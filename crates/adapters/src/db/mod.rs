@@ -61,6 +61,12 @@ pub mod stats_history;
 #[cfg(feature = "db-postgres")]
 pub mod vulnerability;
 
+#[cfg(feature = "db-postgres")]
+pub mod advisory;
+
+#[cfg(feature = "db-postgres")]
+pub mod air_gap;
+
 // ── Domain subfolders, mirroring `batlehub_core::ports`'s auth/governance/ops/storage split ──
 // (registry-domain concerns stay flat above, as `packages`/`artifact_meta` already did before
 // this split — there was no separate `registry/` port module to mirror there.)
@@ -127,3 +133,9 @@ pub use storage::storage_admin::PgStorageAdminRepository;
 
 #[cfg(feature = "db-postgres")]
 pub use vulnerability::PgVulnerabilityRepository;
+
+#[cfg(feature = "db-postgres")]
+pub use advisory::PgAdvisoryRepository;
+
+#[cfg(feature = "db-postgres")]
+pub use air_gap::{PgBundleHistory, PgMissRecorder};

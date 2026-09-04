@@ -457,7 +457,12 @@ impl PolicyPath {
 /// `security_verdict` (RFC 0018 §4.1) is the one addition: an exemption on it
 /// overrides a verdict, and the service folds it in as `ADMIN_OVERRIDE` — the
 /// result is `warned`, never `allowed`, so the override stays visible.
-pub const EXEMPTIBLE_GATES: &[&str] = &["cve_gate", "license_gate", "security_verdict"];
+///
+/// `flags` (RFC 0002 §13 decision 4): an exemption on it silences a pushed
+/// flag on one version — on a `[security]` registry through the verdict, on
+/// any other through `FlagsRule`. It replaces the suppress endpoint and the
+/// role bypass RFC 0002 first designed: one mechanism, one audit trail.
+pub const EXEMPTIBLE_GATES: &[&str] = &["cve_gate", "license_gate", "security_verdict", "flags"];
 
 /// A gate exemption, as it is written on a version-tier node.
 ///

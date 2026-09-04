@@ -1,14 +1,15 @@
 mod api;
 mod cli;
 mod config;
+mod contract;
 mod tui;
 
 use anyhow::Result;
 use clap::Parser;
 
 use cli::{
-    admin, auth, authz, config_cmd, download, owner, package, publish, registry, setup, version,
-    Cli, Command,
+    admin, auth, authz, config_cmd, download, mise, owner, package, publish, registry, security,
+    setup, version, Cli, Command,
 };
 use config::ConfigFile;
 
@@ -86,11 +87,28 @@ async fn main() -> Result<()> {
         Command::Version { cmd } => version::run(cmd, &client).await?,
         Command::Owners { cmd } => owner::run(cmd, &client, cli.json).await?,
         Command::Authz { cmd } => authz::run(cmd, &client, cli.json).await?,
+        Command::Mise { cmd } => mise::run(cmd, &client, cli.json).await?,
+        Command::Why(args) => security::run_why(args, &client, cli.json).await?,
+        Command::Wait(args) => {
+            let code = security::run_wait(args, &client, cli.json).await?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
         Command::Publish(args) => publish::run(args, &client, resolved.registry.as_deref()).await?,
         Command::Download(args) => {
             download::run(args, &client, resolved.registry.as_deref()).await?
         }
-        Command::Auth { cmd } => auth::run(cmd, &client, cli.json, cli.profile.as_deref()).await?,
+        Command::Auth { cmd } => {
+            auth::run(
+                cmd,
+                &client,
+                cli.json,
+                cli.profile.as_deref(),
+                cli.token.as_deref(),
+            )
+            .await?
+        }
         Command::Admin { cmd } => admin::run(cmd, &client, cli.json).await?,
         Command::Tui => tui::run(client).await?,
         Command::Config { .. } | Command::Completion { .. } | Command::Setup { .. } => {

@@ -205,6 +205,11 @@ pub enum RegistryKind {
     /// (`node`), one version per release, one file per platform — so a Node
     /// release can be blocked rather than merely cached (RFC 0010).
     Nodedist,
+    /// SDKMAN's candidates API and download broker as one registry: the JDK,
+    /// Gradle, Maven-the-distribution, Kotlin — addressed by
+    /// `{candidate}/{version}/{platform}`, the broker's `302` to a third-party
+    /// CDN followed server-side through the SSRF guard (RFC 0010).
+    Sdkman,
 }
 
 impl RegistryKind {
@@ -233,6 +238,7 @@ impl RegistryKind {
         Self::JetbrainsMarketplace,
         Self::Generic,
         Self::Nodedist,
+        Self::Sdkman,
     ];
 
     /// The kebab-case wire string for this kind (matches TOML `type = "..."`).
@@ -260,6 +266,23 @@ impl RegistryKind {
             Self::JetbrainsMarketplace => "jetbrains-marketplace",
             Self::Generic => "generic",
             Self::Nodedist => "nodedist",
+            Self::Sdkman => "sdkman",
+        }
+    }
+
+    /// The name a blocked-version lookup should use for `package`.
+    ///
+    /// Defaults to the name itself. `sdkman` addresses its listing documents
+    /// by `{candidate}/{platform}` because `fetch_version_document` has
+    /// nowhere else to put the platform, but a block is a statement about the
+    /// candidate: an admin blocking a JDK means all eight platforms, not the
+    /// one whose listing they happened to be looking at (RFC 0010 §6.2,
+    /// decision 8). Every other kind returns `package` unchanged, so the
+    /// call sites in `ProxyService::version_document` are inert for them.
+    pub fn blocking_package_name<'a>(&self, package: &'a str) -> &'a str {
+        match self {
+            Self::Sdkman => crate::services::sdkman::candidate_of(package),
+            _ => package,
         }
     }
 
@@ -267,9 +290,9 @@ impl RegistryKind {
     /// package versions for itself — the read-only source-hosting types
     /// (github/forgejo/gitlab/jetbrains) have no local publish model. `generic`
     /// is proxy-only for now; hosting arbitrary files is a separate roadmap item.
-    /// `nodedist` has no publish protocol either: Node releases are built by
-    /// the Node project, and hosting a private toolchain is a separate feature
-    /// (RFC 0010 §3).
+    /// `nodedist` and `sdkman` have no publish protocol either: Node releases
+    /// are built by the Node project and SDKMAN's candidates by their vendors,
+    /// and hosting a private toolchain is a separate feature (RFC 0010 §3).
     pub fn supports_local_mode(&self) -> bool {
         !matches!(
             self,
@@ -279,6 +302,7 @@ impl RegistryKind {
                 | Self::Jetbrains
                 | Self::Generic
                 | Self::Nodedist
+                | Self::Sdkman
         )
     }
 
@@ -430,6 +454,21 @@ impl RegistryKind {
             ListingDocument::filtered("`index.tab`", &["versions"]),
             ListingDocument::filtered("`index.json`", &["index-json"]),
         ];
+        // Three text documents (RFC 0010 §4.4). `versions/all` and
+        // `candidates/default` are what `sdk install` resolves through; the
+        // rendered `versions/list` is what `sdk list` prints, filtered in both
+        // of its fixed-width layouts so the console never advertises a JDK the
+        // install then refuses (decision 5). The chokepoint itself,
+        // `candidates/validate`, is not a listing: it answers `invalid` for a
+        // blocked version in the handler.
+        const SDKMAN: &[ListingDocument] = &[
+            ListingDocument::filtered("`versions/all`", &["versions"]),
+            ListingDocument::filtered("`candidates/default`", &["sdkman-default"]),
+            ListingDocument::filtered(
+                "the rendered `versions/list` table (`sdk list`)",
+                &["versions-list"],
+            ),
+        ];
 
         match self {
             Self::Npm => NPM,
@@ -447,6 +486,7 @@ impl RegistryKind {
             Self::Deb | Self::Rpm | Self::Pacman => SIGNED,
             Self::Openvsx | Self::VscodeMarketplace => EXTENSION_GALLERY,
             Self::Nodedist => NODEDIST,
+            Self::Sdkman => SDKMAN,
             // `generic` and `jetbrains` mirror an arbitrary file tree by path —
             // there is no listing document in the protocol at all, so there is
             // nothing to say beyond that. (JetBrains *plugins* are the separate
@@ -520,6 +560,10 @@ impl RegistryKind {
                 "a Node release is a set of tarballs and a checksum file; the dist tree carries \
                  no prose",
             ),
+            Self::Sdkman => ReadmeSupport::None(
+                "SDKMAN describes a distribution, not a package: no document in the protocol \
+                 carries prose about a candidate",
+            ),
         }
     }
 
@@ -572,6 +616,9 @@ impl RegistryKind {
             }
             // `index.tab`: one row per release, with its date and LTS codename.
             Self::Nodedist => UpstreamDetailSupport::Document("versions"),
+            // `versions/all` for the candidate on the default platform — the
+            // identifiers and nothing else; SDKMAN publishes no dates.
+            Self::Sdkman => UpstreamDetailSupport::Document("versions"),
         }
     }
 
@@ -665,6 +712,12 @@ impl RegistryKind {
                 "a Node release is a set of files — one per platform, plus headers, source and \
                  checksums — so \"fetch this version\" has no single meaning",
             ),
+            // Terraform's reasoning: the artifact needs a platform as well as
+            // a version, and the platform is not a constant (RFC 0010 §6.1).
+            Self::Sdkman => FetchSupport::None(
+                "an SDKMAN artifact is addressed by platform as well as version — one archive \
+                 per platform — so \"fetch this version\" has no single meaning",
+            ),
         }
     }
 
@@ -688,6 +741,86 @@ impl RegistryKind {
         match self.fetchable_by_version() {
             FetchSupport::ByVersion(artifact) => Some(artifact),
             FetchSupport::None(_) => None,
+        }
+    }
+
+    /// The artifact sub-coordinates one version of this kind has, one per
+    /// platform — for the two kinds whose "one artifact per version" is
+    /// really one per platform (RFC 0010 §6.9).
+    ///
+    /// `sdkman` and `nodedist` answer [`Self::fetchable_by_version`] with
+    /// `None` because the platform is not a constant, so the console's fetch
+    /// button cannot name the file. Warming can, once it is *told* the
+    /// platforms: `[registries.cache] warm_platforms`, defaulting to the
+    /// platform this server runs on ([`Self::host_platform`]). Guessing all
+    /// eight SDKMAN platforms would fetch 1.6 GB of JDK to satisfy a one-line
+    /// `.sdkmanrc`.
+    ///
+    /// `None` for every other kind, which keeps [`Self::warm_artifact`] the
+    /// single answer for them.
+    pub fn platform_artifacts(
+        &self,
+        name: &str,
+        version: &str,
+        platforms: &[String],
+    ) -> Option<Vec<String>> {
+        let host;
+        let platforms: &[String] = if platforms.is_empty() {
+            host = [self.host_platform()?.to_owned()];
+            &host
+        } else {
+            platforms
+        };
+        match self {
+            // The platform *is* the artifact: `{c}/{v}/{platform}`.
+            Self::Sdkman => Some(platforms.to_vec()),
+            // The tree's own file names: `node-v22.11.0-linux-x64.tar.xz`,
+            // `.zip` on Windows, `iojs-…` on an io.js tree.
+            Self::Nodedist => Some(
+                platforms
+                    .iter()
+                    .map(|p| {
+                        let ext = if p.starts_with("win") {
+                            "zip"
+                        } else {
+                            "tar.xz"
+                        };
+                        format!("{name}-{version}-{p}.{ext}")
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        }
+    }
+
+    /// The platform this server runs on, spelled the way this kind spells
+    /// platforms — the default for `warm_platforms`.
+    ///
+    /// `None` for the kinds that have no platform axis.
+    pub fn host_platform(&self) -> Option<&'static str> {
+        use std::env::consts::{ARCH, OS};
+        match self {
+            Self::Sdkman => Some(match (OS, ARCH) {
+                ("linux", "x86_64") => "linuxx64",
+                ("linux", "x86") => "linuxx32",
+                ("linux", "aarch64") => "linuxarm64",
+                ("linux", "arm") => "linuxarm32hf",
+                ("macos", "x86_64") => "darwinx64",
+                ("macos", "aarch64") => "darwinarm64",
+                ("windows", "x86_64") => "windowsx64",
+                _ => "exotic",
+            }),
+            Self::Nodedist => Some(match (OS, ARCH) {
+                ("linux", "x86_64") => "linux-x64",
+                ("linux", "aarch64") => "linux-arm64",
+                ("linux", "arm") => "linux-armv7l",
+                ("macos", "x86_64") => "darwin-x64",
+                ("macos", "aarch64") => "darwin-arm64",
+                ("windows", "x86_64") => "win-x64",
+                ("windows", "aarch64") => "win-arm64",
+                _ => "linux-x64",
+            }),
+            _ => None,
         }
     }
 
@@ -841,6 +974,7 @@ mod tests {
         assert!(!RegistryKind::Jetbrains.supports_local_mode());
         assert!(!RegistryKind::Generic.supports_local_mode());
         assert!(!RegistryKind::Nodedist.supports_local_mode());
+        assert!(!RegistryKind::Sdkman.supports_local_mode());
         assert!(RegistryKind::Cargo.supports_local_mode());
         assert!(RegistryKind::Deb.supports_local_mode());
         assert!(RegistryKind::JetbrainsMarketplace.supports_local_mode());
@@ -855,6 +989,8 @@ mod tests {
         assert!(!RegistryKind::Npm.requires_explicit_upstream_in_proxy_mode());
         // `https://nodejs.org/dist` is the default the client itself uses.
         assert!(!RegistryKind::Nodedist.requires_explicit_upstream_in_proxy_mode());
+        // `https://api.sdkman.io/2` is the default `sdkman-init.sh` sets.
+        assert!(!RegistryKind::Sdkman.requires_explicit_upstream_in_proxy_mode());
         assert!(!RegistryKind::JetbrainsMarketplace.requires_explicit_upstream_in_proxy_mode());
     }
 
@@ -951,6 +1087,8 @@ mod tests {
                 "generic",
                 // Tarballs and a checksum file: no prose anywhere in the tree.
                 "nodedist",
+                // A distribution, not a package: no document carries prose.
+                "sdkman",
             ]
         );
     }
@@ -1032,6 +1170,7 @@ mod tests {
             // Typed, not path-addressed, and that is the whole point of the
             // kind: `generic` mirrors the same tree and can block nothing on it.
             RegistryKind::Nodedist,
+            RegistryKind::Sdkman,
         ] {
             assert!(
                 !kind.is_path_addressed(),
@@ -1100,6 +1239,7 @@ mod tests {
             RegistryKind::Maven,
             RegistryKind::Terraform,
             RegistryKind::Nodedist,
+            RegistryKind::Sdkman,
         ] {
             assert!(
                 kind.fetchable_by_version().reason().is_some(),
@@ -1109,6 +1249,65 @@ mod tests {
                 kind.fetch_coordinate("r", "numpy", "1.24.0").is_none(),
                 "{kind} should not produce a fetch coordinate"
             );
+        }
+    }
+
+    /// A block on a JDK means all eight platforms (RFC 0010 decision 8): the
+    /// listing coordinate carries the platform, the blocked-set lookup must
+    /// not. Inert for every other kind.
+    #[test]
+    fn the_blocking_name_drops_sdkmans_platform_and_nothing_else() {
+        assert_eq!(
+            RegistryKind::Sdkman.blocking_package_name("java/linuxx64"),
+            "java"
+        );
+        assert_eq!(
+            RegistryKind::Sdkman.blocking_package_name("java/linuxx64?current=&installed="),
+            "java"
+        );
+        assert_eq!(RegistryKind::Sdkman.blocking_package_name("java"), "java");
+        for kind in RegistryKind::ALL
+            .iter()
+            .filter(|k| **k != RegistryKind::Sdkman)
+        {
+            assert_eq!(kind.blocking_package_name("a/b?c"), "a/b?c", "{kind}");
+        }
+    }
+
+    /// The two platform-addressed kinds warm one file per platform, spelled
+    /// as the tree and the broker spell them; everything else has no
+    /// platform axis and answers `None` here as it does for `warm_artifact`.
+    #[test]
+    fn platform_artifacts_name_one_file_per_platform_for_the_toolchain_kinds() {
+        let platforms = ["linux-x64".to_owned(), "win-x64".to_owned()];
+        assert_eq!(
+            RegistryKind::Nodedist.platform_artifacts("node", "v22.11.0", &platforms),
+            Some(vec![
+                "node-v22.11.0-linux-x64.tar.xz".to_owned(),
+                "node-v22.11.0-win-x64.zip".to_owned(),
+            ])
+        );
+        let platforms = ["linuxx64".to_owned(), "darwinarm64".to_owned()];
+        assert_eq!(
+            RegistryKind::Sdkman.platform_artifacts("java", "21.0.5-tem", &platforms),
+            Some(vec!["linuxx64".to_owned(), "darwinarm64".to_owned()])
+        );
+        // No platforms given: the host's own, which is never empty.
+        let host = RegistryKind::Sdkman
+            .platform_artifacts("java", "21.0.5-tem", &[])
+            .unwrap();
+        assert_eq!(host.len(), 1);
+        assert!(crate::services::sdkman::parse_platform(&host[0]).is_some());
+        for kind in RegistryKind::ALL
+            .iter()
+            .filter(|k| !matches!(k, RegistryKind::Sdkman | RegistryKind::Nodedist))
+        {
+            assert_eq!(
+                kind.platform_artifacts("x", "1.0.0", &platforms),
+                None,
+                "{kind}"
+            );
+            assert_eq!(kind.host_platform(), None, "{kind}");
         }
     }
 

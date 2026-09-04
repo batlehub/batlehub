@@ -1,7 +1,8 @@
 use std::io::{self, Write};
+use std::path::PathBuf;
 
-use anyhow::Result;
-use clap::Subcommand;
+use anyhow::{bail, Result};
+use clap::{Args, Subcommand};
 use comfy_table::Table;
 
 use crate::api::{
@@ -9,15 +10,24 @@ use crate::api::{
     BatleHubClient,
 };
 use crate::config::ConfigFile;
+use crate::contract::{self, ContractFile, Entry, Kind};
 
 #[derive(Subcommand)]
 pub enum AuthCommand {
     /// Show the current identity
     Whoami,
-    /// Token management
+    /// Print a valid credential, or manage API tokens with a subcommand
+    ///
+    /// With no subcommand this prints a credential for the configured server,
+    /// refreshing it first if it is close to expiry — the one command whose
+    /// job is to emit a secret, and the one a broker shells out to
+    /// (RFC 0011 §4.1.3). `auth token list|create|revoke` are the personal
+    /// access tokens, unchanged.
     Token {
         #[command(subcommand)]
-        cmd: TokenCommand,
+        cmd: Option<TokenCommand>,
+        #[command(flatten)]
+        args: PrintTokenArgs,
     },
     /// Log in via OIDC (browser) or Kubernetes service account; saves token to config
     Login {
@@ -31,6 +41,34 @@ pub enum AuthCommand {
         #[arg(long)]
         profile: Option<String>,
     },
+    /// Refresh if needed, then update the credential contract file that
+    /// non-CLI consumers read
+    ///
+    /// The file is `$BATLEHUB_HOME/state/vsx-token.json` (RFC 0011 §4.1). It
+    /// is written atomically and only this server's entry is touched, so a
+    /// laptop pointed at three Batlehubs keeps three credentials in one file.
+    WriteTokenFile {
+        /// Write somewhere other than the default contract path.
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Record the credential as a *path to read* rather than as the value
+        /// itself — for a projected Kubernetes token, or any secret something
+        /// else keeps fresh. The file stops being a place a credential rests.
+        #[arg(long, value_name = "PATH")]
+        from_file: Option<String>,
+    },
+    /// Show every registry in the contract file and whether its credential
+    /// resolves right now
+    ///
+    /// The state is a resolution performed now, never a cached opinion: a
+    /// stale "ok" from before a token file rotated is the failure being
+    /// debugged.
+    Status {
+        /// Read a contract file other than the default one — the same
+        /// `--path` `write-token-file` writes to.
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
     /// Manually refresh a cached OIDC access token using the stored refresh token
     Refresh {
         /// OIDC provider name (defaults to the first configured provider)
@@ -40,6 +78,19 @@ pub enum AuthCommand {
         #[arg(long)]
         profile: Option<String>,
     },
+}
+
+#[derive(Args)]
+pub struct PrintTokenArgs {
+    /// `raw` prints the credential and nothing else, for `$(…)` and for a
+    /// broker reading stdout. `json` adds what it is and when it expires.
+    #[arg(long, default_value = "raw")]
+    pub output: String,
+    /// Refresh when less than this is left, in seconds. The default is the
+    /// threshold the CLI already refreshes on for every other command, so
+    /// this introduces no second notion of freshness.
+    #[arg(long, default_value_t = 120)]
+    pub min_ttl: i64,
 }
 
 #[derive(Subcommand)]
@@ -90,6 +141,10 @@ pub async fn run(
     client: &BatleHubClient,
     json: bool,
     global_profile: Option<&str>,
+    // `--token` / `BATLEHUB_TOKEN`, as the user gave it. An override is an
+    // override: when one is present it *is* the credential, and neither the
+    // profile store nor a refresh has anything to say about it.
+    token_override: Option<&str>,
 ) -> Result<()> {
     match cmd {
         AuthCommand::Whoami => {
@@ -107,7 +162,12 @@ pub async fn run(
                 println!("{table}");
             }
         }
-        AuthCommand::Token { cmd } => handle_token_command(cmd, client, json).await?,
+        AuthCommand::Token { cmd, args } => match cmd {
+            Some(cmd) => handle_token_command(cmd, client, json).await?,
+            // No subcommand: emit a credential. Everything else that reports
+            // on credentials renders a summary type that cannot hold one.
+            None => handle_print_token(args, client, global_profile, token_override).await?,
+        },
 
         AuthCommand::Login {
             provider,
@@ -127,7 +187,228 @@ pub async fn run(
         AuthCommand::Refresh { provider, profile } => {
             handle_auth_refresh(client, provider, profile, global_profile).await?
         }
+
+        AuthCommand::WriteTokenFile { path, from_file } => {
+            handle_write_token_file(path, from_file, client, global_profile, token_override).await?
+        }
+        AuthCommand::Status { path } => handle_status(path, json)?,
     }
+    Ok(())
+}
+
+// ── RFC 0011 §4.1.3: the three verbs the contract file needs ─────────────────
+
+/// Resolve a credential for this server, refreshing when less than `min_ttl`
+/// is left.
+///
+/// Built on the same `resolve_token` every other command already goes
+/// through, so what this prints is what the CLI itself would send — the
+/// alternative is a second freshness rule that disagrees with the first on
+/// exactly the boundary nobody tests.
+async fn resolve_fresh(
+    client: &BatleHubClient,
+    profile: Option<&str>,
+    min_ttl: i64,
+    token_override: Option<&str>,
+) -> Result<(Option<String>, Option<chrono::DateTime<chrono::Utc>>, Kind)> {
+    if let Some(t) = token_override {
+        // Nothing to refresh and nothing to look up: the caller handed us the
+        // credential. Its kind is still worth recording, so the contract file
+        // says what a reader is holding.
+        return Ok((Some(t.to_owned()), None, kind_of(t, false)));
+    }
+    let mut cfg = ConfigFile::load()?;
+    // A wider `--min-ttl` than the shipped 120 s threshold: nudge the stored
+    // expiry so the shared resolver considers it expiring, rather than
+    // teaching it a second rule.
+    if min_ttl > 120 {
+        let p = match profile {
+            Some(n) => cfg.profiles.entry(n.to_owned()).or_default(),
+            None => &mut cfg.default,
+        };
+        if let Some(exp) = p.oidc_expires_at {
+            if chrono::Utc::now().timestamp() >= exp - min_ttl {
+                p.oidc_expires_at = Some(chrono::Utc::now().timestamp());
+            }
+        }
+    }
+    let token = crate::api::auth::resolve_token(&client.base_url, profile, &mut cfg).await?;
+
+    let p = match profile {
+        Some(n) => cfg.profiles.get(n).cloned().unwrap_or_default(),
+        None => cfg.default.clone(),
+    };
+    let kind = kind_of(
+        token.as_deref().unwrap_or_default(),
+        p.kubernetes_token_path.is_some(),
+    );
+    let expires_at = match kind {
+        // A PAT's expiry is the server's to know; a mounted token's is
+        // whatever wrote it. Claiming either here would be inventing one.
+        Kind::Oidc => p
+            .oidc_expires_at
+            .and_then(|e| chrono::DateTime::from_timestamp(e, 0)),
+        _ => None,
+    };
+    Ok((token, expires_at, kind))
+}
+
+/// What the credential is, from what it looks like. The `bh_pat_` prefix is
+/// the server's own dispatch rule, so this agrees with the thing that will
+/// judge it rather than guessing separately.
+fn kind_of(token: &str, from_mounted_file: bool) -> Kind {
+    if from_mounted_file {
+        Kind::Kubernetes
+    } else if token.starts_with("bh_pat_") {
+        Kind::Pat
+    } else {
+        Kind::Oidc
+    }
+}
+
+async fn handle_print_token(
+    args: PrintTokenArgs,
+    client: &BatleHubClient,
+    profile: Option<&str>,
+    token_override: Option<&str>,
+) -> Result<()> {
+    let (token, expires_at, kind) =
+        resolve_fresh(client, profile, args.min_ttl, token_override).await?;
+    let Some(token) = token else {
+        // Non-zero, because a caller substituting this into a header needs to
+        // know it got nothing — and a broker reading stdout would otherwise
+        // send an empty bearer.
+        bail!(
+            "no credential for {}: run `batlehub-cli auth login`",
+            client.base_url
+        );
+    };
+    match args.output.as_str() {
+        "raw" => println!("{token}"),
+        "json" => println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "registry": contract::normalize_origin(&client.base_url),
+                "token": token,
+                "kind": kind.as_str(),
+                "expires_at": expires_at,
+            }))?
+        ),
+        other => bail!("--output is `raw` or `json`, not `{other}`"),
+    }
+    Ok(())
+}
+
+async fn handle_write_token_file(
+    path: Option<PathBuf>,
+    from_file: Option<String>,
+    client: &BatleHubClient,
+    profile: Option<&str>,
+    token_override: Option<&str>,
+) -> Result<()> {
+    let path = path.unwrap_or_else(contract::contract_path);
+    let registry = contract::normalize_origin(&client.base_url);
+
+    let entry = match from_file {
+        // The credential stays where it is and something else keeps it
+        // fresh: the file records a path, not a secret.
+        Some(p) => {
+            let entry = Entry::from_file(p, Kind::Kubernetes);
+            // Resolve it once now. A path that yields nothing is legitimate
+            // — a projected token in a pod that has not started yet — so
+            // this is a warning and not a refusal, but learning it here beats
+            // learning it from an editor that quietly shows no extensions.
+            let r = entry.resolve();
+            match r.token {
+                Some(_) => {}
+                None => eprintln!(
+                    "Warning: that path yields no credential right now ({}).                      The entry is written anyway; `auth status` re-checks it.",
+                    r.detail.as_deref().unwrap_or("no reason given")
+                ),
+            }
+            entry
+        }
+        None => {
+            let (token, expires_at, kind) =
+                resolve_fresh(client, profile, 120, token_override).await?;
+            let Some(token) = token else {
+                bail!("no credential for {registry}: run `batlehub-cli auth login`");
+            };
+            Entry::literal(token, kind, expires_at)
+        }
+    };
+    contract::validate_entry(&entry)?;
+
+    // Read-modify-write: this writer owns one entry and must preserve every
+    // other, including fields it does not know about. `try_load` rather than
+    // `load`, because overwriting a file we could not parse would discard
+    // another registry's credential.
+    let mut doc = ContractFile::try_load(&path)
+        .map_err(|e| anyhow::anyhow!("{} is not a usable contract file: {e}", path.display()))?;
+    // Whether this replaces something matters to a reader of the output: a
+    // "written" line that silently replaced another credential for the same
+    // origin is the one case where this command is not additive.
+    let replaced = doc.entry(&registry).is_some();
+    doc.set_entry(&registry, entry);
+    doc.save(&path)?;
+
+    println!(
+        "{registry} {} in {}",
+        if replaced { "replaced" } else { "written" },
+        path.display()
+    );
+    Ok(())
+}
+
+fn handle_status(path: Option<PathBuf>, json: bool) -> Result<()> {
+    let path = path.unwrap_or_else(contract::contract_path);
+    let doc = ContractFile::load(&path);
+    let rows: Vec<_> = doc
+        .registries
+        .iter()
+        .map(|(origin, e)| e.summary(origin))
+        .collect();
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+        return Ok(());
+    }
+    if rows.is_empty() {
+        println!("No credentials in {}.", path.display());
+        println!("`batlehub-cli auth login` then `auth write-token-file` puts one there.");
+        return Ok(());
+    }
+    let mut table = Table::new();
+    table.set_header([
+        "Registry",
+        "Kind",
+        "Token source",
+        "State",
+        "Expires",
+        "Refresh",
+    ]);
+    for r in &rows {
+        table.add_row([
+            r.registry.as_str(),
+            r.kind,
+            r.source.as_str(),
+            r.state,
+            r.expires_in.as_str(),
+            r.refresh.as_str(),
+        ]);
+    }
+    println!("{table}");
+    for r in rows.iter().filter(|r| r.detail.is_some()) {
+        // `unset` and `refused` look identical from the editor and want
+        // opposite fixes, so the reason is printed rather than left to be
+        // guessed at.
+        println!("  {}: {}", r.registry, r.detail.as_deref().unwrap_or(""));
+    }
+    println!(
+        "
+Contract file: {}",
+        path.display()
+    );
     Ok(())
 }
 

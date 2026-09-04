@@ -57,6 +57,11 @@ sha2.workspace = true
 sqlx.workspace = true
 tar = { version = "0.4", optional = true }
 tokio.workspace = true
+# The scanner runner (RFC 0018 §6.3): per-job work directories and the
+# rlimits set on a sandboxed scanner before exec.
+tempfile.workspace = true
+libc = "0.2"
+thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 quick-xml = { workspace = true, optional = true }
@@ -110,6 +115,7 @@ default = [
   "registry-jetbrains-marketplace",
   "registry-generic",
   "registry-nodedist",
+  "registry-sdkman",
   "sbom",
   "storage-fs",
   "vuln-scan"
@@ -173,6 +179,9 @@ registry-jetbrains-marketplace = ["dep:quick-xml"]
 # vendor CDNs). Also reuses `PathProxyRegistryClient`.
 registry-generic = []
 registry-nodedist = []
+# SDKMAN: the candidates API and the download broker as one registry, the
+# broker's 302 followed server-side through the SSRF guard (RFC 0010).
+registry-sdkman = []
 registry-rubygems = ["dep:flate2", "dep:tar"]
 registry-terraform = []
 registry-vscode-marketplace = []

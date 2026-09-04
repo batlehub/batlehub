@@ -2,6 +2,7 @@ pub mod cargo;
 pub mod common;
 pub mod composer;
 pub mod conda;
+pub mod forge_api;
 pub mod forgejo;
 pub mod generic;
 pub mod github;
@@ -17,6 +18,7 @@ pub mod openvsx;
 pub mod pypi;
 pub mod repo;
 pub mod rubygems;
+pub mod sdkman;
 pub mod search;
 pub mod terraform;
 /// The only outbound HTTP under this tree — see RFC 0009 §4.2.

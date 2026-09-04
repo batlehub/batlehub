@@ -62,6 +62,14 @@ pub struct ScanWorker {
     pub hot: HotConfigLock,
     /// The scanners built from `[scanners]`, by name.
     pub scanners: HashMap<String, Arc<dyn ArtifactScanner>>,
+    /// The artifact cache, for the scanners that read bytes (phase 3): a
+    /// cached artifact is read from here, an uncached one is fetched from
+    /// upstream through the registry's client and *not* cached — the proxy
+    /// path owns that, with its integrity checks.
+    pub storage: Option<Arc<dyn crate::ports::StorageBackend>>,
+    /// The most bytes the worker will hold for one scan; the proxy's
+    /// `max_artifact_size_bytes`, or 500 MiB.
+    pub max_artifact_bytes: u64,
 }
 
 /// What one pass over the queue did.
@@ -202,18 +210,50 @@ impl ScanWorker {
                 .map(|s| s.document),
             None => None,
         };
+        let applicable: Vec<Arc<dyn ArtifactScanner>> =
+            scanners.into_iter().filter(|s| s.supports(kind)).collect();
+        // Bytes and the listing only when a scanner will read them: a
+        // metadata-only profile is one row read and no egress.
+        let mut findings: Vec<Finding> = Vec::new();
+        let artifact = if applicable.iter().any(|s| s.needs_artifact()) {
+            match self.artifact_bytes(&job.package, kind).await {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    tracing::warn!(package = %job.package, error = %e, "security worker: could not fetch the artifact for scanning");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let artifact_unavailable = artifact.is_none();
+        let listing = if applicable.iter().any(|s| s.needs_listing()) {
+            self.listing_document(&job.package).await
+        } else {
+            None
+        };
         let input = crate::ports::ScanInput {
             package: package.clone(),
             kind,
             purl,
-            artifact: None,
+            artifact,
             sbom,
+            listing,
         };
 
-        let mut findings: Vec<Finding> = Vec::new();
         let mut done: Vec<String> = Vec::new();
-        for scanner in scanners {
-            if !scanner.supports(kind) {
+        for scanner in applicable {
+            // A scanner that reads bytes it could not be given did not run:
+            // `SCANNER_UNSUPPORTED` names the reason without pretending the
+            // scan happened (RFC 0018 §11 q1).
+            if scanner.needs_artifact() && artifact_unavailable {
+                findings.push(Finding::new(
+                    scanner.name(),
+                    FindingKind::ScannerError,
+                    ReasonCode::ScannerUnsupported,
+                    Severity::High,
+                    "the artifact bytes could not be obtained for scanning",
+                ));
                 continue;
             }
             let started = Instant::now();
@@ -287,6 +327,71 @@ impl ScanWorker {
             "security worker: verdict recorded"
         );
         Ok(())
+    }
+
+    /// The bytes of the version's primary artifact — the one file the kind
+    /// names for a version (`RegistryKind::warm_artifact`) — from the cache
+    /// when it is there, else from upstream. `None` for a kind that names a
+    /// set of files (PyPI, Maven, conda, Terraform), which the archive
+    /// scanners answer `SCANNER_UNSUPPORTED` for.
+    async fn artifact_bytes(
+        &self,
+        package: &crate::entities::PackageId,
+        kind: RegistryKind,
+    ) -> Result<Option<bytes::Bytes>, CoreError> {
+        use futures::StreamExt;
+        let Some(coordinate) =
+            kind.fetch_coordinate(&package.registry, &package.name, &package.version)
+        else {
+            return Ok(None);
+        };
+        let limit = self.max_artifact_bytes;
+        let key = format!("artifact:{}", coordinate.cache_key());
+        let mut stream = match &self.storage {
+            Some(storage) => match storage.retrieve(&key).await? {
+                Some(stored) => Some(stored.stream),
+                None => None,
+            },
+            None => None,
+        };
+        if stream.is_none() {
+            let client = {
+                let hot = self.hot.read().await;
+                hot.registries.get(&package.registry).cloned()
+            };
+            let Some(client) = client else {
+                return Ok(None);
+            };
+            stream = Some(client.fetch_artifact(&coordinate).await?.stream);
+        }
+        let mut stream = stream.expect("set above");
+        let mut buf: Vec<u8> = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            if buf.len() as u64 + chunk.len() as u64 > limit {
+                return Err(CoreError::PayloadTooLarge(format!(
+                    "artifact exceeds the {limit}-byte scan limit"
+                )));
+            }
+            buf.extend_from_slice(&chunk);
+        }
+        Ok(Some(bytes::Bytes::from(buf)))
+    }
+
+    /// The registry's listing document for the package, or nothing — a
+    /// scanner that needs it says so in its own finding.
+    async fn listing_document(
+        &self,
+        package: &crate::entities::PackageId,
+    ) -> Option<crate::ports::VersionDocument> {
+        let client = {
+            let hot = self.hot.read().await;
+            hot.registries.get(&package.registry).cloned()
+        }?;
+        client
+            .fetch_version_document(&package.name, crate::ports::DocumentKind::Versions)
+            .await
+            .ok()
     }
 
     /// A job whose attempts are spent: every required scanner that never

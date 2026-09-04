@@ -179,8 +179,24 @@ tasks:
       - task: pg
         vars:
           TEST: pg_user_tokens
+
+  test:pg-advisory:
+    desc: Run PgAdvisoryRepository integration tests — flags and the exposure report (starts a temporary Postgres container via Podman)
+    cmds:
+      - task: pg
+        vars:
+          TEST: pg_advisory
           CONTAINER: batlehub-test-pg-tokens
           PORT: "15440"
+
+  test:pg-air-gap:
+    desc: Run the RFC 0008 air-gap store integration tests — the miss log's upsert, per-registry cap and retention purge, and the bundle history (starts a temporary Postgres container via Podman)
+    cmds:
+      - task: pg
+        vars:
+          TEST: pg_air_gap
+          CONTAINER: batlehub-test-pg-air-gap
+          PORT: "15441"
 
   test:pg-storage-router:
     desc: Run storage_router integration tests (starts a temporary Postgres container via Podman)
@@ -279,8 +295,13 @@ tasks:
     cmds:
       - bash tests/heavy/nvm.sh
 
+  test:sdkman-heavy:
+    desc: "Heavy SDKMAN integration: `sdk list` / `sdk list java` / `sdk list maven` against an sdkman registry, a blocked JDK refused on SDKMAN's own invalid-version path with nothing requested from the broker, the vendor table and the grid both filtered, `sdk install java` through the broker's redirect and the relayed post-install hook, second install from cache (needs DATABASE_URL + network + zip/unzip)"
+    cmds:
+      - bash tests/heavy/sdkman.sh
+
   test:mise-heavy:
-    desc: "Heavy mise integration: `mise install ubi:cli/cli` from a GitHub release through a github registry, and the RFC 0019 ref headers on branch, tag and commit archives (needs DATABASE_URL + network; anonymous GitHub, ~8 requests)"
+    desc: "Heavy mise integration: `mise install` from a GitHub release through a github registry, the RFC 0019 ref headers on branch, tag and commit archives, and RFC 0008's air gap end to end — plan, seed, export, import into a second `[air_gap]` instance, then install again with egress denied (needs DATABASE_URL + network; anonymous GitHub, ~8 requests)"
     cmds:
       - bash tests/heavy/mise.sh
 
@@ -346,6 +367,7 @@ tasks:
       - bash tests/heavy/composer.sh
       - bash tests/heavy/terraform.sh
       - bash tests/heavy/nvm.sh
+      - bash tests/heavy/sdkman.sh
       - bash tests/heavy/mise.sh
       - bash tests/heavy/cargo.sh
       - bash tests/heavy/go.sh

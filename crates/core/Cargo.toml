@@ -44,6 +44,11 @@ base64.workspace = true
 # Ed25519-only signature verification (download path). RSA-based crypto (the
 # `rsa` crate) is hard-banned by deny.toml; Ed25519 keeps the tree rsa-free.
 ed25519-dalek = "3"
+# RFC 0008 §4.3 — the bundle is a tar. A format codec, like `serde_json`
+# beside it: no I/O of its own, it works over `Read`/`Write`, and putting it
+# here is what lets the CLI (export) and the server (import) share one
+# definition of the layout rather than two that must agree.
+tar = "0.4"
 
 [lints]
 workspace = true

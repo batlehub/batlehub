@@ -19,7 +19,9 @@ use chrono::Utc;
 use crate::entities::SecurityPolicy;
 use crate::ports::PolicyRepository;
 use crate::rules::{Rule, RuleContext, RuleDecision};
-use crate::services::verdict::{apply_override, VerdictService, VERDICT_EXEMPTION_GATE};
+use crate::services::verdict::{
+    apply_override, note_request_verdict, VerdictService, VERDICT_EXEMPTION_GATE,
+};
 
 pub struct VerdictGateRule {
     pub service: Arc<VerdictService>,
@@ -70,6 +72,10 @@ impl Rule for VerdictGateRule {
             }
         };
         if verdict.is_served() {
+            // A `warned` artifact is served with its reasons on the response.
+            if verdict.state == crate::entities::VerdictState::Warned {
+                note_request_verdict(&verdict);
+            }
             return RuleDecision::Allow;
         }
         let exempt =
@@ -82,8 +88,10 @@ impl Rule for VerdictGateRule {
                 codes = ?over.reason_codes,
                 "security: verdict overridden by an active exemption; serving as warned"
             );
+            note_request_verdict(&over);
             return RuleDecision::Allow;
         }
+        note_request_verdict(&verdict);
         let status = "403";
         for code in &verdict.reason_codes {
             metrics::counter!(
@@ -127,6 +135,9 @@ mod tests {
         }
         async fn get(&self, p: &PackageId) -> Result<Option<Verdict>, CoreError> {
             Ok(self.0.lock().unwrap().get(&p.cache_key()).cloned())
+        }
+        async fn list_for_package(&self, _: &str, _: &str) -> Result<Vec<Verdict>, CoreError> {
+            Ok(vec![])
         }
         async fn list_by_state(
             &self,

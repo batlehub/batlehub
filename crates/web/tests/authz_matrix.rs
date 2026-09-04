@@ -551,6 +551,58 @@ fn matrix() -> Vec<Row> {
             .coord("node", "v9.8.7")
             .token("v1.1.0")
             .vis(WHOLE_REGISTRY),
+        // ── sdkman (RFC 0010 phase 6) ────────────────────────────────────────
+        // Proxy-only like `nodedist`, with a real coordinate: the candidate is
+        // the package and the platform the artifact. The per-candidate listings
+        // carry no local package to check; the three relayed API documents that
+        // name no package at all (`healthcheck`, `broker/version`, `selfupdate`)
+        // are `NoPackage` in the inventory rather than rows.
+        Row::new(
+            "sdkman",
+            "/proxy/reg/sdkman/broker/download/pkg/9.8.7/linuxx64",
+        )
+        .vis(Expect::NotChecked(
+            "proxy-only: the archive is streamed through the broker and no local package is read",
+        )),
+        Row::new(
+            "sdkman",
+            "/proxy/reg/sdkman/candidates/pkg/linuxx64/versions/all",
+        )
+        .token("1.1.0")
+        .vis(Expect::NotChecked(
+            "proxy-only listing: no local package to gate on",
+        )),
+        Row::new(
+            "sdkman",
+            "/proxy/reg/sdkman/candidates/pkg/linuxx64/versions/list?current=&installed=",
+        )
+        .vis(Expect::NotChecked(
+            "proxy-only listing: no local package to gate on",
+        )),
+        Row::new("sdkman", "/proxy/reg/sdkman/candidates/default/pkg")
+            .token("1.1.0")
+            .vis(Expect::NotChecked(
+                "proxy-only listing: no local package to gate on",
+            )),
+        Row::new(
+            "sdkman",
+            "/proxy/reg/sdkman/candidates/validate/pkg/9.8.7/linuxx64",
+        )
+        .token("valid")
+        .vis(Expect::NotChecked(
+            "proxy-only: the answer is one word about an upstream version",
+        )),
+        Row::new("sdkman", "/proxy/reg/sdkman/hooks/post/pkg/9.8.7/linuxx64").vis(
+            Expect::NotChecked(
+                "proxy-only: a hook script relayed byte-exact, no local package is read",
+            ),
+        ),
+        Row::new("sdkman", "/proxy/reg/sdkman/candidates/all")
+            .token("java")
+            .vis(WHOLE_REGISTRY),
+        Row::new("sdkman", "/proxy/reg/sdkman/candidates/list")
+            .token("fixture")
+            .vis(WHOLE_REGISTRY),
         Row::new(
             "vscode-marketplace",
             "/proxy/reg/vscode/asset/acme/ext/9.8.7/Microsoft.VisualStudio.Services.VSIXPackage",
@@ -903,6 +955,17 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/nodedist/index.json", Coverage::Row),
     ("/proxy/{registry}/nodedist/index.tab", Coverage::Row),
     ("/proxy/{registry}/nodedist/{version}/{file}", Coverage::Row),
+    ("/proxy/{registry}/sdkman/broker/download/{candidate}/{version}/{platform}", Coverage::Row),
+    ("/proxy/{registry}/sdkman/broker/version/sdkman/{component}/{channel}", Coverage::NoPackage("the SDKMAN script/native version on a channel; names no package")),
+    ("/proxy/{registry}/sdkman/candidates/all", Coverage::Row),
+    ("/proxy/{registry}/sdkman/candidates/default/{candidate}", Coverage::Row),
+    ("/proxy/{registry}/sdkman/candidates/list", Coverage::Row),
+    ("/proxy/{registry}/sdkman/candidates/validate/{candidate}/{version}/{platform}", Coverage::Row),
+    ("/proxy/{registry}/sdkman/candidates/{candidate}/{platform}/versions/all", Coverage::Row),
+    ("/proxy/{registry}/sdkman/candidates/{candidate}/{platform}/versions/list", Coverage::Row),
+    ("/proxy/{registry}/sdkman/healthcheck", Coverage::NoPackage("the upstream health token, relayed as-is; names no package")),
+    ("/proxy/{registry}/sdkman/hooks/{phase}/{candidate}/{version}/{platform}", Coverage::Row),
+    ("/proxy/{registry}/sdkman/selfupdate/{channel}/{platform}", Coverage::NoPackage("the SDKMAN self-update script for a channel; names no package")),
     ("/proxy/{registry}/nuget/v3/autocomplete", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/nuget/v3/flat/{id}/index.json", Coverage::Row),
     ("/proxy/{registry}/nuget/v3/flat/{id}/{version}/{filename}", Coverage::Row),
@@ -953,11 +1016,14 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/{module}/@v/list", Coverage::Row),
     ("/proxy/{registry}/{module}/@v/{filename}", Coverage::Row),
     ("/proxy/{registry}/{name}/{version}/download", Coverage::Row),
+    ("/proxy/{registry}/{owner}/{repo}/branches/{branch}", Coverage::NoRow("RFC 0019 [api_reads]: opt-in, off by default, exercised in forge_api_reads.rs")),
+    ("/proxy/{registry}/{owner}/{repo}/commits/{sha}", Coverage::NoRow("RFC 0019 [api_reads]: opt-in, off by default, exercised in forge_api_reads.rs")),
     ("/proxy/{registry}/{owner}/{repo}/raw/{git_ref}/{path}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{owner}/{repo}/releases", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{owner}/{repo}/releases/assets/{asset_id}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{owner}/{repo}/releases/download/{tag}/{filename}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{owner}/{repo}/releases/tags/{tag}", Coverage::NoRow("package read, not yet exercised")),
+    ("/proxy/{registry}/{owner}/{repo}/tags", Coverage::NoRow("RFC 0019 [api_reads]: opt-in, off by default, exercised in forge_api_reads.rs")),
     ("/proxy/{registry}/{owner}/{repo}/tarball/{tag}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{owner}/{repo}/zipball/{tag}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{package}", Coverage::Row),

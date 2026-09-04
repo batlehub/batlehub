@@ -425,6 +425,7 @@ fn npm_warming_service(storage: Arc<dyn StorageBackend>) -> Arc<WarmingService> 
         latest_n: 3,
         concurrency: 4,
         coordinator: Arc::new(NoopWarmCoordinator),
+        platforms: Vec::new(),
         metrics: Arc::new(ProxyMetrics::new(&["npm".to_owned()])),
     })
 }

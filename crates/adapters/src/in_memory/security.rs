@@ -36,6 +36,20 @@ impl VerdictRepository for InMemoryVerdictRepository {
     async fn get(&self, pkg: &PackageId) -> Result<Option<Verdict>, CoreError> {
         Ok(self.rows.read().await.get(&pkg.cache_key()).cloned())
     }
+    async fn list_for_package(
+        &self,
+        registry: &str,
+        package: &str,
+    ) -> Result<Vec<Verdict>, CoreError> {
+        Ok(self
+            .rows
+            .read()
+            .await
+            .values()
+            .filter(|v| v.package.registry == registry && v.package.name == package)
+            .cloned()
+            .collect())
+    }
     async fn list_by_state(
         &self,
         registry: &str,

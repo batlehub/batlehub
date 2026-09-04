@@ -185,6 +185,14 @@ pub(super) struct ServerParams {
     /// RFC 0015 §6.3 — the package and version policy tiers, written through the
     /// admin API because §4.1 says a config file cannot enumerate them.
     pub policy_repo: Arc<dyn batlehub_core::ports::PolicyRepository>,
+    /// RFC 0002 (recast) — the flag store, the push funnel over it, the
+    /// configured sources and what the exposure coverage block reads.
+    /// RFC 0008 §6.4 — what came across the gap.
+    pub bundle_history: Arc<dyn batlehub_core::ports::BundleHistory>,
+    pub advisory_repo: Arc<dyn batlehub_core::ports::AdvisoryRepository>,
+    pub flag_svc: Arc<batlehub_core::services::FlagService>,
+    pub flag_sources: batlehub_web::FlagSources,
+    pub exposure_config: batlehub_web::ExposureConfig,
     pub ip_blocking_cfg: Option<IpBlockingConfig>,
     /// Resolved `[server].trusted_proxies` (or the deprecated
     /// `[ip_blocking]` fallback). Registered as `app_data` so the middleware
@@ -239,6 +247,11 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
         beta_channel_store,
         team_namespace_store,
         policy_repo,
+        bundle_history,
+        advisory_repo,
+        flag_svc,
+        flag_sources,
+        exposure_config,
         ip_blocking_cfg,
         proxy_trust,
         registry_host_map,
@@ -313,6 +326,11 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
             .app_data(web::Data::new(Arc::clone(&beta_channel_store)))
             .app_data(web::Data::new(Arc::clone(&team_namespace_store)))
             .app_data(web::Data::new(Arc::clone(&policy_repo)))
+            .app_data(web::Data::new(Arc::clone(&bundle_history)))
+            .app_data(web::Data::new(Arc::clone(&advisory_repo)))
+            .app_data(web::Data::new(Arc::clone(&flag_svc)))
+            .app_data(web::Data::new(flag_sources.clone()))
+            .app_data(web::Data::new(exposure_config.clone()))
             .app_data(web::Data::new(Arc::clone(&reload_svc)))
             .app_data(web::Data::new(Arc::clone(&banner_svc)))
             .app_data(web::Data::new(proxy_trust.clone()))

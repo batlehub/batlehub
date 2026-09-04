@@ -450,6 +450,8 @@ use batlehub_core::{
 use metrics_exporter_prometheus::PrometheusHandle;
 
 pub use handlers::auth::OidcProviderNames;
+pub use handlers::back_office::exposure::ExposureConfig;
+pub use handlers::flags::FlagSources;
 pub use handlers::front_office::cli_download::CliBinaryPath;
 pub use handlers::healthz::{healthz, livez};
 pub use handlers::metrics::prometheus_metrics;
@@ -487,8 +489,10 @@ pub use spa::{configure_spa, narrow_csp, SpaDir};
         (name = "proxy/jetbrains-marketplace", description = "JetBrains Marketplace — IDE-facing plugin API (search, compatible updates, meta.json, downloads), updatePlugins.xml custom repository, and marketplace-compatible plugin publishing"),
         (name = "proxy/generic",    description = "Generic file mirror — path-addressed proxy cache for upstreams with no package protocol (toolchain tarballs, vendor CDNs), restricted by a path_allow allowlist"),
         (name = "proxy/nodedist",   description = "Node distributions (nvm, fnm, n, mise) — the nodejs.org/dist tree as a typed registry: filtered index.tab/index.json listings, per-release tarballs and SHASUMS256.txt byte-exact"),
+        (name = "proxy/sdkman",     description = "SDKMAN — the candidates API and the download broker as one registry: filtered versions/all, candidates/default and the rendered sdk list table, a blocked version answered `invalid` at candidates/validate, hook scripts relayed byte-exact, the broker's 302 followed server-side and cached"),
         (name = "front-office",     description = "User-facing package information"),
         (name = "user",             description = "Caller-scoped reads — quota, downloads and advisories for whoever holds the token, never for anyone else"),
+        (name = "security",         description = "Supply-chain verdicts (RFC 0018) — what a held or warned version is held for, when it lifts, and a rescan request; what `batlehub why` and `batlehub wait` read"),
         (name = "explore",          description = "Package explorer — browse and search across registries"),
         (name = "back-office",    description = "Admin management (requires Admin role)"),
         (name = "notifications",  description = "Inbound webhook receiver — accepts events from external systems"),
@@ -670,6 +674,12 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 gem_gemspec, gem_info, gem_publish, gem_specs_full, gem_specs_latest,
                 gem_specs_prerelease, gem_unyank, gem_versions, gem_yank,
             },
+            sdkman::{
+                sdkman_candidate_default, sdkman_candidates_all, sdkman_candidates_list,
+                sdkman_download, sdkman_healthcheck, sdkman_hook, sdkman_selfupdate,
+                sdkman_selfupdate_version, sdkman_validate, sdkman_versions_all,
+                sdkman_versions_list,
+            },
             search::{cargo_search, composer_list, composer_search, npm_search},
             terraform::{
                 terraform_discovery, terraform_discovery_host_routed, terraform_mirror_index,
@@ -727,6 +737,11 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(download_zipball);
     cfg.service(download_raw);
     // GitLab (distinct `/-/` delimiter; most-specific first)
+    // RFC 0019 §4.1 `[api_reads]` — typed, read-only, opt-in. Before the
+    // archive and raw routes so `/tags` is not read as a ref.
+    cfg.service(crate::handlers::proxy::forge_api::forge_tags); // …/{o}/{r}/tags
+    cfg.service(crate::handlers::proxy::forge_api::forge_commit); // …/{o}/{r}/commits/{sha}
+    cfg.service(crate::handlers::proxy::forge_api::forge_branch); // …/{o}/{r}/branches/{name}
     cfg.service(gl_download_link); // …/-/releases/{tag}/downloads/{name}
     cfg.service(gl_get_release); // …/-/releases/{tag}
     cfg.service(gl_list_releases); // …/-/releases
@@ -747,7 +762,24 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(nodedist_index_tab); // GET …/nodedist/index.tab   (filtered document)
     cfg.service(nodedist_index_json); // GET …/nodedist/index.json  (filtered document)
     cfg.service(nodedist_file); // GET …/nodedist/{version}/{file}
-                                // Cargo download (literal "download" suffix)
+                                // SDKMAN (RFC 0010 phase 6). The literal `candidates/all`,
+                                // `candidates/list`, `candidates/default/{c}` and
+                                // `candidates/validate/…` routes before the
+                                // `candidates/{c}/{plat}/…` ones, so a candidate named
+                                // `default` or `validate` cannot shadow them; every one
+                                // before the npm catch-alls below.
+    cfg.service(sdkman_candidates_all); // GET …/sdkman/candidates/all      (relayed)
+    cfg.service(sdkman_candidates_list); // GET …/sdkman/candidates/list     (relayed)
+    cfg.service(sdkman_candidate_default); // GET …/sdkman/candidates/default/{c}  (filtered, composed)
+    cfg.service(sdkman_validate); // GET …/sdkman/candidates/validate/{c}/{v}/{plat}  (blocked ⇒ invalid)
+    cfg.service(sdkman_versions_all); // GET …/sdkman/candidates/{c}/{plat}/versions/all   (filtered)
+    cfg.service(sdkman_versions_list); // GET …/sdkman/candidates/{c}/{plat}/versions/list  (filtered)
+    cfg.service(sdkman_hook); // GET …/sdkman/hooks/{phase}/{c}/{v}/{plat}  (relayed, byte-exact)
+    cfg.service(sdkman_healthcheck); // GET …/sdkman/healthcheck             (relayed)
+    cfg.service(sdkman_selfupdate_version); // GET …/sdkman/broker/version/sdkman/{component}/{channel}
+    cfg.service(sdkman_selfupdate); // GET …/sdkman/selfupdate/{channel}/{plat}  (relayed)
+    cfg.service(sdkman_download); // GET …/sdkman/broker/download/{c}/{v}/{plat}  (artifact)
+                                  // Cargo download (literal "download" suffix)
     cfg.service(download_crate);
     // Go module proxy (multi-segment module paths — must precede generic packument routes)
     // Vuln DB passthrough: literal /v1/ paths registered before the module wildcard routes.
@@ -963,6 +995,9 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(my_quota);
     cfg.service(my_downloads);
     cfg.service(my_advisories);
+    // RFC 0018 phase 2: the verdict endpoint.
+    cfg.service(crate::handlers::security::get_verdict); // GET  /api/v1/verdicts/{registry}/{name}/{version}
+    cfg.service(crate::handlers::security::rescan_verdict); // POST /api/v1/verdicts/{registry}/{name}/{version}/rescan
     cfg.service(download_cli);
     cfg.service(list_registries);
     // Explore: detail path before list (more specific first); upstream before
@@ -980,6 +1015,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(explore_package_detail);
     cfg.service(explore_upstream_search);
     cfg.service(explore_packages);
+    cfg.service(crate::handlers::front_office::explore::explore_forge_refs); // RFC 0019 §6.5
     cfg.service(explore_registry_stats);
     cfg.service(list_packages);
     cfg.service(check_access);
@@ -998,6 +1034,19 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(export_audit_log); // specific path before parameterised handlers
     cfg.service(audit_log);
     cfg.service(purge_audit_log);
+    // RFC 0002 (recast): pushed flags and the exposure report.
+    cfg.service(crate::handlers::back_office::exposure::export_exposure); // GET /api/v1/admin/exposure/export
+    cfg.service(crate::handlers::back_office::exposure::exposure_report); // GET /api/v1/admin/exposure
+    cfg.service(crate::handlers::back_office::flags::list_flags); // GET /api/v1/admin/flags
+                                                                  // RFC 0008 §6.4 — the air gap's record, and the sink for a host nothing
+                                                                  // rewrites.
+    cfg.service(crate::handlers::air_gap::list_missing); // GET    /api/v1/admin/air-gap/missing
+    cfg.service(crate::handlers::air_gap::purge_missing); // DELETE /api/v1/admin/air-gap/missing
+    cfg.service(crate::handlers::air_gap::unmirrored_sink); // GET  /_air-gap/unmirrored/{tail}
+    cfg.service(crate::handlers::air_gap::import_bundle); // POST /api/v1/admin/bundle/import
+    cfg.service(crate::handlers::air_gap::list_bundles); // GET  /api/v1/admin/bundle
+    cfg.service(crate::handlers::flags::push_flags); // POST   /api/v1/flags/{source}
+    cfg.service(crate::handlers::flags::revoke_flag); // DELETE /api/v1/flags/{source}/{external_id}
     cfg.service(get_warming_status);
     cfg.service(warm_registry);
     cfg.service(evict_registry);

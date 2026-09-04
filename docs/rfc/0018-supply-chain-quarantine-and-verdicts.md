@@ -1532,3 +1532,98 @@ What differs from the text, each deliberate:
   validated; nothing reads them yet** (phases 3 and 4). `runtime = "none"`
   is refused now rather than then, so a config that disables the sandbox is
   a decision taken on purpose from the first day it can be written.
+
+### 13.3 Phases 2 and 3 landed (2026-09-04)
+
+**Phase 2.** `handlers/security.rs`: the verdict endpoint (`GET
+/api/v1/verdicts/{registry}/{name}/{version}`, `POST …/rescan`), the
+per-registry error bodies of §4.2 (one `native_body` per `RegistryKind`),
+the `X-BatleHub-Verdict` / `-Reason` / `-Available-At` / `-Details` headers
+and `Retry-After` on a time-bound hold, the `404` for a caller without
+`quarantine:read` with the two `403`-always exceptions (`goproxy`, `maven`),
+the findings line for `findings:read`; a `warned` artifact streamed with the
+same headers; held versions hidden from listings through the block filter
+(`held_versions_for` unions them into `blocked_versions_for`, so cargo marks
+`yanked`, conda drops the summary entry and every RFC 0006 caveat holds);
+local publish enqueues `FirstSeen` and persists `quarantined(SCAN_PENDING)`
+(`VerdictService::first_sight_local`); `batlehub why` and `batlehub wait`;
+the console's verdict panel on the selected version with a rescan button
+for `gates:exempt`; the two verbs left `vocabulary_dead_ends.rs`. Tests in
+`security_registry.rs` cover each row of §4.2's direct-request table.
+
+**Phase 3.** `scanners/subprocess.rs` — the `bwrap` runner of §6.3 with
+its argv asserted flag by flag (namespaces, no network unless declared,
+read-only root, one writable mount, empty environment, no shell), rlimits
+from `[worker.sandbox]` set before exec, a stdout cap that kills the child,
+`runtime = "none"` for tests. `scanners/extract.rs` — `ExtractPolicy`:
+traversal, absolute paths, symlinks, hardlinks and devices refused; entry
+count, size and a 100:1 ratio refused rather than truncated; nested archives
+written and not descended; execute bits dropped. The scanners:
+`postmortem` (project materialised per ecosystem, synthetic lockfile *and
+manifest*, `--no-config`, the timeline's transitions), `trivy` (the client
+against a server or its own database, SBOM first, extracted tree second),
+`guarddog`, `sigstore` (npm attestations and Rekor inclusion). The worker
+fetches the artifact — cache first, upstream second, never cached by it —
+only when a scanner says `needs_artifact()`, and the listing for
+`needs_listing()`. `Containerfile.worker`, the chart's `worker.enabled`
+Deployment (memory-backed scratch, optional `runtimeClassName`) and the
+Trivy sub-chart dependency; docs in the configuration guide and the CLI
+page. What differs from the text, each deliberate:
+
+- **The verdict reaches the response through a task-local slot, not a
+  `RuleDecision` field.** Sixty sites build or match `Deny { reason }`; a
+  new field would have touched every one for the benefit of one rule. The
+  gate leaves its verdict in `with_request_verdict`'s scope around
+  `evaluate_rules`, and `ProxyResponse::Denied` carries it as an `Option`;
+  a served `warned` stream is wrapped in `ProxyResponse::Warned`.
+- **The middleware of §6.4 is a function in `proxy_stream`.** Every
+  artifact route already funnels through it, and a middleware would have
+  had to re-derive the registry kind and the caller's grants from a
+  response it could no longer ask about.
+- **`candidates`-style permission checks read grants, not the chain.**
+  `hold_visibility` asks `authorize_grants_public` for `quarantine:read`
+  and `findings:read`: running the rule chain to decide who may see a
+  verdict would run the gate on the gate. The rescan endpoint reads
+  `gates:exempt` against the coordinate, as the exemption endpoints do;
+  `role:admin` does not hold it by default (RFC 0015 §10) and a grant is
+  written for it.
+- **The verdict endpoint re-judges when it can.** With the version's
+  metadata cached — the case a refused request leaves behind — it calls
+  `VerdictService::current`, so a lifted age hold answers as served; with
+  nothing cached it answers the stored row. `batlehub wait` therefore sleeps
+  to `available_at` and asks again, rather than trusting the row.
+- **`min_age` still applies to local publishes.** §4.2 says it should not;
+  the local read path judges with the publish time as `published_at`, and
+  telling the gate a version is local needs a signal the metadata does not
+  carry yet. Recorded rather than papered over.
+- **postmortem needs the manifest beside the lockfile.** §6.3's synthetic
+  lockfile alone is *"no supported ecosystem detected"* (exit 2, observed):
+  `package.json` next to `package-lock.json`, `Cargo.toml` next to
+  `Cargo.lock`, and so on. Its findings on the canary package — a
+  `preinstall` hook (medium), a `postinstall` piping `curl` into `sh`
+  (high), a base64 `eval` and a credential read (medium) — are the fixture
+  the mapping is tested against, and the real binary runs on the same
+  package in the test suite wherever it is on `PATH`. Exit codes: 0 clean,
+  1 the gate tripped (an answer), 2 no ecosystem (not one).
+- **`X-Sdkman`-style header forwarding for scanners does not arise**, but
+  `trivy` always keeps the network namespace: it talks to a server or
+  downloads a database, and the RFC's "no network inside the sandbox"
+  default holds for `postmortem` (offline) and `guarddog` only.
+- **`sigstore` is an existence-and-inclusion check**, not a full
+  verification: the attestation the packument announces is fetched and each
+  transparency-log entry it cites is looked up in Rekor. Certificate chain,
+  SCT and DSSE signature are the client's own `npm audit signatures`.
+  Generic cosign bundles on `X-Artifact-Signature` wait for a registry that
+  carries one.
+- **`guarddog` is read, not observed.** Not provisioned here; its
+  rule-family mapping is from the documented output and says so. The first
+  worker-image run in CI is what turns it into an observation.
+- **The rlimits are `RLIMIT_AS` and `RLIMIT_CPU`**, set on the child before
+  exec: `bwrap` has no flag for them. The seccomp filter of §6.3 (`ptrace`,
+  `mount`, `keyctl`, `bpf`, `io_uring`) is not applied by the runner — that
+  is the pod's `RuntimeDefault` profile in the chart, and a `bwrap`-level
+  filter needs a compiled BPF program the runner does not carry yet.
+- **The chart cannot mount the scratch `noexec`.** An `emptyDir` has no
+  mount-option knob; the extraction policy drops execute bits on every file
+  instead, and the worker never runs anything from the tree regardless.
+

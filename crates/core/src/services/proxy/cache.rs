@@ -23,11 +23,64 @@ use super::{ProxyRequest, ProxyResponse, ProxyService, RequestTiming};
 /// coordinate, so functions below recompute it instead of taking it as a
 /// parameter — `handle.rs` still holds its own copy for the `artifact_is_fresh`
 /// check that picks between the cache-hit and fetch-and-cache paths.
+/// Read the first chunk of a raw response and refuse it when it starts like
+/// a script and the registry's policy is `deny`.
+///
+/// The chunk is put back, so the caller streams the whole file exactly as it
+/// came: this peeks, it does not buffer the artifact.
+async fn peek_for_script(
+    stream: crate::ports::ArtifactStream,
+    coordinate: &str,
+) -> Result<crate::ports::ArtifactStream, CoreError> {
+    use futures::StreamExt;
+    let mut stream = stream;
+    let first = stream.next().await;
+    match first {
+        Some(Ok(chunk)) => {
+            if crate::entities::RawPolicy::starts_like_script(&chunk) {
+                return Err(CoreError::AccessDenied(format!(
+                    "RAW_SCRIPT: '{coordinate}' begins with a script preamble; this registry's \
+                     raw.scripts is \"deny\""
+                )));
+            }
+            let head = futures::stream::once(async move { Ok(chunk) });
+            Ok(Box::pin(head.chain(stream)))
+        }
+        Some(Err(e)) => Err(e),
+        None => Ok(Box::pin(futures::stream::empty())),
+    }
+}
+
 fn artifact_key_for(req: &ProxyRequest) -> String {
     format!("artifact:{}", req.package_id.cache_key())
 }
 
 impl ProxyService {
+    /// [`peek_for_script`] when this is a raw coordinate on a registry whose
+    /// `raw.scripts` is `deny`; the stream untouched otherwise.
+    async fn refuse_raw_script(
+        &self,
+        req: &ProxyRequest,
+        stream: crate::ports::ArtifactStream,
+    ) -> Result<crate::ports::ArtifactStream, CoreError> {
+        use crate::entities::{ForgeCoordinate, ForgeKind, ScriptAction};
+        let Some(ForgeKind::Raw { path, .. }) =
+            ForgeCoordinate::from_package_id(&req.package_id).map(|c| c.kind)
+        else {
+            return Ok(stream);
+        };
+        let deny = {
+            let hot = self.hot.read().await;
+            hot.forge_raw
+                .get(&req.package_id.registry)
+                .is_some_and(|p| p.enabled && p.scripts == ScriptAction::Deny)
+        };
+        if !deny {
+            return Ok(stream);
+        }
+        peek_for_script(stream, &path).await
+    }
+
     /// Serve an artifact from a fresh cache hit. When `verify_on_serve` is set,
     /// the stored bytes are re-hashed against the recorded SHA-256 before being
     /// streamed (failing closed on a lookup error, evicting on a mismatch). See
@@ -258,6 +311,18 @@ impl ProxyService {
             Arc::clone(&self.metrics),
             upstream.stream,
         );
+
+        // RFC 0019 §4.2 *Raw content*, phase 3 — the shebang half of the
+        // script check, on the bytes rather than the name. Only under
+        // `scripts = "deny"`: refusing costs the first chunk and nothing
+        // else, while a `warn` that had to read bytes would mean buffering
+        // every raw file to say something the response already says by name.
+        upstream.stream = self
+            .refuse_raw_script(&req, upstream.stream)
+            .await
+            .inspect_err(|_| {
+                tracing::info!(package = %req.package_id, "raw: refused by scripts = deny");
+            })?;
 
         let skip_artifact_cache = upstream
             .cache_control

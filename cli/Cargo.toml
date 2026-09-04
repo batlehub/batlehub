@@ -40,6 +40,8 @@ dirs = "6"
 comfy-table = "8"
 # Publish payload encoding (npm attachments, checksums)
 base64 = { workspace = true }
+ed25519-dalek = "3"
+regex = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 

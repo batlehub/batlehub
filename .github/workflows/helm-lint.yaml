@@ -25,6 +25,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
+      # The Trivy server sub-chart (RFC 0018 §6.3) is a declared dependency
+      # fetched at build time; `charts/` is not committed.
+      - name: helm dependency build
+        run: helm dependency build helm/batlehub
       - name: helm lint
         run: helm lint helm/batlehub
 

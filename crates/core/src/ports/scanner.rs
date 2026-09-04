@@ -21,6 +21,10 @@ pub struct ScanInput {
     pub artifact: Option<bytes::Bytes>,
     /// The CycloneDX SBOM already recorded for this artifact, when one is.
     pub sbom: Option<serde_json::Value>,
+    /// The registry's own listing document for the package, when a scanner
+    /// asked for it (`needs_listing`): the npm packument is where the
+    /// provenance attestations of a version are announced.
+    pub listing: Option<crate::ports::VersionDocument>,
 }
 
 /// Why a scanner did not answer.
@@ -71,6 +75,19 @@ pub trait ArtifactScanner: Send + Sync {
     /// A scanner declares its own coverage; a registry that lists it for a
     /// kind it does not cover is skipped there, not failed.
     fn supports(&self, kind: RegistryKind) -> bool;
+
+    /// Whether this scanner reads the artifact's bytes (RFC 0018 phase 3).
+    /// The worker fetches them — from the cache, else from upstream — only
+    /// when one of the job's scanners says so, so a metadata-only profile
+    /// costs no egress.
+    fn needs_artifact(&self) -> bool {
+        false
+    }
+
+    /// Whether this scanner reads the package's listing document.
+    fn needs_listing(&self) -> bool {
+        false
+    }
 
     /// Scan. An empty `Ok` is a clean answer; an `Err` is not an answer.
     async fn scan(&self, input: &ScanInput) -> Result<Vec<Finding>, ScannerError>;

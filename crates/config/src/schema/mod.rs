@@ -1,4 +1,6 @@
+pub mod air_gap;
 pub mod auth;
+pub mod flag_sources;
 pub mod forge;
 pub mod network;
 pub mod notifications;
@@ -10,11 +12,24 @@ pub mod server;
 pub mod storage;
 pub mod warnings;
 
+pub use air_gap::{valid_ed25519_hex_key, AirGapConfig};
 pub use auth::{
     ActionsGroupRule, ActionsOidcAuthConfig, AuthConfig, Condition, ConditionMatchType,
     KubernetesAuthConfig, OidcAuthConfig, RuleMatch, TokenAuthConfig, TokenEntry,
 };
-pub use forge::{RefsConfig, MIN_BRANCH_TTL_SECS};
+
+/// A key in an error message: enough to recognise, never the whole of a value
+/// an operator may have pasted from a secret store by mistake.
+fn truncate_key(key: &str) -> String {
+    let head: String = key.chars().take(12).collect();
+    if key.chars().count() > 12 {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+pub use flag_sources::FlagSourceConfig;
+pub use forge::{valid_repo_glob, ApiReadsConfig, RawConfig, RefsConfig, MIN_BRANCH_TTL_SECS};
 pub use network::{
     BasicAuthConfig, BearerAuthConfig, GroupRateLimitConfig, HeaderAuthConfig, IpBlockingConfig,
     RateLimitConfig, RateLimitEnforcement, UpstreamAuthConfig, UpstreamProxyConfig,
@@ -106,6 +121,13 @@ pub struct AppConfig {
     /// Optional webhook and notification configuration.
     #[serde(default)]
     pub notifications: Option<NotificationsConfig>,
+    /// Third parties that may push vulnerability flags (RFC 0002 §4.3).
+    #[serde(default)]
+    pub flag_sources: Vec<FlagSourceConfig>,
+    /// A server that will not dial out (RFC 0008 §4.1). Absent means today's
+    /// behaviour.
+    #[serde(default)]
+    pub air_gap: Option<AirGapConfig>,
     /// Global HTTP/SOCKS proxy applied to all registry upstreams that do not
     /// define their own `[registries.proxy]` section.
     ///
@@ -677,7 +699,39 @@ impl AppConfig {
         self.tiered_policy_warnings(&mut out);
         self.dry_run_warnings(&mut out);
         self.coherence_warnings(&mut out);
+        self.sdkman_warnings(&mut out);
+        self.flag_source_warnings(&mut out);
+        self.air_gap_warnings(&mut out);
         out
+    }
+
+    /// RFC 0010 §4.5: SDKMAN versions its API in the path, so an `upstreams`
+    /// entry without the `/2` is more likely a typo than a choice — but it
+    /// is not ours to reject, because an operator pointing at a mirror may
+    /// have mounted it anywhere.
+    fn sdkman_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        for (index, reg) in self.registries.iter().enumerate() {
+            if reg.registry_type != batlehub_core::entities::RegistryKind::Sdkman.as_str() {
+                continue;
+            }
+            for (i, upstream) in reg.upstreams.iter().enumerate() {
+                let path = upstream.trim_end_matches('/');
+                if path.ends_with("/2") {
+                    continue;
+                }
+                out.push(ConfigWarning::new(
+                    warnings::SDKMAN_UPSTREAM_WITHOUT_API_VERSION,
+                    format!("registries[{index}].upstreams[{i}]"),
+                    format!(
+                        "registry '{}': sdkman upstream '{upstream}' does not end in '/2'. \
+                         SDKMAN's candidates API is versioned in the path \
+                         (https://api.sdkman.io/2); the URL is served as given, so `sdk list` \
+                         will answer 404 if this is a typo",
+                        reg.name
+                    ),
+                ));
+            }
+        }
     }
 
     /// The periodic orphan sweep's grace window is its interval — see
@@ -986,7 +1040,30 @@ impl AppConfig {
             else {
                 continue;
             };
-            if !kind.is_forge() || registry.upstream_auth.is_some() {
+            if !kind.is_forge() {
+                continue;
+            }
+            // RFC 0019 §4.1 phase 3 — raw is off unless written, and the
+            // setup snippet this registry generates (`registry suggest`, the
+            // console's Setup Guide) rewrites the forge's raw host at it
+            // unconditionally. So the operator hands out a snippet pointing
+            // at a path that refuses, and the first person to hit it reads a
+            // `403` as a permissions problem.
+            if registry.raw.as_ref().is_none_or(|r| !r.enabled) {
+                out.push(ConfigWarning::new(
+                    warnings::FORGE_RAW_DISABLED_BUT_LINKED,
+                    format!("registries[{index}].raw"),
+                    format!(
+                        "registry '{}' ({kind}) serves no raw content — '[registries.raw]' is \
+                         absent or disabled — while the setup snippet it generates rewrites the \
+                         forge's raw host at it. Add '[registries.raw]' with enabled = true, or \
+                         tell the people using this registry that raw URLs go direct \
+                         (RFC 0019 §4.1).",
+                        registry.name
+                    ),
+                ));
+            }
+            if registry.upstream_auth.is_some() {
                 continue;
             }
             out.push(ConfigWarning::new(
@@ -2112,6 +2189,8 @@ impl AppConfig {
             Self::validate_registry_upstreams(registry, kind)?;
             Self::validate_registry_path_allow(registry, kind)?;
             Self::validate_registry_release_age(registry, kind)?;
+            Self::validate_registry_broker_url(registry, kind)?;
+            Self::validate_registry_warm_platforms(registry, kind)?;
             Self::validate_registry_refs(registry, kind)?;
             self.validate_registry_security(registry)?;
             Self::validate_registry_readme(registry)?;
@@ -2254,9 +2333,20 @@ impl AppConfig {
         kind: batlehub_core::entities::RegistryKind,
     ) -> Result<()> {
         use batlehub_core::entities::RegistryKind;
-        if !matches!(kind, RegistryKind::Nodedist) {
-            return Ok(());
-        }
+        // What an undated release *is* on each kind, for the error: on
+        // `nodedist` it is the exception, on `sdkman` it is every artifact.
+        let consequence = match kind {
+            RegistryKind::Nodedist => {
+                "A Node release that index.tab no longer lists reaches the gate with no \
+                 publish date: 'true' refuses it, 'false' serves it"
+            }
+            RegistryKind::Sdkman => {
+                "SDKMAN publishes no dates at all, so every artifact reaches the gate without \
+                 one: 'true' refuses every download on this registry, 'false' makes the gate \
+                 inert"
+            }
+            _ => return Ok(()),
+        };
         let namespace_rules = registry
             .namespaces
             .iter()
@@ -2269,14 +2359,78 @@ impl AppConfig {
             if cfg.deny_missing_timestamp.is_none() {
                 bail!(
                     "registry '{}': a release_age_gate rule on a {} registry must set \
-                     'deny_missing_timestamp' explicitly. A Node release that index.tab no \
-                     longer lists reaches the gate with no publish date: 'true' refuses it, \
-                     'false' serves it, and neither is a default this server picks for you \
-                     (RFC 0010 §6.7)",
+                     'deny_missing_timestamp' explicitly. {consequence}, and neither is a \
+                     default this server picks for you (RFC 0010 §6.7)",
                     registry.name,
                     kind
                 );
             }
+        }
+        Ok(())
+    }
+
+    /// RFC 0010 §6.9: `warm_platforms` names the files warming fetches on
+    /// the two platform-addressed kinds, and means nothing anywhere else.
+    /// On `sdkman` the set is closed, so a misspelling is refused here
+    /// rather than sent to the broker as a path segment.
+    fn validate_registry_warm_platforms(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+    ) -> Result<()> {
+        use batlehub_core::entities::RegistryKind;
+        if registry.cache.warm_platforms.is_empty() {
+            return Ok(());
+        }
+        match kind {
+            RegistryKind::Sdkman => {
+                for p in &registry.cache.warm_platforms {
+                    if batlehub_core::services::sdkman::parse_platform(p).is_none() {
+                        bail!(
+                            "registry '{}': cache.warm_platforms entry '{p}' is not an SDKMAN \
+                             platform (one of {})",
+                            registry.name,
+                            batlehub_core::services::sdkman::PLATFORMS.join(", ")
+                        );
+                    }
+                }
+                Ok(())
+            }
+            RegistryKind::Nodedist => Ok(()),
+            other => bail!(
+                "registry '{}': 'cache.warm_platforms' is only meaningful on sdkman and \
+                 nodedist registries, whose artifact is one file per platform, not {other}",
+                registry.name
+            ),
+        }
+    }
+
+    /// RFC 0010 §4.5: `broker_url` is SDKMAN's second upstream and nobody
+    /// else's. Same class as `index_url` on a non-cargo registry — a silently
+    /// ignored option is a misconfiguration that looks like a proxy bug — and
+    /// a relative value would fail at the first `sdk install` instead of at
+    /// boot.
+    fn validate_registry_broker_url(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+    ) -> Result<()> {
+        use batlehub_core::entities::RegistryKind;
+        let Some(url) = registry.broker_url.as_deref() else {
+            return Ok(());
+        };
+        if kind != RegistryKind::Sdkman {
+            bail!(
+                "registry '{}': 'broker_url' is only meaningful on an sdkman registry (it is \
+                 SDKMAN's download broker), not {}",
+                registry.name,
+                kind
+            );
+        }
+        if !(url.starts_with("http://") || url.starts_with("https://")) || url.len() <= 8 {
+            bail!(
+                "registry '{}': 'broker_url' must be an absolute http(s) URL, got '{url}' — it \
+                 is joined with '/download/{{candidate}}/{{version}}/{{platform}}' and fetched",
+                registry.name
+            );
         }
         Ok(())
     }
@@ -2408,6 +2562,25 @@ impl AppConfig {
             bail!(
                 "[server] roles is empty: a process that is neither proxy nor worker does nothing"
             );
+        }
+        self.validate_flag_sources()?;
+        self.validate_air_gap()?;
+        // RFC 0019 §4.3 — a raw ceiling above the global artifact limit is a
+        // number the global one would silently win over.
+        for reg in &self.registries {
+            if let Some(raw) = &reg.raw {
+                if let Some(global) = self.limits.max_artifact_size_bytes {
+                    if raw.enabled && raw.max_size_bytes > global {
+                        bail!(
+                            "registry '{}': raw.max_size_bytes = {} exceeds \
+                             [limits].max_artifact_size_bytes = {global}; the global ceiling \
+                             would win and the registry's number would be a lie",
+                            reg.name,
+                            raw.max_size_bytes
+                        );
+                    }
+                }
+            }
         }
         let has_security = self.registries.iter().any(|r| r.security.is_some());
         for name in &self.worker.registries {
@@ -2543,6 +2716,178 @@ impl AppConfig {
         }
     }
 
+    /// RFC 0008 §4.5 — an air gap is a promise about the whole instance, so
+    /// the things that contradict it are refused at load rather than
+    /// discovered from a log.
+    fn validate_air_gap(&self) -> Result<()> {
+        // The hex check applies whether or not the mode is on: a malformed
+        // key must never read as "signing is configured". This is also the
+        // check `[registries.signing].trusted_keys` never had — it was parsed
+        // at verify time, so a typo surfaced as a `502` on the first download
+        // and named nothing.
+        for (index, reg) in self.registries.iter().enumerate() {
+            if let Some(signing) = &reg.signing {
+                for key in &signing.trusted_keys {
+                    if !crate::schema::valid_ed25519_hex_key(key) {
+                        bail!(
+                            "registries[{index}] '{}': signing.trusted_keys entry '{}' is not a \
+                             hex-encoded 32-byte ed25519 public key (64 hex characters); an \
+                             unusable key reads as 'signing is configured' and fails only at the \
+                             first download",
+                            reg.name,
+                            truncate_key(key)
+                        );
+                    }
+                }
+            }
+        }
+        let Some(air_gap) = &self.air_gap else {
+            return Ok(());
+        };
+        for key in &air_gap.bundle_trusted_keys {
+            if !crate::schema::valid_ed25519_hex_key(key) {
+                bail!(
+                    "[air_gap] bundle_trusted_keys entry '{}' is not a hex-encoded 32-byte \
+                     ed25519 public key (64 hex characters)",
+                    truncate_key(key)
+                );
+            }
+        }
+        if !air_gap.enabled {
+            return Ok(());
+        }
+        if air_gap.bundle_trusted_keys.is_empty() {
+            bail!(
+                "[air_gap] enabled = true with no bundle_trusted_keys: import would accept any \
+                 bundle, and an air-gapped instance whose only content path is unauthenticated \
+                 is worse than one with no content path (RFC 0008 §4.5)"
+            );
+        }
+        if self.proxy.is_some() {
+            bail!(
+                "[air_gap] enabled = true together with [proxy]: an egress proxy is a route off \
+                 the site, and which one wins is not obvious enough to pick silently"
+            );
+        }
+        for (index, reg) in self.registries.iter().enumerate() {
+            if reg.proxy.is_some() {
+                bail!(
+                    "[air_gap] enabled = true together with registries[{index}] '{}' \
+                     [registries.proxy]: an egress proxy is a route off the site",
+                    reg.name
+                );
+            }
+            if !reg.cache.warm_packages.is_empty() || !reg.cache.warm_paths.is_empty() {
+                bail!(
+                    "[air_gap] enabled = true with warming configured on registries[{index}] \
+                     '{}': warming fetches from an upstream this mode guarantees will never be \
+                     dialled. Seed the instance with a bundle instead (RFC 0008 §4.3)",
+                    reg.name
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// RFC 0002 §4.3: a flag source is a credential with a ceiling, and both
+    /// halves are checked at load — a push endpoint whose secret is empty
+    /// authenticates nobody, and a ceiling nobody can parse would fall to the
+    /// weakest effect and silently turn every block into a note.
+    fn validate_flag_sources(&self) -> Result<()> {
+        let mut seen = std::collections::HashSet::new();
+        for (i, src) in self.flag_sources.iter().enumerate() {
+            let path = format!("flag_sources[{i}]");
+            if !FlagSourceConfig::valid_name(&src.name) {
+                bail!(
+                    "{path}: name '{}' is not a valid source name (lower-case letters, digits, \
+                     '-' and '_', at most 64 characters)",
+                    src.name
+                );
+            }
+            if !seen.insert(src.name.as_str()) {
+                bail!("{path}: duplicate flag source name '{}'", src.name);
+            }
+            if src.secret.trim().is_empty() {
+                bail!(
+                    "{path}: '{}' has an empty secret; the HMAC signature is the only credential \
+                     the push endpoint has, so an empty key lets anyone on the network flag \
+                     (or block) packages",
+                    src.name
+                );
+            }
+            if src.max_effect().is_none() {
+                bail!(
+                    "{path}: unknown max_effect '{}' (expected inform, warn, gate or hard_block)",
+                    src.max_effect
+                );
+            }
+            for reg in &src.registries {
+                if !self.registries.iter().any(|r| &r.name == reg) {
+                    bail!("{path}: registries names '{reg}', which is not a configured registry");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// RFC 0008 §4.5 — two states that are legitimate and worth saying out
+    /// loud, because in both the operator has configured something that does
+    /// not mean what it looks like.
+    fn air_gap_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        let Some(air_gap) = &self.air_gap else {
+            return;
+        };
+        if air_gap.enabled {
+            for (index, reg) in self.registries.iter().enumerate() {
+                if matches!(reg.mode, RegistryMode::Hybrid) {
+                    out.push(ConfigWarning::new(
+                        warnings::AIR_GAP_HYBRID_REGISTRY,
+                        format!("registries[{index}].mode"),
+                        format!(
+                            "registry '{}' is hybrid and [air_gap] is on, so its fall-through to \
+                             upstream can never happen: it behaves as a local registry. \
+                             Publishing to it still works — this is allowed, and is here so it \
+                             is not a surprise.",
+                            reg.name
+                        ),
+                    ));
+                }
+            }
+        } else if !air_gap.bundle_trusted_keys.is_empty() {
+            out.push(ConfigWarning::new(
+                warnings::AIR_GAP_KEYS_UNUSED,
+                "air_gap.bundle_trusted_keys",
+                "[air_gap] has bundle_trusted_keys but enabled = false. The keys are kept — \
+                 staging a bundle on a connected instance is how one is built — and they \
+                 authorise imports only; nothing about serving changes.",
+            ));
+        }
+    }
+
+    /// RFC 0002 §4.3: a source allowed `hard_block` can refuse every
+    /// download of what it names, on every registry it may flag. That is
+    /// the point of the ceiling, and worth one line at startup.
+    fn flag_source_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        for (i, src) in self.flag_sources.iter().enumerate() {
+            if src.max_effect() == Some(batlehub_core::entities::FlagEffect::HardBlock) {
+                let scope = if src.registries.is_empty() {
+                    "every registry".to_owned()
+                } else {
+                    src.registries.join(", ")
+                };
+                out.push(ConfigWarning::new(
+                    warnings::FLAG_SOURCE_CAN_HARD_BLOCK,
+                    format!("flag_sources[{i}].max_effect"),
+                    format!(
+                        "flag source '{}' may hard-block: a push from it refuses downloads on {scope} \
+                         with no threshold and no bypass, only a gate exemption on the version",
+                        src.name
+                    ),
+                ));
+            }
+        }
+    }
+
     fn security_warnings(&self, out: &mut Vec<ConfigWarning>) {
         for (index, registry) in self.registries.iter().enumerate() {
             let Some(sec) = &registry.security else {
@@ -2625,6 +2970,101 @@ impl AppConfig {
                 refs.branch_ttl_secs,
                 MIN_BRANCH_TTL_SECS
             );
+        }
+        Self::validate_registry_raw(registry, kind)?;
+        Self::validate_registry_api_reads(registry, kind)?;
+        // An unparsable action must not fall back to a default: `mutable_refs`
+        // and `tag_moved` decide whether a request is served or refused, and
+        // an operator who typed `"denied"` expecting refusals would get the
+        // opposite of what they wrote.
+        for (key, value) in [
+            ("mutable_refs", &refs.mutable_refs),
+            ("tag_moved", &refs.tag_moved),
+        ] {
+            if batlehub_core::entities::RefAction::parse(value).is_none() {
+                bail!(
+                    "registry '{}': refs.{key} = '{}' is not a valid action (expected \
+                     \"warn\" or \"deny\")",
+                    registry.name,
+                    value
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// `[registries.raw]` (RFC 0019 §4.3): forge kinds only, a ceiling that
+    /// means something, and an allowlist that cannot silently allow or refuse
+    /// everything through a typo.
+    fn validate_registry_raw(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+    ) -> Result<()> {
+        let Some(raw) = &registry.raw else {
+            return Ok(());
+        };
+        if !kind.is_forge() {
+            bail!(
+                "registry '{}': '[registries.raw]' is only meaningful on a git-forge registry \
+                 (github, gitlab, forgejo), not {}",
+                registry.name,
+                kind
+            );
+        }
+        if raw.enabled && raw.max_size_bytes == 0 {
+            bail!(
+                "registry '{}': raw.max_size_bytes = 0 with raw.enabled = true; unbounded raw \
+                 content is exactly what this section exists to close",
+                registry.name
+            );
+        }
+        if let Some(scripts) = &raw.scripts {
+            if batlehub_core::entities::ScriptAction::parse(scripts).is_none() {
+                bail!(
+                    "registry '{}': raw.scripts = '{scripts}' is not a valid action (expected \
+                     \"warn\", \"deny\" or \"ignore\")",
+                    registry.name
+                );
+            }
+        }
+        for pattern in &raw.repos {
+            if !crate::schema::valid_repo_glob(pattern) {
+                bail!(
+                    "registry '{}': raw.repos entry '{pattern}' is not an owner/repo glob; a typo \
+                     here either allows every repository or none, silently",
+                    registry.name
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// `[registries.api_reads]` (RFC 0019 §4.3): forge kinds only, and a
+    /// closed family list — `contents` and `git/blobs` are raw by another
+    /// door, and an unknown family would proxy writes.
+    fn validate_registry_api_reads(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+    ) -> Result<()> {
+        let Some(api) = &registry.api_reads else {
+            return Ok(());
+        };
+        if !kind.is_forge() {
+            bail!(
+                "registry '{}': '[registries.api_reads]' is only meaningful on a git-forge \
+                 registry (github, gitlab, forgejo), not {}",
+                registry.name,
+                kind
+            );
+        }
+        for family in &api.families {
+            if batlehub_core::entities::ApiReadFamily::parse(family).is_none() {
+                bail!(
+                    "registry '{}': api_reads.families entry '{family}' is not one of tags, \
+                     commits, branches",
+                    registry.name
+                );
+            }
         }
         Ok(())
     }

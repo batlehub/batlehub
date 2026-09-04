@@ -13,11 +13,11 @@ use super::super::http_client::{
 use super::super::ssrf;
 use super::models::{FjAsset, FjBranch, FjCommit, FjRelease, FjTag};
 use batlehub_core::{
-    entities::{is_commit_sha, PackageId, PackageMetadata, RefKind},
+    entities::{is_commit_sha, ForgeProvenance, PackageId, PackageMetadata, RefKind},
     error::CoreError,
     ports::{
-        BudgetRole, DocumentKind, FetchedArtifact, ForgeCommit, ForgeRegistry, RateLimitBudget,
-        RegistryClient, ResolvedTarget, VersionDocument,
+        BudgetRole, DocumentKind, FetchedArtifact, ForgeCommit, ForgeRegistry, ForgeTag,
+        RateLimitBudget, RegistryClient, ResolvedTarget, VersionDocument,
     },
 };
 
@@ -250,6 +250,79 @@ impl ForgeRegistry for ForgejoRegistryClient {
             publisher: committer.and_then(|c| {
                 person_label(c.username.as_deref(), c.name.as_deref(), c.email.as_deref())
             }),
+        })
+    }
+
+    /// `GET /repos/{o}/{r}/tags` — confirmed against codeberg.org on
+    /// 2026-09-04: `name`, `id` (the tag object or the commit) and
+    /// `commit.{sha, created}`. Forgejo dates the *commit*, never a tagger,
+    /// which is the same limitation the parity table records for its
+    /// by-name endpoint.
+    async fn tags(&self, owner_repo: &str) -> Result<Vec<ForgeTag>, CoreError> {
+        let url = format!("{}/repos/{}/tags?limit=100", self.api_base_url, owner_repo);
+        let resp = self.api_get(&url).await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(CoreError::NotFound(format!("{owner_repo} not found")));
+        }
+        let tags: Vec<FjTag> = resp
+            .error_for_status()
+            .map_err(to_registry_error)?
+            .json()
+            .await
+            .map_err(to_registry_error)?;
+        Ok(tags
+            .into_iter()
+            .filter_map(|t| {
+                Some(ForgeTag {
+                    name: t.name?,
+                    sha: t.commit.sha,
+                    date: parse_date(t.commit.created.as_deref()),
+                })
+            })
+            .collect())
+    }
+
+    /// The commit's own signature, as Forgejo verified it. Forgejo has no
+    /// attestation store, so a release asset has no provenance of its own and
+    /// the answer is the commit's — never `Unverifiable`, which is GitLab's
+    /// alone (RFC 0019 decision 8).
+    async fn provenance(
+        &self,
+        owner_repo: &str,
+        sha: &str,
+        _asset_digest: Option<&str>,
+    ) -> Result<ForgeProvenance, CoreError> {
+        let url = format!(
+            "{}/repos/{}/git/commits/{}",
+            self.api_base_url, owner_repo, sha
+        );
+        let resp = self.api_get(&url).await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(ForgeProvenance::Missing);
+        }
+        let c: FjCommit = resp
+            .error_for_status()
+            .map_err(to_registry_error)?
+            .json()
+            .await
+            .map_err(to_registry_error)?;
+        let v = c.commit.as_ref().and_then(|d| d.verification.as_ref());
+        Ok(match v {
+            Some(v) if v.verified => ForgeProvenance::Verified {
+                detail: v.reason.clone().unwrap_or_else(|| "valid".to_owned()),
+            },
+            Some(v) => {
+                let reason = v.reason.clone().unwrap_or_default();
+                // `gpg.error.not_signed_commit` is "there is no signature",
+                // which is `Missing`; anything else is a signature that
+                // failed to verify.
+                if reason.is_empty() || reason.contains("not_signed") {
+                    ForgeProvenance::Missing
+                } else {
+                    ForgeProvenance::Invalid { reason }
+                }
+            }
+            None => ForgeProvenance::Missing,
         })
     }
 

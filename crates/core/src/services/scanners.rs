@@ -18,8 +18,8 @@ use crate::entities::{
     UpstreamState,
 };
 use crate::ports::{
-    ArtifactScanner, PackageRepository, ScanInput, ScannerError, UpstreamStatusPort,
-    VulnerabilityRepository,
+    AdvisoryRepository, ArtifactScanner, PackageRepository, ScanInput, ScannerError,
+    UpstreamStatusPort, VulnerabilityRepository,
 };
 use crate::rules::{Rule, RuleContext, RuleDecision};
 
@@ -95,6 +95,105 @@ impl ArtifactScanner for RecordedVulnerabilityScanner {
                     "fixed_version": r.fixed_version,
                 }))
             })
+            .collect())
+    }
+}
+
+/// What the forge says about who made this commit, as a finding (RFC 0019
+/// phase 5).
+///
+/// The verdict is about a *version*, and on a forge a version is a commit —
+/// so what this asks for is the commit's own signature. A release asset's
+/// build attestation is keyed on the asset's digest, which is a
+/// sub-coordinate the verdict does not have; the read path carries that in
+/// `extra.forge` for the response, and the RFC's §13 records it as the one
+/// provenance source the worker cannot reach.
+///
+/// A forge with no answer reports `PROVENANCE_MISSING`, never a guess.
+/// `PROVENANCE_UNVERIFIABLE` comes from GitLab's release evidence alone —
+/// `provenance_never_unverifiable_outside_gitlab` in the adapters pins that.
+pub struct ForgeProvenanceScanner {
+    /// The registry's client. Captured rather than looked up: the internal
+    /// scanner map is rebuilt on every config reload from the same pass that
+    /// builds the clients, so this handle is exactly as fresh as the map
+    /// holding it.
+    pub client: Arc<dyn crate::ports::RegistryClient>,
+}
+
+pub const FORGE_PROVENANCE_SCANNER: &str = "forge_provenance";
+
+#[async_trait]
+impl ArtifactScanner for ForgeProvenanceScanner {
+    fn name(&self) -> &str {
+        FORGE_PROVENANCE_SCANNER
+    }
+
+    fn supports(&self, kind: RegistryKind) -> bool {
+        kind.is_forge()
+    }
+
+    async fn scan(&self, input: &ScanInput) -> Result<Vec<Finding>, ScannerError> {
+        let id = &input.package.id;
+        let Some(forge) = self.client.forge() else {
+            return Err(ScannerError::Unsupported(format!(
+                "registry '{}' has no forge client",
+                id.registry
+            )));
+        };
+        // The digest the read path recorded for a release asset, when the
+        // coordinate is one; the commit otherwise.
+        let asset_digest = input
+            .package
+            .extra
+            .get(crate::entities::FORGE_EXTRA_KEY)
+            .and_then(|f| f.get(crate::entities::FORGE_ASSET_DIGEST))
+            .and_then(|v| v.as_str());
+        let provenance = forge
+            .provenance(&id.name, &id.version, asset_digest)
+            .await
+            .map_err(|e| ScannerError::Upstream(format!("provenance lookup failed: {e}")))?;
+        let Some(code) = provenance.reason_code() else {
+            return Ok(Vec::new());
+        };
+        Ok(vec![Finding::new(
+            FORGE_PROVENANCE_SCANNER,
+            FindingKind::Provenance,
+            code,
+            Severity::Low,
+            format!("{}: {}", provenance.state(), provenance.detail()),
+        )])
+    }
+}
+
+/// The pushed flags covering the version (RFC 0002 §13 decision 1), as
+/// findings: `hard_block` is `SOC_VERDICT`, `gate` a vulnerability at its
+/// severity, `warn`/`inform` a low one for the record. Re-emitted on every
+/// scan, so a revoked flag disappears with the next rescan — `record_scan`
+/// drops the previous run's `flags` findings for that reason.
+pub struct FlagsScanner {
+    pub repo: Arc<dyn AdvisoryRepository>,
+}
+
+#[async_trait]
+impl ArtifactScanner for FlagsScanner {
+    fn name(&self) -> &str {
+        crate::entities::FLAGS_SCANNER
+    }
+    fn supports(&self, _: RegistryKind) -> bool {
+        true
+    }
+    async fn scan(&self, input: &ScanInput) -> Result<Vec<Finding>, ScannerError> {
+        let id = &input.package.id;
+        let now = chrono::Utc::now();
+        let flags = self
+            .repo
+            .live_flags_for_package(&id.registry, &id.name, now)
+            .await
+            .map_err(|e| ScannerError::Upstream(format!("flag store unreadable: {e}")))?;
+        Ok(flags
+            .iter()
+            .filter(|f| f.is_live(now) && f.covers(&id.version))
+            .map(|f| f.as_finding())
             .collect())
     }
 }
@@ -286,6 +385,7 @@ mod tests {
             purl: "pkg:npm/p@1.0.0".into(),
             artifact: None,
             sbom: None,
+            listing: None,
         }
     }
 

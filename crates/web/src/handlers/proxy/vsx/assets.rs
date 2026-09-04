@@ -16,7 +16,7 @@ use batlehub_config::schema::RegistryMode;
 use batlehub_core::{
     entities::PackageId,
     error::CoreError,
-    services::{LocalRegistryService, ProxyRequest, ProxyResponse, ProxyService},
+    services::{LocalRegistryService, ProxyRequest, ProxyService},
 };
 
 use super::protocol::asset_type;
@@ -344,12 +344,13 @@ pub(super) async fn vsix_bytes(
         ip_address: None,
         user_agent: None,
     };
-    match svc.handle(req).await.map_err(AppError::from)? {
-        ProxyResponse::Denied { reason } => Err(AppError::forbidden(reason)),
-        ProxyResponse::Stream(stream) | ProxyResponse::ForgeStream { stream, .. } => {
-            super::super::common::collect_storage_stream(stream).await
-        }
-    }
+    let stream = svc
+        .handle(req)
+        .await
+        .map_err(AppError::from)?
+        .into_stream()
+        .map_err(|(reason, _)| AppError::forbidden(reason))?;
+    super::super::common::collect_storage_stream(stream).await
 }
 
 #[cfg(test)]

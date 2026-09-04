@@ -24,6 +24,8 @@ BatleHub's tests fall into six layers, in increasing order of infrastructure cos
 | **Heavy client** | `tests/heavy/*.sh` | real Postgres **and a real client** — VS Code, IntelliJ, Bundler, npm, pip, ovsx, micromamba, dotnet, composer, terraform, nvm, mise, cargo, go, mvn, apt/dnf | `task test:heavy`, or one `task test:<ecosystem>-heavy` |
 | **Heavy authorization** | `tests/heavy/authz.sh` | real Postgres, grants from a **real config file**, and the same clients | `task test:authz-heavy`, or `task test:authz-matrix-heavy` for the fast half |
 | **Fuzz** | `fuzz/fuzz_targets/*.rs` | nightly toolchain to *run*, none to check | `task fuzz:check`, `task fuzz` |
+| **Editor patch** | `patches/che-code/*.test.ts` | none — Node strips the types itself | `task test:patch` |
+| **API contract** | `crates/web/tests/openapi_contract.rs` | none — walks the generated spec *and* the handler sources | `cargo test -p batlehub-web --test openapi_contract` |
 
 The in-process layer is the workhorse: every test there spins up a real
 actix-web application wired to `InMemoryPackageRepository`,
@@ -60,6 +62,8 @@ task test:pg-local-registry   # Postgres — PostgresLocalRegistry
 task test:pg-storage-router   # Postgres — StorageRouter
 task test:pg-artifact-meta    # Postgres — PgArtifactMetaRepository
 task test:pg-vulnerability    # Postgres — PgVulnerabilityRepository
+task test:pg-air-gap          # Postgres — the miss log's upsert, cap and purge (RFC 0008)
+task test:patch               # the editor credential patch (RFC 0011) — plain `node --test`
 task test:s3                  # MinIO    — S3StorageBackend (feature storage-s3)
 
 # Repo interop (real apt/dnf/pacman consume signed repos)
@@ -77,7 +81,10 @@ task test:nuget-heavy         # `dotnet nuget push` / `package search` / `add pa
 task test:composer-heavy      # local + proxy resolution with Packagist disabled
 task test:terraform-heavy     # `terraform init` over TLS, host-routed discovery
 task test:nvm-heavy           # `nvm ls-remote` / `nvm install` against a nodedist registry
-task test:mise-heavy          # `mise install github:…` through a forge registry (RFC 0019)
+task test:sdkman-heavy        # `sdk list` / `sdk install java` against an sdkman registry (RFC 0010)
+task test:mise-heavy          # `mise install github:…` through a forge registry (RFC 0019),
+                              # then the whole air gap: plan, seed, export, import into a
+                              # second `[air_gap]` instance, install through it (RFC 0008)
 task test:cargo-heavy         # RFC 0018 §4.4: yanked mark, 403/404 refusal, recovery, `cargo publish`
 task test:go-heavy            # …same axes for `go`, plus the GOPROXY `direct` fallback and the sumdb
 task test:maven-heavy         # …same for `mvn`, incl. its cached failure and `deploy:deploy-file`

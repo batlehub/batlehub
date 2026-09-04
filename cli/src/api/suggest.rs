@@ -49,22 +49,27 @@ pub struct SuggestedRegistry {
     pub client_env: Vec<(String, String)>,
     /// Extra caveat printed alongside the block.
     pub note: Option<String>,
+    /// `[registries.cache] warm_packages` entries, `name@version`, from the
+    /// files that pin a toolchain version (`.nvmrc`, `.sdkmanrc`).
+    pub warm_packages: Vec<String>,
 }
 
 impl SuggestedRegistry {
     /// The proxy base URL clients should point at, e.g.
     /// `https://hub.example.com/proxy/node-dist/generic`.
     ///
-    /// Only the path-addressed types carry the type as a URL segment
-    /// (`…/proxy/{name}/generic/{path}`). Typed adapters route straight off the
-    /// registry name — GitHub is `…/proxy/{name}/{owner}/{repo}/…`, with no
-    /// `/github/` in the path.
+    /// The path-addressed types carry the type as a URL segment
+    /// (`…/proxy/{name}/generic/{path}`), and so do the two toolchain kinds
+    /// of RFC 0010 (`…/proxy/{name}/nodedist/index.tab`,
+    /// `…/proxy/{name}/sdkman/candidates/all`). The other typed adapters
+    /// route straight off the registry name — GitHub is
+    /// `…/proxy/{name}/{owner}/{repo}/…`, with no `/github/` in the path.
     pub fn proxy_url(&self, server_url: &str) -> String {
-        let base = format!("{}/proxy/{}", server_url.trim_end_matches('/'), self.name);
-        match self.registry_type.parse::<RegistryKind>() {
-            Ok(kind) if kind.is_path_addressed() => format!("{base}/{kind}"),
-            _ => base,
-        }
+        format!(
+            "{}{}",
+            server_url.trim_end_matches('/'),
+            proxy_base_path(&self.name, &self.registry_type)
+        )
     }
 
     /// `client_env` with `{proxy}` resolved against `server_url`.
@@ -182,6 +187,115 @@ const BUCKET_HOSTS: &[&str] = &[
 
 /// mise backend prefixes that imply a registry even when the lock records no
 /// URL (`cargo:`, `pipx:` and friends install from the ecosystem registry).
+/// The path this download takes through BatleHub, or `None` when nothing
+/// mirrors its host (RFC 0008 §4.2).
+///
+/// A **path**, not a full URL: a plan built against one server is imported on
+/// another, and a host baked into every entry would make the plan a statement
+/// about the machine that produced it rather than about the estate.
+///
+/// The rewrite is the same table `--mise` emits — one source, so what the
+/// seed fetches is exactly what mise would fetch. That is the property that
+/// makes a successful seed evidence the rewrite table is right, which is what
+/// `unmirrored_hosts` cannot prove on its own.
+pub(crate) fn proxy_path_for(
+    url: &str,
+    registry_name: &str,
+    registry_type: &str,
+) -> Option<String> {
+    // The same base the rewrite rules use, type segment and all. Without it
+    // a `generic` mirror plans `/proxy/{name}/v24/node.tar.gz` while the
+    // route is `/proxy/{name}/generic/v24/node.tar.gz`, and every seeded
+    // entry 404s — the path-addressed kinds are exactly the ones RFC 0008's
+    // toolchain estate leans on.
+    let proxy = proxy_base_path(registry_name, registry_type);
+    if registry_type == "generic" {
+        let (host, _) = split_url(url)?;
+        let preset = generic_preset(host)?;
+        let upstream = preset.upstream.trim_end_matches('/');
+        let rest = url.strip_prefix(upstream)?.trim_start_matches('/');
+        return Some(format!("{proxy}/{rest}"));
+    }
+    for (pattern, replacement) in typed_url_replacements(registry_type) {
+        let Ok(re) = regex::Regex::new(pattern) else {
+            continue;
+        };
+        if let Some(caps) = re.captures(url) {
+            let mut out = replacement.replace("{proxy}", &proxy);
+            // `$1`..`$9`, highest first so `$10` is never eaten by `$1`.
+            for i in (1..=9).rev() {
+                let group = caps.get(i).map(|m| m.as_str()).unwrap_or("");
+                out = out.replace(&format!("${i}"), group);
+            }
+            return Some(out);
+        }
+    }
+    None
+}
+
+/// `/proxy/{name}` plus the type segment the path-addressed kinds carry.
+///
+/// One rule, shared by the URL rewrite rules ([`SuggestedRegistry::proxy_url`])
+/// and by the plan's own paths, because a plan whose paths disagree with the
+/// rules it emits is a bundle seeded from 404s.
+pub(crate) fn proxy_base_path(registry_name: &str, registry_type: &str) -> String {
+    let base = format!("/proxy/{registry_name}");
+    match registry_type.parse::<RegistryKind>() {
+        Ok(kind)
+            if kind.is_path_addressed()
+                || matches!(kind, RegistryKind::Nodedist | RegistryKind::Sdkman) =>
+        {
+            format!("{base}/{kind}")
+        }
+        _ => base,
+    }
+}
+
+/// The registry *kind* a host's downloads go through, for RFC 0008's plan.
+///
+/// Same table the suggester reads, asked a narrower question: planning needs
+/// to know whether *some* configured registry of that kind mirrors the host,
+/// not what a new registry should be called.
+pub(crate) fn registry_kind_for_host(host: &str) -> Option<&'static str> {
+    if let Some((_, kind, _)) = TYPED_HOSTS.iter().find(|(h, _, _)| *h == host) {
+        return Some(kind);
+    }
+    // A generic mirror can front any host, so a host with a preset is
+    // mirrorable as `generic` — and one without is not mirrorable at all
+    // until an operator writes a registry for it.
+    generic_preset(host).map(|_| "generic")
+}
+
+/// Why a backend cannot come through BatleHub, or `None` when it can.
+///
+/// A backend that downloads over HTTP is covered by the URL rules; one that
+/// shells out to the ecosystem's own tool is covered by the client-env
+/// block. What is left is the backends that fetch over git, and the estate
+/// learns that here — at planning time, naming the backend — rather than at
+/// install time on a disconnected workstation, naming a connect timeout.
+pub(crate) fn unsupported_backend_reason(backend: &str) -> Option<String> {
+    if BACKEND_REGISTRIES
+        .iter()
+        .any(|(prefix, _, _)| backend.starts_with(prefix))
+    {
+        return None;
+    }
+    if backend.starts_with("asdf:") || backend.starts_with("vfox:") {
+        return Some(format!(
+            "{backend}: a git-fetched plugin backend; mise clones it, and there is no HTTP path              through BatleHub"
+        ));
+    }
+    if backend.starts_with("core:") {
+        // `core:*` downloads from a fixed host, which the URL rules cover
+        // when a registry fronts it — and `unmirrored_hosts` says so when
+        // none does.
+        return None;
+    }
+    Some(format!(
+        "{backend}: no registry kind fronts this backend, and it downloads nothing over HTTP that          a rewrite rule could catch"
+    ))
+}
+
 const BACKEND_REGISTRIES: &[(&str, &str, &str)] = &[
     // (backend prefix, registry type, suggested name)
     ("cargo:", "cargo", "cargo"),
@@ -227,6 +341,8 @@ impl Accumulator {
         merge_new(&mut existing.sources, reg.sources.drain(..));
         merge_new(&mut existing.path_allow, reg.path_allow.drain(..));
         merge_new(&mut existing.upstreams, reg.upstreams.drain(..));
+        merge_new(&mut existing.client_env, reg.client_env.drain(..));
+        merge_new(&mut existing.warm_packages, reg.warm_packages.drain(..));
     }
 
     fn finish(self) -> Vec<SuggestedRegistry> {
@@ -240,6 +356,7 @@ impl Accumulator {
         for reg in &mut out {
             reg.path_allow.sort();
             reg.sources.sort();
+            reg.warm_packages.sort();
         }
         out
     }
@@ -271,8 +388,96 @@ pub fn suggest_registries(root: &Path, depth: usize) -> Vec<SuggestedRegistry> {
     }
 
     collect_from_manifests(root, depth, &mut acc);
+    collect_from_toolchain_files(root, &mut acc);
 
     acc.finish()
+}
+
+// ── .nvmrc and .sdkmanrc ──────────────────────────────────────────────────────
+//
+// RFC 0010 §6.9. Each pins the toolchain a project builds with, in a file the
+// manager itself reads: `.nvmrc` is one line — a version or an alias — and
+// `.sdkmanrc` is `candidate=version` pairs. Both map onto a typed registry
+// and the client variable that points the manager at it, and a pinned
+// version becomes a `warm_packages` entry so the proxy holds the bytes before
+// the first `nvm install` / `sdk env install` asks for them. Neither file
+// names a platform; warming reads `warm_platforms` for that, defaulting to the
+// server's own.
+
+/// `.nvmrc` → a `nodedist` registry; `.sdkmanrc` → an `sdkman` one.
+fn collect_from_toolchain_files(root: &Path, acc: &mut Accumulator) {
+    if let Ok(content) = std::fs::read_to_string(root.join(".nvmrc")) {
+        acc.add(registry_for_nvmrc(&content));
+    }
+    if let Ok(content) = std::fs::read_to_string(root.join(".sdkmanrc")) {
+        acc.add(registry_for_sdkmanrc(&content));
+    }
+}
+
+/// The `nodedist` registry an `.nvmrc` implies. A concrete version is warmed
+/// as the tree spells it (`v22.11.0`); an alias (`lts/*`, `node`, `lts/jod`)
+/// names no release and is left to `nvm ls-remote`.
+fn registry_for_nvmrc(content: &str) -> SuggestedRegistry {
+    let pin = content
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with('#'));
+    let warm_packages = match pin {
+        Some(v) if v.chars().next().is_some_and(|c| c.is_ascii_digit()) => {
+            vec![format!("node@v{v}")]
+        }
+        Some(v)
+            if v.starts_with('v') && v[1..].chars().next().is_some_and(|c| c.is_ascii_digit()) =>
+        {
+            vec![format!("node@{v}")]
+        }
+        _ => Vec::new(),
+    };
+    let note = match pin {
+        Some(v) if warm_packages.is_empty() => Some(format!(
+            ".nvmrc pins the alias '{v}', which names no release; nvm resolves it through \
+             index.tab, so nothing is warmed ahead of time"
+        )),
+        _ => None,
+    };
+    SuggestedRegistry {
+        name: "node".to_owned(),
+        registry_type: "nodedist".to_owned(),
+        upstreams: Vec::new(),
+        path_allow: Vec::new(),
+        sources: vec![".nvmrc".to_owned()],
+        client_env: vec![("NVM_NODEJS_ORG_MIRROR".to_owned(), "{proxy}".to_owned())],
+        warm_packages,
+        note,
+    }
+}
+
+/// The `sdkman` registry an `.sdkmanrc` implies, one `warm_packages` entry per
+/// `candidate=version` line.
+fn registry_for_sdkmanrc(content: &str) -> SuggestedRegistry {
+    let warm_packages = content
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|l| l.split_once('='))
+        .map(|(c, v)| format!("{}@{}", c.trim(), v.trim()))
+        .filter(|entry| !entry.starts_with('@') && !entry.ends_with('@'))
+        .collect();
+    SuggestedRegistry {
+        name: "sdkman".to_owned(),
+        registry_type: "sdkman".to_owned(),
+        upstreams: Vec::new(),
+        path_allow: Vec::new(),
+        sources: vec![".sdkmanrc".to_owned()],
+        // Both variables are read by sdkman-init.sh only when empty, so they
+        // have to be exported before it is sourced.
+        client_env: vec![
+            ("SDKMAN_CANDIDATES_API".to_owned(), "{proxy}".to_owned()),
+            ("SDKMAN_BROKER_API".to_owned(), "{proxy}/broker".to_owned()),
+        ],
+        warm_packages,
+        note: None,
+    }
 }
 
 // ── mise.lock ─────────────────────────────────────────────────────────────────
@@ -358,6 +563,7 @@ fn registry_for_url(url: &str, source: &str) -> Option<SuggestedRegistry> {
             path_allow: Vec::new(),
             sources: vec![source.to_owned()],
             client_env: Vec::new(),
+            warm_packages: Vec::new(),
             note: None,
         });
     }
@@ -376,6 +582,7 @@ fn registry_for_url(url: &str, source: &str) -> Option<SuggestedRegistry> {
                 .iter()
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
                 .collect(),
+            warm_packages: Vec::new(),
             note: None,
         });
     }
@@ -421,6 +628,7 @@ fn generic_from_unknown_url(host: &str, path: &str, source: &str) -> SuggestedRe
         },
         sources: vec![source.to_owned()],
         client_env: Vec::new(),
+        warm_packages: Vec::new(),
         note: Some(
             "no preset for this host — path_allow lists the exact locked paths; \
              widen it (or re-run this command) when the pinned version changes"
@@ -443,6 +651,7 @@ fn registry_for_backend(backend: &str, source: &str) -> Option<SuggestedRegistry
             path_allow: Vec::new(),
             sources: vec![source.to_owned()],
             client_env: Vec::new(),
+            warm_packages: Vec::new(),
             note: None,
         });
     }
@@ -467,6 +676,7 @@ fn registry_for_backend(backend: &str, source: &str) -> Option<SuggestedRegistry
             .iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect(),
+        warm_packages: Vec::new(),
         note: None,
     })
 }
@@ -507,6 +717,7 @@ fn collect_from_mise_toml(content: &str, file: &str, acc: &mut Accumulator) {
             path_allow: Vec::new(),
             sources: vec![source],
             client_env: Vec::new(),
+            warm_packages: Vec::new(),
             note: None,
         });
     }
@@ -564,6 +775,7 @@ fn collect_from_manifests(root: &Path, depth: usize, acc: &mut Accumulator) {
             path_allow: Vec::new(),
             sources: vec![where_],
             client_env: Vec::new(),
+            warm_packages: Vec::new(),
             note: None,
         });
     }
@@ -612,7 +824,7 @@ fn looks_like_hex(s: &str) -> bool {
 /// Split `https://host/a/b` into `("host", "a/b")`. Only `http`/`https` URLs are
 /// recognised; anything else (a `file:` path, a bare string) is skipped rather
 /// than guessed at.
-fn split_url(url: &str) -> Option<(&str, &str)> {
+pub(crate) fn split_url(url: &str) -> Option<(&str, &str)> {
     let rest = url
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))?;
@@ -750,7 +962,61 @@ fn toml_quote(s: &str) -> String {
 ///
 /// `commented` prefixes every line with `# `, for committing into a shared
 /// `mise.toml` where contributors without a BatleHub must not be broken.
-pub fn render_mise_toml(regs: &[SuggestedRegistry], server_url: &str, commented: bool) -> String {
+/// The catch-all rule's target: everything no typed rule matched lands here,
+/// is recorded, and answers `501` (RFC 0008 §4.4).
+///
+/// `$1` carries the host as the **first path segment**, so the recorder sees
+/// the host without parsing the tail as a URL — which is what keeps the
+/// sink's "opaque string for logging" rule cheap to hold.
+pub const MISE_CATCH_ALL_PATTERN: &str = "^https://([^/]+)/(.*)";
+
+/// The identity rule that has to precede the catch-all: this server's own
+/// URLs, rewritten to themselves.
+///
+/// `None` when the server URL has no host to anchor on, in which case there
+/// is nothing to protect and the catch-all stands alone.
+pub fn mise_proxy_identity_rule(server_url: &str) -> Option<(String, String)> {
+    let rest = server_url
+        .trim_end_matches('/')
+        .strip_prefix("https://")
+        .or_else(|| server_url.trim_end_matches('/').strip_prefix("http://"))?;
+    let host = rest.split('/').next().filter(|h| !h.is_empty())?;
+    let scheme = if server_url.starts_with("http://") {
+        "http"
+    } else {
+        "https"
+    };
+    Some((
+        format!("^{scheme}://{}/(.*)", regex_escape(host)),
+        format!("{scheme}://{host}/$1"),
+    ))
+}
+
+pub fn mise_catch_all_rule(server_url: &str) -> (String, String) {
+    (
+        MISE_CATCH_ALL_PATTERN.to_owned(),
+        format!(
+            "{}/_air-gap/unmirrored/$1/$2",
+            server_url.trim_end_matches('/')
+        ),
+    )
+}
+
+/// `catch_all` appends RFC 0008 §4.4's final rule, **last, always**.
+///
+/// mise applies `[settings.url_replacements]` in declaration order, first
+/// match wins, and matching stops at the first hit (measured on mise 2026.8.6,
+/// RFC 0008 decision 8). A catch-all declared before a typed rule swallows it,
+/// and there is no fallback on failure — the rule that matched is the only URL
+/// tried. So the ordering is a property of this generator rather than of the
+/// operator's editing, which is why it is a parameter here and not a rule the
+/// operator is told to add.
+pub fn render_mise_toml(
+    regs: &[SuggestedRegistry],
+    server_url: &str,
+    commented: bool,
+    catch_all: bool,
+) -> String {
     let mut body = String::new();
     body.push_str("[settings.url_replacements]\n");
 
@@ -777,6 +1043,45 @@ pub fn render_mise_toml(regs: &[SuggestedRegistry], server_url: &str, commented:
 
     if !any {
         body.push_str("# (nothing mise downloads itself — see the note below)\n");
+    }
+    if catch_all {
+        // The proxy's own host, first. The catch-all matches *any* https URL,
+        // BatleHub's included, so an operator who has already pointed a
+        // backend at the proxy — `NODEJS_ORG_MIRROR`, a `[settings]` entry, a
+        // hand-written rule below — would have that URL rewritten into the
+        // `501` sink and lose a registry that was working. Matching stops at
+        // the first hit, so one identity rule ahead of the catch-all is the
+        // whole fix (RFC 0008 §13, *Coverage, stated*).
+        if let Some((pattern, replacement)) = mise_proxy_identity_rule(server_url) {
+            body.push('\n');
+            for line in wrap_comment(
+                "This server's own URLs are left alone. The catch-all below matches every \
+                 https host, so without this line a backend already pointed at BatleHub \
+                 would be rewritten into the unmirrored sink.",
+            ) {
+                body.push_str(&format!("# {line}\n"));
+            }
+            body.push_str(&format!(
+                "{} = {}\n",
+                toml_quote(&format!("regex:{pattern}")),
+                toml_quote(&replacement)
+            ));
+        }
+        let (pattern, replacement) = mise_catch_all_rule(server_url);
+        body.push('\n');
+        for line in wrap_comment(
+            "Air gap (RFC 0008): anything no rule above matched lands here. Nothing is \
+             fetched — the proxy answers 501, names the host and records it, so an \
+             unmirrored host is a line in the console instead of a connect timeout. \
+             This rule must stay last: mise stops at the first match.",
+        ) {
+            body.push_str(&format!("# {line}\n"));
+        }
+        body.push_str(&format!(
+            "{} = {}\n",
+            toml_quote(&format!("regex:{pattern}")),
+            toml_quote(&replacement)
+        ));
     }
     push_mise_skipped_note(&mut body, &skipped);
 
@@ -877,7 +1182,25 @@ fn push_registry_block(out: &mut String, reg: &SuggestedRegistry) {
         out.push_str("]\n");
     }
     out.push_str("\n[registries.rbac]\n");
-    out.push_str("anonymous = [\"releases:read\"]\n");
+    // The toolchain kinds read their listings with a verb of their own.
+    if matches!(reg.registry_type.as_str(), "nodedist" | "sdkman") {
+        out.push_str("anonymous = [\"releases:read\", \"releases:list\"]\n");
+    } else {
+        out.push_str("anonymous = [\"releases:read\"]\n");
+    }
+    if !reg.warm_packages.is_empty() {
+        out.push_str("\n# Pre-fetched on startup, for the platform this server runs on; list\n");
+        out.push_str("# others under warm_platforms to warm them too (RFC 0010 §6.9).\n");
+        out.push_str("[registries.cache]\n");
+        out.push_str(&format!(
+            "warm_packages = [{}]\n",
+            reg.warm_packages
+                .iter()
+                .map(|p| format!("\"{p}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
 }
 
 /// Render the client-side environment variables for the suggestions that have
@@ -1219,6 +1542,86 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
         assert!(suggest_registries(dir.path(), 0).is_empty());
     }
 
+    // ── .nvmrc and .sdkmanrc (RFC 0010 §6.9) ─────────────────────────────────
+
+    #[test]
+    fn nvmrc_maps_to_a_nodedist_registry_and_warms_the_pinned_release() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join(".nvmrc"), "22.11.0\n").unwrap();
+        let regs = suggest_registries(dir.path(), 0);
+        let node = find(&regs, "node");
+        assert_eq!(node.registry_type, "nodedist");
+        assert_eq!(node.sources, [".nvmrc"]);
+        assert_eq!(
+            node.warm_packages,
+            ["node@v22.11.0"],
+            "spelled as the tree spells it"
+        );
+        assert_eq!(
+            node.resolved_env("https://hub.example.com"),
+            [(
+                "NVM_NODEJS_ORG_MIRROR".to_owned(),
+                "https://hub.example.com/proxy/node/nodedist".to_owned()
+            )]
+        );
+
+        let toml = render_toml(&regs);
+        assert!(toml.contains("type       = \"nodedist\""), "{toml}");
+        assert!(
+            toml.contains("warm_packages = [\"node@v22.11.0\"]"),
+            "{toml}"
+        );
+        assert!(
+            toml.contains("\"releases:list\""),
+            "listings take their own verb: {toml}"
+        );
+        toml::from_str::<toml::Value>(&toml).expect("the rendered block is valid TOML");
+    }
+
+    #[test]
+    fn nvmrc_alias_warms_nothing_and_says_why() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join(".nvmrc"), "lts/*\n").unwrap();
+        let regs = suggest_registries(dir.path(), 0);
+        let node = find(&regs, "node");
+        assert!(node.warm_packages.is_empty());
+        assert!(node.note.as_deref().unwrap_or("").contains("lts/*"));
+        let with_v = registry_for_nvmrc("v20.18.0");
+        assert_eq!(with_v.warm_packages, ["node@v20.18.0"]);
+    }
+
+    #[test]
+    fn sdkmanrc_maps_to_an_sdkman_registry_with_both_client_variables() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join(".sdkmanrc"),
+            "# Enable auto-env through the sdkman_auto_env config\njava=21.0.5-tem\nmaven = 3.9.9\n",
+        )
+        .unwrap();
+        let regs = suggest_registries(dir.path(), 0);
+        let sdk = find(&regs, "sdkman");
+        assert_eq!(sdk.registry_type, "sdkman");
+        assert_eq!(sdk.warm_packages, ["java@21.0.5-tem", "maven@3.9.9"]);
+        assert_eq!(
+            sdk.resolved_env("https://hub.example.com/"),
+            [
+                (
+                    "SDKMAN_CANDIDATES_API".to_owned(),
+                    "https://hub.example.com/proxy/sdkman/sdkman".to_owned()
+                ),
+                (
+                    "SDKMAN_BROKER_API".to_owned(),
+                    "https://hub.example.com/proxy/sdkman/sdkman/broker".to_owned()
+                ),
+            ]
+        );
+        let env = render_client_env(&regs, "https://hub.example.com");
+        assert!(env.contains("export SDKMAN_BROKER_API="), "{env}");
+        let toml = render_toml(&regs);
+        toml::from_str::<toml::Value>(&toml).expect("the rendered block is valid TOML");
+        assert!(toml.contains("[registries.cache]"), "{toml}");
+    }
+
     #[test]
     fn rendered_toml_is_parseable_and_passes_the_generic_allowlist_rule() {
         let mut acc = Accumulator::default();
@@ -1260,6 +1663,76 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
         assert!(
             !env.contains("{proxy}"),
             "placeholder must be resolved: {env}"
+        );
+    }
+
+    /// The catch-all matches every https host, this server's included. An
+    /// operator who already pointed a backend at BatleHub would have that URL
+    /// rewritten into the `501` sink — a working registry turned into an
+    /// "unmirrored host" by the rule meant to find unmirrored hosts. Matching
+    /// stops at the first hit, so the identity rule has to come first.
+    #[test]
+    fn the_proxys_own_urls_are_left_alone_ahead_of_the_catch_all() {
+        let regs = vec![registry_for_url(
+            "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
+            "s",
+        )
+        .unwrap()];
+        let out = render_mise_toml(&regs, "https://hub.example.com", false, true);
+        let identity = out
+            .find("hub\\\\.example\\\\.com")
+            .unwrap_or_else(|| panic!("the identity rule is emitted:\n{out}"));
+        let catch_all = out
+            .find("^https://([^/]+)/(.*)")
+            .unwrap_or_else(|| panic!("the catch-all is emitted:\n{out}"));
+        assert!(
+            identity < catch_all,
+            "the identity rule must precede the catch-all, or the catch-all swallows it:\n{out}"
+        );
+        assert!(out.contains(r#"= "https://hub.example.com/$1""#), "{out}");
+    }
+
+    #[test]
+    fn an_identity_rule_needs_a_host_to_anchor_on() {
+        assert!(mise_proxy_identity_rule("https://hub.example.com/").is_some());
+        assert_eq!(
+            mise_proxy_identity_rule("http://localhost:8080"),
+            Some((
+                r"^http://localhost:8080/(.*)".to_owned(),
+                "http://localhost:8080/$1".to_owned()
+            ))
+        );
+        assert!(mise_proxy_identity_rule("not-a-url").is_none());
+    }
+
+    /// The plan's paths and the rewrite rules must agree, because the plan's
+    /// path is what `mise seed` fetches. A `generic` mirror routes as
+    /// `/proxy/{name}/generic/{path}`; a plan that dropped the segment seeded
+    /// nothing but 404s, and the operator learned it on the disconnected side.
+    #[test]
+    fn a_plans_path_carries_the_same_type_segment_as_the_rewrite_rule() {
+        assert_eq!(
+            proxy_path_for(
+                "https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.gz",
+                "node-dist",
+                "generic"
+            )
+            .as_deref(),
+            Some("/proxy/node-dist/generic/v24.18.0/node-v24.18.0-linux-x64.tar.gz")
+        );
+        let suggested = registry_for_url("https://nodejs.org/dist/v1/x.tar.gz", "s").unwrap();
+        assert!(suggested
+            .proxy_url("https://hub.example.com")
+            .ends_with("/proxy/node-dist/generic"));
+        // GitHub routes straight off the name, and gains no segment either way.
+        assert_eq!(
+            proxy_path_for(
+                "https://api.github.com/repos/cli/cli/releases/tags/v2.60.0",
+                "gh",
+                "github"
+            )
+            .as_deref(),
+            Some("/proxy/gh/cli/cli/releases/tags/v2.60.0")
         );
     }
 
@@ -1344,7 +1817,7 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
         let mut acc = Accumulator::default();
         collect_from_mise_lock(SAMPLE_LOCK, &mut acc);
         let regs = acc.finish();
-        let rendered = render_mise_toml(&regs, "https://hub.example.com", false);
+        let rendered = render_mise_toml(&regs, "https://hub.example.com", false, false);
 
         let parsed: toml::Value = toml::from_str(&rendered)
             .unwrap_or_else(|e| panic!("mise block must parse as TOML: {e}\n{rendered}"));
@@ -1368,7 +1841,7 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
     fn commented_mise_block_has_no_active_toml() {
         let mut acc = Accumulator::default();
         collect_from_mise_lock(SAMPLE_LOCK, &mut acc);
-        let rendered = render_mise_toml(&acc.finish(), "https://hub.example.com", true);
+        let rendered = render_mise_toml(&acc.finish(), "https://hub.example.com", true, false);
         let parsed: toml::Value = toml::from_str(&rendered).expect("commented block must parse");
         assert!(
             parsed.as_table().is_none_or(|t| t.is_empty()),
@@ -1396,7 +1869,7 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
         let mut acc = Accumulator::default();
         collect_from_mise_lock(SAMPLE_LOCK, &mut acc);
         let regs = acc.finish();
-        let commented = render_mise_toml(&regs, "https://hub.example.com", true);
+        let commented = render_mise_toml(&regs, "https://hub.example.com", true, false);
 
         let uncommented: String = commented
             .lines()
@@ -1412,7 +1885,7 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
             Some("https://hub.example.com/proxy/node-dist/generic/$1")
         );
         // …and it must be byte-identical to the uncommented rendering.
-        let direct = render_mise_toml(&regs, "https://hub.example.com", false);
+        let direct = render_mise_toml(&regs, "https://hub.example.com", false, false);
         let strip_header = |s: &str| {
             s.lines()
                 .filter(|l| !l.starts_with("# Uncomment"))
@@ -1431,6 +1904,7 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
             path_allow: vec!["helm-v*".to_owned()],
             sources: vec!["mise.lock: helm".to_owned()],
             client_env: Vec::new(),
+            warm_packages: Vec::new(),
             note: None,
         }];
         let env = render_client_env(&regs, "https://hub.example.com");

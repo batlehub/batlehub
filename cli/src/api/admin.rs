@@ -939,3 +939,237 @@ impl BatleHubClient {
         }
     }
 }
+
+// ── RFC 0002 (recast): flags and the exposure report ──────────────────────────
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct FlagsQuery {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effect: Option<String>,
+    pub include_dead: bool,
+    pub page: u64,
+    pub per_page: u64,
+}
+
+/// One pushed flag, as `GET /api/v1/admin/flags` lists it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlagEntry {
+    pub id: Uuid,
+    pub source: String,
+    pub external_id: String,
+    pub registry: String,
+    pub package_name: String,
+    pub version: String,
+    pub kind: String,
+    pub effect: String,
+    #[serde(default)]
+    pub severity: Option<String>,
+    pub summary: String,
+    #[serde(default)]
+    pub url: Option<String>,
+    pub first_seen: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(default)]
+    pub expires_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlagsResponse {
+    pub items: Vec<FlagEntry>,
+    pub total: u64,
+    pub page: u64,
+    pub per_page: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ExposureQuery {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_effect: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+    pub limit: u64,
+}
+
+/// One consumer × coordinate × flag of the exposure report.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExposureRow {
+    pub consumer: String,
+    pub consumer_role: String,
+    pub registry: String,
+    pub package_name: String,
+    pub version: String,
+    pub source: String,
+    pub external_id: String,
+    pub kind: String,
+    pub effect: String,
+    #[serde(default)]
+    pub severity: Option<String>,
+    pub summary: String,
+    pub flag_first_seen: DateTime<Utc>,
+    pub pulls: u64,
+    pub pulls_before_flag: u64,
+    pub first_pull: DateTime<Utc>,
+    pub last_pull: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExposureScanState {
+    pub registry: String,
+    pub last_scan_at: DateTime<Utc>,
+    pub artifacts_scanned: u64,
+    pub findings: u64,
+    pub errors: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExposureSourceCoverage {
+    pub source: String,
+    pub live_flags: u64,
+    #[serde(default)]
+    pub last_push_at: Option<DateTime<Utc>>,
+}
+
+/// What the report could and could not see.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExposureCoverage {
+    pub registries_total: u64,
+    pub sbom_configured: u64,
+    pub security_profiles: u64,
+    #[serde(default)]
+    pub last_scan: Vec<ExposureScanState>,
+    #[serde(default)]
+    pub flag_sources: Vec<ExposureSourceCoverage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExposureResponse {
+    pub rows: Vec<ExposureRow>,
+    #[serde(default)]
+    pub next: Option<String>,
+    pub coverage: ExposureCoverage,
+}
+
+impl BatleHubClient {
+    /// `GET /api/v1/admin/flags`.
+    pub async fn list_flags(&self, query: FlagsQuery) -> Result<FlagsResponse> {
+        self.get_with_params("/api/v1/admin/flags", &query).await
+    }
+
+    /// `GET /api/v1/admin/exposure`, one page.
+    pub async fn exposure(&self, query: ExposureQuery) -> Result<ExposureResponse> {
+        self.get_with_params("/api/v1/admin/exposure", &query).await
+    }
+}
+
+// ── RFC 0008: the bundle ──────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BundleImportResponse {
+    pub bundle_id: String,
+    pub signer_key: String,
+    pub imported: u64,
+    pub entries: u64,
+    pub rejected: u64,
+    #[serde(default)]
+    pub rejections: Vec<String>,
+    #[serde(default)]
+    pub already_imported: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BundleImportEntry {
+    pub bundle_id: String,
+    pub signer_key: String,
+    pub imported_at: DateTime<Utc>,
+    #[serde(default)]
+    pub imported_by: Option<String>,
+    pub entries: u64,
+    pub blobs: u64,
+    pub rejected: u64,
+}
+
+impl BatleHubClient {
+    /// `POST /api/v1/admin/bundle/import` with the bundle as the raw body.
+    pub async fn import_bundle(&self, bytes: Vec<u8>) -> Result<BundleImportResponse> {
+        let req = self
+            .request(reqwest::Method::POST, "/api/v1/admin/bundle/import")
+            .header("Content-Type", "application/octet-stream")
+            .body(bytes);
+        // `expect_ok`, not a bare `json()`: an import is refused far more
+        // often than it succeeds — an untrusted signature, a key that is not
+        // configured, a verb the caller lacks — and decoding the refusal as
+        // the success shape reports "missing field `bundle_id`" instead of
+        // the reason the server gave.
+        crate::api::expect_ok(self.send(req).await?).await
+    }
+
+    /// `GET /api/v1/admin/bundle`.
+    pub async fn list_bundles(&self) -> Result<Vec<BundleImportEntry>> {
+        #[derive(Deserialize)]
+        struct Wrapper {
+            items: Vec<BundleImportEntry>,
+        }
+        let w: Wrapper = self.get("/api/v1/admin/bundle").await?;
+        Ok(w.items)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct MissingQuery {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    pub page: u64,
+    pub per_page: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordedMissEntry {
+    pub registry: String,
+    pub storage_key: String,
+    pub kind: String,
+    #[serde(default)]
+    pub coordinate: Option<String>,
+    pub first_seen: DateTime<Utc>,
+    pub last_seen: DateTime<Utc>,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MissingResponse {
+    pub items: Vec<RecordedMissEntry>,
+    pub total: u64,
+    pub page: u64,
+    pub per_page: u64,
+    #[serde(default)]
+    pub air_gapped: bool,
+}
+
+impl BatleHubClient {
+    /// `GET /api/v1/admin/air-gap/missing`.
+    pub async fn air_gap_missing(&self, query: MissingQuery) -> Result<MissingResponse> {
+        self.get_with_params("/api/v1/admin/air-gap/missing", &query)
+            .await
+    }
+}

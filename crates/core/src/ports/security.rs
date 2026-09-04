@@ -14,6 +14,15 @@ pub trait VerdictRepository: Send + Sync {
 
     async fn get(&self, package: &PackageId) -> Result<Option<Verdict>, CoreError>;
 
+    /// Every verdict recorded for one package — what the listing filter reads
+    /// to hide held versions (RFC 0018 §4.2 *Listings*). Findings may be
+    /// omitted: the filter reads states and clocks, not content.
+    async fn list_for_package(
+        &self,
+        registry: &str,
+        package: &str,
+    ) -> Result<Vec<Verdict>, CoreError>;
+
     async fn list_by_state(
         &self,
         registry: &str,

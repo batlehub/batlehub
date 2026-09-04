@@ -9,7 +9,10 @@ use batlehub_core::{
     entities::{NotificationEvent, NotificationEventType, PackageId},
     error::CoreError,
     ports::{ByteStream, DocumentBody, DocumentKind, VersionDocument},
-    services::{LocalRegistryService, ProxyRequest, ProxyResponse, ProxyService, PublishRequest},
+    services::{
+        proxy::proxy_artifact_key, LocalRegistryService, ProxyRequest, ProxyResponse, ProxyService,
+        PublishRequest,
+    },
 };
 
 use crate::{
@@ -339,12 +342,103 @@ pub async fn proxy_gem_specs(
 /// removes the sniffing step entirely.
 const DEFAULT_ARTIFACT_CONTENT_TYPE: &str = "application/octet-stream";
 
+/// The most release JSON this proxy will rewrite before serving it.
+///
+/// A release document is kilobytes — GitHub's own is a few hundred lines.
+/// Above this the body is streamed through untouched rather than buffered:
+/// an upstream that answers a release route with a hundred megabytes is not
+/// something to hold in memory, and the URLs in it were never going to be
+/// read by a client that asked for a release.
+const MAX_REWRITTEN_RELEASE_BYTES: usize = 4 * 1024 * 1024;
+
+/// [`proxy_stream`] for a forge release document (RFC 0019 §4.2 *API
+/// reads*): the JSON is collected, its download URLs repointed at this proxy,
+/// and served.
+///
+/// Why this route buffers when nothing else does: `tarball_url`,
+/// `zipball_url` and `browser_download_url` are absolute upstream URLs, and
+/// `mise`, `gh` and every other client that reads the release document
+/// instead of building a path follows them straight to the forge — no
+/// policy, no cache, no audit row. Rewriting them needs the whole document,
+/// and a release document is small. A body that is not JSON, or is over
+/// [`MAX_REWRITTEN_RELEASE_BYTES`], is served exactly as it came.
+pub async fn proxy_release_document(
+    svc: web::Data<Arc<ProxyService>>,
+    pkg: PackageId,
+    identity: AuthIdentity,
+    action: Action,
+    public_base: String,
+) -> Result<HttpResponse, AppError> {
+    let owner_repo = pkg.name.clone();
+    let response = proxy_stream(svc, pkg, identity, action, Some("application/json")).await?;
+    if !response.status().is_success() || public_base.is_empty() {
+        return Ok(response);
+    }
+    let (parts, body) = response.into_parts();
+    let bytes = match actix_web::body::to_bytes_limited(body, MAX_REWRITTEN_RELEASE_BYTES).await {
+        Ok(Ok(b)) => b,
+        // Over the cap, or a body that failed mid-collection: there is
+        // nothing left to stream (the body was consumed), so this is an
+        // error rather than a silent pass-through.
+        _ => {
+            return Err(AppError::bad_gateway(
+                "the upstream release document could not be read",
+            ))
+        }
+    };
+    let Ok(mut doc) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return Ok(parts.set_body(actix_web::body::BoxBody::new(bytes)));
+    };
+    batlehub_core::services::blocking::forge::rewrite_release_urls(
+        &mut doc,
+        &public_base,
+        &owner_repo,
+    );
+    let rewritten = serde_json::to_vec(&doc).unwrap_or_else(|_| bytes.to_vec());
+    Ok(parts.set_body(actix_web::body::BoxBody::new(rewritten)))
+}
+
 /// Send a proxy request and stream the result back to the HTTP client.
 ///
 /// Pass `content_type = Some("application/json")` to set an explicit
 /// `Content-Type` header on the response; pass `None` to fall back to
 /// [`DEFAULT_ARTIFACT_CONTENT_TYPE`]. `None` never means "send no
 /// `Content-Type`" — see that constant for why.
+/// Where the proxy says it keeps the bytes it just served.
+///
+/// RFC 0008 §4.2 wants a plan to be "a statement about BatleHub's storage,
+/// rather than about a URL", and the CLI cannot derive that statement: the key
+/// is a function of the *route*, not of the upstream URL — a GitHub asset by
+/// name lands under `…/{tag}/filename/{file}`, the same asset by id under
+/// `…/unknown/{id}`, a generic mirror under `…/repo/_/{path}`, and a forge
+/// archive under its commit. Deriving it a second time in the CLI would be a
+/// second routing table to keep in step; reporting it is one header.
+///
+/// It discloses nothing: every segment is already in the URL the caller asked
+/// for, and the value is [`proxy_artifact_key`] — the one definition the cache
+/// write, the eviction sweep and the bundle importer already share.
+pub const STORAGE_KEY_HEADER: &str = "X-BatleHub-Storage-Key";
+
+/// The coordinate those bytes are filed under, beside the key.
+///
+/// The key alone cannot be read back into a coordinate: it is
+/// `{registry}/{name}/{version}[/{artifact}]` and a name may contain slashes
+/// (`cli/cli`, `@scope/pkg`), so `gh/cli/cli/v2.60.0/filename/gh.tar.gz` splits
+/// four plausible ways and only one of them is right. A bundle importing it
+/// wrongly files the *verdict* against a package nobody will ask about, which
+/// is the failure that would look like "the verdict was lost".
+pub const PACKAGE_HEADER: &str = "X-BatleHub-Package";
+pub const VERSION_HEADER: &str = "X-BatleHub-Version";
+
+/// The `(key, name, version)` triple a response reports about itself.
+fn served_identity(pkg: &PackageId) -> [(&'static str, String); 3] {
+    [
+        (STORAGE_KEY_HEADER, proxy_artifact_key(pkg)),
+        (PACKAGE_HEADER, pkg.name.clone()),
+        (VERSION_HEADER, pkg.version.clone()),
+    ]
+}
+
 pub async fn proxy_stream(
     svc: web::Data<Arc<ProxyService>>,
     pkg: PackageId,
@@ -352,33 +446,90 @@ pub async fn proxy_stream(
     action: Action,
     content_type: Option<&str>,
 ) -> Result<HttpResponse, AppError> {
+    let identity = identity.0;
+    let coordinate = pkg.clone();
     let req = ProxyRequest {
         package_id: pkg,
-        identity: identity.0,
+        identity: identity.clone(),
         action: action.to_owned(),
         ip_address: None,
         user_agent: None,
     };
-    match svc.handle(req).await.map_err(AppError::from)? {
-        ProxyResponse::Denied { reason } => Err(AppError::forbidden(reason)),
+    let response = svc.handle(req).await.map_err(AppError::from)?;
+    // RFC 0018 §4.2: a `warned` artifact is the same bytes with the verdict's
+    // headers on them.
+    let (response, warned) = match response {
+        ProxyResponse::Warned { response, verdict } => (*response, Some(verdict)),
+        other => (other, None),
+    };
+    let now = chrono::Utc::now();
+    match response {
+        // A security verdict answers in the registry's own shape, and as a
+        // 404 to a caller who may not learn why (RFC 0018 §4.2).
+        ProxyResponse::Denied {
+            verdict: Some(verdict),
+            ..
+        } => Ok(crate::handlers::security::hold_http_response(
+            &svc,
+            &coordinate,
+            &identity,
+            &verdict,
+        )
+        .await),
+        ProxyResponse::Denied { reason, .. } => Err(AppError::forbidden(reason)),
         ProxyResponse::Stream(stream) => {
             let body = stream
                 .filter_map(|chunk| async move { chunk.ok().map(Ok::<Bytes, actix_web::Error>) });
-            Ok(HttpResponse::Ok()
-                .content_type(content_type.unwrap_or(DEFAULT_ARTIFACT_CONTENT_TYPE))
-                .streaming(body))
+            let mut builder = HttpResponse::Ok();
+            builder.content_type(content_type.unwrap_or(DEFAULT_ARTIFACT_CONTENT_TYPE));
+            for header in served_identity(&coordinate) {
+                builder.insert_header(header);
+            }
+            if let Some(v) = &warned {
+                crate::handlers::security::verdict_headers(&mut builder, v, now);
+            }
+            Ok(builder.streaming(body))
         }
         // RFC 0019 §4.2 *Response headers*: which kind of ref was asked for and
         // which commit answered. Spelled like the existing `X-BatleHub-Cache`.
-        ProxyResponse::ForgeStream { stream, resolved } => {
+        ProxyResponse::ForgeStream {
+            stream,
+            resolved,
+            keyed,
+        } => {
             let body = stream
                 .filter_map(|chunk| async move { chunk.ok().map(Ok::<Bytes, actix_web::Error>) });
-            Ok(HttpResponse::Ok()
+            let mut builder = HttpResponse::Ok();
+            builder
                 .content_type(content_type.unwrap_or(DEFAULT_ARTIFACT_CONTENT_TYPE))
                 .insert_header(("X-BatleHub-Ref-Kind", resolved.kind.as_str()))
                 .insert_header(("X-BatleHub-Resolved-Commit", resolved.sha.as_str()))
-                .streaming(body))
+                // The ref as the *client* spelled it. On a commit-keyed
+                // archive the coordinate below has already become the SHA,
+                // so this is the only place the asked-for name survives —
+                // and RFC 0008's bundle has to carry the pair, because a
+                // disconnected instance cannot resolve a ref at all.
+                .insert_header(("X-BatleHub-Ref-Requested", resolved.requested.as_str()));
+            // The commit-keyed coordinate, not the one asked for.
+            for header in served_identity(&keyed) {
+                builder.insert_header(header);
+            }
+            // RFC 0019 phase 2 — the commit this ref answered with last time,
+            // when it differs. On a registry with `[security]` the same fact
+            // is `TAG_MOVED` in the verdict; on one without there is no
+            // verdict to carry it, and this header is the whole of the `warn`
+            // outcome §6.1 promises. Present for a branch too, where it is
+            // the ordinary "the branch advanced".
+            if let Some(previous) = resolved.previous.as_deref() {
+                builder.insert_header(("X-BatleHub-Ref-Previous-Commit", previous));
+            }
+            if let Some(v) = &warned {
+                crate::handlers::security::verdict_headers(&mut builder, v, now);
+            }
+            Ok(builder.streaming(body))
         }
+        // A `Warned` never wraps a `Warned`; unwrapped above.
+        ProxyResponse::Warned { .. } => Err(AppError::internal("nested verdict response")),
     }
 }
 

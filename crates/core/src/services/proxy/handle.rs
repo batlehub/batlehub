@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::entities::AccessEvent;
+use crate::entities::MissKind;
 use crate::error::CoreError;
 use crate::ports::{DocumentKind, VersionDocument};
 use crate::rules::{evaluate_rules, RuleContext, RuleDecision};
@@ -29,6 +30,15 @@ pub(super) struct RequestPrelude {
     pub(super) cache_key: String,
     pub(super) ttl: Option<std::time::Duration>,
     pub(super) registry_label: Arc<str>,
+}
+
+/// Whether the coordinate names a raw file — the one forge kind with its own
+/// size ceiling and its own script policy.
+fn is_raw_coordinate(pkg: &crate::entities::PackageId) -> bool {
+    matches!(
+        crate::entities::ForgeCoordinate::from_package_id(pkg).map(|c| c.kind),
+        Some(crate::entities::ForgeKind::Raw { .. })
+    )
 }
 
 /// Merge a ref resolution into the metadata the rules and the cache see
@@ -109,7 +119,7 @@ impl ProxyService {
         // bytes on every `counter!`/`histogram!` invocation.
         let registry_label: Arc<str> = Arc::from(registry_name);
 
-        let (client, policy, integrity, limit) = {
+        let (client, policy, integrity, limit, raw_limit) = {
             let hot = self.hot.read().await;
             let client = hot
                 .registries
@@ -125,7 +135,23 @@ impl ProxyService {
                 .cloned()
                 .unwrap_or_default();
             let limit = hot.max_artifact_size_bytes.unwrap_or(500 * 1024 * 1024);
-            (client, policy, integrity, limit)
+            // RFC 0019 §4.2 *Raw content*: a raw file has its own, lower
+            // ceiling. Applied here rather than in the client so it is the
+            // *stream* that stops — the file is refused, never truncated —
+            // and so every forge gets it from one place. `min` because the
+            // global limit still wins if it is the smaller of the two, which
+            // validation makes impossible for a written policy and possible
+            // for the default one.
+            let raw_limit = hot
+                .forge_raw
+                .get(registry_name)
+                .filter(|p| p.enabled)
+                .map(|p| p.max_size_bytes);
+            (client, policy, integrity, limit, raw_limit)
+        };
+        let limit = match (raw_limit, is_raw_coordinate(&req.package_id)) {
+            (Some(raw), true) => limit.min(raw),
+            _ => limit,
         };
 
         let cache_key = super::proxy_meta_key(&req.package_id);
@@ -286,14 +312,130 @@ impl ProxyService {
         // anything else, and an archive or raw coordinate is rewritten onto
         // that commit so the cache, the metadata and the rules all see the
         // SHA. Everything below this line is unchanged for every other kind.
-        let resolved = self.resolve_forge_ref(&mut req).await?;
-        let response = self.handle_resolved(req, resolved.as_ref()).await?;
+        let coordinate = req.package_id.clone();
+        let resolved = match self.resolve_forge_ref(&mut req).await {
+            Ok(r) => r,
+            Err(e) => return Err(self.record_if_missing(e, &coordinate, MissKind::Ref).await),
+        };
+        // The coordinate the bytes are stored under, captured after the ref
+        // rewrite and before `req` is consumed. RFC 0008's export reads it
+        // back off the response so a bundle names the key this instance
+        // serves from rather than one the client derived from a URL.
+        let served = req.package_id.clone();
+        let response = match self.handle_resolved(req, resolved.as_ref()).await {
+            Ok(r) => r,
+            // RFC 0008 §5.3: the record is written *here*, above the rule
+            // chain's own exits, so a coordinate a rule denied is never
+            // proposed for the next bundle — a blocked package is not a gap
+            // in the mirror. Only the offline client's refusal reaches this
+            // arm; every other error passes through untouched.
+            Err(e) => {
+                return Err(self
+                    .record_if_missing(e, &coordinate, MissKind::Artifact)
+                    .await)
+            }
+        };
         Ok(match (response, resolved) {
-            (ProxyResponse::Stream(stream), Some(resolved)) => {
-                ProxyResponse::ForgeStream { stream, resolved }
+            (ProxyResponse::Stream(stream), Some(resolved)) => ProxyResponse::ForgeStream {
+                stream,
+                resolved: Box::new(resolved),
+                keyed: Box::new(served),
+            },
+            // A warned forge artifact carries both: the ref it resolved to
+            // and the verdict it was served under.
+            (ProxyResponse::Warned { response, verdict }, Some(resolved)) => {
+                ProxyResponse::Warned {
+                    response: Box::new(match *response {
+                        ProxyResponse::Stream(stream) => ProxyResponse::ForgeStream {
+                            stream,
+                            resolved: Box::new(resolved),
+                            keyed: Box::new(served),
+                        },
+                        other => other,
+                    }),
+                    verdict,
+                }
             }
             (other, _) => other,
         })
+    }
+
+    /// Record a `ContentUnavailable` and hand the error back unchanged.
+    ///
+    /// Fire-and-forget by design (RFC 0008 §6.2): a recorder that cannot
+    /// write must never turn a `503` into a `500`. The estate loses one line
+    /// of its next bundle list, which is worth strictly less than the
+    /// request it would otherwise break.
+    pub(super) async fn record_if_missing(
+        &self,
+        error: CoreError,
+        coordinate: &crate::entities::PackageId,
+        kind: MissKind,
+    ) -> CoreError {
+        let CoreError::ContentUnavailable { registry, key } = &error else {
+            return error;
+        };
+        // RFC 0008 §5.3 and decision 7: *a blocked package is not a gap in
+        // the mirror.* The RFC put this after the rule chain, and on an
+        // air-gapped instance the chain never runs: the offline client
+        // refuses metadata resolution first, so the block list is never
+        // consulted and an administrator's own refusal would arrive as
+        // "the next bundle needs this". The check is therefore made here,
+        // on the miss path only, where it costs one lookup on a request
+        // that has already failed — and it changes the *answer* too, which
+        // is the half that matters to the operator reading the `503`.
+        if let Some(reason) = self.blocked_reason(coordinate).await {
+            return CoreError::AccessDenied(reason);
+        }
+        let recorder = {
+            let hot = self.hot.read().await;
+            hot.air_gap
+                .record_misses
+                .then(|| hot.miss_recorder.clone())
+                .flatten()
+        };
+        let Some(recorder) = recorder else {
+            return error;
+        };
+        let miss = crate::entities::ContentMiss {
+            registry: registry.clone(),
+            storage_key: key.clone(),
+            kind,
+            coordinate: Some(coordinate.cache_key()),
+        };
+        if let Err(e) = recorder.record(&miss, chrono::Utc::now()).await {
+            tracing::warn!(key = %key, error = %e, "air gap: could not record the miss");
+        }
+        error
+    }
+
+    /// The administrator's reason for blocking this coordinate, if they did.
+    ///
+    /// The same widening `BlockListRule` does — the requested coordinate,
+    /// then the bare version — because a block on a version covers every
+    /// file of it, and a download addresses a file.
+    ///
+    /// Fails **open**, as the rule does: an unreadable store must not turn a
+    /// miss into a refusal that names a block nobody wrote.
+    async fn blocked_reason(&self, id: &crate::entities::PackageId) -> Option<String> {
+        use crate::entities::PackageStatus;
+        for candidate in [
+            Some(id.clone()),
+            id.artifact.as_ref().map(|_| crate::entities::PackageId {
+                artifact: None,
+                ..id.clone()
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Ok(PackageStatus::Blocked { reason, .. }) =
+                self.repo.get_status(&candidate).await
+            {
+                return Some(reason);
+            }
+        }
+        None
     }
 
     /// Resolve a forge coordinate's ref and rewrite the request onto the
@@ -325,11 +467,14 @@ impl ProxyService {
                 // error, so nothing is said here.
                 return Ok(None);
             };
-            (
-                Arc::clone(client),
-                hot.ref_resolutions.clone(),
-                hot.forge_refs.get(&registry).copied().unwrap_or_default(),
-            )
+            (Arc::clone(client), hot.ref_resolutions.clone(), {
+                let mut p = hot.forge_refs.get(&registry).copied().unwrap_or_default();
+                // RFC 0008 §13.3: an air-gapped instance re-resolves
+                // nothing, because there is nothing to re-resolve
+                // against.
+                p.frozen = hot.air_gap.enabled;
+                p
+            })
         };
         let Some(forge) = client.forge() else {
             return Ok(None);
@@ -355,7 +500,6 @@ impl ProxyService {
         resolved: Option<&crate::entities::ResolvedRef>,
     ) -> Result<ProxyResponse, CoreError> {
         let start = Instant::now();
-        let registry_name: &str = req.package_id.registry.as_str();
         let RequestPrelude {
             client,
             policy,
@@ -408,7 +552,10 @@ impl ProxyService {
                 "denied download",
             );
             super::finish_request(&registry_label, "denied", start);
-            return Ok(ProxyResponse::Denied { reason });
+            return Ok(ProxyResponse::Denied {
+                reason,
+                verdict: None,
+            });
         }
 
         let empty: Vec<Box<dyn crate::rules::Rule>> = vec![];
@@ -425,7 +572,13 @@ impl ProxyService {
             requested_version: Some(&req.package_id.version),
         };
 
-        if let RuleDecision::Deny { reason } = evaluate_rules(rules, &ctx).await {
+        // The verdict gate leaves the verdict it judged under beside its
+        // decision (RFC 0018 §4.2), so a refusal can carry the reason codes
+        // and a `warned` stream its headers, without the chain's other rules
+        // knowing anything about it.
+        let (decision, verdict) =
+            crate::services::verdict::with_request_verdict(evaluate_rules(rules, &ctx)).await;
+        if let RuleDecision::Deny { reason } = decision {
             super::warn_if_audit_failed(
                 self.repo
                     .record_access(AccessEvent::denied_download(
@@ -438,8 +591,51 @@ impl ProxyService {
                 "denied download",
             );
             super::finish_request(&registry_label, "denied", start);
-            return Ok(ProxyResponse::Denied { reason });
+            return Ok(ProxyResponse::Denied {
+                reason,
+                verdict: verdict.map(Box::new),
+            });
         }
+        let warned = verdict
+            .filter(|v| v.state == crate::entities::VerdictState::Warned)
+            .map(Box::new);
+
+        let response = self
+            .serve_after_rules(
+                req,
+                client,
+                policy,
+                metadata,
+                integrity,
+                limit,
+                registry_label,
+                start,
+            )
+            .await?;
+        Ok(match warned {
+            Some(verdict) => ProxyResponse::Warned {
+                response: Box::new(response),
+                verdict,
+            },
+            None => response,
+        })
+    }
+
+    /// Everything after the rules have allowed the request: the firewall
+    /// stream, the cache hit, or the fetch-and-cache.
+    #[allow(clippy::too_many_arguments)]
+    async fn serve_after_rules(
+        &self,
+        req: ProxyRequest,
+        client: Arc<dyn crate::ports::RegistryClient>,
+        policy: Option<Arc<crate::services::hot_config::RegistryPolicy>>,
+        metadata: crate::entities::PackageMetadata,
+        integrity: crate::services::hot_config::IntegrityPolicy,
+        limit: u64,
+        registry_label: Arc<str>,
+        start: Instant,
+    ) -> Result<ProxyResponse, CoreError> {
+        let registry_name: &str = req.package_id.registry.as_str();
 
         // ── 3. Firewall-only: stream directly from upstream, skip all caching ──
         let firewall_only = policy.as_ref().map(|p| p.firewall_only).unwrap_or(false);
@@ -626,9 +822,20 @@ impl ProxyService {
             .await?;
 
         let name = req.package_id.name.as_str();
-        let mut doc = self
+        let mut doc = match self
             .cached_version_document(&prelude, req, name, doc_kind)
-            .await?;
+            .await
+        {
+            Ok(d) => d,
+            // A listing an air-gapped instance does not hold is the other
+            // half of RFC 0008's record: the next bundle needs the document
+            // as much as the bytes.
+            Err(e) => {
+                return Err(self
+                    .record_if_missing(e, &req.package_id, MissKind::Document)
+                    .await)
+            }
+        };
 
         let kind = prelude.client.registry_type().parse().unwrap_or_else(|_| {
             // Unreachable in practice: `registry_type()` returns the same
@@ -641,16 +848,21 @@ impl ProxyService {
             );
             crate::entities::RegistryKind::Generic
         });
+        // The blocked set is a statement about the *package*, and for one kind
+        // the listing coordinate says more than that: SDKMAN's carries the
+        // platform (`java/linuxx64`), and a block on a JDK must cover all of
+        // them (RFC 0010 §6.2). Every other kind returns `name` unchanged.
+        let blocking_name = kind.blocking_package_name(name);
         let ctx = crate::services::blocking::ListingContext {
             registry: &req.package_id.registry,
             kind,
             document: doc_kind,
-            package: name,
+            package: blocking_name,
             public_base,
         };
 
         let blocked = self
-            .blocked_versions_for(&req.package_id.registry, name, kind)
+            .blocked_versions_for(&req.package_id.registry, blocking_name, kind)
             .await;
 
         crate::services::blocking::dispatch(&ctx, &mut doc, &blocked);
@@ -687,7 +899,7 @@ impl ProxyService {
         package: &str,
         kind: crate::entities::RegistryKind,
     ) -> crate::services::blocking::BlockedVersions {
-        let versions = self
+        let mut versions = self
             .repo
             .blocked_versions(registry, package)
             .await
@@ -700,7 +912,47 @@ impl ProxyService {
                 );
                 Vec::new()
             });
+        versions.extend(self.held_versions_for(registry, package).await);
         crate::services::blocking::BlockedVersions::new(kind, versions)
+    }
+
+    /// The versions a security verdict keeps out of the listings (RFC 0018
+    /// §4.2 *Listings*), hidden **by the same mechanism as a block** — so
+    /// cargo marks them `yanked`, conda drops them from the channel summary,
+    /// and every per-registry caveat of RFC 0006 applies unchanged.
+    ///
+    /// Empty for a registry without `[security]`, and empty on a store error:
+    /// a listing fails open like a block does, because the download gate
+    /// re-checks the concrete coordinate on every request and no failure here
+    /// makes held bytes retrievable.
+    async fn held_versions_for(&self, registry: &str, package: &str) -> Vec<String> {
+        let verdicts = {
+            let hot = self.hot.read().await;
+            if !hot.security.contains_key(registry) {
+                return Vec::new();
+            }
+            hot.verdicts.clone()
+        };
+        let Some(verdicts) = verdicts else {
+            return Vec::new();
+        };
+        let now = chrono::Utc::now();
+        match verdicts.list_for_package(registry, package).await {
+            Ok(rows) => rows
+                .into_iter()
+                .filter(|v| v.hides_from_listings(now))
+                .map(|v| v.package.version)
+                .collect(),
+            Err(e) => {
+                tracing::warn!(
+                    registry = %registry,
+                    package = %package,
+                    error = %e,
+                    "failed to load verdicts for listing, failing open"
+                );
+                Vec::new()
+            }
+        }
     }
 
     /// The blocked `(package, version)` set for a whole registry, behind a

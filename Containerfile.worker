@@ -1,0 +1,99 @@
+# The worker image (RFC 0018 §5.4, §6.3): the same `batlehub` binary as the
+# proxy image, started with `--roles worker`, plus the scanner toolchains the
+# proxy image deliberately does not carry — bubblewrap for the sandbox,
+# postmortem, GuardDog and the Trivy client.
+#
+# Why a second image rather than a fatter proxy image: only the worker opens
+# artifacts, so only the worker needs the tools that open them, and the proxy
+# keeps its distroless, shell-less runtime. The two roles share nothing but the
+# database and the storage backend; NetworkPolicies tighten around that.
+#
+# Every tool is pinned. `mise.toml` pins the same postmortem and trivy for the
+# developer machine and CI, so the three run the identical scanner.
+#
+#   podman build -f Containerfile.worker -t batlehub-worker .
+#   podman run --rm -v ./config.toml:/etc/batlehub/config.toml:ro batlehub-worker
+
+ARG POSTMORTEM_VERSION=2.3.1
+ARG TRIVY_VERSION=0.74.0
+ARG GUARDDOG_VERSION=3.2.0
+
+# ── Build stage: the server binary, as the proxy image builds it ─────────────
+FROM rust:1.98-slim-bookworm@sha256:1469a27c125cb5a3aebfa4f4e4665d935b02fb72cc093b2c974b3d740e43f157 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev curl make \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY crates/core/Cargo.toml        crates/core/Cargo.toml
+COPY crates/config/Cargo.toml      crates/config/Cargo.toml
+COPY crates/adapters/Cargo.toml    crates/adapters/Cargo.toml
+COPY crates/web/Cargo.toml         crates/web/Cargo.toml
+COPY crates/examples/Cargo.toml    crates/examples/Cargo.toml
+COPY server/Cargo.toml             server/Cargo.toml
+COPY cli/Cargo.toml                cli/Cargo.toml
+COPY patches/ patches/
+RUN for crate in crates/core crates/config crates/adapters crates/web; do \
+    mkdir -p $crate/src && echo "pub fn _stub() {}" > $crate/src/lib.rs; \
+    done && \
+    mkdir -p crates/examples/src && echo "pub fn _stub() {}" > crates/examples/src/lib.rs && \
+    mkdir -p server/src && echo "fn main() {}" > server/src/main.rs && \
+    mkdir -p cli/src    && echo "fn main() {}" > cli/src/main.rs
+RUN cargo build --release -p batlehub-server 2>/dev/null; exit 0
+COPY crates/ crates/
+COPY server/ server/
+COPY cli/ cli/
+RUN touch crates/*/src/lib.rs server/src/main.rs cli/src/main.rs && \
+    cargo build --release -p batlehub-server
+
+# ── Scanner toolchains ───────────────────────────────────────────────────────
+FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS tools
+ARG POSTMORTEM_VERSION
+ARG TRIVY_VERSION
+ARG GUARDDOG_VERSION
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates tar gzip python3 python3-pip python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+# postmortem: the release binary (the asset names are the ones the project
+# publishes: `postmortem-<version>-x86_64-unknown-linux-gnu.tar.gz`).
+RUN mkdir -p /tmp/pm && curl -fsSL "https://github.com/mlab-sh/postmortem/releases/download/v${POSTMORTEM_VERSION}/postmortem-${POSTMORTEM_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+    | tar -xz -C /tmp/pm && install -m 0755 "$(find /tmp/pm -type f -name postmortem | head -1)" /usr/local/bin/postmortem && rm -rf /tmp/pm
+# Trivy: the client; the database lives on the Trivy server the chart deploys
+# (`[scanners.trivy] endpoint`), or is downloaded on first use.
+RUN mkdir -p /tmp/tv && curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+    | tar -xz -C /tmp/tv && install -m 0755 "$(find /tmp/tv -type f -name trivy | head -1)" /usr/local/bin/trivy && rm -rf /tmp/tv
+# GuardDog: a Python tool, in its own venv so its dependency tree stays out of
+# the system interpreter.
+RUN python3 -m venv /opt/guarddog && /opt/guarddog/bin/pip install --no-cache-dir "guarddog==${GUARDDOG_VERSION}" \
+    && ln -s /opt/guarddog/bin/guarddog /usr/local/bin/guarddog
+
+# ── Runtime image ─────────────────────────────────────────────────────────────
+# Debian rather than distroless: `bwrap` and the Python GuardDog need a
+# userland. Still no shell on the entrypoint path — the runner passes argv
+# directly — and the process runs as the same non-root uid as the proxy.
+FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bubblewrap ca-certificates python3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -g 65532 nonroot && useradd -u 65532 -g 65532 -M -s /usr/sbin/nologin nonroot \
+    && mkdir -p /var/cache/batlehub /tmp/batlehub && chown 65532:65532 /var/cache/batlehub /tmp/batlehub
+
+COPY --from=builder /build/target/release/batlehub /usr/local/bin/batlehub
+COPY --from=tools /usr/local/bin/postmortem /usr/local/bin/postmortem
+COPY --from=tools /usr/local/bin/trivy      /usr/local/bin/trivy
+COPY --from=tools /opt/guarddog             /opt/guarddog
+RUN ln -s /opt/guarddog/bin/guarddog /usr/local/bin/guarddog
+
+# The sandbox's per-job work directories go under TMPDIR; the chart mounts an
+# emptyDir here (`noexec` where the node allows it).
+ENV TMPDIR=/tmp/batlehub
+
+# The worker exposes /livez and /metrics only.
+EXPOSE 8080
+
+USER 65532:65532
+
+ENTRYPOINT ["batlehub"]
+CMD ["--config", "/etc/batlehub/config.toml", "--roles", "worker"]

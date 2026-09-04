@@ -1,11 +1,13 @@
 pub mod admin;
 pub mod authz;
 pub mod blocking;
+pub mod bundle;
 pub mod cache_control;
 pub mod document_cache;
 pub mod escaping;
 pub mod eviction;
 pub mod explore_cache;
+pub mod flags;
 pub mod forge_refs;
 pub mod grants_admin;
 pub mod hot_config;
@@ -21,6 +23,7 @@ pub mod retention;
 pub mod sbom;
 pub mod scan_worker;
 pub mod scanners;
+pub mod sdkman;
 pub mod search;
 pub mod shadow;
 pub mod signature;
@@ -35,10 +38,14 @@ pub mod warming;
 
 pub use admin::{AdminService, BulkActionResult, BulkBlockItem};
 pub use blocking::{BlockedVersions, ListingContext};
+pub use bundle::{
+    verify_manifest_signature, BundleEntry, BundleManifest, BundleRef, BUNDLE_VERSION,
+};
 pub use cache_control::{parse_cache_control, CacheControlDirectives};
 pub use escaping::{escape_html, percent_encode_path_segment};
 pub use eviction::{CoherenceReport, EvictionConfig, EvictionReport, EvictionService};
 pub use explore_cache::ExploreCache;
+pub use flags::{FlagPushError, FlagService, FlagSourceLimits, MAX_BATCH as MAX_FLAG_BATCH};
 pub use grants_admin::{
     BackendVersions, GrantAdminService, GrantTarget, GrantWarning, VersionLookup,
 };
@@ -70,8 +77,9 @@ pub use retention::{
 pub use sbom::{SbomProxiedOptions, SbomPublishOptions, SbomService};
 pub use scan_worker::{PassReport, ScanWorker, WorkerConfig};
 pub use scanners::{
-    BlockListScanner, RecordedVulnerabilityScanner, RuleAsScanner, UpstreamPresenceScanner,
-    UPSTREAM_PRESENCE_SCANNER, WRAPPED_GATES,
+    BlockListScanner, FlagsScanner, ForgeProvenanceScanner, RecordedVulnerabilityScanner,
+    RuleAsScanner, UpstreamPresenceScanner, FORGE_PROVENANCE_SCANNER, UPSTREAM_PRESENCE_SCANNER,
+    WRAPPED_GATES,
 };
 pub use search::{SearchHit, SearchMode, SearchResults};
 pub use signed_url::{

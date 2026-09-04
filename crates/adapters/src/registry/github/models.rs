@@ -17,6 +17,14 @@ pub(super) struct GhAsset {
     pub browser_download_url: String,
     #[allow(dead_code)]
     pub size: u64,
+    /// `sha256:…` of the uploaded bytes (RFC 0019 §4.2 *Identity of the
+    /// bytes*). Confirmed against api.github.com on 2026-09-04: the field is
+    /// present on the asset object and is `null` for assets uploaded before
+    /// GitHub started recording it, so it is an `Option` and its absence
+    /// disables `ASSET_REPLACED` for that asset rather than asserting
+    /// anything.
+    #[serde(default)]
+    pub digest: Option<String>,
 }
 
 // ── Refs, tags, branches and commits (RFC 0019) ───────────────────────────────
@@ -65,6 +73,9 @@ pub struct GhTagObject {
 #[derive(Debug, Deserialize)]
 pub struct GhCommitDetail {
     pub committer: Option<GhGitPerson>,
+    /// RFC 0019 phase 5 — GitHub's own verdict on the commit's signature.
+    #[serde(default)]
+    pub verification: Option<GhVerification>,
 }
 
 /// `GET /repos/{o}/{r}/branches/{name}`.
@@ -85,4 +96,40 @@ pub struct GhCommit {
     pub sha: String,
     pub commit: Option<GhCommitDetail>,
     pub committer: Option<GhUser>,
+}
+
+/// The `verification` object GitHub puts on a commit (and on a tag object).
+/// Confirmed against api.github.com on 2026-09-04 on `cli/cli@trunk`:
+/// `{verified, reason, signature, payload}`, with `reason` = `"valid"` on a
+/// verified commit.
+#[derive(Debug, Deserialize)]
+pub(super) struct GhVerification {
+    #[serde(default)]
+    pub verified: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// `GET /repos/{o}/{r}/attestations/{sha256:digest}`. Confirmed against
+/// api.github.com on 2026-09-04: the endpoint is anonymous-readable and
+/// answers `200 {"attestations": []}` when there is none, so an empty array
+/// is "no attestation" and a `404` is "this instance has no such endpoint" —
+/// which is what GitHub Enterprise below 3.13 answers.
+#[derive(Debug, Deserialize)]
+pub(super) struct GhAttestations {
+    #[serde(default)]
+    pub attestations: Vec<serde_json::Value>,
+}
+
+/// One entry of `GET /repos/{o}/{r}/tags`. Confirmed against api.github.com
+/// on 2026-09-04: `name` and `commit.sha`, with no date on the listing.
+#[derive(Debug, Deserialize)]
+pub(super) struct GhTag {
+    pub name: String,
+    pub commit: GhTagCommit,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct GhTagCommit {
+    pub sha: String,
 }

@@ -10,13 +10,19 @@ use super::super::http_client::{
     to_registry_error, upstream_auth_headers, UpstreamHttpOptions,
 };
 use super::super::ssrf;
-use super::models::{GhAsset, GhBranch, GhCommit, GhRef, GhRelease, GhTagObject};
+use super::models::{
+    GhAsset, GhAttestations, GhBranch, GhCommit, GhRef, GhRelease, GhTag, GhTagObject,
+    GhVerification,
+};
 use batlehub_core::{
-    entities::{is_commit_sha, PackageId, PackageMetadata, RefKind, FORGE_EXTRA_KEY, UNKNOWN_TAG},
+    entities::{
+        is_commit_sha, ForgeProvenance, PackageId, PackageMetadata, RefKind, FORGE_ASSET_DIGEST,
+        FORGE_EXTRA_KEY, UNKNOWN_TAG,
+    },
     error::CoreError,
     ports::{
-        BudgetRole, DocumentKind, FetchedArtifact, ForgeCommit, ForgeRegistry, RateLimitBudget,
-        RegistryClient, ResolvedTarget, VersionDocument,
+        BudgetRole, DocumentKind, FetchedArtifact, ForgeCommit, ForgeRegistry, ForgeTag,
+        RateLimitBudget, RegistryClient, ResolvedTarget, VersionDocument,
     },
 };
 
@@ -232,6 +238,29 @@ impl GithubRegistryClient {
 
 // ── ForgeRegistry impl (RFC 0019 §6.3) ────────────────────────────────────────
 
+/// GitHub's (and Forgejo's) `verification` object, as a provenance state.
+///
+/// `verified: true` is the forge's own cryptographic check. `false` with a
+/// reason of "not signed" is nothing to report; `false` with any other reason
+/// is a signature that failed, which is a different fact and a different
+/// code.
+fn verification_to_provenance(v: Option<&GhVerification>) -> ForgeProvenance {
+    match v {
+        Some(v) if v.verified => ForgeProvenance::Verified {
+            detail: v.reason.clone().unwrap_or_else(|| "valid".to_owned()),
+        },
+        Some(v) => {
+            let reason = v.reason.clone().unwrap_or_default();
+            if reason.is_empty() || reason.contains("not_signed") || reason.contains("unsigned") {
+                ForgeProvenance::Missing
+            } else {
+                ForgeProvenance::Invalid { reason }
+            }
+        }
+        None => ForgeProvenance::Missing,
+    }
+}
+
 #[async_trait]
 impl ForgeRegistry for GithubRegistryClient {
     /// Tag first (`git/ref/tags/{ref}`, then the tag object for an annotated
@@ -302,6 +331,92 @@ impl ForgeRegistry for GithubRegistryClient {
             publisher: committer
                 .and_then(|c| person_label(None, c.name.as_deref(), c.email.as_deref())),
         })
+    }
+
+    /// `GET /repos/{o}/{r}/tags` — name and commit sha, newest first as
+    /// GitHub orders them. The list carries no date, so an annotated tag's
+    /// tagger date is not here; `resolve_ref` is what fetches one when a
+    /// coordinate needs it, and paying two calls per tag to fill a listing
+    /// would spend the whole rate-limit budget on a display.
+    async fn tags(&self, owner_repo: &str) -> Result<Vec<ForgeTag>, CoreError> {
+        let url = format!("{}/repos/{}/tags?per_page=100", self.base_url, owner_repo);
+        let resp = self.api_get(&url).await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(CoreError::NotFound(format!("{owner_repo} not found")));
+        }
+        let tags: Vec<GhTag> = resp
+            .error_for_status()
+            .map_err(to_registry_error)?
+            .json()
+            .await
+            .map_err(to_registry_error)?;
+        Ok(tags
+            .into_iter()
+            .map(|t| ForgeTag {
+                name: t.name,
+                sha: t.commit.sha,
+                date: None,
+            })
+            .collect())
+    }
+
+    /// An attestation for the asset's digest when the coordinate names one,
+    /// the commit's signature otherwise (RFC 0019 phase 5).
+    ///
+    /// **Never `Unverifiable`** — that state is GitLab's release evidence and
+    /// nothing else (decision 8); a test below asserts it.
+    ///
+    /// GitHub Enterprise below 3.13 has no attestations endpoint and answers
+    /// `404`; that is `Missing`, which is the same thing the endpoint's empty
+    /// array means and the honest answer either way.
+    async fn provenance(
+        &self,
+        owner_repo: &str,
+        sha: &str,
+        asset_digest: Option<&str>,
+    ) -> Result<ForgeProvenance, CoreError> {
+        if let Some(digest) = asset_digest {
+            let digest = if digest.contains(':') {
+                digest.to_owned()
+            } else {
+                format!("sha256:{digest}")
+            };
+            let url = format!(
+                "{}/repos/{}/attestations/{}",
+                self.base_url, owner_repo, digest
+            );
+            let resp = self.api_get(&url).await?;
+            if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                return Ok(ForgeProvenance::Missing);
+            }
+            let a: GhAttestations = resp
+                .error_for_status()
+                .map_err(to_registry_error)?
+                .json()
+                .await
+                .map_err(to_registry_error)?;
+            return Ok(if a.attestations.is_empty() {
+                ForgeProvenance::Missing
+            } else {
+                ForgeProvenance::Verified {
+                    detail: format!("{} build attestation(s) for {digest}", a.attestations.len()),
+                }
+            });
+        }
+        let url = format!("{}/repos/{}/commits/{}", self.base_url, owner_repo, sha);
+        let resp = self.api_get(&url).await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(ForgeProvenance::Missing);
+        }
+        let c: GhCommit = resp
+            .error_for_status()
+            .map_err(to_registry_error)?
+            .json()
+            .await
+            .map_err(to_registry_error)?;
+        Ok(verification_to_provenance(
+            c.commit.as_ref().and_then(|d| d.verification.as_ref()),
+        ))
     }
 
     async fn commit(&self, owner_repo: &str, sha: &str) -> Result<ForgeCommit, CoreError> {
@@ -537,26 +652,24 @@ impl RegistryClient for GithubRegistryClient {
 
                 let is_signed = is_release_signed(&release.assets);
 
-                let download_url = if let Some(artifact_str) = &pkg.artifact {
+                // The asset this coordinate names, found once: the URL to
+                // stream and the digest RFC 0019's `ASSET_REPLACED` compares
+                // come from the same object, and finding it twice was how
+                // the two could disagree.
+                let selected = if let Some(artifact_str) = &pkg.artifact {
                     if let Some(filename) = artifact_str.strip_prefix("filename/") {
-                        release
-                            .assets
-                            .iter()
-                            .find(|a| a.name == filename)
-                            .map(|a| a.browser_download_url.clone())
+                        release.assets.iter().find(|a| a.name == filename)
                     } else {
                         let asset_id: u64 = artifact_str.parse().map_err(|_| {
                             CoreError::Registry(format!("invalid asset id: {artifact_str}"))
                         })?;
-                        release
-                            .assets
-                            .iter()
-                            .find(|a| a.id == asset_id)
-                            .map(|a| a.browser_download_url.clone())
+                        release.assets.iter().find(|a| a.id == asset_id)
                     }
                 } else {
                     None
                 };
+                let download_url = selected.map(|a| a.browser_download_url.clone());
+                let selected_digest = selected.and_then(|a| a.digest.clone());
 
                 let extra = serde_json::json!({
                     "release_id": release.id,
@@ -565,7 +678,16 @@ impl RegistryClient for GithubRegistryClient {
                         "id": a.id,
                         "name": a.name,
                         "download_url": a.browser_download_url,
+                        "digest": a.digest,
                     })).collect::<Vec<_>>(),
+                    // RFC 0019 phase 2: the digest of the asset this
+                    // coordinate names, where the coordinate names one, so
+                    // `ASSET_REPLACED` can compare it with the bytes already
+                    // cached. A release (no asset selector) carries none.
+                    FORGE_EXTRA_KEY: selected_digest
+                        .as_ref()
+                        .map(|d| serde_json::json!({ FORGE_ASSET_DIGEST: d }))
+                        .unwrap_or(serde_json::Value::Null),
                 });
 
                 Ok(PackageMetadata {
@@ -722,6 +844,7 @@ mod tests {
             name: name.to_string(),
             browser_download_url: format!("https://example.com/{name}"),
             size: 0,
+            digest: None,
         }
     }
 

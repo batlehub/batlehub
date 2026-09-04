@@ -3,7 +3,7 @@ name: Test
 # client integrations: the marketplaces (headless VS Code + IntelliJ installing
 # an extension that exists only on this instance), Bundler, and one job per
 # remaining ecosystem in the `heavy-client` matrix (npm, pypi, openvsx, conda,
-# nuget, composer, terraform, nvm, mise, cargo, go, maven, pathproxy), each
+# nuget, composer, terraform, nvm, sdkman, mise, cargo, go, maven, pathproxy), each
 # driving that ecosystem's real client against a real server. Each job produces an LCOV file; the final job merges them and
 # publishes a coverage table in the run summary.
 #
@@ -433,8 +433,16 @@ jobs:
           # decision 9 — not the installer) and needs only curl, tar and xz,
           # all on the runner image.
           - suite: nvm
-          # mise: installed by the job below; anonymous GitHub, about eight
-          # API requests per run (RFC 0019 phase 1).
+          # sdkman: the script downloads the sdkman-cli release zip itself (RFC
+          # 0010 decision 9 — not the installer) and needs curl, zip, unzip and
+          # tar, all on the runner image. Installs one JDK (~200 MB) from the
+          # vendor CDN the broker names.
+          - suite: sdkman
+          # mise: installed by the job below. Anonymous GitHub, and the run
+          # spends about eighteen of the sixty requests an hour that allows —
+          # RFC 0019 phase 1's ref headers, plus RFC 0008 §4's air gap, which
+          # seeds a second instance and installs through it with egress
+          # denied. A 502 on `releases/assets/{id}` is the budget, not a bug.
           - suite: mise
           # RFC 0018 phase 0a — the rejection survey. cargo, go, mvn and java
           # are on the runner image; the path-proxy suite drives apt (on the
@@ -543,7 +551,7 @@ jobs:
         # `~` is expanded by the action; it is deliberately not passed to the
         # scripts as `HEAVY_CACHE`, where bash would take it literally and put
         # the downloads in a directory named `~`.
-        if: matrix.suite == 'conda' || matrix.suite == 'composer' || matrix.suite == 'nvm'
+        if: matrix.suite == 'conda' || matrix.suite == 'composer' || matrix.suite == 'nvm' || matrix.suite == 'sdkman'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/batlehub-heavy

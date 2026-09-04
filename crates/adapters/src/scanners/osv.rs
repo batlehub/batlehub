@@ -55,6 +55,7 @@ impl ArtifactScanner for OsvArtifactScanner {
                 | RegistryKind::Jetbrains
                 | RegistryKind::Generic
                 | RegistryKind::Nodedist
+                | RegistryKind::Sdkman
                 | RegistryKind::JetbrainsMarketplace
                 | RegistryKind::Openvsx
                 | RegistryKind::VscodeMarketplace
@@ -140,6 +141,7 @@ mod tests {
             purl: "pkg:npm/left-pad@1.3.1".into(),
             artifact: None,
             sbom,
+            listing: None,
         }
     }
 

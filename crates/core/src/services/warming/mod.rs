@@ -97,4 +97,8 @@ pub struct WarmingService {
     /// Shared with `ProxyService` so warming traffic feeds the same
     /// upstream-health signal as regular proxy reads.
     pub metrics: Arc<ProxyMetrics>,
+    /// The platforms to warm, for the kinds whose artifact is one file per
+    /// platform (`sdkman`, `nodedist` — RFC 0010 §6.9). Empty means the
+    /// platform this server runs on; ignored by every other kind.
+    pub platforms: Vec<String>,
 }

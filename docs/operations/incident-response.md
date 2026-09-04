@@ -92,6 +92,45 @@ batlehub admin block <registry> <package-name>
 batlehub admin packages unlist <registry> <package-name> <version>
 ```
 
+### Flag a version from your SOC tooling
+
+A `[[flag_sources]]` entry ([configuration §3.11](/guide/configuration#flag-sources))
+lets the SOC platform push the verdict itself, signed, without a console
+login — and the push is the record the exposure report reads.
+
+```bash
+BODY='{"flags":[{"external_id":"CASE-2026-0912","registry":"npm","package_name":"left-pad",
+  "version":"1.3.1","kind":"malware","effect":"hard_block","summary":"credential stealer in postinstall"}]}'
+SIG="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$FLAG_SECRET" | sed 's/^.* //')"
+curl -sS -X POST "$BATLEHUB/api/v1/flags/soc" \
+  -H "Content-Type: application/json" -H "X-Hub-Signature-256: $SIG" --data "$BODY"
+```
+
+`version_range = "*"` flags every version of the package. On a registry with
+a `[registries.security]` profile the version is denied at once; elsewhere
+`FlagsRule` refuses it on the next request. Lift it with
+`DELETE /api/v1/flags/soc/CASE-2026-0912` (signed over the empty body): the
+row stays as a tombstone so the report below still answers.
+
+### Who pulled a flagged version {#who-pulled-a-flagged-version}
+
+The exposure report joins the access log to the flags, one row per consumer,
+coordinate and flag, and says how many of the pulls **preceded** the flag —
+the retroactive case, where the developer did nothing wrong and still has
+the artifact.
+
+```bash
+batlehub admin exposure --source soc --min-effect gate --when before-flag
+batlehub admin exposure --registry npm --package left-pad --from 2026-09-01T00:00:00Z
+batlehub admin flags list --include-dead          # what every source has said, tombstones too
+```
+
+`GET /api/v1/admin/exposure/export?format=csv` is the same rows as a file for
+the ticket. Read the **coverage** block before quoting the numbers: it says
+how many registries have an SBOM extractor (so the CVE scan reaches them),
+when that scan last ran per registry, and which sources have pushed — a
+report that has never scanned knows only what was pushed.
+
 ### Isolate a replica
 
 If one replica is compromised, remove it from the load balancer before forensics. BatleHub state lives in Postgres and S3 — the replica itself is stateless.

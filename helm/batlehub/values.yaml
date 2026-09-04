@@ -289,6 +289,61 @@ podDisruptionBudget:
 # proxy, and a default-deny policy written without that list silently breaks every
 # cache miss. Turn it on once you know your egress, and note that DNS must be
 # allowed or *every* upstream lookup fails.
+# ── The scan worker (RFC 0018 §5.4) ──────────────────────────────────────────
+# A second Deployment of the same binary, started with `--roles worker` from
+# the worker image — the one that carries bubblewrap, postmortem, GuardDog and
+# the Trivy client (Containerfile.worker). It leases scan jobs from the
+# database, opens artifacts inside a `bwrap` sandbox and records verdicts; it
+# answers no HTTP but /livez and /metrics.
+#
+# Off by default: every existing deployment keeps the embedded worker in the
+# proxy pod. When you enable this, set `config.server.roles = ["proxy"]` so the
+# proxy stops scanning and the toolchains live only here. Only the worker needs
+# egress to upstream artifacts, the Trivy server and Rekor; a NetworkPolicy
+# that says so is the next thing to write once this is on.
+worker:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: ghcr.io/batleforc/batlehub-worker
+    pullPolicy: IfNotPresent
+    # Defaults to Chart.appVersion — the worker and the proxy are one release.
+    tag: ""
+  # bubblewrap needs unprivileged user namespaces on the node
+  # (`kernel.unprivileged_userns_clone=1` on Debian-derived kernels, on by
+  # default on most others). Where the node forbids them, either grant the
+  # container `CAP_SYS_ADMIN` (not recommended) or run the pod under a sandboxed
+  # runtime class below and set `[worker.sandbox] runtime = "none"` with
+  # `BATLEHUB_UNSAFE_NO_SANDBOX=1` — the runtime class is then the sandbox.
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+  # The opt-in fourth wall (RFC 0018 §7): gVisor (`gvisor`) or Kata around the
+  # whole pod, on top of bubblewrap around each scanner.
+  runtimeClassName: ""
+  # The per-job work directories: a memory-backed emptyDir, so a hostile
+  # archive never touches the node's disk. Size it for `max_concurrent` jobs
+  # of `[worker.sandbox] max_extracted_mb` each.
+  scratch:
+    sizeLimit: 4Gi
+  resources: {}
+  #  limits:
+  #    memory: 4Gi
+  #  requests:
+  #    cpu: 500m
+  #    memory: 1Gi
+  nodeSelector: {}
+  tolerations: []
+
+# The Trivy server sub-chart (aquasecurity/trivy), for `[scanners.trivy]
+# endpoint`. Off by default; `helm dependency update` fetches it when you turn
+# it on, and the endpoint is then `http://<release>-trivy:4954`.
+trivy:
+  enabled: false
+
 networkPolicy:
   enabled: false
   # Peers allowed to reach the service port. Leaving this empty renders an

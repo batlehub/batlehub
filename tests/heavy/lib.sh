@@ -50,6 +50,8 @@ HEAVY_SUITE=""
 HEAVY_WORK=""
 HEAVY_SERVER_PID=""
 HEAVY_TAP_PID=""
+HEAVY_SERVER2_PID=""
+HEAVY_BASE2=""
 
 heavy_log() { printf '\n==> %s\n' "$*"; }
 
@@ -64,6 +66,10 @@ heavy_fail() {
   if [[ -n "${HEAVY_WORK:-}" && -s "$HEAVY_WORK/server.log" ]]; then
     echo "── server log (tail) ──" >&2
     tail -60 "$HEAVY_WORK/server.log" >&2
+  fi
+  if [[ -n "${HEAVY_WORK:-}" && -s "$HEAVY_WORK/server2.log" ]]; then
+    echo "── second server log (tail) ──" >&2
+    tail -40 "$HEAVY_WORK/server2.log" >&2
   fi
   exit 1
 }
@@ -89,8 +95,64 @@ heavy_stop_server() {
   HEAVY_SERVER_PID=""
 }
 
+# heavy_start_second_server <config> <port> [storage-dir]
+#
+# A second BatleHub, beside the first, on its own port and its own storage.
+# One suite needs it — RFC 0008's air gap, where the whole claim is that a
+# *disconnected* instance serves what a *connected* one exported, and one
+# process cannot be both.
+#
+# The two share the database, because the suites have one `DATABASE_URL`. What
+# that does and does not cost is worth stating: the metadata cache is
+# in-process and the storage directory is separate, so the second instance
+# holds no *bytes* until something is imported into it — the refusal and the
+# serve are both real. But the storage router's inventory is a table in that
+# shared database, so the second instance can *see* rows for keys it does not
+# hold, and any assertion about what it reports holding is meaningless here.
+# A real pair shares nothing.
+heavy_start_second_server() {
+  local config="$1" port="$2" storage="${3:-$HEAVY_WORK/storage2}"
+  mkdir -p "$storage"
+  HEAVY_BASE2="http://127.0.0.1:$port"
+  heavy_log "Starting the second BatleHub (config=$config, port=$port)"
+  # Its own port and path, through the loader's env-override path so the
+  # config file stays valid TOML. Exported for this launch only: the parent
+  # shell keeps the first instance's values.
+  (
+    export PROXY_CACHE__SERVER__PORT="$port"
+    export PROXY_CACHE__STORAGE__PATH="$storage"
+    setsid cargo run -p batlehub-server -- \
+      --config "$config" >"$HEAVY_WORK/server2.log" 2>&1 &
+    echo $! > "$HEAVY_WORK/server2.pid"
+  )
+  HEAVY_SERVER2_PID="$(cat "$HEAVY_WORK/server2.pid")"
+  for i in $(seq 1 120); do
+    if curl -sf "$HEAVY_BASE2/healthz" >/dev/null 2>&1; then
+      heavy_log "Second server healthy at $HEAVY_BASE2"
+      return 0
+    fi
+    if ! kill -0 "$HEAVY_SERVER2_PID" 2>/dev/null; then
+      tail -40 "$HEAVY_WORK/server2.log" >&2
+      HEAVY_SERVER2_PID=""
+      heavy_fail "the second server exited before becoming healthy"
+    fi
+    sleep 2
+    [[ "$i" == 120 ]] && heavy_fail "the second server did not become healthy within 4 minutes"
+  done
+}
+
+heavy_stop_second_server() {
+  if [[ -n "${HEAVY_SERVER2_PID:-}" ]]; then
+    kill -TERM -- "-$HEAVY_SERVER2_PID" 2>/dev/null \
+      || kill -TERM "$HEAVY_SERVER2_PID" 2>/dev/null || true
+    wait "$HEAVY_SERVER2_PID" 2>/dev/null || true
+  fi
+  HEAVY_SERVER2_PID=""
+}
+
 heavy_cleanup() {
   [[ -n "$HEAVY_TAP_PID" ]] && kill "$HEAVY_TAP_PID" 2>/dev/null
+  heavy_stop_second_server
   heavy_stop_server
   [[ -n "$HEAVY_WORK" ]] && rm -rf "$HEAVY_WORK"
   return 0

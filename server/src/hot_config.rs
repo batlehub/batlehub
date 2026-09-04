@@ -170,6 +170,18 @@ fn build_sbom_map(registries: &[RegistryConfig]) -> HashMap<String, HotSbomConfi
 pub(super) struct ForgeStores {
     pub ref_resolutions: Option<Arc<dyn batlehub_core::ports::RefResolutionRepository>>,
     pub rate_limit_budget: Option<Arc<dyn batlehub_core::ports::RateLimitBudget>>,
+    /// RFC 0019 phase 2 — the digest of the bytes already cached under a
+    /// coordinate, which is what `ASSET_REPLACED` compares the forge's
+    /// advertised digest against. `None` disables that one detection.
+    pub artifact_meta: Option<Arc<dyn batlehub_core::ports::ArtifactCacheMeta>>,
+}
+
+/// The store RFC 0008 keeps in the database: what this instance was asked
+/// for and did not hold.
+#[derive(Clone, Default)]
+pub(super) struct AirGapStores {
+    pub miss_recorder: Option<Arc<dyn batlehub_core::ports::MissRecorder>>,
+    pub bundle_history: Option<Arc<dyn batlehub_core::ports::BundleHistory>>,
 }
 
 /// The stores RFC 0018 keeps in the database: verdicts, the scan queue and
@@ -182,6 +194,9 @@ pub(super) struct SecurityStores {
     /// RFC 0014's rows, when `[upstream_audit]` is enabled: the
     /// `upstream-presence` scanner reads them on a `[security]` registry.
     pub upstream_status: Option<Arc<dyn batlehub_core::ports::UpstreamStatusPort>>,
+    /// RFC 0002 (recast): the pushed flags — the `flags` scanner on a
+    /// `[security]` registry, `FlagsRule` on every other.
+    pub advisories: Option<Arc<dyn batlehub_core::ports::AdvisoryRepository>>,
 }
 
 impl SecurityStores {
@@ -205,13 +220,47 @@ fn build_forge_refs_map(
     registries
         .iter()
         .filter_map(|reg| {
-            reg.refs.as_ref().map(|r| {
+            reg.refs
+                .as_ref()
+                .map(|_| (reg.name.clone(), crate::builders::forge_refs_policy(reg)))
+        })
+        .collect()
+}
+
+/// `[registries.raw]` per forge registry (RFC 0019 §4.1, phase 3).
+///
+/// Only registries that wrote the block get an entry; every other forge
+/// registry takes the default, which is **off**. `scripts` defaults to
+/// `deny` when the registry also has `[registries.security]` (§11 q2).
+fn build_forge_raw_map(
+    registries: &[RegistryConfig],
+) -> HashMap<String, batlehub_core::entities::RawPolicy> {
+    registries
+        .iter()
+        .filter_map(|reg| {
+            reg.raw
+                .as_ref()
+                .map(|raw| (reg.name.clone(), raw.policy(reg.security.is_some())))
+        })
+        .collect()
+}
+
+/// `[registries.api_reads]` per forge registry (RFC 0019 §4.1, phase 3).
+/// Validation has already refused an unknown family, so an unparsable one
+/// here is dropped rather than guessed at.
+fn build_api_reads_map(
+    registries: &[RegistryConfig],
+) -> HashMap<String, Vec<batlehub_core::entities::ApiReadFamily>> {
+    registries
+        .iter()
+        .filter_map(|reg| {
+            reg.api_reads.as_ref().map(|a| {
                 (
                     reg.name.clone(),
-                    batlehub_core::entities::ForgeRefsPolicy {
-                        branch_ttl: std::time::Duration::from_secs(r.branch_ttl_secs),
-                        tag_ttl: std::time::Duration::from_secs(r.tag_ttl_secs),
-                    },
+                    a.families
+                        .iter()
+                        .filter_map(|f| batlehub_core::entities::ApiReadFamily::parse(f))
+                        .collect(),
                 )
             })
         })
@@ -377,6 +426,10 @@ pub(super) fn build_hot_bundle(
     // `[security]` and no store is refused here: serving it would mean serving
     // unscanned, which is the one thing the section promises not to do.
     security_stores: &SecurityStores,
+    // RFC 0008 §6.3 — where a miss is written. Threaded like the other
+    // stores: a `None` on the reload path would silently stop recording on
+    // every config change.
+    air_gap_stores: &AirGapStores,
 ) -> anyhow::Result<(
     HotConfig,
     AccessConfig,
@@ -410,15 +463,26 @@ pub(super) fn build_hot_bundle(
         Vec<Arc<dyn batlehub_core::ports::ArtifactScanner>>,
     > = HashMap::new();
     let verdict_service = security_stores.service();
+    // RFC 0008 §13 decision 1 — one read of the switch, applied to every
+    // client, so "never dials" is a property of construction rather than a
+    // check each of the seven dial-out paths has to remember.
+    let air_gapped = cfg.air_gap.as_ref().is_some_and(|a| a.enabled);
 
     for reg in &cfg.registries {
         let client = crate::builders::build_registry_client(
             reg,
             cfg.proxy.as_ref(),
             forge_stores.rate_limit_budget.as_ref(),
+            air_gapped,
         )
         .with_context(|| format!("building registry client for '{}'", reg.name))?;
         reg_clients.insert(reg.name.clone(), client);
+        // The optional stores the newer gates read: RFC 0002's pushed flags
+        // and RFC 0019's artifact digests.
+        let gate_stores = crate::builders::GateStores {
+            advisories: security_stores.advisories.clone(),
+            artifact_meta: forge_stores.artifact_meta.clone(),
+        };
         // RFC 0018 §6.5: a `[security]` registry gets the verdict gate first
         // and its five covered gates as scanners; every other registry keeps
         // the chain it always had.
@@ -445,6 +509,8 @@ pub(super) fn build_hot_bundle(
                             .upstream_status
                             .as_ref()
                             .map(|s| (Arc::clone(s), cfg.upstream_audit.on_confirmed == "block")),
+                        security_stores.advisories.clone(),
+                        reg_clients.get(&reg.name).map(Arc::clone),
                     )
                     .with_context(|| format!("building internal scanners for '{}'", reg.name))?,
                 );
@@ -462,6 +528,7 @@ pub(super) fn build_hot_bundle(
                 Arc::clone(repo),
                 Arc::clone(vuln_repo),
                 Arc::clone(sbom_repo),
+                gate_stores.clone(),
                 w,
             ),
             None => crate::builders::build_policy(
@@ -469,6 +536,7 @@ pub(super) fn build_hot_bundle(
                 Arc::clone(repo),
                 Arc::clone(vuln_repo),
                 Arc::clone(sbom_repo),
+                gate_stores.clone(),
             ),
         }
         .with_context(|| format!("building policy for '{}'", reg.name))?;
@@ -481,6 +549,7 @@ pub(super) fn build_hot_bundle(
             Arc::clone(repo),
             Arc::clone(vuln_repo),
             Arc::clone(sbom_repo),
+            gate_stores.clone(),
             wiring,
         )
         .with_context(|| format!("building namespace rule overrides for '{}'", reg.name))?;
@@ -538,6 +607,19 @@ pub(super) fn build_hot_bundle(
         ref_resolutions: forge_stores.ref_resolutions.clone(),
         rate_limit_budget: forge_stores.rate_limit_budget.clone(),
         forge_refs: build_forge_refs_map(&cfg.registries),
+        forge_raw: build_forge_raw_map(&cfg.registries),
+        forge_api_reads: build_api_reads_map(&cfg.registries),
+        air_gap: cfg
+            .air_gap
+            .as_ref()
+            .map(|a| batlehub_core::entities::AirGapPolicy {
+                enabled: a.enabled,
+                record_misses: a.record_misses,
+                miss_retention_days: a.miss_retention_days,
+                bundle_trusted_keys: a.bundle_trusted_keys.clone(),
+            })
+            .unwrap_or_default(),
+        miss_recorder: air_gap_stores.miss_recorder.clone(),
         security: reg_security,
         internal_scanners: reg_internal_scanners,
         verdicts: security_stores.verdicts.clone(),
@@ -856,6 +938,7 @@ pub(super) fn make_hot_builder(
     signing_keys: Option<Arc<dyn batlehub_core::ports::SigningKeyPort>>,
     forge_stores: ForgeStores,
     security_stores: SecurityStores,
+    air_gap_stores: AirGapStores,
     text_config: SettledTextConfig,
 ) -> batlehub_web::services::HotConfigBuilder {
     Arc::new(move |cfg: &AppConfig| {
@@ -874,6 +957,7 @@ pub(super) fn make_hot_builder(
             &signing_keys,
             &forge_stores,
             &security_stores,
+            &air_gap_stores,
         )?;
         let mut cargo_map: HashMap<String, CargoIndexProxy> = HashMap::new();
         for reg in &cfg.registries {

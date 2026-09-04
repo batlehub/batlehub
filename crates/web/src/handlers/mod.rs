@@ -1,11 +1,14 @@
+pub mod air_gap;
 pub mod auth;
 pub mod back_office;
+pub mod flags;
 pub mod front_office;
 pub mod healthz;
 pub mod inbound_webhook;
 pub mod metrics;
 pub mod proxy;
 pub mod schemas;
+pub mod security;
 
 /// Clamp caller-supplied `page`/`per_page` query params before they're used to
 /// compute a SQL `offset = page * per_page`. `per_page=0` would make `LIMIT 0`

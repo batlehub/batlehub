@@ -230,6 +230,14 @@ pub struct RegistryConfig {
     /// Set this for self-hosted registries (e.g. Gitea/Forgejo package feeds).
     #[serde(default)]
     pub index_url: Option<String>,
+    /// SDKMAN only: URL of the download broker, the second host of the one
+    /// protocol. Defaults to `https://broker.sdkman.io`; `upstreams` is the
+    /// candidates API (`https://api.sdkman.io/2`). Rejected on any other type,
+    /// for the same reason `index_url` would be on a non-cargo registry: a
+    /// silently ignored option is a misconfiguration that looks like a proxy
+    /// bug (RFC 0010 §4.1, §4.5).
+    #[serde(default)]
+    pub broker_url: Option<String>,
     #[serde(default)]
     pub cache: CachePolicy,
     #[serde(default)]
@@ -343,6 +351,14 @@ pub struct RegistryConfig {
     /// hour.
     #[serde(default)]
     pub refs: Option<super::forge::RefsConfig>,
+    /// `[registries.raw]` — raw file serving, off unless written (RFC 0019
+    /// §4.1, phase 3).
+    #[serde(default)]
+    pub raw: Option<super::forge::RawConfig>,
+    /// `[registries.api_reads]` — the typed read-only JSON routes to add
+    /// beside the release listing.
+    #[serde(default)]
+    pub api_reads: Option<super::forge::ApiReadsConfig>,
     /// Optional configuration for the console's discovery read — whether this
     /// instance may ask upstream about a package it holds nothing of.
     ///
@@ -1022,6 +1038,14 @@ pub struct CachePolicy {
     /// startup and via the `/warm` admin endpoint (`paths`).
     #[serde(default)]
     pub warm_paths: Vec<String>,
+    /// The platforms `warm_packages` warms, for the two kinds whose artifact
+    /// is one file per platform: `sdkman` (`linuxx64`, `darwinarm64`, …) and
+    /// `nodedist` (`linux-x64`, `darwin-arm64`, …). Empty — the default —
+    /// means the platform this server runs on; guessing every platform would
+    /// fetch 1.6 GB of JDK to satisfy a one-line `.sdkmanrc` (RFC 0010 §6.9).
+    /// Rejected on any other kind.
+    #[serde(default)]
+    pub warm_platforms: Vec<String>,
     /// Number of most-recent versions to pre-warm per package (default: 1 = latest only).
     #[serde(default = "default_warm_latest_n")]
     pub warm_latest_n: usize,
@@ -1057,6 +1081,7 @@ impl Default for CachePolicy {
             keep_latest_n: None,
             warm_packages: vec![],
             warm_paths: vec![],
+            warm_platforms: vec![],
             warm_latest_n: default_warm_latest_n(),
             warm_concurrency: default_warm_concurrency(),
         }

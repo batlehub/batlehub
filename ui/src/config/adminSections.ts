@@ -64,6 +64,9 @@ export const OPERATIONS_TABS = [
   // read at all, and nothing on it changes when the instance changes. It is an
   // operation you perform, which is this section, not something you watch.
   { to: "/admin/operations/sbom", label: "adminNav.sbomExport" },
+  // RFC 0008 §6.6: the air gap is an operation too — what came across it,
+  // and what the next bundle needs.
+  { to: "/admin/operations/air-gap", label: "adminNav.airGap" },
 ];
 
 /**

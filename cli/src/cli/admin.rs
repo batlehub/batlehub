@@ -5,9 +5,9 @@ use comfy_table::Table;
 use crate::api::{
     admin::{
         AccessSimulationResponse, AuditEntry, AuditQuery, BlockedUserEntry, BulkPackageResult,
-        CoherenceReportDto, EvictionReportDto, NotificationChannelEntry,
-        NotificationSubscriptionEntry, RegistryHealthEntry, SimulateAccessRequest, StatsResponse,
-        TeamNamespaceEntry,
+        CoherenceReportDto, EvictionReportDto, ExposureQuery, ExposureResponse, FlagsQuery,
+        FlagsResponse, MissingQuery, NotificationChannelEntry, NotificationSubscriptionEntry,
+        RegistryHealthEntry, SimulateAccessRequest, StatsResponse, TeamNamespaceEntry,
     },
     version::RetentionReport,
     BatleHubClient,
@@ -18,6 +18,31 @@ fn parse_pkg_version(s: &str) -> anyhow::Result<(String, String)> {
         .split_once('@')
         .ok_or_else(|| anyhow::anyhow!("expected name@version, got: {s}"))?;
     Ok((name.to_string(), version.to_string()))
+}
+
+#[derive(Subcommand)]
+pub enum FlagsCommand {
+    /// List the flags pushed by the configured sources
+    List {
+        #[arg(long)]
+        registry: Option<String>,
+        /// Only this package name
+        #[arg(long)]
+        package: Option<String>,
+        /// Only this `[[flag_sources]]` name
+        #[arg(long)]
+        source: Option<String>,
+        /// inform, warn, gate or hard_block
+        #[arg(long)]
+        effect: Option<String>,
+        /// Include revoked and expired flags
+        #[arg(long)]
+        include_dead: bool,
+        #[arg(long, default_value_t = 0)]
+        page: u64,
+        #[arg(long, default_value_t = 50)]
+        per_page: u64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -63,6 +88,57 @@ pub enum AdminCommand {
         /// what would be reclaimed.
         #[arg(long)]
         show_kept: bool,
+    },
+    /// Who pulled a flagged version (RFC 0002): the exposure report
+    ///
+    /// One row per consumer, coordinate and flag, newest pull first, with
+    /// how many of the pulls preceded the flag. `--when before-flag` keeps
+    /// the retroactive rows only. Pages by cursor: pass `--after` the value
+    /// the previous page printed.
+    Exposure {
+        #[arg(long)]
+        registry: Option<String>,
+        /// Only this package name
+        #[arg(long)]
+        package: Option<String>,
+        /// Only flags from this `[[flag_sources]]` name
+        #[arg(long)]
+        source: Option<String>,
+        /// Only flags at this effect or stronger: inform, warn, gate, hard_block
+        #[arg(long)]
+        min_effect: Option<String>,
+        /// any (default), before-flag, after-flag
+        #[arg(long)]
+        when: Option<String>,
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        to: Option<String>,
+        /// The cursor the previous page printed
+        #[arg(long)]
+        after: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: u64,
+    },
+    /// What came across the air gap: the bundles this instance imported
+    /// (RFC 0008)
+    Bundles,
+    /// What this instance was asked for and did not hold (RFC 0008)
+    AirGapMissing {
+        #[arg(long)]
+        registry: Option<String>,
+        /// artifact, document, checksum, ref or unmirrored_host
+        #[arg(long)]
+        kind: Option<String>,
+        #[arg(long, default_value_t = 0)]
+        page: u64,
+        #[arg(long, default_value_t = 100)]
+        per_page: u64,
+    },
+    /// Pushed vulnerability flags (RFC 0002)
+    Flags {
+        #[command(subcommand)]
+        cmd: FlagsCommand,
     },
     /// Query the access audit log
     AuditLog {
@@ -481,6 +557,129 @@ pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Resu
                 },
             )
             .await?
+        }
+        AdminCommand::Exposure {
+            registry,
+            package,
+            source,
+            min_effect,
+            when,
+            from,
+            to,
+            after,
+            limit,
+        } => {
+            let resp = client
+                .exposure(ExposureQuery {
+                    from,
+                    to,
+                    registry,
+                    package_name: package,
+                    source,
+                    min_effect,
+                    when: when.map(|w| w.replace('-', "_")),
+                    after,
+                    limit,
+                })
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&resp)?);
+            } else {
+                print_exposure(&resp);
+            }
+        }
+        AdminCommand::Flags { cmd } => match cmd {
+            FlagsCommand::List {
+                registry,
+                package,
+                source,
+                effect,
+                include_dead,
+                page,
+                per_page,
+            } => {
+                let resp = client
+                    .list_flags(FlagsQuery {
+                        registry,
+                        package_name: package,
+                        source,
+                        effect,
+                        include_dead,
+                        page,
+                        per_page,
+                    })
+                    .await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                } else {
+                    print_flags(&resp);
+                }
+            }
+        },
+        AdminCommand::Bundles => {
+            let items = client.list_bundles().await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&items)?);
+            } else {
+                let mut table = Table::new();
+                table.set_header(["Bundle", "Signer", "Imported", "By", "Blobs", "Rejected"]);
+                for b in &items {
+                    table.add_row([
+                        b.bundle_id.clone(),
+                        b.signer_key.chars().take(8).collect(),
+                        b.imported_at.format("%Y-%m-%d %H:%M").to_string(),
+                        b.imported_by.clone().unwrap_or_else(|| "-".into()),
+                        b.blobs.to_string(),
+                        b.rejected.to_string(),
+                    ]);
+                }
+                println!("{table}");
+                println!("{} bundle(s)", items.len());
+                if items.is_empty() {
+                    println!(
+                        "nothing has been imported. On an air-gapped instance that means it \
+                         holds only what it was seeded with before the gap."
+                    );
+                }
+            }
+        }
+        AdminCommand::AirGapMissing {
+            registry,
+            kind,
+            page,
+            per_page,
+        } => {
+            let resp = client
+                .air_gap_missing(MissingQuery {
+                    registry,
+                    kind,
+                    page,
+                    per_page,
+                })
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&resp)?);
+            } else {
+                let mut table = Table::new();
+                table.set_header(["Registry", "Kind", "Key", "Asked", "Last seen"]);
+                for m in &resp.items {
+                    table.add_row([
+                        m.registry.clone(),
+                        m.kind.clone(),
+                        m.storage_key.clone(),
+                        m.count.to_string(),
+                        m.last_seen.format("%Y-%m-%d %H:%M").to_string(),
+                    ]);
+                }
+                println!("{table}");
+                println!("{} of {} row(s)", resp.items.len(), resp.total);
+                if !resp.air_gapped {
+                    println!(
+                        "this instance is not air-gapped, so a miss is fetched rather than \
+                         recorded: an empty list here is not the same as nothing missing."
+                    );
+                }
+            }
         }
         AdminCommand::Stats => {
             let resp = client.admin_stats().await?;
@@ -1432,6 +1631,104 @@ fn print_notification_subscriptions_table(entries: &[NotificationSubscriptionEnt
         ]);
     }
     println!("{table}");
+}
+
+fn print_flags(resp: &FlagsResponse) {
+    let mut table = Table::new();
+    table.set_header([
+        "Source", "Id", "Registry", "Package", "Version", "Effect", "Kind", "State", "Summary",
+    ]);
+    for f in &resp.items {
+        let state = if f.revoked_at.is_some() {
+            "revoked".to_owned()
+        } else if let Some(exp) = f.expires_at {
+            format!("expires {}", exp.format("%Y-%m-%d"))
+        } else {
+            "live".to_owned()
+        };
+        table.add_row([
+            f.source.as_str(),
+            f.external_id.as_str(),
+            f.registry.as_str(),
+            f.package_name.as_str(),
+            f.version.as_str(),
+            f.effect.as_str(),
+            f.kind.as_str(),
+            state.as_str(),
+            f.summary.as_str(),
+        ]);
+    }
+    println!("{table}");
+    println!(
+        "{} of {} flag(s), page {}",
+        resp.items.len(),
+        resp.total,
+        resp.page
+    );
+}
+
+fn print_exposure(resp: &ExposureResponse) {
+    let mut table = Table::new();
+    table.set_header([
+        "Consumer",
+        "Registry",
+        "Package",
+        "Version",
+        "Flag",
+        "Effect",
+        "Pulls",
+        "Before flag",
+        "Last pull",
+    ]);
+    for r in &resp.rows {
+        table.add_row([
+            r.consumer.clone(),
+            r.registry.clone(),
+            r.package_name.clone(),
+            r.version.clone(),
+            format!("{}:{}", r.source, r.external_id),
+            r.effect.clone(),
+            r.pulls.to_string(),
+            r.pulls_before_flag.to_string(),
+            r.last_pull.format("%Y-%m-%d %H:%M").to_string(),
+        ]);
+    }
+    println!("{table}");
+    println!("{} row(s)", resp.rows.len());
+    if let Some(next) = &resp.next {
+        println!("more follow: --after {next}");
+    }
+    let c = &resp.coverage;
+    println!(
+        "coverage: {} registr{}, {} with an SBOM extractor, {} with a security profile",
+        c.registries_total,
+        if c.registries_total == 1 { "y" } else { "ies" },
+        c.sbom_configured,
+        c.security_profiles
+    );
+    if c.last_scan.is_empty() {
+        println!("  CVE scan: never recorded a pass — the report knows only what was pushed");
+    }
+    for s in &c.last_scan {
+        println!(
+            "  {}: scanned {} at {} ({} finding(s), {} error(s))",
+            s.registry,
+            s.artifacts_scanned,
+            s.last_scan_at.format("%Y-%m-%d %H:%M"),
+            s.findings,
+            s.errors
+        );
+    }
+    for s in &c.flag_sources {
+        println!(
+            "  source {}: {} live flag(s), last push {}",
+            s.source,
+            s.live_flags,
+            s.last_push_at
+                .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_else(|| "never".into())
+        );
+    }
 }
 
 fn print_audit_log_table(entries: &[AuditEntry]) {

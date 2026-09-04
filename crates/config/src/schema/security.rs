@@ -212,7 +212,14 @@ impl ScannerConfig {
     /// phase 1; `postmortem`, `trivy`, `sigstore`, `guarddog` in phase 3;
     /// `socket`, `mlab` in phase 5.
     pub fn available(&self) -> bool {
-        matches!(self, Self::Osv { .. })
+        matches!(
+            self,
+            Self::Osv { .. }
+                | Self::Trivy { .. }
+                | Self::Postmortem { .. }
+                | Self::Guarddog { .. }
+                | Self::Sigstore { .. }
+        )
     }
 
     /// The phase the scanner ships in, for the refusal message.

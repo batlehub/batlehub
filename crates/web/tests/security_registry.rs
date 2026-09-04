@@ -85,6 +85,9 @@ struct FakeOsv {
     findings: Mutex<HashMap<String, Vec<Finding>>>,
     fail: Mutex<bool>,
     scans: AtomicUsize,
+    /// Scans that arrived with the artifact bytes (phase 3): the worker
+    /// fetched them because this scanner says it reads them.
+    with_bytes: AtomicUsize,
 }
 
 impl FakeOsv {
@@ -93,6 +96,7 @@ impl FakeOsv {
             findings: Mutex::new(HashMap::new()),
             fail: Mutex::new(false),
             scans: AtomicUsize::new(0),
+            with_bytes: AtomicUsize::new(0),
         })
     }
     fn vuln(&self, version: &str, severity: Severity) {
@@ -118,8 +122,18 @@ impl ArtifactScanner for FakeOsv {
     fn supports(&self, _: RegistryKind) -> bool {
         true
     }
+    fn needs_artifact(&self) -> bool {
+        true
+    }
     async fn scan(&self, input: &ScanInput) -> Result<Vec<Finding>, ScannerError> {
         self.scans.fetch_add(1, Ordering::SeqCst);
+        if input
+            .artifact
+            .as_ref()
+            .is_some_and(|b| b.starts_with(b"artifact:npm:"))
+        {
+            self.with_bytes.fetch_add(1, Ordering::SeqCst);
+        }
         if *self.fail.lock().unwrap() {
             return Err(ScannerError::Upstream("osv down".into()));
         }
@@ -189,6 +203,24 @@ async fn lab(
         hot.security.insert(REG.to_owned(), sec);
         hot.verdicts = Some(Arc::clone(&verdicts) as Arc<dyn VerdictRepository>);
         hot.scan_queue = Some(Arc::clone(&queue) as Arc<dyn ScanQueue>);
+        // Anonymous may read the tarball here — the public-mirror case of
+        // §4.2 — so it is the one caller with the bytes and without
+        // `quarantine:read`: a held version must answer it a plain 404.
+        let mut perms = rbac_policy_perms();
+        perms
+            .roles
+            .entry(batlehub_core::entities::Role::Anonymous)
+            .or_default()
+            .push("source:read".to_owned());
+        // `gates:exempt` is held by nobody by default (RFC 0015 §10); the
+        // rescan endpoint reads it, so the admin gets it here and the user
+        // does not — which is the pair the rescan test measures.
+        use batlehub_core::entities::{Action, Role, SubjectMatcher};
+        let mut grants = fixture_grants(REG, "npm", &RegistryMode::Proxy, &perms);
+        let node = grants.registry.grants.take().unwrap_or_default();
+        grants.registry.grants =
+            Some(node.grant(SubjectMatcher::Role(Role::Admin), [Action::GatesExempt]));
+        hot.grants.insert(REG.to_owned(), Arc::new(grants));
     }
     let mut scanners: HashMap<String, Arc<dyn ArtifactScanner>> = HashMap::new();
     scanners.insert("osv".into(), Arc::clone(&osv) as Arc<dyn ArtifactScanner>);
@@ -207,6 +239,8 @@ async fn lab(
         sboms: None,
         hot: parts.proxy_svc.hot.clone(),
         scanners,
+        storage: Some(Arc::clone(&parts.proxy_svc.storage)),
+        max_artifact_bytes: 64 * 1024 * 1024,
     });
     let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
     (
@@ -264,6 +298,9 @@ async fn first_request_is_held_pending_then_served_after_the_worker_scans() {
     let report = lab.worker.run_once().await.unwrap();
     assert_eq!((report.leased, report.completed), (1, 1));
     assert_eq!(lab.osv.scans.load(Ordering::SeqCst), 1);
+    // Phase 3: a scanner that reads bytes was handed the artifact — fetched
+    // from upstream by the worker, since the refused request cached nothing.
+    assert_eq!(lab.osv.with_bytes.load(Ordering::SeqCst), 1);
     assert!(lab.queue.open_jobs().await.is_empty(), "the job closed");
 
     let (code, body) = status(&app, &tarball("1.1.0")).await;
@@ -419,4 +456,304 @@ async fn a_registry_without_the_section_is_untouched() {
     let app = proxy_registry_app("npm-plain", "npm").await;
     let resp = call_service(&app, admin_get("/proxy/npm-plain/pkg/1.1.0/tarball")).await;
     assert_eq!(resp.status(), 200);
+}
+
+// ── phase 2: the verdict on the wire ─────────────────────────────────────────
+
+use actix_web::test::TestRequest;
+use batlehub_web::handlers::security::{
+    HEADER_AVAILABLE_AT, HEADER_DETAILS, HEADER_REASON, HEADER_VERDICT,
+};
+
+async fn get_as<S: TestService>(
+    app: &S,
+    uri: &str,
+    token: Option<&str>,
+) -> actix_web::dev::ServiceResponse {
+    let mut req = TestRequest::get().uri(uri);
+    if let Some(t) = token {
+        req = req.insert_header(("Authorization", bearer(t)));
+    }
+    call_service(app, req.to_request()).await
+}
+
+fn header<'a>(resp: &'a actix_web::dev::ServiceResponse, name: &str) -> Option<&'a str> {
+    resp.headers().get(name).and_then(|v| v.to_str().ok())
+}
+
+/// A hold answers in the registry's own error shape with the verdict in
+/// headers for a caller with `quarantine:read`, and as the registry's own
+/// not-found — nothing in the headers — for one without (§4.2).
+#[actix_web::test]
+async fn a_hold_is_npms_error_shape_with_headers_and_a_404_for_anonymous() {
+    let (app, _lab) = lab(SecurityMode::Block, old()).await;
+
+    let resp = get_as(&app, &tarball("1.1.0"), Some(USER_TOKEN)).await;
+    assert_eq!(resp.status(), 403);
+    assert!(header(&resp, "content-type")
+        .unwrap()
+        .starts_with("application/json"));
+    assert_eq!(header(&resp, HEADER_VERDICT), Some("quarantined"));
+    assert_eq!(header(&resp, HEADER_REASON), Some("SCAN_PENDING"));
+    assert!(header(&resp, HEADER_DETAILS)
+        .unwrap()
+        .contains("batlehub why"));
+    assert!(
+        header(&resp, "retry-after").is_none(),
+        "a pending scan names no clock"
+    );
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert!(
+        body["error"].as_str().unwrap().contains("SCAN_PENDING"),
+        "{body}"
+    );
+
+    let resp = get_as(&app, &tarball("1.1.0"), None).await;
+    let code = resp.status();
+    assert!(header(&resp, HEADER_VERDICT).is_none(), "nothing leaks");
+    let body = actix_web::test::read_body(resp).await;
+    let body = String::from_utf8_lossy(&body).into_owned();
+    assert_eq!(code, 404, "anonymous holds neither permission: {body}");
+    assert!(body.contains("not found"), "{body}");
+}
+
+#[actix_web::test]
+async fn a_time_bound_hold_carries_retry_after_and_available_at() {
+    let (app, lab) = lab(SecurityMode::Block, HashMap::from([("1.1.0", Some(60))])).await;
+    lab.worker.run_once().await.ok();
+    let _ = status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+
+    let resp = get_as(&app, &tarball("1.1.0"), Some(ADMIN_TOKEN)).await;
+    assert_eq!(resp.status(), 403);
+    assert_eq!(header(&resp, HEADER_REASON), Some("MIN_AGE_NOT_MET"));
+    assert!(header(&resp, HEADER_AVAILABLE_AT).is_some());
+    let retry: u64 = header(&resp, "retry-after").unwrap().parse().unwrap();
+    assert!((3400..=3600).contains(&retry), "{retry}");
+}
+
+/// The same finding that denies in `block` serves in `warn` — with the
+/// verdict on the response, so a pipeline can log what it pulled under.
+#[actix_web::test]
+async fn a_warned_artifact_is_served_with_the_verdict_headers() {
+    let (app, lab) = lab(SecurityMode::Warn, old()).await;
+    lab.osv.vuln("1.1.0", Severity::Critical);
+    let _ = status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+
+    let resp = get_as(&app, &tarball("1.1.0"), Some(USER_TOKEN)).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(header(&resp, HEADER_VERDICT), Some("warned"));
+    assert_eq!(header(&resp, HEADER_REASON), Some("VULNERABILITY"));
+    assert!(header(&resp, "retry-after").is_none());
+}
+
+/// A held version leaves the packument by the same mechanism as a block
+/// (§4.2 *Listings*), and comes back when the verdict serves.
+#[actix_web::test]
+async fn a_held_version_is_hidden_from_the_listing_until_it_serves() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    let packument = format!("/proxy/{REG}/pkg");
+
+    let before = get_json(&app, &packument).await;
+    assert!(before["versions"].get("1.1.0").is_some(), "{before}");
+
+    let _ = status(&app, &tarball("1.1.0")).await;
+    let held = get_json(&app, &packument).await;
+    assert!(
+        held["versions"].get("1.1.0").is_none(),
+        "SCAN_PENDING hides the version: {held}"
+    );
+    assert!(held["versions"].get("1.0.0").is_some());
+    assert_ne!(held["dist-tags"]["latest"], "1.1.0", "latest is repaired");
+
+    lab.worker.run_once().await.unwrap();
+    let after = get_json(&app, &packument).await;
+    assert!(after["versions"].get("1.1.0").is_some(), "{after}");
+}
+
+/// `GET /api/v1/verdicts/…`: the verdict for `quarantine:read`, findings
+/// for `findings:read`, `404` for nobody else and for a version never seen.
+#[actix_web::test]
+async fn the_verdict_endpoint_answers_by_permission() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    lab.osv.vuln("1.1.0", Severity::Critical);
+    let uri = format!("/api/v1/verdicts/{REG}/pkg/1.1.0");
+
+    let resp = get_as(&app, &uri, Some(ADMIN_TOKEN)).await;
+    assert_eq!(resp.status(), 404, "never seen");
+
+    let _ = status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+
+    let resp = get_as(&app, &uri, Some(ADMIN_TOKEN)).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(body["state"], "denied", "{body}");
+    assert_eq!(body["findings_withheld"], false);
+    assert_eq!(body["findings"][0]["summary"], "GHSA-test");
+
+    let resp = get_as(&app, &uri, Some(USER_TOKEN)).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(body["findings_withheld"], true);
+    assert!(body["findings"].as_array().unwrap().is_empty());
+
+    let resp = get_as(&app, &uri, None).await;
+    assert_eq!(resp.status(), 404, "anonymous cannot enumerate holds");
+}
+
+#[actix_web::test]
+async fn a_rescan_needs_gates_exempt_and_queues_one_job() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    let _ = status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+    assert!(lab.queue.open_jobs().await.is_empty());
+    let uri = format!("/api/v1/verdicts/{REG}/pkg/1.1.0/rescan");
+
+    let resp = call_service(
+        &app,
+        TestRequest::post()
+            .uri(&uri)
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 403);
+
+    let resp = call_service(
+        &app,
+        TestRequest::post()
+            .uri(&uri)
+            .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+            .to_request(),
+    )
+    .await;
+    let code = resp.status();
+    let body = actix_web::test::read_body(resp).await;
+    let body = String::from_utf8_lossy(&body).into_owned();
+    assert_eq!(code, 202, "{body}");
+    let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["queued"], true);
+    let jobs = lab.queue.open_jobs().await;
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].trigger, ScanTrigger::Rescan);
+}
+
+// ── RFC 0002 (recast): a pushed flag on a `[security]` registry ──────────────
+
+/// A `hard_block` pushed for a version this instance already judged denies it
+/// at once — no worker in the loop — and the rescan that follows re-derives
+/// the same denial from the `flags` scanner; a revoke lifts it on the next
+/// rescan. The push goes through `FlagService` directly: the endpoint's
+/// signature check is measured in `flags.rs`, and what is measured here is
+/// what a flag does to a verdict.
+#[actix_web::test]
+async fn a_pushed_hard_block_denies_a_judged_version_and_a_revoke_lifts_it() {
+    use batlehub_adapters::in_memory::InMemoryAdvisoryRepository;
+    use batlehub_core::entities::{FlagEffect, FlagKind, FlagPush};
+    use batlehub_core::ports::AdvisoryRepository;
+    use batlehub_core::services::{FlagService, FlagSourceLimits, FlagsScanner};
+
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    let advisories: Arc<dyn AdvisoryRepository> = Arc::new(InMemoryAdvisoryRepository::new());
+    {
+        let mut hot = lab.worker.hot.write().await;
+        hot.internal_scanners.insert(
+            REG.to_owned(),
+            vec![Arc::new(FlagsScanner {
+                repo: Arc::clone(&advisories),
+            }) as Arc<dyn ArtifactScanner>],
+        );
+    }
+    let flags = FlagService::new(Arc::clone(&advisories), lab.worker.hot.clone());
+    let soc = FlagSourceLimits {
+        name: "soc".into(),
+        max_effect: FlagEffect::HardBlock,
+        registries: vec![],
+        max_flags_per_minute: 0,
+    };
+    let push = |effect: FlagEffect| FlagPush {
+        external_id: "CASE-42".into(),
+        registry: REG.into(),
+        package_name: "pkg".into(),
+        version: Some("1.1.0".into()),
+        version_range: None,
+        kind: FlagKind::Malware,
+        effect,
+        severity: None,
+        summary: "credential stealer".into(),
+        url: None,
+        expires_at: None,
+    };
+
+    // Judged clean and served.
+    status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+    let (code, _) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 200);
+
+    // The SOC's word: denied before any worker runs, and a rescan queued.
+    let out = flags
+        .push(&soc, vec![push(FlagEffect::HardBlock)], Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(out.accepted, 1, "{out:?}");
+    let (code, body) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 403, "{body}");
+    assert!(body.contains("SOC_VERDICT"), "{body}");
+    assert_eq!(lab.queue.open_jobs().await.len(), 1, "one Webhook rescan");
+    assert_eq!(lab.queue.open_jobs().await[0].trigger, ScanTrigger::Webhook);
+
+    // The rescan agrees: the `flags` scanner re-emits the finding.
+    lab.worker.run_once().await.unwrap();
+    let (code, body) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 403, "{body}");
+    let stored = lab
+        .verdicts
+        .get(&PackageId::new(REG, "pkg", "1.1.0"))
+        .await
+        .unwrap()
+        .unwrap();
+    let from_flags: Vec<_> = stored
+        .findings
+        .iter()
+        .filter(|f| f.scanner == "flags")
+        .collect();
+    assert_eq!(
+        from_flags.len(),
+        1,
+        "no duplicate across rescans: {stored:?}"
+    );
+    assert_eq!(from_flags[0].reference.as_deref(), Some("soc:CASE-42"));
+
+    // Revoked: the rescan drops the finding and the version is served again.
+    assert!(flags.revoke("soc", "CASE-42", Utc::now()).await.unwrap());
+    assert_eq!(lab.queue.open_jobs().await.len(), 1);
+    lab.worker.run_once().await.unwrap();
+    let (code, body) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 200, "{body}");
+
+    // A `warn` flag on every version is recorded, and the version stays served.
+    let mut warn = push(FlagEffect::Warn);
+    warn.external_id = "NOTE-1".into();
+    warn.version = None;
+    warn.version_range = Some("*".into());
+    flags.push(&soc, vec![warn], Utc::now()).await.unwrap();
+    lab.worker.run_once().await.unwrap();
+    let (code, _) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 200);
+    let stored = lab
+        .verdicts
+        .get(&PackageId::new(REG, "pkg", "1.1.0"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        stored
+            .findings
+            .iter()
+            .any(|f| f.reference.as_deref() == Some("soc:NOTE-1")),
+        "{stored:?}"
+    );
 }

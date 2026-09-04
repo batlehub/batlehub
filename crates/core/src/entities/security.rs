@@ -425,6 +425,24 @@ impl Verdict {
         )
     }
 
+    /// Whether this verdict keeps its version out of the listings a client
+    /// resolves against (RFC 0018 §4.2 *Listings*): a `denied` or
+    /// `quarantined` version is hidden by the registry's own block mechanism,
+    /// except a time-bound hold whose clock has already run out — the next
+    /// read re-derives that one as served, and a listing must not lag it.
+    pub fn hides_from_listings(&self, now: DateTime<Utc>) -> bool {
+        match self.state {
+            VerdictState::Allowed | VerdictState::Warned => false,
+            VerdictState::Denied => true,
+            VerdictState::Quarantined => {
+                let lifted = !self.reason_codes.is_empty()
+                    && self.reason_codes.iter().all(|c| c.is_time_bound())
+                    && self.available_at.is_some_and(|at| at <= now);
+                !lifted
+            }
+        }
+    }
+
     /// `Retry-After` in seconds, when waiting can help: a hold whose every
     /// code is time-bound and which names an `available_at`.
     pub fn retry_after_secs(&self, now: DateTime<Utc>) -> Option<u64> {

@@ -4,6 +4,7 @@ on:
     branches: ["main"]
     paths:
       - "Containerfile"
+      - "Containerfile.worker"
       - "Cargo.lock"
       - "ui/pnpm-lock.yaml"
       - ".github/workflows/image-scan.yaml"
@@ -11,6 +12,7 @@ on:
     branches: ["main"]
     paths:
       - "Containerfile"
+      - "Containerfile.worker"
       - "Cargo.lock"
       - "ui/pnpm-lock.yaml"
       - ".github/workflows/image-scan.yaml"
@@ -62,6 +64,50 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: batlehub:scan
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+  scan-worker:
+    name: Build & Trivy scan (Containerfile.worker)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # upload SARIF to the Security tab
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Build image (load, no push)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Containerfile.worker
+          load: true
+          push: false
+          tags: batlehub-worker:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # Produce SARIF for the Security tab (does not fail the build).
+      - name: Trivy scan (SARIF)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: batlehub-worker:scan
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-containerfile-worker
+      # The gate: fail the job on any fixable HIGH/CRITICAL OS or library CVE.
+      - name: Trivy scan (gate)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: batlehub-worker:scan
           format: table
           severity: HIGH,CRITICAL
           ignore-unfixed: true

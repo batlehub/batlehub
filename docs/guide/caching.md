@@ -52,6 +52,28 @@ BatleHub separates two kinds of cached state with different lifetimes and backen
 
 Metadata is intentionally short-lived: version lists change as packages are published upstream. Artifacts are stored permanently because a `.crate` or tarball at a given version never changes.
 
+### What an artifact response says about itself
+
+Every artifact response names where the bytes are kept and what they are
+filed under:
+
+| Header | Meaning |
+| --- | --- |
+| `X-BatleHub-Storage-Key` | the key in blob storage — `artifact:{registry}/{name}/{version}[/{file}]` |
+| `X-BatleHub-Package` | the package name, which may contain slashes (`cli/cli`, `@scope/pkg`) |
+| `X-BatleHub-Version` | the version, or the commit on a forge archive |
+
+They disclose nothing new: every part is in the URL that was requested. They
+exist because the key is a function of the **route** rather than of the
+upstream URL, so a client cannot derive it — the same GitHub asset is filed
+under `…/{tag}/filename/{file}` when fetched by name and `…/unknown/{id}` when
+fetched by id, and a forge archive is filed under the commit its ref resolved
+to, not the branch that was asked for.
+
+`batlehub mise export` reads all three
+([RFC 0008](/rfc/0008-mise-in-an-air-gapped-estate) §14.1), which is how an
+air-gap bundle names keys the disconnected instance will actually look under.
+
 ---
 
 ## Cache backend — `[cache]` {#cache-backend}
@@ -225,7 +247,7 @@ Version enumeration (needed to warm bare package names) applies only to the pack
 | RubyGems | `rails` | `rails@7.1.0` |
 | Composer | `monolog/monolog` | `monolog/monolog@3.5.0` |
 
-Scoped npm names keep their leading `@` as part of the name (`@scope/pkg`, `@scope/pkg@1.2.3`). For **GitHub**, bare names enumerate releases via the Releases API. For **VS Code Marketplace**, they enumerate all extension versions via the Gallery API. For **Conda**, the version list is synthesised by scanning `repodata.json` across the standard platforms. For **JetBrains Marketplace**, an entry is the plugin `xmlId` and bare names enumerate the **Stable** channel only. The path-addressed types (Deb, RPM, Pacman, JetBrains IDEs, Generic) have no version model at all and pre-warm `warm_paths` instead of `warm_packages`.
+Scoped npm names keep their leading `@` as part of the name (`@scope/pkg`, `@scope/pkg@1.2.3`). For **GitHub**, bare names enumerate releases via the Releases API. For **VS Code Marketplace**, they enumerate all extension versions via the Gallery API. For **Conda**, the version list is synthesised by scanning `repodata.json` across the standard platforms. For **JetBrains Marketplace**, an entry is the plugin `xmlId` and bare names enumerate the **Stable** channel only. The path-addressed types (Deb, RPM, Pacman, JetBrains IDEs, Generic) have no version model at all and pre-warm `warm_paths` instead of `warm_packages`. The two toolchain types (**Node distributions**, **SDKMAN**) are one archive *per platform*, so an entry such as `node@v22.11.0` or `java@21.0.5-tem` warms one file per entry of `warm_platforms` (`linux-x64`, `darwin-arm64`, … for Node; `linuxx64`, `darwinarm64`, … for SDKMAN), defaulting to the platform this server runs on — guessing every platform would fetch 1.6 GB of JDK for a one-line `.sdkmanrc` (RFC 0010 §6.9).
 :::
 
 ---

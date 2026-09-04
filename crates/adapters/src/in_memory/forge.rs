@@ -45,6 +45,21 @@ impl RefResolutionRepository for InMemoryRefResolutionRepository {
             .cloned())
     }
 
+    async fn list_for_repo(
+        &self,
+        registry: &str,
+        owner_repo: &str,
+    ) -> Result<Vec<(String, StoredRefResolution)>, CoreError> {
+        let rows = self.rows.read().await;
+        let mut out: Vec<(String, StoredRefResolution)> = rows
+            .iter()
+            .filter(|((r, o, _), _)| r == registry && o == owner_repo)
+            .map(|((_, _, git_ref), v)| (git_ref.clone(), v.clone()))
+            .collect();
+        out.sort_by(|a, b| b.1.resolved_at.cmp(&a.1.resolved_at).then(a.0.cmp(&b.0)));
+        Ok(out)
+    }
+
     async fn upsert(
         &self,
         registry: &str,

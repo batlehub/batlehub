@@ -47,6 +47,13 @@ or an ingress that authenticates in front of BatleHub. A gallery registry that
 requires a bearer token answers every query with an empty list, and the editor
 reports that no extensions were found — which looks like a broken proxy rather
 than a configuration choice.
+
+**Unless you build the editor yourself.** A build you compile can carry a
+small patch that reads a credential and attaches it, and this repository ships
+the module and the integration steps at
+[`patches/che-code/`](https://batleforc.git.batleforc.fr/batlehub/tree/main/patches/che-code).
+It reads the same file `batlehub-cli auth write-token-file` writes; see
+[the credential contract file](#the-credential-contract-file) below.
 :::
 
 ### Use it with `ovsx`
@@ -155,6 +162,50 @@ curl -s -H "Authorization: Bearer <your-token>" \
 ## Authentication
 
 Pass a BatleHub token as a Bearer header on the VSIX request. Anonymous access works only when the registry's RBAC grants the `anonymous` role read access.
+
+### The credential contract file
+
+The editor is not the only thing that has to find a credential, and none of
+the things that do can share the CLI's config: a program started by a desktop
+session, a workspace template or a terminal inherits neither an environment
+variable nor a login. So there is one file, written by the CLI and read by
+everything else ([RFC 0011](/rfc/0011-openvsx-login) §4.1):
+
+```sh
+batlehub-cli --server https://hub.example.dev auth write-token-file
+batlehub-cli auth status
+```
+
+```
+REGISTRY                  KIND        TOKEN SOURCE               STATE  EXPIRES  REFRESH
+https://hub.example.dev   oidc        inline (written by cli)    ok     4m12s    cli (batlehub-cli)
+https://hub.k8s.dev       kubernetes  file /var/run/…/token      ok     —        reresolve
+```
+
+`$BATLEHUB_HOME/state/vsx-token.json`, `0600`, `$HOME/.batlehub` by default.
+It is keyed by origin, so one laptop pointed at three BatleHubs keeps three
+credentials in one file and a login to one is not a logout from the others.
+The normative shape is the JSON Schema shipped beside the CLI at
+`cli/schema/vsx-token.schema.json`, not this page.
+
+Two properties are worth knowing before you write a consumer:
+
+- **A credential need not be *in* it.** `{"from": "file", "path": "/var/run/…"}`
+  records where to read one, which is what you want for a projected
+  Kubernetes token something else keeps fresh. Pass `--from-file` to
+  `write-token-file` to record one.
+- **Nothing here fails loudly.** A missing file, an unreadable one, a source
+  a consumer does not implement — all of them mean "no credential", and the
+  editor then behaves exactly as it does against an anonymous gallery. That
+  is deliberate, and it is why `auth status` exists: it resolves every entry
+  at the moment you ask and names the reason when one does not, because
+  *nothing was configured* and *the file went away* look identical from the
+  editor and want opposite fixes.
+
+`batlehub-cli auth token` prints a credential for scripts and brokers,
+refreshing it first when it is close to expiry. It is the only command whose
+job is to emit one; `auth status` renders a summary that has no field able to
+hold a secret.
 
 ## Notes
 

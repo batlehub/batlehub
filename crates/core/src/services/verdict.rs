@@ -162,6 +162,21 @@ fn classify(f: &Finding, policy: &SecurityPolicy) -> Option<VerdictState> {
         }
         ReasonCode::ProvenanceUnverifiable => Some(VerdictState::Warned),
         ReasonCode::AdminOverride => None,
+        // RFC 0019 §4.2 — the forge-ref codes carry the operator's own
+        // action in their severity (`deny` → critical, `warn` → low), so
+        // they are not judged against `max_severity`: a warned mutable ref
+        // must reach the client, and a registry whose threshold is
+        // `critical` must not silently swallow it. `mode = "warn"` still
+        // downgrades a refusal, as it does for every other code.
+        ReasonCode::MutableRef
+        | ReasonCode::TagMoved
+        | ReasonCode::AssetReplaced
+        | ReasonCode::PinnedRefRequired
+        | ReasonCode::RawScript => Some(match (f.severity, policy.mode) {
+            (Severity::Critical, SecurityMode::Block) => VerdictState::Denied,
+            (Severity::Critical, SecurityMode::Warn) => VerdictState::Warned,
+            _ => VerdictState::Warned,
+        }),
         _ => threshold(f.severity),
     }
 }
@@ -357,10 +372,17 @@ impl VerdictService {
         let key = coordinate_key(&package.id);
         let stored = self.verdicts.get(&key).await?;
         if let Some(prev) = &stored {
+            // The `flags` scanner re-emits every live pushed flag on each
+            // run (RFC 0002 §13), so its previous findings are not kept:
+            // keeping them would outlive a revoke. Every other SOC finding
+            // — an administrator's word — stays.
             findings.extend(
                 prev.findings
                     .iter()
-                    .filter(|f| f.kind == FindingKind::SocVerdict)
+                    .filter(|f| {
+                        f.kind == FindingKind::SocVerdict
+                            && f.scanner != crate::entities::FLAGS_SCANNER
+                    })
                     .cloned(),
             );
             for s in &prev.scanners_done {
@@ -392,6 +414,132 @@ impl VerdictService {
             .increment(1);
         }
         Ok((from, verdict))
+    }
+}
+
+tokio::task_local! {
+    /// The verdict the current request was judged under, left by
+    /// `VerdictGateRule` for the response to carry (RFC 0018 §4.2: the
+    /// `X-BatleHub-*` headers, `Retry-After`, the native body). A task-local
+    /// rather than a field on `RuleDecision`: the sixty sites that build or
+    /// match a `Deny` stay as they are, and a rule that is not the gate never
+    /// touches it.
+    static REQUEST_VERDICT: std::cell::RefCell<Option<Verdict>>;
+}
+
+/// Leave `verdict` for the enclosing [`with_request_verdict`], if any. A
+/// no-op outside one — the gate is also run by the local read path and the
+/// explain oracle, which want only the decision.
+pub fn note_request_verdict(verdict: &Verdict) {
+    let _ = REQUEST_VERDICT.try_with(|slot| *slot.borrow_mut() = Some(verdict.clone()));
+}
+
+/// Add findings the *request* produced to the verdict it carries (RFC 0019
+/// phase 2).
+///
+/// The forge-ref facts — a branch followed, a tag that moved — are about how
+/// the client addressed the bytes, not about the bytes: the same commit
+/// reached through a tag and through a branch is one stored verdict and two
+/// ref kinds. So they are merged into the per-request verdict here and never
+/// written to the verdict store, and the worker (which sees a coordinate, not
+/// a request) never produces them.
+///
+/// With a verdict already noted — a `[security]` registry, where
+/// `VerdictGateRule` ran first — the findings and their codes are added to
+/// it and a served state falls to `warned`, or to `denied` when the ref
+/// policy refused. With none noted, one is built only when `create` is set:
+/// on a forge registry without `[security]` a refusal is a plain `403` and
+/// there is no verdict to invent (RFC 0019 §6.1's honest degradation).
+pub fn augment_request_verdict(
+    package: &PackageId,
+    policy_ref: &str,
+    findings: Vec<Finding>,
+    denied: bool,
+    create: bool,
+    now: DateTime<Utc>,
+) {
+    if findings.is_empty() {
+        return;
+    }
+    let _ = REQUEST_VERDICT.try_with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let base = match slot.take() {
+            Some(v) => Some(v),
+            None if create => Some(Verdict {
+                package: package.clone(),
+                state: VerdictState::Allowed,
+                reason_codes: Vec::new(),
+                findings: Vec::new(),
+                policy_ref: policy_ref.to_owned(),
+                available_at: None,
+                evaluated_at: now,
+                last_scanned_at: None,
+                scanners_done: Vec::new(),
+            }),
+            None => None,
+        };
+        let Some(mut verdict) = base else { return };
+        for f in findings {
+            if !verdict.reason_codes.contains(&f.code) {
+                verdict.reason_codes.push(f.code);
+            }
+            verdict.findings.push(f);
+        }
+        verdict.state = match (denied, verdict.state) {
+            (true, _) => VerdictState::Denied,
+            // A hold stays a hold: a mutable ref does not release a
+            // quarantined version, it is one more thing to say about it.
+            (false, VerdictState::Allowed) => VerdictState::Warned,
+            (false, other) => other,
+        };
+        *slot = Some(verdict);
+    });
+}
+
+/// Run `f` with a slot for the gate to leave its verdict in, and return both.
+pub async fn with_request_verdict<F: std::future::Future>(f: F) -> (F::Output, Option<Verdict>) {
+    REQUEST_VERDICT
+        .scope(std::cell::RefCell::new(None), async move {
+            let out = f.await;
+            let verdict = REQUEST_VERDICT.with(|slot| slot.borrow_mut().take());
+            (out, verdict)
+        })
+        .await
+}
+
+impl VerdictService {
+    /// A version this instance just published into a `[security]` registry
+    /// (RFC 0018 §4.2 *Local publish*, phase 2): stored, enqueued as
+    /// `FirstSeen`, and `quarantined(SCAN_PENDING)` — hidden from listings —
+    /// until the worker answers. Dated `now`: the publisher is authenticated,
+    /// so there is no upstream date to wait on, and the read path re-judges
+    /// the age against the registry's own profile from here.
+    pub async fn first_sight_local(
+        &self,
+        package: &PackageId,
+        policy: &SecurityPolicy,
+        now: DateTime<Utc>,
+    ) -> Result<Verdict, CoreError> {
+        let key = coordinate_key(package);
+        let mut meta = PackageMetadata::minimal(key.clone(), serde_json::Value::Null);
+        meta.published_at = Some(now);
+        let created = self
+            .queue
+            .enqueue(&key, meta.published_at, ScanTrigger::FirstSeen)
+            .await?;
+        if created {
+            tracing::info!(package = %key, "security: local publish, scan queued");
+        }
+        let verdict = evaluate(&meta, Vec::new(), Vec::new(), policy, now, None);
+        self.verdicts.upsert(&verdict).await?;
+        metrics::counter!(
+            "batlehub_verdicts_total",
+            "registry" => key.registry.clone(),
+            "state" => verdict.state.as_str(),
+            "trigger" => ScanTrigger::FirstSeen.as_str(),
+        )
+        .increment(1);
+        Ok(verdict)
     }
 }
 

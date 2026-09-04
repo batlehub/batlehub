@@ -187,6 +187,28 @@ impl VerdictRepository for PgVerdictRepository {
         Ok(Some(Self::row_to_verdict(&row, findings)?))
     }
 
+    /// Findings are not loaded: the listing filter reads states and clocks.
+    async fn list_for_package(
+        &self,
+        registry: &str,
+        package: &str,
+    ) -> Result<Vec<Verdict>, CoreError> {
+        let rows = sqlx::query(
+            "SELECT registry, package_name, version, state, reason_codes, policy_ref,
+                    available_at, evaluated_at, last_scanned_at, scanners_done
+             FROM artifact_verdicts
+             WHERE registry = $1 AND package_name = $2",
+        )
+        .bind(registry)
+        .bind(package)
+        .fetch_all(&self.pool)
+        .await
+        .db_err()?;
+        rows.iter()
+            .map(|r| Self::row_to_verdict(r, Vec::new()))
+            .collect()
+    }
+
     async fn list_by_state(
         &self,
         registry: &str,

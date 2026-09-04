@@ -82,6 +82,7 @@ fn every_advertised_document_reaches_a_reader() {
                     | RegistryKind::Rubygems
                     | RegistryKind::Terraform
                     | RegistryKind::Nodedist
+                    | RegistryKind::Sdkman
             ),
             "{kind} advertises a document but `dispatch` has no arm for it"
         );
@@ -103,6 +104,7 @@ fn every_reader_belongs_to_a_kind_that_advertises_a_document() {
         RegistryKind::Rubygems,
         RegistryKind::Terraform,
         RegistryKind::Nodedist,
+        RegistryKind::Sdkman,
     ] {
         assert!(
             matches!(kind.upstream_detail(), UpstreamDetailSupport::Document(_)),
@@ -133,6 +135,7 @@ fn an_unparseable_document_contributes_nothing() {
         RegistryKind::Rubygems,
         RegistryKind::Terraform,
         RegistryKind::Nodedist,
+        RegistryKind::Sdkman,
     ] {
         // The wrong encoding entirely, and a well-formed document of the right
         // encoding with none of the expected keys.

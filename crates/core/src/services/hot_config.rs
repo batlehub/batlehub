@@ -440,6 +440,22 @@ pub struct HotConfig {
     /// Per-registry ref TTLs (`[registries.refs]`). A registry with no entry
     /// takes the defaults, which is what every non-forge registry has.
     pub forge_refs: HashMap<String, crate::entities::ForgeRefsPolicy>,
+    /// Per-registry `[registries.raw]` (RFC 0019 §4.1, phase 3). A forge
+    /// registry with no entry takes [`crate::entities::RawPolicy::default`],
+    /// which is **off**: raw was implicitly on before the section existed,
+    /// and turning it off is the behaviour change §9 states.
+    pub forge_raw: HashMap<String, crate::entities::RawPolicy>,
+    /// Per-registry `[registries.api_reads]` (RFC 0019 §4.1, phase 3): the
+    /// typed read-only JSON families to serve beside the release routes. A
+    /// registry with no entry serves none — the routes answer `404`, which
+    /// is what an un-opted-in registry has always done.
+    pub forge_api_reads: HashMap<String, Vec<crate::entities::ApiReadFamily>>,
+    /// RFC 0008 §4.1 — whether this instance will dial out at all, and what
+    /// it does with a miss. The default is today's behaviour.
+    pub air_gap: crate::entities::AirGapPolicy,
+    /// Where a miss is written. `None` on a deployment with no database and
+    /// on every connected instance that never records one.
+    pub miss_recorder: Option<Arc<dyn crate::ports::MissRecorder>>,
     /// Per-registry `[registries.security]` profiles (RFC 0018 §4.1). A
     /// registry with no entry has no quarantine: its gates run as rules,
     /// exactly as before the section existed.
@@ -593,6 +609,10 @@ impl Default for HotConfig {
             rate_limit_budget: None,
             forge_refs: HashMap::new(),
             security: HashMap::new(),
+            forge_raw: HashMap::new(),
+            forge_api_reads: HashMap::new(),
+            air_gap: crate::entities::AirGapPolicy::default(),
+            miss_recorder: None,
             internal_scanners: HashMap::new(),
             verdicts: None,
             scan_queue: None,

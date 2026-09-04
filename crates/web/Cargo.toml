@@ -49,6 +49,9 @@ bzip2 = "0.6"
 
 [dev-dependencies]
 batlehub-adapters = { path = "../adapters" }
+# Test-only: sign a bundle manifest, to walk RFC 0008's import through its
+# own door rather than around it.
+ed25519-dalek = "3"
 actix-http = "3"
 ar = "0.9"
 # Test-only: build `.tar.bz2` conda package fixtures.

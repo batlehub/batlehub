@@ -35,6 +35,10 @@ pub(super) struct FjAsset {
 #[derive(Debug, Deserialize)]
 pub(super) struct FjTag {
     pub commit: FjTagCommit,
+    /// Present on the *list* endpoint (`/repos/{o}/{r}/tags`), absent on the
+    /// by-name one. Confirmed against codeberg.org on 2026-09-04.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +77,22 @@ pub(super) struct FjGitPerson {
 #[derive(Debug, Deserialize)]
 pub(super) struct FjCommitDetail {
     pub committer: Option<FjGitPerson>,
+    /// RFC 0019 phase 5. Confirmed against codeberg.org on 2026-09-04:
+    /// `commit.verification` is `{verified, reason, signature, signer,
+    /// payload}` and reads `gpg.error.not_signed_commit` on an unsigned one.
+    /// The RFC's parity table recorded this as *(to confirm — the existing
+    /// models have no commit or tag struct)*; the object is there, and this
+    /// is it.
+    #[serde(default)]
+    pub verification: Option<FjVerification>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FjVerification {
+    #[serde(default)]
+    pub verified: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

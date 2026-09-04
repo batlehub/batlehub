@@ -809,6 +809,7 @@ async fn jbm_warmed_plugin_lands_in_the_download_cache_slot() {
         latest_n: 1,
         concurrency: 2,
         coordinator: Arc::new(NoopWarmCoordinator),
+        platforms: Vec::new(),
         metrics: Arc::new(ProxyMetrics::new(&["jbm".to_owned()])),
     };
     let report = warming.warm_package("org.flaky.plugin@1.2.0").await;

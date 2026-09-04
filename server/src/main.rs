@@ -255,11 +255,30 @@ async fn main() -> Result<()> {
         rate_limit_budget: Some(Arc::new(batlehub_adapters::db::PgRateLimitBudget::new(
             repo.pool(),
         ))),
+        artifact_meta: Some(
+            Arc::clone(&artifact_meta) as Arc<dyn batlehub_core::ports::ArtifactCacheMeta>
+        ),
     };
     // RFC 0018 §6.3 — verdicts, the leased scan queue and worker heartbeats,
     // all in PostgreSQL: the one store every deployment has, and the only
     // thing the proxy and worker roles share.
+    // RFC 0002 (recast): pushed flags and the exposure report's scan state.
+    let advisory_repo: Arc<dyn batlehub_core::ports::AdvisoryRepository> = Arc::new(
+        batlehub_adapters::db::PgAdvisoryRepository::new(repo.pool()),
+    );
+    // RFC 0008 §6.3 — the miss log. Always wired: a connected instance
+    // records nothing because nothing refuses, and an instance that later
+    // turns the mode on has the table already.
+    let air_gap_stores = hot_config::AirGapStores {
+        miss_recorder: Some(Arc::new(batlehub_adapters::db::PgMissRecorder::new(
+            repo.pool(),
+        ))),
+        bundle_history: Some(Arc::new(batlehub_adapters::db::PgBundleHistory::new(
+            repo.pool(),
+        ))),
+    };
     let security_stores = hot_config::SecurityStores {
+        advisories: Some(Arc::clone(&advisory_repo)),
         verdicts: Some(Arc::new(batlehub_adapters::db::PgVerdictRepository::new(
             repo.pool(),
         ))),
@@ -297,6 +316,7 @@ async fn main() -> Result<()> {
         &Some(Arc::clone(&signing_key_store)),
         &forge_stores,
         &security_stores,
+        &air_gap_stores,
     )?;
     let warming_clients: HashMap<String, Arc<dyn batlehub_core::ports::RegistryClient>> = init_hot
         .registries
@@ -363,6 +383,22 @@ async fn main() -> Result<()> {
         readme: Some(Arc::clone(&readme_svc)),
         discovery: Default::default(),
     });
+
+    // RFC 0008 §4.5, the third warning: an air-gapped registry with nothing
+    // cached answers `503` to everything, and that is worth one line at boot
+    // rather than a support ticket about a mirror that "does not work". Said
+    // once, here; the Air gap page recomputes it, so it stays true after the
+    // first import rather than freezing what was true at startup.
+    if config.air_gap.as_ref().is_some_and(|a| a.enabled) {
+        let empty = batlehub_web::handlers::air_gap::empty_registries(&proxy_svc).await;
+        if !empty.is_empty() {
+            tracing::warn!(
+                count = empty.len(),
+                registries = %empty.join(", "),
+                "air gap: these registries hold no cached artifact, so they will answer 503 to                  every request until a bundle is imported"
+            );
+        }
+    }
 
     let ip_block_store = stores::create_ip_block_store(&config, repo.pool()).await?;
     let user_block_repo = stores::create_user_block_repository(repo.pool());
@@ -434,6 +470,7 @@ async fn main() -> Result<()> {
         Some(Arc::clone(&signing_key_store)),
         forge_stores.clone(),
         security_stores.clone(),
+        air_gap_stores.clone(),
         settled_text_config,
     );
     // Built once here so the same instance is shared with the reload service (for
@@ -510,12 +547,15 @@ async fn main() -> Result<()> {
             .build()
             .context("building OSV HTTP client")?;
         let scanner = Arc::new(OsvScanner::new(osv_client, vuln_cfg.osv_api_url.clone()));
-        let scan_svc = Arc::new(VulnerabilityScanService::new(
-            Arc::clone(&sbom_svc.repo),
-            scanner,
-            Arc::clone(&vuln_repo),
-            vuln_cfg.batch_size as u64,
-        ));
+        let scan_svc = Arc::new(
+            VulnerabilityScanService::new(
+                Arc::clone(&sbom_svc.repo),
+                scanner,
+                Arc::clone(&vuln_repo),
+                vuln_cfg.batch_size as u64,
+            )
+            .with_advisories(Arc::clone(&advisory_repo)),
+        );
         watcher::spawn_periodic_vuln_scan(vuln_cfg.interval_secs, scan_svc);
         tracing::info!(
             interval_secs = vuln_cfg.interval_secs,
@@ -548,6 +588,11 @@ async fn main() -> Result<()> {
             sboms: Some(Arc::clone(&sbom_svc.repo)),
             hot: Arc::clone(&hot),
             scanners,
+            storage: Some(Arc::clone(&storage)),
+            max_artifact_bytes: config
+                .limits
+                .max_artifact_size_bytes
+                .unwrap_or(500 * 1024 * 1024),
         });
         tokio::spawn(Arc::clone(&worker).run());
         tracing::info!(
@@ -678,6 +723,20 @@ async fn main() -> Result<()> {
         beta_channel_store,
         team_namespace_store,
         policy_repo,
+        bundle_history: air_gap_stores.bundle_history.clone().expect("built above"),
+        advisory_repo: Arc::clone(&advisory_repo),
+        flag_svc: Arc::new(batlehub_core::services::FlagService::new(
+            Arc::clone(&advisory_repo),
+            Arc::clone(&hot),
+        )),
+        flag_sources: batlehub_web::FlagSources(config.flag_sources.clone()),
+        exposure_config: batlehub_web::ExposureConfig {
+            sbom_registries: config
+                .registries
+                .iter()
+                .filter(|r| r.sbom.is_some())
+                .count() as u64,
+        },
         ip_blocking_cfg,
         proxy_trust,
         registry_host_map,

@@ -2870,6 +2870,220 @@ fn nodedist_is_proxy_only_and_needs_no_explicit_upstream() {
     assert!(err.contains("not supported for nodedist"), "{err}");
 }
 
+// ── RFC 0010 phase 6: sdkman ─────────────────────────────────────────────────
+
+/// On `sdkman` the field *is* the rule: no artifact ever carries a date.
+#[test]
+fn an_age_gate_on_sdkman_must_state_deny_missing_timestamp() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 86400
+        "#,
+        "an age gate on sdkman without deny_missing_timestamp must not load",
+    );
+    assert!(err.contains("deny_missing_timestamp"), "{err}");
+    assert!(err.contains("sdkman"), "the error names the kind: {err}");
+    assert!(
+        err.contains("no dates at all"),
+        "the error says what the field decides on this kind: {err}"
+    );
+    for value in ["true", "false"] {
+        parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 86400
+        deny_missing_timestamp = {value}
+        "#
+        ))
+        .validate()
+        .unwrap_or_else(|e| panic!("deny_missing_timestamp = {value} must load: {e}"));
+    }
+}
+
+/// Proxy-only, default upstream, and `broker_url` optional.
+#[test]
+fn sdkman_is_proxy_only_and_needs_no_explicit_upstream() {
+    parse_config(
+        r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+        "#,
+    )
+    .validate()
+    .expect("a bare sdkman registry loads");
+
+    parse_config(
+        r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+        upstreams = ["https://api.sdkman.io/2"]
+        broker_url = "https://broker.sdkman.io"
+        "#,
+    )
+    .validate()
+    .expect("both hosts stated loads");
+
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+        mode = "hybrid"
+        "#,
+        "sdkman has no publish protocol, so hybrid mode must be refused",
+    );
+    assert!(err.contains("not supported for sdkman"), "{err}");
+}
+
+/// `broker_url` is SDKMAN's second host and nobody else's; silently ignored
+/// elsewhere it would read as a working option that does nothing.
+#[test]
+fn broker_url_is_refused_off_sdkman_and_must_be_absolute() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        broker_url = "https://broker.sdkman.io"
+        "#,
+        "broker_url on npm must not load",
+    );
+    assert!(err.contains("broker_url"), "{err}");
+    assert!(err.contains("sdkman"), "{err}");
+
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+        broker_url = "broker.sdkman.io"
+        "#,
+        "a relative broker_url must not load",
+    );
+    assert!(err.contains("absolute http(s) URL"), "{err}");
+}
+
+/// `path_allow` means nothing on a typed kind; the existing rule refuses it
+/// on `sdkman` exactly as on `nodedist` (RFC 0010 §13.1).
+#[test]
+fn path_allow_on_sdkman_is_refused() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+        path_allow = ["**"]
+        "#,
+        "path_allow on sdkman must not load",
+    );
+    assert!(err.contains("path_allow"), "{err}");
+}
+
+/// `warm_platforms` names the files warming fetches on the two
+/// platform-addressed kinds; on `sdkman` the set is closed (RFC 0010 §6.9).
+#[test]
+fn warm_platforms_is_checked_on_sdkman_and_refused_elsewhere() {
+    parse_config(
+        r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+
+        [registries.cache]
+        warm_packages = ["java@21.0.5-tem"]
+        warm_platforms = ["linuxx64", "darwinarm64"]
+        "#,
+    )
+    .validate()
+    .expect("two SDKMAN platforms load");
+    parse_config(
+        r#"
+        [[registries]]
+        type = "nodedist"
+        name = "node"
+
+        [registries.cache]
+        warm_platforms = ["linux-x64", "darwin-arm64"]
+        "#,
+    )
+    .validate()
+    .expect("Node's platform tags load");
+
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+
+        [registries.cache]
+        warm_platforms = ["linux-x64"]
+        "#,
+        "a Node spelling is not an SDKMAN platform",
+    );
+    assert!(err.contains("not an SDKMAN platform"), "{err}");
+
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+
+        [registries.cache]
+        warm_platforms = ["linuxx64"]
+        "#,
+        "warm_platforms means nothing on npm",
+    );
+    assert!(err.contains("warm_platforms"), "{err}");
+}
+
+/// An upstream without the `/2` is served as given and warned about.
+#[test]
+fn an_sdkman_upstream_without_the_api_version_is_warned_not_refused() {
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+        upstreams = ["https://sdkman.internal.example"]
+        "#,
+    );
+    cfg.validate().expect("served as given");
+    let warning = cfg
+        .warnings()
+        .into_iter()
+        .find(|w| w.code == warnings::SDKMAN_UPSTREAM_WITHOUT_API_VERSION)
+        .expect("a warning names the upstream");
+    assert_eq!(warning.path, "registries[0].upstreams[0]");
+
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+        upstreams = ["https://api.sdkman.io/2/"]
+        "#,
+    );
+    assert!(
+        !cfg.warnings()
+            .iter()
+            .any(|w| w.code == warnings::SDKMAN_UPSTREAM_WITHOUT_API_VERSION),
+        "a trailing slash after the version is not a missing version"
+    );
+}
+
 // ── RFC 0019 §4.3: [registries.refs] and the anonymous-forge warning ─────────
 
 #[test]
@@ -3044,16 +3258,35 @@ fn an_undeclared_scanner_and_a_required_scanner_outside_scanners_are_refused() {
 fn a_declared_scanner_this_build_cannot_run_is_refused_by_phase() {
     let err = validation_error(
         &security_config(
-            r#"        scanners = ["osv", "trivy"]"#,
+            r#"        scanners = ["osv", "socket"]"#,
             r#"
+        [scanners.socket]
+        type = "socket"
+        api_key = "k"
+        "#,
+        ),
+        "a phase-5 scanner must not be listed before it ships",
+    );
+    assert!(err.contains("phase 5"), "{err}");
+}
+
+/// RFC 0018 phase 3: the archive and provenance scanners are runnable now.
+#[test]
+fn the_phase_3_scanners_load_when_declared() {
+    parse_config(&security_config(
+        r#"        scanners = ["osv", "trivy", "sigstore"]"#,
+        r#"
         [scanners.trivy]
         type = "trivy"
         endpoint = "http://trivy:4954"
+
+        [scanners.sigstore]
+        type = "sigstore"
+        require_for = ["npm"]
         "#,
-        ),
-        "a phase-3 scanner must not be listed in phase 1",
-    );
-    assert!(err.contains("phase 3"), "{err}");
+    ))
+    .validate()
+    .expect("phase-3 scanners load");
 }
 
 #[test]
@@ -3313,4 +3546,200 @@ fn upstream_audit_warnings_name_the_missing_registry_and_the_missing_role() {
         !codes.iter().any(|c| c.starts_with("upstream-audit")),
         "{codes:?}"
     );
+}
+
+// ── RFC 0008 §4.5: the air gap is a promise about the whole instance ──────────
+//
+// Everything that contradicts it is refused at load rather than discovered
+// from a log, and the two things that *narrow* behaviour without breaking it
+// are warnings rather than refusals.
+
+/// A proxy registry plus whatever `extra` adds, with `[air_gap]` on and a
+/// usable key — the shape every rejection below deviates from by one line.
+fn air_gapped_config(extra: &str) -> AppConfig {
+    parse_config(&format!(
+        r#"
+        [air_gap]
+        enabled = true
+        bundle_trusted_keys = ["{key}"]
+
+        [[registries]]
+        type = "npm"
+        name = "npm-mirror"
+        mode = "proxy"
+        upstreams = ["https://registry.npmjs.org"]
+{extra}
+        "#,
+        key = "a".repeat(64),
+    ))
+}
+
+#[test]
+fn an_air_gapped_instance_with_a_usable_key_and_no_egress_is_valid() {
+    air_gapped_config("")
+        .validate()
+        .expect("the ordinary shape");
+}
+
+#[test]
+fn the_section_is_absent_by_default_and_changes_nothing() {
+    let cfg = parse_config("");
+    assert!(cfg.air_gap.is_none());
+    cfg.validate().expect("today's config still validates");
+}
+
+#[test]
+fn an_air_gap_with_no_trusted_key_is_refused() {
+    let err = parse_config(
+        r#"
+        [air_gap]
+        enabled = true
+        "#,
+    )
+    .validate()
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("bundle_trusted_keys"), "{err}");
+    assert!(
+        err.contains("any bundle"),
+        "the message says what an empty list means: {err}"
+    );
+}
+
+#[test]
+fn a_trusted_key_that_is_not_thirty_two_hex_bytes_is_refused_whether_or_not_the_mode_is_on() {
+    for enabled in ["true", "false"] {
+        let err = parse_config(&format!(
+            r#"
+            [air_gap]
+            enabled = {enabled}
+            bundle_trusted_keys = ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5"]
+            "#
+        ))
+        .validate()
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("hex-encoded 32-byte"), "{enabled}: {err}");
+    }
+}
+
+/// The check `signing.trusted_keys` never had. It was parsed at verify time,
+/// so a typo read as "signing is configured" and surfaced as a `502` on the
+/// first download, naming nothing.
+#[test]
+fn a_malformed_signing_key_is_refused_at_load_rather_than_at_the_first_download() {
+    let err = parse_config(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm-mirror"
+        mode = "proxy"
+        upstreams = ["https://registry.npmjs.org"]
+
+        [registries.signing]
+        trusted_keys = ["not-a-key"]
+        "#,
+    )
+    .validate()
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("signing.trusted_keys"), "{err}");
+    assert!(err.contains("npm-mirror"), "the message names it: {err}");
+}
+
+#[test]
+fn an_egress_proxy_and_an_air_gap_together_are_refused_at_both_levels() {
+    let err = parse_config(&format!(
+        r#"
+        [air_gap]
+        enabled = true
+        bundle_trusted_keys = ["{key}"]
+
+        [proxy]
+        url = "http://egress.corp:3128"
+        "#,
+        key = "a".repeat(64),
+    ))
+    .validate()
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("[proxy]"), "{err}");
+
+    let err = air_gapped_config(
+        r#"
+        [registries.proxy]
+        url = "http://egress.corp:3128"
+        "#,
+    )
+    .validate()
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("route off the site"), "{err}");
+}
+
+/// Warming fetches from an upstream this mode guarantees will never be
+/// dialled. Failing at boot beats a startup task logging a connect error per
+/// path, forever.
+#[test]
+fn warming_configured_on_an_air_gapped_instance_is_refused() {
+    for line in [
+        r#"warm_packages = ["lodash"]"#,
+        r#"warm_paths = ["/lodash/-/lodash-4.17.21.tgz"]"#,
+    ] {
+        let err = air_gapped_config(&format!(
+            r#"
+            [registries.cache]
+            {line}
+            "#
+        ))
+        .validate()
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("warming"), "{line}: {err}");
+        assert!(err.contains("bundle"), "it says what to do instead: {err}");
+    }
+}
+
+/// A hybrid registry keeps working — publishing to a disconnected instance is
+/// legitimate — but its fall-through can never happen, so it behaves as a
+/// local registry and an operator should not have to deduce that.
+#[test]
+fn a_hybrid_registry_under_an_air_gap_warns_rather_than_failing() {
+    let cfg = parse_config(&format!(
+        r#"
+        [air_gap]
+        enabled = true
+        bundle_trusted_keys = ["{key}"]
+
+        [[registries]]
+        type = "npm"
+        name = "npm-mirror"
+        mode = "hybrid"
+        upstreams = ["https://registry.npmjs.org"]
+        "#,
+        key = "a".repeat(64),
+    ));
+    cfg.validate().expect("allowed, and warned about");
+    assert!(
+        warning_codes(&cfg).contains(&warnings::AIR_GAP_HYBRID_REGISTRY.to_owned()),
+        "{:?}",
+        warning_codes(&cfg)
+    );
+}
+
+/// Staging a bundle on a *connected* instance is how one is built, so keys
+/// with the mode off are kept — and the warning says they authorise imports
+/// and nothing else.
+#[test]
+fn trusted_keys_without_the_mode_are_kept_and_explained() {
+    let cfg = parse_config(&format!(
+        r#"
+        [air_gap]
+        enabled = false
+        bundle_trusted_keys = ["{key}"]
+        "#,
+        key = "b".repeat(64),
+    ));
+    cfg.validate().expect("valid: this is the staging instance");
+    assert!(warning_codes(&cfg).contains(&warnings::AIR_GAP_KEYS_UNUSED.to_owned()));
 }

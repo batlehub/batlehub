@@ -20,9 +20,121 @@ use std::sync::Arc;
 
 use chrono::Utc;
 
-use crate::entities::{is_commit_sha, ForgeRefsPolicy, RefKind, ResolvedRef};
+use crate::entities::{
+    is_commit_sha, ForgeCoordinate, ForgeKind, ForgeRefsPolicy, PackageMetadata, ReasonCode,
+    RefAction, RefKind, ResolvedRef, Severity, FORGE_ASSET_DIGEST, FORGE_EXTRA_KEY,
+    FORGE_PREVIOUS_COMMIT, FORGE_REF_KIND, FORGE_RESOLVED_COMMIT,
+};
 use crate::error::CoreError;
 use crate::ports::{ForgeRegistry, RefResolutionRepository, StoredRefResolution};
+
+/// One thing the ref says about this request, and what the operator chose to
+/// do about it (RFC 0019 §4.2, phase 2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefFinding {
+    pub code: ReasonCode,
+    pub action: RefAction,
+    /// The sentence a refusal shows and a finding records. Names the code so
+    /// a client reading only the body still learns which fact refused it.
+    pub message: String,
+}
+
+impl RefFinding {
+    pub fn denies(&self) -> bool {
+        self.action == RefAction::Deny
+    }
+
+    /// The severity the verdict judges it at: the action, encoded.
+    pub fn severity(&self) -> Severity {
+        self.action.severity()
+    }
+}
+
+/// Read `extra.forge` back and say what the ref makes of this request.
+///
+/// `cached_digest` is the digest of the bytes already stored under this
+/// coordinate, bare hex; `None` means nothing is stored yet — a first sight,
+/// which is trusted. Both the rule (no `[security]`) and the scanner (with
+/// one) call this, so the two paths cannot disagree about what a moved tag
+/// is.
+pub fn ref_findings(
+    policy: ForgeRefsPolicy,
+    metadata: &PackageMetadata,
+    cached_digest: Option<&str>,
+) -> Vec<RefFinding> {
+    let Some(coord) = ForgeCoordinate::from_package_id(&metadata.id) else {
+        return Vec::new();
+    };
+    let forge = match metadata.extra.get(FORGE_EXTRA_KEY) {
+        Some(serde_json::Value::Object(m)) => m,
+        // No resolution rode along: a listing, or a client with no `forge()`.
+        // Nothing is asserted about a ref nobody resolved.
+        _ => return Vec::new(),
+    };
+    let str_at = |key: &str| forge.get(key).and_then(|v| v.as_str());
+    let kind: Option<RefKind> = str_at(FORGE_REF_KIND).and_then(|k| k.parse().ok());
+    let resolved = str_at(FORGE_RESOLVED_COMMIT).unwrap_or("");
+    let previous = str_at(FORGE_PREVIOUS_COMMIT);
+    // What the *client* asked for, not what the coordinate now says: by the
+    // time the rules run, an archive's `PackageId` has been rewritten onto
+    // the commit, so `git_ref()` would answer a SHA and the refusal would
+    // name something the user never typed.
+    let asked = str_at(crate::entities::FORGE_REQUESTED_REF)
+        .or_else(|| coord.git_ref())
+        .unwrap_or("?");
+    let mut out = Vec::new();
+
+    if kind == Some(RefKind::Branch) {
+        out.push(RefFinding {
+            code: ReasonCode::MutableRef,
+            action: policy.mutable_refs,
+            message: format!(
+                "MUTABLE_REF: '{asked}' is a branch, served at commit {resolved}; what it \
+                 names can change under the same coordinate"
+            ),
+        });
+    }
+
+    // A tag that resolves elsewhere than it did. A *branch* that advanced is
+    // the same field and is not this finding — it is what a branch does, and
+    // `MUTABLE_REF` above already says so.
+    if kind == Some(RefKind::Tag) {
+        if let Some(prev) = previous.filter(|p| !p.is_empty() && *p != resolved) {
+            out.push(RefFinding {
+                code: ReasonCode::TagMoved,
+                action: policy.tag_moved,
+                message: format!(
+                    "TAG_MOVED: tag '{asked}' now resolves to {resolved}, previously {prev}"
+                ),
+            });
+        }
+    }
+
+    // The forge's own digest for a release asset against the bytes already
+    // cached under the coordinate. Only for assets: an archive is generated
+    // on demand and is not byte-stable (§4.2 *Identity of the bytes*), so a
+    // difference there says nothing about the source.
+    if matches!(coord.kind, ForgeKind::Asset { .. }) {
+        if let (Some(upstream), Some(cached)) = (str_at(FORGE_ASSET_DIGEST), cached_digest) {
+            let upstream_hex = upstream
+                .rsplit_once(':')
+                .map(|(_, h)| h)
+                .unwrap_or(upstream)
+                .to_ascii_lowercase();
+            if !upstream_hex.is_empty() && upstream_hex != cached.to_ascii_lowercase() {
+                out.push(RefFinding {
+                    code: ReasonCode::AssetReplaced,
+                    action: policy.tag_moved,
+                    message: format!(
+                        "ASSET_REPLACED: the asset now has digest {upstream_hex}, the bytes \
+                         cached under this coordinate hash to {cached}"
+                    ),
+                });
+            }
+        }
+    }
+    out
+}
 
 /// Resolve `git_ref` in `owner_repo` on `registry`.
 ///
@@ -67,9 +179,13 @@ pub async fn resolve_ref(
     };
 
     if let Some(prev) = &stored {
-        let fresh = policy.ttl_for(prev.kind).is_some_and(|ttl| {
-            Utc::now() - prev.resolved_at < chrono::Duration::from_std(ttl).unwrap_or_default()
-        });
+        // `frozen` short-circuits the TTL on an air-gapped instance: there is
+        // no upstream to re-ask, so an expired row would fall through to a
+        // refusal and take every cached artifact of that ref with it.
+        let fresh = policy.frozen
+            || policy.ttl_for(prev.kind).is_some_and(|ttl| {
+                Utc::now() - prev.resolved_at < chrono::Duration::from_std(ttl).unwrap_or_default()
+            });
         if fresh {
             return Ok(ResolvedRef {
                 requested: git_ref.to_owned(),
@@ -271,6 +387,7 @@ mod tests {
         let expire_at_once = ForgeRefsPolicy {
             branch_ttl: Duration::ZERO,
             tag_ttl: Duration::ZERO,
+            ..ForgeRefsPolicy::default()
         };
         let first = resolve_ref("gh", &f, Some(&s), expire_at_once, "o/r", "main")
             .await
@@ -293,6 +410,53 @@ mod tests {
         assert_eq!(*f.calls.lock().unwrap(), 3);
     }
 
+    /// RFC 0008 §13.3. A TTL is a promise to go and ask again, and an
+    /// air-gapped instance has nobody to ask. Frozen, an expired row is
+    /// simply what this instance knows — and it has to be, because a ref is
+    /// resolved *before* anything is fetched: falling through to the forge
+    /// would refuse every cached artifact of that ref along with it.
+    #[tokio::test]
+    async fn a_frozen_policy_never_re_asks_however_old_the_row_is() {
+        let f = forge();
+        let s = store();
+        let expired = ForgeRefsPolicy {
+            branch_ttl: Duration::ZERO,
+            tag_ttl: Duration::ZERO,
+            ..ForgeRefsPolicy::default()
+        };
+        // One resolution, made while there was still an upstream.
+        let first = resolve_ref("gh", &f, Some(&s), expired, "o/r", "main")
+            .await
+            .unwrap();
+        assert_eq!(first.sha, A);
+        assert_eq!(*f.calls.lock().unwrap(), 1);
+
+        let frozen = ForgeRefsPolicy {
+            frozen: true,
+            ..expired
+        };
+        // The branch moves upstream. The frozen instance neither knows nor
+        // asks: it answers what it holds.
+        f.branches.lock().unwrap().insert("main", B.to_owned());
+        for _ in 0..3 {
+            let again = resolve_ref("gh", &f, Some(&s), frozen, "o/r", "main")
+                .await
+                .unwrap();
+            assert_eq!(again.sha, A, "a frozen resolution is the one it holds");
+        }
+        assert_eq!(
+            *f.calls.lock().unwrap(),
+            1,
+            "not one of the three reached the forge"
+        );
+
+        // And a ref it has never resolved is still a refusal rather than an
+        // invention: frozen means "do not re-ask", not "answer anyway".
+        assert!(resolve_ref("gh", &f, Some(&s), frozen, "o/r", "never-seen")
+            .await
+            .is_err());
+    }
+
     #[tokio::test]
     async fn an_unknown_ref_is_not_found() {
         let f = forge();
@@ -300,5 +464,41 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, CoreError::NotFound(_)));
+    }
+}
+
+#[cfg(test)]
+mod ref_finding_tests {
+    use super::*;
+    use crate::entities::{PackageId, RefAction};
+
+    fn meta(artifact: &str, forge: serde_json::Value) -> PackageMetadata {
+        let mut m = PackageMetadata::minimal(
+            PackageId::new("gh", "cli/cli", "v1.0.0").with_artifact(artifact),
+            serde_json::Value::Null,
+        );
+        m.extra = serde_json::json!({ FORGE_EXTRA_KEY: forge });
+        m
+    }
+
+    #[test]
+    fn an_asset_digest_that_differs_from_the_cached_bytes_is_a_finding() {
+        let p = ForgeRefsPolicy::default();
+        let m = meta(
+            "filename/gh.tar.gz",
+            serde_json::json!({
+                "ref_kind": "tag",
+                "resolved_commit": "a".repeat(40),
+                "asset_digest": format!("sha256:{}", "f".repeat(64)),
+            }),
+        );
+        let found = ref_findings(p, &m, Some(&"e".repeat(64)));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].code, ReasonCode::AssetReplaced);
+        assert_eq!(found[0].action, RefAction::Deny);
+
+        // The same digest, and a first sight, are both trusted.
+        assert!(ref_findings(p, &m, Some(&"f".repeat(64))).is_empty());
+        assert!(ref_findings(p, &m, None).is_empty());
     }
 }

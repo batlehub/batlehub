@@ -29,7 +29,7 @@ use futures::StreamExt;
 use super::{web, AppError, Arc, AuthIdentity, Deserialize, IntoParams, Serialize, ToSchema};
 use batlehub_core::{
     entities::{RegistryKind, Role},
-    services::{LocalRegistryService, ProxyRequest, ProxyResponse, ProxyService},
+    services::{LocalRegistryService, ProxyRequest, ProxyService},
 };
 
 use crate::RegistryMap;
@@ -284,16 +284,14 @@ pub async fn explore_fetch_version(
         .await
         .map_err(AppError::from)?;
 
-    let stream = match response {
-        // The rule's own reason, which is the same string the download would
-        // have given — so the console shows the operator *why*, and the
-        // `/tools/access-check` page it already links to explains the same
-        // verdict (§4.4).
-        ProxyResponse::Denied { reason } => {
-            return Err(AppError::forbidden(reason).coded(FETCH_DENIED))
-        }
-        ProxyResponse::Stream(stream) | ProxyResponse::ForgeStream { stream, .. } => stream,
-    };
+    // The rule's own reason, which is the same string the download would
+    // have given — so the console shows the operator *why*, and the
+    // `/tools/access-check` page it already links to explains the same
+    // verdict (§4.4). A security verdict's headers are not needed here: the
+    // console reads the verdict endpoint for those.
+    let stream = response
+        .into_stream()
+        .map_err(|(reason, _)| AppError::forbidden(reason).coded(FETCH_DENIED))?;
 
     // Drained, not forwarded: this wants the side effect, not the bytes.
     // Everything that makes a download safe has already applied because it *is*

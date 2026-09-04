@@ -219,23 +219,37 @@ impl WarmingService {
         // `WarmingService::warm_artifact`). Anything else fills a storage slot
         // no request ever looks in.
         let artifact = self.warm_artifact();
+        let kind = self.client.registry_type().parse::<RegistryKind>().ok();
 
         for version in versions {
-            let pkg = match artifact {
-                Some(a) => a.coordinate(&self.registry_name, name, &version),
+            let bare =
+                || PackageId::new(self.registry_name.clone(), name.to_owned(), version.clone());
+            // One coordinate per version — or one per platform for the two
+            // toolchain kinds, whose file is addressed by platform and which
+            // `warm_artifact` therefore cannot name (RFC 0010 §6.9).
+            let coordinates: Vec<PackageId> = match artifact {
+                Some(a) => vec![a.coordinate(&self.registry_name, name, &version)],
                 None => {
-                    PackageId::new(self.registry_name.clone(), name.to_owned(), version.clone())
+                    match kind.and_then(|k| k.platform_artifacts(name, &version, &self.platforms)) {
+                        Some(files) => files
+                            .into_iter()
+                            .map(|file| bare().with_artifact(file))
+                            .collect(),
+                        None => vec![bare()],
+                    }
                 }
             };
-            let artifact_key = format!("artifact:{}", pkg.cache_key());
-            handles.push(tokio::spawn(warm_one_version(
-                self.clone(),
-                artifact_key,
-                pkg,
-                name.to_owned(),
-                version,
-                Arc::clone(&sem),
-            )));
+            for pkg in coordinates {
+                let artifact_key = format!("artifact:{}", pkg.cache_key());
+                handles.push(tokio::spawn(warm_one_version(
+                    self.clone(),
+                    artifact_key,
+                    pkg,
+                    name.to_owned(),
+                    version.clone(),
+                    Arc::clone(&sem),
+                )));
+            }
         }
 
         let mut total = WarmingReport::default();

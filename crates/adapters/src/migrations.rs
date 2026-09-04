@@ -219,6 +219,18 @@ pub fn embedded_migrator() -> Migrator {
             "upstream_status",
             "../migrations/053_upstream_status.sql"
         ),
+        mig!(54, "package_flags", "../migrations/054_package_flags.sql"),
+        mig!(
+            55,
+            "registry_scan_state",
+            "../migrations/055_registry_scan_state.sql"
+        ),
+        mig!(
+            56,
+            "missing_content",
+            "../migrations/056_missing_content.sql"
+        ),
+        mig!(57, "bundle_imports", "../migrations/057_bundle_imports.sql"),
     ])
 }
 

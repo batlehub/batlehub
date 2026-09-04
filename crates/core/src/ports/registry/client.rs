@@ -186,6 +186,32 @@ impl DocumentKind {
     /// filtering one and not the other would leave an unfiltered answer to the
     /// same question.
     pub const INDEX_JSON: Self = Self::Secondary("index-json");
+    /// SDKMAN's `candidates/default/{c}` — the one identifier `sdk install
+    /// <candidate>` resolves to when no version is given — as against the
+    /// candidate's `versions/all`.
+    ///
+    /// RFC 0010 §6.2. Names one version and carries no list, so, like Go's
+    /// `@latest`, it is repaired against the filtered `versions/all` in the
+    /// handler that has both rather than inside `strip`.
+    pub const SDKMAN_DEFAULT: Self = Self::Secondary("sdkman-default");
+    /// SDKMAN's rendered `candidates/{c}/{plat}/versions/list` — the table
+    /// `sdk list <candidate>` prints — as against the comma-separated
+    /// `versions/all`.
+    ///
+    /// The client's `?current=&installed=` query travels in the package
+    /// string and is therefore part of the cache key: two clients with
+    /// different installed sets must not share an entry (RFC 0010 §6.4).
+    pub const SDKMAN_VERSIONS_LIST: Self = Self::Secondary("versions-list");
+    /// A protocol document relayed byte-exact, addressed by the upstream path
+    /// carried in `package`.
+    ///
+    /// SDKMAN's `candidates/all`, `candidates/list`, `hooks/{pre,post}/…`,
+    /// `healthcheck`, `broker/version/…` and `selfupdate/…` are all text the
+    /// client reads as-is, and two of them (the hooks) are bash it sources
+    /// and runs — so none is filtered, rewritten or parsed (RFC 0010 §7). One
+    /// kind rather than six, because the only thing that varies is the path;
+    /// each is still its own cache entry, keyed by that path.
+    pub const RELAYED: Self = Self::Secondary("relayed");
 
     /// The cache-key and log discriminant.
     pub fn as_str(&self) -> &'static str {

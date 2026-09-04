@@ -697,6 +697,7 @@ async fn the_presence_scanner_reads_the_row_and_never_probes() {
         purl: String::new(),
         artifact: None,
         sbom: None,
+        listing: None,
     };
     let audit = UpstreamPresenceScanner {
         status: Arc::clone(&status) as Arc<dyn UpstreamStatusPort>,

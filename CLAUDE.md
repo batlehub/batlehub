@@ -163,7 +163,7 @@ CVE detection runs continuously across every layer; see `docs/contributing/secur
 - **Rust deps**: `cargo audit` (RUSTSEC) + `cargo deny` (advisories/bans/licenses/sources) — `.github/workflows/back-dep-audit.yaml`.
 - **JS deps**: `pnpm audit --audit-level high` — `.github/workflows/dep-audit-frontend.yaml`.
 - **Dependency supply chain**: [postmortem](https://github.com/mlab-sh/postmortem) (source-repo reputation + vulns from lockfiles) — `.github/workflows/postmortem.yaml`, one job per dependency root (Rust `.`, `ui/`, `docs/`), SARIF to Code Scanning.
-- **Container/OS**: Trivy on the built images, blocking on fixable HIGH/CRITICAL — `.github/workflows/image-scan.yaml` (GitHub, daily rebuild+rescan) and `.forgejo/workflows/build.yaml` (both images).
+- **Container/OS**: Trivy on the built images — the proxy image (`Containerfile`) and the scan-worker image (`Containerfile.worker`, RFC 0018) — blocking on fixable HIGH/CRITICAL — `.github/workflows/image-scan.yaml` (GitHub, daily rebuild+rescan) and `.forgejo/workflows/build.yaml` (both images).
 - **SBOM**: CycloneDX for the Rust workspace and the image, attached/attested on release (`.github/workflows/build.yaml`).
 - **SAST / secrets / lint**: CodeQL, Semgrep (`semgrep.yaml`), gitleaks (`secret-scan.yaml`, config `gitleaks.toml`), and the clippy/fmt `lint` job in `test.yaml`.
 

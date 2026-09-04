@@ -311,6 +311,13 @@ const config = withMermaid(defineConfig({
             { text: "Generic mirror", link: "/registries/generic" },
           ],
         },
+        {
+          text: "Toolchains",
+          items: [
+            { text: "Node (nvm, fnm, n, mise)", link: "/registries/nodedist" },
+            { text: "SDKMAN", link: "/registries/sdkman" },
+          ],
+        },
       ],
       // I run this server.
       "/guide/": [
@@ -377,6 +384,7 @@ const config = withMermaid(defineConfig({
           text: "When something is wrong",
           items: [
             { text: "Vulnerability proxy", link: "/use/vulnerability-proxy" },
+            { text: "mise", link: "/use/mise" },
             { text: "Troubleshooting", link: "/use/troubleshooting" },
           ],
         },
@@ -399,6 +407,7 @@ const config = withMermaid(defineConfig({
               link: "/operations/production-hardening",
             },
             { text: "Registry health check", link: "/operations/check-registries" },
+            { text: "Air gap", link: "/operations/air-gap" },
           ],
         },
         {

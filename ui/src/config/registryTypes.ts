@@ -1835,6 +1835,165 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
       },
     ],
   },
+  {
+    id: "nodedist",
+    label: "Node (nvm, fnm, n, mise)",
+    fileHint: ".nvmrc",
+    description:
+      `The <code>nodejs.org/dist</code> tree as a typed registry, so a Node release can be ` +
+      `<em>blocked</em> rather than merely cached: <code>index.tab</code> and ` +
+      `<code>index.json</code> are filtered listings, the tarballs and ` +
+      `<code>SHASUMS256.txt</code> are served byte-exact. Read by nvm, fnm, ` +
+      `<code>n</code> and mise. Proxy-only: there is no publish protocol.`,
+    snippets: [
+      {
+        key: "nodedist-env",
+        label: "Client setup",
+        lang: "bash",
+        template: (ctx) => {
+          const reg = `${ctx.registryUrl}/nodedist`;
+          return [
+            `# Export before sourcing nvm.sh — in /etc/profile.d, a Containerfile,`,
+            `# or a CI job's env: block. fnm and n read their own variable.`,
+            `export NVM_NODEJS_ORG_MIRROR="${reg}"`,
+            `export FNM_NODE_DIST_MIRROR="${reg}"`,
+            `export N_NODE_MIRROR="${reg}"`,
+            `export NODEJS_ORG_MIRROR="${reg}"   # mise`,
+            ``,
+            `nvm ls-remote        # reads index.tab through the proxy`,
+            `nvm install 22.11.0  # SHASUMS256.txt and the tarball, cached`,
+          ].join("\n");
+        },
+        note: (ctx) =>
+          ctx.isAuthenticated
+            ? `nvm builds its own <code>curl</code> command and has nowhere to put a header; ` +
+              `libcurl reads <code>~/.netrc</code> without being asked, so add an entry for ` +
+              `this host (see the <em>~/.netrc</em> tab).`
+            : `A blocked release disappears from <code>nvm ls-remote</code> and ` +
+              `<code>nvm install &lt;that version&gt;</code> stops on nvm's own ` +
+              `<em>"Version … not found"</em> — no download is attempted.`,
+      },
+      {
+        key: "nodedist-netrc",
+        label: "~/.netrc",
+        lang: "text",
+        showWhen: (ctx) => ctx.isAuthenticated,
+        template: (ctx) =>
+          [`machine ${ctx.netrcHost}`, `login ${ctx.netrcLogin}`, `password ${ctx.token}`].join(
+            "\n",
+          ),
+        note: `Neither nvm nor fnm can send an <code>Authorization</code> header; both use libcurl, which reads this file.`,
+      },
+      {
+        key: "nodedist-config",
+        label: "Server config",
+        lang: "toml",
+        template: (ctx) =>
+          [
+            `[[registries]]`,
+            `name      = "${ctx.registryName}"`,
+            `type      = "nodedist"`,
+            `mode      = "proxy"                       # the only mode: no publish protocol`,
+            `upstreams = ["https://nodejs.org/dist"]  # the default; io.js takes its own block`,
+            ``,
+            `[registries.rbac]`,
+            `# index.tab / index.json are listings; the files are reads. An install needs both.`,
+            `anonymous = ["releases:read", "releases:list"]`,
+            ``,
+            `# An age gate here must say what it does with a release index.tab no`,
+            `# longer lists (it reaches the gate with no date) — there is no default.`,
+            `# [[registries.rules]]`,
+            `# kind = "release_age_gate"`,
+            `# min_age_secs = 86400`,
+            `# deny_missing_timestamp = false`,
+          ].join("\n"),
+        note:
+          `Run <code>batlehub-cli registry suggest</code> in a project with an ` +
+          `<code>.nvmrc</code> to generate this block with the pinned release under ` +
+          `<code>warm_packages</code>.`,
+      },
+    ],
+  },
+  {
+    id: "sdkman",
+    label: "SDKMAN",
+    fileHint: ".sdkmanrc",
+    description:
+      `SDKMAN's candidates API and download broker as one registry: the JDK, Gradle, ` +
+      `Maven, Kotlin and every other candidate. <code>sdk list</code> and ` +
+      `<code>sdk install</code> resolve through filtered listings, a blocked version answers ` +
+      `<code>invalid</code> at <code>candidates/validate</code>, and the broker's redirect to ` +
+      `the vendor's CDN is followed server-side so the archive is cached here. Proxy-only.`,
+    snippets: [
+      {
+        key: "sdkman-env",
+        label: "Client setup",
+        lang: "bash",
+        template: (ctx) => {
+          const reg = `${ctx.registryUrl}/sdkman`;
+          return [
+            `# Export before sourcing sdkman-init.sh — it sets each variable only`,
+            `# when empty. /etc/profile.d, a Containerfile, or a CI job's env: block.`,
+            `export SDKMAN_CANDIDATES_API="${reg}"`,
+            `export SDKMAN_BROKER_API="${reg}/broker"`,
+            ``,
+            `sdk list java                # the rendered table, blocked versions removed`,
+            `sdk install java 21.0.5-tem  # validate, download through the broker route, hook`,
+          ].join("\n");
+        },
+        note: (ctx) =>
+          ctx.isAuthenticated
+            ? `<code>sdk</code> builds its own <code>curl</code> command and has nowhere to put ` +
+              `a header; libcurl reads <code>~/.netrc</code> without being asked, so add an ` +
+              `entry for this host (see the <em>~/.netrc</em> tab).`
+            : `A blocked version answers <code>invalid</code> at ` +
+              `<code>candidates/validate</code>, so <code>sdk install</code> stops on ` +
+              `SDKMAN's own refusal before any download.`,
+      },
+      {
+        key: "sdkman-netrc",
+        label: "~/.netrc",
+        lang: "text",
+        showWhen: (ctx) => ctx.isAuthenticated,
+        template: (ctx) =>
+          [`machine ${ctx.netrcHost}`, `login ${ctx.netrcLogin}`, `password ${ctx.token}`].join(
+            "\n",
+          ),
+        note: `<code>sdk</code> cannot send an <code>Authorization</code> header; it uses libcurl, which reads this file.`,
+      },
+      {
+        key: "sdkman-config",
+        label: "Server config",
+        lang: "toml",
+        template: (ctx) =>
+          [
+            `[[registries]]`,
+            `name       = "${ctx.registryName}"`,
+            `type       = "sdkman"`,
+            `mode       = "proxy"                        # the only mode: no publish protocol`,
+            `upstreams  = ["https://api.sdkman.io/2"]    # the candidates API (the /2 is part of it)`,
+            `broker_url = "https://broker.sdkman.io"     # the download broker`,
+            ``,
+            `[registries.rbac]`,
+            `# candidates, validate, hooks and healthcheck are listings; the download is a read.`,
+            `anonymous = ["releases:read", "releases:list"]`,
+            ``,
+            `# SDKMAN publishes no dates, so an age gate here is decided entirely by`,
+            `# deny_missing_timestamp: true refuses every download, false makes it inert.`,
+            `# [[registries.rules]]`,
+            `# kind = "release_age_gate"`,
+            `# min_age_secs = 86400`,
+            `# deny_missing_timestamp = false`,
+          ].join("\n"),
+        note:
+          `Egress: <code>api.sdkman.io</code>, <code>broker.sdkman.io</code> and the CDNs the ` +
+          `broker redirects to (<code>github.com</code>, <code>repo.maven.apache.org</code>, ` +
+          `<code>services.gradle.org</code>, …). Run <code>batlehub-cli registry suggest</code> ` +
+          `in a project with an <code>.sdkmanrc</code> to generate this block with its ` +
+          `pinned versions under <code>warm_packages</code>.`,
+      },
+    ],
+  },
 ];
 
 /**

@@ -693,6 +693,14 @@ pub fn namespace_separator(kind: RegistryKind) -> char {
         RegistryKind::Openvsx | RegistryKind::VscodeMarketplace | RegistryKind::Nuget => '.',
         // Maven coordinates are `groupId:artifactId`.
         RegistryKind::Maven => ':',
+        // SDKMAN has no namespace tier of its own — candidates are flat — but
+        // its *listing* coordinate carries the platform under the candidate
+        // (`java/linuxx64`, RFC 0010 §5.2), so `/` is the separator that makes
+        // a grant written against `java` cover the listing as well as the
+        // download. Written out rather than left to the default below, because
+        // RFC 0010 §13 records the choice and the default would otherwise be
+        // a coincidence.
+        RegistryKind::Sdkman => '/',
         // Everything else: npm scopes, Go modules, conda channels, Terraform
         // namespaces, deb components, and the forges.
         _ => '/',

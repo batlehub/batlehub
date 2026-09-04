@@ -356,10 +356,14 @@ cfg.service(download_myext);
 pub struct ApiDoc;
 ```
 
-**Every `200`/`201` must declare a body.** `crates/web/tests/openapi_contract.rs` walks the
-generated document and fails on any success response that has only a `description` — a response
-with no schema makes the generated TypeScript client emit `unknown`, and leaves the docs site's
-API reference blank for that endpoint. Point `body` at a real DTO where the handler has one;
+**Every `200`/`201` must declare a body**, and **the status you declare must be the status you
+send**. `crates/web/tests/openapi_contract.rs` enforces both. The first walks the generated
+document and fails on any success response that has only a `description` — a response with no
+schema makes the generated TypeScript client emit `unknown`, and leaves the docs site's API
+reference blank for that endpoint. The second reads the handler beside the annotation and fails
+when the two disagree about a `2xx`: the annotation is written by hand next to a body written
+separately, and a wrong number there breaks nothing until a client believes it. If your handler
+answers `201`, say `201`. Point `body` at a real DTO where the handler has one;
 otherwise use the shared markers in `crates/web/src/handlers/schemas.rs`:
 
 | Marker | For |

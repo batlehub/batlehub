@@ -1,4 +1,6 @@
 pub mod access_log;
+pub mod advisory;
+pub mod air_gap;
 pub mod banner;
 pub mod explore;
 pub mod forge;
@@ -21,6 +23,15 @@ pub mod upstream_status;
 pub mod vulnerability;
 
 pub use access_log::{AccessAction, AccessEvent, AccessResult, EventFilter};
+pub use advisory::{
+    ExposureCoverage, ExposureCursor, ExposurePage, ExposureQuery, ExposureRow, ExposureWhen,
+    FlagEffect, FlagFilter, FlagItemOutcome, FlagKind, FlagPush, FlagPushResponse,
+    FlagSourceCoverage, PackageFlag, RegistryScanState, ANY_VERSION, FLAGS_SCANNER,
+};
+pub use air_gap::{
+    AirGapPolicy, BundleImport, ContentMiss, MissFilter, MissKind, RecordedMiss,
+    MAX_MISSES_PER_REGISTRY,
+};
 pub use banner::{BannerLevel, GlobalBanner};
 pub use explore::{
     resolve_state, ExploreEntry, ExploreFilter, ExplorePackageDetail, ExploreSortBy,
@@ -28,8 +39,10 @@ pub use explore::{
     ReleaseAgeGateParams, ResolutionPolicy, ResolutionState,
 };
 pub use forge::{
-    is_commit_sha, ArchiveFormat, ForgeCoordinate, ForgeKind, ForgeRefsPolicy, RefKind,
-    ResolvedRef, FORGE_EXTRA_KEY, UNKNOWN_TAG,
+    is_commit_sha, ApiReadFamily, ArchiveFormat, ForgeCoordinate, ForgeKind, ForgeProvenance,
+    ForgeRefsPolicy, RawPolicy, RefAction, RefKind, ResolvedRef, ScriptAction, FORGE_ASSET_DIGEST,
+    FORGE_EXTRA_KEY, FORGE_PREVIOUS_COMMIT, FORGE_PROVENANCE, FORGE_REF_KIND, FORGE_REQUESTED_REF,
+    FORGE_RESOLVED_COMMIT, SCRIPT_EXTENSIONS, UNKNOWN_TAG,
 };
 pub use grant::{
     namespace_matches, namespace_separator, pat_is_within_owner, resolve, snapshot_pat_groups,

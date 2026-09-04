@@ -2,12 +2,13 @@
 
 | Field      | Value                                                                  |
 | ---------- | ---------------------------------------------------------------------- |
-| Status     | Draft — revised 2026-09-02: phases 1–2 are largely shipped, the PAT model here is not the shipped one; see §13 |
+| Status     | **In review** — §13's cut landed 2026-09-04 (§14): the credential contract file with its normative JSON Schema, `auth token`/`write-token-file`/`status`, and the editor patch carried in `patches/che-code/`. What remains is what §13 moved out — the loopback proxy, the bootstrap entry and the extension — and it waits on an editor build that cannot repoint its gallery URL, which none of ours currently is. Phases 1–2's server half was already shipped under RFC 0015/0017; the PAT model in the body above is not the shipped one, and §13 says so |
 | Short      | Authenticated OpenVSX access |
 | Settles    | Giving an editor that has no credential hook a way to send one: a contract file that may point at a secret rather than hold it, the pod's own Kubernetes identity, a loopback proxy for editors we do not build, and a sign-in entry in the Extensions view instead of a blank one |
 | Author     | batleforc                                                              |
 | Co-author  | —                                                                      |
 | Created    | 2026-08-18                                                             |
+| Revised    | 2026-09-02 — §13, re-read against the tree: what shipped elsewhere, what was wrong when drafted, and the cut. 2026-09-04 — §14, what building the cut found |
 | Supersedes | —                                                                      |
 | Touches    | `server` (VSX API auth: OIDC, PAT, Kubernetes), `cli/` (**existing** `batlehub-cli`: auth sources, local gallery proxy, TUI credential screen), `vscode-ext` (new), `che-code` patch (external), docs |
 
@@ -1055,3 +1056,122 @@ through what the server returns and never re-decide. 4 (offline cache): fail
 visibly, as the gallery already does. 6 (where the extension lives): a
 separate repository, when it exists. 7 (TokenReview → offline JWKS): no; the
 cache bounds the cost. Zero remain.
+
+---
+
+## 14. Landed (2026-09-04)
+
+§13's cut is built: the contract file, three CLI verbs, and the editor patch.
+Roughly what §13 estimated, and it closes the one thing this RFC could deliver
+without an editor build in front of us — a Batlehub gallery that requires a
+credential is no longer a gallery that answers every query with an empty list.
+
+**What is there.** `cli/src/contract.rs` — the document, the resolver and the
+atomic read-modify-write writer, with `cli/schema/vsx-token.schema.json` as
+the normative shape §4.1 asked for. `batlehub-cli auth token`,
+`auth write-token-file` and `auth status` (§4.1.3, §4.6).
+`patches/che-code/` — the credential module and the steps to integrate it,
+carried in this repository so both halves of the contract change together.
+`docs/registries/openvsx.md` gains the section, beside the warning it answers,
+and `docs/use/cli.md` the three verbs.
+
+### 14.1 Two sources, and the rest named rather than silent
+
+The cut says "one source: `file`, plus a literal for tests". Built as
+`inline` and `file` — the literal the CLI writes after a login, and the
+projected token something else keeps fresh, which is the pair a Kubernetes
+workspace actually needs.
+
+`env`, `exchange` and `keychain` are **in the schema as reserved**, and read
+as "no credential" with one warning. That is §4.1.2 rule 4 taken seriously:
+naming them is what lets a later implementation arrive without a `version`
+bump, and refusing to guess at them is what stops this build sending the wrong
+thing. A schema that omitted them would make the first one to land look like a
+breaking change.
+
+### 14.2 The schema is the document, and a test says so
+
+§4.1 argued the normative schema belongs beside the CLI rather than in the
+prose, because "four refresh sources times six token sources with one level of
+nesting is more than prose keeps honest". Taking that seriously means the two
+cannot be allowed to drift, so the CLI's tests read the shipped schema and
+assert against it in **both** directions: a vocabulary the schema documents
+and the model cannot parse is a lie to whoever writes the second
+implementation, and a value the model accepts and the schema omits is a second
+implementation written against the wrong document. Every example the schema
+carries is parsed and resolved by the same code path a consumer uses.
+
+No JSON Schema validator was added to do it. The drift that matters here is
+vocabulary and field names, and walking the schema for those costs sixty lines
+and no dependency — which is the right trade in a tree whose supply chain is
+its own §7.
+
+### 14.3 `auth token` is the bare verb, not a fourth name
+
+§4.1.3 spells it `batlehub auth token --output raw`, and §4.2's credential
+chain hardcodes that string. But `auth token` was already the personal-access-
+token subcommand group. **Decision:** the subcommand is optional — `auth
+token` prints a credential, `auth token list|create|revoke` are unchanged. A
+fourth name would have been easier and would have made the RFC's own
+integration snippet wrong.
+
+### 14.4 Redaction is a property of a type
+
+§4.6's rule is that a secret is never printed or logged, and the way it is
+kept is that `EntrySummary` — what the status table, the JSON output and any
+future TUI widget render — has **no field able to hold one**. The resolution
+that does carry the credential is a different type. A log line added later
+cannot leak what the type it was handed never had, which is the only version
+of this rule that survives a year of edits.
+
+### 14.5 What the patch will not do, and why it is short
+
+The module reads a literal `token` string, scopes the header to the gallery's
+own origin, retries once on `401`, and never throws. It does **not** read the
+`refresh` block, resolve a token *source*, or send a request of its own —
+each would mean an IDP client id or a second file open in the editor's own
+process, and each belongs to a broker. That is §4.1.1 rule 3 and decision 6,
+and it is also what keeps the patch to one added file and a handful of call
+sites, which is what a rebase-friendly series has to be.
+
+**It is carried, not applied.** This repository builds no editor, so the
+honest artifact is the module plus the integration steps rather than a diff
+with invented context lines that would fail to apply against whatever upstream
+looks like on the day. `patches/che-code/README.md` says so in those words.
+
+### 14.6 The patch is tested, and testing it found a bug
+
+§10 names five properties for the patch — resolution order, origin scoping
+including the redirect drop, the single 401 retry, an unparseable file as no
+credential, and a token *source* object falling through to the environment
+variable. All five are asserted, in `patches/che-code/vsxRegistryAuth.test.ts`,
+which travels with the module so whoever rebases it can tell in one command
+whether it still does what the contract says.
+
+**Plain `node --test`, no toolchain.** Node strips the types itself, so the
+module that goes into an editor build is tested with no dependency, no bundler
+and no config — which is what makes it reasonable to carry tests for code this
+repository does not compile.
+
+Writing them found a defect in the retry: the guard that stops a second
+identical request compared the retry's `Authorization` against the *base*
+headers, which never carried one, so every `401` retried whether the
+credential had changed or not. `sendWithCredential` compares against the
+headers it actually sent now. It is the same lesson as 0008 §14.5 at a smaller
+scale — the code read correctly and did something else, and only a test that
+counted the requests could tell.
+
+### 14.7 Still cut
+
+Everything §13 moved out stays out: the loopback `proxy serve`, the
+unauthenticated bootstrap entry, the `batlehub-vsx` extension, and
+`auth source`/`auth doctor`. The first three wait on an editor build that
+cannot repoint its gallery URL; the last two are conveniences over a format
+whose validation now happens at write time, which was the failure they were
+mostly there to explain.
+
+The `--kubernetes` and `--kubeconfig` login modes of §4.5 are not built
+either. `--kubernetes-token-path` ships, and `write-token-file --from-file`
+turns it into the `file` + `reresolve` contract entry the RFC describes, which
+is the part a consumer sees; the audience assertion and `TokenRequest` minting
+remain phase 2's.

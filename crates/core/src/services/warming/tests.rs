@@ -89,6 +89,7 @@ fn disabled_svc() -> WarmingService {
         latest_n: 3,
         concurrency: 0,
         coordinator: Arc::new(crate::ports::NoopWarmCoordinator),
+        platforms: Vec::new(),
         metrics: Arc::new(crate::services::metrics::ProxyMetrics::new(&[
             "test".into(),
             "test-reg".into(),
@@ -383,6 +384,7 @@ fn active_svc(client: Arc<dyn RegistryClient>, storage: Arc<dyn StorageBackend>)
         latest_n: 3,
         concurrency: 4,
         coordinator: Arc::new(crate::ports::NoopWarmCoordinator),
+        platforms: Vec::new(),
         metrics: Arc::new(crate::services::metrics::ProxyMetrics::new(&[
             "test".into(),
             "test-reg".into(),
@@ -453,6 +455,7 @@ async fn warm_package_unpinned_scoped_npm_name() {
         latest_n: 1,
         concurrency: 4,
         coordinator: Arc::new(crate::ports::NoopWarmCoordinator),
+        platforms: Vec::new(),
         metrics: Arc::new(crate::services::metrics::ProxyMetrics::new(&[
             "test".into(),
             "test-reg".into(),
@@ -495,6 +498,7 @@ async fn warm_package_lists_versions_and_warms_latest_n() {
         latest_n: 2,
         concurrency: 4,
         coordinator: Arc::new(crate::ports::NoopWarmCoordinator),
+        platforms: Vec::new(),
         metrics: Arc::new(crate::services::metrics::ProxyMetrics::new(&[
             "test".into(),
             "test-reg".into(),
@@ -631,6 +635,7 @@ async fn warm_package_succeeds_despite_record_artifact_failure() {
         latest_n: 3,
         concurrency: 4,
         coordinator: Arc::new(crate::ports::NoopWarmCoordinator),
+        platforms: Vec::new(),
         metrics: Arc::new(crate::services::metrics::ProxyMetrics::new(&[
             "test".into(),
             "test-reg".into(),
@@ -654,6 +659,7 @@ async fn warm_package_latest_n_larger_than_available_versions() {
         latest_n: 10,
         concurrency: 4,
         coordinator: Arc::new(crate::ports::NoopWarmCoordinator),
+        platforms: Vec::new(),
         metrics: Arc::new(crate::services::metrics::ProxyMetrics::new(&[
             "test".into(),
             "test-reg".into(),

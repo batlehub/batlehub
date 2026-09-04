@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use crate::entities::RefKind;
+use crate::entities::{ForgeProvenance, RefKind};
 use crate::error::CoreError;
 
 /// What a forge said a ref points at, in one lookup.
@@ -51,6 +51,52 @@ pub trait ForgeRegistry: Send + Sync {
     /// The commit's date and committer, for the coordinates that resolved
     /// through a lookup that did not carry them.
     async fn commit(&self, owner_repo: &str, sha: &str) -> Result<ForgeCommit, CoreError>;
+
+    /// The repository's tags, newest first as the forge orders them
+    /// (RFC 0019 §4.1 `[api_reads]`, phase 3).
+    ///
+    /// The default refuses: a forge whose client has not implemented it
+    /// answers `404` for the family rather than an empty list, because "this
+    /// repository has no tags" and "this proxy cannot ask" are different
+    /// facts and only one of them is about the repository.
+    async fn tags(&self, _owner_repo: &str) -> Result<Vec<ForgeTag>, CoreError> {
+        Err(CoreError::NotFound(
+            "this forge client cannot list tags".to_owned(),
+        ))
+    }
+
+    /// What the forge can say about who made this object and whether that is
+    /// verifiable (RFC 0019 phase 5).
+    ///
+    /// `asset_digest` names a release asset — `sha256:…` — when the
+    /// coordinate is one; the commit's own signature is the answer
+    /// otherwise. The default is `Missing`, which is what RFC 0019 says a
+    /// forge without the capability reports: never a guess.
+    async fn provenance(
+        &self,
+        _owner_repo: &str,
+        _sha: &str,
+        _asset_digest: Option<&str>,
+    ) -> Result<ForgeProvenance, CoreError> {
+        Ok(ForgeProvenance::Missing)
+    }
+}
+
+/// One tag, in this proxy's own shape (RFC 0019 §4.1 `[api_reads]`).
+///
+/// Deliberately not the forge's JSON: a typed answer has no upstream URL in
+/// it to rewrite, no field that means something different per forge, and no
+/// room for a passthrough to grow into one.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ForgeTag {
+    pub name: String,
+    /// The commit the tag points at — through the tag object for an
+    /// annotated tag, directly for a lightweight one.
+    pub sha: String,
+    /// The tagger's date for an annotated tag, the commit's otherwise;
+    /// `None` where the forge exposes neither (Forgejo's tag list).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date: Option<DateTime<Utc>>,
 }
 
 /// A remembered resolution.
@@ -85,6 +131,20 @@ pub trait RefResolutionRepository: Send + Sync {
         git_ref: &str,
         resolution: &StoredRefResolution,
     ) -> Result<(), CoreError>;
+
+    /// Every ref this instance has resolved for one repository, newest
+    /// resolution first — the console's *moving refs* panel (RFC 0019 §6.5).
+    ///
+    /// The default answers none, so a store that cannot enumerate stays
+    /// correct: the panel then says the instance remembers nothing, which is
+    /// true of a deployment with no database.
+    async fn list_for_repo(
+        &self,
+        _registry: &str,
+        _owner_repo: &str,
+    ) -> Result<Vec<(String, StoredRefResolution)>, CoreError> {
+        Ok(Vec::new())
+    }
 }
 
 /// Who is asking for budget (RFC 0019 §5.2).

@@ -270,6 +270,7 @@ pub(super) fn build_warming_map(
                 concurrency: reg.cache.warm_concurrency,
                 coordinator: Arc::clone(&coordinator),
                 metrics: Arc::clone(&proxy_metrics),
+                platforms: reg.cache.warm_platforms.clone(),
             });
             warming_map.insert(reg.name.clone(), warming_svc);
         }
@@ -388,12 +389,108 @@ pub(super) fn build_scanners(
             .build()
             .context("building OSV HTTP client")
     };
+    // The sandbox every binary scanner runs under (RFC 0018 §6.3), from
+    // `[worker.sandbox]`; validation has already refused `runtime = "none"`
+    // outside the escape hatch.
+    let sandbox = batlehub_adapters::scanners::Sandbox {
+        runtime: config.worker.sandbox.runtime.clone(),
+        bwrap: std::path::PathBuf::from("bwrap"),
+        memory_limit_mb: config.worker.sandbox.memory_limit_mb,
+        cpu_seconds: config.worker.sandbox.cpu_seconds,
+    };
+    let extract = batlehub_adapters::scanners::ExtractPolicy {
+        max_entries: config.worker.sandbox.max_entries,
+        max_extracted_bytes: config.worker.sandbox.max_extracted_mb * 1024 * 1024,
+        max_ratio: 100,
+    };
+    let job_timeout = std::time::Duration::from_secs(config.worker.job_timeout_secs);
+    let require_command = |name: &str, command: &str| -> Result<std::path::PathBuf> {
+        let path = std::path::PathBuf::from(command);
+        if !batlehub_adapters::scanners::subprocess::command_exists(&path) {
+            anyhow::bail!(
+                "[scanners.{name}] command '{command}' is not an executable file (or on PATH); \
+                 the worker image is where the scanner toolchains live (RFC 0018 §5.4)"
+            );
+        }
+        Ok(path)
+    };
     let mut out: HashMap<String, Arc<dyn batlehub_core::ports::ArtifactScanner>> = HashMap::new();
     for (name, cfg) in &config.scanners {
         match cfg {
             ScannerConfig::Osv { api_url, .. } => {
                 let inner = Arc::new(OsvScanner::new(osv_client(60)?, api_url.clone()));
                 out.insert(name.clone(), Arc::new(OsvArtifactScanner::new(inner)));
+            }
+            ScannerConfig::Postmortem {
+                command,
+                online,
+                timeline,
+                ..
+            } => {
+                out.insert(
+                    name.clone(),
+                    Arc::new(batlehub_adapters::scanners::PostmortemScanner {
+                        command: require_command(name, command)?,
+                        sandbox: sandbox.clone(),
+                        extract: extract.clone(),
+                        online: *online,
+                        timeline: *timeline,
+                        timeout: job_timeout,
+                    }),
+                );
+            }
+            ScannerConfig::Guarddog {
+                command,
+                ecosystems,
+                ..
+            } => {
+                out.insert(
+                    name.clone(),
+                    Arc::new(batlehub_adapters::scanners::GuarddogScanner {
+                        command: require_command(name, command)?,
+                        ecosystems: ecosystems.clone(),
+                        sandbox: sandbox.clone(),
+                        extract: extract.clone(),
+                        timeout: job_timeout,
+                    }),
+                );
+            }
+            ScannerConfig::Trivy {
+                endpoint,
+                timeout_secs,
+                ..
+            } => {
+                out.insert(
+                    name.clone(),
+                    Arc::new(batlehub_adapters::scanners::TrivyScanner {
+                        command: require_command(name, "trivy")?,
+                        endpoint: endpoint.clone(),
+                        sandbox: sandbox.clone(),
+                        extract: extract.clone(),
+                        timeout: std::time::Duration::from_secs(*timeout_secs).max(job_timeout),
+                    }),
+                );
+            }
+            ScannerConfig::Sigstore {
+                rekor_url,
+                require_for,
+                ..
+            } => {
+                let require_for = require_for
+                    .iter()
+                    .filter_map(|k| k.parse::<batlehub_core::entities::RegistryKind>().ok())
+                    .collect();
+                out.insert(
+                    name.clone(),
+                    Arc::new(batlehub_adapters::scanners::SigstoreScanner {
+                        http: osv_client(30)?,
+                        rekor_url: rekor_url.clone().unwrap_or_else(|| {
+                            batlehub_adapters::scanners::sigstore::DEFAULT_REKOR.to_owned()
+                        }),
+                        require_for,
+                        timeout: std::time::Duration::from_secs(30),
+                    }),
+                );
             }
             other => {
                 info!(

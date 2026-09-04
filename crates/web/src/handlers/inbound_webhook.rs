@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use actix_web::{get, post, web, HttpRequest, HttpResponse, Responder};
 use batlehub_config::schema::NotificationsConfig;
-use batlehub_core::entities::InboundWebhookEvent;
+use batlehub_core::entities::{
+    FlagEffect, FlagKind, FlagPush, InboundWebhookEvent, PackageId, ScanTrigger, Severity,
+};
+use batlehub_core::services::{FlagService, FlagSourceLimits};
 use bytes::BytesMut;
 use chrono::Utc;
 use futures::StreamExt;
@@ -40,6 +43,8 @@ pub async fn receive_inbound_webhook(
     mut payload: web::Payload,
     notification_store: web::Data<Arc<dyn NotificationPort>>,
     notifications_config: web::Data<Option<NotificationsConfig>>,
+    flags: Option<web::Data<Arc<FlagService>>>,
+    hot: web::Data<batlehub_core::services::hot_config::HotConfigLock>,
 ) -> Result<impl Responder, AppError> {
     let name = path.into_inner();
 
@@ -111,8 +116,8 @@ pub async fn receive_inbound_webhook(
 
     let event = InboundWebhookEvent {
         id: Uuid::new_v4(),
-        webhook_name: name,
-        payload,
+        webhook_name: name.clone(),
+        payload: payload.clone(),
         source_ip,
         received_at: Utc::now(),
         signature_valid,
@@ -120,7 +125,127 @@ pub async fn receive_inbound_webhook(
 
     notification_store.record_inbound_event(event).await?;
 
+    // RFC 0018 §4.3's two security events, on a signed webhook only. Unsigned
+    // ones are recorded above and do nothing: validation already refuses an
+    // unsigned inbound webhook once a registry has `[security]`, and this is
+    // the second line — a `security.verdict` that could deny a package must
+    // come from someone holding the secret.
+    if signature_valid == Some(true) {
+        handle_security_event(&name, &payload, flags.as_ref().map(|d| d.get_ref()), &hot).await;
+    }
+
     Ok(HttpResponse::Ok().json(OkResponse::new()))
+}
+
+/// `security.verdict` and `security.rescan` (RFC 0018 §4.3, recast by RFC
+/// 0002 §13 decision 2): the verdict event is an alias for a `hard_block`
+/// flag pushed under the webhook's name, so it lands in `package_flags` and
+/// the exposure report sees it; the rescan event enqueues its coordinates
+/// at `Webhook` priority.
+async fn handle_security_event(
+    webhook: &str,
+    payload: &serde_json::Value,
+    flags: Option<&Arc<FlagService>>,
+    hot: &batlehub_core::services::hot_config::HotConfigLock,
+) {
+    let kind = payload.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    match kind {
+        "security.verdict" => {
+            let Some(flags) = flags else { return };
+            let Some((registry, name, version)) = payload
+                .get("coordinate")
+                .and_then(|c| c.as_str())
+                .and_then(split_coordinate)
+            else {
+                tracing::warn!(
+                    webhook,
+                    "security.verdict without a `registry:name@version` coordinate"
+                );
+                return;
+            };
+            let summary = payload
+                .get("summary")
+                .and_then(|s| s.as_str())
+                .unwrap_or("SOC verdict")
+                .to_owned();
+            let external_id = payload
+                .get("external_id")
+                .and_then(|s| s.as_str())
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("{registry}:{name}@{version}"));
+            let push = FlagPush {
+                external_id,
+                registry,
+                package_name: name,
+                version: Some(version),
+                version_range: None,
+                kind: payload
+                    .get("kind")
+                    .and_then(|k| k.as_str())
+                    .map(FlagKind::parse)
+                    .unwrap_or(FlagKind::Malware),
+                effect: FlagEffect::HardBlock,
+                severity: payload
+                    .get("severity")
+                    .and_then(|s| s.as_str())
+                    .and_then(Severity::parse),
+                summary,
+                url: payload
+                    .get("url")
+                    .and_then(|s| s.as_str())
+                    .map(str::to_owned),
+                expires_at: payload
+                    .get("expires_at")
+                    .and_then(|s| s.as_str())
+                    .and_then(|s| s.parse::<chrono::DateTime<Utc>>().ok()),
+            };
+            let source = FlagSourceLimits {
+                name: webhook.to_owned(),
+                max_effect: FlagEffect::HardBlock,
+                registries: Vec::new(),
+                max_flags_per_minute: 0,
+            };
+            match flags.push(&source, vec![push], Utc::now()).await {
+                Ok(out) => {
+                    tracing::info!(webhook, accepted = out.accepted, rejected = out.rejected,
+                    outcome = ?out.items.first(), "security.verdict recorded as a flag")
+                }
+                Err(e) => tracing::warn!(webhook, error = %e, "security.verdict not recorded"),
+            }
+        }
+        "security.rescan" => {
+            let queue = { hot.read().await.scan_queue.clone() };
+            let Some(queue) = queue else { return };
+            for coordinate in payload
+                .get("coordinates")
+                .and_then(|c| c.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|c| c.as_str())
+            {
+                let Some((registry, name, version)) = split_coordinate(coordinate) else {
+                    continue;
+                };
+                let pkg = PackageId::new(&registry, &name, &version);
+                if let Err(e) = queue.enqueue(&pkg, None, ScanTrigger::Webhook).await {
+                    tracing::warn!(webhook, package = %pkg, error = %e, "security.rescan not queued");
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `registry:name@version` → its three parts. The name may itself carry
+/// `@` (an npm scope) and `:` (a Maven coordinate), so the registry is the
+/// text before the first `:` and the version the text after the last `@`.
+fn split_coordinate(s: &str) -> Option<(String, String, String)> {
+    let (registry, rest) = s.split_once(':')?;
+    let (name, version) = rest.rsplit_once('@')?;
+    if registry.is_empty() || name.is_empty() || version.is_empty() {
+        return None;
+    }
+    Some((registry.to_owned(), name.to_owned(), version.to_owned()))
 }
 
 // ── Admin: list inbound events ────────────────────────────────────────────────
@@ -156,4 +281,27 @@ pub async fn list_inbound_events(
     .await?;
     let events = notification_store.list_inbound_events(100).await?;
     Ok(web::Json(InboundEventsResponse { events }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_coordinate;
+
+    #[test]
+    fn coordinates_split_on_the_first_colon_and_the_last_at() {
+        assert_eq!(
+            split_coordinate("npm:left-pad@1.3.1"),
+            Some(("npm".into(), "left-pad".into(), "1.3.1".into()))
+        );
+        assert_eq!(
+            split_coordinate("npm:@scope/pkg@2.0.0"),
+            Some(("npm".into(), "@scope/pkg".into(), "2.0.0".into()))
+        );
+        assert_eq!(
+            split_coordinate("maven:org.apache:commons@1.0"),
+            Some(("maven".into(), "org.apache:commons".into(), "1.0".into()))
+        );
+        assert_eq!(split_coordinate("left-pad@1.3.1"), None);
+        assert_eq!(split_coordinate("npm:left-pad"), None);
+    }
 }

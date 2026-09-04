@@ -291,6 +291,7 @@ async fn archives_are_cached_by_commit_and_a_moved_branch_is_a_new_entry() {
         ForgeRefsPolicy {
             branch_ttl: Duration::ZERO,
             tag_ttl: Duration::from_secs(3600),
+            ..ForgeRefsPolicy::default()
         },
         None,
     )
@@ -350,6 +351,7 @@ async fn a_fresh_commit_on_a_branch_is_held_by_min_age_and_an_old_one_is_served(
         ForgeRefsPolicy {
             branch_ttl: Duration::ZERO,
             tag_ttl: Duration::from_secs(3600),
+            ..ForgeRefsPolicy::default()
         },
         Some(Duration::from_secs(3600)),
     )

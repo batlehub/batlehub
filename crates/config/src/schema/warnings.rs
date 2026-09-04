@@ -79,6 +79,11 @@ pub const CORS_ANY_ORIGIN: &str = "cors.any-origin";
 /// actually closed (RFC 0012 §7).
 pub const SIGNED_URLS_ANONYMOUS_STILL_GRANTED: &str = "signed-urls.anonymous-still-granted";
 
+/// An `sdkman` registry's `upstreams` entry does not end in `/2`. SDKMAN
+/// versions its candidates API in the path; the URL is served as given, but a
+/// missing version segment is more likely a typo than a choice (RFC 0010 §4.5).
+pub const SDKMAN_UPSTREAM_WITHOUT_API_VERSION: &str = "sdkman.upstream-without-api-version";
+
 /// `[server.signed_urls]` is configured and no registry sets
 /// `signed_downloads = true`, so the secret signs nothing. Harmless, and worth
 /// saying: it is the shape of a feature enabled on the wrong side.
@@ -305,11 +310,26 @@ pub const COHERENCE_INTERVAL_TOO_SHORT: &str = "cache-coherence.interval-too-sho
 /// A `github`, `gitlab` or `forgejo` registry with no `[registries.upstream_auth]`
 /// (RFC 0019 §4.3). Anonymous GitHub is 60 requests an hour, and ref resolution
 /// spends one or two per new ref.
+/// `[air_gap]` is on and a registry is hybrid: its fall-through can never
+/// reach upstream, so it behaves as local (RFC 0008 §4.5).
+pub const AIR_GAP_HYBRID_REGISTRY: &str = "air-gap.hybrid-registry";
+
+/// Bundle keys configured on a connected instance: legitimate — that is how
+/// a bundle is staged — and worth saying they authorise imports only.
+pub const AIR_GAP_KEYS_UNUSED: &str = "air-gap.keys-unused";
+
 pub const FORGE_ANONYMOUS_UPSTREAM: &str = "forge.anonymous-upstream";
+
+/// A forge registry serves no raw content while the setup snippet it hands
+/// out rewrites the forge's raw host at it (RFC 0019 §4.1, phase 3).
+pub const FORGE_RAW_DISABLED_BUT_LINKED: &str = "forge.raw-disabled-but-linked";
 
 /// `[registries.security]` with `mode = "warn"` and no `required_scanners`:
 /// nothing can ever hold a version (RFC 0018 §4.3).
 pub const SECURITY_UNPROTECTED: &str = "security.unprotected";
+
+/// A `[[flag_sources]]` entry may push `hard_block` (RFC 0002 §4.3).
+pub const FLAG_SOURCE_CAN_HARD_BLOCK: &str = "flag-source.can-hard-block";
 
 /// A `required_scanners` entry that only enriches other findings and never
 /// creates one (RFC 0018 §6.3, `mlab`).

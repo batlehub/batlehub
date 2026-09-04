@@ -4,9 +4,7 @@ use anyhow::Result;
 use clap::Subcommand;
 use comfy_table::Table;
 
-use crate::api::suggest::{
-    render_client_env, render_mise_toml, render_toml, suggest_registries, SuggestedRegistry,
-};
+use crate::api::suggest::{render_client_env, render_toml, suggest_registries, SuggestedRegistry};
 use crate::api::BatleHubClient;
 
 #[derive(Subcommand)]
@@ -42,6 +40,13 @@ pub enum RegistryCommand {
         #[arg(long, requires = "mise")]
         mise_commented: bool,
 
+        /// Append RFC 0008's catch-all rule: anything no other rule matched
+        /// is sent to the proxy's sink, which fetches nothing, answers 501
+        /// and records the host. Turns an unmirrored host from a connect
+        /// timeout into a line in the console.
+        #[arg(long, requires = "mise")]
+        mise_catch_all: bool,
+
         /// Include suggestions the server already has a registry for
         #[arg(long)]
         include_existing: bool,
@@ -58,6 +63,7 @@ pub async fn run(cmd: RegistryCommand, client: &BatleHubClient, json: bool) -> R
             client_env,
             mise,
             mise_commented,
+            mise_catch_all,
             include_existing,
         } => {
             run_suggest(
@@ -69,6 +75,7 @@ pub async fn run(cmd: RegistryCommand, client: &BatleHubClient, json: bool) -> R
                     client_env,
                     mise,
                     mise_commented,
+                    mise_catch_all,
                     include_existing,
                 },
             )
@@ -119,6 +126,7 @@ struct SuggestOptions {
     client_env: bool,
     mise: bool,
     mise_commented: bool,
+    mise_catch_all: bool,
     include_existing: bool,
 }
 
@@ -146,7 +154,13 @@ async fn run_suggest(client: &BatleHubClient, json: bool, opts: SuggestOptions) 
         .partition(|s| opts.include_existing || !existing.contains(&s.registry_type));
 
     if json {
-        print_json(&wanted, &already, &client.base_url, opts.mise_commented)?;
+        print_json(
+            &wanted,
+            &already,
+            &client.base_url,
+            opts.mise_commented,
+            opts.mise_catch_all,
+        )?;
     } else {
         print_human(
             &wanted,
@@ -155,6 +169,7 @@ async fn run_suggest(client: &BatleHubClient, json: bool, opts: SuggestOptions) 
             &client.base_url,
             opts.client_env,
             opts.mise.then_some(opts.mise_commented),
+            opts.mise_catch_all,
         );
     }
     Ok(())
@@ -165,6 +180,7 @@ fn print_json(
     already: &[SuggestedRegistry],
     server_url: &str,
     mise_commented: bool,
+    mise_catch_all: bool,
 ) -> Result<()> {
     let to_json = |s: &SuggestedRegistry| {
         serde_json::json!({
@@ -187,7 +203,12 @@ fn print_json(
         "suggested": wanted.iter().map(to_json).collect::<Vec<_>>(),
         "already_configured": already.iter().map(to_json).collect::<Vec<_>>(),
         "toml": render_toml(wanted),
-        "mise_toml": render_mise_toml(wanted, server_url, mise_commented),
+        "mise_toml": crate::api::suggest::render_mise_toml(
+            wanted,
+            server_url,
+            mise_commented,
+            mise_catch_all,
+        ),
     });
     println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
@@ -201,13 +222,15 @@ fn print_human(
     client_env: bool,
     // `Some(commented)` when `--mise` was passed.
     mise: Option<bool>,
+    // RFC 0008 §4.4's catch-all, appended last.
+    mise_catch_all: bool,
 ) {
     if wanted.is_empty() && already.is_empty() {
         println!("No package sources found in: {}", dir.display());
         println!(
-            "Looked at: mise.lock, mise.toml, Cargo.toml, go.mod, package.json, \
-             pyproject.toml, pom.xml, composer.json, *.gemspec, *.nuspec, *.csproj, \
-             *.tf, environment.yml"
+            "Looked at: mise.lock, mise.toml, .nvmrc, .sdkmanrc, Cargo.toml, go.mod, \
+             package.json, pyproject.toml, pom.xml, composer.json, *.gemspec, *.nuspec, \
+             *.csproj, *.tf, environment.yml"
         );
         return;
     }
@@ -240,7 +263,10 @@ fn print_human(
         println!();
         println!("Route mise through the proxy:");
         println!();
-        println!("{}", render_mise_toml(wanted, server_url, commented));
+        println!(
+            "{}",
+            crate::api::suggest::render_mise_toml(wanted, server_url, commented, mise_catch_all)
+        );
     }
 
     if client_env {

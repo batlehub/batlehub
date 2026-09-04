@@ -18,6 +18,12 @@
 #   3. A second pull of the branch, after its TTL, is served from the cache
 #      the first one filled — the cache is keyed by the commit, so the
 #      counter moves — and reports the same commit.
+#   4. RFC 0008's air gap, end to end: a lock is planned, the plan is seeded
+#      and exported as a signed bundle, a *second* instance running
+#      `[air_gap] enabled = true` imports it, and `mise install` completes
+#      against that instance with egress denied to both processes. Before the
+#      import the same coordinate is a `503` naming itself, which is the
+#      other half of the claim: an air-gapped instance says what it lacks.
 #
 # What this does *not* prove, and why: the moved-tag refusal and the
 # `MUTABLE_REF` verdict are RFC 0019 phase 2, and there is no branch on the
@@ -27,8 +33,9 @@
 # Run via `task test:mise-heavy` or directly. Needs network: the upstream is
 # api.github.com, anonymously (60 requests/hour; this run spends about eight).
 # Environment knobs: DATABASE_URL (required), HEAVY_PORT (8101), HEAVY_TAP_PORT
-# (8111), COVERAGE, HEAVY_MISE_TOOL (github:cli/cli), HEAVY_MISE_VERSION (2.60.0),
-# HEAVY_MISE_BRANCH (trunk — cli/cli's default branch).
+# (8111), HEAVY_AIRGAP_PORT (8107), COVERAGE, HEAVY_MISE_TOOL (github:cli/cli),
+# HEAVY_MISE_VERSION (2.60.0), HEAVY_MISE_BRANCH (trunk — cli/cli's default
+# branch).
 #
 # The `github:` backend, not the deprecated `ubi:` one: ubi downloads the asset
 # with its own HTTP client, which mise's `url_replacements` never see, so the
@@ -174,5 +181,279 @@ else
   # That is the other half of the design working: a new commit is a new entry.
   heavy_log "MISE-CACHE-OK (branch moved $BRANCH_SHA -> $BRANCH_SHA2 during the run; a new commit is a new entry)"
 fi
+
+# ── 4. The air gap: seed, export, carry, import, install with no egress ──────
+#
+# RFC 0008 §10's standing proof, and the only test in the tree where "the
+# server never dials" is a measurement rather than a claim.
+#
+# The shape is the RFC's §5.1 diagram, with the gap made real twice over:
+#
+#   * the second instance runs `[air_gap] enabled = true`, so every registry
+#     client it builds is wrapped in one that refuses to dial (§13 decision 1)
+#     — there is no route off the host *through the server*;
+#   * `mise` itself runs with HTTP(S)_PROXY pointed at a closed port and
+#     `no_proxy` narrowed to the loopback, so a URL the rewrite rules failed
+#     to catch fails immediately instead of quietly succeeding through the
+#     runner's real network — the failure mode that makes an air-gapped claim
+#     untestable on a connected developer machine.
+#
+# What is *not* claimed: the runner's kernel routing is untouched, so this is
+# egress denied to the two processes under test rather than to the host. That
+# is the strongest form available in a CI container that has to reach GitHub
+# in section 1 to have anything to carry across in section 4.
+
+heavy_mark "air-gap"
+AG_WORK="$HEAVY_WORK/airgap"
+mkdir -p "$AG_WORK"
+
+# The lock is the bill of materials (§4.2). It names the release asset by both
+# addresses mise records — the browser download URL and the API's own — so the
+# plan carries whichever the client asks for.
+# `|| true`: the whole point is that it is often absent, and a failing
+# command substitution under `set -e` would end the run rather than take the
+# fallback below.
+ASSET_URL="$(grep -oE "https://github\.com/$OWNER_REPO/releases/download/v$VERSION/[^ \"]+\.tar\.gz" \
+  "$HEAVY_WORK/install.txt" 2>/dev/null | head -1 || true)"
+if [[ -z "$ASSET_URL" ]]; then
+  # mise 2026.8 downloads by asset id; the URL is not in its output, so it is
+  # rebuilt from the release the proxy already served.
+  ASSET_URL="https://github.com/$OWNER_REPO/releases/download/v$VERSION/gh_${VERSION}_linux_amd64.tar.gz"
+fi
+heavy_log "planning from a lock naming $ASSET_URL"
+cat > "$AG_WORK/mise.lock" <<EOF
+[[tools."$TOOL"]]
+version = "$VERSION"
+backend = "$TOOL"
+
+[tools."$TOOL"."platforms.linux-x64"]
+url = "$ASSET_URL"
+EOF
+
+# The binary, not `cargo run`: cargo writes progress and lock notices to
+# stderr, and three of the steps below parse this command's output as JSON.
+cargo build --quiet -p batlehub-cli >"$AG_WORK/cli-build.txt" 2>&1 \
+  || { cat "$AG_WORK/cli-build.txt" >&2; heavy_fail "the CLI did not build"; }
+CLI=("$(cargo metadata --format-version 1 --no-deps \
+  | python3 -c 'import json,sys;print(json.load(sys.stdin)["target_directory"])')/debug/batlehub-cli")
+[[ -x "${CLI[0]}" ]] || heavy_fail "no batlehub-cli binary at ${CLI[0]}"
+export BATLEHUB_SERVER="$HEAVY_BASE"
+export BATLEHUB_TOKEN="$ADMIN_TOKEN"
+
+"${CLI[@]}" mise plan --lock "$AG_WORK/mise.lock" --platform linux-x64 \
+  -o "$AG_WORK/plan.json" >"$AG_WORK/plan.txt" 2>"$AG_WORK/plan.err" \
+  || { cat "$AG_WORK/plan.txt" "$AG_WORK/plan.err" >&2; heavy_fail "mise plan failed"; }
+grep -q "$REG" "$AG_WORK/plan.json" \
+  || { cat "$AG_WORK/plan.json" >&2; heavy_fail "the plan named no registry for the asset host"; }
+heavy_log "AIRGAP-PLAN-OK ($(grep -c '"tool"' "$AG_WORK/plan.json" || true) planned entries)"
+
+# Seeding is fetching: one pass warms the connected instance and proves the
+# planned path is one the server actually answers.
+"${CLI[@]}" mise seed --plan "$AG_WORK/plan.json" >"$AG_WORK/seed.txt" 2>"$AG_WORK/seed.err" \
+  || { cat "$AG_WORK/seed.txt" "$AG_WORK/seed.err" >&2; heavy_fail "mise seed failed — a planned path the server does not answer"; }
+heavy_log "AIRGAP-SEED-OK ($(head -1 "$AG_WORK/seed.txt"))"
+
+# A signing key, generated per run: the bundle's authenticity is the only
+# thing standing between a disconnected instance and any tar somebody hands it.
+head -c 32 /dev/urandom | od -An -tx1 | tr -d " \n" > "$AG_WORK/estate.key"
+"${CLI[@]}" --json mise export --plan "$AG_WORK/plan.json" \
+  --sign-key "$AG_WORK/estate.key" -o "$AG_WORK/estate.bhub" \
+  --bundle-id "heavy-$HEAVY_RUN" >"$AG_WORK/export.json" 2>"$AG_WORK/export.err" \
+  || { cat "$AG_WORK/export.json" "$AG_WORK/export.err" >&2; heavy_fail "mise export failed"; }
+BLOBS="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["blobs"])' "$AG_WORK/export.json")"
+[[ "$BLOBS" -ge 1 ]] || { cat "$AG_WORK/export.json" >&2; heavy_fail "the bundle carried no blob"; }
+export HEAVY_BUNDLE_PUBKEY="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["signer_key"])' "$AG_WORK/export.json")"
+
+# What the manifest carries, read out of the tar. This is the one place the
+# `ref → commit` row can be checked honestly: a release *asset* resolves its
+# tag before it is fetched (RFC 0019 §4.2 *Identity* — the tag is resolved,
+# the cache keeps the tag as its key), and the two instances share a database,
+# so the disconnected side would find the connected side's resolution whether
+# the bundle carried one or not. The bundle is the thing under test, so the
+# bundle is what is asserted.
+python3 - "$AG_WORK/estate.bhub" <<'PY' || heavy_fail "the bundle's manifest does not carry the ref it resolved"
+import json, re, sys, tarfile
+with tarfile.open(sys.argv[1]) as t:
+    manifest = json.load(t.extractfile("manifest.json"))
+entries = manifest["entries"]
+assert entries, "no entries"
+refs = [e["git_ref"] for e in entries if e.get("git_ref")]
+assert refs, f"no entry carries a git_ref: {entries}"
+r = refs[0]
+assert re.fullmatch(r"[0-9a-f]{40}", r["sha"]), r
+assert r["kind"] == "tag", r
+print(f"manifest: {len(entries)} entr(y|ies), ref {r['git_ref']} -> {r['sha'][:12]} ({r['kind']})")
+PY
+
+heavy_log "AIRGAP-EXPORT-OK ($BLOBS blob(s), signed by ${HEAVY_BUNDLE_PUBKEY:0:8}…, ref row carried)"
+
+# ── the disconnected side ────────────────────────────────────────────────────
+
+heavy_start_second_server tests/heavy/config.mise-airgap.toml "${HEAVY_AIRGAP_PORT:-8107}"
+AG_BASE="$HEAVY_BASE2"
+
+# It knows what it is. The miss log is empty because nothing has been asked
+# for yet, which is a different fact from "nothing is missing" — and the
+# endpoint says which by reporting the mode.
+#
+# What is *not* asserted here is `empty_registries`, and the reason is this
+# fixture rather than the feature: the two instances share one `DATABASE_URL`,
+# and every deployment wraps its storage in a `StorageRouter` whose inventory
+# lives in that database (`server/src/setup.rs`). So the disconnected instance
+# reads the connected one's rows and does not look empty, however empty its own
+# directory is. A real air-gapped pair shares nothing; the report is asserted
+# where the store is per-instance, in `crates/web/tests/air_gap.rs`.
+MISSING_CODE="$(curl -s -o "$AG_WORK/missing.json" -w '%{http_code}' \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "$AG_BASE/api/v1/admin/air-gap/missing?registry=$REG")"
+[[ "$MISSING_CODE" == "200" ]] \
+  || heavy_fail "the miss endpoint answered $MISSING_CODE: $(cat "$AG_WORK/missing.json")"
+grep -q '"air_gapped":true' "$AG_WORK/missing.json" \
+  || heavy_fail "the instance does not think it is air-gapped: $(cat "$AG_WORK/missing.json")"
+
+# Before the import: a coordinate it does not hold is a 503 that names itself,
+# never a 404 — 404 asserts the artifact does not exist, and is what a hybrid
+# fall-through acts on (§4.4).
+BEFORE_CODE="$(curl -s -o "$AG_WORK/before.json" -w '%{http_code}' \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "$AG_BASE/proxy/$REG/$OWNER_REPO/releases/tags/v$VERSION")"
+[[ "$BEFORE_CODE" == "503" ]] \
+  || heavy_fail "an air-gapped miss answered $BEFORE_CODE, expected 503 (404 would assert non-existence)"
+grep -q 'content_unavailable' "$AG_WORK/before.json" \
+  || heavy_fail "the 503 body did not name itself: $(cat "$AG_WORK/before.json")"
+heavy_log "AIRGAP-MISS-OK (503 content_unavailable before the import)"
+
+BATLEHUB_SERVER="$AG_BASE" "${CLI[@]}" mise import "$AG_WORK/estate.bhub" \
+  >"$AG_WORK/import.txt" 2>"$AG_WORK/import.err" \
+  || { cat "$AG_WORK/import.txt" "$AG_WORK/import.err" >&2; heavy_fail "mise import failed"; }
+grep -q "signature ok" "$AG_WORK/import.txt" \
+  || { cat "$AG_WORK/import.txt" >&2; heavy_fail "the import did not verify the signature"; }
+heavy_log "AIRGAP-IMPORT-OK ($(head -1 "$AG_WORK/import.txt"))"
+
+# The history is the provenance: a disconnected instance has no upstream to
+# point at, so what it can say about an artifact is which bundle brought it.
+curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" "$AG_BASE/api/v1/admin/bundle" \
+  | grep -q "heavy-$HEAVY_RUN" \
+  || heavy_fail "the imported bundle is not in the history"
+
+# The bytes, back out of the read path, from an instance that cannot dial.
+AG_PATH="$(python3 - "$AG_WORK/plan.json" <<'PY'
+import json, sys
+plan = json.load(open(sys.argv[1]))
+print(next(e["proxy_path"] for e in plan["entries"] if e.get("proxy_path")))
+PY
+)"
+AG_CODE="$(curl -s -o "$AG_WORK/served.bin" -w '%{http_code}' \
+  -H "Authorization: Bearer $ADMIN_TOKEN" "$AG_BASE$AG_PATH")"
+[[ "$AG_CODE" == "200" ]] \
+  || heavy_fail "the air-gapped instance did not serve what the bundle gave it: HTTP $AG_CODE on $AG_PATH"
+[[ -s "$AG_WORK/served.bin" ]] || heavy_fail "the served artifact was empty"
+heavy_log "AIRGAP-SERVE-OK ($(wc -c < "$AG_WORK/served.bin") bytes, from an instance with no route out)"
+
+# ── the install, with egress denied ──────────────────────────────────────────
+#
+# A fresh mise home so nothing installed in section 1 can answer, and a proxy
+# pointed at a closed port so anything the rewrite rules missed fails at once.
+
+AG_PROXY="$AG_BASE/proxy/$REG"
+export MISE_DATA_DIR="$AG_WORK/mise/data"
+export MISE_CACHE_DIR="$AG_WORK/mise/cache"
+export MISE_CONFIG_DIR="$AG_WORK/mise/config"
+export MISE_STATE_DIR="$AG_WORK/mise/state"
+mkdir -p "$MISE_DATA_DIR" "$MISE_CACHE_DIR" "$MISE_CONFIG_DIR" "$MISE_STATE_DIR"
+# Four backslashes, as in section 1 and for the same reason: the heredoc eats
+# one pair, and TOML needs `\\.` in a basic string to mean a literal `\.` in
+# the regex. Two would reach mise as `\.`, which is a TOML escape error — and
+# mise reports it, keeps going, and runs with the whole settings block
+# dropped. (It is the trap `toml_quote` exists for in the CLI's generator.)
+cat > "$MISE_CONFIG_DIR/config.toml" <<EOF
+[settings]
+# The five verifiers RFC 0008 §2 names, off — exactly as that section says
+# operators already set them on a disconnected workstation, and the reason
+# §5.2 moves verification to the connected side. Each reaches Sigstore or the
+# forge before it will install anything, and a transparency log is not a thing
+# a proxy caches: an offline inclusion proof proves nothing (§3, first
+# non-goal). What replaces them is the verdict the bundle carried (§13.4).
+#
+# Measured rather than assumed, and in this order: with attestations on, the
+# install gets through download and checksum from the air-gapped instance and
+# stops at `api.github.com/…/attestations`. With those off, SLSA stops it at
+# the release *document*, which is the §14.8 gap in a second guise. The
+# checksum in `mise.lock` is verified locally throughout — it is the one check
+# that needs nothing but the bytes.
+github_attestations = false
+
+[settings.github]
+slsa = false
+
+[settings.aqua]
+cosign = false
+slsa = false
+minisign = false
+
+[settings.url_replacements]
+"regex:^https://api\\\\.github\\\\.com/repos/(.+)" = "$AG_PROXY/\$1"
+"regex:^https://github\\\\.com/([^/]+)/([^/]+)/releases/download/([^/]+)/(.+)" = "$AG_PROXY/\$1/\$2/releases/download/\$3/\$4"
+"regex:^https://codeload\\\\.github\\\\.com/([^/]+)/([^/]+)/tar\\\\.gz/(?:refs/tags/)?(.+)" = "$AG_PROXY/\$1/\$2/tarball/\$3"
+EOF
+
+# **From the lock**, in a project directory, which is the whole premise of
+# §4.2: `mise.lock` records the exact URL and checksum of every tool, so an
+# install that reads it resolves nothing. Without a lock mise asks the forge
+# for the release *list* to resolve `2.60.0` to a concrete version — a
+# document, and a bundle carries artifacts — and gets the `503` this mode
+# promises. That refusal is correct and it is also the measurement: it is why
+# the lock, not the version string, is the bill of materials.
+AG_PROJECT="$AG_WORK/project"
+mkdir -p "$AG_PROJECT"
+AG_SHA="$(sha256sum "$AG_WORK/served.bin" | cut -d" " -f1)"
+cat > "$AG_PROJECT/mise.toml" <<EOF
+[settings]
+lockfile = true
+
+[tools]
+"$TOOL" = { version = "$VERSION", exe = "gh" }
+EOF
+cat > "$AG_PROJECT/mise.lock" <<EOF
+[[tools."$TOOL"]]
+version = "$VERSION"
+backend = "$TOOL"
+
+[tools."$TOOL"."platforms.linux-x64"]
+url = "$ASSET_URL"
+checksum = "sha256:$AG_SHA"
+EOF
+
+heavy_log "mise install from the lock, with egress denied (proxy -> 127.0.0.1:1)"
+set +e
+(
+  cd "$AG_PROJECT"
+  env HTTP_PROXY="http://127.0.0.1:1" HTTPS_PROXY="http://127.0.0.1:1" \
+      http_proxy="http://127.0.0.1:1" https_proxy="http://127.0.0.1:1" \
+      NO_PROXY="127.0.0.1,localhost" no_proxy="127.0.0.1,localhost" \
+      MISE_TRUSTED_CONFIG_PATHS="$AG_PROJECT" \
+      "${MISE[@]}" install
+) >"$AG_WORK/install.txt" 2>&1
+AG_INSTALL=$?
+set -e
+if [[ "$AG_INSTALL" -ne 0 ]]; then
+  cat "$AG_WORK/install.txt" >&2
+  heavy_fail "mise install from the lock failed against the air-gapped instance with no egress — read the log above: a URL the plan did not carry is a gap in the bundle, and that is the finding"
+fi
+AG_INSTALLED="$(cd "$AG_PROJECT" && env HTTP_PROXY="http://127.0.0.1:1" \
+  HTTPS_PROXY="http://127.0.0.1:1" NO_PROXY="127.0.0.1,localhost" \
+  MISE_TRUSTED_CONFIG_PATHS="$AG_PROJECT" \
+  "${MISE[@]}" exec -- gh --version 2>/dev/null | head -1 || true)"
+[[ "$AG_INSTALLED" == *"$VERSION"* ]] \
+  || heavy_fail "gh --version answered '$AG_INSTALLED' after the air-gapped install, expected $VERSION"
+heavy_log "AIRGAP-INSTALL-OK ($AG_INSTALLED, from the lock, with no route off the host)"
+
+# The other half of the promise: what it could not answer is *named*, so the
+# next bundle is a list the estate produced.
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "$AG_BASE/api/v1/admin/air-gap/missing?registry=$REG" > "$AG_WORK/missing-after.json"
+heavy_log "AIRGAP-MISSLOG-OK ($(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["total"], "recorded miss(es):", ", ".join(sorted({i["kind"]+" "+i["storage_key"] for i in d["items"]})[:4]))' "$AG_WORK/missing-after.json"))"
+
+heavy_stop_second_server
 
 heavy_done MISE-HEAVY-OK

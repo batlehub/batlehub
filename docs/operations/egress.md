@@ -20,6 +20,17 @@ fetches from the configured upstream.
 Turn it off by not running a proxy-mode registry: `mode = "local"` never
 consults an upstream at all.
 
+**One kind fetches from hosts you did not configure.** An `sdkman` registry
+asks `broker.sdkman.io` for a download and is answered with a `302` to
+wherever the vendor publishes — `github.com` (and
+`objects.githubusercontent.com`), `repo.maven.apache.org`,
+`services.gradle.org`, `groovy.jfrog.io` at minimum. The chain is followed
+server-side through the SSRF guard and the operator's credentials stop at the
+two configured origins, but egress to those CDN hosts is a prerequisite of the
+kind. The list is *observed, not exhaustive*: the broker can add a host without
+telling anyone, which is itself an argument for warming ahead of an air gap
+([RFC 0010](/rfc/0010-toolchain-managers) §9).
+
 ## A search box is typed into
 
 `GET /api/v1/explore/upstream` fans a query out across every accessible

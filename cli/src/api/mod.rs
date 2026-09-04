@@ -2,10 +2,12 @@ pub mod admin;
 pub mod auth;
 pub mod authz;
 pub mod ide;
+pub mod mise_plan;
 pub mod owner;
 pub mod package;
 pub mod publish;
 pub mod registry;
+pub mod security;
 pub mod setup;
 pub mod suggest;
 pub mod version;
@@ -13,6 +15,49 @@ pub mod version;
 use anyhow::{bail, Result};
 use reqwest::{Method, RequestBuilder, Response, StatusCode};
 use serde::{de::DeserializeOwned, Serialize};
+
+/// What one seed fetch found.
+#[derive(Debug, Clone)]
+pub struct SeedFetch {
+    pub status: u16,
+    pub size: u64,
+    /// Bare hex of the bytes served; empty when the fetch failed.
+    pub sha256: String,
+    /// `X-BatleHub-Verdict`, when the registry has a security profile.
+    pub verdict: Option<String>,
+    /// `X-BatleHub-Reason`, comma-separated; empty when there is none.
+    pub reasons: String,
+    /// The body of a failed response, for the line the operator reads.
+    pub error: Option<String>,
+}
+
+/// One artifact, as the bundle export needs it: the bytes, the key the
+/// server keeps them under, and what the security layer said.
+#[derive(Debug, Clone)]
+pub struct FetchedForBundle {
+    pub bytes: Vec<u8>,
+    /// `X-BatleHub-Storage-Key`. `None` from a server too old to send it,
+    /// in which case the export falls back to the plan's derived key and
+    /// says so.
+    pub storage_key: Option<String>,
+    /// The coordinate the server files those bytes under. Carried rather
+    /// than parsed out of the key, which cannot be split unambiguously when
+    /// the name contains a slash — and a coordinate guessed wrong files the
+    /// verdict against a package nobody asks about.
+    ///
+    /// It is also what the export asks the verdict endpoint about: RFC 0018's
+    /// headers are silent on an `allowed` artifact, and that is the case a
+    /// bundle has to carry.
+    pub package_name: Option<String>,
+    pub version: Option<String>,
+    /// `tag`, `branch` or `commit` on a forge coordinate; `None` elsewhere.
+    pub ref_kind: Option<String>,
+    pub resolved_commit: Option<String>,
+    /// The ref as the client spelled it — `main`, `v2.60.0`. Not derivable
+    /// from the coordinate on a commit-keyed archive, where the version has
+    /// already become the SHA.
+    pub requested_ref: Option<String>,
+}
 
 #[derive(Clone)]
 pub struct BatleHubClient {
@@ -180,6 +225,110 @@ impl BatleHubClient {
     /// reachable. An arbitrary absolute URL (e.g. a redirect or a manifest-sourced
     /// download link to another host) is fetched **without** the token — sending
     /// the BatleHub credential to an unrelated host would be a leak.
+    /// Fetch one proxy path, hashing as it goes, and report what the server
+    /// said about it (RFC 0008 §4.3).
+    ///
+    /// One request does both halves of a seed: fetching *is* warming, and
+    /// the digest is of exactly the bytes the proxy served — not of a
+    /// second read that could differ. The verdict headers come back on the
+    /// same response, so `--verify` needs no second call and no coordinate
+    /// parsing: RFC 0018 already judged this request.
+    pub async fn seed_fetch(&self, path: &str) -> Result<SeedFetch> {
+        use futures::StreamExt;
+        use sha2::{Digest, Sha256};
+
+        let url = self.url(path);
+        let mut req = self.inner.request(Method::GET, url.as_str());
+        if let Some(auth) = self.auth_header() {
+            req = req.header("Authorization", auth);
+        }
+        let resp = req.send().await?;
+        let status = resp.status().as_u16();
+        let header = |name: &str| {
+            resp.headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        };
+        let verdict = header("X-BatleHub-Verdict");
+        let reasons = header("X-BatleHub-Reason").unwrap_or_default();
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Ok(SeedFetch {
+                status,
+                size: 0,
+                sha256: String::new(),
+                verdict,
+                reasons,
+                error: Some(body),
+            });
+        }
+        let mut hasher = Sha256::new();
+        let mut size = 0u64;
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            size += chunk.len() as u64;
+            hasher.update(&chunk);
+        }
+        Ok(SeedFetch {
+            status,
+            size,
+            sha256: hex::encode(hasher.finalize()),
+            verdict,
+            reasons,
+            error: None,
+        })
+    }
+
+    /// Fetch one proxy path into memory. For the bundle export, which needs
+    /// the bytes to hash *and* to write, so streaming to a file and reading
+    /// it back would be two passes over the same artifact.
+    ///
+    /// The response's own account of itself comes back with the bytes: the
+    /// storage key it was served from, and the coordinate it files them
+    /// under. Neither can be derived by a client: the key is a function of
+    /// the route rather than of the URL, and the key cannot be split back
+    /// into a coordinate when the name contains a slash.
+    pub async fn fetch_for_bundle(&self, path: &str) -> Result<FetchedForBundle> {
+        let url = self.url(path);
+        let mut req = self.inner.request(Method::GET, url.as_str());
+        if let Some(auth) = self.auth_header() {
+            req = req.header("Authorization", auth);
+        }
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("HTTP {status}: {body}");
+        }
+        let header = |name: &str| {
+            resp.headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        };
+        let storage_key = header("X-BatleHub-Storage-Key");
+        let package_name = header("X-BatleHub-Package");
+        let version = header("X-BatleHub-Version");
+        // RFC 0019's forge headers, when this was a forge coordinate: what
+        // the client asked for and what it resolved to. The bundle carries
+        // the pair so the disconnected instance can answer the ref without
+        // resolving it, which it cannot do.
+        let ref_kind = header("X-BatleHub-Ref-Kind");
+        let resolved_commit = header("X-BatleHub-Resolved-Commit");
+        let requested_ref = header("X-BatleHub-Ref-Requested");
+        Ok(FetchedForBundle {
+            bytes: resp.bytes().await?.to_vec(),
+            storage_key,
+            package_name,
+            version,
+            ref_kind,
+            resolved_commit,
+            requested_ref,
+        })
+    }
+
     pub async fn download_to<W: std::io::Write>(
         &self,
         path_or_url: &str,

@@ -1,0 +1,108 @@
+{
+  "SchemaVersion": 2,
+  "Trivy": {
+    "Version": "0.74.0"
+  },
+  "ReportID": "01a06b82-9729-71d8-bc10-a2c7e4dfb5d1",
+  "CreatedAt": "2026-09-04T08:21:55.625123021Z",
+  "ArtifactName": "sbom.json",
+  "ArtifactType": "cyclonedx",
+  "Results": [
+    {
+      "Target": "Node.js",
+      "Class": "lang-pkgs",
+      "Type": "node-pkg",
+      "Packages": [
+        {
+          "ID": "lodash@4.17.15",
+          "Name": "lodash",
+          "Identifier": {
+            "PURL": "pkg:npm/lodash@4.17.15",
+            "UID": "2f65addc5f427473",
+            "BOMRef": "6633e1c9-711d-44be-9f49-5e29773c7121"
+          },
+          "Version": "4.17.15"
+        },
+        {
+          "ID": "lodash@4.17.15",
+          "Name": "lodash",
+          "Identifier": {
+            "PURL": "pkg:npm/lodash@4.17.15",
+            "UID": "e7b7721712828aad",
+            "BOMRef": "41d47716-c377-4ad7-b640-bb0aac435f51"
+          },
+          "Version": "4.17.15"
+        }
+      ],
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2020-8203",
+          "VendorIDs": [
+            "GHSA-p6mc-m468-83gw"
+          ],
+          "PkgID": "lodash@4.17.15",
+          "PkgName": "lodash",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/lodash@4.17.15",
+            "UID": "2f65addc5f427473",
+            "BOMRef": "6633e1c9-711d-44be-9f49-5e29773c7121"
+          },
+          "InstalledVersion": "4.17.15",
+          "FixedVersion": "4.17.19",
+          "Status": "fixed",
+          "Fingerprint": "sha256:654eb32df008bc6b5d55792382b93f26893aad5b532b36905136a36f621721c7",
+          "Title": "nodejs-lodash: prototype pollution in zipObjectDeep function",
+          "Severity": "HIGH",
+          "CweIDs": [
+            "CWE-770",
+            "CWE-1321"
+          ]
+        },
+        {
+          "VulnerabilityID": "CVE-2021-23337",
+          "VendorIDs": [
+            "GHSA-35jh-r3h4-6jhm"
+          ],
+          "PkgID": "lodash@4.17.15",
+          "PkgName": "lodash",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/lodash@4.17.15",
+            "UID": "2f65addc5f427473",
+            "BOMRef": "6633e1c9-711d-44be-9f49-5e29773c7121"
+          },
+          "InstalledVersion": "4.17.15",
+          "FixedVersion": "4.17.21",
+          "Status": "fixed",
+          "Fingerprint": "sha256:e6fbdfd5861000dbe9ba4ea2e8f3d6751ac0cbbcbae49c811ff1d07b3833394d",
+          "Title": "nodejs-lodash: command injection via template",
+          "Severity": "HIGH",
+          "CweIDs": [
+            "CWE-94"
+          ]
+        },
+        {
+          "VulnerabilityID": "CVE-2026-4800",
+          "VendorIDs": [
+            "GHSA-r5fr-rjxr-66jc"
+          ],
+          "PkgID": "lodash@4.17.15",
+          "PkgName": "lodash",
+          "PkgIdentifier": {
+            "PURL": "pkg:npm/lodash@4.17.15",
+            "UID": "2f65addc5f427473",
+            "BOMRef": "6633e1c9-711d-44be-9f49-5e29773c7121"
+          },
+          "InstalledVersion": "4.17.15",
+          "FixedVersion": "4.18.0",
+          "Status": "fixed",
+          "Fingerprint": "sha256:0747e1b11504e4a56b55cd2762c3089f3f700e750aa6efcbc114c3d3810ae716",
+          "Title": "lodash: lodash: Arbitrary code execution via untrusted input in template imports",
+          "Severity": "HIGH",
+          "CweIDs": [
+            "CWE-94"
+          ]
+        }
+      ]
+    }
+  ]
+}

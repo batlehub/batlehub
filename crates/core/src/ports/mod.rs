@@ -1,3 +1,5 @@
+pub mod advisory;
+pub mod air_gap;
 pub mod auth;
 pub mod banner;
 pub mod config_change;
@@ -14,6 +16,8 @@ pub mod stats_history;
 pub mod storage;
 pub mod vulnerability;
 
+pub use advisory::AdvisoryRepository;
+pub use air_gap::{BundleHistory, MissRecorder};
 pub use auth::{
     ActionsGroupRule, ActionsOidcAuthConfig, AuthProvider, Condition, ConditionMatchType,
     KubernetesAuthConfig, LoginState, LoginStateStore, OidcAuthConfig, RawAuthRequest, RuleMatch,
@@ -22,8 +26,9 @@ pub use auth::{
 pub use banner::BannerPort;
 pub use config_change::{ConfigChangeRecord, ConfigChangeRepository};
 pub use forge::{
-    budget_allows, token_fingerprint, BudgetRole, ForgeCommit, ForgeRegistry, RateLimitBudget,
-    RateLimitObservation, RefResolutionRepository, ResolvedTarget, StoredRefResolution,
+    budget_allows, token_fingerprint, BudgetRole, ForgeCommit, ForgeRegistry, ForgeTag,
+    RateLimitBudget, RateLimitObservation, RefResolutionRepository, ResolvedTarget,
+    StoredRefResolution,
 };
 pub use governance::{
     version_node_key, BetaChannelEntry, BetaChannelPort, GrantRepository, NodeKind, OwnerEntry,

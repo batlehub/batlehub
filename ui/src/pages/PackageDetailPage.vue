@@ -24,6 +24,8 @@ import PackageVisibility from "@/components/admin/PackageVisibility.vue";
 import PackageGrants from "@/components/admin/PackageGrants.vue";
 import PackageEventsTable from "@/components/admin/PackageEventsTable.vue";
 import ReadmePanel from "@/components/package/ReadmePanel.vue";
+import VerdictPanel from "@/components/package/VerdictPanel.vue";
+import MovingRefsPanel from "@/components/package/MovingRefsPanel.vue";
 import UpstreamNotice from "@/components/package/UpstreamNotice.vue";
 import { useAuthFetch } from "@/composables/useAuthFetch";
 import { useApi, extractMessage } from "@/composables/useApi";
@@ -1475,6 +1477,18 @@ const {
            cache's TTL never holds a stale document and the detail payload does
            not grow by a megabyte per package (RFC 0007 §5.4). -->
       <ReadmePanel :registry="registry" :name="name" :version="selectedVersion" />
+
+      <!-- The selected version's supply-chain verdict (RFC 0018), when the
+           registry has one: what it is held or warned for, and the findings
+           for a reader who may see them. Silent otherwise. -->
+      <!-- RFC 0019 §6.5: on a forge, what a "version" is needs saying. -->
+      <MovingRefsPanel :registry="registry" :name="name" />
+      <VerdictPanel
+        :registry="registry"
+        :name="name"
+        :version="selectedVersion"
+        :can-rescan="isAdmin"
+      />
 
       <!-- ── The index ─────────────────────────────────────────────────────
            What the table is now: the list you pick the subject from, not the

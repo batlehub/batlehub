@@ -280,9 +280,16 @@ pub fn translate_rbac(
     // neither: on a public mirror a held version is a plain 404 unless the
     // operator grants it.
     map = map.grant(SubjectMatcher::Role(Role::User), [Action::QuarantineRead]);
+    // `flags:read` (RFC 0002 §13) goes with `findings:read`: a pushed flag
+    // names its source, which is the same disclosure as a SOC case in a
+    // finding, and the same reader.
     map = map.grant(
         SubjectMatcher::Role(Role::Admin),
-        [Action::QuarantineRead, Action::FindingsRead],
+        [
+            Action::QuarantineRead,
+            Action::FindingsRead,
+            Action::FlagsRead,
+        ],
     );
 
     // The registry-scoped half of §4.2's deferred `require_admin` split. Every
@@ -363,6 +370,8 @@ pub fn instance_node(explicit: Option<&GrantMap>) -> Node {
             Action::AuditPurge,
             Action::StatsRead,
             Action::PackagesBlock,
+            // RFC 0002 (recast): the flag listing spans every registry too.
+            Action::FlagsRead,
             // The governance and lifecycle verbs the admin API's own endpoints
             // ask for. `require_admin` conferred these on every registry,
             // including ones with no hierarchy of their own, so an administrator

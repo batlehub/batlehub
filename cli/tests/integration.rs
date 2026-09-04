@@ -3383,3 +3383,710 @@ fn admin_grants_set_rejects_an_unparseable_subject() {
     );
     assert!(!ok, "an unparseable subject must fail; stdout: {stdout}");
 }
+
+// ── Tests: RFC 0008, the air gap ─────────────────────────────────────────────
+//
+// `mise plan` turns a lock into a bill of materials; `mise export` turns the
+// plan into a signed bundle; `mise import` carries it in. The first is
+// offline apart from asking the server which registries exist; the last two
+// go through the running server, which is what makes this file the right
+// place for them.
+
+const AIR_GAP_LOCK: &str = r#"
+[[tools."aqua:EmbarkStudios/cargo-deny"]]
+version = "0.18.2"
+backend = "aqua:EmbarkStudios/cargo-deny"
+
+[tools."aqua:EmbarkStudios/cargo-deny"."platforms.linux-x64"]
+checksum = "sha256:4f0c000000000000000000000000000000000000000000000000000000000000"
+url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.18.2/cargo-deny-0.18.2-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471598214"
+
+[[tools."asdf:mise-plugins/mise-postgres"]]
+version = "16.2"
+backend = "asdf:mise-plugins/mise-postgres"
+
+[[tools.sonar]]
+version = "5.0"
+[tools.sonar."platforms.linux-x64"]
+url = "https://binaries.sonarsource.com/Distribution/sonar-scanner/sonar-scanner-5.0.zip"
+"#;
+
+fn write_lock(dir: &std::path::Path) -> String {
+    let path = dir.join("mise.lock");
+    std::fs::write(&path, AIR_GAP_LOCK).unwrap();
+    path.to_str().unwrap().to_owned()
+}
+
+#[test]
+fn mise_plan_names_the_downloads_the_unsupported_and_the_unmirrored() {
+    let srv = TestServer::start_with(&[("gh", "github")]);
+    let dir = tempfile::TempDir::new().unwrap();
+    let lock = write_lock(dir.path());
+
+    let (ok, stdout, stderr) = cli_cmd(
+        &["mise", "plan", "--lock", &lock, "--platform", "linux-x64"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(ok, "mise plan should succeed: {stderr}");
+    let plan: serde_json::Value = serde_json::from_str(&stdout).expect("a plan is JSON");
+    assert_eq!(plan["plan_version"], 1);
+    assert_eq!(plan["platforms"][0], "linux-x64");
+
+    let entries = plan["entries"].as_array().unwrap();
+    // The download URL and the API address of the same asset, plus the
+    // sonar zip nothing mirrors.
+    let deny: Vec<&serde_json::Value> = entries
+        .iter()
+        .filter(|e| e["tool"].as_str().unwrap().contains("cargo-deny"))
+        .collect();
+    assert_eq!(deny.len(), 2, "both addresses are planned: {stdout}");
+    assert!(deny.iter().all(|e| e["registry"]["name"] == "gh"));
+    assert!(
+        deny.iter()
+            .any(|e| e["proxy_path"]
+                == "/proxy/gh/EmbarkStudios/cargo-deny/releases/assets/471598214")
+    );
+
+    // The git-fetched backend is named, with the reason, before a bundle
+    // exists rather than at install time on a disconnected workstation.
+    let unsupported = plan["unsupported"].as_array().unwrap();
+    assert_eq!(unsupported.len(), 1, "{stdout}");
+    assert!(unsupported[0]["tool"]
+        .as_str()
+        .unwrap()
+        .contains("mise-postgres"));
+
+    // "Is my rewrite table complete?" — the question that has no answer today.
+    assert_eq!(plan["unmirrored_hosts"][0], "binaries.sonarsource.com");
+}
+
+/// RFC 0008 §13 decision 2: a bundle carries the binary that reads the next
+/// plan, so upgrading mise never means crossing the gap by hand.
+#[test]
+fn mise_plan_can_carry_mise_itself() {
+    let srv = TestServer::start_with(&[("gh", "github")]);
+    let dir = tempfile::TempDir::new().unwrap();
+    let lock = write_lock(dir.path());
+
+    let (ok, stdout, stderr) = cli_cmd(
+        &[
+            "mise",
+            "plan",
+            "--lock",
+            &lock,
+            "--platform",
+            "linux-x64",
+            "--include-mise",
+            "--mise-version",
+            "2026.8.6",
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(ok, "{stderr}");
+    let plan: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let mise = plan["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["tool"] == "github:jdx/mise")
+        .unwrap_or_else(|| panic!("the plan should carry mise: {stdout}"));
+    assert_eq!(mise["version"], "2026.8.6");
+    assert!(mise["url"]
+        .as_str()
+        .unwrap()
+        .contains("mise-v2026.8.6-linux-x64"));
+}
+
+/// A plan built against a server with no matching registry still plans: the
+/// lock is the bill of materials, and every host is reported as unmirrored,
+/// which is the honest answer rather than an empty file.
+#[test]
+fn mise_plan_against_a_server_with_no_matching_registry_reports_every_host() {
+    let srv = TestServer::start();
+    let dir = tempfile::TempDir::new().unwrap();
+    let lock = write_lock(dir.path());
+
+    let (ok, stdout, stderr) = cli_cmd(
+        &["mise", "plan", "--lock", &lock, "--platform", "all"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(ok, "{stderr}");
+    let plan: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let hosts: Vec<&str> = plan["unmirrored_hosts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h.as_str().unwrap())
+        .collect();
+    assert!(hosts.contains(&"github.com"), "{stdout}");
+    assert!(hosts.contains(&"binaries.sonarsource.com"), "{stdout}");
+    assert!(plan["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|e| e["key"].is_null()));
+}
+
+/// Export → import, through the server both ways.
+///
+/// The plan is hand-written rather than derived from a lock, because what is
+/// under test is the bundle: a published artifact is fetched back through the
+/// proxy path, signed into a bundle, and carried in by an instance that
+/// trusts the signing key. The lock path is covered above.
+#[test]
+fn a_bundle_round_trips_from_export_to_import() {
+    let srv = TestServer::start();
+    let tmp = tempfile::tempdir().unwrap();
+
+    // Something to carry.
+    let nupkg = tmp.path().join("Carried.1.0.0.nupkg");
+    std::fs::write(&nupkg, make_nupkg("Carried", "1.0.0")).unwrap();
+    let (ok, _, stderr) = cli_cmd(
+        &["publish", nupkg.to_str().unwrap(), "--registry", REGISTRY],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(ok, "publish should succeed: {stderr}");
+
+    let plan = serde_json::json!({
+        "plan_version": 1,
+        "generated_from": { "file": "mise.lock", "sha256": "0".repeat(64) },
+        "platforms": ["linux-x64"],
+        "entries": [{
+            "tool": "nuget:Carried",
+            "version": "1.0.0",
+            "platform": "linux-x64",
+            "url": "https://example.invalid/Carried.1.0.0.nupkg",
+            "registry": { "name": REGISTRY, "type": "nuget" },
+            "key": format!("{REGISTRY}/carried/1.0.0/carried.1.0.0.nupkg"),
+            "proxy_path": format!("/proxy/{REGISTRY}/nuget/v3/flat/carried/1.0.0/carried.1.0.0.nupkg"),
+        }],
+        "unsupported": [],
+        "unmirrored_hosts": [],
+    });
+    let plan_path = tmp.path().join("plan.json");
+    std::fs::write(&plan_path, serde_json::to_string(&plan).unwrap()).unwrap();
+
+    // A signing key is a file, never a flag: a key on a command line is a key
+    // in the shell history and in every process listing on the machine.
+    let key_path = tmp.path().join("estate.key");
+    std::fs::write(&key_path, "0".repeat(63) + "1").unwrap();
+    let bundle_path = tmp.path().join("estate.bhub");
+
+    let (ok, stdout, stderr) = cli_cmd(
+        &[
+            "mise",
+            "export",
+            "--plan",
+            plan_path.to_str().unwrap(),
+            "--sign-key",
+            key_path.to_str().unwrap(),
+            "-o",
+            bundle_path.to_str().unwrap(),
+            "--bundle-id",
+            "round-trip-1",
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(ok, "export should succeed: {stdout}{stderr}");
+    assert!(bundle_path.exists(), "{stdout}");
+
+    // The bundle really carries the artifact, not an empty manifest: the
+    // published bytes are in it, found by content rather than by name.
+    let bundle = std::fs::read(&bundle_path).unwrap();
+    assert!(
+        bundle.windows(9).any(|w| w == b"manifest."),
+        "the container holds a manifest"
+    );
+    assert!(
+        stdout.contains("1 entr") && stdout.contains("1 blob"),
+        "one entry, one blob: {stdout}"
+    );
+
+    // The import side, on an instance that trusts no key. This is the first
+    // thing an import checks and the reason it is checked *before* a blob is
+    // read: an instance whose only content path is unauthenticated is worse
+    // than one with no content path.
+    let (ok, stdout, stderr) = cli_cmd(
+        &["mise", "import", bundle_path.to_str().unwrap()],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    let said = format!("{stdout}{stderr}");
+    assert!(
+        !ok,
+        "a bundle no configured key vouches for is refused: {said}"
+    );
+    assert!(
+        said.contains("bundle_trusted_keys"),
+        "and the message names the thing to configure: {said}"
+    );
+}
+
+// ── Tests: RFC 0011, the credential contract file ────────────────────────────
+//
+// `auth write-token-file` and `auth status` are how a process that is not the
+// CLI learns which credential to present. What is asserted here is the
+// consumer's side of that contract through the real binary: the file lands
+// where the editor patch looks, one registry's entry does not disturb
+// another's, and nothing on the reporting path prints a secret.
+
+/// The contract file the CLI would write, for a run with its own home.
+fn contract_home() -> tempfile::TempDir {
+    tempfile::TempDir::new().unwrap()
+}
+
+fn cli_in_home(
+    args: &[&str],
+    server: &str,
+    token: &str,
+    home: &std::path::Path,
+) -> (bool, String, String) {
+    let config = scratch_home();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_batlehub-cli"))
+        .args(args)
+        .env("BATLEHUB_SERVER", server)
+        .env("BATLEHUB_TOKEN", token)
+        .env("BATLEHUB_HOME", home)
+        .env("HOME", home)
+        .env("XDG_CONFIG_HOME", config.path())
+        // The patch reads this first, and so does the CLI: unset here so the
+        // default path under BATLEHUB_HOME is what is exercised.
+        .env_remove("VSX_REGISTRY_AUTH_TOKEN_FILE")
+        .output()
+        .expect("run the CLI");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn write_token_file_puts_the_credential_where_the_editor_patch_looks() {
+    let srv = TestServer::start();
+    let home = contract_home();
+
+    let (ok, stdout, stderr) = cli_in_home(
+        &["auth", "write-token-file"],
+        &srv.base_url(),
+        "bh_pat_secret-value",
+        home.path(),
+    );
+    assert!(ok, "write-token-file should succeed: {stdout}{stderr}");
+    assert!(stdout.contains("written"), "{stdout}");
+
+    // The path is the contract's, not the CLI profile store's: an editor
+    // patch that had to know about XDG on Linux and Application Support on
+    // macOS would be a second contract.
+    let path = home.path().join("state").join("vsx-token.json");
+    assert!(path.exists(), "{stdout}");
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(doc["version"], 1);
+
+    let origin = srv.base_url();
+    let entry = &doc["registries"][origin.trim_end_matches('/')];
+    assert_eq!(entry["token"], "bh_pat_secret-value");
+    assert_eq!(
+        entry["kind"], "pat",
+        "the bh_pat_ prefix is the server's own dispatch rule"
+    );
+    assert_eq!(
+        entry["refresh"]["source"], "none",
+        "a PAT has nothing to redeem"
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the file holds a credential");
+    }
+}
+
+/// A laptop pointed at three Batlehubs keeps three credentials in one file,
+/// and a login to one is not a logout from the others.
+#[test]
+fn writing_one_registry_leaves_every_other_entry_alone() {
+    let srv = TestServer::start();
+    let home = contract_home();
+    let path = home.path().join("state").join("vsx-token.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        r#"{
+          "version": 1,
+          "aFieldFromTheFuture": 42,
+          "registries": {
+            "https://hub.elsewhere.dev": {
+              "token": "someone-elses",
+              "kind": "oidc",
+              "unknownEntryField": true
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let (ok, stdout, stderr) = cli_in_home(
+        &["auth", "write-token-file"],
+        &srv.base_url(),
+        "bh_pat_mine",
+        home.path(),
+    );
+    assert!(ok, "{stdout}{stderr}");
+
+    // Writing the same origin again says it replaced rather than added: the
+    // one case where this command is not additive is the one worth naming.
+    let (_, second, _) = cli_in_home(
+        &["auth", "write-token-file"],
+        &srv.base_url(),
+        "bh_pat_mine",
+        home.path(),
+    );
+    assert!(second.contains("replaced"), "{second}");
+
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        doc["registries"]["https://hub.elsewhere.dev"]["token"],
+        "someone-elses"
+    );
+    assert_eq!(
+        doc["registries"]["https://hub.elsewhere.dev"]["unknownEntryField"], true,
+        "a consumer that dropped what it did not understand would undo the writer that added it"
+    );
+    assert_eq!(doc["aFieldFromTheFuture"], 42);
+    assert_eq!(doc["registries"].as_object().unwrap().len(), 2);
+}
+
+/// A credential that stays where it is: the file records a path, and the
+/// contract file stops being a place a secret rests.
+#[test]
+fn a_mounted_token_is_recorded_as_a_path_rather_than_a_value() {
+    let srv = TestServer::start();
+    let home = contract_home();
+    let mounted = home.path().join("sa-token");
+    std::fs::write(&mounted, "mounted-secret\n").unwrap();
+
+    let (ok, stdout, stderr) = cli_in_home(
+        &[
+            "auth",
+            "write-token-file",
+            "--from-file",
+            mounted.to_str().unwrap(),
+        ],
+        &srv.base_url(),
+        "unused",
+        home.path(),
+    );
+    assert!(ok, "{stdout}{stderr}");
+
+    let body = std::fs::read_to_string(home.path().join("state").join("vsx-token.json")).unwrap();
+    assert!(
+        !body.contains("mounted-secret"),
+        "the value must not be copied into the contract file: {body}"
+    );
+    let doc: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let entry = &doc["registries"][srv.base_url().trim_end_matches('/')];
+    assert_eq!(entry["token"]["from"], "file");
+    assert_eq!(entry["token"]["path"], mounted.to_str().unwrap());
+    assert_eq!(
+        entry["refresh"]["source"], "reresolve",
+        "something else keeps a projected token fresh"
+    );
+
+    // And `auth status` resolves it — now, not from a cache — and still
+    // does not print it.
+    let (ok, stdout, stderr) = cli_in_home(
+        &["--json", "auth", "status"],
+        &srv.base_url(),
+        "unused",
+        home.path(),
+    );
+    assert!(ok, "{stderr}");
+    assert!(!stdout.contains("mounted-secret"), "{stdout}");
+    let rows: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(rows[0]["state"], "ok");
+    assert_eq!(rows[0]["kind"], "kubernetes");
+
+    // The state is a resolution performed now: take the file away and the
+    // same command says so, which is the whole value of the command.
+    std::fs::remove_file(&mounted).unwrap();
+    let (_, stdout, _) = cli_in_home(
+        &["--json", "auth", "status"],
+        &srv.base_url(),
+        "unused",
+        home.path(),
+    );
+    let rows: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(rows[0]["state"], "unset");
+    assert!(
+        rows[0]["detail"].as_str().unwrap().contains("No such file"),
+        "`unset` and a refused endpoint look identical from the editor and want opposite fixes: {}",
+        rows[0]["detail"]
+    );
+}
+
+#[test]
+fn auth_token_prints_the_credential_and_status_never_does() {
+    let srv = TestServer::start();
+    let home = contract_home();
+
+    let (ok, stdout, stderr) = cli_in_home(
+        &["auth", "token"],
+        &srv.base_url(),
+        "bh_pat_printable",
+        home.path(),
+    );
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "bh_pat_printable",
+        "`auth token` is the one command whose job is to emit a credential"
+    );
+
+    let (ok, stdout, _) = cli_in_home(
+        &["auth", "token", "--output", "json"],
+        &srv.base_url(),
+        "bh_pat_printable",
+        home.path(),
+    );
+    assert!(ok);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["token"], "bh_pat_printable");
+    assert_eq!(v["kind"], "pat");
+
+    // The PAT subcommands still dispatch: adding the bare verb did not take
+    // the namespace from them. `list` refuses a static token because listing
+    // PATs needs an OIDC session — which is the point, because reaching that
+    // refusal means the subcommand ran rather than the credential printer.
+    let (ok, stdout, stderr) = cli_in_home(
+        &["auth", "token", "list"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+        home.path(),
+    );
+    let said = format!("{stdout}{stderr}");
+    assert!(!ok, "{said}");
+    assert!(
+        said.contains("only OIDC sessions can list API tokens"),
+        "`auth token list` reached the listing endpoint rather than printing a credential: {said}"
+    );
+    assert!(
+        !said.contains(AUTH_TOKEN),
+        "and it did not print the credential on its way there: {said}"
+    );
+
+    // And the status table renders the same entry with no way to carry it.
+    cli_in_home(
+        &["auth", "write-token-file"],
+        &srv.base_url(),
+        "bh_pat_printable",
+        home.path(),
+    );
+    let (ok, stdout, stderr) =
+        cli_in_home(&["auth", "status"], &srv.base_url(), "unused", home.path());
+    assert!(ok, "{stderr}");
+    assert!(
+        !stdout.contains("bh_pat_printable"),
+        "the status table rendered a credential: {stdout}"
+    );
+    assert!(stdout.contains("inline"), "{stdout}");
+}
+
+#[test]
+fn a_contract_file_that_does_not_parse_is_no_credential_rather_than_a_failure() {
+    let srv = TestServer::start();
+    let home = contract_home();
+    let path = home.path().join("state").join("vsx-token.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "{ not json at all").unwrap();
+
+    // Reading it is not an error — it must never break an anonymous gallery.
+    let (ok, _, stderr) = cli_in_home(&["auth", "status"], &srv.base_url(), "unused", home.path());
+    assert!(ok, "status must not fail on a broken file: {stderr}");
+    assert!(stderr.contains("not a usable contract file"), "{stderr}");
+
+    // Writing over it *is* refused: overwriting a file we could not read
+    // would silently discard another registry's entry.
+    let (ok, stdout, stderr) = cli_in_home(
+        &["auth", "write-token-file"],
+        &srv.base_url(),
+        "bh_pat_x",
+        home.path(),
+    );
+    assert!(!ok, "{stdout}{stderr}");
+    assert!(
+        format!("{stdout}{stderr}").contains("not a usable contract file"),
+        "{stdout}{stderr}"
+    );
+}
+
+#[test]
+fn the_three_verbs_agree_on_a_path_other_than_the_default() {
+    let srv = TestServer::start();
+    let home = contract_home();
+    let elsewhere = home.path().join("somewhere-else.json");
+
+    let (ok, stdout, stderr) = cli_in_home(
+        &[
+            "auth",
+            "write-token-file",
+            "--path",
+            elsewhere.to_str().unwrap(),
+        ],
+        &srv.base_url(),
+        "bh_pat_elsewhere",
+        home.path(),
+    );
+    assert!(ok, "{stdout}{stderr}");
+    assert!(elsewhere.exists(), "{stdout}");
+    assert!(
+        !home.path().join("state").join("vsx-token.json").exists(),
+        "--path means --path"
+    );
+
+    // `auth status` has to be able to read what `write-token-file` wrote, or
+    // the one command that explains the file cannot explain half of them.
+    let (ok, stdout, _) = cli_in_home(
+        &[
+            "--json",
+            "auth",
+            "status",
+            "--path",
+            elsewhere.to_str().unwrap(),
+        ],
+        &srv.base_url(),
+        "unused",
+        home.path(),
+    );
+    assert!(ok);
+    let rows: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(rows[0]["state"], "ok");
+    assert!(!stdout.contains("bh_pat_elsewhere"), "{stdout}");
+
+    // …and the default path is still empty, which the status command says
+    // rather than leaving as an empty table.
+    let (ok, stdout, _) = cli_in_home(&["auth", "status"], &srv.base_url(), "unused", home.path());
+    assert!(ok);
+    assert!(stdout.contains("No credentials in"), "{stdout}");
+}
+
+/// The one command whose job is to emit a secret has to fail loudly when it
+/// has none: a caller substituting `$(… auth token)` into a header would
+/// otherwise send an empty bearer and get a 401 it cannot explain.
+#[test]
+fn auth_token_exits_non_zero_when_there_is_no_credential() {
+    let srv = TestServer::start();
+    let home = contract_home();
+    let config = scratch_home();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_batlehub-cli"))
+        .args(["auth", "token"])
+        .env("BATLEHUB_SERVER", srv.base_url())
+        .env("BATLEHUB_HOME", home.path())
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", config.path())
+        .env_remove("BATLEHUB_TOKEN")
+        .output()
+        .expect("run the CLI");
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).trim().is_empty());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("auth login"),
+        "and it says what to do about it"
+    );
+}
+
+#[test]
+fn auth_token_refuses_an_output_format_it_does_not_have() {
+    let srv = TestServer::start();
+    let home = contract_home();
+    let (ok, stdout, stderr) = cli_in_home(
+        &["auth", "token", "--output", "yaml"],
+        &srv.base_url(),
+        "bh_pat_x",
+        home.path(),
+    );
+    let said = format!("{stdout}{stderr}");
+    assert!(!ok, "{said}");
+    assert!(said.contains("`raw` or `json`"), "{said}");
+    assert!(
+        !said.contains("bh_pat_x"),
+        "and it prints nothing on the way out"
+    );
+}
+
+/// `--min-ttl` is a knob on the refresh threshold, not a second freshness
+/// rule: it is accepted, and with a credential already in hand it changes
+/// nothing about what comes out.
+#[test]
+fn min_ttl_is_accepted_and_does_not_change_a_credential_that_needs_no_refresh() {
+    let srv = TestServer::start();
+    let home = contract_home();
+    for ttl in ["0", "120", "86400"] {
+        let (ok, stdout, stderr) = cli_in_home(
+            &["auth", "token", "--min-ttl", ttl],
+            &srv.base_url(),
+            "bh_pat_stable",
+            home.path(),
+        );
+        assert!(ok, "--min-ttl {ttl}: {stdout}{stderr}");
+        assert_eq!(stdout.trim(), "bh_pat_stable", "--min-ttl {ttl}");
+    }
+}
+
+/// A path that yields nothing today is legitimate — a projected token in a
+/// pod that has not started yet — so the entry is written and the operator is
+/// told, rather than the command refusing and leaving the estate unconfigured.
+#[test]
+fn from_file_warns_but_still_records_a_path_that_yields_nothing_yet() {
+    let srv = TestServer::start();
+    let home = contract_home();
+    let not_yet = home.path().join("not-mounted-yet");
+
+    let (ok, stdout, stderr) = cli_in_home(
+        &[
+            "auth",
+            "write-token-file",
+            "--from-file",
+            not_yet.to_str().unwrap(),
+        ],
+        &srv.base_url(),
+        "unused",
+        home.path(),
+    );
+    assert!(ok, "{stdout}{stderr}");
+    assert!(
+        stderr.contains("yields no credential right now"),
+        "the operator is told: {stderr}"
+    );
+
+    let (_, stdout, _) = cli_in_home(
+        &["--json", "auth", "status"],
+        &srv.base_url(),
+        "unused",
+        home.path(),
+    );
+    let rows: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(rows[0]["state"], "unset");
+
+    // And when it appears, the same entry resolves — nothing had to be
+    // rewritten, which is the point of recording a path rather than a value.
+    std::fs::write(&not_yet, "arrived-later\n").unwrap();
+    let (_, stdout, _) = cli_in_home(
+        &["--json", "auth", "status"],
+        &srv.base_url(),
+        "unused",
+        home.path(),
+    );
+    let rows: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(rows[0]["state"], "ok");
+    assert!(!stdout.contains("arrived-later"), "{stdout}");
+}

@@ -59,6 +59,42 @@ impl RefResolutionRepository for PgRefResolutionRepository {
         }))
     }
 
+    async fn list_for_repo(
+        &self,
+        registry: &str,
+        owner_repo: &str,
+    ) -> Result<Vec<(String, StoredRefResolution)>, CoreError> {
+        let rows = sqlx::query(
+            "SELECT git_ref, ref_kind, sha, resolved_at, previous_sha
+             FROM ref_resolutions
+             WHERE registry = $1 AND owner_repo = $2
+             ORDER BY resolved_at DESC, git_ref
+             LIMIT 200",
+        )
+        .bind(registry)
+        .bind(owner_repo)
+        .fetch_all(&self.pool)
+        .await
+        .db_err()?;
+        rows.into_iter()
+            .map(|row| {
+                let kind: String = row.get("ref_kind");
+                let kind: RefKind = kind.parse().map_err(|e: String| {
+                    CoreError::Other(anyhow::anyhow!("ref_resolutions: {e}"))
+                })?;
+                Ok((
+                    row.get::<String, _>("git_ref"),
+                    StoredRefResolution {
+                        kind,
+                        sha: row.get("sha"),
+                        resolved_at: row.get("resolved_at"),
+                        previous: row.try_get("previous_sha").ok(),
+                    },
+                ))
+            })
+            .collect()
+    }
+
     async fn upsert(
         &self,
         registry: &str,

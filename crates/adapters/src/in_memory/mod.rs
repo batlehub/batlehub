@@ -1,3 +1,5 @@
+pub mod advisory;
+pub mod air_gap;
 /// In-memory implementations of all core port traits.
 ///
 /// These are suitable for tests, integration harnesses, and any scenario
@@ -22,6 +24,8 @@ pub mod governance;
 pub mod ops;
 pub mod storage;
 
+pub use advisory::InMemoryAdvisoryRepository;
+pub use air_gap::{InMemoryBundleHistory, InMemoryMissRecorder};
 pub use artifact_meta::NoopArtifactMetaRepository;
 pub use auth::login_states::InMemoryLoginStateStore;
 pub use auth::user_tokens::NullUserTokenRepository;

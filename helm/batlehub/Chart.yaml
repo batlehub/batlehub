@@ -18,3 +18,10 @@ keywords:
   - cargo
   - go
   - helm
+dependencies:
+  # The Trivy server for `[scanners.trivy]` (RFC 0018 §6.3). Optional: the
+  # worker's Trivy client can also download its own database.
+  - name: trivy
+    version: "0.14.1"
+    repository: https://aquasecurity.github.io/helm-charts/
+    condition: trivy.enabled

@@ -56,6 +56,7 @@ pub mod npm;
 pub mod nuget;
 pub mod pypi;
 pub mod rubygems;
+pub mod sdkman;
 pub mod terraform;
 
 /// Everything a filter needs to know about the request it is filtering for.
@@ -468,6 +469,19 @@ fn strip(
             _ => with_text(doc, |text| nodedist::strip_index_tab(text, blocked)),
         }),
 
+        // Three text documents (RFC 0010 §6.2). `candidates/default` names one
+        // version and carries no list, so — like Go's `@latest` — it is
+        // repaired in the handler against the filtered `versions/all`. The
+        // relayed documents (hooks, healthcheck, `candidates/all`, …) name no
+        // version, or are bash the client runs, and pass through untouched.
+        RegistryKind::Sdkman => Some(match ctx.document {
+            DocumentKind::SDKMAN_DEFAULT | DocumentKind::RELAYED => Vec::new(),
+            DocumentKind::SDKMAN_VERSIONS_LIST => {
+                with_text(doc, |text| sdkman::strip_rendered_list(text, blocked))
+            }
+            _ => with_text(doc, |text| sdkman::strip_versions_csv(text, blocked)),
+        }),
+
         // No listing document, one that must not be rewritten, or one filtered
         // at a handler chokepoint instead (see `FILTERED_ELSEWHERE`). The
         // reasons are recorded once, in `listing_filter()`.
@@ -530,6 +544,14 @@ pub fn rewrite_urls(ctx: &ListingContext<'_>, doc: &mut VersionDocument) {
         RegistryKind::Composer => {
             if let Some(json) = doc.body.as_json_mut() {
                 composer::rewrite_dist_urls(json, ctx.public_base);
+            }
+        }
+        // RFC 0019 §4.2 *API reads* — a forge release document advertises
+        // absolute upstream download URLs, and a client that follows them
+        // goes past the proxy entirely.
+        kind if kind.is_forge() => {
+            if let Some(json) = doc.body.as_json_mut() {
+                forge::rewrite_release_urls(json, ctx.public_base, ctx.package);
             }
         }
         _ => {
@@ -1149,6 +1171,9 @@ mod tests {
             DocumentKind::COMPACT_INFO,
             DocumentKind::COMPACT_NAMES,
             DocumentKind::INDEX_JSON,
+            DocumentKind::SDKMAN_DEFAULT,
+            DocumentKind::SDKMAN_VERSIONS_LIST,
+            DocumentKind::RELAYED,
         ];
         KNOWN.iter().find(|k| k.as_str() == name).copied()
     }

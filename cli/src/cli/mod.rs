@@ -3,10 +3,12 @@ pub mod auth;
 pub mod authz;
 pub mod config_cmd;
 pub mod download;
+pub mod mise;
 pub mod owner;
 pub mod package;
 pub mod publish;
 pub mod registry;
+pub mod security;
 pub mod setup;
 pub mod version;
 
@@ -66,6 +68,11 @@ pub enum Command {
         #[command(subcommand)]
         cmd: owner::OwnerCommand,
     },
+    /// Air-gap commands: plan a mise.lock as a bill of materials (RFC 0008)
+    Mise {
+        #[command(subcommand)]
+        cmd: mise::MiseCommand,
+    },
     /// Publish an artifact to a local/hybrid registry
     Publish(publish::PublishArgs),
     /// Download a file through the proxy cache (warms path-addressed registries)
@@ -95,6 +102,10 @@ pub enum Command {
         #[command(subcommand)]
         cmd: setup::SetupCommand,
     },
+    /// Explain why a version is held, denied or warned (RFC 0018)
+    Why(security::WhyArgs),
+    /// Wait for a held version to become servable; exit 1 when waiting cannot help, 2 on timeout
+    Wait(security::WaitArgs),
     /// Launch interactive TUI
     Tui,
     /// Print shell completion script to stdout

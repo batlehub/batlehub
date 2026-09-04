@@ -432,10 +432,14 @@ batlehub-cli publish numpy-1.26.0-py311h0.conda --registry internal --platform l
 
 ```
 batlehub-cli auth whoami
+batlehub-cli auth token                      # print a credential (refreshing it first)
+batlehub-cli auth token [--output raw|json] [--min-ttl <seconds>]
 batlehub-cli auth token list
 batlehub-cli auth token create --name <n> [--days <d>] [--role user|admin]
                                [--groups <g1,g2> | --all-groups]
 batlehub-cli auth token revoke <uuid>
+batlehub-cli auth write-token-file [--path <p>] [--from-file <p>]
+batlehub-cli auth status [--path <p>] [--json]
 ```
 
 ### `auth whoami`
@@ -451,6 +455,61 @@ $ batlehub-cli auth whoami
 | Groups   | nuget-maintainers, …  |
 +----------+-----------------------+
 ```
+
+### `auth token`
+
+With no subcommand, print a credential for the configured server — the one
+command whose job is to emit a secret, and what a broker shells out to. It
+refreshes first when less than `--min-ttl` seconds are left, defaulting to the
+same 120 seconds every other command already refreshes on, so there is no
+second notion of freshness to keep in step.
+
+```
+$ batlehub-cli auth token --output json
+{ "registry": "https://hub.example.dev", "token": "…", "kind": "oidc",
+  "expires_at": "2026-09-04T21:40:00Z" }
+```
+
+Non-zero exit when there is no credential, so a caller substituting it into a
+header does not send an empty bearer.
+
+### `auth write-token-file` and `auth status` {#credential-contract}
+
+The credential contract file ([RFC 0011](/rfc/0011-openvsx-login) §4.1) is how
+a process that is *not* the CLI finds a credential — a patched editor, a
+script, anything started by a desktop session that inherits neither your login
+nor your environment.
+
+```
+$ batlehub-cli --server https://hub.example.dev auth write-token-file
+https://hub.example.dev written to /home/you/.batlehub/state/vsx-token.json
+```
+
+`$BATLEHUB_HOME/state/vsx-token.json`, `0600`, written atomically. It is keyed
+by origin and only this server's entry is touched, so one laptop pointed at
+three BatleHubs keeps three credentials in one file — and unknown fields are
+preserved, so a newer writer's additions survive an older CLI.
+
+`--from-file <path>` records a **path to read** rather than the value: for a
+projected Kubernetes token, or any secret something else keeps fresh. The
+credential then never rests in the contract file at all.
+
+```
+$ batlehub-cli auth status
++-------------------------+------------+---------------------------+-------+---------+-----------+
+| Registry                | Kind       | Token source              | State | Expires | Refresh   |
++-------------------------+------------+---------------------------+-------+---------+-----------+
+| https://hub.example.dev | oidc       | inline (written by cli)   | ok    | 4m12s   | cli       |
+| https://hub.k8s.dev     | kubernetes | file /var/run/…/token     | unset | —       | reresolve |
++-------------------------+------------+---------------------------+-------+---------+-----------+
+  https://hub.k8s.dev: reading /var/run/…/token: No such file or directory
+```
+
+Every state is a resolution performed **now**, never a cached opinion: a stale
+`ok` from before a token file rotated is the failure being debugged. `unset`
+and a misconfigured source look identical from an editor and want opposite
+fixes, which is why the reason is printed. No output path can emit a
+credential — the row type has no field able to hold one.
 
 ### `auth token create`
 
@@ -623,9 +682,55 @@ which is how you check a policy against what it actually does before arming it.
 Pinning a single version against retention is
 [`version pin`](#commands-version).
 
+### Air gap
+
+```
+batlehub-cli admin air-gap-missing [--registry <r>] [--kind artifact|document|checksum|ref|unmirrored_host]
+batlehub-cli admin bundles
+```
+
+What a disconnected instance was asked for and did not hold, and what came
+across the gap. See [the air-gap runbook](/operations/air-gap).
+
 ---
 
-## 11. Commands — config
+## 11. Commands — mise {#commands-mise}
+
+The air gap's four verbs ([RFC 0008](/rfc/0008-mise-in-an-air-gapped-estate)).
+The first three run against a **connected** instance; the last runs against
+the disconnected one.
+
+```
+batlehub-cli mise plan   [--lock mise.lock] [--platform <p>[,<p>]|all] [--include-mise] [-o plan.json]
+batlehub-cli mise seed   [--plan plan.json] [--verify]
+batlehub-cli mise export [--plan plan.json] --sign-key <file> [-o estate.bhub] [--bundle-id <id>]
+batlehub-cli mise import <bundle>
+```
+
+`plan` turns a lock into the bill of materials, offline: it reads the lock and
+the server's registry list and resolves nothing over the network. `--platform`
+defaults to this machine's; `all` takes every platform the lock records.
+`--include-mise` carries mise's own release, so the estate can upgrade the
+tool that reads the next plan.
+
+`seed` fetches every planned entry *through* BatleHub — fetching is warming —
+and compares the digest of what the server served with the lock's. Non-zero
+exit means the bundle would be incomplete or wrong, so it works as a CI gate.
+`--verify` adds what the supply-chain layer said and fails on a denied
+verdict.
+
+`export` builds the signed, content-addressed bundle and prints the **public**
+key it signed with, which is the value the disconnected instance needs in
+`air_gap.bundle_trusted_keys`. The signing key is a file, not a flag: a key on
+a command line is a key in the shell history.
+
+`import` verifies the signature before reading a single blob, then writes each
+blob, the metadata entry that finds it, and the verdict and ref resolution it
+carried. Importing the same bundle twice writes once and says so.
+
+---
+
+## 12. Commands — config
 
 ```
 batlehub-cli config init           # interactive first-run wizard
@@ -639,7 +744,7 @@ Valid keys for `config set`: `server_url`, `token`, `registry`.
 
 ---
 
-## 12. Commands — setup
+## 13. Commands — setup
 
 ```
 batlehub-cli setup detect [--dir <path>] [--depth <n>] [--offline] [--json]
@@ -665,7 +770,7 @@ placeholders and say so on stderr. `--offline` skips the request entirely.
 
 ---
 
-## 13. TUI mode
+## 14. TUI mode
 
 ```
 batlehub-cli tui
@@ -709,3 +814,42 @@ The TUI is a full-screen terminal interface built with [ratatui](https://ratatui
 | `p` | Open publish wizard |
 | `?` | Toggle help overlay |
 | `Tab` / `Shift-Tab` | Cycle fields in publish wizard |
+
+## 15. Commands — why and wait {#commands-security}
+
+The two verbs of a supply-chain quarantine ([RFC 0018](/rfc/0018-supply-chain-quarantine-and-verdicts)). A registry behind `[registries.security]` refuses a version it has not judged yet, or has judged against; the refusal names the coordinate, the state, the reason codes and this command.
+
+### `why <registry>:<name>@<version>`
+
+The verdict behind a refusal: state, reason codes, when a hold lifts, which scanners answered, and — for a token with `findings:read` — the findings themselves. Needs `quarantine:read` on the registry (`user` and `admin` hold it by default; `anonymous` does not, so a public mirror answers a plain 404 unless the operator grants it).
+
+```bash
+batlehub why npm:left-pad@1.3.1
+batlehub why npm:left-pad@1.3.1 --json
+batlehub why npm:left-pad@1.3.1 --rescan     # queue a rescan too (needs gates:exempt)
+```
+
+```text
+npm:left-pad@1.3.1
+  state        quarantined
+  reasons      MIN_AGE_NOT_MET
+  available    2026-09-05T14:12:00Z
+  policy       npm/default
+  evaluated    2026-09-04T14:12:03Z
+  scanned      2026-09-04T14:12:01Z
+  scanners     osv
+  findings     none
+
+Held until 2026-09-05T14:12:00Z. `batlehub wait` waits for it.
+```
+
+### `wait <registry>:<name>@<version> [--timeout 1h] [--interval 30s]`
+
+The CI contract. Polls the verdict and exits **0** when the version becomes servable, **1 when waiting cannot help** — a `denied` verdict, or a hold with no clock such as `TIMESTAMP_MISSING` — and **2** on timeout. Exit 1 comes back on the first poll with the reason, never after burning the timeout, so a pipeline fails fast on a decision and waits only on a clock. When the hold names an `available_at` the wait sleeps to it rather than polling.
+
+```bash
+batlehub wait npm:left-pad@1.3.1 --timeout 2h && npm ci
+```
+
+A version this instance has never been asked for has no verdict to wait on: request the artifact once (the first request is what creates the hold and queues the scan), then wait.
+

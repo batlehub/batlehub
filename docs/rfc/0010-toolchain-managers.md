@@ -1018,7 +1018,13 @@ written explicitly rather than left to the `_ => '/'` default.
   Operators who put a toolchain registry behind `[security]` get exactly the
   age gate this RFC argues for, with a verdict and a `Retry-After`.
 - 0010 decision 9 (no installers) and 0019's `raw` policy are reconciled in
-  0019 §11 q2, not here.
+  0019 §11 q2, **decided 2026-09-04**: this RFC refuses to *host* an
+  installer as a package — a synthetic version, a cache entry, a name in the
+  catalogue — while 0019 passes one *through* a forge's raw route under a
+  policy, with a reason code on the response. The two are different acts and
+  the difference is what `[registries.raw]` exists to govern; a registry with
+  `[registries.security]` refuses script payloads by default, which is the
+  strictest reading either RFC asks for.
 
 **RFC 0019.** SDKMAN's broker answers `302` to `github.com/…/releases/download/…`
 for several candidates. This RFC follows the chain server-side through the
@@ -1098,3 +1104,82 @@ proxy and reported *Checksums matched!*; a second install from a fresh
 `$NVM_NODEJS_ORG_MIRROR` (`nvm_get_mirror`) is a no-op in 0.40.3 — its `awk`
 evaluates the regex and discards the result — so a mirror with a port number
 works, which §4.2's example URL depends on.
+
+### 13.2 Phases 5–9 landed (2026-09-04)
+
+`sdkman` shipped: `RegistryKind::Sdkman` and its exhaustive answers,
+`SdkmanRegistryClient` (`registry/sdkman/`), the eleven routes of §6.5, the
+three filters of §6.2 with `blocking_package_name`, `broker_url` and the
+mandatory `deny_missing_timestamp`, `warm_platforms` and the `.nvmrc` /
+`.sdkmanrc` inputs of §6.9, the console entries and registry pages of §6.8,
+and `tests/heavy/sdkman.sh` — run against sdkman-cli 5.23.0, api.sdkman.io
+and broker.sdkman.io before this note was written. What differs from the text
+above, each small and each deliberate:
+
+- **`X-Sdkman-*` headers are not forwarded, and `FetchedArtifact` did not
+  grow a field.** §4.4 and §6.4 asked for the family to cross back from the
+  final response. Two things the build found: the proxy's artifact path has
+  no header channel from a *cached* artifact, so forwarding would have
+  applied to the first request and silently not to the second; and the
+  client's own reader, `grep '^X-Sdkman'` in `__sdkman_download`, is
+  case-sensitive where the API answers over HTTP/2 with lower-cased names —
+  so the checksum step is inert today against the API itself, and no sampled
+  candidate emits a checksum header anyway. Forwarding a header nothing reads
+  through a channel that does not exist was not worth thirty-six edits. The
+  registry page says so; when a vendor starts emitting checksums, the work is
+  a header channel on `ProxyResponse::Stream` plus persistence beside the
+  cached bytes, and this note is where to start.
+- **The refusal text.** §4.4 quotes *"Stop! 17.0.20-tem is not a valid java
+  version."* — the line in `sdkman-install.sh`. It is never reached:
+  `__sdkman_determine_version` (`sdkman-env-helpers.sh`) returns first with
+  *"Stop! java X is not available. Possible causes: · X is an invalid
+  version · java binaries are incompatible with your platform · …"*. Same
+  path, same effect (no download, `sdk` exits non-zero), different words;
+  the heavy suite accepts either.
+- **`candidates/default` is repaired against the default platform.** The
+  document carries no platform and §6.5 did not say which list to repair it
+  from. `linuxx64`: every vendor ships for it, so its list is the nearest
+  thing to the union of the eight. A repaired default that some other
+  platform lacks fails at `validate`, which is where a wrong version always
+  failed.
+- **Relayed documents are one `DocumentKind`, not six.** `candidates/all`,
+  `candidates/list`, `hooks/*`, `healthcheck`, `broker/version/*` and
+  `selfupdate/*` are all text the client reads as-is; `RELAYED` carries the
+  API path in `package`, behind an allow-list of the paths the client calls,
+  and each is its own cache entry.
+- **`validate` answers a blocked version without asking upstream**, after
+  RBAC. §5.3's *"refused, upstream never asked"* holds for the resolution;
+  the heavy suite's transcript shows the `validate` read and nothing from the
+  broker or the hooks for the blocked version.
+- **`namespace_separator` stays `/` for `sdkman`, written out.** §13 chose
+  `None`. With `/`, a grant on `java` covers both the download coordinate
+  (`java`) and the listing coordinate (`java/linuxx64`); with `None` it would
+  cover the first and not the second, and a namespace that reaches the
+  archive but not its listing is the inconsistency the decision was trying to
+  avoid. The arm carries the reason.
+- **`versions/all` is not called by the 5.23.0 bash client.** `sdk list`
+  reads the rendered `versions/list`; `versions/all` is the API's documented
+  list and what the native component reads. It is served, filtered and
+  conformance-tested, with its source recorded as read rather than observed.
+- **The Java table has four columns now**, not the six §4.4 shows: `Vendor
+  | Use | Version | Identifier`. The filter finds `Identifier` by header
+  name, so the change cost nothing, and the fixture is the 2026-09-04
+  rendering. The help line below the table (*"install the default:
+  25.0.4-tem"*) is not a row and is left alone.
+- **Phase 9's pages cover both kinds**: `nodedist` had shipped in §13.1 with
+  its console entry and registry page deferred to this phase, and both land
+  here beside `sdkman`'s.
+
+Observed, not read, by the heavy suite: with `26.0.2+1.1-tem` blocked, `sdk
+install java 26.0.2+1.1-tem` exited non-zero on SDKMAN's own invalid-version
+path after one `candidates/validate` read and no broker or hook request; the
+row left `sdk list java` and a blocked `3.9.9` was blanked from `sdk list
+maven` with the table's line count unchanged; `sdk install java 25.0.4-tem`
+read `validate`, then `broker/download/java/25.0.4-tem/linuxx64` (141 MB,
+followed server-side from the broker's `302`), then `hooks/post`, and the
+relayed hook's `tar` + `zip` produced a JDK whose `java -version` answered
+`openjdk version "25.0.4"`; a second install from a fresh `$SDKMAN_DIR` moved
+`batlehub_artifact_cache_hits_total`. Every `sdk` invocation read
+`healthcheck` first, and the 24-byte token crossed unchanged — an HTML body
+there is what the client calls *"PROXY DETECTED"*.
+
