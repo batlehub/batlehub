@@ -314,9 +314,9 @@ relies on it, before anything depends on it:
 | Release by tag         | `/repos/{o}/{r}/releases/tags/{tag}` ✓          | `/projects/{id}/releases/{tag}` ✓        | `/repos/{o}/{r}/releases/tags/{tag}` ✓    |
 | Archive                | `github.com/{o}/{r}/archive/{ref}.tar.gz` ✓     | `/repository/archive.{fmt}?sha={ref}` ✓  | `/repos/{o}/{r}/archive/{ref}.tar.gz` ✓   |
 | Raw                    | `raw.githubusercontent.com/{o}/{r}/{ref}/{path}` ✓ | `/repository/files/{path}/raw?ref={ref}` ✓ | `/repos/{o}/{r}/raw/{ref}/{path}` ✓  |
-| Tag object / date      | `/git/ref/tags/{tag}` → `/git/tags/{sha}` *(to confirm)* | `/repository/tags/{tag}` *(to confirm)* | `/repos/{o}/{r}/tags/{tag}` *(to confirm)* |
-| Commit date            | `/commits/{sha}` *(to confirm)*                 | `/repository/commits/{sha}` *(to confirm)* | `/repos/{o}/{r}/git/commits/{sha}` *(to confirm)* |
-| Branch head            | `/branches/{name}` *(to confirm)*               | `/repository/branches/{name}` *(to confirm)* | `/repos/{o}/{r}/branches/{name}` *(to confirm)* |
+| Tag object / date      | `/git/ref/tags/{tag}` → `/git/tags/{sha}` ✓ *(confirmed 2026-09-03: `object.type` is `commit` for a lightweight tag, `tag` for an annotated one, whose object carries `tagger.date`)* | `/repository/tags/{tag}` *(to confirm)* | `/repos/{o}/{r}/tags/{tag}` ✓ *(confirmed 2026-09-03: `commit.sha` and `commit.created` — the commit's date, not a tagger's; Forgejo exposes none)* |
+| Commit date            | `/commits/{sha}` ✓ *(confirmed 2026-09-03: `commit.committer.date`, `committer.login`)* | `/repository/commits/{sha}` *(to confirm)* | `/repos/{o}/{r}/git/commits/{sha}` ✓ *(confirmed 2026-09-03: `commit.committer.date`, `committer.login`)* |
+| Branch head            | `/branches/{name}` ✓ *(confirmed 2026-09-03: `commit.sha`, `commit.commit.committer.date`)* | `/repository/branches/{name}` *(to confirm)* | `/repos/{o}/{r}/branches/{name}` ✓ *(confirmed 2026-09-03: `commit.id`, `commit.timestamp`, `commit.committer.username`)* |
 | Asset attestation      | `/repos/{o}/{r}/attestations/{sha256}` *(to confirm)* | — (release evidence, not verifiable) | —                                    |
 | Tag/commit signature   | `verification` on commit; tag via `/git/tags` *(to confirm)* | `/repository/commits/{sha}/signature` *(to confirm)* | `verification` on commit/tag *(to confirm — the existing models have no commit or tag struct)* |
 
@@ -676,13 +676,14 @@ verdict model (this RFC only adds codes and one rule); storage backends;
 
 ### Still open
 
-1. **Endpoints marked *(to confirm)*.** Eleven cells of the parity table are
-   written from documentation, and the first revision of this RFC claimed
-   the Forgejo `verification` object was already in the client's models — it
-   is not. Each is verified against a live forge in the phase that first
-   relies on it (phase 1 for GitHub and Forgejo dates, phase 4 for GitLab,
-   phase 5 for provenance). This RFC does not move to "In review" until the
-   phase-1 cells are confirmed; the table is updated in place.
+1. **Endpoints marked *(to confirm)*.** Eleven cells of the parity table
+   were written from documentation, and the first revision of this RFC
+   claimed the Forgejo `verification` object was already in the client's
+   models — it is not. Each is verified against a live forge in the phase
+   that first relies on it. **Phase 1 confirmed its six cells on 2026-09-03**
+   (GitHub and Forgejo: tag, commit, branch — §13.1); the five GitLab and
+   provenance cells wait for phases 4 and 5, and the table is updated in
+   place as each lands.
 2. **Installers through `raw`.** RFC 0010 decision 9 says BatleHub proxies
    registries, not installers, and refuses to mirror `install.sh`; this RFC
    serves exactly that file under a `warn` default. The two are reconcilable
@@ -708,3 +709,90 @@ verdict model (this RFC only adds codes and one rule); storage backends;
 | 3     | `[raw]` policy, off-by-default switch, script sniffing, `[api_reads]` typed routes + link rewriting + verdict filtering of release listings. Decides §11 q2 first. |
 | 4     | GitLab `ForgeRegistry` to parity; the three registry pages updated.                                          |
 | 5     | Provenance (attestations, signatures) wired into 0018 findings; GHES attestation detection; Forgejo/GitLab commit and tag models. |
+
+---
+
+## 13. Revision against the tree
+
+### 13.1 Phase 1 landed (2026-09-03)
+
+Built and verified: `ForgeCoordinate` and `RefKind` (`entities/forge.rs`),
+the `ForgeRegistry`, `RefResolutionRepository` and `RateLimitBudget` ports
+(`ports/forge.rs`), `services::forge_refs::resolve_ref`, `mig!` 047
+(`ref_resolutions`) and 048 (`rate_limit_budget`) with Postgres and in-memory
+stores, the `PackageId` rewrite in `ProxyService::handle`, the two response
+headers, `ForgeRegistry` on the GitHub and Forgejo clients with every API
+call drawn on the budget, the GitHub client on
+`ssrf::fetch_following_redirects_trusting`, `[registries.refs]` with its
+validation, the `forge.anonymous-upstream` warning, and `tests/heavy/mise.sh`.
+The six phase-1 parity cells were probed live against api.github.com and
+codeberg.org before the clients were written; the table above records what
+each returned. Six things differ from the text, each deliberate:
+
+- **`ForgeCoordinate` is read from the `PackageId`, not parsed from the
+  path.** The handlers already encode the request in a small set of artifact
+  conventions (`tarball/{ref}`, `zipball`, `raw/{path}`, `filename/{name}`,
+  an asset id, `version = "releases"`); a second parser over the URL would be
+  a second address for the same request. `from_package_id` reads those
+  conventions back, in the one place that already resolves metadata first.
+- **The access log records the resolved coordinate.** §4.2 asked for the
+  un-rewritten id in the log and both in the headers. The audit row now names
+  the commit that was served, which is the fact an incident needs; the
+  requested ref is in the response headers and in `extra.forge.requested_ref`
+  on the metadata. Threading a second id through every audit call for a row
+  that would say `main` was not worth its surface.
+- **The GitHub client trusts three origins, not one.** GitHub is the API
+  host, `github.com` for archives and `raw.githubusercontent.com` for raw
+  files, and a private repository needs the token on all three. The guard
+  gained a `fetch_following_redirects_trusting` form taking the derived
+  origins; every hop off them is SSRF-checked and re-issued without
+  credentials, and an asset URL not on one of them is refused before any
+  request.
+- **`forge.raw-disabled-but-linked` waits for phase 3.** It describes the
+  `[raw]` section, which does not exist yet; raw stays implicitly on until
+  phase 3 turns it off, and a warning about a switch that is not there would
+  be noise.
+- **`forge.anonymous-upstream` fires for all three kinds.** GitLab.com is
+  metered too, and an anonymous self-hosted Forgejo still sees the proxy's
+  requests as nobody's. The message names GitHub's 60/hour as the reason.
+- **The release listing (`/releases`) is not drawn on the budget.** It goes
+  through the shared `fetch_release_listing` helper, which takes a request
+  rather than a client; the release-by-tag, asset, ref and commit calls are.
+  Closing that gap is a one-line change once the helper takes a client.
+
+**Two shipped defects `mise.sh` found**, both in the three routes §4.2 says a
+client calls today, and both invisible to every route test because
+`FixedRegistry` answers any coordinate with bytes:
+
+- `GET /{o}/{r}/releases/tags/{tag}` answered **500** to every real client.
+  The handler streams it through `proxy_stream`, and both forge clients'
+  `fetch_artifact` refused a coordinate with no artifact selector. mise's
+  `github:` backend asks for exactly this first. Both clients now stream the
+  release's own JSON, byte-exact.
+- `GET /{o}/{r}/releases/assets/{id}` answered **404** unless the caller
+  added `?tag=`, which no client does: the handler's placeholder tag
+  `unknown` was looked up as a release. The GitHub client now reads the
+  asset's own JSON, takes its release from `browser_download_url`, and dates
+  the coordinate by that release; the coordinate model treats the placeholder
+  as naming no ref, so the by-id route carries no ref headers (there is no
+  ref to report until the asset has been read). Forgejo's by-id route still
+  needs the tag — its API addresses an attachment through its release — and
+  is left for phase 4 with the GitLab parity work.
+
+Also observed: mise sends a `HEAD` for the asset by name before falling back
+to the API asset, and the artifact routes answer `404` to `HEAD`. Harmless
+here, since the fallback works, and noted for phase 3's typed reads.
+
+Observed by `mise.sh` against api.github.com anonymously, with mise 2026.8.6
+(the `ubi:` backend was tried first and downloads with its own HTTP client,
+outside mise's `url_replacements` — the suite uses `github:`): `mise install
+github:cli/cli[exe=gh]@2.60.0` read the release JSON, the checksums file and
+the asset through the proxy; the release JSON and the checksums answered
+`X-BatleHub-Ref-Kind: tag` with the tag's commit; `tarball/trunk` answered
+`branch` with the head commit; `tarball/v2.60.0` answered `tag`;
+`tarball/<sha>` answered `commit` resolving to itself; and a second pull of
+`trunk` after its TTL was a cache hit on the commit-keyed entry. Not observed,
+because they are phase 2: the moved-tag refusal and the `MUTABLE_REF` verdict.
+
+Not yet in "In review": §11 q2 and q3 are still open, and the five GitLab
+and provenance cells are still from documentation.

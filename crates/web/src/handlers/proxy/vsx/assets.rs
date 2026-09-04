@@ -346,7 +346,9 @@ pub(super) async fn vsix_bytes(
     };
     match svc.handle(req).await.map_err(AppError::from)? {
         ProxyResponse::Denied { reason } => Err(AppError::forbidden(reason)),
-        ProxyResponse::Stream(stream) => super::super::common::collect_storage_stream(stream).await,
+        ProxyResponse::Stream(stream) | ProxyResponse::ForgeStream { stream, .. } => {
+            super::super::common::collect_storage_stream(stream).await
+        }
     }
 }
 

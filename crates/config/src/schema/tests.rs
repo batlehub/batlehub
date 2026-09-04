@@ -2739,3 +2739,578 @@ fn a_short_coherence_interval_warns() {
     assert_eq!(w.path, "cache_coherence.interval_secs");
     assert!(w.message.contains("30s"), "{}", w.message);
 }
+
+// ── RFC 0010 §4.5: the age gate on a toolchain kind must state the field ─────
+
+/// The validation error for `extra`, or a failure naming what was accepted.
+fn validation_error(extra: &str, what: &str) -> String {
+    match parse_config(extra).validate() {
+        Ok(()) => panic!("{what}"),
+        Err(e) => e.to_string(),
+    }
+}
+
+/// On `nodedist` the field *is* the gate for every release `index.tab` no
+/// longer lists, so inheriting npm's default silently is refused.
+#[test]
+fn an_age_gate_on_nodedist_must_state_deny_missing_timestamp() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "nodedist"
+        name = "node"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 86400
+        "#,
+        "an age gate on nodedist without deny_missing_timestamp must not load",
+    );
+    assert!(err.contains("deny_missing_timestamp"), "{err}");
+    assert!(err.contains("nodedist"), "the error names the kind: {err}");
+    assert!(
+        err.contains("'node'"),
+        "the error names the registry: {err}"
+    );
+}
+
+/// Either value is a legitimate posture; what is refused is not choosing.
+#[test]
+fn an_age_gate_on_nodedist_loads_with_either_value() {
+    for value in ["true", "false"] {
+        let cfg = parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "nodedist"
+        name = "node"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 86400
+        deny_missing_timestamp = {value}
+        "#
+        ));
+        cfg.validate()
+            .unwrap_or_else(|e| panic!("deny_missing_timestamp = {value} must load: {e}"));
+    }
+}
+
+/// A namespace that re-tunes the gate re-inherits the same silent default, so
+/// it is held to the same rule.
+#[test]
+fn a_namespace_age_gate_override_on_nodedist_must_state_the_field_too() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "nodedist"
+        name = "node"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 86400
+        deny_missing_timestamp = false
+
+        [[registries.namespaces]]
+        match = "node"
+
+        [[registries.namespaces.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 0
+        "#,
+        "a namespace override without deny_missing_timestamp must not load",
+    );
+    assert!(err.contains("deny_missing_timestamp"), "{err}");
+}
+
+/// Everywhere else the field stays optional and the default is unchanged.
+#[test]
+fn an_age_gate_elsewhere_keeps_its_optional_default() {
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 3600
+        "#,
+    );
+    cfg.validate().expect("npm needs no explicit value");
+    let RuleConfig::ReleaseAgeGate(gate) = &cfg.registries[0].rules[0] else {
+        panic!("expected the age gate");
+    };
+    assert_eq!(gate.deny_missing_timestamp, None);
+    assert!(!gate.deny_missing_timestamp());
+}
+
+/// The kind itself: proxy-only, and its default upstream is the one the
+/// client uses, so `upstreams` may be omitted.
+#[test]
+fn nodedist_is_proxy_only_and_needs_no_explicit_upstream() {
+    parse_config(
+        r#"
+        [[registries]]
+        type = "nodedist"
+        name = "node"
+        "#,
+    )
+    .validate()
+    .expect("a bare nodedist registry loads");
+
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "nodedist"
+        name = "node"
+        mode = "local"
+        "#,
+        "nodedist has no publish protocol, so local mode must be refused",
+    );
+    assert!(err.contains("not supported for nodedist"), "{err}");
+}
+
+// ── RFC 0019 §4.3: [registries.refs] and the anonymous-forge warning ─────────
+
+#[test]
+fn refs_is_refused_on_a_registry_that_is_not_a_forge() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+
+        [registries.refs]
+        branch_ttl_secs = 60
+        "#,
+        "[registries.refs] on npm must not load",
+    );
+    assert!(err.contains("refs"), "{err}");
+    assert!(err.contains("npm"), "{err}");
+}
+
+#[test]
+fn a_branch_ttl_below_the_floor_is_refused_and_the_defaults_load() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "github"
+        name = "gh"
+
+        [registries.refs]
+        branch_ttl_secs = 5
+        "#,
+        "a 5-second branch TTL must not load",
+    );
+    assert!(err.contains("branch_ttl_secs"), "{err}");
+
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "forgejo"
+        name = "fj"
+        upstreams = ["https://codeberg.org"]
+
+        [registries.refs]
+        "#,
+    );
+    cfg.validate()
+        .expect("an empty refs block takes the defaults");
+    let refs = cfg.registries[0].refs.as_ref().unwrap();
+    assert_eq!((refs.branch_ttl_secs, refs.tag_ttl_secs), (60, 3600));
+}
+
+#[test]
+fn a_forge_registry_without_a_token_warns_and_one_with_a_token_does_not() {
+    let anonymous = parse_config(
+        r#"
+        [[registries]]
+        type = "github"
+        name = "gh"
+        "#,
+    );
+    assert!(
+        warning_codes(&anonymous).contains(&warnings::FORGE_ANONYMOUS_UPSTREAM.to_owned()),
+        "{:?}",
+        warning_codes(&anonymous)
+    );
+
+    let authenticated = parse_config(
+        r#"
+        [[registries]]
+        type = "github"
+        name = "gh"
+
+        [registries.upstream_auth]
+        type = "bearer"
+        token = "ghp_x"
+        "#,
+    );
+    assert!(!warning_codes(&authenticated).contains(&warnings::FORGE_ANONYMOUS_UPSTREAM.to_owned()));
+
+    let npm = parse_config(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        "#,
+    );
+    assert!(
+        !warning_codes(&npm).contains(&warnings::FORGE_ANONYMOUS_UPSTREAM.to_owned()),
+        "a package registry is not metered like a forge"
+    );
+}
+
+// ── RFC 0018 §4.3: [registries.security] ─────────────────────────────────────
+
+fn security_config(body: &str, extra: &str) -> String {
+    format!(
+        r#"
+{extra}
+        [[registries]]
+        type = "npm"
+        name = "npm"
+
+        [registries.security]
+{body}
+        "#
+    )
+}
+
+#[test]
+fn a_security_section_with_only_mode_loads_with_the_documented_defaults() {
+    let cfg = parse_config(&security_config(r#"        mode = "block""#, ""));
+    cfg.validate().expect("mode alone is a complete profile");
+    let sec = cfg.registries[0].security.as_ref().unwrap();
+    assert_eq!((sec.min_age_secs, sec.mature_age_secs), (86_400, 86_400));
+    assert_eq!(sec.scanners, vec!["osv"]);
+    assert_eq!(sec.required_scanners, vec!["osv"]);
+    assert!(sec.hold_missing_timestamp);
+    let policy = sec.to_policy("npm", &cfg.scanners);
+    assert_eq!(policy.policy_ref, "npm/default");
+    assert_eq!(policy.max_severity, batlehub_core::entities::Severity::High);
+}
+
+#[test]
+fn min_age_below_one_hour_is_refused() {
+    let err = validation_error(
+        &security_config(r#"        min_age_secs = 600"#, ""),
+        "a 10-minute quarantine must not load",
+    );
+    assert!(err.contains("min_age_secs"), "{err}");
+    assert!(err.contains("3600"), "{err}");
+}
+
+#[test]
+fn security_and_a_release_age_rule_on_one_registry_are_refused() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+
+        [registries.security]
+        mode = "block"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 7200
+        "#,
+        "two owners of the age gate must not load",
+    );
+    assert!(err.contains("release_age_gate"), "{err}");
+}
+
+#[test]
+fn an_undeclared_scanner_and_a_required_scanner_outside_scanners_are_refused() {
+    let err = validation_error(
+        &security_config(r#"        scanners = ["osv", "trivy"]"#, ""),
+        "an undeclared scanner must not load",
+    );
+    assert!(err.contains("trivy") && err.contains("[scanners]"), "{err}");
+
+    let err = validation_error(
+        &security_config(
+            r#"        scanners = ["osv"]
+        required_scanners = ["osv", "postmortem"]"#,
+            "",
+        ),
+        "a required scanner that never runs must not load",
+    );
+    assert!(err.contains("required_scanners"), "{err}");
+}
+
+#[test]
+fn a_declared_scanner_this_build_cannot_run_is_refused_by_phase() {
+    let err = validation_error(
+        &security_config(
+            r#"        scanners = ["osv", "trivy"]"#,
+            r#"
+        [scanners.trivy]
+        type = "trivy"
+        endpoint = "http://trivy:4954"
+        "#,
+        ),
+        "a phase-3 scanner must not be listed in phase 1",
+    );
+    assert!(err.contains("phase 3"), "{err}");
+}
+
+#[test]
+fn a_socket_scanner_without_a_key_and_a_bad_command_are_refused() {
+    let err = validation_error(
+        r#"
+        [scanners.socket]
+        type = "socket"
+        "#,
+        "socket without api_key must not load",
+    );
+    assert!(err.contains("api_key"), "{err}");
+
+    let err = validation_error(
+        r#"
+        [scanners.pm]
+        type = "postmortem"
+        command = "/nonexistent/postmortem"
+        "#,
+        "a missing command must not load",
+    );
+    assert!(err.contains("executable"), "{err}");
+
+    parse_config(
+        r#"
+        [scanners.pm]
+        type = "postmortem"
+        command = "/bin/sh"
+        "#,
+    )
+    .validate()
+    .expect("an executable command loads");
+}
+
+#[test]
+fn mature_age_below_min_age_and_an_unknown_severity_are_refused() {
+    let err = validation_error(
+        &security_config(
+            r#"        min_age_secs = 7200
+        mature_age_secs = 3600"#,
+            "",
+        ),
+        "mature before servable is nonsense",
+    );
+    assert!(err.contains("mature_age_secs"), "{err}");
+    let err = validation_error(
+        &security_config(r#"        max_severity = "scary""#, ""),
+        "an unknown severity must not load",
+    );
+    assert!(err.contains("max_severity"), "{err}");
+}
+
+#[test]
+fn an_unsigned_webhook_is_refused_once_any_registry_is_quarantined() {
+    let err = validation_error(
+        &security_config(
+            r#"        mode = "block""#,
+            r#"
+        [notifications]
+        enabled = true
+
+        [[notifications.inbound]]
+        name = "soc"
+        "#,
+        ),
+        "an unsigned webhook beside a quarantine must not load",
+    );
+    assert!(err.contains("secret"), "{err}");
+}
+
+#[test]
+fn roles_and_worker_scoping_are_checked() {
+    let err = validation_error(
+        r#"
+        roles = []
+        "#,
+        "an empty roles list must not load",
+    );
+    assert!(err.contains("roles"), "{err}");
+
+    let cfg = parse_config("");
+    assert_eq!(cfg.server.roles, default_roles(), "absent means both");
+
+    let err = validation_error(
+        r#"
+        [worker]
+        registries = ["nope"]
+        "#,
+        "an unknown worker registry must not load",
+    );
+    assert!(err.contains("nope"), "{err}");
+}
+
+#[test]
+fn warn_mode_with_nothing_required_and_a_dateless_kind_warn() {
+    let cfg = parse_config(&security_config(
+        r#"        mode = "warn"
+        required_scanners = []"#,
+        "",
+    ));
+    assert!(warning_codes(&cfg).contains(&warnings::SECURITY_UNPROTECTED.to_owned()));
+
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "deb"
+        name = "deb"
+        upstreams = ["https://deb.debian.org/debian"]
+
+        [registries.security]
+        mode = "block"
+        "#,
+    );
+    assert!(warning_codes(&cfg).contains(&warnings::SECURITY_TIMESTAMP_HOLD_UNAVAILABLE.to_owned()));
+
+    let quiet = parse_config(&security_config(r#"        mode = "block""#, ""));
+    assert!(
+        !warning_codes(&quiet).contains(&warnings::SECURITY_TIMESTAMP_HOLD_UNAVAILABLE.to_owned()),
+        "npm dates its versions"
+    );
+}
+
+// ── RFC 0014 §4.4: [upstream_audit] ──────────────────────────────────────────
+
+fn audit_config(body: &str) -> String {
+    format!(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+
+        [[registries]]
+        type = "npm"
+        name = "mine"
+        mode = "local"
+
+        [upstream_audit]
+{body}
+        "#
+    )
+}
+
+#[test]
+fn an_absent_upstream_audit_block_is_off_with_the_documented_defaults() {
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        "#,
+    );
+    cfg.validate().unwrap();
+    let a = &cfg.upstream_audit;
+    assert!(!a.enabled);
+    assert_eq!(
+        a.on_confirmed, "audit",
+        "the single most important default in RFC 0014"
+    );
+    assert_eq!((a.confirm_after, a.confirm_min_age_secs), (3, 86_400));
+    assert_eq!(a.interval_secs, 21_600);
+    assert!(a.retain_disappeared && a.skip_recently_seen);
+    assert_eq!(cfg.upstream_audit_registries(), vec!["npm"]);
+}
+
+#[test]
+fn the_audited_set_is_every_proxy_or_hybrid_registry_unless_named() {
+    let cfg = parse_config(&audit_config("        enabled = true"));
+    cfg.validate().unwrap();
+    assert_eq!(
+        cfg.upstream_audit_registries(),
+        vec!["npm"],
+        "the local one is never in"
+    );
+    let cfg = parse_config(&audit_config(
+        r#"        enabled = true
+        registries = ["npm"]"#,
+    ));
+    cfg.validate().unwrap();
+    assert_eq!(cfg.upstream_audit_registries(), vec!["npm"]);
+}
+
+#[test]
+fn upstream_audit_rejections() {
+    for (body, needle) in [
+        ("        confirm_after = 0", "confirm_after"),
+        ("        outage_ratio = 0.0", "outage_ratio"),
+        ("        outage_ratio = 1.5", "outage_ratio"),
+        ("        interval_secs = 60", "interval_secs"),
+        (
+            r#"        registries = ["nope"]"#,
+            "not a configured registry",
+        ),
+        (r#"        registries = ["mine"]"#, "local registry"),
+        (
+            r#"        on_confirmed = "blocked""#,
+            "not \"audit\" or \"block\"",
+        ),
+        (r#"        on_confirmed = "block""#, "enabled = false"),
+        (
+            r#"        enabled = true
+        on_confirmed = "block""#,
+            "phase 6",
+        ),
+    ] {
+        let err = validation_error(&audit_config(body), body);
+        assert!(err.contains(needle), "{body}: {err}");
+    }
+}
+
+#[test]
+fn a_misspelled_upstream_audit_key_fails_the_load() {
+    let raw = audit_config("        confirm_afer = 3");
+    assert!(
+        crate::load_from_str(&raw).is_err(),
+        "a typo must not silently take the default"
+    );
+}
+
+#[test]
+fn upstream_audit_warnings_name_the_missing_registry_and_the_missing_role() {
+    let cfg = crate::load_from_str(
+        r#"
+        [database]
+        type = "postgresql"
+        url = "postgresql://localhost/test"
+
+        [storage]
+        type = "filesystem"
+        path = "/tmp/batlehub-test"
+
+        [server]
+        roles = ["proxy"]
+
+        [[registries]]
+        type = "npm"
+        name = "mine"
+        mode = "local"
+
+        [upstream_audit]
+        enabled = true
+        "#,
+    )
+    .expect("loads");
+    let ws = cfg.warnings();
+    let codes: Vec<&str> = ws.iter().map(|w| w.code.as_str()).collect();
+    assert!(
+        codes.contains(&warnings::UPSTREAM_AUDIT_NOTHING_TO_AUDIT),
+        "{codes:?}"
+    );
+    assert!(
+        codes.contains(&warnings::UPSTREAM_AUDIT_NO_WORKER),
+        "{codes:?}"
+    );
+    let quiet = parse_config(&audit_config("        enabled = true"));
+    let codes: Vec<String> = quiet.warnings().into_iter().map(|w| w.code).collect();
+    assert!(
+        !codes.iter().any(|c| c.starts_with("upstream-audit")),
+        "{codes:?}"
+    );
+}

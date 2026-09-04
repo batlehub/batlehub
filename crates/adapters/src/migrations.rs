@@ -188,6 +188,37 @@ pub fn embedded_migrator() -> Migrator {
             "user_tokens_groups",
             "../migrations/046_user_tokens_groups.sql"
         ),
+        mig!(
+            47,
+            "ref_resolutions",
+            "../migrations/047_ref_resolutions.sql"
+        ),
+        mig!(
+            48,
+            "rate_limit_budget",
+            "../migrations/048_rate_limit_budget.sql"
+        ),
+        mig!(
+            49,
+            "artifact_verdicts",
+            "../migrations/049_artifact_verdicts.sql"
+        ),
+        mig!(
+            50,
+            "artifact_findings",
+            "../migrations/050_artifact_findings.sql"
+        ),
+        mig!(51, "scan_jobs", "../migrations/051_scan_jobs.sql"),
+        mig!(
+            52,
+            "worker_heartbeats",
+            "../migrations/052_worker_heartbeats.sql"
+        ),
+        mig!(
+            53,
+            "upstream_status",
+            "../migrations/053_upstream_status.sql"
+        ),
     ])
 }
 

@@ -301,3 +301,29 @@ pub const VERSIONING_IN_DRY_RUN: &str = "versioning.dry-run-active";
 /// second guard. But it is the one setting here that trades away the margin on
 /// data this must never delete, so it says so.
 pub const COHERENCE_INTERVAL_TOO_SHORT: &str = "cache-coherence.interval-too-short";
+
+/// A `github`, `gitlab` or `forgejo` registry with no `[registries.upstream_auth]`
+/// (RFC 0019 §4.3). Anonymous GitHub is 60 requests an hour, and ref resolution
+/// spends one or two per new ref.
+pub const FORGE_ANONYMOUS_UPSTREAM: &str = "forge.anonymous-upstream";
+
+/// `[registries.security]` with `mode = "warn"` and no `required_scanners`:
+/// nothing can ever hold a version (RFC 0018 §4.3).
+pub const SECURITY_UNPROTECTED: &str = "security.unprotected";
+
+/// A `required_scanners` entry that only enriches other findings and never
+/// creates one (RFC 0018 §6.3, `mlab`).
+pub const SECURITY_ENRICHMENT_REQUIRED: &str = "security.enrichment-required";
+
+/// `[registries.security]` with `hold_missing_timestamp = true` on a kind that
+/// structurally has no publish date — the path-proxy family — so every version
+/// is held open-ended (RFC 0018 §4.3, decision 27).
+pub const SECURITY_TIMESTAMP_HOLD_UNAVAILABLE: &str = "security.timestamp-hold-unavailable";
+
+/// `[upstream_audit]` enabled with no registry in `proxy`/`hybrid` mode
+/// (RFC 0014 §4.4): a config in transition is legitimate, so a warning.
+pub const UPSTREAM_AUDIT_NOTHING_TO_AUDIT: &str = "upstream-audit.nothing-to-audit";
+
+/// `[upstream_audit]` enabled on a process without the `worker` role (RFC
+/// 0014 §13): the sweep runs on a worker, and this one is not it.
+pub const UPSTREAM_AUDIT_NO_WORKER: &str = "upstream-audit.no-worker-role";

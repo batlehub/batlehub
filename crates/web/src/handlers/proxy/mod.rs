@@ -10,6 +10,7 @@ pub mod goproxy;
 pub mod jetbrains;
 pub mod jetbrains_marketplace;
 pub mod maven;
+pub mod nodedist;
 pub mod npm;
 pub mod nuget;
 pub mod openvsx;

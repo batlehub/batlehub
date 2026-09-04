@@ -127,11 +127,41 @@ pub async fn fetch_following_redirects(
     instance_origin: &str,
     start: reqwest::Url,
 ) -> Result<reqwest::Response, CoreError> {
-    let base = reqwest::Url::parse(instance_origin).ok();
+    fetch_following_redirects_trusting(
+        credentialed,
+        plain,
+        basic_auth,
+        &[instance_origin.to_owned()],
+        start,
+    )
+    .await
+}
+
+/// [`fetch_following_redirects`] for a forge whose bytes live on more than one
+/// operator-trusted origin (RFC 0019 §6.3).
+///
+/// GitHub is three hosts: the API on `api.github.com`, archives on
+/// `github.com` and raw files on `raw.githubusercontent.com`, and a private
+/// repository needs the token on all three. Each is as operator-trusted as
+/// the single instance origin the Forgejo client passes — they are derived
+/// from the configured base URL, never from a response — so credentials are
+/// attached while the URL is on any of them and the SSRF check applies to
+/// every hop that is not.
+pub async fn fetch_following_redirects_trusting(
+    credentialed: &reqwest::Client,
+    plain: &reqwest::Client,
+    basic_auth: &Option<(String, String)>,
+    trusted_origins: &[String],
+    start: reqwest::Url,
+) -> Result<reqwest::Response, CoreError> {
+    let bases: Vec<reqwest::Url> = trusted_origins
+        .iter()
+        .filter_map(|o| reqwest::Url::parse(o).ok())
+        .collect();
     let mut url = start;
 
     for _ in 0..=MAX_REDIRECTS {
-        let same_origin_as_instance = base.as_ref().map(|b| same_origin(&url, b)).unwrap_or(false);
+        let same_origin_as_instance = bases.iter().any(|b| same_origin(&url, b));
 
         // The configured instance origin is operator-trusted (a private/internal
         // upstream is a legitimate deployment), so the SSRF check applies only to

@@ -96,6 +96,13 @@ pub enum Action {
     StatsRead,
     /// The access log.
     AuditRead,
+    /// Seeing that a version is `quarantined`/`denied`/`warned`, its reason
+    /// codes and `available_at` (RFC 0018 §4.1). Without it a held version is
+    /// indistinguishable from one that does not exist upstream.
+    QuarantineRead,
+    /// Seeing the findings behind those codes — CVE ids, scanner output, a
+    /// SOC case id — which can name an embargoed advisory.
+    FindingsRead,
     /// Deleting access events older than a cutoff.
     ///
     /// Its own verb rather than `audit:read`'s, and the distinction is the point
@@ -262,6 +269,8 @@ impl Action {
         Action::GatesExempt,
         Action::StatsRead,
         Action::AuditRead,
+        Action::QuarantineRead,
+        Action::FindingsRead,
         Action::AuditPurge,
         Action::ConfigRead,
         Action::ConfigWrite,
@@ -302,6 +311,8 @@ impl Action {
             Action::GatesExempt => "gates:exempt",
             Action::StatsRead => "stats:read",
             Action::AuditRead => "audit:read",
+            Action::QuarantineRead => "quarantine:read",
+            Action::FindingsRead => "findings:read",
             Action::AuditPurge => "audit:purge",
             Action::ConfigRead => "config:read",
             Action::ConfigWrite => "config:write",

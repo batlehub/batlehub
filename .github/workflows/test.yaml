@@ -3,8 +3,8 @@ name: Test
 # client integrations: the marketplaces (headless VS Code + IntelliJ installing
 # an extension that exists only on this instance), Bundler, and one job per
 # remaining ecosystem in the `heavy-client` matrix (npm, pypi, openvsx, conda,
-# nuget, composer, terraform), each driving that ecosystem's real client against
-# a real server. Each job produces an LCOV file; the final job merges them and
+# nuget, composer, terraform, nvm, mise, cargo, go, maven, pathproxy), each
+# driving that ecosystem's real client against a real server. Each job produces an LCOV file; the final job merges them and
 # publishes a coverage table in the run summary.
 #
 # The heavy jobs exist because the layers above them cannot fail on the bugs
@@ -429,6 +429,20 @@ jobs:
           - suite: nuget
           - suite: composer
           - suite: terraform
+          # nvm: the script downloads nvm's release tarball itself (RFC 0010
+          # decision 9 — not the installer) and needs only curl, tar and xz,
+          # all on the runner image.
+          - suite: nvm
+          # mise: installed by the job below; anonymous GitHub, about eight
+          # API requests per run (RFC 0019 phase 1).
+          - suite: mise
+          # RFC 0018 phase 0a — the rejection survey. cargo, go, mvn and java
+          # are on the runner image; the path-proxy suite drives apt (on the
+          # image) and dnf (installed by the job below).
+          - suite: cargo
+          - suite: go
+          - suite: maven
+          - suite: pathproxy
     services:
       postgres:
         image: postgres:17-alpine
@@ -452,6 +466,7 @@ jobs:
       NODE_VERSION: "24"
       DOTNET_CHANNEL: "10.0"
       TERRAFORM_VERSION: "1.8.5"
+      MISE_VERSION: "2026.8.6"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
@@ -492,6 +507,25 @@ jobs:
             "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
           sudo unzip -o -q /tmp/terraform.zip -d /usr/local/bin
           terraform version
+      - name: Install mise
+        if: matrix.suite == 'mise'
+        run: |
+          # From the release archive rather than the `curl | sh` installer:
+          # one URL, one version, and nothing else enters the runner.
+          curl -fsSL --proto '=https' --proto-redir '=https' -o /tmp/mise.tar.gz \
+            "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/mise-v${MISE_VERSION}-linux-x64.tar.gz"
+          tar -xzf /tmp/mise.tar.gz -C /tmp
+          sudo install -m 0755 /tmp/mise/bin/mise /usr/local/bin/mise
+          mise --version
+      - name: Install dnf
+        if: matrix.suite == 'pathproxy'
+        run: |
+          # Ubuntu packages dnf; the suite refuses to run without it rather
+          # than skip the rpm rows (HEAVY_PATHPROXY_SKIP_DNF=1 is the explicit
+          # opt-out, for a developer's machine without root).
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dnf
+          dnf --version | head -1
       - name: Check PHP and Composer
         if: matrix.suite == 'composer'
         run: |
@@ -501,14 +535,15 @@ jobs:
           composer --version || echo "no composer on PATH — the suite will download composer.phar"
       - name: Cache heavy client downloads
         # conda downloads micromamba; Composer may download a static PHP and
-        # composer.phar. The versions are pinned *in the scripts*, so hashing
+        # composer.phar; nvm downloads its own release tarball. The versions
+        # are pinned *in the scripts*, so hashing
         # them is the key that cannot go stale — an env var repeated here would
         # have to be kept in step with the default it shadows.
         #
         # `~` is expanded by the action; it is deliberately not passed to the
         # scripts as `HEAVY_CACHE`, where bash would take it literally and put
         # the downloads in a directory named `~`.
-        if: matrix.suite == 'conda' || matrix.suite == 'composer'
+        if: matrix.suite == 'conda' || matrix.suite == 'composer' || matrix.suite == 'nvm'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/batlehub-heavy

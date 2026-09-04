@@ -69,8 +69,8 @@ use crate::services::hot_config::HotConfigLock;
 
 pub use chain::{
     authorize_control, authorize_grants_public, authorize_listing, authorize_read,
-    authorize_read_against, authorize_unheld_read, browsable_registries, resolution_path,
-    resolution_path_for_coordinate, synthetic_metadata,
+    authorize_read_against, authorize_unheld_read, browsable_registries, exempt_gates_in,
+    resolution_path, resolution_path_for_coordinate, synthetic_metadata,
 };
 
 /// Everything RFC 0015 §4.1 says applies to one coordinate, composed.

@@ -112,6 +112,7 @@ port = 8080             # default
 | `cli_binary_path` | string | — | Path to `batlehub-cli`, served at `GET /api/v1/cli/download` |
 | `trusted_proxies` | string[] | *absent* | CIDR ranges (or bare IPs) of reverse proxies whose `X-Forwarded-*` headers are believed |
 | `signed_urls` | table | *absent* | Signing material for download URLs. See [`[server.signed_urls]`](#server-signed-urls) |
+| `roles` | string[] | `["proxy", "worker"]` | What this process does: `proxy` serves requests and queues scan jobs, `worker` dequeues and scans them. The default is both (an embedded worker). `batlehub --roles worker` overrides it for a scan-only process. See [`[registries.security]`](#registries-security) and [`[worker]`](#scanners-and-worker). |
 
 #### CORS
 
@@ -1349,6 +1350,79 @@ BatleHub stores physical artifact bytes at a content-addressed key (`blob/{sha25
 | `admin` | string[] | `[]` | Permissions granted to admins (inherits user and anonymous perms) |
 | `groups` | map | `{}` | Dynamic group permissions (see [Section 4](#_4-permissions-reference)) |
 
+**`[registries.refs]` — Git-forge ref resolution (`github`, `gitlab`, `forgejo` only; RFC 0019):**
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `branch_ttl_secs` | u64 | `60` | How long a branch → commit resolution is trusted before the forge is asked again. Below `10` is a config error: re-resolving on every request is a rate-limit self-DoS. |
+| `tag_ttl_secs` | u64 | `3600` | How long a tag → commit resolution is trusted. Also the latency with which a moved tag is noticed. |
+
+> Every archive (`tarball/{ref}`, `zipball/{ref}`) and raw file is resolved to a commit before it is fetched, and cached under that commit — `main` today and `main` tomorrow are two entries. Every forge response carries `X-BatleHub-Ref-Kind` (`commit`, `tag` or `branch`) and `X-BatleHub-Resolved-Commit`. A forge registry with no `[registries.upstream_auth]` raises the `forge.anonymous-upstream` warning: anonymous GitHub allows 60 API requests an hour, and ref resolution spends one or two per new ref.
+
+**`[registries.security]` — Quarantine and verdicts (optional):** {#registries-security}
+
+Opts the registry into the supply-chain layer of RFC 0018. Every version this
+registry serves then carries a **verdict** — `allowed`, `warned`,
+`quarantined` or `denied` — computed from its age, the scanners' findings,
+the operator's blocks and any SOC verdict. A version whose verdict is not
+served is refused on the download path, with its reason codes, until the
+verdict changes. A registry without the section is untouched.
+
+```toml
+[registries.security]
+mode                   = "block"     # "block" | "warn"
+min_age_secs           = 259200      # never served below this age; floor 3600
+mature_age_secs        = 2592000     # served `warned` while a scan is pending above this age
+hold_missing_timestamp = true        # hold a version the upstream did not date
+scanners               = ["osv"]     # names from [scanners]; "osv" needs no declaration
+required_scanners      = ["osv"]     # all must answer before the version is served
+max_severity           = "high"      # findings at or above this deny (block) or warn
+require_provenance     = false
+deny_install_hooks     = "warn"      # "deny" | "warn" | "ignore"
+scanner_error          = "quarantine" # "quarantine" | "warn" | "ignore"
+
+[registries.security.rescan]         # parsed now, read by the rescan worker (phase 4)
+interval_secs = 0
+on_webhook    = true
+```
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `mode` | string | `"block"` | `block` refuses a version whose verdict is `quarantined` or `denied`; `warn` serves it with the verdict visible. `BLOCK_LIST` and `SOC_VERDICT` deny in both modes. |
+| `min_age_secs` | u64 | `86400` | Below this age a version is held (`MIN_AGE_NOT_MET`) whatever the scanners say. Below `3600` is a config error: an hour is the point of the quarantine. |
+| `mature_age_secs` | u64 | `86400` | Above this age a version whose scan has not returned is served `warned` (`SCAN_PENDING`) and scanned behind the request. `0` never serves unscanned. Must be at least `min_age_secs`. With both at their defaults the scan-hold window is empty — the recommended production profile is 3 days / 30 days. |
+| `hold_missing_timestamp` | bool | `true` | Hold a version the upstream did not date (`TIMESTAMP_MISSING`, open-ended: no `available_at`, and the maturity bypass does not reach it). `false` skips the age gate for it, as `release_age_gate` does by default. On the path-proxy kinds (`deb`, `rpm`, `pacman`, `generic`, `jetbrains`) no version is dated, so `true` holds everything and raises `security.timestamp-hold-unavailable`. |
+| `scanners` | string[] | `["osv"]` | Which scanners the worker runs on this registry. Each name is a `[scanners.<name>]` entry; `osv` is implicit. A scanner this build cannot run yet (`trivy`, `postmortem`, `guarddog`, `sigstore` land with phase 3; `socket`, `mlab` with phase 5) is refused at startup. |
+| `required_scanners` | string[] | `["osv"]` | Must all have answered before the version is served. Must be a subset of `scanners`. Empty with `mode = "warn"` raises `security.unprotected`: nothing can ever hold a version. |
+| `max_severity` | string | `"high"` | `low`, `medium`, `high` or `critical`. A finding at or above it produces `denied` in `block` mode and `warned` in `warn` mode. |
+| `require_provenance` | bool | `false` | A version without a provenance attestation is `PROVENANCE_MISSING` (a finding at `high`). Only meaningful with a scanner that checks provenance (`sigstore`, phase 3). |
+| `deny_install_hooks` | string | `"warn"` | What an install hook (npm `preinstall`, a Python `setup.py`) is: `deny`, `warn` or `ignore`. Read by the archive scanners of phase 3. |
+| `scanner_error` | string | `"quarantine"` | A scanner that cannot answer after `[worker].max_attempts`: `quarantine` holds the version (`SCANNER_ERROR`, time-bound), `warn` serves it warned, `ignore` drops the finding. |
+
+> **Where the rules go.** `min_age_secs` *replaces* a `release_age_gate` rule
+> on this registry — declaring both is a config error. The `cve_gate`,
+> `license_gate`, `require_signed_release` and `trusted_publisher` rules, and
+> the administrator's block list, are no longer run as rules on this registry:
+> they run as internal scanners whose denial becomes a finding
+> (`VULNERABILITY`, `LICENSE_DENIED`, `SIGNATURE_MISSING`,
+> `UNTRUSTED_PUBLISHER`, `BLOCK_LIST`), so there is one decision per version
+> and no rule that can fail open beside it. `deny_latest` and `version_gate`
+> stay in the chain; they judge the request, not the artifact.
+>
+> **Who sees why.** A refused download is a plain `403` for everyone; the
+> reason codes and the `batlehub why` hint in the body need `quarantine:read`
+> (granted to `user` and `admin` by default) and the findings behind them
+> need `findings:read` (`admin`). An operator override is a `GateExemption`
+> on the gate `security_verdict` (`gates:exempt`): it turns a hold into
+> `warned`, never into `allowed`, so it stays visible.
+>
+> **What must also be true.** Every `[[notifications.inbound]]` webhook must
+> carry a `secret` once any registry has this section — a `security.*` event
+> on an unsigned webhook would let anyone on the network deny packages. And
+> a process with `worker` in its roles must exist somewhere: a proxy that
+> queues jobs nobody dequeues holds every new version until
+> `mature_age_secs`, and logs a warning at startup when it is alone.
+
 **`[[registries.rules]]` — Release age gate:**
 
 | Field | Type | Default | Notes |
@@ -1363,6 +1437,7 @@ BatleHub stores physical artifact bytes at a content-addressed key (`blob/{sha25
 > - **GitHub** — timestamp populated only for specific-tag release requests (asset downloads). Raw files, source tarballs, and release listings return no timestamp; the gate is skipped for those requests.
 > - **Conda** — timestamp is the `timestamp` field (milliseconds since epoch) in `repodata.json`. Most packages carry it, but older or third-party packages may omit it. Use `deny_missing_timestamp = true` to reject packages without a verifiable build date.
 > - **Terraform providers** — timestamp populated by `registry.terraform.io` but not mandated by the official spec; other Terraform registries may omit it.
+> - **Node distributions (`nodedist`)** — the release date is read from `index.tab`, so current releases carry a timestamp; a release the index no longer lists reaches the gate with none. On this kind `deny_missing_timestamp` is **mandatory**: a `release_age_gate` rule without it is a config error, because the field decides the gate for every de-listed release and neither answer is a default this server picks for you (RFC 0010 §6.7). `true` refuses de-listed releases, `false` serves them.
 
 **`[[registries.rules]]` — Require signed release:**
 
@@ -2063,6 +2138,70 @@ Scheduled sweeps are audited as `cache_coherence_run` with `user_id = "system"`
 
 ---
 
+### 3.8c `[upstream_audit]` (optional)
+
+A periodic sweep that asks each proxy or hybrid upstream whether the artifacts
+cached from it still exist, confirms a disappearance across several sweeps
+before believing it, and **holds a confirmed artifact back from eviction** so
+the last copy in the estate is not garbage-collected precisely because
+upstream stopped refreshing it (RFC 0014). Off unless asked for: it sends
+scheduled requests to third-party registries.
+
+```toml
+[upstream_audit]
+enabled              = true
+interval_secs        = 21600    # 6 h between sweeps; floor 300
+confirm_after        = 3        # consecutive sweeps a miss must survive
+confirm_min_age_secs = 86400    # …and at least this long since the first miss
+outage_ratio         = 0.25     # above this fraction missing, the sweep is void
+on_confirmed         = "audit"  # "audit" today; "block" is RFC 0014 phase 6
+retain_disappeared   = true     # hold confirmed artifacts back from eviction
+skip_recently_seen   = true     # real traffic counts as a successful probe
+registries           = []       # empty = every proxy/hybrid registry
+```
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `enabled` | bool | `false` | Nothing sweeps unless asked. |
+| `interval_secs` | u64 | `21600` | Seconds between sweeps. Below `300` is a config error: a faster loop is a denial of service against someone else's registry, from a typo. |
+| `confirm_after` | u32 | `3` | Consecutive misses, each in a valid sweep, before a disappearance is believed. `0` is refused. |
+| `confirm_min_age_secs` | u64 | `86400` | The other floor: at least this long since the first miss. Both must clear, so with the defaults the fastest confirmation is 24 h. Lowering only `interval_secs` buys more probes and the same answer. |
+| `outage_ratio` | f64 | `0.25` | A sweep in which more than this fraction of a registry's probed packages came back missing is **void**: nothing recorded, nothing confirmed. An outage affects nearly everything; an unpublish affects one thing. Must be in `(0.0, 1.0]`. Below ten probed packages the ratio is skipped and the two floors carry the decision alone. |
+| `on_confirmed` | string | `"audit"` | What a confirmation does beyond recording, holding and logging. `"block"` (refuse on the wire through the block list) is RFC 0014 phase 6 and is refused by this build; any other value is a config error rather than a fallback. |
+| `retain_disappeared` | bool | `true` | Hold a confirmed artifact back from the TTL, idle and keep-latest-N eviction passes, and re-pin its cached metadata each sweep. **Not** from the LRU size cap: that exists to stop the disk filling, so held artifacts sort last there instead of being exempt. |
+| `skip_recently_seen` | bool | `true` | A package re-cached from upstream since the last sweep started was demonstrably present; its probe is skipped. |
+| `registries` | string[] | `[]` | Only these registries. Empty means every registry in `proxy` or `hybrid` mode. Naming an unknown or a `local` registry is a config error. |
+
+**How a sweep decides.** Per registry: every cached package is probed — one
+listing request per package on the kinds that have a listing document, one
+request per version (25 at most per package per sweep) on the kinds that do
+not; an upstream that fails to answer is *inconclusive* and counts on neither
+side of the ratio. A miss inserts or increments a row; a successful probe
+deletes it outright, never decrements it. A confirmed row is logged at `WARN`
+with the coordinate and the misses, and appears in the `batlehub_upstream_*`
+gauges; a reappearance clears the row and logs it. **The first sweep after
+enabling finds nothing**, by design — every miss starts at one — and the
+first confirmations arrive after `confirm_min_age_secs`.
+
+**Where it runs.** On the `worker` role (see [`[server].roles`](#31-server)):
+the probe is a scanner on RFC 0018's worker, and `[worker].max_concurrent`
+bounds the simultaneous upstream requests. A proxy-only process with the
+section enabled logs a warning and raises `upstream-audit.no-worker-role`.
+On a registry with [`[registries.security]`](#registries-security) a
+confirmed disappearance is also an `UNPUBLISHED_UPSTREAM` finding on the
+version's verdict — recorded and visible in `batlehub why`, never a hold
+under `"audit"`.
+
+**Metrics.** `batlehub_upstream_missing_total` and
+`batlehub_upstream_disappeared_total` (gauges, per registry),
+`batlehub_upstream_audit_sweeps_total` (counter, `outcome` = `ok` / `void`),
+`batlehub_upstream_audit_duration_seconds`. A rising `void` rate is the
+alert that says the feature has stopped working; a gauge of disappearances
+alone would never show it. The eviction report's `held` count says what the
+hold kept on each pass.
+
+---
+
 ### 3.9 `[subdomain_routing]` (optional)
 
 Every registry is always reachable at `/proxy/{name}/…`. This section adds a
@@ -2164,6 +2303,63 @@ had the feature.
 
 ---
 
+### 3.10 `[scanners]` and `[worker]` (optional) {#scanners-and-worker}
+
+Scanners are declared once, globally, and registries opt in by name in
+[`[registries.security]`](#registries-security). The worker is the process
+role that runs them.
+
+```toml
+[scanners.osv]                       # implicit — declare it only to change something
+type = "osv"
+# api_url = "https://api.osv.dev"
+
+[scanners.osv.escalation]            # optional, per scanner
+kinds = ["vulnerability"]            # FindingKinds that combine
+count = 3                            # this many at or above `from`…
+from  = "medium"
+to    = "high"                       # …are raised to this severity
+
+[server]
+roles = ["proxy", "worker"]
+
+[worker]
+max_concurrent   = 4                 # scan jobs in flight in this process
+registries       = []                # empty = every registry; else only these names
+job_timeout_secs = 600
+max_attempts     = 3                 # then the verdict carries SCANNER_ERROR
+
+[worker.sandbox]                     # parsed now, enforced by phase 3's subprocess runner
+runtime          = "bwrap"           # "none" is refused unless BATLEHUB_UNSAFE_NO_SANDBOX=1
+memory_limit_mb  = 2048
+cpu_seconds      = 300
+max_extracted_mb = 512
+max_entries      = 50000
+```
+
+| Scanner `type` | Ships in | Keys | Notes |
+|---|---|---|---|
+| `osv` | now | `api_url` | The OSV.dev query already behind `cve_gate`, as a scanner: a vulnerability at or above the registry's `max_severity` is a finding. Runs on every kind with a package URL; the path-proxy kinds, `nodedist`, the marketplaces and Terraform have none. |
+| `trivy`, `postmortem`, `guarddog`, `sigstore` | RFC 0018 phase 3 | `endpoint` / `command`, … | Parse today so a config written for the full set round-trips; a registry that lists one is refused at startup with the phase it ships in. `postmortem`/`guarddog` also check that `command` is executable. |
+| `socket`, `mlab` | RFC 0018 phase 5 | `api_key` | Same. `mlab` only enriches other findings and is refused in `required_scanners` (`security.enrichment-required`). |
+
+| `[worker]` field | Type | Default | Notes |
+|---|---|---|---|
+| `max_concurrent` | u32 | `4` | Jobs leased at once by this process. |
+| `registries` | string[] | `[]` | Scope the worker to these registry names; each must exist. Empty is every registry. |
+| `job_timeout_secs` | u64 | `600` | A lease that is not completed or heartbeated within this time returns to the queue. |
+| `max_attempts` | u32 | `3` | Attempts before the coordinate's verdict records `SCANNER_ERROR` and the job closes. |
+
+**How the queue behaves.** Jobs carry a trigger — `FirstSeen` (a user is
+waiting) is dequeued before `Webhook`, `Rescan` and `Backfill`; within a
+tier, oldest first. A job is leased with a heartbeat, so a worker that dies
+mid-scan hands its job to the next one after `job_timeout_secs`. Several
+worker processes share one queue through the database; the live ones are
+counted in `batlehub_workers_live`, and a proxy-only process warns at
+startup when that count is zero.
+
+---
+
 ## 4. Permissions Reference
 
 ### Roles
@@ -2182,6 +2378,8 @@ Three built-in roles are evaluated with inheritance: `admin` inherits all `user`
 |---|---|
 | `releases:read` | List releases and download release assets |
 | `source:read` | Download source tarballs |
+| `quarantine:read` | See that a version is held or denied, its reason codes and when it becomes available (default: `user`, `admin`) |
+| `findings:read` | See the findings behind those codes — CVE ids, scanner output, SOC text (default: `admin`) |
 | `*` | All permissions (wildcard) |
 
 ### Group-based permissions

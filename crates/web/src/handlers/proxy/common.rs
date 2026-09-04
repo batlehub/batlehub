@@ -368,6 +368,17 @@ pub async fn proxy_stream(
                 .content_type(content_type.unwrap_or(DEFAULT_ARTIFACT_CONTENT_TYPE))
                 .streaming(body))
         }
+        // RFC 0019 §4.2 *Response headers*: which kind of ref was asked for and
+        // which commit answered. Spelled like the existing `X-BatleHub-Cache`.
+        ProxyResponse::ForgeStream { stream, resolved } => {
+            let body = stream
+                .filter_map(|chunk| async move { chunk.ok().map(Ok::<Bytes, actix_web::Error>) });
+            Ok(HttpResponse::Ok()
+                .content_type(content_type.unwrap_or(DEFAULT_ARTIFACT_CONTENT_TYPE))
+                .insert_header(("X-BatleHub-Ref-Kind", resolved.kind.as_str()))
+                .insert_header(("X-BatleHub-Resolved-Commit", resolved.sha.as_str()))
+                .streaming(body))
+        }
     }
 }
 

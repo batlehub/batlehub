@@ -2,7 +2,7 @@
 
 | Field       | Value                                                                                 |
 | ----------- | ------------------------------------------------------------------------------------- |
-| Status      | Draft — revised 2026-09-02 against the tree (config shape, rule chain, server CLI, webhook, migrations; see §11) |
+| Status      | Draft — phase 0a measured and phase 1 landed 2026-09-03 (§13); revised 2026-09-02 against the tree (see §11) |
 | Short       | Supply-chain quarantine and verdicts                                                  |
 | Settles     | How an artifact is scanned before it is served, who may see why it is held, and how the SOC can intervene |
 | Author      | Maxime <maxleriche.60@gmail.com>                                                       |
@@ -504,23 +504,24 @@ publishes (the publisher is authenticated; the age gate targets upstream
 hijacks). A CI that publishes then immediately consumes uses `batlehub
 wait`.
 
-**Native error bodies** — what each client actually prints. **The rows below
-are phase 0a's input, not its output**: they are written from protocol
-documentation and from what the existing handlers already emit, and each one
-is replaced by what the real client was observed to print before the
-corresponding registry ships (§4.4). Where a row and a client disagree, the
-client is right.
+**Native error bodies** — what each client actually prints. A row marked
+**measured** is phase 0a's output (§4.4, §13.1): what the real client printed
+on the wire, and the assertion of its heavy suite. The other rows are still
+phase 0a's *input* — written from protocol documentation and from what the
+existing handlers already emit — and each is replaced by what the real client
+was observed to print before the corresponding registry ships. Where a row and
+a client disagree, the client is right.
 
 
 | Registry            | Body that the client surfaces                                        |
 | ------------------- | -------------------------------------------------------------------- |
 | npm                 | `{"error": "<message>"}`                                             |
-| Cargo               | `{"errors": [{"detail": "<message>"}]}`                              |
+| Cargo               | **measured** (cargo 1.98): the body is printed verbatim under `failed to get successful HTTP response from <url>, got <status>`, whatever its shape — the block's `{"error":"Forbidden","message":…}` reached the user as is. `{"errors": [{"detail": "<message>"}]}` stays the shape, for the registry-API tools that parse it. One request, no retry, `Retry-After` ignored. |
 | Composer            | `{"status": "error", "message": "<message>"}`                        |
 | RubyGems            | plain text `<message>` (gem prints the body)                         |
-| Go                  | plain text `<message>` (go prints the body on non-200)               |
+| Go                  | **measured** (go 1.27): the body is **not** printed — `reading <url>: 403 Forbidden` is the whole line, so the reason travels only through `batlehub why`. And a hold must be **`403`, never `404`, whatever the caller's permission**: with the default-shaped `GOPROXY=<proxy>,direct` a 404 means "ask the next source" and the held module was fetched from the origin behind the proxy's back; a 403 stops the list. The no-permission row of the direct-artifact table does not apply to `goproxy` (§11 decision 32). One request, `Retry-After` ignored. |
 | Terraform           | `{"errors": ["<message>"]}`                                          |
-| Maven               | none read by mvn → status reason-phrase `403 Quarantined: <short>`   |
+| Maven               | **measured** (mvn 3.9.16): the body is not read; `status code: 403, reason phrase: <phrase>` is what reaches the user, so the reason phrase carries the short message. A `404` is worse than useless here: mvn treats a missing pom as *absent* and keeps resolving, then fails on the jar with "Could not find artifact" — the hold has to be a `403`. One request, `Retry-After` ignored; no `.lastUpdated` is written for a 403, so the next build sees the lifted hold without `-U`. |
 | PyPI                | none read by pip/uv → removed from `simple/`; direct file URL gets the reason-phrase |
 | Conda               | none read by conda → removed from `repodata.json`; direct URL gets the reason-phrase |
 | NuGet               | none read by `dotnet`/`nuget` beyond the status → reason-phrase; omitted from the registration index and `FindPackagesById` |
@@ -528,7 +529,7 @@ client is right.
 | OpenVSX             | `{"error": "<message>"}`; a VS Code-side reading of the verdict endpoint waits on RFC 0011 phases 7–8 (no such extension exists today) |
 | VS Code Marketplace | gallery error JSON; same extension path                              |
 | JetBrains Marketplace | `updatePlugins.xml` omission; direct download gets `{"message": ...}` |
-| deb / rpm / pacman / jetbrains / generic (path proxy) | none read by apt/dnf/pacman beyond the status → reason-phrase on the artifact. **No listing omission**: these indexes (`Packages`, `repomd.xml`, `*.db.tar.*`) are signed upstream and BatleHub does not hold the key, so a held version stays listed and fails at download. The doc page says so and recommends `mode = "warn"` for this family unless the operator re-signs. |
+| deb / rpm / pacman / jetbrains / generic (path proxy) | **measured for `apt`** (Ubuntu 26.04): `E: Failed to fetch <url>  403  Forbidden [IP: …]` — the status and its reason phrase, nothing of the body; one request, no retry, `Retry-After` ignored; the same apt state downloads the file the moment the hold lifts. `dnf` is scripted in the same suite and measured in CI (§13.1). **No listing omission**: these indexes (`Packages`, `repomd.xml`, `*.db.tar.*`) are signed upstream and BatleHub does not hold the key, so a held version stays listed and fails at download. The doc page says so and recommends `mode = "warn"` for this family unless the operator re-signs. |
 
 The `<message>` those bodies carry is always:
 
@@ -732,6 +733,23 @@ skip). The forges are RFC 0019's phase 1, measured there.
 Phase 0a blocks phase 2 — the error-body mapping and listing filters — not
 phase 1, which holds and refuses through paths every existing suite already
 exercises.
+
+**Measured (2026-09-03).** The four suites, run against crates.io,
+proxy.golang.org (with sum.golang.org through the proxy), repo1.maven.org and
+archive.ubuntu.com, with the tap rewriting the block's native `403` into a
+`404` + `Retry-After: 30` for the second Refuse column. Each cell is an
+assertion of the suite named in its row.
+
+| Suite | Hide (fresh resolve / pinned) | Refuse (`403` / `404`) | Recover | Publish |
+| --- | --- | --- | --- | --- |
+| `cargo.sh` | yanked mark: `cargo generate-lockfile` picks the previous version; a `Cargo.lock` pinning the held one resolves and hits the download gate | prints the status and the body verbatim, both statuses, one request, no wait | the same `CARGO_HOME` fetches the version on the next `cargo fetch --locked` | `cargo publish` accepts `200` and `202` alike, then **polls the index** until the version appears (its own `waiting for … to be available`, 60 s default, a warning on timeout, exit 0) |
+| `go.sh` | omitted from `@v/list` and `@latest`: `go get @latest` picks the previous; a pinned `go.mod` hits `.mod` first | prints `reading <url>: <status>`, never the body, one request, no wait; **`404` is bypassed by `GOPROXY=…,direct`, `403` stops it** | the same `GOMODCACHE` downloads on the next `go mod download` | — (no publish in the protocol) |
+| `maven.sh` | omitted from `maven-metadata.xml`: a range `[prev,)` picks the previous; a pinned pom hits the pom first | `403`: `Could not transfer artifact …:pom:<v> from/to <mirror> … status code: 403, reason phrase: Forbidden` — the reason phrase is printed, the body is not; one request. `404`: the pom is treated as *absent* and mvn goes on to the jar, then `Could not find artifact …:jar:<v> in <mirror>`; no wait on `Retry-After` | **plain**: the same local repository resolves on the next run, no `-U` needed — Maven's `.lastUpdated` memory is for a 404, and a `403` transfer error leaves none | `mvn deploy:deploy-file` accepts `201` and `202` alike, `BUILD SUCCESS` on both |
+| `pathproxy.sh` | **none**: `apt-cache policy` keeps the candidate (the index is signed); the refusal is the whole contract | `E: Failed to fetch … 403 Forbidden`, status and reason phrase only, one request, no wait | the same apt lists and cache download on the next `apt-get download` | — |
+
+Two of the cells corrected the design rather than a table: a Go hold cannot
+be a `404` (decision 32), and `cargo publish` already waits on the index, so
+a quarantined publish needs no status change to be noticed (decision 31).
 
 ---
 
@@ -1373,6 +1391,8 @@ of a denied coordinate is refused before any byte is downloaded.
 | 27 | Missing publish timestamp, at startup                | **Hold (unchanged default), plus a startup warning** with the stable code `security.timestamp-hold-unavailable` naming the affected registries and the two ways out. The forges and the path-proxy family are structurally dateless; §4.3 states the consequence in the words an operator needs. |
 | 28 | Relationship to RFC 0002 (pushed flags, exposure)     | **One SOC surface, one who-pulled report.** `security.verdict` is the minimal single-coordinate form and ships in phase 4; RFC 0002's batch, idempotent, range-aware, per-source-capped contract is the richer one and, once 0002 is revised onto this pipeline, replaces it — a pushed flag lands as a `SocVerdict` finding, never as a second gate. The pullers export here is the coordinate-centric half; 0002's advisory-centric report extends the same `EventFilter` query rather than adding a second join. |
 | 29 | Relationship to RFC 0014 (upstream disappearance)    | **0014's probe runs as a scanner** (`upstream-presence`, `ScanTrigger::Rescan`) on this worker and produces `UNPUBLISHED_UPSTREAM`; the population gate, confirmation window and eviction hold stay in 0014. On a `[security]` registry 0014's `on_confirmed = "block"` is a `denied` verdict with that code; elsewhere it stays a `PackageStatus` row. Precedence on the same bytes: 0014's hold > §6.10 retention > eviction. |
+| 31 | Publish status per tool (was open question 2)      | **Keep each registry's shipped status.** Measured (§4.4): `cargo publish` accepts `200` and `202` alike and then polls the sparse index for the version by itself, so a held version is noticed by the tool's own wait — no status change buys anything; `mvn deploy:deploy-file` likewise (§13.1). The asynchronous part is discovered through `X-BatleHub-Verdict` and `batlehub wait`. |
+| 32 | A Go hold is never a `404`                           | **`goproxy` answers `403` for a withheld version whatever the caller's permission.** Measured: with `GOPROXY=<proxy>,direct` — the shape every `go env` defaults to — a `404` is "ask the next source" and the held module arrives from the origin; a `403` stops the list. The "no permission → 404" row of §4.2 has this one exception, and the doc page says why. |
 | 30 | `ForgeRefRule` (RFC 0019)                             | **Wrapped like the four gates** on a `[security]` registry, so `MUTABLE_REF`/`TAG_MOVED` are findings on the verdict; a plain rule elsewhere. |
 
 ### Still open
@@ -1385,14 +1405,10 @@ of a denied coordinate is refused before any byte is downloaded.
    works with a documented caveat / falls back to source-level rules only
    with `SCANNER_UNSUPPORTED`. The result is appended to this RFC before it
    moves to "In review".
-2. **Publish status per tool.** §4.2 defers `201` versus `202 Accepted`.
-   `202` is the honest answer for "stored, not yet servable" and NuGet's
-   protocol already allows it; `cargo publish` expects a JSON warnings body,
-   and for `twine`, `gem push`, `composer` and `mvn deploy` nobody here has
-   measured it. Phase 0a's Publish axis decides it per tool. A tool that
-   rejects `202` keeps `201`, and the asynchronous part is discovered through
-   the verdict header and `batlehub wait` — the CI contract does not depend on
-   the status code.
+2. **Publish status per tool** — settled for cargo and mvn by decision 31;
+   `twine`, `gem push`, `composer` and `dotnet nuget push` are measured when
+   their registries opt in (their heavy suites exist; the Publish phase is
+   added to each then).
 
 ---
 
@@ -1407,3 +1423,112 @@ of a denied coordinate is refused before any byte is downloaded.
 | 3     | `subprocess.rs` + `bwrap` runner, `ExtractPolicy`, canary fixtures; scanners: `postmortem` (+ timeline), `trivy`, `sigstore`, `guarddog`; `batlehub-worker` image, Helm `worker.enabled`, Trivy sub-chart; docs.                                     |
 | 4     | Rescan worker, admin alert on flip with pullers list, `pullers`/`audit pulls` endpoints + CSV export, `ArtifactReleased`, inbound webhook events.       |
 | 5     | `socket` and `mlab` external scanners, admin verdict listing/bulk rescan, `batlehub verdicts list|backfill`, HPA metric.                                          |
+
+---
+
+## 13. Revision against the tree
+
+### 13.1 Phase 0a measured (2026-09-03)
+
+Four suites in `tests/heavy/` — `cargo.sh`, `go.sh`, `maven.sh`,
+`pathproxy.sh` — with `task test:<name>-heavy` tasks and rows in the
+`heavy-client` CI matrix. The instrument is a **status-rewrite file** in
+`http_tap.py` (`heavy_tap_rewrite`): the server does not emit a quarantine's
+`403` + `Retry-After` until phase 2, so the tap answers them where the block
+answered its native status, and the transcript shows `403=>404` so an
+assertion can tell the two apart. Blocks go through the admin API
+(`heavy_block`/`heavy_unblock` in `lib.sh`; the path-proxy kinds block one
+file by its artifact path). The §4.4 table and the marked rows of §4.2 are
+what the clients did; three things the survey turned up are not in either:
+
+- **Two shipped defects, found by the clients and fixed in passing.**
+  `cargo publish` could not authenticate against a local registry: cargo
+  sends its token bare (`Authorization: <token>`, per the registry web API)
+  and every `AuthProvider` read a `Bearer`, so the documented publish flow
+  arrived anonymous — normalised in `extractors.rs` for cargo's API
+  namespace only. And the goproxy checksum-database mirror never carried a
+  lookup: `go` routes them through a proxy only after a `200` on
+  `sumdb/<log>/supported`, which nothing upstream answers (even
+  proxy.golang.org is a 404 on it), and the default base built
+  `https://sum.golang.org/sum.golang.org/lookup/…` — a 404 for every lookup.
+  The registry now answers `supported` itself and drops the log's host
+  segment when the base *is* the log. Both are regression-tested in
+  `crates/web`.
+- **The terraform-provider `201`/`200` drift this RFC was going to fix is
+  not in the tree.** The manifest upload declares `201` and answers it
+  through `publish_and_respond(StatusCode::CREATED)`; the binary upload
+  declares `200` and answers `Ok()`. Both are asserted by
+  `openapi_contract.rs`. Nothing to change; the §12 row is kept as written
+  so the history reads.
+- **`dnf` is scripted, not observed here.** The developer machine this ran
+  on has `apt` and no root, so `pathproxy.sh` ran with
+  `HEAVY_PATHPROXY_SKIP_DNF=1` — an explicit opt-out that the banner
+  records as *NOT MEASURED*, never a silent skip. The CI job installs `dnf`
+  (Ubuntu packages it) and refuses to run without it; the rpm rows of §4.4
+  are filled by that job's first run.
+
+The Recover axis, the one with no prior art, came back clean for all four:
+none of cargo, go, mvn or apt remembers a `403`, and the same client cache
+that was refused fetches the version on its next invocation once the hold
+lifts — Maven's `.lastUpdated` memory, the one this axis was written for,
+is only written for a 404, which is one more reason a hold is a `403`. None
+of them honours `Retry-After` either (one request, no wait), so the CI
+contract stays `batlehub wait`, as §4.2 says.
+
+### 13.2 Phase 1 landed (2026-09-03)
+
+Built and verified: `entities/security.rs` (`VerdictState`, the closed
+`ReasonCode` enum, `Finding`, `Verdict`, `SecurityPolicy`, `ScanJob`),
+`ports/scanner.rs` (`ArtifactScanner`) and `ports/security.rs`
+(`VerdictRepository`, `ScanQueue`, `WorkerRegistry`),
+`services/verdict.rs` (`evaluate`, `VerdictService` with maturity and
+`ADMIN_OVERRIDE`), `services/scanners.rs`, `services/scan_worker.rs`,
+`rules/verdict_gate.rs`, the two permissions, `[registries.security]`,
+`[scanners]`, `[server].roles`, `[worker]` with §4.3's validation and the
+three warnings, migrations 049–052 with Postgres and in-memory stores, the
+`osv` scanner, `--roles` on the server binary, the embedded worker and the
+worker-only process (`/livez` + `/metrics`). Tests: the evaluator and gate in
+`crates/core`, the config rules in `crates/config`, the queue on a real
+Postgres (`pg_verdicts.rs`: `SKIP LOCKED` across two workers, lease expiry
+by the database clock, the partial unique index), the whole thing in process
+(`crates/web/tests/security_registry.rs`: first sight held → worker →
+served, age hold with a clock, findings in `block` and `warn`, maturity,
+scanner error, the undated case, a registry without the section untouched).
+What differs from the text, each deliberate:
+
+- **`FindingKind::Pending` exists.** The evaluator derives `SCAN_PENDING` /
+  `SCANNER_ERROR` on every read from `scanners_done` versus
+  `required_scanners`; those findings need a kind, and folding them into
+  `Age` would have made "held for a scan" and "held for its age"
+  indistinguishable to `batlehub why`.
+- **`block_list` and `cve_gate` are scanners in their own right, not wrapped
+  rules.** §4.1 wanted every gate behind `RuleAsScanner`; the two that read a
+  store are re-implemented directly so a repository error is
+  `ScannerError` → `SCANNER_ERROR` → quarantine, as the section requires.
+  `license_gate`, `require_signed_release` and `trusted_publisher` are
+  wrapped: they read metadata only, and their `Allow` on a missing signal is
+  the rule's own documented default, not a failure.
+- **The worker reads its policies from `HotConfig`.** A reload changes what
+  the next job scans with, as it changes what the proxy serves with; the
+  worker holds no copy.
+- **Local publish does not enqueue.** `LocalRegistryService::publish()` is
+  untouched; the version's first *read* creates the verdict and the
+  `FirstSeen` job. The difference is the seconds between publish and first
+  pull, and it kept the publish path out of a phase whose read path is the
+  invariant. Phase 2 revisits it with the listing filters, which are where
+  the hidden-until-scanned behaviour becomes visible.
+- **The refusal body is the gate's message, for everyone.** Phase 1 has no
+  verdict endpoint and no per-registry body mapping (phase 2), so a refused
+  download is a `403` carrying `<registry>:<name>@<version> is <state>
+  (<CODES>[, available <RFC3339>]). Run \`batlehub why …\`` in the registry's
+  error shape, whether or not the caller holds `quarantine:read`. The two
+  permissions are in the vocabulary and granted per §4.1 but consulted by no
+  route yet; `vocabulary_dead_ends.rs` carries them as a phase-2 exception
+  that names itself.
+- **No anti-starvation slot.** §4.2's "one lower-tier job per
+  `max_concurrent` slots" waits on the backfill command of phase 5, which is
+  the first thing that can fill the low tier.
+- **`[worker.sandbox]` and `[registries.security.rescan]` parse and are
+  validated; nothing reads them yet** (phases 3 and 4). `runtime = "none"`
+  is refused now rather than then, so a config that disables the sandbox is
+  a decision taken on purpose from the first day it can be written.

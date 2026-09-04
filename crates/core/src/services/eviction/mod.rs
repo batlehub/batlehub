@@ -81,6 +81,10 @@ pub struct EvictionService {
     /// and refusing to reclaim disk because the audit sink is absent would be
     /// the wrong trade in the direction this service is not protecting.
     packages: Option<Arc<dyn PackageRepository>>,
+    /// The upstream-disappearance rows (RFC 0014 §5.3). `None` — what every
+    /// existing construction site and test passes — means no hold, so the
+    /// suite's behaviour is unchanged by construction rather than by review.
+    upstream_status: Option<Arc<dyn crate::ports::UpstreamStatusPort>>,
 }
 
 impl EvictionService {
@@ -95,7 +99,44 @@ impl EvictionService {
             config,
             coherence_pending: tokio::sync::Mutex::new(std::collections::HashSet::new()),
             packages: None,
+            upstream_status: None,
         }
+    }
+
+    /// Wire the eviction hold: a `disappeared` artifact is skipped by the
+    /// TTL, idle and keep-latest-N passes, and sorted last by the size cap.
+    pub fn with_upstream_status(
+        mut self,
+        status: Arc<dyn crate::ports::UpstreamStatusPort>,
+    ) -> Self {
+        self.upstream_status = Some(status);
+        self
+    }
+
+    /// The `hold_key` forms held in this registry, fetched once per pass.
+    /// A store error holds nothing and says so: eviction reclaiming disk
+    /// must not stop because the audit table is unreachable, and the next
+    /// pass asks again.
+    async fn held_keys(&self) -> std::collections::HashSet<String> {
+        let Some(status) = &self.upstream_status else {
+            return std::collections::HashSet::new();
+        };
+        match status.disappeared_keys(&self.config.registry).await {
+            Ok(keys) => keys,
+            Err(e) => {
+                tracing::warn!(registry = %self.config.registry, error = %e, "eviction: upstream-status unreadable; holding nothing this pass");
+                std::collections::HashSet::new()
+            }
+        }
+    }
+
+    /// Whether the hold covers `meta`: its version, or its whole package.
+    fn is_held(held: &std::collections::HashSet<String>, meta: &ArtifactMeta) -> bool {
+        !held.is_empty()
+            && (held.contains(&crate::entities::hold_key(
+                &meta.package_name,
+                Some(&meta.version),
+            )) || held.contains(&crate::entities::hold_key(&meta.package_name, None)))
     }
 
     /// Wire the audit trail.
@@ -255,8 +296,13 @@ impl EvictionService {
             .artifact_meta
             .list_expired_by_ttl(&self.config.registry, cutoff)
             .await?;
+        let held = self.held_keys().await;
         let mut count = 0;
         for meta in expired {
+            if Self::is_held(&held, &meta) {
+                report.held += 1;
+                continue;
+            }
             if self.drop_artifact(&meta, report, "ttl").await {
                 count += 1;
             }
@@ -278,8 +324,13 @@ impl EvictionService {
             .artifact_meta
             .list_idle(&self.config.registry, cutoff)
             .await?;
+        let held = self.held_keys().await;
         let mut count = 0;
         for meta in idle {
+            if Self::is_held(&held, &meta) {
+                report.held += 1;
+                continue;
+            }
             if self.drop_artifact(&meta, report, "idle").await {
                 count += 1;
             }
@@ -299,6 +350,7 @@ impl EvictionService {
         };
 
         let all = self.artifact_meta.list_artifacts_by_package().await?;
+        let held = self.held_keys().await;
 
         // list_artifacts_by_package returns rows ordered by (registry, package_name, cached_at DESC)
         // Group and pick the tail beyond the first N per group.
@@ -316,6 +368,10 @@ impl EvictionService {
             if group_pos <= n {
                 continue; // within keep window
             }
+            if Self::is_held(&held, &meta) {
+                report.held += 1;
+                continue;
+            }
             if self.drop_artifact(&meta, report, "keep_latest_n").await {
                 count += 1;
             }
@@ -327,6 +383,10 @@ impl EvictionService {
     }
 
     /// Evict one batch of LRU candidates. Returns `(evicted_count, new_total)`.
+    ///
+    /// Held candidates sort last (RFC 0014 §4.1): the size cap exists to
+    /// stop the disk filling, so the hold does not exempt from it — but a
+    /// present artifact goes before an artifact upstream no longer has.
     async fn evict_lru_batch(
         &self,
         candidates: Vec<ArtifactMeta>,
@@ -334,10 +394,22 @@ impl EvictionService {
         cap: u64,
         report: &mut EvictionReport,
     ) -> (usize, u64) {
+        let held = self.held_keys().await;
+        let (kept, present): (Vec<ArtifactMeta>, Vec<ArtifactMeta>) = candidates
+            .into_iter()
+            .partition(|m| Self::is_held(&held, m));
         let mut count = 0;
-        for meta in candidates {
+        let mut candidates = present;
+        let held_count = kept.len();
+        candidates.extend(kept);
+        let present_count = candidates.len() - held_count;
+        let mut held_evicted = 0usize;
+        for (i, meta) in candidates.into_iter().enumerate() {
             if total <= cap {
                 break;
+            }
+            if i >= present_count {
+                held_evicted += 1;
             }
             let size = meta.size_bytes.unwrap_or(0);
             if !self.drop_artifact(&meta, report, "lru").await {
@@ -345,6 +417,11 @@ impl EvictionService {
             }
             total = total.saturating_sub(size);
             count += 1;
+        }
+        if held_evicted == 0 && total <= cap {
+            // The present candidates were enough: the held ones were skipped
+            // in their favour.
+            report.held += held_count;
         }
         (count, total)
     }

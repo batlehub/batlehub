@@ -241,18 +241,75 @@ pub async fn goproxy_sumdb(
         ));
     }
 
-    // `sub` already carries the sumdb host as its first segment
-    // (`sum.golang.org/lookup/...`), which is how the protocol addresses a
-    // database — so the configured base is the *proxy* root, not the log's.
-    let url = format!("{}/{sub}", base.trim_end_matches('/'));
+    // `go` asks `<proxy>/sumdb/<log>/supported` before it will route a single
+    // checksum lookup through a proxy, and treats anything but a 200 as "this
+    // proxy does not carry the log": it then opens a direct connection to the
+    // log for every lookup, and the registry never sees them. Nothing upstream
+    // answers that probe — `sum.golang.org` has no such path and even
+    // `proxy.golang.org` returns 404 on it (measured, tests/heavy/go.sh) — so
+    // forwarding it is a 404 that silently turns the whole feature off. It is
+    // a statement about *this* registry, answered here.
+    if sub.ends_with("/supported") {
+        return Ok(HttpResponse::Ok().finish());
+    }
+
+    let url = sumdb_upstream_url(&base, &sub);
     let key = format!("sumdb:{registry}:{sub}");
     cached_forward(&svc, &client, &registry, &key, Outbound::get(url)).await
+}
+
+/// The upstream URL for a checksum-database path.
+///
+/// `sub` carries the log's host as its first segment (`sum.golang.org/lookup/…`)
+/// — that is how the protocol addresses a database *through a proxy*. The
+/// configured base is either such a proxy root (keep the segment: the proxy
+/// expects it) or the log itself (drop it: `https://sum.golang.org` serves
+/// `/lookup/…`, and `/sum.golang.org/lookup/…` is a 404 — which is what the
+/// default used to build for every lookup). The base's own host decides.
+fn sumdb_upstream_url(base: &str, sub: &str) -> String {
+    let base = base.trim_end_matches('/');
+    let base_host = reqwest::Url::parse(base)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned));
+    let path = match (base_host, sub.split_once('/')) {
+        (Some(host), Some((log, rest))) if log.eq_ignore_ascii_case(&host) => rest,
+        _ => sub,
+    };
+    format!("{base}/{path}")
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
+    use super::sumdb_upstream_url;
+
+    #[test]
+    fn a_lookup_against_the_log_itself_drops_the_host_segment() {
+        assert_eq!(
+            sumdb_upstream_url(
+                "https://sum.golang.org",
+                "sum.golang.org/lookup/github.com/x@v1.0.0"
+            ),
+            "https://sum.golang.org/lookup/github.com/x@v1.0.0"
+        );
+        assert_eq!(
+            sumdb_upstream_url("https://sum.golang.org/", "sum.golang.org/tile/8/0/000"),
+            "https://sum.golang.org/tile/8/0/000"
+        );
+    }
+
+    #[test]
+    fn a_lookup_against_a_proxy_root_keeps_it() {
+        assert_eq!(
+            sumdb_upstream_url(
+                "https://goproxy.corp/sumdb",
+                "sum.golang.org/lookup/github.com/x@v1.0.0"
+            ),
+            "https://goproxy.corp/sumdb/sum.golang.org/lookup/github.com/x@v1.0.0"
+        );
+    }
+
     #[test]
     fn id_validation_accepts_valid_ids() {
         let valid = [

@@ -10,6 +10,9 @@ pub use readme_image::HttpReadmeImageFetcher;
 pub mod fanout;
 pub use fanout::FanoutRegistryClient;
 
+pub mod forge_api;
+pub use forge_api::BudgetedApi;
+
 #[cfg(feature = "registry-github")]
 pub mod github;
 #[cfg(feature = "registry-github")]
@@ -106,3 +109,8 @@ pub use pypi::PypiRegistryClient;
 pub mod conda;
 #[cfg(feature = "registry-conda")]
 pub use conda::CondaRegistryClient;
+
+#[cfg(feature = "registry-nodedist")]
+pub mod nodedist;
+#[cfg(feature = "registry-nodedist")]
+pub use nodedist::NodeDistRegistryClient;

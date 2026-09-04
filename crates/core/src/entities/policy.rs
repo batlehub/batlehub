@@ -453,7 +453,11 @@ impl PolicyPath {
 /// A future gate is exemptible only if it falls on the first side of that
 /// sentence, and **adding it here is the decision** — not a config value someone
 /// can set.
-pub const EXEMPTIBLE_GATES: &[&str] = &["cve_gate", "license_gate"];
+///
+/// `security_verdict` (RFC 0018 §4.1) is the one addition: an exemption on it
+/// overrides a verdict, and the service folds it in as `ADMIN_OVERRIDE` — the
+/// result is `warned`, never `allowed`, so the override stays visible.
+pub const EXEMPTIBLE_GATES: &[&str] = &["cve_gate", "license_gate", "security_verdict"];
 
 /// A gate exemption, as it is written on a version-tier node.
 ///

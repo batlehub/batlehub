@@ -1,9 +1,11 @@
 pub mod auth;
+pub mod forge;
 pub mod network;
 pub mod notifications;
 pub mod registry;
 pub mod routing;
 pub mod rules;
+pub mod security;
 pub mod server;
 pub mod storage;
 pub mod warnings;
@@ -12,6 +14,7 @@ pub use auth::{
     ActionsGroupRule, ActionsOidcAuthConfig, AuthConfig, Condition, ConditionMatchType,
     KubernetesAuthConfig, OidcAuthConfig, RuleMatch, TokenAuthConfig, TokenEntry,
 };
+pub use forge::{RefsConfig, MIN_BRANCH_TTL_SECS};
 pub use network::{
     BasicAuthConfig, BearerAuthConfig, GroupRateLimitConfig, HeaderAuthConfig, IpBlockingConfig,
     RateLimitConfig, RateLimitEnforcement, UpstreamAuthConfig, UpstreamProxyConfig,
@@ -36,6 +39,10 @@ pub use rules::{
     ReleaseAgeGateConfig, RequireSignedReleaseConfig, RuleConfig, TrustedPublisherConfig,
     VersionGateConfig,
 };
+pub use security::{
+    default_roles, EscalationConfig, ProcessRole, SandboxConfig, ScannerConfig, SecurityConfig,
+    SecurityRescanConfig, WorkerConfig, MIN_AGE_FLOOR_SECS,
+};
 pub use server::{
     default_service_name, is_secure_issuer_url, parse_trusted_proxies, CacheConfig, DatabaseConfig,
     OtelConfig, ServerConfig, SignedUrlsConfig,
@@ -48,6 +55,7 @@ pub use storage::{
 };
 
 use anyhow::{bail, Result};
+use batlehub_core::entities::Severity;
 use batlehub_core::ports::LICENSE_EXTRACTION_TYPES;
 use serde::Deserialize;
 
@@ -114,6 +122,9 @@ pub struct AppConfig {
     /// operator asks for it.
     #[serde(default)]
     pub cache_coherence: Option<CacheCoherenceConfig>,
+    /// The upstream-disappearance audit (RFC 0014). Absent means off.
+    #[serde(default)]
+    pub upstream_audit: UpstreamAuditConfig,
     /// Optional wildcard host derivation for host-based registry routing.
     /// Absent or `enabled = false` derives no wildcard hosts; a registry can
     /// still declare explicit `hosts`.
@@ -127,6 +138,13 @@ pub struct AppConfig {
     /// is what it has always matched.
     #[serde(default)]
     pub search: SearchConfig,
+    /// `[scanners.<name>]` — the scanners registries opt into by name
+    /// (RFC 0018 §4.1). Absent means only the implicit `osv`.
+    #[serde(default)]
+    pub scanners: std::collections::HashMap<String, ScannerConfig>,
+    /// `[worker]` — how the scan worker role is tuned (RFC 0018 §4.1).
+    #[serde(default)]
+    pub worker: WorkerConfig,
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
@@ -290,6 +308,106 @@ pub struct VulnerabilityScanConfig {
     #[serde(default = "default_vuln_batch_size")]
     pub batch_size: usize,
 }
+
+// ── Upstream audit (RFC 0014) ─────────────────────────────────────────────────
+
+fn default_audit_interval_secs() -> u64 {
+    21_600
+}
+fn default_confirm_after() -> u32 {
+    3
+}
+fn default_confirm_min_age_secs() -> u64 {
+    86_400
+}
+fn default_outage_ratio() -> f64 {
+    0.25
+}
+fn default_on_confirmed() -> String {
+    "audit".to_owned()
+}
+fn default_true_audit() -> bool {
+    true
+}
+
+/// `[upstream_audit]` (RFC 0014 §4.1): the periodic sweep that asks each
+/// proxy/hybrid upstream whether the artifacts cached from it still exist,
+/// confirms a disappearance across sweeps, and holds a confirmed artifact
+/// back from eviction.
+///
+/// `deny_unknown_fields`: a typo in `confirm_after` must fail the load, not
+/// silently take the default. Concurrency is `[worker].max_concurrent` —
+/// the sweep runs on the worker role (0014 §13).
+///
+/// ```toml
+/// [upstream_audit]
+/// enabled              = true
+/// interval_secs        = 21600
+/// confirm_after        = 3
+/// confirm_min_age_secs = 86400
+/// outage_ratio         = 0.25
+/// on_confirmed         = "audit"
+/// retain_disappeared   = true
+/// skip_recently_seen   = true
+/// registries           = []
+/// ```
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct UpstreamAuditConfig {
+    /// Nothing sweeps unless asked: scheduled outbound traffic to third
+    /// parties is opt-in, like `[vulnerability_scan]`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Seconds between sweeps. Default six hours; floor five minutes.
+    #[serde(default = "default_audit_interval_secs")]
+    pub interval_secs: u64,
+    /// Consecutive valid-sweep misses a disappearance must survive.
+    #[serde(default = "default_confirm_after")]
+    pub confirm_after: u32,
+    /// …and at least this long since the first miss. Both floors must clear.
+    #[serde(default = "default_confirm_min_age_secs")]
+    pub confirm_min_age_secs: u64,
+    /// Above this fraction of a registry's probed packages missing, the
+    /// sweep is void for that registry: an outage, not an unpublish.
+    #[serde(default = "default_outage_ratio")]
+    pub outage_ratio: f64,
+    /// `"audit"` (report and hold) or `"block"` (also refuse on the wire —
+    /// RFC 0014 phase 6, refused until it lands).
+    #[serde(default = "default_on_confirmed")]
+    pub on_confirmed: String,
+    /// Hold confirmed artifacts back from TTL, idle and keep-latest-N
+    /// eviction (not from the LRU size cap), and pin their metadata.
+    #[serde(default = "default_true_audit")]
+    pub retain_disappeared: bool,
+    /// A package re-cached from upstream since the last sweep started was
+    /// present then; skip its probe.
+    #[serde(default = "default_true_audit")]
+    pub skip_recently_seen: bool,
+    /// Empty = every `proxy`/`hybrid` registry; else only these names.
+    #[serde(default)]
+    pub registries: Vec<String>,
+}
+
+impl Default for UpstreamAuditConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_secs: default_audit_interval_secs(),
+            confirm_after: default_confirm_after(),
+            confirm_min_age_secs: default_confirm_min_age_secs(),
+            outage_ratio: default_outage_ratio(),
+            on_confirmed: default_on_confirmed(),
+            retain_disappeared: true,
+            skip_recently_seen: true,
+            registries: Vec::new(),
+        }
+    }
+}
+
+/// The floor under `[upstream_audit].interval_secs`: below five minutes a
+/// sweep is an unintentional denial of service against a third party's
+/// registry, from a config typo (RFC 0014 §4.4).
+pub const MIN_UPSTREAM_AUDIT_INTERVAL_SECS: u64 = 300;
 
 // ── Cache coherence ───────────────────────────────────────────────────────────
 
@@ -553,6 +671,9 @@ impl AppConfig {
         self.retention_warnings(&mut out);
         self.signed_url_warnings(&mut out);
         self.require_signed_release_warnings(&mut out);
+        self.forge_warnings(&mut out);
+        self.security_warnings(&mut out);
+        self.upstream_audit_warnings(&mut out);
         self.tiered_policy_warnings(&mut out);
         self.dry_run_warnings(&mut out);
         self.coherence_warnings(&mut out);
@@ -849,6 +970,41 @@ impl AppConfig {
     /// instead, which is the same policy delivered to the person who can act
     /// on it.
     ///
+    /// RFC 0019 §4.3: a forge registry with no upstream token.
+    ///
+    /// Anonymous GitHub is 60 requests an hour, and ref resolution spends one
+    /// or two of them per new ref, so an unauthenticated registry is a few
+    /// minutes of use before every branch resolution starts failing. Raised
+    /// for every forge kind: GitLab.com is metered too, and a self-hosted
+    /// Forgejo that allows anonymous reads still sees the proxy's requests as
+    /// nobody's.
+    fn forge_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        for (index, registry) in self.registries.iter().enumerate() {
+            let Ok(kind) = registry
+                .registry_type
+                .parse::<batlehub_core::entities::RegistryKind>()
+            else {
+                continue;
+            };
+            if !kind.is_forge() || registry.upstream_auth.is_some() {
+                continue;
+            }
+            out.push(ConfigWarning::new(
+                warnings::FORGE_ANONYMOUS_UPSTREAM,
+                format!("registries[{index}].upstream_auth"),
+                format!(
+                    "registry '{}' ({kind}) has no [registries.upstream_auth], so every request \
+                     to the forge is anonymous. GitHub allows 60 anonymous API requests an hour \
+                     and ref resolution spends one or two per new branch or tag, so an \
+                     unauthenticated forge registry runs out of budget within minutes of real \
+                     use (RFC 0019 §4.2). Configure a token; the proxy fingerprints it for the \
+                     shared rate-limit budget and never logs it.",
+                    registry.name
+                ),
+            ));
+        }
+    }
+
     /// Only local and hybrid registries are considered: a proxy-mode registry
     /// accepts no publishes, so there is no second half to disagree with.
     fn require_signed_release_warnings(&self, out: &mut Vec<ConfigWarning>) {
@@ -1827,6 +1983,8 @@ impl AppConfig {
         self.validate_page_sizes()?;
         self.validate_search()?;
         self.validate_registries()?;
+        self.validate_security_globals()?;
+        self.validate_upstream_audit()?;
         Ok(())
     }
 
@@ -1953,6 +2111,9 @@ impl AppConfig {
             self.validate_retention(registry)?;
             Self::validate_registry_upstreams(registry, kind)?;
             Self::validate_registry_path_allow(registry, kind)?;
+            Self::validate_registry_release_age(registry, kind)?;
+            Self::validate_registry_refs(registry, kind)?;
+            self.validate_registry_security(registry)?;
             Self::validate_registry_readme(registry)?;
             Self::validate_registry_upstream_detail(registry)?;
             Self::validate_registry_versioning(registry)?;
@@ -2069,6 +2230,401 @@ impl AppConfig {
                     registry.name
                 )
             })?;
+        }
+        Ok(())
+    }
+
+    /// RFC 0010 §4.5, §6.7: on a toolchain kind, an age gate must say what it
+    /// does with a release that has no publish date.
+    ///
+    /// `ReleaseAgeGateConfig::deny_missing_timestamp` defaults to `false`
+    /// everywhere else, and that default was written for npm, where every
+    /// version carries a timestamp and the field decides nothing. On `nodedist`
+    /// it decides the gate for every release `index.tab` no longer lists — and
+    /// on `sdkman`, when it lands, for every artifact, because that protocol
+    /// publishes no dates at all. "Quarantine everything undated" and "exempt
+    /// it" are opposite security postures; inheriting one silently is how an
+    /// operator ends up believing a toolchain is quarantined when it is not.
+    /// So the field is mandatory here, and only here.
+    ///
+    /// Namespace rule overrides (RFC 0015 §4.1) are checked too: a namespace
+    /// that re-tunes the gate re-inherits the same silent default.
+    fn validate_registry_release_age(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+    ) -> Result<()> {
+        use batlehub_core::entities::RegistryKind;
+        if !matches!(kind, RegistryKind::Nodedist) {
+            return Ok(());
+        }
+        let namespace_rules = registry
+            .namespaces
+            .iter()
+            .filter_map(|ns| ns.rules.as_deref())
+            .flatten();
+        for rule in registry.rules.iter().chain(namespace_rules) {
+            let RuleConfig::ReleaseAgeGate(cfg) = rule else {
+                continue;
+            };
+            if cfg.deny_missing_timestamp.is_none() {
+                bail!(
+                    "registry '{}': a release_age_gate rule on a {} registry must set \
+                     'deny_missing_timestamp' explicitly. A Node release that index.tab no \
+                     longer lists reaches the gate with no publish date: 'true' refuses it, \
+                     'false' serves it, and neither is a default this server picks for you \
+                     (RFC 0010 §6.7)",
+                    registry.name,
+                    kind
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// `[registries.security]` (RFC 0018 §4.3), one row of the table each.
+    fn validate_registry_security(&self, registry: &RegistryConfig) -> Result<()> {
+        let Some(sec) = &registry.security else {
+            return Ok(());
+        };
+        if sec.min_age_secs < MIN_AGE_FLOOR_SECS {
+            bail!(
+                "registry '{}': security.min_age_secs = {} is below the {}-second floor; the \
+                 one-hour minimum is the point of the quarantine, and degrading it silently \
+                 defeats it",
+                registry.name,
+                sec.min_age_secs,
+                MIN_AGE_FLOOR_SECS
+            );
+        }
+        if sec.mature_age_secs != 0 && sec.mature_age_secs < sec.min_age_secs {
+            bail!(
+                "registry '{}': security.mature_age_secs ({}) is below min_age_secs ({}); a \
+                 version would be \"mature\" before it is servable at all",
+                registry.name,
+                sec.mature_age_secs,
+                sec.min_age_secs
+            );
+        }
+        if registry
+            .rules
+            .iter()
+            .any(|r| matches!(r, RuleConfig::ReleaseAgeGate(_)))
+        {
+            bail!(
+                "registry '{}': [registries.security] and a release_age_gate rule on one \
+                 registry are two owners of the same gate with different defaults; move the \
+                 rule's min_age_secs into security.min_age_secs and drop the rule",
+                registry.name
+            );
+        }
+        if Severity::parse(&sec.max_severity).is_none() {
+            bail!(
+                "registry '{}': security.max_severity '{}' is not one of unknown, low, medium, \
+                 high, critical",
+                registry.name,
+                sec.max_severity
+            );
+        }
+        for name in &sec.scanners {
+            let Some(cfg) = self.scanner_named(name) else {
+                bail!(
+                    "registry '{}': security.scanners names '{name}', which is not declared under \
+                     [scanners]; a typo here would silently scan with nothing",
+                    registry.name
+                );
+            };
+            if !cfg.available() {
+                bail!(
+                    "registry '{}': scanner '{name}' has type '{}', which ships in {} and cannot \
+                     run in this build; listing it would hold every version of the registry \
+                     forever",
+                    registry.name,
+                    cfg.type_name(),
+                    cfg.ships_in()
+                );
+            }
+        }
+        for name in &sec.required_scanners {
+            if !sec.scanners.contains(name) {
+                bail!(
+                    "registry '{}': security.required_scanners names '{name}', which is not in \
+                     security.scanners; a required scanner that never runs would quarantine \
+                     forever",
+                    registry.name
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// The implicit `osv` (RFC 0018 §4.1: *"already implicit today; now
+    /// named"*) or a declared `[scanners.<name>]`.
+    fn scanner_named(&self, name: &str) -> Option<std::borrow::Cow<'_, ScannerConfig>> {
+        if let Some(cfg) = self.scanners.get(name) {
+            return Some(std::borrow::Cow::Borrowed(cfg));
+        }
+        (name == "osv").then_some(std::borrow::Cow::Owned(ScannerConfig::Osv {
+            api_url: None,
+            escalation: None,
+        }))
+    }
+
+    /// `[scanners]`, `[server].roles`, `[worker]` and the webhook secret
+    /// (RFC 0018 §4.3): the rows that are about the whole config.
+    fn validate_security_globals(&self) -> Result<()> {
+        for (name, cfg) in &self.scanners {
+            match cfg {
+                ScannerConfig::Socket { api_key, .. } | ScannerConfig::Mlab { api_key, .. }
+                    if api_key.as_deref().is_none_or(str::is_empty) =>
+                {
+                    bail!(
+                        "[scanners.{name}] type = \"{}\" needs an api_key; without one every \
+                         call fails with a 401 nobody reads",
+                        cfg.type_name()
+                    );
+                }
+                ScannerConfig::Postmortem { command, .. }
+                | ScannerConfig::Guarddog { command, .. }
+                    if !is_executable(command) =>
+                {
+                    bail!(
+                        "[scanners.{name}] command '{command}' does not exist or is not \
+                         executable; this is a scanner that opens untrusted archives, so it \
+                         is checked at startup rather than at the first job"
+                    );
+                }
+                _ => {}
+            }
+            if let Some(esc) = cfg.escalation() {
+                if Severity::parse(&esc.from).is_none() || Severity::parse(&esc.to).is_none() {
+                    bail!("[scanners.{name}.escalation] from/to must be severities");
+                }
+                if esc.count == 0 {
+                    bail!("[scanners.{name}.escalation] count must be at least 1");
+                }
+            }
+        }
+        if self.server.roles.is_empty() {
+            bail!(
+                "[server] roles is empty: a process that is neither proxy nor worker does nothing"
+            );
+        }
+        let has_security = self.registries.iter().any(|r| r.security.is_some());
+        for name in &self.worker.registries {
+            if !self.registries.iter().any(|r| &r.name == name) {
+                bail!("[worker] registries names '{name}', which is not a configured registry");
+            }
+        }
+        if has_security {
+            if let Some(n) = &self.notifications {
+                for hook in &n.inbound {
+                    if hook.secret.as_deref().is_none_or(str::is_empty) {
+                        bail!(
+                            "[[notifications.inbound]] '{}' has no secret while a registry has \
+                             [registries.security]; a security.* event on an unsigned webhook \
+                             would let anyone on the network deny packages (RFC 0018 §4.3)",
+                            hook.name
+                        );
+                    }
+                }
+            }
+            if self.worker.sandbox.runtime == "none"
+                && std::env::var("BATLEHUB_UNSAFE_NO_SANDBOX").as_deref() != Ok("1")
+            {
+                bail!(
+                    "[worker.sandbox] runtime = \"none\" is refused outside tests unless \
+                     BATLEHUB_UNSAFE_NO_SANDBOX=1 is set"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// RFC 0018 §4.3's warnings.
+    /// The registries `[upstream_audit]` sweeps: every `proxy`/`hybrid`
+    /// registry, or the operator's list (validated to name only those).
+    pub fn upstream_audit_registries(&self) -> Vec<String> {
+        let audited = |r: &RegistryConfig| r.mode != RegistryMode::Local;
+        if self.upstream_audit.registries.is_empty() {
+            self.registries
+                .iter()
+                .filter(|r| audited(r))
+                .map(|r| r.name.clone())
+                .collect()
+        } else {
+            self.registries
+                .iter()
+                .filter(|r| audited(r) && self.upstream_audit.registries.contains(&r.name))
+                .map(|r| r.name.clone())
+                .collect()
+        }
+    }
+
+    /// `[upstream_audit]` (RFC 0014 §4.4).
+    fn validate_upstream_audit(&self) -> Result<()> {
+        let a = &self.upstream_audit;
+        if a.confirm_after == 0 {
+            bail!(
+                "[upstream_audit] confirm_after must be at least 1: zero confirms a disappearance \
+                 on the first miss, which is the failure the whole design exists to prevent"
+            );
+        }
+        if !(a.outage_ratio > 0.0 && a.outage_ratio <= 1.0) {
+            bail!(
+                "[upstream_audit] outage_ratio must be in (0.0, 1.0]: 0.0 voids every sweep that \
+                 contains a miss, and above 1.0 silently means \"never void\", which should be \
+                 written as 1.0"
+            );
+        }
+        if a.interval_secs < MIN_UPSTREAM_AUDIT_INTERVAL_SECS {
+            bail!(
+                "[upstream_audit] interval_secs must be at least {MIN_UPSTREAM_AUDIT_INTERVAL_SECS}: \
+                 below five minutes the sweep is a denial of service against a third party's \
+                 registry"
+            );
+        }
+        for name in &a.registries {
+            match self.registries.iter().find(|r| &r.name == name) {
+                None => bail!(
+                    "[upstream_audit] registries names '{name}', which is not a configured registry"
+                ),
+                Some(r) if r.mode == RegistryMode::Local => bail!(
+                    "[upstream_audit] registries names '{name}', a local registry: it has no \
+                     upstream to audit"
+                ),
+                Some(_) => {}
+            }
+        }
+        match a.on_confirmed.as_str() {
+            "audit" => {}
+            "block" => {
+                if !a.enabled {
+                    bail!(
+                        "[upstream_audit] on_confirmed = \"block\" with enabled = false: the key \
+                         has no effect and reads as if blocking were active"
+                    );
+                }
+                bail!(
+                    "[upstream_audit] on_confirmed = \"block\" is RFC 0014 phase 6 and is not in \
+                     this build; \"audit\" reports and holds, and the console's block is one \
+                     click from the row"
+                );
+            }
+            other => bail!(
+                "[upstream_audit] on_confirmed = \"{other}\" is not \"audit\" or \"block\"; a \
+                 typo here must not fall back to either"
+            ),
+        }
+        Ok(())
+    }
+
+    fn upstream_audit_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        let a = &self.upstream_audit;
+        if !a.enabled {
+            return;
+        }
+        if self.upstream_audit_registries().is_empty() {
+            out.push(ConfigWarning::new(
+                warnings::UPSTREAM_AUDIT_NOTHING_TO_AUDIT,
+                "upstream_audit.enabled",
+                "the upstream audit is enabled and no registry is in proxy or hybrid mode: every \
+                 sweep will find nothing to probe"
+                    .to_owned(),
+            ));
+        }
+        if !self.server.roles.contains(&ProcessRole::Worker) {
+            out.push(ConfigWarning::new(
+                warnings::UPSTREAM_AUDIT_NO_WORKER,
+                "upstream_audit.enabled",
+                "the upstream audit is enabled but this process has no worker role; the sweep \
+                 runs on a worker, so unless another process has one, nothing is audited"
+                    .to_owned(),
+            ));
+        }
+    }
+
+    fn security_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        for (index, registry) in self.registries.iter().enumerate() {
+            let Some(sec) = &registry.security else {
+                continue;
+            };
+            let path = format!("registries[{index}].security");
+            if sec.mode == batlehub_core::entities::SecurityMode::Warn
+                && sec.required_scanners.is_empty()
+            {
+                out.push(ConfigWarning::new(
+                    warnings::SECURITY_UNPROTECTED,
+                    path.clone(),
+                    format!(
+                        "registry '{}' has mode = \"warn\" and no required_scanners, so nothing \
+                         can ever hold a version: the quarantine is on paper only",
+                        registry.name
+                    ),
+                ));
+            }
+            for name in &sec.required_scanners {
+                if self.scanner_named(name).is_some_and(|c| c.is_enrichment()) {
+                    out.push(ConfigWarning::new(
+                        warnings::SECURITY_ENRICHMENT_REQUIRED,
+                        path.clone(),
+                        format!(
+                            "registry '{}' requires scanner '{name}', which only enriches other \
+                             scanners' findings and never creates one; requiring it holds \
+                             versions on a scanner that has nothing to say",
+                            registry.name
+                        ),
+                    ));
+                }
+            }
+            let Ok(kind) = registry
+                .registry_type
+                .parse::<batlehub_core::entities::RegistryKind>()
+            else {
+                continue;
+            };
+            if sec.hold_missing_timestamp && kind.is_path_addressed() {
+                out.push(ConfigWarning::new(
+                    warnings::SECURITY_TIMESTAMP_HOLD_UNAVAILABLE,
+                    path,
+                    format!(
+                        "every version of '{}' will be held: this registry kind ({kind}) \
+                         addresses a file tree by path and cannot supply a publish date, so \
+                         hold_missing_timestamp = true (the default) holds every coordinate \
+                         open-ended, with no available_at. Set hold_missing_timestamp = false \
+                         on this registry, or leave it and accept that it serves nothing \
+                         (RFC 0018 §4.3)",
+                        registry.name
+                    ),
+                ));
+            }
+        }
+    }
+
+    /// `[registries.refs]` (RFC 0019 §4.3): forge kinds only, and a branch TTL
+    /// that does not turn every request into an API call.
+    fn validate_registry_refs(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+    ) -> Result<()> {
+        let Some(refs) = &registry.refs else {
+            return Ok(());
+        };
+        if !kind.is_forge() {
+            bail!(
+                "registry '{}': '[registries.refs]' is only meaningful on a git-forge registry \
+                 (github, gitlab, forgejo), not {}",
+                registry.name,
+                kind
+            );
+        }
+        if refs.branch_ttl_secs < MIN_BRANCH_TTL_SECS {
+            bail!(
+                "registry '{}': refs.branch_ttl_secs = {} is below the {}-second floor; \
+                 re-resolving a branch on every request is a rate-limit self-DoS",
+                registry.name,
+                refs.branch_ttl_secs,
+                MIN_BRANCH_TTL_SECS
+            );
         }
         Ok(())
     }
@@ -2356,3 +2912,12 @@ fn apply_proxy_env_overrides(
 
 #[cfg(test)]
 mod tests;
+
+/// Whether `path` names an existing file with an execute bit — the check
+/// RFC 0018 §4.3 asks for the subprocess scanners' `command`.
+fn is_executable(path: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}

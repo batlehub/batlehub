@@ -177,6 +177,15 @@ impl DocumentKind {
     /// what addresses the document, and it keeps one cache entry per platform
     /// rather than one per provider.
     pub const PROVIDER_DOWNLOAD: Self = Self::Secondary("provider-download");
+    /// The `nodejs.org/dist` tree's `index.json` — the same release table as
+    /// `index.tab`, as a JSON array — as against the TSV nvm reads.
+    ///
+    /// RFC 0010 §4.4. Two encodings of one document: nvm resolves every
+    /// install through `index.tab`, fnm and mise read `index.json`. A separate
+    /// kind because they are different bytes for different URLs, and because
+    /// filtering one and not the other would leave an unfiltered answer to the
+    /// same question.
+    pub const INDEX_JSON: Self = Self::Secondary("index-json");
 
     /// The cache-key and log discriminant.
     pub fn as_str(&self) -> &'static str {
@@ -288,6 +297,17 @@ pub trait RegistryClient: Send + Sync {
         Err(CoreError::NotSupported(
             "this registry type does not link to a README".to_owned(),
         ))
+    }
+
+    /// The forge-specific questions this client answers, when it is a forge
+    /// (RFC 0019 §6.1): ref resolution and commit lookup.
+    ///
+    /// `None` for every package registry, and nothing else changes for them.
+    /// A forge client returns `Some(self)`, which is what lets `ProxyService`
+    /// resolve a ref to a commit before it fetches, without the proxy knowing
+    /// which forge it is talking to.
+    fn forge(&self) -> Option<&dyn super::super::forge::ForgeRegistry> {
+        None
     }
 
     /// Search the upstream registry for packages matching `query`.

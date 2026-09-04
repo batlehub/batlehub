@@ -1047,3 +1047,54 @@ rendered `versions/list` table. Its cache key includes the client's
 `?current=&installed=` query, so the hit rate is per client and the filter runs
 on nearly every call; §4.4 now says so instead of implying the document caches
 like `index.tab`.
+
+### 13.1 Phases 1–4 landed (2026-09-03)
+
+`nodedist` shipped: `RegistryKind::Nodedist` and its exhaustive answers,
+`NodeDistRegistryClient`, the three routes, the `index.tab` / `index.json`
+filters, the mandatory `deny_missing_timestamp`, the conformance entries and
+`tests/heavy/nvm.sh` — run against nvm 0.40.3 and nodejs.org before this note
+was written. Six things differ from the text above, each small and each
+deliberate:
+
+- **`RegistryKind::Sdkman` waits for phase 5.** §12's phase 1 declares both
+  variants. Declaring `sdkman` with no client means a `type = "sdkman"` config
+  that validates and then fails to build at startup, and a generated support
+  table advertising three filtered documents that no route serves. The
+  exhaustive matches apply the same compile-time pressure whenever the variant
+  is added, so nothing is lost by adding it with its adapter. `broker_url`
+  goes with it.
+- **`path_allow` on `nodedist` is rejected, not warned.** §4.5 asked for a
+  warning; the existing validator already refuses `path_allow` on every kind
+  that is not path-addressed, and a refusal is the stronger form of the same
+  statement. One rule for twenty-two kinds beats a second one for two.
+- **No boot-time probe of the upstream's `index.tab`.** §4.5's "warned at
+  reload" needs a network request inside config validation, which is offline
+  by design. A tree with no `index.tab` fails on the first `nvm ls-remote`
+  with an upstream error naming the URL; the heavy suite is the check that
+  the default tree has one.
+- **The publish date is the index's day at 00:00 UTC.** `index.tab` carries a
+  date, not a time. Midnight is the earliest instant of that day, so a release
+  is never treated as older than it can be: a 24-hour gate holds a release
+  published at 23:00 for a full day after the date rolls, never less.
+- **The `iojs` package name comes from the upstream URL**, read through the
+  registry's upstream map, not from a config field: a registry pointed at
+  `iojs.org` serves `iojs`, everything else serves `node`. The client itself
+  never needs the name — its URLs are `{base}/{version}/{file}` — so the
+  choice lives in the handler, once.
+- **The two listing routes take `releases:list`; the file route takes
+  `releases:read`.** §7 said so; it is restated here because the nvm suite's
+  config needed both in `anonymous`, which is the line the registry page will
+  have to carry (phase 9).
+
+Observed, not read, by the heavy suite: with `v22.10.0` blocked, `nvm install
+22.10.0` exited non-zero on nvm's own not-found path (nvm.sh:3477, *"Version
+'…' not found - try `nvm ls-remote`"*), `nvm ls-remote` no longer listed it,
+and nothing was requested under `/nodedist/v22.10.0/` — the transcript shows
+one `index.tab` read per resolution and no file request;
+`nvm install 22.11.0` read `SHASUMS256.txt` and the `.tar.xz` through the
+proxy and reported *Checksums matched!*; a second install from a fresh
+`$NVM_DIR` moved `batlehub_artifact_cache_hits_total`. nvm's own check on
+`$NVM_NODEJS_ORG_MIRROR` (`nvm_get_mirror`) is a no-op in 0.40.3 — its `awk`
+evaluates the regex and discards the result — so a mirror with a port number
+works, which §4.2's example URL depends on.

@@ -2,7 +2,7 @@
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Draft — revised 2026-09-02 onto RFC 0018's worker; O2, O4, O6 closed in §13 |
+| Status      | Draft — phases 1–3 and 5 landed 2026-09-04 (§13.1); revised 2026-09-02 onto RFC 0018's worker |
 | Short       | Upstream disappearance                                        |
 | Settles     | How a package that vanished upstream is detected, held, and reported to the admin |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -1118,3 +1118,53 @@ empty `Vec`.
 | O6 | Per-registry `on_confirmed` | RFC 0015's `policy` table already composes per-tier `rules` and `retention`; `on_confirmed` is a registry-tier policy row, deepest wins. No global key. |
 
 Zero remain open.
+
+### 13.1 Phases 1–3 and 5 landed (2026-09-04)
+
+Built and verified: `entities/upstream_status.rs` and the
+`UpstreamStatusPort` under `ports/ops/` (phase 1, migration **053** — the
+next free number by the time it landed — with Postgres and in-memory
+stores, the `''` sentinel converted at the adapter and round-tripped in
+`pg_upstream_status.rs`); `services/upstream_audit/` — the probe ladder
+dispatching on `RegistryKind::upstream_detail()`, the ratio gate with
+`min_probed = 10`, the state machine, `SweepReport` — with the §10 unit
+cases against a recording fake (a voided sweep asserted to have written
+*nothing*, the age floor holding a met count, a clear rather than a
+decrement, whole-package as one row and one transition, the rung-3 cap
+reported, traffic as a free probe, a local registry never in the input)
+(phase 2); `[upstream_audit]` with every §4.4 rejection and the two
+warnings, `spawn_upstream_audit` on the worker role, the §6.10 metrics
+(phase 3); and the eviction hold on TTL, idle and keep-latest-N with held
+keys sorted last in the size cap, `held` on the report, and the metadata
+pin of O1 (phase 5). What differs from the text, each deliberate:
+
+- **The 0018 seam is a scanner that reads, not one that probes.**
+  Decision 29 has the probe "run as an `ArtifactScanner`". A scan is one
+  coordinate, and §5.1's whole argument is that one coordinate's 404 proves
+  nothing — so the sweep stays a sweep (it needs the population), and
+  `UpstreamPresenceScanner` (`upstream-presence`) reads the row the sweep
+  wrote and says `UNPUBLISHED_UPSTREAM` when it is confirmed: `low` under
+  `"audit"`, `high` under `"block"`. A confirmation or reappearance on a
+  `[security]` registry queues a `Rescan` per affected version, which is
+  how the verdict notices. On a registry without the section the row is
+  the whole record until phase 6.
+- **`interval_secs` stays.** §13 said the timer knob goes to `[worker]`;
+  `[worker]` has no cadence — the scan queue is demand-driven — and a sweep
+  needs one. Concurrency did move: it is `[worker].max_concurrent`.
+- **`on_confirmed = "block"` parses and is refused**, naming phase 6, the
+  way `[scanners]` refuses a scanner that has not shipped. The key exists
+  so a config written for the full feature round-trips and a typo is a
+  startup error today rather than a silent `"audit"` later.
+- **The negative-cache seed is not taken.** §13's "a remembered absence is
+  a free first miss" would seed from `UpstreamDetailCoordinator`'s
+  per-process, console-only cache; the sweep's own first miss costs one
+  request and the seed would have made the first confirmation depend on
+  whether someone had opened the console. Left out.
+- **The metadata pin re-stores the entry, it does not read on the serve
+  path.** O1 is met by the sweep re-`set`ting `meta:<coordinate>` with a
+  TTL of two intervals for every `disappeared` version each sweep, so
+  `serve_stale_metadata` keeps answering; `ProxyService` reads none of
+  this, as §6.11 promised.
+- **Phase 4 (notifications), 6 (the block arm), 7–9 (API, console, the
+  operations page) are not started.** The config reference carries the
+  section so the keys are documented from the day they parse.

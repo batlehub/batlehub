@@ -180,6 +180,91 @@ pub(super) fn spawn_periodic_coherence_sweep(
     });
 }
 
+/// Spawn the upstream audit (RFC 0014 §6.10): one sweep per interval, on
+/// the worker role. Copies `spawn_periodic_coherence_sweep`'s first tick —
+/// never at second zero, so `skip_recently_seen` has a picture to compare
+/// against and a restart storm does not become a probe storm.
+pub(super) fn spawn_upstream_audit(
+    interval_secs: u64,
+    svc: Arc<batlehub_core::services::UpstreamAuditService>,
+) {
+    let period = Duration::from_secs(interval_secs.max(1));
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(period);
+        ticker.tick().await;
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+            let report = svc.run_sweep().await;
+            for r in &report.registries {
+                let outcome = if r.void { "void" } else { "ok" };
+                metrics::counter!(
+                    "batlehub_upstream_audit_sweeps_total",
+                    "registry" => r.registry.clone(),
+                    "outcome" => outcome
+                )
+                .increment(1);
+                metrics::histogram!(
+                    "batlehub_upstream_audit_duration_seconds",
+                    "registry" => r.registry.clone()
+                )
+                .record(r.duration.as_secs_f64());
+                if let Ok((missing, disappeared)) = svc.counts(&r.registry).await {
+                    metrics::gauge!("batlehub_upstream_missing_total", "registry" => r.registry.clone())
+                        .set(missing as f64);
+                    metrics::gauge!("batlehub_upstream_disappeared_total", "registry" => r.registry.clone())
+                        .set(disappeared as f64);
+                }
+                if r.void {
+                    // A registry that is void every cycle is itself an alert,
+                    // not a silent gap in coverage.
+                    tracing::warn!(
+                        registry = %r.registry,
+                        probed = r.probed,
+                        missing = r.missing,
+                        "upstream audit: sweep VOID — too many misses to be unpublishes; nothing recorded"
+                    );
+                } else {
+                    tracing::info!(
+                        registry = %r.registry,
+                        probed = r.probed,
+                        missing = r.missing,
+                        inconclusive = r.inconclusive,
+                        skipped_recent = r.skipped_recent,
+                        confirmed = r.confirmed(),
+                        reappeared = r.reappeared(),
+                        capped = r.capped_packages,
+                        "upstream audit: sweep complete"
+                    );
+                }
+                for t in &r.transitions {
+                    match t {
+                        batlehub_core::services::Transition::Confirmed(row, versions) => {
+                            tracing::warn!(
+                                registry = %row.registry,
+                                package = %row.package_name,
+                                version = ?row.version,
+                                versions = versions.len(),
+                                misses = row.consecutive_misses,
+                                first_missed_at = %row.first_missed_at,
+                                "upstream audit: DISAPPEARED upstream — held from eviction"
+                            );
+                        }
+                        batlehub_core::services::Transition::Reappeared(row, _) => {
+                            tracing::info!(
+                                registry = %row.registry,
+                                package = %row.package_name,
+                                version = ?row.version,
+                                "upstream audit: reappeared upstream — hold released"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
 /// Spawn the cache-statistics rollup (RFC 0004 §6.4, R9).
 ///
 /// The stored **resolution** is fixed at one hour rather than configured: it is

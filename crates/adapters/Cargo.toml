@@ -109,6 +109,7 @@ default = [
   "registry-jetbrains",
   "registry-jetbrains-marketplace",
   "registry-generic",
+  "registry-nodedist",
   "sbom",
   "storage-fs",
   "vuln-scan"
@@ -171,6 +172,7 @@ registry-jetbrains-marketplace = ["dep:quick-xml"]
 # Path-addressed mirror of an arbitrary upstream file tree (toolchain tarballs,
 # vendor CDNs). Also reuses `PathProxyRegistryClient`.
 registry-generic = []
+registry-nodedist = []
 registry-rubygems = ["dep:flate2", "dep:tar"]
 registry-terraform = []
 registry-vscode-marketplace = []

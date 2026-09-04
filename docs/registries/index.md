@@ -148,6 +148,7 @@ any of them. The page says which rather than showing a disabled button — see
 | jetbrains | path-addressed: there is no package identity to hang a README on | — | neither | no |
 | jetbrains-marketplace | the metadata document, already fetched | yes | versions + README | yes |
 | generic | path-addressed: there is no package identity to hang a README on | — | neither | no |
+| nodedist | a Node release is a set of tarballs and a checksum file; the dist tree carries no prose | — | versions only | no |
 <!-- END readme-coverage -->
 
 Configured per registry with

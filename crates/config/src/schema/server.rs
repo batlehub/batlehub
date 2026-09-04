@@ -7,6 +7,11 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct ServerConfig {
+    /// What this process does (RFC 0018 §4.1): `proxy` serves requests and
+    /// enqueues scan jobs, `worker` dequeues and scans. Default both — the
+    /// embedded worker — so every existing deployment keeps working.
+    #[serde(default = "super::security::default_roles")]
+    pub roles: Vec<super::security::ProcessRole>,
     #[serde(default = "default_host")]
     pub host: String,
     #[serde(default = "default_port")]

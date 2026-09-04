@@ -269,6 +269,8 @@ protocol has one and editing it is safe:
 | jetbrains | — | no listing document |
 | jetbrains-marketplace | `updatePlugins.xml`, `/plugins/list` and the plugin-updates API | yes |
 | generic | — | no listing document |
+| nodedist | `index.tab` | yes |
+| nodedist | `index.json` | yes |
 <!-- END listing-coverage -->
 
 Filtering is invisible when it works, which is exactly when you want evidence

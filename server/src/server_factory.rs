@@ -410,6 +410,27 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The HTTP surface of a worker-only process (RFC 0018 §6.5): `/livez` and
+/// `/metrics`, nothing that serves an artifact. `/healthz` needs the proxy
+/// service and is not here; a worker's health is its heartbeat row.
+pub(super) async fn run_worker_only_server(
+    bind_addr: String,
+    prometheus_handle: Option<PrometheusHandle>,
+) -> anyhow::Result<()> {
+    tracing::info!(%bind_addr, "worker-only: listening for /livez and /metrics");
+    HttpServer::new(move || {
+        let mut app = App::new().service(livez).service(prometheus_metrics);
+        if let Some(h) = prometheus_handle.clone() {
+            app = app.app_data(web::Data::new(h));
+        }
+        app
+    })
+    .bind(&bind_addr)?
+    .run()
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod span_tests {
     use super::*;

@@ -4,6 +4,7 @@ pub mod migrations;
 pub mod notification;
 pub mod rate_limit;
 pub mod sbom;
+pub mod scanners;
 
 #[cfg(any(
     feature = "auth-token",

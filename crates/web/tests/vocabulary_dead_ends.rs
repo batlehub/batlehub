@@ -96,6 +96,21 @@ fn is_not_a_requester(path: &Path) -> bool {
 /// requested set without being added here, and `no_stale_exceptions` fails when
 /// an entry stops being true — so it cannot quietly become a list of everything.
 const DELIBERATELY_UNREQUESTED: &[(&str, &str)] = &[
+    // ── two verbs waiting on RFC 0018 phase 2 ───────────────────────────────
+    //
+    // Phase 1 of RFC 0018 holds and refuses; the verdict endpoint, the
+    // per-registry error bodies and the listing filters that *consult* these
+    // two are phase 2 (§4.2, §12). They are in the vocabulary now so a grant
+    // written today survives the upgrade, and this entry is the reminder to
+    // delete itself when the endpoint lands.
+    (
+        "quarantine:read",
+        "RFC 0018 phase 2: consulted by the verdict endpoint and the 403 body          (reason codes, `available_at`); phase 1 refuses without reading it",
+    ),
+    (
+        "findings:read",
+        "RFC 0018 phase 2: consulted by the verdict endpoint's findings array;          phase 1 has no route that returns findings",
+    ),
     // ── one verb, and it is a decision rather than a backlog item ────────────
     //
     // Its three siblings were on this list and are not any more —

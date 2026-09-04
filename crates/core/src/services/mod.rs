@@ -6,23 +6,29 @@ pub mod document_cache;
 pub mod escaping;
 pub mod eviction;
 pub mod explore_cache;
+pub mod forge_refs;
 pub mod grants_admin;
 pub mod hot_config;
 pub mod integrity;
 pub mod local_registry;
 pub mod metrics;
+pub mod nodedist;
 pub mod ownership_grants;
 pub mod proxy;
 pub mod quota;
 pub mod readme;
 pub mod retention;
 pub mod sbom;
+pub mod scan_worker;
+pub mod scanners;
 pub mod search;
 pub mod shadow;
 pub mod signature;
 pub mod signed_url;
 pub mod stats_rollup;
+pub mod upstream_audit;
 pub mod upstream_detail;
+pub mod verdict;
 pub mod version_order;
 pub mod vulnerability;
 pub mod warming;
@@ -62,6 +68,11 @@ pub use retention::{
     RetentionService, DEFAULT_DOWNLOAD_SIGNAL_FLOOR, MAX_REPORTED_DECISIONS,
 };
 pub use sbom::{SbomProxiedOptions, SbomPublishOptions, SbomService};
+pub use scan_worker::{PassReport, ScanWorker, WorkerConfig};
+pub use scanners::{
+    BlockListScanner, RecordedVulnerabilityScanner, RuleAsScanner, UpstreamPresenceScanner,
+    UPSTREAM_PRESENCE_SCANNER, WRAPPED_GATES,
+};
 pub use search::{SearchHit, SearchMode, SearchResults};
 pub use signed_url::{
     Coordinate as SignedUrlCoordinate, SignedUrlError, SignedUrlService,
@@ -70,7 +81,12 @@ pub use signed_url::{
     QUERY_PARAM as SIGNED_URL_QUERY_PARAM,
 };
 pub use stats_rollup::{hour_start, StatsRollupService};
+pub use upstream_audit::{
+    ProbeOutcome, RegistryReport, SweepReport, Transition, UpstreamAuditPolicy,
+    UpstreamAuditService, MAX_VERSION_PROBES_PER_PACKAGE, MIN_PROBED_FOR_RATIO,
+};
 pub use upstream_detail::{UpstreamDetail, UpstreamDetailCoordinator, UpstreamVersion};
+pub use verdict::{VerdictService, VERDICT_EXEMPTION_GATE};
 pub use version_order::newest_first;
 pub use vulnerability::{ScanReport, VulnerabilityScanService};
 pub use warming::{WarmFailure, WarmingReport, WarmingService};

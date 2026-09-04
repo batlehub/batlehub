@@ -284,6 +284,9 @@ pub(super) fn build_eviction_map(
     storage: Arc<dyn StorageBackend>,
     pool: sqlx::PgPool,
     packages: Arc<dyn batlehub_core::ports::PackageRepository>,
+    // RFC 0014 §5.3: the eviction hold, when `[upstream_audit]` is enabled
+    // with `retain_disappeared`. `None` is byte-identical to before.
+    upstream_status: Option<Arc<dyn batlehub_core::ports::UpstreamStatusPort>>,
 ) -> batlehub_web::handlers::back_office::ops::eviction::EvictionServiceMap {
     use batlehub_adapters::db::PgArtifactMetaRepository;
     use batlehub_core::services::{EvictionConfig, EvictionService};
@@ -299,24 +302,30 @@ pub(super) fn build_eviction_map(
     // of reading absence from this map.
     for reg in &config.registries {
         let cache = &reg.cache;
-        let eviction_svc = Arc::new(
-            EvictionService::new(
-                Arc::new(PgArtifactMetaRepository::new(pool.clone()))
-                    as Arc<dyn batlehub_core::ports::ArtifactMetaRepository>,
-                storage.clone(),
-                EvictionConfig {
-                    artifact_ttl_secs: cache.artifact_ttl_secs,
-                    idle_days: cache.idle_days,
-                    max_size_bytes: cache.max_size_bytes,
-                    keep_latest_n: cache.keep_latest_n,
-                    registry: reg.name.clone(),
-                },
-            )
-            // Without this the sweep runs and records nothing — the state every
-            // one of these services was in before RFC 0016's trail was extended
-            // to the cache.
-            .with_audit(packages.clone()),
-        );
+        let mut eviction_svc = EvictionService::new(
+            Arc::new(PgArtifactMetaRepository::new(pool.clone()))
+                as Arc<dyn batlehub_core::ports::ArtifactMetaRepository>,
+            storage.clone(),
+            EvictionConfig {
+                artifact_ttl_secs: cache.artifact_ttl_secs,
+                idle_days: cache.idle_days,
+                max_size_bytes: cache.max_size_bytes,
+                keep_latest_n: cache.keep_latest_n,
+                registry: reg.name.clone(),
+            },
+        )
+        // Without this the sweep runs and records nothing — the state every
+        // one of these services was in before RFC 0016's trail was extended
+        // to the cache.
+        .with_audit(packages.clone());
+        // RFC 0014 §5.3: a local registry has no upstream, so nothing of its
+        // can be held.
+        if let Some(status) = &upstream_status {
+            if reg.mode != batlehub_config::schema::RegistryMode::Local {
+                eviction_svc = eviction_svc.with_upstream_status(Arc::clone(status));
+            }
+        }
+        let eviction_svc = Arc::new(eviction_svc);
         eviction_map.insert(reg.name.clone(), eviction_svc);
     }
     eviction_map
@@ -355,4 +364,54 @@ pub(super) fn add_user_token_provider(
 ) {
     auth_providers.push(Arc::new(UserTokenAuthProvider::new(token_repo)));
     info!("configured user-token auth provider");
+}
+
+/// The scanners a worker runs, from `[scanners]` plus the implicit `osv`
+/// (RFC 0018 §4.1: *"already implicit today; now named"*).
+///
+/// Only the types this build can run are built; validation has already
+/// refused a registry that lists any other, so a declared-but-unavailable
+/// scanner here is one nobody uses, and is skipped with a note rather than
+/// refused.
+pub(super) fn build_scanners(
+    config: &batlehub_config::schema::AppConfig,
+) -> Result<HashMap<String, Arc<dyn batlehub_core::ports::ArtifactScanner>>> {
+    use batlehub_adapters::scanners::OsvArtifactScanner;
+    use batlehub_adapters::vulnerability::OsvScanner;
+    use batlehub_config::schema::ScannerConfig;
+
+    let osv_client = |timeout: u64| {
+        reqwest::Client::builder()
+            .user_agent("batlehub/0.1")
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(timeout))
+            .build()
+            .context("building OSV HTTP client")
+    };
+    let mut out: HashMap<String, Arc<dyn batlehub_core::ports::ArtifactScanner>> = HashMap::new();
+    for (name, cfg) in &config.scanners {
+        match cfg {
+            ScannerConfig::Osv { api_url, .. } => {
+                let inner = Arc::new(OsvScanner::new(osv_client(60)?, api_url.clone()));
+                out.insert(name.clone(), Arc::new(OsvArtifactScanner::new(inner)));
+            }
+            other => {
+                info!(
+                    scanner = %name,
+                    kind = other.type_name(),
+                    ships_in = other.ships_in(),
+                    "scanner declared but not runnable in this build; skipped"
+                );
+            }
+        }
+    }
+    if !out.contains_key("osv") {
+        let api_url = config
+            .vulnerability_scan
+            .as_ref()
+            .and_then(|v| v.osv_api_url.clone());
+        let inner = Arc::new(OsvScanner::new(osv_client(60)?, api_url));
+        out.insert("osv".to_owned(), Arc::new(OsvArtifactScanner::new(inner)));
+    }
+    Ok(out)
 }

@@ -405,6 +405,28 @@ impl RegistryClient for FixedRegistry {
                 "Time": "2020-02-01T00:00:00Z"
             }))),
 
+            // The `nodejs.org/dist` release table, in both encodings, with the
+            // tree's own spellings: `v`-prefixed versions, newest first, eleven
+            // columns, `-` for "no LTS codename" in the TSV and `false` in the
+            // JSON. The same three versions as everywhere else; `v1.1.0` and
+            // `v1.0.0` share an LTS line so a block on the newer one visibly
+            // moves the alias nvm derives from the `lts` column.
+            ("nodedist", DocumentKind::Versions) => Ok(VersionDocument::text(
+                "text/plain; charset=utf-8",
+                "version\tdate\tfiles\tnpm\tv8\tuv\tzlib\topenssl\tmodules\tlts\tsecurity\n\
+                 v2.0.0-beta.1\t2020-03-01\theaders,linux-x64,src\t7.0.0\t9.0\t1.40.0\t1.2.11\t1.1.1\t90\t-\t-\n\
+                 v1.1.0\t2020-02-01\theaders,linux-x64,src\t6.14.0\t8.4\t1.34.0\t1.2.11\t1.1.1\t83\tArgon\t-\n\
+                 v1.0.0\t2020-01-02\theaders,linux-x64,src\t6.13.0\t8.4\t1.34.0\t1.2.11\t1.1.1\t83\tArgon\ttrue\n",
+            )),
+            ("nodedist", DocumentKind::INDEX_JSON) => Ok(VersionDocument::json(serde_json::json!([
+                { "version": "v2.0.0-beta.1", "date": "2020-03-01", "files": ["headers", "linux-x64", "src"],
+                  "npm": "7.0.0", "lts": false, "security": false },
+                { "version": "v1.1.0", "date": "2020-02-01", "files": ["headers", "linux-x64", "src"],
+                  "npm": "6.14.0", "lts": "Argon", "security": false },
+                { "version": "v1.0.0", "date": "2020-01-02", "files": ["headers", "linux-x64", "src"],
+                  "npm": "6.13.0", "lts": "Argon", "security": true }
+            ]))),
+
             _ => unsupported(),
         }
     }
@@ -1355,6 +1377,12 @@ pub async fn make_app_with_defaults_and_access(
             "composer".to_owned(),
             FixedRegistry::new("composer") as Arc<dyn RegistryClient>,
         ),
+        // RFC 0010: the conformance fixture asserts nvm's request lines reach
+        // the nodedist routes, which needs a registry of that kind to exist.
+        (
+            "nodedist".to_owned(),
+            FixedRegistry::new("nodedist") as Arc<dyn RegistryClient>,
+        ),
     ]
     .into();
 
@@ -1387,6 +1415,10 @@ pub async fn make_app_with_defaults_and_access(
         ),
         (
             "composer".to_owned(),
+            Arc::new(rbac_policy(repo_dyn.clone()).0),
+        ),
+        (
+            "nodedist".to_owned(),
             Arc::new(rbac_policy(repo_dyn.clone()).0),
         ),
     ]
@@ -1460,6 +1492,7 @@ pub async fn make_app_with_defaults_and_access(
         ("jbm", "jetbrains-marketplace"),
         ("nuget", "nuget"),
         ("composer", "composer"),
+        ("nodedist", "nodedist"),
     ]);
     let cargo_indexes = batlehub_web::CargoIndexMap::default();
     finish_test_app(

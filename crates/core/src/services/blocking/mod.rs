@@ -51,6 +51,7 @@ pub mod conda;
 pub mod forge;
 pub mod goproxy;
 pub mod maven;
+pub mod nodedist;
 pub mod npm;
 pub mod nuget;
 pub mod pypi;
@@ -456,6 +457,17 @@ fn strip(
             _ => with_text(doc, |html| pypi::strip_simple_html(html, blocked)),
         }),
 
+        // Two encodings of the one release table (RFC 0010 §6.2). `index.tab`
+        // is what nvm resolves every install through; `index.json` is the same
+        // rows for fnm and mise. `SHASUMS256.txt` never comes here: it is an
+        // artifact, signed by a sibling, and not rewritten.
+        RegistryKind::Nodedist => Some(match ctx.document {
+            DocumentKind::INDEX_JSON => {
+                with_json(doc, |json| nodedist::strip_index_json(json, blocked))
+            }
+            _ => with_text(doc, |text| nodedist::strip_index_tab(text, blocked)),
+        }),
+
         // No listing document, one that must not be rewritten, or one filtered
         // at a handler chokepoint instead (see `FILTERED_ELSEWHERE`). The
         // reasons are recorded once, in `listing_filter()`.
@@ -589,7 +601,14 @@ pub fn normalize(kind: RegistryKind, version: &str) -> Cow<'_, str> {
         // repository and `v1.2.3` in the next. Which one a repository uses is a
         // habit rather than a convention, so a block must not depend on whose
         // habit the operator happened to copy.
-        RegistryKind::Github | RegistryKind::Forgejo | RegistryKind::Gitlab => {
+        //
+        // Node's tree spells every version `v22.11.0` and every client accepts
+        // `22.11.0`: `nvm install 22.11.0` is the documented form, so that is
+        // the spelling an operator copies into a block.
+        RegistryKind::Github
+        | RegistryKind::Forgejo
+        | RegistryKind::Gitlab
+        | RegistryKind::Nodedist => {
             let v = version.trim();
             Cow::Borrowed(v.strip_prefix('v').unwrap_or(v))
         }
@@ -909,6 +928,15 @@ mod tests {
         assert!(blocked.contains("v1.2.3"));
     }
 
+    /// `index.tab` spells `v22.11.0`; `nvm install 22.11.0` is the documented
+    /// form and so the one an operator copies into a block.
+    #[test]
+    fn nodedist_versions_compare_with_or_without_their_v_prefix() {
+        assert_eq!(norm(RegistryKind::Nodedist, "v22.11.0"), "22.11.0");
+        let blocked = BlockedVersions::new(RegistryKind::Nodedist, vec!["22.11.0".to_owned()]);
+        assert!(blocked.contains("v22.11.0"));
+    }
+
     #[test]
     fn npm_and_maven_normalisation_is_identity() {
         assert_eq!(norm(RegistryKind::Npm, "4.17.21"), "4.17.21");
@@ -1120,6 +1148,7 @@ mod tests {
             DocumentKind::COMPACT_VERSIONS,
             DocumentKind::COMPACT_INFO,
             DocumentKind::COMPACT_NAMES,
+            DocumentKind::INDEX_JSON,
         ];
         KNOWN.iter().find(|k| k.as_str() == name).copied()
     }

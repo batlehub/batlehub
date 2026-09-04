@@ -201,6 +201,10 @@ pub enum RegistryKind {
     Jetbrains,
     JetbrainsMarketplace,
     Generic,
+    /// The `nodejs.org/dist` file tree as a *typed* registry — one package
+    /// (`node`), one version per release, one file per platform — so a Node
+    /// release can be blocked rather than merely cached (RFC 0010).
+    Nodedist,
 }
 
 impl RegistryKind {
@@ -228,6 +232,7 @@ impl RegistryKind {
         Self::Jetbrains,
         Self::JetbrainsMarketplace,
         Self::Generic,
+        Self::Nodedist,
     ];
 
     /// The kebab-case wire string for this kind (matches TOML `type = "..."`).
@@ -254,6 +259,7 @@ impl RegistryKind {
             Self::Jetbrains => "jetbrains",
             Self::JetbrainsMarketplace => "jetbrains-marketplace",
             Self::Generic => "generic",
+            Self::Nodedist => "nodedist",
         }
     }
 
@@ -261,10 +267,18 @@ impl RegistryKind {
     /// package versions for itself — the read-only source-hosting types
     /// (github/forgejo/gitlab/jetbrains) have no local publish model. `generic`
     /// is proxy-only for now; hosting arbitrary files is a separate roadmap item.
+    /// `nodedist` has no publish protocol either: Node releases are built by
+    /// the Node project, and hosting a private toolchain is a separate feature
+    /// (RFC 0010 §3).
     pub fn supports_local_mode(&self) -> bool {
         !matches!(
             self,
-            Self::Github | Self::Forgejo | Self::Gitlab | Self::Jetbrains | Self::Generic
+            Self::Github
+                | Self::Forgejo
+                | Self::Gitlab
+                | Self::Jetbrains
+                | Self::Generic
+                | Self::Nodedist
         )
     }
 
@@ -274,6 +288,13 @@ impl RegistryKind {
     /// `generic` mirrors an arbitrary file tree, so it has no default at all.
     pub fn requires_explicit_upstream_in_proxy_mode(&self) -> bool {
         matches!(self, Self::Deb | Self::Rpm | Self::Generic)
+    }
+
+    /// Whether this kind is a git forge — GitHub, GitLab, Forgejo — and so
+    /// speaks in refs rather than versions (RFC 0019). The kinds
+    /// `[registries.refs]` means something on.
+    pub fn is_forge(&self) -> bool {
+        matches!(self, Self::Github | Self::Gitlab | Self::Forgejo)
     }
 
     /// Whether this kind is addressed purely by upstream file path, with the
@@ -400,6 +421,15 @@ impl RegistryKind {
             "extension gallery (`extensionquery`) and the OpenVSX API",
             &[],
         )];
+        // Two encodings of one document. nvm resolves *every* install through
+        // `index.tab`; fnm and mise read `index.json`. Filtering one and not
+        // the other would leave a second, unfiltered answer to the same
+        // question (RFC 0010 §4.4). `SHASUMS256.txt` is deliberately not a
+        // listing: it is signed by a sibling `.asc`/`.sig` and never rewritten.
+        const NODEDIST: &[ListingDocument] = &[
+            ListingDocument::filtered("`index.tab`", &["versions"]),
+            ListingDocument::filtered("`index.json`", &["index-json"]),
+        ];
 
         match self {
             Self::Npm => NPM,
@@ -416,6 +446,7 @@ impl RegistryKind {
             Self::Github | Self::Gitlab | Self::Forgejo => FORGE,
             Self::Deb | Self::Rpm | Self::Pacman => SIGNED,
             Self::Openvsx | Self::VscodeMarketplace => EXTENSION_GALLERY,
+            Self::Nodedist => NODEDIST,
             // `generic` and `jetbrains` mirror an arbitrary file tree by path —
             // there is no listing document in the protocol at all, so there is
             // nothing to say beyond that. (JetBrains *plugins* are the separate
@@ -485,6 +516,10 @@ impl RegistryKind {
                  under `raw/{ref}/`, so a second URL for it would be a second answer to a \
                  solved question",
             ),
+            Self::Nodedist => ReadmeSupport::None(
+                "a Node release is a set of tarballs and a checksum file; the dist tree carries \
+                 no prose",
+            ),
         }
     }
 
@@ -535,6 +570,8 @@ impl RegistryKind {
                     "path-addressed: there is no package identity to ask about",
                 )
             }
+            // `index.tab`: one row per release, with its date and LTS codename.
+            Self::Nodedist => UpstreamDetailSupport::Document("versions"),
         }
     }
 
@@ -621,6 +658,12 @@ impl RegistryKind {
             }
             Self::Github | Self::Gitlab | Self::Forgejo => FetchSupport::None(
                 "a release asset is addressed by its filename, which the page does not know",
+            ),
+            // Maven's reasoning, one tree over: the file name is not a
+            // constant, so warming cannot name it either (RFC 0010 §6.1).
+            Self::Nodedist => FetchSupport::None(
+                "a Node release is a set of files — one per platform, plus headers, source and \
+                 checksums — so \"fetch this version\" has no single meaning",
             ),
         }
     }
@@ -797,6 +840,7 @@ mod tests {
         assert!(!RegistryKind::Gitlab.supports_local_mode());
         assert!(!RegistryKind::Jetbrains.supports_local_mode());
         assert!(!RegistryKind::Generic.supports_local_mode());
+        assert!(!RegistryKind::Nodedist.supports_local_mode());
         assert!(RegistryKind::Cargo.supports_local_mode());
         assert!(RegistryKind::Deb.supports_local_mode());
         assert!(RegistryKind::JetbrainsMarketplace.supports_local_mode());
@@ -809,6 +853,8 @@ mod tests {
         assert!(RegistryKind::Generic.requires_explicit_upstream_in_proxy_mode());
         assert!(!RegistryKind::Pacman.requires_explicit_upstream_in_proxy_mode());
         assert!(!RegistryKind::Npm.requires_explicit_upstream_in_proxy_mode());
+        // `https://nodejs.org/dist` is the default the client itself uses.
+        assert!(!RegistryKind::Nodedist.requires_explicit_upstream_in_proxy_mode());
         assert!(!RegistryKind::JetbrainsMarketplace.requires_explicit_upstream_in_proxy_mode());
     }
 
@@ -903,6 +949,8 @@ mod tests {
                 "pacman",
                 "jetbrains",
                 "generic",
+                // Tarballs and a checksum file: no prose anywhere in the tree.
+                "nodedist",
             ]
         );
     }
@@ -981,6 +1029,9 @@ mod tests {
             RegistryKind::Github,
             RegistryKind::Goproxy,
             RegistryKind::JetbrainsMarketplace,
+            // Typed, not path-addressed, and that is the whole point of the
+            // kind: `generic` mirrors the same tree and can block nothing on it.
+            RegistryKind::Nodedist,
         ] {
             assert!(
                 !kind.is_path_addressed(),
@@ -1048,6 +1099,7 @@ mod tests {
             RegistryKind::Conda,
             RegistryKind::Maven,
             RegistryKind::Terraform,
+            RegistryKind::Nodedist,
         ] {
             assert!(
                 kind.fetchable_by_version().reason().is_some(),

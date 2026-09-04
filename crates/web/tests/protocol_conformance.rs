@@ -578,6 +578,40 @@ const LONG_TAIL: &[Conformance] = &[
     ),
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// nodedist — nvm (RFC 0010)
+//
+// nvm resolves *every* install through `index.tab`, then fetches the checksum
+// file and the tarball from the release directory. All three lines are read
+// from nvm.sh v0.40.3; the heavy suite (`tests/heavy/nvm.sh`) is what turns
+// "read" into "observed". `index.tab` and `{version}/{file}` are the pair that
+// proves route ordering: a listing must be a document, never a file.
+// ─────────────────────────────────────────────────────────────────────────────
+const NODEDIST: &[Conformance] = &[
+    Conformance::get(
+        "/proxy/nodedist/nodedist/index.tab",
+        "/proxy/{registry}/nodedist/index.tab",
+        "nvm.sh 0.40.3:1657, `nvm_ls_remote_index_tab` — `nvm ls-remote` and every `nvm install`",
+    )
+    .must_find("v1.1.0"),
+    Conformance::get(
+        "/proxy/nodedist/nodedist/index.json",
+        "/proxy/{registry}/nodedist/index.json",
+        "fnm src/remote_node_index.rs and mise's core node plugin — the same table as JSON",
+    )
+    .must_find("v1.1.0"),
+    Conformance::get(
+        "/proxy/nodedist/nodedist/v1.1.0/SHASUMS256.txt",
+        "/proxy/{registry}/nodedist/{version}/{file}",
+        "nvm.sh 0.40.3:1853, `nvm_get_checksum` — read before every download",
+    ),
+    Conformance::get(
+        "/proxy/nodedist/nodedist/v1.1.0/node-v1.1.0-linux-x64.tar.xz",
+        "/proxy/{registry}/nodedist/{version}/{file}",
+        "nvm.sh 0.40.3:2466, `nvm_download_artifact` — `${MIRROR}/${VERSION}/${SLUG}.${COMPRESSION}`",
+    ),
+];
+
 const SUITES: &[(&str, &[Conformance])] = &[
     ("npm", NPM),
     ("rubygems", RUBYGEMS),
@@ -585,6 +619,7 @@ const SUITES: &[(&str, &[Conformance])] = &[
     ("goproxy", GOPROXY),
     ("terraform", TERRAFORM),
     ("nuget", NUGET),
+    ("nodedist", NODEDIST),
     ("others", OTHERS),
     ("long-tail", LONG_TAIL),
 ];

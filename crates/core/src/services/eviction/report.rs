@@ -20,6 +20,11 @@ pub struct EvictionReport {
     pub evicted_idle: usize,
     pub evicted_old_versions: usize,
     pub evicted_lru: usize,
+    /// Candidates the upstream-disappearance hold kept (RFC 0014 §5.3):
+    /// artifacts upstream no longer has, which no strategy that assumes a
+    /// re-fetch may take. The LRU size cap still can, and counts them here
+    /// only when it skipped them in favour of a present candidate.
+    pub held: usize,
     /// True when nothing was written.
     pub dry_run: bool,
     /// The storage keys evicted, or that would be under `dry_run`.

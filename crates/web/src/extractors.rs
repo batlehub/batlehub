@@ -55,6 +55,23 @@ pub fn raw_auth_from_request(req: &HttpRequest) -> batlehub_core::ports::RawAuth
         }
     }
 
+    // cargo sends its registry token *bare* — `Authorization: <token>`, no
+    // scheme; the registry web API says so and cargo 1.98 does so (measured,
+    // tests/heavy/cargo.sh). Every `AuthProvider` reads a `Bearer`, so a
+    // `cargo publish` arrived anonymous and was refused `releases:publish` by
+    // a registry whose admin token it carried. Normalised here, scoped to
+    // cargo's API namespace: no other client speaks this way, and a bare
+    // value elsewhere stays what it is — a malformed header.
+    if req.path().contains("/api/v1/crates") {
+        if let Some(bare) = headers
+            .get("authorization")
+            .filter(|v| !v.trim().is_empty() && !v.contains(' '))
+            .cloned()
+        {
+            headers.insert("authorization".to_owned(), format!("Bearer {bare}"));
+        }
+    }
+
     // Percent-decoded, with `+` read as a space, per
     // `application/x-www-form-urlencoded` — which is what a query string is.
     //
@@ -94,6 +111,34 @@ pub fn raw_auth_from_request(req: &HttpRequest) -> batlehub_core::ports::RawAuth
 mod tests {
     use super::*;
     use actix_web::test::TestRequest;
+
+    #[test]
+    fn a_bare_cargo_token_becomes_a_bearer_header_on_the_crates_api_only() {
+        let req = TestRequest::put()
+            .uri("/proxy/crates/api/v1/crates/new")
+            .insert_header(("Authorization", "tok-123"))
+            .to_http_request();
+        assert_eq!(
+            raw_auth_from_request(&req)
+                .headers
+                .get("authorization")
+                .map(String::as_str),
+            Some("Bearer tok-123"),
+            "cargo sends its token without a scheme"
+        );
+        let req = TestRequest::get()
+            .uri("/proxy/npm/pkg")
+            .insert_header(("Authorization", "tok-123"))
+            .to_http_request();
+        assert_eq!(
+            raw_auth_from_request(&req)
+                .headers
+                .get("authorization")
+                .map(String::as_str),
+            Some("tok-123"),
+            "elsewhere a bare value is left alone"
+        );
+    }
 
     #[test]
     fn ovsx_publish_token_in_the_query_becomes_a_bearer_header() {

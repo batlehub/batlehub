@@ -82,8 +82,21 @@ pub struct ReleaseAgeGateConfig {
     /// Useful for registries — such as conda — where the timestamp field is
     /// optional: setting this to `true` forces every package to carry a
     /// verifiable age before it can be downloaded.
+    ///
+    /// An `Option` so that *absence* is observable: on the toolchain kinds
+    /// (`nodedist`; `sdkman` when it lands) this one field is most of the rule,
+    /// and config validation refuses to let it default there (RFC 0010 §4.5,
+    /// §6.7). Everywhere else an unset field means `false`, exactly as before —
+    /// read it through [`Self::deny_missing_timestamp`].
     #[serde(default)]
-    pub deny_missing_timestamp: bool,
+    pub deny_missing_timestamp: Option<bool>,
+}
+
+impl ReleaseAgeGateConfig {
+    /// The effective setting: `false` unless the operator wrote `true`.
+    pub fn deny_missing_timestamp(&self) -> bool {
+        self.deny_missing_timestamp.unwrap_or(false)
+    }
 }
 
 fn default_min_age() -> u64 {

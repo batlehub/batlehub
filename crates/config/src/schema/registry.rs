@@ -333,6 +333,16 @@ pub struct RegistryConfig {
     /// (RFC 0007 §4.1).
     #[serde(default)]
     pub readme: Option<ReadmeConfig>,
+    /// `[registries.security]` — the quarantine profile (RFC 0018 §4.1).
+    /// Absent means no quarantine: the gates run as rules, exactly as before.
+    #[serde(default)]
+    pub security: Option<super::security::SecurityConfig>,
+    /// `[registries.refs]` — how long a forge ref → commit resolution is
+    /// trusted (RFC 0019 §4.1). Forge kinds only; validation refuses it
+    /// elsewhere. Absent means the defaults: branches every minute, tags every
+    /// hour.
+    #[serde(default)]
+    pub refs: Option<super::forge::RefsConfig>,
     /// Optional configuration for the console's discovery read — whether this
     /// instance may ask upstream about a package it holds nothing of.
     ///

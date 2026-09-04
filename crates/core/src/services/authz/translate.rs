@@ -273,6 +273,18 @@ pub fn translate_rbac(
         ],
     );
 
+    // RFC 0018 §4.1: `quarantine:read` for `user` and `admin`, `findings:read`
+    // for `admin`. So adding a `[security]` section does not hide errors from
+    // existing developers, and the findings — which can name an embargoed
+    // advisory or a SOC case — stay with the administrator. `anonymous` gets
+    // neither: on a public mirror a held version is a plain 404 unless the
+    // operator grants it.
+    map = map.grant(SubjectMatcher::Role(Role::User), [Action::QuarantineRead]);
+    map = map.grant(
+        SubjectMatcher::Role(Role::Admin),
+        [Action::QuarantineRead, Action::FindingsRead],
+    );
+
     // The registry-scoped half of §4.2's deferred `require_admin` split. Every
     // one of these guards an endpoint that is `require_admin` today, so granting
     // them to `role:admin` is what makes the decomposition a **rename of who

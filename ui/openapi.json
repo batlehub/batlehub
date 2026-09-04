@@ -9563,6 +9563,159 @@
         ]
       }
     },
+    "/proxy/{registry}/nodedist/index.json": {
+      "get": {
+        "tags": [
+          "proxy/nodedist"
+        ],
+        "summary": "The same release table as JSON — what fnm and mise read.",
+        "operationId": "nodedist_index_json",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Release table as a JSON array, blocked releases removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UpstreamDocument"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/nodedist/index.tab": {
+      "get": {
+        "tags": [
+          "proxy/nodedist"
+        ],
+        "summary": "The release table nvm resolves every install through, blocked releases\nremoved.",
+        "operationId": "nodedist_index_tab",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tab-separated release table, header preserved, blocked releases removed",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/nodedist/{version}/{file}": {
+      "get": {
+        "tags": [
+          "proxy/nodedist"
+        ],
+        "summary": "One file of one release: a tarball, `SHASUMS256.txt`, or a signature.",
+        "operationId": "nodedist_file",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "Release directory, as the tree spells it (e.g. v22.11.0)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "description": "File inside the release directory (e.g. node-v22.11.0-linux-x64.tar.xz, SHASUMS256.txt)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File streamed from upstream (cached), byte-exact",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe version or file name"
+          },
+          "403": {
+            "description": "Access denied, or the release is blocked"
+          },
+          "404": {
+            "description": "Not found upstream, or unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/proxy/{registry}/nuget/api/v2/package": {
       "put": {
         "tags": [
@@ -20413,6 +20566,10 @@
     {
       "name": "proxy/generic",
       "description": "Generic file mirror — path-addressed proxy cache for upstreams with no package protocol (toolchain tarballs, vendor CDNs), restricted by a path_allow allowlist"
+    },
+    {
+      "name": "proxy/nodedist",
+      "description": "Node distributions (nvm, fnm, n, mise) — the nodejs.org/dist tree as a typed registry: filtered index.tab/index.json listings, per-release tarballs and SHASUMS256.txt byte-exact"
     },
     {
       "name": "front-office",

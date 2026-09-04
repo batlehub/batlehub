@@ -116,6 +116,8 @@ heavy_init() {
   HEAVY_TAP_BASE="http://127.0.0.1:$HEAVY_TAP_PORT"
   HEAVY_LOG="$HEAVY_WORK/tap.log"
   : > "$HEAVY_LOG"
+  # The tap's status-rewrite rules (RFC 0018 §4.4); see `heavy_tap_rewrite`.
+  export TAP_REWRITE_FILE="$HEAVY_WORK/tap.rewrite"
 
   # `${HEAVY_RUN}` is read by the suite configs through the loader's `${VAR}`
   # expansion, which happens on the raw text; the port and storage path go
@@ -225,6 +227,47 @@ heavy_self_signed() {
 # run rather than to everything the client has ever asked for.
 heavy_mark() { echo "### $*" >> "$HEAVY_LOG"; }
 
+# heavy_tap_rewrite <METHOD> <path-prefix> <from> <to> [Header: value]... —
+# from now on the tap answers <to> where the server answered <from> on that
+# path, with the headers added. This is the instrument of RFC 0018 §4.4: the
+# server does not emit a quarantine's `403` + `Retry-After` yet (phase 2), and
+# what each client *does* with one is the measurement. The transcript shows
+# `-> 200=>202` for a rewritten line, so the assertion can tell the two apart.
+# Rules accumulate until `heavy_tap_rewrite_clear`.
+heavy_tap_rewrite() {
+  local method="$1" prefix="$2" from="$3" to="$4"
+  shift 4
+  local headers=""
+  local h
+  for h in "$@"; do headers="${headers:+$headers ;; }$h"; done
+  echo "$method $prefix $from $to${headers:+ $headers}" >> "$TAP_REWRITE_FILE"
+}
+heavy_tap_rewrite_clear() { rm -f "$TAP_REWRITE_FILE"; }
+
+# heavy_block <registry> <name> <version> [artifact] — block one coordinate
+# through the admin API; `heavy_unblock` lifts it. The path-proxy kinds have
+# one package (`repo`, version `_`) and address a file by its artifact path.
+heavy_block() {
+  local registry="$1" name="$2" version="$3" artifact="${4:-}"
+  local body
+  body=$(printf '{"registry":"%s","name":"%s","version":"%s",%s"reason":"heavy: administratively blocked"}' \
+    "$registry" "$name" "$version" "${artifact:+\"artifact\":\"$artifact\",}")
+  curl -fsS -X POST "$HEAVY_BASE/api/v1/admin/packages/block" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+    -d "$body" >"$HEAVY_WORK/block.json" \
+    || { cat "$HEAVY_WORK/block.json" >&2; heavy_fail "the block request failed"; }
+}
+heavy_unblock() {
+  local registry="$1" name="$2" version="$3" artifact="${4:-}"
+  local body
+  body=$(printf '{"registry":"%s","name":"%s","version":"%s"%s}' \
+    "$registry" "$name" "$version" "${artifact:+,\"artifact\":\"$artifact\"}")
+  curl -fsS -X POST "$HEAVY_BASE/api/v1/admin/packages/unblock" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+    -d "$body" >"$HEAVY_WORK/unblock.json" \
+    || { cat "$HEAVY_WORK/unblock.json" >&2; heavy_fail "the unblock request failed"; }
+}
+
 # heavy_wire <fixed-string> [explanation] — the line must be in the transcript.
 heavy_wire() {
   local needle="$1" explanation="${2:-}"
@@ -284,24 +327,26 @@ heavy_need() {
     || heavy_fail "$bin not found on PATH — install it ($provided_by) before running this suite"
 }
 
-# heavy_runner_for <binary> <mise-spec> — set HEAVY_RUNNER to the prefix that
-# runs <binary>: empty when it works on PATH, `mise x <spec> --` when only a
-# directory-scoped mise toolchain has it.
+# heavy_runner_for <binary> <mise-spec>... — set HEAVY_RUNNER to the prefix
+# that runs <binary>: empty when it works on PATH, `mise x <spec>... --` when
+# only a directory-scoped mise toolchain has it. Several specs when the tool
+# needs a second one to run at all (Maven needs a JDK).
 #
 # `command -v` is not the test. mise installs shims: the binary is on PATH and
 # exits non-zero with "No version is set for shim" because no version is pinned
 # for this directory. Probe by *running* it.
 heavy_runner_for() {
-  local bin="$1" spec="$2"
+  local bin="$1"
+  shift
   HEAVY_RUNNER=()
   if "$bin" --version >/dev/null 2>&1; then
     return 0
   fi
-  if command -v mise >/dev/null 2>&1 && mise x "$spec" -- "$bin" --version >/dev/null 2>&1; then
-    HEAVY_RUNNER=(mise x "$spec" --)
+  if command -v mise >/dev/null 2>&1 && mise x "$@" -- "$bin" --version >/dev/null 2>&1; then
+    HEAVY_RUNNER=(mise x "$@" --)
     return 0
   fi
-  heavy_fail "no working $bin (and no mise toolchain for $spec)"
+  heavy_fail "no working $bin (and no mise toolchain for $*)"
 }
 
 # heavy_cached_dir <name> <url> [format] — download and unpack once into

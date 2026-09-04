@@ -533,6 +533,24 @@ fn matrix() -> Vec<Row> {
                 "path mirror: the coordinate is repo/_ and no local package is read",
             ))
             .no_control(),
+        // ── nodedist (RFC 0010) ──────────────────────────────────────────────
+        // Proxy-only like `generic`, so axis B has no local package to read —
+        // but unlike `generic` the coordinate is real (`node` / `v9.8.7`), which
+        // is exactly what makes a Node release blockable. The two listings are
+        // whole-registry documents: one package, every release.
+        Row::new("nodedist", "/proxy/reg/nodedist/v9.8.7/SHASUMS256.txt")
+            .coord("node", "v9.8.7")
+            .vis(Expect::NotChecked(
+                "proxy-only: the file is streamed from upstream and no local package is read",
+            )),
+        Row::new("nodedist", "/proxy/reg/nodedist/index.tab")
+            .coord("node", "v9.8.7")
+            .token("v1.1.0")
+            .vis(WHOLE_REGISTRY),
+        Row::new("nodedist", "/proxy/reg/nodedist/index.json")
+            .coord("node", "v9.8.7")
+            .token("v1.1.0")
+            .vis(WHOLE_REGISTRY),
         Row::new(
             "vscode-marketplace",
             "/proxy/reg/vscode/asset/acme/ext/9.8.7/Microsoft.VisualStudio.Services.VSIXPackage",
@@ -882,6 +900,9 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/list.json", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/maven2/{path}", Coverage::Row),
     ("/proxy/{registry}/names", Coverage::Row),
+    ("/proxy/{registry}/nodedist/index.json", Coverage::Row),
+    ("/proxy/{registry}/nodedist/index.tab", Coverage::Row),
+    ("/proxy/{registry}/nodedist/{version}/{file}", Coverage::Row),
     ("/proxy/{registry}/nuget/v3/autocomplete", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/nuget/v3/flat/{id}/index.json", Coverage::Row),
     ("/proxy/{registry}/nuget/v3/flat/{id}/{version}/{filename}", Coverage::Row),

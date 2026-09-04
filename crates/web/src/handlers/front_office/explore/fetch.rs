@@ -292,7 +292,7 @@ pub async fn explore_fetch_version(
         ProxyResponse::Denied { reason } => {
             return Err(AppError::forbidden(reason).coded(FETCH_DENIED))
         }
-        ProxyResponse::Stream(stream) => stream,
+        ProxyResponse::Stream(stream) | ProxyResponse::ForgeStream { stream, .. } => stream,
     };
 
     // Drained, not forwarded: this wants the side effect, not the bytes.

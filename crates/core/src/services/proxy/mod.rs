@@ -67,6 +67,15 @@ pub(crate) fn proxy_meta_key(package_id: &crate::entities::PackageId) -> String 
 pub enum ProxyResponse {
     /// Artifact stream to forward to the HTTP client.
     Stream(ArtifactStream),
+    /// [`Self::Stream`] for a forge coordinate whose ref was resolved first
+    /// (RFC 0019 §4.2): the same bytes, plus what the ref resolved to, so the
+    /// handler can say so in `X-BatleHub-Ref-Kind` and
+    /// `X-BatleHub-Resolved-Commit`. A separate variant rather than a field on
+    /// `Stream`, so every non-forge path is untouched.
+    ForgeStream {
+        stream: ArtifactStream,
+        resolved: crate::entities::ResolvedRef,
+    },
     /// Access was denied; the caller should receive a 403.
     Denied { reason: String },
 }

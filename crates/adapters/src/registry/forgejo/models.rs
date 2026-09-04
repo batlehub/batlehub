@@ -25,6 +25,68 @@ pub(super) struct FjAsset {
     pub size: u64,
 }
 
+// ── Tags, branches and commits (RFC 0019) ─────────────────────────────────────
+//
+// Shapes confirmed against codeberg.org on 2026-09-03: `tags/{tag}` carries
+// `commit.sha` and `commit.created`; `branches/{name}` carries `commit.id`,
+// `commit.timestamp` and `commit.committer.username`; `git/commits/{sha}`
+// carries `commit.committer.date` and a top-level `committer.login`.
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FjTag {
+    pub commit: FjTagCommit,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FjTagCommit {
+    pub sha: String,
+    pub created: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FjBranch {
+    pub commit: FjBranchCommit,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FjBranchCommit {
+    pub id: String,
+    pub timestamp: Option<String>,
+    pub committer: Option<FjPayloadUser>,
+}
+
+/// A person as Forgejo's payload objects spell them.
+#[derive(Debug, Deserialize)]
+pub(super) struct FjPayloadUser {
+    pub name: Option<String>,
+    pub email: Option<String>,
+    pub username: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FjGitPerson {
+    pub name: Option<String>,
+    pub email: Option<String>,
+    pub date: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FjCommitDetail {
+    pub committer: Option<FjGitPerson>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FjUser {
+    pub login: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FjCommit {
+    pub sha: String,
+    pub commit: Option<FjCommitDetail>,
+    pub committer: Option<FjUser>,
+}
+
 impl ForgejoRegistryClient {
     /// Resolve the upstream download URL for a release asset identified either by
     /// filename (`filename/<name>`) or attachment id (numeric). Both look the asset

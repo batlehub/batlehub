@@ -274,6 +274,36 @@ tasks:
     cmds:
       - bash tests/heavy/composer.sh
 
+  test:nvm-heavy:
+    desc: "Heavy nvm integration: `nvm ls-remote` and `nvm install` against a nodedist registry, a blocked release refused on nvm's own not-found path with nothing requested under it, SHASUMS256.txt byte-exact, second install from cache (needs DATABASE_URL + network)"
+    cmds:
+      - bash tests/heavy/nvm.sh
+
+  test:mise-heavy:
+    desc: "Heavy mise integration: `mise install ubi:cli/cli` from a GitHub release through a github registry, and the RFC 0019 ref headers on branch, tag and commit archives (needs DATABASE_URL + network; anonymous GitHub, ~8 requests)"
+    cmds:
+      - bash tests/heavy/mise.sh
+
+  test:cargo-heavy:
+    desc: "Heavy cargo integration (RFC 0018 §4.4): a blocked crate version marked yanked in the sparse index, a pinned Cargo.lock refused at download with 403 and 404, the same CARGO_HOME recovering after the unblock, `cargo publish` to a local registry on 200 and on a rewritten 202 (needs DATABASE_URL + network)"
+    cmds:
+      - bash tests/heavy/cargo.sh
+
+  test:go-heavy:
+    desc: "Heavy Go integration (RFC 0018 §4.4): a blocked module version hidden from @v/list and @latest, a pinned go.mod refused with 403 and 404, GOPROXY=proxy,direct measured on both, the checksum database routed through the proxy, the same module cache recovering after the unblock (needs DATABASE_URL + network)"
+    cmds:
+      - bash tests/heavy/go.sh
+
+  test:maven-heavy:
+    desc: "Heavy Maven integration (RFC 0018 §4.4): a blocked version omitted from maven-metadata.xml so a range picks the previous one, a pinned pom refused with 403 and 404, Maven's cached failure measured on recovery, `mvn deploy:deploy-file` to a local registry on 201 and on a rewritten 202 (needs DATABASE_URL + network)"
+    cmds:
+      - bash tests/heavy/maven.sh
+
+  test:pathproxy-heavy:
+    desc: "Heavy apt/dnf integration (RFC 0018 §4.4): the signed indexes keep naming a blocked .deb/.rpm, the download refused with 403 and 404, the same apt/dnf state recovering after the unblock (needs DATABASE_URL + network; HEAVY_PATHPROXY_SKIP_DNF=1 leaves the rpm rows unmeasured on a host without dnf)"
+    cmds:
+      - bash tests/heavy/pathproxy.sh
+
   test:terraform-heavy:
     desc: "Heavy Terraform integration: `terraform init` over TLS through host-routed discovery — versions, download document, shasums, signature and archive all through the proxy (needs DATABASE_URL + network)"
     cmds:
@@ -315,5 +345,11 @@ tasks:
       - bash tests/heavy/nuget.sh
       - bash tests/heavy/composer.sh
       - bash tests/heavy/terraform.sh
+      - bash tests/heavy/nvm.sh
+      - bash tests/heavy/mise.sh
+      - bash tests/heavy/cargo.sh
+      - bash tests/heavy/go.sh
+      - bash tests/heavy/maven.sh
+      - bash tests/heavy/pathproxy.sh
       - task: test:authz-heavy
 

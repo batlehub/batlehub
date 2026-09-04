@@ -1,0 +1,47 @@
+# Server configuration for the heavy nvm integration test (tests/heavy/nvm.sh).
+# See tests/heavy/config.npm.toml for the env-var conventions; `${HEAVY_RUN}`
+# keeps each run's registry out of the last one's, because the database
+# persists and a block recorded by a previous run would make this one green
+# for the wrong reason.
+
+[server]
+host = "127.0.0.1"
+port = 8090
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+# The suite blocks a release through the admin API with this.
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-nvm-storage"
+
+# ── The nodejs.org/dist tree, typed (RFC 0010) ───────────────────────────────
+#
+# Proxy-only: there is no publish protocol. The upstream is the default — the
+# same URL nvm itself falls back to — and is stated here so the transcript's
+# reader does not have to know that.
+#
+# nvm reads the listing and the files anonymously; `releases:list` is the
+# document verb (index.tab, index.json) and `releases:read` the file verb
+# (tarballs, SHASUMS256.txt). Both are needed for an install.
+[[registries]]
+type = "nodedist"
+name = "node-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://nodejs.org/dist"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list"]
+admin = ["*"]

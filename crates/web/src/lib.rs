@@ -486,6 +486,7 @@ pub use spa::{configure_spa, narrow_csp, SpaDir};
         (name = "proxy/nuget",      description = "NuGet registry — service index, flat container, registration metadata, .nupkg download, and private package publishing"),
         (name = "proxy/jetbrains-marketplace", description = "JetBrains Marketplace — IDE-facing plugin API (search, compatible updates, meta.json, downloads), updatePlugins.xml custom repository, and marketplace-compatible plugin publishing"),
         (name = "proxy/generic",    description = "Generic file mirror — path-addressed proxy cache for upstreams with no package protocol (toolchain tarballs, vendor CDNs), restricted by a path_allow allowlist"),
+        (name = "proxy/nodedist",   description = "Node distributions (nvm, fnm, n, mise) — the nodejs.org/dist tree as a typed registry: filtered index.tab/index.json listings, per-release tarballs and SHASUMS256.txt byte-exact"),
         (name = "front-office",     description = "User-facing package information"),
         (name = "user",             description = "Caller-scoped reads — quota, downloads and advisories for whoever holds the token, never for anyone else"),
         (name = "explore",          description = "Package explorer — browse and search across registries"),
@@ -643,6 +644,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 jbm_update_plugins_xml, jbm_upload,
             },
             maven::{maven_get, maven_put},
+            nodedist::{nodedist_file, nodedist_index_json, nodedist_index_tab},
             npm::{
                 audit_bulk, audit_bulk_legacy, audit_quick, audit_quick_legacy,
                 download_tarball as npm_download_tarball, get_packument, get_version,
@@ -739,7 +741,13 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(pacman_get); // GET …/pacman/{path}
     cfg.service(jetbrains_get); // GET …/jetbrains/{path} (proxy-only cache)
     cfg.service(generic_get); // GET …/generic/{path}   (proxy-only cache)
-                              // Cargo download (literal "download" suffix)
+                              // Node dist tree (RFC 0010): the two listing documents before the
+                              // `{version}/{file}` artifact route, so `index.tab` is a document
+                              // and never a file; all three before the npm catch-alls below.
+    cfg.service(nodedist_index_tab); // GET …/nodedist/index.tab   (filtered document)
+    cfg.service(nodedist_index_json); // GET …/nodedist/index.json  (filtered document)
+    cfg.service(nodedist_file); // GET …/nodedist/{version}/{file}
+                                // Cargo download (literal "download" suffix)
     cfg.service(download_crate);
     // Go module proxy (multi-segment module paths — must precede generic packument routes)
     // Vuln DB passthrough: literal /v1/ paths registered before the module wildcard routes.

@@ -46,6 +46,12 @@ struct Cli {
     #[arg(short, long)]
     config: Option<String>,
 
+    /// What this process does (RFC 0018 §4.1): `proxy`, `worker`, or
+    /// `proxy,worker`. Overrides `[server].roles`; absent means the config's
+    /// value, which defaults to both.
+    #[arg(long, value_delimiter = ',')]
+    roles: Option<Vec<String>>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -102,8 +108,24 @@ async fn main() -> Result<()> {
         .config
         .or_else(|| std::env::var("BATLEHUB_CONFIG").ok())
         .unwrap_or_else(|| "config.toml".to_string());
-    let config = batlehub_config::load(&config_path)
+    let mut config = batlehub_config::load(&config_path)
         .with_context(|| format!("loading config from '{config_path}'"))?;
+    if let Some(roles) = cli.roles {
+        let parsed = roles
+            .iter()
+            .map(|r| r.parse::<batlehub_config::schema::ProcessRole>())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(anyhow::Error::msg)
+            .context("--roles")?;
+        if parsed.is_empty() {
+            anyhow::bail!("--roles: a process that is neither proxy nor worker does nothing");
+        }
+        config.server.roles = parsed;
+    }
+    let roles = config.server.roles.clone();
+    let is_proxy = roles.contains(&batlehub_config::schema::ProcessRole::Proxy);
+    let is_worker = roles.contains(&batlehub_config::schema::ProcessRole::Worker);
+    tracing::info!(?roles, "process roles");
 
     // `/metrics` is unauthenticated and was, until RFC 0004, unconditional —
     // it publishes cache hit rates, per-registry pull volumes and upstream
@@ -222,6 +244,39 @@ async fn main() -> Result<()> {
     // licence through it; `build_sbom_service` below wraps the same repository.
     let sbom_repo: Arc<dyn batlehub_core::ports::SbomRepository> =
         Arc::new(batlehub_adapters::db::PgSbomRepository::new(repo.pool()));
+    // RFC 0019 §5.2 — where forge refs are remembered and the rate-limit
+    // budget the forge clients share. In the database because it is the one
+    // store every deployment has, and because the budget only means something
+    // if every process on the token reads the same row.
+    let forge_stores = hot_config::ForgeStores {
+        ref_resolutions: Some(Arc::new(
+            batlehub_adapters::db::PgRefResolutionRepository::new(repo.pool()),
+        )),
+        rate_limit_budget: Some(Arc::new(batlehub_adapters::db::PgRateLimitBudget::new(
+            repo.pool(),
+        ))),
+    };
+    // RFC 0018 §6.3 — verdicts, the leased scan queue and worker heartbeats,
+    // all in PostgreSQL: the one store every deployment has, and the only
+    // thing the proxy and worker roles share.
+    let security_stores = hot_config::SecurityStores {
+        verdicts: Some(Arc::new(batlehub_adapters::db::PgVerdictRepository::new(
+            repo.pool(),
+        ))),
+        queue: Some(Arc::new(batlehub_adapters::db::PgScanQueue::new(
+            repo.pool(),
+        ))),
+        workers: Some(Arc::new(batlehub_adapters::db::PgWorkerRegistry::new(
+            repo.pool(),
+        ))),
+        // RFC 0014: only when the audit is on. Absent, the presence scanner is
+        // not built and the eviction hold holds nothing — the pre-0014 tree.
+        upstream_status: config.upstream_audit.enabled.then(|| {
+            Arc::new(batlehub_adapters::db::PgUpstreamStatusStore::new(
+                repo.pool(),
+            )) as Arc<dyn batlehub_core::ports::UpstreamStatusPort>
+        }),
+    };
 
     let (
         init_hot,
@@ -240,6 +295,8 @@ async fn main() -> Result<()> {
         &grant_repo,
         &Some(Arc::clone(&policy_repo)),
         &Some(Arc::clone(&signing_key_store)),
+        &forge_stores,
+        &security_stores,
     )?;
     let warming_clients: HashMap<String, Arc<dyn batlehub_core::ports::RegistryClient>> = init_hot
         .registries
@@ -346,6 +403,10 @@ async fn main() -> Result<()> {
         storage.clone(),
         repo.pool(),
         repo.clone() as Arc<dyn batlehub_core::ports::PackageRepository>,
+        security_stores
+            .upstream_status
+            .clone()
+            .filter(|_| config.upstream_audit.retain_disappeared),
     );
     let access_config = new_access_lock(init_access);
     // Prose search, shared between the app and the reload path so an operator
@@ -371,6 +432,8 @@ async fn main() -> Result<()> {
         grant_repo.clone(),
         Some(Arc::clone(&policy_repo)),
         Some(Arc::clone(&signing_key_store)),
+        forge_stores.clone(),
+        security_stores.clone(),
         settled_text_config,
     );
     // Built once here so the same instance is shared with the reload service (for
@@ -460,6 +523,105 @@ async fn main() -> Result<()> {
         );
     }
 
+    // RFC 0018 §5.4 — the worker role: lease scan jobs, run the scanners,
+    // record verdicts. Embedded by default; `--roles worker` runs it alone.
+    let quarantined: Vec<String> = config
+        .registries
+        .iter()
+        .filter(|r| r.security.is_some())
+        .map(|r| r.name.clone())
+        .collect();
+    if is_worker {
+        let scanners = setup::build_scanners(&config).context("building scanners")?;
+        let worker = Arc::new(batlehub_core::services::ScanWorker {
+            config: batlehub_core::services::WorkerConfig {
+                worker_id: format!("{}-{}", hostname_or("worker"), std::process::id()),
+                max_concurrent: config.worker.max_concurrent,
+                registries: config.worker.registries.clone(),
+                job_timeout: std::time::Duration::from_secs(config.worker.job_timeout_secs),
+                max_attempts: config.worker.max_attempts,
+                idle_poll: std::time::Duration::from_secs(2),
+            },
+            queue: Arc::clone(security_stores.queue.as_ref().expect("built above")),
+            verdicts: security_stores.service().expect("built above"),
+            workers: security_stores.workers.clone(),
+            sboms: Some(Arc::clone(&sbom_svc.repo)),
+            hot: Arc::clone(&hot),
+            scanners,
+        });
+        tokio::spawn(Arc::clone(&worker).run());
+        tracing::info!(
+            max_concurrent = config.worker.max_concurrent,
+            registries = ?config.worker.registries,
+            "security worker: started"
+        );
+    } else if !quarantined.is_empty() {
+        // A proxy-only process with a quarantine and nobody scanning: the
+        // §4.3 warning, from the heartbeat table rather than a guess.
+        let live = match &security_stores.workers {
+            Some(w) => w.live_count(120).await.unwrap_or(0),
+            None => 0,
+        };
+        metrics::gauge!("batlehub_workers_live").set(live as f64);
+        if live == 0 {
+            tracing::warn!(
+                registries = ?quarantined,
+                "security: no worker has sent a heartbeat in the last two minutes; versions of \
+                 these registries below mature_age_secs will stay refused with SCAN_PENDING \
+                 until one runs (start a process with --roles worker)"
+            );
+        }
+    }
+    if !is_proxy {
+        tracing::info!("proxy role absent: serving only /livez and /metrics");
+        return server_factory::run_worker_only_server(
+            format!("{}:{}", config.server.host, config.server.port),
+            prometheus_handle,
+        )
+        .await;
+    }
+
+    // RFC 0014: the upstream audit, on the worker role (§13). A proxy-only
+    // process with it enabled is told, once, that it is not the one sweeping.
+    if config.upstream_audit.enabled {
+        if let (true, Some(status)) = (is_worker, security_stores.upstream_status.clone()) {
+            let audit = &config.upstream_audit;
+            let svc = Arc::new(batlehub_core::services::UpstreamAuditService::new(
+                Arc::new(batlehub_adapters::db::PgArtifactMetaRepository::new(
+                    repo.pool(),
+                )) as Arc<dyn batlehub_core::ports::ArtifactInventory>,
+                status,
+                Arc::clone(&hot),
+                Some(Arc::clone(&cache)),
+                security_stores.queue.clone(),
+                batlehub_core::services::UpstreamAuditPolicy {
+                    confirm_after: audit.confirm_after,
+                    confirm_min_age: std::time::Duration::from_secs(audit.confirm_min_age_secs),
+                    outage_ratio: audit.outage_ratio,
+                    retain_disappeared: audit.retain_disappeared,
+                    skip_recently_seen: audit.skip_recently_seen,
+                    metadata_pin_ttl: std::time::Duration::from_secs(2 * audit.interval_secs),
+                },
+                config.worker.max_concurrent as usize,
+                config.upstream_audit_registries(),
+            ));
+            watcher::spawn_upstream_audit(audit.interval_secs, svc);
+            tracing::info!(
+                interval_secs = audit.interval_secs,
+                confirm_after = audit.confirm_after,
+                confirm_min_age_secs = audit.confirm_min_age_secs,
+                on_confirmed = %audit.on_confirmed,
+                registries = ?config.upstream_audit_registries(),
+                "upstream audit: enabled"
+            );
+        } else if !is_worker {
+            tracing::warn!(
+                "upstream audit: enabled, but this process has no worker role; the sweep runs \
+                 on a worker, and unless another process has that role nothing is audited"
+            );
+        }
+    }
+
     // Periodic collection of storage blobs nothing references. Off unless asked
     // for: it deletes on a timer with nobody watching, and the on-demand
     // endpoint covers the deployment that would rather look first.
@@ -527,4 +689,13 @@ async fn main() -> Result<()> {
         storage_admin_repo,
     })
     .await
+}
+
+/// The host name, for a worker id that says where it ran.
+fn hostname_or(fallback: &str) -> String {
+    std::fs::read_to_string("/etc/hostname")
+        .map(|s| s.trim().to_owned())
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| fallback.to_owned())
 }

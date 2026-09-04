@@ -32,6 +32,7 @@ mod composer;
 pub mod coordinator;
 mod goproxy;
 mod maven;
+mod nodedist;
 mod npm;
 mod nuget;
 mod pypi;
@@ -117,6 +118,7 @@ pub fn dispatch(kind: RegistryKind, doc: &VersionDocument) -> UpstreamDetail {
         RegistryKind::Composer => composer::read(doc),
         RegistryKind::Rubygems => rubygems::read(doc),
         RegistryKind::Terraform => terraform::read(doc),
+        RegistryKind::Nodedist => nodedist::read(doc),
         other => {
             // Reachable only through a bug: `RegistryKind::upstream_detail()`
             // answers `Document(_)` for exactly the kinds above, and the drift
@@ -165,7 +167,8 @@ pub fn listing_carries_readmes(kind: RegistryKind) -> bool {
         | RegistryKind::Rpm
         | RegistryKind::Pacman
         | RegistryKind::Jetbrains
-        | RegistryKind::Generic => false,
+        | RegistryKind::Generic
+        | RegistryKind::Nodedist => false,
     }
 }
 
@@ -215,7 +218,8 @@ pub fn listing_carries_links(kind: RegistryKind) -> bool {
         | RegistryKind::Rpm
         | RegistryKind::Pacman
         | RegistryKind::Jetbrains
-        | RegistryKind::Generic => false,
+        | RegistryKind::Generic
+        | RegistryKind::Nodedist => false,
     }
 }
 

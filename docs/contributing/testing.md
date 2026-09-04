@@ -21,7 +21,7 @@ BatleHub's tests fall into six layers, in increasing order of infrastructure cos
 | **In-process integration** | `crates/web/tests/*.rs`, `crates/examples/tests/*.rs` | none — full actix app on in-memory backends | `cargo test -p batlehub-web --test '*'` |
 | **CLI subprocess integration** | `cli/tests/integration.rs` | none — CLI binary vs. in-memory actix server | `task test:cli:integration` |
 | **External integration** | `crates/adapters/tests/*.rs` | real Postgres / MinIO(S3) / Redis via Podman | `task test:pg-*`, `task test:s3` |
-| **Heavy client** | `tests/heavy/*.sh` | real Postgres **and a real client** — VS Code, IntelliJ, Bundler, npm, pip, ovsx, micromamba, dotnet, composer, terraform | `task test:heavy`, or one `task test:<ecosystem>-heavy` |
+| **Heavy client** | `tests/heavy/*.sh` | real Postgres **and a real client** — VS Code, IntelliJ, Bundler, npm, pip, ovsx, micromamba, dotnet, composer, terraform, nvm, mise, cargo, go, mvn, apt/dnf | `task test:heavy`, or one `task test:<ecosystem>-heavy` |
 | **Heavy authorization** | `tests/heavy/authz.sh` | real Postgres, grants from a **real config file**, and the same clients | `task test:authz-heavy`, or `task test:authz-matrix-heavy` for the fast half |
 | **Fuzz** | `fuzz/fuzz_targets/*.rs` | nightly toolchain to *run*, none to check | `task fuzz:check`, `task fuzz` |
 
@@ -76,6 +76,12 @@ task test:conda-heavy         # micromamba: the HEAD probe and a post-warm publi
 task test:nuget-heavy         # `dotnet nuget push` / `package search` / `add package`
 task test:composer-heavy      # local + proxy resolution with Packagist disabled
 task test:terraform-heavy     # `terraform init` over TLS, host-routed discovery
+task test:nvm-heavy           # `nvm ls-remote` / `nvm install` against a nodedist registry
+task test:mise-heavy          # `mise install github:…` through a forge registry (RFC 0019)
+task test:cargo-heavy         # RFC 0018 §4.4: yanked mark, 403/404 refusal, recovery, `cargo publish`
+task test:go-heavy            # …same axes for `go`, plus the GOPROXY `direct` fallback and the sumdb
+task test:maven-heavy         # …same for `mvn`, incl. its cached failure and `deploy:deploy-file`
+task test:pathproxy-heavy     # …same for `apt` and `dnf`, whose signed indexes cannot hide anything
 task test:authz-matrix-heavy  # every verb in the vocabulary, both directions, over curl
 task test:authz-heavy         # …plus signed-URL expiry/rotation and each real client
 

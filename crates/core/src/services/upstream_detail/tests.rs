@@ -81,6 +81,7 @@ fn every_advertised_document_reaches_a_reader() {
                     | RegistryKind::Composer
                     | RegistryKind::Rubygems
                     | RegistryKind::Terraform
+                    | RegistryKind::Nodedist
             ),
             "{kind} advertises a document but `dispatch` has no arm for it"
         );
@@ -101,6 +102,7 @@ fn every_reader_belongs_to_a_kind_that_advertises_a_document() {
         RegistryKind::Composer,
         RegistryKind::Rubygems,
         RegistryKind::Terraform,
+        RegistryKind::Nodedist,
     ] {
         assert!(
             matches!(kind.upstream_detail(), UpstreamDetailSupport::Document(_)),
@@ -130,6 +132,7 @@ fn an_unparseable_document_contributes_nothing() {
         RegistryKind::Composer,
         RegistryKind::Rubygems,
         RegistryKind::Terraform,
+        RegistryKind::Nodedist,
     ] {
         // The wrong encoding entirely, and a well-formed document of the right
         // encoding with none of the expected keys.
@@ -532,4 +535,39 @@ fn a_simple_page_without_pep_700_derives_distinct_versions_from_filenames() {
 fn a_pypi_simple_page_carries_no_readme() {
     let doc = json_doc(serde_json::json!({ "versions": ["1.0.0"] }));
     assert!(dispatch(RegistryKind::Pypi, &doc).readmes.is_empty());
+}
+
+// ── nodedist ─────────────────────────────────────────────────────────────────
+
+/// Node's `index.tab` as the tree serves it: eleven columns, newest first, the
+/// release date in column two. The date is what the row is worth — it is the
+/// same value the client hands the age gate.
+#[test]
+fn nodedist_index_tab_yields_versions_with_their_release_dates() {
+    let doc = text_doc(
+        "version\tdate\tfiles\tnpm\tv8\tuv\tzlib\topenssl\tmodules\tlts\tsecurity\n\
+         v22.11.0\t2024-10-29\theaders,linux-x64\t10.9.0\t12.4\t1.49.1\t1.3\t3.0.15\t127\tJod\t-\n\
+         v22.10.0\t2024-10-16\theaders,linux-x64\t10.9.0\t12.4\t1.49.1\t1.3\t3.0.15\t127\t-\t-\n",
+    );
+    let detail = dispatch(RegistryKind::Nodedist, &doc);
+    assert_eq!(versions_of(&detail), ["v22.11.0", "v22.10.0"]);
+    assert_eq!(
+        detail.versions[0].published_at.map(|d| d.to_rfc3339()),
+        Some("2024-10-29T00:00:00+00:00".to_owned())
+    );
+    assert!(detail.readmes.is_empty());
+    assert!(detail.links.is_none());
+}
+
+/// io.js's nine columns read the same way: the reader goes by header name,
+/// not by position.
+#[test]
+fn nodedist_reads_the_nine_column_iojs_table() {
+    let doc = text_doc(
+        "version\tdate\tfiles\tnpm\tv8\tuv\tzlib\topenssl\tmodules\n\
+         v3.3.1\t2015-09-15\theaders,linux-x64\t2.14.3\t4.4\t1.7.4\t1.2.8\t1.0.2d\t45\n",
+    );
+    let detail = dispatch(RegistryKind::Nodedist, &doc);
+    assert_eq!(versions_of(&detail), ["v3.3.1"]);
+    assert!(detail.versions[0].published_at.is_some());
 }

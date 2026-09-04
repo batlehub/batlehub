@@ -1,0 +1,48 @@
+# Server configuration for the heavy mise integration test (tests/heavy/mise.sh).
+# See tests/heavy/config.npm.toml for the env-var conventions; `${HEAVY_RUN}`
+# keeps each run's registry — and its remembered ref resolutions — out of the
+# last one's.
+
+[server]
+host = "127.0.0.1"
+port = 8101
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-mise-storage"
+
+# ── GitHub, as a forge registry (RFC 0019) ───────────────────────────────────
+#
+# Anonymous on purpose: the suite must run on a fork with no secret, and the
+# whole of it costs a handful of the 60 requests an hour GitHub allows. The
+# server warns `forge.anonymous-upstream` at load, which is correct. A short
+# branch TTL so the second pull of a branch in the same run re-resolves.
+#
+# mise reads release JSON, asset bytes and source tarballs; those are three
+# verbs.
+[[registries]]
+type = "github"
+name = "github-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.refs]
+branch_ttl_secs = 10
+tag_ttl_secs = 3600
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

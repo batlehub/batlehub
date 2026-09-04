@@ -31,6 +31,60 @@ pub(super) struct RequestPrelude {
     pub(super) registry_label: Arc<str>,
 }
 
+/// Merge a ref resolution into the metadata the rules and the cache see
+/// (RFC 0019 §4.2 *Metadata contract*), under `extra.forge`.
+///
+/// `published_at` is filled only when the client left it empty — a release
+/// keeps its release date, which is the better answer — from the tagger or
+/// committer date the resolution carried. Keys the client already wrote under
+/// `forge` (a commit's `committed_at`, its `committer`) are kept; the
+/// resolution adds the ref kind and the two SHAs beside them.
+fn overlay_forge_metadata(
+    mut metadata: crate::entities::PackageMetadata,
+    resolved: &crate::entities::ResolvedRef,
+) -> crate::entities::PackageMetadata {
+    use crate::entities::FORGE_EXTRA_KEY;
+    if metadata.published_at.is_none() {
+        metadata.published_at = resolved.object_date;
+    }
+    let mut forge = match metadata.extra.get(FORGE_EXTRA_KEY) {
+        Some(serde_json::Value::Object(existing)) => existing.clone(),
+        _ => serde_json::Map::new(),
+    };
+    forge.insert("ref_kind".into(), resolved.kind.as_str().into());
+    forge.insert("requested_ref".into(), resolved.requested.clone().into());
+    forge.insert("resolved_commit".into(), resolved.sha.clone().into());
+    forge.insert(
+        "previous_commit".into(),
+        resolved
+            .previous
+            .clone()
+            .map(serde_json::Value::from)
+            .unwrap_or(serde_json::Value::Null),
+    );
+    if let Some(p) = &resolved.publisher {
+        forge.entry("publisher").or_insert_with(|| p.clone().into());
+    }
+    match &mut metadata.extra {
+        serde_json::Value::Object(map) => {
+            map.insert(FORGE_EXTRA_KEY.into(), serde_json::Value::Object(forge));
+        }
+        other => {
+            // `minimal()` metadata carries `Null`; a listing carries an array.
+            // Neither has room for a key, so the object is built around it
+            // rather than lost: the previous value moves under `upstream`.
+            let previous = std::mem::take(other);
+            let mut map = serde_json::Map::new();
+            if !previous.is_null() {
+                map.insert("upstream".into(), previous);
+            }
+            map.insert(FORGE_EXTRA_KEY.into(), serde_json::Value::Object(forge));
+            *other = serde_json::Value::Object(map);
+        }
+    }
+    metadata
+}
+
 impl ProxyService {
     /// Validate the coordinate, snapshot the registry's hot config (one brief
     /// read lock, released before any async I/O), and derive the metadata
@@ -227,7 +281,79 @@ impl ProxyService {
         Ok(metadata)
     }
 
-    pub async fn handle(&self, req: ProxyRequest) -> Result<ProxyResponse, CoreError> {
+    pub async fn handle(&self, mut req: ProxyRequest) -> Result<ProxyResponse, CoreError> {
+        // RFC 0019 §4.2: on a forge, the ref is resolved to a commit *before*
+        // anything else, and an archive or raw coordinate is rewritten onto
+        // that commit so the cache, the metadata and the rules all see the
+        // SHA. Everything below this line is unchanged for every other kind.
+        let resolved = self.resolve_forge_ref(&mut req).await?;
+        let response = self.handle_resolved(req, resolved.as_ref()).await?;
+        Ok(match (response, resolved) {
+            (ProxyResponse::Stream(stream), Some(resolved)) => {
+                ProxyResponse::ForgeStream { stream, resolved }
+            }
+            (other, _) => other,
+        })
+    }
+
+    /// Resolve a forge coordinate's ref and rewrite the request onto the
+    /// commit (RFC 0019 §4.2 *Cache key*). `None` for anything that is not a
+    /// forge read of a ref — every package registry, a release listing, the
+    /// Forgejo packages passthrough — and for a forge client that does not
+    /// answer [`crate::ports::RegistryClient::forge`] (a fan-out over several
+    /// upstreams, today).
+    ///
+    /// Releases and assets are resolved but **not** rewritten: their bytes are
+    /// identified by the upload, not the commit, so the tag stays the key. The
+    /// resolution is still recorded, which is what makes a moved tag
+    /// detectable.
+    async fn resolve_forge_ref(
+        &self,
+        req: &mut ProxyRequest,
+    ) -> Result<Option<crate::entities::ResolvedRef>, CoreError> {
+        let Some(coord) = crate::entities::ForgeCoordinate::from_package_id(&req.package_id) else {
+            return Ok(None);
+        };
+        let Some(git_ref) = coord.git_ref().map(str::to_owned) else {
+            return Ok(None);
+        };
+        let registry = req.package_id.registry.clone();
+        let (client, store, policy) = {
+            let hot = self.hot.read().await;
+            let Some(client) = hot.registries.get(&registry) else {
+                // Unknown registry: the prelude answers that with the right
+                // error, so nothing is said here.
+                return Ok(None);
+            };
+            (
+                Arc::clone(client),
+                hot.ref_resolutions.clone(),
+                hot.forge_refs.get(&registry).copied().unwrap_or_default(),
+            )
+        };
+        let Some(forge) = client.forge() else {
+            return Ok(None);
+        };
+        let resolved = crate::services::forge_refs::resolve_ref(
+            &registry,
+            forge,
+            store.as_ref(),
+            policy,
+            &coord.owner_repo,
+            &git_ref,
+        )
+        .await?;
+        if coord.keyed_by_commit() {
+            req.package_id = coord.rewrite_onto(&req.package_id, &resolved.sha);
+        }
+        Ok(Some(resolved))
+    }
+
+    async fn handle_resolved(
+        &self,
+        req: ProxyRequest,
+        resolved: Option<&crate::entities::ResolvedRef>,
+    ) -> Result<ProxyResponse, CoreError> {
         let start = Instant::now();
         let registry_name: &str = req.package_id.registry.as_str();
         let RequestPrelude {
@@ -244,6 +370,15 @@ impl ProxyService {
         let metadata = self
             .resolve_metadata_cached(&client, &policy, &req, &cache_key, ttl, &registry_label)
             .await?;
+        // RFC 0019 §4.2 *Metadata contract*: what the ref resolved to rides in
+        // `extra.forge`, and a coordinate the client could not date takes the
+        // object's date from the resolution. Per request rather than cached:
+        // the same commit reached through a tag and through a branch is one
+        // cached entry and two ref kinds.
+        let metadata = match resolved {
+            Some(r) => overlay_forge_metadata(metadata, r),
+            None => metadata,
+        };
 
         // ── 2. Evaluate grants, then rules ─────────────────────────────────────
         //

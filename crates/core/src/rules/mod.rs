@@ -6,6 +6,7 @@ pub mod rbac;
 pub mod release_age;
 pub mod signed_release;
 pub mod trusted_publisher;
+pub mod verdict_gate;
 pub mod version_gate;
 
 pub use block_list::BlockListRule;
@@ -16,6 +17,7 @@ pub use rbac::RbacRule;
 pub use release_age::ReleaseAgeGateRule;
 pub use signed_release::RequireSignedReleaseRule;
 pub use trusted_publisher::TrustedPublisherRule;
+pub use verdict_gate::VerdictGateRule;
 pub use version_gate::VersionGateRule;
 
 use async_trait::async_trait;
