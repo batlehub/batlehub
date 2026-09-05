@@ -1,3 +1,7 @@
+---
+reference: true
+---
+
 # Testing
 
 This document describes how BatleHub is tested: the categories of automated
@@ -89,6 +93,10 @@ task test:cargo-heavy         # RFC 0018 §4.4: yanked mark, 403/404 refusal, re
 task test:go-heavy            # …same axes for `go`, plus the GOPROXY `direct` fallback and the sumdb
 task test:maven-heavy         # …same for `mvn`, incl. its cached failure and `deploy:deploy-file`
 task test:pathproxy-heavy     # …same for `apt` and `dnf`, whose signed indexes cannot hide anything
+task test:quarantine-heavy    # RFC 0018 from npm's side: a hold, the worker clearing it, a real OSV
+                              # advisory refused, the listing agreeing, warn mode, the sandbox's egress
+task test:upstream-audit-heavy # RFC 0014 from the receiving end: a served directory loses a package,
+                              # two probes confirm it, a webhook receiver the suite runs gets the event
 task test:authz-matrix-heavy  # every verb in the vocabulary, both directions, over curl
 task test:authz-heavy         # …plus signed-URL expiry/rotation and each real client
 
@@ -262,6 +270,8 @@ found by running the client, by nothing else, twice over.
 | `nuget.sh` | dotnet | the client can *select* the search resource, `skip` advances the page, and `push` hits the path it appends a slash to |
 | `composer.sh` | composer | proxy-mode resolution with Packagist disabled, `dist.shasum` the client accepts, and `search.json` reached through the advertised template |
 | `terraform.sh` | terraform | `init` over TLS: host-routed discovery, download document, shasums, signature and archive, all through the proxy |
+| `upstream_audit.sh` | npm, `webhook_sink.py` | a disappearance is *told*: the suite serves a directory as an npm registry, `npm install` seeds the cache, the files are removed, two `recheck` probes confirm — one miss tells nobody — and `package_disappeared_upstream` lands at a receiver the suite runs, with RFC 0014 §4.5's payload; the restore delivers `package_reappeared_upstream` |
+| `quarantine.sh` | npm, `batlehub wait`/`why` | a `[registries.security]` registry as a client meets it: first contact **held** with the reason code in npm's own output, the embedded worker clearing it and the same cache recovering, a real OSV advisory refused on the wire and named by `why`, the packument hiding the denied version, a reload to `warn` serving it with the verdict headers, a scanner under `bwrap` that *tries* to reach the tap and cannot, and the flip — a version scanned clean by an OSV the suite runs, installed, then refused after the *scheduler's* rescan, with the admin alert at a receiver the suite runs naming who pulled it |
 | `authz.sh` | all of the above | a caller who **may not pull** is stopped, the one who may is not stopped by accident, and [RFC 0012](/rfc/0012-signed-urls-for-terraform)'s signed URLs let a *closed* Terraform registry install end to end |
 
 Conventions worth knowing before adding one:
@@ -499,10 +509,11 @@ to start under a restricted `ptrace_scope`, not a finding — re-run with
   - `heavy-bundler`: `bash tests/heavy/bundler.sh` (a real `bundle install`
     against a local rubygems registry).
   - `heavy-client` (matrix): one job per ecosystem — `npm`, `pypi`, `openvsx`,
-    `conda`, `nuget`, `composer`, `terraform` — each running
-    `tests/heavy/<suite>.sh`. A matrix rather than seven jobs because only the
-    toolchain setup differs; `fail-fast: false`, because one unhappy client says
-    nothing about the other six.
+    `conda`, `nuget`, `composer`, `terraform`, `nvm`, `sdkman`, `mise`,
+    `cargo`, `go`, `maven`, `pathproxy`, `quarantine`, `upstream_audit` — each
+    running `tests/heavy/<suite>.sh`. A matrix rather than sixteen jobs because only
+    the toolchain setup differs; `fail-fast: false`, because one unhappy
+    client says nothing about the others.
   - `heavy-authz` (matrix): one job per target of `tests/heavy/authz.sh` —
     `matrix`, then `npm`, `pypi`, `openvsx`, `conda`, `nuget`, `composer`,
     `rubygems`, `terraform`. Its own job rather than more rows in `heavy-client`

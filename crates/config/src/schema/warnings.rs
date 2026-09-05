@@ -347,3 +347,8 @@ pub const UPSTREAM_AUDIT_NOTHING_TO_AUDIT: &str = "upstream-audit.nothing-to-aud
 /// `[upstream_audit]` enabled on a process without the `worker` role (RFC
 /// 0014 §13): the sweep runs on a worker, and this one is not it.
 pub const UPSTREAM_AUDIT_NO_WORKER: &str = "upstream-audit.no-worker-role";
+
+/// `on_confirmed = "block"` with `retain_disappeared = false` (RFC 0014
+/// §4.4): a blocked package is never read, so idle eviction deletes the
+/// bytes the block was keeping.
+pub const UPSTREAM_AUDIT_BLOCK_WITHOUT_HOLD: &str = "upstream-audit.block-without-hold";

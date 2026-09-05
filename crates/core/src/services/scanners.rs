@@ -416,3 +416,102 @@ mod tests {
         assert!(RuleAsScanner::for_rule(Box::new(Unwrapped)).is_none());
     }
 }
+
+/// A scanner under the name its `[scanners.<name>]` entry gave it.
+///
+/// `required_scanners` and `scanners_done` speak in config keys, and the
+/// worker records a scanner as done under `name()`. An adapter answers its
+/// *type* — `osv`, `postmortem` — so a second OSV pointed at another
+/// database (`[scanners.osvflip] type = "osv"`) or a postmortem-shaped
+/// probe under its own key was never "done" and held its registry forever
+/// (found by `tests/heavy/quarantine.sh` step 7). This wrapper is the
+/// config key, all the way down: its findings carry it too, so a
+/// per-scanner escalation block keyed on it applies.
+pub struct NamedScanner {
+    name: String,
+    inner: Arc<dyn ArtifactScanner>,
+}
+
+impl NamedScanner {
+    /// `inner` under `name`; the inner scanner itself when the two agree.
+    pub fn wrap(name: &str, inner: Arc<dyn ArtifactScanner>) -> Arc<dyn ArtifactScanner> {
+        if inner.name() == name {
+            inner
+        } else {
+            Arc::new(Self {
+                name: name.to_owned(),
+                inner,
+            })
+        }
+    }
+}
+
+#[async_trait]
+impl ArtifactScanner for NamedScanner {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn supports(&self, kind: RegistryKind) -> bool {
+        self.inner.supports(kind)
+    }
+    fn needs_artifact(&self) -> bool {
+        self.inner.needs_artifact()
+    }
+    fn needs_listing(&self) -> bool {
+        self.inner.needs_listing()
+    }
+    async fn scan(&self, input: &ScanInput) -> Result<Vec<Finding>, ScannerError> {
+        let mut findings = self.inner.scan(input).await?;
+        for f in &mut findings {
+            f.scanner = self.name.clone();
+        }
+        Ok(findings)
+    }
+}
+
+#[cfg(test)]
+mod named_tests {
+    use super::*;
+    use crate::entities::{PackageId, PackageMetadata, ReasonCode, Severity};
+
+    struct Typed;
+    #[async_trait]
+    impl ArtifactScanner for Typed {
+        fn name(&self) -> &str {
+            "osv"
+        }
+        fn supports(&self, _: RegistryKind) -> bool {
+            true
+        }
+        async fn scan(&self, _: &ScanInput) -> Result<Vec<Finding>, ScannerError> {
+            Ok(vec![Finding::new(
+                "osv",
+                FindingKind::Vulnerability,
+                ReasonCode::Vulnerability,
+                Severity::High,
+                "x",
+            )])
+        }
+    }
+
+    #[tokio::test]
+    async fn a_scanner_answers_under_its_config_key_and_so_do_its_findings() {
+        let same = NamedScanner::wrap("osv", Arc::new(Typed));
+        assert_eq!(same.name(), "osv");
+        let renamed = NamedScanner::wrap("osvflip", Arc::new(Typed));
+        assert_eq!(renamed.name(), "osvflip");
+        let input = ScanInput {
+            package: PackageMetadata::minimal(
+                PackageId::new("r", "p", "1"),
+                serde_json::Value::Null,
+            ),
+            kind: RegistryKind::Npm,
+            purl: String::new(),
+            artifact: None,
+            sbom: None,
+            listing: None,
+        };
+        let findings = renamed.scan(&input).await.unwrap();
+        assert_eq!(findings[0].scanner, "osvflip");
+    }
+}

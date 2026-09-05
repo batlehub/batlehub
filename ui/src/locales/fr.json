@@ -271,7 +271,12 @@
     "roleAdmins": "Admins",
     "roleAnonymous": "Anonymes",
     "roleUsers": "Utilisateurs",
+    "upstreamCounts": "{missing} manquant(s) · {disappeared} disparu(s)",
     "upstreamError": "Erreur upstream",
+    "upstreamOpen": "Ouvrir le tableau",
+    "upstreamPolicyAudit": "à la confirmation : audit",
+    "upstreamPolicyBlock": "à la confirmation : block",
+    "upstreamTitle": "Audit amont",
     "whoHasAccess": "Qui y a accès"
   },
   "adminNav": {
@@ -296,7 +301,8 @@
     "subscriptions": "Abonnements",
     "teamNamespaces": "Namespaces d'équipe",
     "warming": "Préchauffage",
-    "authorization": "Autorisation"
+    "authorization": "Autorisation",
+    "upstream": "Amont"
   },
   "adminNotifications": {
     "configuredChannels": "Canaux configurés",
@@ -393,6 +399,49 @@
     "selectARegistry": "Choisir un registre…",
     "selectARegistryToView": "Choisissez un registre pour voir les revendications.",
     "teamNamespaces": "Namespaces d'équipe"
+  },
+  "adminUpstream": {
+    "allRegistries": "Tous les registres",
+    "allStates": "Tous les états",
+    "col": {
+      "confirmed": "Confirmé",
+      "firstMissed": "Premier manque",
+      "lastChecked": "Dernière vérification",
+      "misses": "Manques",
+      "package": "Paquet",
+      "state": "État"
+    },
+    "counts": "{missing} manquant(s) · {disappeared} disparu(s)",
+    "description": "Les paquets que le balayage a vus manquer chez leur amont, et ceux qu'il a confirmés disparus. Un manque est noté, pas cru : la confirmation prend plusieurs balayages.",
+    "empty": "Rien ne manque chez aucun amont. Le premier balayage après activation ne trouve rien, par conception : chaque manque commence à un.",
+    "filterRegistry": "Registre",
+    "filterState": "État",
+    "notRunning": "L'audit amont ne tourne pas dans ce processus : [upstream_audit] est désactivé, ou ce processus n'a pas le rôle worker.",
+    "pageOf": "Page {page} sur {count}",
+    "policy": {
+      "audit": "audit",
+      "block": "block"
+    },
+    "policyHelp": {
+      "audit": "Une disparition confirmée est notée, retenue hors éviction et notifiée. Le service est inchangé.",
+      "block": "Une disparition confirmée est aussi bloquée sur le fil ; l'audit lève son propre blocage au retour du paquet, jamais celui d'un admin."
+    },
+    "policyTitle": "À la confirmation",
+    "recheck": {
+      "confirmed": "Disparition confirmée",
+      "present": "Présent chez l'amont ; la ligne est effacée",
+      "reappeared": "Réapparu ; la ligne est effacée",
+      "stillMissing": "Toujours manquant ({misses} manques)"
+    },
+    "recheckButton": "Revérifier",
+    "rechecking": "Revérification…",
+    "refreshing": "Actualisation…",
+    "state": {
+      "disappeared": "disparu",
+      "missing": "manquant"
+    },
+    "title": "Disparition amont",
+    "wholePackage": "(toutes les versions)"
   },
   "adminWarming": {
     "cacheWarming": "Préchauffage du cache",
@@ -898,7 +947,11 @@
     "tableCaption": "{shown} versions sur {total} · les versions stables d'abord, les plus récentes en premier",
     "tableLabel": "Versions de {name}",
     "unlisted": "non listée",
+    "upstreamBadgeHelp": "L'audit amont (RFC 0014) ne trouve plus cette version chez son amont.",
+    "upstreamBlocked": "bloqué par l'audit amont",
+    "upstreamDisappeared": "disparu chez l'amont",
     "upstreamHasNoneEither": "Rien n'est passé par le proxy, et l'amont ne la connaît pas non plus.",
+    "upstreamMissing": "manquant chez l'amont",
     "upstreamUnreachable": "Rien n'est passé par le proxy, et l'amont est injoignable.",
     "versionsShown": "{shown} sur {total} affichées",
     "vulnerabilityCount": "1 avis | {n} avis",

@@ -78,13 +78,18 @@ HOP = {"connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrad
 ASKED = ("Range", "If-None-Match", "If-Modified-Since")
 # Response headers worth recording: the ones that say what kind of answer it is.
 # …plus the two RFC 0019 headers a forge response carries: which kind of ref
-# answered, and which commit. The mise suite asserts on them.
+# answered, and which commit. The mise suite asserts on them. And the two
+# RFC 0018 verdict headers: a refusal's state and reason code, and — the
+# half no status can show — a `200` that was served *warned*. The quarantine
+# suite asserts on both.
 ANSWERED = (
     "Content-Range",
     "ETag",
     "Repr-Digest",
     "X-BatleHub-Ref-Kind",
     "X-BatleHub-Resolved-Commit",
+    "X-BatleHub-Verdict",
+    "X-BatleHub-Reason",
 )
 
 

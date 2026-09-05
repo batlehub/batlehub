@@ -63,6 +63,20 @@ impl NotificationService {
     }
 }
 
+// ── The domain's view of dispatch ────────────────────────────────────────────
+
+/// [`NotificationSink`](batlehub_core::ports::NotificationSink) over a
+/// [`NotificationService`]: what a core service — the upstream audit (RFC
+/// 0014 §4.5) — is handed so it can report without knowing about channels.
+/// Fire-and-forget through `dispatch_event_background`, as the port promises.
+pub struct NotificationSinkAdapter(pub Arc<NotificationService>);
+
+impl batlehub_core::ports::NotificationSink for NotificationSinkAdapter {
+    fn emit(&self, event: batlehub_core::entities::NotificationEvent) {
+        self.0.dispatch_event_background(event);
+    }
+}
+
 // ── Inbound webhook HMAC verification ────────────────────────────────────────
 
 /// Verify a `X-Hub-Signature-256: sha256=<hex>` header against the request body.

@@ -89,6 +89,7 @@ async fn main() -> Result<()> {
         Command::Authz { cmd } => authz::run(cmd, &client, cli.json).await?,
         Command::Mise { cmd } => mise::run(cmd, &client, cli.json).await?,
         Command::Why(args) => security::run_why(args, &client, cli.json).await?,
+        Command::Verdicts { cmd } => security::run_verdicts(cmd, &client, cli.json).await?,
         Command::Wait(args) => {
             let code = security::run_wait(args, &client, cli.json).await?;
             if code != 0 {

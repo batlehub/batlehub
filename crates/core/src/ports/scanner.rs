@@ -92,3 +92,18 @@ pub trait ArtifactScanner: Send + Sync {
     /// Scan. An empty `Ok` is a clean answer; an `Err` is not an answer.
     async fn scan(&self, input: &ScanInput) -> Result<Vec<Finding>, ScannerError>;
 }
+
+/// An *enrichment* scanner (RFC 0018 §6.3, `mlab`): runs after the others
+/// and attaches to findings that already exist — a CVSS vector, an EPSS
+/// probability, a CISA KEV listing — raising a severity where the listing
+/// warrants it. It never creates a finding of its own, which is why it is
+/// never a sensible member of `required_scanners`.
+#[async_trait]
+pub trait FindingEnricher: Send + Sync {
+    /// The name `[scanners.<name>]` uses.
+    fn name(&self) -> &str;
+
+    /// Enrich `findings` in place. An `Err` is "the enrichment did not
+    /// happen"; the findings stand as they were.
+    async fn enrich(&self, findings: &mut Vec<Finding>) -> Result<(), ScannerError>;
+}

@@ -50,6 +50,26 @@ impl VerdictRepository for InMemoryVerdictRepository {
             .cloned()
             .collect())
     }
+    async fn list_due_for_rescan(
+        &self,
+        registry: &str,
+        before: DateTime<Utc>,
+        limit: u64,
+    ) -> Result<Vec<PackageId>, CoreError> {
+        let rows = self.rows.read().await;
+        let mut due: Vec<&Verdict> = rows
+            .values()
+            .filter(|v| v.package.registry == registry)
+            .filter(|v| v.last_scanned_at.is_none_or(|at| at < before))
+            .collect();
+        due.sort_by_key(|v| v.last_scanned_at);
+        Ok(due
+            .into_iter()
+            .take(limit as usize)
+            .map(|v| v.package.clone())
+            .collect())
+    }
+
     async fn list_by_state(
         &self,
         registry: &str,
@@ -75,6 +95,35 @@ struct Row {
     leased_by: Option<String>,
     completed: bool,
     last_error: Option<String>,
+}
+
+/// Pick up to `n` of `sorted` (already in priority-then-age order): `n - 1`
+/// from the front, then the oldest job of the *lowest* tier still waiting —
+/// the reserved slot — or, when nothing of a lower tier waits, the next in
+/// order. With `n == 1` there is nothing to reserve.
+pub fn starvation_pick<T: Copy, P: Ord, A: Ord>(
+    sorted: &[T],
+    n: usize,
+    priority: impl Fn(&T) -> P,
+    created: impl Fn(&T) -> A,
+) -> Vec<T> {
+    if n <= 1 || sorted.len() <= n {
+        return sorted.iter().take(n).copied().collect();
+    }
+    let mut out: Vec<T> = sorted.iter().take(n - 1).copied().collect();
+    let rest = &sorted[n - 1..];
+    let lowest = rest
+        .iter()
+        .max_by(|a, b| {
+            priority(a)
+                .cmp(&priority(b))
+                .then(created(b).cmp(&created(a)))
+        })
+        .copied();
+    if let Some(j) = lowest {
+        out.push(j);
+    }
+    out
 }
 
 #[derive(Default)]
@@ -164,8 +213,18 @@ impl ScanQueue for InMemoryScanQueue {
             .map(|(i, _)| i)
             .collect();
         candidates.sort_by_key(|&i| (rows[i].job.trigger.priority(), rows[i].job.created_at));
+        // The anti-starvation slot (RFC 0018 §4.2, decision 16): of `n`
+        // slots, one goes to the *lowest* tier waiting, so a flood of
+        // `FirstSeen` never parks a backfill forever. The same rule the
+        // Postgres queue applies, in two picks.
+        let picked = starvation_pick(
+            &candidates,
+            n as usize,
+            |&i| rows[i].job.trigger.priority(),
+            |&i| rows[i].job.created_at,
+        );
         let mut out = Vec::new();
-        for i in candidates.into_iter().take(n as usize) {
+        for i in picked {
             let r = &mut rows[i];
             r.job.attempts += 1;
             r.job.leased_until = Some(now + Duration::seconds(lease_secs as i64));
@@ -217,6 +276,11 @@ impl ScanQueue for InMemoryScanQueue {
             .take(n as usize)
             .map(|r| r.job.clone())
             .collect())
+    }
+
+    async fn try_lead(&self, _key: i64) -> Result<bool, CoreError> {
+        // One process, by construction.
+        Ok(true)
     }
 
     async fn queued(&self) -> Result<Vec<QueuedCount>, CoreError> {

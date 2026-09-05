@@ -441,6 +441,413 @@ pub async fn rescan_verdict(
     }))
 }
 
+/// `?since=30d&format=csv` on the pullers report.
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+pub struct PullersQuery {
+    /// A window back from now — `30d`, `12h`, `90m`, `3600s`, or a bare
+    /// number of seconds — or an RFC 3339 instant. Default: the registry's
+    /// `pullers_window_days`.
+    pub since: Option<String>,
+    /// `json` (default) or `csv`.
+    pub format: Option<String>,
+}
+
+/// Who pulled one version (RFC 0018 §4.2 *Who pulled what*).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PullersResponse {
+    pub registry: String,
+    pub package_name: String,
+    pub version: String,
+    /// The start of the window the rows cover.
+    pub since: chrono::DateTime<chrono::Utc>,
+    pub pullers: Vec<batlehub_core::services::Puller>,
+}
+
+/// `30d` / `12h` / `90m` / `3600s` / `3600` back from `now`, or RFC 3339.
+fn parse_since(
+    raw: Option<&str>,
+    default_window: std::time::Duration,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<chrono::DateTime<chrono::Utc>, AppError> {
+    let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(now - chrono::Duration::from_std(default_window).unwrap_or_default());
+    };
+    if let Ok(at) = chrono::DateTime::parse_from_rfc3339(raw) {
+        return Ok(at.with_timezone(&chrono::Utc));
+    }
+    let split = raw.find(|c: char| !c.is_ascii_digit()).unwrap_or(raw.len());
+    let (num, unit) = raw.split_at(split);
+    let n: i64 = num.parse().map_err(|_| {
+        AppError::bad_request(format!(
+            "since '{raw}' is not a window (30d, 12h, 90m, 3600s) or an RFC 3339 instant"
+        ))
+    })?;
+    let secs = match unit.trim() {
+        "" | "s" => n,
+        "m" => n * 60,
+        "h" => n * 3600,
+        "d" => n * 86_400,
+        other => {
+            return Err(AppError::bad_request(format!(
+                "since: unknown unit '{other}' (s, m, h, d)"
+            )))
+        }
+    };
+    Ok(now - chrono::Duration::seconds(secs))
+}
+
+/// Who pulled this version inside a window — the incident question,
+/// answered from `access_events` through the same query the flip alert
+/// carried (RFC 0018 decision 28: one who-pulled query, not two).
+///
+/// `audit:read` on the registry: the report is a view of the access log,
+/// and the same reader holds both. Exposure only — allowed downloads; a
+/// refused request delivered no bytes (RFC 0002 decision 5). Anonymous
+/// pulls are kept under `ip:<addr>`.
+#[utoipa::path(
+    get,
+    path = "/api/v1/verdicts/{registry}/{name}/{version}/pullers",
+    tag = "security",
+    params(
+        ("registry" = String, Path, description = "Registry name"),
+        ("name" = String, Path, description = "Package name"),
+        ("version" = String, Path, description = "Version"),
+        PullersQuery,
+    ),
+    responses(
+        (status = 200, description = "Who pulled the version in the window; `?format=csv` selects CSV, anything else JSON", content(
+            (PullersResponse = "application/json"),
+            (crate::handlers::schemas::ProtocolDocument = "text/csv"),
+        )),
+        (status = 400, description = "An unparseable `since`"),
+        (status = 403, description = "`audit:read` on the registry required"),
+        (status = 404, description = "The registry has no security profile"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[get("/api/v1/verdicts/{registry}/{name}/{version}/pullers")]
+pub async fn list_pullers(
+    path: web::Path<(String, String, String)>,
+    query: web::Query<PullersQuery>,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+    admin_svc: web::Data<Arc<batlehub_core::services::AdminService>>,
+) -> Result<HttpResponse, AppError> {
+    let (registry, name, version) = path.into_inner();
+    batlehub_core::services::validate_coordinate(&name, &version, None).map_err(AppError::from)?;
+    crate::handlers::back_office::require_verb(
+        &identity,
+        Action::AuditRead,
+        Some(&registry),
+        &svc.hot,
+    )
+    .await?;
+    let policy = svc.hot.read().await.security.get(&registry).cloned();
+    let Some(policy) = policy else {
+        return Err(AppError::not_found(format!(
+            "registry '{registry}' has no security profile"
+        )));
+    };
+    let now = chrono::Utc::now();
+    let since = parse_since(query.since.as_deref(), policy.pullers_window, now)?;
+    let requested = PackageId::new(&registry, &name, &version);
+    // On a forge the pulls were logged against the commit (RFC 0019 §13.1).
+    let pkg = match resolve_ref_for(&svc, &requested).await {
+        Some(r) => PackageId::new(&registry, &name, &r.sha),
+        None => requested,
+    };
+    let pullers = batlehub_core::services::pullers_for(admin_svc.repo.as_ref(), &pkg, since)
+        .await
+        .map_err(AppError::from)?;
+    if query.format.as_deref() == Some("csv") {
+        let filename = format!(
+            "pullers-{}-{}-{}.csv",
+            registry,
+            name.replace('/', "_"),
+            version
+        );
+        return Ok(HttpResponse::Ok()
+            .content_type("text/csv; charset=utf-8")
+            .insert_header((
+                actix_web::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ))
+            .body(batlehub_core::services::pullers::to_csv(&pullers)));
+    }
+    Ok(HttpResponse::Ok().json(PullersResponse {
+        registry,
+        package_name: name,
+        version,
+        since,
+        pullers,
+    }))
+}
+
+// ── the admin surface (RFC 0018 phase 5) ─────────────────────────────────────
+
+/// `?registry=&state=&limit=` on the admin listing.
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+pub struct VerdictListQuery {
+    pub registry: String,
+    /// `allowed`, `warned`, `quarantined` or `denied`; absent lists every
+    /// state.
+    pub state: Option<String>,
+    /// Per state; default 100, at most 1000.
+    pub limit: Option<u64>,
+}
+
+/// The admin listing: the verdicts of one registry, newest evaluation
+/// first, per state (RFC 0018 §4.2 *CLI*: `batlehub verdicts list`).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct VerdictListResponse {
+    pub registry: String,
+    pub items: Vec<Verdict>,
+}
+
+fn parse_states(raw: Option<&str>) -> Result<Vec<VerdictState>, AppError> {
+    match raw.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok(vec![
+            VerdictState::Denied,
+            VerdictState::Quarantined,
+            VerdictState::Warned,
+            VerdictState::Allowed,
+        ]),
+        Some(s) => s.parse::<VerdictState>().map(|st| vec![st]).map_err(|_| {
+            AppError::bad_request(format!(
+                "state '{s}' is not one of: allowed, warned, quarantined, denied"
+            ))
+        }),
+    }
+}
+
+/// The verdicts of a registry, by state. `system:read`. Findings are
+/// included: the reader is an administrator, and the listing exists to
+/// answer "what is held, and why" in one page.
+#[utoipa::path(
+    get,
+    path = "/api/v1/admin/verdicts",
+    tag = "security",
+    params(VerdictListQuery),
+    responses(
+        (status = 200, description = "The verdicts, newest first per state", body = VerdictListResponse),
+        (status = 400, description = "An unknown `state`"),
+        (status = 403, description = "`system:read` required"),
+        (status = 404, description = "The registry has no security profile"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[get("/api/v1/admin/verdicts")]
+pub async fn list_verdicts(
+    query: web::Query<VerdictListQuery>,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+) -> Result<HttpResponse, AppError> {
+    crate::handlers::back_office::require_verb(
+        &identity,
+        Action::SystemRead,
+        Some(&query.registry),
+        &svc.hot,
+    )
+    .await?;
+    let verdicts = {
+        let hot = svc.hot.read().await;
+        if !hot.security.contains_key(&query.registry) {
+            return Err(AppError::not_found(format!(
+                "registry '{}' has no security profile",
+                query.registry
+            )));
+        }
+        hot.verdicts.clone()
+    };
+    let Some(verdicts) = verdicts else {
+        return Err(AppError::not_found("no verdict store in this process"));
+    };
+    let limit = query.limit.unwrap_or(100).clamp(1, 1000);
+    let mut items = Vec::new();
+    for state in parse_states(query.state.as_deref())? {
+        items.extend(
+            verdicts
+                .list_by_state(&query.registry, state, limit)
+                .await
+                .map_err(AppError::from)?,
+        );
+    }
+    Ok(HttpResponse::Ok().json(VerdictListResponse {
+        registry: query.registry.clone(),
+        items,
+    }))
+}
+
+/// A bulk rescan or a backfill.
+#[derive(Debug, serde::Deserialize, ToSchema)]
+pub struct BulkScanRequest {
+    pub registry: String,
+    /// Rescan only the verdicts in this state; absent rescans every
+    /// verdict of the registry. Ignored by `backfill`.
+    #[serde(default)]
+    pub state: Option<String>,
+}
+
+/// What a bulk operation queued.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BulkScanResponse {
+    pub registry: String,
+    /// Coordinates considered.
+    pub considered: usize,
+    /// Jobs created; a coordinate with an open job already is not counted.
+    pub queued: usize,
+    pub trigger: String,
+}
+
+/// Queue a `Rescan` for every verdict of a registry, or every verdict in
+/// one state (RFC 0018 §4.2 *CLI*). `system:write`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/verdicts/rescan",
+    tag = "security",
+    request_body = BulkScanRequest,
+    responses(
+        (status = 202, description = "The rescans are queued", body = BulkScanResponse),
+        (status = 400, description = "An unknown `state`"),
+        (status = 403, description = "`system:write` required"),
+        (status = 404, description = "The registry has no security profile"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[post("/api/v1/admin/verdicts/rescan")]
+pub async fn bulk_rescan(
+    body: web::Json<BulkScanRequest>,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+) -> Result<HttpResponse, AppError> {
+    let req = body.into_inner();
+    crate::handlers::back_office::require_verb(
+        &identity,
+        Action::SystemWrite,
+        Some(&req.registry),
+        &svc.hot,
+    )
+    .await?;
+    let (verdicts, queue) = {
+        let hot = svc.hot.read().await;
+        if !hot.security.contains_key(&req.registry) {
+            return Err(AppError::not_found(format!(
+                "registry '{}' has no security profile",
+                req.registry
+            )));
+        }
+        (hot.verdicts.clone(), hot.scan_queue.clone())
+    };
+    let (Some(verdicts), Some(queue)) = (verdicts, queue) else {
+        return Err(AppError::not_found("no verdict store in this process"));
+    };
+    let mut considered = 0usize;
+    let mut queued = 0usize;
+    for state in parse_states(req.state.as_deref())? {
+        for v in verdicts
+            .list_by_state(&req.registry, state, 1000)
+            .await
+            .map_err(AppError::from)?
+        {
+            considered += 1;
+            let published_at = svc
+                .cached_metadata_for(&v.package)
+                .await
+                .and_then(|m| m.published_at);
+            if queue
+                .enqueue(&v.package, published_at, ScanTrigger::Rescan)
+                .await
+                .map_err(AppError::from)?
+            {
+                queued += 1;
+            }
+        }
+    }
+    tracing::info!(registry = %req.registry, by = ?identity.0.user_id, considered, queued, "security: bulk rescan requested");
+    Ok(HttpResponse::Accepted().json(BulkScanResponse {
+        registry: req.registry,
+        considered,
+        queued,
+        trigger: ScanTrigger::Rescan.as_str().to_owned(),
+    }))
+}
+
+/// Queue a `Backfill` — the lowest priority — for every cached version of
+/// a registry (RFC 0018 §4.2 *CLI*: `batlehub verdicts backfill`), so an
+/// estate that turned `[security]` on with a warm cache judges what it
+/// already holds without a user waiting on any of it. `system:write`.
+#[utoipa::path(
+    post,
+    path = "/api/v1/admin/verdicts/backfill",
+    tag = "security",
+    request_body = BulkScanRequest,
+    responses(
+        (status = 202, description = "The backfill is queued", body = BulkScanResponse),
+        (status = 403, description = "`system:write` required"),
+        (status = 404, description = "The registry has no security profile"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[post("/api/v1/admin/verdicts/backfill")]
+pub async fn backfill_verdicts(
+    body: web::Json<BulkScanRequest>,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+    inventory: web::Data<Arc<dyn batlehub_core::ports::ArtifactInventory>>,
+) -> Result<HttpResponse, AppError> {
+    let req = body.into_inner();
+    crate::handlers::back_office::require_verb(
+        &identity,
+        Action::SystemWrite,
+        Some(&req.registry),
+        &svc.hot,
+    )
+    .await?;
+    let queue = {
+        let hot = svc.hot.read().await;
+        if !hot.security.contains_key(&req.registry) {
+            return Err(AppError::not_found(format!(
+                "registry '{}' has no security profile",
+                req.registry
+            )));
+        }
+        hot.scan_queue.clone()
+    };
+    let Some(queue) = queue else {
+        return Err(AppError::not_found("no scan queue in this process"));
+    };
+    let cached = inventory
+        .list_artifacts(&req.registry)
+        .await
+        .map_err(AppError::from)?;
+    let mut queued = 0usize;
+    let mut seen = std::collections::HashSet::new();
+    for row in &cached {
+        let id = PackageId::new(&req.registry, &row.package_name, &row.version);
+        if !seen.insert(id.cache_key()) {
+            continue;
+        }
+        let published_at = svc
+            .cached_metadata_for(&id)
+            .await
+            .and_then(|m| m.published_at);
+        if queue
+            .enqueue(&id, published_at, ScanTrigger::Backfill)
+            .await
+            .map_err(AppError::from)?
+        {
+            queued += 1;
+        }
+    }
+    tracing::info!(registry = %req.registry, by = ?identity.0.user_id, considered = seen.len(), queued, "security: backfill requested");
+    Ok(HttpResponse::Accepted().json(BulkScanResponse {
+        registry: req.registry,
+        considered: seen.len(),
+        queued,
+        trigger: ScanTrigger::Backfill.as_str().to_owned(),
+    }))
+}
+
 /// Resolve a forge ref, or `None` for a coordinate that names none — every
 /// package registry, and a forge coordinate whose version is already a
 /// commit.

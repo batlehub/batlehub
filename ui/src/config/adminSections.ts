@@ -67,6 +67,8 @@ export const OPERATIONS_TABS = [
   // RFC 0008 §6.6: the air gap is an operation too — what came across it,
   // and what the next bundle needs.
   { to: "/admin/operations/air-gap", label: "adminNav.airGap" },
+  // RFC 0014 §4.6: what the upstream audit knows, and a probe on demand.
+  { to: "/admin/operations/upstream", label: "adminNav.upstream" },
 ];
 
 /**

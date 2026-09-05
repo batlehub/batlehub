@@ -5,8 +5,10 @@
 //! [`extract`] policy, and `sigstore` for provenance. The external services
 //! (`socket`, `mlab`) are phase 5.
 
+pub mod mlab;
 pub mod osv;
 pub mod sigstore;
+pub mod socket;
 pub mod subprocess;
 
 #[cfg(feature = "sbom")]
@@ -18,8 +20,10 @@ pub mod postmortem;
 #[cfg(feature = "sbom")]
 pub mod trivy;
 
+pub use mlab::MlabEnricher;
 pub use osv::OsvArtifactScanner;
 pub use sigstore::SigstoreScanner;
+pub use socket::SocketScanner;
 pub use subprocess::Sandbox;
 
 #[cfg(feature = "sbom")]

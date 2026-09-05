@@ -17,11 +17,15 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 
 use crate::entities::{
-    coordinate_purl, Finding, FindingKind, PackageMetadata, ReasonCode, RegistryKind, ScanJob,
-    SecurityPolicy, Severity,
+    coordinate_purl, Finding, FindingKind, NotificationEvent, NotificationEventType,
+    PackageMetadata, ReasonCode, RegistryKind, ScanJob, SecurityPolicy, Severity, Verdict,
+    VerdictState,
 };
 use crate::error::CoreError;
-use crate::ports::{ArtifactScanner, SbomRepository, ScanQueue, ScannerError, WorkerRegistry};
+use crate::ports::{
+    ArtifactScanner, FindingEnricher, NotificationSink, PackageRepository, SbomRepository,
+    ScanQueue, ScannerError, WorkerRegistry,
+};
 use crate::services::hot_config::HotConfigLock;
 use crate::services::verdict::VerdictService;
 
@@ -62,6 +66,9 @@ pub struct ScanWorker {
     pub hot: HotConfigLock,
     /// The scanners built from `[scanners]`, by name.
     pub scanners: HashMap<String, Arc<dyn ArtifactScanner>>,
+    /// The enrichment scanners (`mlab`), by name: run after the others over
+    /// what they found (RFC 0018 §6.3).
+    pub enrichers: HashMap<String, Arc<dyn FindingEnricher>>,
     /// The artifact cache, for the scanners that read bytes (phase 3): a
     /// cached artifact is read from here, an uncached one is fetched from
     /// upstream through the registry's client and *not* cached — the proxy
@@ -70,7 +77,17 @@ pub struct ScanWorker {
     /// The most bytes the worker will hold for one scan; the proxy's
     /// `max_artifact_size_bytes`, or 500 MiB.
     pub max_artifact_bytes: u64,
+    /// Where a flip is reported (RFC 0018 decision 23) and a lifted hold
+    /// announced. `None` records the transition and tells nobody.
+    pub notifier: Option<Arc<dyn NotificationSink>>,
+    /// The access log, for who pulled a version before its verdict flipped
+    /// and who was refused it while it was held. `None` sends the alert
+    /// without a pullers list, and says so on it.
+    pub events: Option<Arc<dyn PackageRepository>>,
 }
+
+/// The actor the worker's own events carry (RFC 0014 decision 12's form).
+pub const WORKER_ACTOR: &str = "system:security-worker";
 
 /// What one pass over the queue did.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -195,6 +212,26 @@ impl ScanWorker {
         };
         let mut package = PackageMetadata::minimal(job.package.clone(), serde_json::Value::Null);
         package.published_at = job.published_at;
+        if package.published_at.is_none() {
+            // A rescan queued without the date — the metadata cache had let
+            // it go — must not re-judge a dated version as
+            // `TIMESTAMP_MISSING`: ask upstream once, as the proxy would.
+            let client = self
+                .hot
+                .read()
+                .await
+                .registries
+                .get(&job.package.registry)
+                .cloned();
+            if let Some(client) = client {
+                match client.resolve_metadata(&job.package).await {
+                    Ok(meta) => package.published_at = meta.published_at,
+                    Err(e) => {
+                        tracing::debug!(package = %job.package, error = %e, "security worker: no date from upstream for the rescan")
+                    }
+                }
+            }
+        }
         let purl = coordinate_purl(kind, &job.package.name, &job.package.version);
         let sbom = match &self.sboms {
             Some(repo) => repo
@@ -308,6 +345,26 @@ impl ScanWorker {
             }
         }
 
+        // Enrichment last, over everything the scanners said; a registry
+        // names it in `scanners` like any other, and it is "done" only when
+        // it answered.
+        for name in &policy.scanners {
+            let Some(enricher) = self.enrichers.get(name) else {
+                continue;
+            };
+            match tokio::time::timeout(self.config.job_timeout, enricher.enrich(&mut findings))
+                .await
+            {
+                Ok(Ok(())) => done.push(enricher.name().to_owned()),
+                Ok(Err(e)) => {
+                    tracing::warn!(package = %job.package, scanner = enricher.name(), error = %e, "security worker: enrichment did not answer");
+                }
+                Err(_) => {
+                    tracing::warn!(package = %job.package, scanner = enricher.name(), "security worker: enrichment timed out");
+                }
+            }
+        }
+
         let (from, verdict) = self
             .verdicts
             .record_scan(&package, &policy, findings, done, Utc::now())
@@ -326,7 +383,123 @@ impl ScanWorker {
             codes = ?verdict.reason_codes,
             "security worker: verdict recorded"
         );
+        if let Some(from) = from {
+            // RFC 0018 decision 23: a version that was being served and is
+            // now refused is the one transition an incident is built on —
+            // the admin is told, with who pulled it. A version that was
+            // held and is now served is told to the ones who were refused.
+            if from.is_served() && verdict.state == VerdictState::Denied {
+                self.alert_flip(job, &policy, from, &verdict).await;
+            } else if from == VerdictState::Quarantined && verdict.is_served() {
+                self.announce_release(job, &policy, from, &verdict).await;
+            }
+        }
         Ok(())
+    }
+
+    /// `verdict_changed` (RFC 0018 §4.2 *Rescan*): the coordinate, the
+    /// codes, the findings, and the identities that pulled it inside
+    /// `pullers_window` — to the operator's subscriptions, never to the
+    /// pullers.
+    async fn alert_flip(
+        &self,
+        job: &ScanJob,
+        policy: &SecurityPolicy,
+        from: VerdictState,
+        verdict: &Verdict,
+    ) {
+        let Some(sink) = &self.notifier else {
+            return;
+        };
+        let window = chrono::Duration::from_std(policy.pullers_window).unwrap_or_default();
+        let since = Utc::now() - window;
+        let (pullers, pullers_known) = match &self.events {
+            Some(repo) => {
+                match crate::services::pullers_for(repo.as_ref(), &job.package, since).await {
+                    Ok(p) => (p, true),
+                    Err(e) => {
+                        tracing::warn!(package = %job.package, error = %e, "security worker: could not list pullers for the alert");
+                        (Vec::new(), false)
+                    }
+                }
+            }
+            None => (Vec::new(), false),
+        };
+        let mut event = NotificationEvent::new(
+            NotificationEventType::VerdictChanged,
+            &job.package.registry,
+            &job.package.name,
+            Some(job.package.version.clone()),
+            WORKER_ACTOR,
+        );
+        event.metadata = serde_json::json!({
+            "from": from.as_str(),
+            "to": verdict.state.as_str(),
+            "reason_codes": verdict.reason_codes,
+            "trigger": job.trigger.as_str(),
+            "findings": verdict.findings.iter().map(|f| serde_json::json!({
+                "scanner": f.scanner,
+                "code": f.code,
+                "severity": f.severity.as_str(),
+                "summary": f.summary,
+                "reference": f.reference,
+            })).collect::<Vec<_>>(),
+            "pullers": pullers,
+            "pullers_known": pullers_known,
+            "pullers_window_days": policy.pullers_window.as_secs() / 86_400,
+            "since": since,
+        });
+        tracing::warn!(
+            package = %job.package,
+            from = %from,
+            to = %verdict.state,
+            pullers = pullers.len(),
+            "security worker: served verdict flipped to denied; admin alert sent"
+        );
+        sink.emit(event);
+    }
+
+    /// `artifact_released` (RFC 0018 §4.2): a hold lifted; carries the
+    /// identities that were refused the version while it was held, and is
+    /// sent only when there is at least one.
+    async fn announce_release(
+        &self,
+        job: &ScanJob,
+        policy: &SecurityPolicy,
+        from: VerdictState,
+        verdict: &Verdict,
+    ) {
+        let (Some(sink), Some(repo)) = (&self.notifier, &self.events) else {
+            return;
+        };
+        let window = chrono::Duration::from_std(policy.pullers_window).unwrap_or_default();
+        let since = Utc::now() - window;
+        let refused = match crate::services::refused_for(repo.as_ref(), &job.package, since).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(package = %job.package, error = %e, "security worker: could not list who was refused");
+                return;
+            }
+        };
+        if refused.is_empty() {
+            return;
+        }
+        let mut event = NotificationEvent::new(
+            NotificationEventType::ArtifactReleased,
+            &job.package.registry,
+            &job.package.name,
+            Some(job.package.version.clone()),
+            WORKER_ACTOR,
+        );
+        event.metadata = serde_json::json!({
+            "from": from.as_str(),
+            "to": verdict.state.as_str(),
+            "reason_codes": verdict.reason_codes,
+            "trigger": job.trigger.as_str(),
+            "recipients": refused,
+            "since": since,
+        });
+        sink.emit(event);
     }
 
     /// The bytes of the version's primary artifact — the one file the kind

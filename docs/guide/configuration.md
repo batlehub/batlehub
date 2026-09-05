@@ -1437,8 +1437,10 @@ require_provenance     = false
 deny_install_hooks     = "warn"      # "deny" | "warn" | "ignore"
 scanner_error          = "quarantine" # "quarantine" | "warn" | "ignore"
 
-[registries.security.rescan]         # parsed now, read by the rescan worker (phase 4)
-interval_secs = 0
+pullers_window_days    = 30          # how far back a flip alert names who pulled the version
+
+[registries.security.rescan]         # the rescan timer (RFC 0018 phase 4)
+interval_secs = 0                    # > 0: every verdict older than this is scanned again
 on_webhook    = true
 ```
 
@@ -1448,12 +1450,14 @@ on_webhook    = true
 | `min_age_secs` | u64 | `86400` | Below this age a version is held (`MIN_AGE_NOT_MET`) whatever the scanners say. Below `3600` is a config error: an hour is the point of the quarantine. |
 | `mature_age_secs` | u64 | `86400` | Above this age a version whose scan has not returned is served `warned` (`SCAN_PENDING`) and scanned behind the request. `0` never serves unscanned. Must be at least `min_age_secs`. With both at their defaults the scan-hold window is empty — the recommended production profile is 3 days / 30 days. |
 | `hold_missing_timestamp` | bool | `true` | Hold a version the upstream did not date (`TIMESTAMP_MISSING`, open-ended: no `available_at`, and the maturity bypass does not reach it). `false` skips the age gate for it, as `release_age_gate` does by default. On the path-proxy kinds (`deb`, `rpm`, `pacman`, `generic`, `jetbrains`) no version is dated, so `true` holds everything and raises `security.timestamp-hold-unavailable`. |
-| `scanners` | string[] | `["osv"]` | Which scanners the worker runs on this registry. Each name is a `[scanners.<name>]` entry; `osv` is implicit. A scanner this build cannot run yet (`trivy`, `postmortem`, `guarddog`, `sigstore` land with phase 3; `socket`, `mlab` with phase 5) is refused at startup. |
+| `scanners` | string[] | `["osv"]` | Which scanners the worker runs on this registry. Each name is a `[scanners.<name>]` entry; `osv` is implicit. Every type the RFC names is built: `osv`, `postmortem`, `guarddog`, `trivy`, `sigstore`, and the two external services `socket` (Socket.dev, one call per coordinate, needs `api_key`) and `mlab` (mlab.sh's CVE API, an *enrichment*: it attaches CVSS, EPSS and CISA KEV to the vulnerability findings the others produced and raises a KEV-listed CVE to `critical`; it never creates a finding, so listing it under `required_scanners` warns). A scanner answers under its config key, so a second `osv` pointed at another `api_url` is its own name. |
 | `required_scanners` | string[] | `["osv"]` | Must all have answered before the version is served. Must be a subset of `scanners`. Empty with `mode = "warn"` raises `security.unprotected`: nothing can ever hold a version. |
 | `max_severity` | string | `"high"` | `low`, `medium`, `high` or `critical`. A finding at or above it produces `denied` in `block` mode and `warned` in `warn` mode. |
 | `require_provenance` | bool | `false` | A version without a provenance attestation is `PROVENANCE_MISSING` (a finding at `high`). Only meaningful with a scanner that checks provenance (`sigstore`, phase 3). |
 | `deny_install_hooks` | string | `"warn"` | What an install hook (npm `preinstall`, a Python `setup.py`) is: `deny`, `warn` or `ignore`. Read by the archive scanners of phase 3. |
 | `scanner_error` | string | `"quarantine"` | A scanner that cannot answer after `[worker].max_attempts`: `quarantine` holds the version (`SCANNER_ERROR`, time-bound), `warn` serves it warned, `ignore` drops the finding. |
+| `pullers_window_days` | u32 | `30` | When a rescan moves a *served* version to `denied`, the `verdict_changed` notification names every identity that pulled it inside this window, read from the access log (RFC 0018 decision 23); it is also the default window of `GET /api/v1/verdicts/{registry}/{name}/{version}/pullers` and `batlehub verdicts pullers`. Anonymous pulls are kept under `ip:<addr>`. |
+| `rescan.interval_secs` | u64 | `0` | `> 0`: the rescan scheduler — one per estate, elected with a PostgreSQL advisory lock — queues a `Rescan` (below `FirstSeen` and `Webhook`, above `Backfill`) for every verdict of this registry whose last scan is older than the interval. A verdict that flips from served to `denied` raises the alert above; a hold that lifts raises `artifact_released` to the identities that were refused it. `0` never rescans on a clock; `POST …/rescan` and the `security.rescan` webhook still do. |
 
 > **Where the rules go.** `min_age_secs` *replaces* a `release_age_gate` rule
 > on this registry — declaring both is a config error. The `cve_gate`,
@@ -2211,7 +2215,7 @@ interval_secs        = 21600    # 6 h between sweeps; floor 300
 confirm_after        = 3        # consecutive sweeps a miss must survive
 confirm_min_age_secs = 86400    # …and at least this long since the first miss
 outage_ratio         = 0.25     # above this fraction missing, the sweep is void
-on_confirmed         = "audit"  # "audit" today; "block" is RFC 0014 phase 6
+on_confirmed         = "audit"  # or "block": refuse a confirmed disappearance on the wire
 retain_disappeared   = true     # hold confirmed artifacts back from eviction
 skip_recently_seen   = true     # real traffic counts as a successful probe
 registries           = []       # empty = every proxy/hybrid registry
@@ -2224,10 +2228,27 @@ registries           = []       # empty = every proxy/hybrid registry
 | `confirm_after` | u32 | `3` | Consecutive misses, each in a valid sweep, before a disappearance is believed. `0` is refused. |
 | `confirm_min_age_secs` | u64 | `86400` | The other floor: at least this long since the first miss. Both must clear, so with the defaults the fastest confirmation is 24 h. Lowering only `interval_secs` buys more probes and the same answer. |
 | `outage_ratio` | f64 | `0.25` | A sweep in which more than this fraction of a registry's probed packages came back missing is **void**: nothing recorded, nothing confirmed. An outage affects nearly everything; an unpublish affects one thing. Must be in `(0.0, 1.0]`. Below ten probed packages the ratio is skipped and the two floors carry the decision alone. |
-| `on_confirmed` | string | `"audit"` | What a confirmation does beyond recording, holding and logging. `"block"` (refuse on the wire through the block list) is RFC 0014 phase 6 and is refused by this build; any other value is a config error rather than a fallback. |
+| `on_confirmed` | string | `"audit"` | What a confirmation does beyond recording, holding and notifying. `"block"` also blocks every held version of the name through the admin block list (`blocked_by = system:upstream-audit`), and lifts *its own* block when the package reappears — never an admin's. Any other value is a config error rather than a fallback. See the paragraph below before choosing `"block"`, and the [operations page](/operations/upstream-disappearance) for what it looks like from the console. |
 | `retain_disappeared` | bool | `true` | Hold a confirmed artifact back from the TTL, idle and keep-latest-N eviction passes, and re-pin its cached metadata each sweep. **Not** from the LRU size cap: that exists to stop the disk filling, so held artifacts sort last there instead of being exempt. |
 | `skip_recently_seen` | bool | `true` | A package re-cached from upstream since the last sweep started was demonstrably present; its probe is skipped. |
 | `registries` | string[] | `[]` | Only these registries. Empty means every registry in `proxy` or `hybrid` mode. Naming an unknown or a `local` registry is a config error. |
+
+**What `"block"` costs.** Under `"audit"` the worst outcome of a false
+confirmation is an admin reading a wrong alert. Under `"block"` it is a
+targeted denial of service: an attacker who can serve selective `404`s to
+this instance — control of the path to the upstream, held across the whole
+confirmation window, narrowly enough not to trip `outage_ratio` — picks a
+package the estate depends on and the estate blocks it against itself. That
+position already lets them serve fabricated metadata on a cache miss, so the
+*capability* is not new; the cost is, and it is not fully mitigable. Choose
+`"block"` for an estate whose threat is a withdrawn or hijacked package
+reaching a build; keep the confirmation window long, keep
+`retain_disappeared = true` (without it a blocked package is never read and
+idle eviction deletes the copy the block was keeping —
+`upstream-audit.block-without-hold` warns), and know that turning the policy
+off unblocks nothing: the blocks it wrote are administrative state, listed
+under `system:upstream-audit` in the console's block table, and stay until an
+admin lifts them or the package reappears.
 
 **How a sweep decides.** Per registry: every cached package is probed — one
 listing request per package on the kinds that have a listing document, one
@@ -2235,8 +2256,13 @@ request per version (25 at most per package per sweep) on the kinds that do
 not; an upstream that fails to answer is *inconclusive* and counts on neither
 side of the ratio. A miss inserts or increments a row; a successful probe
 deletes it outright, never decrements it. A confirmed row is logged at `WARN`
-with the coordinate and the misses, and appears in the `batlehub_upstream_*`
-gauges; a reappearance clears the row and logs it. **The first sweep after
+with the coordinate and the misses, appears in the `batlehub_upstream_*`
+gauges and in the console's *Operations → Upstream* table, and is sent to
+every subscription on `package_disappeared_upstream`; a reappearance clears
+the row, logs it and sends `package_reappeared_upstream`; a void sweep sends
+`upstream_unreachable` for the registry. `POST
+/api/v1/admin/upstream/recheck` probes one package now, through the same
+ladder and state machine. **The first sweep after
 enabling finds nothing**, by design — every miss starts at one — and the
 first confirmations arrive after `confirm_min_age_secs`.
 
@@ -2370,6 +2396,16 @@ role that runs them.
 [scanners.osv]                       # implicit — declare it only to change something
 type = "osv"
 # api_url = "https://api.osv.dev"
+
+[scanners.socket]                    # Socket.dev: metered, opt-in per registry, key required
+type    = "socket"
+api_key = "${SOCKET_API_KEY}"
+# api_url = "https://api.socket.dev"
+
+[scanners.mlab]                      # mlab.sh CVE API: CVSS/EPSS/KEV on CVE findings (enrichment)
+type    = "mlab"
+# api_key = "${MLAB_API_KEY}"        # optional: the endpoint answers unauthenticated
+# api_url = "https://vuln.mlab.sh"
 
 [scanners.osv.escalation]            # optional, per scanner
 kinds = ["vulnerability"]            # FindingKinds that combine

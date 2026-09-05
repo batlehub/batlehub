@@ -325,6 +325,16 @@ tasks:
     cmds:
       - bash tests/heavy/pathproxy.sh
 
+  test:quarantine-heavy:
+    desc: "Heavy quarantine integration (RFC 0018): npm against a [registries.security] registry backed by npmjs.org and the real OSV — first contact held on SCAN_PENDING with the reason code in npm's output, `batlehub wait` clearing it and the same cache recovering, a real advisory refused on the wire and named by `batlehub why`, the packument hiding the denied version, a config reload to warn serving it with the verdict headers, a scanner under bwrap failing to reach the tap, and the phase-4 flip — clean scan, install, the suite's own OSV learns an advisory, the scheduler's rescan refuses the next install and the alert names the puller (needs DATABASE_URL + network + bubblewrap; HEAVY_QUARANTINE_SKIP_SANDBOX=1 leaves the egress row unmeasured on a host without user namespaces)"
+    cmds:
+      - bash tests/heavy/quarantine.sh
+
+  test:upstream-audit-heavy:
+    desc: "Heavy upstream-audit integration (RFC 0014): an npm registry over a directory the suite serves itself, `npm install` seeding the cache, the packument and tarball removed, two `recheck` probes confirming the disappearance, one `package_disappeared_upstream` delivered to a webhook receiver the suite runs, then the restore and its `package_reappeared_upstream` (needs DATABASE_URL; no network)"
+    cmds:
+      - bash tests/heavy/upstream_audit.sh
+
   test:terraform-heavy:
     desc: "Heavy Terraform integration: `terraform init` over TLS through host-routed discovery — versions, download document, shasums, signature and archive all through the proxy (needs DATABASE_URL + network)"
     cmds:
@@ -373,5 +383,7 @@ tasks:
       - bash tests/heavy/go.sh
       - bash tests/heavy/maven.sh
       - bash tests/heavy/pathproxy.sh
+      - bash tests/heavy/quarantine.sh
+      - bash tests/heavy/upstream_audit.sh
       - task: test:authz-heavy
 

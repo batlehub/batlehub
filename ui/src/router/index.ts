@@ -313,6 +313,7 @@ export const router = createRouter({
         { path: "observability/health", component: () => import("@/pages/AdminHealth.vue") },
         { path: "operations/sbom", component: () => import("@/pages/AdminSbom.vue") },
         { path: "operations/air-gap", component: () => import("@/pages/AdminAirGap.vue") },
+        { path: "operations/upstream", component: () => import("@/pages/AdminUpstream.vue") },
         { path: "observability/audit-log", component: () => import("@/pages/AuditLog.vue") },
         {
           path: "notifications/subscriptions",

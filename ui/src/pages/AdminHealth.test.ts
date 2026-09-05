@@ -11,6 +11,12 @@ vi.mock("@/client/sdk.gen", () => ({
   clearRegistryCache: clearCacheMock,
   invalidateExploreCache: invalidateMock,
 }));
+// RFC 0014's card reads the audit listing; `503` — the audit not running in
+// this process — is the default, and the card stays away.
+const { authFetchMock } = vi.hoisted(() => ({ authFetchMock: vi.fn() }));
+vi.mock("@/composables/useAuthFetch", () => ({
+  useAuthFetch: () => ({ authFetch: authFetchMock }),
+}));
 
 import AdminHealth from "./AdminHealth.vue";
 
@@ -49,6 +55,38 @@ describe("AdminHealth", () => {
     registryHealthMock.mockReset().mockResolvedValue({ data: [health()] });
     clearCacheMock.mockReset().mockResolvedValue({ data: { cleared: 1 } });
     invalidateMock.mockReset().mockResolvedValue({ data: {} });
+    authFetchMock.mockReset().mockResolvedValue({ ok: false, status: 503 });
+  });
+
+  /**
+   * RFC 0014 §4.6: the policy the instance applies to a confirmed
+   * disappearance is on the health page, so a blocked-package question never
+   * starts with "check the config file". Without the audit, no card.
+   */
+  it("shows the upstream audit's policy and counts when the audit runs here", async () => {
+    const w = await mountPage();
+    expect(w.find('[data-testid="upstream-card"]').exists()).toBe(false);
+
+    authFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [],
+        total: 3,
+        page: 0,
+        per_page: 1,
+        policy: "block",
+        registries: ["npm"],
+        counts: [{ registry: "npm", missing: 2, disappeared: 1 }],
+      }),
+    });
+    const w2 = await mountPage();
+    const card = w2.find('[data-testid="upstream-card"]');
+    expect(card.exists()).toBe(true);
+    expect(card.text()).toContain("block");
+    expect(card.find('[data-testid="upstream-card-count"]').text()).toContain("npm");
+    expect(card.text()).toContain("2 missing");
+    expect(card.text()).toContain("1 disappeared");
   });
 
   /**

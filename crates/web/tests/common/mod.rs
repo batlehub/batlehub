@@ -1097,6 +1097,10 @@ pub struct ConfigureAppDefaults {
     /// One-time store for in-flight OIDC logins. Process-local by default; the
     /// SSO suite keeps its own handle so it can seed and inspect entries.
     pub login_states: Arc<dyn batlehub_core::ports::LoginStateStore>,
+    /// RFC 0014's audit, registered the way `server_factory` registers it —
+    /// only when present, so the admin routes answer `503` without it, as a
+    /// proxy-only process does. `None` by default.
+    pub upstream_audit: Option<Arc<batlehub_core::services::UpstreamAuditService>>,
     /// Browser-login flows. Empty by default, so `/auth/oidc/*` answers 503 in
     /// every suite that is not about SSO; the SSO suite points one at a mock IdP.
     pub sso_flows: Vec<batlehub_adapters::auth::OidcSsoFlow>,
@@ -1125,6 +1129,7 @@ impl Default for ConfigureAppDefaults {
             readme_search: false,
             oidc_provider_names: batlehub_web::OidcProviderNames::default(),
             login_states: batlehub_adapters::in_memory::InMemoryLoginStateStore::arc(),
+            upstream_audit: None,
             sso_flows: Vec::new(),
             advisory_repo: None,
             flag_sources: batlehub_web::FlagSources::default(),
@@ -1184,6 +1189,7 @@ pub async fn finish_test_app(
 > {
     let user_block_repo = Arc::clone(&defaults.user_block_repo);
     let ip_block_store = Arc::clone(&defaults.ip_block_store);
+    let upstream_audit = defaults.upstream_audit.clone();
     // RFC 0002 (recast): the flag store joins the exposure report against
     // this app's own access log, and the push funnel judges over its hot
     // config. Present on every app so the routes answer `403`/`404` rather
@@ -1217,6 +1223,19 @@ pub async fn finish_test_app(
         .app_data(actix_web::web::Data::new(user_block_repo))
         .app_data(actix_web::web::Data::new(ip_block_store))
         .app_data(actix_web::web::Data::new(cargo_indexes))
+        // RFC 0014: present only when the suite runs the audit, as in
+        // production; the handlers extract it as `Option<Data<_>>`.
+        .configure(move |cfg| {
+            if let Some(audit) = upstream_audit.clone() {
+                cfg.app_data(actix_web::web::Data::new(audit));
+            }
+        })
+        // RFC 0018 phase 5: what `backfill` walks. Empty here — the proxy
+        // path records nothing in these apps — so a backfill queues nothing
+        // and says so, rather than 500ing on a missing extractor.
+        .app_data(actix_web::web::Data::new(
+            NoopArtifactMeta::arc() as Arc<dyn batlehub_core::ports::ArtifactInventory>
+        ))
         // RFC 0017 §4.1 — the grants editor, assembled from the same handles
         // `server_factory` uses. Wired unconditionally so a suite that never
         // touches it pays nothing and a suite that does needs no second factory;
@@ -1668,6 +1687,28 @@ pub fn local_registry_app_parts_with_readme(
     sbom_svc: Option<Arc<SbomService>>,
     readme_svc: Option<Arc<ReadmeService>>,
 ) -> LocalRegistryAppParts {
+    local_registry_app_parts_with_artifact_meta(
+        name,
+        registry_type,
+        mode,
+        sbom_svc,
+        readme_svc,
+        NoopArtifactMeta::arc(),
+    )
+}
+
+/// [`local_registry_app_parts_with_readme`] with the artifact-meta store
+/// supplied — for a suite that wants to see what the proxy *records* about
+/// cached artifacts (RFC 0014 §6.2: the local publish path must record
+/// nothing, or the upstream audit would probe a version no upstream has).
+pub fn local_registry_app_parts_with_artifact_meta(
+    name: &str,
+    registry_type: &str,
+    mode: RegistryMode,
+    sbom_svc: Option<Arc<SbomService>>,
+    readme_svc: Option<Arc<ReadmeService>>,
+    artifact_meta: Arc<dyn batlehub_core::ports::ArtifactMetaRepository>,
+) -> LocalRegistryAppParts {
     let repo_dyn: Arc<dyn PackageRepository> = InMemoryRepo::new();
     let storage: Arc<dyn StorageBackend> = InMemoryStorage::new();
     let cache: Arc<dyn CacheStore> = Arc::new(InMemoryCacheStore::new());
@@ -1715,7 +1756,7 @@ pub fn local_registry_app_parts_with_readme(
         storage,
         cache,
         repo: repo_dyn.clone(),
-        artifact_meta: NoopArtifactMeta::arc(),
+        artifact_meta,
         // Registered by name, not empty: `ProxyMetrics` silently ignores
         // counters for a registry it has never heard of, so an empty map turns
         // every `record_*` in a test into a no-op and makes assertions on them

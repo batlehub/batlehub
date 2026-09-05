@@ -13,12 +13,15 @@ use tokio::sync::RwLock;
 
 use super::*;
 use crate::entities::{
-    MissObservation, PackageId, PackageMetadata, ScanJob, SecurityPolicy, UpstreamKey,
-    UpstreamStatusFilter,
+    AccessEvent, EventFilter, MissObservation, NotificationEvent, NotificationEventType,
+    PackageFilter, PackageId, PackageMetadata, PackageStatus, PackageSummary, ScanJob,
+    SecurityPolicy, UpstreamKey, UpstreamStatusFilter,
 };
 use crate::ports::{
-    ArtifactInventory, ArtifactMeta, FetchedArtifact, QueuedCount, RegistryClient, ScanQueue,
+    ArtifactInventory, ArtifactMeta, FetchedArtifact, NotificationSink, PackageRepository,
+    QueuedCount, RegistryClient, ScanQueue,
 };
+use crate::services::AdminService;
 use crate::services::HotConfig;
 
 // ── fakes ────────────────────────────────────────────────────────────────────
@@ -290,6 +293,10 @@ struct RecordingQueue {
 
 #[async_trait]
 impl ScanQueue for RecordingQueue {
+    async fn try_lead(&self, _: i64) -> Result<bool, CoreError> {
+        Ok(true)
+    }
+
     async fn enqueue(
         &self,
         package: &PackageId,
@@ -326,6 +333,123 @@ impl ScanQueue for RecordingQueue {
     }
 }
 
+/// Every event the sweep emitted, in order.
+#[derive(Default)]
+struct RecordingSink {
+    events: Mutex<Vec<NotificationEvent>>,
+}
+
+impl RecordingSink {
+    fn events(&self) -> Vec<NotificationEvent> {
+        self.events.lock().unwrap().clone()
+    }
+    fn of(&self, kind: NotificationEventType) -> Vec<NotificationEvent> {
+        self.events()
+            .into_iter()
+            .filter(|e| e.event_type == kind)
+            .collect()
+    }
+}
+
+impl NotificationSink for RecordingSink {
+    fn emit(&self, event: NotificationEvent) {
+        self.events.lock().unwrap().push(event);
+    }
+}
+
+/// The block table, as the admin pen sees it: statuses, the audit trail,
+/// and a switch that makes any write a panic — the strongest statement
+/// that `"audit"` is inert (RFC 0014 §10).
+#[derive(Default)]
+struct BlockTable {
+    statuses: Mutex<HashMap<String, PackageStatus>>,
+    events: Mutex<Vec<AccessEvent>>,
+    refuse_writes: Mutex<bool>,
+    fail_writes: Mutex<bool>,
+}
+
+impl BlockTable {
+    fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+    fn status(&self, id: &PackageId) -> PackageStatus {
+        self.statuses
+            .lock()
+            .unwrap()
+            .get(&id.cache_key())
+            .cloned()
+            .unwrap_or(PackageStatus::Available)
+    }
+    fn blocked_by(&self, id: &PackageId) -> Option<(String, String)> {
+        match self.status(id) {
+            PackageStatus::Blocked {
+                reason, blocked_by, ..
+            } => Some((blocked_by, reason)),
+            _ => None,
+        }
+    }
+    fn block_as(&self, id: &PackageId, who: &str) {
+        self.statuses.lock().unwrap().insert(
+            id.cache_key(),
+            PackageStatus::Blocked {
+                reason: "an admin's own reason".into(),
+                blocked_by: who.into(),
+                blocked_at: Utc::now(),
+            },
+        );
+    }
+}
+
+#[async_trait]
+impl PackageRepository for BlockTable {
+    async fn record_access(&self, event: AccessEvent) -> Result<(), CoreError> {
+        self.events.lock().unwrap().push(event);
+        Ok(())
+    }
+    async fn get_status(&self, pkg: &PackageId) -> Result<PackageStatus, CoreError> {
+        Ok(self.status(pkg))
+    }
+    async fn set_status(&self, pkg: &PackageId, status: PackageStatus) -> Result<(), CoreError> {
+        assert!(
+            !*self.refuse_writes.lock().unwrap(),
+            "the block table was written under on_confirmed = \"audit\": {pkg} -> {status:?}"
+        );
+        if *self.fail_writes.lock().unwrap() {
+            return Err(CoreError::Database(
+                "the block table is read-only today".into(),
+            ));
+        }
+        self.statuses
+            .lock()
+            .unwrap()
+            .insert(pkg.cache_key(), status);
+        Ok(())
+    }
+    async fn list_packages(&self, _: PackageFilter) -> Result<Vec<PackageSummary>, CoreError> {
+        Ok(vec![])
+    }
+    async fn count_packages(&self, _: PackageFilter) -> Result<u64, CoreError> {
+        Ok(0)
+    }
+    async fn list_events(&self, _: EventFilter) -> Result<Vec<AccessEvent>, CoreError> {
+        Ok(self.events.lock().unwrap().clone())
+    }
+    async fn count_events(&self, _: EventFilter) -> Result<u64, CoreError> {
+        Ok(self.events.lock().unwrap().len() as u64)
+    }
+    async fn list_own_downloads(
+        &self,
+        _: &str,
+        _: DateTime<Utc>,
+        _: u64,
+    ) -> Result<Vec<AccessEvent>, CoreError> {
+        Ok(vec![])
+    }
+    async fn delete_package(&self, _: &PackageId) -> Result<bool, CoreError> {
+        Ok(false)
+    }
+}
+
 // ── the lab ──────────────────────────────────────────────────────────────────
 
 const REG: &str = "npm-proxy";
@@ -335,6 +459,8 @@ struct Lab {
     inventory: Arc<SeededInventory>,
     status: Arc<RecordingStatus>,
     queue: Arc<RecordingQueue>,
+    sink: Arc<RecordingSink>,
+    blocks: Arc<BlockTable>,
     svc: UpstreamAuditService,
 }
 
@@ -343,6 +469,14 @@ fn lab_with(kind: &'static str, lists: bool, secured: bool, policy: UpstreamAudi
     let inventory = SeededInventory::new();
     let status = RecordingStatus::new();
     let queue = Arc::new(RecordingQueue::default());
+    let sink = Arc::new(RecordingSink::default());
+    let blocks = BlockTable::new();
+    // Under "audit" the table refuses every write: the default must not
+    // touch it, and a branch that did would panic here rather than pass.
+    *blocks.refuse_writes.lock().unwrap() = policy.on_confirmed == OnConfirmed::Audit;
+    let admin = Arc::new(AdminService::new(
+        Arc::clone(&blocks) as Arc<dyn PackageRepository>
+    ));
     let mut hot = HotConfig::default();
     hot.registries
         .insert(REG.into(), Arc::clone(&upstream) as Arc<dyn RegistryClient>);
@@ -359,13 +493,25 @@ fn lab_with(kind: &'static str, lists: bool, secured: bool, policy: UpstreamAudi
         policy,
         4,
         vec![REG.into()],
-    );
+    )
+    .with_notifier(Arc::clone(&sink) as Arc<dyn NotificationSink>)
+    .with_admin(admin);
     Lab {
         upstream,
         inventory,
         status,
         queue,
+        sink,
+        blocks,
         svc,
+    }
+}
+
+/// `quick()` with the block arm.
+fn blocking() -> UpstreamAuditPolicy {
+    UpstreamAuditPolicy {
+        on_confirmed: OnConfirmed::Block,
+        ..quick()
     }
 }
 
@@ -638,6 +784,327 @@ async fn a_local_registry_is_never_in_the_input() {
     let report = lab.svc.run_sweep().await;
     assert_eq!(report.registries.len(), 1);
     assert_eq!(report.registries[0].probed, 0);
+}
+
+// ── phase 4: notifications (RFC 0014 §4.5) ───────────────────────────────────
+
+#[tokio::test]
+async fn a_confirmation_emits_exactly_one_event_per_package_with_the_payload() {
+    let lab = lab_with("npm", true, false, quick());
+    seed_population(&lab, 12);
+    for v in ["1.0.0", "1.1.0", "1.2.0"] {
+        lab.inventory.cached(REG, "withdrawn", v, long_ago());
+    }
+    lab.upstream.gone("withdrawn");
+
+    one(&lab).await;
+    assert!(lab.sink.events().is_empty(), "a silent miss tells nobody");
+
+    one(&lab).await;
+    let events = lab.sink.events();
+    assert_eq!(events.len(), 1, "one package, one event: {events:?}");
+    let e = &events[0];
+    assert_eq!(
+        e.event_type,
+        NotificationEventType::PackageDisappearedUpstream
+    );
+    assert_eq!(
+        (e.registry.as_str(), e.package_name.as_str()),
+        (REG, "withdrawn")
+    );
+    assert_eq!(e.version, None, "package-level: the version is the package");
+    assert_eq!(e.actor, SYSTEM_ACTOR);
+    let m = &e.metadata;
+    assert_eq!(m["consecutive_misses"], 2);
+    assert_eq!(m["probe"], "package");
+    assert_eq!(m["versions"].as_array().unwrap().len(), 3);
+    assert_eq!(m["policy"], "audit");
+    assert_eq!(m["blocked"], false);
+    assert_eq!(m["held_from_eviction"], true);
+    assert!(m["first_missed_at"].is_string());
+    assert!(m["confirmed_at"].is_string());
+    assert!(m["cached_at"].is_string());
+    assert_eq!(m["sweep"]["probed"], 13);
+    assert_eq!(m["sweep"]["missing"], 1);
+
+    // Confirmed once, reported once.
+    one(&lab).await;
+    assert_eq!(lab.sink.events().len(), 1);
+}
+
+#[tokio::test]
+async fn a_version_level_confirmation_names_the_version_and_the_rung() {
+    let lab = lab_with("npm", true, false, quick());
+    seed_population(&lab, 12);
+    lab.inventory.cached(REG, "left-pad", "1.3.1", long_ago());
+    lab.upstream.has("left-pad", &["1.3.0"]);
+    one(&lab).await;
+    one(&lab).await;
+    let events = lab
+        .sink
+        .of(NotificationEventType::PackageDisappearedUpstream);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].version.as_deref(), Some("1.3.1"));
+    assert_eq!(events[0].metadata["probe"], "version_listing");
+}
+
+#[tokio::test]
+async fn a_voided_sweep_emits_upstream_unreachable_and_no_package_event() {
+    let lab = lab_with("npm", true, false, quick());
+    seed_population(&lab, 12);
+    for i in 0..5 {
+        lab.inventory
+            .cached(REG, &format!("outage-{i}"), "1.0.0", long_ago());
+        lab.upstream.gone(&format!("outage-{i}"));
+    }
+    let r = one(&lab).await;
+    assert!(r.void);
+    let events = lab.sink.events();
+    assert_eq!(events.len(), 1, "{events:?}");
+    let e = &events[0];
+    assert_eq!(e.event_type, NotificationEventType::UpstreamUnreachable);
+    assert_eq!(e.package_name, "*", "registry-scoped");
+    assert_eq!(e.version, None);
+    assert_eq!(e.metadata["probed"], 17);
+    assert_eq!(e.metadata["missing"], 5);
+    assert!(lab
+        .sink
+        .of(NotificationEventType::PackageDisappearedUpstream)
+        .is_empty());
+}
+
+#[tokio::test]
+async fn a_reappearance_is_reported_only_for_a_row_that_had_reached_disappeared() {
+    let lab = lab_with("npm", true, false, quick());
+    seed_population(&lab, 12);
+    lab.inventory.cached(REG, "flappy", "2.0.0", long_ago());
+
+    // One miss, then back: the row was `missing`, never reported, and its
+    // clearing is not news either.
+    lab.upstream.has("flappy", &["1.0.0"]);
+    one(&lab).await;
+    lab.upstream.has("flappy", &["1.0.0", "2.0.0"]);
+    let r = one(&lab).await;
+    assert_eq!(r.reappeared(), 1, "the row cleared…");
+    assert!(
+        lab.sink.events().is_empty(),
+        "…but nobody was told it was missing, so nobody is told it is back"
+    );
+
+    // Confirmed gone, then back: reported both ways.
+    lab.upstream.has("flappy", &["1.0.0"]);
+    one(&lab).await;
+    one(&lab).await;
+    assert_eq!(
+        lab.sink
+            .of(NotificationEventType::PackageDisappearedUpstream)
+            .len(),
+        1
+    );
+    lab.upstream.has("flappy", &["1.0.0", "2.0.0"]);
+    one(&lab).await;
+    let back = lab
+        .sink
+        .of(NotificationEventType::PackageReappearedUpstream);
+    assert_eq!(back.len(), 1, "{:?}", lab.sink.events());
+    assert_eq!(back[0].version.as_deref(), Some("2.0.0"));
+    assert_eq!(back[0].metadata["unblocked"], false);
+    assert!(back[0].metadata["confirmed_at"].is_string());
+}
+
+// ── phase 6: the block arm (RFC 0014 §4.3, §6.5, §10) ────────────────────────
+
+#[tokio::test]
+async fn under_audit_a_confirmation_touches_no_block_path_at_all() {
+    // `lab_with` arms the block table to panic on any write under "audit".
+    let lab = lab_with("npm", true, false, quick());
+    assert!(!lab.svc.blocks());
+    seed_population(&lab, 12);
+    lab.inventory.cached(REG, "withdrawn", "1.0.0", long_ago());
+    lab.upstream.gone("withdrawn");
+    one(&lab).await;
+    let r = one(&lab).await;
+    assert_eq!(r.confirmed(), 1);
+    assert!(!lab
+        .blocks
+        .status(&PackageId::new(REG, "withdrawn", "1.0.0"))
+        .is_blocked());
+    let e = &lab
+        .sink
+        .of(NotificationEventType::PackageDisappearedUpstream)[0];
+    assert_eq!(e.metadata["policy"], "audit");
+    assert_eq!(e.metadata["blocked"], false);
+}
+
+#[tokio::test]
+async fn under_block_a_version_confirmation_blocks_that_version_with_the_rfcs_row() {
+    let lab = lab_with("npm", true, false, blocking());
+    assert!(lab.svc.blocks());
+    seed_population(&lab, 12);
+    lab.inventory.cached(REG, "left-pad", "1.3.0", long_ago());
+    lab.inventory.cached(REG, "left-pad", "1.3.1", long_ago());
+    lab.upstream.has("left-pad", &["1.3.0"]); // 1.3.1 unpublished
+    one(&lab).await;
+    assert!(
+        lab.blocks
+            .blocked_by(&PackageId::new(REG, "left-pad", "1.3.1"))
+            .is_none(),
+        "one miss blocks nothing"
+    );
+    let r = one(&lab).await;
+    assert_eq!(r.confirmed(), 1);
+    let (by, reason) = lab
+        .blocks
+        .blocked_by(&PackageId::new(REG, "left-pad", "1.3.1"))
+        .expect("blocked");
+    assert_eq!(by, SYSTEM_ACTOR);
+    assert!(
+        reason.starts_with("upstream disappearance confirmed ")
+            && reason.contains("2 misses since"),
+        "{reason}"
+    );
+    assert!(
+        lab.blocks
+            .blocked_by(&PackageId::new(REG, "left-pad", "1.3.0"))
+            .is_none(),
+        "the version upstream still has is untouched"
+    );
+    // In the audit trail, as an admin's block would be.
+    let trail = lab.blocks.events.lock().unwrap().clone();
+    assert!(trail.iter().any(|e| {
+        matches!(e.action, crate::entities::AccessAction::Block)
+            && e.user_id.as_deref() == Some(SYSTEM_ACTOR)
+    }));
+    let e = &lab
+        .sink
+        .of(NotificationEventType::PackageDisappearedUpstream)[0];
+    assert_eq!(e.metadata["policy"], "block");
+    assert_eq!(e.metadata["blocked"], true);
+}
+
+#[tokio::test]
+async fn under_block_a_package_confirmation_blocks_every_held_version() {
+    let lab = lab_with("npm", true, false, blocking());
+    seed_population(&lab, 12);
+    for v in ["1.0.0", "1.1.0", "1.2.0"] {
+        lab.inventory.cached(REG, "withdrawn", v, long_ago());
+    }
+    lab.upstream.gone("withdrawn");
+    one(&lab).await;
+    one(&lab).await;
+    for v in ["1.0.0", "1.1.0", "1.2.0"] {
+        let (by, _) = lab
+            .blocks
+            .blocked_by(&PackageId::new(REG, "withdrawn", v))
+            .unwrap_or_else(|| panic!("{v} not blocked"));
+        assert_eq!(by, SYSTEM_ACTOR);
+    }
+}
+
+#[tokio::test]
+async fn a_reappearance_unblocks_only_this_audits_own_block_and_flags_an_admins() {
+    let lab = lab_with("npm", true, false, blocking());
+    seed_population(&lab, 12);
+    lab.inventory.cached(REG, "flappy", "2.0.0", long_ago());
+    lab.inventory.cached(REG, "manual", "1.0.0", long_ago());
+    lab.upstream.has("flappy", &["1.0.0"]);
+    lab.upstream.has("manual", &["0.9.0"]);
+    one(&lab).await;
+    one(&lab).await;
+    let flappy = PackageId::new(REG, "flappy", "2.0.0");
+    let manual = PackageId::new(REG, "manual", "1.0.0");
+    assert!(lab.blocks.blocked_by(&flappy).is_some());
+    // An admin edits the second block before upstream comes back.
+    lab.blocks.block_as(&manual, "alice");
+
+    lab.upstream.has("flappy", &["1.0.0", "2.0.0"]);
+    lab.upstream.has("manual", &["0.9.0", "1.0.0"]);
+    let r = one(&lab).await;
+    assert_eq!(r.reappeared(), 2);
+    assert!(!lab.blocks.status(&flappy).is_blocked(), "ours: lifted");
+    assert_eq!(
+        lab.blocks.blocked_by(&manual).map(|(by, _)| by).as_deref(),
+        Some("alice"),
+        "an admin's decision is not reversed by a 200"
+    );
+    let back = lab
+        .sink
+        .of(NotificationEventType::PackageReappearedUpstream);
+    let of = |name: &str| {
+        back.iter()
+            .find(|e| e.package_name == name)
+            .unwrap()
+            .metadata
+            .clone()
+    };
+    assert_eq!(of("flappy")["unblocked"], true);
+    assert!(of("flappy").get("unblock_skipped_reason").is_none());
+    assert_eq!(of("manual")["unblocked"], false);
+    assert_eq!(of("manual")["unblock_skipped_reason"], "blocked_by_admin");
+}
+
+#[tokio::test]
+async fn a_failed_block_write_is_reported_as_not_blocked_rather_than_a_lie() {
+    let lab = lab_with("npm", true, false, blocking());
+    seed_population(&lab, 12);
+    lab.inventory.cached(REG, "withdrawn", "1.0.0", long_ago());
+    lab.upstream.gone("withdrawn");
+    one(&lab).await;
+    *lab.blocks.fail_writes.lock().unwrap() = true;
+    let r = one(&lab).await;
+    assert_eq!(r.confirmed(), 1, "the row is still confirmed");
+    let e = &lab
+        .sink
+        .of(NotificationEventType::PackageDisappearedUpstream)[0];
+    assert_eq!(e.metadata["policy"], "block");
+    assert_eq!(e.metadata["blocked"], false);
+
+    // §6.5: the next sweep reconciles a confirmed row that has no block.
+    *lab.blocks.fail_writes.lock().unwrap() = false;
+    let r = one(&lab).await;
+    assert!(r.transitions.is_empty(), "nothing new to report");
+    let (by, _) = lab
+        .blocks
+        .blocked_by(&PackageId::new(REG, "withdrawn", "1.0.0"))
+        .expect("reconciled");
+    assert_eq!(by, SYSTEM_ACTOR);
+}
+
+#[tokio::test]
+async fn enabling_block_on_a_server_with_confirmed_rows_reconciles_them() {
+    // A row confirmed under "audit" (nothing blocked)…
+    let audit = lab_with("npm", true, false, quick());
+    seed_population(&audit, 12);
+    audit
+        .inventory
+        .cached(REG, "withdrawn", "1.0.0", long_ago());
+    audit.upstream.gone("withdrawn");
+    one(&audit).await;
+    one(&audit).await;
+    assert!(audit.status.row(REG, "withdrawn", None).is_some());
+
+    // …and the same estate restarted under "block": the first sweep blocks
+    // it without a new transition.
+    let block = lab_with("npm", true, false, blocking());
+    seed_population(&block, 12);
+    block
+        .inventory
+        .cached(REG, "withdrawn", "1.0.0", long_ago());
+    block.upstream.gone("withdrawn");
+    let row = audit.status.row(REG, "withdrawn", None).unwrap();
+    block
+        .status
+        .rows
+        .lock()
+        .unwrap()
+        .insert((REG.into(), "withdrawn".into(), None), row);
+    let r = one(&block).await;
+    assert!(r.transitions.is_empty(), "already confirmed: {r:?}");
+    let (by, _) = block
+        .blocks
+        .blocked_by(&PackageId::new(REG, "withdrawn", "1.0.0"))
+        .expect("reconciled on the first sweep");
+    assert_eq!(by, SYSTEM_ACTOR);
 }
 
 // ── the 0018 seam ────────────────────────────────────────────────────────────

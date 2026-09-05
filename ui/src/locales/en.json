@@ -271,7 +271,12 @@
     "roleAdmins": "Admins",
     "roleAnonymous": "Anonymous",
     "roleUsers": "Users",
+    "upstreamCounts": "{missing} missing · {disappeared} disappeared",
     "upstreamError": "Upstream error",
+    "upstreamOpen": "Open the table",
+    "upstreamPolicyAudit": "on confirmation: audit",
+    "upstreamPolicyBlock": "on confirmation: block",
+    "upstreamTitle": "Upstream audit",
     "whoHasAccess": "Who has access"
   },
   "adminNav": {
@@ -296,7 +301,8 @@
     "subscriptions": "Subscriptions",
     "teamNamespaces": "Team Namespaces",
     "warming": "Warming",
-    "authorization": "Authorization"
+    "authorization": "Authorization",
+    "upstream": "Upstream"
   },
   "adminNotifications": {
     "configuredChannels": "Configured Channels",
@@ -393,6 +399,49 @@
     "selectARegistry": "Select a registry…",
     "selectARegistryToView": "Select a registry to view namespace claims.",
     "teamNamespaces": "Team Namespaces"
+  },
+  "adminUpstream": {
+    "allRegistries": "All registries",
+    "allStates": "All states",
+    "col": {
+      "confirmed": "Confirmed",
+      "firstMissed": "First missed",
+      "lastChecked": "Last checked",
+      "misses": "Misses",
+      "package": "Package",
+      "state": "State"
+    },
+    "counts": "{missing} missing · {disappeared} disappeared",
+    "description": "Packages the sweep has seen missing at their upstream, and packages it has confirmed gone. A miss is recorded, not believed: confirmation takes several sweeps.",
+    "empty": "Nothing is missing at any upstream. The first sweep after enabling finds nothing by design — every miss starts at one.",
+    "filterRegistry": "Registry",
+    "filterState": "State",
+    "notRunning": "The upstream audit is not running in this process: [upstream_audit] is off, or this process has no worker role.",
+    "pageOf": "Page {page} of {count}",
+    "policy": {
+      "audit": "audit",
+      "block": "block"
+    },
+    "policyHelp": {
+      "audit": "A confirmed disappearance is recorded, held back from eviction and notified. Serving is unchanged.",
+      "block": "A confirmed disappearance is also blocked on the wire; the audit lifts its own block when the package reappears, never an admin's."
+    },
+    "policyTitle": "On confirmation",
+    "recheck": {
+      "confirmed": "Confirmed gone",
+      "present": "Present upstream; the row is cleared",
+      "reappeared": "Reappeared; the row is cleared",
+      "stillMissing": "Still missing ({misses} misses)"
+    },
+    "recheckButton": "Recheck",
+    "rechecking": "Rechecking…",
+    "refreshing": "Refreshing…",
+    "state": {
+      "disappeared": "disappeared",
+      "missing": "missing"
+    },
+    "title": "Upstream disappearance",
+    "wholePackage": "(every version)"
   },
   "adminWarming": {
     "cacheWarming": "Cache Warming",
@@ -898,7 +947,11 @@
     "tableCaption": "{shown} of {total} versions · releases first, newest first",
     "tableLabel": "Versions of {name}",
     "unlisted": "unlisted",
+    "upstreamBadgeHelp": "The upstream audit (RFC 0014) no longer finds this version at its upstream.",
+    "upstreamBlocked": "blocked by the upstream audit",
+    "upstreamDisappeared": "disappeared upstream",
     "upstreamHasNoneEither": "Nothing has been pulled through, and the upstream does not have it either.",
+    "upstreamMissing": "missing upstream",
     "upstreamUnreachable": "Nothing has been pulled through, and the upstream could not be reached.",
     "versionsShown": "{shown} of {total} shown",
     "vulnerabilityCount": "1 advisory | {n} advisories",

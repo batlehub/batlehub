@@ -2497,6 +2497,15 @@ impl AppConfig {
                     cfg.ships_in()
                 );
             }
+            if cfg.missing_required_key() {
+                bail!(
+                    "registry '{}': scanner '{name}' (type '{}') has no api_key; it is a metered \
+                     external service and would fail every scan with a 401 nobody reads (RFC \
+                     0018 §4.4)",
+                    registry.name,
+                    cfg.type_name()
+                );
+            }
         }
         for name in &sec.required_scanners {
             if !sec.scanners.contains(name) {
@@ -2677,11 +2686,6 @@ impl AppConfig {
                          has no effect and reads as if blocking were active"
                     );
                 }
-                bail!(
-                    "[upstream_audit] on_confirmed = \"block\" is RFC 0014 phase 6 and is not in \
-                     this build; \"audit\" reports and holds, and the console's block is one \
-                     click from the row"
-                );
             }
             other => bail!(
                 "[upstream_audit] on_confirmed = \"{other}\" is not \"audit\" or \"block\"; a \
@@ -2702,6 +2706,18 @@ impl AppConfig {
                 "upstream_audit.enabled",
                 "the upstream audit is enabled and no registry is in proxy or hybrid mode: every \
                  sweep will find nothing to probe"
+                    .to_owned(),
+            ));
+        }
+        if a.on_confirmed == "block" && !a.retain_disappeared {
+            // RFC 0014 §4.4, §5.4: a blocked package is never read, so
+            // `run_idle` evicts its bytes — the combination quietly deletes
+            // what the block was keeping. Legal, and almost always a mistake.
+            out.push(ConfigWarning::new(
+                warnings::UPSTREAM_AUDIT_BLOCK_WITHOUT_HOLD,
+                "upstream_audit.retain_disappeared",
+                "on_confirmed = \"block\" with retain_disappeared = false: a blocked package is \
+                 never read, so idle eviction deletes the last copy the block was keeping"
                     .to_owned(),
             ));
         }

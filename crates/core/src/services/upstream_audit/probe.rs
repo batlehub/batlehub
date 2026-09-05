@@ -34,6 +34,26 @@ impl ProbeOutcome {
     }
 }
 
+/// Whether `kind` answers rung 1 — one listing request covers every cached
+/// version — or falls straight to the per-version rung 3.
+pub fn listing_capable(kind: RegistryKind) -> bool {
+    matches!(
+        kind.upstream_detail(),
+        UpstreamDetailSupport::Document(_) | UpstreamDetailSupport::ListVersions
+    )
+}
+
+/// The rung a miss was observed on, as the notification names it (RFC 0014
+/// §4.5 `probe`).
+pub fn probe_name(kind: RegistryKind, outcome: &ProbeOutcome) -> &'static str {
+    match outcome {
+        ProbeOutcome::MissingPackage => "package",
+        ProbeOutcome::MissingVersions(_) if listing_capable(kind) => "version_listing",
+        ProbeOutcome::MissingVersions(_) => "per_version",
+        ProbeOutcome::Present | ProbeOutcome::Inconclusive(_) => "none",
+    }
+}
+
 /// Probe `name`'s cached `versions` against `client`.
 ///
 /// Returns the outcome and whether the per-version cap bound the probe.
@@ -44,11 +64,7 @@ pub async fn probe_package(
     name: &str,
     versions: &[String],
 ) -> (ProbeOutcome, bool) {
-    let listing_capable = matches!(
-        kind.upstream_detail(),
-        UpstreamDetailSupport::Document(_) | UpstreamDetailSupport::ListVersions
-    );
-    if listing_capable {
+    if listing_capable(kind) {
         // Rung 1: one request covers every cached version.
         match client.list_versions(name).await {
             Ok(listed) if !listed.is_empty() => {

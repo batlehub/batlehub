@@ -377,7 +377,8 @@ async fn main() -> Result<()> {
         storage: storage.clone(),
         cache: cache.clone(),
         repo: repo.clone() as Arc<dyn batlehub_core::ports::PackageRepository>,
-        artifact_meta,
+        artifact_meta: Arc::clone(&artifact_meta)
+            as Arc<dyn batlehub_core::ports::ArtifactCacheMeta>,
         metrics: Arc::clone(&proxy_metrics),
         sbom: Some(Arc::clone(&sbom_svc)),
         readme: Some(Arc::clone(&readme_svc)),
@@ -572,7 +573,10 @@ async fn main() -> Result<()> {
         .map(|r| r.name.clone())
         .collect();
     if is_worker {
-        let scanners = setup::build_scanners(&config).context("building scanners")?;
+        let setup::BuiltScanners {
+            scanners,
+            enrichers,
+        } = setup::build_scanners(&config).context("building scanners")?;
         let worker = Arc::new(batlehub_core::services::ScanWorker {
             config: batlehub_core::services::WorkerConfig {
                 worker_id: format!("{}-{}", hostname_or("worker"), std::process::id()),
@@ -588,13 +592,41 @@ async fn main() -> Result<()> {
             sboms: Some(Arc::clone(&sbom_svc.repo)),
             hot: Arc::clone(&hot),
             scanners,
+            enrichers,
             storage: Some(Arc::clone(&storage)),
             max_artifact_bytes: config
                 .limits
                 .max_artifact_size_bytes
                 .unwrap_or(500 * 1024 * 1024),
+            // RFC 0018 phase 4: the flip alert and the release announcement
+            // go through the same channels a publish does, with the pullers
+            // read from the same access log the audit page reads.
+            notifier: notification_svc.as_ref().map(|n| {
+                Arc::new(batlehub_web::services::NotificationSinkAdapter(Arc::clone(
+                    n,
+                ))) as Arc<dyn batlehub_core::ports::NotificationSink>
+            }),
+            events: Some(Arc::clone(&repo) as Arc<dyn batlehub_core::ports::PackageRepository>),
         });
         tokio::spawn(Arc::clone(&worker).run());
+        // RFC 0018 phase 4: the rescan timer, one per estate — every worker
+        // process ticks, the one holding the advisory lock queues.
+        if config.registries.iter().any(|r| {
+            r.security
+                .as_ref()
+                .and_then(|s| s.rescan.as_ref())
+                .is_some_and(|x| x.interval_secs > 0)
+        }) {
+            let scheduler = Arc::new(batlehub_core::services::RescanScheduler {
+                verdicts: Arc::clone(security_stores.verdicts.as_ref().expect("built above")),
+                queue: Arc::clone(security_stores.queue.as_ref().expect("built above")),
+                hot: Arc::clone(&hot),
+                cache: Some(Arc::clone(&cache)),
+                batch: 500,
+            });
+            watcher::spawn_rescan_scheduler(scheduler);
+            tracing::info!("security: rescan scheduler started");
+        }
         tracing::info!(
             max_concurrent = config.worker.max_concurrent,
             registries = ?config.worker.registries,
@@ -628,10 +660,13 @@ async fn main() -> Result<()> {
 
     // RFC 0014: the upstream audit, on the worker role (§13). A proxy-only
     // process with it enabled is told, once, that it is not the one sweeping.
+    // The handle is kept for the admin surface (§4.6): `recheck` drives the
+    // same probe on demand.
+    let mut upstream_audit: Option<Arc<batlehub_core::services::UpstreamAuditService>> = None;
     if config.upstream_audit.enabled {
         if let (true, Some(status)) = (is_worker, security_stores.upstream_status.clone()) {
             let audit = &config.upstream_audit;
-            let svc = Arc::new(batlehub_core::services::UpstreamAuditService::new(
+            let svc = batlehub_core::services::UpstreamAuditService::new(
                 Arc::new(batlehub_adapters::db::PgArtifactMetaRepository::new(
                     repo.pool(),
                 )) as Arc<dyn batlehub_core::ports::ArtifactInventory>,
@@ -646,10 +681,37 @@ async fn main() -> Result<()> {
                     retain_disappeared: audit.retain_disappeared,
                     skip_recently_seen: audit.skip_recently_seen,
                     metadata_pin_ttl: std::time::Duration::from_secs(2 * audit.interval_secs),
+                    on_confirmed: audit.on_confirmed.parse().unwrap_or_default(),
                 },
                 config.worker.max_concurrent as usize,
                 config.upstream_audit_registries(),
-            ));
+            );
+            // RFC 0014 §4.5: a transition is reported through the same
+            // channels a publish is. No notification service (disabled in
+            // config) means the sweep records and holds, and tells nobody.
+            let svc = match &notification_svc {
+                Some(n) => svc.with_notifier(Arc::new(
+                    batlehub_web::services::NotificationSinkAdapter(Arc::clone(n)),
+                )),
+                None => svc,
+            };
+            // RFC 0014 §4.3, §6.5: under `"block"` the sweep writes through
+            // the same service an admin's block goes through, so the block is
+            // in shape and in the audit trail exactly theirs. `with_admin` is
+            // a no-op under `"audit"`.
+            let svc = svc.with_admin(Arc::clone(&admin_svc));
+            if svc.blocks() {
+                // §4.4: the setting that can break a build is said once, at
+                // startup, where an operator reading the log will see it.
+                tracing::info!(
+                    blocked_by = batlehub_core::services::upstream_audit::SYSTEM_ACTOR,
+                    "upstream audit: on_confirmed = \"block\" — a confirmed disappearance is \
+                     refused on the wire through the admin block list; a reappearance lifts only \
+                     this audit's own blocks"
+                );
+            }
+            let svc = Arc::new(svc);
+            upstream_audit = Some(Arc::clone(&svc));
             watcher::spawn_upstream_audit(audit.interval_secs, svc);
             tracing::info!(
                 interval_secs = audit.interval_secs,
@@ -714,6 +776,9 @@ async fn main() -> Result<()> {
         notification_svc,
         notification_store,
         notifications_config: config.notifications.clone(),
+        upstream_audit,
+        artifact_inventory: Arc::clone(&artifact_meta)
+            as Arc<dyn batlehub_core::ports::ArtifactInventory>,
         local_svc,
         quota_svc,
         registry_mode_map,

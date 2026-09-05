@@ -33,6 +33,165 @@ pub struct WhyArgs {
     pub rescan: bool,
 }
 
+/// `batlehub verdicts …` (RFC 0018 §4.2): the admin's side of the verdict.
+#[derive(clap::Subcommand)]
+pub enum VerdictsCommand {
+    /// Who pulled a version inside a window — the incident question,
+    /// from the same access-log query the flip alert carried
+    Pullers(PullersArgs),
+    /// The verdicts of a registry, by state (admin)
+    List(ListArgs),
+    /// Queue a low-priority scan of every cached version of a registry (admin)
+    Backfill(BulkArgs),
+    /// Queue a rescan of every verdict of a registry, or of one state (admin)
+    Rescan(BulkArgs),
+}
+
+#[derive(Args)]
+pub struct ListArgs {
+    #[arg(long)]
+    pub registry: String,
+    /// `allowed`, `warned`, `quarantined` or `denied`; default every state
+    #[arg(long)]
+    pub state: Option<String>,
+    /// Per state (default 100, at most 1000)
+    #[arg(long)]
+    pub limit: Option<u64>,
+}
+
+#[derive(Args)]
+pub struct BulkArgs {
+    #[arg(long)]
+    pub registry: String,
+    /// `rescan` only: the state to rescan; default every verdict
+    #[arg(long)]
+    pub state: Option<String>,
+}
+
+#[derive(Args)]
+pub struct PullersArgs {
+    /// `<registry>:<name>@<version>`
+    pub coordinate: String,
+    /// The window back from now (`30d`, `12h`, `90m`) or an RFC 3339 instant;
+    /// default: the registry's `pullers_window_days`
+    #[arg(long, default_value = "")]
+    pub since: String,
+    /// Print the CSV the export endpoint renders
+    #[arg(long)]
+    pub csv: bool,
+}
+
+pub async fn run_verdicts(cmd: VerdictsCommand, client: &BatleHubClient, json: bool) -> Result<()> {
+    match cmd {
+        VerdictsCommand::List(args) => {
+            let report = client
+                .list_verdicts(&args.registry, args.state.as_deref(), args.limit)
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+                return Ok(());
+            }
+            let items = report["items"].as_array().cloned().unwrap_or_default();
+            println!("{} verdict(s) in {}", items.len(), args.registry);
+            if !items.is_empty() {
+                println!(
+                    "{:<12} {:<40} {:<12} codes",
+                    "state", "coordinate", "scanned"
+                );
+                for v in items {
+                    let p = &v["package"];
+                    let coordinate = format!(
+                        "{}@{}",
+                        p["name"].as_str().unwrap_or(""),
+                        p["version"].as_str().unwrap_or("")
+                    );
+                    let scanned = v["last_scanned_at"]
+                        .as_str()
+                        .map(|s| s.chars().take(10).collect::<String>())
+                        .unwrap_or_else(|| "never".into());
+                    let codes = v["reason_codes"]
+                        .as_array()
+                        .map(|c| {
+                            c.iter()
+                                .filter_map(|x| x.as_str())
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        })
+                        .unwrap_or_default();
+                    println!(
+                        "{:<12} {:<40} {:<12} {}",
+                        v["state"].as_str().unwrap_or(""),
+                        coordinate,
+                        scanned,
+                        codes
+                    );
+                }
+            }
+            Ok(())
+        }
+        VerdictsCommand::Backfill(args) => bulk(client, "backfill", &args, json).await,
+        VerdictsCommand::Rescan(args) => bulk(client, "rescan", &args, json).await,
+        VerdictsCommand::Pullers(args) => {
+            let (registry, name, version) = parse_coordinate(&args.coordinate)?;
+            let body = client
+                .pullers(&registry, &name, &version, &args.since, args.csv)
+                .await?;
+            if args.csv || json {
+                print!("{body}");
+                if !body.ends_with('\n') {
+                    println!();
+                }
+                return Ok(());
+            }
+            let report: serde_json::Value = serde_json::from_str(&body)?;
+            let rows = report["pullers"].as_array().cloned().unwrap_or_default();
+            println!(
+                "{} pulled by {} identit{} since {}",
+                args.coordinate,
+                rows.len(),
+                if rows.len() == 1 { "y" } else { "ies" },
+                report["since"].as_str().unwrap_or("?")
+            );
+            if !rows.is_empty() {
+                println!(
+                    "{:<40} {:<10} {:>6}  {:<25} {:<25}",
+                    "identity", "role", "pulls", "first", "last"
+                );
+                for r in rows {
+                    println!(
+                        "{:<40} {:<10} {:>6}  {:<25} {:<25}",
+                        r["identity"].as_str().unwrap_or(""),
+                        r["role"].as_str().unwrap_or(""),
+                        r["count"].as_u64().unwrap_or(0),
+                        r["first_pull"].as_str().unwrap_or(""),
+                        r["last_pull"].as_str().unwrap_or("")
+                    );
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+async fn bulk(client: &BatleHubClient, op: &str, args: &BulkArgs, json: bool) -> Result<()> {
+    let out = client
+        .bulk_scan(op, &args.registry, args.state.as_deref())
+        .await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!(
+            "{}: {} of {} coordinate(s) queued at {} priority in {}",
+            op,
+            out["queued"].as_u64().unwrap_or(0),
+            out["considered"].as_u64().unwrap_or(0),
+            out["trigger"].as_str().unwrap_or("?"),
+            args.registry
+        );
+    }
+    Ok(())
+}
+
 #[derive(Args)]
 pub struct WaitArgs {
     /// `<registry>:<name>@<version>`

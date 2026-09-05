@@ -5019,6 +5019,189 @@
         ]
       }
     },
+    "/api/v1/admin/upstream/disappeared": {
+      "get": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "The rows the audit holds: packages seen missing and packages confirmed\ngone (RFC 0014 §4.6). `system:read`. Pages by\n`[limits].packages_per_page` when `per_page` is absent.",
+        "operationId": "list_disappeared",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "query",
+            "description": "One registry; absent lists every audited registry.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "`missing` (seen missing, unconfirmed) or `disappeared` (confirmed);\nabsent lists both.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Absent (or `0`) takes `[limits].packages_per_page`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of rows, with the active policy and the per-registry counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamStatusPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unknown `state`"
+          },
+          "403": {
+            "description": "`system:read` required"
+          },
+          "503": {
+            "description": "The upstream audit is not running in this process"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/upstream/recheck": {
+      "post": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "Probe one cached package against its upstream now (RFC 0014 §4.6).",
+        "description": "The same ladder and state machine as the periodic sweep — a miss here\ncounts towards confirmation like any other, a success clears the row —\nso an admin who has heard from upstream does not wait an interval. It\nis a probe, not an override: it cannot confirm a disappearance the\ncount and age floors would not.",
+        "operationId": "recheck_upstream",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Probed; what the probe found and the row it left",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecheckResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`system:write` required"
+          },
+          "404": {
+            "description": "Not an audited registry, or nothing cached under the name"
+          },
+          "503": {
+            "description": "The upstream audit is not running in this process"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/upstream/status/{registry}/{name}": {
+      "get": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "One package's rows (RFC 0014 §4.6). `system:read`. A package with no row\nanswers `200` with an empty list — \"present\" is the absence of a row,\nand a `404` here would read as \"no such package\".",
+        "operationId": "get_upstream_status",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Package name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The package's rows, possibly none",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamPackageStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`system:read` required"
+          },
+          "404": {
+            "description": "Not an audited registry"
+          },
+          "503": {
+            "description": "The upstream audit is not running in this process"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/users/blocked": {
       "get": {
         "tags": [
@@ -5116,6 +5299,164 @@
           },
           "403": {
             "description": "`blocks:write` required"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/verdicts": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "The verdicts of a registry, by state. `system:read`. Findings are\nincluded: the reader is an administrator, and the listing exists to\nanswer \"what is held, and why\" in one page.",
+        "operationId": "list_verdicts",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "`allowed`, `warned`, `quarantined` or `denied`; absent lists every\nstate.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Per state; default 100, at most 1000.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The verdicts, newest first per state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerdictListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unknown `state`"
+          },
+          "403": {
+            "description": "`system:read` required"
+          },
+          "404": {
+            "description": "The registry has no security profile"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/verdicts/backfill": {
+      "post": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Queue a `Backfill` — the lowest priority — for every cached version of\na registry (RFC 0018 §4.2 *CLI*: `batlehub verdicts backfill`), so an\nestate that turned `[security]` on with a warm cache judges what it\nalready holds without a user waiting on any of it. `system:write`.",
+        "operationId": "backfill_verdicts",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkScanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The backfill is queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkScanResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`system:write` required"
+          },
+          "404": {
+            "description": "The registry has no security profile"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/verdicts/rescan": {
+      "post": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Queue a `Rescan` for every verdict of a registry, or every verdict in\none state (RFC 0018 §4.2 *CLI*). `system:write`.",
+        "operationId": "bulk_rescan",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkScanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The rescans are queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkScanResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unknown `state`"
+          },
+          "403": {
+            "description": "`system:write` required"
+          },
+          "404": {
+            "description": "The registry has no security profile"
           }
         },
         "security": [
@@ -6765,6 +7106,100 @@
           },
           "404": {
             "description": "No verdict, no security profile on the registry, or no quarantine:read"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/verdicts/{registry}/{name}/{version}/pullers": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Who pulled this version inside a window — the incident question,\nanswered from `access_events` through the same query the flip alert\ncarried (RFC 0018 decision 28: one who-pulled query, not two).",
+        "description": "`audit:read` on the registry: the report is a view of the access log,\nand the same reader holds both. Exposure only — allowed downloads; a\nrefused request delivered no bytes (RFC 0002 decision 5). Anonymous\npulls are kept under `ip:<addr>`.",
+        "operationId": "list_pullers",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Package name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "Version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "A window back from now — `30d`, `12h`, `90m`, `3600s`, or a bare\nnumber of seconds — or an RFC 3339 instant. Default: the registry's\n`pullers_window_days`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "`json` (default) or `csv`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Who pulled the version in the window; `?format=csv` selects CSV, anything else JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullersResponse"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unparseable `since`"
+          },
+          "403": {
+            "description": "`audit:read` on the registry required"
+          },
+          "404": {
+            "description": "The registry has no security profile"
           }
         },
         "security": [
@@ -17743,6 +18178,53 @@
           }
         }
       },
+      "BulkScanRequest": {
+        "type": "object",
+        "description": "A bulk rescan or a backfill.",
+        "required": [
+          "registry"
+        ],
+        "properties": {
+          "registry": {
+            "type": "string"
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Rescan only the verdicts in this state; absent rescans every\nverdict of the registry. Ignored by `backfill`."
+          }
+        }
+      },
+      "BulkScanResponse": {
+        "type": "object",
+        "description": "What a bulk operation queued.",
+        "required": [
+          "registry",
+          "considered",
+          "queued",
+          "trigger"
+        ],
+        "properties": {
+          "considered": {
+            "type": "integer",
+            "description": "Coordinates considered.",
+            "minimum": 0
+          },
+          "queued": {
+            "type": "integer",
+            "description": "Jobs created; a coordinate with an open job already is not counted.",
+            "minimum": 0
+          },
+          "registry": {
+            "type": "string"
+          },
+          "trigger": {
+            "type": "string"
+          }
+        }
+      },
       "BulkUnblockRequest": {
         "type": "object",
         "required": [
@@ -20544,7 +21026,12 @@
           "package_published",
           "package_yanked",
           "package_unyanked",
-          "package_deleted"
+          "package_deleted",
+          "package_disappeared_upstream",
+          "package_reappeared_upstream",
+          "upstream_unreachable",
+          "verdict_changed",
+          "artifact_released"
         ]
       },
       "NotificationSubscription": {
@@ -21358,6 +21845,72 @@
         "description": "A non-JSON registry protocol document — `maven-metadata.xml`,\n`updatePlugins.xml`, a PyPI simple-index HTML page, an APT `Release` file, a\nGo `go.mod`, a plain-text token or version list.\n\nAs with [`UpstreamDocument`], the format belongs to the registry protocol.\nThe `Content-Type` header identifies which one.",
         "example": "<registry protocol document>"
       },
+      "Puller": {
+        "type": "object",
+        "description": "One identity's pulls of one version inside the window.",
+        "required": [
+          "identity",
+          "role",
+          "first_pull",
+          "last_pull",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "first_pull": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "identity": {
+            "type": "string",
+            "description": "The user id, or `ip:<addr>` for an anonymous pull, or `anonymous`\nwhen not even the address was recorded."
+          },
+          "last_pull": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      },
+      "PullersResponse": {
+        "type": "object",
+        "description": "Who pulled one version (RFC 0018 §4.2 *Who pulled what*).",
+        "required": [
+          "registry",
+          "package_name",
+          "version",
+          "since",
+          "pullers"
+        ],
+        "properties": {
+          "package_name": {
+            "type": "string"
+          },
+          "pullers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Puller"
+            }
+          },
+          "registry": {
+            "type": "string"
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The start of the window the rows cover."
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "PurgeMissingResponse": {
         "type": "object",
         "required": [
@@ -21721,6 +22274,81 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "RecheckRequest": {
+        "type": "object",
+        "required": [
+          "registry",
+          "package_name"
+        ],
+        "properties": {
+          "package_name": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "One cached version; absent means every cached version of the name."
+          }
+        }
+      },
+      "RecheckResponse": {
+        "type": "object",
+        "description": "What one probe did (RFC 0014 §4.6).",
+        "required": [
+          "registry",
+          "package_name",
+          "probed",
+          "missing",
+          "inconclusive",
+          "transitions"
+        ],
+        "properties": {
+          "inconclusive": {
+            "type": "integer",
+            "description": "Packages upstream could not answer for.",
+            "minimum": 0
+          },
+          "missing": {
+            "type": "integer",
+            "description": "Packages (or versions of them) upstream denied.",
+            "minimum": 0
+          },
+          "package_name": {
+            "type": "string"
+          },
+          "probed": {
+            "type": "integer",
+            "description": "Packages the probe asked upstream about: one, or zero when nothing\nis cached under the name any more.",
+            "minimum": 0
+          },
+          "registry": {
+            "type": "string"
+          },
+          "status": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UpstreamStatus",
+                "description": "The row after the probe: absent when upstream has the package and no\nmiss is on record."
+              }
+            ]
+          },
+          "transitions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`confirmed` or `reappeared`, one per state change the probe produced.\nEmpty when the row only moved to — or stayed — `missing`, or when\nupstream simply has it."
           }
         }
       },
@@ -23049,6 +23677,35 @@
           }
         }
       },
+      "UpstreamPackageStatus": {
+        "type": "object",
+        "description": "What the audit knows about one package: its rows, whole-package and\nper-version (RFC 0014 §4.6).",
+        "required": [
+          "registry",
+          "package_name",
+          "policy",
+          "rows"
+        ],
+        "properties": {
+          "package_name": {
+            "type": "string"
+          },
+          "policy": {
+            "type": "string",
+            "description": "`audit` or `block`."
+          },
+          "registry": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UpstreamStatusSummary"
+            },
+            "description": "Empty when upstream has it and no miss is on record."
+          }
+        }
+      },
       "UpstreamReadDto": {
         "type": "object",
         "description": "What the discovery read did, so the page can say which rung answered rather\nthan presenting a degraded answer as a complete one.",
@@ -23087,6 +23744,30 @@
           }
         }
       },
+      "UpstreamRegistryCounts": {
+        "type": "object",
+        "description": "One audited registry's row counts.",
+        "required": [
+          "registry",
+          "missing",
+          "disappeared"
+        ],
+        "properties": {
+          "disappeared": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "missing": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "registry": {
+            "type": "string"
+          }
+        }
+      },
       "UpstreamSearchResponse": {
         "type": "object",
         "required": [
@@ -23098,6 +23779,182 @@
             "items": {
               "$ref": "#/components/schemas/UpstreamPackageDto"
             }
+          }
+        }
+      },
+      "UpstreamState": {
+        "type": "string",
+        "enum": [
+          "missing",
+          "disappeared"
+        ]
+      },
+      "UpstreamStatus": {
+        "type": "object",
+        "description": "One row of `upstream_status`.",
+        "required": [
+          "registry",
+          "package_name",
+          "state",
+          "first_missed_at",
+          "last_checked_at",
+          "consecutive_misses"
+        ],
+        "properties": {
+          "confirmed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "consecutive_misses": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "first_missed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The upstream error as last seen, for the console. Never parsed."
+          },
+          "package_name": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/UpstreamState"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`None` = the whole package is gone, not one version."
+          }
+        }
+      },
+      "UpstreamStatusPage": {
+        "type": "object",
+        "description": "A page of rows (RFC 0014 §4.6).",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "per_page",
+          "policy",
+          "registries",
+          "counts"
+        ],
+        "properties": {
+          "counts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UpstreamRegistryCounts"
+            },
+            "description": "Per audited registry, how many rows are `missing` and how many\n`disappeared` — the health card's numbers, unfiltered."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UpstreamStatusSummary"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "policy": {
+            "type": "string",
+            "description": "`audit` or `block`: what a confirmation does on this instance. On the\nlisting so a console never has to answer \"check the config file\"."
+          },
+          "registries": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The registries the sweep covers."
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Rows matching the filter, every page included.",
+            "minimum": 0
+          }
+        }
+      },
+      "UpstreamStatusSummary": {
+        "type": "object",
+        "description": "One `upstream_status` row, as the console shows it (RFC 0014 §4.6\n`UpstreamStatusSummary`).",
+        "required": [
+          "registry",
+          "package_name",
+          "state",
+          "first_missed_at",
+          "last_checked_at",
+          "consecutive_misses"
+        ],
+        "properties": {
+          "confirmed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "consecutive_misses": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "first_missed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The upstream's last error, verbatim and bounded; never parsed."
+          },
+          "package_name": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/UpstreamState"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Absent for a whole-package row: every cached version went at once."
           }
         }
       },
@@ -23186,6 +24043,25 @@
           },
           "state": {
             "$ref": "#/components/schemas/VerdictState"
+          }
+        }
+      },
+      "VerdictListResponse": {
+        "type": "object",
+        "description": "The admin listing: the verdicts of one registry, newest evaluation\nfirst, per state (RFC 0018 §4.2 *CLI*: `batlehub verdicts list`).",
+        "required": [
+          "registry",
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Verdict"
+            }
+          },
+          "registry": {
+            "type": "string"
           }
         }
       },

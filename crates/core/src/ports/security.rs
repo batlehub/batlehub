@@ -29,6 +29,17 @@ pub trait VerdictRepository: Send + Sync {
         state: VerdictState,
         limit: u64,
     ) -> Result<Vec<Verdict>, CoreError>;
+
+    /// The coordinates of `registry` whose last scan is older than `before`
+    /// (or that were never scanned), oldest first, at most `limit` — what
+    /// the rescan scheduler queues (RFC 0018 phase 4). Findings are not
+    /// loaded: the scheduler needs the coordinate, not the content.
+    async fn list_due_for_rescan(
+        &self,
+        registry: &str,
+        before: DateTime<Utc>,
+        limit: u64,
+    ) -> Result<Vec<PackageId>, CoreError>;
 }
 
 /// The count of open jobs, per registry and trigger — the
@@ -83,6 +94,13 @@ pub trait ScanQueue: Send + Sync {
     async fn exhausted(&self, max_attempts: u32, n: u32) -> Result<Vec<ScanJob>, CoreError>;
 
     async fn queued(&self) -> Result<Vec<QueuedCount>, CoreError>;
+
+    /// Whether this process leads the scheduled work keyed by `key` (RFC
+    /// 0018 §6.3: one rescan timer per estate, elected with a PostgreSQL
+    /// advisory lock). `true` while the lock is held — a process that got
+    /// it keeps it until it exits — and `false` for every other process.
+    /// The in-memory queue is one process by construction and always leads.
+    async fn try_lead(&self, key: i64) -> Result<bool, CoreError>;
 }
 
 /// `worker_heartbeats`: which workers are alive, so the proxy can say when

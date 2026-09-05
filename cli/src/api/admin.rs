@@ -262,6 +262,10 @@ pub enum NotificationEventTypeEntry {
     PackageYanked,
     PackageUnyanked,
     PackageDeleted,
+    /// RFC 0014 §4.5 — the upstream audit's three.
+    PackageDisappearedUpstream,
+    PackageReappearedUpstream,
+    UpstreamUnreachable,
 }
 
 impl std::fmt::Display for NotificationEventTypeEntry {
@@ -271,6 +275,9 @@ impl std::fmt::Display for NotificationEventTypeEntry {
             Self::PackageYanked => "package_yanked",
             Self::PackageUnyanked => "package_unyanked",
             Self::PackageDeleted => "package_deleted",
+            Self::PackageDisappearedUpstream => "package_disappeared_upstream",
+            Self::PackageReappearedUpstream => "package_reappeared_upstream",
+            Self::UpstreamUnreachable => "upstream_unreachable",
         };
         f.write_str(s)
     }

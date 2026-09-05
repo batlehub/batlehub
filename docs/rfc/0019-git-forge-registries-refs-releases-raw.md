@@ -2,7 +2,7 @@
 
 | Field       | Value                                                                                 |
 | ----------- | ------------------------------------------------------------------------------------- |
-| Status      | Draft — revised 2026-09-02 against the tree; see §11 for what that reopened            |
+| Status      | **In review** — all five phases of §12 landed: phase 1 on 2026-09-03 (§13.1) and phases 2–5 on 2026-09-04 (§13.2), each parity cell probed live before the code that relies on it; every §11 question is decided. What is left is presentation (the Explorer's short-SHA column) and client-side proof of phases 3–5 in `tests/heavy/mise.sh` |
 | Short       | Forge registries: refs, releases, raw                                                 |
 | Settles     | What a "version" is for GitHub/GitLab/Forgejo, how mutable refs are served, what raw content is allowed, and what metadata these registries hand to RFC 0018 |
 | Author      | Maxime <maxleriche.60@gmail.com>                                                       |
@@ -682,7 +682,7 @@ verdict model (this RFC only adds codes and one rule); storage backends;
 
 ### Still open
 
-1. **Endpoints marked *(to confirm)*.** Eleven cells of the parity table
+1. ~~**Endpoints marked *(to confirm)*.**~~ Eleven cells of the parity table
    were written from documentation, and the first revision of this RFC
    claimed the Forgejo `verification` object was already in the client's
    models — it is not. Each is verified against a live forge in the phase
@@ -692,7 +692,7 @@ verdict model (this RFC only adds codes and one rule); storage backends;
    signature endpoints, GitHub's attestation store, Forgejo's `verification`
    object — §13.2). Every cell of the table is now a live observation, and
    the question is closed.
-2. **Installers through `raw`.** RFC 0010 decision 9 says BatleHub proxies
+2. ~~**Installers through `raw`.**~~ RFC 0010 decision 9 says BatleHub proxies
    registries, not installers, and refuses to mirror `install.sh`; this RFC
    serves exactly that file under a `warn` default. The two are reconcilable
    — 0010 is about *hosting* an installer as a package, this is about
@@ -712,12 +712,19 @@ verdict model (this RFC only adds codes and one rule); storage backends;
    SBOMs and lockfiles, and none of them is handed a single file. A default
    of `warn` there would have been a hole in the one section that promises
    there is none.
-3. **An `archive/{ref}.tar.gz` route alias.** Every forge's own JSON
+3. ~~**An `archive/{ref}.tar.gz` route alias.**~~ Every forge's own JSON
    advertises this shape; the snippet rewrites it and §4.2 rewrites it in
    JSON, so nothing needs it today. Adding it would let an un-rewritten
    `tarball_url` work; it would also be a second name for one coordinate in
-   the cache and the access log. Lean: no, until a client is observed to
-   need it.
+   the cache and the access log.
+
+   **Decided 2026-09-04: no.** The setup snippet and the §4.2 JSON rewrite
+   both point every client at `tarball/{ref}`, and across `mise.sh`'s runs
+   and the live probes of §13.1 and §13.2 no client has been observed to
+   request the alias. Adding it would give one coordinate two names in the
+   cache and the access log — the thing decision 12 exists to prevent — for
+   a request nobody makes. Reopen it on the first client that does, with the
+   client's name.
 
 ---
 
@@ -922,3 +929,24 @@ assertions for `TAG_MOVED` live in the in-process suite. The Explorer's
 version rows do not yet show a short SHA — the moving-refs panel is the half
 of §6.5 that needed a store behind it, and the SHA column is presentation
 over data the page already has.
+
+### 13.3 The tails (2026-09-05)
+
+What the build order that followed this RFC left for last: presentation
+over data the page already had, and client-side proof of phases 3–5.
+The Explorer's version rows now show the short SHA beside a version that
+is a ref (`data-testid="ref-sha"`, from the same `/refs` answer the
+moving-refs panel reads; nothing on a package registry, where there is no
+ref to resolve), tested in `PackageDetailPage.test.ts`. `tests/heavy/mise.sh`
+gained two sections under a `[registries.raw] enabled = true, scripts =
+"deny"` and `[registries.api_reads] families = ["tags"]` config: raw
+`script/createrepo.sh` at a pinned tag is answered `403` naming
+`RAW_SCRIPT` with none of its bytes, `README.md` at the same tag is served
+through the same route; the `tags` family answers and names the tag, the
+`commits` family — not enabled — refuses; and the release document for the
+tag has every `browser_download_url`, `tarball_url` and `zipball_url` on
+the proxy and no `assets_url`/`upload_url`/asset `url` left on
+api.github.com. One thing the run settled: the release's own top-level
+`url` is left as the forge wrote it — it is the release's identity, not a
+link a client follows — and the suite asserts on the links that are.
+

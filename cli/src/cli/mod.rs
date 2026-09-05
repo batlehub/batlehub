@@ -106,6 +106,11 @@ pub enum Command {
     Why(security::WhyArgs),
     /// Wait for a held version to become servable; exit 1 when waiting cannot help, 2 on timeout
     Wait(security::WaitArgs),
+    /// The admin's side of a verdict: who pulled a version (RFC 0018)
+    Verdicts {
+        #[command(subcommand)]
+        cmd: security::VerdictsCommand,
+    },
     /// Launch interactive TUI
     Tui,
     /// Print shell completion script to stdout

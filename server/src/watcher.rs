@@ -180,6 +180,29 @@ pub(super) fn spawn_periodic_coherence_sweep(
     });
 }
 
+/// Spawn the rescan scheduler (RFC 0018 phase 4): one tick a minute on
+/// every worker process; the tick does nothing unless this process holds
+/// the estate's advisory lock. First tick after one period, so a restart
+/// storm does not become a queue storm.
+pub(super) fn spawn_rescan_scheduler(scheduler: Arc<batlehub_core::services::RescanScheduler>) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(batlehub_core::services::RESCAN_TICK);
+        ticker.tick().await;
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+            match scheduler.run_once(chrono::Utc::now()).await {
+                Ok(r) if r.leader && r.queued > 0 => {
+                    metrics::counter!("batlehub_rescans_queued_total").increment(r.queued as u64);
+                    tracing::info!(queued = r.queued, due = ?r.due, "security: rescans queued");
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "security: rescan tick failed"),
+            }
+        }
+    });
+}
+
 /// Spawn the upstream audit (RFC 0014 §6.10): one sweep per interval, on
 /// the worker role. Copies `spawn_periodic_coherence_sweep`'s first tick —
 /// never at second zero, so `skip_recently_seen` has a picture to compare

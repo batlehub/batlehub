@@ -8,6 +8,8 @@ use common::*;
 use actix_web::test::{call_service, read_body, read_body_json, TestRequest};
 use serde_json::Value;
 
+use std::sync::Arc;
+
 use base64::Engine as _;
 use batlehub_adapters::in_memory::InMemoryPackageRepository as InMemoryRepo;
 use batlehub_config::schema::RegistryMode;
@@ -277,4 +279,118 @@ async fn npm_dist_tags_local_mode_unknown_package_returns_404() {
         .insert_header(("Authorization", bearer(USER_TOKEN)))
         .to_request();
     assert_eq!(call_service(&app, req).await.status(), 404);
+}
+
+// ── RFC 0014 §6.2: a locally published version is never in the sweep's input ──
+
+/// An artifact-meta store that remembers every `record_artifact`, and is
+/// the inventory the sweep would read.
+#[derive(Default)]
+struct RecordingArtifactMeta {
+    recorded: std::sync::Mutex<Vec<String>>,
+}
+
+#[async_trait::async_trait]
+impl batlehub_core::ports::ArtifactCacheMeta for RecordingArtifactMeta {
+    async fn record_artifact(
+        &self,
+        rec: batlehub_core::ports::ArtifactMetaRecord<'_>,
+    ) -> Result<(), batlehub_core::error::CoreError> {
+        self.recorded.lock().unwrap().push(rec.key.to_owned());
+        Ok(())
+    }
+    async fn get_artifact_checksum(
+        &self,
+        _: &str,
+    ) -> Result<Option<String>, batlehub_core::error::CoreError> {
+        Ok(None)
+    }
+    async fn touch_artifact(&self, _: &str) -> Result<(), batlehub_core::error::CoreError> {
+        Ok(())
+    }
+    async fn is_artifact_expired(
+        &self,
+        _: &str,
+        _: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, batlehub_core::error::CoreError> {
+        Ok(false)
+    }
+    async fn delete_artifact_meta(&self, _: &str) -> Result<(), batlehub_core::error::CoreError> {
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl batlehub_core::ports::ArtifactInventory for RecordingArtifactMeta {
+    async fn list_artifacts(
+        &self,
+        _: &str,
+    ) -> Result<Vec<batlehub_core::ports::ArtifactMeta>, batlehub_core::error::CoreError> {
+        Ok(vec![])
+    }
+    async fn list_artifacts_by_package(
+        &self,
+    ) -> Result<Vec<batlehub_core::ports::ArtifactMeta>, batlehub_core::error::CoreError> {
+        Ok(vec![])
+    }
+    async fn list_expired_by_ttl(
+        &self,
+        _: &str,
+        _: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<batlehub_core::ports::ArtifactMeta>, batlehub_core::error::CoreError> {
+        Ok(vec![])
+    }
+    async fn list_idle(
+        &self,
+        _: &str,
+        _: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<batlehub_core::ports::ArtifactMeta>, batlehub_core::error::CoreError> {
+        Ok(vec![])
+    }
+    async fn total_size_bytes(&self, _: &str) -> Result<u64, batlehub_core::error::CoreError> {
+        Ok(0)
+    }
+    async fn list_lru(
+        &self,
+        _: &str,
+        _: i64,
+    ) -> Result<Vec<batlehub_core::ports::ArtifactMeta>, batlehub_core::error::CoreError> {
+        Ok(vec![])
+    }
+}
+
+/// The load-bearing invariant of RFC 0014 §6.2: `record_artifact` has two
+/// call sites (the proxy fetch and warming) and the local publish path is
+/// not one of them, so a version published to a hybrid registry is absent
+/// from the sweep's input rather than excluded by a filter. A future
+/// `record_artifact` on the publish path would turn this red — and would
+/// otherwise make the audit probe an upstream for a version it never had.
+#[actix_web::test]
+async fn a_locally_published_version_is_never_recorded_as_cached_from_upstream() {
+    let meta = Arc::new(RecordingArtifactMeta::default());
+    let parts = local_registry_app_parts_with_artifact_meta(
+        "local-npm",
+        "npm",
+        RegistryMode::Hybrid,
+        None,
+        None,
+        Arc::clone(&meta) as Arc<dyn batlehub_core::ports::ArtifactMetaRepository>,
+    );
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+
+    let req = TestRequest::put()
+        .uri("/proxy/local-npm/mine")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_json(make_npm_publish_payload("mine", "1.0.0"))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 200);
+    // …and read back through the local path, which must not record either.
+    let resp = call_service(&app, admin_get("/proxy/local-npm/mine/1.0.0/tarball")).await;
+    assert_eq!(resp.status(), 200);
+
+    assert!(
+        meta.recorded.lock().unwrap().is_empty(),
+        "the publish path recorded an artifact as cached from upstream: {:?}",
+        meta.recorded.lock().unwrap()
+    );
 }

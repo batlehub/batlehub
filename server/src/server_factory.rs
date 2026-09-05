@@ -173,6 +173,12 @@ pub(super) struct ServerParams {
     pub notification_svc: Option<Arc<NotificationService>>,
     pub notification_store: Arc<dyn NotificationPort>,
     pub notifications_config: Option<NotificationsConfig>,
+    /// RFC 0014 §4.6 — the audit, when this process runs it: `recheck` (and,
+    /// with phase 7, the listing) answer 503 without it.
+    pub upstream_audit: Option<Arc<batlehub_core::services::UpstreamAuditService>>,
+    /// RFC 0018 phase 5 — what `backfill` walks: every cached version of a
+    /// registry, from the artifact-meta table.
+    pub artifact_inventory: Arc<dyn batlehub_core::ports::ArtifactInventory>,
     pub local_svc: Arc<LocalRegistryService>,
     pub quota_svc: Arc<QuotaService>,
     pub stats_history: Arc<dyn batlehub_core::ports::StatsHistoryRepository>,
@@ -237,6 +243,8 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
         notification_svc,
         notification_store,
         notifications_config,
+        upstream_audit,
+        artifact_inventory,
         local_svc,
         quota_svc,
         stats_history,
@@ -342,6 +350,12 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
         if let Some(path) = cli_binary_path_inner {
             app = app.app_data(web::Data::new(CliBinaryPath(path)));
         }
+        // Registered only when the audit runs here, so the handlers extract
+        // it as `Option<Data<_>>` and answer 503 on a process without it.
+        if let Some(audit) = &upstream_audit {
+            app = app.app_data(web::Data::new(Arc::clone(audit)));
+        }
+        app = app.app_data(web::Data::new(Arc::clone(&artifact_inventory)));
 
         let cors = crate::watcher::build_cors(&cors_allowed_origins);
         let enabled = ip_blocking_cfg.as_ref().is_some_and(|c| c.enabled);

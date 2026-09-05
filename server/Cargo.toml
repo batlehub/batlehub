@@ -63,6 +63,10 @@ serde_json.workspace = true
 [dev-dependencies]
 toml.workspace = true
 serde.workspace = true
+# `tests/roles.rs` (RFC 0018 §10): the built binary as a subprocess, a fake
+# OSV and a scratch config file.
+mockito = "1"
+tempfile.workspace = true
 
 [lints]
 workspace = true

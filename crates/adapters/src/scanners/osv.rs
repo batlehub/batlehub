@@ -91,6 +91,7 @@ impl ArtifactScanner for OsvArtifactScanner {
                 .with_raw(serde_json::json!({
                     "purl": m.purl,
                     "fixed_version": m.fixed_version,
+                    "aliases": m.aliases,
                 }))
             })
             .collect())
@@ -126,6 +127,7 @@ mod tests {
                     severity: Severity::High,
                     summary: "bad".into(),
                     fixed_version: Some("1.3.2".into()),
+                    aliases: vec![],
                 })
                 .collect())
         }

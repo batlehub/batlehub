@@ -12,13 +12,14 @@ use std::fmt;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 /// `last_error` is upstream-controlled text: stored verbatim, never parsed,
 /// and cut here so a hostile upstream cannot use it as unbounded storage
 /// (RFC 0014 §7).
 pub const LAST_ERROR_MAX_BYTES: usize = 512;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum UpstreamState {
     /// Upstream denied it at least once; unconfirmed.
@@ -55,7 +56,7 @@ impl fmt::Display for UpstreamState {
 }
 
 /// One row of `upstream_status`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct UpstreamStatus {
     pub registry: String,
     pub package_name: String,

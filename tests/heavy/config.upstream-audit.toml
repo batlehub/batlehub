@@ -1,0 +1,81 @@
+# Server configuration for the heavy upstream-audit integration test
+# (tests/heavy/upstream_audit.sh) — RFC 0014 seen from the receiving end.
+#
+# See tests/heavy/config.npm.toml for the env-var conventions. Two more
+# placeholders here: `${HEAVY_UPSTREAM_URL}` is the directory the suite serves
+# itself and deletes from, and `${HEAVY_WEBHOOK_URL}` the receiver it reads.
+
+[server]
+host = "127.0.0.1"
+port = 8109
+# The audit runs on the worker role; the default is both, spelled out.
+roles = ["proxy", "worker"]
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-upstream-audit-storage"
+
+# ── The receiver ─────────────────────────────────────────────────────────────
+#
+# One webhook channel; the suite subscribes to it through the admin API, the
+# way an operator would, and reads what arrived from the receiver's own log.
+[notifications]
+enabled = true
+
+[[notifications.channels]]
+type = "webhook"
+name = "sink"
+url = "${HEAVY_WEBHOOK_URL}"
+
+# ── The audit ────────────────────────────────────────────────────────────────
+#
+# `interval_secs` at its floor: the periodic sweep is not what the suite
+# drives — five minutes, twice, is longer than a heavy suite should take —
+# and `POST /api/v1/admin/upstream/recheck` runs the same probe and state
+# machine on demand. Two misses with no age floor confirm, which is the
+# smallest window the state machine allows and the one that makes a run
+# short; an estate would never set `confirm_min_age_secs = 0`.
+[upstream_audit]
+enabled = true
+interval_secs = 300
+confirm_after = 2
+confirm_min_age_secs = 0
+skip_recently_seen = false
+# The block arm (RFC 0014 phase 6): a confirmed disappearance is refused on
+# the wire through the admin block list, and a reappearance lifts the
+# audit's own block. Steps 5 and 6 of the suite are what "block" promises
+# to a real client; steps 1–4 hold under either value.
+on_confirmed = "block"
+
+# ── The registry: an npm upstream the suite owns ─────────────────────────────
+#
+# A directory served by `python3 -m http.server`: the packument is a file
+# named after the package, the tarball sits beside it. A disappearance is
+# `rm`, a reappearance is `cp` — a real 404 from a real upstream, staged
+# without asking npmjs.org to unpublish anything. A loopback upstream is the
+# operator-trusted origin (the SSRF guard applies to what the upstream *says*,
+# not to where the operator pointed it), and npm's tarball URL must be on
+# that same origin, which the fixture's packument arranges.
+[[registries]]
+type = "npm"
+name = "npm-audited-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["${HEAVY_UPSTREAM_URL}"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

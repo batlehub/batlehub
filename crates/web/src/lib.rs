@@ -570,6 +570,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 quota::{
                     get_quota_for_user, list_quota, list_quota_for_registry, reset_quota_for_user,
                 },
+                upstream::{get_upstream_status, list_disappeared, recheck_upstream},
                 warming::{get_warming_status, warm_registry},
             },
             packages::{
@@ -998,6 +999,10 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     // RFC 0018 phase 2: the verdict endpoint.
     cfg.service(crate::handlers::security::get_verdict); // GET  /api/v1/verdicts/{registry}/{name}/{version}
     cfg.service(crate::handlers::security::rescan_verdict); // POST /api/v1/verdicts/{registry}/{name}/{version}/rescan
+    cfg.service(crate::handlers::security::list_pullers); // GET  /api/v1/verdicts/{registry}/{name}/{version}/pullers
+    cfg.service(crate::handlers::security::list_verdicts); // GET  /api/v1/admin/verdicts
+    cfg.service(crate::handlers::security::bulk_rescan); // POST /api/v1/admin/verdicts/rescan
+    cfg.service(crate::handlers::security::backfill_verdicts); // POST /api/v1/admin/verdicts/backfill
     cfg.service(download_cli);
     cfg.service(list_registries);
     // Explore: detail path before list (more specific first); upstream before
@@ -1049,6 +1054,9 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(crate::handlers::flags::revoke_flag); // DELETE /api/v1/flags/{source}/{external_id}
     cfg.service(get_warming_status);
     cfg.service(warm_registry);
+    cfg.service(recheck_upstream); // POST /api/v1/admin/upstream/recheck (RFC 0014 §4.6)
+    cfg.service(list_disappeared); // GET  /api/v1/admin/upstream/disappeared
+    cfg.service(get_upstream_status); // GET  /api/v1/admin/upstream/status/{registry}/{name}
     cfg.service(evict_registry);
     cfg.service(coherence_sweep);
     cfg.service(delete_cached_artifact);

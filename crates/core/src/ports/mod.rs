@@ -35,7 +35,7 @@ pub use governance::{
     OwnershipPort, PolicyRepository, SigningKeyPort, StoredGrant, StoredPolicy, TeamNamespacePort,
     UserBlock, UserBlockRepository,
 };
-pub use notification::NotificationPort;
+pub use notification::{NotificationPort, NotificationSink};
 pub use ops::{
     BlockedIpInfo, IpBlockStore, NoopWarmCoordinator, QuotaOutcome, QuotaRepository, QuotaUsage,
     RateLimitStore, UpstreamStatusPort, WarmCoordinator,
@@ -50,7 +50,7 @@ pub use sbom::{
     ExtractedManifest, ExtractedReadme, SbomDependency, SbomExtractor, SbomRepository,
     UpstreamSbomFetcher, LICENSE_EXTRACTION_TYPES, README_EXTRACTION_TYPES, README_EXTRACT_CEILING,
 };
-pub use scanner::{ArtifactScanner, ScanInput, ScannerError};
+pub use scanner::{ArtifactScanner, FindingEnricher, ScanInput, ScannerError};
 pub use security::{QueuedCount, ScanQueue, VerdictRepository, WorkerRegistry};
 pub use stats_history::{StatsHistoryRepository, StatsRollupRow};
 pub use storage::{

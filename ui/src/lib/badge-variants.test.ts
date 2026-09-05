@@ -66,6 +66,10 @@ describe("eventBadgeVariant", () => {
     expect(eventBadgeVariant("package_published")).toBe("default");
     expect(eventBadgeVariant("package_yanked")).toBe("destructive");
     expect(eventBadgeVariant("package_unyanked")).toBe("secondary");
+    // RFC 0014 §4.5
+    expect(eventBadgeVariant("package_disappeared_upstream")).toBe("destructive");
+    expect(eventBadgeVariant("package_reappeared_upstream")).toBe("secondary");
+    expect(eventBadgeVariant("upstream_unreachable")).toBe("copper");
     expect(eventBadgeVariant("other")).toBe("outline");
   });
 });

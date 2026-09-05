@@ -30,8 +30,8 @@ use batlehub_core::{
         SecurityMode, SecurityPolicy, Severity, VerdictState,
     },
     ports::{
-        ArtifactScanner, DocumentKind, FetchedArtifact, RegistryClient, ScanInput, ScanQueue,
-        ScannerError, VerdictRepository, VersionDocument,
+        ArtifactScanner, DocumentKind, FetchedArtifact, NotificationSink, PackageRepository,
+        RegistryClient, ScanInput, ScanQueue, ScannerError, VerdictRepository, VersionDocument,
     },
     rules::VerdictGateRule,
     services::{RegistryPolicy, ScanWorker, VerdictService, WorkerConfig},
@@ -147,11 +147,41 @@ impl ArtifactScanner for FakeOsv {
     }
 }
 
+/// Every event the worker emitted (RFC 0018 phase 4).
+#[derive(Default)]
+struct RecordingSink {
+    events: Mutex<Vec<batlehub_core::entities::NotificationEvent>>,
+}
+
+impl RecordingSink {
+    fn of(
+        &self,
+        kind: batlehub_core::entities::NotificationEventType,
+    ) -> Vec<batlehub_core::entities::NotificationEvent> {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| e.event_type == kind)
+            .cloned()
+            .collect()
+    }
+}
+
+impl NotificationSink for RecordingSink {
+    fn emit(&self, event: batlehub_core::entities::NotificationEvent) {
+        self.events.lock().unwrap().push(event);
+    }
+}
+
 struct Lab {
     osv: Arc<FakeOsv>,
     queue: Arc<InMemoryScanQueue>,
     verdicts: Arc<InMemoryVerdictRepository>,
     worker: Arc<ScanWorker>,
+    /// The hot config the app reads, so a test can do what a reload does.
+    hot: batlehub_core::services::HotConfigLock,
+    sink: Arc<RecordingSink>,
 }
 
 fn policy(mode: SecurityMode) -> SecurityPolicy {
@@ -224,6 +254,7 @@ async fn lab(
     }
     let mut scanners: HashMap<String, Arc<dyn ArtifactScanner>> = HashMap::new();
     scanners.insert("osv".into(), Arc::clone(&osv) as Arc<dyn ArtifactScanner>);
+    let sink = Arc::new(RecordingSink::default());
     let worker = Arc::new(ScanWorker {
         config: WorkerConfig {
             worker_id: "test-worker".into(),
@@ -239,9 +270,13 @@ async fn lab(
         sboms: None,
         hot: parts.proxy_svc.hot.clone(),
         scanners,
+        enrichers: HashMap::new(),
         storage: Some(Arc::clone(&parts.proxy_svc.storage)),
         max_artifact_bytes: 64 * 1024 * 1024,
+        notifier: Some(Arc::clone(&sink) as Arc<dyn NotificationSink>),
+        events: Some(Arc::clone(&parts.proxy_svc.repo) as Arc<dyn PackageRepository>),
     });
+    let hot = parts.proxy_svc.hot.clone();
     let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
     (
         app,
@@ -250,6 +285,8 @@ async fn lab(
             queue,
             verdicts,
             worker,
+            hot,
+            sink,
         },
     )
 }
@@ -570,6 +607,320 @@ async fn a_held_version_is_hidden_from_the_listing_until_it_serves() {
     lab.worker.run_once().await.unwrap();
     let after = get_json(&app, &packument).await;
     assert!(after["versions"].get("1.1.0").is_some(), "{after}");
+}
+
+/// A `denied` judged under `block` must not keep hiding its version once the
+/// registry is flipped to `warn` (the listing reads stored rows; the artifact
+/// path re-judges — and a hidden version never reaches the artifact path
+/// from a fresh resolve). Found by `tests/heavy/quarantine.sh` step 5: after
+/// the flip, `npm install` answered ETARGET indefinitely.
+#[actix_web::test]
+async fn a_denied_version_is_listed_again_when_the_registry_flips_to_warn() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    lab.osv.vuln("1.1.0", Severity::Critical);
+    let packument = format!("/proxy/{REG}/pkg");
+
+    let _ = status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+    let (code, _) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 403, "denied under block");
+    let held = get_json(&app, &packument).await;
+    assert!(held["versions"].get("1.1.0").is_none(), "{held}");
+
+    // What a config reload does to the registry's profile.
+    {
+        let mut hot = lab.hot.write().await;
+        hot.security.get_mut(REG).unwrap().mode = SecurityMode::Warn;
+    }
+    let after = get_json(&app, &packument).await;
+    assert!(
+        after["versions"].get("1.1.0").is_some(),
+        "a stale denied must be listed under warn, or no fresh resolve ever reaches the gate that would serve it: {after}"
+    );
+
+    // An always-denied code is not the mode's to lift.
+    lab.osv.findings.lock().unwrap().insert(
+        "1.0.0".into(),
+        vec![Finding::new(
+            "flags",
+            FindingKind::SocVerdict,
+            ReasonCode::SocVerdict,
+            Severity::Critical,
+            "pushed hard block",
+        )],
+    );
+    let _ = status(&app, &tarball("1.0.0")).await;
+    lab.worker.run_once().await.unwrap();
+    let after = get_json(&app, &packument).await;
+    assert!(
+        after["versions"].get("1.0.0").is_none(),
+        "SOC_VERDICT denies in both modes and stays hidden: {after}"
+    );
+}
+
+// ── phase 4: the rescan and the flip (RFC 0018 decision 23) ──────────────────
+
+/// A version served yesterday is refused today after a rescan finding, and
+/// the admin alert names who pulled it — exactly the identities in the
+/// access log inside the window, none outside — with the same list the
+/// `pullers` endpoint answers, as JSON and as CSV.
+#[actix_web::test]
+async fn a_rescan_finding_flips_a_served_version_and_the_alert_names_the_pullers() {
+    use batlehub_core::entities::NotificationEventType;
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    let pkg = PackageId::new(REG, "pkg", "1.1.0");
+    // A one-second window, so "outside the window" is a second of waiting
+    // rather than a clock the test cannot move.
+    lab.hot
+        .write()
+        .await
+        .security
+        .get_mut(REG)
+        .unwrap()
+        .pullers_window = Duration::from_secs(1);
+
+    // Scanned clean and served.
+    let _ = status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+    // The admin pulls it, then time passes, then the user pulls it.
+    assert_eq!(
+        get_as(&app, &tarball("1.1.0"), Some(ADMIN_TOKEN))
+            .await
+            .status(),
+        200
+    );
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert_eq!(
+        get_as(&app, &tarball("1.1.0"), Some(USER_TOKEN))
+            .await
+            .status(),
+        200
+    );
+    assert!(lab
+        .sink
+        .of(NotificationEventType::VerdictChanged)
+        .is_empty());
+
+    // The database learns something; the rescan is queued as the scheduler
+    // would queue it, with the version's date.
+    lab.osv.vuln("1.1.0", Severity::Critical);
+    assert!(lab
+        .queue
+        .enqueue(
+            &pkg,
+            Some(Utc::now() - chrono::Duration::hours(2)),
+            ScanTrigger::Rescan
+        )
+        .await
+        .unwrap());
+    let report = lab.worker.run_once().await.unwrap();
+    assert_eq!((report.leased, report.completed), (1, 1));
+
+    // Refused now — the download gate, in npm's own shape.
+    let resp = get_as(&app, &tarball("1.1.0"), Some(USER_TOKEN)).await;
+    assert_eq!(resp.status(), 403);
+    assert_eq!(header(&resp, HEADER_VERDICT), Some("denied"));
+
+    // One alert, with the user inside the window and not the admin
+    // outside it.
+    let alerts = lab.sink.of(NotificationEventType::VerdictChanged);
+    assert_eq!(alerts.len(), 1, "{alerts:?}");
+    let alert = &alerts[0];
+    assert_eq!(alert.package_name, "pkg");
+    assert_eq!(alert.version.as_deref(), Some("1.1.0"));
+    assert_eq!(alert.actor, "system:security-worker");
+    let m = &alert.metadata;
+    assert_eq!(m["from"], "allowed");
+    assert_eq!(m["to"], "denied");
+    assert_eq!(m["trigger"], "rescan");
+    assert_eq!(m["pullers_known"], true);
+    assert_eq!(
+        m["pullers_window_days"], 0,
+        "a one-second window rounds to no whole day"
+    );
+    assert!(m["reason_codes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c == "VULNERABILITY"));
+    assert_eq!(m["findings"][0]["reference"], "GHSA-test");
+    let pullers = m["pullers"].as_array().unwrap();
+    assert_eq!(
+        pullers.len(),
+        1,
+        "only the pull inside the window: {pullers:?}"
+    );
+    let who = pullers[0]["identity"].as_str().unwrap().to_owned();
+    assert_eq!(pullers[0]["role"], "user");
+    assert_eq!(pullers[0]["count"], 1);
+
+    // The endpoint answers the same list from the same query…
+    let uri = format!("/api/v1/verdicts/{REG}/pkg/1.1.0/pullers?since=1s");
+    let resp = get_as(&app, &uri, Some(ADMIN_TOKEN)).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    let listed = body["pullers"].as_array().unwrap();
+    assert_eq!(listed.len(), 1, "{body}");
+    assert_eq!(listed[0]["identity"], who);
+    // …a wider window has both…
+    let resp = get_as(
+        &app,
+        &format!("/api/v1/verdicts/{REG}/pkg/1.1.0/pullers?since=1h"),
+        Some(ADMIN_TOKEN),
+    )
+    .await;
+    let wide: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(wide["pullers"].as_array().unwrap().len(), 2, "{wide}");
+    // …the CSV agrees with the JSON…
+    let resp = get_as(&app, &format!("{uri}&format=csv"), Some(ADMIN_TOKEN)).await;
+    assert_eq!(resp.status(), 200);
+    assert!(header(&resp, "content-type")
+        .unwrap()
+        .starts_with("text/csv"));
+    let csv = String::from_utf8(actix_web::test::read_body(resp).await.to_vec()).unwrap();
+    let mut lines = csv.lines();
+    assert_eq!(
+        lines.next(),
+        Some("identity,role,first_pull,last_pull,count")
+    );
+    let row = lines.next().unwrap();
+    assert!(row.starts_with(&format!("{who},user,")), "{csv}");
+    assert!(row.ends_with(",1"), "{csv}");
+    assert!(lines.next().is_none());
+    // …and a non-admin is refused it, and an unparseable window is a 400.
+    assert_eq!(get_as(&app, &uri, Some(USER_TOKEN)).await.status(), 403);
+    assert_eq!(get_as(&app, &uri, None).await.status(), 403);
+    assert_eq!(
+        get_as(
+            &app,
+            &format!("/api/v1/verdicts/{REG}/pkg/1.1.0/pullers?since=yesterday"),
+            Some(ADMIN_TOKEN)
+        )
+        .await
+        .status(),
+        400
+    );
+
+    // Denied stays denied on the next rescan: no second alert.
+    lab.queue
+        .enqueue(
+            &pkg,
+            Some(Utc::now() - chrono::Duration::hours(2)),
+            ScanTrigger::Rescan,
+        )
+        .await
+        .unwrap();
+    lab.worker.run_once().await.unwrap();
+    assert_eq!(lab.sink.of(NotificationEventType::VerdictChanged).len(), 1);
+}
+
+/// A hold that lifts announces itself to the ones refused during it — the
+/// first-contact requester — and to nobody when nobody was.
+#[actix_web::test]
+async fn a_lifted_hold_is_announced_to_the_identities_that_were_refused() {
+    use batlehub_core::entities::NotificationEventType;
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+
+    // The user meets the hold; the worker clears it.
+    assert_eq!(
+        get_as(&app, &tarball("1.1.0"), Some(USER_TOKEN))
+            .await
+            .status(),
+        403
+    );
+    lab.worker.run_once().await.unwrap();
+    let released = lab.sink.of(NotificationEventType::ArtifactReleased);
+    assert_eq!(released.len(), 1, "{released:?}");
+    let m = &released[0].metadata;
+    assert_eq!(m["from"], "quarantined");
+    assert_eq!(m["to"], "allowed");
+    let recipients = m["recipients"].as_array().unwrap();
+    assert_eq!(recipients.len(), 1, "{recipients:?}");
+    assert_eq!(recipients[0]["role"], "user");
+    assert!(lab
+        .sink
+        .of(NotificationEventType::VerdictChanged)
+        .is_empty());
+}
+
+// ── phase 5: the admin listing, bulk rescan and backfill ─────────────────────
+
+#[actix_web::test]
+async fn the_admin_listing_lists_by_state_and_bulk_rescan_queues_each() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    lab.osv.vuln("1.1.0", Severity::Critical);
+    let _ = status(&app, &tarball("1.0.0")).await;
+    let _ = status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+
+    let uri = format!("/api/v1/admin/verdicts?registry={REG}");
+    let resp = get_as(&app, &uri, Some(ADMIN_TOKEN)).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    let items = body["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "{body}");
+    assert_eq!(items[0]["state"], "denied", "denied first: {body}");
+    assert_eq!(items[1]["state"], "allowed");
+    assert!(items[0]["findings"]
+        .as_array()
+        .is_some_and(|f| !f.is_empty()));
+
+    let resp = get_as(&app, &format!("{uri}&state=denied"), Some(ADMIN_TOKEN)).await;
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(body["items"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        get_as(&app, &format!("{uri}&state=held"), Some(ADMIN_TOKEN))
+            .await
+            .status(),
+        400
+    );
+    assert_eq!(get_as(&app, &uri, Some(USER_TOKEN)).await.status(), 403);
+    assert_eq!(
+        get_as(
+            &app,
+            "/api/v1/admin/verdicts?registry=nowhere",
+            Some(ADMIN_TOKEN)
+        )
+        .await
+        .status(),
+        404
+    );
+
+    // Bulk rescan of the denied state: one job, at Rescan priority.
+    let req = actix_web::test::TestRequest::post()
+        .uri("/api/v1/admin/verdicts/rescan")
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .set_json(serde_json::json!({ "registry": REG, "state": "denied" }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 202);
+    let out: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(out["considered"], 1);
+    assert_eq!(out["queued"], 1);
+    assert_eq!(out["trigger"], "rescan");
+    let jobs = lab.queue.open_jobs().await;
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].trigger, ScanTrigger::Rescan);
+    assert_eq!(jobs[0].package.version, "1.1.0");
+
+    // Backfill: nothing cached in this app's inventory, so nothing queued —
+    // and it says so rather than failing.
+    let req = actix_web::test::TestRequest::post()
+        .uri("/api/v1/admin/verdicts/backfill")
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .set_json(serde_json::json!({ "registry": REG }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 202);
+    let out: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(out["trigger"], "backfill");
+    assert_eq!(out["queued"], 0);
+    let req = actix_web::test::TestRequest::post()
+        .uri("/api/v1/admin/verdicts/backfill")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_json(serde_json::json!({ "registry": REG }))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 403);
 }
 
 /// `GET /api/v1/verdicts/…`: the verdict for `quarantine:read`, findings

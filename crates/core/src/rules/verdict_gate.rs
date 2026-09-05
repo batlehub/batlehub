@@ -126,6 +126,15 @@ mod tests {
     struct MemVerdicts(Mutex<HashMap<String, Verdict>>);
     #[async_trait]
     impl VerdictRepository for MemVerdicts {
+        async fn list_due_for_rescan(
+            &self,
+            _: &str,
+            _: chrono::DateTime<chrono::Utc>,
+            _: u64,
+        ) -> Result<Vec<PackageId>, CoreError> {
+            Ok(vec![])
+        }
+
         async fn upsert(&self, v: &Verdict) -> Result<(), CoreError> {
             self.0
                 .lock()
@@ -153,6 +162,10 @@ mod tests {
     struct MemQueue(Mutex<Vec<PackageId>>);
     #[async_trait]
     impl ScanQueue for MemQueue {
+        async fn try_lead(&self, _: i64) -> Result<bool, CoreError> {
+            Ok(true)
+        }
+
         async fn enqueue(
             &self,
             p: &PackageId,

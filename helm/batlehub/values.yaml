@@ -304,6 +304,20 @@ podDisruptionBudget:
 worker:
   enabled: false
   replicaCount: 1
+  # Scale the workers on the queue (RFC 0018 phase 5): a HorizontalPodAutoscaler
+  # on the *external* metric `batlehub_scan_jobs_queued` — the gauge every
+  # process exports at /metrics, per registry and trigger — which needs a
+  # metrics adapter (prometheus-adapter or KEDA's prometheus scaler) to expose
+  # it to the HPA. `targetQueued` is the average number of open jobs per
+  # worker replica to aim for; `replicaCount` is ignored while this is on.
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 4
+    targetQueued: 20
+    # The metric name as the adapter exposes it. Sum it over the `trigger`
+    # label in the adapter's rule; the query here selects it by name only.
+    metricName: batlehub_scan_jobs_queued
   image:
     repository: ghcr.io/batleforc/batlehub-worker
     pullPolicy: IfNotPresent

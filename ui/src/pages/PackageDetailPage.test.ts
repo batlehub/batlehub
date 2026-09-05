@@ -116,8 +116,11 @@ vi.mock("@/composables/useAuth", async () => {
   };
 });
 
+// RFC 0014's badge reads the audit's per-package status through `authFetch`;
+// the default answer is the audit not running (`503`), so no badge.
+const { authFetchMock } = vi.hoisted(() => ({ authFetchMock: vi.fn() }));
 vi.mock("@/composables/useAuthFetch", () => ({
-  useAuthFetch: () => ({ authFetch: vi.fn() }),
+  useAuthFetch: () => ({ authFetch: authFetchMock }),
 }));
 
 import { useRoute } from "vue-router";
@@ -331,6 +334,107 @@ async function typeFilter(w: Awaited<ReturnType<typeof mountPage>>, value: strin
 
 const fetchButton = (w: Awaited<ReturnType<typeof mountPage>>) =>
   w.findAll("button").find((b) => b.text().includes("Fetch this version"));
+
+/**
+ * RFC 0014 §4.6: an admin sees the audit's word on the selected version —
+ * a miss not yet believed, a confirmed disappearance, or under "block" the
+ * block the audit wrote. Nobody else asks, and without the audit there is
+ * no badge.
+ */
+describe("PackageDetailPage upstream badge", () => {
+  beforeEach(() => {
+    explorePackageDetailMock.mockReset().mockImplementation(serve());
+    exploreFetchVersionMock.mockReset();
+    listRegistriesMock.mockReset().mockResolvedValue({ data: [{ name: "npm1", type: "npm" }] });
+    packageDetailMock.mockReset().mockResolvedValue({ data: null });
+    authFetchMock.mockReset().mockResolvedValue({ ok: false, status: 503 });
+    routeState.query = {};
+  });
+
+  it("is absent for a non-admin, who never asks", async () => {
+    authState.isAdmin = false;
+    const w = await mountPage();
+    expect(w.find('[data-testid="upstream-badge"]').exists()).toBe(false);
+    expect(authFetchMock.mock.calls.some((c) => String(c[0]).includes("/upstream/status/"))).toBe(
+      false,
+    );
+  });
+
+  it("names the audit's state for the selected version, and the block under that policy", async () => {
+    authState.isAdmin = true;
+    try {
+      authFetchMock.mockImplementation((url: string) =>
+        Promise.resolve(
+          String(url).includes("/upstream/status/")
+            ? {
+                ok: true,
+                status: 200,
+                json: async () => ({
+                  registry: "npm1",
+                  package_name: "express",
+                  policy: "block",
+                  rows: [{ version: "4.18.2", state: "disappeared", consecutive_misses: 3 }],
+                }),
+              }
+            : { ok: false, status: 404 },
+        ),
+      );
+      const w = await mountPage();
+      const badge = w.find('[data-testid="upstream-badge"]');
+      expect(badge.exists()).toBe(true);
+      expect(badge.text()).toContain("blocked by the upstream audit");
+    } finally {
+      authState.isAdmin = false;
+    }
+  });
+});
+
+/**
+ * RFC 0019 §6.5: on a forge a version is a ref, and the row says which commit
+ * it resolved to — the identity everything else keys on. Not on a package
+ * registry, where there is no ref to resolve.
+ */
+describe("PackageDetailPage forge short SHA", () => {
+  beforeEach(() => {
+    explorePackageDetailMock.mockReset().mockImplementation(serve());
+    exploreFetchVersionMock.mockReset();
+    packageDetailMock.mockReset().mockResolvedValue({ data: null });
+    authFetchMock.mockReset().mockResolvedValue({ ok: false, status: 503 });
+    routeState.query = {};
+  });
+
+  it("shows the resolved commit beside a version that is a ref", async () => {
+    listRegistriesMock.mockReset().mockResolvedValue({ data: [{ name: "npm1", type: "github" }] });
+    authFetchMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        String(url).includes("/refs")
+          ? {
+              ok: true,
+              status: 200,
+              json: async () => ({
+                refs: [
+                  { git_ref: "4.18.2", ref_kind: "tag", sha: "abcdef1234567890abcdef1234567890abcdef12" },
+                ],
+                remembered: true,
+              }),
+            }
+          : { ok: false, status: 404 },
+      ),
+    );
+    const w = await mountPage();
+    const chips = w.findAll('[data-testid="ref-sha"]');
+    expect(chips.length).toBeGreaterThan(0);
+    expect(chips[0].text()).toBe("abcdef1");
+  });
+
+  it("asks for no refs on a package registry", async () => {
+    listRegistriesMock.mockReset().mockResolvedValue({ data: [{ name: "npm1", type: "npm" }] });
+    const w = await mountPage();
+    // (The moving-refs panel asks on its own and learns it is not a forge; the
+    // rows are what this test is about.)
+    expect(w.findAll('[data-testid="ref-sha"]')).toHaveLength(0);
+  });
+});
 
 describe("PackageDetailPage fetch button", () => {
   beforeEach(() => {

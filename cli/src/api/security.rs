@@ -140,6 +140,69 @@ impl BatleHubClient {
         Ok(Some(super::expect_ok(resp).await?))
     }
 
+    /// Who pulled the version inside `since` (RFC 0018 §4.2): the JSON
+    /// report, or the CSV as the server renders it.
+    pub async fn pullers(
+        &self,
+        registry: &str,
+        name: &str,
+        version: &str,
+        since: &str,
+        csv: bool,
+    ) -> Result<String> {
+        let path = format!(
+            "/api/v1/verdicts/{}/{}/{}/pullers?since={}&format={}",
+            super::auth::percent_encode(registry),
+            super::auth::percent_encode(name),
+            super::auth::percent_encode(version),
+            super::auth::percent_encode(since),
+            if csv { "csv" } else { "json" }
+        );
+        let resp = self.send(self.request(Method::GET, &path)).await?;
+        let status = resp.status();
+        let body = resp.text().await?;
+        if !status.is_success() {
+            anyhow::bail!("{status}: {body}");
+        }
+        Ok(body)
+    }
+
+    /// The admin listing (RFC 0018 phase 5), raw: the caller prints it.
+    pub async fn list_verdicts(
+        &self,
+        registry: &str,
+        state: Option<&str>,
+        limit: Option<u64>,
+    ) -> Result<serde_json::Value> {
+        let mut path = format!(
+            "/api/v1/admin/verdicts?registry={}",
+            super::auth::percent_encode(registry)
+        );
+        if let Some(s) = state {
+            path.push_str(&format!("&state={}", super::auth::percent_encode(s)));
+        }
+        if let Some(l) = limit {
+            path.push_str(&format!("&limit={l}"));
+        }
+        let resp = self.send(self.request(Method::GET, &path)).await?;
+        super::expect_ok(resp).await
+    }
+
+    /// `POST /api/v1/admin/verdicts/{rescan|backfill}`.
+    pub async fn bulk_scan(
+        &self,
+        op: &str,
+        registry: &str,
+        state: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        let path = format!("/api/v1/admin/verdicts/{op}");
+        let body = serde_json::json!({ "registry": registry, "state": state });
+        let resp = self
+            .send(self.request(Method::POST, &path).json(&body))
+            .await?;
+        super::expect_ok(resp).await
+    }
+
     pub async fn rescan(&self, registry: &str, name: &str, version: &str) -> Result<RescanView> {
         let path = format!(
             "/api/v1/verdicts/{}/{}/{}/rescan",

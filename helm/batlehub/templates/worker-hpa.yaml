@@ -1,0 +1,28 @@
+{{- if and .Values.worker.enabled .Values.worker.autoscaling.enabled }}
+# RFC 0018 phase 5: the workers scale on the queue. `batlehub_scan_jobs_queued`
+# is the gauge every process exports (per registry and trigger); a metrics
+# adapter turns it into the External metric this object reads, and the
+# target is the average number of open jobs one replica should own.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "batlehub.fullname" . }}-worker
+  labels:
+    {{- include "batlehub.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "batlehub.fullname" . }}-worker
+  minReplicas: {{ .Values.worker.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.worker.autoscaling.maxReplicas }}
+  metrics:
+    - type: External
+      external:
+        metric:
+          name: {{ .Values.worker.autoscaling.metricName }}
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.worker.autoscaling.targetQueued | quote }}
+{{- end }}

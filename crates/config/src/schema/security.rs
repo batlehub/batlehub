@@ -56,6 +56,10 @@ pub struct SecurityConfig {
     pub scanner_error: ScannerErrorMode,
     #[serde(default)]
     pub rescan: Option<SecurityRescanConfig>,
+    /// How far back the flip alert names who pulled a version, and the
+    /// default window of the `pullers` report (RFC 0018 decision 23).
+    #[serde(default = "default_pullers_window_days")]
+    pub pullers_window_days: u32,
 }
 
 impl SecurityConfig {
@@ -88,12 +92,21 @@ impl SecurityConfig {
             scanner_error: self.scanner_error,
             escalation,
             policy_ref: format!("{name}/default"),
+            rescan_interval: self
+                .rescan
+                .as_ref()
+                .map(|r| r.interval_secs)
+                .filter(|s| *s > 0)
+                .map(Duration::from_secs),
+            pullers_window: Duration::from_secs(u64::from(self.pullers_window_days) * 86_400),
         }
     }
 }
 
-/// `[registries.security.rescan]` — phase 4's knob, parsed now so the
-/// section round-trips; nothing reads it until the rescan worker lands.
+/// `[registries.security.rescan]` (RFC 0018 phase 4): `interval_secs > 0`
+/// has the rescan scheduler queue a `Rescan` for every verdict of the
+/// registry whose last scan is older than that; `on_webhook` is whether an
+/// inbound `security.rescan` is honoured regardless of the interval.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct SecurityRescanConfig {
     #[serde(default)]
@@ -164,6 +177,9 @@ pub enum ScannerConfig {
     Mlab {
         #[serde(default)]
         api_key: Option<String>,
+        /// The CVE API base; `https://vuln.mlab.sh` when absent.
+        #[serde(default)]
+        api_url: Option<String>,
         #[serde(default)]
         escalation: Option<EscalationConfig>,
     },
@@ -178,6 +194,9 @@ pub enum ScannerConfig {
     Socket {
         #[serde(default)]
         api_key: Option<String>,
+        /// The REST base; `https://api.socket.dev` when absent.
+        #[serde(default)]
+        api_url: Option<String>,
         #[serde(default)]
         escalation: Option<EscalationConfig>,
     },
@@ -210,16 +229,18 @@ impl ScannerConfig {
 
     /// Whether this build can run the scanner (RFC 0018 §12): `osv` in
     /// phase 1; `postmortem`, `trivy`, `sigstore`, `guarddog` in phase 3;
-    /// `socket`, `mlab` in phase 5.
+    /// `socket`, `mlab` in phase 5. Every scanner the RFC names is built.
     pub fn available(&self) -> bool {
-        matches!(
-            self,
-            Self::Osv { .. }
-                | Self::Trivy { .. }
-                | Self::Postmortem { .. }
-                | Self::Guarddog { .. }
-                | Self::Sigstore { .. }
-        )
+        true
+    }
+
+    /// A scanner that talks to a metered external service and cannot
+    /// without a key (RFC 0018 §4.4): refused at load rather than failing
+    /// at the first request with a `401` nobody reads. `mlab`'s CVE API
+    /// answers unauthenticated (observed 2026-09-05), so a key there is a
+    /// rate-limit courtesy, not a requirement.
+    pub fn missing_required_key(&self) -> bool {
+        matches!(self, Self::Socket { api_key, .. } if api_key.as_deref().is_none_or(str::is_empty))
     }
 
     /// The phase the scanner ships in, for the refusal message.
@@ -341,6 +362,9 @@ fn default_install_hooks() -> InstallHookMode {
 }
 fn default_scanner_error() -> ScannerErrorMode {
     ScannerErrorMode::Quarantine
+}
+fn default_pullers_window_days() -> u32 {
+    30
 }
 fn default_scanner_timeout() -> u64 {
     60

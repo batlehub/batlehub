@@ -3,8 +3,9 @@ name: Test
 # client integrations: the marketplaces (headless VS Code + IntelliJ installing
 # an extension that exists only on this instance), Bundler, and one job per
 # remaining ecosystem in the `heavy-client` matrix (npm, pypi, openvsx, conda,
-# nuget, composer, terraform, nvm, sdkman, mise, cargo, go, maven, pathproxy), each
-# driving that ecosystem's real client against a real server. Each job produces an LCOV file; the final job merges them and
+# nuget, composer, terraform, nvm, sdkman, mise, cargo, go, maven, pathproxy,
+# quarantine, upstream_audit), each driving that ecosystem's real client
+# against a real server. Each job produces an LCOV file; the final job merges them and
 # publishes a coverage table in the run summary.
 #
 # The heavy jobs exist because the layers above them cannot fail on the bugs
@@ -451,6 +452,16 @@ jobs:
           - suite: go
           - suite: maven
           - suite: pathproxy
+          # RFC 0018 from the client side: npm against a `[registries.security]`
+          # registry backed by npmjs.org and the real OSV, the worker embedded.
+          # Needs Node (installed below) and bubblewrap for the egress row —
+          # a scanner under the worker's sandbox trying to reach the tap.
+          - suite: quarantine
+          # RFC 0014 from the receiving end: npm against a directory the
+          # suite serves as a registry, a staged disappearance, and the
+          # notification asserted at a webhook receiver the suite runs.
+          # Needs Node (installed below) and nothing off the runner.
+          - suite: upstream_audit
     services:
       postgres:
         image: postgres:17-alpine
@@ -491,8 +502,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
 
       # ── Per-ecosystem client setup ──────────────────────────────────────────
-      - name: Set up Node (npm / Open VSX)
-        if: matrix.suite == 'npm' || matrix.suite == 'openvsx'
+      - name: Set up Node (npm / Open VSX / quarantine / upstream_audit)
+        if: matrix.suite == 'npm' || matrix.suite == 'openvsx' || matrix.suite == 'quarantine' || matrix.suite == 'upstream_audit'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -534,6 +545,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends dnf
           dnf --version | head -1
+      - name: Install bubblewrap
+        if: matrix.suite == 'quarantine'
+        run: |
+          # The worker's scanner sandbox (RFC 0018 §6.3). The suite refuses to
+          # run without it rather than skip the egress row
+          # (HEAVY_QUARANTINE_SKIP_SANDBOX=1 is the explicit opt-out, for a
+          # developer's machine without user namespaces).
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          bwrap --version
       - name: Check PHP and Composer
         if: matrix.suite == 'composer'
         run: |

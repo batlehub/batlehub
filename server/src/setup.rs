@@ -374,9 +374,14 @@ pub(super) fn add_user_token_provider(
 /// refused a registry that lists any other, so a declared-but-unavailable
 /// scanner here is one nobody uses, and is skipped with a note rather than
 /// refused.
-pub(super) fn build_scanners(
-    config: &batlehub_config::schema::AppConfig,
-) -> Result<HashMap<String, Arc<dyn batlehub_core::ports::ArtifactScanner>>> {
+/// What `[scanners]` builds: the scanners by name, and the enrichers by
+/// name (RFC 0018 §6.3 — `mlab` runs after the others over their findings).
+pub(super) struct BuiltScanners {
+    pub scanners: HashMap<String, Arc<dyn batlehub_core::ports::ArtifactScanner>>,
+    pub enrichers: HashMap<String, Arc<dyn batlehub_core::ports::FindingEnricher>>,
+}
+
+pub(super) fn build_scanners(config: &batlehub_config::schema::AppConfig) -> Result<BuiltScanners> {
     use batlehub_adapters::scanners::OsvArtifactScanner;
     use batlehub_adapters::vulnerability::OsvScanner;
     use batlehub_config::schema::ScannerConfig;
@@ -415,6 +420,8 @@ pub(super) fn build_scanners(
         Ok(path)
     };
     let mut out: HashMap<String, Arc<dyn batlehub_core::ports::ArtifactScanner>> = HashMap::new();
+    let mut enrichers: HashMap<String, Arc<dyn batlehub_core::ports::FindingEnricher>> =
+        HashMap::new();
     for (name, cfg) in &config.scanners {
         match cfg {
             ScannerConfig::Osv { api_url, .. } => {
@@ -492,6 +499,39 @@ pub(super) fn build_scanners(
                     }),
                 );
             }
+            ScannerConfig::Socket {
+                api_key, api_url, ..
+            } => {
+                out.insert(
+                    name.clone(),
+                    Arc::new(batlehub_adapters::scanners::SocketScanner {
+                        http: osv_client(30)?,
+                        api_url: api_url.clone().unwrap_or_else(|| {
+                            batlehub_adapters::scanners::socket::DEFAULT_API.to_owned()
+                        }),
+                        // Validation refused an absent key; an empty one is
+                        // the same refusal's job.
+                        api_key: api_key.clone().unwrap_or_default(),
+                        timeout: std::time::Duration::from_secs(30),
+                    }),
+                );
+            }
+            ScannerConfig::Mlab {
+                api_key, api_url, ..
+            } => {
+                enrichers.insert(
+                    name.clone(),
+                    Arc::new(batlehub_adapters::scanners::MlabEnricher {
+                        http: osv_client(30)?,
+                        api_url: api_url.clone().unwrap_or_else(|| {
+                            batlehub_adapters::scanners::mlab::DEFAULT_API.to_owned()
+                        }),
+                        api_key: api_key.clone().filter(|k| !k.is_empty()),
+                        timeout: std::time::Duration::from_secs(30),
+                    }),
+                );
+            }
+            #[allow(unreachable_patterns)]
             other => {
                 info!(
                     scanner = %name,
@@ -510,5 +550,18 @@ pub(super) fn build_scanners(
         let inner = Arc::new(OsvScanner::new(osv_client(60)?, api_url));
         out.insert("osv".to_owned(), Arc::new(OsvArtifactScanner::new(inner)));
     }
-    Ok(out)
+    // `required_scanners` and `scanners_done` speak in config keys, and an
+    // adapter answers its type: a second `osv` under another key, or a
+    // postmortem-shaped probe under its own, must be "done" under the key.
+    let out: HashMap<String, Arc<dyn batlehub_core::ports::ArtifactScanner>> = out
+        .into_iter()
+        .map(|(name, scanner)| {
+            let named = batlehub_core::services::NamedScanner::wrap(&name, scanner);
+            (name, named)
+        })
+        .collect();
+    Ok(BuiltScanners {
+        scanners: out,
+        enrichers,
+    })
 }

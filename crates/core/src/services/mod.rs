@@ -17,8 +17,10 @@ pub mod metrics;
 pub mod nodedist;
 pub mod ownership_grants;
 pub mod proxy;
+pub mod pullers;
 pub mod quota;
 pub mod readme;
+pub mod rescan;
 pub mod retention;
 pub mod sbom;
 pub mod scan_worker;
@@ -65,11 +67,13 @@ pub use local_registry::{
 };
 pub use metrics::ProxyMetrics;
 pub use proxy::{ProxyRequest, ProxyResponse, ProxyService};
+pub use pullers::{pullers_for, refused_for, Puller};
 pub use quota::{
     QuotaCheck, QuotaEnforcement, QuotaService, QuotaState, RegistryQuotaConfig,
     RegistryQuotaStatus,
 };
 pub use readme::{truncate_to, ReadmeCapture, ReadmeService, RecordOutcome};
+pub use rescan::{RescanReport, RescanScheduler, RESCAN_LEADER_KEY, RESCAN_TICK};
 pub use retention::{
     KeepReason, RetentionDecision, RetentionPolicy as RetentionRunPolicy, RetentionReport,
     RetentionService, DEFAULT_DOWNLOAD_SIGNAL_FLOOR, MAX_REPORTED_DECISIONS,
@@ -77,9 +81,9 @@ pub use retention::{
 pub use sbom::{SbomProxiedOptions, SbomPublishOptions, SbomService};
 pub use scan_worker::{PassReport, ScanWorker, WorkerConfig};
 pub use scanners::{
-    BlockListScanner, FlagsScanner, ForgeProvenanceScanner, RecordedVulnerabilityScanner,
-    RuleAsScanner, UpstreamPresenceScanner, FORGE_PROVENANCE_SCANNER, UPSTREAM_PRESENCE_SCANNER,
-    WRAPPED_GATES,
+    BlockListScanner, FlagsScanner, ForgeProvenanceScanner, NamedScanner,
+    RecordedVulnerabilityScanner, RuleAsScanner, UpstreamPresenceScanner, FORGE_PROVENANCE_SCANNER,
+    UPSTREAM_PRESENCE_SCANNER, WRAPPED_GATES,
 };
 pub use search::{SearchHit, SearchMode, SearchResults};
 pub use signed_url::{
@@ -90,8 +94,8 @@ pub use signed_url::{
 };
 pub use stats_rollup::{hour_start, StatsRollupService};
 pub use upstream_audit::{
-    ProbeOutcome, RegistryReport, SweepReport, Transition, UpstreamAuditPolicy,
-    UpstreamAuditService, MAX_VERSION_PROBES_PER_PACKAGE, MIN_PROBED_FOR_RATIO,
+    OnConfirmed, ProbeOutcome, RegistryReport, SweepReport, Transition, UpstreamAuditPolicy,
+    UpstreamAuditService, MAX_VERSION_PROBES_PER_PACKAGE, MIN_PROBED_FOR_RATIO, SYSTEM_ACTOR,
 };
 pub use upstream_detail::{UpstreamDetail, UpstreamDetailCoordinator, UpstreamVersion};
 pub use verdict::{VerdictService, VERDICT_EXEMPTION_GATE};

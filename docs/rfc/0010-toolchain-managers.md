@@ -2,7 +2,7 @@
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | **Accepted** — every open question resolved (§11), two of them against this document's own first draft: SDKMAN's rendered version table is filtered rather than exempted, and an unknown publish date is now the operator's explicit choice rather than a hard-coded allow. Implementation may start; nodedist ships at phase 4 and sdkman at phase 7, each behind its own heavy suite |
+| Status      | **Implemented** — all nine phases of §12 landed: `nodedist` on 2026-09-03 (§13.1, phases 1–4, `tests/heavy/nvm.sh`) and `sdkman` on 2026-09-04 (§13.2, phases 5–9, `tests/heavy/sdkman.sh`), each proven by its own heavy suite before it shipped. Every open question was resolved before implementation (§11), two of them against this document's own first draft: SDKMAN's rendered version table is filtered rather than exempted, and an unknown publish date is the operator's explicit choice rather than a hard-coded allow |
 | Short       | The toolchain layer |
 | Settles     | Proxying the JDK and the Node runtime themselves, not only what they build: SDKMAN and the `nodejs.org/dist` tree as registry kinds, and making a blocked toolchain a refusal rather than a claim |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |

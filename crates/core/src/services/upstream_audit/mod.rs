@@ -28,13 +28,94 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use tokio::sync::{Mutex, Semaphore};
 
-use crate::entities::{PackageId, RegistryKind, ScanTrigger, UpstreamState, UpstreamStatus};
+use crate::entities::{
+    Identity, NotificationEvent, NotificationEventType, PackageId, PackageStatus, RegistryKind,
+    Role, ScanTrigger, UpstreamState, UpstreamStatus, UpstreamStatusFilter,
+};
 use crate::error::CoreError;
-use crate::ports::{ArtifactInventory, CacheStore, RegistryClient, ScanQueue, UpstreamStatusPort};
-use crate::services::HotConfigLock;
+use crate::ports::{
+    ArtifactInventory, CacheStore, NotificationSink, RegistryClient, ScanQueue, UpstreamStatusPort,
+};
+use crate::services::{AdminService, HotConfigLock};
 
 pub use confirm::Transition;
-pub use probe::{probe_package, ProbeOutcome, MAX_VERSION_PROBES_PER_PACKAGE};
+pub use probe::{
+    listing_capable, probe_name, probe_package, ProbeOutcome, MAX_VERSION_PROBES_PER_PACKAGE,
+};
+
+/// The actor every event this service emits carries (RFC 0014 §11 q12):
+/// not a user id, and the `system:` prefix cannot collide with one. It is
+/// also what the block arm records as `blocked_by` (§4.3), and the one
+/// value the conditional unblock lifts.
+pub const SYSTEM_ACTOR: &str = "system:upstream-audit";
+
+/// The identity the block arm writes with (RFC 0014 §6.5): `user_id` is
+/// what `block_package` records as `blocked_by`, and the `system:` prefix
+/// is not a legal user id from any provider.
+pub fn system_identity() -> Identity {
+    Identity {
+        user_id: Some(SYSTEM_ACTOR.to_owned()),
+        role: Role::Admin,
+        ..Identity::system()
+    }
+}
+
+/// What a block write did for one confirmation, for the event (§4.5:
+/// `policy` says what was configured, `blocked` what happened).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BlockOutcome {
+    /// Every version the confirmation covers is now blocked.
+    pub blocked: bool,
+    /// The reappearance lifted this service's own block.
+    pub unblocked: bool,
+    /// A reappearance left a block in place because it was not this
+    /// service's — an admin's decision, not to be reversed by a `200`.
+    pub kept_admin_block: bool,
+}
+
+/// What a confirmed disappearance does beyond the row (`[upstream_audit]
+/// on_confirmed`, RFC 0014 §4.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OnConfirmed {
+    /// Record, hold, notify. The default, and the whole of phases 1–5.
+    #[default]
+    Audit,
+    /// …and refuse the version on the wire through the admin block list
+    /// (phase 6).
+    Block,
+}
+
+impl OnConfirmed {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Audit => "audit",
+            Self::Block => "block",
+        }
+    }
+}
+
+impl std::str::FromStr for OnConfirmed {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "audit" => Ok(Self::Audit),
+            "block" => Ok(Self::Block),
+            other => Err(format!("unknown on_confirmed policy '{other}'")),
+        }
+    }
+}
+
+/// §4.3's reason string on a block this audit writes.
+fn block_reason(row: &UpstreamStatus) -> String {
+    format!(
+        "upstream disappearance confirmed {} ({} misses since {})",
+        row.confirmed_at
+            .unwrap_or(row.last_checked_at)
+            .format("%Y-%m-%d"),
+        row.consecutive_misses,
+        row.first_missed_at.format("%Y-%m-%d")
+    )
+}
 
 /// A registry's cached packages: name → (cached versions, newest `cached_at`).
 pub type CachedPackages = HashMap<String, (Vec<String>, DateTime<Utc>)>;
@@ -62,6 +143,10 @@ pub struct UpstreamAuditPolicy {
     /// How long a pinned metadata entry stays fresh: long enough to reach
     /// the next sweep, which pins it again.
     pub metadata_pin_ttl: Duration,
+    /// What a confirmation does beyond the row. Reported on every event as
+    /// `policy`, beside `blocked` — what was configured and what happened
+    /// are two fields on purpose (§4.5).
+    pub on_confirmed: OnConfirmed,
 }
 
 impl Default for UpstreamAuditPolicy {
@@ -73,6 +158,7 @@ impl Default for UpstreamAuditPolicy {
             retain_disappeared: true,
             skip_recently_seen: true,
             metadata_pin_ttl: Duration::from_secs(2 * 21_600),
+            on_confirmed: OnConfirmed::Audit,
         }
     }
 }
@@ -140,6 +226,14 @@ pub struct UpstreamAuditService {
     /// The registries to audit: every `proxy`/`hybrid` registry, or the
     /// operator's list. A local registry has no upstream and is never here.
     pub registries: Vec<String>,
+    /// Where a transition is reported (RFC 0014 §4.5). `None` tells nobody,
+    /// which is what a process with notifications disabled asked for.
+    notifier: Option<Arc<dyn NotificationSink>>,
+    /// The block arm's pen (RFC 0014 §6.5): `AdminService::block_package`,
+    /// so a block written here is in shape and in the audit trail exactly
+    /// an admin's. `None` under `"audit"` — the default is inert by
+    /// construction, not by a branch.
+    admin: Option<Arc<AdminService>>,
     /// When the previous sweep started, for `skip_recently_seen`.
     last_started: Mutex<Option<DateTime<Utc>>>,
 }
@@ -165,8 +259,30 @@ impl UpstreamAuditService {
             policy,
             concurrency: concurrency.max(1),
             registries,
+            notifier: None,
+            admin: None,
             last_started: Mutex::new(None),
         }
+    }
+
+    /// Report transitions through `sink` (RFC 0014 §4.5).
+    pub fn with_notifier(mut self, sink: Arc<dyn NotificationSink>) -> Self {
+        self.notifier = Some(sink);
+        self
+    }
+
+    /// Block through `admin` under `on_confirmed = "block"` (RFC 0014 §4.3,
+    /// §6.5). Ignored under `"audit"`.
+    pub fn with_admin(mut self, admin: Arc<AdminService>) -> Self {
+        if self.policy.on_confirmed == OnConfirmed::Block {
+            self.admin = Some(admin);
+        }
+        self
+    }
+
+    /// Whether this service blocks on confirmation.
+    pub fn blocks(&self) -> bool {
+        self.admin.is_some()
     }
 
     /// Sweep every audited registry. One registry's failure is reported and
@@ -233,7 +349,14 @@ impl UpstreamAuditService {
         // Probe, bounded.
         let sem = Arc::new(Semaphore::new(self.concurrency));
         let mut handles = Vec::new();
+        // The newest `cached_at` per package, for the event payload (§4.5),
+        // and the versions held per package, for the block arm's scope
+        // (§4.3: a package-level confirmation blocks every held version).
+        let mut cached_at: HashMap<String, DateTime<Utc>> = HashMap::new();
+        let mut held_versions: HashMap<String, Vec<String>> = HashMap::new();
         for (name, (versions, newest)) in packages {
+            cached_at.insert(name.clone(), newest);
+            held_versions.insert(name.clone(), versions.clone());
             if self.policy.skip_recently_seen && previous_start.is_some_and(|p| newest > p) {
                 report.skipped_recent += 1;
                 continue;
@@ -265,33 +388,203 @@ impl UpstreamAuditService {
         report.void = applied.void;
         report.transitions = applied.transitions;
 
-        if !report.void {
-            self.act(registry, secured, &report.transitions, &applied.disappeared)
+        if report.void {
+            self.notify_void(&report);
+        } else {
+            let outcomes_by_row = self
+                .act(registry, secured, &report.transitions, &applied.disappeared)
                 .await;
+            // §6.5: a confirmation that crashed between the status write and
+            // the block is reconciled by the next sweep — every `disappeared`
+            // row is re-checked against the block table, on every sweep.
+            self.reconcile(registry, &held_versions).await;
+            let probes: HashMap<&str, &'static str> = outcomes
+                .iter()
+                .map(|(name, _, (outcome, _))| (name.as_str(), probe_name(kind, outcome)))
+                .collect();
+            self.notify_transitions(&report, &probes, &cached_at, &outcomes_by_row);
         }
         report.duration = clock.elapsed();
         report
     }
 
+    /// The reconciliation pass (RFC 0014 §6.5): under `"block"`, every
+    /// `disappeared` row of the registry whose versions are not all blocked
+    /// gets blocked now. Idempotent, and what makes turning the policy on
+    /// with existing confirmed rows do the obvious thing.
+    async fn reconcile(&self, registry: &str, held: &HashMap<String, Vec<String>>) {
+        let Some(admin) = &self.admin else {
+            return;
+        };
+        let rows = match self
+            .status
+            .list(UpstreamStatusFilter {
+                registry: Some(registry.to_owned()),
+                state: Some(UpstreamState::Disappeared),
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(registry, error = %e, "upstream audit: could not list confirmed rows to reconcile");
+                return;
+            }
+        };
+        for row in rows {
+            let versions: Vec<String> = match &row.version {
+                Some(v) => vec![v.clone()],
+                None => held.get(&row.package_name).cloned().unwrap_or_default(),
+            };
+            for v in versions {
+                let id = PackageId::new(registry, &row.package_name, &v);
+                match admin.repo.get_status(&id).await {
+                    Ok(PackageStatus::Blocked { .. }) => {}
+                    Ok(_) => {
+                        tracing::info!(package = %id, "upstream audit: confirmed and unblocked; reconciling");
+                        if let Err(e) = admin
+                            .block_package(&id, block_reason(&row), &system_identity())
+                            .await
+                        {
+                            tracing::warn!(package = %id, error = %e, "upstream audit: reconciliation block failed");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(package = %id, error = %e, "upstream audit: could not read the block status")
+                    }
+                }
+            }
+        }
+    }
+
+    /// RFC 0014 §4.5: one event per transition — per *package* when the
+    /// whole package went, not per version — and none for a silent miss.
+    /// A reappearance is news only for a row that had reached
+    /// `disappeared`: an unconfirmed miss that clears was never reported,
+    /// so its clearing is not a reversal anybody heard about.
+    fn notify_transitions(
+        &self,
+        report: &RegistryReport,
+        probes: &HashMap<&str, &'static str>,
+        cached_at: &HashMap<String, DateTime<Utc>>,
+        outcomes: &[BlockOutcome],
+    ) {
+        let Some(sink) = &self.notifier else {
+            return;
+        };
+        let sweep = serde_json::json!({
+            "probed": report.probed,
+            "missing": report.missing,
+            "inconclusive": report.inconclusive,
+        });
+        for (i, t) in report.transitions.iter().enumerate() {
+            let outcome = outcomes.get(i).copied().unwrap_or_default();
+            let (kind, row, versions) = match t {
+                Transition::Confirmed(row, versions) => (
+                    NotificationEventType::PackageDisappearedUpstream,
+                    row,
+                    versions,
+                ),
+                Transition::Reappeared(row, versions) => {
+                    if row.state != UpstreamState::Disappeared {
+                        continue;
+                    }
+                    (
+                        NotificationEventType::PackageReappearedUpstream,
+                        row,
+                        versions,
+                    )
+                }
+            };
+            let mut event = NotificationEvent::new(
+                kind,
+                &row.registry,
+                &row.package_name,
+                row.version.clone(),
+                SYSTEM_ACTOR,
+            );
+            let mut metadata = serde_json::json!({
+                "first_missed_at": row.first_missed_at,
+                "confirmed_at": row.confirmed_at,
+                "consecutive_misses": row.consecutive_misses,
+                "probe": probes.get(row.package_name.as_str()).copied().unwrap_or("none"),
+                "cached_at": cached_at.get(&row.package_name),
+                "versions": versions,
+                "policy": self.policy.on_confirmed.as_str(),
+                "sweep": sweep,
+            });
+            match kind {
+                NotificationEventType::PackageDisappearedUpstream => {
+                    metadata["held_from_eviction"] =
+                        serde_json::Value::Bool(self.policy.retain_disappeared);
+                    // What happened, beside what was configured (§4.5): they
+                    // differ when the block write failed.
+                    metadata["blocked"] = serde_json::Value::Bool(outcome.blocked);
+                }
+                _ => {
+                    metadata["unblocked"] = serde_json::Value::Bool(outcome.unblocked);
+                    if outcome.kept_admin_block {
+                        // §4.4: a manual decision is now the only thing
+                        // keeping it blocked, and the admin should know.
+                        metadata["unblock_skipped_reason"] =
+                            serde_json::Value::String("blocked_by_admin".to_owned());
+                    }
+                }
+            }
+            event.metadata = metadata;
+            sink.emit(event);
+        }
+    }
+
+    /// RFC 0014 §4.5 `upstream_unreachable`: registry-scoped, `package_name`
+    /// `"*"`, so a subscription with no package filter matches it and a
+    /// per-package one does not.
+    fn notify_void(&self, report: &RegistryReport) {
+        let Some(sink) = &self.notifier else {
+            return;
+        };
+        let mut event = NotificationEvent::new(
+            NotificationEventType::UpstreamUnreachable,
+            &report.registry,
+            "*",
+            None,
+            SYSTEM_ACTOR,
+        );
+        event.metadata = serde_json::json!({
+            "probed": report.probed,
+            "missing": report.missing,
+            "inconclusive": report.inconclusive,
+            "outage_ratio": self.policy.outage_ratio,
+        });
+        sink.emit(event);
+    }
+
     /// What a transition does beyond the row: pin the metadata of a held
-    /// coordinate and queue a rescan on a `[security]` registry.
+    /// coordinate, block or unblock under `"block"` (§4.3, §6.5 — the row
+    /// is already written, so a crash here is reconciled by the next
+    /// sweep), and queue a rescan on a `[security]` registry. Returns the
+    /// block arm's outcome per transition, in order, for the events.
     async fn act(
         &self,
         registry: &str,
         secured: bool,
         transitions: &[Transition],
         disappeared: &[UpstreamStatus],
-    ) {
+    ) -> Vec<BlockOutcome> {
         if self.policy.retain_disappeared {
             for row in disappeared {
                 self.pin_metadata(row).await;
             }
         }
+        let mut outcomes = Vec::with_capacity(transitions.len());
+        for t in transitions {
+            outcomes.push(self.apply_block_policy(registry, t).await);
+        }
         if !secured {
-            return;
+            return outcomes;
         }
         let Some(queue) = &self.queue else {
-            return;
+            return outcomes;
         };
         for t in transitions {
             let (row, versions) = match t {
@@ -301,9 +594,88 @@ impl UpstreamAuditService {
             };
             for v in versions {
                 let id = PackageId::new(registry, &row.package_name, v);
-                if let Err(e) = queue.enqueue(&id, None, ScanTrigger::Rescan).await {
+                // With the version's date when the metadata cache still has
+                // it: the worker's age gate reads it, and a rescan without
+                // one would re-judge a dated version as `TIMESTAMP_MISSING`.
+                let published_at = match &self.cache {
+                    Some(cache) => match cache
+                        .get_stale(&crate::services::proxy::proxy_meta_key(&id))
+                        .await
+                    {
+                        Ok(Some(entry)) => entry.metadata.published_at,
+                        _ => None,
+                    },
+                    None => None,
+                };
+                if let Err(e) = queue.enqueue(&id, published_at, ScanTrigger::Rescan).await {
                     tracing::warn!(package = %id, error = %e, "upstream audit: could not queue the rescan");
                 }
+            }
+        }
+        outcomes
+    }
+
+    /// The block arm for one transition (RFC 0014 §4.3). A confirmation
+    /// blocks every version it covers, with §4.3's reason and
+    /// `blocked_by = system:upstream-audit`; `blocked` is true only when
+    /// every write succeeded. A reappearance unblocks a version only when
+    /// the block is this service's own — an admin's block, or one this
+    /// service wrote and an admin then edited, stays, and the event says so.
+    async fn apply_block_policy(&self, registry: &str, t: &Transition) -> BlockOutcome {
+        let Some(admin) = &self.admin else {
+            return BlockOutcome::default();
+        };
+        let identity = system_identity();
+        match t {
+            Transition::Confirmed(row, versions) => {
+                let mut all = true;
+                for v in versions {
+                    let id = PackageId::new(registry, &row.package_name, v);
+                    if let Err(e) = admin.block_package(&id, block_reason(row), &identity).await {
+                        tracing::warn!(package = %id, error = %e, "upstream audit: block failed");
+                        all = false;
+                    }
+                }
+                BlockOutcome {
+                    blocked: all && !versions.is_empty(),
+                    ..Default::default()
+                }
+            }
+            Transition::Reappeared(row, versions) => {
+                if row.state != UpstreamState::Disappeared {
+                    return BlockOutcome::default();
+                }
+                let mut outcome = BlockOutcome::default();
+                let mut lifted = 0usize;
+                for v in versions {
+                    let id = PackageId::new(registry, &row.package_name, v);
+                    match admin.repo.get_status(&id).await {
+                        Ok(PackageStatus::Blocked { blocked_by, .. })
+                            if blocked_by == SYSTEM_ACTOR =>
+                        {
+                            match admin.unblock_package(&id, &identity).await {
+                                Ok(()) => lifted += 1,
+                                Err(e) => {
+                                    tracing::warn!(package = %id, error = %e, "upstream audit: unblock failed")
+                                }
+                            }
+                        }
+                        Ok(PackageStatus::Blocked { blocked_by, .. }) => {
+                            tracing::warn!(
+                                package = %id,
+                                blocked_by,
+                                "upstream audit: reappeared upstream, but the block is not this audit's; left in place"
+                            );
+                            outcome.kept_admin_block = true;
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::warn!(package = %id, error = %e, "upstream audit: could not read the block status")
+                        }
+                    }
+                }
+                outcome.unblocked = lifted > 0 && lifted == versions.len();
+                outcome
             }
         }
     }
@@ -339,6 +711,48 @@ impl UpstreamAuditService {
                 tracing::warn!(package = %id, error = %e, "upstream audit: metadata cache unreadable")
             }
         }
+    }
+
+    /// Probe one package now, through the same ladder and state machine a
+    /// sweep uses (RFC 0014 §4.6 `recheck`). A probe, not an override: an
+    /// admin who has just confirmed with upstream that a package is back
+    /// does not wait for the next interval, and a package still missing
+    /// gains one more miss towards confirmation — never a confirmation the
+    /// count and age floors would not grant. Below the population floor by
+    /// construction, so the ratio gate never voids it.
+    ///
+    /// `NotFound` for a registry the audit does not cover and for a package
+    /// (or version) with nothing cached: there is nothing to ask upstream
+    /// about, and the row is the cache's, not the operator's.
+    pub async fn recheck(
+        &self,
+        registry: &str,
+        package: &str,
+        version: Option<&str>,
+    ) -> Result<RegistryReport, CoreError> {
+        if !self.registries.iter().any(|r| r == registry) {
+            return Err(CoreError::NotFound(format!(
+                "registry '{registry}' is not audited ([upstream_audit] registries)"
+            )));
+        }
+        let mut packages: CachedPackages = HashMap::new();
+        for row in self.inventory.list_artifacts(registry).await? {
+            if row.package_name != package || version.is_some_and(|v| row.version != v) {
+                continue;
+            }
+            let entry = packages
+                .entry(row.package_name)
+                .or_insert_with(|| (Vec::new(), row.cached_at));
+            entry.0.push(row.version);
+            entry.1 = entry.1.max(row.cached_at);
+        }
+        if packages.is_empty() {
+            return Err(CoreError::NotFound(format!(
+                "nothing cached for {registry}/{package}{}",
+                version.map(|v| format!("@{v}")).unwrap_or_default()
+            )));
+        }
+        Ok(self.sweep_registry(registry, packages, None).await)
     }
 
     /// The per-registry counts, for the gauges.

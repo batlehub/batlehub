@@ -2,9 +2,23 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::{
-    entities::{InboundWebhookEvent, NotificationEventType, NotificationSubscription},
+    entities::{
+        InboundWebhookEvent, NotificationEvent, NotificationEventType, NotificationSubscription,
+    },
     error::CoreError,
 };
+
+/// Outbound dispatch as the domain sees it: hand an event over and carry on.
+///
+/// The subscription matching, the channels and the HTTP live in the web
+/// crate's `NotificationService`; a domain service that has something to
+/// say — the upstream audit confirming a disappearance (RFC 0014 §4.5) —
+/// needs only this. Fire-and-forget by contract: an implementation queues
+/// the delivery and never blocks the caller, and a failure to deliver is the
+/// implementation's to log, because a sweep must not fail on a webhook.
+pub trait NotificationSink: Send + Sync {
+    fn emit(&self, event: NotificationEvent);
+}
 
 /// Storage port for notification subscriptions and inbound webhook events.
 #[async_trait]

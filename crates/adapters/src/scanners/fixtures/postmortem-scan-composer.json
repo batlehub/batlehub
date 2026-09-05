@@ -1,0 +1,33 @@
+{
+ "schema_version": 3,
+ "root": "/work",
+ "ecosystems": [
+  "php"
+ ],
+ "dependencies": [
+  {
+   "name": "canary/pad",
+   "version": "1.0.0",
+   "ecosystem": "php",
+   "direct": true,
+   "scope": "prod",
+   "parents": []
+  }
+ ],
+ "findings": [
+  {
+   "dependency": "<project>",
+   "severity": "low",
+   "category": "sensitive_api",
+   "detail": "uses exec(, shell_exec(",
+   "location": "/work/canary/pad/src/Evil.php"
+  },
+  {
+   "dependency": "<project>",
+   "severity": "high",
+   "category": "obfuscation",
+   "detail": "3 obfuscation signal(s): high-entropy, eval(), base64/codecs decode (entropy 5.51)",
+   "location": "/work/canary/pad/src/Evil.php"
+  }
+ ]
+}

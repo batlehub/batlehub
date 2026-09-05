@@ -222,3 +222,147 @@ async fn a_verdict_round_trips_with_its_findings_replaced_as_a_set() {
         .unwrap();
     assert!(workers.live_count(60).await.unwrap() >= 1);
 }
+
+// ── RFC 0018 phase 4 ─────────────────────────────────────────────────────────
+
+/// Due-selection picks the rows past the interval — and the never-scanned
+/// ones — oldest first, and nothing scanned since.
+#[tokio::test]
+async fn due_selection_picks_only_rows_past_the_interval_oldest_first() {
+    let Some(url) = db_url() else {
+        eprintln!("skipping: DATABASE_URL is not set");
+        return;
+    };
+    let (pool, reg) = fixture(&url).await;
+    let repo = PgVerdictRepository::new(pool.clone());
+    let now = Utc::now();
+    let verdict = |name: &str, scanned: Option<chrono::DateTime<Utc>>| Verdict {
+        package: PackageId::new(&reg, name, "1.0.0"),
+        state: VerdictState::Allowed,
+        reason_codes: vec![],
+        findings: vec![],
+        policy_ref: format!("{reg}/default"),
+        available_at: None,
+        evaluated_at: now,
+        last_scanned_at: scanned,
+        scanners_done: vec!["osv".into()],
+    };
+    repo.upsert(&verdict("stale", Some(now - chrono::Duration::hours(48))))
+        .await
+        .unwrap();
+    repo.upsert(&verdict("older", Some(now - chrono::Duration::hours(72))))
+        .await
+        .unwrap();
+    repo.upsert(&verdict("fresh", Some(now - chrono::Duration::hours(1))))
+        .await
+        .unwrap();
+    repo.upsert(&verdict("never", None)).await.unwrap();
+
+    let due = repo
+        .list_due_for_rescan(&reg, now - chrono::Duration::hours(24), 10)
+        .await
+        .unwrap();
+    let names: Vec<&str> = due.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, ["never", "older", "stale"], "{names:?}");
+
+    let capped = repo
+        .list_due_for_rescan(&reg, now - chrono::Duration::hours(24), 2)
+        .await
+        .unwrap();
+    assert_eq!(capped.len(), 2);
+    assert!(repo
+        .list_due_for_rescan(&reg, now - chrono::Duration::days(365), 10)
+        .await
+        .unwrap()
+        .iter()
+        .all(|p| p.name == "never"));
+}
+
+/// Under a flood of user-facing jobs, one slot per lease goes to the lowest
+/// tier waiting (decision 16), so a backfill is not starved.
+#[tokio::test]
+async fn the_starvation_slot_lets_a_backfill_through_under_a_first_seen_flood() {
+    let Some(url) = db_url() else {
+        eprintln!("skipping: DATABASE_URL is not set");
+        return;
+    };
+    let (pool, reg) = fixture(&url).await;
+    let q = PgScanQueue::new(pool.clone());
+    for i in 0..20 {
+        q.enqueue(
+            &PackageId::new(&reg, format!("hot-{i}"), "1"),
+            None,
+            ScanTrigger::FirstSeen,
+        )
+        .await
+        .unwrap();
+    }
+    q.enqueue(
+        &PackageId::new(&reg, "cold", "1"),
+        None,
+        ScanTrigger::Backfill,
+    )
+    .await
+    .unwrap();
+
+    let leased = q
+        .lease("w1", std::slice::from_ref(&reg), 4, 60, 3)
+        .await
+        .unwrap();
+    assert_eq!(leased.len(), 4);
+    let triggers: Vec<ScanTrigger> = leased.iter().map(|j| j.trigger).collect();
+    assert_eq!(
+        triggers
+            .iter()
+            .filter(|t| **t == ScanTrigger::FirstSeen)
+            .count(),
+        3
+    );
+    assert!(
+        triggers.contains(&ScanTrigger::Backfill),
+        "the reserved slot took the backfill: {triggers:?}"
+    );
+
+    // One slot reserves nothing: strict priority.
+    let one = q
+        .lease("w1", std::slice::from_ref(&reg), 1, 60, 3)
+        .await
+        .unwrap();
+    assert_eq!(one.len(), 1);
+    assert_eq!(one[0].trigger, ScanTrigger::FirstSeen);
+
+    // Nothing of a lower tier left: the slot falls back to the next in order.
+    let more = q
+        .lease("w1", std::slice::from_ref(&reg), 4, 60, 3)
+        .await
+        .unwrap();
+    assert_eq!(more.len(), 4);
+    assert!(more.iter().all(|j| j.trigger == ScanTrigger::FirstSeen));
+}
+
+/// One rescan timer per estate: the advisory lock is held by the first
+/// queue that asks, refused to a second over another connection, and
+/// released when the holder is dropped.
+#[tokio::test]
+async fn leadership_is_one_process_at_a_time_and_released_on_drop() {
+    let Some(url) = db_url() else {
+        eprintln!("skipping: DATABASE_URL is not set");
+        return;
+    };
+    let (pool, _reg) = fixture(&url).await;
+    let key = 0x7e5c_0000 + i64::from(std::process::id());
+    let first = PgScanQueue::new(pool.clone());
+    let second = PgScanQueue::new(pool.clone());
+    assert!(first.try_lead(key).await.unwrap());
+    assert!(first.try_lead(key).await.unwrap(), "kept, not re-taken");
+    assert!(!second.try_lead(key).await.unwrap(), "held elsewhere");
+    drop(first);
+    // The lock goes with the connection, which the pool closes on drop.
+    for _ in 0..20 {
+        if second.try_lead(key).await.unwrap() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("the lock was not released after the holder was dropped");
+}

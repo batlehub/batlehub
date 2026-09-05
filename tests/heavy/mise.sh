@@ -182,6 +182,78 @@ else
   heavy_log "MISE-CACHE-OK (branch moved $BRANCH_SHA -> $BRANCH_SHA2 during the run; a new commit is a new entry)"
 fi
 
+# ── 5. Raw content under a policy (RFC 0019 phase 3) ─────────────────────────
+#
+# The first client-side proof of the `[raw]` policy: a shell script at a
+# pinned tag is refused with its reason code, and a plain file at the same
+# tag is served, through the same route. Both are what a `curl | sh`
+# installer line and a `curl -O README` do; mise itself never fetches raw.
+
+heavy_mark "raw"
+RAW_SCRIPT="script/createrepo.sh"
+heavy_log "raw $RAW_SCRIPT at v$VERSION — refused as a script; README.md — served"
+RAW_CODE="$(curl -sS -o "$HEAVY_WORK/raw-script.body" -w '%{http_code}' -D "$HEAVY_WORK/raw-script.h" \
+  "$PROXY/$OWNER_REPO/raw/v$VERSION/$RAW_SCRIPT")"
+[[ "$RAW_CODE" == "403" ]] || { cat "$HEAVY_WORK/raw-script.body" >&2; heavy_fail "raw/$RAW_SCRIPT answered $RAW_CODE, expected 403 under scripts = \"deny\""; }
+grep -q "RAW_SCRIPT" "$HEAVY_WORK/raw-script.body" "$HEAVY_WORK/raw-script.h" \
+  || { cat "$HEAVY_WORK/raw-script.body" "$HEAVY_WORK/raw-script.h" >&2; heavy_fail "the refusal does not name RAW_SCRIPT"; }
+heavy_wire_after "raw" "GET /proxy/$REG/$OWNER_REPO/raw/v$VERSION/$RAW_SCRIPT -> 403" \
+  "the script refusal did not cross the tap as a 403"
+[[ ! -s "$HEAVY_WORK/raw-script.body" ]] || ! grep -q '^#!' "$HEAVY_WORK/raw-script.body" \
+  || heavy_fail "the refused script's bytes were served with the refusal"
+
+curl -fsS -o "$HEAVY_WORK/raw-readme.md" "$PROXY/$OWNER_REPO/raw/v$VERSION/README.md" \
+  || heavy_fail "raw/README.md at v$VERSION was not served under the same policy"
+grep -qi "gh\|github" "$HEAVY_WORK/raw-readme.md" \
+  || heavy_fail "raw/README.md does not look like cli/cli's README"
+heavy_wire_after "raw" "GET /proxy/$REG/$OWNER_REPO/raw/v$VERSION/README.md -> 200" \
+  "the README was not served through the proxy"
+heavy_log "MISE-RAW-OK ($RAW_SCRIPT refused with RAW_SCRIPT, README.md served)"
+
+# ── 6. The typed reads, and a release document that points home ─────────────
+#
+# `[api_reads] families = ["tags"]` turns one typed family on; a release
+# document read through the proxy has every download URL repointed at the
+# proxy and the forge's own API links removed (RFC 0019 §4.2, §13.2). Both
+# are what a client resolving *from* the proxy's answer needs: a URL left
+# pointing at github.com is a request the proxy never sees.
+
+heavy_mark "api-reads"
+heavy_log "tags family, then the release document for v$VERSION"
+curl -fsS -o "$HEAVY_WORK/tags.json" "$PROXY/$OWNER_REPO/tags" \
+  || heavy_fail "the tags family was not served with [api_reads] families = [\"tags\"]"
+python3 - "$HEAVY_WORK/tags.json" "v$VERSION" <<'PY' || { head -c 400 "$HEAVY_WORK/tags.json" >&2; heavy_fail "the tags document does not list v$VERSION"; }
+import json, sys
+tags = json.load(open(sys.argv[1]))
+names = [t.get("name") for t in tags] if isinstance(tags, list) else [t.get("name") for t in tags.get("tags", [])]
+sys.exit(0 if sys.argv[2] in names else 1)
+PY
+heavy_wire_after "api-reads" "GET /proxy/$REG/$OWNER_REPO/tags -> 200" "the tags read did not cross the tap"
+COMMITS_CODE="$(curl -sS -o /dev/null -w '%{http_code}' "$PROXY/$OWNER_REPO/commits/$BRANCH_SHA")"
+[[ "$COMMITS_CODE" == "404" || "$COMMITS_CODE" == "403" ]] \
+  || heavy_fail "the commits family is not enabled and answered $COMMITS_CODE rather than refusing"
+
+curl -fsS -o "$HEAVY_WORK/release.json" "$PROXY/$OWNER_REPO/releases/tags/v$VERSION" \
+  || heavy_fail "the release document for v$VERSION was not served"
+python3 - "$HEAVY_WORK/release.json" "$HEAVY_TAP_BASE/proxy/$REG/" <<'PY' || { head -c 600 "$HEAVY_WORK/release.json" >&2; heavy_fail "the release document still points at the forge"; }
+import json, sys
+doc = json.load(open(sys.argv[1])); base = sys.argv[2]
+urls = [a.get("browser_download_url") for a in doc.get("assets", [])]
+urls += [doc.get("tarball_url"), doc.get("zipball_url")]
+urls = [u for u in urls if u]
+bad = [u for u in urls if not u.startswith(base)]
+if bad:
+    print("not on the proxy:", bad[:3], file=sys.stderr)
+# The document's own `url` is the release's identity, left as the forge
+# wrote it; what must not survive are the links a client would *follow*.
+api = [k for k in ("assets_url", "upload_url") if str(doc.get(k, "")).startswith("https://api.github.com")]
+api += ["assets[].url" for a in doc.get("assets", []) if str(a.get("url", "")).startswith("https://api.github.com")]
+if api:
+    print("forge API links left:", api, file=sys.stderr)
+sys.exit(0 if urls and not bad and not api else 1)
+PY
+heavy_log "MISE-API-READS-OK (tags served, commits refused, release URLs on the proxy)"
+
 # ── 4. The air gap: seed, export, carry, import, install with no egress ──────
 #
 # RFC 0008 §10's standing proof, and the only test in the tree where "the

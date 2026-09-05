@@ -2,7 +2,7 @@
 
 | Field       | Value                                                                                 |
 | ----------- | ------------------------------------------------------------------------------------- |
-| Status      | Draft — phase 0a measured and phase 1 landed 2026-09-03 (§13); revised 2026-09-02 against the tree (see §11) |
+| Status      | **Implemented** — every phase of §12 landed (§13.1–§13.7): the quarantine, the scanners and the sandbox, the rescan and the flip alert, the external scanners and the admin surface, each proven in process and, for the client-facing claims, by `tests/heavy/quarantine.sh`. §11 q1 is answered by the spike table; q2 is measured per tool as its registries opt in |
 | Short       | Supply-chain quarantine and verdicts                                                  |
 | Settles     | How an artifact is scanned before it is served, who may see why it is held, and how the SOC can intervene |
 | Author      | Maxime <maxleriche.60@gmail.com>                                                       |
@@ -746,6 +746,7 @@ assertion of the suite named in its row.
 | `go.sh` | omitted from `@v/list` and `@latest`: `go get @latest` picks the previous; a pinned `go.mod` hits `.mod` first | prints `reading <url>: <status>`, never the body, one request, no wait; **`404` is bypassed by `GOPROXY=…,direct`, `403` stops it** | the same `GOMODCACHE` downloads on the next `go mod download` | — (no publish in the protocol) |
 | `maven.sh` | omitted from `maven-metadata.xml`: a range `[prev,)` picks the previous; a pinned pom hits the pom first | `403`: `Could not transfer artifact …:pom:<v> from/to <mirror> … status code: 403, reason phrase: Forbidden` — the reason phrase is printed, the body is not; one request. `404`: the pom is treated as *absent* and mvn goes on to the jar, then `Could not find artifact …:jar:<v> in <mirror>`; no wait on `Retry-After` | **plain**: the same local repository resolves on the next run, no `-U` needed — Maven's `.lastUpdated` memory is for a 404, and a `403` transfer error leaves none | `mvn deploy:deploy-file` accepts `201` and `202` alike, `BUILD SUCCESS` on both |
 | `pathproxy.sh` | **none**: `apt-cache policy` keeps the candidate (the index is signed); the refusal is the whole contract | `E: Failed to fetch … 403 Forbidden`, status and reason phrase only, one request, no wait | the same apt lists and cache download on the next `apt-get download` | — |
+| `quarantine.sh` (npm 11.19, **against the real gate**, 2026-09-04) | hidden from the packument: a fresh `npm install <pkg>@<denied>` stops at resolution with `ETARGET` / *No matching version found* and never asks for the tarball — the developer sees "no such version", not the finding, which is what `batlehub why` is for; a lockfile pinning it (`npm ci`) skips the packument and reaches the gate | prints the body's `error` verbatim — `… is quarantined (SCAN_PENDING). Run \`batlehub why …\`` / `… is denied (VULNERABILITY) …` — with `code E403`, exits 1, **one** request, no retry, no fallback, nothing left in `node_modules` | the **same** npm cache installs on the next `npm install` once the verdict serves: a `403` is not cached | — (the local registry's `npm publish` is `npm.sh`'s) |
 
 Two of the cells corrected the design rather than a table: a Go hold cannot
 be a `404` (decision 32), and `cargo publish` already waits on the index, so
@@ -1397,7 +1398,7 @@ of a denied coordinate is refused before any byte is downloaded.
 
 ### Still open
 
-1. **postmortem input shape** — a spike, not a decision (phase 0b below).
+1. ~~**postmortem input shape** — a spike, not a decision (phase 0b below).~~
    `scan` wants a project with a lockfile, not a bare archive. The
    synthetic-lockfile approach in §6.3 must be validated against the pinned
    postmortem release for each of the seven ecosystems, Go and Maven first
@@ -1405,6 +1406,32 @@ of a denied coordinate is refused before any byte is downloaded.
    works with a documented caveat / falls back to source-level rules only
    with `SCANNER_UNSUPPORTED`. The result is appended to this RFC before it
    moves to "In review".
+
+   **Measured 2026-09-04, postmortem 2.3.1** (§13.5). One canary archive per
+   ecosystem, packed as that ecosystem's tool packs one and carrying a
+   `curl | sh`, a base64 `eval` and an `AWS_SECRET_ACCESS_KEY` read in its
+   language; each materialised by `PostmortemScanner::layout` — the archive
+   under the dependency path, the synthetic lockfile and manifest beside it
+   — and scanned. **No ecosystem falls to `SCANNER_UNSUPPORTED`**: every
+   layout is recognised (exit 0 or 1, never 2). What differs is whether
+   postmortem has source rules for the language, and whether the artifact
+   the proxy serves carries any source at all:
+
+   | Ecosystem | Recognised as | Synthetic lockfile | Outcome | Caveat |
+   | --- | --- | --- | --- | --- |
+   | npm | `node` | `package-lock.json` + `package.json` | **works as designed** — `install_hook` (high) on the `preinstall`, `install_hook` (medium) on the `postinstall` | — |
+   | PyPI | `python` | `requirements.txt` | **works as designed** — `install_hook` (critical) on `setup.py`, `obfuscation`, `sensitive_api` | an sdist; a wheel carries no `setup.py`, and the `.py` walk finds what it ships |
+   | Composer | `php` | `composer.lock` + `composer.json` | **works as designed** — `obfuscation` (high), `sensitive_api` | a `scripts.post-install-cmd` in the package's own `composer.json` is not reported as an install hook |
+   | Go | `go` | `go.sum` + `go.mod` | **works as designed** — `sensitive_api` | the graph is flat offline (postmortem's own `warn`, expected: §12 phase 0b); Go has no install hooks, and `exec.Command` alone is not one |
+   | RubyGems | `ruby` | `Gemfile.lock` + `Gemfile` | **works with a fix** — `obfuscation` (high), `sensitive_api` ×2 **once `data.tar.gz` is unpacked** | a `.gem` is a tar of `metadata.gz` + `data.tar.gz`; the extraction policy does not descend nested archives, so the first run saw two blobs and found nothing. `materialise` now opens that one tarball, deliberately, under the same ceilings (`Layout::gem_data`) |
+   | Cargo | `rust` | `Cargo.lock` + `Cargo.toml` | **graph only** — recognised, zero findings | postmortem 2.3.1 has no Rust source rules: `build.rs` with the full canary yields nothing. The lockfile graph (typosquat, advisories with `online`) is the whole answer for a crate |
+   | Maven | `java` | `pom.xml` | **graph only** — recognised, zero findings | the Java rules exist (a `.java` with the canary yields `sensitive_api`), but a jar is bytecode and the proxy serves the jar; only a `-sources.jar` would carry a signal. Flat graph offline, as for Go |
+
+   The row for a graph-only ecosystem is not a skip: the adapter test
+   asserts the empty answer, so a postmortem release that starts reading
+   `.rs` or `.class` turns it red and this table gets updated. The fixtures
+   (`fixtures/canary-*.{tgz,tar.gz,crate,gem,zip,jar}`) and the recorded
+   outputs are the canary tests', as the phase asked.
 2. **Publish status per tool** — settled for cargo and mvn by decision 31;
    `twine`, `gem push`, `composer` and `dotnet nuget push` are measured when
    their registries opt in (their heavy suites exist; the Publish phase is
@@ -1627,3 +1654,172 @@ page. What differs from the text, each deliberate:
   mount-option knob; the extraction policy drops execute bits on every file
   instead, and the worker never runs anything from the tree regardless.
 
+### 13.4 The quarantine measured from the client side (2026-09-04)
+
+`tests/heavy/quarantine.sh` — npm 11.19 against a `[registries.security]`
+registry backed by registry.npmjs.org and the real OSV database, the worker
+embedded (`server.roles = ["proxy", "worker"]`), `tests/heavy/http_tap.py`
+on the wire and `batlehub wait` / `why` as the developer's two verbs; a row
+in the `heavy-client` matrix and `task test:quarantine-heavy`. The first
+heavy suite with a `[security]` section: until it ran, every claim above
+about a client had been proven against `FixedRegistry` and a fake OSV. Six
+steps — first contact held on `SCAN_PENDING`, the worker clearing it and the
+same cache recovering, `minimist@1.2.5`'s GHSA-xvch-5gv4-984h refused on
+the wire and named by `why`, the listing agreeing, a config reload to `warn`
+serving it with the verdict headers, and a scanner under `bwrap` that
+*tries* to reach the tap (a script the worker runs as postmortem, reporting
+a critical finding if the connect succeeds) — the last measured in CI only,
+where `bubblewrap` and user namespaces exist. The §4.4 row is what it
+observed. Two things it found:
+
+- **A flip to `warn` did not reach the listings.** The artifact path
+  re-judges a stored verdict under the current policy on every read
+  (`VerdictService::current`), so a `denied` served `warned` the moment the
+  registry flipped; the listing filter read the *stored* state, kept the
+  version hidden, and a fresh resolve therefore never reached the artifact
+  path that would have re-judged it — `npm install` answered ETARGET
+  indefinitely. In-process, `the_same_finding_serves_in_warn_mode` starts in
+  `warn` and could not see it. `Verdict::hides_from_listings_under(now,
+  mode)` now judges the stored row under the registry's current mode: under
+  `warn` a stored `denied` hides only when it carries an always-denied code
+  (`BLOCK_LIST`, `SOC_VERDICT`), since those are the only `denied` the
+  evaluator produces in that mode. The other direction — a stored `warned`
+  under a registry now in `block` — is left to the artifact path, which
+  refuses with the finding and re-judges the row so the next listing agrees:
+  a one-request lag that errs on the side the gate corrects.
+  `a_denied_version_is_listed_again_when_the_registry_flips_to_warn` pins it.
+- **The Hide axis has two halves for npm, and only one reaches the gate.**
+  §4.4's premise held: a fresh resolve of a denied version fails at the
+  packument, as a block does, with npm's own `ETARGET` and no reason code —
+  the developer is told the version does not exist. The refusal body, the
+  headers and the reason code are seen only by a *pinned* resolve (`npm ci`
+  over a lockfile naming the tarball), which is the path an existing project
+  takes. The suite measures both, and the table says which is which.
+
+Two smaller things the run settled: the config file watcher counts an
+in-place rewrite as several change events (truncate, write, close) and a
+reload asked for while it is mid-load answers `400`, so the suite renames a
+new file over the old one and waits a beat; and `tests/heavy/http_tap.py`
+now records `X-BatleHub-Verdict` and `X-BatleHub-Reason`, because a `200`
+served *warned* is indistinguishable from a plain `200` without them.
+
+### 13.5 Phase 0b measured (2026-09-04)
+
+The spike of §11 q1, run against postmortem 2.3.1 on this machine with the
+seven canary archives now in `crates/adapters/src/scanners/fixtures/`. The
+table is in §11; the tests are
+`every_canary_materialises_into_its_ecosystems_layout`,
+`the_spike_outputs_map_per_ecosystem` (the recorded output of the four
+ecosystems that found something, through `map_scan`) and
+`the_real_postmortem_answers_for_all_seven_ecosystems_as_the_spike_recorded`,
+which runs the binary wherever it is on `PATH` and asserts each row's
+outcome — including the two empty ones. One thing it changed: a `.gem` is
+opened one level further than the extraction policy allows for anything
+else, because the format *is* a tar of tars and the Ruby source lives in
+the inner one. One thing it settled: the phase's outcome vocabulary had a
+third value, `SCANNER_UNSUPPORTED`, that no ecosystem needed — the
+synthetic lockfile is recognised everywhere, and the distinction that
+matters is whether the language has source rules and whether the served
+artifact carries source. q1 is struck; q2 stays open by design — the
+publish status of `twine`, `gem push`, `composer` and `dotnet nuget push`
+is measured when each registry opts in, not argued here.
+
+### 13.6 Phase 4 landed (2026-09-04)
+
+The rescan and the flip. `VerdictRepository::list_due_for_rescan` (the
+rows of a registry whose last scan is older than a cut-off, oldest first,
+never-scanned first of all) and `RescanScheduler` (`services/rescan.rs`):
+a tick a minute on every worker process, a no-op on every process but the
+one holding the estate's advisory lock (`ScanQueue::try_lead`, a session
+lock on a connection the queue keeps out of the pool while it leads —
+§6.3's election, with the lock released by the connection closing). Each
+tick queues a `Rescan` for what is due on every registry with
+`[registries.security.rescan] interval_secs > 0`, dated from the metadata
+cache so the age gate has what it had the first time, and the worker asks
+upstream for the date once when the cache no longer has it. The
+anti-starvation slot §13.2 deferred is in both queues: of `n` lease slots,
+one goes to the *lowest* tier waiting, so a `FirstSeen` flood never parks
+a backfill. The flip: a rescan that moves a served verdict to `denied`
+emits `verdict_changed` — decision 23's admin alert — with the coordinate,
+the codes, the findings and the identities that pulled the version inside
+`pullers_window_days`, read from `access_events` through one query
+(`services/pullers.rs`) that the new `GET
+/api/v1/verdicts/{registry}/{name}/{version}/pullers?since=&format=json|csv`
+and `batlehub verdicts pullers` read too (decision 28: one who-pulled
+query). A hold that lifts emits `artifact_released` to the identities
+refused during it, and to nobody when nobody was. Measured by
+`pg_verdicts.rs` on Postgres (due-selection, the slot under a flood,
+leadership refused to a second connection and released on drop),
+`security_registry.rs` (a served version refused after a rescan finding;
+the alert naming the pull inside a one-second window and not the one
+before it; the endpoint's JSON and CSV agreeing with the alert; a
+non-admin refused; a lifted hold announced to the first-contact requester)
+and `quarantine.sh` step 7: a version scanned clean by an OSV the suite
+runs, installed, then refused after that OSV learned an advisory — the
+*scheduler's* rescan, observed at the receiver, with `ci-admin` in the
+alert's pullers and in `batlehub verdicts pullers`. What differs from the
+text, each deliberate:
+
+- **The inbound `security.verdict` webhook stays, as the alias it already
+  is.** §12 listed it under this phase and the build order called for
+  dropping it in favour of RFC 0002's signed push (decision 28). It had
+  landed earlier as a thin arm over the flag service — one coordinate
+  recorded as a `SocVerdict` flag — so there is no second pipeline to
+  remove, and a SOC integration written against the documented shape keeps
+  working. 0002's contract is the one that grows; this one does not.
+- **`pullers_window_days` is per registry**, on `[registries.security]`,
+  not global: the estate that proxies a public mirror and the one that
+  proxies its own packages do not owe the same horizon.
+- **The alert says when it could not name anyone.** `pullers_known` is
+  `false` on a worker without an access log (a `--roles worker` process
+  without the repository, or a query that failed), so an empty list is
+  never read as "nobody pulled it".
+- **The release announcement is an event, not a message to each puller.**
+  The notification machinery has channels, not inboxes; the event carries
+  the `recipients` and the operator's subscription decides where it goes.
+- **A scanner answers under its config key.** `required_scanners` and
+  `scanners_done` speak in `[scanners.<name>]` keys, and the adapters
+  answered their *type*: a second `osv` under another key — the suite's
+  own database — or a postmortem-shaped probe under its own key was never
+  "done", and its registry held every version forever. Found by step 7 of
+  the heavy suite; `NamedScanner` wraps every configured scanner under its
+  key, findings included, so a per-scanner escalation block keyed on it
+  applies too.
+
+### 13.7 Phase 5 landed (2026-09-05)
+
+The two external scanners, the admin surface and the scaling input.
+`scanners/socket.rs` — Socket.dev as an `ArtifactScanner`: `POST
+/v0/purl?alerts=true&compact=true`, the key as the Basic-auth user name
+the way Socket's own CLI sends it, one NDJSON artifact per line, alerts
+mapped by `type` (`installScripts` → `INSTALL_HOOK`, `didYouMean` →
+`TYPOSQUAT_SUSPECT`, the CVE types → `VULNERABILITY`, `malware` and
+everything else → `MALWARE_SIGNAL` at the severity Socket gave; an alert
+type this build does not know is reported, never dropped); a `429` and a
+malformed answer are not answers. `scanners/mlab.rs` — mlab.sh's CVE API
+as the *enrichment* §6.3 describes, behind a new `FindingEnricher` port
+the worker runs after the scanners over what they found: `GET
+/api/v1/cve/{id}` for every vulnerability finding that names a CVE, in its
+`reference` or through the `aliases` OSV now records beside a GHSA id
+(`OsvMatch::aliases`); CVSS, EPSS and the KEV listing attached under
+`raw.enrichment`, a KEV-listed CVE raised to `critical`. The endpoint was
+observed to answer unauthenticated on 2026-09-05, so `mlab`'s key is a
+courtesy and `socket`'s is refused absent (§4.4). `GET
+/api/v1/admin/verdicts?registry=&state=&limit=`, `POST
+…/verdicts/rescan { registry, state? }` and `POST …/verdicts/backfill {
+registry }` — the last walking the artifact-meta inventory and queueing
+every cached version at `Backfill`, the priority the anti-starvation slot
+of §13.6 exists for — with `batlehub verdicts list|rescan|backfill` over
+them. The chart's `worker.autoscaling` renders a `HorizontalPodAutoscaler`
+on the External metric `batlehub_scan_jobs_queued` (the gauge the worker
+already exported, per registry and trigger; a metrics adapter exposes it)
+and drops the Deployment's `replicas` while it is on; `helm lint` and the
+rendered-manifest assertions pass. Measured by `mockito` for both APIs
+(the mapping, the key on the wire, the rate-limited and the malformed
+answer), `security_registry.rs` (the listing by state and its `403`/`404`,
+a bulk rescan queueing one job at `Rescan`, a backfill queueing nothing on
+an empty inventory and saying so), and `server/tests/roles.rs` — the
+directory §10 asked for — where the built binary started with `--roles
+worker` alone drains a queue seeded at `Backfill` priority against a
+Postgres and a fake OSV, and records the verdict. Every phase of §12 has
+now landed.

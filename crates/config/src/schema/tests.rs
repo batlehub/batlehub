@@ -3485,15 +3485,45 @@ fn upstream_audit_rejections() {
             "not \"audit\" or \"block\"",
         ),
         (r#"        on_confirmed = "block""#, "enabled = false"),
-        (
-            r#"        enabled = true
-        on_confirmed = "block""#,
-            "phase 6",
-        ),
     ] {
         let err = validation_error(&audit_config(body), body);
         assert!(err.contains(needle), "{body}: {err}");
     }
+}
+
+/// RFC 0014 phase 6: `"block"` is accepted with the audit enabled, and the
+/// one combination §5.4 shows is quietly destructive warns.
+#[test]
+fn on_confirmed_block_is_accepted_and_warns_without_the_hold() {
+    let ok = audit_config(
+        r#"        enabled = true
+        on_confirmed = "block""#,
+    );
+    let cfg = parse_config(&ok);
+    cfg.validate()
+        .expect("block is RFC 0014 phase 6, and it is built");
+    assert_eq!(cfg.upstream_audit.on_confirmed, "block");
+    let codes: Vec<String> = cfg.warnings().iter().map(|w| w.code.clone()).collect();
+    assert!(
+        !codes
+            .iter()
+            .any(|c| c == warnings::UPSTREAM_AUDIT_BLOCK_WITHOUT_HOLD),
+        "the hold is on by default: {codes:?}"
+    );
+
+    let cfg = parse_config(&audit_config(
+        r#"        enabled = true
+        on_confirmed = "block"
+        retain_disappeared = false"#,
+    ));
+    cfg.validate().unwrap();
+    let codes: Vec<String> = cfg.warnings().iter().map(|w| w.code.clone()).collect();
+    assert!(
+        codes
+            .iter()
+            .any(|c| c == warnings::UPSTREAM_AUDIT_BLOCK_WITHOUT_HOLD),
+        "{codes:?}"
+    );
 }
 
 #[test]

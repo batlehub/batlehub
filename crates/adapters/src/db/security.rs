@@ -209,6 +209,38 @@ impl VerdictRepository for PgVerdictRepository {
             .collect()
     }
 
+    async fn list_due_for_rescan(
+        &self,
+        registry: &str,
+        before: DateTime<Utc>,
+        limit: u64,
+    ) -> Result<Vec<PackageId>, CoreError> {
+        let rows = sqlx::query(
+            "SELECT registry, package_name, version
+             FROM artifact_verdicts
+             WHERE registry = $1
+               AND (last_scanned_at IS NULL OR last_scanned_at < $2)
+             ORDER BY last_scanned_at ASC NULLS FIRST, evaluated_at ASC
+             LIMIT $3",
+        )
+        .bind(registry)
+        .bind(before)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .db_err()?;
+        Ok(rows
+            .iter()
+            .map(|r| {
+                PackageId::new(
+                    r.get::<String, _>("registry"),
+                    r.get::<String, _>("package_name"),
+                    r.get::<String, _>("version"),
+                )
+            })
+            .collect())
+    }
+
     async fn list_by_state(
         &self,
         registry: &str,
@@ -246,11 +278,19 @@ impl VerdictRepository for PgVerdictRepository {
 /// `scan_jobs` (migration 051), leased with `FOR UPDATE SKIP LOCKED`.
 pub struct PgScanQueue {
     pool: PgPool,
+    /// The connection holding the advisory lock while this process leads
+    /// (RFC 0018 §6.3). A session lock lives as long as its connection, so
+    /// the connection is kept out of the pool for as long as the lock is
+    /// wanted, and giving it back is how leadership is released.
+    leader: tokio::sync::Mutex<Option<sqlx::pool::PoolConnection<sqlx::Postgres>>>,
 }
 
 impl PgScanQueue {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            leader: tokio::sync::Mutex::new(None),
+        }
     }
 
     fn row_to_job(r: &sqlx::postgres::PgRow) -> Result<ScanJob, CoreError> {
@@ -275,6 +315,48 @@ impl PgScanQueue {
 }
 
 const JOB_COLUMNS: &str = "id, registry, package_name, version, published_at, artifact_sha256, trigger, attempts, leased_until, created_at";
+
+impl PgScanQueue {
+    /// One lease pick: up to `n` open, unleased, unexhausted jobs in
+    /// `order`, locked with `SKIP LOCKED` so any number of workers share
+    /// the table without two of them taking one job.
+    async fn lease_ordered(
+        &self,
+        worker_id: &str,
+        registries: &[String],
+        n: u32,
+        lease_secs: u64,
+        max_attempts: u32,
+        order: &str,
+    ) -> Result<Vec<ScanJob>, CoreError> {
+        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE scan_jobs SET
+                 leased_until = NOW() + make_interval(secs => $3),
+                 leased_by = $1,
+                 attempts = attempts + 1
+             WHERE id IN (
+                 SELECT id FROM scan_jobs
+                 WHERE completed_at IS NULL
+                   AND (leased_until IS NULL OR leased_until < NOW())
+                   AND attempts < $4
+                   AND (cardinality($5::text[]) = 0 OR registry = ANY($5))
+                 ORDER BY {order}
+                 LIMIT $2
+                 FOR UPDATE SKIP LOCKED
+             )
+             RETURNING {JOB_COLUMNS}"
+        )))
+        .bind(worker_id)
+        .bind(n as i64)
+        .bind(lease_secs as f64)
+        .bind(max_attempts as i32)
+        .bind(registries)
+        .fetch_all(&self.pool)
+        .await
+        .db_err()?;
+        rows.iter().map(Self::row_to_job).collect()
+    }
+}
 
 #[async_trait]
 impl ScanQueue for PgScanQueue {
@@ -313,32 +395,61 @@ impl ScanQueue for PgScanQueue {
         // The subquery picks and locks; the update leases. `SKIP LOCKED` is what
         // lets any number of workers share the table without handing one job to
         // two of them.
-        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "UPDATE scan_jobs SET
-                 leased_until = NOW() + make_interval(secs => $3),
-                 leased_by = $1,
-                 attempts = attempts + 1
-             WHERE id IN (
-                 SELECT id FROM scan_jobs
-                 WHERE completed_at IS NULL
-                   AND (leased_until IS NULL OR leased_until < NOW())
-                   AND attempts < $4
-                   AND (cardinality($5::text[]) = 0 OR registry = ANY($5))
-                 ORDER BY priority, created_at
-                 LIMIT $2
-                 FOR UPDATE SKIP LOCKED
-             )
-             RETURNING {JOB_COLUMNS}"
-        )))
-        .bind(worker_id)
-        .bind(n as i64)
-        .bind(lease_secs as f64)
-        .bind(max_attempts as i32)
-        .bind(registries)
-        .fetch_all(&self.pool)
-        .await
-        .db_err()?;
-        rows.iter().map(Self::row_to_job).collect()
+        // The anti-starvation slot (RFC 0018 §4.2, decision 16): `n - 1`
+        // slots go to the queue in priority order and one to the *lowest*
+        // tier waiting, so a flood of `FirstSeen` never parks a backfill
+        // forever. A job leased by the first pick is `leased_until > NOW()`
+        // and invisible to the second, which is what keeps the two from
+        // handing out the same row.
+        let mut jobs = self
+            .lease_ordered(
+                worker_id,
+                registries,
+                n.saturating_sub(1).max(1),
+                lease_secs,
+                max_attempts,
+                "priority, created_at",
+            )
+            .await?;
+        if n >= 2 {
+            let low = self
+                .lease_ordered(
+                    worker_id,
+                    registries,
+                    1,
+                    lease_secs,
+                    max_attempts,
+                    "priority DESC, created_at",
+                )
+                .await?;
+            jobs.extend(low);
+        }
+        Ok(jobs)
+    }
+
+    async fn try_lead(&self, key: i64) -> Result<bool, CoreError> {
+        let mut guard = self.leader.lock().await;
+        if let Some(conn) = guard.as_mut() {
+            // Still ours while the connection answers; a dropped connection
+            // dropped the lock with it, and the next call competes again.
+            match sqlx::query("SELECT 1").execute(&mut **conn).await {
+                Ok(_) => return Ok(true),
+                Err(e) => {
+                    tracing::warn!(error = %e, "scan queue: leader connection lost; re-electing");
+                    *guard = None;
+                }
+            }
+        }
+        let mut conn = self.pool.acquire().await.db_err()?;
+        let held: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+            .bind(key)
+            .fetch_one(&mut *conn)
+            .await
+            .db_err()?;
+        if held {
+            *guard = Some(conn);
+        }
+        Ok(held)
     }
 
     async fn heartbeat(&self, job_id: Uuid, lease_secs: u64) -> Result<(), CoreError> {

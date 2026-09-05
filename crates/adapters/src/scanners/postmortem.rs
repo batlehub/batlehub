@@ -165,6 +165,7 @@ impl PostmortemScanner {
             lockfile: lockfile.to_owned(),
             lock_body,
             manifest,
+            gem_data: kind == RegistryKind::Rubygems,
         })
     }
 
@@ -198,6 +199,15 @@ impl PostmortemScanner {
             staging.clone()
         };
         std::fs::rename(&source, &target).map_err(io_err)?;
+        if layout.gem_data {
+            let inner = target.join("data.tar.gz");
+            if inner.is_file() {
+                let bytes = std::fs::read(&inner).map_err(io_err)?;
+                let report = extract_to(&bytes, &target, &self.extract)?;
+                tracing::debug!(files = report.files, "postmortem: gem data.tar.gz unpacked");
+                std::fs::remove_file(&inner).map_err(io_err)?;
+            }
+        }
         std::fs::write(work.join(&layout.lockfile), &layout.lock_body).map_err(io_err)?;
         if let Some((name, body)) = &layout.manifest {
             std::fs::write(work.join(name), body).map_err(io_err)?;
@@ -326,6 +336,13 @@ struct Layout {
     /// next to `Cargo.lock`. Observed: a lockfile alone is "no supported
     /// ecosystem detected".
     manifest: Option<(String, String)>,
+    /// A `.gem` is a tar *of* tars — `metadata.gz`, `data.tar.gz`,
+    /// `checksums.yaml.gz` — and the Ruby source is inside the second. The
+    /// extraction policy does not descend nested archives (hostile input),
+    /// so this one is opened deliberately, once, under the same ceilings:
+    /// without it postmortem sees a gem directory holding two blobs and
+    /// finds nothing (phase 0b, RFC 0018 §11 q1).
+    gem_data: bool,
 }
 
 fn io_err(e: std::io::Error) -> ScannerError {
@@ -562,6 +579,243 @@ mod tests {
         }
         assert!(PostmortemScanner::layout(RegistryKind::Generic, "x", "1").is_none());
         assert!(!scanner().supports(RegistryKind::Deb));
+        assert!(
+            PostmortemScanner::layout(RegistryKind::Rubygems, "x", "1")
+                .unwrap()
+                .gem_data
+        );
+        assert!(
+            !PostmortemScanner::layout(RegistryKind::Npm, "x", "1")
+                .unwrap()
+                .gem_data
+        );
+    }
+
+    // ── phase 0b: the seven ecosystems (RFC 0018 §11 q1) ──────────────────────
+    //
+    // One canary archive per ecosystem, built the way that ecosystem's tool
+    // packs one — a `.tgz` with a `package/` wrapper, an sdist, a `.crate`,
+    // a `.gem` of tars, a Composer zip, a module zip, a jar — each carrying a
+    // `curl | sh`, a base64 `eval` and an `AWS_SECRET_ACCESS_KEY` read in that
+    // ecosystem's language. `spike_row` is what postmortem 2.3.1 did with it
+    // on 2026-09-04, and the table in the RFC is this function.
+
+    /// The archive, the coordinate and the outcome the spike recorded.
+    fn spike_row(kind: RegistryKind) -> (&'static [u8], &'static str, &'static str, SpikeOutcome) {
+        match kind {
+            RegistryKind::Npm => (
+                include_bytes!("fixtures/canary-npm.tgz"),
+                "canary-pad",
+                "1.0.0",
+                SpikeOutcome::Finds(&[ReasonCode::InstallHook]),
+            ),
+            RegistryKind::Pypi => (
+                include_bytes!("fixtures/canary-pypi.tar.gz"),
+                "canary-pad",
+                "1.0.0",
+                SpikeOutcome::Finds(&[ReasonCode::InstallHook, ReasonCode::MalwareSignal]),
+            ),
+            RegistryKind::Composer => (
+                include_bytes!("fixtures/canary-composer.zip"),
+                "canary/pad",
+                "1.0.0",
+                SpikeOutcome::Finds(&[ReasonCode::MalwareSignal]),
+            ),
+            RegistryKind::Goproxy => (
+                include_bytes!("fixtures/canary-goproxy.zip"),
+                "github.com/canary/pad",
+                "v1.0.0",
+                SpikeOutcome::Finds(&[ReasonCode::MalwareSignal]),
+            ),
+            RegistryKind::Rubygems => (
+                include_bytes!("fixtures/canary-rubygems.gem"),
+                "canary-pad",
+                "1.0.0",
+                SpikeOutcome::Finds(&[ReasonCode::MalwareSignal]),
+            ),
+            // Recognised as `rust`, and nothing read: postmortem 2.3.1 has no
+            // Rust source rules — `build.rs` with a `curl | sh` and a
+            // credential read yields nothing. The lockfile graph is the
+            // whole answer for a crate.
+            RegistryKind::Cargo => (
+                include_bytes!("fixtures/canary-cargo.crate"),
+                "canary-pad",
+                "1.0.0",
+                SpikeOutcome::GraphOnly,
+            ),
+            // Recognised as `java`, and a jar is bytecode: the Java source
+            // rules exist (a `.java` with the same canary yields
+            // `sensitive_api`) but a binary jar carries none. Only a
+            // `-sources.jar` would; the artifact the proxy serves is not it.
+            RegistryKind::Maven => (
+                include_bytes!("fixtures/canary-maven.jar"),
+                "org.canary:pad",
+                "1.0.0",
+                SpikeOutcome::GraphOnly,
+            ),
+            other => panic!("{other} is not a postmortem ecosystem"),
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum SpikeOutcome {
+        /// Works as designed: the archive's source is read and these codes
+        /// come back.
+        Finds(&'static [ReasonCode]),
+        /// Works with a caveat: the ecosystem is recognised, the lockfile
+        /// graph is built, and no source-level rule applies to the bytes —
+        /// an empty answer, not `SCANNER_UNSUPPORTED`.
+        GraphOnly,
+    }
+
+    const SPIKE: [RegistryKind; 7] = [
+        RegistryKind::Npm,
+        RegistryKind::Pypi,
+        RegistryKind::Cargo,
+        RegistryKind::Rubygems,
+        RegistryKind::Composer,
+        RegistryKind::Goproxy,
+        RegistryKind::Maven,
+    ];
+
+    /// Every canary materialises under its ecosystem's path with the
+    /// synthetic lockfile beside it — and the gem's inner tarball is opened,
+    /// which is the one layout the spike changed.
+    #[test]
+    fn every_canary_materialises_into_its_ecosystems_layout() {
+        for kind in SPIKE {
+            let (archive, name, version, _) = spike_row(kind);
+            let work = tempfile::tempdir().unwrap();
+            let layout = PostmortemScanner::layout(kind, name, version).unwrap();
+            scanner()
+                .materialise(work.path(), &layout, archive)
+                .unwrap();
+            let dir = work.path().join(&layout.dir);
+            assert!(dir.is_dir(), "{kind}: {}", layout.dir);
+            assert!(work.path().join(&layout.lockfile).is_file(), "{kind}");
+            let files: Vec<PathBuf> = walk(&dir);
+            assert!(!files.is_empty(), "{kind}: nothing under {}", dir.display());
+            if kind == RegistryKind::Rubygems {
+                assert!(dir.join("lib/canary_pad.rb").is_file(), "{files:?}");
+                assert!(
+                    !dir.join("data.tar.gz").exists(),
+                    "the blob is replaced by its contents"
+                );
+            }
+        }
+    }
+
+    fn walk(dir: &Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    out.extend(walk(&p));
+                } else {
+                    out.push(p);
+                }
+            }
+        }
+        out
+    }
+
+    /// The spike's recorded output for each ecosystem that found something,
+    /// mapped: the categories postmortem uses per language land on the
+    /// codes the verdict reads.
+    #[test]
+    fn the_spike_outputs_map_per_ecosystem() {
+        let rows: [(&str, &[ReasonCode]); 4] = [
+            (
+                include_str!("fixtures/postmortem-scan-npm.json"),
+                &[ReasonCode::InstallHook],
+            ),
+            (
+                include_str!("fixtures/postmortem-scan-pypi.json"),
+                &[ReasonCode::InstallHook, ReasonCode::MalwareSignal],
+            ),
+            (
+                include_str!("fixtures/postmortem-scan-composer.json"),
+                &[ReasonCode::MalwareSignal],
+            ),
+            (
+                include_str!("fixtures/postmortem-scan-goproxy.json"),
+                &[ReasonCode::MalwareSignal],
+            ),
+        ];
+        for (raw, expected) in rows {
+            let doc: serde_json::Value = serde_json::from_str(raw).unwrap();
+            let findings = scanner().map_scan(&doc);
+            assert!(!findings.is_empty(), "{}", doc["ecosystems"]);
+            for code in expected {
+                assert!(
+                    findings.iter().any(|f| f.code == *code),
+                    "{}: no {code:?} in {findings:?}",
+                    doc["ecosystems"]
+                );
+            }
+            assert!(findings.iter().all(|f| f.scanner == "postmortem"));
+        }
+        // The pypi row is the one with a critical: `setup.py` running
+        // `os.system` / `exec` / `base64` / `os.environ` is an install hook
+        // postmortem rates critical, and the mapping keeps the severity.
+        let pypi: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/postmortem-scan-pypi.json")).unwrap();
+        assert!(scanner()
+            .map_scan(&pypi)
+            .iter()
+            .any(|f| f.code == ReasonCode::InstallHook && f.severity == Severity::Critical));
+    }
+
+    /// The table, against the binary: every ecosystem is recognised (never
+    /// exit 2, never `Unsupported`), the ones with source rules find the
+    /// canary, and the two without answer empty — asserted, not skipped,
+    /// because "postmortem says nothing about a crate or a jar" is the
+    /// caveat the RFC records and a future release that starts reading them
+    /// should turn this red.
+    #[tokio::test]
+    async fn the_real_postmortem_answers_for_all_seven_ecosystems_as_the_spike_recorded() {
+        if !subprocess::command_exists(Path::new("postmortem")) {
+            eprintln!("postmortem not on PATH; skipped");
+            return;
+        }
+        for kind in SPIKE {
+            let (archive, name, version, outcome) = spike_row(kind);
+            let mut meta = PackageMetadata::minimal(
+                PackageId::new("sec", name, version),
+                serde_json::Value::Null,
+            );
+            meta.published_at = None;
+            let input = ScanInput {
+                package: meta,
+                kind,
+                purl: format!("pkg:{}/{name}@{version}", kind),
+                artifact: Some(bytes::Bytes::copy_from_slice(archive)),
+                sbom: None,
+                listing: None,
+            };
+            let findings = match scanner().scan(&input).await {
+                Ok(f) => f,
+                Err(e) => panic!("{kind}: postmortem did not answer: {e}"),
+            };
+            match outcome {
+                SpikeOutcome::Finds(codes) => {
+                    for code in codes {
+                        assert!(
+                            findings.iter().any(|f| f.code == *code),
+                            "{kind}: expected {code:?} in {findings:?}"
+                        );
+                    }
+                }
+                SpikeOutcome::GraphOnly => {
+                    assert!(
+                        findings.is_empty(),
+                        "{kind}: postmortem now reads this ecosystem's source — update the \
+                         spike table in RFC 0018 §11: {findings:?}"
+                    );
+                }
+            }
+        }
     }
 
     /// The archive is put where the ecosystem keeps it, wrapper stripped, and

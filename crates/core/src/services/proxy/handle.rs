@@ -926,21 +926,25 @@ impl ProxyService {
     /// re-checks the concrete coordinate on every request and no failure here
     /// makes held bytes retrievable.
     async fn held_versions_for(&self, registry: &str, package: &str) -> Vec<String> {
-        let verdicts = {
+        let (verdicts, mode) = {
             let hot = self.hot.read().await;
-            if !hot.security.contains_key(registry) {
+            let Some(policy) = hot.security.get(registry) else {
                 return Vec::new();
-            }
-            hot.verdicts.clone()
+            };
+            (hot.verdicts.clone(), policy.mode)
         };
         let Some(verdicts) = verdicts else {
             return Vec::new();
         };
         let now = chrono::Utc::now();
+        // Judged under the registry's *current* mode, not the one the row
+        // was written under: a `denied` from before a flip to `warn` must
+        // not keep hiding a version the gate would now serve (see
+        // `Verdict::hides_from_listings_under`).
         match verdicts.list_for_package(registry, package).await {
             Ok(rows) => rows
                 .into_iter()
-                .filter(|v| v.hides_from_listings(now))
+                .filter(|v| v.hides_from_listings_under(now, mode))
                 .map(|v| v.package.version)
                 .collect(),
             Err(e) => {

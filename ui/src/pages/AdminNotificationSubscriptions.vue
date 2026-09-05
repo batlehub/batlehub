@@ -91,6 +91,12 @@ const ALL_EVENT_TYPES: NotificationEventType[] = [
   "package_yanked",
   "package_unyanked",
   "package_deleted",
+  // RFC 0014 §4.5 — the upstream audit's three. `upstream_unreachable` is
+  // registry-scoped (its package is `*`), so a subscription with a package
+  // filter never sees it.
+  "package_disappeared_upstream",
+  "package_reappeared_upstream",
+  "upstream_unreachable",
 ];
 
 const dialogOpen = ref(false);

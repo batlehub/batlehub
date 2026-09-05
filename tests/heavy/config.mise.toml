@@ -42,6 +42,18 @@ mode = "proxy"
 branch_ttl_secs = 10
 tag_ttl_secs = 3600
 
+# RFC 0019 phase 3, measured from the client side by sections 5 and 6 of
+# the suite: raw content on, bounded, with scripts refused — the one
+# artifact no scanner reads — and the typed `tags` family beside the
+# release listing.
+[registries.raw]
+enabled = true
+max_size_bytes = 1048576
+scripts = "deny"
+
+[registries.api_reads]
+families = ["tags"]
+
 [registries.rbac]
 anonymous = ["releases:read", "releases:list", "source:read"]
 user = ["releases:read", "releases:list", "source:read"]

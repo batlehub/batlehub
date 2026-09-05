@@ -431,9 +431,35 @@ impl Verdict {
     /// except a time-bound hold whose clock has already run out — the next
     /// read re-derives that one as served, and a listing must not lag it.
     pub fn hides_from_listings(&self, now: DateTime<Utc>) -> bool {
+        self.hides_from_listings_under(now, SecurityMode::Block)
+    }
+
+    /// [`Self::hides_from_listings`] judged under the registry's *current*
+    /// `mode`, which the stored row may predate.
+    ///
+    /// A verdict is re-judged on the artifact path on every read
+    /// (`VerdictService::current`), so a `denied` judged under `block` is
+    /// served `warned` the moment the registry flips to `warn` — but the
+    /// listing filter reads the stored rows, and a stored `denied` hid the
+    /// version from every fresh resolve, which therefore never reached the
+    /// artifact path that would have re-judged it. Measured by
+    /// `tests/heavy/quarantine.sh` step 5: after the flip, `npm install`
+    /// answered ETARGET forever. Under `warn` the only `denied` the evaluator
+    /// can produce is one carrying an always-denied code (`BLOCK_LIST`,
+    /// `SOC_VERDICT`); any other stored `denied` is stale and served.
+    ///
+    /// The other direction — a stored `warned` under a registry now in
+    /// `block` — is left to the artifact path: the listing names the
+    /// version, the gate refuses it with the finding, and the refusal
+    /// re-judges the row so the next listing agrees. That lag is one request
+    /// long and errs on the side the gate corrects.
+    pub fn hides_from_listings_under(&self, now: DateTime<Utc>, mode: SecurityMode) -> bool {
         match self.state {
             VerdictState::Allowed | VerdictState::Warned => false,
-            VerdictState::Denied => true,
+            VerdictState::Denied => match mode {
+                SecurityMode::Block => true,
+                SecurityMode::Warn => self.reason_codes.iter().any(|c| c.is_always_denied()),
+            },
             VerdictState::Quarantined => {
                 let lifted = !self.reason_codes.is_empty()
                     && self.reason_codes.iter().all(|c| c.is_time_bound())
@@ -511,6 +537,13 @@ pub struct SecurityPolicy {
     pub escalation: HashMap<String, Escalation>,
     /// What the verdict cites as its policy: `<registry>/default`.
     pub policy_ref: String,
+    /// `[registries.security.rescan] interval_secs` (RFC 0018 phase 4):
+    /// a served verdict older than this is scanned again. `None` never
+    /// rescans on a clock — a webhook or an admin still can.
+    pub rescan_interval: Option<Duration>,
+    /// How far back the flip alert and the `pullers` report look
+    /// (`pullers_window_days`, decision 23). Default thirty days.
+    pub pullers_window: Duration,
 }
 
 impl SecurityPolicy {
@@ -530,6 +563,8 @@ impl SecurityPolicy {
             scanner_error: ScannerErrorMode::Quarantine,
             escalation: HashMap::new(),
             policy_ref: format!("{registry}/default"),
+            rescan_interval: None,
+            pullers_window: Duration::from_secs(30 * 86_400),
         }
     }
 }
