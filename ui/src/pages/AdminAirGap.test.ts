@@ -32,6 +32,8 @@ const MISS = {
   registry: "npm-mirror",
   storage_key: "npm-mirror/left-pad/1.3.1/left-pad.tgz",
   kind: "artifact",
+  requested_version: "1.3.1",
+  held_versions: ["1.3.0"],
   first_seen: "2026-09-04T09:00:00Z",
   last_seen: "2026-09-04T11:00:00Z",
   count: 7,
@@ -55,6 +57,9 @@ describe("AdminAirGap", () => {
     const missing = w.find('[data-testid="air-gap-missing"]');
     expect(missing.text()).toContain("npm-mirror/left-pad/1.3.1/left-pad.tgz");
     expect(missing.text()).toContain("7");
+    // RFC 0008-bis §4.4: the version asked for and what was held, side by side.
+    expect(w.find('[data-testid="air-gap-requested"]').text()).toBe("1.3.1");
+    expect(w.find('[data-testid="air-gap-held"]').text()).toBe("1.3.0");
   });
 
   /// An empty miss log means two different things, and the page says which.
@@ -78,9 +83,7 @@ describe("AdminAirGap", () => {
     respond({ items: [] }, { items: [], total: 0, air_gapped: true });
     const w = mount(AdminAirGap, { global: { stubs: { SectionTabs: true } } });
     await flushPromises();
-    expect(w.find('[data-testid="air-gap-no-bundles"]').text()).toMatch(
-      /seeded with|amorcée/i,
-    );
+    expect(w.find('[data-testid="air-gap-no-bundles"]').text()).toMatch(/seeded with|amorcée/i);
   });
 
   /**
@@ -120,8 +123,6 @@ describe("AdminAirGap", () => {
     await flushPromises();
     await w.find('[data-testid="air-gap-copy"]').trigger("click");
     await flushPromises();
-    expect(clipboard).toHaveBeenCalledWith(
-      "npm-mirror\tnpm-mirror/left-pad/1.3.1/left-pad.tgz\t7",
-    );
+    expect(clipboard).toHaveBeenCalledWith("npm-mirror\tnpm-mirror/left-pad/1.3.1/left-pad.tgz\t7");
   });
 });

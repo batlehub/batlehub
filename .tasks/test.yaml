@@ -275,6 +275,11 @@ tasks:
     cmds:
       - bash tests/heavy/openvsx.sh
 
+  test:vsx-login-heavy:
+    desc: "Heavy RFC 0011 §4.4 suite: the local gallery proxy (`batlehub-cli proxy serve`) in front of a credential-only vscode-marketplace registry, driven by the real VS Code 1.96.4 core with product.json repointed — unauthenticated, a search is the one sign-in entry and it installs; after `auth write-token-file` the same editor installs by id and every registry request carries a Bearer (needs DATABASE_URL + network once for the VS Code download)"
+    cmds:
+      - bash tests/heavy/vsx_login.sh
+
   test:conda-heavy:
     desc: "Heavy conda integration: micromamba's `HEAD` probe for repodata.json.zst, and a package published after the compressed channel was warmed (needs DATABASE_URL; downloads micromamba on first run)"
     cmds:
@@ -304,6 +309,11 @@ tasks:
     desc: "Heavy mise integration: `mise install` from a GitHub release through a github registry, the RFC 0019 ref headers on branch, tag and commit archives, and RFC 0008's air gap end to end — plan, seed, export, import into a second `[air_gap]` instance, then install again with egress denied (needs DATABASE_URL + network; anonymous GitHub, ~8 requests)"
     cmds:
       - bash tests/heavy/mise.sh
+
+  test:airgap-heavy:
+    desc: "Heavy air-gap measurement (RFC 0008-bis phase 0): one version of an npm package, a PyPI wheel and a GitHub release asset seeded, exported and imported into a second `[air_gap]` instance, then npm, pip and mise driven against it with egress denied — a version string resolves through a listing and is a 503, a lock (npm ci, a PEP 508 direct reference) resolves nothing and installs; the miss log names the three listings (needs DATABASE_URL + network; anonymous GitHub, ~3 requests)"
+    cmds:
+      - bash tests/heavy/airgap.sh
 
   test:cargo-heavy:
     desc: "Heavy cargo integration (RFC 0018 §4.4): a blocked crate version marked yanked in the sparse index, a pinned Cargo.lock refused at download with 403 and 404, the same CARGO_HOME recovering after the unblock, `cargo publish` to a local registry on 200 and on a rewritten 202 (needs DATABASE_URL + network)"
@@ -372,6 +382,7 @@ tasks:
       - bash tests/heavy/npm.sh
       - bash tests/heavy/pypi.sh
       - bash tests/heavy/openvsx.sh
+      - bash tests/heavy/vsx_login.sh
       - bash tests/heavy/conda.sh
       - bash tests/heavy/nuget.sh
       - bash tests/heavy/composer.sh
@@ -385,5 +396,6 @@ tasks:
       - bash tests/heavy/pathproxy.sh
       - bash tests/heavy/quarantine.sh
       - bash tests/heavy/upstream_audit.sh
+      - bash tests/heavy/airgap.sh
       - task: test:authz-heavy
 

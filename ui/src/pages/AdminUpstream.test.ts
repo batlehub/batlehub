@@ -46,6 +46,8 @@ function page(items: Row[], policy: "audit" | "block" = "audit") {
         registry: "npm",
         missing: items.filter((r) => r.state === "missing").length,
         disappeared: items.filter((r) => r.state === "disappeared").length,
+        policy,
+        overridden: false,
       },
     ],
   };
@@ -151,5 +153,21 @@ describe("AdminUpstream", () => {
       version: "1.3.1",
     });
     expect(w.text()).toMatch(/reappeared/i);
+  });
+});
+
+describe("the registry-tier policy (RFC 0014 §13 O6)", () => {
+  it("shows a registry's own policy beside its counts when it differs from the estate's", async () => {
+    const data = page([], "audit");
+    data.counts = [
+      { registry: "npm1", missing: 0, disappeared: 0, policy: "block", overridden: true },
+      { registry: "npm2", missing: 0, disappeared: 0, policy: "audit", overridden: false },
+    ];
+    serve(data);
+    const w = await mountPage();
+    expect(w.find('[data-testid="upstream-policy"]').text()).toContain("audit");
+    const badges = w.findAll('[data-testid="upstream-count-policy"]');
+    expect(badges).toHaveLength(1);
+    expect(badges[0].text()).toContain("block");
   });
 });

@@ -1,5 +1,7 @@
 pub mod cache;
 pub mod in_memory;
+#[cfg(feature = "registry-cargo")]
+pub mod listing_facts;
 pub mod migrations;
 pub mod notification;
 pub mod rate_limit;

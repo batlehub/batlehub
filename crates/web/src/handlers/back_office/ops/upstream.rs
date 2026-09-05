@@ -193,6 +193,11 @@ pub struct UpstreamRegistryCounts {
     pub registry: String,
     pub missing: u64,
     pub disappeared: u64,
+    /// The policy that applies to this registry (RFC 0014 §13 O6): its own
+    /// `on_confirmed` row when it has one, else the page's `policy`.
+    pub policy: String,
+    /// Whether `policy` is the registry's own row rather than the estate's key.
+    pub overridden: bool,
 }
 
 /// A page of rows (RFC 0014 §4.6).
@@ -280,10 +285,13 @@ pub async fn list_disappeared(
     let mut counts = Vec::with_capacity(audit.registries.len());
     for registry in &audit.registries {
         let (missing, disappeared) = audit.counts(registry).await.map_err(AppError::from)?;
+        let policy = audit.policy_for(registry).await;
         counts.push(UpstreamRegistryCounts {
             registry: registry.clone(),
             missing,
             disappeared,
+            policy: policy.as_str().to_owned(),
+            overridden: policy != audit.policy.on_confirmed,
         });
     }
     Ok(web::Json(UpstreamStatusPage {
@@ -365,10 +373,11 @@ pub async fn get_upstream_status(
         .filter(|r| r.package_name == name)
         .map(UpstreamStatusSummary::from)
         .collect();
+    let policy = audit.policy_for(&registry).await.as_str().to_owned();
     Ok(web::Json(UpstreamPackageStatus {
         registry,
         package_name: name,
-        policy: audit.policy.on_confirmed.as_str().to_owned(),
+        policy,
         rows,
     }))
 }

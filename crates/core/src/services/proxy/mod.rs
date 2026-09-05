@@ -106,6 +106,12 @@ pub enum ProxyResponse {
         response: Box<ProxyResponse>,
         verdict: Box<crate::entities::Verdict>,
     },
+    /// A document composed from what this instance holds, on a route that
+    /// otherwise streams an artifact — a forge's release by tag on an
+    /// air-gapped instance (RFC 0008-bis §4.3). Carries its own content
+    /// type and the `synthesised` count the handler turns into
+    /// `X-BatleHub-Listing`.
+    Document(crate::ports::VersionDocument),
 }
 
 impl ProxyResponse {
@@ -119,6 +125,15 @@ impl ProxyResponse {
     ) -> Result<ArtifactStream, (String, Option<Box<crate::entities::Verdict>>)> {
         match self {
             Self::Stream(stream) | Self::ForgeStream { stream, .. } => Ok(stream),
+            Self::Document(doc) => {
+                let bytes = match doc.body {
+                    crate::ports::DocumentBody::Json(v) => {
+                        bytes::Bytes::from(serde_json::to_vec(&v).unwrap_or_default())
+                    }
+                    crate::ports::DocumentBody::Text(t) => bytes::Bytes::from(t),
+                };
+                Ok(Box::pin(futures::stream::once(async move { Ok(bytes) })))
+            }
             Self::Warned { response, .. } => response.into_stream(),
             Self::Denied { reason, verdict } => Err((reason, verdict)),
         }

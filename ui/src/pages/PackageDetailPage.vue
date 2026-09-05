@@ -1342,7 +1342,11 @@ const {
                confirmed one, and under "block" the block it wrote. -->
           <Badge
             v-if="upstreamRowFor(selectedRow.version)"
-            :variant="upstreamRowFor(selectedRow.version)!.state === 'disappeared' ? 'destructive' : 'copper'"
+            :variant="
+              upstreamRowFor(selectedRow.version)!.state === 'disappeared'
+                ? 'destructive'
+                : 'copper'
+            "
             class="shrink-0"
             :title="t('packageDetailPage.upstreamBadgeHelp')"
             data-testid="upstream-badge"

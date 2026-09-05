@@ -69,6 +69,16 @@ pub struct ContentMiss {
     /// list. Never parsed; it is a label.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coordinate: Option<String>,
+    /// The version the client asked for, when its request named one — an
+    /// artifact's, a forge release by tag. A listing names none (RFC
+    /// 0008-bis §4.4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_version: Option<String>,
+    /// What this instance held of the package at the time: what a
+    /// synthesised listing named. With `requested_version` it is the next
+    /// plan's diff.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub held_versions: Vec<String>,
 }
 
 /// A recorded miss, as the admin surface and the next plan read it.
@@ -84,6 +94,13 @@ pub struct RecordedMiss {
     /// How many times it was asked for. mise retries; this is the number
     /// that tells an operator which gap actually hurts.
     pub count: u64,
+    /// See [`ContentMiss::requested_version`]. The last one asked for, when
+    /// the requests differed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_version: Option<String>,
+    /// See [`ContentMiss::held_versions`], as of the last request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub held_versions: Vec<String>,
 }
 
 /// Which recorded misses to list.
@@ -103,6 +120,17 @@ pub struct AirGapPolicy {
     pub miss_retention_days: u32,
     /// The keys an imported bundle's signature must verify against.
     pub bundle_trusted_keys: Vec<String>,
+    /// Answer a listing this instance does not hold from the versions it
+    /// does hold (RFC 0008-bis). Meaningful only with `enabled`.
+    pub synthesise_listings: bool,
+}
+
+impl AirGapPolicy {
+    /// Whether a listing miss is answered from the held set: the mode is on
+    /// and synthesis was not turned off.
+    pub fn synthesises_listings(&self) -> bool {
+        self.enabled && self.synthesise_listings
+    }
 }
 
 impl Default for AirGapPolicy {
@@ -112,6 +140,7 @@ impl Default for AirGapPolicy {
             record_misses: true,
             miss_retention_days: 90,
             bundle_trusted_keys: Vec::new(),
+            synthesise_listings: true,
         }
     }
 }

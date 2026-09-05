@@ -53,6 +53,8 @@ type Miss = {
   first_seen: string;
   last_seen: string;
   count: number;
+  requested_version?: string | null;
+  held_versions?: string[];
 };
 
 const bundles = ref<Bundle[]>([]);
@@ -188,7 +190,11 @@ onMounted(load);
             </TableRow>
           </TableBody>
         </Table>
-        <p v-else-if="!loading" class="text-sm text-muted-foreground" data-testid="air-gap-no-bundles">
+        <p
+          v-else-if="!loading"
+          class="text-sm text-muted-foreground"
+          data-testid="air-gap-no-bundles"
+        >
           {{ t("airGap.noBundles") }}
         </p>
       </CardContent>
@@ -211,6 +217,8 @@ onMounted(load);
               <TableHead>{{ t("common.registry") }}</TableHead>
               <TableHead>{{ t("airGap.kind") }}</TableHead>
               <TableHead>{{ t("airGap.key") }}</TableHead>
+              <TableHead>{{ t("airGap.requested") }}</TableHead>
+              <TableHead>{{ t("airGap.held") }}</TableHead>
               <TableHead>{{ t("airGap.asked") }}</TableHead>
               <TableHead>{{ t("airGap.lastSeen") }}</TableHead>
             </TableRow>
@@ -222,6 +230,12 @@ onMounted(load);
                 <Badge :variant="kindVariant(m.kind)" class="text-xs">{{ m.kind }}</Badge>
               </TableCell>
               <TableCell class="font-mono text-xs">{{ m.storage_key }}</TableCell>
+              <TableCell class="font-mono text-xs" data-testid="air-gap-requested">
+                {{ m.requested_version ?? "—" }}
+              </TableCell>
+              <TableCell class="font-mono text-xs" data-testid="air-gap-held">
+                {{ m.held_versions?.length ? m.held_versions.join(", ") : "—" }}
+              </TableCell>
               <TableCell class="tabular-nums">{{ m.count }}</TableCell>
               <TableCell class="whitespace-nowrap text-xs tabular-nums">
                 {{ formatDate(m.last_seen) }}
@@ -229,7 +243,11 @@ onMounted(load);
             </TableRow>
           </TableBody>
         </Table>
-        <p v-else-if="!loading" class="text-sm text-muted-foreground" data-testid="air-gap-no-misses">
+        <p
+          v-else-if="!loading"
+          class="text-sm text-muted-foreground"
+          data-testid="air-gap-no-misses"
+        >
           {{ airGapped ? t("airGap.noMisses") : t("airGap.noMissesConnected") }}
         </p>
 

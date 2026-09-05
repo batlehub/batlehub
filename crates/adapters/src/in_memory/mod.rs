@@ -26,7 +26,7 @@ pub mod storage;
 
 pub use advisory::InMemoryAdvisoryRepository;
 pub use air_gap::{InMemoryBundleHistory, InMemoryMissRecorder};
-pub use artifact_meta::NoopArtifactMetaRepository;
+pub use artifact_meta::{InMemoryArtifactMetaRepository, NoopArtifactMetaRepository};
 pub use auth::login_states::InMemoryLoginStateStore;
 pub use auth::user_tokens::NullUserTokenRepository;
 pub use forge::{InMemoryRateLimitBudget, InMemoryRefResolutionRepository};

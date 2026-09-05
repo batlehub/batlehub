@@ -11,6 +11,7 @@ Proxy and cache the Terraform provider and module registry protocol (v1 API), or
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
 | **Private publish** | ✅ module + provider upload |
+| **Air gap** | offline, provider and module `versions` are composed from the held set, and a provider's `download` document for a platform whose archive, `shasums` and `shasums.sig` are all held — the plan must name all three paths — with the publisher's signing keys carried on the bundle's manifest by `mise export`; `terraform init` verifies the publisher's signature as it does connected, and this instance signs nothing. A platform missing any of the three is a `503` |
 
 ## Proxy setup
 

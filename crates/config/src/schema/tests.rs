@@ -3254,20 +3254,24 @@ fn an_undeclared_scanner_and_a_required_scanner_outside_scanners_are_refused() {
     assert!(err.contains("required_scanners"), "{err}");
 }
 
+/// RFC 0018 phase 5 (§13.7): the external scanners ship, so declaring one
+/// is accepted — the refusal that used to stand here was "not before it
+/// ships", and it has.
 #[test]
-fn a_declared_scanner_this_build_cannot_run_is_refused_by_phase() {
-    let err = validation_error(
-        &security_config(
-            r#"        scanners = ["osv", "socket"]"#,
-            r#"
+fn the_phase_5_scanners_load_when_declared() {
+    parse_config(&security_config(
+        r#"        scanners = ["osv", "socket", "mlab"]"#,
+        r#"
         [scanners.socket]
         type = "socket"
         api_key = "k"
+
+        [scanners.mlab]
+        type = "mlab"
         "#,
-        ),
-        "a phase-5 scanner must not be listed before it ships",
-    );
-    assert!(err.contains("phase 5"), "{err}");
+    ))
+    .validate()
+    .expect("the phase-5 scanners are runnable now");
 }
 
 /// RFC 0018 phase 3: the archive and provenance scanners are runnable now.
@@ -3772,4 +3776,117 @@ fn trusted_keys_without_the_mode_are_kept_and_explained() {
     ));
     cfg.validate().expect("valid: this is the staging instance");
     assert!(warning_codes(&cfg).contains(&warnings::AIR_GAP_KEYS_UNUSED.to_owned()));
+}
+
+/// RFC 0014 §13 O6: the registry-tier `on_confirmed` row, held to the
+/// estate key's own rules.
+#[test]
+fn a_registry_tier_on_confirmed_is_validated_like_the_estate_key() {
+    let with = |registry_line: &str, audit: &str| {
+        format!(
+            r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+{registry_line}
+
+        [[registries]]
+        type = "npm"
+        name = "mine"
+        mode = "local"
+
+        [upstream_audit]
+{audit}
+        "#
+        )
+    };
+    // A proxy registry may say block once the audit sweeps it.
+    let cfg = parse_config(&with(
+        r#"        on_confirmed = "block""#,
+        "        enabled = true",
+    ));
+    cfg.validate()
+        .expect("a registry-tier block under an enabled audit");
+    assert_eq!(cfg.registries[0].on_confirmed.as_deref(), Some("block"));
+    // …and warns without the hold, exactly as the estate key does.
+    let cfg = parse_config(&with(
+        r#"        on_confirmed = "block""#,
+        "        enabled = true\n        retain_disappeared = false",
+    ));
+    cfg.validate().unwrap();
+    let codes: Vec<String> = cfg.warnings().iter().map(|w| w.code.clone()).collect();
+    assert!(
+        codes
+            .iter()
+            .any(|c| c == warnings::UPSTREAM_AUDIT_BLOCK_WITHOUT_HOLD),
+        "{codes:?}"
+    );
+    // Audit is always accepted, sweeping or not.
+    parse_config(&with(
+        r#"        on_confirmed = "audit""#,
+        "        enabled = false",
+    ))
+    .validate()
+    .expect("audit is the default and never a lie");
+
+    // Block with nothing sweeping reads as if blocking were active.
+    let err = parse_config(&with(
+        r#"        on_confirmed = "block""#,
+        "        enabled = false",
+    ))
+    .validate()
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("'npm'") && err.contains("not enabled"),
+        "{err}"
+    );
+    // Block on a registry the audit does not sweep.
+    let err = parse_config(&with(
+        r#"        on_confirmed = "block""#,
+        r#"        enabled = true
+        registries = ["mine-too"]"#,
+    ))
+    .validate()
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("mine-too") || err.contains("not audited"),
+        "{err}"
+    );
+    // A typo never falls back.
+    let err = parse_config(&with(
+        r#"        on_confirmed = "blocked""#,
+        "        enabled = true",
+    ))
+    .validate()
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("\"blocked\"") && err.contains("'npm'"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_local_registry_cannot_say_block() {
+    let text = r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+
+        [[registries]]
+        type = "npm"
+        name = "mine"
+        mode = "local"
+        on_confirmed = "block"
+
+        [upstream_audit]
+        enabled = true
+        "#;
+    let err = parse_config(text).validate().unwrap_err().to_string();
+    assert!(
+        err.contains("'mine'") && err.contains("not audited"),
+        "{err}"
+    );
 }

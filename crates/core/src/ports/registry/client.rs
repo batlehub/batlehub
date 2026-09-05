@@ -85,6 +85,13 @@ pub struct VersionDocument {
     /// `proxy_stream`, which served packuments as `application/octet-stream`.
     pub content_type: String,
     pub body: DocumentBody,
+    /// `Some(n)` when this document was not received from upstream but
+    /// composed from the `n` versions this instance holds (RFC 0008-bis
+    /// §4.2). A flag rather than a second type, so every filter and rewrite
+    /// a held document goes through applies to a synthesised one unchanged;
+    /// the response builder turns it into `X-BatleHub-Listing: synthesised`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synthesised: Option<u32>,
 }
 
 impl VersionDocument {
@@ -93,6 +100,7 @@ impl VersionDocument {
         Self {
             content_type: "application/json".to_owned(),
             body: DocumentBody::Json(value),
+            synthesised: None,
         }
     }
 
@@ -101,6 +109,7 @@ impl VersionDocument {
         Self {
             content_type: content_type.into(),
             body: DocumentBody::Text(text.into()),
+            synthesised: None,
         }
     }
 }
@@ -247,6 +256,23 @@ pub trait RegistryClient: Send + Sync {
     /// Stream the raw artifact bytes from the upstream registry, along with any
     /// upstream `Cache-Control` header.
     async fn fetch_artifact(&self, pkg: &PackageId) -> Result<FetchedArtifact, CoreError>;
+
+    /// Ask upstream whether one artifact is still there, without fetching it
+    /// (RFC 0014 §13.5) — a `HEAD` on the file, for the kinds addressed purely
+    /// by path, whose [`Self::resolve_metadata`] answers without asking
+    /// upstream and therefore cannot tell the audit sweep a file has gone.
+    ///
+    /// `Ok(())` when upstream confirms it, [`CoreError::NotFound`] when
+    /// upstream denies it, any other error when upstream could not answer.
+    /// The default is [`CoreError::NotSupported`]: a kind with a metadata
+    /// API is probed through that instead, and a capability gap must read
+    /// as inconclusive, never as absence.
+    async fn probe_artifact(&self, pkg: &PackageId) -> Result<(), CoreError> {
+        Err(CoreError::NotSupported(format!(
+            "{} has no artifact probe: {pkg} is asked about through its metadata",
+            self.registry_type()
+        )))
+    }
 
     /// Return all known version strings for `package`, oldest-first.
     ///

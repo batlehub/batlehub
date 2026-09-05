@@ -697,14 +697,23 @@ async fn main() -> Result<()> {
             };
             // RFC 0014 §4.3, §6.5: under `"block"` the sweep writes through
             // the same service an admin's block goes through, so the block is
-            // in shape and in the audit trail exactly theirs. `with_admin` is
-            // a no-op under `"audit"`.
+            // in shape and in the audit trail exactly theirs. Whether a
+            // registry blocks is decided per registry (§13 O6), so the pen
+            // is always handed over.
             let svc = svc.with_admin(Arc::clone(&admin_svc));
-            if svc.blocks() {
+            let blocking_registries: Vec<&str> = config
+                .registries
+                .iter()
+                .filter(|r| r.on_confirmed.as_deref() == Some("block"))
+                .map(|r| r.name.as_str())
+                .collect();
+            if svc.blocks() || !blocking_registries.is_empty() {
                 // §4.4: the setting that can break a build is said once, at
                 // startup, where an operator reading the log will see it.
                 tracing::info!(
                     blocked_by = batlehub_core::services::upstream_audit::SYSTEM_ACTOR,
+                    estate = %audit.on_confirmed,
+                    registries_blocking = ?blocking_registries,
                     "upstream audit: on_confirmed = \"block\" — a confirmed disappearance is \
                      refused on the wire through the admin block list; a reappearance lifts only \
                      this audit's own blocks"

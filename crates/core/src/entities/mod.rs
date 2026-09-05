@@ -83,7 +83,7 @@ pub use signing_key::SigningKey;
 pub use subject::{Decision, Resource, Subject, Tier};
 pub use team_namespace::{NamespacePackage, TeamNamespace};
 pub use upstream_status::{
-    hold_key, truncate_error, MissObservation, UpstreamKey, UpstreamState, UpstreamStatus,
-    UpstreamStatusFilter, LAST_ERROR_MAX_BYTES,
+    hold_key, truncate_error, MissObservation, OnConfirmed, UpstreamKey, UpstreamState,
+    UpstreamStatus, UpstreamStatusFilter, LAST_ERROR_MAX_BYTES,
 };
 pub use vulnerability::{ArtifactVulnerability, Severity};

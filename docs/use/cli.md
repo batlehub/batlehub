@@ -440,6 +440,8 @@ batlehub-cli auth token create --name <n> [--days <d>] [--role user|admin]
 batlehub-cli auth token revoke <uuid>
 batlehub-cli auth write-token-file [--path <p>] [--from-file <p>]
 batlehub-cli auth status [--path <p>] [--json]
+batlehub-cli proxy serve --registry <url> [--bind 127.0.0.1:0] [--contract <p>]
+                         [--state-dir <d>] [--print-gallery-url]
 ```
 
 ### `auth whoami`
@@ -510,6 +512,46 @@ Every state is a resolution performed **now**, never a cached opinion: a stale
 and a misconfigured source look identical from an editor and want opposite
 fixes, which is why the reason is printed. No output path can emit a
 credential — the row type has no field able to hold one.
+
+### `proxy serve` {#gallery-proxy}
+
+The local gallery proxy ([RFC 0011](/rfc/0011-openvsx-login) §4.4), for an
+editor whose core cannot send a credential — stock VS Code and every build
+of it that reads its gallery from `product.json`. It is a loopback server
+your own CLI runs in front of one BatleHub VSX registry; the editor's
+gallery points at it, and it attaches the credential from the contract
+file, so the editor never holds one.
+
+```
+$ batlehub-cli proxy serve --registry https://hub.example.dev/proxy/vsx
+gallery proxy for https://hub.example.dev/proxy/vsx on 127.0.0.1:41873
+  extensionsGallery.serviceUrl = http://127.0.0.1:41873/9f2c…/vsx/vscode/gallery
+  credential: /home/you/.batlehub/state/vsx-token.json
+  state:      /home/you/.batlehub/state/gallery-proxy.json
+  not signed in: a search shows the sign-in entry until you are
+```
+
+Three things to know:
+
+- **The path is the secret, not the port.** Everything is served under a
+  per-run random segment; anything outside it is a `404`. In a workspace
+  pod loopback is shared by every container, so a proxy on a well-known
+  port would hand your credential to any process in it. `--bind` accepts
+  loopback addresses only. `--print-gallery-url` prints the URL alone, for
+  a startup script that writes it into the editor's `product.json`; the
+  same URL is in `gallery-proxy.json`, mode `0600`.
+- **Signing in is something the editor shows you, not an error it hides.**
+  With no credential a search answers one entry, *Sign in to BatleHub*,
+  whose details are the sign-in steps; a lookup by name answers nothing,
+  so the editor's installed extensions are never marked unavailable. Run
+  `auth login`, then `auth write-token-file`: the proxy re-reads the file
+  on every request, and the next search is the registry's.
+- **Every URL in a gallery answer is rewritten onto the proxy**, so the
+  `.vsix` the editor downloads after you click Install goes through it
+  too, with the credential. A URL on any other origin is left alone.
+
+`tests/heavy/vsx_login.sh` drives the real VS Code core through it, with
+and without a credential.
 
 ### `auth token create`
 

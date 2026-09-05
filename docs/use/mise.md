@@ -177,7 +177,11 @@ batlehub admin bundles
 or the console's **Air gap** page under Operations. The miss log is one row
 per `(registry, key)` with a counter — mise retries, and the log must not
 grow with the retries — sorted most-asked first, which is the order to build
-the next plan in.
+the next plan in. Two columns say what the row means for the next plan:
+**Requested**, the version the client asked for when its request named one
+(mise's release by tag does, so `mise install gh@2.61.0` against an
+instance holding 2.60.0 reads *requested v2.61.0, held v2.60.0*), and
+**Held**, what the instance had of that tool.
 
 A coordinate an administrator **blocked** never appears there. A blocked
 package is not a gap in the mirror, and proposing it for the next bundle
@@ -198,15 +202,19 @@ would be undoing the block by accident.
   still verified locally — it needs nothing but the bytes — and what replaces
   the signature is BatleHub's verdict, recorded when it could be and carried
   across with them.
-- **An install that is not driven by the lock.** A bundle carries artifacts
-  and the entry that finds them, not proxied documents — a release listing, a
-  packument, a flat index. `mise install some-tool@1.2.3` on the disconnected
-  side asks the forge to resolve that version against the release list and
-  gets a `503`, recorded under the `document` kind. The same tool **from
-  `mise.lock`** attempts exactly one URL — the asset the lock names — and that
-  is the one the bundle carries. Keep `lockfile = true` and commit the lock;
-  that is what makes the estate installable offline, and it is why `mise plan`
-  reads the lock rather than the config.
+- **A version the bundle did not carry.** A bundle carries artifacts and
+  the entry that finds them, not the forge's own documents. Since
+  [RFC 0008-bis](/rfc/0008-bis-listings-across-the-gap) the disconnected
+  instance *composes* the release document from the assets it holds, so
+  `mise install some-tool@1.2.3` works without a lock when 1.2.3's asset was
+  bundled — mise reads the release by tag, finds the asset, installs. For a
+  version that was not bundled the release is a `503`, recorded under the
+  `document` kind with the tag as **Requested**, and mise's fallback to the
+  release list finds only the held versions. The lock is still the bill of
+  materials: an install **from `mise.lock`** attempts exactly one URL, the
+  asset the lock names, and `mise plan` reads the lock rather than the
+  config because that is the list the bundle must carry. Keep
+  `lockfile = true` and commit the lock.
 
 ## See also
 

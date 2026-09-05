@@ -363,7 +363,7 @@ alternative is a second event shape for one field.
   "metadata": {
     "first_missed_at": "2026-08-20T04:09:55Z",
     "consecutive_misses": 3,
-    "probe": "version_listing",
+    "probe": "version_listing",   // or "package", "per_version", "artifact" (§13.5)
     "cached_at": "2026-08-11T09:22:31Z",
     "held_from_eviction": true,
     "policy": "block",
@@ -1111,11 +1111,11 @@ empty `Vec`.
 | # | Question | Decision |
 | - | -------- | -------- |
 | O1 | Hold the metadata cache too? | Yes, in phase 5: a `disappeared` row pins the metadata key's stale copy, otherwise motivation 3 returns one layer up. |
-| O2 | Which kinds reach rung 1? | Answered by `upstream_detail()`: 9 by document, 4 by listing, 8 cannot (3 forges, 5 path-proxy). The matrix is generated from the enum, not maintained in `docs/internal/`. |
+| O2 | Which kinds reach rung 1? | Answered by `upstream_detail()`: 9 by document, 4 by listing, 8 cannot (3 forges, 5 path-proxy). The matrix is generated from the enum, not maintained in `docs/internal/`. The five path-proxy kinds reach a rung of their own since §13.5 — a `HEAD` per held file. |
 | O3 | Flip `enabled` default? | Later; unchanged. |
 | O4 | `outage_ratio` on three packages | `min_probed = 10` (a constant, not config): below it the ratio gate is skipped and `confirm_after`/`confirm_min_age` carry the decision, **and** `"block"` is refused under the floor — hold and notify only, the event carrying `policy_downgraded: "small_population"`. The one place the population argument is weak is no longer the one place the destructive arm fires. This was the decision the index said was owed before phase 2. |
 | O5 | Block a freed name | RFC 0002 §13 allows a `version = '*'` sentinel on `Opaque` kinds; a package-level confirmation writes it once 0002 lands. Until then, versions only, as written. |
-| O6 | Per-registry `on_confirmed` | RFC 0015's `policy` table already composes per-tier `rules` and `retention`; `on_confirmed` is a registry-tier policy row, deepest wins. No global key. |
+| O6 | Per-registry `on_confirmed` | RFC 0015's `policy` table already composes per-tier `rules` and `retention`; `on_confirmed` is a registry-tier policy row, deepest wins. Landed §13.6 — with the global key kept as the estate tier the row falls back to, not removed: it is what every operator guide and the heavy suite describe, and "absent means the estate's key" is the same rule `visibility` follows. |
 
 Zero remain open.
 
@@ -1210,7 +1210,7 @@ from the text, each deliberate:
   not as inconclusive. O2's "8 cannot reach rung 1" understated it: they
   reach no rung. The heavy fixture the plan wanted in `pathproxy.sh` is
   therefore an npm directory instead, and a `HEAD` probe for path kinds
-  is a gap this RFC records rather than closes.
+  is a gap this RFC records rather than closes. *Closed in §13.5.*
 
 ### 13.3 Phase 6 landed (2026-09-04)
 
@@ -1250,7 +1250,8 @@ probe both install again. What differs from the text, each deliberate:
 - **`on_confirmed` is still one value for the estate.** §13 O6 decided a
   registry-tier policy row; nothing reads one yet, and the config key is
   what the heavy suite and the operator guide describe. The row is phase
-  7's to add beside the listing, where the console can show it.
+  7's to add beside the listing, where the console can show it. *Landed
+  in §13.6.*
 - **The reconciliation reads the held versions from the sweep's own
   input**, so a package-level row is reconciled against what the cache
   holds *now*: a version evicted since the confirmation is not blocked
@@ -1295,3 +1296,96 @@ things differ from the text:
   page that wants it is the cheaper coupling.
 
 With this, every phase of §12 has landed.
+
+### 13.5 The path-addressed kinds, probed per file (2026-09-05)
+
+§13.2 recorded that `deb`, `rpm`, `pacman`, `jetbrains` and `generic` reach
+no rung: their client's `resolve_metadata` answers without asking upstream,
+so a vanished file read as *present*. Closed, on the status page's
+"path-proxy probe" item, by giving them a rung of their own rather than by
+bending rung 3.
+
+- **A path kind has one package and one version.** Every file is filed
+  under `repo/_` with its upstream path as the artifact selector
+  (`generic.rs`, `repo/mod.rs`), so the sweep's "versions" for such a
+  registry were a list of `_`s — one per file, all the same — and a probe
+  per version had nothing to ask about. The audit now carries **the file's
+  path** as the version for these kinds (`held_version`, read off the
+  artifact key `{registry}/repo/_/{path}`), so a status row, an event and
+  a block name the file.
+- **The probe is a `HEAD`.** `RegistryClient::probe_artifact`, default
+  `NotSupported` — a capability gap stays inconclusive — implemented by
+  `PathProxyRegistryClient` as `HEAD {upstream}/{path}` through the same
+  allowlist as a fetch, with a `GET` whose body is dropped when the server
+  answers `405`/`501`. `404` is the file gone; anything but `2xx` is an
+  upstream that did not answer. `probe_package` takes this rung for
+  `is_path_addressed()` kinds, capped at the same 25 per package per sweep
+  and inconclusive on the first failure to answer, as rung 3 is; the
+  event's `probe` is `"artifact"`.
+- **The block lands on the file.** `audit_coordinate` builds
+  `repo/_` *with the path as the artifact* for these kinds — the exact
+  coordinate a request on the file carries, which `BlockListRule` checks
+  first. A block on the bare `repo/_` would have been every file of the
+  registry: the in-process test asserts the sibling file stays served, and
+  the heavy suite reads it off the route. The unblock on reappearance,
+  the reconciliation pass, the metadata pin and the rescan all address the
+  same coordinate. `recheck` with a `version` selects one file by its path.
+- **What did not change.** The population floor counts what is probed —
+  files, here — and the ratio gate reads as before; `upstream_detail()`
+  still says *no package identity to ask about*, because that method is
+  about the console asking upstream for a package held nowhere, which a
+  path kind still cannot do.
+
+**Measured** (`tests/heavy/upstream_audit.sh` §7, 2026-09-05): the
+suite's served directory configured a second time as a `generic` registry
+with `path_allow = ["**"]`; two files fetched through it with `curl`
+(`tarballs/left-pad-1.3.0.tgz` and `left-pad`, both `200`, both held under
+`repo/_`); the tarball removed from the directory. `recheck` on `repo`:
+probed 1, missing 1, no transition, and the served directory's own log
+shows `HEAD /tarballs/left-pad-1.3.0.tgz`; the second `recheck` confirms,
+and the receiver gets `package_disappeared_upstream` with `package_name:
+"repo"`, `version: "tarballs/left-pad-1.3.0.tgz"`, `probe: "artifact"`,
+`policy: "block"`, `blocked: true`. On the wire the file then answers
+`403` and its sibling `200` — the block is the file's, not the
+registry's. Restored, one `recheck` clears the row, the receiver gets
+`package_reappeared_upstream` with `unblocked: true`, and the file is
+`200` again. In process (`crates/core` and `crates/web/tests/upstream_audit.rs`):
+the row is filed under the path, an upstream that refuses the probe is
+inconclusive, `recheck` selects one file by its path, and the sibling
+route is never refused.
+
+### 13.6 The registry-tier `on_confirmed` (2026-09-05)
+
+§13 O6's row, on the status page's last build item. `on_confirmed` is now a
+field of the policy node (`PolicyNode::on_confirmed`, RFC 0015's tier
+model), written at the registry tier from `[registries] on_confirmed` and
+resolved the way `visibility` is: deepest wins, absent means the tier above
+— and the tier above the registry is the estate's `[upstream_audit]` key,
+which stays. O6 said "no global key"; the key is kept as the estate tier
+rather than removed, because it is what the operator guide, the heavy
+suite and every existing config say, and a row that falls back to it is
+the same rule the other scalars follow.
+
+- **Resolved per registry, at apply time.** `UpstreamAuditService::policy_for`
+  reads the registry's tier row off the hot config and falls back to the
+  estate key; the block arm and the reconciliation pass are gated on it,
+  not on whether the pen was handed over — `with_admin` now always keeps
+  `AdminService`, since a registry-tier `"block"` under an estate-wide
+  `"audit"` needs it. The event's `policy` is the one that applied.
+- **Validated like the estate key.** `"block"` on a registry the audit
+  does not sweep — a local registry, one left out of `[upstream_audit]
+  registries`, or any registry when the audit is off — is refused, and a
+  value other than the two is a typo, never a fallback. One `"block"`
+  anywhere with `retain_disappeared = false` raises §5.4's warning.
+- **Shown where the decision is made.** The listing's page carries the
+  estate's `policy` and, per registry, `policy` and `overridden`; a
+  package's status carries its registry's; the console's policy card puts
+  a badge beside a registry whose row differs, so "audit" at the top is
+  never read as "everywhere". The `upstream-presence` scanner's block flag
+  is the registry's too.
+- **Measured** by `tests/heavy/upstream_audit.sh`, whose estate key is
+  now `"audit"` with `on_confirmed = "block"` on both audited registries:
+  every step §13.3 and §13.5 read off the wire — the `403`s, the lifted
+  blocks, the events saying `policy: "block"` — holds under the
+  registry-tier row, and the admin listing reports the estate as `audit`
+  with both registries overridden to `block`.

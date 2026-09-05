@@ -51,9 +51,9 @@ impl CondaRegistryClient {
 
     pub(super) fn artifact_url(&self, pkg: &PackageId) -> String {
         let base = self.base_url.trim_end_matches('/');
-        let platform = &pkg.version; // version = platform for conda
+        let (platform, artifact) = platform_and_file(pkg);
 
-        match pkg.artifact.as_deref() {
+        match artifact {
             None | Some("repodata.json") => {
                 format!("{base}/{platform}/repodata.json")
             }
@@ -64,6 +64,23 @@ impl CondaRegistryClient {
                 format!("{base}/{platform}/{filename}")
             }
         }
+    }
+}
+
+/// Where a coordinate says which subdir it is in.
+///
+/// The proxy route files a package under its *name and version* — the
+/// coordinate every rule reads, and the one a block is placed on — and
+/// carries the subdir in the artifact selector as `{platform}/{filename}`.
+/// A coordinate whose selector has no `/` is the older shape, `version` =
+/// platform, which the listing routes still use (`repodata` at
+/// `{platform}`); it is read as before. Found by RFC 0008-bis's suite: a
+/// proxied conda download resolved its repodata under the *version* as the
+/// platform and never worked.
+pub(super) fn platform_and_file(pkg: &PackageId) -> (&str, Option<&str>) {
+    match pkg.artifact.as_deref().and_then(|a| a.split_once('/')) {
+        Some((platform, filename)) => (platform, Some(filename)),
+        None => (pkg.version.as_str(), pkg.artifact.as_deref()),
     }
 }
 

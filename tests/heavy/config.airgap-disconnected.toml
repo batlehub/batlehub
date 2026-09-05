@@ -1,0 +1,158 @@
+# The *disconnected* half of the heavy air-gap measurement
+# (tests/heavy/airgap.sh, RFC 0008-bis phase 0). Same three registries as
+# tests/heavy/config.airgap.toml under the same names; its own port and
+# storage, so it starts holding nothing; and `[air_gap]` on, so every
+# registry client it builds is wrapped in one that refuses to dial (RFC 0008
+# §13 decision 1). What the three clients do against it is the measurement.
+
+[server]
+host = "127.0.0.1"
+port = 8120
+# Host-based routing (the Terraform registry's `hosts`) believes the
+# forwarded host only from a trusted peer; the taps sit on the loopback.
+trusted_proxies = ["127.0.0.1/32"]
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-airgap-disconnected-storage"
+
+[air_gap]
+enabled = true
+bundle_trusted_keys = ["${HEAVY_BUNDLE_PUBKEY}"]
+record_misses = true
+miss_retention_days = 90
+# Off for the first half of the suite — RFC 0008's refusal, which is the
+# phase-0 measurement — and flipped to `true` by a hot reload for the
+# second, where the same three commands succeed (RFC 0008-bis phase 1).
+# The suite runs the server on a copy of this file and rewrites the copy.
+synthesise_listings = false
+
+[[registries]]
+type = "github"
+name = "github-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.refs]
+branch_ttl_secs = 10
+tag_ttl_secs = 3600
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "npm"
+name = "npm-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://registry.npmjs.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "pypi"
+name = "pypi-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://pypi.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]
+
+# ── RFC 0008-bis phase 3: the four package registries whose clients the
+# runner has, one held version each, so their listings are composed from it.
+[[registries]]
+type = "cargo"
+name = "cargo-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "goproxy"
+name = "go-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "maven"
+name = "mvn-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://repo1.maven.org/maven2/"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "nuget"
+name = "nuget-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://api.nuget.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "rubygems"
+name = "gems-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://rubygems.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "conda"
+name = "conda-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://conda.anaconda.org/conda-forge"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "terraform"
+name = "tf-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://registry.terraform.io"]
+# Terraform reaches a registry protocol only on a host of its own (its
+# discovery document lives at that host's `/.well-known/`), so the TLS tap
+# the suite puts in front of this instance is bound here. The other
+# clients address 127.0.0.1 and never match.
+hosts = ["localhost"]
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

@@ -462,6 +462,12 @@ jobs:
           # notification asserted at a webhook receiver the suite runs.
           # Needs Node (installed below) and nothing off the runner.
           - suite: upstream_audit
+          # RFC 0008-bis phase 0 — the measurement: npm, pip and mise against
+          # a second `[air_gap]` instance holding one version of each, with
+          # egress denied. Needs Node and mise (installed below), python3
+          # with venv (on the image), and about three anonymous GitHub
+          # requests for the seed.
+          - suite: airgap
     services:
       postgres:
         image: postgres:17-alpine
@@ -502,8 +508,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
 
       # ── Per-ecosystem client setup ──────────────────────────────────────────
-      - name: Set up Node (npm / Open VSX / quarantine / upstream_audit)
-        if: matrix.suite == 'npm' || matrix.suite == 'openvsx' || matrix.suite == 'quarantine' || matrix.suite == 'upstream_audit'
+      - name: Set up Node (npm / Open VSX / quarantine / upstream_audit / airgap)
+        if: matrix.suite == 'npm' || matrix.suite == 'openvsx' || matrix.suite == 'quarantine' || matrix.suite == 'upstream_audit' || matrix.suite == 'airgap'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -527,7 +533,7 @@ jobs:
           sudo unzip -o -q /tmp/terraform.zip -d /usr/local/bin
           terraform version
       - name: Install mise
-        if: matrix.suite == 'mise'
+        if: matrix.suite == 'mise' || matrix.suite == 'airgap'
         run: |
           # From the release archive rather than the `curl | sh` installer:
           # one URL, one version, and nothing else enters the runner.

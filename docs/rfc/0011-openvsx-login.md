@@ -2,7 +2,7 @@
 
 | Field      | Value                                                                  |
 | ---------- | ---------------------------------------------------------------------- |
-| Status     | **In review** — §13's cut landed 2026-09-04 (§14): the credential contract file with its normative JSON Schema, `auth token`/`write-token-file`/`status`, and the editor patch carried in `patches/che-code/`. What remains is what §13 moved out — the loopback proxy, the bootstrap entry and the extension — and it waits on an editor build that cannot repoint its gallery URL, which none of ours currently is. Phases 1–2's server half was already shipped under RFC 0015/0017; the PAT model in the body above is not the shipped one, and §13 says so |
+| Status     | **In review** — §13's cut landed 2026-09-04 (§14): the credential contract file with its normative JSON Schema, `auth token`/`write-token-file`/`status`, and the editor patch carried in `patches/che-code/`. The loopback proxy and the bootstrap entry followed on 2026-09-05 (§14.8), measured against the real VS Code 1.96.4 core with `product.json` repointed — the editor a test *can* repoint. What remains is the `batlehub-vsx` extension and the canary workspace with a real Extensions view. Phases 1–2's server half was already shipped under RFC 0015/0017; the PAT model in the body above is not the shipped one, and §13 says so |
 | Short      | Authenticated OpenVSX access |
 | Settles    | Giving an editor that has no credential hook a way to send one: a contract file that may point at a secret rather than hold it, the pod's own Kubernetes identity, a loopback proxy for editors we do not build, and a sign-in entry in the Extensions view instead of a blank one |
 | Author     | batleforc                                                              |
@@ -1163,10 +1163,11 @@ counted the requests could tell.
 
 ### 14.7 Still cut
 
-Everything §13 moved out stays out: the loopback `proxy serve`, the
-unauthenticated bootstrap entry, the `batlehub-vsx` extension, and
-`auth source`/`auth doctor`. The first three wait on an editor build that
-cannot repoint its gallery URL; the last two are conveniences over a format
+Of what §13 moved out, the loopback `proxy serve` and the unauthenticated
+bootstrap entry landed on 2026-09-05 — §14.8. Still out: the `batlehub-vsx`
+extension and `auth source`/`auth doctor`. The extension waits on an editor
+build whose gallery URL cannot be repointed at all (its fallback-marketplace
+role, phase 8); the last two are conveniences over a format
 whose validation now happens at write time, which was the failure they were
 mostly there to explain.
 
@@ -1175,3 +1176,87 @@ either. `--kubernetes-token-path` ships, and `write-token-file --from-file`
 turns it into the `file` + `reresolve` contract entry the RFC describes, which
 is the part a consumer sees; the audience assertion and `TokenRequest` minting
 remain phase 2's.
+
+### 14.8 The proxy and the bootstrap, against the real editor core (2026-09-05)
+
+§13 deferred phases 3–4 until "a build that cannot repoint its gallery URL
+is actually in front of us". The premise was that no editor here could be
+pointed at a loopback proxy. The recipe §4.4.4 itself used says otherwise
+for a *test*: the stock VS Code download reads `extensionsGallery` from
+`product.json`, that file is editable, and the CLI (`cli.js` under
+`ELECTRON_RUN_AS_NODE`) drives the real `extensionGalleryService`. It is not
+a configuration we can ship — §3's non-goal stands, updates overwrite the
+file — but it is the editor a heavy suite can put in front of the proxy,
+which is what the deferral was waiting for. So phases 3 and 4 are built,
+and `tests/heavy/vsx_login.sh` measures them.
+
+**What is there.** `cli/src/gallery_proxy.rs` — the server: the session
+segment (§4.4.1), the credential read off the contract file on every
+request, the absolute-URL rewrite (§4.4.3), the `filterType` classifier
+and the sign-in entry with its three assets (§4.4.2), and the `.vsix` it
+serves, generated at startup. `cli/src/cli/proxy.rs` — `batlehub-cli proxy
+serve`: loopback-only bind, `--print-gallery-url`, `gallery-proxy.json`
+at `0600`. Unit tests hold every row of §4.4.2's table, and the two
+findings of §4.4.4 — `Code.Engine` mandatory, a package mandatory — are
+regression tests rather than notes.
+
+**What differs from §6.3, each deliberate.**
+
+- **No login surface on the proxy.** §6.3 wanted `/{session}/login` as a
+  PKCE redirect target or a device-code display. §13 recorded that neither
+  flow exists in the shipped CLI — the login is server-brokered — so the
+  sign-in page names the two commands that do, `auth login` then `auth
+  write-token-file`, and the proxy re-reads the contract file on every
+  request. A login lands without a restart, which is the property the
+  page promised; the device code was one way to get it.
+- **The package is generated, not `batlehub-vsx`.** The entry's `.vsix`
+  is a manifest, a readme and nothing else: installing it changes nothing
+  about the editor. §12 phase 7 makes the extension the package; until
+  then the Install button is not a dead end, which is what §4.4.4 found
+  it had to not be.
+- **Every string on the registry's origin is rewritten, not two fields.**
+  §4.4.3 named `assetUri` and `fallbackAssetUri`; the proxy rewrites any
+  string in the document that starts with the registry base, and leaves
+  every other origin alone. Two fields was the measured minimum; a
+  prefix rewrite is what stays true when the document gains a third.
+- **A lookup by name for the entry itself is answered with the entry.**
+  §4.4.2's rule — never on a query by extension name — exists so that
+  startup's lookup of every installed extension is answered empty rather
+  than with an error. The suite's first run found the rule, read
+  literally, made the entry uninstallable: `--install-extension
+  batlehub.sign-in` *is* a `filterType: 7` lookup, and an empty answer is
+  *Extension 'batlehub.sign-in' not found*. The proxy now answers a lookup
+  whose name is the entry's own; every other name stays empty.
+- **The package carries no `activationEvents`.** The second run found the
+  editor's manifest validator refusing the key on an extension with no
+  `main` or `browser` — *Cannot read the extension from …* — so the
+  generated manifest is name, publisher, version and `engines` and nothing
+  that implies code. Read off `--verbose --log trace`, which is the only
+  place the editor says why.
+- **The tap records the credential's scheme.** `http_tap.py` now logs
+  `Authorization: Bearer` when a request carries one — the scheme only,
+  never the value — so the suite can assert that every registry request
+  the proxy forwarded was authenticated and none arrived bare.
+
+**Measured** (`tests/heavy/vsx_login.sh`, VS Code 1.96.4's `cli.js` under
+node, a local `vscode-marketplace` registry whose `anonymous` holds no
+verb, the tap between the proxy and the registry). The registry answers an
+anonymous `extensionquery` with `403` — not the empty `200` §13 assumed of
+a gallery, which holds only where anonymous read is granted — and a
+user's with the one fixture. Unauthenticated, through the proxy: a search
+is `200` with one entry, `batlehub.sign-in`, `Code.Engine` set, and the tap
+saw nothing; `--install-extension batleforc.weebo-bridge-notify` printed
+*Extension 'batleforc.weebo-bridge-notify' not found* and the tap saw
+nothing; `--install-extension batlehub.sign-in` printed *was successfully
+installed* and the entry is listed; a request outside the session segment
+was `404`. Then `auth write-token-file` with the user token, nothing
+restarted: a search through the proxy is `[batleforc.weebo-bridge-notify]`
+with both asset URIs on the proxy; `--install-extension` by id succeeded;
+the tap recorded six registry requests, every one `Authorization: Bearer`
+— two `extensionquery`, two `Code.Manifest`, the `VSIXPackage` with
+`?redirect=true&install=true` — and none without. `auth status` reported
+the entry `ok` and printed no credential. Four runs to green, each a
+finding: the anonymous `403`, the lookup-by-name rule read too literally,
+the manifest validator's `activationEvents`, all recorded above. What this
+does not measure, still: the Extensions view itself, and the che-code build
+with the patch of §14.5.

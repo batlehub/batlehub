@@ -2,7 +2,7 @@
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | **Implemented** — all six phases landed 2026-09-04 (§14), and `tests/heavy/mise.sh` §4 passes: plan, seed, export, import into a second instance running `[air_gap] enabled = true`, then `mise install` completing from the lock with egress denied to both processes. Building it corrected four things this document said about the tree — a storage key is a function of the route and not of the URL, so the server reports the one it used (§14.1); an imported artifact needs the metadata entry that finds it, because metadata resolves before the cache is looked at (§14.2); a forge resolves its ref before it fetches anything, so the resolution has to cross too (§14.4); and `mise.lock` records a quoted platform key and two addresses per asset (§14.5) — and found one defect in shipped code, RFC 0019's release rewrite removing a field the GitHub schema requires (§14.6). §14.8 states what a bundle does not carry: proxied documents, which an `0008-bis` should settle |
+| Status      | **Implemented** — all six phases landed 2026-09-04 (§14), and `tests/heavy/mise.sh` §4 passes: plan, seed, export, import into a second instance running `[air_gap] enabled = true`, then `mise install` completing from the lock with egress denied to both processes. Building it corrected four things this document said about the tree — a storage key is a function of the route and not of the URL, so the server reports the one it used (§14.1); an imported artifact needs the metadata entry that finds it, because metadata resolves before the cache is looked at (§14.2); a forge resolves its ref before it fetches anything, so the resolution has to cross too (§14.4); and `mise.lock` records a quoted platform key and two addresses per asset (§14.5) — and found one defect in shipped code, RFC 0019's release rewrite removing a field the GitHub schema requires (§14.6). §14.8 states what a bundle does not carry: proxied documents, which [RFC 0008-bis](/rfc/0008-bis-listings-across-the-gap) settles |
 | Short       | mise in an air-gapped estate |
 | Settles     | Making `mise install` work with no route off the site: `mise.lock` as the bill of materials, a server that will not dial out, and verification moved to the connected side |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -63,7 +63,7 @@ mise all tools installed          # no egress, checksums verified from mise.lock
 $ mise install some-new-tool
 mise ERROR download failed: 503 from batlehub.corp
       not in this instance: github/jdx/mise-tool@v1.2.0
-$ batlehub-cli admin air-gap missing
+$ batlehub-cli admin air-gap-missing
 github  jdx/mise-tool@v1.2.0   4 requests   first 2026-08-14  last 2026-08-15
 ```
 
@@ -495,7 +495,7 @@ mirror.
   registry/key resolution, the `unsupported` classification from `BACKEND_REGISTRIES` (a backend not
   in that table and not HTTP-fetching lands in `unsupported`), and the `unmirrored_hosts` diff
   against `GET /api/v1/registries`.
-- `batlehub-cli mise seed [--verify]`, `admin bundle export|import`, `admin air-gap missing`.
+- `batlehub-cli mise seed [--verify]`, `admin bundle export|import`, `admin air-gap-missing`.
 - `registry suggest --mise` gains the catch-all rule in its emitted block, behind
   `--mise-catch-all` (`requires = "mise"`, mirroring the existing `--mise-commented`) so an existing
   user's output does not change shape without asking. `render_mise_toml` grows the flag as a fourth
@@ -951,15 +951,17 @@ port and reading which URLs the client attempted:
 A disconnected instance cannot answer a query, so the first is a correct
 `503`; the second resolves nothing, because the lock already holds the URL and
 the checksum, and takes the artifact the bundle carried. §1's claim is about
-the second, and §4.2's first sentence says so.
+the second, and §4.2's first sentence says so. (Measured again on a `503`
+rather than a closed port, by RFC 0008-bis phase 0: the lockless install asks
+for the release *by tag* first and pages the listing only after that fails —
+0008-bis §2 and §13.1. The conclusion is the same; the first URL is not.)
 
 So it is a gap only for a client that resolves through a listing on the
 disconnected side, and the miss log's `document` kind is exactly where that
 shows up: the estate is told what it asked for and did not get, which is what
-turns the next bundle into a list rather than a guess. An `0008-bis` should
-decide whether a bundle carries documents or a disconnected instance answers
-listings from what it holds; neither is attempted here, and §12's phases are
-complete without it.
+turns the next bundle into a list rather than a guess. [RFC 0008-bis](/rfc/0008-bis-listings-across-the-gap) decides it — a
+disconnected instance answers listings from what it holds — and neither is
+attempted here; §12's phases are complete without it.
 
 **Sigstore, and what actually replaces it.** §2's second motivation lists five
 verifiers mise runs by default. Turning them off one at a time on the

@@ -93,6 +93,29 @@ impl ArtifactCacheMeta for PgArtifactMetaRepository {
             .db_err()?;
         Ok(())
     }
+
+    async fn list_registry_artifacts(
+        &self,
+        registry: &str,
+    ) -> Result<Vec<ArtifactMeta>, CoreError> {
+        ArtifactInventory::list_artifacts(self, registry).await
+    }
+
+    async fn list_package_artifacts(
+        &self,
+        registry: &str,
+        package: &str,
+    ) -> Result<Vec<ArtifactMeta>, CoreError> {
+        let rows = sqlx::query(
+            "SELECT artifact_key, registry, package_name, version, size_bytes, cached_at, last_accessed_at FROM artifact_cache_meta WHERE registry = $1 AND package_name = $2 ORDER BY cached_at DESC",
+        )
+        .bind(registry)
+        .bind(package)
+        .fetch_all(&self.pool)
+        .await
+        .db_err()?;
+        Ok(rows.into_iter().map(row_to_meta).collect())
+    }
 }
 
 #[async_trait]

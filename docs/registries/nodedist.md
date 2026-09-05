@@ -11,6 +11,7 @@ Proxy and cache the `nodejs.org/dist` tree as a *typed* registry, so a Node rele
 | **Modes** | proxy-only |
 | **Addressing** | one package (`node`), one version per release, one file per platform |
 | **Private publish** | ❌ proxy-only |
+| **Air gap** | offline, `index.tab` and `index.json` are composed from the held dist files, dated by receipt and with `lts` unknown |
 
 ## Proxy setup
 

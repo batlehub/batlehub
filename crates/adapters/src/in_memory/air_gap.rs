@@ -42,6 +42,10 @@ impl MissRecorder for InMemoryMissRecorder {
             Some(row) => {
                 row.last_seen = now;
                 row.count += 1;
+                if miss.requested_version.is_some() {
+                    row.requested_version = miss.requested_version.clone();
+                }
+                row.held_versions = miss.held_versions.clone();
                 return Ok(());
             }
             None => {
@@ -73,6 +77,8 @@ impl MissRecorder for InMemoryMissRecorder {
                         first_seen: now,
                         last_seen: now,
                         count: 1,
+                        requested_version: miss.requested_version.clone(),
+                        held_versions: miss.held_versions.clone(),
                     },
                 );
             }
@@ -182,7 +188,30 @@ mod tests {
             storage_key: key.to_owned(),
             kind: MissKind::Artifact,
             coordinate: Some(key.to_owned()),
+            requested_version: None,
+            held_versions: Vec::new(),
         }
+    }
+
+    /// RFC 0008-bis §4.4: the version the client asked for survives a later
+    /// request that named none, and the held set is as of the last request.
+    #[tokio::test]
+    async fn the_requested_version_is_kept_and_the_held_set_is_the_latest() {
+        let r = InMemoryMissRecorder::new();
+        let now = Utc::now();
+        let mut first = miss("npm", "left-pad (versions)");
+        first.requested_version = Some("1.2.0".into());
+        first.held_versions = vec!["1.3.0".into()];
+        r.record(&first, now).await.unwrap();
+        let mut second = miss("npm", "left-pad (versions)");
+        second.held_versions = vec!["1.3.0".into(), "1.3.1".into()];
+        r.record(&second, now + chrono::Duration::minutes(1))
+            .await
+            .unwrap();
+        let rows = r.list(&MissFilter::default()).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].requested_version.as_deref(), Some("1.2.0"));
+        assert_eq!(rows[0].held_versions, vec!["1.3.0", "1.3.1"]);
     }
 
     #[tokio::test]

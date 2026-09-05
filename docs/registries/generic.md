@@ -11,6 +11,7 @@ A proxy-only, path-addressed mirror of any plain HTTP file tree — for upstream
 | **Modes** | proxy-only |
 | **Addressing** | path-addressed |
 | **Private publish** | ❌ proxy-only |
+| **Air gap** | no index to compose; a held file is served by path |
 
 ## Proxy setup
 

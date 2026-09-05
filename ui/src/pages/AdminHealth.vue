@@ -194,7 +194,9 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
             data-testid="upstream-card-count"
           >
             {{ c.registry }}:
-            {{ t("adminHealth.upstreamCounts", { missing: c.missing, disappeared: c.disappeared }) }}
+            {{
+              t("adminHealth.upstreamCounts", { missing: c.missing, disappeared: c.disappeared })
+            }}
           </span>
           <RouterLink to="/admin/operations/upstream" class="text-xs underline">
             {{ t("adminHealth.upstreamOpen") }}

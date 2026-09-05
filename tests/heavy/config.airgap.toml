@@ -1,0 +1,141 @@
+# The *connected* half of the heavy air-gap measurement (tests/heavy/airgap.sh,
+# RFC 0008-bis phase 0). Three registries a bundle is built from — a forge for
+# mise, an npm and a PyPI proxy — with the same names as
+# tests/heavy/config.airgap-disconnected.toml, because a bundle names the
+# registry its entries belong to and the two instances have to agree on it.
+# See tests/heavy/config.npm.toml for the env-var conventions.
+
+[server]
+host = "127.0.0.1"
+port = 8110
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-airgap-storage"
+
+# Anonymous GitHub, as in config.mise.toml: the seed spends about three of
+# the sixty requests an hour.
+[[registries]]
+type = "github"
+name = "github-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.refs]
+branch_ttl_secs = 10
+tag_ttl_secs = 3600
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "npm"
+name = "npm-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://registry.npmjs.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "pypi"
+name = "pypi-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://pypi.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]
+
+# ── RFC 0008-bis phase 3: the four package registries whose clients the
+# runner has, one held version each, so their listings are composed from it.
+[[registries]]
+type = "cargo"
+name = "cargo-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "goproxy"
+name = "go-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "maven"
+name = "mvn-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://repo1.maven.org/maven2/"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "nuget"
+name = "nuget-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://api.nuget.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "rubygems"
+name = "gems-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://rubygems.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "conda"
+name = "conda-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://conda.anaconda.org/conda-forge"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "terraform"
+name = "tf-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://registry.terraform.io"]
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

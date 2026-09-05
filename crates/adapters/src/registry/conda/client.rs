@@ -149,11 +149,11 @@ impl RegistryClient for CondaRegistryClient {
 
     async fn resolve_metadata(&self, pkg: &PackageId) -> Result<PackageMetadata, CoreError> {
         let base = self.base_url.trim_end_matches('/');
-        let platform = &pkg.version;
+        let (platform, filename) = super::platform_and_file(pkg);
 
         // For specific package files, look them up in repodata.json.
         if pkg.name != "repodata" {
-            if let Some(filename) = &pkg.artifact {
+            if let Some(filename) = filename {
                 return self
                     .lookup_file_in_repodata(base, platform, filename, pkg)
                     .await;

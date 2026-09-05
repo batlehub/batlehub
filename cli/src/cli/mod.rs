@@ -6,6 +6,7 @@ pub mod download;
 pub mod mise;
 pub mod owner;
 pub mod package;
+pub mod proxy;
 pub mod publish;
 pub mod registry;
 pub mod security;
@@ -72,6 +73,12 @@ pub enum Command {
     Mise {
         #[command(subcommand)]
         cmd: mise::MiseCommand,
+    },
+    /// The local gallery proxy for editors that cannot send a credential
+    /// (RFC 0011 §4.4)
+    Proxy {
+        #[command(subcommand)]
+        cmd: proxy::ProxyCommand,
     },
     /// Publish an artifact to a local/hybrid registry
     Publish(publish::PublishArgs),

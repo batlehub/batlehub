@@ -381,6 +381,7 @@ impl RegistryClient for FixedRegistry {
                           "url": format!("https://files.invalid/{package}-2.0.0b1-py3-none-any.whl") }
                     ]
                 })),
+                synthesised: None,
             }),
 
             ("cargo", DocumentKind::Versions) => Ok(VersionDocument::text(

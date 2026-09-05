@@ -44,6 +44,10 @@ ed25519-dalek = "3"
 regex = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+# The local gallery proxy (RFC 0011 §4.4): a loopback HTTP server, and the
+# `.vsix` it serves for the sign-in entry
+actix-web = { workspace = true }
+zip = { workspace = true }
 
 [dev-dependencies]
 batlehub-web      = { path = "../crates/web" }

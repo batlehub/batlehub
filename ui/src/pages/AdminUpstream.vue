@@ -52,7 +52,14 @@ export interface UpstreamStatusPage {
   per_page: number;
   policy: "audit" | "block";
   registries: string[];
-  counts: { registry: string; missing: number; disappeared: number }[];
+  counts: {
+    registry: string;
+    missing: number;
+    disappeared: number;
+    /** RFC 0014 Â§13 O6: the registry's own `on_confirmed` row, else `policy`. */
+    policy: "audit" | "block";
+    overridden: boolean;
+  }[];
 }
 
 interface RecheckResponse {
@@ -209,10 +216,22 @@ const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : "â€
             <span
               v-for="c in data.counts"
               :key="c.registry"
-              class="font-mono text-xs"
+              class="inline-flex items-center gap-1 font-mono text-xs"
               data-testid="upstream-count"
             >
-              {{ c.registry }}: {{ t("adminUpstream.counts", { missing: c.missing, disappeared: c.disappeared }) }}
+              {{ c.registry }}:
+              {{ t("adminUpstream.counts", { missing: c.missing, disappeared: c.disappeared }) }}
+              <!-- A registry whose own row differs from the estate's key says
+                   so beside its counts (RFC 0014 Â§13 O6), so "block" above
+                   is never read as "everywhere". -->
+              <Badge
+                v-if="c.overridden"
+                :variant="c.policy === 'block' ? 'destructive' : 'secondary'"
+                :title="t('adminUpstream.policyOverride')"
+                data-testid="upstream-count-policy"
+              >
+                {{ t(POLICY_KEYS[c.policy]) }}
+              </Badge>
             </span>
           </CardContent>
         </Card>
@@ -271,10 +290,15 @@ const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : "â€
                 <TableRow v-for="row in data.items" :key="rowKey(row)" data-testid="upstream-row">
                   <TableCell class="font-mono text-xs">
                     <span class="text-muted-foreground">{{ row.registry }}/</span
-                    >{{ row.package_name
-                    }}<span v-if="row.version">@{{ row.version }}</span>
-                    <span v-else class="text-muted-foreground"> {{ t("adminUpstream.wholePackage") }}</span>
-                    <p v-if="row.last_error" class="mt-1 max-w-[48ch] truncate text-muted-foreground" :title="row.last_error">
+                    >{{ row.package_name }}<span v-if="row.version">@{{ row.version }}</span>
+                    <span v-else class="text-muted-foreground">
+                      {{ t("adminUpstream.wholePackage") }}</span
+                    >
+                    <p
+                      v-if="row.last_error"
+                      class="mt-1 max-w-[48ch] truncate text-muted-foreground"
+                      :title="row.last_error"
+                    >
                       {{ row.last_error }}
                     </p>
                   </TableCell>
@@ -295,7 +319,11 @@ const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : "â€
                       data-testid="upstream-recheck"
                       @click="recheck(row)"
                     >
-                      {{ rechecking === rowKey(row) ? t("adminUpstream.rechecking") : t("adminUpstream.recheckButton") }}
+                      {{
+                        rechecking === rowKey(row)
+                          ? t("adminUpstream.rechecking")
+                          : t("adminUpstream.recheckButton")
+                      }}
                     </Button>
                     <p v-if="recheckResult[rowKey(row)]" class="mt-1 text-xs text-muted-foreground">
                       {{ recheckResult[rowKey(row)] }}
@@ -311,7 +339,9 @@ const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : "â€
           <Button size="sm" variant="outline" :disabled="page === 0" @click="page = page - 1">
             {{ t("common.previous") }}
           </Button>
-          <span class="tabular-nums">{{ t("adminUpstream.pageOf", { page: page + 1, count: pageCount }) }}</span>
+          <span class="tabular-nums">{{
+            t("adminUpstream.pageOf", { page: page + 1, count: pageCount })
+          }}</span>
           <Button
             size="sm"
             variant="outline"

@@ -426,6 +426,7 @@
       "audit": "Une disparition confirmée est notée, retenue hors éviction et notifiée. Le service est inchangé.",
       "block": "Une disparition confirmée est aussi bloquée sur le fil ; l'audit lève son propre blocage au retour du paquet, jamais celui d'un admin."
     },
+    "policyOverride": "La ligne on_confirmed propre à ce registre, qui remplace ici la clé de l'instance",
     "policyTitle": "À la confirmation",
     "recheck": {
       "confirmed": "Disparition confirmée",
@@ -487,6 +488,8 @@
     "enabled": "Cette instance est isolée : elle ne compose jamais vers l'extérieur, et chaque manque ci-dessous est à prévoir dans le prochain bundle.",
     "imported": "Importé",
     "key": "Clé",
+    "requested": "Demandée",
+    "held": "Détenues",
     "kind": "Type",
     "lastSeen": "Dernière demande",
     "loadFailed": "Impossible de charger la vue du réseau isolé.",

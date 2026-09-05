@@ -308,6 +308,14 @@ pub struct RegistryConfig {
     /// stop such an instance booting on upgrade. §4.9 warns instead.
     #[serde(default)]
     pub prerelease_visibility: Option<Visibility>,
+    /// RFC 0014 §13 O6 — the registry-tier `on_confirmed`: what the upstream
+    /// audit does with a disappearance confirmed on *this* registry,
+    /// `"audit"` or `"block"`. Deepest wins: set, it overrides
+    /// `[upstream_audit] on_confirmed` for this registry alone; absent, the
+    /// estate's key applies. `"block"` needs the audit enabled and this
+    /// registry audited, which §4.9-style validation checks.
+    #[serde(default)]
+    pub on_confirmed: Option<String>,
     /// Optional artifact signing configuration (local/hybrid mode only).
     #[serde(default)]
     pub signing: Option<SigningConfig>,

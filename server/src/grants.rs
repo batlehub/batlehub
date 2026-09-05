@@ -222,6 +222,10 @@ pub(super) fn build_policy_tiers(reg: &RegistryConfig) -> RegistryPolicyTiers {
     registry.versioning = reg.versioning.as_ref().map(versioning_rules);
     registry.quota = reg.quota.as_ref().map(quota_rules);
     registry.rules = rule_overrides(&reg.rules);
+    // RFC 0014 §13 O6: the registry-tier `on_confirmed`. Validation already
+    // refused anything but the two values, so a parse failure here is
+    // unreachable and reads as "absent".
+    registry.on_confirmed = reg.on_confirmed.as_deref().and_then(|s| s.parse().ok());
 
     let namespaces = reg
         .namespaces

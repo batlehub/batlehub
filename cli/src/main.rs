@@ -2,14 +2,15 @@ mod api;
 mod cli;
 mod config;
 mod contract;
+mod gallery_proxy;
 mod tui;
 
 use anyhow::Result;
 use clap::Parser;
 
 use cli::{
-    admin, auth, authz, config_cmd, download, mise, owner, package, publish, registry, security,
-    setup, version, Cli, Command,
+    admin, auth, authz, config_cmd, download, mise, owner, package, proxy, publish, registry,
+    security, setup, version, Cli, Command,
 };
 use config::ConfigFile;
 
@@ -88,6 +89,7 @@ async fn main() -> Result<()> {
         Command::Owners { cmd } => owner::run(cmd, &client, cli.json).await?,
         Command::Authz { cmd } => authz::run(cmd, &client, cli.json).await?,
         Command::Mise { cmd } => mise::run(cmd, &client, cli.json).await?,
+        Command::Proxy { cmd } => proxy::run(cmd).await?,
         Command::Why(args) => security::run_why(args, &client, cli.json).await?,
         Command::Verdicts { cmd } => security::run_verdicts(cmd, &client, cli.json).await?,
         Command::Wait(args) => {

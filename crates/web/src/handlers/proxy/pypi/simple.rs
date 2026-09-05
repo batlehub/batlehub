@@ -159,9 +159,10 @@ pub async fn pypi_simple_package(
         &proxy_base,
     );
 
-    Ok(HttpResponse::Ok()
-        .content_type(content_type)
-        .body(rewritten))
+    let mut builder = HttpResponse::Ok();
+    builder.content_type(content_type);
+    crate::handlers::proxy::common::listing_headers(&mut builder, &doc);
+    Ok(builder.body(rewritten))
 }
 
 /// The PyPI JSON API — `GET /pypi/{package}/json`.

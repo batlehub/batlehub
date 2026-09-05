@@ -24,6 +24,7 @@ bytes.workspace = true
 chrono.workspace = true
 bzip2 = { version = "0.6", optional = true }
 flate2 = { version = "1", optional = true }
+toml = { workspace = true, optional = true }
 zstd = { version = "0.13", optional = true }
 # Deb/RPM repository hosting (all pure-Rust; none pull the banned `rsa` crate).
 ar = { version = "0.9", optional = true }
@@ -132,7 +133,7 @@ auth-token = []
 cache-redis = ["dep:redis"]
 db-postgres = []
 local-registry = ["db-postgres"]
-registry-cargo = []
+registry-cargo = ["dep:flate2", "dep:tar", "dep:toml"]
 registry-composer = ["dep:zip"]
 registry-forgejo = []
 registry-github = []

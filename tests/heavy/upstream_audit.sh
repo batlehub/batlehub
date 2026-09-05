@@ -360,4 +360,107 @@ heavy_wire_after "unblocked" "GET /proxy/$REG/$PKG/$VERSION/tarball -> 200" \
   || { cat "$HEAVY_WORK/ci-unblocked.err" >&2; heavy_fail "npm ci failed after the audit lifted its block"; }
 heavy_log "UNBLOCK-OK (fresh resolve and pinned install both served again)"
 
+# ── 7. A path-addressed registry: the file is probed by HEAD (§13.5) ───────
+#
+# `generic` files every download under `repo/_` with the path as the
+# artifact, and its client resolves metadata without asking upstream — so
+# until RFC 0014 §13.5 a vanished file read as present. Now each held file
+# is asked about with a `HEAD` on the served directory, the miss is filed
+# under the file's path, the event names it as `version`, and the block
+# lands on the file's own coordinate: the sibling file stays served.
+
+GEN_REG="generic-audited-$HEAVY_RUN"
+GEN_PATH="tarballs/$PKG-$VERSION.tgz"
+GEN_OTHER="$PKG"
+GEN_URL="$HEAVY_TAP_BASE/proxy/$GEN_REG/generic"
+recheck_generic() {
+  admin_post /api/v1/admin/upstream/recheck "{\"registry\":\"$GEN_REG\",\"package_name\":\"repo\"}"
+  [[ "$ADMIN_CODE" == "200" ]] || { cat "$HEAVY_WORK/admin.json" >&2; heavy_fail "recheck of $GEN_REG answered $ADMIN_CODE"; }
+}
+admin_post /api/v1/admin/notifications/subscriptions \
+  "{\"registry\":\"$GEN_REG\",\"package_name\":null,\"event_types\":[\"package_disappeared_upstream\",\"package_reappeared_upstream\"],\"channel_name\":\"sink\"}" \
+  >"$HEAVY_WORK/subscription-generic.json"
+[[ "$ADMIN_CODE" == "200" || "$ADMIN_CODE" == "201" ]] \
+  || { cat "$HEAVY_WORK/subscription-generic.json" >&2; heavy_fail "creating the generic subscription answered $ADMIN_CODE"; }
+
+heavy_mark "generic-seed"
+heavy_log "Two files of the served directory through the generic registry"
+curl -sf -o /dev/null -H "Authorization: Bearer $ADMIN_TOKEN" "$GEN_URL/$GEN_PATH" \
+  || heavy_fail "the generic registry did not serve $GEN_PATH"
+curl -sf -o /dev/null -H "Authorization: Bearer $ADMIN_TOKEN" "$GEN_URL/$GEN_OTHER" \
+  || heavy_fail "the generic registry did not serve $GEN_OTHER"
+heavy_wire_after "generic-seed" "GET /proxy/$GEN_REG/generic/$GEN_PATH -> 200" "the file was not fetched through the proxy"
+heavy_log "GENERIC-SEED-OK (two files held under repo/_)"
+
+heavy_log "Removing $GEN_PATH from the served directory; two probes confirm and block"
+rm -f "$UPSTREAM_DIR/$GEN_PATH"
+FIRST="$(recheck_generic)"
+python3 - "$FIRST" "$GEN_PATH" <<'PY' || { echo "$FIRST" >&2; heavy_fail "the first HEAD probe did not record one miss under the file's path"; }
+import json, sys
+r, path = json.loads(sys.argv[1]), sys.argv[2]
+ok = r["probed"] == 1 and r["missing"] == 1 and r["inconclusive"] == 0 and r["transitions"] == []
+sys.exit(0 if ok else 1)
+PY
+grep -q "HEAD /$GEN_PATH " "$HEAVY_WORK/upstream.log" \
+  || { tail -20 "$HEAVY_WORK/upstream.log" >&2; heavy_fail "the served directory was never asked with HEAD for $GEN_PATH"; }
+SECOND="$(recheck_generic)"
+python3 - "$SECOND" <<'PY' || { echo "$SECOND" >&2; heavy_fail "the second HEAD probe did not confirm"; }
+import json, sys
+r = json.loads(sys.argv[1])
+sys.exit(0 if r["missing"] == 1 and len(r["transitions"]) == 1 else 1)
+PY
+EVENT="$(sink_wait package_disappeared_upstream 3)"
+python3 - "$EVENT" "$GEN_REG" "$GEN_PATH" <<'PY' || { echo "$EVENT" >&2; heavy_fail "the generic event does not name the file as the version with probe=artifact"; }
+import json, sys
+e, reg, path = json.loads(sys.argv[1]), sys.argv[2], sys.argv[3]
+m = e["metadata"]
+ok = e["registry"] == reg and e["package_name"] == "repo" and e["version"] == path \
+    and m["probe"] == "artifact" and m["policy"] == "block" and m["blocked"] is True
+sys.exit(0 if ok else 1)
+PY
+heavy_mark "generic-blocked"
+GEN_CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $ADMIN_TOKEN" "$GEN_URL/$GEN_PATH")"
+[[ "$GEN_CODE" == "403" ]] || heavy_fail "the confirmed file answered $GEN_CODE, expected 403"
+OTHER_CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $ADMIN_TOKEN" "$GEN_URL/$GEN_OTHER")"
+[[ "$OTHER_CODE" == "200" ]] || heavy_fail "the sibling file answered $OTHER_CODE — the block landed on repo/_, every file of the registry"
+heavy_wire_after "generic-blocked" "GET /proxy/$GEN_REG/generic/$GEN_PATH -> 403" "the blocked file was not refused on the wire"
+heavy_log "GENERIC-BLOCK-OK (the vanished file 403, its sibling 200)"
+
+heavy_log "Restoring $GEN_PATH; one probe clears the row and lifts the block"
+cp "$FIXTURE_DIR/$GEN_PATH" "$UPSTREAM_DIR/$GEN_PATH"
+LIFTED="$(recheck_generic)"
+python3 - "$LIFTED" <<'PY' || { echo "$LIFTED" >&2; heavy_fail "the probe after the restore did not clear the file's row"; }
+import json, sys
+r = json.loads(sys.argv[1])
+sys.exit(0 if r["missing"] == 0 and len(r["transitions"]) == 1 else 1)
+PY
+EVENT="$(sink_wait package_reappeared_upstream 3)"
+python3 - "$EVENT" "$GEN_PATH" <<'PY' || { echo "$EVENT" >&2; heavy_fail "the generic reappearance does not say the block was lifted"; }
+import json, sys
+e, path = json.loads(sys.argv[1]), sys.argv[2]
+sys.exit(0 if e["version"] == path and e["metadata"]["unblocked"] is True else 1)
+PY
+heavy_mark "generic-unblocked"
+GEN_CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $ADMIN_TOKEN" "$GEN_URL/$GEN_PATH")"
+[[ "$GEN_CODE" == "200" ]] || heavy_fail "the restored file answered $GEN_CODE, expected 200"
+heavy_log "GENERIC-UNBLOCK-OK (a path-addressed file: probed by HEAD, confirmed, blocked as itself, released)"
+
+# ── 8. The policy the admin API reports is the registry's own (§13 O6) ────
+#
+# The estate key in this suite's config is "audit"; both registries say
+# "block" for themselves. Everything above was read off the wire under that
+# row, and the listing says which is which.
+PAGE_CODE="$(curl -sS -o "$HEAVY_WORK/upstream-page.json" -w '%{http_code}' -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_BASE/api/v1/admin/upstream/disappeared")"
+[[ "$PAGE_CODE" == "200" ]] || { cat "$HEAVY_WORK/upstream-page.json" >&2; heavy_fail "the upstream listing answered $PAGE_CODE"; }
+python3 - "$HEAVY_WORK/upstream-page.json" "$REG" "$GEN_REG" <<'PY' || { cat "$HEAVY_WORK/upstream-page.json" >&2; heavy_fail "the listing does not report the estate as audit and both registries as block (0014 §13 O6)"; }
+import json, sys
+page, npm_reg, gen_reg = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3]
+assert page["policy"] == "audit", page["policy"]
+by = {c["registry"]: c for c in page["counts"]}
+for r in (npm_reg, gen_reg):
+    assert by[r]["policy"] == "block" and by[r]["overridden"] is True, by[r]
+print("policy: estate=audit, overridden to block on", sorted(by))
+PY
+heavy_log "POLICY-TIER-OK (estate audit, both registries block by their own row)"
+
 heavy_done UPSTREAM-AUDIT-HEAVY-OK

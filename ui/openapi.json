@@ -22380,6 +22380,13 @@
             "type": "string",
             "format": "date-time"
           },
+          "held_versions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "See [`ContentMiss::held_versions`], as of the last request."
+          },
           "kind": {
             "$ref": "#/components/schemas/MissKind"
           },
@@ -22389,6 +22396,13 @@
           },
           "registry": {
             "type": "string"
+          },
+          "requested_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "See [`ContentMiss::requested_version`]. The last one asked for, when\nthe requests differed."
           },
           "storage_key": {
             "type": "string"
@@ -23750,7 +23764,9 @@
         "required": [
           "registry",
           "missing",
-          "disappeared"
+          "disappeared",
+          "policy",
+          "overridden"
         ],
         "properties": {
           "disappeared": {
@@ -23762,6 +23778,14 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "overridden": {
+            "type": "boolean",
+            "description": "Whether `policy` is the registry's own row rather than the estate's key."
+          },
+          "policy": {
+            "type": "string",
+            "description": "The policy that applies to this registry (RFC 0014 §13 O6): its own\n`on_confirmed` row when it has one, else the page's `policy`."
           },
           "registry": {
             "type": "string"

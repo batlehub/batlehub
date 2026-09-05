@@ -766,6 +766,7 @@ deny_missing_timestamp = false   # set true to block packages with no timestamp
 | `broker_url` | string | no | **sdkman only.** The download broker, the second host of the one protocol. Defaults to `https://broker.sdkman.io`; `upstreams` is the candidates API (`https://api.sdkman.io/2`). An absolute http(s) URL; rejected on any other type ([RFC 0010](/rfc/0010-toolchain-managers) §4.5). |
 | `storage` | string | no | Name of the storage backend. Must match a `[[storage.backends]]` name. Omit to use the default backend. |
 | `path_allow` | string[] | no | Glob allowlist of upstream paths this registry may serve. Only valid for the path-addressed types (`deb`, `rpm`, `pacman`, `jetbrains`, `generic`) — using it elsewhere is a config error. **Required and non-empty for `generic`.** Use `["**"]` to allow everything deliberately. |
+| `on_confirmed` | string | no | RFC 0014 §13 O6 — what the upstream audit does with a disappearance confirmed on *this* registry, `"audit"` or `"block"`. Overrides `[upstream_audit] on_confirmed` for this registry alone; absent, the estate's key applies. `"block"` needs the audit enabled and this registry audited, or the config is refused. |
 | `vuln_db_url` | string | no | **goproxy only.** Upstream URL for the Go Vulnerability Database. Default: `https://vuln.go.dev`. Set to `""` to disable the `/v1/` endpoints. See [Vulnerability Proxy](/use/vulnerability-proxy#_1-go-—-govulncheck-go-vulnerability-database). |
 | `sumdb_url` | string | no | **goproxy only.** Upstream URL for the Go checksum database. Default: `https://sum.golang.org`. Set to `""` to disable `/sumdb/{path}` — do that for a registry serving only private modules, where a lookup would leak private module paths to a public log. |
 | `upstream_auth` | table | no | Credentials sent on every upstream request. See [upstream auth](#upstream_auth). |
@@ -2199,7 +2200,7 @@ Scheduled sweeps are audited as `cache_coherence_run` with `user_id = "system"`
 
 ---
 
-### 3.8c `[upstream_audit]` (optional)
+### 3.8c `[upstream_audit]` (optional) {#upstream-audit}
 
 A periodic sweep that asks each proxy or hybrid upstream whether the artifacts
 cached from it still exist, confirms a disappearance across several sweeps
@@ -2228,7 +2229,7 @@ registries           = []       # empty = every proxy/hybrid registry
 | `confirm_after` | u32 | `3` | Consecutive misses, each in a valid sweep, before a disappearance is believed. `0` is refused. |
 | `confirm_min_age_secs` | u64 | `86400` | The other floor: at least this long since the first miss. Both must clear, so with the defaults the fastest confirmation is 24 h. Lowering only `interval_secs` buys more probes and the same answer. |
 | `outage_ratio` | f64 | `0.25` | A sweep in which more than this fraction of a registry's probed packages came back missing is **void**: nothing recorded, nothing confirmed. An outage affects nearly everything; an unpublish affects one thing. Must be in `(0.0, 1.0]`. Below ten probed packages the ratio is skipped and the two floors carry the decision alone. |
-| `on_confirmed` | string | `"audit"` | What a confirmation does beyond recording, holding and notifying. `"block"` also blocks every held version of the name through the admin block list (`blocked_by = system:upstream-audit`), and lifts *its own* block when the package reappears — never an admin's. Any other value is a config error rather than a fallback. See the paragraph below before choosing `"block"`, and the [operations page](/operations/upstream-disappearance) for what it looks like from the console. |
+| `on_confirmed` | string | `"audit"` | What a confirmation does beyond recording, holding and notifying, for every audited registry that does not say otherwise. `"block"` also blocks every held version of the name through the admin block list (`blocked_by = system:upstream-audit`), and lifts *its own* block when the package reappears — never an admin's. Any other value is a config error rather than a fallback. A registry overrides this for itself with its own `on_confirmed` (RFC 0014 §13 O6; deepest wins) — auto-block a public upstream, audit-only an internal mirror. See the paragraph below before choosing `"block"`, and the [operations page](/operations/upstream-disappearance) for what it looks like from the console. |
 | `retain_disappeared` | bool | `true` | Hold a confirmed artifact back from the TTL, idle and keep-latest-N eviction passes, and re-pin its cached metadata each sweep. **Not** from the LRU size cap: that exists to stop the disk filling, so held artifacts sort last there instead of being exempt. |
 | `skip_recently_seen` | bool | `true` | A package re-cached from upstream since the last sweep started was demonstrably present; its probe is skipped. |
 | `registries` | string[] | `[]` | Only these registries. Empty means every registry in `proxy` or `hybrid` mode. Naming an unknown or a `local` registry is a config error. |
@@ -2253,7 +2254,9 @@ admin lifts them or the package reappears.
 **How a sweep decides.** Per registry: every cached package is probed — one
 listing request per package on the kinds that have a listing document, one
 request per version (25 at most per package per sweep) on the kinds that do
-not; an upstream that fails to answer is *inconclusive* and counts on neither
+not, and one `HEAD` per held file on the path-addressed kinds (`deb`, `rpm`,
+`pacman`, `jetbrains`, `generic`), whose rows and blocks then name the file's
+path; an upstream that fails to answer is *inconclusive* and counts on neither
 side of the ratio. A miss inserts or increments a row; a successful probe
 deletes it outright, never decrements it. A confirmed row is logged at `WARN`
 with the coordinate and the misses, appears in the `batlehub_upstream_*`
@@ -2461,7 +2464,7 @@ require_for = ["npm"]                # PROVENANCE_MISSING on these kinds; elsewh
 | `trivy` | now | `endpoint`, `timeout_secs` | The Trivy **client**, against the server at `endpoint` (the chart's `trivy.enabled` deploys one) or its own database when empty. Scans the CycloneDX SBOM this instance already recorded for the artifact, else the extracted archive. Findings: `VULNERABILITY` with the CVE as reference. |
 | `guarddog` | now | `command`, `ecosystems` | DataDog GuardDog on npm, PyPI and Go archives, under the same sandbox. Optional second opinion; not in the default profile. The rule-to-finding mapping is by rule family and is *read, not observed* until the worker image runs it. |
 | `sigstore` | now | `rekor_url`, `require_for` | npm provenance: the attestations the packument announces for the version are fetched and every transparency-log entry they cite is looked up in Rekor. `PROVENANCE_MISSING` on the kinds in `require_for`, `PROVENANCE_INVALID` when a cited entry is not in the log. An existence-and-inclusion check, not a full Sigstore verification. |
-| `socket`, `mlab` | RFC 0018 phase 5 | `api_key` | Same. `mlab` only enriches other findings and is refused in `required_scanners` (`security.enrichment-required`). |
+| `socket`, `mlab` | RFC 0018 phase 5 | `api_key` for `socket` | `socket` is refused at load without one (a `401` nobody reads otherwise); `mlab`'s CVE API answers unauthenticated, so its key is a rate-limit courtesy rather than a requirement. `mlab` only enriches other findings and is refused in `required_scanners` (`security.enrichment-required`). |
 
 | `[worker]` field | Type | Default | Notes |
 |---|---|---|---|
@@ -2559,6 +2562,7 @@ and `config_version` does not move.
 [air_gap]
 enabled             = true
 bundle_trusted_keys = ["3b1f…"]   # hex ed25519 public keys accepted on import
+synthesise_listings = true        # answer a listing from what this instance holds
 record_misses       = true
 miss_retention_days = 90
 ```
@@ -2567,6 +2571,7 @@ miss_retention_days = 90
 |---|---|---|---|
 | `enabled` | bool | `false` | No proxy-mode registry attempts an upstream connection. A cache hit is served exactly as today; a miss is an immediate `503` naming the registry and coordinate, not a connect error some seconds later. |
 | `bundle_trusted_keys` | string[] | `[]` | Hex-encoded 32-byte ed25519 public keys whose signature an imported bundle must carry. **Required** when `enabled`: an instance whose only content path is unauthenticated is worse than one with no content path. |
+| `synthesise_listings` | bool | `true` | A listing this instance holds no document for — the packument `npm install` reads, the simple page `pip` reads, the release a pinned `mise install` asks for — is composed from the versions it *does* hold and answered `200` with `X-BatleHub-Listing: synthesised` (RFC 0008-bis). Every version such a listing names is served by the next request; a version it does not hold is not named, so the client stops by itself (`ETARGET`, "no matching distribution") instead of retrying a `503`. Composed for npm's packument, PyPI's simple page (PEP 691 JSON and PEP 503 HTML), cargo's sparse index (from the crate's own manifest, read at import), Go's `@v/list`, `@latest` and `.info`, `maven-metadata.xml`, NuGet's flat index, GitHub, Forgejo and GitLab releases (listing and by tag), nodedist's `index.tab`/`index.json`, SDKMAN's `versions/all`, RubyGems' compact index, conda's `repodata.json`, NuGet's registration page and Composer's `p2` (the last four from facts the import reads out of the package). Terraform is not composed and stays a `503`. `false` is RFC 0008's behaviour: every unheld listing a `503` and a recorded miss. Read only under `enabled`. |
 | `record_misses` | bool | `true` | Record what was asked for and not held, one row per `(registry, key)` with a counter. This record is the input to the next bundle. |
 | `miss_retention_days` | u32 | `90` | How long a recorded miss is kept. `0` keeps it until purged by hand. |
 
@@ -2579,16 +2584,21 @@ at boot rather than discover from a log:
 | `enabled = true` with `warm_packages` or `warm_paths` on any registry | Warming fetches from an upstream this mode guarantees will never be dialled. Seed with a bundle instead. |
 | `enabled = true` with `bundle_trusted_keys = []` | Import would accept any bundle. |
 | A `bundle_trusted_keys` entry that is not 64 hex characters | An unusable key must not read as "signing is configured". |
+| `synthesise_listings = true` with `enabled = false` | The key has no effect on a connected instance and reads as if this one answered listings offline. |
 
 The same hex check now applies to every registry's
 `[registries.signing].trusted_keys`, which had none: a typo there used to
 surface as a `502` on the first download and named nothing.
 
-**Warned about**, because both are legitimate and neither means what it looks
+**Warned about**, because each is legitimate and none means what it looks
 like: a hybrid registry under `enabled = true` behaves as local (its
-fall-through can never reach upstream — `air-gap.hybrid-registry`), and
+fall-through can never reach upstream — `air-gap.hybrid-registry`);
 `bundle_trusted_keys` on a connected instance authorise imports only, which
-is how a bundle is staged (`air-gap.keys-unused`).
+is how a bundle is staged (`air-gap.keys-unused`); and a `deb`, `rpm`,
+`pacman`, `jetbrains` or `generic` registry under `enabled = true` gets no
+synthesised index — a signed `Packages` file cannot be re-signed here — so
+its listing stays a `503` while a held file is served by path
+(`air-gap.listing-not-synthesised`).
 
 **What an operator sees.** A miss is `503` with
 `{"code": "content_unavailable", "registry", "coordinate", "bundle_hint"}`;

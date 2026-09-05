@@ -313,6 +313,11 @@ impl ProxyService {
         // that commit so the cache, the metadata and the rules all see the
         // SHA. Everything below this line is unchanged for every other kind.
         let coordinate = req.package_id.clone();
+        // Kept past the move below for the one path that answers after the
+        // resolved request has failed: a forge release composed from the
+        // held assets (RFC 0008-bis), which still has to be authorised.
+        let identity = req.identity.clone();
+        let action = req.action;
         let resolved = match self.resolve_forge_ref(&mut req).await {
             Ok(r) => r,
             Err(e) => return Err(self.record_if_missing(e, &coordinate, MissKind::Ref).await),
@@ -330,9 +335,31 @@ impl ProxyService {
             // in the mirror. Only the offline client's refusal reaches this
             // arm; every other error passes through untouched.
             Err(e) => {
+                if let Some(answer) = self
+                    .synthesised_artifact_document(&coordinate, &identity, action, &e)
+                    .await
+                {
+                    return Ok(answer);
+                }
+                // A forge release by tag, Go's `.info`: a document about one
+                // version, served through this route; its miss is filed as
+                // one, under the package, naming the version (RFC 0008-bis
+                // §4.4) — not as an artifact under a key nothing will ever
+                // be stored at.
+                if let Some(key) = self.document_by_version_key(&coordinate).await {
+                    return Err(self
+                        .record_miss(
+                            e,
+                            &coordinate,
+                            MissKind::Document,
+                            Some(key),
+                            Some(coordinate.version.clone()),
+                        )
+                        .await);
+                }
                 return Err(self
                     .record_if_missing(e, &coordinate, MissKind::Artifact)
-                    .await)
+                    .await);
             }
         };
         Ok(match (response, resolved) {
@@ -372,6 +399,33 @@ impl ProxyService {
         coordinate: &crate::entities::PackageId,
         kind: MissKind,
     ) -> CoreError {
+        // An artifact, a ref or a checksum request names its version; a
+        // listing does not, and a placeholder version (`__simple__`,
+        // `releases`) is not one.
+        let requested = match kind {
+            MissKind::Artifact | MissKind::Ref | MissKind::Checksum => {
+                Some(coordinate.version.clone())
+                    .filter(|v| !v.is_empty() && !v.starts_with("__") && v != "releases")
+            }
+            MissKind::Document | MissKind::UnmirroredHost => None,
+        };
+        self.record_miss(error, coordinate, kind, None, requested)
+            .await
+    }
+
+    /// [`Self::record_if_missing`] with the row's shape chosen by the caller:
+    /// the storage key to file it under (the error's own when `None`) and
+    /// the version the request named. The held set of the package is read
+    /// under synthesis, so the row says what the listing the client saw
+    /// had offered (RFC 0008-bis §4.4).
+    async fn record_miss(
+        &self,
+        error: CoreError,
+        coordinate: &crate::entities::PackageId,
+        kind: MissKind,
+        storage_key: Option<String>,
+        requested_version: Option<String>,
+    ) -> CoreError {
         let CoreError::ContentUnavailable { registry, key } = &error else {
             return error;
         };
@@ -397,16 +451,68 @@ impl ProxyService {
         let Some(recorder) = recorder else {
             return error;
         };
+        let held_versions = self
+            .held_version_names(&coordinate.registry, &coordinate.name)
+            .await;
         let miss = crate::entities::ContentMiss {
             registry: registry.clone(),
-            storage_key: key.clone(),
+            storage_key: storage_key.unwrap_or_else(|| key.clone()),
             kind,
             coordinate: Some(coordinate.cache_key()),
+            requested_version,
+            held_versions,
         };
         if let Err(e) = recorder.record(&miss, chrono::Utc::now()).await {
             tracing::warn!(key = %key, error = %e, "air gap: could not record the miss");
         }
         error
+    }
+
+    /// The distinct versions this instance holds of a package, newest first —
+    /// what a synthesised listing named — or nothing when listings are not
+    /// synthesised, in which case the client saw no listing to compare with.
+    async fn held_version_names(&self, registry: &str, name: &str) -> Vec<String> {
+        if !self.hot.read().await.air_gap.synthesises_listings() {
+            return Vec::new();
+        }
+        let mut versions: Vec<String> = crate::services::listing_synthesis::held_versions(
+            self.artifact_meta.as_ref(),
+            self.cache.as_ref(),
+            registry,
+            name,
+        )
+        .await
+        .into_iter()
+        .map(|h| h.version)
+        .collect();
+        versions.sort_by(|a, b| crate::services::version_order::newest_first(a, b));
+        versions.dedup();
+        versions
+    }
+
+    /// The miss key of a by-version document — a forge release by tag,
+    /// Go's `.info` — when the coordinate is one, else `None`
+    /// (`listing_synthesis::is_document_by_version`).
+    async fn document_by_version_key(
+        &self,
+        coordinate: &crate::entities::PackageId,
+    ) -> Option<String> {
+        let kind = {
+            let hot = self.hot.read().await;
+            let client = hot.registries.get(&coordinate.registry)?;
+            client
+                .registry_type()
+                .parse::<crate::entities::RegistryKind>()
+                .ok()?
+        };
+        crate::services::listing_synthesis::is_document_by_version(
+            kind,
+            &coordinate.version,
+            coordinate.artifact.as_deref(),
+        )
+        .then(|| {
+            crate::services::listing_synthesis::document_by_version_key(kind, &coordinate.name)
+        })
     }
 
     /// The administrator's reason for blocking this coordinate, if they did.
@@ -827,14 +933,22 @@ impl ProxyService {
             .await
         {
             Ok(d) => d,
-            // A listing an air-gapped instance does not hold is the other
-            // half of RFC 0008's record: the next bundle needs the document
-            // as much as the bytes.
-            Err(e) => {
-                return Err(self
-                    .record_if_missing(e, &req.package_id, MissKind::Document)
-                    .await)
-            }
+            // A listing an air-gapped instance does not hold is answered
+            // from what it does hold (RFC 0008-bis) — through the same
+            // filters below as a fetched one — and, where nothing can be
+            // composed, is the other half of RFC 0008's record: the next
+            // bundle needs the document as much as the bytes.
+            Err(e) => match self
+                .synthesised_listing(&prelude, req, name, doc_kind, public_base, &e)
+                .await
+            {
+                Some(doc) => doc,
+                None => {
+                    return Err(self
+                        .record_if_missing(e, &req.package_id, MissKind::Document)
+                        .await)
+                }
+            },
         };
 
         let kind = prelude.client.registry_type().parse().unwrap_or_else(|_| {
@@ -877,6 +991,161 @@ impl ProxyService {
         self.metrics.record_listing_read(&req.package_id.registry);
 
         Ok(doc)
+    }
+
+    /// RFC 0008-bis §5.1: a listing this instance holds no document for,
+    /// composed from the versions it does hold. `None` — the `503` of RFC
+    /// 0008 — unless the miss is the offline client's, the mode is on with
+    /// synthesis, something is held, and the kind has a shape to render.
+    async fn synthesised_listing(
+        &self,
+        prelude: &RequestPrelude,
+        req: &ProxyRequest,
+        name: &str,
+        doc_kind: DocumentKind,
+        public_base: &str,
+        error: &CoreError,
+    ) -> Option<VersionDocument> {
+        if !matches!(error, CoreError::ContentUnavailable { .. }) {
+            return None;
+        }
+        if !self.hot.read().await.air_gap.synthesises_listings() {
+            return None;
+        }
+        let kind: crate::entities::RegistryKind = prelude.client.registry_type().parse().ok()?;
+        if crate::services::listing_synthesis::is_registry_wide(kind, doc_kind) {
+            let held = crate::services::listing_synthesis::held_registry(
+                self.artifact_meta.as_ref(),
+                self.cache.as_ref(),
+                &req.package_id.registry,
+            )
+            .await;
+            let doc =
+                crate::services::listing_synthesis::render_registry(kind, doc_kind, name, &held)?;
+            tracing::info!(
+                registry = %req.package_id.registry,
+                document = %doc_kind.as_str(),
+                held = held.len(),
+                "air gap: registry-wide listing synthesised from the held set"
+            );
+            return Some(doc);
+        }
+        let held = crate::services::listing_synthesis::held_versions_of(
+            self.artifact_meta.as_ref(),
+            self.cache.as_ref(),
+            &req.package_id.registry,
+            &crate::services::listing_synthesis::package_names_for(kind, name),
+        )
+        .await;
+        let doc =
+            crate::services::listing_synthesis::render(kind, doc_kind, name, &held, public_base)?;
+        tracing::info!(
+            registry = %req.package_id.registry,
+            package = %name,
+            document = %doc_kind.as_str(),
+            held = held.len(),
+            "air gap: listing synthesised from the held set"
+        );
+        Some(doc)
+    }
+
+    /// RFC 0008-bis §4.3: a document about one version, on a route that
+    /// streams bytes — a forge release by tag (the document a pinned `mise
+    /// install` asks for first, §13.1), Go's `@v/{v}.info` — composed from
+    /// the held set.
+    ///
+    /// The resolved path failed before its rules ran, so they run here on a
+    /// minimal metadata for the coordinate — the grant check, the block
+    /// list, the registry's rule chain — and a refusal is a refusal, not a
+    /// listing. The URLs are left for the handler to point home, as it does
+    /// for the forge's own document.
+    async fn synthesised_artifact_document(
+        &self,
+        coordinate: &crate::entities::PackageId,
+        identity: &crate::entities::Identity,
+        action: Action,
+        error: &CoreError,
+    ) -> Option<ProxyResponse> {
+        if !matches!(error, CoreError::ContentUnavailable { .. }) {
+            return None;
+        }
+        let (kind, policy) = {
+            let hot = self.hot.read().await;
+            if !hot.air_gap.synthesises_listings() {
+                return None;
+            }
+            let client = hot.registries.get(&coordinate.registry)?;
+            let kind: crate::entities::RegistryKind = client.registry_type().parse().ok()?;
+            (kind, hot.policies.get(&coordinate.registry).cloned())
+        };
+        if !crate::services::listing_synthesis::is_document_by_version(
+            kind,
+            &coordinate.version,
+            coordinate.artifact.as_deref(),
+        ) {
+            return None;
+        }
+        let held = crate::services::listing_synthesis::held_versions(
+            self.artifact_meta.as_ref(),
+            self.cache.as_ref(),
+            &coordinate.registry,
+            &coordinate.name,
+        )
+        .await;
+        let doc = crate::services::listing_synthesis::render_artifact_document(
+            kind,
+            &coordinate.name,
+            &coordinate.version,
+            &held,
+            "",
+        )?;
+        if let Err(e) =
+            crate::services::authz::authorize_grants_public(&self.hot, coordinate, identity, action)
+                .await
+        {
+            return Some(ProxyResponse::Denied {
+                reason: e.to_string(),
+                verdict: None,
+            });
+        }
+        if let Some(reason) = self.blocked_reason(coordinate).await {
+            return Some(ProxyResponse::Denied {
+                reason,
+                verdict: None,
+            });
+        }
+        let metadata = crate::entities::PackageMetadata::minimal(
+            coordinate.clone(),
+            serde_json::json!({ "tag_name": coordinate.version, "synthesised": true }),
+        );
+        let empty: Vec<Box<dyn crate::rules::Rule>> = vec![];
+        let rules = policy
+            .as_ref()
+            .map(|p| p.rules.as_slice())
+            .unwrap_or(empty.as_slice());
+        let ctx = RuleContext {
+            identity,
+            package: &metadata,
+            action,
+            cache_entry: None,
+            requested_version: Some(&coordinate.version),
+        };
+        let (decision, verdict) =
+            crate::services::verdict::with_request_verdict(evaluate_rules(rules, &ctx)).await;
+        if let RuleDecision::Deny { reason } = decision {
+            return Some(ProxyResponse::Denied {
+                reason,
+                verdict: verdict.map(Box::new),
+            });
+        }
+        tracing::info!(
+            registry = %coordinate.registry,
+            package = %coordinate.name,
+            version = %coordinate.version,
+            held = doc.synthesised.unwrap_or(0),
+            "air gap: by-version document composed from the held set"
+        );
+        Some(ProxyResponse::Document(doc))
     }
 
     /// One package's blocked versions, normalised for its protocol, **failing
@@ -1072,9 +1341,27 @@ impl ProxyService {
             .await?;
 
         let name = req.package_id.name.as_str();
-        let mut doc = self
+        // A registry-wide listing an air-gapped instance does not hold is
+        // composed from everything it holds (RFC 0008-bis §13.6) — a conda
+        // subdir's `repodata.json` — and, where nothing can be, is RFC
+        // 0008's recorded miss, as for a per-package listing.
+        let mut doc = match self
             .cached_version_document(&prelude, req, name, doc_kind)
-            .await?;
+            .await
+        {
+            Ok(d) => d,
+            Err(e) => match self
+                .synthesised_listing(&prelude, req, name, doc_kind, public_base, &e)
+                .await
+            {
+                Some(doc) => doc,
+                None => {
+                    return Err(self
+                        .record_if_missing(e, &req.package_id, MissKind::Document)
+                        .await)
+                }
+            },
+        };
 
         let kind = prelude
             .client

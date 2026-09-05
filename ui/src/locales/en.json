@@ -426,6 +426,7 @@
       "audit": "A confirmed disappearance is recorded, held back from eviction and notified. Serving is unchanged.",
       "block": "A confirmed disappearance is also blocked on the wire; the audit lifts its own block when the package reappears, never an admin's."
     },
+    "policyOverride": "This registry's own on_confirmed row, which overrides the estate's key here",
     "policyTitle": "On confirmation",
     "recheck": {
       "confirmed": "Confirmed gone",
@@ -487,6 +488,8 @@
     "enabled": "This instance is air-gapped: it never dials out, and every miss below is something the next bundle needs.",
     "imported": "Imported",
     "key": "Key",
+    "requested": "Requested",
+    "held": "Held",
     "kind": "Kind",
     "lastSeen": "Last asked",
     "loadFailed": "The air-gap view could not be loaded.",

@@ -260,6 +260,8 @@ pub async fn terraform_provider_download(
 
     let mut resp = HttpResponse::Ok();
     resp.content_type("application/json");
+    // A document composed from the held set says so (RFC 0008-bis §13.7).
+    crate::handlers::proxy::common::listing_headers(&mut resp, &doc);
     mark_uncacheable_if_signed(&mut resp, signed);
     Ok(resp.body(match doc.body {
         batlehub_core::ports::DocumentBody::Json(v) => {

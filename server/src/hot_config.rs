@@ -505,10 +505,14 @@ pub(super) fn build_hot_bundle(
                         Arc::clone(repo),
                         Arc::clone(vuln_repo),
                         Arc::clone(sbom_repo),
-                        security_stores
-                            .upstream_status
-                            .as_ref()
-                            .map(|s| (Arc::clone(s), cfg.upstream_audit.on_confirmed == "block")),
+                        security_stores.upstream_status.as_ref().map(|s| {
+                            // RFC 0014 §13 O6: the registry's own row first.
+                            let policy = reg
+                                .on_confirmed
+                                .as_deref()
+                                .unwrap_or(&cfg.upstream_audit.on_confirmed);
+                            (Arc::clone(s), policy == "block")
+                        }),
                         security_stores.advisories.clone(),
                         reg_clients.get(&reg.name).map(Arc::clone),
                     )
@@ -617,6 +621,7 @@ pub(super) fn build_hot_bundle(
                 record_misses: a.record_misses,
                 miss_retention_days: a.miss_retention_days,
                 bundle_trusted_keys: a.bundle_trusted_keys.clone(),
+                synthesise_listings: a.synthesises_listings(),
             })
             .unwrap_or_default(),
         miss_recorder: air_gap_stores.miss_recorder.clone(),

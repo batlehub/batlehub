@@ -73,37 +73,10 @@ pub struct BlockOutcome {
     pub kept_admin_block: bool,
 }
 
-/// What a confirmed disappearance does beyond the row (`[upstream_audit]
-/// on_confirmed`, RFC 0014 §4.3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum OnConfirmed {
-    /// Record, hold, notify. The default, and the whole of phases 1–5.
-    #[default]
-    Audit,
-    /// …and refuse the version on the wire through the admin block list
-    /// (phase 6).
-    Block,
-}
-
-impl OnConfirmed {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Audit => "audit",
-            Self::Block => "block",
-        }
-    }
-}
-
-impl std::str::FromStr for OnConfirmed {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "audit" => Ok(Self::Audit),
-            "block" => Ok(Self::Block),
-            other => Err(format!("unknown on_confirmed policy '{other}'")),
-        }
-    }
-}
+/// What a confirmed disappearance does beyond the row (RFC 0014 §4.3).
+/// Lives with the entities since §13 O6 made it a policy-node field; kept
+/// under this path for every caller that spells it `services::OnConfirmed`.
+pub use crate::entities::OnConfirmed;
 
 /// §4.3's reason string on a block this audit writes.
 fn block_reason(row: &UpstreamStatus) -> String {
@@ -119,6 +92,54 @@ fn block_reason(row: &UpstreamStatus) -> String {
 
 /// A registry's cached packages: name → (cached versions, newest `cached_at`).
 pub type CachedPackages = HashMap<String, (Vec<String>, DateTime<Utc>)>;
+
+/// The one synthetic package and version every path-addressed kind files
+/// its files under (`generic.rs`, `repo/mod.rs`): the coordinate is
+/// `repo/_` and the file's upstream path is the artifact selector.
+pub const PATH_KIND_PACKAGE: &str = "repo";
+pub const PATH_KIND_VERSION: &str = "_";
+
+/// The "version" the audit carries for one inventory row (RFC 0014 §13.5):
+/// the version itself for every kind with a package identity, and for a
+/// path-addressed kind the file's upstream path, read off the artifact key
+/// `{registry}/repo/_/{path}` — there is one version (`_`) for every file
+/// of such a registry, and a probe per "version" would ask about nothing.
+/// `None` for a row of a path kind whose key is not of that shape.
+pub fn held_version(kind: RegistryKind, row: &crate::ports::ArtifactMeta) -> Option<String> {
+    if !kind.is_path_addressed() {
+        return Some(row.version.clone());
+    }
+    let key = row
+        .artifact_key
+        .strip_prefix("artifact:")
+        .unwrap_or(&row.artifact_key);
+    let prefix = format!(
+        "{}/{}/{}/",
+        row.registry, PATH_KIND_PACKAGE, PATH_KIND_VERSION
+    );
+    key.strip_prefix(&prefix)
+        .filter(|p| !p.is_empty())
+        .map(str::to_owned)
+}
+
+/// The coordinate a held "version" is blocked, pinned and rescanned under:
+/// the version for a kind with a package identity, and `repo/_` with the
+/// file as the artifact selector for a path-addressed kind — the coordinate
+/// a request on that file actually carries, which a block must match
+/// exactly (`BlockListRule` widens to the bare version, and `_` is every
+/// file of the registry).
+pub fn audit_coordinate(
+    kind: RegistryKind,
+    registry: &str,
+    name: &str,
+    version: &str,
+) -> PackageId {
+    if kind.is_path_addressed() {
+        PackageId::new(registry, name, PATH_KIND_VERSION).with_artifact(version)
+    } else {
+        PackageId::new(registry, name, version)
+    }
+}
 
 /// Below this many probed packages the ratio gate is skipped (RFC 0014 §13
 /// O4): one package *is* a quarter of a four-package registry, and the
@@ -271,18 +292,47 @@ impl UpstreamAuditService {
         self
     }
 
-    /// Block through `admin` under `on_confirmed = "block"` (RFC 0014 §4.3,
-    /// §6.5). Ignored under `"audit"`.
+    /// The pen the block arm writes with. Always kept: whether a
+    /// confirmation blocks is decided per registry at apply time
+    /// ([`Self::policy_for`]), and a registry-tier `"block"` under an
+    /// estate-wide `"audit"` needs it as much as the reverse does not.
     pub fn with_admin(mut self, admin: Arc<AdminService>) -> Self {
-        if self.policy.on_confirmed == OnConfirmed::Block {
-            self.admin = Some(admin);
-        }
+        self.admin = Some(admin);
         self
     }
 
-    /// Whether this service blocks on confirmation.
+    /// Whether the *estate's* key is `"block"` — the default a registry
+    /// inherits when its own tier says nothing.
     pub fn blocks(&self) -> bool {
-        self.admin.is_some()
+        self.admin.is_some() && self.policy.on_confirmed == OnConfirmed::Block
+    }
+
+    /// The policy that applies to `registry` (RFC 0014 §13 O6): its
+    /// registry-tier row when it has one, deepest wins, else the estate's
+    /// `[upstream_audit] on_confirmed`.
+    pub async fn policy_for(&self, registry: &str) -> OnConfirmed {
+        let hot = self.hot.read().await;
+        hot.policy_tiers
+            .get(registry)
+            .and_then(|tiers| tiers.registry.on_confirmed)
+            .unwrap_or(self.policy.on_confirmed)
+    }
+
+    /// Whether a confirmation on `registry` is blocked on the wire.
+    pub async fn blocks_for(&self, registry: &str) -> bool {
+        self.admin.is_some() && self.policy_for(registry).await == OnConfirmed::Block
+    }
+
+    /// The kind of each audited registry, from the hot config.
+    async fn kinds(&self) -> HashMap<String, RegistryKind> {
+        let hot = self.hot.read().await;
+        self.registries
+            .iter()
+            .filter_map(|r| {
+                let kind = hot.registries.get(r)?.registry_type().parse().ok()?;
+                Some((r.clone(), kind))
+            })
+            .collect()
     }
 
     /// Sweep every audited registry. One registry's failure is reported and
@@ -297,18 +347,25 @@ impl UpstreamAuditService {
                 return SweepReport::default();
             }
         };
+        let kinds = self.kinds().await;
         // registry → package → (versions, newest cached_at)
         let mut by_registry: HashMap<String, CachedPackages> = HashMap::new();
         for row in all {
             if !self.registries.contains(&row.registry) {
                 continue;
             }
+            let Some(kind) = kinds.get(&row.registry) else {
+                continue;
+            };
+            let Some(version) = held_version(*kind, &row) else {
+                continue;
+            };
             let entry = by_registry
                 .entry(row.registry)
                 .or_default()
                 .entry(row.package_name)
                 .or_insert_with(|| (Vec::new(), row.cached_at));
-            entry.0.push(row.version);
+            entry.0.push(version);
             entry.1 = entry.1.max(row.cached_at);
         }
         let mut report = SweepReport::default();
@@ -392,17 +449,24 @@ impl UpstreamAuditService {
             self.notify_void(&report);
         } else {
             let outcomes_by_row = self
-                .act(registry, secured, &report.transitions, &applied.disappeared)
+                .act(
+                    registry,
+                    kind,
+                    secured,
+                    &report.transitions,
+                    &applied.disappeared,
+                )
                 .await;
             // §6.5: a confirmation that crashed between the status write and
             // the block is reconciled by the next sweep — every `disappeared`
             // row is re-checked against the block table, on every sweep.
-            self.reconcile(registry, &held_versions).await;
+            self.reconcile(registry, kind, &held_versions).await;
             let probes: HashMap<&str, &'static str> = outcomes
                 .iter()
                 .map(|(name, _, (outcome, _))| (name.as_str(), probe_name(kind, outcome)))
                 .collect();
-            self.notify_transitions(&report, &probes, &cached_at, &outcomes_by_row);
+            let effective = self.policy_for(registry).await;
+            self.notify_transitions(&report, effective, &probes, &cached_at, &outcomes_by_row);
         }
         report.duration = clock.elapsed();
         report
@@ -412,10 +476,18 @@ impl UpstreamAuditService {
     /// `disappeared` row of the registry whose versions are not all blocked
     /// gets blocked now. Idempotent, and what makes turning the policy on
     /// with existing confirmed rows do the obvious thing.
-    async fn reconcile(&self, registry: &str, held: &HashMap<String, Vec<String>>) {
+    async fn reconcile(
+        &self,
+        registry: &str,
+        kind: RegistryKind,
+        held: &HashMap<String, Vec<String>>,
+    ) {
         let Some(admin) = &self.admin else {
             return;
         };
+        if self.policy_for(registry).await != OnConfirmed::Block {
+            return;
+        }
         let rows = match self
             .status
             .list(UpstreamStatusFilter {
@@ -437,7 +509,7 @@ impl UpstreamAuditService {
                 None => held.get(&row.package_name).cloned().unwrap_or_default(),
             };
             for v in versions {
-                let id = PackageId::new(registry, &row.package_name, &v);
+                let id = audit_coordinate(kind, registry, &row.package_name, &v);
                 match admin.repo.get_status(&id).await {
                     Ok(PackageStatus::Blocked { .. }) => {}
                     Ok(_) => {
@@ -465,6 +537,7 @@ impl UpstreamAuditService {
     fn notify_transitions(
         &self,
         report: &RegistryReport,
+        effective: OnConfirmed,
         probes: &HashMap<&str, &'static str>,
         cached_at: &HashMap<String, DateTime<Utc>>,
         outcomes: &[BlockOutcome],
@@ -510,7 +583,7 @@ impl UpstreamAuditService {
                 "probe": probes.get(row.package_name.as_str()).copied().unwrap_or("none"),
                 "cached_at": cached_at.get(&row.package_name),
                 "versions": versions,
-                "policy": self.policy.on_confirmed.as_str(),
+                "policy": effective.as_str(),
                 "sweep": sweep,
             });
             match kind {
@@ -567,18 +640,19 @@ impl UpstreamAuditService {
     async fn act(
         &self,
         registry: &str,
+        kind: RegistryKind,
         secured: bool,
         transitions: &[Transition],
         disappeared: &[UpstreamStatus],
     ) -> Vec<BlockOutcome> {
         if self.policy.retain_disappeared {
             for row in disappeared {
-                self.pin_metadata(row).await;
+                self.pin_metadata(kind, row).await;
             }
         }
         let mut outcomes = Vec::with_capacity(transitions.len());
         for t in transitions {
-            outcomes.push(self.apply_block_policy(registry, t).await);
+            outcomes.push(self.apply_block_policy(registry, kind, t).await);
         }
         if !secured {
             return outcomes;
@@ -593,7 +667,7 @@ impl UpstreamAuditService {
                 }
             };
             for v in versions {
-                let id = PackageId::new(registry, &row.package_name, v);
+                let id = audit_coordinate(kind, registry, &row.package_name, v);
                 // With the version's date when the metadata cache still has
                 // it: the worker's age gate reads it, and a rescan without
                 // one would re-judge a dated version as `TIMESTAMP_MISSING`.
@@ -621,16 +695,24 @@ impl UpstreamAuditService {
     /// every write succeeded. A reappearance unblocks a version only when
     /// the block is this service's own — an admin's block, or one this
     /// service wrote and an admin then edited, stays, and the event says so.
-    async fn apply_block_policy(&self, registry: &str, t: &Transition) -> BlockOutcome {
+    async fn apply_block_policy(
+        &self,
+        registry: &str,
+        kind: RegistryKind,
+        t: &Transition,
+    ) -> BlockOutcome {
         let Some(admin) = &self.admin else {
             return BlockOutcome::default();
         };
+        if self.policy_for(registry).await != OnConfirmed::Block {
+            return BlockOutcome::default();
+        }
         let identity = system_identity();
         match t {
             Transition::Confirmed(row, versions) => {
                 let mut all = true;
                 for v in versions {
-                    let id = PackageId::new(registry, &row.package_name, v);
+                    let id = audit_coordinate(kind, registry, &row.package_name, v);
                     if let Err(e) = admin.block_package(&id, block_reason(row), &identity).await {
                         tracing::warn!(package = %id, error = %e, "upstream audit: block failed");
                         all = false;
@@ -648,7 +730,7 @@ impl UpstreamAuditService {
                 let mut outcome = BlockOutcome::default();
                 let mut lifted = 0usize;
                 for v in versions {
-                    let id = PackageId::new(registry, &row.package_name, v);
+                    let id = audit_coordinate(kind, registry, &row.package_name, v);
                     match admin.repo.get_status(&id).await {
                         Ok(PackageStatus::Blocked { blocked_by, .. })
                             if blocked_by == SYSTEM_ACTOR =>
@@ -685,7 +767,7 @@ impl UpstreamAuditService {
     /// listing forgets the version one layer above the artifact the hold
     /// keeps. Package-level rows pin every cached version's entry through
     /// the version rows the sweep also wrote; here, the one the row names.
-    async fn pin_metadata(&self, row: &UpstreamStatus) {
+    async fn pin_metadata(&self, kind: RegistryKind, row: &UpstreamStatus) {
         let Some(cache) = &self.cache else {
             return;
         };
@@ -695,7 +777,7 @@ impl UpstreamAuditService {
         if row.state != UpstreamState::Disappeared {
             return;
         }
-        let id = PackageId::new(&row.registry, &row.package_name, version);
+        let id = audit_coordinate(kind, &row.registry, &row.package_name, version);
         let key = crate::services::proxy::proxy_meta_key(&id);
         match cache.get_stale(&key).await {
             Ok(Some(entry)) => {
@@ -735,15 +817,28 @@ impl UpstreamAuditService {
                 "registry '{registry}' is not audited ([upstream_audit] registries)"
             )));
         }
+        let Some(kind) = self.kinds().await.get(registry).copied() else {
+            return Err(CoreError::NotFound(format!(
+                "registry '{registry}' has no client to probe with"
+            )));
+        };
         let mut packages: CachedPackages = HashMap::new();
         for row in self.inventory.list_artifacts(registry).await? {
-            if row.package_name != package || version.is_some_and(|v| row.version != v) {
+            if row.package_name != package {
+                continue;
+            }
+            // For a path kind the "version" is the file's path (§13.5), so
+            // `version` selects one file.
+            let Some(held) = held_version(kind, &row) else {
+                continue;
+            };
+            if version.is_some_and(|v| held != v) {
                 continue;
             }
             let entry = packages
                 .entry(row.package_name)
                 .or_insert_with(|| (Vec::new(), row.cached_at));
-            entry.0.push(row.version);
+            entry.0.push(held);
             entry.1 = entry.1.max(row.cached_at);
         }
         if packages.is_empty() {

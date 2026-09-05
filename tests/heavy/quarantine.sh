@@ -166,26 +166,6 @@ export NPM_CONFIG_FUND=false NPM_CONFIG_AUDIT=false NPM_CONFIG_UPDATE_NOTIFIER=f
 
 heavy_log "npm $(npm --version), node $(node --version)"
 
-# heavy_wire_re_after <mark> <regex> [explanation] — like heavy_wire_after
-# with a regex, for the lines that carry headers after the status: the
-# assertion is about the verdict on the answer, not only the status. The
-# tarball path is the one this server writes into the packument
-# (`{name}/{version}/tarball`), not npm's own `{name}/-/{name}-{v}.tgz`.
-heavy_wire_re_after() {
-  local label="$1" re="$2" explanation="${3:-}"
-  awk -v mark="### $label" -v re="$re" '
-    index($0, mark) == 1 { seen = 1; next }
-    seen && $0 ~ re { found = 1 }
-    END { exit found ? 0 : 1 }' "$HEAVY_LOG" \
-    || heavy_fail "${explanation:-no request matching /$re/ after mark \"$label\"}"
-}
-heavy_wire_count_after() {  # mark, regex → count on stdout
-  awk -v mark="### $1" -v re="$2" '
-    index($0, mark) == 1 { seen = 1; next }
-    seen && $0 ~ re { n++ }
-    END { print n + 0 }' "$HEAVY_LOG"
-}
-
 # sink_wait <event_type> <count> [seconds] — the receiver's log holds
 # exactly <count> deliveries of that type within the wait; echoes the last.
 sink_wait() {

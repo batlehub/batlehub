@@ -121,6 +121,36 @@ impl RegistryClient for PathProxyRegistryClient {
         })
     }
 
+    /// RFC 0014 §13.5: `HEAD` on the file. A server that refuses `HEAD`
+    /// (`405`, `501`) is asked with `GET` and the body dropped unread — the
+    /// question is whether the file is there, not what is in it.
+    async fn probe_artifact(&self, pkg: &PackageId) -> Result<(), CoreError> {
+        let path = Self::upstream_path(pkg)?;
+        self.check_path_allowed(path)?;
+        let url = format!("{}/{}", self.base_url, path);
+        tracing::debug!(url = %url, "probing {} artifact", self.registry_type);
+
+        let mut req = self.http.head(&url);
+        if let Some((user, pass)) = &self.basic_auth {
+            req = req.basic_auth(user, Some(pass));
+        }
+        let mut resp = req.send().await.map_err(to_registry_error)?;
+        if matches!(
+            resp.status(),
+            reqwest::StatusCode::METHOD_NOT_ALLOWED | reqwest::StatusCode::NOT_IMPLEMENTED
+        ) {
+            resp = basic_auth_get(&self.http, &self.basic_auth, &url)
+                .send()
+                .await
+                .map_err(to_registry_error)?;
+        }
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(CoreError::NotFound(format!("{path} not found upstream")));
+        }
+        resp.error_for_status().map_err(to_registry_error)?;
+        Ok(())
+    }
+
     async fn fetch_artifact(&self, pkg: &PackageId) -> Result<FetchedArtifact, CoreError> {
         let path = Self::upstream_path(pkg)?;
         self.check_path_allowed(path)?;
@@ -308,5 +338,88 @@ mod tests {
             Err(CoreError::AccessDenied(_)) => {}
             other => panic!("expected AccessDenied, got {:?}", other.map(|_| "ok")),
         }
+    }
+
+    #[tokio::test]
+    async fn probe_is_a_head_that_reads_presence_and_absence() {
+        let mut server = mockito::Server::new_async().await;
+        let there = server
+            .mock("HEAD", "/dists/stable/Release")
+            .with_status(200)
+            .create_async()
+            .await;
+        let gone = server
+            .mock("HEAD", "/pool/main/x/x_1.0_amd64.deb")
+            .with_status(404)
+            .create_async()
+            .await;
+        let client =
+            PathProxyRegistryClient::new("deb", server.url(), &UpstreamHttpOptions::default())
+                .unwrap();
+        let file = |path: &str| PackageId::new("deb1", "repo", "_").with_artifact(path);
+        assert!(client
+            .probe_artifact(&file("dists/stable/Release"))
+            .await
+            .is_ok());
+        assert!(matches!(
+            client
+                .probe_artifact(&file("pool/main/x/x_1.0_amd64.deb"))
+                .await,
+            Err(CoreError::NotFound(_))
+        ));
+        there.assert_async().await;
+        gone.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn a_server_that_refuses_head_is_asked_with_get() {
+        let mut server = mockito::Server::new_async().await;
+        let head = server
+            .mock("HEAD", "/node/v20.0.0/node-v20.0.0-linux-x64.tar.gz")
+            .with_status(405)
+            .create_async()
+            .await;
+        let get = server
+            .mock("GET", "/node/v20.0.0/node-v20.0.0-linux-x64.tar.gz")
+            .with_status(200)
+            .with_body("bytes")
+            .create_async()
+            .await;
+        let client =
+            PathProxyRegistryClient::new("generic", server.url(), &UpstreamHttpOptions::default())
+                .unwrap();
+        let pkg = PackageId::new("g", "repo", "_")
+            .with_artifact("node/v20.0.0/node-v20.0.0-linux-x64.tar.gz");
+        assert!(client.probe_artifact(&pkg).await.is_ok());
+        head.assert_async().await;
+        get.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn an_upstream_that_cannot_answer_the_probe_is_not_an_absence() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("HEAD", "/x")
+            .with_status(503)
+            .create_async()
+            .await;
+        let client =
+            PathProxyRegistryClient::new("rpm", server.url(), &UpstreamHttpOptions::default())
+                .unwrap();
+        let pkg = PackageId::new("r", "repo", "_").with_artifact("x");
+        assert!(matches!(
+            client.probe_artifact(&pkg).await,
+            Err(CoreError::Registry(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn the_probe_honours_the_path_allowlist_before_any_request() {
+        let client = generic_with_allow(&["node/**"]);
+        let pkg = PackageId::new("g", "repo", "_").with_artifact("secret/keys.txt");
+        assert!(matches!(
+            client.probe_artifact(&pkg).await,
+            Err(CoreError::AccessDenied(_))
+        ));
     }
 }

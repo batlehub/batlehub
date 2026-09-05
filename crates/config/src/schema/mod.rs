@@ -2537,9 +2537,10 @@ impl AppConfig {
     fn validate_security_globals(&self) -> Result<()> {
         for (name, cfg) in &self.scanners {
             match cfg {
-                ScannerConfig::Socket { api_key, .. } | ScannerConfig::Mlab { api_key, .. }
-                    if api_key.as_deref().is_none_or(str::is_empty) =>
-                {
+                // One rule, `ScannerConfig::missing_required_key`, says which
+                // external scanners cannot run without a key; mlab's API
+                // answers unauthenticated and is not among them.
+                cfg if cfg.missing_required_key() => {
                     bail!(
                         "[scanners.{name}] type = \"{}\" needs an api_key; without one every \
                          call fails with a 401 nobody reads",
@@ -2692,6 +2693,42 @@ impl AppConfig {
                  typo here must not fall back to either"
             ),
         }
+        // RFC 0014 §13 O6: the registry-tier row, held to the same rules as
+        // the estate key — a value that is not one of the two is a typo, and
+        // `"block"` on a registry the audit never sweeps reads as if
+        // blocking were active there.
+        let audited = self.upstream_audit_registries();
+        for r in &self.registries {
+            let Some(value) = r.on_confirmed.as_deref() else {
+                continue;
+            };
+            match value {
+                "audit" => {}
+                "block" => {
+                    if !a.enabled {
+                        bail!(
+                            "[[registries]] '{}' sets on_confirmed = \"block\" while \
+                             [upstream_audit] is not enabled: nothing sweeps, so nothing is \
+                             ever confirmed or blocked",
+                            r.name
+                        );
+                    }
+                    if !audited.contains(&r.name) {
+                        bail!(
+                            "[[registries]] '{}' sets on_confirmed = \"block\" but is not \
+                             audited: it is a local registry, or [upstream_audit] registries \
+                             names others",
+                            r.name
+                        );
+                    }
+                }
+                other => bail!(
+                    "[[registries]] '{}' on_confirmed = \"{other}\" is not \"audit\" or \
+                     \"block\"; a typo here must not fall back to either",
+                    r.name
+                ),
+            }
+        }
         Ok(())
     }
 
@@ -2709,7 +2746,14 @@ impl AppConfig {
                     .to_owned(),
             ));
         }
-        if a.on_confirmed == "block" && !a.retain_disappeared {
+        // The estate key, or any registry-tier row (RFC 0014 §13 O6): one
+        // `"block"` anywhere is enough for the hold to matter.
+        let blocks_somewhere = a.on_confirmed == "block"
+            || self
+                .registries
+                .iter()
+                .any(|r| r.on_confirmed.as_deref() == Some("block"));
+        if blocks_somewhere && !a.retain_disappeared {
             // RFC 0014 §4.4, §5.4: a blocked package is never read, so
             // `run_idle` evicts its bytes — the combination quietly deletes
             // what the block was keeping. Legal, and almost always a mistake.
@@ -2770,6 +2814,13 @@ impl AppConfig {
             }
         }
         if !air_gap.enabled {
+            if air_gap.synthesise_listings == Some(true) {
+                bail!(
+                    "[air_gap] synthesise_listings = true with enabled = false: the key has no \
+                     effect on a connected instance and reads as if this one answered listings \
+                     offline (RFC 0008-bis §4.5)"
+                );
+            }
             return Ok(());
         }
         if air_gap.bundle_trusted_keys.is_empty() {
@@ -2855,6 +2906,30 @@ impl AppConfig {
         };
         if air_gap.enabled {
             for (index, reg) in self.registries.iter().enumerate() {
+                // RFC 0008-bis §4.5: the kinds whose listing this instance
+                // cannot compose — a signed `Packages` index cannot be
+                // re-signed here, a gallery answers by query — stay `503` on
+                // a listing however many artifacts of theirs are held. Said
+                // at startup, so that `503` is not read as synthesis failing.
+                if air_gap.synthesises_listings()
+                    && matches!(reg.mode, RegistryMode::Proxy)
+                    && matches!(
+                        reg.registry_type.as_str(),
+                        "deb" | "rpm" | "pacman" | "jetbrains" | "generic"
+                    )
+                {
+                    out.push(ConfigWarning::new(
+                        warnings::AIR_GAP_LISTING_NOT_SYNTHESISED,
+                        format!("registries[{index}].type"),
+                        format!(
+                            "registry '{}' is a {} registry under [air_gap]: its index is not \
+                             synthesised from what this instance holds (RFC 0008-bis §4.3), so \
+                             a listing it does not hold stays a 503 while a held file is served \
+                             by path.",
+                            reg.name, reg.registry_type
+                        ),
+                    ));
+                }
                 if matches!(reg.mode, RegistryMode::Hybrid) {
                     out.push(ConfigWarning::new(
                         warnings::AIR_GAP_HYBRID_REGISTRY,

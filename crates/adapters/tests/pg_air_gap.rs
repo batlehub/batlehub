@@ -56,6 +56,8 @@ fn miss(registry: &str, key: &str, kind: MissKind) -> ContentMiss {
         storage_key: key.to_owned(),
         kind,
         coordinate: Some(format!("{registry}:{key}")),
+        requested_version: None,
+        held_versions: Vec::new(),
     }
 }
 
@@ -267,4 +269,35 @@ async fn the_bundle_history_is_keyed_by_id_and_reads_newest_first() {
         Some("one blob did not hash to its name"),
         "the line an operator reads before deciding whether to care"
     );
+}
+
+/// RFC 0008-bis §4.4: the two columns round-trip, the requested version is
+/// kept across a request that named none, and the held set is the latest.
+#[tokio::test]
+async fn the_requested_version_and_the_held_set_are_stored_and_kept() {
+    let Some(url) = db_url() else { return };
+    let (pool, registry) = fixture(&url).await;
+    let recorder = PgMissRecorder::new(pool.clone());
+    let now = Utc::now();
+    let mut first = miss(&registry, "left-pad (versions)", MissKind::Document);
+    first.requested_version = Some("1.2.0".into());
+    first.held_versions = vec!["1.3.0".into()];
+    recorder.record(&first, now).await.expect("record");
+    let mut second = miss(&registry, "left-pad (versions)", MissKind::Document);
+    second.held_versions = vec!["1.3.0".into(), "1.3.1".into()];
+    recorder
+        .record(&second, now + Duration::minutes(1))
+        .await
+        .expect("record again");
+    let rows = recorder
+        .list(&MissFilter {
+            registry: Some(registry.clone()),
+            ..Default::default()
+        })
+        .await
+        .expect("list");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].count, 2);
+    assert_eq!(rows[0].requested_version.as_deref(), Some("1.2.0"));
+    assert_eq!(rows[0].held_versions, vec!["1.3.0", "1.3.1"]);
 }

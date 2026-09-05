@@ -90,6 +90,8 @@ ANSWERED = (
     "X-BatleHub-Resolved-Commit",
     "X-BatleHub-Verdict",
     "X-BatleHub-Reason",
+    "X-BatleHub-Listing",
+    "X-BatleHub-Listing-Held",
 )
 
 
@@ -150,6 +152,12 @@ class Tap(BaseHTTPRequestHandler):
         shown = f"{resp.status}=>{status}" if status != resp.status else f"{status}"
 
         asked = [f"{h}: {self.headers[h]}" for h in ASKED if self.headers.get(h)]
+        # A credential is recorded as its scheme only — `Authorization: Bearer`
+        # — never its value: the vsx_login suite asserts that every gallery
+        # request the proxy forwarded carried one, and a log with tokens in
+        # it would be the leak RFC 0011 §4.4 exists to prevent.
+        if self.headers.get("Authorization"):
+            asked.append(f"Authorization: {self.headers['Authorization'].split(' ', 1)[0]}")
         answered = [f"{h}: {resp.getheader(h)}" for h in ANSWERED if resp.getheader(h)]
         LOG.write(
             f"{self.command} {self.path} -> {shown} ({len(payload)}B)"

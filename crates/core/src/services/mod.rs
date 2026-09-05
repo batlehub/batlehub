@@ -12,6 +12,7 @@ pub mod forge_refs;
 pub mod grants_admin;
 pub mod hot_config;
 pub mod integrity;
+pub mod listing_synthesis;
 pub mod local_registry;
 pub mod metrics;
 pub mod nodedist;

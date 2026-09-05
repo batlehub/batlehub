@@ -103,12 +103,24 @@ All three take `system:read` (the listing and the status) or `system:write`
 
 ## What the audit cannot see
 
-The path-addressed kinds — `deb`, `rpm`, `pacman`, `jetbrains`, `generic` —
-have no package identity to ask about and their client answers a probe
-without asking upstream, so a vanished file is not detected. The forges
-(`github`, `gitlab`, `forgejo`) are proxied by path too. For every other
-kind the sweep reaches the listing document where there is one and probes
-per version where there is not, at most 25 versions per package per sweep.
+The forges (`github`, `gitlab`, `forgejo`) are proxied by path and are
+not probed. The path-addressed kinds — `deb`, `rpm`, `pacman`, `jetbrains`,
+`generic` — have no package identity, so the sweep asks about **each held
+file** with a `HEAD` on its upstream path (RFC 0014 §13.5): the row, the
+event and the block name the file's path where a package kind's would name
+a version, under the one package these registries have (`repo`), and a
+block lands on that file alone. For every other kind the sweep reaches the
+listing document where there is one and probes per version where there is
+not, at most 25 versions — or files — per package per sweep.
+
+`on_confirmed` is decided per registry (RFC 0014 §13 O6): a registry's own
+`on_confirmed` row overrides the `[upstream_audit]` key for that registry,
+so one estate can block a public upstream and only audit an internal
+mirror. The console's policy card shows the estate's key and, beside each
+registry's counts, a badge where a registry's own row differs; the API
+reports both (`policy` on the page, `policy` and `overridden` per registry,
+and the registry's own on a package's status). The event's `policy` is the
+one that applied.
 
 The block arm blocks the versions the estate *holds*. It cannot block a
 name against re-registration: nothing has blocked a version that does not
@@ -118,4 +130,4 @@ watches the name.
 ## Configuration
 
 The section, its floors and its warnings are in the
-[configuration reference](/guide/configuration#38c-upstream_audit-optional).
+[configuration reference](/guide/configuration#upstream-audit).

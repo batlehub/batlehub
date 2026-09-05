@@ -176,7 +176,7 @@ impl From<CoreError> for AppError {
             .with_details(serde_json::json!({
                 "registry": registry,
                 "coordinate": key,
-                "bundle_hint": "batlehub-cli admin air-gap missing",
+                "bundle_hint": "batlehub-cli admin air-gap-missing",
             })),
             CoreError::AccessDenied(msg) => Self::forbidden(msg),
             CoreError::UnknownRegistry(name) => {

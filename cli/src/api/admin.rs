@@ -1161,6 +1161,14 @@ pub struct RecordedMissEntry {
     pub first_seen: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
     pub count: u64,
+    /// The version the client asked for, when its request named one (RFC
+    /// 0008-bis §4.4).
+    #[serde(default)]
+    pub requested_version: Option<String>,
+    /// What the instance held of the package: what its synthesised
+    /// listing named.
+    #[serde(default)]
+    pub held_versions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

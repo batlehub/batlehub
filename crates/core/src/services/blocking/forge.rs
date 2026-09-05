@@ -272,14 +272,15 @@ fn rewrite_one(release: &mut Value, base: &str, owner_repo: &str) {
             .map(|id| format!("{base}/{owner_repo}/releases/assets/{id}"));
         // By name where the asset has one, by id otherwise: both are routes
         // this proxy serves, and the name is the one a human reads.
-        let replacement = match (&tag, &name) {
+        let by_name = match (&tag, &name) {
             (Some(tag), Some(name)) => Some(format!(
                 "{base}/{owner_repo}/releases/download/{}/{}",
                 super::encode_package_segment(tag),
                 super::encode_package_segment(name)
             )),
-            _ => by_id.clone(),
+            _ => None,
         };
+        let replacement = by_name.clone().or_else(|| by_id.clone());
         if let (Some(url), true) = (replacement, a.contains_key("browser_download_url")) {
             a.insert("browser_download_url".to_owned(), Value::String(url));
         }
@@ -296,9 +297,13 @@ fn rewrite_one(release: &mut Value, base: &str, owner_repo: &str) {
         // *does* have an equivalent for it: `releases/assets/{id}` is a route
         // it serves, under the same rules as every other artifact, so the
         // bypass is closed by pointing the field here rather than by deleting
-        // it. An asset with no id has no route to name, and only then is the
-        // field dropped.
-        match by_id {
+        // it. An asset with no id — a release composed from held assets on
+        // an air-gapped instance (RFC 0008-bis §13.2), which has no forge id
+        // to name — is addressed by name instead, on the download route the
+        // instance holds it under; measured, again, as `missing field
+        // \`url\`` from mise before it was. Only an asset with neither has
+        // the field dropped.
+        match by_id.or(by_name) {
             Some(url) if a.contains_key("url") => {
                 a.insert("url".to_owned(), Value::String(url));
             }
@@ -316,6 +321,26 @@ fn rewrite_one(release: &mut Value, base: &str, owner_repo: &str) {
 mod rewrite_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn an_asset_without_an_id_keeps_a_url_that_points_at_the_download_route() {
+        let mut doc = json!({
+            "tag_name": "v2.60.0",
+            "assets": [{
+                "name": "gh_2.60.0_linux_amd64.tar.gz",
+                "browser_download_url": "/cli/cli/releases/download/v2.60.0/gh_2.60.0_linux_amd64.tar.gz",
+                "url": "/cli/cli/releases/download/v2.60.0/gh_2.60.0_linux_amd64.tar.gz"
+            }]
+        });
+        rewrite_release_urls(&mut doc, "https://hub/proxy/gh", "cli/cli");
+        let a = &doc["assets"][0];
+        assert_eq!(
+            a["url"],
+            "https://hub/proxy/gh/cli/cli/releases/download/v2.60.0/gh_2.60.0_linux_amd64.tar.gz",
+            "mise reads `url`, and an id-less asset is addressed by name"
+        );
+        assert_eq!(a["url"], a["browser_download_url"]);
+    }
 
     fn release() -> Value {
         json!({
@@ -370,19 +395,26 @@ mod rewrite_tests {
         assert!(doc["body"].as_str().unwrap().contains("prose"));
     }
 
-    /// An asset with no id has no route to name, so the field goes rather
-    /// than pointing at something that would 404.
+    /// An asset with no id is addressed by name (RFC 0008-bis §13.2); one
+    /// with neither has no route to name, so the field goes rather than
+    /// pointing at something that would 404.
     #[test]
-    fn an_asset_with_no_id_loses_the_field_rather_than_gaining_a_dead_route() {
+    fn an_asset_with_no_id_is_addressed_by_name_and_one_with_neither_loses_the_field() {
         let mut doc = json!({
             "tag_name": "v1",
             "assets": [{
                 "name": "thing.tar.gz",
                 "url": "https://api.github.com/repos/cli/cli/releases/assets/7",
+            }, {
+                "url": "https://api.github.com/repos/cli/cli/releases/assets/8",
             }],
         });
         rewrite_release_urls(&mut doc, "https://hub.example/proxy/gh", "cli/cli");
-        assert!(doc["assets"][0].get("url").is_none());
+        assert_eq!(
+            doc["assets"][0]["url"],
+            "https://hub.example/proxy/gh/cli/cli/releases/download/v1/thing.tar.gz"
+        );
+        assert!(doc["assets"][1].get("url").is_none());
     }
 
     #[test]

@@ -35,6 +35,9 @@ struct ScriptedRegistry {
     /// Whether `list_versions` is implemented at all (a kind that only
     /// answers per version leaves it at the default empty).
     lists: bool,
+    /// The files a path-addressed upstream has (`true`) or has lost
+    /// (`false`); a path not in the map was never there.
+    files: Mutex<HashMap<String, bool>>,
 }
 
 impl ScriptedRegistry {
@@ -44,7 +47,14 @@ impl ScriptedRegistry {
             listing: Mutex::new(HashMap::new()),
             errors: Mutex::new(HashSet::new()),
             lists,
+            files: Mutex::new(HashMap::new()),
         })
+    }
+    fn has_file(&self, path: &str) {
+        self.files.lock().unwrap().insert(path.into(), true);
+    }
+    fn lost_file(&self, path: &str) {
+        self.files.lock().unwrap().insert(path.into(), false);
     }
     fn has(&self, name: &str, versions: &[&str]) {
         self.listing.lock().unwrap().insert(
@@ -85,6 +95,16 @@ impl RegistryClient for ScriptedRegistry {
     async fn fetch_artifact(&self, _: &PackageId) -> Result<FetchedArtifact, CoreError> {
         Err(CoreError::NotFound("no bytes in this fake".into()))
     }
+    async fn probe_artifact(&self, pkg: &PackageId) -> Result<(), CoreError> {
+        let path = pkg.artifact.clone().unwrap_or_default();
+        if self.errors.lock().unwrap().contains(&path) {
+            return Err(CoreError::Registry("upstream down".into()));
+        }
+        match self.files.lock().unwrap().get(&path) {
+            Some(true) => Ok(()),
+            _ => Err(CoreError::NotFound(format!("{path} not found upstream"))),
+        }
+    }
     async fn list_versions(&self, package: &str) -> Result<Vec<String>, CoreError> {
         if !self.lists {
             return Ok(vec![]);
@@ -116,6 +136,19 @@ impl SeededInventory {
             registry: registry.into(),
             package_name: name.into(),
             version: version.into(),
+            size_bytes: Some(1),
+            cached_at,
+            last_accessed_at: cached_at,
+        });
+    }
+    /// A path kind's row: the synthetic `repo/_` coordinate, the file in
+    /// the key (`generic.rs`).
+    fn cached_file(&self, registry: &str, path: &str, cached_at: DateTime<Utc>) {
+        self.rows.lock().unwrap().push(ArtifactMeta {
+            artifact_key: format!("artifact:{registry}/repo/_/{path}"),
+            registry: registry.into(),
+            package_name: "repo".into(),
+            version: "_".into(),
             size_bytes: Some(1),
             cached_at,
             last_accessed_at: cached_at,
@@ -1195,4 +1228,244 @@ async fn the_presence_scanner_reads_the_row_and_never_probes() {
         crate::entities::Severity::High
     );
     assert!(block.scan(&input("other")).await.unwrap().is_empty());
+}
+
+// ── RFC 0014 §13.5: the path-addressed kinds, probed per file ────────────────
+
+fn seed_files(lab: &Lab, n: usize) {
+    for i in 0..n {
+        let path = format!("pool/main/s/steady/steady_{i}.deb");
+        lab.inventory.cached_file(REG, &path, long_ago());
+        lab.upstream.has_file(&path);
+    }
+}
+
+fn file_id(path: &str) -> PackageId {
+    PackageId::new(REG, "repo", "_").with_artifact(path)
+}
+
+#[test]
+fn a_path_kinds_held_version_is_the_file_read_off_its_key() {
+    let row = |key: &str| ArtifactMeta {
+        artifact_key: key.into(),
+        registry: REG.into(),
+        package_name: "repo".into(),
+        version: "_".into(),
+        size_bytes: None,
+        cached_at: long_ago(),
+        last_accessed_at: long_ago(),
+    };
+    assert_eq!(
+        held_version(
+            RegistryKind::Deb,
+            &row(&format!("artifact:{REG}/repo/_/dists/stable/Release"))
+        ),
+        Some("dists/stable/Release".into())
+    );
+    assert_eq!(
+        held_version(
+            RegistryKind::Generic,
+            &row(&format!("{REG}/repo/_/node/v20/node.tar.gz"))
+        ),
+        Some("node/v20/node.tar.gz".into())
+    );
+    assert_eq!(
+        held_version(RegistryKind::Rpm, &row(&format!("{REG}/repo/_/"))),
+        None
+    );
+    assert_eq!(
+        held_version(RegistryKind::Rpm, &row(&format!("{REG}/other/1.0"))),
+        None
+    );
+    // A kind with a package identity keeps its version.
+    let mut npm = row(&format!("{REG}/left-pad/1.3.0"));
+    npm.package_name = "left-pad".into();
+    npm.version = "1.3.0".into();
+    assert_eq!(held_version(RegistryKind::Npm, &npm), Some("1.3.0".into()));
+    assert_eq!(
+        audit_coordinate(RegistryKind::Deb, REG, "repo", "pool/x.deb"),
+        file_id("pool/x.deb")
+    );
+    assert_eq!(
+        audit_coordinate(RegistryKind::Npm, REG, "left-pad", "1.3.0"),
+        PackageId::new(REG, "left-pad", "1.3.0")
+    );
+}
+
+#[tokio::test]
+async fn a_vanished_file_of_a_path_kind_is_confirmed_under_its_path_and_blocked_as_that_file() {
+    let lab = lab_with("deb", false, false, blocking());
+    seed_files(&lab, 12);
+    let gone = "pool/main/x/x_1.0_amd64.deb";
+    lab.inventory.cached_file(REG, gone, long_ago());
+    lab.upstream.lost_file(gone);
+
+    let r1 = one(&lab).await;
+    assert!(!r1.void, "{r1:?}");
+    assert_eq!((r1.missing, r1.inconclusive), (1, 0));
+    assert!(r1.transitions.is_empty());
+    let row = lab
+        .status
+        .row(REG, "repo", Some(gone))
+        .expect("the miss is filed under the file");
+    assert_eq!(row.consecutive_misses, 1);
+    assert!(lab.blocks.blocked_by(&file_id(gone)).is_none());
+
+    let r2 = one(&lab).await;
+    assert_eq!(r2.confirmed(), 1, "{r2:?}");
+    let (by, _) = lab
+        .blocks
+        .blocked_by(&file_id(gone))
+        .expect("the file is blocked");
+    assert_eq!(by, SYSTEM_ACTOR);
+    assert!(
+        lab.blocks
+            .blocked_by(&PackageId::new(REG, "repo", "_"))
+            .is_none(),
+        "the bare coordinate is every file of the registry and must not be blocked"
+    );
+    assert!(
+        lab.blocks
+            .blocked_by(&file_id("pool/main/s/steady/steady_0.deb"))
+            .is_none(),
+        "a file upstream still has is untouched"
+    );
+    let events = lab.sink.events();
+    let e = events
+        .iter()
+        .find(|e| e.event_type == NotificationEventType::PackageDisappearedUpstream)
+        .expect("one disappearance event");
+    assert_eq!(e.package_name, "repo");
+    assert_eq!(e.version.as_deref(), Some(gone));
+    assert_eq!(e.metadata["probe"], "artifact");
+    assert_eq!(e.metadata["blocked"], true);
+
+    // Back upstream: the audit's own block is lifted.
+    lab.upstream.has_file(gone);
+    let r3 = one(&lab).await;
+    assert_eq!(r3.reappeared(), 1, "{r3:?}");
+    assert!(lab.blocks.blocked_by(&file_id(gone)).is_none());
+}
+
+#[tokio::test]
+async fn a_path_upstream_that_cannot_answer_the_probe_is_inconclusive() {
+    let lab = lab_with("generic", false, false, quick());
+    seed_files(&lab, 12);
+    let flaky = "node/v20.0.0/node.tar.gz";
+    lab.inventory.cached_file(REG, flaky, long_ago());
+    lab.upstream.failing(flaky, true);
+    let r = one(&lab).await;
+    // `repo` is one package: the first file that fails to answer makes the
+    // whole package inconclusive, as rung 3 does.
+    assert_eq!((r.missing, r.inconclusive), (0, 1), "{r:?}");
+    assert!(lab.status.row(REG, "repo", Some(flaky)).is_none());
+}
+
+#[tokio::test]
+async fn a_path_kinds_recheck_selects_one_file_by_its_path() {
+    let lab = lab_with("rpm", false, false, quick());
+    seed_files(&lab, 12);
+    let gone = "Packages/x/x-1.0.rpm";
+    lab.inventory.cached_file(REG, gone, long_ago());
+    lab.upstream.lost_file(gone);
+    let r = lab.svc.recheck(REG, "repo", Some(gone)).await.unwrap();
+    assert_eq!((r.probed, r.missing), (1, 1), "{r:?}");
+    assert!(lab.status.row(REG, "repo", Some(gone)).is_some());
+    let err = lab.svc.recheck(REG, "repo", Some("nothing/held")).await;
+    assert!(matches!(err, Err(CoreError::NotFound(_))));
+}
+
+// ── RFC 0014 §13 O6: the registry-tier `on_confirmed` ───────────────────────
+
+/// The lab's registry with a registry-tier row of its own.
+async fn set_registry_tier(lab: &Lab, on_confirmed: OnConfirmed) {
+    use crate::entities::RegistryPolicyTiers;
+    let mut tiers = RegistryPolicyTiers::open(RegistryKind::Npm, REG);
+    tiers.registry.on_confirmed = Some(on_confirmed);
+    lab.svc
+        .hot
+        .write()
+        .await
+        .policy_tiers
+        .insert(REG.into(), Arc::new(tiers));
+}
+
+#[tokio::test]
+async fn a_registry_tier_block_under_an_estate_wide_audit_blocks_that_registry() {
+    // The estate says audit; the pen is handed over regardless.
+    let lab = lab_with("npm", true, false, quick());
+    *lab.blocks.refuse_writes.lock().unwrap() = false;
+    set_registry_tier(&lab, OnConfirmed::Block).await;
+    assert!(!lab.svc.blocks(), "the estate key is still audit");
+    assert!(
+        lab.svc.blocks_for(REG).await,
+        "the registry's own row says block"
+    );
+    assert_eq!(lab.svc.policy_for(REG).await, OnConfirmed::Block);
+    assert_eq!(
+        lab.svc.policy_for("some-other").await,
+        OnConfirmed::Audit,
+        "a registry without a row inherits the estate's key"
+    );
+
+    seed_population(&lab, 12);
+    lab.inventory.cached(REG, "left-pad", "1.3.1", long_ago());
+    lab.upstream.has("left-pad", &["1.3.0"]);
+    one(&lab).await;
+    let r = one(&lab).await;
+    assert_eq!(r.confirmed(), 1);
+    let (by, _) = lab
+        .blocks
+        .blocked_by(&PackageId::new(REG, "left-pad", "1.3.1"))
+        .expect("blocked under the registry's row");
+    assert_eq!(by, SYSTEM_ACTOR);
+    let events = lab.sink.events();
+    let e = events
+        .iter()
+        .find(|e| e.event_type == NotificationEventType::PackageDisappearedUpstream)
+        .unwrap();
+    assert_eq!(
+        e.metadata["policy"], "block",
+        "the event names the effective policy"
+    );
+    assert_eq!(e.metadata["blocked"], true);
+}
+
+#[tokio::test]
+async fn a_registry_tier_audit_under_an_estate_wide_block_leaves_that_registry_alone() {
+    let lab = lab_with("npm", true, false, blocking());
+    set_registry_tier(&lab, OnConfirmed::Audit).await;
+    assert!(lab.svc.blocks(), "the estate key is block");
+    assert!(
+        !lab.svc.blocks_for(REG).await,
+        "this registry's row says audit"
+    );
+
+    seed_population(&lab, 12);
+    lab.inventory.cached(REG, "left-pad", "1.3.1", long_ago());
+    lab.upstream.has("left-pad", &["1.3.0"]);
+    one(&lab).await;
+    let r = one(&lab).await;
+    assert_eq!(r.confirmed(), 1);
+    assert!(
+        lab.blocks
+            .blocked_by(&PackageId::new(REG, "left-pad", "1.3.1"))
+            .is_none(),
+        "audit-only here, whatever the estate says"
+    );
+    let events = lab.sink.events();
+    let e = events
+        .iter()
+        .find(|e| e.event_type == NotificationEventType::PackageDisappearedUpstream)
+        .unwrap();
+    assert_eq!(e.metadata["policy"], "audit");
+    assert_eq!(e.metadata["blocked"], false);
+
+    // The reconciliation pass is gated the same way: a confirmed row on an
+    // audit-only registry is not blocked after the fact.
+    one(&lab).await;
+    assert!(lab
+        .blocks
+        .blocked_by(&PackageId::new(REG, "left-pad", "1.3.1"))
+        .is_none());
 }

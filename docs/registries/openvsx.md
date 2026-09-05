@@ -11,6 +11,7 @@ Proxy and cache VS Code extensions from [open-vsx.org](https://open-vsx.org), or
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
 | **Private publish** | ✅ VSIX upload (`PUT …/vsix`) |
+| **Air gap** | no composed listing offline: a gallery answers by query |
 
 ## Proxy setup
 
@@ -206,6 +207,35 @@ Two properties are worth knowing before you write a consumer:
 refreshing it first when it is close to expiry. It is the only command whose
 job is to emit one; `auth status` renders a summary that has no field able to
 hold a secret.
+
+### An editor that cannot send a credential
+
+Stock VS Code, and every build that reads its gallery from `product.json`,
+has no hook for an `Authorization` header on gallery requests. For those,
+run the local gallery proxy and point the editor at it
+([`batlehub-cli proxy serve`](/use/cli#gallery-proxy), RFC 0011 §4.4):
+
+```sh
+batlehub-cli proxy serve --registry https://hub.example.dev/proxy/vsx
+```
+
+```json
+"extensionsGallery": {
+  "serviceUrl": "http://127.0.0.1:<port>/<session>/vsx/vscode/gallery",
+  "itemUrl": "http://127.0.0.1:<port>/<session>/vsx/vscode/item",
+  "resourceUrlTemplate": "http://127.0.0.1:<port>/<session>/vsx/vscode/unpkg/{publisher}/{name}/{version}/{path}"
+}
+```
+
+The proxy attaches the credential from the contract file above, rewrites
+every gallery URL onto itself so the `.vsix` download is authenticated
+too, and — while there is no credential — answers a search with a single
+*Sign in to BatleHub* entry whose details are the steps, instead of the
+empty view an anonymous gallery produces. The editor never holds the
+token; it only knows the proxy's URL, which is per run and is the secret.
+`product.json` is the only place a gallery URL can be set, and updates of
+the editor overwrite it: a workspace startup script that runs the proxy
+with `--print-gallery-url` and rewrites the file is the shape that lasts.
 
 ## Notes
 

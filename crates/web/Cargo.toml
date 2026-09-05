@@ -30,6 +30,7 @@ ipnet.workspace = true
 tokio.workspace = true
 metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
+sha1 = "0.11"
 sha2.workspace = true
 hmac = "0.13"
 hex.workspace = true

@@ -11,6 +11,7 @@ Proxy and cache VS Code extension VSIX downloads from Microsoft's [Visual Studio
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
 | **Private publish** | ✅ VSIX upload (`PUT …/vsix`) |
+| **Air gap** | no composed listing offline: a gallery answers by query |
 
 ## Proxy setup
 

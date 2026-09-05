@@ -24,12 +24,23 @@ connected side                          disconnected side
 2. seed      ← fetch + verify
 3. export    ← signed bundle
                          ══ carry ══→   4. import
-                                        5. read what is still missing
+                                        4b. listings composed from what is held
+                                        5. read what was requested, and what was held
                                         └──────── feeds step 1 ────────┘
 ```
 
 The loop closes on itself. What the disconnected side could not serve is
-what the next plan carries, and nobody has to guess.
+what the next plan carries, and nobody has to guess. Step 4b needs no
+action: an air-gapped instance answers a listing it does not hold — the
+packument `npm install` reads, the simple page `pip` reads, the release a
+pinned `mise install` asks for, cargo's sparse index, Go's `@v/list`,
+`maven-metadata.xml`, NuGet's flat index — from the versions it *does*
+hold, marked `X-BatleHub-Listing: synthesised`
+([RFC 0008-bis](/rfc/0008-bis-listings-across-the-gap)). A version string
+therefore resolves offline, and a version the instance does not hold is
+one the listing never names, so the client stops by itself instead of
+retrying a `503`. `synthesise_listings = false` in `[air_gap]` restores
+the refusal.
 
 ---
 
@@ -56,6 +67,16 @@ Before going further, read the two lists it prints:
 | `unsupported: <tool>` | A git-fetched backend. There is no HTTP path; the tool has to be replaced or installed another way. |
 
 A plan with neither is a plan the bundle can satisfy completely.
+
+A plan is a list of proxy paths, and a few kinds need more than one path
+per version. A Terraform provider is **three**: the archive
+(`/v1/providers/{ns}/{type}/{v}/artifact/{os}/{arch}`), the checksum list
+(`…/{v}/shasums`) and its signature (`…/{v}/shasums.sig`) — `terraform
+init` verifies the archive against them and refuses without them. The
+export reads the provider's download document off the connected instance
+and carries its signing keys on the manifest, so the disconnected instance
+can compose that document without signing anything; it also prints a note
+for any provider archive whose two sidecars the plan does not name.
 
 ## 2. Seed and verify
 
@@ -115,12 +136,26 @@ Importing the same bundle twice writes once and says so.
 
 ```bash
 batlehub admin air-gap-missing --kind artifact
+batlehub admin air-gap-missing --kind document
 batlehub admin air-gap-missing --kind unmirrored_host
 ```
 
 or the console's **Air gap** page. The first list is content the next bundle
-should carry. The second is hosts nothing mirrors — each one is a rewrite
-rule you do not have, and no bundle will ever fix it.
+should carry. The second is listings nothing could be composed for — a
+package with no held version, or a kind whose index is not composed (see
+the registry's page) — and, for a forge release by tag or a Go `.info`,
+the version the client wanted. The third is hosts nothing mirrors — each
+one is a rewrite rule you do not have, and no bundle will ever fix it.
+
+Every row carries two more columns, **Requested** and **Held**: the
+version the request named, when it named one (an artifact from a lock, a
+release by tag), and what the instance held of that package at the time —
+what the composed listing had offered. Read together they are the next
+plan's diff: not "left-pad is missing" but "1.2.0 was asked for; 1.3.0 is
+held". `Requested` stays empty for a client that resolved a version string
+against the composed listing and stopped (npm's `ETARGET`, pip's "no
+matching distribution"): it never asked for a version this instance could
+record, and only a lock naming that version will.
 
 Feed both into the next plan, and purge what you have satisfied:
 
@@ -140,7 +175,12 @@ curl -X DELETE "$BATLEHUB/api/v1/admin/air-gap/missing?before=$(date -u +%Y-%m-%
 | `501` with `"code": "unmirrored_host"` | The catch-all rule caught a host nothing mirrors. Nothing was fetched. |
 | `403` naming a block | Not a gap. An administrator blocked this coordinate, and it will not be proposed for the next bundle. |
 | A hybrid registry behaving as local | Expected, and warned about at load: the fall-through to upstream cannot happen here. |
-| A `503` under `--kind document` | A client asked for a *listing* — a release list, a packument, a flat index — and a bundle carries artifacts, not documents. An install from a lock does not need one; anything resolving a version at install time does. |
+| `200` with `X-BatleHub-Listing: synthesised` | A listing composed from what the instance holds; `X-BatleHub-Listing-Held` counts the versions. Every version it names is served by the next request. |
+| A `503` under `--kind document` | A listing nothing could be composed for: no version of the package is held, the kind's index is not composed (the registry page says), or — with `Requested` filled — a forge release by tag or a Go `.info` for a version not held. An install from a lock does not need one. |
+| `pip (simple-json)` in the miss log, once per run | pip's own version self-check, `/simple/pip/`, ignored by pip. `PIP_DISABLE_PIP_VERSION_CHECK=1` on the client removes it. |
+| `github.com (versions)`, `github.com/google (versions)` beside a Go module | `go get` probing the parent paths for the module boundary before it settles on the module. Nothing to carry. |
+| `.sha1` and `.md5` misses beside a Maven artifact | Maven asks for a checksum file beside every file. Carry them for the real files (the plan can name them); the composed `maven-metadata.xml` answers its own. |
+| A `503` on a Terraform provider's `download/{os}/{arch}` while its `versions` lists the version | The archive is held but its `shasums` or `shasums.sig` is not, so the document Terraform would verify through cannot be composed. Add the two paths to the plan. |
 
 Both lists on the page name registries that hold **nothing at all**, which is
 worth reading first: such a registry refuses every request, and an empty miss

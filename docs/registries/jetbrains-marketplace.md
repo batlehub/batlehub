@@ -11,6 +11,7 @@ Proxy and cache the JetBrains plugin ecosystem ([plugins.jetbrains.com](https://
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
 | **Private publish** | ✅ marketplace-compatible upload |
+| **Air gap** | no composed listing offline: a gallery answers by query |
 
 ## Proxy setup
 

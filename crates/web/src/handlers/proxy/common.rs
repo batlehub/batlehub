@@ -490,6 +490,22 @@ pub async fn proxy_stream(
             }
             Ok(builder.streaming(body))
         }
+        // RFC 0008-bis: a release composed from the held assets, on the
+        // route that otherwise streams the forge's own JSON. Its own
+        // content type, the listing header, and no storage-key header —
+        // nothing is stored under this coordinate.
+        ProxyResponse::Document(doc) => {
+            let mut builder = HttpResponse::Ok();
+            builder.content_type(doc.content_type.clone());
+            listing_headers(&mut builder, &doc);
+            if let Some(v) = &warned {
+                crate::handlers::security::verdict_headers(&mut builder, v, now);
+            }
+            Ok(match doc.body {
+                DocumentBody::Json(v) => builder.json(v),
+                DocumentBody::Text(s) => builder.body(s),
+            })
+        }
         // RFC 0019 §4.2 *Response headers*: which kind of ref was asked for and
         // which commit answered. Spelled like the existing `X-BatleHub-Cache`.
         ProxyResponse::ForgeStream {
@@ -865,9 +881,28 @@ where
 /// (cargo's sparse index) as well as JSON, and serving any of them as
 /// `application/json` — or, as the pre-`serve_local_or_proxy_document` packument
 /// route did, as `application/octet-stream` — breaks the client that asked.
+/// `X-BatleHub-Listing: synthesised` on a listing composed from the held
+/// set, with the count beside it (RFC 0008-bis §4.2). A held document —
+/// cached from upstream — carries neither.
+pub const LISTING_HEADER: &str = "X-BatleHub-Listing";
+pub const LISTING_HELD_HEADER: &str = "X-BatleHub-Listing-Held";
+
+/// Mark a listing response that was composed rather than fetched. Every
+/// handler that builds its own response from a `fetch_proxy_document`
+/// result — rather than through [`document_response`] — has to call this
+/// for the kinds RFC 0008-bis synthesises for it; the PyPI simple page
+/// does, the rest render kinds that are not composed yet (its phase 3).
+pub fn listing_headers(builder: &mut actix_web::HttpResponseBuilder, doc: &VersionDocument) {
+    if let Some(held) = doc.synthesised {
+        builder.insert_header((LISTING_HEADER, "synthesised"));
+        builder.insert_header((LISTING_HELD_HEADER, held.to_string()));
+    }
+}
+
 pub fn document_response(doc: VersionDocument) -> HttpResponse {
     let mut builder = HttpResponse::Ok();
     builder.content_type(doc.content_type.clone());
+    listing_headers(&mut builder, &doc);
     match doc.body {
         DocumentBody::Json(v) => builder.json(v),
         DocumentBody::Text(s) => builder.body(s),

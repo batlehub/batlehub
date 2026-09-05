@@ -6,6 +6,7 @@ use super::{
     PublishPolicyRequest, PublishRequest, RegistryMap, RegistryMode, RegistryModeMap, Responder,
     Sha256, StorageMeta,
 };
+use crate::handlers::proxy::common::fetch_proxy_document;
 use crate::handlers::schemas::{ArtifactBytes, OkResponse};
 use batlehub_core::entities::Action;
 
@@ -78,6 +79,37 @@ pub async fn maven_get(
     // Maven resolves a range, `LATEST` or `RELEASE` against it. Streamed
     // through `proxy_stream` it would arrive with the blocked version still in
     // `<versions>`, and the build would pick it and fail at download.
+    // A checksum of `maven-metadata.xml`: when the document is composed from
+    // the held set there is no upstream `.sha1` to fetch, and Maven retries
+    // the `503` for minutes (RFC 0008-bis §13.4). The composed bytes answer
+    // their own digest; a held document keeps upstream's file, below.
+    if let Some((name, algo)) = super::routing::metadata_checksum_of(&maven_path) {
+        let doc = fetch_proxy_document(
+            svc.clone(),
+            PackageId::new(&registry, name, "maven-metadata.xml"),
+            AuthIdentity(identity.0.clone()),
+            Action::ReleasesRead,
+            batlehub_core::ports::DocumentKind::Versions,
+            String::new(),
+        )
+        .await;
+        if let Ok(doc) = doc {
+            if doc.synthesised.is_some() {
+                let bytes = match &doc.body {
+                    batlehub_core::ports::DocumentBody::Text(t) => t.as_bytes().to_vec(),
+                    batlehub_core::ports::DocumentBody::Json(v) => {
+                        serde_json::to_vec(v).unwrap_or_default()
+                    }
+                };
+                let digest = digest_hex(algo, &bytes);
+                let mut builder = HttpResponse::Ok();
+                builder.content_type("text/plain; charset=utf-8");
+                crate::handlers::proxy::common::listing_headers(&mut builder, &doc);
+                return Ok(builder.body(digest));
+            }
+        }
+    }
+
     match &kind {
         MavenPathKind::Metadata { name } => {
             proxy_document(
@@ -264,5 +296,17 @@ pub async fn maven_put(
             )
             .await
         }
+    }
+}
+
+/// The hex digest Maven expects in a checksum file, for the algorithm its
+/// suffix names.
+fn digest_hex(algo: &str, bytes: &[u8]) -> String {
+    use md5::Digest as _;
+    match algo {
+        "md5" => hex::encode(md5::Md5::digest(bytes)),
+        "sha256" => hex::encode(sha2::Sha256::digest(bytes)),
+        "sha512" => hex::encode(sha2::Sha512::digest(bytes)),
+        _ => hex::encode(sha1::Sha1::digest(bytes)),
     }
 }

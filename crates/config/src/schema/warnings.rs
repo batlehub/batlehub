@@ -318,6 +318,10 @@ pub const AIR_GAP_HYBRID_REGISTRY: &str = "air-gap.hybrid-registry";
 /// a bundle is staged — and worth saying they authorise imports only.
 pub const AIR_GAP_KEYS_UNUSED: &str = "air-gap.keys-unused";
 
+/// `[air_gap]` is on with listings synthesised, and a registry is of a kind
+/// whose index this instance cannot compose (RFC 0008-bis §4.3).
+pub const AIR_GAP_LISTING_NOT_SYNTHESISED: &str = "air-gap.listing-not-synthesised";
+
 pub const FORGE_ANONYMOUS_UPSTREAM: &str = "forge.anonymous-upstream";
 
 /// A forge registry serves no raw content while the setup snippet it hands

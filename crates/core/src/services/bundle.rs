@@ -83,6 +83,17 @@ pub struct BundleEntry {
     /// can serve `tarball/main` without resolving anything.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_ref: Option<BundleRef>,
+    /// RFC 0008-bis §13.7: what the connected side's *documents* said about
+    /// this artifact that its bytes do not — keyed by registry kind, the way
+    /// the import files what it reads off the bytes. Terraform's provider
+    /// download document names the publisher's signing keys and the
+    /// protocols the provider speaks; neither is in the archive, the
+    /// checksum list or the signature, and a download document composed
+    /// without the keys leads the client to a refusal. Evidence, never an
+    /// order: a key set is something the client verifies *with*, and the
+    /// manifest signature covers it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facts: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,6 +155,17 @@ impl BundleManifest {
                     entry.key
                 )));
             }
+            // Facts are filed into the `meta:` entry's `extra` under their
+            // kind, so the shape is an object keyed by kind — anything else
+            // would be merged as nothing and silently lose what it carried.
+            if let Some(facts) = &entry.facts {
+                if !facts.is_object() {
+                    return Err(CoreError::InvalidInput(format!(
+                        "entry '{}' carries facts that are not an object keyed by registry kind",
+                        entry.key
+                    )));
+                }
+            }
         }
         Ok(())
     }
@@ -195,6 +217,7 @@ mod tests {
             reason_codes: vec![],
             verified_at: None,
             git_ref: None,
+            facts: None,
         }
     }
 
@@ -435,6 +458,7 @@ mod container_tests {
                     reason_codes: vec![],
                     verified_at: Some(Utc::now()),
                     git_ref: None,
+                    facts: None,
                 },
                 // The same bytes under a second key: one blob.
                 BundleEntry {
@@ -448,6 +472,7 @@ mod container_tests {
                     reason_codes: vec![],
                     verified_at: None,
                     git_ref: None,
+                    facts: None,
                 },
             ],
         }

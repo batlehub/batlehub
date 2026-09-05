@@ -11,6 +11,7 @@ Proxy and cache PyPI through BatleHub for pip, uv, Poetry, and other Python pack
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
 | **Private publish** | ✅ `twine upload` |
+| **Air gap** | offline, the simple page (JSON and HTML) is composed from the held files; `pip install` resolves against it |
 
 ## Proxy setup
 

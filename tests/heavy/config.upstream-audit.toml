@@ -58,7 +58,9 @@ skip_recently_seen = false
 # the wire through the admin block list, and a reappearance lifts the
 # audit's own block. Steps 5 and 6 of the suite are what "block" promises
 # to a real client; steps 1–4 hold under either value.
-on_confirmed = "block"
+# RFC 0014 §13 O6: the estate audits; each registry below says block for
+# itself, so what the suite reads off the wire is the registry-tier row.
+on_confirmed = "audit"
 
 # ── The registry: an npm upstream the suite owns ─────────────────────────────
 #
@@ -74,6 +76,23 @@ type = "npm"
 name = "npm-audited-${HEAVY_RUN}"
 mode = "proxy"
 upstreams = ["${HEAVY_UPSTREAM_URL}"]
+on_confirmed = "block"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# RFC 0014 §13.5: a path-addressed registry over the same served directory.
+# Its files have no package identity, so the audit asks about each held
+# file with a `HEAD`, and a block lands on the file's own coordinate.
+[[registries]]
+type = "generic"
+name = "generic-audited-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["${HEAVY_UPSTREAM_URL}"]
+path_allow = ["**"]
+on_confirmed = "block"
 
 [registries.rbac]
 anonymous = ["releases:read", "releases:list", "source:read"]

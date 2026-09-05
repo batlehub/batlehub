@@ -35,6 +35,8 @@ fn row_to_miss(r: &sqlx::postgres::PgRow) -> RecordedMiss {
         first_seen: r.get("first_seen"),
         last_seen: r.get("last_seen"),
         count: r.get::<i64, _>("count").max(0) as u64,
+        requested_version: r.get("requested_version"),
+        held_versions: r.get::<Vec<String>, _>("held_versions"),
     }
 }
 
@@ -46,11 +48,17 @@ impl MissRecorder for PgMissRecorder {
         let res = sqlx::query(
             r#"
             INSERT INTO missing_content
-                (registry, storage_key, kind, coordinate, first_seen, last_seen, count)
-            VALUES ($1, $2, $3, $4, $5, $5, 1)
+                (registry, storage_key, kind, coordinate, first_seen, last_seen, count,
+                 requested_version, held_versions)
+            VALUES ($1, $2, $3, $4, $5, $5, 1, $6, $7)
             ON CONFLICT (registry, storage_key) DO UPDATE
-                SET last_seen = EXCLUDED.last_seen,
-                    count     = missing_content.count + 1
+                SET last_seen         = EXCLUDED.last_seen,
+                    count             = missing_content.count + 1,
+                    -- The last version asked for, kept across a request that
+                    -- named none; the held set as of the last request.
+                    requested_version = COALESCE(EXCLUDED.requested_version,
+                                                 missing_content.requested_version),
+                    held_versions     = EXCLUDED.held_versions
             RETURNING (xmax = 0) AS created
             "#,
         )
@@ -59,6 +67,8 @@ impl MissRecorder for PgMissRecorder {
         .bind(miss.kind.as_str())
         .bind(&miss.coordinate)
         .bind(now)
+        .bind(&miss.requested_version)
+        .bind(&miss.held_versions)
         .fetch_one(&self.pool)
         .await
         .db_err()?;
@@ -95,7 +105,8 @@ impl MissRecorder for PgMissRecorder {
         };
         let rows = sqlx::query(
             r#"
-            SELECT registry, storage_key, kind, coordinate, first_seen, last_seen, count
+            SELECT registry, storage_key, kind, coordinate, first_seen, last_seen, count,
+                   requested_version, held_versions
             FROM missing_content
             WHERE ($1::text IS NULL OR registry = $1)
               AND ($2::text IS NULL OR kind = $2)

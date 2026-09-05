@@ -156,6 +156,40 @@ pub fn truncate_error(error: &str) -> String {
     error[..end].to_owned()
 }
 
+/// What a confirmed disappearance does beyond the row (RFC 0014 §4.3):
+/// `[upstream_audit] on_confirmed` for the estate, and — RFC 0014 §13 O6 —
+/// a registry-tier policy row that overrides it (`[registries]
+/// on_confirmed`, [`super::PolicyNode::on_confirmed`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OnConfirmed {
+    /// Record, hold, notify. The default, and the whole of phases 1–5.
+    #[default]
+    Audit,
+    /// …and refuse the version on the wire through the admin block list
+    /// (phase 6).
+    Block,
+}
+
+impl OnConfirmed {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Audit => "audit",
+            Self::Block => "block",
+        }
+    }
+}
+
+impl std::str::FromStr for OnConfirmed {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "audit" => Ok(Self::Audit),
+            "block" => Ok(Self::Block),
+            other => Err(format!("unknown on_confirmed policy '{other}'")),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

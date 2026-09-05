@@ -68,6 +68,8 @@ pub async fn unmirrored_sink(
             storage_key: host.clone(),
             kind: MissKind::UnmirroredHost,
             coordinate: Some(tail.clone()),
+            requested_version: None,
+            held_versions: Vec::new(),
         };
         if let Err(e) = recorder.record(&miss, Utc::now()).await {
             tracing::warn!(host = %host, error = %e, "air gap: could not record an unmirrored host");
@@ -82,7 +84,7 @@ pub async fn unmirrored_sink(
              for it and rebuild the bundle, or drop the tool that needs it."
         ),
         "host": host,
-        "bundle_hint": "batlehub-cli admin air-gap missing --kind unmirrored_host",
+        "bundle_hint": "batlehub-cli admin air-gap-missing --kind unmirrored_host",
     })))
 }
 
@@ -332,6 +334,108 @@ pub struct BundleImportResponse {
 /// checked — so it is bounded, and the number is stated rather than implied.
 const MAX_BUNDLE_BYTES: usize = 4 * 1024 * 1024 * 1024;
 
+/// The registry-kind facts a synthesised listing needs from an imported
+/// artifact's bytes, by kind (RFC 0008-bis §13.4), merged over the facts
+/// the manifest carried for the entry (§13.7) — what the connected side's
+/// documents said that the bytes do not. `Null` for every kind whose keys
+/// say enough.
+fn listing_facts_for(
+    kinds: &std::collections::HashMap<String, String>,
+    registry: &str,
+    coordinate: &batlehub_core::entities::PackageId,
+    bytes: &[u8],
+    carried: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let from_bytes = listing_facts_from_bytes(kinds, registry, coordinate, bytes);
+    match (carried.filter(|c| c.is_object()), from_bytes) {
+        (None, facts) => facts,
+        (Some(carried), serde_json::Value::Null) => carried.clone(),
+        (Some(carried), serde_json::Value::Object(read)) => {
+            // Both keyed by kind; what the bytes say about a kind wins over
+            // what a document said, because the bytes are what is served.
+            let mut merged = carried.as_object().cloned().unwrap_or_default();
+            for (kind, facts) in read {
+                match (merged.get_mut(&kind), facts) {
+                    (Some(serde_json::Value::Object(into)), serde_json::Value::Object(from)) => {
+                        into.extend(from);
+                    }
+                    (_, facts) => {
+                        merged.insert(kind, facts);
+                    }
+                }
+            }
+            serde_json::Value::Object(merged)
+        }
+        (Some(_), facts) => facts,
+    }
+}
+
+fn listing_facts_from_bytes(
+    kinds: &std::collections::HashMap<String, String>,
+    registry: &str,
+    coordinate: &batlehub_core::entities::PackageId,
+    bytes: &[u8],
+) -> serde_json::Value {
+    match kinds.get(registry).map(String::as_str) {
+        Some("cargo") => batlehub_adapters::listing_facts::cargo_index_facts(
+            &coordinate.name,
+            &coordinate.version,
+            bytes,
+        )
+        .map(|facts| serde_json::json!({ "cargo": facts }))
+        .unwrap_or(serde_json::Value::Null),
+        // The compact index carries each gem's runtime dependencies inline,
+        // from the gemspec inside the `.gem`.
+        Some("rubygems") => batlehub_adapters::registry::rubygems::parse_gem_bytes(bytes)
+            .map(|g| {
+                serde_json::json!({ "rubygems": {
+                    "platform": g.platform,
+                    "dependencies": g.dependencies.iter().map(|d| serde_json::json!({
+                        "name": d.name, "requirement": d.requirement,
+                    })).collect::<Vec<_>>(),
+                } })
+            })
+            .unwrap_or(serde_json::Value::Null),
+        // `repodata.json` is a copy of each package's `info/index.json`.
+        Some("conda") => batlehub_adapters::registry::conda::parse_conda_metadata(bytes)
+            .map(|c| {
+                serde_json::json!({ "conda": {
+                    "name": c.name, "version": c.version, "build": c.build,
+                    "build_number": c.build_number, "depends": c.depends,
+                    "subdir": c.subdir, "license": c.license,
+                } })
+            })
+            .unwrap_or(serde_json::Value::Null),
+        // The registration page's catalog entry is the `.nuspec`.
+        Some("nuget") => crate::handlers::proxy::nuget::nuspec::extract_nuspec_from_nupkg(bytes)
+            .and_then(|x| crate::handlers::proxy::nuget::nuspec::parse_nuspec(&x))
+            .map(|n| {
+                serde_json::json!({ "nuget": {
+                    "id": n.id, "version": n.version, "description": n.description,
+                    "authors": n.authors, "tags": n.tags,
+                } })
+            })
+            .unwrap_or(serde_json::Value::Null),
+        // `p2` is `composer.json`, from inside the dist zip.
+        Some("composer") => batlehub_adapters::registry::composer::parse_composer_zip(
+            &bytes::Bytes::copy_from_slice(bytes),
+            Some(&coordinate.version),
+        )
+        .map(|c| serde_json::json!({ "composer": c.composer_json }))
+        .unwrap_or(serde_json::Value::Null),
+        // A provider's checksum list names each archive's file, which the
+        // composed download document is looked up by (§13.7). The keys and
+        // protocols the same document needs are not in any artifact: they
+        // arrive as the entry's carried facts.
+        Some("terraform") if coordinate.artifact.as_deref() == Some("shasums") => {
+            batlehub_adapters::listing_facts::terraform_shasums_facts(bytes)
+                .map(|facts| serde_json::json!({ "terraform": facts }))
+                .unwrap_or(serde_json::Value::Null)
+        }
+        _ => serde_json::Value::Null,
+    }
+}
+
 /// Import a bundle.
 #[utoipa::path(
     post,
@@ -414,6 +518,13 @@ pub async fn import_bundle(
         .map(|d| format!("blob {d}: its bytes do not hash to its name"))
         .collect();
     let mut imported = 0u64;
+    let kinds: std::collections::HashMap<String, String> = {
+        let hot = svc.hot.read().await;
+        hot.registries
+            .iter()
+            .map(|(name, client)| (name.clone(), client.registry_type().to_owned()))
+            .collect()
+    };
     for entry in &read.manifest.entries {
         // Every guard the two existing funnels apply, applied here too: a
         // bundle is untrusted input that *names storage keys*, and without
@@ -508,7 +619,17 @@ pub async fn import_bundle(
                         checksum: Some(entry.digest.clone()),
                         is_signed: None,
                         cache_control: None,
-                        extra: Default::default(),
+                        // RFC 0008-bis §13.4: the listing facts a synthesised
+                        // document needs and the key does not carry, read off
+                        // the bytes once, here. cargo's sparse-index line needs
+                        // the crate's dependencies and features.
+                        extra: listing_facts_for(
+                            &kinds,
+                            &entry.registry,
+                            &coordinate,
+                            bytes,
+                            entry.facts.as_ref(),
+                        ),
                     },
                     cached_at: Utc::now(),
                     // No expiry on a disconnected instance: there is nothing

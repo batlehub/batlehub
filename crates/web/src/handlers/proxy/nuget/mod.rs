@@ -1,5 +1,5 @@
 mod flat;
-mod nuspec;
+pub(crate) mod nuspec;
 mod registration;
 mod search_publish;
 mod service_index;

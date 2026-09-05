@@ -50,6 +50,7 @@ HEAVY_SUITE=""
 HEAVY_WORK=""
 HEAVY_SERVER_PID=""
 HEAVY_TAP_PID=""
+HEAVY_EXTRA_PIDS=()
 HEAVY_SERVER2_PID=""
 HEAVY_BASE2=""
 
@@ -152,6 +153,12 @@ heavy_stop_second_server() {
 
 heavy_cleanup() {
   [[ -n "$HEAVY_TAP_PID" ]] && kill "$HEAVY_TAP_PID" 2>/dev/null
+  # A suite that starts a second tap (or anything else) registers its pid
+  # here, so a failure mid-way leaves no listener behind on the port the
+  # next run needs.
+  for pid in "${HEAVY_EXTRA_PIDS[@]:-}"; do
+    [[ -n "$pid" ]] && kill "$pid" 2>/dev/null
+  done
   heavy_stop_second_server
   heavy_stop_server
   [[ -n "$HEAVY_WORK" ]] && rm -rf "$HEAVY_WORK"
@@ -193,6 +200,11 @@ heavy_init() {
   mkdir -p "$HEAVY_STORAGE"
 
   trap heavy_cleanup EXIT
+  # `set -e` ends a suite on the first failing command it does not test,
+  # and does so silently: the transcript is never printed and the run
+  # reads as "stopped". Name the line and the command, so a bug in the
+  # suite is told apart from a finding about the server.
+  trap 'echo "ERROR: $HEAVY_SUITE died at line $LINENO of ${BASH_SOURCE[0]}: $BASH_COMMAND (exit $?)" >&2' ERR
   heavy_log "[$HEAVY_SUITE] work dir $HEAVY_WORK, run id $HEAVY_RUN"
 }
 
@@ -365,6 +377,26 @@ heavy_wire_after() {
   local label="$1" needle="$2" explanation="${3:-}"
   heavy_wire_seen_after "$label" "$needle" \
     || heavy_fail "${explanation:-no request matching \"$needle\" after mark \"$label\"}"
+}
+
+# heavy_wire_re_after <mark> <regex> [explanation] — like heavy_wire_after
+# with a regex, for the lines that carry headers after the status: the
+# assertion is about the verdict on the answer, not only the status. The
+# tarball path is the one this server writes into the packument
+# (`{name}/{version}/tarball`), not npm's own `{name}/-/{name}-{v}.tgz`.
+heavy_wire_re_after() {
+  local label="$1" re="$2" explanation="${3:-}"
+  awk -v mark="### $label" -v re="$re" '
+    index($0, mark) == 1 { seen = 1; next }
+    seen && $0 ~ re { found = 1 }
+    END { exit found ? 0 : 1 }' "$HEAVY_LOG" \
+    || heavy_fail "${explanation:-no request matching /$re/ after mark \"$label\"}"
+}
+heavy_wire_count_after() {  # mark, regex → count on stdout
+  awk -v mark="### $1" -v re="$2" '
+    index($0, mark) == 1 { seen = 1; next }
+    seen && $0 ~ re { n++ }
+    END { print n + 0 }' "$HEAVY_LOG"
 }
 
 # heavy_done <banner> — stop the server first, so the coverage profiles are

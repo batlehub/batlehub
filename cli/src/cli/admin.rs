@@ -661,12 +661,33 @@ pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Resu
                 println!("{}", serde_json::to_string_pretty(&resp)?);
             } else {
                 let mut table = Table::new();
-                table.set_header(["Registry", "Kind", "Key", "Asked", "Last seen"]);
+                // `Requested` and `Held` together are the next plan's diff
+                // (RFC 0008-bis §4.4): not "left-pad is missing" but "1.2.0
+                // was asked for; 1.3.0 is held". Absent when the request named
+                // no version — a listing — or the instance held nothing.
+                table.set_header([
+                    "Registry",
+                    "Kind",
+                    "Key",
+                    "Requested",
+                    "Held",
+                    "Asked",
+                    "Last seen",
+                ]);
                 for m in &resp.items {
+                    let held = match m.held_versions.len() {
+                        0 => "—".to_owned(),
+                        n if n > 4 => format!("{} (+{})", m.held_versions[..4].join(", "), n - 4),
+                        _ => m.held_versions.join(", "),
+                    };
                     table.add_row([
                         m.registry.clone(),
                         m.kind.clone(),
                         m.storage_key.clone(),
+                        m.requested_version
+                            .clone()
+                            .unwrap_or_else(|| "—".to_owned()),
+                        held,
                         m.count.to_string(),
                         m.last_seen.format("%Y-%m-%d %H:%M").to_string(),
                     ]);

@@ -235,6 +235,19 @@ async fn run_export(args: ExportArgs, client: &BatleHubClient, json: bool) -> Re
                 .unwrap_or(None),
             _ => None,
         };
+        // RFC 0008-bis §13.7: a Terraform provider archive is installed
+        // through a download document that names the publisher's signing
+        // keys and the protocols the provider speaks — facts the archive,
+        // the checksum list and the signature do not carry, and a document
+        // composed without the keys leads the client to a refusal. Read off
+        // the connected instance's own document, carried as evidence.
+        let facts = match terraform_provider_facts(client, registry, path).await {
+            Ok(facts) => facts,
+            Err(note) => {
+                skipped.push(format!("{} [{}]: {note}", entry.tool, entry.platform));
+                None
+            }
+        };
         entries.push(BundleEntry {
             registry: registry.name.clone(),
             key: stored_key,
@@ -282,8 +295,20 @@ async fn run_export(args: ExportArgs, client: &BatleHubClient, json: bool) -> Re
                 }
                 _ => None,
             },
+            facts,
         });
         blobs.entry(digest).or_insert(bytes);
+    }
+
+    // A provider archive installs only beside its checksum list and the
+    // list's signature (Terraform verifies the archive against them before
+    // it will use it), and a plan is a list of paths: one that names the
+    // archive without its two sidecars produces a bundle whose provider
+    // lists and then refuses to install. Said here, where the plan can
+    // still be fixed, rather than as two `checksum` rows in the miss log
+    // on the other side of the gap.
+    for note in provider_sidecars_missing_from(&plan) {
+        skipped.push(note);
     }
 
     let manifest = BundleManifest {
@@ -622,5 +647,175 @@ fn print_summary(plan: &MisePlan, out: Option<&std::path::Path>) {
     }
     if let Some(path) = out {
         println!("plan written to {}", path.display());
+    }
+}
+
+// ── Terraform provider facts (RFC 0008-bis §13.7) ────────────────────────────
+
+/// The three paths of one provider version, read off the plan path of its
+/// archive: the download document, the checksum list and its signature.
+/// `None` for a path that is not a provider archive on the registry
+/// protocol route (`/proxy/{reg}/v1/providers/{ns}/{type}/{v}/artifact/{os}/{arch}`).
+struct ProviderPaths {
+    download_document: String,
+    shasums: String,
+    shasums_sig: String,
+}
+
+fn provider_paths_of(path: &str) -> Option<ProviderPaths> {
+    let (prefix, platform) = path.split_once("/artifact/")?;
+    if !prefix.contains("/v1/providers/") || platform.split('/').count() != 2 {
+        return None;
+    }
+    Some(ProviderPaths {
+        download_document: format!("{prefix}/download/{platform}"),
+        shasums: format!("{prefix}/shasums"),
+        shasums_sig: format!("{prefix}/shasums.sig"),
+    })
+}
+
+/// What a provider's download document says that no artifact carries —
+/// `protocols` and `signing_keys` — keyed under `terraform`, the way the
+/// import files what it reads off the bytes. `Ok(None)` for every entry
+/// that is not a Terraform provider archive; `Err` with the note to print
+/// when the document could not be read, so the archive is still carried
+/// and the operator is told the install will stop at its download document.
+async fn terraform_provider_facts(
+    client: &BatleHubClient,
+    registry: &crate::api::mise_plan::PlanRegistry,
+    path: &str,
+) -> std::result::Result<Option<serde_json::Value>, String> {
+    if registry.registry_type != "terraform" {
+        return Ok(None);
+    }
+    let Some(paths) = provider_paths_of(path) else {
+        return Ok(None);
+    };
+    let doc: serde_json::Value = client.get(&paths.download_document).await.map_err(|e| {
+        format!(
+            "the provider's download document ({}) could not be read, so the bundle carries \
+             the archive without its signing keys and a disconnected install will stop at \
+             that document: {e}",
+            paths.download_document
+        )
+    })?;
+    let protocols = doc
+        .get("protocols")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!([]));
+    let signing_keys = doc
+        .get("signing_keys")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({ "gpg_public_keys": [] }));
+    Ok(Some(serde_json::json!({
+        "terraform": { "protocols": protocols, "signing_keys": signing_keys }
+    })))
+}
+
+/// One note per provider archive whose checksum list or signature the plan
+/// does not also name.
+fn provider_sidecars_missing_from(plan: &MisePlan) -> Vec<String> {
+    let planned: std::collections::BTreeSet<&str> = plan
+        .entries
+        .iter()
+        .filter_map(|e| e.proxy_path.as_deref())
+        .collect();
+    let mut notes = Vec::new();
+    for entry in &plan.entries {
+        let is_terraform = entry
+            .registry
+            .as_ref()
+            .is_some_and(|r| r.registry_type == "terraform");
+        let Some(paths) = entry
+            .proxy_path
+            .as_deref()
+            .filter(|_| is_terraform)
+            .and_then(provider_paths_of)
+        else {
+            continue;
+        };
+        let missing: Vec<&str> = [paths.shasums.as_str(), paths.shasums_sig.as_str()]
+            .into_iter()
+            .filter(|p| !planned.contains(p))
+            .collect();
+        if !missing.is_empty() {
+            notes.push(format!(
+                "{} [{}]: the plan names the provider archive but not {} — Terraform verifies \
+                 the archive against the checksum list and its signature, so a disconnected \
+                 install of this provider will stop there; add the path(s) to the plan",
+                entry.tool,
+                entry.platform,
+                missing.join(" and ")
+            ));
+        }
+    }
+    notes
+}
+
+#[cfg(test)]
+mod terraform_facts_tests {
+    use super::*;
+
+    #[test]
+    fn the_three_sibling_paths_come_off_the_archive_path() {
+        let p =
+            provider_paths_of("/proxy/tf/v1/providers/hashicorp/null/3.2.2/artifact/linux/amd64")
+                .expect("a provider archive path");
+        assert_eq!(
+            p.download_document,
+            "/proxy/tf/v1/providers/hashicorp/null/3.2.2/download/linux/amd64"
+        );
+        assert_eq!(
+            p.shasums,
+            "/proxy/tf/v1/providers/hashicorp/null/3.2.2/shasums"
+        );
+        assert_eq!(
+            p.shasums_sig,
+            "/proxy/tf/v1/providers/hashicorp/null/3.2.2/shasums.sig"
+        );
+    }
+
+    #[test]
+    fn only_a_provider_archive_on_the_registry_route_has_them() {
+        for not_one in [
+            "/proxy/tf/v1/providers/hashicorp/null/3.2.2/shasums",
+            "/proxy/tf/v1/modules/hashicorp/dir/template/1.0.2/artifact",
+            "/proxy/npm/left-pad/1.3.0/tarball",
+            "/proxy/tf/v1/providers/hashicorp/null/3.2.2/artifact/linux",
+        ] {
+            assert!(provider_paths_of(not_one).is_none(), "{not_one}");
+        }
+    }
+
+    #[test]
+    fn a_plan_naming_the_archive_alone_is_told_which_sidecars_it_lacks() {
+        let text = serde_json::json!({
+            "plan_version": 1,
+            "generated_from": { "file": "x", "sha256": "0" },
+            "platforms": ["linux-x64"],
+            "entries": [
+                {
+                    "tool": "terraform:hashicorp/null", "version": "3.2.2", "platform": "linux-x64",
+                    "url": "https://releases.hashicorp.com/x",
+                    "registry": { "name": "tf", "type": "terraform" },
+                    "key": "tf/providers/hashicorp/null/3.2.2",
+                    "proxy_path": "/proxy/tf/v1/providers/hashicorp/null/3.2.2/artifact/linux/amd64"
+                },
+                {
+                    "tool": "terraform:hashicorp/null (shasums)", "version": "3.2.2", "platform": "linux-x64",
+                    "url": "https://releases.hashicorp.com/y",
+                    "registry": { "name": "tf", "type": "terraform" },
+                    "key": "tf/providers/hashicorp/null/3.2.2",
+                    "proxy_path": "/proxy/tf/v1/providers/hashicorp/null/3.2.2/shasums"
+                }
+            ],
+            "unsupported": [],
+            "unmirrored_hosts": []
+        });
+        let plan: MisePlan = serde_json::from_value(text).unwrap();
+        let notes = provider_sidecars_missing_from(&plan);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("/shasums.sig"), "{}", notes[0]);
+        assert!(!notes[0].contains("/shasums —"), "{}", notes[0]);
     }
 }

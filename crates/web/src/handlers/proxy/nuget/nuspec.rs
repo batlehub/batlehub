@@ -18,7 +18,7 @@ pub(super) fn content_type_for(filename: &str) -> &'static str {
 
 // ── .nuspec parser ────────────────────────────────────────────────────────────
 
-pub(super) struct NuspecMetadata {
+pub(crate) struct NuspecMetadata {
     pub id: String,
     pub version: String,
     pub description: Option<String>,
@@ -105,7 +105,7 @@ fn decode_nuspec_text(e: &quick_xml::events::BytesText) -> Result<String, AppErr
         .into_owned())
 }
 
-pub(super) fn parse_nuspec(bytes: &[u8]) -> Result<NuspecMetadata, AppError> {
+pub(crate) fn parse_nuspec(bytes: &[u8]) -> Result<NuspecMetadata, AppError> {
     let mut reader = XmlReader::from_reader(bytes);
     reader.config_mut().trim_text(true);
 
@@ -134,7 +134,7 @@ pub(super) fn parse_nuspec(bytes: &[u8]) -> Result<NuspecMetadata, AppError> {
 }
 
 /// Extract the `.nuspec` from a `.nupkg` ZIP archive.
-pub(super) fn extract_nuspec_from_nupkg(bytes: &[u8]) -> Result<Vec<u8>, AppError> {
+pub(crate) fn extract_nuspec_from_nupkg(bytes: &[u8]) -> Result<Vec<u8>, AppError> {
     let cursor = std::io::Cursor::new(bytes);
     let mut archive = zip::ZipArchive::new(cursor)
         .map_err(|e| AppError::unprocessable(format!("invalid .nupkg (not a ZIP): {e}")))?;

@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use actix_web::test::{call_service, TestRequest};
 use async_trait::async_trait;
 use batlehub_adapters::in_memory::InMemoryUpstreamStatusStore;
 use batlehub_adapters::notification::InMemoryNotificationStore;
@@ -114,6 +115,63 @@ impl SeededInventory {
             cached_at: long_ago,
             last_accessed_at: long_ago,
         });
+    }
+    /// A path-addressed kind's row: `repo/_`, the file in the key — the
+    /// shape `generic.rs` files a download under.
+    fn cached_file(&self, registry: &str, path: &str) {
+        let long_ago: DateTime<Utc> = Utc::now() - chrono::Duration::days(30);
+        self.rows.lock().unwrap().push(ArtifactMeta {
+            artifact_key: format!("artifact:{registry}/repo/_/{path}"),
+            registry: registry.into(),
+            package_name: "repo".into(),
+            version: "_".into(),
+            size_bytes: Some(1),
+            cached_at: long_ago,
+            last_accessed_at: long_ago,
+        });
+    }
+}
+
+/// A path-addressed upstream: a file tree that answers a `HEAD` (RFC 0014
+/// §13.5) and, like the real client, resolves metadata without asking.
+struct ScriptedFiles {
+    files: Mutex<HashMap<String, bool>>,
+}
+
+impl ScriptedFiles {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            files: Mutex::new(HashMap::new()),
+        })
+    }
+    fn has(&self, path: &str) {
+        self.files.lock().unwrap().insert(path.into(), true);
+    }
+    fn lost(&self, path: &str) {
+        self.files.lock().unwrap().insert(path.into(), false);
+    }
+}
+
+#[async_trait]
+impl RegistryClient for ScriptedFiles {
+    fn registry_type(&self) -> &str {
+        "generic"
+    }
+    async fn resolve_metadata(&self, pkg: &PackageId) -> Result<PackageMetadata, CoreError> {
+        Ok(PackageMetadata::minimal(
+            pkg.clone(),
+            serde_json::Value::Null,
+        ))
+    }
+    async fn fetch_artifact(&self, _: &PackageId) -> Result<FetchedArtifact, CoreError> {
+        Err(CoreError::NotFound("no bytes in this fake".into()))
+    }
+    async fn probe_artifact(&self, pkg: &PackageId) -> Result<(), CoreError> {
+        let path = pkg.artifact.clone().unwrap_or_default();
+        match self.files.lock().unwrap().get(&path) {
+            Some(true) => Ok(()),
+            _ => Err(CoreError::NotFound(format!("{path} not found upstream"))),
+        }
     }
 }
 
@@ -502,7 +560,7 @@ async fn the_admin_listing_has_the_rows_the_policy_and_the_counts() {
     assert_eq!(page["items"][0]["consecutive_misses"], 2);
     assert_eq!(
         page["counts"],
-        serde_json::json!([{ "registry": "audited-npm", "missing": 0, "disappeared": 1 }])
+        serde_json::json!([{ "registry": "audited-npm", "missing": 0, "disappeared": 1, "policy": "block", "overridden": false }])
     );
 
     // Filters: state, registry; an unknown state is a 400.
@@ -761,4 +819,200 @@ async fn a_reappearance_is_delivered_as_its_own_type() {
     lab.notifications.shutdown().await;
 
     back.assert_async().await;
+}
+
+// ── RFC 0014 §13.5: a path-addressed registry, probed per file ──────────────
+
+/// Under `"block"`, a file a `generic` registry holds and its upstream has
+/// lost is refused on its own route once confirmed, and served again once
+/// it is back — the block is placed on the file's coordinate (`repo/_` with
+/// the path as the artifact), never on the bare `repo/_` that would be every
+/// file of the registry.
+#[actix_web::test]
+async fn under_block_a_confirmed_file_of_a_generic_registry_is_refused_on_its_path() {
+    use batlehub_core::services::OnConfirmed;
+    const GEN: &str = "audited-files";
+    let parts = local_registry_app_parts(GEN, "generic", RegistryMode::Proxy, None);
+    let upstream = ScriptedFiles::new();
+    parts.proxy_svc.hot.write().await.registries.insert(
+        GEN.to_owned(),
+        Arc::clone(&upstream) as Arc<dyn RegistryClient>,
+    );
+    let inventory = SeededInventory::new();
+    let audit = Arc::new(
+        UpstreamAuditService::new(
+            Arc::clone(&inventory) as Arc<dyn ArtifactInventory>,
+            InMemoryUpstreamStatusStore::new() as Arc<dyn UpstreamStatusPort>,
+            parts.proxy_svc.hot.clone(),
+            None,
+            None,
+            UpstreamAuditPolicy {
+                confirm_after: 2,
+                confirm_min_age: Duration::ZERO,
+                skip_recently_seen: false,
+                on_confirmed: OnConfirmed::Block,
+                ..Default::default()
+            },
+            4,
+            vec![GEN.to_owned()],
+        )
+        .with_admin(Arc::clone(&parts.admin_svc)),
+    );
+    // Twelve files upstream still has, and the one it will lose — held
+    // here, bytes and all, the way a served download leaves them.
+    for i in 0..12 {
+        let path = format!("node/v20.0.{i}/node.tar.gz");
+        inventory.cached_file(GEN, &path);
+        upstream.has(&path);
+    }
+    let gone = "node/v18.0.0/node-v18.0.0-linux-x64.tar.gz";
+    inventory.cached_file(GEN, gone);
+    upstream.has(gone);
+    parts
+        .proxy_svc
+        .storage
+        .store(
+            &format!("artifact:{GEN}/repo/_/{gone}"),
+            bytes::Bytes::from_static(b"the tarball"),
+            Default::default(),
+        )
+        .await
+        .unwrap();
+    let app = build_local_registry_app_with_defaults(
+        parts,
+        batlehub_web::CargoIndexMap::default(),
+        ConfigureAppDefaults {
+            upstream_audit: Some(Arc::clone(&audit)),
+            ..Default::default()
+        },
+    )
+    .await;
+    let route = format!("/proxy/{GEN}/generic/{gone}");
+    let other = format!("/proxy/{GEN}/generic/node/v20.0.0/node.tar.gz");
+
+    let resp = call_service(&app, TestRequest::get().uri(&route).to_request()).await;
+    assert_eq!(resp.status(), 200, "held and upstream has it");
+
+    upstream.lost(gone);
+    audit.run_sweep().await;
+    let resp = call_service(&app, TestRequest::get().uri(&route).to_request()).await;
+    assert_eq!(resp.status(), 200, "one miss blocks nothing");
+    let report = audit.run_sweep().await;
+    assert_eq!(report.registries[0].confirmed(), 1, "{report:?}");
+
+    let resp = call_service(&app, TestRequest::get().uri(&route).to_request()).await;
+    assert_eq!(
+        resp.status(),
+        403,
+        "confirmed: the file is refused on its route"
+    );
+    // The bare coordinate was not blocked: another file of the same
+    // registry is still resolvable (its bytes are not held, so the fake
+    // upstream's refusal to stream is the answer — not a 403).
+    let resp = call_service(&app, TestRequest::get().uri(&other).to_request()).await;
+    assert_ne!(
+        resp.status(),
+        403,
+        "a block on repo/_ would refuse every file"
+    );
+
+    upstream.has(gone);
+    let report = audit.run_sweep().await;
+    assert_eq!(report.registries[0].reappeared(), 1, "{report:?}");
+    let resp = call_service(&app, TestRequest::get().uri(&route).to_request()).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "back upstream: the audit's block is lifted"
+    );
+
+    // The status row and the recheck name the file, not a version.
+    let report = audit.recheck(GEN, "repo", Some(gone)).await.unwrap();
+    assert_eq!(report.probed, 1);
+}
+
+// ── RFC 0014 §13 O6: the registry-tier `on_confirmed` on the admin API ──────
+
+/// The estate says audit and one registry's own row says block: the
+/// listing reports both, the package status reports the registry's, and
+/// the block lands.
+#[actix_web::test]
+async fn the_listing_reports_the_registrys_own_policy_beside_the_estates() {
+    use batlehub_core::entities::{RegistryKind, RegistryPolicyTiers};
+    use batlehub_core::services::OnConfirmed;
+    let name = "tiered-npm";
+    let parts = local_registry_app_parts(name, "npm", RegistryMode::Local, None);
+    let upstream = ScriptedUpstream::new();
+    {
+        let mut hot = parts.proxy_svc.hot.write().await;
+        hot.registries.insert(
+            name.to_owned(),
+            Arc::clone(&upstream) as Arc<dyn RegistryClient>,
+        );
+        let mut tiers = RegistryPolicyTiers::open(RegistryKind::Npm, name);
+        tiers.registry.on_confirmed = Some(OnConfirmed::Block);
+        hot.policy_tiers.insert(name.to_owned(), Arc::new(tiers));
+    }
+    let inventory = SeededInventory::new();
+    let audit = Arc::new(
+        UpstreamAuditService::new(
+            Arc::clone(&inventory) as Arc<dyn ArtifactInventory>,
+            InMemoryUpstreamStatusStore::new() as Arc<dyn UpstreamStatusPort>,
+            parts.proxy_svc.hot.clone(),
+            None,
+            None,
+            UpstreamAuditPolicy {
+                confirm_after: 2,
+                confirm_min_age: Duration::ZERO,
+                skip_recently_seen: false,
+                on_confirmed: OnConfirmed::Audit,
+                ..Default::default()
+            },
+            4,
+            vec![name.to_owned()],
+        )
+        .with_admin(Arc::clone(&parts.admin_svc)),
+    );
+    let app = build_local_registry_app_with_defaults(
+        parts,
+        batlehub_web::CargoIndexMap::default(),
+        ConfigureAppDefaults {
+            upstream_audit: Some(Arc::clone(&audit)),
+            ..Default::default()
+        },
+    )
+    .await;
+    for i in 0..12 {
+        let pkg = format!("steady-{i}");
+        inventory.cached_in(name, &pkg, "1.0.0");
+        upstream.has(&pkg, &["1.0.0"]);
+    }
+    inventory.cached_in(name, "gone", "1.0.0");
+    upstream.gone("gone");
+    audit.run_sweep().await;
+    let report = audit.run_sweep().await;
+    assert_eq!(report.registries[0].confirmed(), 1, "{report:?}");
+
+    let resp = get_as(
+        &app,
+        "/api/v1/admin/upstream/disappeared",
+        Some(ADMIN_TOKEN),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let page: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(page["policy"], "audit", "the estate's key");
+    assert_eq!(page["counts"][0]["registry"], name);
+    assert_eq!(page["counts"][0]["policy"], "block", "the registry's row");
+    assert_eq!(page["counts"][0]["overridden"], true);
+
+    let resp = get_as(
+        &app,
+        &format!("/api/v1/admin/upstream/status/{name}/gone"),
+        Some(ADMIN_TOKEN),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let status: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(status["policy"], "block");
 }

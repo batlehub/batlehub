@@ -43,6 +43,22 @@ pub struct AirGapConfig {
     /// How long a recorded miss is kept. `0` keeps it until purged by hand.
     #[serde(default = "default_miss_retention_days")]
     pub miss_retention_days: u32,
+    /// Answer a listing from what this instance holds when it holds no
+    /// document for it (RFC 0008-bis §4.1). Absent means `true` under
+    /// `enabled = true`: an instance that has just imported a bundle should
+    /// answer `npm install` without a second setting. `false` is RFC 0008's
+    /// behaviour — every listing it does not hold is a `503` and a recorded
+    /// miss. Read only under `enabled = true`; `true` elsewhere is refused at
+    /// load, because it would read as if the instance answered offline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synthesise_listings: Option<bool>,
+}
+
+impl AirGapConfig {
+    /// The effective value of `synthesise_listings`: on unless turned off.
+    pub fn synthesises_listings(&self) -> bool {
+        self.synthesise_listings.unwrap_or(true)
+    }
 }
 
 impl Default for AirGapConfig {
@@ -52,6 +68,7 @@ impl Default for AirGapConfig {
             bundle_trusted_keys: Vec::new(),
             record_misses: true,
             miss_retention_days: default_miss_retention_days(),
+            synthesise_listings: None,
         }
     }
 }
@@ -73,6 +90,16 @@ pub fn valid_ed25519_hex_key(key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listings_are_synthesised_unless_turned_off() {
+        let c: AirGapConfig = toml::from_str("enabled = true").unwrap();
+        assert_eq!(c.synthesise_listings, None);
+        assert!(c.synthesises_listings());
+        let c: AirGapConfig =
+            toml::from_str("enabled = true\nsynthesise_listings = false").unwrap();
+        assert!(!c.synthesises_listings());
+    }
 
     #[test]
     fn absent_is_off_and_recording_is_on_with_the_mode() {

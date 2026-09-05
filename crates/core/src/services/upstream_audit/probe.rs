@@ -49,6 +49,7 @@ pub fn probe_name(kind: RegistryKind, outcome: &ProbeOutcome) -> &'static str {
     match outcome {
         ProbeOutcome::MissingPackage => "package",
         ProbeOutcome::MissingVersions(_) if listing_capable(kind) => "version_listing",
+        ProbeOutcome::MissingVersions(_) if kind.is_path_addressed() => "artifact",
         ProbeOutcome::MissingVersions(_) => "per_version",
         ProbeOutcome::Present | ProbeOutcome::Inconclusive(_) => "none",
     }
@@ -64,6 +65,9 @@ pub async fn probe_package(
     name: &str,
     versions: &[String],
 ) -> (ProbeOutcome, bool) {
+    if kind.is_path_addressed() {
+        return probe_files(client, registry, name, versions).await;
+    }
     if listing_capable(kind) {
         // Rung 1: one request covers every cached version.
         match client.list_versions(name).await {
@@ -111,6 +115,43 @@ pub async fn probe_package(
                 // result.
                 return (ProbeOutcome::Inconclusive(Some(e.to_string())), capped);
             }
+        }
+    }
+    if answered == 0 {
+        return (ProbeOutcome::Inconclusive(None), capped);
+    }
+    if missing.is_empty() {
+        (ProbeOutcome::Present, capped)
+    } else {
+        (ProbeOutcome::MissingVersions(missing), capped)
+    }
+}
+
+/// The path-addressed kinds' rung (RFC 0014 §13.5): one `HEAD` per held
+/// file. A path kind has one synthetic package (`repo`) and one version
+/// (`_`), and `resolve_metadata` answers without asking upstream — so the
+/// "versions" the sweep carries for it are the files' upstream paths
+/// (`upstream_audit::held_version`), and each is asked about by name.
+/// Capped like rung 3, and inconclusive on the first failure to answer for
+/// the same reason.
+async fn probe_files(
+    client: &dyn RegistryClient,
+    registry: &str,
+    name: &str,
+    paths: &[String],
+) -> (ProbeOutcome, bool) {
+    let capped = paths.len() > MAX_VERSION_PROBES_PER_PACKAGE;
+    let mut missing = Vec::new();
+    let mut answered = 0usize;
+    for path in paths.iter().take(MAX_VERSION_PROBES_PER_PACKAGE) {
+        let id = PackageId::new(registry, name, super::PATH_KIND_VERSION).with_artifact(path);
+        match client.probe_artifact(&id).await {
+            Ok(()) => answered += 1,
+            Err(CoreError::NotFound(_)) | Err(CoreError::NotFoundWithheld(_)) => {
+                answered += 1;
+                missing.push(path.clone());
+            }
+            Err(e) => return (ProbeOutcome::Inconclusive(Some(e.to_string())), capped),
         }
     }
     if answered == 0 {

@@ -413,7 +413,11 @@ describe("PackageDetailPage forge short SHA", () => {
               status: 200,
               json: async () => ({
                 refs: [
-                  { git_ref: "4.18.2", ref_kind: "tag", sha: "abcdef1234567890abcdef1234567890abcdef12" },
+                  {
+                    git_ref: "4.18.2",
+                    ref_kind: "tag",
+                    sha: "abcdef1234567890abcdef1234567890abcdef12",
+                  },
                 ],
                 remembered: true,
               }),

@@ -11,6 +11,7 @@ Proxy and cache SDKMAN — the JDK, Gradle, Maven, Kotlin and every other candid
 | **Modes** | proxy-only |
 | **Addressing** | `{candidate}/{version}/{platform}` — one archive per platform |
 | **Private publish** | ❌ proxy-only |
+| **Air gap** | offline, `versions/all` and `candidates/default` are composed from the held candidate archives for the platform |
 
 ## Proxy setup
 
