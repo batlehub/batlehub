@@ -55,13 +55,24 @@ spec:
           {{- if eq $configEntry.kind "ConfigMap" }}
           configMap:
             name: {{ $configEntry.name }}
+            {{- with $configEntry.mount.items }}
+            items:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
           {{- else }}
           secret:
             secretName: {{ $configEntry.name }}
+            {{- with $configEntry.mount.items }}
+            items:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
           {{- end }}
           {{- else }}
           secret:
             secretName: {{ include "batlehub.fullname" . }}-config
+            items:
+              - key: config.toml
+                path: config.toml
           {{- end }}
         # The per-job work directories: the only place a scanner writes, and
         # gone with the pod. Memory-backed so a hostile archive's bytes never
@@ -72,8 +83,18 @@ spec:
             sizeLimit: {{ .Values.worker.scratch.sizeLimit }}
         {{- if eq .Values.config.storage.type "filesystem" }}
         - name: cache
+          {{- if .Values.persistence.enabled }}
           persistentVolumeClaim:
             claimName: {{ .Values.persistence.existingClaim | default (printf "%s-cache" (include "batlehub.fullname" .)) }}
+          {{- else }}
+          # The same fallback the proxy Deployment carries: with
+          # `persistence.enabled = false` the chart renders no PersistentVolumeClaim
+          # at all, so referencing one here left the worker pod Pending forever
+          # with `persistentvolumeclaim not found`. An emptyDir gives it the
+          # writable path it needs under a read-only root.
+          emptyDir:
+            sizeLimit: {{ .Values.persistence.ephemeralSizeLimit | default "1Gi" }}
+          {{- end }}
         {{- end }}
       containers:
         - name: worker

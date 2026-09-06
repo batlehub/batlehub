@@ -123,6 +123,22 @@ impl ForgeCoordinate {
                 git_ref: pkg.version.clone(),
                 format: ArchiveFormat::Zip,
             },
+            // GitLab spells the same read `rawfile/{git_ref}/{path}` — its
+            // route carries the ref in the path as well as in the version — so
+            // it has to be recognised here too. Without it a GitLab raw read
+            // fell through to `Asset`, and `[registries.raw]` (the policy rule,
+            // the shebang refusal and the size ceiling all key on
+            // `ForgeKind::Raw`) was inert on GitLab alone.
+            Some(a) if a.starts_with("rawfile/") => {
+                let rest = &a["rawfile/".len()..];
+                let path = rest
+                    .strip_prefix(&format!("{}/", pkg.version))
+                    .unwrap_or(rest);
+                ForgeKind::Raw {
+                    git_ref: pkg.version.clone(),
+                    path: path.to_owned(),
+                }
+            }
             Some(a) => match a.strip_prefix("raw/") {
                 Some(path) => ForgeKind::Raw {
                     git_ref: pkg.version.clone(),
@@ -602,6 +618,24 @@ mod tests {
         let raw = ForgeCoordinate::from_package_id(&pkg("main", Some("raw/install.sh"))).unwrap();
         assert!(matches!(raw.kind, ForgeKind::Raw { ref path, .. } if path == "install.sh"));
         assert_eq!(raw.git_ref(), Some("main"));
+
+        // GitLab's spelling of the same read, which its handler builds as
+        // `rawfile/{git_ref}/{path}`. It has to land on `Raw` too: `Asset` puts
+        // it outside `[registries.raw]` entirely — no `RawPolicyRule`, no
+        // shebang refusal, no size ceiling — on GitLab alone.
+        let gl = ForgeCoordinate::from_package_id(&pkg("main", Some("rawfile/main/install.sh")))
+            .unwrap();
+        assert!(
+            matches!(gl.kind, ForgeKind::Raw { ref path, .. } if path == "install.sh"),
+            "{:?}",
+            gl.kind
+        );
+        assert_eq!(gl.git_ref(), Some("main"));
+        // A nested path keeps every segment below the ref.
+        let nested =
+            ForgeCoordinate::from_package_id(&pkg("main", Some("rawfile/main/ci/setup.sh")))
+                .unwrap();
+        assert!(matches!(nested.kind, ForgeKind::Raw { ref path, .. } if path == "ci/setup.sh"));
 
         assert!(ForgeCoordinate::from_package_id(&pkg(
             "_",

@@ -153,8 +153,8 @@ async fn fetch_conda_index(
         package_id: PackageId::new(registry, platform, "__repodata__"),
         identity: identity.0,
         action: Action::ReleasesRead.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
     };
     let doc = svc
         .multi_package_document(&req, kind, "")

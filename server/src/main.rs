@@ -552,10 +552,6 @@ async fn main() -> Result<()> {
     let artifact_meta = Arc::new(PgArtifactMetaRepository::new(repo.pool()));
     let vuln_repo: Arc<dyn VulnerabilityRepository> =
         Arc::new(PgVulnerabilityRepository::new(repo.pool()));
-    let admin_svc = Arc::new(
-        AdminService::new(repo.clone() as Arc<dyn batlehub_core::ports::PackageRepository>)
-            .with_vulnerability_repo(Arc::clone(&vuln_repo)),
-    );
     let local_registry_backend = Arc::new(PostgresLocalRegistry::new(repo.pool()));
     stores::spawn_pending_publish_cleanup(Arc::clone(&local_registry_backend));
     let quota_svc = Arc::new(builders::build_quota_service(
@@ -677,6 +673,15 @@ async fn main() -> Result<()> {
         .map(|(k, v)| (k.clone(), Arc::clone(v)))
         .collect();
     let hot = new_hot_lock(init_hot);
+    // Built after the hot lock because block/unblock propagate into the verdict
+    // pipeline it carries: on a `[security]` registry `BlockListRule` is not in
+    // the download chain, so a block that only writes the status row would never
+    // reach the gate (RFC 0018 §6.1).
+    let admin_svc = Arc::new(
+        AdminService::new(repo.clone() as Arc<dyn batlehub_core::ports::PackageRepository>)
+            .with_vulnerability_repo(Arc::clone(&vuln_repo))
+            .with_hot_config(hot.clone()),
+    );
 
     let sbom_svc = stores::build_sbom_service(repo.pool())?;
     // Per-registry README capture is configured in `HotConfig::readme` and
@@ -886,19 +891,15 @@ async fn main() -> Result<()> {
     } else if !quarantined.is_empty() {
         warn_if_no_worker(&security_stores, &quarantined).await;
     }
-    if !is_proxy {
-        tracing::info!("proxy role absent: serving only /livez and /metrics");
-        return server_factory::run_worker_only_server(
-            format!("{}:{}", config.server.host, config.server.port),
-            prometheus_handle,
-        )
-        .await;
-    }
-
     // RFC 0014: the upstream audit, on the worker role (§13). A proxy-only
     // process with it enabled is told, once, that it is not the one sweeping.
     // The handle is kept for the admin surface (§4.6): `recheck` drives the
     // same probe on demand.
+    //
+    // Built *above* the worker-only early return, because the sweep is a worker
+    // job: below it, a `--roles worker` process never reached this call and a
+    // `--roles proxy` process declines to sweep, so the documented split
+    // deployment swept nowhere and no `upstream_status` row was ever written.
     let upstream_audit = build_upstream_audit(&UpstreamAuditParams {
         config: &config,
         is_worker,
@@ -909,6 +910,15 @@ async fn main() -> Result<()> {
         admin_svc: &admin_svc,
         notification_svc: &notification_svc,
     });
+
+    if !is_proxy {
+        tracing::info!("proxy role absent: serving only /livez and /metrics");
+        return server_factory::run_worker_only_server(
+            format!("{}:{}", config.server.host, config.server.port),
+            prometheus_handle,
+        )
+        .await;
+    }
 
     // Periodic collection of storage blobs nothing references. Off unless asked
     // for: it deletes on a timer with nobody watching, and the on-demand

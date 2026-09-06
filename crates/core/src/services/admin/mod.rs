@@ -16,6 +16,7 @@ use crate::entities::{
 use crate::error::CoreError;
 use crate::ports::{PackageRepository, VulnerabilityRepository};
 use crate::services::explore_cache::ExploreCache;
+use crate::services::hot_config::HotConfigLock;
 
 /// Cap on simultaneous in-flight operations for a single bulk admin action, to
 /// avoid a large selection (thousands of packages) opening more concurrent DB
@@ -47,6 +48,16 @@ pub struct AdminService {
     /// Optional source of vulnerability findings (the periodic SBOM re-scan).
     /// When absent, `list_vulnerabilities` returns an empty list.
     pub vuln_repo: Option<Arc<dyn VulnerabilityRepository>>,
+    /// Where the verdict pipeline lives, so a block reaches the download gate
+    /// on a `[security]` registry (RFC 0018 §6.1).
+    ///
+    /// On such a registry `BlockListRule` is not in the rule chain — the gate
+    /// is `VerdictGateRule`, which reads only the stored verdict — so a block
+    /// that writes just the status row is invisible to downloads until a scan
+    /// happens to run. `None` is the pre-`[security]` deployment, where
+    /// `BlockListRule` reads the status row on every request and there is
+    /// nothing to propagate.
+    pub hot: Option<HotConfigLock>,
 }
 
 impl AdminService {
@@ -55,7 +66,15 @@ impl AdminService {
             repo,
             explore_cache: Arc::new(ExploreCache::new()),
             vuln_repo: None,
+            hot: None,
         }
+    }
+
+    /// Attach the hot config so block/unblock propagate to verdicts.
+    #[must_use]
+    pub fn with_hot_config(mut self, hot: HotConfigLock) -> Self {
+        self.hot = Some(hot);
+        self
     }
 
     /// Attach a vulnerability repository so package detail views can surface

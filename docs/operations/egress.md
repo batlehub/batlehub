@@ -166,6 +166,35 @@ are dropped the moment a redirect leaves it.
 The periodic OSV re-check, when `[vulnerability_scan] enabled = true`. Off by
 default. See [SBOM](/guide/sbom).
 
+## A scan job runs {#a-scan-job-runs}
+
+A registry with a [`[registries.security]`](/guide/configuration#security)
+profile hands each new version to the worker, and the scanners the profile names
+make their own requests. Each is off unless you configured it in `[[scanners]]`.
+
+Most of them dial a host you named: OSV, a Trivy server, the Socket and mlab
+APIs. The binary scanners under the sandbox reach only what the sandbox lets
+them. Two entries are worth stating separately.
+
+**Rekor**, when `sigstore` is enabled: one lookup per transparency-log entry an
+attestation cites, at `rekor_url` (`https://rekor.sigstore.dev` by default).
+A host you configured, like the rest.
+
+**A host the upstream chose**, in that same scanner. npm announces a version's
+attestations in the packument as `dist.attestations.url`, and the bundle is
+fetched from that URL — which means the *upstream index*, not your config,
+names the host. It is treated the way [a linked README](#a-linked-readme) is:
+the scheme must be `http` or `https`, redirects are followed by BatleHub one hop
+at a time rather than by its HTTP client, every hop is re-checked against the
+private, reserved, loopback and link-local ranges before it is dialled, and no
+credential travels with the request at all. An upstream that answers with
+`302 Location: http://169.254.169.254/…` gets no request; the scan reports the
+refusal as a scanner error rather than a finding, so the response body of
+something internal can never reach a finding an operator reads.
+
+Turn the whole class off by leaving `[registries.security]` unwritten, or the
+one entry off by removing `sigstore` from `[[scanners]]`.
+
 ## See also
 
 - [Production hardening](/operations/production-hardening) — the other settings

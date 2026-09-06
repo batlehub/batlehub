@@ -483,17 +483,25 @@ fn parse_since(
         ))
     })?;
     let secs = match unit.trim() {
-        "" | "s" => n,
-        "m" => n * 60,
-        "h" => n * 3600,
-        "d" => n * 86_400,
+        "" | "s" => Some(n),
+        "m" => n.checked_mul(60),
+        "h" => n.checked_mul(3600),
+        "d" => n.checked_mul(86_400),
         other => {
             return Err(AppError::bad_request(format!(
                 "since: unknown unit '{other}' (s, m, h, d)"
             )))
         }
     };
-    Ok(now - chrono::Duration::seconds(secs))
+    // `checked_mul` and `try_seconds`, because both overflow on a
+    // caller-supplied integer: `Duration::seconds` *panics* above ~9.2e15
+    // seconds, so `?since=9999999999999999` took the request down with no
+    // response at all instead of answering the 400 this function documents.
+    let window = secs
+        .and_then(chrono::Duration::try_seconds)
+        .ok_or_else(|| AppError::bad_request(format!("since '{raw}' is too large a window")))?;
+    now.checked_sub_signed(window)
+        .ok_or_else(|| AppError::bad_request(format!("since '{raw}' is too large a window")))
 }
 
 /// Who pulled this version inside a window — the incident question,

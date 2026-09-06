@@ -238,7 +238,7 @@ fn extract_tar<R: Read>(
                 if looks_like_nested_archive(&name) {
                     report.nested_archives += 1;
                 }
-                let written = write_bounded(&mut entry, &target, budget)?;
+                let written = write_bounded(&mut entry, &target, budget, declared)?;
                 // The declared size was budgeted; the actual one is what
                 // counts, and a header that lied about it is caught here.
                 if written > declared {
@@ -297,7 +297,7 @@ fn extract_zip(
             report.nested_archives += 1;
         }
         let declared = file.size();
-        let written = write_bounded(&mut file, &target, budget)?;
+        let written = write_bounded(&mut file, &target, budget, declared)?;
         if written > declared {
             budget.bytes(written - declared)?;
         }
@@ -313,12 +313,19 @@ fn write_bounded<R: Read>(
     reader: &mut R,
     target: &Path,
     budget: &Budget<'_>,
+    declared: u64,
 ) -> Result<u64, ExtractError> {
     use std::io::Write;
+    // `declared` is subtracted back out because the caller already charged it
+    // to `budget.bytes` before calling: without that, this entry was counted
+    // twice and the ceiling was effectively halved for the largest member — an
+    // archive holding one incompressible 300 MB file was refused as extracting
+    // to more than 512 MiB, and `ExtractError` becomes a `ScannerError::Output`,
+    // so the legitimate artifact was held.
     let remaining = budget
         .policy
         .max_extracted_bytes
-        .saturating_sub(budget.bytes.saturating_sub(0));
+        .saturating_sub(budget.bytes.saturating_sub(declared));
     let mut out = std::fs::File::create(target)?;
     let mut limited = reader.take(remaining + 1);
     let written = std::io::copy(&mut limited, &mut out)?;

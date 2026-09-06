@@ -18,7 +18,6 @@
 //! fresh age reading and a fresh pending check. Only a change of state is
 //! written back, so a hot read path costs one row read.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -443,10 +442,32 @@ impl VerdictService {
                     })
                     .cloned(),
             );
+            // A scanner whose previous answer is carried forward in
+            // `scanners_done` has to have its previous *findings* carried with
+            // it. Content findings are otherwise re-derived by the scanner that
+            // ran, so nothing is lost when it did — but inheriting the marker
+            // alone for a scanner that did *not* run erased what it had found
+            // while still suppressing `SCAN_PENDING`. A rescan during an OSV
+            // outage dropped a critical vulnerability finding and left only
+            // `SCANNER_ERROR`, which is maturity-bypassable, so the version was
+            // downgraded to `warned` and served.
+            //
+            // `flags` is the exception in both halves: it re-emits every live
+            // pushed flag on each run, so re-adding its stored findings would
+            // outlive a revoke.
             for s in &prev.scanners_done {
-                if !done.contains(s) {
-                    done.push(s.clone());
+                if done.contains(s) {
+                    continue;
                 }
+                if s != crate::entities::FLAGS_SCANNER {
+                    findings.extend(
+                        prev.findings
+                            .iter()
+                            .filter(|f| &f.scanner == s && f.kind != FindingKind::SocVerdict)
+                            .cloned(),
+                    );
+                }
+                done.push(s.clone());
             }
         }
         let verdict = evaluate(package, findings, done, policy, now, Some(now));
@@ -606,15 +627,6 @@ impl VerdictService {
 /// release shares one verdict and one scan.
 pub fn coordinate_key(id: &PackageId) -> PackageId {
     PackageId::new(&id.registry, &id.name, &id.version)
-}
-
-/// Group findings by scanner, for callers that report per scanner.
-pub fn by_scanner(findings: &[Finding]) -> HashMap<&str, Vec<&Finding>> {
-    let mut out: HashMap<&str, Vec<&Finding>> = HashMap::new();
-    for f in findings {
-        out.entry(f.scanner.as_str()).or_default().push(f);
-    }
-    out
 }
 
 #[cfg(test)]

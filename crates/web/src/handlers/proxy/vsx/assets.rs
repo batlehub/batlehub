@@ -403,8 +403,8 @@ async fn proxied_artifact(
         package_id: PackageId::new(registry, extension_id, version).with_artifact(selector),
         identity: identity.0.clone(),
         action: Action::SourceRead.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
     };
     let stream = svc
         .handle(req)
@@ -489,8 +489,8 @@ pub(super) async fn vsix_bytes_with_source(
         package_id: pkg.with_artifact(VSIX_ARTIFACT),
         identity: identity.0.clone(),
         action: Action::SourceRead.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
     };
     let stream = svc
         .handle(req)

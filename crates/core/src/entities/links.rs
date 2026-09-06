@@ -60,11 +60,6 @@ impl MetadataLinks {
         let raw: Self = serde_json::from_value(extra.get("links")?.clone()).ok()?;
         Self::new(raw.repository.as_deref(), raw.homepage.as_deref())
     }
-
-    /// The `extra` fragment a registry client merges into its own `json!({…})`.
-    pub fn to_extra_value(&self) -> serde_json::Value {
-        serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
-    }
 }
 
 /// A URL safe to put in an `href`, or `None`.

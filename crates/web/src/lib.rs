@@ -139,15 +139,6 @@ impl RegistryMap {
         self.0.entries()
     }
 
-    /// Registry names with the given type.
-    pub fn names_of_type(&self, registry_type: &str) -> Vec<String> {
-        self.entries()
-            .into_iter()
-            .filter(|(_, t)| t == registry_type)
-            .map(|(n, _)| n)
-            .collect()
-    }
-
     /// Replace this map's contents with `other`'s (called by the hot-reload applier).
     pub fn replace_from(&self, other: &Self) {
         self.0.replace_from(&other.0);

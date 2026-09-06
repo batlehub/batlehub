@@ -537,7 +537,13 @@ Three things to know:
   per-run random segment; anything outside it is a `404`. In a workspace
   pod loopback is shared by every container, so a proxy on a well-known
   port would hand your credential to any process in it. `--bind` accepts
-  loopback addresses only. `--print-gallery-url` prints the URL alone, for
+  loopback addresses only. Inside the segment the path is still checked
+  rather than trusted: a `.` or `..` in it is a `404` (encoded forms
+  included), because the credential is attached to whatever the forwarded
+  path resolves to, and a request that climbed out of the registry's own
+  prefix would reach the rest of the API holding your token. Only `GET`,
+  `HEAD` and `POST` are forwarded, which is everything the gallery protocol
+  uses. `--print-gallery-url` prints the URL alone, for
   a startup script that writes it into the editor's `product.json`; the
   same URL is in `gallery-proxy.json`, mode `0600`.
 - **Signing in is something the editor shows you, not an error it hides.**

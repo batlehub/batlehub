@@ -1289,7 +1289,11 @@ of a denied coordinate is refused before any byte is downloaded.
   `artifact_findings`, `scan_jobs`, `worker_heartbeats`); existing
   `artifact_vulnerabilities` rows are read, not migrated.
 - **Operator prerequisites**: the postmortem binary (bundled in the worker
-  image), a Trivy server and/or GuardDog binary reachable from the worker; outbound HTTPS to Rekor if `sigstore` is enabled; a
+  image), a Trivy server and/or GuardDog binary reachable from the worker; if
+  `sigstore` is enabled, outbound HTTPS to Rekor **and** to whatever host the
+  packument's `dist.attestations.url` names, since that URL comes from the
+  upstream index rather than the config (it is fetched through the SSRF guard,
+  every redirect hop re-checked, with no credential attached); a
   Socket.dev key if `socket` is enabled. Air-gapped deployments can run with
   `["osv"]` against an OSV mirror plus `postmortem` (offline).
 - **Enabling on a live registry**: add the section, run `batlehub verdicts
@@ -1538,6 +1542,17 @@ What differs from the text, each deliberate:
   `license_gate`, `require_signed_release` and `trusted_publisher` are
   wrapped: they read metadata only, and their `Allow` on a missing signal is
   the rule's own documented default, not a failure.
+- **An administrator's block is written into the verdict, not only queued.**
+  Moving `block_list` out of the chain moved it off the request path: on a
+  `[security]` registry the download gate reads the stored verdict, so a block
+  that wrote only the `PackageStatus::Blocked` row left an already-`allowed`
+  version streaming to every client until some later scan happened to run —
+  and with no `[rescan]` interval configured, none ever would. `block_package`
+  therefore denies the stored verdict immediately, the way `FlagService` does
+  for a pushed `hard_block`, *and* enqueues a `Webhook`-priority rescan so
+  `BlockListScanner` re-derives the same finding and the durable path stays the
+  scanner's. Blocking is an operator's containment decision during an incident;
+  it is the one gate that must not wait for a worker to lease a job.
 - **The worker reads its policies from `HotConfig`.** A reload changes what
   the next job scans with, as it changes what the proxy serves with; the
   worker holds no copy.

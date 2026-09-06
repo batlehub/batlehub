@@ -277,9 +277,11 @@ impl RegistryClient for VsCodeMarketplaceRegistryClient {
     async fn fetch_artifact(&self, pkg: &PackageId) -> Result<FetchedArtifact, CoreError> {
         let (publisher, ext_name) = Self::parse_id(&pkg.name)?;
 
+        let mut upstream_supplied = false;
         let url = if pkg.artifact.as_deref()
             == Some(batlehub_core::services::vsx_signature::SIGNATURE_ARTIFACT)
         {
+            upstream_supplied = true;
             // RFC 0020 §4.2: the signature archive is the file the gallery
             // document names, on the gallery's own CDN — the same hosts the
             // README link is allowed to point at, and no other.
@@ -311,12 +313,35 @@ impl RegistryClient for VsCodeMarketplaceRegistryClient {
 
         tracing::debug!(url = %url, "fetching VS Code Marketplace artifact");
 
-        let response = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .map_err(to_registry_error)?;
+        let response = if upstream_supplied {
+            // The signature archive's URL came out of the gallery *document*, so
+            // only its first hop was origin-checked above. `self.http` follows
+            // up to ten redirects itself, with the operator's configured auth
+            // headers attached and no check on any hop — the same defect this
+            // MR fixed in the GitHub client and in the sigstore scanner. So the
+            // redirects are followed here instead, one at a time: the first
+            // hop's own origin (the one `ensure_linked_origin` just approved)
+            // and the configured base stay credentialed, and any hop that leaves
+            // them is checked against the private, reserved and link-local
+            // ranges and re-issued without the credential.
+            let parsed = reqwest::Url::parse(&url)
+                .map_err(|e| CoreError::Registry(format!("invalid upstream URL '{url}': {e}")))?;
+            let trusted = vec![self.base_url.clone(), parsed.origin().ascii_serialization()];
+            crate::registry::ssrf::fetch_following_redirects_trusting(
+                &self.readme_credentialed,
+                &self.readme_plain,
+                &None,
+                &trusted,
+                parsed,
+            )
+            .await?
+        } else {
+            self.http
+                .get(&url)
+                .send()
+                .await
+                .map_err(to_registry_error)?
+        };
 
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(CoreError::NotFound(format!(

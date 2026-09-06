@@ -1617,7 +1617,7 @@ pub async fn make_app_with_defaults_and_access(
         readme: None,
         discovery: Default::default(),
     });
-    let admin_svc = Arc::new(AdminService::new(repo_dyn));
+    let admin_svc = Arc::new(AdminService::new(repo_dyn).with_hot_config(hot.clone()));
 
     let token_repo: Arc<dyn UserTokenRepository> = Arc::new(NullTokenRepository);
     let access_config = access.unwrap_or_else(|| {
@@ -1767,7 +1767,7 @@ pub fn local_registry_app_parts_with_artifact_meta(
         readme: readme_svc,
         discovery: Default::default(),
     });
-    let admin_svc = Arc::new(AdminService::new(repo_dyn));
+    let admin_svc = Arc::new(AdminService::new(repo_dyn).with_hot_config(hot.clone()));
 
     let mode_map = RegistryModeMap::default();
     mode_map.insert(name.to_owned(), mode);
@@ -2078,7 +2078,7 @@ pub fn empty_app_parts() -> EmptyAppParts {
     });
     EmptyAppParts {
         proxy_svc,
-        admin_svc: Arc::new(AdminService::new(repo_dyn)),
+        admin_svc: Arc::new(AdminService::new(repo_dyn).with_hot_config(hot.clone())),
         token_repo: Arc::new(NullTokenRepository),
         access_config: access_config_for(&[]),
         registry_map: registry_map_for(&[]),
@@ -2235,7 +2235,7 @@ pub async fn make_app_with_eviction_and_repo(
         readme: None,
         discovery: Default::default(),
     });
-    let admin_svc = Arc::new(AdminService::new(repo_dyn));
+    let admin_svc = Arc::new(AdminService::new(repo_dyn).with_hot_config(hot.clone()));
     let token_repo: Arc<dyn UserTokenRepository> = Arc::new(NullTokenRepository);
     let access_config = access_config_for(&["npm"]);
     let registry_map = registry_map_for(&[("npm", "npm")]);
@@ -2296,7 +2296,7 @@ pub async fn make_app_with_warming(
         readme: None,
         discovery: Default::default(),
     });
-    let admin_svc = Arc::new(AdminService::new(repo_dyn));
+    let admin_svc = Arc::new(AdminService::new(repo_dyn).with_hot_config(hot.clone()));
     let token_repo: Arc<dyn UserTokenRepository> = Arc::new(NullTokenRepository);
     let access_config = access_config_for(&["npm"]);
     let registry_map = registry_map_for(&[("npm", "npm")]);
@@ -2614,7 +2614,7 @@ pub async fn make_local_nuget_app(
         readme: None,
         discovery: Default::default(),
     });
-    let admin_svc = Arc::new(AdminService::new(repo_dyn));
+    let admin_svc = Arc::new(AdminService::new(repo_dyn).with_hot_config(hot.clone()));
     let mode_map = RegistryModeMap::default();
     mode_map.insert("local-nuget".to_owned(), mode);
 

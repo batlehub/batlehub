@@ -211,19 +211,6 @@ impl ReasonCode {
     pub fn is_maturity_bypassable(&self) -> bool {
         matches!(self, Self::ScanPending | Self::ScannerError)
     }
-
-    /// A transition signal (RFC 0018 §4.2): `medium` on its own, raised when
-    /// combined per the scanner's escalation block.
-    pub fn is_transition(&self) -> bool {
-        matches!(
-            self,
-            Self::PublisherChanged
-                | Self::InstallHookAdded
-                | Self::RepositoryMoved
-                | Self::DormantRelease
-                | Self::ProvenanceRemoved
-        )
-    }
 }
 
 impl std::str::FromStr for ReasonCode {
@@ -268,6 +255,14 @@ pub enum FindingKind {
     BlockList,
     Ref,
 }
+
+/// The name the block-list gate emits findings under.
+///
+/// Two writers put a `BlockList` finding on a verdict — `BlockListScanner` on
+/// every scan, and `AdminService::block_package` immediately when the operator
+/// blocks — and each has to recognise the other's finding to replace it rather
+/// than duplicate it. One constant is what keeps them agreeing.
+pub const BLOCK_LIST_SCANNER: &str = "block_list";
 
 impl FindingKind {
     pub fn as_str(&self) -> &'static str {

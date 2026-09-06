@@ -127,11 +127,14 @@ impl ProxyService {
 
         super::warn_if_audit_failed(
             self.repo
-                .record_access(AccessEvent::allowed_download(
-                    req.package_id,
-                    req.identity.user_id,
-                    req.identity.role,
-                ))
+                .record_access(
+                    AccessEvent::allowed_download(
+                        req.package_id,
+                        req.identity.user_id,
+                        req.identity.role,
+                    )
+                    .with_ip_ua(req.ip_address.clone(), req.user_agent.clone()),
+                )
                 .await,
             "allowed download",
         );
@@ -454,11 +457,14 @@ impl ProxyService {
 
         super::warn_if_audit_failed(
             self.repo
-                .record_access(AccessEvent::allowed_download(
-                    req.package_id,
-                    req.identity.user_id,
-                    req.identity.role,
-                ))
+                .record_access(
+                    AccessEvent::allowed_download(
+                        req.package_id,
+                        req.identity.user_id,
+                        req.identity.role,
+                    )
+                    .with_ip_ua(req.ip_address.clone(), req.user_agent.clone()),
+                )
                 .await,
             "allowed download",
         );
@@ -564,12 +570,15 @@ impl ProxyService {
     ) {
         super::warn_if_audit_failed(
             self.repo
-                .record_access(AccessEvent::proxy_error(
-                    req.package_id.clone(),
-                    req.identity.user_id.clone(),
-                    req.identity.role.clone(),
-                    reason.to_owned(),
-                ))
+                .record_access(
+                    AccessEvent::proxy_error(
+                        req.package_id.clone(),
+                        req.identity.user_id.clone(),
+                        req.identity.role.clone(),
+                        reason.to_owned(),
+                    )
+                    .with_ip_ua(req.ip_address.clone(), req.user_agent.clone()),
+                )
                 .await,
             audit_label,
         );
@@ -664,11 +673,14 @@ impl ProxyService {
 
         super::warn_if_audit_failed(
             self.repo
-                .record_access(AccessEvent::allowed_download(
-                    req.package_id,
-                    req.identity.user_id,
-                    req.identity.role,
-                ))
+                .record_access(
+                    AccessEvent::allowed_download(
+                        req.package_id,
+                        req.identity.user_id,
+                        req.identity.role,
+                    )
+                    .with_ip_ua(req.ip_address.clone(), req.user_agent.clone()),
+                )
                 .await,
             "allowed download",
         );

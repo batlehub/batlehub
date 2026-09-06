@@ -140,7 +140,7 @@ async fn proxy_gem_info(
     let mut gem = fetch_proxy_document(
         svc.clone(),
         PackageId::new(&registry, &name, "info"),
-        AuthIdentity(identity.0.clone()),
+        AuthIdentity(identity.0.clone(), identity.1.clone()),
         Action::ReleasesRead,
         DocumentKind::GEM,
         String::new(),

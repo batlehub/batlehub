@@ -588,6 +588,22 @@ impl ImportCtx<'_> {
         if let Err(e) = batlehub_core::services::validate_path_safe("bundle key", &entry.key) {
             return Some(format!("{}: {e}", entry.key));
         }
+        // The key has to live under the registry the entry names. `import_entry`
+        // writes `artifact:{key}` and `write_meta` writes `meta:{key}`, and those
+        // are exactly `proxy_artifact_key`/`proxy_meta_key` —
+        // `{registry}/{name}/{version}[/{artifact}]`. Without this check an entry
+        // declaring one (known) registry while naming another registry's key
+        // plants its bytes *and* a matching metadata entry in that other
+        // registry's cache namespace, which then serves them as its own, while
+        // `coordinate_of` files the carried verdict under the declared registry
+        // so nothing in the verdict store looks wrong.
+        if !entry.key.starts_with(&format!("{}/", entry.registry)) {
+            return Some(format!(
+                "{}: this key is not under the registry the entry names ('{}'); a bundle entry \
+                 may only write into its own registry",
+                entry.key, entry.registry
+            ));
+        }
         None
     }
 

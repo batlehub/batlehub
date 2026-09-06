@@ -78,8 +78,8 @@ pub async fn extension_entry(
         package_id: PackageId::new(registry, extension_id, "latest"),
         identity: identity.0.clone(),
         action: Action::SourceRead.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
     };
     let meta = match svc.resolve_metadata_for(&req).await {
         Ok(m) => m,

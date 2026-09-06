@@ -34,7 +34,7 @@ use batlehub_core::{
         RegistryClient, ScanInput, ScanQueue, ScannerError, VerdictRepository, VersionDocument,
     },
     rules::VerdictGateRule,
-    services::{RegistryPolicy, ScanWorker, VerdictService, WorkerConfig},
+    services::{BlockListScanner, RegistryPolicy, ScanWorker, VerdictService, WorkerConfig},
 };
 use chrono::Utc;
 
@@ -233,6 +233,16 @@ async fn lab(
         hot.security.insert(REG.to_owned(), sec);
         hot.verdicts = Some(Arc::clone(&verdicts) as Arc<dyn VerdictRepository>);
         hot.scan_queue = Some(Arc::clone(&queue) as Arc<dyn ScanQueue>);
+        // `build_internal_scanners` puts `block_list` first on every
+        // `[security]` registry, so the lab does too: without it a rescan
+        // re-derives the verdict from the other scanners alone and drops an
+        // administrator's block, which is the production shape's whole point.
+        hot.internal_scanners.insert(
+            REG.to_owned(),
+            vec![Arc::new(BlockListScanner {
+                repo: Arc::clone(&parts.proxy_svc.repo),
+            }) as Arc<dyn ArtifactScanner>],
+        );
         // Anonymous may read the tarball here — the public-mirror case of
         // §4.2 — so it is the one caller with the bytes and without
         // `quarantine:read`: a held version must answer it a plain 404.
@@ -349,7 +359,145 @@ async fn first_request_is_held_pending_then_served_after_the_worker_scans() {
         .unwrap()
         .unwrap();
     assert_eq!(stored.state, VerdictState::Allowed);
-    assert_eq!(stored.scanners_done, vec!["osv"]);
+    // `block_list` beside `osv`: the internal scanner every `[security]`
+    // registry runs, which is what carries an administrator's block into the
+    // verdict the download gate reads.
+    assert_eq!(stored.scanners_done, vec!["block_list", "osv"]);
+}
+
+/// An operator's block reaches the download gate on a `[security]` registry.
+///
+/// The regression this guards: `BlockListRule` is not in such a registry's
+/// chain — `VerdictGateRule` is, and it reads only the stored verdict — so a
+/// block that wrote just the status row left an already-`allowed` version
+/// downloading with `200` to every client, indefinitely on a registry with no
+/// `[rescan]` interval. The block still hid the version from listings, so the
+/// API and the audit log both said it had worked.
+#[actix_web::test]
+async fn an_admin_block_denies_the_download_of_an_already_allowed_version() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    let pkg = PackageId::new(REG, "pkg", "1.1.0");
+
+    // Reach a served verdict the honest way: held pending, scanned, then 200.
+    let (code, _) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 403);
+    lab.worker.run_once().await.unwrap();
+    let (code, body) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 200, "{body}");
+    assert_eq!(
+        lab.verdicts.get(&pkg).await.unwrap().unwrap().state,
+        VerdictState::Allowed
+    );
+
+    // The operator blocks it, through the endpoint they would really use.
+    block_version(&app, REG, "pkg", "1.1.0").await;
+
+    // The download is refused now, not after some later scan.
+    let (code, body) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 403, "a blocked version must not stream: {body}");
+    assert!(body.contains("BLOCK_LIST"), "{body}");
+
+    let stored = lab.verdicts.get(&pkg).await.unwrap().unwrap();
+    assert_eq!(stored.state, VerdictState::Denied);
+    assert!(
+        stored
+            .findings
+            .iter()
+            .any(|f| f.kind == FindingKind::BlockList),
+        "the block is a finding on the verdict: {:?}",
+        stored.findings
+    );
+
+    // And a rescan is queued, so the scanner re-derives the same denial and
+    // the durable path stays the worker's.
+    let jobs = lab.queue.open_jobs().await;
+    assert_eq!(jobs.len(), 1, "one rescan queued: {jobs:?}");
+    assert_eq!(jobs[0].trigger, ScanTrigger::Webhook);
+}
+
+/// The block is re-derived by the scanner, not just written once by the admin
+/// call — so the two writers agree and a rescan does not lift the block.
+#[actix_web::test]
+async fn the_scanner_re_derives_an_admin_block_on_the_next_scan() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    let pkg = PackageId::new(REG, "pkg", "1.1.0");
+
+    let (_, _) = status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+    assert_eq!(status(&app, &tarball("1.1.0")).await.0, 200);
+
+    block_version(&app, REG, "pkg", "1.1.0").await;
+    // Run the queued rescan: the block must survive it.
+    lab.worker.run_once().await.unwrap();
+
+    let (code, body) = status(&app, &tarball("1.1.0")).await;
+    assert_eq!(code, 403, "the rescan must not lift the block: {body}");
+    let stored = lab.verdicts.get(&pkg).await.unwrap().unwrap();
+    assert_eq!(stored.state, VerdictState::Denied);
+    // Exactly one block finding: the admin call's and the scanner's are the
+    // same finding, replaced rather than accumulated.
+    assert_eq!(
+        stored
+            .findings
+            .iter()
+            .filter(|f| f.kind == FindingKind::BlockList)
+            .count(),
+        1,
+        "{:?}",
+        stored.findings
+    );
+}
+
+/// A block naming one *file* of a version is not a block on the version.
+///
+/// `BlockListRule` documents the asymmetry — a version-level block covers
+/// every file of the version, a per-file block leaves the others alone — and a
+/// `[security]` registry's gate has no per-file granularity at all: verdicts
+/// are keyed by the coordinate. So the version's verdict must be left exactly
+/// as it was. Propagating a per-file block would hand `BlockListScanner` the
+/// per-file status row on the queued rescan, and `record_scan` files findings
+/// under the coordinate — turning one blocked file into a denial of the whole
+/// release.
+#[actix_web::test]
+async fn a_per_artifact_block_leaves_the_versions_verdict_alone() {
+    let (app, lab) = lab(SecurityMode::Block, old()).await;
+    let pkg = PackageId::new(REG, "pkg", "1.1.0");
+
+    let (_, _) = status(&app, &tarball("1.1.0")).await;
+    lab.worker.run_once().await.unwrap();
+    assert_eq!(status(&app, &tarball("1.1.0")).await.0, 200);
+    let before = lab.verdicts.get(&pkg).await.unwrap().unwrap();
+    assert!(lab.queue.open_jobs().await.is_empty(), "the scan drained");
+
+    // The same admin endpoint, naming a single file of the version.
+    let req = actix_web::test::TestRequest::post()
+        .uri("/api/v1/admin/packages/block")
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .set_json(serde_json::json!({
+            "registry": REG,
+            "name": "pkg",
+            "version": "1.1.0",
+            "artifact": "pkg-1.1.0.tgz",
+            "reason": "one bad file",
+        }))
+        .to_request();
+    let resp = actix_web::test::call_service(&app, req).await;
+    assert!(resp.status().is_success(), "{}", resp.status());
+
+    let after = lab.verdicts.get(&pkg).await.unwrap().unwrap();
+    assert_eq!(after.state, before.state, "the version's verdict moved");
+    assert!(
+        after
+            .findings
+            .iter()
+            .all(|f| f.kind != FindingKind::BlockList),
+        "a per-file block became a finding on the version: {:?}",
+        after.findings
+    );
+    assert!(
+        lab.queue.open_jobs().await.is_empty(),
+        "a per-file block must not queue a rescan of the coordinate"
+    );
 }
 
 #[actix_web::test]

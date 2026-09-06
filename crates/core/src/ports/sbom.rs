@@ -150,17 +150,6 @@ pub struct ExtractedReadme {
 /// that matters: the input is attacker-controlled and compresses well.
 pub const README_EXTRACT_CEILING: usize = 4 * 1024 * 1024;
 
-impl ExtractedManifest {
-    /// The pre-licence shape: dependencies only, nothing declared.
-    pub fn from_dependencies(dependencies: Vec<SbomDependency>) -> Self {
-        Self {
-            dependencies,
-            license: None,
-            readme: None,
-        }
-    }
-}
-
 /// Registry types whose archives carry a manifest the extractor can read a
 /// licence out of.
 ///

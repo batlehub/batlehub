@@ -7,11 +7,48 @@ use batlehub_core::entities::Identity;
 
 use crate::error::AppError;
 
-/// Extracts the `Identity` attached by `AuthMiddleware` from request extensions.
+/// Where a request came from, for the audit trail.
+///
+/// Two ambient facts about the caller that no handler argument carries: the
+/// address the proxy-trust verdict says it came from, and the `User-Agent` it
+/// sent. Both are read once, here, so every audit row that records them agrees
+/// about what they mean.
+#[derive(Debug, Clone, Default)]
+pub struct CallerNet {
+    pub ip: Option<String>,
+    pub user_agent: Option<String>,
+}
+
+impl CallerNet {
+    /// Read both off the request.
+    ///
+    /// The address goes through [`crate::middleware::proxy_trust::client_ip`]
+    /// rather than `connection_info().realip_remote_addr()`, which believes
+    /// `X-Forwarded-For` from any peer: that would let a caller write whatever
+    /// source address it liked into its own audit row. Same verdict as every
+    /// other IP-consuming path, so they cannot disagree.
+    pub fn from_request(req: &HttpRequest) -> Self {
+        Self {
+            ip: Some(crate::middleware::proxy_trust::client_ip(
+                req,
+                crate::middleware::proxy_trust::peer_trust(req),
+            )),
+            user_agent: req
+                .headers()
+                .get(actix_web::http::header::USER_AGENT)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned),
+        }
+    }
+}
+
+/// Extracts the `Identity` attached by `AuthMiddleware` from request extensions,
+/// plus the caller's address and agent for the audit trail.
 ///
 /// Falls back to `Identity::anonymous()` if no middleware has run (should not
 /// happen in production, but avoids panics in tests).
-pub struct AuthIdentity(pub Identity);
+#[derive(Debug, Clone)]
+pub struct AuthIdentity(pub Identity, pub CallerNet);
 
 impl FromRequest for AuthIdentity {
     type Error = AppError;
@@ -23,7 +60,7 @@ impl FromRequest for AuthIdentity {
             .get::<Identity>()
             .cloned()
             .unwrap_or_else(Identity::anonymous);
-        ready(Ok(AuthIdentity(identity)))
+        ready(Ok(AuthIdentity(identity, CallerNet::from_request(req))))
     }
 }
 

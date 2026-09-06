@@ -144,7 +144,7 @@ async fn composed_metadata_checksum(
     let doc = fetch_proxy_document(
         svc.clone(),
         PackageId::new(registry, name, "maven-metadata.xml"),
-        AuthIdentity(identity.0.clone()),
+        AuthIdentity(identity.0.clone(), identity.1.clone()),
         Action::ReleasesRead,
         batlehub_core::ports::DocumentKind::Versions,
         String::new(),

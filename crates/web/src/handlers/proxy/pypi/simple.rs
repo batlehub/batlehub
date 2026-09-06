@@ -209,8 +209,8 @@ pub async fn pypi_json(
         package_id: pkg,
         identity: identity.0,
         action: Action::ReleasesRead.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
     };
 
     // PEP 691 JSON rather than the HTML page: same filtered content, already

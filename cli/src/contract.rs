@@ -446,8 +446,15 @@ impl Entry {
                 // (§4.1.1 rule 1).
                 source: match kind {
                     Kind::Oidc => RefreshSource::Cli,
-                    Kind::Kubernetes => RefreshSource::Reresolve,
-                    Kind::Pat => RefreshSource::None,
+                    // `reresolve` on a *literal* is the one combination
+                    // `validate_entry` refuses outright — re-reading a literal
+                    // yields the same literal — so writing it here made
+                    // `Entry::literal(_, Kind::Kubernetes, _)` fail validation
+                    // every time, and a pod identity could never get a contract
+                    // entry without `--from-file`. `Entry::from_file` is the
+                    // shape that carries `reresolve`, because there the token
+                    // really is re-read from the mount.
+                    Kind::Kubernetes | Kind::Pat => RefreshSource::None,
                 },
                 owner: matches!(kind, Kind::Oidc).then(|| CLI_OWNER.to_owned()),
                 extra: BTreeMap::new(),

@@ -283,6 +283,24 @@ async fn handle_print_token(
             client.base_url
         );
     };
+    // An expired credential is not a credential. `resolve_token` refreshes only
+    // when a refresh token exists, and on a failed refresh it warns and falls
+    // back to the *stored* value — so without this check a stale access token
+    // was printed with exit 0 and the broker substituting stdout into a header
+    // sent a bearer that comes back 401, indistinguishable from an
+    // authorization bug. The promise this command makes is a non-zero exit.
+    if let Some(exp) = expires_at {
+        let left = (exp - chrono::Utc::now()).num_seconds();
+        if left < args.min_ttl.max(0) {
+            bail!(
+                "the credential for {} has {}s left (less than the {}s asked for) and could not be \
+                 refreshed: run `batlehub-cli auth login`",
+                client.base_url,
+                left,
+                args.min_ttl
+            );
+        }
+    }
     match args.output.as_str() {
         "raw" => println!("{token}"),
         "json" => println!(

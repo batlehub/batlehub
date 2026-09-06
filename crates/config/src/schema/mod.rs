@@ -2211,6 +2211,14 @@ impl AppConfig {
             Self::validate_registry_broker_url(registry, kind)?;
             Self::validate_registry_warm_platforms(registry, kind)?;
             Self::validate_registry_refs(registry, kind)?;
+            // Beside `refs`, not inside it: `[registries.raw]` and
+            // `[registries.api_reads]` are independent sections, and calling
+            // them from `validate_registry_refs` meant a config that wrote
+            // either one without `[registries.refs]` got no validation at all —
+            // so `scripts = "denied"` loaded and fell back to `warn`, the
+            // opposite of what the operator asked for.
+            Self::validate_registry_raw(registry, kind)?;
+            Self::validate_registry_api_reads(registry, kind)?;
             self.validate_registry_security(registry)?;
             Self::validate_registry_readme(registry)?;
             Self::validate_registry_upstream_detail(registry)?;
@@ -2949,6 +2957,28 @@ impl AppConfig {
                     bail!("{path}: registries names '{reg}', which is not a configured registry");
                 }
             }
+            // A flag's identity is `(source, external_id)`, and a
+            // `security.verdict` event stores its `hard_block` under the
+            // *inbound webhook's* name as the source. Share a name between the
+            // two blocks and the credentials stop matching the authority: the
+            // flag-source secret — which may be capped to `gate` — revokes a
+            // `hard_block` a security feed pushed through the webhook, because
+            // `DELETE /api/v1/flags/{source}/{external_id}` authenticates
+            // against `[[flag_sources]]` alone. A weaker key must not be able
+            // to lift a stronger denial, so the collision is refused here.
+            if self
+                .notifications
+                .iter()
+                .flat_map(|n| &n.inbound)
+                .any(|h| h.name == src.name)
+            {
+                bail!(
+                    "{path}: name '{}' is also a [[notifications.inbound]] webhook; a \
+                     security.verdict event stores its hard_block under the webhook's name, and \
+                     this source's secret would then revoke it — give them distinct names",
+                    src.name
+                );
+            }
         }
         Ok(())
     }
@@ -3118,8 +3148,6 @@ impl AppConfig {
                 MIN_BRANCH_TTL_SECS
             );
         }
-        Self::validate_registry_raw(registry, kind)?;
-        Self::validate_registry_api_reads(registry, kind)?;
         // An unparsable action must not fall back to a default: `mutable_refs`
         // and `tag_moved` decide whether a request is served or refused, and
         // an operator who typed `"denied"` expecting refusals would get the

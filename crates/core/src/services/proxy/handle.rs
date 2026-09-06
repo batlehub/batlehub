@@ -585,6 +585,38 @@ impl ProxyService {
         let Some(forge) = client.forge() else {
             return Ok(None);
         };
+        // Everything past this point is an authenticated upstream call with the
+        // operator's forge token plus a `ref_resolutions` write, and `handle`
+        // calls this *before* the prelude and the grant check. So both run here
+        // first: without them an anonymous caller could ask about a tag in a
+        // repository they may not read and tell "no such tag" (the 404
+        // `resolve_ref` returns) from "not yours" (the 403 the grant check
+        // returns later) — an existence oracle over the proxy's credential, and
+        // an unauthenticated way to spend the shared rate-limit budget — while
+        // an unvalidated `owner/repo` or ref reached the upstream URL and the
+        // store before the edge chokepoint saw it.
+        //
+        // A denial is deliberately *not* returned as an error: `handle_resolved`
+        // owns the audit record and the `Denied` response for it, and taking the
+        // exit here would lose both. The ref is left unresolved instead, and the
+        // request is denied where it always was.
+        if crate::services::validate_coordinate(
+            &req.package_id.name,
+            &req.package_id.version,
+            req.package_id.artifact.as_deref(),
+        )
+        .is_err()
+            || crate::services::authz::authorize_grants_public(
+                &self.hot,
+                &req.package_id,
+                &req.identity,
+                req.action,
+            )
+            .await
+            .is_err()
+        {
+            return Ok(None);
+        }
         let resolved = crate::services::forge_refs::resolve_ref(
             &registry,
             forge,
@@ -648,12 +680,15 @@ impl ProxyService {
             let reason = e.to_string();
             super::warn_if_audit_failed(
                 self.repo
-                    .record_access(AccessEvent::denied_download(
-                        req.package_id,
-                        req.identity.user_id,
-                        req.identity.role,
-                        reason.clone(),
-                    ))
+                    .record_access(
+                        AccessEvent::denied_download(
+                            req.package_id,
+                            req.identity.user_id,
+                            req.identity.role,
+                            reason.clone(),
+                        )
+                        .with_ip_ua(req.ip_address.clone(), req.user_agent.clone()),
+                    )
                     .await,
                 "denied download",
             );
@@ -687,12 +722,15 @@ impl ProxyService {
         if let RuleDecision::Deny { reason } = decision {
             super::warn_if_audit_failed(
                 self.repo
-                    .record_access(AccessEvent::denied_download(
-                        req.package_id,
-                        req.identity.user_id,
-                        req.identity.role,
-                        reason.clone(),
-                    ))
+                    .record_access(
+                        AccessEvent::denied_download(
+                            req.package_id,
+                            req.identity.user_id,
+                            req.identity.role,
+                            reason.clone(),
+                        )
+                        .with_ip_ua(req.ip_address.clone(), req.user_agent.clone()),
+                    )
                     .await,
                 "denied download",
             );
@@ -769,11 +807,14 @@ impl ProxyService {
                 // path calls the same function — see
                 // `PackageId::is_verification_sidecar`.
                 self.repo
-                    .record_access(AccessEvent::allowed_read(
-                        req.package_id,
-                        req.identity.user_id,
-                        req.identity.role,
-                    ))
+                    .record_access(
+                        AccessEvent::allowed_read(
+                            req.package_id,
+                            req.identity.user_id,
+                            req.identity.role,
+                        )
+                        .with_ip_ua(req.ip_address.clone(), req.user_agent.clone()),
+                    )
                     .await,
                 "allowed download",
             );
@@ -882,12 +923,15 @@ impl ProxyService {
         if let CoreError::AccessDenied(reason) = &e {
             super::warn_if_audit_failed(
                 self.repo
-                    .record_access(AccessEvent::denied_metadata(
-                        req.package_id.clone(),
-                        req.identity.user_id.clone(),
-                        req.identity.role.clone(),
-                        reason.clone(),
-                    ))
+                    .record_access(
+                        AccessEvent::denied_metadata(
+                            req.package_id.clone(),
+                            req.identity.user_id.clone(),
+                            req.identity.role.clone(),
+                            reason.clone(),
+                        )
+                        .with_ip_ua(req.ip_address.clone(), req.user_agent.clone()),
+                    )
                     .await,
                 what,
             );

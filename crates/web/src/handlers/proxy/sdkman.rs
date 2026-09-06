@@ -37,7 +37,7 @@ use serde::Deserialize;
 
 use batlehub_core::{
     entities::{Action, PackageId, RegistryKind},
-    ports::{DocumentBody, DocumentKind},
+    ports::DocumentKind,
     services::{
         blocking::sdkman::{default_version, repaired_default},
         sdkman::{listing_package, parse_platform, DEFAULT_PLATFORM},
@@ -217,7 +217,7 @@ pub async fn sdkman_candidate_default(
     let default = fetch_proxy_document(
         svc.clone(),
         PackageId::new(&registry, candidate, "default"),
-        AuthIdentity(identity.0.clone()),
+        AuthIdentity(identity.0.clone(), identity.1.clone()),
         Action::ReleasesList,
         DocumentKind::SDKMAN_DEFAULT,
         String::new(),
@@ -685,13 +685,6 @@ pub async fn sdkman_download(
         Some("application/octet-stream"),
     )
     .await
-}
-
-/// Keeps the `DocumentBody` import honest for the composed default: the
-/// repaired body is text, and the unrepaired one is served as it came.
-#[allow(dead_code)]
-fn _body_is_text(body: &DocumentBody) -> bool {
-    matches!(body, DocumentBody::Text(_))
 }
 
 #[cfg(test)]

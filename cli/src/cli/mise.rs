@@ -116,6 +116,12 @@ async fn run_import(args: ImportArgs, client: &BatleHubClient, json: bool) -> Re
     let resp = client.import_bundle(bytes).await?;
     if json {
         println!("{}", serde_json::to_string_pretty(&resp)?);
+        // The same exit code as the human path: a runbook piping `--json` into
+        // `jq` would otherwise go green on a partially failed import, and the
+        // missing artifacts surface later as 503s from the disconnected proxy.
+        if resp.rejected > 0 {
+            std::process::exit(1);
+        }
         return Ok(());
     }
     if resp.already_imported {

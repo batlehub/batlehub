@@ -171,7 +171,7 @@ async fn proxy_go_latest(
     let latest = fetch_proxy_document(
         svc.clone(),
         PackageId::new(&registry, &module, "latest"),
-        AuthIdentity(identity.0.clone()),
+        AuthIdentity(identity.0.clone(), identity.1.clone()),
         Action::ReleasesRead,
         DocumentKind::LATEST,
         String::new(),

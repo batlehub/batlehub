@@ -30,7 +30,7 @@ use std::collections::BTreeSet;
 use anyhow::{Context, Result};
 
 use batlehub_config::load;
-use batlehub_core::entities::{expand_patterns, Action, RegistryKind, WildcardScope};
+use batlehub_core::entities::{expand_patterns, RegistryKind, WildcardScope};
 
 /// Read `path` and print the expanded permission set per registry.
 pub(crate) fn explain_config(path: &str) -> Result<()> {
@@ -184,25 +184,6 @@ fn print_node(node: &batlehub_core::entities::Node) {
                         .join(", ")
                 );
             }
-        }
-    }
-}
-
-/// Every verb, for `--help`-shaped questions about what can be written.
-#[allow(dead_code)]
-pub(crate) fn print_vocabulary() {
-    for action in Action::ALL {
-        match action.kinds() {
-            None => println!("{}", action.as_str()),
-            Some(kinds) => println!(
-                "{}  (only on: {})",
-                action.as_str(),
-                kinds
-                    .iter()
-                    .map(|k| k.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
         }
     }
 }

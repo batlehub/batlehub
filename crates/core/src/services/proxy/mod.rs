@@ -200,12 +200,15 @@ impl ProxyService {
                 metrics::counter!("batlehub_upstream_errors_total", "registry" => Arc::clone(registry_label)).increment(1);
                 warn_if_audit_failed(
                     self.repo
-                        .record_access(AccessEvent::proxy_error(
-                            req.package_id.clone(),
-                            req.identity.user_id.clone(),
-                            req.identity.role.clone(),
-                            e.to_string(),
-                        ))
+                        .record_access(
+                            AccessEvent::proxy_error(
+                                req.package_id.clone(),
+                                req.identity.user_id.clone(),
+                                req.identity.role.clone(),
+                                e.to_string(),
+                            )
+                            .with_ip_ua(req.ip_address.clone(), req.user_agent.clone()),
+                        )
                         .await,
                     "proxy error",
                 );

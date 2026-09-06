@@ -249,17 +249,24 @@ impl ScanWorker {
         self.record(job, &package, &policy, findings, done).await
     }
 
-    /// The version's metadata, dated.
+    /// The version's metadata, resolved and dated.
+    ///
+    /// The whole document, not just the date: on a `[security]` registry
+    /// `license_gate`, `require_signed_release` and `trusted_publisher` are
+    /// removed from the request chain and run here as `RuleAsScanner`s instead,
+    /// and every one of them judges a field of this metadata (`license`,
+    /// `is_signed`, `extra["publisher"]`). Handing them a
+    /// `PackageMetadata::minimal(_, Null)` made the signature gate a permanent
+    /// no-op under its default (`deny_missing_signature = false`) and made
+    /// `trusted_publisher` fail closed on every package — in both cases judging
+    /// the absence of a field rather than the field.
     ///
     /// A rescan queued without the date — the metadata cache had let it go —
-    /// must not re-judge a dated version as `TIMESTAMP_MISSING`: ask upstream
-    /// once, as the proxy would.
+    /// must not re-judge a dated version as `TIMESTAMP_MISSING` either, so the
+    /// job's own `published_at` still wins when it has one.
     async fn dated_metadata(&self, job: &ScanJob) -> PackageMetadata {
         let mut package = PackageMetadata::minimal(job.package.clone(), serde_json::Value::Null);
         package.published_at = job.published_at;
-        if package.published_at.is_some() {
-            return package;
-        }
         let client = self
             .hot
             .read()
@@ -271,9 +278,15 @@ impl ScanWorker {
             return package;
         };
         match client.resolve_metadata(&job.package).await {
-            Ok(meta) => package.published_at = meta.published_at,
+            Ok(meta) => {
+                let queued_date = package.published_at;
+                package = meta;
+                // The date the job carried is the one the request saw, so it
+                // stays authoritative; upstream's only fills a gap.
+                package.published_at = queued_date.or(package.published_at);
+            }
             Err(e) => {
-                tracing::debug!(package = %job.package, error = %e, "security worker: no date from upstream for the rescan")
+                tracing::debug!(package = %job.package, error = %e, "security worker: upstream did not answer for the rescan; judging on the coordinate alone")
             }
         }
         package

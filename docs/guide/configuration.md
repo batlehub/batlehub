@@ -2547,7 +2547,7 @@ max_flags_per_minute = 600          # 0 disables the limit
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `name` | — | `[a-z0-9][a-z0-9_-]*`, at most 64 characters, unique. The source pushes to `POST /api/v1/flags/{name}` and revokes with `DELETE /api/v1/flags/{name}/{external_id}`. |
+| `name` | — | `[a-z0-9][a-z0-9_-]*`, at most 64 characters, unique — and distinct from every `[[notifications.inbound]]` name, because a `security.verdict` event stores its `hard_block` under the webhook's name and this source's secret is what revokes a flag under that name. The source pushes to `POST /api/v1/flags/{name}` and revokes with `DELETE /api/v1/flags/{name}/{external_id}`. |
 | `secret` | — | HMAC-SHA256 key. The push carries `X-Hub-Signature-256: sha256=<hex>` over the raw body (over the empty string on a `DELETE`), the same scheme `[[notifications.inbound]]` verifies. An unknown name and a bad signature answer the same `404`. |
 | `max_effect` | `gate` | The strongest effect this source may set. A push asking for more is stored at the ceiling and told so (`effect_capped: true`). |
 | `registries` | `[]` | The registries the source may flag. An item naming another one is rejected, per item. |

@@ -394,6 +394,21 @@ pub(super) fn build_scanners(config: &batlehub_config::schema::AppConfig) -> Res
             .build()
             .context("building OSV HTTP client")
     };
+    // The sigstore scanner's own client, and the one difference that matters:
+    // redirects are disabled. It is the one scanner that dials a URL taken from
+    // a *response* (`dist.attestations.url` in the packument) rather than from
+    // config, so it fetches through `registry::ssrf`, which follows hops itself
+    // in order to check each against the private and link-local ranges. A
+    // client that followed them too would take the unchecked path first.
+    let no_redirect_client = |timeout: u64| {
+        reqwest::Client::builder()
+            .user_agent("batlehub/0.1")
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(timeout))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .context("building the sigstore HTTP client")
+    };
     // The sandbox every binary scanner runs under (RFC 0018 §6.3), from
     // `[worker.sandbox]`; validation has already refused `runtime = "none"`
     // outside the escape hatch.
@@ -491,7 +506,7 @@ pub(super) fn build_scanners(config: &batlehub_config::schema::AppConfig) -> Res
                 out.insert(
                     name.clone(),
                     Arc::new(batlehub_adapters::scanners::SigstoreScanner {
-                        http: osv_client(30)?,
+                        http: no_redirect_client(30)?,
                         rekor_url: rekor_url.clone().unwrap_or_else(|| {
                             batlehub_adapters::scanners::sigstore::DEFAULT_REKOR.to_owned()
                         }),

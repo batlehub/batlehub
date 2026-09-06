@@ -446,14 +446,17 @@ pub async fn proxy_stream(
     action: Action,
     content_type: Option<&str>,
 ) -> Result<HttpResponse, AppError> {
+    // Captured before `identity` is narrowed to the domain `Identity`, which is
+    // all the rest of this function needs.
+    let net = identity.1.clone();
     let identity = identity.0;
     let coordinate = pkg.clone();
     let req = ProxyRequest {
         package_id: pkg,
         identity: identity.clone(),
         action: action.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: net.ip,
+        user_agent: net.user_agent,
     };
     let response = svc.handle(req).await.map_err(AppError::from)?;
     // RFC 0018 §4.2: a `warned` artifact is the same bytes with the verdict's
@@ -599,8 +602,8 @@ pub async fn fetch_proxy_document(
         package_id: pkg,
         identity: identity.0,
         action: action.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
     };
     svc.version_document(&req, doc_kind, &public_base)
         .await

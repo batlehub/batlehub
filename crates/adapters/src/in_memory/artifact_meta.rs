@@ -160,12 +160,18 @@ impl ArtifactCacheMeta for InMemoryArtifactMetaRepository {
         key: &str,
         older_than: DateTime<Utc>,
     ) -> Result<bool, CoreError> {
-        Ok(self
+        // An unknown key is *expired*, not fresh — the port's contract, and
+        // what the Postgres store answers (`NOT EXISTS(… cached_at >= $2)`).
+        // Answering `false` here would report a blob with no meta row — one
+        // written by a path that never called `record_artifact`, or whose row
+        // was dropped while the bytes survived — as fresh forever, so
+        // `artifact_ttl` would never expire it.
+        Ok(!self
             .rows
             .lock()
             .expect("artifact meta")
             .get(key)
-            .is_some_and(|r| r.meta.cached_at < older_than))
+            .is_some_and(|r| r.meta.cached_at >= older_than))
     }
 
     async fn delete_artifact_meta(&self, key: &str) -> Result<(), CoreError> {

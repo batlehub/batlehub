@@ -20,7 +20,13 @@
 //! witness.
 //!
 //! The lookups are made by the worker's own HTTP client, not under the
-//! sandbox: nothing hostile is opened, and the coordinates are public.
+//! sandbox. The Rekor base is operator config, but the attestations URL comes
+//! out of the packument — upstream-controlled, exactly like `dist.tarball`
+//! beside it — so it goes through the same SSRF guard the registry adapters
+//! use ([`crate::registry::ssrf`]): every hop is checked against the private,
+//! reserved and link-local ranges, and no credential travels with it. The
+//! client is built with redirects disabled so the guard sees each hop rather
+//! than reqwest following them unchecked.
 
 use std::time::Duration;
 
@@ -29,10 +35,15 @@ use async_trait::async_trait;
 use batlehub_core::entities::{Finding, FindingKind, ReasonCode, RegistryKind, Severity};
 use batlehub_core::ports::{ArtifactScanner, ScanInput, ScannerError};
 
+use crate::registry::ssrf;
+
 pub const NAME: &str = "sigstore";
 pub const DEFAULT_REKOR: &str = "https://rekor.sigstore.dev";
 
 pub struct SigstoreScanner {
+    /// MUST be built with `reqwest::redirect::Policy::none()`: the SSRF guard
+    /// follows hops itself so it can check each one, and a client that also
+    /// followed them would take the unchecked path first.
     pub http: reqwest::Client,
     pub rekor_url: String,
     /// The kinds a missing attestation is a finding on (`require_for`).
@@ -98,13 +109,24 @@ impl SigstoreScanner {
             "{}/api/v1/log/entries?logIndex={index}",
             self.rekor_url.trim_end_matches('/')
         );
-        let resp = self
-            .http
-            .get(&url)
-            .timeout(self.timeout)
-            .send()
-            .await
-            .map_err(|e| ScannerError::Upstream(format!("rekor: {e}")))?;
+        // The configured Rekor origin is operator-trusted, so it is passed as
+        // the trusted origin: redirects are still followed (the client itself
+        // no longer does), and any hop that leaves that origin is checked.
+        let parsed = reqwest::Url::parse(&url)
+            .map_err(|e| ScannerError::Upstream(format!("rekor: bad url: {e}")))?;
+        let resp = tokio::time::timeout(
+            self.timeout,
+            ssrf::fetch_following_redirects(
+                &self.http,
+                &self.http,
+                &None,
+                self.rekor_url.trim_end_matches('/'),
+                parsed,
+            ),
+        )
+        .await
+        .map_err(|_| ScannerError::Upstream("rekor: timed out".to_owned()))?
+        .map_err(|e| ScannerError::Upstream(format!("rekor: {e}")))?;
         match resp.status().as_u16() {
             200 => Ok(true),
             404 => Ok(false),
@@ -152,18 +174,33 @@ impl ArtifactScanner for SigstoreScanner {
             }
             Announced::Some { url } => url,
         };
-        let bundles: serde_json::Value = self
-            .http
-            .get(&url)
-            .timeout(self.timeout)
-            .send()
-            .await
-            .map_err(|e| ScannerError::Upstream(format!("attestations: {e}")))?
-            .error_for_status()
-            .map_err(|e| ScannerError::Upstream(format!("attestations: {e}")))?
-            .json()
-            .await
-            .map_err(|e| ScannerError::Output(format!("attestations are not JSON: {e}")))?;
+        // `url` came out of the packument, so it is attacker-controlled in
+        // scheme, host and port — not just path. Guarded like every other
+        // upstream-supplied URL in this crate: no trusted origin at all (the
+        // empty string), so the SSRF check applies to the first hop and to
+        // every redirect, and `plain` for both clients so no credential can
+        // ride along. Without this a hostile upstream pointed the worker at
+        // the link-local metadata endpoint from inside the cluster.
+        let parsed = reqwest::Url::parse(&url)
+            .map_err(|e| ScannerError::Upstream(format!("attestations: bad url '{url}': {e}")))?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(ScannerError::Upstream(format!(
+                "attestations: refusing scheme '{}'",
+                parsed.scheme()
+            )));
+        }
+        let bundles: serde_json::Value = tokio::time::timeout(
+            self.timeout,
+            ssrf::fetch_following_redirects(&self.http, &self.http, &None, "", parsed),
+        )
+        .await
+        .map_err(|_| ScannerError::Upstream("attestations: timed out".to_owned()))?
+        .map_err(|e| ScannerError::Upstream(format!("attestations: {e}")))?
+        .error_for_status()
+        .map_err(|e| ScannerError::Upstream(format!("attestations: {e}")))?
+        .json()
+        .await
+        .map_err(|e| ScannerError::Output(format!("attestations are not JSON: {e}")))?;
         let indexes = Self::log_indexes(&bundles);
         if indexes.is_empty() {
             return Ok(vec![Finding::new(
@@ -267,5 +304,54 @@ mod tests {
             ..required
         };
         assert!(optional.scan(&input(listing)).await.unwrap().is_empty());
+    }
+
+    /// The attestations URL comes out of the packument, so a hostile upstream
+    /// picks its host. It must never be dialled when that host is internal.
+    #[tokio::test]
+    async fn an_attestations_url_on_an_internal_host_is_refused_not_fetched() {
+        let meta = batlehub_core::entities::PackageMetadata::minimal(
+            batlehub_core::entities::PackageId::new("npm", "left-pad", "1.0.0"),
+            serde_json::Value::Null,
+        );
+        let scanner = SigstoreScanner {
+            http: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
+            rekor_url: DEFAULT_REKOR.into(),
+            require_for: vec![RegistryKind::Npm],
+            timeout: Duration::from_secs(5),
+        };
+        // The cloud metadata endpoint the SSRF guard's own header names, plus
+        // loopback and a private range, and a scheme that is not HTTP at all.
+        for url in [
+            "http://169.254.169.254/latest/meta-data/iam/security-credentials/role",
+            "http://127.0.0.1:9/x",
+            "http://10.0.0.1/x",
+            "file:///etc/passwd",
+        ] {
+            let listing = batlehub_core::ports::VersionDocument::json(serde_json::json!({
+                "versions": { "1.0.0": { "dist": { "attestations": { "url": url } } } }
+            }));
+            let err = scanner
+                .scan(&ScanInput {
+                    package: meta.clone(),
+                    kind: RegistryKind::Npm,
+                    purl: "pkg:npm/left-pad@1.0.0".into(),
+                    artifact: None,
+                    sbom: None,
+                    listing: Some(listing),
+                })
+                .await
+                .expect_err(&format!("{url} must be refused"));
+            // A refusal, never a finding: a finding would carry the response
+            // body, which is the exfiltration half of the same bug.
+            let msg = err.to_string();
+            assert!(
+                msg.contains("SSRF guard") || msg.contains("refusing scheme"),
+                "{url}: {msg}"
+            );
+        }
     }
 }

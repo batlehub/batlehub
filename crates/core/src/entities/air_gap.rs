@@ -16,8 +16,12 @@ use utoipa::ToSchema;
 
 /// What kind of thing was missing. One table, one column — the same shape
 /// RFC 0018 uses for its single verdict table with reason codes.
+// `snake_case`, not `lowercase`: serde's `lowercase` inserts no separator, so
+// `UnmirroredHost` would serialise as `unmirroredhost` while `as_str()` — what
+// the Postgres store writes and what `?kind=` parses — says `unmirrored_host`.
+// The API would then hand a client a value its own filter rejects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum MissKind {
     /// The bytes of a version.
     Artifact,

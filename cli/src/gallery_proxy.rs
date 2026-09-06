@@ -428,6 +428,38 @@ async fn sign_in_asset(req: HttpRequest, state: web::Data<Arc<ProxyState>>) -> H
     }
 }
 
+/// Is `tail` free of the dot segments that would escape the registry prefix?
+///
+/// The router hands the tail through already percent-decoded except for `%`,
+/// `/` and `+` (`actix_router`'s default quoter), so a literal `..` and a
+/// `%2e%2e` both arrive as `..`. Decoding the remaining `%2e` ourselves keeps
+/// the check honest if that quoter ever widens. `%2f` stays encoded and the
+/// `url` crate leaves it that way, so it cannot forge a segment boundary.
+fn tail_is_safe(tail: &str) -> bool {
+    tail.split('/').all(|seg| {
+        let decoded = seg.replace("%2e", ".").replace("%2E", ".");
+        decoded != "." && decoded != ".."
+    })
+}
+
+/// Build the upstream URL for a forwarded gallery request, or `None` if the
+/// result would not sit under the registry base.
+///
+/// `tail_is_safe` is what prevents the escape; this parse is the belt-and-
+/// braces check that the URL reqwest will actually dial still starts where we
+/// think it does, so any future normalisation quirk fails closed.
+fn upstream_url(registry_base: &str, tail: &str, query: Option<&str>) -> Option<String> {
+    let mut url = format!("{registry_base}/{tail}");
+    if let Some(q) = query {
+        url.push('?');
+        url.push_str(q);
+    }
+    let parsed = reqwest::Url::parse(&url).ok()?;
+    let base = reqwest::Url::parse(registry_base).ok()?;
+    let prefix = format!("{}/", base.as_str().trim_end_matches('/'));
+    parsed.as_str().starts_with(&prefix).then_some(url)
+}
+
 /// Every other gallery request — asset fetches, `vspackage`, `item` — goes
 /// upstream with the credential and comes back as it was, body streamed.
 async fn forward(
@@ -439,15 +471,31 @@ async fn forward(
         return not_found().await;
     }
     let tail = req.match_info().get("tail").unwrap_or_default();
-    let mut url = format!("{}/{tail}", state.registry_base);
-    if let Some(q) = req.uri().query() {
-        url.push('?');
-        url.push_str(q);
+    // The tail is interpolated into an URL the credential is attached to, so a
+    // dot segment here is a credential escape, not a cosmetic issue: actix
+    // normalises no path (`NormalizePath` only touches slashes) and its router
+    // decodes `%2e` before matching, while the `url` crate reqwest parses with
+    // *does* collapse `..` — so `../../api/v1/…` would leave the registry
+    // prefix and reach the whole API bearing the user's token. Refuse it here.
+    if !tail_is_safe(tail) {
+        return not_found().await;
     }
+    let Some(url) = upstream_url(&state.registry_base, tail, req.uri().query()) else {
+        return not_found().await;
+    };
     let method = match reqwest::Method::from_bytes(req.method().as_str().as_bytes()) {
         Ok(m) => m,
         Err(_) => return HttpResponse::MethodNotAllowed().finish(),
     };
+    // The gallery protocol reads assets and posts queries; nothing it does
+    // needs `PUT`/`DELETE`/`PATCH`. Since this handler is the one that carries
+    // the credential, the verbs that mutate stay off it.
+    if !matches!(
+        method,
+        reqwest::Method::GET | reqwest::Method::HEAD | reqwest::Method::POST
+    ) {
+        return HttpResponse::MethodNotAllowed().finish();
+    }
     let mut upstream = state.http.request(method, &url);
     if let Some(token) = state.credential() {
         upstream = upstream.bearer_auth(token);
@@ -700,6 +748,84 @@ mod tests {
             let resp = atest::call_service(&app, req).await;
             assert_eq!(resp.status(), 404, "{uri}");
         }
+    }
+
+    #[test]
+    fn a_dot_segment_in_the_tail_is_refused_before_it_reaches_an_url() {
+        for tail in [
+            "../../api/v1/auth/tokens",
+            "..",
+            "vscode/asset/../../../api/v1/admin/packages",
+            "%2e%2e/%2e%2e/api/v1/packages",
+            "%2E%2E/api",
+            "./x",
+        ] {
+            assert!(!tail_is_safe(tail), "{tail} must be refused");
+        }
+        for tail in [
+            "vscode/asset/p/real/1.0.0",
+            "vspackage",
+            "item",
+            "",
+            "a..b/c.d",
+        ] {
+            assert!(tail_is_safe(tail), "{tail} must be allowed");
+        }
+    }
+
+    #[test]
+    fn the_upstream_url_never_leaves_the_registry_base() {
+        let base = "http://bh.local/proxy/vsx";
+        assert_eq!(
+            upstream_url(base, "vscode/asset/p/1.0.0", Some("a=b")).unwrap(),
+            "http://bh.local/proxy/vsx/vscode/asset/p/1.0.0?a=b"
+        );
+        // The escape `tail_is_safe` rejects: refused a second time here, so
+        // the check holds even if the first one is ever bypassed.
+        assert!(upstream_url(base, "../../api/v1/auth/tokens", None).is_none());
+        // A sideways hop to another registry is an escape too.
+        assert!(upstream_url(base, "../npm/some/path", None).is_none());
+    }
+
+    #[actix_web::test]
+    async fn forward_traversal_tail_returns_404_and_sends_no_credential() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut server = mockito::Server::new_async().await;
+        // Anything reaching the origin at all is the bug: the escape target is
+        // mocked so a leak shows up as a hit, not as a connection error.
+        let escaped = server
+            .mock("POST", "/api/v1/auth/tokens")
+            .with_status(200)
+            .with_body("{}")
+            .expect(0)
+            .create_async()
+            .await;
+        let registry_base = format!("{}/proxy/vsx", server.url());
+        let contract = dir.path().join("vsx-token.json");
+        let mut doc = ContractFile::load(&contract);
+        doc.set_entry(
+            &contract::normalize_origin(&registry_base),
+            contract::Entry::literal("bh_pat_secret", contract::Kind::Pat, None),
+        );
+        doc.save(&contract).unwrap();
+        let st = state(&contract, &registry_base);
+        assert_eq!(st.credential().as_deref(), Some("bh_pat_secret"));
+        let app = atest::init_service(
+            App::new()
+                .app_data(web::Data::new(Arc::clone(&st)))
+                .configure(configure),
+        )
+        .await;
+        for uri in [
+            "/abc123/vsx/../../api/v1/auth/tokens",
+            "/abc123/vsx/%2e%2e/%2e%2e/api/v1/auth/tokens",
+            "/abc123/vsx/vscode/asset/../../../api/v1/auth/tokens",
+        ] {
+            let req = atest::TestRequest::post().uri(uri).to_request();
+            let resp = atest::call_service(&app, req).await;
+            assert_eq!(resp.status(), 404, "{uri}");
+        }
+        escaped.assert_async().await;
     }
 
     #[actix_web::test]

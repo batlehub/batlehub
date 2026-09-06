@@ -15,6 +15,7 @@ use batlehub_adapters::in_memory::{
     InMemoryPackageRepository as InMemoryRepo, InMemoryStorageBackend as InMemoryStorage,
     NoopArtifactMetaRepository as NoopArtifactMeta,
 };
+use batlehub_config::schema::RegistryMode;
 use batlehub_core::entities::EventFilter;
 use batlehub_core::entities::{AccessAction, AccessEvent, PackageId, Role};
 use batlehub_core::ports::{NoopWarmCoordinator, PackageRepository, StorageBackend, StorageMeta};
@@ -555,6 +556,62 @@ async fn recorded(
     })
     .await
     .unwrap()
+}
+
+/// A download's audit row carries the caller's address and agent.
+///
+/// The regression this guards: `ProxyRequest` documented both fields as being
+/// "for audit log enrichment", the column existed, the CSV export printed it and
+/// `list_pullers` grouped by it — but nothing ever set them, so every row was
+/// null and the audit trail could attribute nothing to an address.
+#[actix_web::test]
+async fn a_downloads_audit_row_carries_the_callers_address_and_agent() {
+    let parts = local_registry_app_parts("npm", "npm", RegistryMode::Proxy, None);
+    let repo = Arc::clone(&parts.proxy_svc.repo);
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+
+    let req = TestRequest::get()
+        .uri("/proxy/npm/pkg/1.1.0/tarball")
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .insert_header(("User-Agent", "npm/10.2.4 node/v20.11.0"))
+        .peer_addr("203.0.113.9:54321".parse().unwrap())
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert!(resp.status().is_success(), "{}", resp.status());
+
+    let events = recorded(&repo, AccessAction::Download).await;
+    let e = events.first().expect("the download was audited");
+    assert_eq!(e.ip_address.as_deref(), Some("203.0.113.9"));
+    assert_eq!(e.user_agent.as_deref(), Some("npm/10.2.4 node/v20.11.0"));
+}
+
+/// And it is the peer's address, not one the caller asked for.
+///
+/// With no trusted proxy configured, `X-Forwarded-For` is attacker-supplied:
+/// believing it would let any caller write whatever source address it liked into
+/// its own audit row, which is the one field an operator reads to find out who
+/// pulled something.
+#[actix_web::test]
+async fn a_forwarded_for_header_cannot_forge_the_audited_address() {
+    let parts = local_registry_app_parts("npm", "npm", RegistryMode::Proxy, None);
+    let repo = Arc::clone(&parts.proxy_svc.repo);
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+
+    let req = TestRequest::get()
+        .uri("/proxy/npm/pkg/1.1.0/tarball")
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .insert_header(("X-Forwarded-For", "198.51.100.7"))
+        .peer_addr("203.0.113.9:54321".parse().unwrap())
+        .to_request();
+    assert!(call_service(&app, req).await.status().is_success());
+
+    let events = recorded(&repo, AccessAction::Download).await;
+    let e = events.first().expect("the download was audited");
+    assert_eq!(
+        e.ip_address.as_deref(),
+        Some("203.0.113.9"),
+        "the peer, never the header"
+    );
 }
 
 #[actix_web::test]

@@ -169,8 +169,8 @@ async fn serve_compact(
         package_id: PackageId::new(&registry, which.coordinate(), "__compact__"),
         identity: identity.0,
         action: Action::ReleasesRead.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
     };
     let doc = svc
         .multi_package_document(&req, which.document_kind(), "")
@@ -368,8 +368,8 @@ pub async fn gem_compact_info(
         package_id: PackageId::new(&registry, &gem, "__compact__"),
         identity: identity.0,
         action: Action::ReleasesRead.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
     };
     let doc = svc
         .version_document(&req, batlehub_core::ports::DocumentKind::COMPACT_INFO, "")

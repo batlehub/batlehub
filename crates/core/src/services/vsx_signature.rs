@@ -32,12 +32,19 @@ pub const ENTRY_SIG: &str = ".signature.sig";
 pub const ENTRY_MANIFEST: &str = ".signature.manifest";
 pub const ENTRY_P7S: &str = ".signature.p7s";
 
+/// The largest single entry, and the largest total, this will hash out of a
+/// VSIX. Both are ceilings against a hostile archive rather than a real limit:
+/// a genuine extension's largest member is megabytes.
+const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
 /// The signature manifest for `vsix`: the package digest and one entry per
 /// file in the archive, directories skipped.
 pub fn signature_manifest(vsix: &[u8]) -> Result<String, CoreError> {
     let mut archive = zip::ZipArchive::new(Cursor::new(vsix))
         .map_err(|e| CoreError::InvalidInput(format!("VSIX is not a zip archive: {e}")))?;
     let mut entries = serde_json::Map::new();
+    let mut total: u64 = 0;
     for i in 0..archive.len() {
         let mut file = archive
             .by_index(i)
@@ -46,10 +53,36 @@ pub fn signature_manifest(vsix: &[u8]) -> Result<String, CoreError> {
             continue;
         }
         let name = file.name().to_owned();
-        let mut bytes = Vec::with_capacity(file.size() as usize);
-        file.read_to_end(&mut bytes).map_err(|e| {
-            CoreError::InvalidInput(format!("VSIX entry {name} is unreadable: {e}"))
-        })?;
+        // The declared size comes out of the zip central directory, so it is
+        // publisher-controlled: `Vec::with_capacity(file.size())` was an
+        // allocation an attacker chose, and a 1 KB "VSIX" declaring 2^63 aborted
+        // the process on a capacity overflow. The read is bounded too, because a
+        // header that under-declares is a deflate bomb the digest would
+        // otherwise have to buffer whole.
+        let declared = file.size();
+        if declared > MAX_ENTRY_BYTES || total + declared.min(MAX_ENTRY_BYTES) > MAX_TOTAL_BYTES {
+            return Err(CoreError::InvalidInput(format!(
+                "VSIX entry {name} declares {declared} bytes: over the ceiling this manifest \
+                 will hash"
+            )));
+        }
+        let mut bytes = Vec::with_capacity(declared.min(1024 * 1024) as usize);
+        std::io::Read::take(&mut file, MAX_ENTRY_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| {
+                CoreError::InvalidInput(format!("VSIX entry {name} is unreadable: {e}"))
+            })?;
+        if bytes.len() as u64 > MAX_ENTRY_BYTES {
+            return Err(CoreError::InvalidInput(format!(
+                "VSIX entry {name} expands past the {MAX_ENTRY_BYTES}-byte ceiling"
+            )));
+        }
+        total += bytes.len() as u64;
+        if total > MAX_TOTAL_BYTES {
+            return Err(CoreError::InvalidInput(format!(
+                "the VSIX expands past the {MAX_TOTAL_BYTES}-byte ceiling"
+            )));
+        }
         entries.insert(STANDARD.encode(name.as_bytes()), digest_entry(&bytes));
     }
     let manifest = serde_json::json!({

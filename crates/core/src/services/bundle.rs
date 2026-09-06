@@ -377,8 +377,31 @@ pub fn read_bundle<R: std::io::Read>(input: R) -> Result<ReadBundle, CoreError> 
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes).map_err(io)?;
         if path == MANIFEST_PATH {
+            // A duplicate `manifest.json` is refused, and this is a signature
+            // property rather than tidiness: `manifest_bytes_of` — the bytes the
+            // import verifies the ed25519 signature over — returns the *first*
+            // member with this name, while this loop used to keep the *last*.
+            // tar allows duplicate names, so appending a second manifest to a
+            // legitimately signed bundle had the signature cover one manifest
+            // and the import execute another, naming any registry, storage key
+            // and digest the attacker liked (blobs are self-verifying by digest,
+            // so they are free to author).
+            if manifest_bytes.is_some() {
+                return Err(CoreError::InvalidInput(
+                    "the bundle carries more than one manifest.json; the one that is signed and \
+                     the one that would be imported need not be the same file"
+                        .to_owned(),
+                ));
+            }
             manifest_bytes = Some(bytes);
         } else if path == SIGNATURE_PATH {
+            // Same reason: `signature_of` reads the first, so a second must not
+            // be able to stand in for it.
+            if signature.is_some() {
+                return Err(CoreError::InvalidInput(
+                    "the bundle carries more than one manifest.sig".to_owned(),
+                ));
+            }
             signature = Some(bytes);
         } else if let Some(name) = path.strip_prefix(BLOB_PREFIX) {
             // The name is the digest, and nothing else is read from the
@@ -424,7 +447,13 @@ pub fn manifest_bytes_of<R: std::io::Read>(input: R) -> Result<Vec<u8>, CoreErro
     let mut archive = tar::Archive::new(input);
     for entry in archive.entries().map_err(io)? {
         let mut entry = entry.map_err(io)?;
-        let path = entry.path().map_err(io)?.to_string_lossy().into_owned();
+        // Normalised exactly as `read_bundle` normalises it, so the two cannot
+        // disagree about which member is the manifest.
+        let path = entry
+            .path()
+            .map_err(io)?
+            .to_string_lossy()
+            .replace('\\', "/");
         if path == MANIFEST_PATH {
             let mut bytes = Vec::new();
             entry.read_to_end(&mut bytes).map_err(io)?;
@@ -499,6 +528,65 @@ mod container_tests {
             manifest_bytes_of(&out[..]).unwrap(),
             m.to_signed_bytes().unwrap()
         );
+    }
+
+    /// A second `manifest.json` appended to a signed bundle is refused.
+    ///
+    /// The regression this guards is a signature bypass, not untidiness:
+    /// `manifest_bytes_of` — the bytes the import verifies the signature over —
+    /// returns the *first* member with that name, while `read_bundle` used to
+    /// keep the *last*. tar allows duplicate names, so appending one manifest to
+    /// any legitimately signed bundle had the signature cover one document and
+    /// the import execute another, naming arbitrary registries, storage keys and
+    /// digests (blobs are self-verifying, so the attacker authors them freely).
+    #[test]
+    fn a_second_manifest_is_refused_rather_than_shadowing_the_signed_one() {
+        let m = manifest();
+        let mut out = Vec::new();
+        write_bundle(&mut out, &m, b"sig", |d| {
+            (d == crate::services::integrity::sha256_hex(b"one")).then(|| b"one".to_vec())
+        })
+        .unwrap();
+
+        // The attacker's manifest, appended after the signed one exactly as tar
+        // allows: same name, different content, no new signature.
+        let mut attacker = m.clone();
+        attacker.bundle_id = "attacker".to_owned();
+        attacker.entries.clear();
+        let attacker_bytes = attacker.to_signed_bytes().unwrap();
+
+        let mut tampered = Vec::new();
+        {
+            let mut tar = tar::Builder::new(&mut tampered);
+            let mut src = tar::Archive::new(&out[..]);
+            for entry in src.entries().unwrap() {
+                let mut entry = entry.unwrap();
+                let path = entry.path().unwrap().into_owned();
+                let mut bytes = Vec::new();
+                std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
+                let mut header = tar::Header::new_gnu();
+                header.set_size(bytes.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                tar.append_data(&mut header, &path, &bytes[..]).unwrap();
+            }
+            let mut header = tar::Header::new_gnu();
+            header.set_size(attacker_bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append_data(&mut header, MANIFEST_PATH, &attacker_bytes[..])
+                .unwrap();
+            tar.finish().unwrap();
+        }
+
+        // The signature still covers the honest manifest…
+        assert_eq!(
+            manifest_bytes_of(&tampered[..]).unwrap(),
+            m.to_signed_bytes().unwrap()
+        );
+        // …and the reader refuses the bundle rather than executing the other one.
+        let err = read_bundle(&tampered[..]).expect_err("two manifests must be refused");
+        assert!(err.to_string().contains("more than one manifest"), "{err}");
     }
 
     #[test]

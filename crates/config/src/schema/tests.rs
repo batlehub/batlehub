@@ -3361,6 +3361,45 @@ fn an_unsigned_webhook_is_refused_once_any_registry_is_quarantined() {
     assert!(err.contains("secret"), "{err}");
 }
 
+/// A flag source and an inbound webhook must not share a name.
+///
+/// A `security.verdict` event stores its `hard_block` under the webhook's name
+/// as the flag source, and the revoke endpoint authenticates against
+/// `[[flag_sources]]` alone — so a source capped to `gate` would hold the key
+/// that lifts a security feed's `hard_block`.
+#[test]
+fn a_flag_source_may_not_share_a_name_with_an_inbound_webhook() {
+    let blocks = r#"
+        [notifications]
+        enabled = true
+
+        [[notifications.inbound]]
+        name = "soc"
+        secret = "s3cret"
+
+        [[flag_sources]]
+        name = "soc"
+        secret = "other"
+        max_effect = "gate"
+        "#;
+    let err = validation_error(
+        &security_config(r#"        mode = "block""#, blocks),
+        "a name shared by a flag source and an inbound webhook must not load",
+    );
+    assert!(err.contains("notifications.inbound"), "{err}");
+
+    // Distinct names are the whole requirement: the same pair loads.
+    let ok = blocks.replace(
+        r#"[[flag_sources]]
+        name = "soc""#,
+        r#"[[flag_sources]]
+        name = "soc-push""#,
+    );
+    parse_config(&security_config(r#"        mode = "block""#, &ok))
+        .validate()
+        .expect("distinct names load");
+}
+
 #[test]
 fn roles_and_worker_scoping_are_checked() {
     let err = validation_error(

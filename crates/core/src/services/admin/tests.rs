@@ -564,6 +564,7 @@ fn make_svc_with_cache(repo: Arc<dyn PackageRepository>, cache: Arc<ExploreCache
         repo,
         explore_cache: cache,
         vuln_repo: None,
+        hot: None,
     }
 }
 

@@ -1300,6 +1300,10 @@ async fn package_links(input: LinkInput<'_>) -> Option<PackageLinksDto> {
                     package_id,
                     identity: identity.clone(),
                     action: Action::ReleasesRead.to_owned(),
+                    // Left `None` deliberately, unlike every other
+                    // `ProxyRequest`: this read is `_uncaptured_` (below) and
+                    // writes no audit row, so there is nothing for a caller
+                    // address to enrich. A page view is not a download.
                     ip_address: None,
                     user_agent: None,
                 };

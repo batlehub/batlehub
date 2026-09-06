@@ -15,7 +15,7 @@ use async_trait::async_trait;
 
 use crate::entities::{
     Finding, FindingKind, Identity, PackageStatus, ReasonCode, RegistryKind, Severity, UpstreamKey,
-    UpstreamState,
+    UpstreamState, BLOCK_LIST_SCANNER,
 };
 use crate::ports::{
     AdvisoryRepository, ArtifactScanner, PackageRepository, ScanInput, ScannerError,
@@ -31,7 +31,7 @@ pub struct BlockListScanner {
 #[async_trait]
 impl ArtifactScanner for BlockListScanner {
     fn name(&self) -> &str {
-        "block_list"
+        BLOCK_LIST_SCANNER
     }
     fn supports(&self, _: RegistryKind) -> bool {
         true
@@ -42,7 +42,7 @@ impl ArtifactScanner for BlockListScanner {
             Ok(PackageStatus::Blocked {
                 reason, blocked_by, ..
             }) => Ok(vec![Finding::new(
-                "block_list",
+                BLOCK_LIST_SCANNER,
                 FindingKind::BlockList,
                 ReasonCode::BlockList,
                 Severity::Critical,
@@ -274,7 +274,7 @@ impl ArtifactScanner for RuleAsScanner {
 /// than as rules (RFC 0018 §4.1). `build_policy` omits these from the chain
 /// and registers the scanners instead; every one of them is required.
 pub const WRAPPED_GATES: &[&str] = &[
-    "block_list",
+    BLOCK_LIST_SCANNER,
     "cve_gate",
     "license_gate",
     "require_signed_release",

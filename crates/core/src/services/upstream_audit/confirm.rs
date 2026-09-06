@@ -9,7 +9,7 @@
 
 use chrono::{DateTime, Utc};
 
-use super::probe::ProbeOutcome;
+use super::probe::{ProbeOutcome, MAX_VERSION_PROBES_PER_PACKAGE};
 use super::{UpstreamAuditPolicy, MIN_PROBED_FOR_RATIO};
 use crate::entities::{MissObservation, UpstreamKey, UpstreamState, UpstreamStatus};
 use crate::ports::UpstreamStatusPort;
@@ -55,7 +55,15 @@ fn tally(outcomes: &[(String, Vec<String>, (ProbeOutcome, bool))], applied: &mut
     conclusive
 }
 
-/// A package the probe found: the package row and every version row clear.
+/// A package the probe found: the package row and every *probed* version row
+/// clear.
+///
+/// Only the probed prefix, because that is all the probe asked about:
+/// `probe_package` stops at [`MAX_VERSION_PROBES_PER_PACKAGE`], so clearing
+/// every cached version would delete the `disappeared` row of a version
+/// nothing upstream was asked about — reporting it as `Reappeared` and, under
+/// `on_confirmed = "block"`, lifting its block on no evidence at all. That is
+/// the one direction this module's invariant may not fail in.
 async fn present(
     status: &dyn UpstreamStatusPort,
     registry: &str,
@@ -64,7 +72,7 @@ async fn present(
     applied: &mut Applied,
 ) {
     clear(status, registry, name, None, versions, applied).await;
-    for v in versions {
+    for v in versions.iter().take(MAX_VERSION_PROBES_PER_PACKAGE) {
         clear(
             status,
             registry,

@@ -278,8 +278,8 @@ pub async fn explore_fetch_version(
             package_id,
             identity: identity.0.clone(),
             action: Action::SourceRead,
-            ip_address: None,
-            user_agent: None,
+            ip_address: identity.1.ip.clone(),
+            user_agent: identity.1.user_agent.clone(),
         })
         .await
         .map_err(AppError::from)?;
