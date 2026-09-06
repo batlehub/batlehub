@@ -93,7 +93,9 @@ heavy_wire_after apt-update "GET /proxy/$DEB/deb/dists/$SUITE/main/binary-$APT_A
 # The file apt will ask for, from apt itself rather than a guess.
 RUN_OUT="$HEAVY_WORK/apt-uris.txt"
 run_apt "$ROOT0" download --print-uris "$PKG" || { cat "$RUN_OUT" >&2; heavy_fail "apt-get download --print-uris $PKG failed"; }
-DEB_URL=$(grep -o "'[^']*\.deb'" "$RUN_OUT" | head -1 | tr -d "'")
+# `|| true` so the guard below reports the empty case; without it `pipefail`
+# aborts the run here and the operator never sees which command was asked.
+DEB_URL=$(grep -o "'[^']*\.deb'" "$RUN_OUT" | head -1 | tr -d "'" || true)
 [[ -n "$DEB_URL" ]] || { cat "$RUN_OUT" >&2; heavy_fail "apt printed no .deb URI for $PKG"; }
 DEB_PATH="${DEB_URL#"$APT_URL"/}"
 DEB_ROUTE="/proxy/$DEB/deb/$DEB_PATH"
@@ -133,7 +135,7 @@ NATIVE=$(echo "$FIRST" | sed 's/.* -> \([0-9]*\).*/\1/')
 NATIVE_TRIES=$(awk -v mark="### apt-native" -v p="GET $DEB_ROUTE -> " '
   index($0, mark) == 1 { seen = 1; next } seen && index($0, p) == 1 { c++ } END { print c + 0 }' "$HEAVY_LOG")
 heavy_log "Refuse/native: the block answers $NATIVE ($NATIVE_TRIES request(s)); apt said:"
-grep -i "err\|fail\|E:" "$RUN_OUT" | head -3 >&2
+heavy_client_said "$RUN_OUT" 'err|fail|E:'
 
 case "$NATIVE" in
   403) OTHER=404 ;;
@@ -154,7 +156,7 @@ heavy_wire_after apt-other "GET $DEB_ROUTE -> $NATIVE=>$OTHER"
 OTHER_TRIES=$(awk -v mark="### apt-other" -v p="GET $DEB_ROUTE -> " '
   index($0, mark) == 1 { seen = 1; next } seen && index($0, p) == 1 { c++ } END { print c + 0 }' "$HEAVY_LOG")
 heavy_log "Refuse/$OTHER: apt asked $OTHER_TRIES time(s), took ${ELAPSED}s with Retry-After: 30, and said:"
-grep -i "err\|fail\|E:" "$RUN_OUT" | head -3 >&2
+heavy_client_said "$RUN_OUT" 'err|fail|E:'
 [[ "$ELAPSED" -lt 25 ]] || heavy_fail "apt waited on Retry-After — the CI contract assumes it does not"
 heavy_tap_rewrite_clear
 
@@ -234,7 +236,7 @@ EOF
   DNF_TRIES=$(awk -v mark="### dnf-native" -v p="GET $RPM_ROUTE -> " '
     index($0, mark) == 1 { seen = 1; next } seen && index($0, p) == 1 { c++ } END { print c + 0 }' "$HEAVY_LOG")
   heavy_log "Refuse/native: the block answers $DNF_NATIVE ($DNF_TRIES request(s)); dnf said:"
-  grep -i "error\|fail" "$RUN_OUT" | head -3 >&2
+  heavy_client_said "$RUN_OUT" 'error|fail'
 
   case "$DNF_NATIVE" in 403) DNF_OTHER=404 ;; *) DNF_OTHER=403 ;; esac
   heavy_tap_rewrite GET "$RPM_ROUTE" "$DNF_NATIVE" "$DNF_OTHER" "Retry-After: 30"
@@ -249,7 +251,7 @@ EOF
   ELAPSED=$(( $(date +%s) - START ))
   heavy_wire_after dnf-other "GET $RPM_ROUTE -> $DNF_NATIVE=>$DNF_OTHER"
   heavy_log "Refuse/$DNF_OTHER: took ${ELAPSED}s with Retry-After: 30; dnf said:"
-  grep -i "error\|fail" "$RUN_OUT" | head -3 >&2
+  heavy_client_said "$RUN_OUT" 'error|fail'
   heavy_tap_rewrite_clear
 
   heavy_unblock "$RPM" repo _ "$RPM_PATH"

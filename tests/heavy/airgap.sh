@@ -483,7 +483,7 @@ if heavy_wire_seen_after "npm-fresh" "GET /proxy/$NPM_REG/$NPM_PKG/$NPM_VERSION/
   heavy_fail "npm asked for the tarball after a 503 on the packument — the version string did not need the listing after all"
 fi
 NPM_PACKUMENT_TRIES="$(heavy_wire_count_after npm-fresh "GET /proxy/$NPM_REG/$NPM_PKG -> 503")"
-NPM_SAID="$(grep -E 'npm (error|ERR!) (code|[0-9]{3})' "$HEAVY_WORK/npm-fresh.txt" | head -2 | sed 's/^npm \(error\|ERR!\) //' | tr '\n' ';')"
+NPM_SAID="$(grep -E 'npm (error|ERR!) (code|[0-9]{3})' "$HEAVY_WORK/npm-fresh.txt" | head -2 | sed 's/^npm \(error\|ERR!\) //' | tr '\n' ';' || true)"
 measure "npm  | install $NPM_PKG@$NPM_VERSION, clean cache | GET /$NPM_PKG -> 503 x$NPM_PACKUMENT_TRIES, tarball never asked | exit $CLIENT_RC after ${CLIENT_SECS}s | $NPM_SAID"
 heavy_log "NPM-FRESH-MEASURED"
 
@@ -535,7 +535,7 @@ if heavy_wire_seen_after "pip-fresh" "GET /proxy/$PIP_REG/packages/$PIP_WHEEL"; 
   heavy_fail "pip asked for the wheel after a 503 on the simple page"
 fi
 PIP_SIMPLE_TRIES="$(heavy_wire_count_after pip-fresh "GET /proxy/$PIP_REG/simple/$PIP_PKG/ -> 503")"
-PIP_SAID="$(grep -E '^(ERROR|WARNING): ' "$HEAVY_WORK/pip-fresh.txt" | sed 's/ *$//' | sort | uniq -c | sort -rn | head -3 | sed 's/^ *//' | tr '\n' ';')"
+PIP_SAID="$(grep -E '^(ERROR|WARNING): ' "$HEAVY_WORK/pip-fresh.txt" | sed 's/ *$//' | sort | uniq -c | sort -rn | head -3 | sed 's/^ *//' | tr '\n' ';' || true)"
 measure "pip  | install $PIP_PKG==$PIP_VERSION, no cache | GET /simple/$PIP_PKG/ -> 503 x$PIP_SIMPLE_TRIES, wheel never asked | exit $CLIENT_RC after ${CLIENT_SECS}s | $PIP_SAID"
 heavy_log "PIP-FRESH-MEASURED"
 
@@ -616,7 +616,7 @@ fi
 MISE_FIRST="$(awk -v mark="### ${MARK_MISE_NOLOCK}" 'index($0, mark) == 1 { seen = 1; next } seen && /GET \/proxy/ { print; exit }' "$HEAVY_LOG" | sed -E 's/ -> .*//')"
 MISE_BYTAG="$(heavy_wire_count_after "${MARK_MISE_NOLOCK}" "GET /proxy/$GH_REG/$OWNER_REPO/releases/tags/v$TOOL_VERSION -> 503")"
 MISE_LIST="$(heavy_wire_count_after "${MARK_MISE_NOLOCK}" "GET /proxy/$GH_REG/$OWNER_REPO/releases[?]per_page=100 -> 503")"
-MISE_SAID="$(grep -E 'mise ERROR' "$HEAVY_WORK/${MARK_MISE_NOLOCK}.txt" | tail -3 | sed -E 's/^mise ERROR +//' | cut -c1-160 | tr '\n' ';')"
+MISE_SAID="$(grep -E 'mise ERROR' "$HEAVY_WORK/${MARK_MISE_NOLOCK}.txt" | tail -3 | sed -E 's/^mise ERROR +//' | cut -c1-160 | tr '\n' ';' || true)"
 measure "mise | install $TOOL@$TOOL_VERSION, no lock | first $MISE_FIRST -> 503; by-tag x$MISE_BYTAG, listing x$MISE_LIST, asset never asked | exit $CLIENT_RC after ${CLIENT_SECS}s | $MISE_SAID"
 heavy_log "MISE-NOLOCK-MEASURED"
 

@@ -161,7 +161,7 @@ NATIVE=$(echo "$FIRST" | sed 's/.* -> \([0-9]*\).*/\1/')
 NATIVE_TRIES=$(awk -v mark="### pinned-native" -v p="GET $POM -> " '
   index($0, mark) == 1 { seen = 1; next } seen && index($0, p) == 1 { c++ } END { print c + 0 }' "$HEAVY_LOG")
 heavy_log "Refuse/native: the block answers $NATIVE ($NATIVE_TRIES request(s) for the pom); mvn said:"
-grep "ERROR" "$RUN_OUT" | head -3 >&2
+heavy_client_said "$RUN_OUT" 'error'
 
 # ── Refuse: the other status ─────────────────────────────────────────────────
 
@@ -182,7 +182,7 @@ fi
 ELAPSED=$(( $(date +%s) - START ))
 heavy_wire_after pinned-other "GET $POM -> $NATIVE=>$OTHER"
 heavy_log "Refuse/$OTHER: took ${ELAPSED}s with Retry-After: 30; mvn said:"
-grep "ERROR" "$RUN_OUT" | head -3 >&2
+heavy_client_said "$RUN_OUT" 'error'
 [[ "$ELAPSED" -lt 25 ]] || heavy_fail "mvn waited on Retry-After — the CI contract assumes it does not"
 heavy_tap_rewrite_clear
 
@@ -243,7 +243,7 @@ else
 fi
 heavy_wire_after publish-202 "PUT ${DEPLOY_PREFIX}1.1.0/lib-1.1.0.jar -> 201=>202"
 heavy_log "Publish/202: mvn $PUBLISH_202 a 202 Accepted"
-grep "ERROR\|BUILD" "$RUN_OUT" | head -3 >&2
+heavy_client_said "$RUN_OUT" 'error|build'
 heavy_tap_rewrite_clear
 
 heavy_done "maven heavy test passed: hide=omitted/$PREVIOUS refuse=$NATIVE(x$NATIVE_TRIES)/$OTHER recover=$RECOVER publish-202=$PUBLISH_202"

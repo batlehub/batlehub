@@ -56,6 +56,35 @@ HEAVY_BASE2=""
 
 heavy_log() { printf '\n==> %s\n' "$*"; }
 
+# heavy_client_said <file> <ere> [count] — quote to stderr what the client said,
+# for whoever reads the log.
+#
+# **A report, never an assertion.** Under `set -o pipefail` a
+# `grep … | head -3 >&2` that matches nothing exits 1 and takes the whole suite
+# with it — a run killed by the line that was only trying to quote it, because
+# a client changed its wording. Measured on pathproxy: dnf's refusal contained
+# neither "error" nor "fail", and the suite died three phases from the end with
+# every assertion already passed.
+#
+# When nothing matches, the tail is printed instead. The reason to read this
+# line is to find out what the client actually said, and "it said nothing
+# matching my guess" is the least useful possible answer.
+heavy_client_said() {
+  local file="$1" ere="$2" count="${3:-3}" matched
+  if [[ ! -s "$file" ]]; then
+    echo "  (the client printed nothing)" >&2
+    return 0
+  fi
+  matched="$(grep -iE "$ere" "$file" 2>/dev/null | head -"$count" || true)"
+  if [[ -n "$matched" ]]; then
+    printf '%s\n' "$matched" >&2
+  else
+    echo "  (nothing matching /$ere/ — last $count line(s):)" >&2
+    tail -n "$count" "$file" >&2
+  fi
+  return 0
+}
+
 # Every failure dumps the transcript: the sequence is the evidence, and a bare
 # "assertion failed" from a heavy test is unactionable without it.
 heavy_fail() {

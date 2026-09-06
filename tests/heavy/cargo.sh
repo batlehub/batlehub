@@ -119,7 +119,7 @@ heavy_wire_after pinned-native "GET $DOWNLOAD -> " \
   "Hide/pinned: the pinned build never reached the download gate"
 NATIVE=$(awk -v n="GET $DOWNLOAD -> " 'index($0, n) == 1 { s = substr($0, length(n) + 1); sub(/ .*/, "", s); print s }' "$HEAVY_LOG" | tail -1)
 heavy_log "Refuse/native: the block answers $NATIVE on the download; cargo said:"
-grep -i "error\|failed\|status" "$RUN_OUT" | head -5 >&2
+heavy_client_said "$RUN_OUT" 'error|failed|status' 5
 NATIVE_TRIES=$(grep -c "GET $DOWNLOAD -> " "$HEAVY_LOG")
 
 # ── Refuse: the other status, with Retry-After ───────────────────────────────
@@ -143,7 +143,7 @@ heavy_wire_after pinned-other "GET $DOWNLOAD -> $NATIVE=>$OTHER"
 OTHER_TRIES=$(awk -v mark="### pinned-other" -v n="GET $DOWNLOAD -> " '
   index($0, mark) == 1 { seen = 1; next } seen && index($0, n) == 1 { c++ } END { print c + 0 }' "$HEAVY_LOG")
 heavy_log "Refuse/$OTHER: cargo asked $OTHER_TRIES time(s), took ${ELAPSED}s with Retry-After: 30, and said:"
-grep -i "error\|failed\|status" "$RUN_OUT" | head -5 >&2
+heavy_client_said "$RUN_OUT" 'error|failed|status' 5
 [[ "$ELAPSED" -lt 25 ]] || heavy_fail "cargo waited on Retry-After — the CI contract assumes it does not"
 heavy_tap_rewrite_clear
 
@@ -194,7 +194,7 @@ run_cargo "$HEAVY_WORK/homep1" "$HEAVY_WORK/p1" publish --registry heavy --allow
 heavy_wire_after publish-native "PUT $PUBLISH -> 200"
 grep -qi "uploaded\|uploading" "$RUN_OUT" || { cat "$RUN_OUT" >&2; heavy_fail "cargo did not report the upload"; }
 heavy_log "Publish/native (200): cargo said:"
-grep -i "uploaded\|waiting\|published\|warning" "$RUN_OUT" | head -4 >&2
+heavy_client_said "$RUN_OUT" 'uploaded|waiting|published|warning' 4
 
 heavy_tap_rewrite PUT "$PUBLISH" 200 202
 heavy_mark publish-202
@@ -207,7 +207,7 @@ else
 fi
 heavy_wire_after publish-202 "PUT $PUBLISH -> 200=>202"
 heavy_log "Publish/202: cargo $PUBLISH_202 a 202 Accepted, and said:"
-grep -i "error\|uploaded\|waiting\|published\|warning" "$RUN_OUT" | head -5 >&2
+heavy_client_said "$RUN_OUT" 'error|uploaded|waiting|published|warning' 5
 heavy_tap_rewrite_clear
 
 heavy_done "cargo heavy test passed: hide=yanked/$PREVIOUS refuse=$NATIVE(x$NATIVE_TRIES)/$OTHER(x$OTHER_TRIES) recover=ok publish-202=$PUBLISH_202"

@@ -332,7 +332,7 @@ grep -q "Signature verification failed" "$HEAVY_WORK/cli-install-refused.txt" \
 if grep -q "with 'NotSigned' error" "$HEAVY_WORK/cli-install-refused.txt"; then
   heavy_fail "the CLI saw $EXT_ID as 'NotSigned' — the signature asset was not advertised or not fetched"
 fi
-CLI_CODE="$(grep -o "with '[A-Za-z]*' error" "$HEAVY_WORK/cli-install-refused.txt" | head -1 | tr -d "'" | awk '{print $2}')"
+CLI_CODE="$(grep -o "with '[A-Za-z]*' error" "$HEAVY_WORK/cli-install-refused.txt" | head -1 | tr -d "'" | awk '{print $2}' || true)"
 heavy_wire_re_after "cli-install-refused" "GET /proxy/$REG/vscode/asset/.*VsixSignature.* -> 200 .*Authorization: Bearer" \
   "the signature archive was not fetched through the proxy with a Bearer before the refusal"
 heavy_log "CLI-REFUSED-OK (the server's CLI downloaded $EXT_ID and its signature through the proxy and refused it: '$CLI_CODE')"

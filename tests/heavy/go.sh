@@ -112,7 +112,7 @@ NATIVE=$(echo "$FIRST" | sed 's/.* -> \([0-9]*\).*/\1/')
 NATIVE_TRIES=$(awk -v mark="### pinned-native" -v p="GET /proxy/$REG/$MODULE/@v/$BLOCKED." '
   index($0, mark) == 1 { seen = 1; next } seen && index($0, p) == 1 { c++ } END { print c + 0 }' "$HEAVY_LOG")
 heavy_log "Refuse/native: the block answers $NATIVE ($NATIVE_TRIES request(s) for $BLOCKED); go said:"
-grep -v '^$' "$RUN_OUT" | head -4 >&2
+heavy_client_said "$RUN_OUT" '.' 4
 
 # ── Refuse: the other status, and the direct fallback ────────────────────────
 
@@ -137,7 +137,7 @@ grep -qF -- "@v/$BLOCKED." "$HEAVY_LOG" && awk -v mark="### pinned-other" -v p="
   END { exit found ? 0 : 1 }' "$HEAVY_LOG" \
   || heavy_fail "Refuse: no rewritten $NATIVE=>$OTHER answer for $BLOCKED after mark pinned-other"
 heavy_log "Refuse/$OTHER: took ${ELAPSED}s with Retry-After: 30; go said:"
-grep -v '^$' "$RUN_OUT" | head -4 >&2
+heavy_client_said "$RUN_OUT" '.' 4
 [[ "$ELAPSED" -lt 25 ]] || heavy_fail "go waited on Retry-After — the CI contract assumes it does not"
 heavy_tap_rewrite_clear
 
