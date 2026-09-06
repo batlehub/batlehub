@@ -3,7 +3,7 @@ use chrono::Utc;
 use super::{AdminService, BulkActionResult, BulkBlockItem};
 use crate::entities::{
     AccessAction, Finding, FindingKind, Identity, PackageId, PackageStatus, ReasonCode,
-    ScanTrigger, Severity, VerdictState, BLOCK_LIST_SCANNER,
+    ScanTrigger, Severity, Verdict, VerdictState, BLOCK_LIST_SCANNER,
 };
 use crate::error::CoreError;
 
@@ -110,35 +110,7 @@ impl AdminService {
         if let Some(store) = verdicts {
             match store.get(pkg).await {
                 Ok(Some(mut v)) => {
-                    // Drop any previous block finding first, so a re-block with
-                    // an edited reason does not leave both on the verdict.
-                    v.findings.retain(|f| {
-                        f.scanner != BLOCK_LIST_SCANNER && f.kind != FindingKind::BlockList
-                    });
-                    match blocked {
-                        Some((reason, blocked_by)) => {
-                            v.findings.push(Finding::new(
-                                BLOCK_LIST_SCANNER,
-                                FindingKind::BlockList,
-                                ReasonCode::BlockList,
-                                Severity::Critical,
-                                format!("blocked by {blocked_by}: {reason}"),
-                            ));
-                            v.state = VerdictState::Denied;
-                            if !v.reason_codes.contains(&ReasonCode::BlockList) {
-                                v.reason_codes.push(ReasonCode::BlockList);
-                            }
-                            v.available_at = None;
-                        }
-                        None => {
-                            // Unblocking only removes the block's own finding
-                            // and reason code. Whether the version is servable
-                            // again is the rescan's call, not this method's —
-                            // another scanner may hold it for its own reason.
-                            v.reason_codes.retain(|c| *c != ReasonCode::BlockList);
-                        }
-                    }
-                    v.evaluated_at = Utc::now();
+                    Self::rewrite_block_finding(&mut v, blocked);
                     if let Err(e) = store.upsert(&v).await {
                         tracing::warn!(package = %pkg, error = %e,
                             "block: verdict not written, the rescan will catch up");
@@ -155,6 +127,43 @@ impl AdminService {
                 tracing::warn!(package = %pkg, error = %e, "block: could not queue rescan");
             }
         }
+    }
+
+    /// Rewrite a stored verdict's block finding in place, for the `blocked`
+    /// the caller was given: `Some` writes the block, `None` lifts it.
+    ///
+    /// Only the block's own finding and reason code are the caller's to touch —
+    /// see `propagate_to_verdict` for why the *state* is only ever moved one
+    /// way here.
+    fn rewrite_block_finding(v: &mut Verdict, blocked: Option<(&str, &str)>) {
+        // Drop any previous block finding first, so a re-block with an edited
+        // reason does not leave both on the verdict.
+        v.findings
+            .retain(|f| f.scanner != BLOCK_LIST_SCANNER && f.kind != FindingKind::BlockList);
+        match blocked {
+            Some((reason, blocked_by)) => {
+                v.findings.push(Finding::new(
+                    BLOCK_LIST_SCANNER,
+                    FindingKind::BlockList,
+                    ReasonCode::BlockList,
+                    Severity::Critical,
+                    format!("blocked by {blocked_by}: {reason}"),
+                ));
+                v.state = VerdictState::Denied;
+                if !v.reason_codes.contains(&ReasonCode::BlockList) {
+                    v.reason_codes.push(ReasonCode::BlockList);
+                }
+                v.available_at = None;
+            }
+            None => {
+                // Unblocking only removes the block's own finding and reason
+                // code. Whether the version is servable again is the rescan's
+                // call, not this method's — another scanner may hold it for
+                // its own reason.
+                v.reason_codes.retain(|c| *c != ReasonCode::BlockList);
+            }
+        }
+        v.evaluated_at = Utc::now();
     }
 
     /// Record an audit event for a package-scoped admin action performed

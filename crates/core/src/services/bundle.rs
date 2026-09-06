@@ -353,6 +353,29 @@ pub struct ReadBundle {
     pub rejected: Vec<String>,
 }
 
+/// One `blobs/` member of a bundle, kept or rejected.
+///
+/// The name is the digest, and nothing else is read from the path: a blob
+/// called `../../etc/passwd` is not a digest and is rejected here, before any
+/// key is derived from it. A blob whose bytes do not hash to its own name is
+/// rejected too — that is what makes a blob self-verifying, and why the
+/// importer needs no separate trust decision about one.
+fn accept_blob(
+    name: &str,
+    path: &str,
+    bytes: Vec<u8>,
+    blobs: &mut BTreeMap<String, Vec<u8>>,
+    rejected: &mut Vec<String>,
+) {
+    if !is_sha256_hex(name) {
+        rejected.push(path.to_owned());
+    } else if crate::services::integrity::sha256_hex(&bytes) == name {
+        blobs.insert(name.to_owned(), bytes);
+    } else {
+        rejected.push(name.to_owned());
+    }
+}
+
 /// Read a bundle, checking each blob against its own name.
 ///
 /// The signature is **not** checked here: the caller checks it against its
@@ -404,18 +427,7 @@ pub fn read_bundle<R: std::io::Read>(input: R) -> Result<ReadBundle, CoreError> 
             }
             signature = Some(bytes);
         } else if let Some(name) = path.strip_prefix(BLOB_PREFIX) {
-            // The name is the digest, and nothing else is read from the
-            // path: a blob called `../../etc/passwd` is not a digest and is
-            // rejected here, before any key is derived from it.
-            if !is_sha256_hex(name) {
-                rejected.push(path.clone());
-                continue;
-            }
-            if crate::services::integrity::sha256_hex(&bytes) == name {
-                blobs.insert(name.to_owned(), bytes);
-            } else {
-                rejected.push(name.to_owned());
-            }
+            accept_blob(name, &path, bytes, &mut blobs, &mut rejected);
         }
         // Anything else in the tar is ignored rather than refused: a future
         // version may add a file this build does not know, and the manifest

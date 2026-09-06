@@ -2938,47 +2938,54 @@ impl AppConfig {
             if !seen.insert(src.name.as_str()) {
                 bail!("{path}: duplicate flag source name '{}'", src.name);
             }
-            if src.secret.trim().is_empty() {
-                bail!(
-                    "{path}: '{}' has an empty secret; the HMAC signature is the only credential \
+            self.validate_flag_source(&path, src)?;
+        }
+        Ok(())
+    }
+
+    /// One `[[flag_sources]]` entry. Everything except the two checks its
+    /// caller owns: the name's shape, and that no earlier entry claimed it.
+    fn validate_flag_source(&self, path: &str, src: &FlagSourceConfig) -> Result<()> {
+        if src.secret.trim().is_empty() {
+            bail!(
+                "{path}: '{}' has an empty secret; the HMAC signature is the only credential \
                      the push endpoint has, so an empty key lets anyone on the network flag \
                      (or block) packages",
-                    src.name
-                );
+                src.name
+            );
+        }
+        if src.max_effect().is_none() {
+            bail!(
+                "{path}: unknown max_effect '{}' (expected inform, warn, gate or hard_block)",
+                src.max_effect
+            );
+        }
+        for reg in &src.registries {
+            if !self.registries.iter().any(|r| &r.name == reg) {
+                bail!("{path}: registries names '{reg}', which is not a configured registry");
             }
-            if src.max_effect().is_none() {
-                bail!(
-                    "{path}: unknown max_effect '{}' (expected inform, warn, gate or hard_block)",
-                    src.max_effect
-                );
-            }
-            for reg in &src.registries {
-                if !self.registries.iter().any(|r| &r.name == reg) {
-                    bail!("{path}: registries names '{reg}', which is not a configured registry");
-                }
-            }
-            // A flag's identity is `(source, external_id)`, and a
-            // `security.verdict` event stores its `hard_block` under the
-            // *inbound webhook's* name as the source. Share a name between the
-            // two blocks and the credentials stop matching the authority: the
-            // flag-source secret — which may be capped to `gate` — revokes a
-            // `hard_block` a security feed pushed through the webhook, because
-            // `DELETE /api/v1/flags/{source}/{external_id}` authenticates
-            // against `[[flag_sources]]` alone. A weaker key must not be able
-            // to lift a stronger denial, so the collision is refused here.
-            if self
-                .notifications
-                .iter()
-                .flat_map(|n| &n.inbound)
-                .any(|h| h.name == src.name)
-            {
-                bail!(
-                    "{path}: name '{}' is also a [[notifications.inbound]] webhook; a \
+        }
+        // A flag's identity is `(source, external_id)`, and a
+        // `security.verdict` event stores its `hard_block` under the
+        // *inbound webhook's* name as the source. Share a name between the
+        // two blocks and the credentials stop matching the authority: the
+        // flag-source secret — which may be capped to `gate` — revokes a
+        // `hard_block` a security feed pushed through the webhook, because
+        // `DELETE /api/v1/flags/{source}/{external_id}` authenticates
+        // against `[[flag_sources]]` alone. A weaker key must not be able
+        // to lift a stronger denial, so the collision is refused here.
+        if self
+            .notifications
+            .iter()
+            .flat_map(|n| &n.inbound)
+            .any(|h| h.name == src.name)
+        {
+            bail!(
+                "{path}: name '{}' is also a [[notifications.inbound]] webhook; a \
                      security.verdict event stores its hard_block under the webhook's name, and \
                      this source's secret would then revoke it — give them distinct names",
-                    src.name
-                );
-            }
+                src.name
+            );
         }
         Ok(())
     }

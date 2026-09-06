@@ -70,10 +70,16 @@ Nothing here is an authentication, signing or integrity decision BatleHub makes:
 where BatleHub does choose, it chooses SHA-256 (`artifact_storage_key`, the
 bundle manifest, the VSIX signature manifest).
 
-**Resolve in SonarCloud as "won't fix".** This is now the second batch of
-protocol-mandated hashes to reach this note — the standing rule is: never
-"fix" one of these in code, and never add a suppression comment at the call
-site either, because the next reader would have to re-derive why.
+**Ignored in `sonar-project.properties`, one criterion per file** —
+`hashListingSynthesis`, `hashMavenSidecars`, `hashAirGapEmission`,
+`hashUpstreamAuditShasum`, joining the five that were already there. This is
+now the second batch of protocol-mandated hashes to reach this note, and the
+repetition is the argument for putting them in the file: resolving them in the
+UI closes them for one analysis, and the next commit that moves a line raises
+them again. The standing rule is unchanged otherwise — never "fix" one of these
+in code, and never add a suppression comment at the call site, because the next
+reader would have to re-derive why. The properties file is where the reasoning
+lives.
 
 ---
 
@@ -97,7 +103,10 @@ claiming `0o777`, setuid, or an execute bit does not get one. Raising it to
 `0o600` would not improve anything a reader of the scanner sandbox cares about,
 and would obscure that the line is a clamp rather than a grant.
 
-**Resolve in SonarCloud as "won't fix", per location.**
+**Ignored in `sonar-project.properties`** — `modeBundleTar`,
+`modeListingFactsTar`, `modeExtractClamp`, one criterion per file. Same reason
+as the hashes above: a per-location resolution does not survive the next line
+shift, and it leaves nothing for the next reader to read.
 
 ---
 
@@ -206,11 +215,25 @@ Two of these are worth a note beyond the table:
 
 ---
 
-## What is left — 10
+## The re-analysis — 15
 
-Six weak-hash and four file-permission findings, both sections above. Both are
-resolved in SonarCloud, not in code, and both are `VULNERABILITY`-typed — so
-they are also the whole of the security rating on new code. Marking them takes
-the rating to A and the failed condition passes.
+The scan of `195fdbc0` raised fifteen, and they split the same way as before:
+twelve `VULNERABILITY` — the whole of the security rating on new code — and
+three code smells.
+
+The twelve are the ten above plus two more `S2612` in `bundle.rs`, both
+`tar::Header::set_mode(0o644)` in the tamper test that rebuilds a bundle to
+prove the signature still covers the honest manifest. Four of the twelve had
+also moved by a few lines since the first reading, which is the point: they are
+now closed by the seven criteria in `sonar-project.properties` rather than by
+hand, so a line shift no longer re-opens them.
+
+The three smells were new, all `rust:S3776`, all fixed by extraction:
+
+| Function | Was | Extracted |
+| --- | --- | --- |
+| `config/schema/mod.rs::validate_flag_sources` | 16 | `validate_flag_source` — one entry, with the caller keeping the name-shape and uniqueness checks it needs the loop for |
+| `core/services/admin/packages.rs::propagate_to_verdict` | 19 | `rewrite_block_finding` — the in-place edit of the stored verdict, either direction |
+| `core/services/bundle.rs::read_bundle` | 18 | `accept_blob` — the digest-name check and the self-verification, for one `blobs/` member |
 
 Nothing else remains open on this pull request.
