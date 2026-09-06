@@ -256,7 +256,10 @@ run the local gallery proxy and point the editor at it
 ([`batlehub-cli proxy serve`](/use/cli#gallery-proxy), RFC 0011 §4.4):
 
 ```sh
-batlehub-cli proxy serve --registry https://hub.example.dev/proxy/vsx
+# Sign in once, then run the proxy; the editor is pointed at what it prints.
+batlehub-cli --server https://batlehub.example.com auth login
+batlehub-cli --server https://batlehub.example.com auth write-token-file
+batlehub-cli proxy serve --registry https://batlehub.example.com/proxy/<registry>
 ```
 
 ```json

@@ -1342,3 +1342,33 @@ cannot open. Both suites now drive the server build's CLI — the same
 one download. What the view suite still does not measure: a che-code
 build with the patch of §14.5 (this repo builds no editor), and short-TTL
 tokens across a `.vsix` longer than one lifetime (§10's other half).
+
+### 14.10 The key was not an origin (2026-09-06)
+
+§4.1 fixes one rule about the contract file that both consumers depend on:
+**it is keyed by origin.** The JSON Schema says so in as many words, and
+the che-code patch reads it that way — `new URL(url).origin`, §4.2's
+"consumer resolution order", `patches/che-code/vsxRegistryAuth.ts`.
+
+`contract::normalize_origin` did not. It was `registry.trim_end_matches('/')`,
+which is an origin only for a URL that has no path. `proxy serve --registry
+https://hub.example.dev/proxy/vsx` therefore looked its entry up under that
+whole string, and `auth write-token-file --server https://hub.example.dev`
+filed one under the origin: two consumers of one file, two keys, and an
+editor behind the proxy shown the sign-in entry of §4.4.2 while it was in
+fact signed in.
+
+The suites did not catch it because both halves of each were wrong the same
+way: `vsx_login.sh` and `vsx_view.sh` pass `--server "$REGISTRY_BASE"` to
+`write-token-file`, which produced exactly the key the proxy computed. It
+took a second implementation — the `batlehub-vsx` extension of §6.5, in its
+own repository, which writes what the schema says — to make the two
+disagree, and its heavy suite is where it surfaced.
+
+`normalize_origin` now parses the origin (`reqwest::Url`, falling back to
+the old trim for anything that is not a URL, so a lookup key never becomes
+an error). Three tests in `cli/src/contract/tests.rs` hold it: a
+path-carrying URL files and finds the same entry as its origin, a default
+port collapses, a different port or scheme does not, and a non-URL is left
+alone. `vsx_login.sh` passes unchanged — the two halves now agree on the
+right key rather than on the wrong one.

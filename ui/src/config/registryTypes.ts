@@ -322,6 +322,26 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
       `Extension IDs follow the <code>publisher.name</code> convention.`,
     snippets: [
       {
+        key: "openvsx-gallery-proxy",
+        label: "Local gallery proxy - for an editor that cannot send a credential",
+        lang: "sh",
+        template: (ctx) =>
+          [
+            `# Stock VS Code has nowhere in product.json to put a token. Run the proxy,`,
+            `# then point the editor at the loopback URL it prints (RFC 0011 4.4).`,
+            `batlehub-cli --server ${ctx.base} auth login`,
+            `batlehub-cli --server ${ctx.base} auth write-token-file`,
+            `batlehub-cli proxy serve --registry ${ctx.registryUrl}`,
+          ].join("\n"),
+        note:
+          `The proxy holds the credential; the editor only ever knows a loopback ` +
+          `URL, which is per run. While no credential resolves it answers a search ` +
+          `with a single <strong>Sign in to BatleHub</strong> entry whose details ` +
+          `are these steps, instead of the empty gallery an anonymous editor sees. ` +
+          `It re-reads the credential file on every request, so a login lands ` +
+          `without restarting anything.`,
+      },
+      {
         key: "openvsx-direct",
         label: "Direct VSIX download URL",
         lang: "text",
@@ -378,7 +398,13 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
           `<code>product.json</code> has nowhere to put a token — so this ` +
           `registry needs <code>anonymous = ["releases:read", "source:read"]</code> ` +
           `under <code>[registries.rbac]</code>, or an ingress that authenticates ` +
-          `in front of BatleHub. Without it the editor finds no extensions.` +
+          `in front of BatleHub. Without it the editor finds no extensions. ` +
+          `An editor that cannot read anonymously reaches this registry through ` +
+          `the <strong>local gallery proxy</strong> tab instead. This registry ` +
+          `can also sign what it hosts (<code>[registries.vsx_signing]</code>): ` +
+          `a current editor offers Install only on an entry that carries a ` +
+          `signature asset, and <code>batlehub-cli vsx verify</code> checks a ` +
+          `download against the registry key.` +
           (ctx.isAuthenticated
             ? ` VSCodium does not support HTTP Basic Auth in ` +
               `<code>product.json</code>. ` +
@@ -399,6 +425,26 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
       `(marketplace.visualstudio.com). Use this for extensions that are only on the Microsoft marketplace and not mirrored on open-vsx.org. ` +
       `Extension IDs follow the <code>publisher.name</code> convention.`,
     snippets: [
+      {
+        key: "vscode-marketplace-gallery-proxy",
+        label: "Local gallery proxy - for an editor that cannot send a credential",
+        lang: "sh",
+        template: (ctx) =>
+          [
+            `# Stock VS Code has nowhere in product.json to put a token. Run the proxy,`,
+            `# then point the editor at the loopback URL it prints (RFC 0011 4.4).`,
+            `batlehub-cli --server ${ctx.base} auth login`,
+            `batlehub-cli --server ${ctx.base} auth write-token-file`,
+            `batlehub-cli proxy serve --registry ${ctx.registryUrl}`,
+          ].join("\n"),
+        note:
+          `The proxy holds the credential; the editor only ever knows a loopback ` +
+          `URL, which is per run. While no credential resolves it answers a search ` +
+          `with a single <strong>Sign in to BatleHub</strong> entry whose details ` +
+          `are these steps, instead of the empty gallery an anonymous editor sees. ` +
+          `It re-reads the credential file on every request, so a login lands ` +
+          `without restarting anything.`,
+      },
       {
         key: "vscode-marketplace-direct",
         label: "Direct VSIX download URL",
@@ -456,7 +502,13 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
           `<code>product.json</code> has nowhere to put a token — so this ` +
           `registry needs <code>anonymous = ["releases:read", "source:read"]</code> ` +
           `under <code>[registries.rbac]</code>, or an ingress that authenticates ` +
-          `in front of BatleHub. Without it the editor finds no extensions.` +
+          `in front of BatleHub. Without it the editor finds no extensions. ` +
+          `An editor that cannot read anonymously reaches this registry through ` +
+          `the <strong>local gallery proxy</strong> tab instead. This registry ` +
+          `can also sign what it hosts (<code>[registries.vsx_signing]</code>): ` +
+          `a current editor offers Install only on an entry that carries a ` +
+          `signature asset, and <code>batlehub-cli vsx verify</code> checks a ` +
+          `download against the registry key.` +
           (ctx.isAuthenticated
             ? ` VSCodium does not support HTTP Basic Auth in ` +
               `<code>product.json</code>. ` +

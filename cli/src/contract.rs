@@ -394,13 +394,38 @@ impl ContractFile {
     }
 }
 
-/// The key an entry is filed under: the origin, without a trailing slash.
+/// The key an entry is filed under: the **origin** — scheme, host and port,
+/// no path and no trailing slash.
 ///
 /// The consumer matches the *configured gallery origin* against these keys,
 /// so `https://hub.example.dev` and `https://hub.example.dev/` have to be one
-/// entry or a login writes a key nothing reads.
+/// entry or a login writes a key nothing reads. The same holds of the URL
+/// that carries a path: `--server https://hub.example.dev/proxy/vsx` and a
+/// gallery at `https://hub.example.dev/proxy/vsx/vscode/gallery` are the one
+/// origin `https://hub.example.dev`, which is what §4.1 fixes, what the JSON
+/// Schema says ("keyed by origin, without a trailing slash"), and what the
+/// che-code patch reads (`new URL(url).origin`).
+///
+/// This once only trimmed a trailing slash, which made a path-carrying URL
+/// its own key. Two consumers of one file then disagreed: `auth
+/// write-token-file --server <origin>` filed `https://hub.example.dev` while
+/// `proxy serve --registry <base>` looked up `https://hub.example.dev/proxy/vsx`
+/// and found nothing — an editor behind the proxy kept being shown the
+/// sign-in entry while it was, in fact, signed in. The suites missed it
+/// because they passed the same registry base to both halves, so the two
+/// wrong keys agreed.
+///
+/// A string that is not a URL keeps its old treatment rather than becoming an
+/// error: this is a lookup key, and refusing one here would turn a typo in a
+/// config file into a failure to read a credential that may not even be the
+/// one being asked for.
 pub fn normalize_origin(registry: &str) -> String {
-    registry.trim_end_matches('/').to_owned()
+    match reqwest::Url::parse(registry) {
+        // An opaque origin serialises to the literal "null", which would file
+        // every such registry under one key; those keep the old treatment.
+        Ok(url) if url.origin().is_tuple() => url.origin().ascii_serialization(),
+        _ => registry.trim_end_matches('/').to_owned(),
+    }
 }
 
 impl Entry {

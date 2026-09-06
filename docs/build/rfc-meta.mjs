@@ -155,8 +155,13 @@ export function readRfcs(rfcDir) {
     // has already been taken as one still owed is the single thing this report
     // exists to be right about. The lookahead sits after the list marker so it
     // tests the item's own first characters, not the indentation before them.
+    // An HTML comment is not an open question. A section that says "None"
+    // and then keeps the retired questions commented out below it — 0020
+    // does, so the wording that was measured away is not lost — would
+    // otherwise be counted as owing every one of them, which is the report
+    // being wrong in the one direction that matters.
     const afterHeading = raw.split(/^### Still open[ \t]*\r?\n/m)[1] ?? "";
-    const open = afterHeading.split(/^##/m)[0];
+    const open = afterHeading.split(/^##/m)[0].replace(/<!--[\s\S]*?(?:-->|$)/g, "");
     const openQuestions = (open.match(/^[ \t]*(?:\d+\.|[-*])[ \t]+(?!~~)\S/gm) ?? []).length;
 
     rfcs.push({

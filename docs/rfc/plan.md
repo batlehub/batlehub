@@ -21,7 +21,7 @@ and against `task rfc:status`.
 | [0010](/rfc/0010-toolchain-managers) — toolchains | Implemented | All nine phases, `nvm.sh` and `sdkman.sh` green. | Nothing. |
 | [0019](/rfc/0019-git-forge-registries-refs-releases-raw) — forges | In review | All five phases, every §11 question decided, the Explorer's short-SHA column, and `mise.sh` through phases 3–5 (§13.3). | Sign-off. |
 | [0002](/rfc/0002-vulnerability-flags-and-exposure) — flags | In review | Everything §13 recast; the one question decided (*not now*, the feed surfacing is a follow-up). | Sign-off. |
-| [0011](/rfc/0011-openvsx-login) — OpenVSX | In review | The §13 cut (§14); since 2026-09-05 the loopback proxy and the sign-in bootstrap (§14.8), and the canary with a **real Extensions view** (§14.9): VS Code 1.136.1's server build, its workbench driven in Chrome over CDP by `tests/heavy/vsx_view.sh` — the entry in browse and search, its page rendered, the same page after the sign-in. | The `batlehub-vsx` extension, a separate repository (§11 q6). And what the view found is not this RFC's to fix: a current VS Code installs nothing unsigned from its view, and since 1.136 nothing unsigned from its CLI either without `extensions.verifySignature` off — a BatleHub `vscode-marketplace` registry signed nothing — [RFC 0020](/rfc/0020-signing-at-the-vscode-marketplace-registry) now signs what it hosts and relays what it proxies. |
+| [0011](/rfc/0011-openvsx-login) — OpenVSX | In review | The §13 cut (§14); since 2026-09-05 the loopback proxy and the sign-in bootstrap (§14.8), and the canary with a **real Extensions view** (§14.9): VS Code 1.136.1's server build, its workbench driven in Chrome over CDP by `tests/heavy/vsx_view.sh` — the entry in browse and search, its page rendered, the same page after the sign-in. | Nothing here: the `batlehub-vsx` extension was built on 2026-09-06 in its own repository (§11 q6), both modes measured in a real editor. And what the view found is not this RFC's to fix: a current VS Code installs nothing unsigned from its view, and since 1.136 nothing unsigned from its CLI either without `extensions.verifySignature` off — a BatleHub `vscode-marketplace` registry signed nothing — [RFC 0020](/rfc/0020-signing-at-the-vscode-marketplace-registry) now signs what it hosts and relays what it proxies. |
 | [0014](/rfc/0014-upstream-disappearance) — disappearance | Implemented | All nine phases (§13.1–§13.4): the sweep, the notifications, the block arm, the admin API, the console, the operations page; `tests/heavy/upstream_audit.sh` against a served upstream and a real receiver. | Nothing. Both gaps it recorded closed 2026-09-05: the path-proxy family is probed per file (§13.5, `upstream_audit.sh` §7 against a served directory as a `generic` registry), and `on_confirmed` is a registry-tier policy row over the estate key (§13.6, the same suite under a registry-tier `"block"`). |
 | [0018](/rfc/0018-supply-chain-quarantine-and-verdicts) — quarantine | Implemented | Every phase (§13.1–§13.7): the gate, the scanners and the sandbox, the spike, the rescan and the flip alert with pullers, the external scanners and the admin surface, the HPA input; `tests/heavy/quarantine.sh` from npm's side, seven steps. | §11 q2 stays open by design (publish status per tool, measured as each registry opts in). The sandbox row of the heavy suite runs only where user namespaces exist — CI, not this workstation. |
 
@@ -52,8 +52,20 @@ and against `task rfc:status`.
   view installs it and the extension activates; a marketplace extension
   republished with its signature attached (`PUT …/vsix/signature`, its
   §13.6) gets `Success` from the editor's own verifier.
-- **0011's `batlehub-vsx`** — a separate repository (its §11 q6); waits on
-  an editor build whose gallery URL cannot be repointed at all.
+- **0011's `batlehub-vsx`** — **built**, 2026-09-06, in its own repository
+  (its §11 q6): both cuts of §12, phase 7's broker (the contract file kept
+  fresh, the credential in the status bar, the re-query a sign-in needs) and
+  phase 8's fallback marketplace (a view that lists what the registry shows
+  you and installs through the editor's own command, dependencies and packs
+  resolved, RFC 0020's signature verified, RFC 0018's verdict honoured).
+  Proven the way everything else here is: a real VS Code 1.136.1 web build
+  driven in a browser over CDP, both modes, against a real BatleHub. Left:
+  a release of that repository, and deciding whether this instance hosts it.
+  Building it also found and fixed a defect in this repository's CLI: the
+  contract file is keyed by origin, and `contract::normalize_origin` only
+  trimmed a trailing slash, so `proxy serve` looked its entry up under the
+  whole registry URL and never found what a schema-conformant writer filed
+  (0011 §14.10).
 - **Sign-off on 0002 and 0019** — both are *In review* with nothing open.
 
 ## Constraints that still hold
@@ -67,4 +79,7 @@ and against `task rfc:status`.
   8127 and 8137; `airgap.sh` 8110, 8119, 8120 and 8121 (a TLS tap for
   Terraform's host); `vsx_login.sh` 8122/8129 and `vsx_view.sh`
   8123/8130 plus 8131 for the editor's web server (each proxy binds an
-  ephemeral loopback port). The next suite takes 8124/8132.
+  ephemeral loopback port). **8124 and 8132 are taken** by the
+  `batlehub-vsx` repository's `tests/heavy/view.sh`, which starts a BatleHub
+  of its own against this same Postgres — so it is one of the suites that
+  must not run beside another. The next suite takes 8125/8133.

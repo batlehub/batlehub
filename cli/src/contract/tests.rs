@@ -55,6 +55,64 @@ fn an_origin_is_matched_with_or_without_its_trailing_slash() {
     );
 }
 
+/// The key is the origin, so the URL that carries a path files and finds the
+/// same entry as the one that does not. `auth write-token-file --server
+/// <origin>` and `proxy serve --registry <origin>/proxy/vsx` are the two
+/// halves that have to agree, and for a while they did not: this only
+/// trimmed a trailing slash, so the proxy searched for a key ending in
+/// `/proxy/vsx` that no writer produces, and an editor behind it kept being
+/// shown the sign-in entry while it was signed in.
+#[test]
+fn a_registry_path_files_under_the_origin() {
+    let mut doc = ContractFile::default();
+    doc.set_entry(
+        "https://hub.example.dev/proxy/vsx",
+        Entry::literal("abc", Kind::Oidc, None),
+    );
+    assert_eq!(
+        doc.registries.keys().next().map(String::as_str),
+        Some("https://hub.example.dev")
+    );
+    for asked in [
+        "https://hub.example.dev",
+        "https://hub.example.dev/",
+        "https://hub.example.dev/proxy/vsx",
+        "https://hub.example.dev/proxy/vsx/vscode/gallery",
+        "https://hub.example.dev/proxy/ovsx",
+    ] {
+        assert!(doc.entry(asked).is_some(), "{asked} did not find the entry");
+    }
+    // A port is part of the origin; a different one is a different registry.
+    assert!(doc
+        .entry("https://hub.example.dev:8443/proxy/vsx")
+        .is_none());
+    assert!(doc.entry("http://hub.example.dev/proxy/vsx").is_none());
+}
+
+/// The default port is the one an origin drops, so the two spellings of the
+/// same registry are one entry rather than two.
+#[test]
+fn a_default_port_is_the_same_origin() {
+    assert_eq!(
+        normalize_origin("https://hub.example.dev:443/proxy/vsx"),
+        "https://hub.example.dev"
+    );
+    assert_eq!(
+        normalize_origin("http://127.0.0.1:8124/proxy/vsx"),
+        "http://127.0.0.1:8124"
+    );
+}
+
+/// A key is a lookup, not an assertion about the world: something that is not
+/// a URL keeps its old treatment rather than becoming an error or collapsing
+/// onto the "null" every opaque origin serialises to.
+#[test]
+fn a_key_that_is_not_a_url_is_left_alone() {
+    assert_eq!(normalize_origin("hub.example.dev/"), "hub.example.dev");
+    assert_eq!(normalize_origin(""), "");
+    assert_ne!(normalize_origin("data:text/plain,x"), "null");
+}
+
 /// A consumer that dropped what it did not understand would silently undo the
 /// writer that added it — which is how `version` would have to move for every
 /// added field instead of only for a changed one.

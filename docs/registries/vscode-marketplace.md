@@ -32,6 +32,26 @@ Same protocol, same routes as the [OpenVSX page](/registries/openvsx#use-batlehu
 
 The editor sends no credentials to its gallery, so this registry needs `anonymous = ["releases:read", "source:read"]` under `[registries.rbac]`, or an authenticating ingress. See the warning on the [OpenVSX page](/registries/openvsx#use-batlehub-as-your-extension-gallery).
 
+### An editor that cannot send a credential
+
+`product.json` has nowhere to put a token, so a registry that refuses
+anonymous reads is reached through the local gallery proxy
+([`batlehub-cli proxy serve`](/use/cli#gallery-proxy), RFC 0011 §4.4)
+rather than by opening the registry up:
+
+```sh
+# Sign in once, then run the proxy; the editor is pointed at what it prints.
+batlehub-cli --server https://batlehub.example.com auth login
+batlehub-cli --server https://batlehub.example.com auth write-token-file
+batlehub-cli proxy serve --registry https://batlehub.example.com/proxy/<registry>
+```
+
+The proxy attaches the credential, rewrites every gallery URL onto itself so
+the `.vsix` download is authenticated too, and — while no credential
+resolves — answers a search with a single *Sign in to BatleHub* entry
+instead of the empty view an anonymous gallery produces. Point the editor at
+the loopback URL it prints, in place of the `serviceUrl` above.
+
 ### Download a VSIX directly
 
 Download a VSIX directly by coordinate and install it. Replace `<registry>` with your configured registry name; use `latest` as the version to fetch the newest release:
