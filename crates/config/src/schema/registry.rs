@@ -324,6 +324,12 @@ pub struct RegistryConfig {
     /// absent, the hosted repository is unsigned.
     #[serde(default)]
     pub repo_signing: Option<RepoSigningConfig>,
+    /// Optional Ed25519 key a `vscode-marketplace`/`openvsx` registry signs
+    /// every VSIX it publishes with (RFC 0020). The signature is served as the
+    /// gallery's `VsixSignature` asset, which is what a current editor's
+    /// Extensions view requires before it enables Install.
+    #[serde(default)]
+    pub vsx_signing: Option<VsxSigningConfig>,
     /// Optional beta-channel configuration (local/hybrid mode only).
     /// When enabled, pre-release versions are only visible to registered beta-channel members.
     #[serde(default)]
@@ -764,6 +770,26 @@ pub struct RepoSigningConfig {
     /// stable. Defaults to 0.
     #[serde(default)]
     pub created: Option<u32>,
+}
+
+/// Ed25519 VSIX signing key for `vscode-marketplace`/`openvsx` registries
+/// (RFC 0020 §4.1).
+///
+/// ```toml
+/// [registries.vsx_signing]
+/// seed_hex = "${VSX_SIGNING_SEED}"   # 32-byte Ed25519 seed, hex-encoded
+/// key_id   = "2026-09"               # optional; default: 16 hex chars of SHA-256(public key)
+/// ```
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct VsxSigningConfig {
+    /// Hex-encoded 32-byte Ed25519 seed. A secret of the same class as
+    /// `repo_signing.seed_hex`: keep it out of the file with `${VAR}`.
+    pub seed_hex: String,
+    /// The id the public key is served under
+    /// (`/proxy/{registry}/api/-/public-key/{key_id}`). Must change when the
+    /// key does; the default derives it from the key, so it does.
+    #[serde(default)]
+    pub key_id: Option<String>,
 }
 
 // ── SBOM generation ───────────────────────────────────────────────────────────

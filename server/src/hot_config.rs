@@ -98,6 +98,28 @@ fn build_integrity_map(registries: &[RegistryConfig]) -> HashMap<String, Integri
     )
 }
 
+/// RFC 0020 §4.1: the VSIX signing key per registry that configured one. A
+/// seed `validate()` let through and this cannot read is a bug, not a
+/// configuration error, and is reported as one.
+fn build_vsx_signing_map(
+    registries: &[RegistryConfig],
+) -> anyhow::Result<HashMap<String, Arc<batlehub_core::services::signature::VsxSigningKey>>> {
+    let mut out = HashMap::new();
+    for reg in registries {
+        if let Some(cfg) = &reg.vsx_signing {
+            let key = batlehub_core::services::signature::VsxSigningKey::from_seed_hex(
+                &cfg.seed_hex,
+                cfg.key_id.as_deref(),
+            )
+            .map_err(|e| {
+                anyhow::anyhow!("building the VSIX signing key for '{}': {e}", reg.name)
+            })?;
+            out.insert(reg.name.clone(), Arc::new(key));
+        }
+    }
+    Ok(out)
+}
+
 fn build_signing_map(registries: &[RegistryConfig]) -> HashMap<String, CoreSigningConfig> {
     map_registries(
         registries,
@@ -644,6 +666,7 @@ pub(super) fn build_hot_bundle(
         namespace_policies: ns_policies,
         versioning: build_versioning_map(&cfg.registries),
         signing: build_signing_map(&cfg.registries),
+        vsx_signing: build_vsx_signing_map(&cfg.registries)?,
         sbom: build_sbom_map(&cfg.registries),
         readme: build_readme_map(&cfg.registries),
         upstream_detail: build_upstream_detail_map(&cfg.registries),

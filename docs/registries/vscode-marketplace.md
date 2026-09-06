@@ -12,6 +12,7 @@ Proxy and cache VS Code extension VSIX downloads from Microsoft's [Visual Studio
 | **Addressing** | per-package |
 | **Private publish** | ✅ VSIX upload (`PUT …/vsix`) |
 | **Air gap** | no composed listing offline: a gallery answers by query |
+| **Signatures** | the registry signs what it hosts (`[registries.vsx_signing]`), relays the upstream's for what it proxies, and keeps one attached to a republished version |
 
 ## Proxy setup
 
@@ -59,6 +60,16 @@ curl -X PUT \
   -H "Content-Type: application/octet-stream" \
   --data-binary @my-org.my-extension-1.0.0.vsix \
   "https://batlehub.example.com/proxy/<registry>/my-org.my-extension/1.0.0/vsix"
+```
+
+### Signatures
+
+A current editor's Extensions view installs only entries that carry a signature asset. This registry gets one three ways, and the [OpenVSX page](/registries/openvsx#signatures) is where each is explained: the marketplace's own signature is relayed for what is proxied (a stock VS Code verifies it, nothing to set); a key under [`[registries.vsx_signing]`](/guide/configuration#vsx-signing) signs what is published here; and a marketplace extension republished here keeps its signature when the archive is attached after the upload:
+
+```sh
+curl -X PUT -H "Authorization: Bearer $BATLEHUB_TOKEN" -H "Content-Type: application/zip" \
+  --data-binary @ms-vscode.hexeditor-1.11.1.sigzip \
+  "https://batlehub.example.com/proxy/<registry>/ms-vscode.hexeditor/1.11.1/vsix/signature"
 ```
 
 ## Authentication

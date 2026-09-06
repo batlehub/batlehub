@@ -7921,6 +7921,50 @@
         ]
       }
     },
+    "/proxy/{registry}/api/-/public-key/{key_id}": {
+      "get": {
+        "tags": [
+          "proxy/openvsx"
+        ],
+        "summary": "`GET /proxy/{registry}/api/-/public-key/{key_id}` — the key this\nregistry's VSIX signatures verify under (RFC 0020 §4.2), PEM\n(`SubjectPublicKeyInfo`), the shape Open VSX serves and its clients\nparse. Anonymous: a public key is public, and the id names a key, not an\nextension. `404` for any id but the current key's.",
+        "operationId": "openvsx_public_key",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key_id",
+            "in": "path",
+            "description": "The key id the gallery's PublicKey asset names",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The public key, PEM",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown registry, or not this registry's key"
+          }
+        }
+      }
+    },
     "/proxy/{registry}/api/-/publish": {
       "post": {
         "tags": [
@@ -15282,6 +15326,86 @@
           },
           "409": {
             "description": "Version already published"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/{extension_id}/{version}/vsix/signature": {
+      "put": {
+        "tags": [
+          "proxy/openvsx"
+        ],
+        "summary": "`PUT /proxy/{registry}/{extension_id}/{version}/vsix/signature` — attach an\nupstream's signature archive to a version this registry holds (RFC 0020\n§13.6). A marketplace extension republished locally keeps, this way, the\nsignature a stock editor verifies; the registry checks the archive's\nmanifest against the stored bytes, keeps it as-is, and never signs over\nit. Authorised as a publish of the same version.",
+        "operationId": "vsix_signature_attach",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "extension_id",
+            "in": "path",
+            "description": "Extension ID (publisher.name)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "Published version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The signature archive: `.signature.manifest` plus `.signature.p7s` and/or `.signature.sig`",
+          "content": {
+            "application/zip": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signature attached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a signature archive, or its manifest does not describe the stored VSIX"
+          },
+          "403": {
+            "description": "Not allowed to publish this version"
+          },
+          "404": {
+            "description": "Unknown registry, or version not published here"
           }
         },
         "security": [

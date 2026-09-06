@@ -3890,3 +3890,110 @@ fn a_local_registry_cannot_say_block() {
         "{err}"
     );
 }
+
+// ── [registries.vsx_signing] (RFC 0020 §4.3) ───────────────────────────────
+
+#[test]
+fn vsx_signing_is_accepted_on_the_two_kinds_that_speak_the_protocol() {
+    for kind in ["vscode-marketplace", "openvsx"] {
+        let cfg = parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "{kind}"
+        name = "vsx"
+        mode = "local"
+
+        [registries.vsx_signing]
+        seed_hex = "{}"
+        key_id = "2026-09""#,
+            "ab".repeat(32)
+        ));
+        cfg.validate().expect("a key on a VSIX registry is valid");
+        assert!(
+            !cfg.warnings()
+                .iter()
+                .any(|w| w.code == warnings::VSX_SIGNING_PROXY_MODE),
+            "{:?}",
+            cfg.warnings()
+        );
+    }
+}
+
+#[test]
+fn vsx_signing_on_another_kind_is_rejected() {
+    let cfg = parse_config(&format!(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        mode = "local"
+
+        [registries.vsx_signing]
+        seed_hex = "{}""#,
+        "ab".repeat(32)
+    ));
+    let err = cfg.validate().unwrap_err().to_string();
+    assert!(err.contains("vsx_signing"), "{err}");
+    assert!(err.contains("npm"), "{err}");
+}
+
+#[test]
+fn vsx_signing_seed_must_be_a_32_byte_hex_string() {
+    for seed in ["abcd", &"zz".repeat(32), &"ab".repeat(33)] {
+        let cfg = parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "openvsx"
+        name = "vsx"
+        mode = "local"
+
+        [registries.vsx_signing]
+        seed_hex = "{seed}""#
+        ));
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("64 hex characters"), "{seed}: {err}");
+    }
+}
+
+#[test]
+fn vsx_signing_key_id_is_a_path_segment() {
+    for id in ["", "a/b", "with space", "é"] {
+        let cfg = parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "openvsx"
+        name = "vsx"
+        mode = "local"
+
+        [registries.vsx_signing]
+        seed_hex = "{}"
+        key_id = "{id}""#,
+            "ab".repeat(32)
+        ));
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("key_id"), "{id:?}: {err}");
+    }
+}
+
+#[test]
+fn vsx_signing_on_a_proxy_registry_warns_and_is_not_an_error() {
+    let cfg = parse_config(&format!(
+        r#"
+        [[registries]]
+        type = "openvsx"
+        name = "vsx"
+        mode = "proxy"
+
+        [registries.vsx_signing]
+        seed_hex = "{}""#,
+        "ab".repeat(32)
+    ));
+    cfg.validate().expect("a warning, not an error");
+    let w = cfg
+        .warnings()
+        .into_iter()
+        .find(|w| w.code == warnings::VSX_SIGNING_PROXY_MODE)
+        .expect("warning emitted");
+    assert_eq!(w.path, "registries[0].vsx_signing");
+    assert!(w.message.contains("relayed"), "{}", w.message);
+}

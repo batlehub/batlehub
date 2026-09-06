@@ -915,6 +915,7 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/-/whoami", Coverage::NoPackage("echoes the caller's own identity, never a package")),
     ("/proxy/{registry}/.well-known/terraform.json", Coverage::NoPackage("Terraform service discovery; static endpoint map")),
     ("/proxy/{registry}/api/-/search", Coverage::NoRow("package read, not yet exercised")),
+    ("/proxy/{registry}/api/-/public-key/{key_id}", Coverage::NoRow("anonymous by design (RFC 0020 §4.2): serves the registry's own VSIX signing public key, which names a key id and no coordinate — no package is read, and a public key is public. `vsx_signing.rs` asserts the anonymous `200` and the `404` for any other id")),
     ("/proxy/{registry}/api/packages/{path}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/api/plugins/{id}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/api/plugins/{id}/updates", Coverage::NoRow("package read, not yet exercised")),
@@ -2111,6 +2112,7 @@ const WRITE_ROUTE_INVENTORY: &[(&str, &str, WriteCoverage)] = &[
     // ── openvsx / vscode ─────────────────────────────────────────────────────
     ("PUT", "/proxy/{registry}/{extension_id}/{version}/vsix", WriteCoverage::Row),
     ("POST", "/proxy/{registry}/api/-/publish", WriteCoverage::NoRow("write, not yet exercised: the OpenVSX REST publish, which takes its coordinate from the VSIX manifest rather than the URL")),
+    ("PUT", "/proxy/{registry}/{extension_id}/{version}/vsix/signature", WriteCoverage::NoRow("write, covered outside this matrix: `vsx_signing.rs` asserts the anonymous 403, the 404 for a version not published, the 400 for a manifest over other bytes, and the positive control. It authorises through `authorize_write` with `ReleasesPublish`, the same gate as the publish it follows, and publishes nothing itself, so a row here would fingerprint identically to its control")),
     ("POST", "/proxy/{registry}/api/-/namespace/create", WriteCoverage::NoRow("write, covered outside this matrix: `local_vsx_registry.rs`'s `openvsx_namespace_claim_*` rows assert the refusal, the empty store afterwards, and a working positive control. It cannot be a `Row` here because a write row's fingerprint is `get_versions` for a coordinate and a namespace claim publishes nothing — both the denial and its control would fingerprint identically, so the control could not pass")),
     ("POST", "/proxy/{registry}/vscode/gallery/extensionquery", WriteCoverage::ReadRow),
     // ── maven ────────────────────────────────────────────────────────────────

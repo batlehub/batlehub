@@ -9,14 +9,14 @@ use batlehub_core::{
 };
 
 use super::super::http_client::{
-    fetch_linked_text, new_http_client, no_redirect_client_pair, to_registry_error,
-    UpstreamHttpOptions,
+    ensure_linked_origin, fetch_linked_text, new_http_client, no_redirect_client_pair,
+    to_registry_error, UpstreamHttpOptions,
 };
 use super::models::{
     ExtensionQueryCriteria, ExtensionQueryFilter, ExtensionQueryRequest, ExtensionQueryResponse,
     ResolvedExtension, FILTER_EXTENSION_NAME, FILTER_VERSION, FLAG_INCLUDE_ASSET_URI,
     FLAG_INCLUDE_FILES, FLAG_INCLUDE_LATEST_ONLY, FLAG_INCLUDE_VERSIONS, GALLERY_API_ACCEPT,
-    README_ASSET_TYPE, VSIX_ASSET_TYPE,
+    README_ASSET_TYPE, SIGNATURE_ASSET_TYPE, VSIX_ASSET_TYPE,
 };
 
 /// VS Code Marketplace registry client (marketplace.visualstudio.com or compatible).
@@ -221,11 +221,22 @@ impl RegistryClient for VsCodeMarketplaceRegistryClient {
             // answers with when it is read.
             .map(|f| MetadataReadme::linked(&f.source, ReadmeFormat::Markdown));
 
+        // The marketplace signs every extension it publishes and names the
+        // archive as one more file (RFC 0020 §4.2); the editor verifies it
+        // itself, so the proxy relays it and this flag advertises it.
+        let signature_url = resolved
+            .version_info
+            .files
+            .iter()
+            .find(|f| f.asset_type == SIGNATURE_ASSET_TYPE)
+            .map(|f| f.source.clone());
+
         let extra = serde_json::json!({
             "resolved_version": resolved.version_info.version,
             "display_name": resolved.display_name,
             "description": resolved.description,
             "readme": readme,
+            "signature_url": signature_url,
         });
 
         Ok(PackageMetadata {
@@ -236,7 +247,7 @@ impl RegistryClient for VsCodeMarketplaceRegistryClient {
             published_at,
             download_url,
             checksum: None,
-            is_signed: Some(false),
+            is_signed: Some(signature_url.is_some()),
             extra,
             cache_control: None,
         })
@@ -266,14 +277,39 @@ impl RegistryClient for VsCodeMarketplaceRegistryClient {
     async fn fetch_artifact(&self, pkg: &PackageId) -> Result<FetchedArtifact, CoreError> {
         let (publisher, ext_name) = Self::parse_id(&pkg.name)?;
 
-        let url = format!(
-            "{base}/_apis/public/gallery/publishers/{publisher}/vsextensions/{name}/{version}/vspackage",
-            base = self.base_url,
-            name = ext_name,
-            version = pkg.version,
-        );
+        let url = if pkg.artifact.as_deref()
+            == Some(batlehub_core::services::vsx_signature::SIGNATURE_ARTIFACT)
+        {
+            // RFC 0020 §4.2: the signature archive is the file the gallery
+            // document names, on the gallery's own CDN — the same hosts the
+            // README link is allowed to point at, and no other.
+            let resolved = self
+                .query_extension(publisher, ext_name, &pkg.version)
+                .await?;
+            let source = resolved
+                .version_info
+                .files
+                .iter()
+                .find(|f| f.asset_type == SIGNATURE_ASSET_TYPE)
+                .map(|f| f.source.clone())
+                .ok_or_else(|| {
+                    CoreError::NotFound(format!(
+                        "{publisher}.{ext_name}@{} is not signed upstream",
+                        pkg.version
+                    ))
+                })?;
+            ensure_linked_origin(&source, &self.base_url, self.asset_host_suffixes())?;
+            source
+        } else {
+            format!(
+                "{base}/_apis/public/gallery/publishers/{publisher}/vsextensions/{name}/{version}/vspackage",
+                base = self.base_url,
+                name = ext_name,
+                version = pkg.version,
+            )
+        };
 
-        tracing::debug!(url = %url, "fetching VS Code Marketplace VSIX");
+        tracing::debug!(url = %url, "fetching VS Code Marketplace artifact");
 
         let response = self
             .http

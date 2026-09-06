@@ -693,6 +693,7 @@ impl AppConfig {
         self.retention_warnings(&mut out);
         self.signed_url_warnings(&mut out);
         self.require_signed_release_warnings(&mut out);
+        self.vsx_signing_warnings(&mut out);
         self.forge_warnings(&mut out);
         self.security_warnings(&mut out);
         self.upstream_audit_warnings(&mut out);
@@ -1084,6 +1085,24 @@ impl AppConfig {
 
     /// Only local and hybrid registries are considered: a proxy-mode registry
     /// accepts no publishes, so there is no second half to disagree with.
+    /// RFC 0020 §4.3: a signing key on a registry that never publishes.
+    fn vsx_signing_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        for (index, registry) in self.registries.iter().enumerate() {
+            if registry.mode == RegistryMode::Proxy && registry.vsx_signing.is_some() {
+                out.push(ConfigWarning::new(
+                    warnings::VSX_SIGNING_PROXY_MODE,
+                    format!("registries[{index}].vsx_signing"),
+                    format!(
+                        "registry '{}' is in proxy mode with a [registries.vsx_signing] key: \
+                         nothing is published there, so the key signs nothing. An upstream's \
+                         signature is relayed whether or not a key is configured.",
+                        registry.name
+                    ),
+                ));
+            }
+        }
+    }
+
     fn require_signed_release_warnings(&self, out: &mut Vec<ConfigWarning>) {
         for (index, registry) in self.registries.iter().enumerate() {
             if registry.mode == RegistryMode::Proxy {
@@ -2196,6 +2215,7 @@ impl AppConfig {
             Self::validate_registry_readme(registry)?;
             Self::validate_registry_upstream_detail(registry)?;
             Self::validate_registry_versioning(registry)?;
+            Self::validate_registry_vsx_signing(registry, kind)?;
         }
         Ok(())
     }
@@ -3254,6 +3274,53 @@ impl AppConfig {
     /// `version_pattern` is a publish-time restriction (a security
     /// control), so an uncompilable regex must fail the config load
     /// rather than silently degrade to "allow every version" (fail-open).
+    /// RFC 0020 §4.3: the key names a protocol's asset, so it belongs to the
+    /// two kinds that speak it; a seed of the wrong length is a typo Ed25519
+    /// would otherwise sign with; the key id is a URL path segment.
+    fn validate_registry_vsx_signing(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+    ) -> Result<()> {
+        let Some(signing) = &registry.vsx_signing else {
+            return Ok(());
+        };
+        if !matches!(
+            kind,
+            batlehub_core::entities::RegistryKind::VscodeMarketplace
+                | batlehub_core::entities::RegistryKind::Openvsx
+        ) {
+            anyhow::bail!(
+                "registry '{}': [registries.vsx_signing] applies to type = \"vscode-marketplace\" \
+                 or \"openvsx\" only (it signs VSIX packages), not to '{}'",
+                registry.name,
+                registry.registry_type
+            );
+        }
+        let seed = signing.seed_hex.trim();
+        if seed.len() != 64 || !seed.bytes().all(|b| b.is_ascii_hexdigit()) {
+            anyhow::bail!(
+                "registry '{}': vsx_signing.seed_hex must be 64 hex characters (a 32-byte \
+                 Ed25519 seed; `batlehub-cli vsx keygen` prints one), got {} characters",
+                registry.name,
+                seed.len()
+            );
+        }
+        if let Some(id) = &signing.key_id {
+            if id.is_empty()
+                || !id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+            {
+                anyhow::bail!(
+                    "registry '{}': vsx_signing.key_id must be non-empty and use only \
+                     [A-Za-z0-9._-] — it is a path segment of the public-key URL",
+                    registry.name
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn validate_registry_versioning(registry: &RegistryConfig) -> Result<()> {
         let Some(versioning) = &registry.versioning else {
             return Ok(());

@@ -1713,6 +1713,25 @@ trusted_keys = ["<hex pubkey>"]  # hex-encoded 32-byte Ed25519 public keys trust
 
 > **Why Ed25519 only?** RSA-based crypto (the `rsa` crate, and therefore PGP / x509 / the default Sigstore paths) is hard-banned from the dependency tree by `deny.toml` (RUSTSEC-2023-0071). Ed25519 detached-signature verification keeps the tree RSA-free; Sigstore / npm provenance verification is left as a future item for that reason.
 
+#### `[registries.vsx_signing]` {#vsx-signing}
+
+The registry's own signature on every VSIX it publishes ([RFC 0020](/rfc/0020-signing-at-the-vscode-marketplace-registry)), for `vscode-marketplace` and `openvsx` registries. A current VS Code's Extensions view greys out Install on any gallery entry without a signature asset — *This extension is not signed by the Extension Marketplace* — and a registry that holds a key serves one for everything it hosts, in the archive shape Open VSX uses: an Ed25519 signature over the whole `.vsix`, a manifest of its entries, an empty `.signature.p7s`. What it proxies from an upstream that signs (the Microsoft marketplace, an Open VSX instance) is relayed with the upstream's own signature whether or not a key is configured, and never re-signed.
+
+```toml
+[registries.vsx_signing]
+seed_hex = "${VSX_SIGNING_SEED}"   # 32-byte Ed25519 seed, hex — `batlehub-cli vsx keygen` prints one
+key_id   = "2026-09"               # optional; default: the first 16 hex characters of SHA-256(public key)
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `seed_hex` | string | — | The seed, 64 hex characters. A secret of the same class as `repo_signing.seed_hex`: keep it out of the file with `${VAR}`. Rejected at load when it is not 32 bytes of hex. |
+| `key_id` | string | derived | The id the public key is served under, `GET /proxy/{registry}/api/-/public-key/{key_id}` (PEM, anonymous, cached a day). A URL path segment: `[A-Za-z0-9._-]`. Must change when the key does; the default derives it from the key, so it does. |
+
+**What it does.** At publish the registry writes the signature archive beside the artifact and the gallery advertises `Microsoft.VisualStudio.Services.VsixSignature` and `…PublicKey` for the version; the Open VSX document carries `files.signature` and `files.publicKey`. A version published before the key existed is signed on the first request for its archive; a rotated key re-signs the same way, and the served key always verifies the served archive. On a registry in `proxy` mode the key signs nothing (nothing is published there) and a warning says so. A version whose signature archive was **provided** — an upstream's, attached after the publish with `PUT …/{extension_id}/{version}/vsix/signature` (see the [Open VSX page](/registries/openvsx#signatures)) — is never signed over: the registry serves that archive as-is and advertises no key for it.
+
+**What it does not do.** Make a stock VS Code's own verifier pass: that one accepts the marketplace's signature and no other, so on a stock build the view's Install button turns on and the install needs `extensions.verifySignature: false` — the setting code-server, VSCodium and che-code ship off. The [CLI page](/use/cli#gallery-proxy) says where it goes; `batlehub-cli vsx verify` is the check that replaces it.
+
 #### `[registries.upstream_auth]` {#upstream_auth}
 
 Credentials to send on every upstream request for this registry. Three schemes are supported; choose one.

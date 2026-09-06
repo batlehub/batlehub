@@ -170,6 +170,26 @@ tasks:
     cmds:
       - node build/gen-endpoints.mjs --check
 
+  # ── The config generator's harness ──────────────────────────────────────────
+  # The page's pure half (docs/.vitepress/components/configToml.ts) renders the
+  # TOML; `node --test` asserts on it, and the fixtures it writes are loaded by
+  # `cargo test -p batlehub-config --test config_generator_fixtures` with the
+  # real parser — the check that says the generator emits a config the server
+  # accepts. Plain node: types are stripped by Node itself.
+  docs:generator:
+    desc: Run the config generator's tests and regenerate its fixtures for crates/config
+    dir: docs
+    cmds:
+      - node --test build/config-generator.test.ts
+      - node build/config-generator-fixtures.ts
+
+  docs:generator:check:
+    desc: Fail if the config generator's fixtures have drifted from the generator
+    dir: docs
+    cmds:
+      - node --test build/config-generator.test.ts
+      - node build/config-generator-fixtures.ts --check
+
   # ── The docs site's design gates (RFC 0005 phase 4) ──────────────────────────
   # Until these existed the public site's entire design coverage was one static
   # source scan, while the internal console had axe plus a type-ramp check over
@@ -187,6 +207,7 @@ tasks:
       - task: docs:listing-coverage:check
       - task: docs:readme-coverage:check
       - task: docs:endpoints:check
+      - task: docs:generator:check
       # The /rfc/ table and sidebar, generated from the documents themselves —
       # see .tasks/rfc.yaml. Ahead of docs:links because a new RFC missing from
       # the sidebar reads as an orphan there, and "run task rfc:index" is a more

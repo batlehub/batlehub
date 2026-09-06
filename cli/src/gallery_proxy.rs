@@ -43,6 +43,8 @@ use crate::contract::{self, ContractFile, State};
 pub const SIGN_IN_PUBLISHER: &str = "batlehub";
 pub const SIGN_IN_NAME: &str = "sign-in";
 pub const SIGN_IN_VERSION: &str = "1.0.0";
+/// The one date the entry carries, everywhere the editor reads one.
+pub const SIGN_IN_DATE: &str = "2026-01-01T00:00:00Z";
 /// The property RFC 0011 §4.4.4 found mandatory: without it the editor
 /// fetches the manifest to learn `engines.vscode`, a missing one throws,
 /// and the entry is dropped from results — the empty view the entry exists
@@ -169,9 +171,16 @@ pub fn sign_in_document(capability_base: &str) -> Value {
                 "flags": "validated, public",
                 "categories": ["Other"],
                 "tags": [],
+                // Read off the extension, not the version, by the editor's
+                // details page (`publishedDate`, `releaseDate`,
+                // `lastUpdated`): without them it prints "Invalid Date"
+                // (measured in the Extensions view, VS Code 1.96.4 and 1.136.1).
+                "publishedDate": SIGN_IN_DATE,
+                "lastUpdated": SIGN_IN_DATE,
+                "releaseDate": SIGN_IN_DATE,
                 "versions": [{
                     "version": SIGN_IN_VERSION,
-                    "lastUpdated": "2026-01-01T00:00:00Z",
+                    "lastUpdated": SIGN_IN_DATE,
                     "assetUri": asset_base,
                     "fallbackAssetUri": asset_base,
                     "files": [
@@ -207,9 +216,12 @@ pub fn sign_in_readme(registry_base: &str) -> String {
          1. In a terminal: `batlehub-cli --server {registry} auth login`\n\
          2. Then: `batlehub-cli --server {registry} auth write-token-file`\n\n\
          The proxy reads the credential file on every request, so the next search \
-         in this view shows the registry's extensions. Nothing needs restarting.\n\n\
-         Installing this entry does nothing but keep it out of your way; \
-         `batlehub-cli auth status` says what the proxy currently holds.\n"
+         in this view (press its Refresh) shows the registry's extensions. Nothing \
+         needs restarting.\n\n\
+         The Install button next to this entry is greyed out: the editor only \
+         installs signed packages from this view, and this entry is a page, not a \
+         package worth signing. `batlehub-cli auth status` says what the proxy \
+         currently holds.\n"
     )
 }
 

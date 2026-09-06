@@ -270,6 +270,40 @@ impl LocalRegistryBackend for InMemoryLocalRegistry {
         }
     }
 
+    async fn set_vsix_signature_provided(
+        &self,
+        registry: &str,
+        name: &str,
+        version: &str,
+        provided: bool,
+    ) -> Result<bool, CoreError> {
+        let mut map = self.inner.write().await;
+        let Some(r) = published_mut(&mut map, registry, name, version) else {
+            return Ok(false);
+        };
+        let current = r
+            .pkg
+            .index_metadata
+            .get("vsixSignature")
+            .and_then(|v| v.as_str())
+            == Some("provided");
+        if current == provided {
+            return Ok(false);
+        }
+        let Some(obj) = r.pkg.index_metadata.as_object_mut() else {
+            return Ok(false);
+        };
+        if provided {
+            obj.insert(
+                "vsixSignature".to_owned(),
+                serde_json::Value::String("provided".to_owned()),
+            );
+        } else {
+            obj.remove("vsixSignature");
+        }
+        Ok(true)
+    }
+
     async fn set_retention_keep(
         &self,
         registry: &str,

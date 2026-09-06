@@ -91,6 +91,10 @@ struct OpenVsxExtension {
 struct OpenVsxFiles {
     download: Option<String>,
     signature: Option<String>,
+    /// The key the signature verifies under, one URL per signing key
+    /// (`/api/-/public-key/{id}`); present only when the registry signs.
+    #[serde(rename = "publicKey", default)]
+    public_key: Option<String>,
     manifest: Option<String>,
     icon: Option<String>,
     /// A URL to the extension's README, not the text.
@@ -140,6 +144,9 @@ impl RegistryClient for OpenVsxRegistryClient {
             "verified": ext.verified,
             "manifest_url": ext.files.manifest,
             "icon_url": ext.files.icon,
+            // RFC 0020 §4.2: relayed as assets of this registry when present.
+            "signature_url": ext.files.signature,
+            "public_key_url": ext.files.public_key,
             "readme": ext.files.readme.as_deref().map(|url| {
                 // Markdown by protocol, whatever the upstream's `Content-Type`
                 // says when the link is followed: an upstream must not be able
@@ -205,15 +212,41 @@ impl RegistryClient for OpenVsxRegistryClient {
             .fetch_extension(publisher, ext_name, &pkg.version)
             .await?;
 
-        let download_url = ext.files.download.ok_or_else(|| {
-            CoreError::NotFound(format!(
-                "no VSIX download available for {}.{} v{}",
-                publisher, ext_name, pkg.version
-            ))
-        })?;
+        // RFC 0020 §4.2: the signature archive and the public key are
+        // artifacts of the same version, addressed by selector, fetched from
+        // the URLs the extension document names and cached beside the VSIX.
+        let (download_url, what) = match pkg.artifact.as_deref() {
+            Some(batlehub_core::services::vsx_signature::SIGNATURE_ARTIFACT) => (
+                ext.files.signature.ok_or_else(|| {
+                    CoreError::NotFound(format!(
+                        "{}.{} v{} is not signed upstream",
+                        publisher, ext_name, pkg.version
+                    ))
+                })?,
+                "signature archive",
+            ),
+            Some(batlehub_core::services::vsx_signature::PUBLIC_KEY_ARTIFACT) => (
+                ext.files.public_key.ok_or_else(|| {
+                    CoreError::NotFound(format!(
+                        "{}.{} v{} names no public key upstream",
+                        publisher, ext_name, pkg.version
+                    ))
+                })?,
+                "public key",
+            ),
+            _ => (
+                ext.files.download.ok_or_else(|| {
+                    CoreError::NotFound(format!(
+                        "no VSIX download available for {}.{} v{}",
+                        publisher, ext_name, pkg.version
+                    ))
+                })?,
+                "VSIX",
+            ),
+        };
 
         ensure_same_origin(&download_url, &self.base_url)?;
-        tracing::debug!(url = %download_url, "fetching OpenVSX VSIX");
+        tracing::debug!(url = %download_url, what, "fetching OpenVSX artifact");
 
         let response = self
             .get(&download_url)

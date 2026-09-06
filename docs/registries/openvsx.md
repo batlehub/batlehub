@@ -12,6 +12,7 @@ Proxy and cache VS Code extensions from [open-vsx.org](https://open-vsx.org), or
 | **Addressing** | per-package |
 | **Private publish** | ✅ VSIX upload (`PUT …/vsix`) |
 | **Air gap** | no composed listing offline: a gallery answers by query |
+| **Signatures** | the registry signs what it hosts (`[registries.vsx_signing]`), relays the upstream's for what it proxies, and keeps one attached to a republished version |
 
 ## Proxy setup
 
@@ -136,6 +137,43 @@ curl -s -H "Authorization: Bearer <your-token>" \
 # Should show: 50 4b 03 04 ...
 ```
 
+### Signatures
+
+A current editor's Extensions view installs only entries that carry a signature asset. Give the registry a key ([`[registries.vsx_signing]`](/guide/configuration#vsx-signing)) and every version it hosts gets one, in Open VSX's format; what it proxies from an upstream that signs is relayed with the upstream's signature. The public key is at `GET /proxy/{registry}/api/-/public-key/{key_id}` (PEM), and each version's Open VSX document names it under `files.publicKey`.
+
+```sh
+batlehub-cli vsx keygen            # a seed for the config, and its key id
+batlehub-cli vsx verify my-org.my-extension-1.0.0.vsix \
+  --registry https://batlehub.example.com/proxy/internal-ext \
+  --id my-org.my-extension --version 1.0.0
+# ok: … is signed by key 3f1e… (24503 bytes, manifest matches)
+```
+
+**An extension that already carries a signature keeps it.** What the registry proxies is relayed with the upstream's archive, never re-signed. What is republished here from the marketplace — a VSIX downloaded from `marketplace.visualstudio.com`, uploaded to a local registry — loses nothing either: attach the marketplace's signature archive after the package, and the registry serves it as-is instead of signing over it. That archive is the one a stock VS Code verifies, so such a version installs everywhere with nothing turned off.
+
+```sh
+# the VSIX, then the archive the marketplace served as Microsoft.VisualStudio.Services.VsixSignature
+curl -X PUT -H "Authorization: Bearer <token>" -H "Content-Type: application/octet-stream" \
+  --data-binary @ms-vscode.hexeditor-1.11.1.vsix \
+  "https://batlehub.example.com/proxy/internal-ext/ms-vscode.hexeditor/1.11.1/vsix"
+curl -X PUT -H "Authorization: Bearer <token>" -H "Content-Type: application/zip" \
+  --data-binary @ms-vscode.hexeditor-1.11.1.sigzip \
+  "https://batlehub.example.com/proxy/internal-ext/ms-vscode.hexeditor/1.11.1/vsix/signature"
+```
+
+The registry checks the archive's manifest against the bytes it stores (an archive made over other bytes is a `400`), keeps it under the same publish grant as the version, and advertises the signature without a `PublicKey` asset: the key is the signer's, not this registry's.
+
+What installs where, measured against VS Code 1.136.1 ([RFC 0020](/rfc/0020-signing-at-the-vscode-marketplace-registry) §4.5):
+
+| Editor build | Unsigned registry | Signed registry |
+|---|---|---|
+| Stock VS Code, view | Install greyed out, *not signed* | Install enabled; the install needs `extensions.verifySignature: false` — the editor's own verifier accepts the Microsoft marketplace's signature and no other |
+| Stock VS Code, `code --install-extension` | refused, `NotSigned` (since 1.136) | refused until the same setting is off |
+| code-server, VSCodium (the setting shipped off) | Install greyed out | installs |
+| che-code (ships no verifier; measured on 1.128.1) | view: Install greyed out; `code --install-extension` installs | installs, nothing to configure — *Extension signature verification is not done* in its log |
+| An extension proxied from the Microsoft marketplace | refused: the proxy used to drop the upstream's signature | installs everywhere, nothing to set — the upstream's own signature is relayed and verified by the editor |
+| A marketplace extension republished locally with its signature attached | — | installs everywhere with the verifier on: `vsce-sign` answers `Success` to the marketplace's archive served by this registry (measured, `ms-vscode.hexeditor`) |
+
 ### Endpoint reference
 
 <!-- BEGIN endpoints: proxy/openvsx -->
@@ -143,7 +181,9 @@ curl -s -H "Authorization: Bearer <your-token>" \
 |--------|------|-------------|
 | `GET` | `/proxy/{registry}/{extension_id}/{version}/vsix` | Download a VS Code extension VSIX package. |
 | `PUT` | `/proxy/{registry}/{extension_id}/{version}/vsix` | Upload a VS Code extension VSIX package. |
+| `PUT` | `/proxy/{registry}/{extension_id}/{version}/vsix/signature` | `PUT /proxy/{registry}/{extension_id}/{version}/vsix/signature` — attach an |
 | `POST` | `/proxy/{registry}/api/-/namespace/create` | Claim an OpenVSX publisher namespace. |
+| `GET` | `/proxy/{registry}/api/-/public-key/{key_id}` | `GET /proxy/{registry}/api/-/public-key/{key_id}` — the key this |
 | `POST` | `/proxy/{registry}/api/-/publish` | `ovsx publish` — `POST /api/-/publish`. |
 | `GET` | `/proxy/{registry}/api/-/search` | Search the registry — `GET …/api/-/search`. |
 | `GET` | `/proxy/{registry}/api/{namespace}` | `GET /api/{namespace}` — what a publisher has here. |

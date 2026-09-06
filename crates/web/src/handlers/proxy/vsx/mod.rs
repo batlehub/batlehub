@@ -44,11 +44,12 @@ pub mod assets;
 pub mod gallery;
 pub mod protocol;
 pub mod render;
+pub mod signing;
 pub mod source;
 
 pub use api::{
     openvsx_extension, openvsx_extension_version, openvsx_file, openvsx_namespace,
-    openvsx_namespace_create, openvsx_publish, openvsx_search, openvsx_version,
+    openvsx_namespace_create, openvsx_public_key, openvsx_publish, openvsx_search, openvsx_version,
 };
 pub use assets::{vsx_asset, vsx_item, vsx_unpkg, vsx_vspackage};
 pub use gallery::vsx_extension_query;

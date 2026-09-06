@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 # Heavy RFC 0011 §4.4 suite — the local gallery proxy, against the real
-# VS Code core.
+# VS Code core (the current stable; `VSCODE_VERSION` picks another).
 #
 # RFC 0011 kept its loopback proxy and its sign-in bootstrap out of §14
 # because they "wait on an editor build that cannot repoint its gallery URL".
 # This suite is the editor build a test *can* repoint: the stock VS Code
-# download, its `product.json` rewritten to point at the proxy, and its CLI
-# driven headlessly (`ELECTRON_RUN_AS_NODE`, the recipe §4.4.4 used) — the
-# real `extensionGalleryService`, the real `extensionquery` bodies, the real
-# install path. Not the Extensions *view*: Electron cannot start here, and
-# the view is what a canary workspace is for. The IDE this repo does not
-# build (che-code) is not built here either; what is measured is the proxy
-# and the editor core it fronts.
+# server build, its `product.json` rewritten to point at the proxy, and its
+# CLI driven headlessly — the real `extensionGalleryService`, the real
+# `extensionquery` bodies, the real install path. Not the Extensions *view*:
+# that is `vsx_view.sh`, which opens the same build's workbench in a browser.
+# The IDE this repo does not build (che-code) is not built here either; what
+# is measured is the proxy and the editor core it fronts.
 #
 # The registry (`config.vsx-login.toml`) requires a credential to read:
 # `anonymous` holds no verb. What it proves, in order:
@@ -25,19 +24,21 @@
 #      property); an install by id of a real extension fails in the editor's
 #      own words and the tap sees **no** request — the proxy forwards nothing
 #      it has no credential for; `code --install-extension batlehub.sign-in`
-#      installs the package the proxy serves, on stock VS Code, unsigned
-#      (§4.4.4's "holds"). A request outside the session segment is `404`.
+#      is refused as `NotSigned` — 1.136.1 verifies on the CLI path where
+#      1.96.4 did not — then installs the package the proxy serves once
+#      `extensions.verifySignature` is off. A request outside the session
+#      segment is `404`.
 #   3. **After `auth write-token-file`, without a restart, the same editor
 #      installs the real extension by id.** Every gallery request the tap
 #      sees carries `Authorization: Bearer`; none arrives without one; the
 #      editor never held the token — its config names only the proxy.
 #
 # Ports: 8122 (server), 8129 (tap). The proxy binds an ephemeral loopback
-# port of its own. Needs network once: VS Code 1.96.4 and the fixture
+# port of its own. Needs network once: the VS Code build and the fixture
 # extension are downloaded into HEAVY_CACHE and reused.
 #
 # Environment knobs: DATABASE_URL (required), HEAVY_PORT, HEAVY_TAP_PORT,
-# VSCODE_VERSION (1.96.4), WEEBO_VERSION (0.5.0), COVERAGE.
+# VSCODE_VERSION (1.136.1), WEEBO_VERSION (0.5.0), COVERAGE.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 heavy_init vsx_login 8122 8129
@@ -49,7 +50,7 @@ REG="vsx-$HEAVY_RUN"
 EXT_ID="batleforc.weebo-bridge-notify"
 WEEBO_VERSION="${WEEBO_VERSION:-0.5.0}"
 WEEBO_BASE_URL="${WEEBO_BASE_URL:-https://github.com/batleforc/weebo-che-notify/releases/download}"
-VSCODE_VERSION="${VSCODE_VERSION:-1.96.4}"
+VSCODE_VERSION="${VSCODE_VERSION:-1.136.1}"
 USER_TOKEN="heavy-user-token"
 
 # Every download here goes straight into `tar` or is published back through
@@ -59,29 +60,35 @@ fetch() { curl -fsSL --proto '=https' --proto-redir '=https' "$@"; }
 
 # ── 0. The editor core and the fixture, cached across runs ──────────────────
 
-VSCODE_DIR="$HEAVY_CACHE/vscode-$VSCODE_VERSION"
-CLI_JS="$VSCODE_DIR/resources/app/out/cli.js"
-if [[ ! -f "$CLI_JS" ]]; then
-  heavy_log "Downloading VS Code $VSCODE_VERSION into $VSCODE_DIR"
+# The server build (`server-linux-x64-web`): the same `extensionGalleryService`
+# and `ExtensionManagementCLI` as the desktop, under the node it bundles, with
+# `product.json` at its root. The desktop build's `cli.js` was driven under
+# `ELECTRON_RUN_AS_NODE` up to 1.96.4; 1.136.1's imports its dependencies as
+# ES modules out of `node_modules.asar`, which plain node cannot open, so the
+# desktop core is no longer a headless client here. vsx_view.sh shares this
+# download.
+VSCODE_DIR="$HEAVY_CACHE/vscode-server-web-$VSCODE_VERSION"
+CODE_SERVER="$VSCODE_DIR/bin/code-server"
+if [[ ! -x "$CODE_SERVER" ]]; then
+  heavy_log "Downloading VS Code $VSCODE_VERSION (server-linux-x64-web) into $VSCODE_DIR"
   mkdir -p "$VSCODE_DIR"
-  fetch "https://update.code.visualstudio.com/$VSCODE_VERSION/linux-x64/stable" \
+  fetch "https://update.code.visualstudio.com/$VSCODE_VERSION/server-linux-x64-web/stable" \
     | tar -xz -C "$VSCODE_DIR" --strip-components=1
 fi
-[[ -f "$CLI_JS" ]] || heavy_fail "no cli.js in the VS Code build at $VSCODE_DIR"
-# The Electron-only builtin the CLI imports; harmless when already done.
-for f in cli main bootstrap-fork; do
-  sed -i 's/node:original-fs/node:fs/' "$VSCODE_DIR/resources/app/out/$f.js"
-done
-PRODUCT_JSON="$VSCODE_DIR/resources/app/product.json"
+[[ -x "$CODE_SERVER" ]] || heavy_fail "no bin/code-server in the VS Code build at $VSCODE_DIR"
+PRODUCT_JSON="$VSCODE_DIR/product.json"
 cp "$PRODUCT_JSON" "$HEAVY_WORK/product.json.orig"
 restore_product_json() { cp "$HEAVY_WORK/product.json.orig" "$PRODUCT_JSON" 2>/dev/null || true; }
 trap 'restore_product_json; heavy_cleanup' EXIT
 
-# `env -u VSCODE_IPC_HOOK_CLI`: from a terminal inside an editor the CLI
-# would forward every command to that editor over IPC and report success
-# for an install that happened somewhere else (heavy-test-env-gotchas).
-CODE=(env -u VSCODE_IPC_HOOK_CLI ELECTRON_RUN_AS_NODE=1 node "$CLI_JS"
-      --user-data-dir "$HEAVY_WORK/vscode-data" --extensions-dir "$HEAVY_WORK/vscode-ext")
+# Its own data directories under the work dir. `env -u VSCODE_IPC_HOOK_CLI`:
+# from a terminal inside an editor a CLI would otherwise forward every
+# command to that editor over IPC and report success for an install that
+# happened somewhere else (heavy-test-env-gotchas).
+EDITOR_DATA="$HEAVY_WORK/editor"
+mkdir -p "$EDITOR_DATA"
+CODE=(env -u VSCODE_IPC_HOOK_CLI "$CODE_SERVER" --server-data-dir "$EDITOR_DATA/server"
+      --user-data-dir "$EDITOR_DATA/user" --extensions-dir "$EDITOR_DATA/extensions")
 
 VSIX="$HEAVY_CACHE/weebo-bridge-notify-$WEEBO_VERSION.vsix"
 if [[ ! -s "$VSIX" ]]; then
@@ -192,10 +199,9 @@ PY
 heavy_log "ANON-SEARCH-OK (one entry, batlehub.sign-in, Code.Engine set, nothing forwarded)"
 
 heavy_mark "anon-install-by-id"
-set +e
-"${CODE[@]}" --install-extension "$EXT_ID" >"$HEAVY_WORK/anon-install.txt" 2>&1
-RC=$?
-set -e
+# `if`, not `set +e`: the ERR trap still fires under `set +e` and prints a
+# "died at line" for a failure that is the measurement.
+if "${CODE[@]}" --install-extension "$EXT_ID" >"$HEAVY_WORK/anon-install.txt" 2>&1; then RC=0; else RC=$?; fi
 [[ $RC -ne 0 ]] || { cat "$HEAVY_WORK/anon-install.txt" >&2; heavy_fail "the editor installed $EXT_ID with no credential"; }
 grep -qi "not found" "$HEAVY_WORK/anon-install.txt" \
   || { cat "$HEAVY_WORK/anon-install.txt" >&2; heavy_fail "the editor failed for a reason other than 'not found' — the by-name lookup must be an empty 200, not an error"; }
@@ -203,14 +209,31 @@ grep -qi "not found" "$HEAVY_WORK/anon-install.txt" \
   || heavy_fail "the editor's unauthenticated lookup reached the registry through the proxy"
 heavy_log "ANON-BY-ID-OK (the editor says '$(grep -io "extension '[^']*' not found" "$HEAVY_WORK/anon-install.txt" | head -1)', and the registry was never asked)"
 
+# 1.96.4 installed an unsigned package from a custom gallery without a
+# word (§4.4.4's "holds"). 1.136.1 verifies on this path too and its default
+# gallery manifest declares every public extension signed, so the package
+# is refused with `NotSigned` until `extensions.verifySignature` is off in
+# the editor's user settings — the setting the code-server and VSCodium
+# families ship off. Measure the refusal, then set it and go on.
+heavy_mark "anon-install-signin-refused"
+if "${CODE[@]}" --install-extension batlehub.sign-in >"$HEAVY_WORK/signin-refused.txt" 2>&1; then RC=0; else RC=$?; fi
+[[ $RC -ne 0 ]] || { cat "$HEAVY_WORK/signin-refused.txt" >&2; heavy_fail "VS Code $VSCODE_VERSION installed the unsigned sign-in package with signature verification on — re-measure"; }
+grep -q "NotSigned" "$HEAVY_WORK/signin-refused.txt" \
+  || { cat "$HEAVY_WORK/signin-refused.txt" >&2; heavy_fail "the editor refused batlehub.sign-in for a reason other than 'NotSigned'"; }
+heavy_log "ANON-SIGNIN-REFUSED-OK (VS Code $VSCODE_VERSION: 'NotSigned' — an unsigned package needs extensions.verifySignature off)"
+# Where the server's CLI reads its settings (measured against the five
+# candidate files): `<server-data-dir>/data/User/settings.json`.
+mkdir -p "$EDITOR_DATA/server/data/User"
+echo '{ "extensions.verifySignature": false }' >"$EDITOR_DATA/server/data/User/settings.json"
+
 heavy_mark "anon-install-signin"
 "${CODE[@]}" --install-extension batlehub.sign-in >"$HEAVY_WORK/signin-install.txt" 2>&1 \
-  || { cat "$HEAVY_WORK/signin-install.txt" >&2; heavy_fail "stock VS Code refused the sign-in package the proxy serves"; }
+  || { cat "$HEAVY_WORK/signin-install.txt" >&2; heavy_fail "stock VS Code refused the sign-in package the proxy serves, with extensions.verifySignature off"; }
 grep -q "successfully installed" "$HEAVY_WORK/signin-install.txt" \
   || { cat "$HEAVY_WORK/signin-install.txt" >&2; heavy_fail "no 'successfully installed' for batlehub.sign-in"; }
-"${CODE[@]}" --list-extensions | grep -qix "batlehub.sign-in" \
+"${CODE[@]}" --list-extensions 2>/dev/null | grep -qix "batlehub.sign-in" \
   || heavy_fail "batlehub.sign-in not listed after install"
-heavy_log "ANON-SIGNIN-OK (the sign-in entry installs on stock VS Code, unsigned, from the proxy)"
+heavy_log "ANON-SIGNIN-OK (the sign-in entry installs on stock VS Code, unsigned, from the proxy, once extensions.verifySignature is off)"
 
 # ── 3. Sign in; the same editor, the same proxy, no restart ─────────────────
 
@@ -243,7 +266,7 @@ heavy_mark "authed-install"
   || { cat "$HEAVY_WORK/authed-install.txt" >&2; heavy_fail "the editor could not install $EXT_ID through the proxy once signed in"; }
 grep -q "successfully installed" "$HEAVY_WORK/authed-install.txt" \
   || { cat "$HEAVY_WORK/authed-install.txt" >&2; heavy_fail "no 'successfully installed' for $EXT_ID"; }
-"${CODE[@]}" --list-extensions | grep -qix "$EXT_ID" || heavy_fail "$EXT_ID not listed after install"
+"${CODE[@]}" --list-extensions 2>/dev/null | grep -qix "$EXT_ID" || heavy_fail "$EXT_ID not listed after install"
 heavy_wire_re_after "authed-install" "POST /proxy/$REG/vscode/gallery/extensionquery -> 200 .*Authorization: Bearer" \
   "the editor's lookup was not forwarded with a Bearer"
 heavy_wire_re_after "authed-install" "GET /proxy/$REG/vscode/(asset|gallery)/.* -> 200 .*Authorization: Bearer" \
@@ -254,7 +277,7 @@ BARE="$(awk -v mark="### authed-search" 'index($0, mark) == 1 { seen = 1; next }
 [[ "$BARE" == "0" ]] || { grep "/proxy/" "$HEAVY_LOG" | tail -20 >&2; heavy_fail "$BARE request(s) reached the registry without a credential after the sign-in"; }
 heavy_log "AUTHED-INSTALL-OK ($EXT_ID installed by id; every registry request carried a Bearer, the editor's config names only the proxy)"
 
-heavy_log "Measurement: VS Code $VSCODE_VERSION (cli.js under node), proxy $GALLERY, registry $REGISTRY_BASE"
+heavy_log "Measurement: VS Code $VSCODE_VERSION (server build, its CLI), proxy $GALLERY, registry $REGISTRY_BASE"
 heavy_log "  anonymous: registry search $ANON_CODE, proxy search 1 (batlehub.sign-in), install-by-id refused with 'not found' and 0 registry requests, sign-in package installed"
 heavy_log "  signed in: proxy search = [$EXT_ID], install by id succeeded, $(grep -c 'Authorization: Bearer' "$HEAVY_LOG") registry requests with a Bearer, $BARE without"
 

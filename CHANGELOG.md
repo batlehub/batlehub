@@ -8,7 +8,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Signed VSIX assets for `openvsx` / `vscode-marketplace` registries (RFC 0020).**
+  A current VS Code's Extensions view greys out Install on any gallery entry
+  without a signature asset. A registry that holds an Ed25519 key
+  (`[registries.vsx_signing] seed_hex`, `key_id`) now signs every VSIX it
+  publishes and serves the signature in Open VSX's archive shape as
+  `Microsoft.VisualStudio.Services.VsixSignature`, with the key as
+  `…PublicKey` and at `GET …/api/-/public-key/{key_id}`; the Open VSX
+  document carries `files.signature` and `files.publicKey`. Versions
+  published before the key existed are signed on first request; a rotated
+  key re-signs the same way. An upstream's own archive can be attached to a
+  republished version instead (`PUT …/{ext}/{version}/vsix/signature`) and
+  is served as-is — the marketplace's signature is the one a stock editor
+  verifies. `batlehub-cli vsx keygen` prints a seed; `batlehub-cli vsx
+  verify` checks a download against the served archive and key.
+  `tests/heavy/vsx_view.sh` drives a real Extensions view through all of it.
+
 ### Fixed
+
+- **Proxied extensions lost their upstream signature.** The gallery proxy
+  re-rendered every entry with a fixed six-asset list, so an extension
+  proxied from the Microsoft marketplace arrived unsigned and a current
+  editor refused to install it. The upstream's `VsixSignature` (and Open
+  VSX's `PublicKey`) are now relayed byte for byte, cached beside the VSIX,
+  and never re-signed.
 
 - **Setup snippets name the host the client actually talks to.** With host-based
   routing (RFC 0001) a registry answers on its own subdomain, and on that host

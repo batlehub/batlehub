@@ -175,6 +175,9 @@ pub async fn vsix_publish(
     let (signature_bytes, signature_type) =
         ArtifactSignature::split(extract_signature_headers(&req)?);
 
+    let signed_bytes = vsix_bytes.clone();
+    let (registry_name, ext_name, version_name) =
+        (registry.clone(), extension_id.clone(), version.clone());
     let quota = local_svc
         .publish(PublishRequest {
             unlisted: false,
@@ -190,6 +193,14 @@ pub async fn vsix_publish(
         })
         .await
         .map_err(AppError::from)?;
+    super::vsx::signing::sign_after_publish(
+        &local_svc,
+        &registry_name,
+        &ext_name,
+        &version_name,
+        &signed_bytes,
+    )
+    .await;
 
     let mut resp = HttpResponse::Ok();
     for (name, value) in quota.headers() {
@@ -219,4 +230,50 @@ mod tests {
             );
         }
     }
+}
+
+/// `PUT /proxy/{registry}/{extension_id}/{version}/vsix/signature` — attach an
+/// upstream's signature archive to a version this registry holds (RFC 0020
+/// §13.6). A marketplace extension republished locally keeps, this way, the
+/// signature a stock editor verifies; the registry checks the archive's
+/// manifest against the stored bytes, keeps it as-is, and never signs over
+/// it. Authorised as a publish of the same version.
+#[utoipa::path(
+    put,
+    path = "/proxy/{registry}/{extension_id}/{version}/vsix/signature",
+    tag = "proxy/openvsx",
+    params(
+        ("registry"     = String, Path, description = "Registry name"),
+        ("extension_id" = String, Path, description = "Extension ID (publisher.name)"),
+        ("version"      = String, Path, description = "Published version"),
+    ),
+    request_body(content = Vec<u8>, content_type = "application/zip", description = "The signature archive: `.signature.manifest` plus `.signature.p7s` and/or `.signature.sig`"),
+    responses(
+        (status = 200, description = "Signature attached", body = OkResponse),
+        (status = 400, description = "Not a signature archive, or its manifest does not describe the stored VSIX"),
+        (status = 403, description = "Not allowed to publish this version"),
+        (status = 404, description = "Unknown registry, or version not published here"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[put("/proxy/{registry}/{extension_id}/{version}/vsix/signature")]
+pub async fn vsix_signature_attach(
+    path: web::Path<(String, String, String)>,
+    payload: web::Payload,
+    identity: AuthIdentity,
+    map: web::Data<RegistryMap>,
+    mode_map: web::Data<RegistryModeMap>,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
+) -> Result<impl Responder, AppError> {
+    let (registry, extension_id, version) = path.into_inner();
+    require_openvsx(&registry, &map)?;
+    require_local_mode(&registry, &mode_map)?;
+    batlehub_core::services::validate_package_name(&extension_id).map_err(AppError::from)?;
+    batlehub_core::services::validate_path_safe("version", &version).map_err(AppError::from)?;
+    let archive = collect_payload(payload).await?;
+    local_svc
+        .attach_vsix_signature(&registry, &extension_id, &version, archive, &identity.0)
+        .await
+        .map_err(AppError::from)?;
+    Ok(HttpResponse::Ok().json(OkResponse::new()))
 }

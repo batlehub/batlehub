@@ -252,6 +252,26 @@ puts a transparent logging proxy (`http_tap.py`) in front of it, drives that
 ecosystem's **real client**, and asserts on the wire transcript. Shared
 machinery is in `tests/heavy/lib.sh`.
 
+### The config generator's harness
+
+The docs site's config generator (`docs/.vitepress/components/ConfigGenerator.vue`)
+writes TOML nobody used to parse. Its pure half — types, defaults, helpers and
+`renderConfigToml(state)` — lives in `configToml.ts` so it runs without Vue, and
+three things hold it:
+
+- `node --test docs/build/config-generator.test.ts` renders the scenarios of
+  `config-generator-scenarios.ts` and asserts on the sections (plain Node, types
+  stripped by Node itself);
+- `docs/build/config-generator-fixtures.ts` writes each rendering to
+  `crates/config/tests/fixtures/config-generator/*.toml`, and
+  `cargo test -p batlehub-config --test config_generator_fixtures` loads every
+  one with `load_from_str` and `validate()` — the real parser saying the
+  generator emits a config the server accepts;
+- `task docs:generator:check` (part of `task docs:design`) fails when the
+  fixtures drift from the generator. `task docs:generator` regenerates them.
+
+Add a scenario for every section the generator learns to emit.
+
 They exist because the layers above them cannot fail on the defect that matters
 most here: a route that is present, tested, and answering `200` with something
 no client can use. RFC 0009 §5.2 lists the ways — a resource the client cannot
@@ -266,7 +286,8 @@ found by running the client, by nothing else, twice over.
 | `npm.sh` | npm | publish → install → `whoami`/`ping`/`dist-tag`/`search`, and `npm audit` on the path npm really sends |
 | `pypi.sh` | twine, pip | the documented `twine upload` (HTTP Basic) works, and pip's PEP 658 `.metadata` sibling answers |
 | `openvsx.sh` | ovsx | `ovsx publish` with its token in a query parameter, and `ovsx get` following the rewritten download URL |
-| `vsx_login.sh` | VS Code (the 1.96.4 core, headless) | RFC 0011 §4.4: `batlehub-cli proxy serve` in front of a registry whose `anonymous` holds no verb, with `product.json` repointed at the proxy. Unauthenticated, a search through the proxy is the one `batlehub.sign-in` entry with `Code.Engine`, an install by id fails as *not found* with no request reaching the registry, and the sign-in package installs; after `auth write-token-file`, without restarting anything, the same editor installs the fixture by id and every registry request on the tap carries `Authorization: Bearer` |
+| `vsx_login.sh` | VS Code 1.136.1 (the server build's CLI, headless) | RFC 0011 §4.4: `batlehub-cli proxy serve` in front of a registry whose `anonymous` holds no verb, with `product.json` repointed at the proxy. Unauthenticated, a search through the proxy is the one `batlehub.sign-in` entry with `Code.Engine`, an install by id fails as *not found* with no request reaching the registry, and the sign-in package is refused as `NotSigned` until `extensions.verifySignature` is off, then installs; after `auth write-token-file`, without restarting anything, the same editor installs the fixture by id and every registry request on the tap carries `Authorization: Bearer` |
+| `vsx_view.sh` | VS Code 1.136.1 (the server build's workbench, in Chrome over the DevTools protocol — a workspace's sidecar via `CDP_URL`, or a headless `CHROME_BIN`) | RFC 0011 §4.4.2 and RFC 0020 in a **real Extensions view**: unauthenticated, browse and search list the one sign-in entry and opening it renders the sign-in page, with nothing reaching the registry; the entry's Install button is disabled and the editor says *not signed* (pinned — the entry is a page, deliberately unsigned). After `auth write-token-file`, the same page's Refresh lists the fixture with Install **enabled** (the registry signed it); the click passes the publisher-trust dialog, fetches package and signature through the proxy, and the editor's verifier refuses (`UnhandledException`, pinned by running the editor's own `vsce-sign` on the served archive, which `batlehub-cli vsx verify` accepts); the server's CLI refuses the same way and installs once `extensions.verifySignature` is off, and on a second look so does the view. A marketplace extension republished with its own archive attached (`PUT …/vsix/signature`) gets `Success` from `vsce-sign` and installs with the verifier on. `tests/heavy/vsx_view.mjs` is the driver |
 | `conda.sh` | micromamba | the `HEAD` probe for `repodata.json.zst` reaches a handler, and a publish is visible in the *compressed* channel |
 | `nuget.sh` | dotnet | the client can *select* the search resource, `skip` advances the page, and `push` hits the path it appends a slash to |
 | `composer.sh` | composer | proxy-mode resolution with Packagist disabled, `dist.shasum` the client accepts, and `search.json` reached through the advertised template |

@@ -545,13 +545,59 @@ Three things to know:
   whose details are the sign-in steps; a lookup by name answers nothing,
   so the editor's installed extensions are never marked unavailable. Run
   `auth login`, then `auth write-token-file`: the proxy re-reads the file
-  on every request, and the next search is the registry's.
+  on every request, and the next search is the registry's — press the
+  view's Refresh, the view answers a repeated search from its own cache.
 - **Every URL in a gallery answer is rewritten onto the proxy**, so the
   `.vsix` the editor downloads after you click Install goes through it
   too, with the credential. A URL on any other origin is left alone.
 
-`tests/heavy/vsx_login.sh` drives the real VS Code core through it, with
-and without a credential.
+One thing the proxy cannot change: **a current VS Code installs only signed
+packages from a gallery.** The Extensions view greys out Install on any
+entry without a signature asset with *This extension is not signed by the
+Extension Marketplace* — which is why a registry signs what it hosts
+([`[registries.vsx_signing]`](/guide/configuration#vsx-signing)) and relays
+the upstream's signature for what it proxies. That turns the button on. The
+editor's own verifier still accepts the Microsoft marketplace's signature and
+no other, so on a stock build the install itself needs
+`extensions.verifySignature: false`; the builds that ship with a
+non-Microsoft gallery (code-server, VSCodium, che-code) ship it off for that
+reason. On a stock build set it yourself, in the editor's settings (for a
+server build, in `<server-data-dir>/data/User/settings.json`). The sign-in
+entry is deliberately not signed: it is a page to read, and its button stays
+grey.
+
+`tests/heavy/vsx_login.sh` drives the real VS Code core's CLI through the
+proxy, with and without a credential; `tests/heavy/vsx_view.sh` opens the
+same build's Extensions view in a browser and reads what it shows.
+
+### `vsx keygen` and `vsx verify` {#vsx}
+
+The client side of a registry's VSIX signature
+([RFC 0020](/rfc/0020-signing-at-the-vscode-marketplace-registry)). `keygen`
+prints a seed for `[registries.vsx_signing]` and the key id it derives, and
+writes nothing:
+
+```
+$ batlehub-cli vsx keygen
+seed_hex   = "9d61b19d…"
+key_id     = "3f1e0a9c7b2d4e61"
+public_key = "d75a9801…"   # the trusted_keys form
+```
+
+`verify` checks a downloaded `.vsix` against the archive the registry serves
+as its `VsixSignature` asset and the key its `PublicKey` asset names — the
+Ed25519 signature over the file's bytes, and the manifest against the file's
+entries:
+
+```
+$ batlehub-cli vsx verify weebo-bridge-notify-0.5.0.vsix \
+    --registry https://hub.example.dev/proxy/vsx --id batleforc.weebo-bridge-notify --version 0.5.0
+ok: weebo-bridge-notify-0.5.0.vsix is signed by key 3f1e0a9c7b2d4e61… (24503 bytes, manifest matches)
+```
+
+`--signature <archive> --public-key <pem|hex|file>` verifies offline. It does
+not run the editor's own verifier, which accepts the marketplace's signature
+and no other.
 
 ### `auth token create`
 

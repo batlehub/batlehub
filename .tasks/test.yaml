@@ -276,9 +276,14 @@ tasks:
       - bash tests/heavy/openvsx.sh
 
   test:vsx-login-heavy:
-    desc: "Heavy RFC 0011 §4.4 suite: the local gallery proxy (`batlehub-cli proxy serve`) in front of a credential-only vscode-marketplace registry, driven by the real VS Code 1.96.4 core with product.json repointed — unauthenticated, a search is the one sign-in entry and it installs; after `auth write-token-file` the same editor installs by id and every registry request carries a Bearer (needs DATABASE_URL + network once for the VS Code download)"
+    desc: "Heavy RFC 0011 §4.4 suite: the local gallery proxy (`batlehub-cli proxy serve`) in front of a credential-only vscode-marketplace registry, driven by the real VS Code core's CLI (the server build, product.json repointed) — unauthenticated, a search is the one sign-in entry, refused as NotSigned until extensions.verifySignature is off, then installed; after `auth write-token-file` the same editor installs by id and every registry request carries a Bearer (needs DATABASE_URL + network once for the VS Code download)"
     cmds:
       - bash tests/heavy/vsx_login.sh
+
+  test:vsx-view-heavy:
+    desc: "Heavy RFC 0011 §4.4.2 + RFC 0020 suite: a real Extensions view — the VS Code server build's workbench in Chrome over CDP (a sidecar via CDP_URL, or a headless CHROME_BIN) — the sign-in entry and its page, then after `auth write-token-file` the registry-signed fixture with Install enabled, the editor's verifier refusing it (vsce-sign pinned), the view installing it with extensions.verifySignature off, and a marketplace extension republished with its own signature verified and installed with the verifier on (needs DATABASE_URL, a Chrome, ui/node_modules, network once for VS Code, the webview frame and the marketplace extension)"
+    cmds:
+      - bash tests/heavy/vsx_view.sh
 
   test:conda-heavy:
     desc: "Heavy conda integration: micromamba's `HEAD` probe for repodata.json.zst, and a package published after the compressed channel was warmed (needs DATABASE_URL; downloads micromamba on first run)"
@@ -383,6 +388,7 @@ tasks:
       - bash tests/heavy/pypi.sh
       - bash tests/heavy/openvsx.sh
       - bash tests/heavy/vsx_login.sh
+      - bash tests/heavy/vsx_view.sh
       - bash tests/heavy/conda.sh
       - bash tests/heavy/nuget.sh
       - bash tests/heavy/composer.sh

@@ -661,7 +661,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 nuget_registration, nuget_search, nuget_service_index, nuget_symbol_publish,
                 nuget_vuln_index, nuget_vuln_page, nuget_yank,
             },
-            openvsx::{download_vsix, vsix_publish},
+            openvsx::{download_vsix, vsix_publish, vsix_signature_attach},
             pypi::{
                 pypi_file_download, pypi_json, pypi_publish, pypi_simple_package, pypi_simple_root,
             },
@@ -694,8 +694,9 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
             },
             vsx::{
                 openvsx_extension, openvsx_extension_version, openvsx_file, openvsx_namespace,
-                openvsx_namespace_create, openvsx_publish, openvsx_search, openvsx_version,
-                vsx_asset, vsx_extension_query, vsx_item, vsx_unpkg, vsx_vspackage,
+                openvsx_namespace_create, openvsx_public_key, openvsx_publish, openvsx_search,
+                openvsx_version, vsx_asset, vsx_extension_query, vsx_item, vsx_unpkg,
+                vsx_vspackage,
             },
         },
     };
@@ -915,6 +916,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(vsx_item); // GET  …/vscode/item
                            // OpenVSX/VSCode VSIX publish (PUT) and download (GET) — same path, different method
     cfg.service(vsix_publish);
+    cfg.service(vsix_signature_attach); // PUT …/{ext}/{version}/vsix/signature (RFC 0020 §13.6)
     cfg.service(download_vsix);
     // JetBrains Marketplace — literal-prefix routes, most-specific first; must all
     // precede the shared npm version/packument wildcards below, which would
@@ -954,6 +956,10 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(openvsx_version); // GET …/api/version
     cfg.service(openvsx_publish); // POST …/api/-/publish
     cfg.service(openvsx_search); // GET …/api/-/search
+                                 // RFC 0020 §4.2: `/api/-/public-key/{id}` sits under the same `-` segment
+                                 // as search, and for the same reason is registered before the greedy
+                                 // `api/{ns}/{ext}` route below.
+    cfg.service(openvsx_public_key);
     cfg.service(openvsx_file); // GET …/api/{ns}/{ext}/{v}/file/{name}
     cfg.service(openvsx_extension_version); // GET …/api/{ns}/{ext}/{v}
     cfg.service(openvsx_extension); // GET …/api/{ns}/{ext}

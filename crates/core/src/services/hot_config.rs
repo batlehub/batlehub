@@ -496,6 +496,10 @@ pub struct HotConfig {
     pub versioning: HashMap<String, VersioningPolicy>,
     /// Per-registry artifact signing configs (Clone, cheap).
     pub signing: HashMap<String, SigningConfig>,
+    /// Per-registry VSIX signing keys (`[registries.vsx_signing]`, RFC 0020):
+    /// a `vscode-marketplace`/`openvsx` registry that holds one signs what it
+    /// publishes and serves the signature as a gallery asset.
+    pub vsx_signing: HashMap<String, Arc<crate::services::signature::VsxSigningKey>>,
     /// Per-registry SBOM generation configs (Clone, cheap).
     pub sbom: HashMap<String, SbomConfig>,
     /// Per-registry README capture configs (Clone, cheap).
@@ -621,6 +625,7 @@ impl Default for HotConfig {
             document_cache: None,
             versioning: HashMap::new(),
             signing: HashMap::new(),
+            vsx_signing: HashMap::new(),
             sbom: HashMap::new(),
             readme: HashMap::new(),
             upstream_detail: HashMap::new(),

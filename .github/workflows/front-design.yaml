@@ -107,6 +107,17 @@ jobs:
         run: node build/check-audience.mjs
         working-directory: docs
 
+      # The config generator's own harness: its pure half renders each scenario
+      # and the assertions hold; the fixtures crates/config loads with the real
+      # parser (`cargo test -p batlehub-config --test config_generator_fixtures`,
+      # in the test workflow) have not drifted from the generator. Plain Node,
+      # types stripped by Node itself, no install.
+      - name: Config generator harness
+        run: |
+          node --test build/config-generator.test.ts
+          node build/config-generator-fixtures.ts --check
+        working-directory: docs
+
   rendered:
     name: Rendered page gates
     runs-on: ubuntu-latest

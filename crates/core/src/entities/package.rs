@@ -76,6 +76,10 @@ impl PackageId {
             ".asc",
             ".sig",
             ".sigstore",
+            // A VSIX's signature archive and the key it verifies under
+            // (RFC 0020): what an editor fetches beside the package.
+            ".sigzip",
+            ".pubkey",
         ];
         const SIDECAR_NAMES: &[&str] = &["shasums"];
         self.artifact.as_deref().is_some_and(|artifact| {

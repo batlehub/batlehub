@@ -568,6 +568,16 @@ impl LocalRegistryService {
                  and unreachable, and the blob is left for the coherence sweep"
             );
         }
+        // RFC 0020: the signature archives beside the artifact — the
+        // registry's and a provided one — go with it.
+        for sibling in [format!("{key}.sigzip"), format!("{key}.sigzip.upstream")] {
+            if let Err(e) = self.storage.delete(&sibling).await {
+                tracing::warn!(
+                    registry, name, version, error = %e,
+                    "delete: dropping a signature sibling failed (non-fatal, see above)"
+                );
+            }
+        }
         if let Err(e) = self.storage.delete_by_prefix(&format!("{key}/")).await {
             tracing::warn!(
                 registry, name, version, error = %e,

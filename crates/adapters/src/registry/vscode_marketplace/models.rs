@@ -64,6 +64,8 @@ pub(super) struct ResolvedExtension {
 // ── API constants ─────────────────────────────────────────────────────────────
 
 pub(super) const VSIX_ASSET_TYPE: &str = "Microsoft.VisualStudio.Services.VSIXPackage";
+/// The signature archive beside the package (RFC 0020 §4.2), relayed as-is.
+pub(super) const SIGNATURE_ASSET_TYPE: &str = "Microsoft.VisualStudio.Services.VsixSignature";
 /// The extension's README, served as a separate asset URL rather than inline.
 ///
 /// Following it is an outbound request in its own right, so it travels as a

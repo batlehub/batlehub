@@ -2,13 +2,13 @@
 
 | Field      | Value                                                                  |
 | ---------- | ---------------------------------------------------------------------- |
-| Status     | **In review** — §13's cut landed 2026-09-04 (§14): the credential contract file with its normative JSON Schema, `auth token`/`write-token-file`/`status`, and the editor patch carried in `patches/che-code/`. The loopback proxy and the bootstrap entry followed on 2026-09-05 (§14.8), measured against the real VS Code 1.96.4 core with `product.json` repointed — the editor a test *can* repoint. What remains is the `batlehub-vsx` extension and the canary workspace with a real Extensions view. Phases 1–2's server half was already shipped under RFC 0015/0017; the PAT model in the body above is not the shipped one, and §13 says so |
+| Status     | **In review** — §13's cut landed 2026-09-04 (§14): the credential contract file with its normative JSON Schema, `auth token`/`write-token-file`/`status`, and the editor patch carried in `patches/che-code/`. The loopback proxy and the bootstrap entry followed on 2026-09-05 (§14.8), and the same evening the **canary with a real Extensions view** (§14.9): VS Code 1.136.1's server build, its workbench driven in a browser, measured by `tests/heavy/vsx_view.sh` — the entry, its page, and the one thing the view will not do with it. What remains is the `batlehub-vsx` extension, a separate repository (§11 q6). Phases 1–2's server half was already shipped under RFC 0015/0017; the PAT model in the body above is not the shipped one, and §13 says so |
 | Short      | Authenticated OpenVSX access |
 | Settles    | Giving an editor that has no credential hook a way to send one: a contract file that may point at a secret rather than hold it, the pod's own Kubernetes identity, a loopback proxy for editors we do not build, and a sign-in entry in the Extensions view instead of a blank one |
 | Author     | batleforc                                                              |
 | Co-author  | —                                                                      |
 | Created    | 2026-08-18                                                             |
-| Revised    | 2026-09-02 — §13, re-read against the tree: what shipped elsewhere, what was wrong when drafted, and the cut. 2026-09-04 — §14, what building the cut found |
+| Revised    | 2026-09-02 — §13, re-read against the tree: what shipped elsewhere, what was wrong when drafted, and the cut. 2026-09-04 — §14, what building the cut found. 2026-09-05 — §14.8 the proxy against the editor core, §14.9 the view |
 | Supersedes | —                                                                      |
 | Touches    | `server` (VSX API auth: OIDC, PAT, Kubernetes), `cli/` (**existing** `batlehub-cli`: auth sources, local gallery proxy, TUI credential screen), `vscode-ext` (new), `che-code` patch (external), docs |
 
@@ -1164,12 +1164,13 @@ counted the requests could tell.
 ### 14.7 Still cut
 
 Of what §13 moved out, the loopback `proxy serve` and the unauthenticated
-bootstrap entry landed on 2026-09-05 — §14.8. Still out: the `batlehub-vsx`
-extension and `auth source`/`auth doctor`. The extension waits on an editor
-build whose gallery URL cannot be repointed at all (its fallback-marketplace
-role, phase 8); the last two are conveniences over a format
-whose validation now happens at write time, which was the failure they were
-mostly there to explain.
+bootstrap entry landed on 2026-09-05 — §14.8 — and the canary with a real
+Extensions view the same evening — §14.9. Still out: the `batlehub-vsx`
+extension and `auth source`/`auth doctor`. The extension is a separate
+repository (§11 q6) and waits on an editor build whose gallery URL cannot
+be repointed at all (its fallback-marketplace role, phase 8); the last two
+are conveniences over a format whose validation now happens at write time,
+which was the failure they were mostly there to explain.
 
 The `--kubernetes` and `--kubeconfig` login modes of §4.5 are not built
 either. `--kubernetes-token-path` ships, and `write-token-file --from-file`
@@ -1260,3 +1261,84 @@ finding: the anonymous `403`, the lookup-by-name rule read too literally,
 the manifest validator's `activationEvents`, all recorded above. What this
 does not measure, still: the Extensions view itself, and the che-code build
 with the patch of §14.5.
+
+### 14.9 The Extensions view itself (2026-09-05, evening)
+
+§4.4.4 ended on "the Extensions **view** itself could not be exercised";
+§14.8 repeated it. The premise was Electron: the desktop build cannot start
+here. The server build can — `server-linux-x64-web`, the same server a
+che-code workspace runs, under the node it bundles — and it serves the
+workbench to any browser, which a Chrome over the DevTools protocol is: a
+workspace's own sidecar, or a headless one. The browser opens the
+workbench, clicks the Extensions icon, types in the search box, opens an
+entry, and what the view *shows* is read off its DOM. That is the canary
+§10 asked for, minus the short-TTL tokens, and `tests/heavy/vsx_view.sh`
+runs it with `tests/heavy/vsx_view.mjs` as the driver.
+
+**Measured** (VS Code 1.136.1, the server build with `product.json`
+repointed, the workbench in the sidecar Chrome, the registry of §14.8).
+Unauthenticated: browse — the empty box, whose *Popular* section asks the
+gallery — and a search for `weebo` both list exactly one entry, *Sign in to
+BatleHub* by *BatleHub*; opening it renders the sign-in page in the
+editor's readme pane, registry URL and both commands verbatim; the tap saw
+nothing. Then `auth write-token-file`, the same page, no reload: the view's
+Refresh lists *Weebo Bridge Notify* by *batleforc* and the sign-in entry is
+gone; the two `extensionquery` and the manifest and details assets the tap
+saw all carried a Bearer, none arrived bare. Five findings, three of them
+about claims this document made.
+
+- **The view will not install an unsigned entry — any unsigned entry.**
+  §4.4.4's row *an unsigned `.vsix` from a custom gallery installs on stock
+  VS Code — holds* was measured through `code --install-extension`; the
+  view's own gate is `ExtensionsWorkbenchService.canInstall`, which on
+  1.96.4 refuses outright any gallery entry with no signature asset, and
+  on 1.136.1 refuses it whenever the gallery manifest says the repository
+  signs its public extensions — and the manifest an editor builds from
+  `product.json` says exactly that. The Install button is greyed out and
+  the editor says *This extension is not signed by the Extension
+  Marketplace.* The registry's own extension gets the same verdict after
+  the sign-in: it is as unsigned as the entry. So §4.4.2's second rule —
+  a package, so that Install is not a dead end — buys nothing in the view;
+  what the entry is for is its page, which renders, and the sign-in page
+  now says why its button is grey. The suite pins the reason, so an
+  editor that changes its mind is a red run.
+- **1.136.1 refuses on the CLI path too.** `code --install-extension` of
+  the same package: *Signature verification failed with 'NotSigned'* —
+  the 1.96.4 core of §14.8 verified nothing there. What lets it through is
+  `extensions.verifySignature: false`, the setting the code-server and
+  VSCodium families ship off; for a server build it is read from
+  `<server-data-dir>/data/User/settings.json` (measured against the five
+  candidate files — not the machine settings under either data directory).
+  The view's `canInstall` does not read that setting. Both suites now
+  measure the refusal first and the install after. This is not the proxy's
+  finding: a BatleHub `vscode-marketplace` registry serves no
+  `VsixSignature` asset for anything, so on a current stock build nothing
+  it holds installs from the view, and nothing installs from the CLI
+  either until the setting is off. Signing at the registry — a
+  `VsixSignature` asset the editor would at least *see*, and a key the
+  builds that trust one could carry — is a registry RFC's, not this one's:
+  [RFC 0020](/rfc/0020-signing-at-the-vscode-marketplace-registry).
+- **A repeated search is answered from the view's cache.** After the
+  sign-in, the same text typed again listed the sign-in entry: the view
+  never re-asked the gallery. Refresh does, and a user who has just signed
+  in presses it; the sign-in page says so now, and the driver clicks it.
+- **The browser refuses the loopback gallery; the server answers it.** The
+  workbench's content-security policy allows `connect-src` on `https:` and
+  its own origin only, so every fetch of `http://127.0.0.1:…/extensionquery`
+  from the page is refused — twenty in the run — and the request service
+  falls back to the remote agent's request channel: the *server* process
+  asks the proxy, on the pod's loopback. Which is where §4.4.1 put the
+  boundary anyway; it is now also where the requests come from.
+- **Two dates the page could not print.** The editor's details page reads
+  `publishedDate` and `releaseDate` off the extension, not the version;
+  the entry carried neither, and the page said *Invalid Date* twice. It
+  carries them now.
+
+**The desktop core is no longer a headless client here.** `vsx_login.sh`
+drove 1.96.4's `cli.js` under `ELECTRON_RUN_AS_NODE`; 1.136.1's imports its
+dependencies as ES modules out of `node_modules.asar`, which plain node
+cannot open. Both suites now drive the server build's CLI — the same
+`extensionGalleryService`, the same `ExtensionManagementCLI` — and share
+one download. What the view suite still does not measure: a che-code
+build with the patch of §14.5 (this repo builds no editor), and short-TTL
+tokens across a `.vsix` longer than one lifetime (§10's other half).

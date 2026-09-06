@@ -1061,6 +1061,7 @@ dependencies = [
  "dirs",
  "ed25519-dalek",
  "futures",
+ "getrandom 0.3.4",
  "hex",
  "mockito",
  "ratatui",
@@ -1123,6 +1124,7 @@ dependencies = [
  "tracing",
  "utoipa",
  "uuid",
+ "zip",
 ]
 
 [[package]]

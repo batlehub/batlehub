@@ -12,6 +12,7 @@ pub mod registry;
 pub mod security;
 pub mod setup;
 pub mod version;
+pub mod vsx;
 
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
@@ -79,6 +80,12 @@ pub enum Command {
     Proxy {
         #[command(subcommand)]
         cmd: proxy::ProxyCommand,
+    },
+    /// A registry's VSIX signature: a seed for `[registries.vsx_signing]`,
+    /// and verifying a download against the served archive and key.
+    Vsx {
+        #[command(subcommand)]
+        cmd: vsx::VsxCommand,
     },
     /// Publish an artifact to a local/hybrid registry
     Publish(publish::PublishArgs),

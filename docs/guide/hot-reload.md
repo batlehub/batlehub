@@ -89,6 +89,7 @@ Config Reload admin page renders both.
 | `proxy-trust.invalid-deprecated-entry` | An entry of the deprecated `[ip_blocking].trusted_proxies` is not an IP or CIDR range and was dropped |
 | `proxy-trust.shadowed-deprecated-key` | Both keys are set; `[server]` wins and the deprecated list is ignored entirely |
 | `subdomain.invalid-dns-label` | `[subdomain_routing]` is on but a registry name cannot be a DNS label, so no wildcard host is derived for it |
+| `vsx-signing.proxy-mode` | `[registries.vsx_signing]` on a registry in `proxy` mode: nothing is published there, so the key signs nothing; the upstream's signature is relayed regardless |
 
 ## 9.3 Global Admin Banner
 

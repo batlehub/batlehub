@@ -58,7 +58,13 @@ pub async fn extension_entry(
             // The local path is already filtered: `get_openvsx_versions` goes
             // through `load_visible_versions_or_not_found`, which runs
             // `filter_unlisted → filter_blocked → filter_for_identity`.
-            Ok(versions) => return Ok(GalleryEntry::from_local(&versions)),
+            Ok(versions) => {
+                let mut entry = GalleryEntry::from_local(&versions);
+                if let Some(e) = entry.as_mut() {
+                    apply_registry_key(local_svc, registry, e).await;
+                }
+                return Ok(entry);
+            }
             Err(CoreError::NotFound(_)) if mode == RegistryMode::Hybrid => {}
             Err(CoreError::NotFound(_)) => return Ok(None),
             Err(e) => return Err(AppError::from(e)),
@@ -146,8 +152,12 @@ pub async fn search_entries(
         // built from the newest version alone would answer a uuid lookup with a
         // one-version history, and the editor needs the whole list to fall back
         // from a pre-release to the last release.
+        let key_id = registry_key_id(local_svc, registry).await;
         for versions in local {
-            if let Some(e) = GalleryEntry::from_local(&versions) {
+            if let Some(mut e) = GalleryEntry::from_local(&versions) {
+                if let Some(id) = &key_id {
+                    e.sign_locally(id);
+                }
                 entries.push(e);
             }
         }
@@ -276,6 +286,26 @@ async fn filter_blocked(
     }
 }
 
+/// The id of this registry's VSIX signing key, when it holds one
+/// (`[registries.vsx_signing]`, RFC 0020).
+async fn registry_key_id(local_svc: &LocalRegistryService, registry: &str) -> Option<String> {
+    super::signing::registry_key(local_svc, registry)
+        .await
+        .map(|k| k.key_id().to_owned())
+}
+
+/// RFC 0020 §5.1's local branch: every version this registry holds is signed
+/// by its key, so every version advertises the signature and the key.
+async fn apply_registry_key(
+    local_svc: &LocalRegistryService,
+    registry: &str,
+    entry: &mut GalleryEntry,
+) {
+    if let Some(id) = registry_key_id(local_svc, registry).await {
+        entry.sign_locally(&id);
+    }
+}
+
 /// Build an entry from the metadata an adapter resolved.
 ///
 /// Both adapters populate `PackageMetadata.extra`; OpenVSX's is the richer of
@@ -323,6 +353,14 @@ fn entry_from_metadata(
             extension_pack: Vec::new(),
             extension_dependencies: Vec::new(),
             pre_release: false,
+            // RFC 0020 §5.1's relay branch: the upstream signed it, this
+            // registry advertises the archive at its own route and fetches
+            // it on request. Never re-signed.
+            signature: (meta.is_signed == Some(true)).then(|| {
+                super::render::SignatureSource::Upstream {
+                    public_key: s("public_key_url").is_some(),
+                }
+            }),
         }],
         upstream: None,
     })

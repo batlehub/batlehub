@@ -66,6 +66,11 @@ pub const PROXY_TRUST_INVALID_DEPRECATED_ENTRY: &str = "proxy-trust.invalid-depr
 /// label, so no wildcard host is derived for it.
 pub const SUBDOMAIN_INVALID_DNS_LABEL: &str = "subdomain.invalid-dns-label";
 
+/// `[registries.vsx_signing]` on a registry in `proxy` mode: nothing is ever
+/// published there, so the key signs nothing; the upstream's signature is
+/// relayed regardless (RFC 0020 §4.3).
+pub const VSX_SIGNING_PROXY_MODE: &str = "vsx-signing.proxy-mode";
+
 /// `[server].cors_allowed_origins` contains `"*"`, so any website may issue
 /// cross-origin requests to this server and read the responses. Legitimate for a
 /// public mirror, rarely what an internal deployment wants — and since 1.1.0 it

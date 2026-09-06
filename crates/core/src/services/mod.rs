@@ -36,6 +36,7 @@ pub mod upstream_audit;
 pub mod upstream_detail;
 pub mod verdict;
 pub mod version_order;
+pub mod vsx_signature;
 pub mod vulnerability;
 pub mod warming;
 
