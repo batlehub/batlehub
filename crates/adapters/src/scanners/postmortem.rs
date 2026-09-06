@@ -113,6 +113,9 @@ impl PostmortemScanner {
             RegistryKind::Goproxy => (
                 format!("vendor/{name}"),
                 "go.sum",
+                // A placeholder `h1:` module hash (32 zero bytes in base64), not a
+                // credential — the secrets ruleset reads the shape as a bot token.
+                // nosemgrep: generic.secrets.security.detected-telegram-bot-api-key.detected-telegram-bot-api-key
                 format!("{name} {version} h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n"),
             ),
             RegistryKind::Maven => (

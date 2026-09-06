@@ -76,6 +76,9 @@ jobs:
       # Before the install, deliberately: it needs no dependency at all, so a
       # broken lockfile should not be able to hide a broken patch.
       - name: Editor credential patch (RFC 0011)
+        # The patch lives at the repo root, not under `ui/`, so it opts out of
+        # this job's `working-directory: ui` default.
+        working-directory: .
         run: node --test patches/che-code/vsxRegistryAuth.test.ts
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts

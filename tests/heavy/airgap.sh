@@ -101,11 +101,21 @@ RUBY_VERSION="${RUBY_VERSION:-3.3}"
 BUNDLER_VERSION="${BUNDLER_VERSION:-4.0.17}"
 heavy_runner_for ruby "ruby@$RUBY_VERSION"
 RUBY_BIN_DIR="$(dirname "$("${HEAVY_RUNNER[@]}" bash -c 'command -v ruby')")"
+# Install into a work-local GEM_HOME rather than the interpreter's own. A
+# distribution ruby — which is what a CI runner resolves to — keeps its gems in
+# a root-owned directory (/var/lib/gems/<abi> on Ubuntu), so `gem install`
+# there is a `Gem::FilePermissionError` and the suite dies at its first step,
+# before it has proved anything. A private prefix also keeps this run from
+# writing to a developer's machine, which it has no business doing.
+export GEM_HOME="$HEAVY_WORK/gems"
+export GEM_PATH="$GEM_HOME"
+mkdir -p "$GEM_HOME"
 if ! "$RUBY_BIN_DIR/gem" list -i bundler -v "$BUNDLER_VERSION" >/dev/null 2>&1; then
-  heavy_log "Installing bundler $BUNDLER_VERSION"
+  heavy_log "Installing bundler $BUNDLER_VERSION into $GEM_HOME"
   "$RUBY_BIN_DIR/gem" install bundler -v "$BUNDLER_VERSION" --no-document >/dev/null
 fi
-BUNDLE=("$RUBY_BIN_DIR/bundle" "_${BUNDLER_VERSION}_")
+# `bundle` is in the prefix it was installed into, not beside the interpreter.
+BUNDLE=("$GEM_HOME/bin/bundle" "_${BUNDLER_VERSION}_")
 # micromamba, as conda.sh gets it: one archive, cached across runs.
 MICROMAMBA_VERSION="${MICROMAMBA_VERSION:-2.9.0}"
 MM_DIR="$(heavy_cached_dir "micromamba-$MICROMAMBA_VERSION" \
@@ -905,6 +915,7 @@ EOF
 heavy_log "bundle install of $GEM against the composed compact index"
 run_client "bundle install" "$HEAVY_WORK/bundle-synth.txt" \
   env -u MISE_DATA_DIR -u MISE_CACHE_DIR -u MISE_CONFIG_DIR -u MISE_STATE_DIR \
+      GEM_HOME="$GEM_HOME" GEM_PATH="$GEM_PATH" \
       BUNDLE_USER_HOME="$HEAVY_WORK/bundle-home" BUNDLE_PATH="$GEM_DIR/vendor" BUNDLE_DISABLE_VERSION_CHECK=1 \
       bash -c "cd '$GEM_DIR' && ${BUNDLE[*]} install"
 [[ $CLIENT_RC -eq 0 ]] || { tail -40 "$HEAVY_WORK/bundle-synth.txt" >&2; heavy_fail "bundle install could not resolve $GEM through the composed compact index"; }

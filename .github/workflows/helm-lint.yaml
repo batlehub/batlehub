@@ -26,9 +26,14 @@ jobs:
       - uses: Azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
       # The Trivy server sub-chart (RFC 0018 §6.3) is a declared dependency
-      # fetched at build time; `charts/` is not committed.
+      # fetched at build time; `charts/` is not committed. Helm 4 refuses
+      # `dependency build` for a repository it has never been told about, so
+      # the repo is added first — a no-op for Helm 3, required from Helm 4 on.
       - name: helm dependency build
-        run: helm dependency build helm/batlehub
+        run: |
+          helm repo add aquasecurity https://aquasecurity.github.io/helm-charts/
+          helm repo update
+          helm dependency build helm/batlehub
       - name: helm lint
         run: helm lint helm/batlehub
 

@@ -1,0 +1,16 @@
+# Image-scan suppressions. The stance is the same as `deny.toml`'s: nothing is
+# ignored because it is inconvenient, only because there is no version to move
+# to. Every entry carries an expiry, so the gate reopens on its own and the
+# entry has to be re-justified rather than quietly outliving its reason.
+vulnerabilities:
+  - id: CVE-2026-84304
+    # google.golang.org/grpc v1.82.1, vendored inside the upstream Trivy release
+    # binary the worker image carries (`/usr/local/bin/trivy`). Fixed in grpc-go
+    # 1.83.1, but no Trivy release ships it yet: v0.74.0 (2026-08-14) is the
+    # latest and still links v1.82.1, so there is no version to bump to. The
+    # binary is only ever run by the worker as a client against the Trivy server
+    # the chart deploys; it terminates no connection of its own.
+    # Re-check on expiry and drop this entry as soon as Trivy ships grpc 1.83.1.
+    paths:
+      - "usr/local/bin/trivy"
+    expired_at: 2026-12-01

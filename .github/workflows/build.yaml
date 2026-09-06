@@ -304,6 +304,10 @@ jobs:
       - name: Package chart
         shell: bash
         run: |
+          # Helm 4 refuses `dependency build` for a repository it has never
+          # been told about; harmless on the Helm 3 pinned above.
+          helm repo add aquasecurity https://aquasecurity.github.io/helm-charts/
+          helm repo update
           helm dependency build helm/batlehub
           mkdir -p dist
           helm package helm/batlehub \

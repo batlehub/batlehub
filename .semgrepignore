@@ -1,1 +1,9 @@
 examples/
+
+# Scanner fixtures are recorded upstream payloads, not source: the synthetic
+# `h1:` module hash inside them reads as a bot token to the secrets ruleset.
+crates/adapters/src/scanners/fixtures/
+
+# The gate step runs after the SARIF step in the same checkout, so without
+# this it scans its own report and rediscovers every finding it just wrote.
+semgrep.sarif

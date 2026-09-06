@@ -66,7 +66,15 @@ RUN mkdir -p /tmp/tv && curl -fsSL "https://github.com/aquasecurity/trivy/releas
     | tar -xz -C /tmp/tv && install -m 0755 "$(find /tmp/tv -type f -name trivy | head -1)" /usr/local/bin/trivy && rm -rf /tmp/tv
 # GuardDog: a Python tool, in its own venv so its dependency tree stays out of
 # the system interpreter.
-RUN python3 -m venv /opt/guarddog && /opt/guarddog/bin/pip install --no-cache-dir "guarddog==${GUARDDOG_VERSION}" \
+# `python3 -m venv` seeds the venv with bookworm's python3.11 pip and
+# setuptools (pip 23.0.1, setuptools 66.1.1), and that setuptools carries
+# CVE-2024-6345 (fixed in 70.0.0) and CVE-2025-47273 (fixed in 78.1.1) —
+# Trivy reads the venv's dist-info and blocks the image on both. Upgrade the
+# seeds before installing GuardDog; setuptools stays present because GuardDog
+# still imports pkg_resources at runtime.
+RUN python3 -m venv /opt/guarddog \
+    && /opt/guarddog/bin/pip install --no-cache-dir --upgrade "pip>=25.2" "setuptools>=80.9.0" \
+    && /opt/guarddog/bin/pip install --no-cache-dir "guarddog==${GUARDDOG_VERSION}" \
     && ln -s /opt/guarddog/bin/guarddog /usr/local/bin/guarddog
 
 # ── Runtime image ─────────────────────────────────────────────────────────────

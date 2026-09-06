@@ -36,6 +36,12 @@ heavy_need apt-get "apt"
 heavy_need python3 "python3 (the wire tap)"
 SKIP_DNF="${HEAVY_PATHPROXY_SKIP_DNF:-0}"
 [[ "$SKIP_DNF" == "1" ]] || heavy_need dnf "the dnf package (apt-get install dnf), or set HEAVY_PATHPROXY_SKIP_DNF=1 to leave the rpm rows unmeasured"
+# `download` is a plugin subcommand, and the base package ships without it. The
+# rpm rows are built on it, so probe here rather than discovering it after the
+# server is already built, started and three requests in.
+[[ "$SKIP_DNF" == "1" ]] || dnf download --help >/dev/null 2>&1 || heavy_fail \
+  "dnf has no 'download' subcommand — install the plugins (apt-get install python3-dnf-plugins-core, \
+or dnf5-plugins on the dnf5 line), or set HEAVY_PATHPROXY_SKIP_DNF=1 to leave the rpm rows unmeasured"
 
 DEB="deb-$HEAVY_RUN"
 RPM="rpm-$HEAVY_RUN"

@@ -216,7 +216,10 @@ try {
   emit({ phase: "install", ...installed });
 
   if (args["after-anon"]) {
-    execFileSync("bash", ["-c", args["after-anon"]], { stdio: "inherit" });
+    // An absolute interpreter, not `bash` off PATH: this runs inside a
+    // container whose PATH the harness does not own, and a writable directory
+    // ahead of /bin there would decide what the hook executes.
+    execFileSync("/bin/bash", ["-c", args["after-anon"]], { stdio: "inherit" });
     emit({ phase: "after-anon", ran: true });
   }
 
