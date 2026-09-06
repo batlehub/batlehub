@@ -549,20 +549,21 @@ jobs:
           # than skip the rpm rows (HEAVY_PATHPROXY_SKIP_DNF=1 is the explicit
           # opt-out, for a developer's machine without root).
           #
-          # `dnf download` is a *plugin* subcommand, not a built-in: the base
+          # `dnf download` is a *plugin* subcommand, not a built-in: the `dnf`
           # package alone answers "No such command: download", which the suite
           # meets four steps in, after it has already built and started a
-          # server. python3-dnf-plugins-core is what provides it on Ubuntu;
-          # dnf5-plugins is the same thing for the dnf5 line, so try both and
-          # let the probe below decide whether either landed.
+          # server. `dnf-plugins-core` is what ships `dnf-plugins/download.py`
+          # on Ubuntu — noble/universe, the same component `dnf` itself comes
+          # from. Not `python3-dnf-plugins-core` (a Debian name Ubuntu does not
+          # carry) and not `dnf5-plugins` (the dnf5 line, which noble predates).
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends dnf
-          sudo apt-get install -y --no-install-recommends python3-dnf-plugins-core \
-            || sudo apt-get install -y --no-install-recommends dnf5-plugins \
-            || true
+          sudo apt-get install -y --no-install-recommends dnf dnf-plugins-core
           dnf --version | head -1
+          # The probe, not the install, is the gate: a plugin that installed
+          # but did not register is the same failure as one that never landed,
+          # and both are cheaper to read here than four steps into the suite.
           dnf download --help >/dev/null 2>&1 \
-            || { echo "::error::dnf has no 'download' subcommand — the plugins package did not install"; exit 1; }
+            || { echo "::error::dnf has no 'download' subcommand — dnf-plugins-core did not register it"; exit 1; }
       - name: Install bubblewrap
         if: matrix.suite == 'quarantine'
         run: |

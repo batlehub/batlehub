@@ -87,6 +87,7 @@ consumer() {
   </dependencies>
 </project>
 EOF
+  return $?
 }
 
 # run_mvn <repo> <dir> <args...>
@@ -95,6 +96,7 @@ run_mvn() {
   shift 2
   (cd "$dir" && "${HEAVY_RUNNER[@]}" mvn -B -s "$HEAVY_WORK/settings.xml" \
     -Dmaven.repo.local="$repo" "$@") >"$RUN_OUT" 2>&1
+  return $?
 }
 
 # fresh_repo <name> — a local repository holding the warmed plugins and none
@@ -104,6 +106,7 @@ fresh_repo() {
   cp -r "$HEAVY_WORK/warm" "$repo"
   rm -rf "$repo/$GROUP_PATH/$ARTIFACT"
   echo "$repo"
+  return $?
 }
 
 # ── Warm the plugins through the proxy ───────────────────────────────────────
@@ -220,6 +223,7 @@ deploy() {
   run_mvn "$repo" "$HEAVY_WORK" deploy:deploy-file -DrepositoryId=heavy-local -Durl="$LOCAL_URL" \
     -Dfile="$HEAVY_WORK/lib.jar" -DgroupId=com.heavy -DartifactId=lib -Dversion="$version" \
     -Dpackaging=jar -DgeneratePom=true
+  return $?
 }
 
 heavy_mark publish-native

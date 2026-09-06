@@ -82,6 +82,7 @@ run_nvm() {
     [[ "$(type -t nvm)" == "function" ]] || { echo "nvm.sh did not define nvm" >&2; exit 97; }
     eval "$2"
   ' _ "$NVM_SH" "$snippet"
+  return $?
 }
 
 DIR1="$HEAVY_WORK/nvm-1"
@@ -167,6 +168,7 @@ heavy_log "NVM-INSTALL-OK (node $INSTALLED, checksum matched)"
 hits_for() {
   curl -fsS "$HEAVY_BASE/metrics" \
     | awk -v reg="$REG" '$1 ~ /^batlehub_artifact_cache_hits_total\{/ && index($1, "registry=\"" reg "\"") { print $2 }'
+  return $?
 }
 HITS_BEFORE="$(hits_for)"; HITS_BEFORE="${HITS_BEFORE:-0}"
 

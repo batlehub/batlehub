@@ -58,6 +58,7 @@ import _ "$MODULE"
 
 func main() {}
 EOF
+  return $?
 }
 
 # run_go <cache> <dir> <goproxy> <args...>
@@ -67,6 +68,7 @@ run_go() {
   mkdir -p "$cache/mod" "$cache/build"
   (cd "$dir" && GOMODCACHE="$cache/mod" GOCACHE="$cache/build" GOPATH="$cache/gopath" \
     GOPROXY="$goproxy" GOFLAGS="-mod=mod -modcacherw" GOTOOLCHAIN=local go "$@") >"$RUN_OUT" 2>&1
+  return $?
 }
 
 # ── Hide ─────────────────────────────────────────────────────────────────────

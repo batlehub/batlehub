@@ -61,7 +61,7 @@ USER_TOKEN="heavy-user-token"
 # Every download here goes straight into `tar` or is published back through
 # the server, so the transport is the only wall between a redirect and code
 # execution: `--proto-redir` pins the redirect chain too (marketplace.sh).
-fetch() { curl -fsSL --proto '=https' --proto-redir '=https' "$@"; }
+fetch() { curl -fsSL --proto '=https' --proto-redir '=https' "$@"; return $?; }
 
 # ── 0. The editor core and the fixture, cached across runs ──────────────────
 
@@ -83,7 +83,7 @@ fi
 [[ -x "$CODE_SERVER" ]] || heavy_fail "no bin/code-server in the VS Code build at $VSCODE_DIR"
 PRODUCT_JSON="$VSCODE_DIR/product.json"
 cp "$PRODUCT_JSON" "$HEAVY_WORK/product.json.orig"
-restore_product_json() { cp "$HEAVY_WORK/product.json.orig" "$PRODUCT_JSON" 2>/dev/null || true; }
+restore_product_json() { cp "$HEAVY_WORK/product.json.orig" "$PRODUCT_JSON" 2>/dev/null || true; return $?; }
 trap 'restore_product_json; heavy_cleanup' EXIT
 
 # Its own data directories under the work dir. `env -u VSCODE_IPC_HOOK_CLI`:
@@ -124,6 +124,7 @@ curl -fsS -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: appli
 SEARCH_BODY='{"filters":[{"criteria":[{"filterType":8,"value":"Microsoft.VisualStudio.Code"},{"filterType":10,"value":"weebo"}],"pageNumber":1,"pageSize":50}],"flags":950}'
 count_of() {  # <json> → the number of extensions in the first result
   python3 -c 'import json,sys;d=json.load(sys.stdin);print(len(d["results"][0]["extensions"]))'
+  return $?
 }
 # With `anonymous = []` the gallery refuses outright — a `403`, not the
 # empty `200` of a registry that grants anonymous read — which is exactly

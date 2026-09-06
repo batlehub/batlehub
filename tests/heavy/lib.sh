@@ -384,6 +384,15 @@ heavy_wire_after() {
 # assertion is about the verdict on the answer, not only the status. The
 # tarball path is the one this server writes into the packument
 # (`{name}/{version}/tarball`), not npm's own `{name}/-/{name}-{v}.tgz`.
+#
+# **Write a literal metacharacter as a character class, never as `\x`.** The
+# regex reaches awk through `-v`, which runs its own escape processing before
+# the ERE engine ever sees it: gawk turns `\?` into a bare `?` (warning:
+# "escape sequence `\?' treated as plain `?'") and the ERE then reads it as a
+# quantifier, so the assertion matches nothing and passes for the wrong reason
+# on the negative arms. mawk leaves `\?` alone — which is exactly why this
+# reads as green on a developer's machine and fails only on CI. `[?]` survives
+# both layers unchanged. Measured on the airgap suite's `releases?per_page=100`.
 heavy_wire_re_after() {
   local label="$1" re="$2" explanation="${3:-}"
   awk -v mark="### $label" -v re="$re" '

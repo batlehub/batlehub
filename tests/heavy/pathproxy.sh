@@ -40,8 +40,8 @@ SKIP_DNF="${HEAVY_PATHPROXY_SKIP_DNF:-0}"
 # rpm rows are built on it, so probe here rather than discovering it after the
 # server is already built, started and three requests in.
 [[ "$SKIP_DNF" == "1" ]] || dnf download --help >/dev/null 2>&1 || heavy_fail \
-  "dnf has no 'download' subcommand — install the plugins (apt-get install python3-dnf-plugins-core, \
-or dnf5-plugins on the dnf5 line), or set HEAVY_PATHPROXY_SKIP_DNF=1 to leave the rpm rows unmeasured"
+  "dnf has no 'download' subcommand — install the plugins (apt-get install dnf-plugins-core), \
+or set HEAVY_PATHPROXY_SKIP_DNF=1 to leave the rpm rows unmeasured"
 
 DEB="deb-$HEAVY_RUN"
 RPM="rpm-$HEAVY_RUN"
@@ -65,6 +65,7 @@ apt_state() {
   mkdir -p "$root/state/lists/partial" "$root/cache/archives/partial" "$root/out"
   echo "deb [arch=$APT_ARCH signed-by=$KEYRING] $APT_URL $SUITE main" >"$root/sources.list"
   echo "$root"
+  return $?
 }
 
 # run_apt <root> <args...> — apt-get, unprivileged, output in RUN_OUT.
@@ -78,6 +79,7 @@ run_apt() {
     -o "Dir::Etc::Main=/dev/null" -o "Dir::Etc::Parts=/dev/null" \
     -o "Acquire::Languages=none" -o "Debug::NoLocking=true" \
     "$@") >"$RUN_OUT" 2>&1
+  return $?
 }
 
 heavy_mark apt-update
@@ -186,6 +188,7 @@ enabled=1
 gpgcheck=0
 EOF
     echo "$root"
+    return $?
   }
 
   # run_dnf <root> <args...> — dnf, unprivileged, every directory redirected.
@@ -196,6 +199,7 @@ EOF
       --setopt="reposdir=$root/repos" --setopt="cachedir=$root/cache" \
       --setopt="logdir=$root/log" --setopt="persistdir=$root/persist" \
       --disablerepo='*' --enablerepo=heavy "$@" >"$RUN_OUT" 2>&1
+    return $?
   }
 
   heavy_mark dnf-before

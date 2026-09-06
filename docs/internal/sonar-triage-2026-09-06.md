@@ -10,12 +10,12 @@ All 107 were read. The disposition:
 
 | | Count | Where it goes |
 | --- | --- | --- |
-| Fixed in code | 73 | this branch |
-| Won't fix, resolved in SonarCloud | 34 | the four sections below |
+| Fixed in code | 97 | this branch |
+| Won't fix, resolved in SonarCloud | 10 | the two sections below |
 
 ---
 
-## Fixed in code — 73
+## Fixed in code — 97
 
 | Rule | Count | What changed |
 | --- | --- | --- |
@@ -101,15 +101,16 @@ and would obscure that the line is a clamp rather than a grant.
 
 ---
 
-## Not a finding — `shelldre:S7682`, missing explicit `return` ×21
+## Fixed in code — `shelldre:S7682`, missing explicit `return` ×21
 
-Twenty-one heavy-suite functions are asked to end with an explicit `return`.
-**Applying this rule would break the suites**, and it is worth being precise
-about how.
+The first reading of this rule was that it could not be applied. That was
+wrong, and the wrong half is worth recording because the reasoning nearly cost
+the suites.
 
-A bash function returns the status of its last command. Appending `return 0`
-overrides that. The flagged set includes `run_cargo`, `run_go`, `run_mvn`,
-`run_nvm`, `run_sdk` and `fetch` — every one of which is called for its status:
+A bash function returns the status of its last command, and appending
+`return 0` overrides that. The flagged set includes `run_cargo`, `run_go`,
+`run_mvn`, `run_nvm`, `run_sdk` and `fetch` — every one of which is called for
+its status:
 
 ```
 if run_go    "$HEAVY_WORK/cache2" "$HEAVY_WORK/c2" "$PROXY" mod download; then
@@ -118,31 +119,41 @@ if run_mvn   "$REPO2"             "$HEAVY_WORK/c2" dependency:resolve; then
 ```
 
 Each of those `if`s is a negative control: the assertion is that the client
-*fails* against a blocked or air-gapped registry. `return 0` at the end of the
-runner makes every one of them succeed, and the suite goes green having proved
-nothing — the failure mode these suites exist to catch, introduced by a
-readability rule.
+*fails* against a blocked or air-gapped registry. `return 0` makes every one of
+them succeed, and the suite goes green having proved nothing.
 
-The rest of the set (`consumer`, `publishable`, `fresh_repo`, `make_sdkman_dir`,
-`hits_for`, `count_of`, `deploy`) either builds a fixture or echoes a value; an
-explicit `return 0` there is inert, and applying the rule to half the functions
-and not the other half is worse than not applying it.
+**`return $?` is the answer.** It is an explicit return statement, which is
+what the rule asks for, and it is status-transparent, which is what the suites
+need. Verified rather than assumed, on the exact shape the runners use:
 
-**Resolve in SonarCloud as "won't fix", all 21.**
+```
+run_fail() { local d="$1"; shift; (cd "$d" && false) >"$RUN_OUT" 2>&1; return $?; }
+if run_fail /tmp; then echo BUG; else echo "failure arm taken"; fi   # failure arm taken
+```
+
+All 21 carry it now. Two of them (`fetch`, `restore_product_json`) are
+one-liners and take it inline.
+
+Two traps in applying it mechanically, both hit and both avoided: `go.sh`'s
+`consumer` contains a heredoc whose body has a `}` at column 0, which a naive
+brace match reads as the end of the function; and the two one-liners have no
+closing brace on a line of their own.
 
 ---
 
-## Not a finding — `typescript:S7772`, prefer `node:` specifiers ×3
+## Fixed in code — `typescript:S7772`, prefer `node:` specifiers ×3
 
-`patches/che-code/vsxRegistryAuth.ts` imports `fs`, `os` and `path` unprefixed.
-This file is not built here. Its README is explicit: it is copied into
-`src/vs/platform/extensionManagement/common/` of a che-code checkout and compiled
-by *that* build, against whatever `tsconfig` and module resolution the upstream
-uses on the day. Rewriting the specifiers to satisfy a rule in this repository,
-for a file compiled in another one, trades a working integration for a lint
-score.
+`patches/che-code/vsxRegistryAuth.ts` imported `fs`, `os` and `path`
+unprefixed. The first reading was that this file is compiled by che-code's
+build rather than ours, so it should match whatever upstream uses.
 
-**Resolve in SonarCloud as "won't fix".**
+The evidence says otherwise: the sibling repository that holds this project's
+own VS Code extensions imports `node:fs` throughout, which makes this file the
+outlier rather than the conformist. The prefix resolves through `@types/node`
+on any TypeScript module resolution and works on every Node the editor ships.
+The patch's own 16 tests still pass.
+
+---
 
 ---
 
@@ -195,9 +206,11 @@ Two of these are worth a note beyond the table:
 
 ---
 
-## How the gate clears
+## What is left — 10
 
-The ten `VULNERABILITY` issues above are the whole of the security rating on new
-code. Marking them removes it: the rating goes to A and the condition passes.
-The 21 shell smells never gated, and the 31 complexity findings are gone from
-the code rather than from the report.
+Six weak-hash and four file-permission findings, both sections above. Both are
+resolved in SonarCloud, not in code, and both are `VULNERABILITY`-typed — so
+they are also the whole of the security rating on new code. Marking them takes
+the rating to A and the failed condition passes.
+
+Nothing else remains open on this pull request.

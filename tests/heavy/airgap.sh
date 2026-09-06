@@ -602,14 +602,20 @@ run_client "mise install" "$HEAVY_WORK/${MARK_MISE_NOLOCK}.txt" \
 [[ $CLIENT_RC -ne 0 ]] || heavy_fail "mise install with no lock succeeded against an instance that holds no release listing"
 heavy_wire_re_after "${MARK_MISE_NOLOCK}" "GET /proxy/$GH_REG/$OWNER_REPO/releases/tags/v$TOOL_VERSION -> 503" \
   "mise did not ask for the release by tag, or it was not a 503"
-heavy_wire_re_after "${MARK_MISE_NOLOCK}" "GET /proxy/$GH_REG/$OWNER_REPO/releases\\?per_page=100 -> 503" \
+# `[?]` rather than `\?` for the query separator. The regex reaches awk through
+# `-v`, which runs its own escape processing first: gawk turns `\?` into a bare
+# `?` (with a warning) and the ERE then reads it as "the previous character is
+# optional", so this line matched nothing on a gawk host. mawk leaves `\?`
+# alone, which is why it passed on a developer's machine and failed on CI. A
+# character class survives both layers unchanged.
+heavy_wire_re_after "${MARK_MISE_NOLOCK}" "GET /proxy/$GH_REG/$OWNER_REPO/releases[?]per_page=100 -> 503" \
   "mise did not fall back to the release listing, or it was not a 503"
 if heavy_wire_seen_after "${MARK_MISE_NOLOCK}" "/releases/download/v$TOOL_VERSION/"; then
   heavy_fail "mise asked for the asset after a 503 on the listing — the version string did not need the listing after all"
 fi
 MISE_FIRST="$(awk -v mark="### ${MARK_MISE_NOLOCK}" 'index($0, mark) == 1 { seen = 1; next } seen && /GET \/proxy/ { print; exit }' "$HEAVY_LOG" | sed -E 's/ -> .*//')"
 MISE_BYTAG="$(heavy_wire_count_after "${MARK_MISE_NOLOCK}" "GET /proxy/$GH_REG/$OWNER_REPO/releases/tags/v$TOOL_VERSION -> 503")"
-MISE_LIST="$(heavy_wire_count_after "${MARK_MISE_NOLOCK}" "GET /proxy/$GH_REG/$OWNER_REPO/releases\\?per_page=100 -> 503")"
+MISE_LIST="$(heavy_wire_count_after "${MARK_MISE_NOLOCK}" "GET /proxy/$GH_REG/$OWNER_REPO/releases[?]per_page=100 -> 503")"
 MISE_SAID="$(grep -E 'mise ERROR' "$HEAVY_WORK/${MARK_MISE_NOLOCK}.txt" | tail -3 | sed -E 's/^mise ERROR +//' | cut -c1-160 | tr '\n' ';')"
 measure "mise | install $TOOL@$TOOL_VERSION, no lock | first $MISE_FIRST -> 503; by-tag x$MISE_BYTAG, listing x$MISE_LIST, asset never asked | exit $CLIENT_RC after ${CLIENT_SECS}s | $MISE_SAID"
 heavy_log "MISE-NOLOCK-MEASURED"

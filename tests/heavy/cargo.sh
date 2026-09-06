@@ -68,6 +68,7 @@ replace-with = "heavy"
 [source.heavy]
 registry = "$INDEX"
 EOF
+  return $?
 }
 
 # run_cargo <home> <dir> <args...> — cargo with its own home, output captured
@@ -78,6 +79,7 @@ run_cargo() {
   mkdir -p "$home"
   (cd "$dir" && CARGO_HOME="$home" CARGO_TERM_COLOR=never CARGO_NET_RETRY=2 \
     cargo "$@") >"$RUN_OUT" 2>&1
+  return $?
 }
 
 # ── Hide ─────────────────────────────────────────────────────────────────────
@@ -178,6 +180,7 @@ EOF
 index = "$LOCAL_INDEX"
 credential-provider = ["cargo:token"]
 EOF
+  return $?
 }
 
 export CARGO_REGISTRIES_HEAVY_TOKEN="$ADMIN_TOKEN"

@@ -105,6 +105,7 @@ sdkman_checksum_enable=true
 sdkman_native_enable=false
 sdkman_healthcheck_enable=true
 EOF
+  return $?
 }
 
 # run_sdk <sdkman-dir> <shell snippet> — a fresh bash with sdkman-init.sh
@@ -123,6 +124,7 @@ run_sdk() {
     [[ "$(type -t sdk)" == "function" ]] || { echo "sdkman-init.sh did not define sdk" >&2; exit 97; }
     eval "$1"
   ' _ "$snippet"
+  return $?
 }
 
 DIR1="$HEAVY_WORK/sdkman-1"
@@ -264,6 +266,7 @@ heavy_log "SDKMAN-INSTALL-OK ($INSTALLED)"
 hits_for() {
   curl -fsS "$HEAVY_BASE/metrics" \
     | awk -v reg="$REG" '$1 ~ /^batlehub_artifact_cache_hits_total\{/ && index($1, "registry=\"" reg "\"") { print $2 }'
+  return $?
 }
 HITS_BEFORE="$(hits_for)"; HITS_BEFORE="${HITS_BEFORE:-0}"
 
