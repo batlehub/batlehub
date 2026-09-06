@@ -45,8 +45,11 @@
 #      naming v2.59.0 as requested and v2.60.0 as held, which `admin
 #      air-gap-missing` prints as two columns (0008-bis §4.4, phase 2).
 #  11. The miss log after the second half names none of the served listings
-#      and nothing the bundle carried: that one unheld tag, and pip's own
-#      `/simple/pip/` self-check.
+#      and nothing the bundle carried. What it does name: that one unheld tag;
+#      `go get`'s probes of the parent module paths; Maven's `.sha1`/`.md5`
+#      beside every file; and, when pip happens to run it, pip's own
+#      `/simple/pip/` self-check — which is weekly and cache-keyed, so it is
+#      tolerated rather than expected.
 #
 # The elapsed time of each failing install is recorded too: a client that
 # treats a 503 index as an outage retries, and how long it retries is part
@@ -1052,7 +1055,19 @@ assert gh_docs == {f"{repo} (release)"}, f"the forge's document misses should be
 unheld = rows[(gh_reg, "document", f"{repo} (release)")]
 assert unheld.get("requested_version") == f"v{tool_unheld}", unheld
 assert f"v{tool_v}" in unheld.get("held_versions", []), unheld
-assert any(r == pip_reg and k == "pip (simple-json)" for (r, k) in docs), f"pip's self-check is the one document miss expected: {docs}"
+# pip's own "a new release of pip is available" check asks for `/simple/pip/`,
+# which this instance does not hold, so it lands here as a document miss when it
+# happens. **Allowed, not required.** pip performs that check at most once a
+# week and keys it on a file in its cache directory rather than in the venv, so
+# on a runner whose image already ran it the request never happens at all —
+# measured on CI as `/simple/pip/ (the self-check) 0 time(s)`, which failed this
+# assertion on a run where every other phase passed. What it was there to prove
+# — that an unheld document is recorded as a miss, with what was asked for and
+# what is held — is proven exactly by the forge assertion above, which does not
+# depend on a client's bookkeeping. So the direction is inverted: pip may leave
+# its self-check and nothing else.
+pip_docs = {k for (r, k) in docs if r == pip_reg}
+assert pip_docs <= {"pip (simple-json)"}, f"the only document miss pip may leave is its own self-check: {pip_docs}"
 # What the four clients asked for beyond their composed listings, all of it
 # measured and all of it honest (0008-bis §13.4): `go get` probes the
 # parent module paths (`github.com`, `github.com/google`) before it settles
