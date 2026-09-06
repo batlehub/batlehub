@@ -79,7 +79,7 @@ appears, or on a schedule.
 Le repo Git est disponible dans deux provider Git:
 
 - https://git.batleforc.fr/batleforc/batlehub : Instance SelfHosted de Forgejo
-- https://github.com/batleforc/batlehub : Miroir GitHub (Principalement en lecture seule, les contributions se font via des pull requests sur la Forgejo)
+- https://github.com/batlehub/batlehub : Miroir GitHub (Principalement en lecture seule, les contributions se font via des pull requests sur la Forgejo)
 
 ---
 

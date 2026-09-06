@@ -679,4 +679,4 @@ Publisher support by registry type (matching is case-insensitive):
 - **OpenVSX**, **VS Code Marketplace** — the publisher segment of the extension id (`"publisher.extension"` → `"publisher"`)
 - **Not yet supported: Cargo** and any other registry type — configuring this rule there denies every request (fail-closed)
 
-See [`docs/guide/configuration.md`](https://github.com/batleforc/batlehub/blob/main/docs/guide/configuration.md) for the full field table.
+See [`docs/guide/configuration.md`](https://github.com/batlehub/batlehub/blob/main/docs/guide/configuration.md) for the full field table.

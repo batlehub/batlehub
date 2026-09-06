@@ -561,7 +561,7 @@ const config = withMermaid(defineConfig({
 
     socialLinks: [
       { icon: "git", link: "https://git.batleforc.fr/batleforc/batlehub" },
-      { icon: "github", link: "https://github.com/batleforc/batlehub" },
+      { icon: "github", link: "https://github.com/batlehub/batlehub" },
     ],
 
     footer: {

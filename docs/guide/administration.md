@@ -2,7 +2,7 @@
 
 This page covers everything an administrator needs to operate BatleHub: configuration, storage, auth providers, registry management, health monitoring, cache cleanup, hot reloading, and the global banner.
 
-For the complete TOML reference see [`docs/guide/configuration.md`](https://github.com/batleforc/batlehub/blob/main/docs/guide/configuration.md).
+For the complete TOML reference see [`docs/guide/configuration.md`](https://github.com/batlehub/batlehub/blob/main/docs/guide/configuration.md).
 
 ## Contents
 

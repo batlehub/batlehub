@@ -61,7 +61,7 @@ async function triggerDownload() {
 
 const serverUrl = computed(() => globalThis.location.origin);
 
-const RELEASES_URL = "https://github.com/batleforc/batlehub/releases/latest/download";
+const RELEASES_URL = "https://github.com/batlehub/batlehub/releases/latest/download";
 
 const installSnippets: Record<string, { label: string; lang: string; code: string }> = {
   mise: {

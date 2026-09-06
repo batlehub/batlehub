@@ -36,4 +36,4 @@ tasks:
     cmds:
       - mise upgrade
       - git remote set-url origin --add --push https://git.batleforc.fr/batleforc/batlehub
-      - git remote set-url origin --add --push https://github.com/batleforc/batlehub
+      - git remote set-url origin --add --push https://github.com/batlehub/batlehub

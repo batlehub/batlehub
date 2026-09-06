@@ -14,7 +14,7 @@ hero:
       link: /guide/installation
     - theme: alt
       text: View on Git
-      link: https://github.com/batleforc/batlehub
+      link: https://github.com/batlehub/batlehub
 
 features:
   - icon: ⚡

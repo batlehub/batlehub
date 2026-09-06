@@ -44,10 +44,10 @@ docker run -p 8080:8080 \
 
 ### Pre-built binary
 
-A statically linked `batlehub` binary for Linux is attached to each [GitHub Release](https://github.com/batleforc/batlehub/releases). Download it, make it executable, and run:
+A statically linked `batlehub` binary for Linux is attached to each [GitHub Release](https://github.com/batlehub/batlehub/releases). Download it, make it executable, and run:
 
 ```sh
-curl -L -o batlehub https://github.com/batleforc/batlehub/releases/download/<version>/batlehub
+curl -L -o batlehub https://github.com/batlehub/batlehub/releases/download/<version>/batlehub
 chmod +x batlehub
 ./batlehub --config config.toml
 ```
@@ -61,7 +61,7 @@ The fastest way to get a running instance for local development or evaluation.
 **1. Clone the repository:**
 
 ```sh
-git clone https://github.com/batleforc/batlehub
+git clone https://github.com/batlehub/batlehub
 cd batlehub
 ```
 
@@ -155,7 +155,7 @@ Deploy BatleHub on Kubernetes using the bundled Helm chart.
 
 ```sh
 # Clone the repo (chart is bundled in helm/batlehub/)
-git clone https://github.com/batleforc/batlehub
+git clone https://github.com/batlehub/batlehub
 cd batlehub
 
 helm install batlehub ./helm/batlehub \

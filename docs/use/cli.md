@@ -13,30 +13,30 @@ mise use "github:batleforc/batlehub[asset_pattern=batlehub-cli-*]"
 **via cargo** (builds from source — requires Rust toolchain):
 
 ```bash
-cargo install --git https://github.com/batleforc/batlehub batlehub-cli
+cargo install --git https://github.com/batlehub/batlehub batlehub-cli
 ```
 
-**Pre-built binaries** — download from [GitHub Releases](https://github.com/batleforc/batlehub/releases/latest):
+**Pre-built binaries** — download from [GitHub Releases](https://github.com/batlehub/batlehub/releases/latest):
 
 ```bash
 # Linux x86_64
-curl -fSL https://github.com/batleforc/batlehub/releases/latest/download/batlehub-cli-linux-amd64.tar.gz | tar xz
+curl -fSL https://github.com/batlehub/batlehub/releases/latest/download/batlehub-cli-linux-amd64.tar.gz | tar xz
 sudo mv batlehub-cli /usr/local/bin/batlehub-cli
 
 # Linux aarch64
-curl -fSL https://github.com/batleforc/batlehub/releases/latest/download/batlehub-cli-linux-arm64.tar.gz | tar xz
+curl -fSL https://github.com/batlehub/batlehub/releases/latest/download/batlehub-cli-linux-arm64.tar.gz | tar xz
 sudo mv batlehub-cli /usr/local/bin/batlehub-cli
 
 # macOS Apple Silicon (M1/M2/M3)
-curl -fSL https://github.com/batleforc/batlehub/releases/latest/download/batlehub-cli-darwin-arm64.tar.gz | tar xz
+curl -fSL https://github.com/batlehub/batlehub/releases/latest/download/batlehub-cli-darwin-arm64.tar.gz | tar xz
 sudo mv batlehub-cli /usr/local/bin/batlehub-cli
 
 # macOS Intel
-curl -fSL https://github.com/batleforc/batlehub/releases/latest/download/batlehub-cli-darwin-amd64.tar.gz | tar xz
+curl -fSL https://github.com/batlehub/batlehub/releases/latest/download/batlehub-cli-darwin-amd64.tar.gz | tar xz
 sudo mv batlehub-cli /usr/local/bin/batlehub-cli
 
 # Windows (PowerShell)
-Invoke-WebRequest https://github.com/batleforc/batlehub/releases/latest/download/batlehub-cli-windows-amd64.zip -OutFile batlehub-cli.zip
+Invoke-WebRequest https://github.com/batlehub/batlehub/releases/latest/download/batlehub-cli-windows-amd64.zip -OutFile batlehub-cli.zip
 Expand-Archive batlehub-cli.zip -DestinationPath .
 Move-Item batlehub-cli.exe "$env:LOCALAPPDATA\Microsoft\WindowsApps\batlehub-cli.exe"
 ```

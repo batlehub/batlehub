@@ -133,7 +133,7 @@ mise use "github:batleforc/batlehub[asset_pattern=batlehub-cli-*]"
 **via cargo** (builds from source):
 
 ```sh
-cargo install --git https://github.com/batleforc/batlehub batlehub-cli
+cargo install --git https://github.com/batlehub/batlehub batlehub-cli
 ```
 
 ---
