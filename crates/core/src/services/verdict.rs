@@ -122,20 +122,64 @@ pub fn escalate(findings: &mut [Finding], policy: &SecurityPolicy) {
     }
 }
 
+/// A finding at `severity`, judged against the registry's threshold: a refusal
+/// in `block` mode, a warning in `warn` mode, and nothing at all below it.
+fn threshold(severity: Severity, policy: &SecurityPolicy) -> Option<VerdictState> {
+    if severity < policy.max_severity {
+        return None;
+    }
+    Some(match policy.mode {
+        SecurityMode::Block => VerdictState::Denied,
+        SecurityMode::Warn => VerdictState::Warned,
+    })
+}
+
+/// `SCANNER_ERROR` / `SCANNER_UNSUPPORTED`, under `policy.scanner_error`.
+fn scanner_error_effect(policy: &SecurityPolicy) -> Option<VerdictState> {
+    match policy.scanner_error {
+        ScannerErrorMode::Quarantine => Some(VerdictState::Quarantined),
+        ScannerErrorMode::Warn => Some(VerdictState::Warned),
+        ScannerErrorMode::Ignore => None,
+    }
+}
+
+/// `INSTALL_HOOK`, under `policy.deny_install_hooks`. `Deny` is still judged
+/// against the threshold, so a registry that tolerates critical findings
+/// tolerates this one too.
+fn install_hook_effect(policy: &SecurityPolicy) -> Option<VerdictState> {
+    match policy.deny_install_hooks {
+        InstallHookMode::Deny => threshold(Severity::Critical, policy),
+        InstallHookMode::Warn => Some(VerdictState::Warned),
+        InstallHookMode::Ignore => None,
+    }
+}
+
+/// `PROVENANCE_MISSING` / `PROVENANCE_INVALID`: a refusal only where the
+/// registry requires provenance, a warning everywhere else.
+fn provenance_effect(policy: &SecurityPolicy) -> Option<VerdictState> {
+    if policy.require_provenance {
+        threshold(Severity::Critical, policy)
+    } else {
+        Some(VerdictState::Warned)
+    }
+}
+
+/// RFC 0019 §4.2 — the forge-ref codes carry the operator's own action in
+/// their severity (`deny` → critical, `warn` → low), so they are not judged
+/// against `max_severity`: a warned mutable ref must reach the client, and a
+/// registry whose threshold is `critical` must not silently swallow it.
+/// `mode = "warn"` still downgrades a refusal, as it does for every other code.
+fn forge_ref_effect(f: &Finding, policy: &SecurityPolicy) -> Option<VerdictState> {
+    Some(match (f.severity, policy.mode) {
+        (Severity::Critical, SecurityMode::Block) => VerdictState::Denied,
+        _ => VerdictState::Warned,
+    })
+}
+
 /// What one finding does to the state under `policy`, or `None` when it is
 /// recorded but changes nothing (a finding under the threshold, an ignored
 /// scanner error).
 fn classify(f: &Finding, policy: &SecurityPolicy) -> Option<VerdictState> {
-    let threshold = |severity: Severity| -> Option<VerdictState> {
-        if severity >= policy.max_severity {
-            Some(match policy.mode {
-                SecurityMode::Block => VerdictState::Denied,
-                SecurityMode::Warn => VerdictState::Warned,
-            })
-        } else {
-            None
-        }
-    };
     if f.code.is_always_denied() {
         return Some(VerdictState::Denied);
     }
@@ -143,42 +187,90 @@ fn classify(f: &Finding, policy: &SecurityPolicy) -> Option<VerdictState> {
         ReasonCode::MinAgeNotMet | ReasonCode::ScanPending | ReasonCode::TimestampMissing => {
             Some(VerdictState::Quarantined)
         }
-        ReasonCode::ScannerError | ReasonCode::ScannerUnsupported => match policy.scanner_error {
-            ScannerErrorMode::Quarantine => Some(VerdictState::Quarantined),
-            ScannerErrorMode::Warn => Some(VerdictState::Warned),
-            ScannerErrorMode::Ignore => None,
-        },
-        ReasonCode::InstallHook => match policy.deny_install_hooks {
-            InstallHookMode::Deny => threshold(Severity::Critical),
-            InstallHookMode::Warn => Some(VerdictState::Warned),
-            InstallHookMode::Ignore => None,
-        },
-        ReasonCode::ProvenanceMissing | ReasonCode::ProvenanceInvalid => {
-            if policy.require_provenance {
-                threshold(Severity::Critical)
-            } else {
-                Some(VerdictState::Warned)
-            }
-        }
+        ReasonCode::ScannerError | ReasonCode::ScannerUnsupported => scanner_error_effect(policy),
+        ReasonCode::InstallHook => install_hook_effect(policy),
+        ReasonCode::ProvenanceMissing | ReasonCode::ProvenanceInvalid => provenance_effect(policy),
         ReasonCode::ProvenanceUnverifiable => Some(VerdictState::Warned),
         ReasonCode::AdminOverride => None,
-        // RFC 0019 §4.2 — the forge-ref codes carry the operator's own
-        // action in their severity (`deny` → critical, `warn` → low), so
-        // they are not judged against `max_severity`: a warned mutable ref
-        // must reach the client, and a registry whose threshold is
-        // `critical` must not silently swallow it. `mode = "warn"` still
-        // downgrades a refusal, as it does for every other code.
         ReasonCode::MutableRef
         | ReasonCode::TagMoved
         | ReasonCode::AssetReplaced
         | ReasonCode::PinnedRefRequired
-        | ReasonCode::RawScript => Some(match (f.severity, policy.mode) {
-            (Severity::Critical, SecurityMode::Block) => VerdictState::Denied,
-            (Severity::Critical, SecurityMode::Warn) => VerdictState::Warned,
-            _ => VerdictState::Warned,
-        }),
-        _ => threshold(f.severity),
+        | ReasonCode::RawScript => forge_ref_effect(f, policy),
+        _ => threshold(f.severity, policy),
     }
+}
+
+/// What folding the findings produced: the worst state any of them reached,
+/// the codes in first-seen order, and — for a hold — when it lifts and which
+/// codes are holding it.
+struct Folded {
+    state: VerdictState,
+    codes: Vec<ReasonCode>,
+    available_at: Option<DateTime<Utc>>,
+    /// The codes that put the verdict into a hold, to decide whether the
+    /// maturity bypass may lift it.
+    hold_codes: Vec<ReasonCode>,
+}
+
+/// Fold every finding's effect into one state.
+fn fold(findings: &[Finding], policy: &SecurityPolicy) -> Folded {
+    let mut folded = Folded {
+        state: VerdictState::Allowed,
+        codes: Vec::new(),
+        available_at: None,
+        hold_codes: Vec::new(),
+    };
+    for f in findings {
+        let Some(effect) = classify(f, policy) else {
+            continue;
+        };
+        if !folded.codes.contains(&f.code) {
+            folded.codes.push(f.code);
+        }
+        if effect == VerdictState::Quarantined {
+            folded.hold_codes.push(f.code);
+            if let Some(at) = f.available_at {
+                folded.available_at = Some(
+                    folded
+                        .available_at
+                        .map_or(at, |cur: DateTime<Utc>| cur.max(at)),
+                );
+            }
+        }
+        folded.state = worse_state(folded.state, effect);
+    }
+    folded
+}
+
+/// The maturity bypass (RFC 0018 §4.2 *Precedence*): a hold whose only causes
+/// are "nobody looked yet" lifts once the version is older than
+/// `mature_age_secs`. Never for a finding, a block, or a version the upstream
+/// did not date.
+fn maturity_lifts(
+    folded: &Folded,
+    package: &PackageMetadata,
+    policy: &SecurityPolicy,
+    now: DateTime<Utc>,
+) -> bool {
+    if folded.state != VerdictState::Quarantined
+        || folded.hold_codes.is_empty()
+        || policy.mature_age.is_zero()
+    {
+        return false;
+    }
+    if !folded
+        .hold_codes
+        .iter()
+        .all(ReasonCode::is_maturity_bypassable)
+    {
+        return false;
+    }
+    let Some(published) = package.published_at else {
+        return false;
+    };
+    let mature = chrono::Duration::from_std(policy.mature_age).unwrap_or_default();
+    published + mature <= now
 }
 
 /// The pure evaluation (RFC 0018 §5.2): `(metadata, findings, policy, now) →
@@ -202,59 +294,25 @@ pub fn evaluate(
     findings.extend(age_findings(package, policy, now));
     findings.extend(pending_findings(policy, &scanners_done));
 
-    let mut state = VerdictState::Allowed;
-    let mut codes: Vec<ReasonCode> = Vec::new();
-    let mut available_at: Option<DateTime<Utc>> = None;
-    // The codes that put the verdict into a hold, to decide whether the
-    // maturity bypass may lift it.
-    let mut hold_codes: Vec<ReasonCode> = Vec::new();
+    let mut folded = fold(&findings, policy);
 
-    for f in &findings {
-        let Some(effect) = classify(f, policy) else {
-            continue;
-        };
-        if !codes.contains(&f.code) {
-            codes.push(f.code);
-        }
-        if effect == VerdictState::Quarantined {
-            hold_codes.push(f.code);
-            if let Some(at) = f.available_at {
-                available_at = Some(available_at.map_or(at, |cur: DateTime<Utc>| cur.max(at)));
-            }
-        }
-        state = worse_state(state, effect);
+    // The codes stay when maturity lifts a hold, so the served-unscanned state
+    // stays visible; only the state and the lift time move.
+    if maturity_lifts(&folded, package, policy, now) {
+        folded.state = VerdictState::Warned;
     }
-
-    // The maturity bypass (RFC 0018 §4.2 *Precedence*): a hold whose only
-    // causes are "nobody looked yet" lifts to `warned` once the version is
-    // older than `mature_age_secs` — the codes stay, so the served-unscanned
-    // state is visible. Never for a finding, a block, or a version the
-    // upstream did not date.
-    if state == VerdictState::Quarantined
-        && !hold_codes.is_empty()
-        && hold_codes.iter().all(|c| c.is_maturity_bypassable())
-        && !policy.mature_age.is_zero()
-    {
-        if let Some(published) = package.published_at {
-            let mature = chrono::Duration::from_std(policy.mature_age).unwrap_or_default();
-            if published + mature <= now {
-                state = VerdictState::Warned;
-                available_at = None;
-            }
-        }
-    }
-    if state != VerdictState::Quarantined {
-        available_at = None;
+    if folded.state != VerdictState::Quarantined {
+        folded.available_at = None;
     }
 
     Verdict {
         // The version, not the file: every artifact of a release shares it.
         package: coordinate_key(&package.id),
-        state,
-        reason_codes: codes,
+        state: folded.state,
+        reason_codes: folded.codes,
         findings,
         policy_ref: policy.policy_ref.clone(),
-        available_at,
+        available_at: folded.available_at,
         evaluated_at: now,
         last_scanned_at,
         scanners_done,

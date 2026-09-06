@@ -25,7 +25,7 @@
 //! faster than anyone can read the log.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -35,7 +35,7 @@ use crate::entities::{
     ScanTrigger, Verdict, VerdictState, ANY_VERSION, FLAGS_SCANNER,
 };
 use crate::error::CoreError;
-use crate::ports::AdvisoryRepository;
+use crate::ports::{AdvisoryRepository, VerdictRepository};
 use crate::services::hot_config::HotConfigLock;
 use crate::services::verdict::coordinate_key;
 
@@ -113,7 +113,7 @@ impl FlagService {
             return Ok(());
         }
         let minute = now.timestamp().div_euclid(60);
-        let mut budget = self.budget.lock().unwrap_or_else(|p| p.into_inner());
+        let mut budget = self.budget.lock().unwrap_or_else(PoisonError::into_inner);
         let entry = budget.entry(source.name.clone()).or_insert((minute, 0));
         if entry.0 != minute {
             *entry = (minute, 0);
@@ -319,33 +319,55 @@ impl FlagService {
         }
     }
 
+    /// One verdict, denied by `flag` and written back.
+    ///
+    /// The flag's own previous finding is dropped first, so re-pushing a flag
+    /// that has been edited does not leave both versions of it on the verdict.
+    async fn deny_one(
+        store: &Arc<dyn VerdictRepository>,
+        flag: &PackageFlag,
+        mut v: Verdict,
+        now: DateTime<Utc>,
+    ) {
+        v.findings
+            .retain(|f| f.scanner != FLAGS_SCANNER || f.reference != Some(reference(flag)));
+        v.findings.push(flag.as_finding());
+        v.state = VerdictState::Denied;
+        if !v.reason_codes.contains(&ReasonCode::SocVerdict) {
+            v.reason_codes.push(ReasonCode::SocVerdict);
+        }
+        v.available_at = None;
+        v.evaluated_at = now;
+        match store.upsert(&v).await {
+            Err(e) => {
+                tracing::warn!(package = %v.package, error = %e, "flags: could not deny verdict");
+            }
+            Ok(()) => {
+                tracing::info!(package = %coordinate_key(&v.package), source = %flag.source,
+                    external_id = %flag.external_id, "security: denied by pushed flag");
+            }
+        }
+    }
+
+    /// Deny every verdict a live `hard_block` covers. A no-op when the
+    /// instance keeps no verdict store.
+    async fn deny_covered(&self, flag: &PackageFlag, now: DateTime<Utc>) {
+        let verdicts = {
+            let hot = self.hot.read().await;
+            hot.verdicts.clone()
+        };
+        let Some(store) = verdicts else {
+            return;
+        };
+        for v in self.covered_verdicts(flag).await {
+            Self::deny_one(&store, flag, v, now).await;
+        }
+    }
+
     /// What a stored flag does to the verdicts it covers.
     async fn apply(&self, flag: &PackageFlag, now: DateTime<Utc>) {
         if flag.effect == FlagEffect::HardBlock && flag.is_live(now) {
-            let verdicts = {
-                let hot = self.hot.read().await;
-                hot.verdicts.clone()
-            };
-            if let Some(store) = verdicts {
-                for mut v in self.covered_verdicts(flag).await {
-                    v.findings.retain(|f| {
-                        f.scanner != FLAGS_SCANNER || f.reference != Some(reference(flag))
-                    });
-                    v.findings.push(flag.as_finding());
-                    v.state = VerdictState::Denied;
-                    if !v.reason_codes.contains(&ReasonCode::SocVerdict) {
-                        v.reason_codes.push(ReasonCode::SocVerdict);
-                    }
-                    v.available_at = None;
-                    v.evaluated_at = now;
-                    if let Err(e) = store.upsert(&v).await {
-                        tracing::warn!(package = %v.package, error = %e, "flags: could not deny verdict");
-                    } else {
-                        tracing::info!(package = %coordinate_key(&v.package), source = %flag.source,
-                            external_id = %flag.external_id, "security: denied by pushed flag");
-                    }
-                }
-            }
+            self.deny_covered(flag, now).await;
         }
         self.rescan_covered(flag).await;
     }

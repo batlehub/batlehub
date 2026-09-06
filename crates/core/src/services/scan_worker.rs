@@ -99,10 +99,9 @@ pub struct PassReport {
 }
 
 impl ScanWorker {
-    /// Lease and run one batch, then close out any job whose attempts are
-    /// spent. Returns what happened so an embedded caller can pace itself.
-    pub async fn run_once(&self) -> Result<PassReport, CoreError> {
-        let mut report = PassReport::default();
+    /// Tell the worker table this process is alive, and publish the queue
+    /// depths. Neither is load-bearing for the pass, so neither fails it.
+    async fn report_liveness(&self) {
         if let Some(w) = &self.workers {
             if let Err(e) = w
                 .heartbeat(&self.config.worker_id, &self.config.registries)
@@ -111,16 +110,40 @@ impl ScanWorker {
                 tracing::warn!(error = %e, "security worker: heartbeat failed");
             }
         }
-        if let Ok(counts) = self.queue.queued().await {
-            for c in counts {
-                metrics::gauge!(
-                    "batlehub_scan_jobs_queued",
-                    "registry" => c.registry,
-                    "trigger" => c.trigger.as_str(),
-                )
-                .set(c.count as f64);
-            }
+        let Ok(counts) = self.queue.queued().await else {
+            return;
+        };
+        for c in counts {
+            metrics::gauge!(
+                "batlehub_scan_jobs_queued",
+                "registry" => c.registry,
+                "trigger" => c.trigger.as_str(),
+            )
+            .set(c.count as f64);
         }
+    }
+
+    /// Run one leased job and close its row, whichever way it went.
+    async fn run_and_close(&self, job: &ScanJob, report: &mut PassReport) {
+        let Err(e) = self.run_job(job).await else {
+            report.completed += 1;
+            if let Err(e) = self.queue.complete(job.id).await {
+                tracing::warn!(job = %job.id, error = %e, "security worker: could not close job");
+            }
+            return;
+        };
+        report.failed += 1;
+        tracing::warn!(job = %job.id, package = %job.package, error = %e, "security worker: job failed");
+        if let Err(e) = self.queue.fail(job.id, &e.to_string()).await {
+            tracing::warn!(job = %job.id, error = %e, "security worker: could not record failure");
+        }
+    }
+
+    /// Lease and run one batch, then close out any job whose attempts are
+    /// spent. Returns what happened so an embedded caller can pace itself.
+    pub async fn run_once(&self) -> Result<PassReport, CoreError> {
+        let mut report = PassReport::default();
+        self.report_liveness().await;
 
         let jobs = self
             .queue
@@ -137,21 +160,7 @@ impl ScanWorker {
             .set(jobs.len() as f64);
 
         for job in jobs {
-            match self.run_job(&job).await {
-                Ok(()) => {
-                    report.completed += 1;
-                    if let Err(e) = self.queue.complete(job.id).await {
-                        tracing::warn!(job = %job.id, error = %e, "security worker: could not close job");
-                    }
-                }
-                Err(e) => {
-                    report.failed += 1;
-                    tracing::warn!(job = %job.id, package = %job.package, error = %e, "security worker: job failed");
-                    if let Err(e) = self.queue.fail(job.id, &e.to_string()).await {
-                        tracing::warn!(job = %job.id, error = %e, "security worker: could not record failure");
-                    }
-                }
-            }
+            self.run_and_close(&job, &mut report).await;
         }
 
         // Jobs nobody could finish: the verdict says so, and the row closes.
@@ -210,132 +219,24 @@ impl ScanWorker {
             tracing::info!(package = %job.package, "security worker: registry has no security profile any more; dropping job");
             return Ok(());
         };
-        let mut package = PackageMetadata::minimal(job.package.clone(), serde_json::Value::Null);
-        package.published_at = job.published_at;
-        if package.published_at.is_none() {
-            // A rescan queued without the date — the metadata cache had let
-            // it go — must not re-judge a dated version as
-            // `TIMESTAMP_MISSING`: ask upstream once, as the proxy would.
-            let client = self
-                .hot
-                .read()
-                .await
-                .registries
-                .get(&job.package.registry)
-                .cloned();
-            if let Some(client) = client {
-                match client.resolve_metadata(&job.package).await {
-                    Ok(meta) => package.published_at = meta.published_at,
-                    Err(e) => {
-                        tracing::debug!(package = %job.package, error = %e, "security worker: no date from upstream for the rescan")
-                    }
-                }
-            }
-        }
-        let purl = coordinate_purl(kind, &job.package.name, &job.package.version);
-        let sbom = match &self.sboms {
-            Some(repo) => repo
-                .get_sbom_by_coordinates(
-                    &job.package.registry,
-                    &job.package.name,
-                    &job.package.version,
-                    &crate::entities::SbomFormat::CycloneDx,
-                )
-                .await
-                .ok()
-                .flatten()
-                .map(|s| s.document),
-            None => None,
-        };
+        let package = self.dated_metadata(job).await;
         let applicable: Vec<Arc<dyn ArtifactScanner>> =
             scanners.into_iter().filter(|s| s.supports(kind)).collect();
-        // Bytes and the listing only when a scanner will read them: a
-        // metadata-only profile is one row read and no egress.
-        let mut findings: Vec<Finding> = Vec::new();
-        let artifact = if applicable.iter().any(|s| s.needs_artifact()) {
-            match self.artifact_bytes(&job.package, kind).await {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    tracing::warn!(package = %job.package, error = %e, "security worker: could not fetch the artifact for scanning");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        let artifact_unavailable = artifact.is_none();
-        let listing = if applicable.iter().any(|s| s.needs_listing()) {
-            self.listing_document(&job.package).await
-        } else {
-            None
-        };
-        let input = crate::ports::ScanInput {
-            package: package.clone(),
-            kind,
-            purl,
-            artifact,
-            sbom,
-            listing,
-        };
+        let input = self.scan_input(job, kind, &package, &applicable).await;
+        let artifact_unavailable = input.artifact.is_none();
 
+        let mut findings: Vec<Finding> = Vec::new();
         let mut done: Vec<String> = Vec::new();
         for scanner in applicable {
-            // A scanner that reads bytes it could not be given did not run:
-            // `SCANNER_UNSUPPORTED` names the reason without pretending the
-            // scan happened (RFC 0018 §11 q1).
-            if scanner.needs_artifact() && artifact_unavailable {
-                findings.push(Finding::new(
-                    scanner.name(),
-                    FindingKind::ScannerError,
-                    ReasonCode::ScannerUnsupported,
-                    Severity::High,
-                    "the artifact bytes could not be obtained for scanning",
-                ));
-                continue;
-            }
-            let started = Instant::now();
-            let outcome = tokio::time::timeout(self.config.job_timeout, scanner.scan(&input)).await;
-            let outcome = match outcome {
-                Ok(r) => r,
-                Err(_) => Err(ScannerError::Timeout),
-            };
-            let label = match &outcome {
-                Ok(_) => "ok",
-                Err(_) => "error",
-            };
-            metrics::histogram!(
-                "batlehub_scan_job_duration_seconds",
-                "registry" => job.package.registry.clone(),
-                "scanner" => scanner.name().to_owned(),
-                "outcome" => label,
+            self.run_scanner(
+                job,
+                &scanner,
+                &input,
+                artifact_unavailable,
+                &mut findings,
+                &mut done,
             )
-            .record(started.elapsed().as_secs_f64());
-            match outcome {
-                Ok(found) => {
-                    findings.extend(found);
-                    done.push(scanner.name().to_owned());
-                }
-                Err(e) => {
-                    metrics::counter!(
-                        "batlehub_scanner_errors_total",
-                        "scanner" => scanner.name().to_owned(),
-                        "class" => e.class(),
-                    )
-                    .increment(1);
-                    tracing::warn!(package = %job.package, scanner = scanner.name(), error = %e, "security worker: scanner did not answer");
-                    let code = match e {
-                        ScannerError::Unsupported(_) => ReasonCode::ScannerUnsupported,
-                        _ => ReasonCode::ScannerError,
-                    };
-                    findings.push(Finding::new(
-                        scanner.name(),
-                        FindingKind::ScannerError,
-                        code,
-                        Severity::High,
-                        e.to_string(),
-                    ));
-                }
-            }
+            .await;
             if let Err(e) = self
                 .queue
                 .heartbeat(job.id, self.config.job_timeout.as_secs())
@@ -344,17 +245,168 @@ impl ScanWorker {
                 tracing::debug!(job = %job.id, error = %e, "security worker: heartbeat failed");
             }
         }
+        self.enrich(job, &policy, &mut findings, &mut done).await;
+        self.record(job, &package, &policy, findings, done).await
+    }
 
-        // Enrichment last, over everything the scanners said; a registry
-        // names it in `scanners` like any other, and it is "done" only when
-        // it answered.
+    /// The version's metadata, dated.
+    ///
+    /// A rescan queued without the date — the metadata cache had let it go —
+    /// must not re-judge a dated version as `TIMESTAMP_MISSING`: ask upstream
+    /// once, as the proxy would.
+    async fn dated_metadata(&self, job: &ScanJob) -> PackageMetadata {
+        let mut package = PackageMetadata::minimal(job.package.clone(), serde_json::Value::Null);
+        package.published_at = job.published_at;
+        if package.published_at.is_some() {
+            return package;
+        }
+        let client = self
+            .hot
+            .read()
+            .await
+            .registries
+            .get(&job.package.registry)
+            .cloned();
+        let Some(client) = client else {
+            return package;
+        };
+        match client.resolve_metadata(&job.package).await {
+            Ok(meta) => package.published_at = meta.published_at,
+            Err(e) => {
+                tracing::debug!(package = %job.package, error = %e, "security worker: no date from upstream for the rescan")
+            }
+        }
+        package
+    }
+
+    /// The CycloneDX SBOM already recorded for the version, where the instance
+    /// keeps one.
+    async fn stored_sbom(&self, job: &ScanJob) -> Option<serde_json::Value> {
+        let repo = self.sboms.as_ref()?;
+        repo.get_sbom_by_coordinates(
+            &job.package.registry,
+            &job.package.name,
+            &job.package.version,
+            &crate::entities::SbomFormat::CycloneDx,
+        )
+        .await
+        .ok()
+        .flatten()
+        .map(|s| s.document)
+    }
+
+    /// Everything the scanners will be given.
+    ///
+    /// Bytes and the listing only when a scanner will read them: a
+    /// metadata-only profile is one row read and no egress.
+    async fn scan_input(
+        &self,
+        job: &ScanJob,
+        kind: RegistryKind,
+        package: &PackageMetadata,
+        applicable: &[Arc<dyn ArtifactScanner>],
+    ) -> crate::ports::ScanInput {
+        let artifact = match applicable.iter().any(|s| s.needs_artifact()) {
+            false => None,
+            true => self
+                .artifact_bytes(&job.package, kind)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(package = %job.package, error = %e, "security worker: could not fetch the artifact for scanning");
+                    None
+                }),
+        };
+        let listing = match applicable.iter().any(|s| s.needs_listing()) {
+            false => None,
+            true => self.listing_document(&job.package).await,
+        };
+        crate::ports::ScanInput {
+            package: package.clone(),
+            kind,
+            purl: coordinate_purl(kind, &job.package.name, &job.package.version),
+            artifact,
+            sbom: self.stored_sbom(job).await,
+            listing,
+        }
+    }
+
+    /// One scanner: what it found, or why it did not answer.
+    async fn run_scanner(
+        &self,
+        job: &ScanJob,
+        scanner: &Arc<dyn ArtifactScanner>,
+        input: &crate::ports::ScanInput,
+        artifact_unavailable: bool,
+        findings: &mut Vec<Finding>,
+        done: &mut Vec<String>,
+    ) {
+        // A scanner that reads bytes it could not be given did not run:
+        // `SCANNER_UNSUPPORTED` names the reason without pretending the scan
+        // happened (RFC 0018 §11 q1).
+        if scanner.needs_artifact() && artifact_unavailable {
+            findings.push(Finding::new(
+                scanner.name(),
+                FindingKind::ScannerError,
+                ReasonCode::ScannerUnsupported,
+                Severity::High,
+                "the artifact bytes could not be obtained for scanning",
+            ));
+            return;
+        }
+        let started = Instant::now();
+        let outcome = tokio::time::timeout(self.config.job_timeout, scanner.scan(input))
+            .await
+            .unwrap_or(Err(ScannerError::Timeout));
+        metrics::histogram!(
+            "batlehub_scan_job_duration_seconds",
+            "registry" => job.package.registry.clone(),
+            "scanner" => scanner.name().to_owned(),
+            "outcome" => if outcome.is_ok() { "ok" } else { "error" },
+        )
+        .record(started.elapsed().as_secs_f64());
+        let e = match outcome {
+            Ok(found) => {
+                findings.extend(found);
+                done.push(scanner.name().to_owned());
+                return;
+            }
+            Err(e) => e,
+        };
+        metrics::counter!(
+            "batlehub_scanner_errors_total",
+            "scanner" => scanner.name().to_owned(),
+            "class" => e.class(),
+        )
+        .increment(1);
+        tracing::warn!(package = %job.package, scanner = scanner.name(), error = %e, "security worker: scanner did not answer");
+        let code = match e {
+            ScannerError::Unsupported(_) => ReasonCode::ScannerUnsupported,
+            _ => ReasonCode::ScannerError,
+        };
+        findings.push(Finding::new(
+            scanner.name(),
+            FindingKind::ScannerError,
+            code,
+            Severity::High,
+            e.to_string(),
+        ));
+    }
+
+    /// Enrichment, over everything the scanners said. A registry names an
+    /// enricher in `scanners` like any other, and it is "done" only when it
+    /// answered.
+    async fn enrich(
+        &self,
+        job: &ScanJob,
+        policy: &SecurityPolicy,
+        findings: &mut Vec<Finding>,
+        done: &mut Vec<String>,
+    ) {
         for name in &policy.scanners {
             let Some(enricher) = self.enrichers.get(name) else {
                 continue;
             };
-            match tokio::time::timeout(self.config.job_timeout, enricher.enrich(&mut findings))
-                .await
-            {
+            match tokio::time::timeout(self.config.job_timeout, enricher.enrich(findings)).await {
                 Ok(Ok(())) => done.push(enricher.name().to_owned()),
                 Ok(Err(e)) => {
                     tracing::warn!(package = %job.package, scanner = enricher.name(), error = %e, "security worker: enrichment did not answer");
@@ -364,10 +416,20 @@ impl ScanWorker {
                 }
             }
         }
+    }
 
+    /// Write the verdict, count it, and tell whoever the transition concerns.
+    async fn record(
+        &self,
+        job: &ScanJob,
+        package: &PackageMetadata,
+        policy: &SecurityPolicy,
+        findings: Vec<Finding>,
+        done: Vec<String>,
+    ) -> Result<(), CoreError> {
         let (from, verdict) = self
             .verdicts
-            .record_scan(&package, &policy, findings, done, Utc::now())
+            .record_scan(package, policy, findings, done, Utc::now())
             .await?;
         metrics::counter!(
             "batlehub_verdicts_total",
@@ -383,16 +445,17 @@ impl ScanWorker {
             codes = ?verdict.reason_codes,
             "security worker: verdict recorded"
         );
-        if let Some(from) = from {
-            // RFC 0018 decision 23: a version that was being served and is
-            // now refused is the one transition an incident is built on —
-            // the admin is told, with who pulled it. A version that was
-            // held and is now served is told to the ones who were refused.
-            if from.is_served() && verdict.state == VerdictState::Denied {
-                self.alert_flip(job, &policy, from, &verdict).await;
-            } else if from == VerdictState::Quarantined && verdict.is_served() {
-                self.announce_release(job, &policy, from, &verdict).await;
-            }
+        // RFC 0018 decision 23: a version that was being served and is now
+        // refused is the one transition an incident is built on — the admin is
+        // told, with who pulled it. A version that was held and is now served
+        // is told to the ones who were refused.
+        let Some(from) = from else {
+            return Ok(());
+        };
+        if from.is_served() && verdict.state == VerdictState::Denied {
+            self.alert_flip(job, policy, from, &verdict).await;
+        } else if from == VerdictState::Quarantined && verdict.is_served() {
+            self.announce_release(job, policy, from, &verdict).await;
         }
         Ok(())
     }

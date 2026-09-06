@@ -180,8 +180,9 @@ sink_wait() {
 }
 
 new_consumer() {  # dir
-  mkdir -p "$1"
-  cat > "$1/package.json" <<EOF
+  local dir="$1"
+  mkdir -p "$dir"
+  cat > "$dir/package.json" <<EOF
 { "name": "consumer", "version": "1.0.0", "private": true }
 EOF
 }

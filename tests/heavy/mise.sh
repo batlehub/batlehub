@@ -49,6 +49,14 @@ heavy_need curl "curl"
 heavy_need python3 "python3 (the wire tap)"
 
 REG="github-$HEAVY_RUN"
+
+# The literals this suite repeats. `%{http_code}` is the whole of every status
+# assertion here, and the four proxy variables must all name the *same* closed
+# port — a typo in one of them leaves that scheme reaching the real internet
+# and the air-gap phase still passes.
+CURL_CODE='%{http_code}'
+CLOSED_PROXY="http://127.0.0.1:1"
+LOOPBACK_DIRECT="127.0.0.1,localhost"
 TOOL="${HEAVY_MISE_TOOL:-github:cli/cli}"
 VERSION="${HEAVY_MISE_VERSION:-2.60.0}"
 BRANCH="${HEAVY_MISE_BRANCH:-trunk}"
@@ -192,7 +200,7 @@ fi
 heavy_mark "raw"
 RAW_SCRIPT="script/createrepo.sh"
 heavy_log "raw $RAW_SCRIPT at v$VERSION — refused as a script; README.md — served"
-RAW_CODE="$(curl -sS -o "$HEAVY_WORK/raw-script.body" -w '%{http_code}' -D "$HEAVY_WORK/raw-script.h" \
+RAW_CODE="$(curl -sS -o "$HEAVY_WORK/raw-script.body" -w "$CURL_CODE" -D "$HEAVY_WORK/raw-script.h" \
   "$PROXY/$OWNER_REPO/raw/v$VERSION/$RAW_SCRIPT")"
 [[ "$RAW_CODE" == "403" ]] || { cat "$HEAVY_WORK/raw-script.body" >&2; heavy_fail "raw/$RAW_SCRIPT answered $RAW_CODE, expected 403 under scripts = \"deny\""; }
 grep -q "RAW_SCRIPT" "$HEAVY_WORK/raw-script.body" "$HEAVY_WORK/raw-script.h" \
@@ -229,7 +237,7 @@ names = [t.get("name") for t in tags] if isinstance(tags, list) else [t.get("nam
 sys.exit(0 if sys.argv[2] in names else 1)
 PY
 heavy_wire_after "api-reads" "GET /proxy/$REG/$OWNER_REPO/tags -> 200" "the tags read did not cross the tap"
-COMMITS_CODE="$(curl -sS -o /dev/null -w '%{http_code}' "$PROXY/$OWNER_REPO/commits/$BRANCH_SHA")"
+COMMITS_CODE="$(curl -sS -o /dev/null -w "$CURL_CODE" "$PROXY/$OWNER_REPO/commits/$BRANCH_SHA")"
 [[ "$COMMITS_CODE" == "404" || "$COMMITS_CODE" == "403" ]] \
   || heavy_fail "the commits family is not enabled and answered $COMMITS_CODE rather than refusing"
 
@@ -375,7 +383,7 @@ AG_BASE="$HEAVY_BASE2"
 # reads the connected one's rows and does not look empty, however empty its own
 # directory is. A real air-gapped pair shares nothing; the report is asserted
 # where the store is per-instance, in `crates/web/tests/air_gap.rs`.
-MISSING_CODE="$(curl -s -o "$AG_WORK/missing.json" -w '%{http_code}' \
+MISSING_CODE="$(curl -s -o "$AG_WORK/missing.json" -w "$CURL_CODE" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   "$AG_BASE/api/v1/admin/air-gap/missing?registry=$REG")"
 [[ "$MISSING_CODE" == "200" ]] \
@@ -386,7 +394,7 @@ grep -q '"air_gapped":true' "$AG_WORK/missing.json" \
 # Before the import: a coordinate it does not hold is a 503 that names itself,
 # never a 404 — 404 asserts the artifact does not exist, and is what a hybrid
 # fall-through acts on (§4.4).
-BEFORE_CODE="$(curl -s -o "$AG_WORK/before.json" -w '%{http_code}' \
+BEFORE_CODE="$(curl -s -o "$AG_WORK/before.json" -w "$CURL_CODE" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   "$AG_BASE/proxy/$REG/$OWNER_REPO/releases/tags/v$VERSION")"
 [[ "$BEFORE_CODE" == "503" ]] \
@@ -415,7 +423,7 @@ plan = json.load(open(sys.argv[1]))
 print(next(e["proxy_path"] for e in plan["entries"] if e.get("proxy_path")))
 PY
 )"
-AG_CODE="$(curl -s -o "$AG_WORK/served.bin" -w '%{http_code}' \
+AG_CODE="$(curl -s -o "$AG_WORK/served.bin" -w "$CURL_CODE" \
   -H "Authorization: Bearer $ADMIN_TOKEN" "$AG_BASE$AG_PATH")"
 [[ "$AG_CODE" == "200" ]] \
   || heavy_fail "the air-gapped instance did not serve what the bundle gave it: HTTP $AG_CODE on $AG_PATH"
@@ -500,9 +508,9 @@ heavy_log "mise install from the lock, with egress denied (proxy -> 127.0.0.1:1)
 set +e
 (
   cd "$AG_PROJECT"
-  env HTTP_PROXY="http://127.0.0.1:1" HTTPS_PROXY="http://127.0.0.1:1" \
-      http_proxy="http://127.0.0.1:1" https_proxy="http://127.0.0.1:1" \
-      NO_PROXY="127.0.0.1,localhost" no_proxy="127.0.0.1,localhost" \
+  env HTTP_PROXY="$CLOSED_PROXY" HTTPS_PROXY="$CLOSED_PROXY" \
+      http_proxy="$CLOSED_PROXY" https_proxy="$CLOSED_PROXY" \
+      NO_PROXY="$LOOPBACK_DIRECT" no_proxy="127.0.0.1,localhost" \
       MISE_TRUSTED_CONFIG_PATHS="$AG_PROJECT" \
       "${MISE[@]}" install
 ) >"$AG_WORK/install.txt" 2>&1
@@ -512,8 +520,8 @@ if [[ "$AG_INSTALL" -ne 0 ]]; then
   cat "$AG_WORK/install.txt" >&2
   heavy_fail "mise install from the lock failed against the air-gapped instance with no egress — read the log above: a URL the plan did not carry is a gap in the bundle, and that is the finding"
 fi
-AG_INSTALLED="$(cd "$AG_PROJECT" && env HTTP_PROXY="http://127.0.0.1:1" \
-  HTTPS_PROXY="http://127.0.0.1:1" NO_PROXY="127.0.0.1,localhost" \
+AG_INSTALLED="$(cd "$AG_PROJECT" && env HTTP_PROXY="$CLOSED_PROXY" \
+  HTTPS_PROXY="$CLOSED_PROXY" NO_PROXY="$LOOPBACK_DIRECT" \
   MISE_TRUSTED_CONFIG_PATHS="$AG_PROJECT" \
   "${MISE[@]}" exec -- gh --version 2>/dev/null | head -1 || true)"
 [[ "$AG_INSTALLED" == *"$VERSION"* ]] \

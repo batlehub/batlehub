@@ -113,11 +113,62 @@ async function open(page) {
     for (const f of page.frames()) {
       if (f === page.mainFrame() || /webWorkerExtensionHost/.test(f.url())) continue;
       const text = await f.evaluate(() => document.body?.innerText ?? "").catch(() => "");
-      if (text.trim().length > 40 && !/^\(function/.test(text.trim())) { md = { frame: f.url().replace(/^(https?:\/\/[^/]+).*/, "$1/…"), text }; break; }
+      if (text.trim().length > 40 && !text.trim().startsWith("(function")) { md = { frame: f.url().replace(/^(https?:\/\/[^/]+).*/, "$1/…"), text }; break; }
     }
     if (!md.text) await sleep(500);
   }
   return { header, status, frame: md.frame, text: md.text.replace(/\s+/g, " ").trim().slice(0, 700) };
+}
+
+// Click the entry's own Install button, once the row is found by name.
+async function clickInstall(page, name) {
+  for (const it of await page.$$(".extensions-viewlet .extension-list-item")) {
+    const n = await it.$eval(".name", (e) => e.textContent.trim()).catch(() => "");
+    if (n !== name) continue;
+    for (const b of await it.$$(".extension-action.install")) {
+      if (await b.evaluate((e) => !e.classList.contains("hide") && !e.classList.contains("disabled") && e.offsetParent !== null)) { await b.click(); break; }
+    }
+    return;
+  }
+}
+
+// The editor's next gate after the signature (1.136): "Do you trust the
+// publisher?" — a modal that holds the install until answered. True when this
+// pass answered it.
+async function answerTrustPrompt(page) {
+  let trusted = false;
+  for (const b of await page.$$(".monaco-dialog-box .dialog-buttons .monaco-button, .monaco-dialog-box .dialog-buttons a")) {
+    const t = (await b.evaluate((e) => e.textContent)).trim();
+    if (t.startsWith("Trust Publisher")) { await b.click(); trusted = true; await sleep(500); }
+  }
+  return trusted;
+}
+
+// Whatever the toasts say right now. An install the server's verifier refuses
+// lands in a notification toast, and the toast does not wait for the list.
+async function toastMessages(page) {
+  return page.$$eval(".notifications-toasts .notification-list-item-message, .notification-list-item-message",
+    (els) => els.map((e) => e.innerText.replace(/\s+/g, " ").trim()).filter(Boolean)).catch(() => []);
+}
+
+// Wait for the entry's state to move off Install/Installing, collecting what
+// the editor says meanwhile.
+async function settleInstall(page, name) {
+  const notifications = new Set();
+  const t0 = Date.now();
+  let after;
+  let trusted = false;
+  while (Date.now() - t0 < 90000) {
+    if (await answerTrustPrompt(page)) trusted = true;
+    for (const n of await toastMessages(page)) notifications.add(n);
+    after = (await listed(page)).find((x) => x.name === name);
+    const busy = after?.actions.some((a) => a.startsWith("Installing"));
+    const pending = after?.actions.some((a) => a === "Install" || a.startsWith("Install ("));
+    if (after && !busy && !pending) break;
+    if (!busy && [...notifications].some((n) => /signature|verif/i.test(n))) break;
+    await sleep(500);
+  }
+  return { after, trusted, notifications: [...notifications] };
 }
 
 // The entry named `name` in the list: whether its Install button is enabled;
@@ -125,41 +176,12 @@ async function open(page) {
 async function install(page, name) {
   const before = (await listed(page)).find((x) => x.name === name);
   if (!before) return { name, listed: false };
-  const enabled = before.actions.some((a) => a === "Install");
+  const enabled = before.actions.includes("Install");
   if (!enabled) return { name, listed: true, enabled, actions: before.actions };
-  for (const it of await page.$$(".extensions-viewlet .extension-list-item")) {
-    const n = await it.$eval(".name", (e) => e.textContent.trim()).catch(() => "");
-    if (n !== name) continue;
-    for (const b of await it.$$(".extension-action.install")) {
-      if (await b.evaluate((e) => !e.classList.contains("hide") && !e.classList.contains("disabled") && e.offsetParent !== null)) { await b.click(); break; }
-    }
-    break;
-  }
-  // Wait for the state to move off Install/Installing, collecting what the
-  // editor says meanwhile: an install the server's verifier refuses lands in
-  // a notification toast, and the toast does not wait for the list.
-  const notifications = new Set();
-  const t0 = Date.now();
-  let after;
-  let trusted = false;
-  while (Date.now() - t0 < 90000) {
-    // The editor's next gate after the signature (1.136): "Do you trust the
-    // publisher?" — a modal that holds the install until answered.
-    for (const b of await page.$$(".monaco-dialog-box .dialog-buttons .monaco-button, .monaco-dialog-box .dialog-buttons a")) {
-      const t = (await b.evaluate((e) => e.textContent)).trim();
-      if (/^Trust Publisher/.test(t)) { await b.click(); trusted = true; await sleep(500); }
-    }
-    for (const n of await page.$$eval(".notifications-toasts .notification-list-item-message, .notification-list-item-message",
-      (els) => els.map((e) => e.innerText.replace(/\s+/g, " ").trim()).filter(Boolean)).catch(() => [])) notifications.add(n);
-    after = (await listed(page)).find((x) => x.name === name);
-    const busy = after?.actions.some((a) => /^Installing/.test(a));
-    const pending = after?.actions.some((a) => /^Install$/.test(a) || /^Install \(/.test(a));
-    if (after && !busy && !pending) break;
-    if (!busy && [...notifications].some((n) => /signature|verif/i.test(n))) break;
-    await sleep(500);
-  }
-  const installed = !!after && !after.actions.some((a) => /^Install/.test(a));
-  return { name, listed: true, enabled, actions: after?.actions ?? [], installed, trusted, notifications: [...notifications] };
+  await clickInstall(page, name);
+  const { after, trusted, notifications } = await settleInstall(page, name);
+  const installed = !!after && !after.actions.some((a) => a.startsWith("Install"));
+  return { name, listed: true, enabled, actions: after?.actions ?? [], installed, trusted, notifications };
 }
 
 const browser = args.cdp
@@ -179,7 +201,7 @@ try {
   // Should one appear anyway, trust it — this is a throwaway data dir.
   for (const b of await page.$$(".monaco-dialog-box .dialog-buttons .monaco-button, .monaco-dialog-box .dialog-buttons a")) {
     const t = (await b.evaluate((e) => e.textContent)).trim();
-    if (/^Yes/.test(t)) { await b.click(); await sleep(1000); }
+    if (t.startsWith("Yes")) { await b.click(); await sleep(1000); }
   }
   await (await page.waitForSelector('.activitybar [aria-label^="Extensions"]', { timeout: 30000 })).click();
   await page.waitForSelector(".extensions-viewlet", { timeout: 30000 });

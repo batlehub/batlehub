@@ -209,29 +209,6 @@ pub async fn vsix_publish(
     Ok(resp.json(OkResponse::new()))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::VSIX_ARTIFACT;
-    use batlehub_core::entities::{FetchArtifact, RegistryKind};
-
-    /// The warmer and the download path must agree on the cache slot.
-    ///
-    /// They did not: `warm_artifact()` returned `None` while `download_vsix`
-    /// read `.with_artifact("vsix")`, so pre-fetching an extension wrote a key
-    /// nothing looked in. This is the same drift guard
-    /// `jetbrains_marketplace/mod.rs` keeps for `PLUGIN_ARTIFACT`.
-    #[test]
-    fn vsix_artifact_matches_the_warmed_sub_coordinate() {
-        for kind in [RegistryKind::Openvsx, RegistryKind::VscodeMarketplace] {
-            assert_eq!(
-                kind.warm_artifact(),
-                Some(FetchArtifact::Fixed(VSIX_ARTIFACT)),
-                "{kind}: warming and downloading must use the same cache slot"
-            );
-        }
-    }
-}
-
 /// `PUT /proxy/{registry}/{extension_id}/{version}/vsix/signature` — attach an
 /// upstream's signature archive to a version this registry holds (RFC 0020
 /// §13.6). A marketplace extension republished locally keeps, this way, the
@@ -276,4 +253,27 @@ pub async fn vsix_signature_attach(
         .await
         .map_err(AppError::from)?;
     Ok(HttpResponse::Ok().json(OkResponse::new()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::VSIX_ARTIFACT;
+    use batlehub_core::entities::{FetchArtifact, RegistryKind};
+
+    /// The warmer and the download path must agree on the cache slot.
+    ///
+    /// They did not: `warm_artifact()` returned `None` while `download_vsix`
+    /// read `.with_artifact("vsix")`, so pre-fetching an extension wrote a key
+    /// nothing looked in. This is the same drift guard
+    /// `jetbrains_marketplace/mod.rs` keeps for `PLUGIN_ARTIFACT`.
+    #[test]
+    fn vsix_artifact_matches_the_warmed_sub_coordinate() {
+        for kind in [RegistryKind::Openvsx, RegistryKind::VscodeMarketplace] {
+            assert_eq!(
+                kind.warm_artifact(),
+                Some(FetchArtifact::Fixed(VSIX_ARTIFACT)),
+                "{kind}: warming and downloading must use the same cache slot"
+            );
+        }
+    }
 }

@@ -51,6 +51,10 @@ heavy_need npm "nodejs"
 heavy_need python3 "python3"
 
 REG="npm-audited-$HEAVY_RUN"
+
+# `%{http_code}` is the whole of every status assertion in this suite; named
+# once so a `-w` that silently prints something else cannot hide in one call.
+CURL_CODE='%{http_code}'
 PKG="left-pad"
 VERSION="1.3.0"
 UPSTREAM_PORT="${HEAVY_UPSTREAM_PORT:-8128}"
@@ -123,8 +127,9 @@ export NPM_CONFIG_CACHE="$HEAVY_WORK/npm-cache"
 heavy_log "npm $(npm --version), node $(node --version)"
 
 admin_post() {  # path, json → body on stdout, status in ADMIN_CODE
-  ADMIN_CODE="$(curl -sS -o "$HEAVY_WORK/admin.json" -w '%{http_code}' -X POST "$HEAVY_BASE$1" \
-    -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -d "$2")"
+  local path="$1" body="$2"
+  ADMIN_CODE="$(curl -sS -o "$HEAVY_WORK/admin.json" -w "$CURL_CODE" -X POST "$HEAVY_BASE$path" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -d "$body")"
   cat "$HEAVY_WORK/admin.json"
 }
 
@@ -175,7 +180,7 @@ heavy_log "SEED-OK ($PKG@$VERSION cached from the served directory)"
 
 heavy_log "Removing $PKG from the served directory"
 rm -f "$UPSTREAM_DIR/$PKG" "$UPSTREAM_DIR/tarballs/$PKG-$VERSION.tgz"
-curl -s -o /dev/null -w '%{http_code}\n' "$HEAVY_UPSTREAM_URL/$PKG" | grep -q '^404$' \
+curl -s -o /dev/null -w "$CURL_CODE\n" "$HEAVY_UPSTREAM_URL/$PKG" | grep -q '^404$' \
   || heavy_fail "the served upstream still answers for $PKG after the rm"
 
 heavy_log "recheck #1 — a miss, recorded, nobody told"
@@ -300,7 +305,7 @@ grep -q "ETARGET\|E404" "$HEAVY_WORK/install-blocked.err" \
 if heavy_wire_seen_after "blocked-resolve" "GET /proxy/$REG/$PKG/$VERSION/tarball"; then
   heavy_fail "a fresh resolve asked for the blocked tarball — the packument still lists it"
 fi
-PACKUMENT_CODE="$(curl -sS -o "$HEAVY_WORK/packument-blocked.json" -w '%{http_code}' -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_BASE/proxy/$REG/$PKG")"
+PACKUMENT_CODE="$(curl -sS -o "$HEAVY_WORK/packument-blocked.json" -w "$CURL_CODE" -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_BASE/proxy/$REG/$PKG")"
 if [[ "$PACKUMENT_CODE" == "200" ]]; then
   python3 - "$HEAVY_WORK/packument-blocked.json" "$VERSION" <<'PY' || { cat "$HEAVY_WORK/packument-blocked.json" >&2; heavy_fail "the served packument still lists the blocked version"; }
 import json, sys
@@ -419,9 +424,9 @@ ok = e["registry"] == reg and e["package_name"] == "repo" and e["version"] == pa
 sys.exit(0 if ok else 1)
 PY
 heavy_mark "generic-blocked"
-GEN_CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $ADMIN_TOKEN" "$GEN_URL/$GEN_PATH")"
+GEN_CODE="$(curl -s -o /dev/null -w "$CURL_CODE" -H "Authorization: Bearer $ADMIN_TOKEN" "$GEN_URL/$GEN_PATH")"
 [[ "$GEN_CODE" == "403" ]] || heavy_fail "the confirmed file answered $GEN_CODE, expected 403"
-OTHER_CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $ADMIN_TOKEN" "$GEN_URL/$GEN_OTHER")"
+OTHER_CODE="$(curl -s -o /dev/null -w "$CURL_CODE" -H "Authorization: Bearer $ADMIN_TOKEN" "$GEN_URL/$GEN_OTHER")"
 [[ "$OTHER_CODE" == "200" ]] || heavy_fail "the sibling file answered $OTHER_CODE — the block landed on repo/_, every file of the registry"
 heavy_wire_after "generic-blocked" "GET /proxy/$GEN_REG/generic/$GEN_PATH -> 403" "the blocked file was not refused on the wire"
 heavy_log "GENERIC-BLOCK-OK (the vanished file 403, its sibling 200)"
@@ -441,7 +446,7 @@ e, path = json.loads(sys.argv[1]), sys.argv[2]
 sys.exit(0 if e["version"] == path and e["metadata"]["unblocked"] is True else 1)
 PY
 heavy_mark "generic-unblocked"
-GEN_CODE="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $ADMIN_TOKEN" "$GEN_URL/$GEN_PATH")"
+GEN_CODE="$(curl -s -o /dev/null -w "$CURL_CODE" -H "Authorization: Bearer $ADMIN_TOKEN" "$GEN_URL/$GEN_PATH")"
 [[ "$GEN_CODE" == "200" ]] || heavy_fail "the restored file answered $GEN_CODE, expected 200"
 heavy_log "GENERIC-UNBLOCK-OK (a path-addressed file: probed by HEAD, confirmed, blocked as itself, released)"
 
@@ -450,7 +455,7 @@ heavy_log "GENERIC-UNBLOCK-OK (a path-addressed file: probed by HEAD, confirmed,
 # The estate key in this suite's config is "audit"; both registries say
 # "block" for themselves. Everything above was read off the wire under that
 # row, and the listing says which is which.
-PAGE_CODE="$(curl -sS -o "$HEAVY_WORK/upstream-page.json" -w '%{http_code}' -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_BASE/api/v1/admin/upstream/disappeared")"
+PAGE_CODE="$(curl -sS -o "$HEAVY_WORK/upstream-page.json" -w "$CURL_CODE" -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_BASE/api/v1/admin/upstream/disappeared")"
 [[ "$PAGE_CODE" == "200" ]] || { cat "$HEAVY_WORK/upstream-page.json" >&2; heavy_fail "the upstream listing answered $PAGE_CODE"; }
 python3 - "$HEAVY_WORK/upstream-page.json" "$REG" "$GEN_REG" <<'PY' || { cat "$HEAVY_WORK/upstream-page.json" >&2; heavy_fail "the listing does not report the estate as audit and both registries as block (0014 §13 O6)"; }
 import json, sys

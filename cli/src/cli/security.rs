@@ -81,95 +81,108 @@ pub struct PullersArgs {
     pub csv: bool,
 }
 
+/// `verdicts list`: the registry's stored verdicts, newest scan first.
+async fn list_verdicts(args: &ListArgs, client: &BatleHubClient, json: bool) -> Result<()> {
+    let report = client
+        .list_verdicts(&args.registry, args.state.as_deref(), args.limit)
+        .await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+    let items = report["items"].as_array().cloned().unwrap_or_default();
+    println!("{} verdict(s) in {}", items.len(), args.registry);
+    if items.is_empty() {
+        return Ok(());
+    }
+    println!(
+        "{:<12} {:<40} {:<12} codes",
+        "state", "coordinate", "scanned"
+    );
+    for v in items {
+        print_verdict_row(&v);
+    }
+    Ok(())
+}
+
+/// One verdict row.
+fn print_verdict_row(v: &serde_json::Value) {
+    let p = &v["package"];
+    let coordinate = format!(
+        "{}@{}",
+        p["name"].as_str().unwrap_or(""),
+        p["version"].as_str().unwrap_or("")
+    );
+    let scanned = v["last_scanned_at"]
+        .as_str()
+        .map(|s| s.chars().take(10).collect::<String>())
+        .unwrap_or_else(|| "never".into());
+    let codes = v["reason_codes"]
+        .as_array()
+        .map(|c| {
+            c.iter()
+                .filter_map(|x| x.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default();
+    println!(
+        "{:<12} {:<40} {:<12} {}",
+        v["state"].as_str().unwrap_or(""),
+        coordinate,
+        scanned,
+        codes
+    );
+}
+
+/// `verdicts pullers`: who pulled a held version before it was held.
+async fn list_pullers(args: &PullersArgs, client: &BatleHubClient, json: bool) -> Result<()> {
+    let (registry, name, version) = parse_coordinate(&args.coordinate)?;
+    let body = client
+        .pullers(&registry, &name, &version, &args.since, args.csv)
+        .await?;
+    if args.csv || json {
+        print!("{body}");
+        if !body.ends_with('\n') {
+            println!();
+        }
+        return Ok(());
+    }
+    let report: serde_json::Value = serde_json::from_str(&body)?;
+    let rows = report["pullers"].as_array().cloned().unwrap_or_default();
+    println!(
+        "{} pulled by {} identit{} since {}",
+        args.coordinate,
+        rows.len(),
+        if rows.len() == 1 { "y" } else { "ies" },
+        report["since"].as_str().unwrap_or("?")
+    );
+    if rows.is_empty() {
+        return Ok(());
+    }
+    println!(
+        "{:<40} {:<10} {:>6}  {:<25} {:<25}",
+        "identity", "role", "pulls", "first", "last"
+    );
+    for r in rows {
+        println!(
+            "{:<40} {:<10} {:>6}  {:<25} {:<25}",
+            r["identity"].as_str().unwrap_or(""),
+            r["role"].as_str().unwrap_or(""),
+            r["count"].as_u64().unwrap_or(0),
+            r["first_pull"].as_str().unwrap_or(""),
+            r["last_pull"].as_str().unwrap_or("")
+        );
+    }
+    Ok(())
+}
+
 pub async fn run_verdicts(cmd: VerdictsCommand, client: &BatleHubClient, json: bool) -> Result<()> {
     match cmd {
-        VerdictsCommand::List(args) => {
-            let report = client
-                .list_verdicts(&args.registry, args.state.as_deref(), args.limit)
-                .await?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
-                return Ok(());
-            }
-            let items = report["items"].as_array().cloned().unwrap_or_default();
-            println!("{} verdict(s) in {}", items.len(), args.registry);
-            if !items.is_empty() {
-                println!(
-                    "{:<12} {:<40} {:<12} codes",
-                    "state", "coordinate", "scanned"
-                );
-                for v in items {
-                    let p = &v["package"];
-                    let coordinate = format!(
-                        "{}@{}",
-                        p["name"].as_str().unwrap_or(""),
-                        p["version"].as_str().unwrap_or("")
-                    );
-                    let scanned = v["last_scanned_at"]
-                        .as_str()
-                        .map(|s| s.chars().take(10).collect::<String>())
-                        .unwrap_or_else(|| "never".into());
-                    let codes = v["reason_codes"]
-                        .as_array()
-                        .map(|c| {
-                            c.iter()
-                                .filter_map(|x| x.as_str())
-                                .collect::<Vec<_>>()
-                                .join(",")
-                        })
-                        .unwrap_or_default();
-                    println!(
-                        "{:<12} {:<40} {:<12} {}",
-                        v["state"].as_str().unwrap_or(""),
-                        coordinate,
-                        scanned,
-                        codes
-                    );
-                }
-            }
-            Ok(())
-        }
+        VerdictsCommand::List(args) => list_verdicts(&args, client, json).await,
         VerdictsCommand::Backfill(args) => bulk(client, "backfill", &args, json).await,
         VerdictsCommand::Rescan(args) => bulk(client, "rescan", &args, json).await,
-        VerdictsCommand::Pullers(args) => {
-            let (registry, name, version) = parse_coordinate(&args.coordinate)?;
-            let body = client
-                .pullers(&registry, &name, &version, &args.since, args.csv)
-                .await?;
-            if args.csv || json {
-                print!("{body}");
-                if !body.ends_with('\n') {
-                    println!();
-                }
-                return Ok(());
-            }
-            let report: serde_json::Value = serde_json::from_str(&body)?;
-            let rows = report["pullers"].as_array().cloned().unwrap_or_default();
-            println!(
-                "{} pulled by {} identit{} since {}",
-                args.coordinate,
-                rows.len(),
-                if rows.len() == 1 { "y" } else { "ies" },
-                report["since"].as_str().unwrap_or("?")
-            );
-            if !rows.is_empty() {
-                println!(
-                    "{:<40} {:<10} {:>6}  {:<25} {:<25}",
-                    "identity", "role", "pulls", "first", "last"
-                );
-                for r in rows {
-                    println!(
-                        "{:<40} {:<10} {:>6}  {:<25} {:<25}",
-                        r["identity"].as_str().unwrap_or(""),
-                        r["role"].as_str().unwrap_or(""),
-                        r["count"].as_u64().unwrap_or(0),
-                        r["first_pull"].as_str().unwrap_or(""),
-                        r["last_pull"].as_str().unwrap_or("")
-                    );
-                }
-            }
-            Ok(())
-        }
+        VerdictsCommand::Pullers(args) => list_pullers(&args, client, json).await,
     }
 }
 

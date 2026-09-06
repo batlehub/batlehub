@@ -12,7 +12,7 @@
 //! Nothing in the document names a preferred release beyond its position, so
 //! there is nothing to repair — dropping the entry is the whole filter.
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::BlockedVersions;
 
@@ -174,6 +174,130 @@ pub fn rewrite_release_urls(doc: &mut Value, public_base: &str, owner_repo: &str
     }
 }
 
+/// The generated-archive URLs, where the document has them.
+fn rewrite_archive_urls(obj: &mut Map<String, Value>, tag: &str, base: &str, owner_repo: &str) {
+    let tag_seg = super::encode_package_segment(tag);
+    for field in ["tarball_url", "zipball_url"] {
+        if !obj.contains_key(field) {
+            continue;
+        }
+        let kind = field.trim_end_matches("_url");
+        obj.insert(
+            field.to_owned(),
+            Value::String(format!("{base}/{owner_repo}/{kind}/{tag_seg}")),
+        );
+    }
+}
+
+/// GitLab's `assets.sources` — the generated archives, one entry per format.
+fn rewrite_gitlab_sources(
+    assets: &mut Map<String, Value>,
+    tag: &str,
+    base: &str,
+    owner_repo: &str,
+) {
+    let Some(sources) = assets.get_mut("sources").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let tag_seg = super::encode_package_segment(tag);
+    let repo = owner_repo.rsplit('/').next().unwrap_or(owner_repo);
+    for source in sources {
+        let Some(src) = source.as_object_mut() else {
+            continue;
+        };
+        let format = src
+            .get("format")
+            .and_then(Value::as_str)
+            .unwrap_or("tar.gz")
+            .to_owned();
+        src.insert(
+            "url".to_owned(),
+            Value::String(format!(
+                "{base}/{owner_repo}/-/archive/{tag_seg}/{repo}-{tag_seg}.{format}"
+            )),
+        );
+    }
+}
+
+/// GitLab's `assets.links` — what the maintainer attached, addressed by name
+/// on the downloads route this proxy serves.
+fn rewrite_gitlab_links(assets: &mut Map<String, Value>, tag: &str, base: &str, owner_repo: &str) {
+    let Some(links) = assets.get_mut("links").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let tag_seg = super::encode_package_segment(tag);
+    for link in links {
+        let Some(l) = link.as_object_mut() else {
+            continue;
+        };
+        let Some(name) = l.get("name").and_then(Value::as_str).map(str::to_owned) else {
+            continue;
+        };
+        let url = Value::String(format!(
+            "{base}/{owner_repo}/-/releases/{tag_seg}/downloads/{}",
+            super::encode_package_segment(&name)
+        ));
+        for field in ["url", "direct_asset_url"] {
+            if l.contains_key(field) {
+                l.insert(field.to_owned(), url.clone());
+            }
+        }
+    }
+}
+
+/// One asset of a GitHub-shaped release.
+///
+/// `url` is **repointed, not removed.** Removing it looked safe and is not:
+/// `url` is a required field of an asset in the GitHub API's own schema, and a
+/// client that deserializes the document strictly fails on the whole release
+/// list rather than on one asset. mise does, and an install through a BatleHub
+/// github registry answered `missing field \`url\`` for every repository until
+/// this was measured — a rule that silently broke the clients it was
+/// protecting. This proxy *does* have an equivalent: `releases/assets/{id}` is
+/// a route it serves, under the same rules as every other artifact, so the
+/// bypass is closed by pointing the field here rather than by deleting it. An
+/// asset with no id — a release composed from held assets on an air-gapped
+/// instance (RFC 0008-bis §13.2), which has no forge id to name — is addressed
+/// by name instead, on the download route the instance holds it under;
+/// measured, again, as `missing field \`url\`` from mise before it was. Only an
+/// asset with neither has the field dropped.
+fn rewrite_github_asset(
+    a: &mut Map<String, Value>,
+    tag: Option<&str>,
+    base: &str,
+    owner_repo: &str,
+) {
+    let name = a.get("name").and_then(Value::as_str).map(str::to_owned);
+    let by_id = a
+        .get("id")
+        .and_then(Value::as_u64)
+        .map(|id| format!("{base}/{owner_repo}/releases/assets/{id}"));
+    // By name where the asset has one, by id otherwise: both are routes this
+    // proxy serves, and the name is the one a human reads.
+    let by_name = tag.zip(name.as_deref()).map(|(tag, name)| {
+        format!(
+            "{base}/{owner_repo}/releases/download/{}/{}",
+            super::encode_package_segment(tag),
+            super::encode_package_segment(name)
+        )
+    });
+    if let (Some(url), true) = (
+        by_name.clone().or_else(|| by_id.clone()),
+        a.contains_key("browser_download_url"),
+    ) {
+        a.insert("browser_download_url".to_owned(), Value::String(url));
+    }
+    match by_id.or(by_name) {
+        Some(url) if a.contains_key("url") => {
+            a.insert("url".to_owned(), Value::String(url));
+        }
+        _ => {
+            a.remove("url");
+        }
+    }
+    a.remove("uploader");
+}
+
 fn rewrite_one(release: &mut Value, base: &str, owner_repo: &str) {
     let Some(obj) = release.as_object_mut() else {
         return;
@@ -187,131 +311,28 @@ fn rewrite_one(release: &mut Value, base: &str, owner_repo: &str) {
         .and_then(Value::as_str)
         .map(str::to_owned);
     if let Some(tag) = &tag {
-        let tag_seg = super::encode_package_segment(tag);
-        if obj.contains_key("tarball_url") {
-            obj.insert(
-                "tarball_url".to_owned(),
-                Value::String(format!("{base}/{owner_repo}/tarball/{tag_seg}")),
-            );
-        }
-        if obj.contains_key("zipball_url") {
-            obj.insert(
-                "zipball_url".to_owned(),
-                Value::String(format!("{base}/{owner_repo}/zipball/{tag_seg}")),
-            );
-        }
+        rewrite_archive_urls(obj, tag, base, owner_repo);
     }
     // GitLab's release document is a different shape: `assets` is an object
     // with `sources` (the generated archives, by format) and `links` (what
     // the maintainer attached). Confirmed against gitlab.com on 2026-09-04.
     if let Some(assets) = obj.get_mut("assets").and_then(Value::as_object_mut) {
-        if let (Some(tag), Some(sources)) = (
-            &tag,
-            assets.get_mut("sources").and_then(Value::as_array_mut),
-        ) {
-            for source in sources {
-                let Some(src) = source.as_object_mut() else {
-                    continue;
-                };
-                let format = src
-                    .get("format")
-                    .and_then(Value::as_str)
-                    .unwrap_or("tar.gz")
-                    .to_owned();
-                let repo = owner_repo.rsplit('/').next().unwrap_or(owner_repo);
-                src.insert(
-                    "url".to_owned(),
-                    Value::String(format!(
-                        "{base}/{owner_repo}/-/archive/{}/{repo}-{}.{format}",
-                        super::encode_package_segment(tag),
-                        super::encode_package_segment(tag)
-                    )),
-                );
-            }
-        }
-        if let (Some(tag), Some(links)) =
-            (&tag, assets.get_mut("links").and_then(Value::as_array_mut))
-        {
-            for link in links {
-                let Some(l) = link.as_object_mut() else {
-                    continue;
-                };
-                let Some(name) = l.get("name").and_then(Value::as_str).map(str::to_owned) else {
-                    continue;
-                };
-                let url = Value::String(format!(
-                    "{base}/{owner_repo}/-/releases/{}/downloads/{}",
-                    super::encode_package_segment(tag),
-                    super::encode_package_segment(&name)
-                ));
-                if l.contains_key("url") {
-                    l.insert("url".to_owned(), url.clone());
-                }
-                if l.contains_key("direct_asset_url") {
-                    l.insert("direct_asset_url".to_owned(), url);
-                }
-            }
+        if let Some(tag) = &tag {
+            rewrite_gitlab_sources(assets, tag, base, owner_repo);
+            rewrite_gitlab_links(assets, tag, base, owner_repo);
         }
         // The forge's own API links: no equivalent here, and a working way
         // around every rule above.
         obj.remove("_links");
         return;
     }
-
     let Some(assets) = obj.get_mut("assets").and_then(Value::as_array_mut) else {
         return;
     };
     for asset in assets {
-        let Some(a) = asset.as_object_mut() else {
-            continue;
-        };
-        let name = a.get("name").and_then(Value::as_str).map(str::to_owned);
-        let by_id = a
-            .get("id")
-            .and_then(|v| v.as_u64())
-            .map(|id| format!("{base}/{owner_repo}/releases/assets/{id}"));
-        // By name where the asset has one, by id otherwise: both are routes
-        // this proxy serves, and the name is the one a human reads.
-        let by_name = match (&tag, &name) {
-            (Some(tag), Some(name)) => Some(format!(
-                "{base}/{owner_repo}/releases/download/{}/{}",
-                super::encode_package_segment(tag),
-                super::encode_package_segment(name)
-            )),
-            _ => None,
-        };
-        let replacement = by_name.clone().or_else(|| by_id.clone());
-        if let (Some(url), true) = (replacement, a.contains_key("browser_download_url")) {
-            a.insert("browser_download_url".to_owned(), Value::String(url));
+        if let Some(a) = asset.as_object_mut() {
+            rewrite_github_asset(a, tag.as_deref(), base, owner_repo);
         }
-        // The asset's API URL — the forge's own asset endpoint, which needs
-        // the forge's token and is a working way around every rule above.
-        //
-        // **Repointed, not removed.** Removing it looked safe and is not:
-        // `url` is a required field of an asset in the GitHub API's own
-        // schema, and a client that deserializes the document strictly fails
-        // on the whole release list rather than on one asset. mise does, and
-        // an install through a BatleHub github registry answered `missing
-        // field \`url\`` for every repository until this was measured — a
-        // rule that silently broke the clients it was protecting. This proxy
-        // *does* have an equivalent for it: `releases/assets/{id}` is a route
-        // it serves, under the same rules as every other artifact, so the
-        // bypass is closed by pointing the field here rather than by deleting
-        // it. An asset with no id — a release composed from held assets on
-        // an air-gapped instance (RFC 0008-bis §13.2), which has no forge id
-        // to name — is addressed by name instead, on the download route the
-        // instance holds it under; measured, again, as `missing field
-        // \`url\`` from mise before it was. Only an asset with neither has
-        // the field dropped.
-        match by_id.or(by_name) {
-            Some(url) if a.contains_key("url") => {
-                a.insert("url".to_owned(), Value::String(url));
-            }
-            _ => {
-                a.remove("url");
-            }
-        }
-        a.remove("uploader");
     }
     obj.remove("assets_url");
     obj.remove("upload_url");

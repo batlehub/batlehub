@@ -54,6 +54,10 @@ heavy_need tar "tar"
 heavy_need python3 "python3 (the wire tap)"
 
 REG="jvm-$HEAVY_RUN"
+
+# The phase mark: `heavy_mark` and every `heavy_wire_after` about the phase
+# have to spell it the same way, or the assertions match nothing and pass.
+MARK_INSTALL="install"
 CLI_VERSION="${HEAVY_SDKMAN_VERSION:-5.23.0}"
 GRID="${HEAVY_SDKMAN_GRID:-maven}"
 
@@ -230,7 +234,7 @@ heavy_log "SDKMAN-REFUSAL-OK (SDKMAN's own not-valid, nothing requested from the
 
 # ── 3. Install an allowed JDK ────────────────────────────────────────────────
 
-heavy_mark "install"
+heavy_mark "$MARK_INSTALL"
 heavy_log "sdk install java $PROBE"
 run_sdk "$DIR1" "sdk install java $PROBE" >"$HEAVY_WORK/install.txt" 2>&1 \
   || { cat "$HEAVY_WORK/install.txt" >&2; heavy_fail "sdk install java $PROBE failed"; }
@@ -238,11 +242,11 @@ grep -q "Done installing" "$HEAVY_WORK/install.txt" || {
   cat "$HEAVY_WORK/install.txt" >&2
   heavy_fail "sdk did not report the install done"
 }
-heavy_wire_after "install" "GET /proxy/$REG/sdkman/candidates/validate/java/$PROBE/linuxx64 -> 200" \
+heavy_wire_after "$MARK_INSTALL" "GET /proxy/$REG/sdkman/candidates/validate/java/$PROBE/linuxx64 -> 200" \
   "sdk did not validate the version through the proxy"
-heavy_wire_after "install" "GET /proxy/$REG/sdkman/broker/download/java/$PROBE/linuxx64 -> 200" \
+heavy_wire_after "$MARK_INSTALL" "GET /proxy/$REG/sdkman/broker/download/java/$PROBE/linuxx64 -> 200" \
   "the JDK was not downloaded through the proxy's broker route"
-heavy_wire_after "install" "GET /proxy/$REG/sdkman/hooks/post/java/$PROBE/linuxx64 -> 200" \
+heavy_wire_after "$MARK_INSTALL" "GET /proxy/$REG/sdkman/hooks/post/java/$PROBE/linuxx64 -> 200" \
   "the post-install hook was not read through the proxy"
 JAVA_BIN="$DIR1/candidates/java/$PROBE/bin/java"
 [[ -x "$JAVA_BIN" ]] || { ls -la "$DIR1/candidates/java/" >&2; heavy_fail "no java binary under $DIR1/candidates/java/$PROBE — the relayed hook did not repackage the tarball"; }

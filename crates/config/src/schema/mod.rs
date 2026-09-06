@@ -2552,9 +2552,9 @@ impl AppConfig {
         }))
     }
 
-    /// `[scanners]`, `[server].roles`, `[worker]` and the webhook secret
-    /// (RFC 0018 §4.3): the rows that are about the whole config.
-    fn validate_security_globals(&self) -> Result<()> {
+    /// `[scanners]`: the key an external scanner cannot run without, the
+    /// command a local one is, and the escalation rule's own arithmetic.
+    fn validate_scanners(&self) -> Result<()> {
         for (name, cfg) in &self.scanners {
             match cfg {
                 // One rule, `ScannerConfig::missing_required_key`, says which
@@ -2579,15 +2579,71 @@ impl AppConfig {
                 }
                 _ => {}
             }
-            if let Some(esc) = cfg.escalation() {
-                if Severity::parse(&esc.from).is_none() || Severity::parse(&esc.to).is_none() {
-                    bail!("[scanners.{name}.escalation] from/to must be severities");
-                }
-                if esc.count == 0 {
-                    bail!("[scanners.{name}.escalation] count must be at least 1");
-                }
+            let Some(esc) = cfg.escalation() else {
+                continue;
+            };
+            if Severity::parse(&esc.from).is_none() || Severity::parse(&esc.to).is_none() {
+                bail!("[scanners.{name}.escalation] from/to must be severities");
+            }
+            if esc.count == 0 {
+                bail!("[scanners.{name}.escalation] count must be at least 1");
             }
         }
+        Ok(())
+    }
+
+    /// RFC 0019 §4.3 — a raw ceiling above the global artifact limit is a
+    /// number the global one would silently win over.
+    fn validate_raw_ceilings(&self) -> Result<()> {
+        let Some(global) = self.limits.max_artifact_size_bytes else {
+            return Ok(());
+        };
+        for reg in &self.registries {
+            let Some(raw) = &reg.raw else { continue };
+            if raw.enabled && raw.max_size_bytes > global {
+                bail!(
+                    "registry '{}': raw.max_size_bytes = {} exceeds \
+                     [limits].max_artifact_size_bytes = {global}; the global ceiling \
+                     would win and the registry's number would be a lie",
+                    reg.name,
+                    raw.max_size_bytes
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// What a registry with `[registries.security]` requires of the rest of
+    /// the config: signed inbound webhooks, and a real sandbox.
+    fn validate_security_prerequisites(&self) -> Result<()> {
+        if !self.registries.iter().any(|r| r.security.is_some()) {
+            return Ok(());
+        }
+        for hook in self.notifications.iter().flat_map(|n| &n.inbound) {
+            if hook.secret.as_deref().is_none_or(str::is_empty) {
+                bail!(
+                    "[[notifications.inbound]] '{}' has no secret while a registry has \
+                     [registries.security]; a security.* event on an unsigned webhook \
+                     would let anyone on the network deny packages (RFC 0018 §4.3)",
+                    hook.name
+                );
+            }
+        }
+        if self.worker.sandbox.runtime == "none"
+            && std::env::var("BATLEHUB_UNSAFE_NO_SANDBOX").as_deref() != Ok("1")
+        {
+            bail!(
+                "[worker.sandbox] runtime = \"none\" is refused outside tests unless \
+                 BATLEHUB_UNSAFE_NO_SANDBOX=1 is set"
+            );
+        }
+        Ok(())
+    }
+
+    /// `[scanners]`, `[server].roles`, `[worker]` and the webhook secret
+    /// (RFC 0018 §4.3): the rows that are about the whole config.
+    fn validate_security_globals(&self) -> Result<()> {
+        self.validate_scanners()?;
         if self.server.roles.is_empty() {
             bail!(
                 "[server] roles is empty: a process that is neither proxy nor worker does nothing"
@@ -2595,52 +2651,13 @@ impl AppConfig {
         }
         self.validate_flag_sources()?;
         self.validate_air_gap()?;
-        // RFC 0019 §4.3 — a raw ceiling above the global artifact limit is a
-        // number the global one would silently win over.
-        for reg in &self.registries {
-            if let Some(raw) = &reg.raw {
-                if let Some(global) = self.limits.max_artifact_size_bytes {
-                    if raw.enabled && raw.max_size_bytes > global {
-                        bail!(
-                            "registry '{}': raw.max_size_bytes = {} exceeds \
-                             [limits].max_artifact_size_bytes = {global}; the global ceiling \
-                             would win and the registry's number would be a lie",
-                            reg.name,
-                            raw.max_size_bytes
-                        );
-                    }
-                }
-            }
-        }
-        let has_security = self.registries.iter().any(|r| r.security.is_some());
+        self.validate_raw_ceilings()?;
         for name in &self.worker.registries {
             if !self.registries.iter().any(|r| &r.name == name) {
                 bail!("[worker] registries names '{name}', which is not a configured registry");
             }
         }
-        if has_security {
-            if let Some(n) = &self.notifications {
-                for hook in &n.inbound {
-                    if hook.secret.as_deref().is_none_or(str::is_empty) {
-                        bail!(
-                            "[[notifications.inbound]] '{}' has no secret while a registry has \
-                             [registries.security]; a security.* event on an unsigned webhook \
-                             would let anyone on the network deny packages (RFC 0018 §4.3)",
-                            hook.name
-                        );
-                    }
-                }
-            }
-            if self.worker.sandbox.runtime == "none"
-                && std::env::var("BATLEHUB_UNSAFE_NO_SANDBOX").as_deref() != Ok("1")
-            {
-                bail!(
-                    "[worker.sandbox] runtime = \"none\" is refused outside tests unless \
-                     BATLEHUB_UNSAFE_NO_SANDBOX=1 is set"
-                );
-            }
-        }
-        Ok(())
+        self.validate_security_prerequisites()
     }
 
     /// RFC 0018 §4.3's warnings.
@@ -2686,7 +2703,26 @@ impl AppConfig {
                  registry"
             );
         }
-        for name in &a.registries {
+        self.validate_audited_registries()?;
+        match a.on_confirmed.as_str() {
+            "audit" => {}
+            "block" if a.enabled => {}
+            "block" => bail!(
+                "[upstream_audit] on_confirmed = \"block\" with enabled = false: the key \
+                 has no effect and reads as if blocking were active"
+            ),
+            other => bail!(
+                "[upstream_audit] on_confirmed = \"{other}\" is not \"audit\" or \"block\"; a \
+                 typo here must not fall back to either"
+            ),
+        }
+        self.validate_registry_on_confirmed()
+    }
+
+    /// Every name in `[upstream_audit] registries` must be a configured
+    /// registry, and one with an upstream to audit.
+    fn validate_audited_registries(&self) -> Result<()> {
+        for name in &self.upstream_audit.registries {
             match self.registries.iter().find(|r| &r.name == name) {
                 None => bail!(
                     "[upstream_audit] registries names '{name}', which is not a configured registry"
@@ -2698,55 +2734,44 @@ impl AppConfig {
                 Some(_) => {}
             }
         }
-        match a.on_confirmed.as_str() {
-            "audit" => {}
-            "block" => {
-                if !a.enabled {
-                    bail!(
-                        "[upstream_audit] on_confirmed = \"block\" with enabled = false: the key \
-                         has no effect and reads as if blocking were active"
-                    );
-                }
-            }
-            other => bail!(
-                "[upstream_audit] on_confirmed = \"{other}\" is not \"audit\" or \"block\"; a \
-                 typo here must not fall back to either"
-            ),
-        }
-        // RFC 0014 §13 O6: the registry-tier row, held to the same rules as
-        // the estate key — a value that is not one of the two is a typo, and
-        // `"block"` on a registry the audit never sweeps reads as if
-        // blocking were active there.
+        Ok(())
+    }
+
+    /// RFC 0014 §13 O6: the registry-tier `on_confirmed`, held to the same
+    /// rules as the estate key — a value that is not one of the two is a typo,
+    /// and `"block"` on a registry the audit never sweeps reads as if blocking
+    /// were active there.
+    fn validate_registry_on_confirmed(&self) -> Result<()> {
+        let enabled = self.upstream_audit.enabled;
         let audited = self.upstream_audit_registries();
         for r in &self.registries {
             let Some(value) = r.on_confirmed.as_deref() else {
                 continue;
             };
             match value {
-                "audit" => {}
-                "block" => {
-                    if !a.enabled {
-                        bail!(
-                            "[[registries]] '{}' sets on_confirmed = \"block\" while \
-                             [upstream_audit] is not enabled: nothing sweeps, so nothing is \
-                             ever confirmed or blocked",
-                            r.name
-                        );
-                    }
-                    if !audited.contains(&r.name) {
-                        bail!(
-                            "[[registries]] '{}' sets on_confirmed = \"block\" but is not \
-                             audited: it is a local registry, or [upstream_audit] registries \
-                             names others",
-                            r.name
-                        );
-                    }
-                }
+                "audit" => continue,
+                "block" => {}
                 other => bail!(
                     "[[registries]] '{}' on_confirmed = \"{other}\" is not \"audit\" or \
                      \"block\"; a typo here must not fall back to either",
                     r.name
                 ),
+            }
+            if !enabled {
+                bail!(
+                    "[[registries]] '{}' sets on_confirmed = \"block\" while \
+                     [upstream_audit] is not enabled: nothing sweeps, so nothing is \
+                     ever confirmed or blocked",
+                    r.name
+                );
+            }
+            if !audited.contains(&r.name) {
+                bail!(
+                    "[[registries]] '{}' sets on_confirmed = \"block\" but is not \
+                     audited: it is a local registry, or [upstream_audit] registries \
+                     names others",
+                    r.name
+                );
             }
         }
         Ok(())
@@ -2800,27 +2825,7 @@ impl AppConfig {
     /// the things that contradict it are refused at load rather than
     /// discovered from a log.
     fn validate_air_gap(&self) -> Result<()> {
-        // The hex check applies whether or not the mode is on: a malformed
-        // key must never read as "signing is configured". This is also the
-        // check `[registries.signing].trusted_keys` never had — it was parsed
-        // at verify time, so a typo surfaced as a `502` on the first download
-        // and named nothing.
-        for (index, reg) in self.registries.iter().enumerate() {
-            if let Some(signing) = &reg.signing {
-                for key in &signing.trusted_keys {
-                    if !crate::schema::valid_ed25519_hex_key(key) {
-                        bail!(
-                            "registries[{index}] '{}': signing.trusted_keys entry '{}' is not a \
-                             hex-encoded 32-byte ed25519 public key (64 hex characters); an \
-                             unusable key reads as 'signing is configured' and fails only at the \
-                             first download",
-                            reg.name,
-                            truncate_key(key)
-                        );
-                    }
-                }
-            }
-        }
+        self.validate_signing_keys()?;
         let Some(air_gap) = &self.air_gap else {
             return Ok(());
         };
@@ -2856,6 +2861,37 @@ impl AppConfig {
                  the site, and which one wins is not obvious enough to pick silently"
             );
         }
+        self.validate_no_egress_per_registry()
+    }
+
+    /// The hex check applies whether or not the air gap is on: a malformed key
+    /// must never read as "signing is configured". This is also the check
+    /// `[registries.signing].trusted_keys` never had — it was parsed at verify
+    /// time, so a typo surfaced as a `502` on the first download and named
+    /// nothing.
+    fn validate_signing_keys(&self) -> Result<()> {
+        for (index, reg) in self.registries.iter().enumerate() {
+            let Some(signing) = &reg.signing else {
+                continue;
+            };
+            for key in &signing.trusted_keys {
+                if !crate::schema::valid_ed25519_hex_key(key) {
+                    bail!(
+                        "registries[{index}] '{}': signing.trusted_keys entry '{}' is not a \
+                         hex-encoded 32-byte ed25519 public key (64 hex characters); an \
+                         unusable key reads as 'signing is configured' and fails only at the \
+                         first download",
+                        reg.name,
+                        truncate_key(key)
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Under an air gap, the per-registry keys that would dial out anyway.
+    fn validate_no_egress_per_registry(&self) -> Result<()> {
         for (index, reg) in self.registries.iter().enumerate() {
             if reg.proxy.is_some() {
                 bail!(

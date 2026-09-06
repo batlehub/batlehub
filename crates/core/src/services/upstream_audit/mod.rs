@@ -79,6 +79,90 @@ pub struct BlockOutcome {
 pub use crate::entities::OnConfirmed;
 
 /// §4.3's reason string on a block this audit writes.
+/// A confirmation blocks every version it covers, with §4.3's reason and
+/// `blocked_by = system:upstream-audit`. `blocked` is true only when every
+/// write succeeded.
+async fn block_confirmed(
+    admin: &Arc<AdminService>,
+    identity: &Identity,
+    registry: &str,
+    kind: RegistryKind,
+    row: &UpstreamStatus,
+    versions: &[String],
+) -> BlockOutcome {
+    let mut all = true;
+    for v in versions {
+        let id = audit_coordinate(kind, registry, &row.package_name, v);
+        if let Err(e) = admin.block_package(&id, block_reason(row), identity).await {
+            tracing::warn!(package = %id, error = %e, "upstream audit: block failed");
+            all = false;
+        }
+    }
+    BlockOutcome {
+        blocked: all && !versions.is_empty(),
+        ..Default::default()
+    }
+}
+
+/// One version of a reappearance. `true` when this call lifted the block;
+/// `outcome.kept_admin_block` when it deliberately did not.
+async fn unblock_one(
+    admin: &Arc<AdminService>,
+    identity: &Identity,
+    id: &PackageId,
+    outcome: &mut BlockOutcome,
+) -> bool {
+    match admin.repo.get_status(id).await {
+        Ok(PackageStatus::Blocked { blocked_by, .. }) if blocked_by == SYSTEM_ACTOR => {
+            match admin.unblock_package(id, identity).await {
+                Ok(()) => return true,
+                Err(e) => {
+                    tracing::warn!(package = %id, error = %e, "upstream audit: unblock failed")
+                }
+            }
+        }
+        Ok(PackageStatus::Blocked { blocked_by, .. }) => {
+            tracing::warn!(
+                package = %id,
+                blocked_by,
+                "upstream audit: reappeared upstream, but the block is not this audit's; left in place"
+            );
+            outcome.kept_admin_block = true;
+        }
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!(package = %id, error = %e, "upstream audit: could not read the block status")
+        }
+    }
+    false
+}
+
+/// A reappearance unblocks a version only when the block is this service's
+/// own — an admin's block, or one this service wrote and an admin then edited,
+/// stays, and the event says so.
+async fn unblock_reappeared(
+    admin: &Arc<AdminService>,
+    identity: &Identity,
+    registry: &str,
+    kind: RegistryKind,
+    row: &UpstreamStatus,
+    versions: &[String],
+) -> BlockOutcome {
+    if row.state != UpstreamState::Disappeared {
+        return BlockOutcome::default();
+    }
+    let mut outcome = BlockOutcome::default();
+    let mut lifted = 0usize;
+    for v in versions {
+        let id = audit_coordinate(kind, registry, &row.package_name, v);
+        if unblock_one(admin, identity, &id, &mut outcome).await {
+            lifted += 1;
+        }
+    }
+    outcome.unblocked = lifted > 0 && lifted == versions.len();
+    outcome
+}
+
 fn block_reason(row: &UpstreamStatus) -> String {
     format!(
         "upstream disappearance confirmed {} ({} misses since {})",
@@ -654,39 +738,42 @@ impl UpstreamAuditService {
         for t in transitions {
             outcomes.push(self.apply_block_policy(registry, kind, t).await);
         }
-        if !secured {
-            return outcomes;
+        if secured {
+            self.queue_rescans(registry, kind, transitions).await;
         }
+        outcomes
+    }
+
+    /// The version's publication date from the metadata cache, when it still
+    /// has it: the worker's age gate reads it, and a rescan without one would
+    /// re-judge a dated version as `TIMESTAMP_MISSING`.
+    async fn cached_publish_date(&self, id: &PackageId) -> Option<DateTime<Utc>> {
+        let cache = self.cache.as_ref()?;
+        match cache
+            .get_stale(&crate::services::proxy::proxy_meta_key(id))
+            .await
+        {
+            Ok(Some(entry)) => entry.metadata.published_at,
+            _ => None,
+        }
+    }
+
+    /// Queue a rescan for every coordinate the transitions cover. A no-op on a
+    /// registry with no scan queue.
+    async fn queue_rescans(&self, registry: &str, kind: RegistryKind, transitions: &[Transition]) {
         let Some(queue) = &self.queue else {
-            return outcomes;
+            return;
         };
         for t in transitions {
-            let (row, versions) = match t {
-                Transition::Confirmed(row, versions) | Transition::Reappeared(row, versions) => {
-                    (row, versions)
-                }
-            };
+            let (Transition::Confirmed(row, versions) | Transition::Reappeared(row, versions)) = t;
             for v in versions {
                 let id = audit_coordinate(kind, registry, &row.package_name, v);
-                // With the version's date when the metadata cache still has
-                // it: the worker's age gate reads it, and a rescan without
-                // one would re-judge a dated version as `TIMESTAMP_MISSING`.
-                let published_at = match &self.cache {
-                    Some(cache) => match cache
-                        .get_stale(&crate::services::proxy::proxy_meta_key(&id))
-                        .await
-                    {
-                        Ok(Some(entry)) => entry.metadata.published_at,
-                        _ => None,
-                    },
-                    None => None,
-                };
+                let published_at = self.cached_publish_date(&id).await;
                 if let Err(e) = queue.enqueue(&id, published_at, ScanTrigger::Rescan).await {
                     tracing::warn!(package = %id, error = %e, "upstream audit: could not queue the rescan");
                 }
             }
         }
-        outcomes
     }
 
     /// The block arm for one transition (RFC 0014 §4.3). A confirmation
@@ -710,54 +797,10 @@ impl UpstreamAuditService {
         let identity = system_identity();
         match t {
             Transition::Confirmed(row, versions) => {
-                let mut all = true;
-                for v in versions {
-                    let id = audit_coordinate(kind, registry, &row.package_name, v);
-                    if let Err(e) = admin.block_package(&id, block_reason(row), &identity).await {
-                        tracing::warn!(package = %id, error = %e, "upstream audit: block failed");
-                        all = false;
-                    }
-                }
-                BlockOutcome {
-                    blocked: all && !versions.is_empty(),
-                    ..Default::default()
-                }
+                block_confirmed(admin, &identity, registry, kind, row, versions).await
             }
             Transition::Reappeared(row, versions) => {
-                if row.state != UpstreamState::Disappeared {
-                    return BlockOutcome::default();
-                }
-                let mut outcome = BlockOutcome::default();
-                let mut lifted = 0usize;
-                for v in versions {
-                    let id = audit_coordinate(kind, registry, &row.package_name, v);
-                    match admin.repo.get_status(&id).await {
-                        Ok(PackageStatus::Blocked { blocked_by, .. })
-                            if blocked_by == SYSTEM_ACTOR =>
-                        {
-                            match admin.unblock_package(&id, &identity).await {
-                                Ok(()) => lifted += 1,
-                                Err(e) => {
-                                    tracing::warn!(package = %id, error = %e, "upstream audit: unblock failed")
-                                }
-                            }
-                        }
-                        Ok(PackageStatus::Blocked { blocked_by, .. }) => {
-                            tracing::warn!(
-                                package = %id,
-                                blocked_by,
-                                "upstream audit: reappeared upstream, but the block is not this audit's; left in place"
-                            );
-                            outcome.kept_admin_block = true;
-                        }
-                        Ok(_) => {}
-                        Err(e) => {
-                            tracing::warn!(package = %id, error = %e, "upstream audit: could not read the block status")
-                        }
-                    }
-                }
-                outcome.unblocked = lifted > 0 && lifted == versions.len();
-                outcome
+                unblock_reappeared(admin, &identity, registry, kind, row, versions).await
             }
         }
     }

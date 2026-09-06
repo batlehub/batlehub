@@ -393,7 +393,8 @@ heavy_wire_re_after() {
     || heavy_fail "${explanation:-no request matching /$re/ after mark \"$label\"}"
 }
 heavy_wire_count_after() {  # mark, regex → count on stdout
-  awk -v mark="### $1" -v re="$2" '
+  local label="$1" re="$2"
+  awk -v mark="### $label" -v re="$re" '
     index($0, mark) == 1 { seen = 1; next }
     seen && $0 ~ re { n++ }
     END { print n + 0 }' "$HEAVY_LOG"

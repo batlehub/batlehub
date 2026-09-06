@@ -181,10 +181,26 @@ MEASURE_FILE="$HEAVY_WORK/measure.txt"
 measure() { printf '%s\n' "$*" | tee -a "$MEASURE_FILE"; }
 
 # The client-side egress denial, as in mise.sh §4: a proxy on a closed port,
-# with the loopback exempted so the tap is reachable.
-DENY=(env HTTP_PROXY="http://127.0.0.1:1" HTTPS_PROXY="http://127.0.0.1:1"
-      http_proxy="http://127.0.0.1:1" https_proxy="http://127.0.0.1:1"
-      NO_PROXY="127.0.0.1,localhost" no_proxy="127.0.0.1,localhost")
+# with the loopback exempted so the tap is reachable. Named once because all
+# four variables have to name the *same* closed port — a typo in one of them
+# leaves that scheme reaching the real internet, and the phase still passes.
+CLOSED_PROXY="http://127.0.0.1:1"
+LOOPBACK_DIRECT="127.0.0.1,localhost"
+DENY=(env HTTP_PROXY="$CLOSED_PROXY" HTTPS_PROXY="$CLOSED_PROXY"
+      http_proxy="$CLOSED_PROXY" https_proxy="$CLOSED_PROXY"
+      NO_PROXY="$LOOPBACK_DIRECT" no_proxy="$LOOPBACK_DIRECT")
+
+# The phase marks. Each names a `heavy_mark`, the client's output file, and
+# every `heavy_wire_*_after` assertion about that phase — the three have to
+# agree, and a mark spelled one way at the top of a phase and another way in
+# its assertions is an assertion that quietly matches nothing.
+MARK_MISE_NOLOCK="mise-nolock"
+MARK_CARGO_SYNTH="cargo-synth"
+MARK_GO_SYNTH="go-synth"
+MARK_MVN_SYNTH="mvn-synth"
+MARK_BUNDLE_SYNTH="bundle-synth"
+MARK_CONDA_SYNTH="conda-synth"
+MARK_TERRAFORM_SYNTH="terraform-synth"
 
 # ── 0. The connected side: seed one version of each, export a bundle ────────
 
@@ -573,28 +589,28 @@ minisign = false
 "regex:^https://codeload\\\\.github\\\\.com/([^/]+)/([^/]+)/tar\\\\.gz/(?:refs/tags/)?(.+)" = "$GH_PROXY/\$1/\$2/tarball/\$3"
 EOF
 
-heavy_mark "mise-nolock"
-NOLOCK="$HEAVY_WORK/mise-nolock"
+heavy_mark "${MARK_MISE_NOLOCK}"
+NOLOCK="$HEAVY_WORK/${MARK_MISE_NOLOCK}"
 mkdir -p "$NOLOCK"
 cat > "$NOLOCK/mise.toml" <<EOF
 [tools]
 "$TOOL" = { version = "$TOOL_VERSION", exe = "gh" }
 EOF
 heavy_log "mise install $TOOL@$TOOL_VERSION with no lock, against the disconnected instance"
-run_client "mise install" "$HEAVY_WORK/mise-nolock.txt" \
+run_client "mise install" "$HEAVY_WORK/${MARK_MISE_NOLOCK}.txt" \
   bash -c "cd '$NOLOCK' && ${MISE[*]} install"
 [[ $CLIENT_RC -ne 0 ]] || heavy_fail "mise install with no lock succeeded against an instance that holds no release listing"
-heavy_wire_re_after "mise-nolock" "GET /proxy/$GH_REG/$OWNER_REPO/releases/tags/v$TOOL_VERSION -> 503" \
+heavy_wire_re_after "${MARK_MISE_NOLOCK}" "GET /proxy/$GH_REG/$OWNER_REPO/releases/tags/v$TOOL_VERSION -> 503" \
   "mise did not ask for the release by tag, or it was not a 503"
-heavy_wire_re_after "mise-nolock" "GET /proxy/$GH_REG/$OWNER_REPO/releases\\?per_page=100 -> 503" \
+heavy_wire_re_after "${MARK_MISE_NOLOCK}" "GET /proxy/$GH_REG/$OWNER_REPO/releases\\?per_page=100 -> 503" \
   "mise did not fall back to the release listing, or it was not a 503"
-if heavy_wire_seen_after "mise-nolock" "/releases/download/v$TOOL_VERSION/"; then
+if heavy_wire_seen_after "${MARK_MISE_NOLOCK}" "/releases/download/v$TOOL_VERSION/"; then
   heavy_fail "mise asked for the asset after a 503 on the listing — the version string did not need the listing after all"
 fi
-MISE_FIRST="$(awk -v mark="### mise-nolock" 'index($0, mark) == 1 { seen = 1; next } seen && /GET \/proxy/ { print; exit }' "$HEAVY_LOG" | sed -E 's/ -> .*//')"
-MISE_BYTAG="$(heavy_wire_count_after mise-nolock "GET /proxy/$GH_REG/$OWNER_REPO/releases/tags/v$TOOL_VERSION -> 503")"
-MISE_LIST="$(heavy_wire_count_after mise-nolock "GET /proxy/$GH_REG/$OWNER_REPO/releases\\?per_page=100 -> 503")"
-MISE_SAID="$(grep -E 'mise ERROR' "$HEAVY_WORK/mise-nolock.txt" | tail -3 | sed -E 's/^mise ERROR +//' | cut -c1-160 | tr '\n' ';')"
+MISE_FIRST="$(awk -v mark="### ${MARK_MISE_NOLOCK}" 'index($0, mark) == 1 { seen = 1; next } seen && /GET \/proxy/ { print; exit }' "$HEAVY_LOG" | sed -E 's/ -> .*//')"
+MISE_BYTAG="$(heavy_wire_count_after "${MARK_MISE_NOLOCK}" "GET /proxy/$GH_REG/$OWNER_REPO/releases/tags/v$TOOL_VERSION -> 503")"
+MISE_LIST="$(heavy_wire_count_after "${MARK_MISE_NOLOCK}" "GET /proxy/$GH_REG/$OWNER_REPO/releases\\?per_page=100 -> 503")"
+MISE_SAID="$(grep -E 'mise ERROR' "$HEAVY_WORK/${MARK_MISE_NOLOCK}.txt" | tail -3 | sed -E 's/^mise ERROR +//' | cut -c1-160 | tr '\n' ';')"
 measure "mise | install $TOOL@$TOOL_VERSION, no lock | first $MISE_FIRST -> 503; by-tag x$MISE_BYTAG, listing x$MISE_LIST, asset never asked | exit $CLIENT_RC after ${CLIENT_SECS}s | $MISE_SAID"
 heavy_log "MISE-NOLOCK-MEASURED"
 
@@ -745,7 +761,7 @@ heavy_log "MISE-UNHELD-OK (the miss names v$TOOL_UNHELD_VERSION as requested and
 # version (RFC 0008-bis §4.3), and each resolves a *range* or an unpinned
 # request against it — the case a lock does not cover.
 
-heavy_mark "cargo-synth"
+heavy_mark "${MARK_CARGO_SYNTH}"
 CARGO_DIR="$HEAVY_WORK/cargo-consumer"
 mkdir -p "$CARGO_DIR/src" "$CARGO_DIR/.cargo" "$HEAVY_WORK/cargo-home"
 cat >"$CARGO_DIR/Cargo.toml" <<EOF
@@ -766,19 +782,19 @@ replace-with = "airgap"
 registry = "sparse+$HEAVY_TAP_BASE/proxy/$CARGO_REG/registry/"
 EOF
 heavy_log "cargo generate-lockfile + fetch of $CRATE ${CRATE_VERSION%.*} against the composed sparse index"
-run_client "cargo" "$HEAVY_WORK/cargo-synth.txt" \
+run_client "cargo" "$HEAVY_WORK/${MARK_CARGO_SYNTH}.txt" \
   bash -c "cd '$CARGO_DIR' && CARGO_HOME='$HEAVY_WORK/cargo-home' CARGO_NET_RETRY=0 cargo generate-lockfile && CARGO_HOME='$HEAVY_WORK/cargo-home' cargo fetch"
-[[ $CLIENT_RC -eq 0 ]] || { cat "$HEAVY_WORK/cargo-synth.txt" >&2; heavy_fail "cargo could not resolve $CRATE through the composed sparse index"; }
-heavy_wire_re_after "cargo-synth" "GET /proxy/$CARGO_REG/registry/[a-z0-9/]*$CRATE -> 200 .*X-BatleHub-Listing: synthesised" \
+[[ $CLIENT_RC -eq 0 ]] || { cat "$HEAVY_WORK/${MARK_CARGO_SYNTH}.txt" >&2; heavy_fail "cargo could not resolve $CRATE through the composed sparse index"; }
+heavy_wire_re_after "${MARK_CARGO_SYNTH}" "GET /proxy/$CARGO_REG/registry/[a-z0-9/]*$CRATE -> 200 .*X-BatleHub-Listing: synthesised" \
   "the sparse index line was not answered as synthesised"
-heavy_wire_re_after "cargo-synth" "GET /proxy/$CARGO_REG/$CRATE/$CRATE_VERSION/download -> 200" \
+heavy_wire_re_after "${MARK_CARGO_SYNTH}" "GET /proxy/$CARGO_REG/$CRATE/$CRATE_VERSION/download -> 200" \
   "cargo did not fetch the crate the composed index named"
 grep -q "name = \"$CRATE\"" "$CARGO_DIR/Cargo.lock" && grep -q "version = \"$CRATE_VERSION\"" "$CARGO_DIR/Cargo.lock" \
   || { cat "$CARGO_DIR/Cargo.lock" >&2; heavy_fail "Cargo.lock does not pin $CRATE $CRATE_VERSION"; }
 measure "cargo | generate-lockfile + fetch, $CRATE = \"${CRATE_VERSION%.*}\", synthesis on | sparse index -> 200 synthesised (deps from the crate's manifest, read at import), then the crate -> 200 | exit 0 after ${CLIENT_SECS}s | Cargo.lock pins $CRATE_VERSION"
 heavy_log "CARGO-SYNTH-OK (a range resolved through a sparse index this instance composed)"
 
-heavy_mark "go-synth"
+heavy_mark "${MARK_GO_SYNTH}"
 GO_DIR="$HEAVY_WORK/go-consumer"
 mkdir -p "$GO_DIR" "$HEAVY_WORK/go-cache" "$HEAVY_WORK/go-modcache"
 cat >"$GO_DIR/go.mod" <<EOF
@@ -790,22 +806,22 @@ heavy_log "go get $GO_MODULE (no version) against the composed @v/list"
 # GOSUMDB=off: a checksum database is a service off the site, and an
 # air-gapped estate turns it off or mirrors it (RFC 0008 §2). GOFLAGS=-mod=mod
 # so the module cache is written, not just read.
-run_client "go get" "$HEAVY_WORK/go-synth.txt" \
+run_client "go get" "$HEAVY_WORK/${MARK_GO_SYNTH}.txt" \
   env GOPROXY="$HEAVY_TAP_BASE/proxy/$GO_REG" GOSUMDB=off GONOSUMDB="*" GOFLAGS="-mod=mod -modcacherw" \
       GOTOOLCHAIN=local GOCACHE="$HEAVY_WORK/go-cache" GOMODCACHE="$HEAVY_WORK/go-modcache" GOPATH="$HEAVY_WORK/gopath" \
       bash -c "cd '$GO_DIR' && go get $GO_MODULE"
-[[ $CLIENT_RC -eq 0 ]] || { cat "$HEAVY_WORK/go-synth.txt" >&2; heavy_fail "go get could not resolve $GO_MODULE through the composed @v/list"; }
-heavy_wire_re_after "go-synth" "GET /proxy/$GO_REG/$GO_MODULE/@v/list -> 200 .*X-BatleHub-Listing: synthesised" \
+[[ $CLIENT_RC -eq 0 ]] || { cat "$HEAVY_WORK/${MARK_GO_SYNTH}.txt" >&2; heavy_fail "go get could not resolve $GO_MODULE through the composed @v/list"; }
+heavy_wire_re_after "${MARK_GO_SYNTH}" "GET /proxy/$GO_REG/$GO_MODULE/@v/list -> 200 .*X-BatleHub-Listing: synthesised" \
   "@v/list was not answered as synthesised"
-heavy_wire_re_after "go-synth" "GET /proxy/$GO_REG/$GO_MODULE/@v/$GO_VERSION.info -> 200 .*X-BatleHub-Listing: synthesised" \
+heavy_wire_re_after "${MARK_GO_SYNTH}" "GET /proxy/$GO_REG/$GO_MODULE/@v/$GO_VERSION.info -> 200 .*X-BatleHub-Listing: synthesised" \
   "the .info was not composed"
-heavy_wire_re_after "go-synth" "GET /proxy/$GO_REG/$GO_MODULE/@v/$GO_VERSION.zip -> 200" \
+heavy_wire_re_after "${MARK_GO_SYNTH}" "GET /proxy/$GO_REG/$GO_MODULE/@v/$GO_VERSION.zip -> 200" \
   "go did not fetch the zip the composed list named"
 grep -q "$GO_MODULE $GO_VERSION" "$GO_DIR/go.mod" || { cat "$GO_DIR/go.mod" >&2; heavy_fail "go.mod does not require $GO_MODULE $GO_VERSION"; }
 measure "go   | go get $GO_MODULE (unpinned), synthesis on | @v/list -> 200 synthesised, .info -> 200 synthesised, then .mod and .zip -> 200 | exit 0 after ${CLIENT_SECS}s | go.mod requires $GO_VERSION"
 heavy_log "GO-SYNTH-OK (an unpinned get resolved through a list this instance composed)"
 
-heavy_mark "mvn-synth"
+heavy_mark "${MARK_MVN_SYNTH}"
 MVN_DIR="$HEAVY_WORK/mvn-consumer"
 mkdir -p "$MVN_DIR"
 cp -r "$HEAVY_WORK/mvn-warm" "$HEAVY_WORK/mvn-repo"
@@ -843,17 +859,17 @@ cat >"$MVN_DIR/pom.xml" <<EOF
 </project>
 EOF
 heavy_log "mvn dependency:resolve of $MVN_ARTIFACT [${MVN_VERSION%.*},) against the composed maven-metadata.xml"
-run_client "mvn" "$HEAVY_WORK/mvn-synth.txt" \
+run_client "mvn" "$HEAVY_WORK/${MARK_MVN_SYNTH}.txt" \
   env -u MISE_DATA_DIR -u MISE_CACHE_DIR -u MISE_CONFIG_DIR -u MISE_STATE_DIR \
       bash -c "cd '$MVN_DIR' && ${MVN[*]} -B -s '$HEAVY_WORK/settings-disconnected.xml' -Dmaven.repo.local='$HEAVY_WORK/mvn-repo' dependency:resolve"
-[[ $CLIENT_RC -eq 0 ]] || { tail -40 "$HEAVY_WORK/mvn-synth.txt" >&2; heavy_fail "mvn could not resolve the range through the composed metadata"; }
-heavy_wire_re_after "mvn-synth" "GET /proxy/$MVN_REG/maven2/$MVN_GROUP_PATH/$MVN_ARTIFACT/maven-metadata.xml -> 200 .*X-BatleHub-Listing: synthesised" \
+[[ $CLIENT_RC -eq 0 ]] || { tail -40 "$HEAVY_WORK/${MARK_MVN_SYNTH}.txt" >&2; heavy_fail "mvn could not resolve the range through the composed metadata"; }
+heavy_wire_re_after "${MARK_MVN_SYNTH}" "GET /proxy/$MVN_REG/maven2/$MVN_GROUP_PATH/$MVN_ARTIFACT/maven-metadata.xml -> 200 .*X-BatleHub-Listing: synthesised" \
   "maven-metadata.xml was not answered as synthesised"
-heavy_wire_re_after "mvn-synth" "GET /proxy/$MVN_REG/maven2/$MVN_GROUP_PATH/$MVN_ARTIFACT/$MVN_VERSION/$MVN_ARTIFACT-$MVN_VERSION.jar -> 200" \
+heavy_wire_re_after "${MARK_MVN_SYNTH}" "GET /proxy/$MVN_REG/maven2/$MVN_GROUP_PATH/$MVN_ARTIFACT/$MVN_VERSION/$MVN_ARTIFACT-$MVN_VERSION.jar -> 200" \
   "mvn did not fetch the jar the composed metadata named"
 # The checksum Maven asks for beside the composed document answers (RFC
 # 0008-bis §13.5): one request, not minutes of retried 503s.
-heavy_wire_re_after "mvn-synth" "GET /proxy/$MVN_REG/maven2/$MVN_GROUP_PATH/$MVN_ARTIFACT/maven-metadata.xml.sha1 -> 200" \
+heavy_wire_re_after "${MARK_MVN_SYNTH}" "GET /proxy/$MVN_REG/maven2/$MVN_GROUP_PATH/$MVN_ARTIFACT/maven-metadata.xml.sha1 -> 200" \
   "the composed metadata's .sha1 was not answered"
 measure "mvn  | dependency:resolve, [${MVN_VERSION%.*},), synthesis on | maven-metadata.xml -> 200 synthesised, then the pom and jar -> 200 | exit 0 after ${CLIENT_SECS}s | resolved $MVN_VERSION"
 heavy_log "MVN-SYNTH-OK (a range resolved through metadata this instance composed)"
@@ -905,7 +921,7 @@ heavy_log "DOTNET-SYNTH-OK (a floating version resolved through a flat index thi
 # from `repodata.json`, whose entries are each package's `info/index.json`.
 # Both were read at import and are composed here.
 
-heavy_mark "bundle-synth"
+heavy_mark "${MARK_BUNDLE_SYNTH}"
 GEM_DIR="$HEAVY_WORK/gem-consumer"
 mkdir -p "$GEM_DIR"
 cat >"$GEM_DIR/Gemfile" <<EOF
@@ -913,35 +929,35 @@ source "$HEAVY_TAP_BASE/proxy/$GEMS_REG"
 gem "$GEM"
 EOF
 heavy_log "bundle install of $GEM against the composed compact index"
-run_client "bundle install" "$HEAVY_WORK/bundle-synth.txt" \
+run_client "bundle install" "$HEAVY_WORK/${MARK_BUNDLE_SYNTH}.txt" \
   env -u MISE_DATA_DIR -u MISE_CACHE_DIR -u MISE_CONFIG_DIR -u MISE_STATE_DIR \
       GEM_HOME="$GEM_HOME" GEM_PATH="$GEM_PATH" \
       BUNDLE_USER_HOME="$HEAVY_WORK/bundle-home" BUNDLE_PATH="$GEM_DIR/vendor" BUNDLE_DISABLE_VERSION_CHECK=1 \
       bash -c "cd '$GEM_DIR' && ${BUNDLE[*]} install"
-[[ $CLIENT_RC -eq 0 ]] || { tail -40 "$HEAVY_WORK/bundle-synth.txt" >&2; heavy_fail "bundle install could not resolve $GEM through the composed compact index"; }
-heavy_wire_re_after "bundle-synth" "GET /proxy/$GEMS_REG/versions -> 200 .*X-BatleHub-Listing: synthesised" \
+[[ $CLIENT_RC -eq 0 ]] || { tail -40 "$HEAVY_WORK/${MARK_BUNDLE_SYNTH}.txt" >&2; heavy_fail "bundle install could not resolve $GEM through the composed compact index"; }
+heavy_wire_re_after "${MARK_BUNDLE_SYNTH}" "GET /proxy/$GEMS_REG/versions -> 200 .*X-BatleHub-Listing: synthesised" \
   "the compact /versions was not answered as synthesised"
-heavy_wire_re_after "bundle-synth" "GET /proxy/$GEMS_REG/info/$GEM -> 200 .*X-BatleHub-Listing: synthesised" \
+heavy_wire_re_after "${MARK_BUNDLE_SYNTH}" "GET /proxy/$GEMS_REG/info/$GEM -> 200 .*X-BatleHub-Listing: synthesised" \
   "the compact /info/$GEM was not answered as synthesised"
-heavy_wire_re_after "bundle-synth" "GET /proxy/$GEMS_REG/gems/$GEM-$GEM_VERSION.gem -> 200" \
+heavy_wire_re_after "${MARK_BUNDLE_SYNTH}" "GET /proxy/$GEMS_REG/gems/$GEM-$GEM_VERSION.gem -> 200" \
   "bundler did not fetch the gem the composed index named"
 grep -q "$GEM ($GEM_VERSION)" "$GEM_DIR/Gemfile.lock" || { cat "$GEM_DIR/Gemfile.lock" >&2; heavy_fail "Gemfile.lock does not pin $GEM $GEM_VERSION"; }
 measure "bundle | install, gem \"$GEM\", synthesis on | /versions and /info/$GEM -> 200 synthesised (deps from the gemspec, read at import), then the gem -> 200 | exit 0 after ${CLIENT_SECS}s | Gemfile.lock pins $GEM_VERSION"
 heavy_log "BUNDLE-SYNTH-OK (an unpinned gem resolved through a compact index this instance composed)"
 
-heavy_mark "conda-synth"
+heavy_mark "${MARK_CONDA_SYNTH}"
 CONDA_ROOT="$HEAVY_WORK/mamba-root"
 mkdir -p "$CONDA_ROOT"
 heavy_log "micromamba create with $CONDA_PKG against the composed repodata.json"
-run_client "micromamba create" "$HEAVY_WORK/conda-synth.txt" \
+run_client "micromamba create" "$HEAVY_WORK/${MARK_CONDA_SYNTH}.txt" \
   env MAMBA_ROOT_PREFIX="$CONDA_ROOT" "$MM" create -y --no-rc --override-channels \
       -c "$HEAVY_TAP_BASE/proxy/$CONDA_REG" --platform "$CONDA_SUBDIR" -n probe "$CONDA_PKG"
-[[ $CLIENT_RC -eq 0 ]] || { tail -40 "$HEAVY_WORK/conda-synth.txt" >&2; heavy_fail "micromamba could not install $CONDA_PKG through the composed repodata"; }
-heavy_wire_re_after "conda-synth" "GET /proxy/$CONDA_REG/$CONDA_SUBDIR/repodata.json[^ ]* -> 200 .*X-BatleHub-Listing: synthesised" \
+[[ $CLIENT_RC -eq 0 ]] || { tail -40 "$HEAVY_WORK/${MARK_CONDA_SYNTH}.txt" >&2; heavy_fail "micromamba could not install $CONDA_PKG through the composed repodata"; }
+heavy_wire_re_after "${MARK_CONDA_SYNTH}" "GET /proxy/$CONDA_REG/$CONDA_SUBDIR/repodata.json[^ ]* -> 200 .*X-BatleHub-Listing: synthesised" \
   "the subdir's repodata was not answered as synthesised"
-heavy_wire_re_after "conda-synth" "GET /proxy/$CONDA_REG/noarch/repodata.json[^ ]* -> 200 .*X-BatleHub-Listing: synthesised" \
+heavy_wire_re_after "${MARK_CONDA_SYNTH}" "GET /proxy/$CONDA_REG/noarch/repodata.json[^ ]* -> 200 .*X-BatleHub-Listing: synthesised" \
   "the empty noarch repodata was not answered as synthesised"
-heavy_wire_re_after "conda-synth" "GET /proxy/$CONDA_REG/$CONDA_SUBDIR/$CONDA_FILE -> 200" \
+heavy_wire_re_after "${MARK_CONDA_SYNTH}" "GET /proxy/$CONDA_REG/$CONDA_SUBDIR/$CONDA_FILE -> 200" \
   "micromamba did not fetch the package the composed repodata named"
 measure "conda | micromamba create $CONDA_PKG, synthesis on | $CONDA_SUBDIR and noarch repodata -> 200 synthesised (entries from info/index.json, read at import), then the package -> 200 | exit 0 after ${CLIENT_SECS}s | installed"
 heavy_log "CONDA-SYNTH-OK (a package resolved through a repodata this instance composed)"
@@ -956,7 +972,7 @@ heavy_log "CONDA-SYNTH-OK (a package resolved through a repodata this instance c
 # on the manifest, the list and the signature as artifacts, and this
 # instance signed nothing.
 
-heavy_mark "terraform-synth"
+heavy_mark "${MARK_TERRAFORM_SYNTH}"
 TF_PROJECT="$HEAVY_WORK/tf-project"
 mkdir -p "$TF_PROJECT" "$HEAVY_WORK/tf-plugin-cache"
 cat >"$TF_PROJECT/main.tf" <<EOF
@@ -974,29 +990,29 @@ plugin_cache_dir = "$HEAVY_WORK/tf-plugin-cache"
 disable_checkpoint = true
 EOF
 heavy_log "terraform init ($TF_PROVIDER $TF_PROVIDER_VERSION through $TF_HOST, composed listing and download document)"
-run_client "terraform init" "$HEAVY_WORK/terraform-synth.txt" \
+run_client "terraform init" "$HEAVY_WORK/${MARK_TERRAFORM_SYNTH}.txt" \
   env -u MISE_DATA_DIR -u MISE_CACHE_DIR -u MISE_CONFIG_DIR -u MISE_STATE_DIR \
       SSL_CERT_FILE="$TF_CERT" TF_CLI_CONFIG_FILE="$HEAVY_WORK/terraformrc" TF_IN_AUTOMATION=1 CHECKPOINT_DISABLE=1 \
       bash -c "cd '$TF_PROJECT' && ${TF[*]} init -no-color"
-[[ $CLIENT_RC -eq 0 ]] || { tail -40 "$HEAVY_WORK/terraform-synth.txt" >&2; heavy_fail "terraform init could not install $TF_PROVIDER through the composed download document"; }
-grep -q "Terraform has been successfully initialized" "$HEAVY_WORK/terraform-synth.txt" \
+[[ $CLIENT_RC -eq 0 ]] || { tail -40 "$HEAVY_WORK/${MARK_TERRAFORM_SYNTH}.txt" >&2; heavy_fail "terraform init could not install $TF_PROVIDER through the composed download document"; }
+grep -q "Terraform has been successfully initialized" "$HEAVY_WORK/${MARK_TERRAFORM_SYNTH}.txt" \
   || heavy_fail "terraform init reported no success line"
-grep -qi "signed by" "$HEAVY_WORK/terraform-synth.txt" \
-  || { tail -20 "$HEAVY_WORK/terraform-synth.txt" >&2; heavy_fail "Terraform did not report a signature verification — the carried keys, the held list and its signature are what make that possible"; }
+grep -qi "signed by" "$HEAVY_WORK/${MARK_TERRAFORM_SYNTH}.txt" \
+  || { tail -20 "$HEAVY_WORK/${MARK_TERRAFORM_SYNTH}.txt" >&2; heavy_fail "Terraform did not report a signature verification — the carried keys, the held list and its signature are what make that possible"; }
 TF_BASE="/v1/providers/$TF_NS/$TF_TYPE"
-heavy_wire_after "terraform-synth" "GET /.well-known/terraform.json -> 200" \
+heavy_wire_after "${MARK_TERRAFORM_SYNTH}" "GET /.well-known/terraform.json -> 200" \
   "discovery did not answer on Terraform's host"
-heavy_wire_re_after "terraform-synth" "GET $TF_BASE/versions -> 200 .*X-BatleHub-Listing: synthesised" \
+heavy_wire_re_after "${MARK_TERRAFORM_SYNTH}" "GET $TF_BASE/versions -> 200 .*X-BatleHub-Listing: synthesised" \
   "the versions listing was not answered as synthesised"
-heavy_wire_re_after "terraform-synth" "GET $TF_BASE/$TF_PROVIDER_VERSION/download/linux/amd64 -> 200 .*X-BatleHub-Listing: synthesised" \
+heavy_wire_re_after "${MARK_TERRAFORM_SYNTH}" "GET $TF_BASE/$TF_PROVIDER_VERSION/download/linux/amd64 -> 200 .*X-BatleHub-Listing: synthesised" \
   "the download document was not answered as synthesised"
-heavy_wire_after "terraform-synth" "$TF_BASE/$TF_PROVIDER_VERSION/shasums -> 200" \
+heavy_wire_after "${MARK_TERRAFORM_SYNTH}" "$TF_BASE/$TF_PROVIDER_VERSION/shasums -> 200" \
   "the checksum list was not served from the held set"
-heavy_wire_after "terraform-synth" "$TF_BASE/$TF_PROVIDER_VERSION/shasums.sig -> 200" \
+heavy_wire_after "${MARK_TERRAFORM_SYNTH}" "$TF_BASE/$TF_PROVIDER_VERSION/shasums.sig -> 200" \
   "the signature was not served from the held set"
-heavy_wire_after "terraform-synth" "$TF_BASE/$TF_PROVIDER_VERSION/artifact/linux/amd64 -> 200" \
+heavy_wire_after "${MARK_TERRAFORM_SYNTH}" "$TF_BASE/$TF_PROVIDER_VERSION/artifact/linux/amd64 -> 200" \
   "the archive was not served from the held set"
-measure "terraform | init, $TF_PROVIDER $TF_PROVIDER_VERSION, synthesis on | versions and download document -> 200 synthesised (keys carried on the manifest), then shasums, shasums.sig and the archive -> 200 | exit 0 after ${CLIENT_SECS}s | initialized, $(grep -i "signed by" "$HEAVY_WORK/terraform-synth.txt" | head -1 | sed 's/^ *//')"
+measure "terraform | init, $TF_PROVIDER $TF_PROVIDER_VERSION, synthesis on | versions and download document -> 200 synthesised (keys carried on the manifest), then shasums, shasums.sig and the archive -> 200 | exit 0 after ${CLIENT_SECS}s | initialized, $(grep -i "signed by" "$HEAVY_WORK/${MARK_TERRAFORM_SYNTH}.txt" | head -1 | sed 's/^ *//')"
 heavy_log "TERRAFORM-SYNTH-OK (a provider installed and verified through a download document this instance composed)"
 
 # ── 8. The miss log, after the second half ──────────────────────────────────

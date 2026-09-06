@@ -220,72 +220,86 @@ pub(super) fn spawn_upstream_audit(
             ticker.tick().await;
             let report = svc.run_sweep().await;
             for r in &report.registries {
-                let outcome = if r.void { "void" } else { "ok" };
-                metrics::counter!(
-                    "batlehub_upstream_audit_sweeps_total",
-                    "registry" => r.registry.clone(),
-                    "outcome" => outcome
-                )
-                .increment(1);
-                metrics::histogram!(
-                    "batlehub_upstream_audit_duration_seconds",
-                    "registry" => r.registry.clone()
-                )
-                .record(r.duration.as_secs_f64());
-                if let Ok((missing, disappeared)) = svc.counts(&r.registry).await {
-                    metrics::gauge!("batlehub_upstream_missing_total", "registry" => r.registry.clone())
-                        .set(missing as f64);
-                    metrics::gauge!("batlehub_upstream_disappeared_total", "registry" => r.registry.clone())
-                        .set(disappeared as f64);
-                }
-                if r.void {
-                    // A registry that is void every cycle is itself an alert,
-                    // not a silent gap in coverage.
-                    tracing::warn!(
-                        registry = %r.registry,
-                        probed = r.probed,
-                        missing = r.missing,
-                        "upstream audit: sweep VOID — too many misses to be unpublishes; nothing recorded"
-                    );
-                } else {
-                    tracing::info!(
-                        registry = %r.registry,
-                        probed = r.probed,
-                        missing = r.missing,
-                        inconclusive = r.inconclusive,
-                        skipped_recent = r.skipped_recent,
-                        confirmed = r.confirmed(),
-                        reappeared = r.reappeared(),
-                        capped = r.capped_packages,
-                        "upstream audit: sweep complete"
-                    );
-                }
-                for t in &r.transitions {
-                    match t {
-                        batlehub_core::services::Transition::Confirmed(row, versions) => {
-                            tracing::warn!(
-                                registry = %row.registry,
-                                package = %row.package_name,
-                                version = ?row.version,
-                                versions = versions.len(),
-                                misses = row.consecutive_misses,
-                                first_missed_at = %row.first_missed_at,
-                                "upstream audit: DISAPPEARED upstream — held from eviction"
-                            );
-                        }
-                        batlehub_core::services::Transition::Reappeared(row, _) => {
-                            tracing::info!(
-                                registry = %row.registry,
-                                package = %row.package_name,
-                                version = ?row.version,
-                                "upstream audit: reappeared upstream — hold released"
-                            );
-                        }
-                    }
-                }
+                record_sweep(&svc, r).await;
             }
         }
     });
+}
+
+/// One registry's sweep: its counters, its line in the log, and a line per
+/// transition.
+async fn record_sweep(
+    svc: &Arc<batlehub_core::services::UpstreamAuditService>,
+    r: &batlehub_core::services::upstream_audit::RegistryReport,
+) {
+    let outcome = if r.void { "void" } else { "ok" };
+    metrics::counter!(
+        "batlehub_upstream_audit_sweeps_total",
+        "registry" => r.registry.clone(),
+        "outcome" => outcome
+    )
+    .increment(1);
+    metrics::histogram!(
+        "batlehub_upstream_audit_duration_seconds",
+        "registry" => r.registry.clone()
+    )
+    .record(r.duration.as_secs_f64());
+    if let Ok((missing, disappeared)) = svc.counts(&r.registry).await {
+        metrics::gauge!("batlehub_upstream_missing_total", "registry" => r.registry.clone())
+            .set(missing as f64);
+        metrics::gauge!("batlehub_upstream_disappeared_total", "registry" => r.registry.clone())
+            .set(disappeared as f64);
+    }
+    if r.void {
+        // A registry that is void every cycle is itself an alert, not a silent
+        // gap in coverage.
+        tracing::warn!(
+            registry = %r.registry,
+            probed = r.probed,
+            missing = r.missing,
+            "upstream audit: sweep VOID — too many misses to be unpublishes; nothing recorded"
+        );
+    } else {
+        tracing::info!(
+            registry = %r.registry,
+            probed = r.probed,
+            missing = r.missing,
+            inconclusive = r.inconclusive,
+            skipped_recent = r.skipped_recent,
+            confirmed = r.confirmed(),
+            reappeared = r.reappeared(),
+            capped = r.capped_packages,
+            "upstream audit: sweep complete"
+        );
+    }
+    for t in &r.transitions {
+        log_transition(t);
+    }
+}
+
+/// A confirmed disappearance, or a reappearance that lifts the hold.
+fn log_transition(t: &batlehub_core::services::Transition) {
+    match t {
+        batlehub_core::services::Transition::Confirmed(row, versions) => {
+            tracing::warn!(
+                registry = %row.registry,
+                package = %row.package_name,
+                version = ?row.version,
+                versions = versions.len(),
+                misses = row.consecutive_misses,
+                first_missed_at = %row.first_missed_at,
+                "upstream audit: DISAPPEARED upstream — held from eviction"
+            );
+        }
+        batlehub_core::services::Transition::Reappeared(row, _) => {
+            tracing::info!(
+                registry = %row.registry,
+                package = %row.package_name,
+                version = ?row.version,
+                "upstream audit: reappeared upstream — hold released"
+            );
+        }
+    }
 }
 
 /// Spawn the cache-statistics rollup (RFC 0004 §6.4, R9).

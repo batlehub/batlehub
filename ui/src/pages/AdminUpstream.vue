@@ -143,12 +143,13 @@ async function recheck(row: UpstreamStatusSummary) {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const out = (await res.json()) as RecheckResponse;
+    const noTransition = out.status
+      ? t("adminUpstream.recheck.stillMissing", { misses: out.status.consecutive_misses })
+      : t("adminUpstream.recheck.present");
     const outcome =
       out.transitions.length > 0
         ? t(RECHECK_KEYS[out.transitions[0]] ?? "adminUpstream.recheck.confirmed")
-        : out.status
-          ? t("adminUpstream.recheck.stillMissing", { misses: out.status.consecutive_misses })
-          : t("adminUpstream.recheck.present");
+        : noTransition;
     recheckResult.value = { ...recheckResult.value, [key]: outcome };
     announcement.value = `${row.package_name}: ${outcome}`;
     await load();

@@ -150,6 +150,28 @@ impl Default for AirGapPolicy {
 /// and the oldest-seen rows go first (RFC 0008 §13 decision 3).
 pub const MAX_MISSES_PER_REGISTRY: u64 = 10_000;
 
+/// One accepted bundle, as the admin surface reads it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct BundleImport {
+    pub bundle_id: String,
+    /// The public key whose signature verified. Naming it is how an operator
+    /// tells two signers apart; it is the public half and not a secret.
+    pub signer_key: String,
+    pub imported_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported_by: Option<String>,
+    pub entries: u64,
+    pub blobs: u64,
+    pub rejected: u64,
+    /// A few of what was rejected, for the line an operator reads before
+    /// deciding whether to care.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejected_sample: Option<String>,
+    /// The plan the bundle was built from, when the builder recorded one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_from: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,26 +193,4 @@ mod tests {
         assert!(!p.enabled);
         assert!(p.record_misses);
     }
-}
-
-/// One accepted bundle, as the admin surface reads it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-pub struct BundleImport {
-    pub bundle_id: String,
-    /// The public key whose signature verified. Naming it is how an operator
-    /// tells two signers apart; it is the public half and not a secret.
-    pub signer_key: String,
-    pub imported_at: DateTime<Utc>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub imported_by: Option<String>,
-    pub entries: u64,
-    pub blobs: u64,
-    pub rejected: u64,
-    /// A few of what was rejected, for the line an operator reads before
-    /// deciding whether to care.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rejected_sample: Option<String>,
-    /// The plan the bundle was built from, when the builder recorded one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_from: Option<String>,
 }

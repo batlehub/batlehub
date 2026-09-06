@@ -403,7 +403,7 @@ impl Verdict {
         let codes = self
             .reason_codes
             .iter()
-            .map(|c| c.as_str())
+            .map(ReasonCode::as_str)
             .collect::<Vec<_>>()
             .join(", ");
         let coord = format!(
@@ -458,11 +458,11 @@ impl Verdict {
             VerdictState::Allowed | VerdictState::Warned => false,
             VerdictState::Denied => match mode {
                 SecurityMode::Block => true,
-                SecurityMode::Warn => self.reason_codes.iter().any(|c| c.is_always_denied()),
+                SecurityMode::Warn => self.reason_codes.iter().any(ReasonCode::is_always_denied),
             },
             VerdictState::Quarantined => {
                 let lifted = !self.reason_codes.is_empty()
-                    && self.reason_codes.iter().all(|c| c.is_time_bound())
+                    && self.reason_codes.iter().all(ReasonCode::is_time_bound)
                     && self.available_at.is_some_and(|at| at <= now);
                 !lifted
             }
@@ -473,7 +473,7 @@ impl Verdict {
     /// code is time-bound and which names an `available_at`.
     pub fn retry_after_secs(&self, now: DateTime<Utc>) -> Option<u64> {
         if self.state != VerdictState::Quarantined
-            || !self.reason_codes.iter().all(|c| c.is_time_bound())
+            || !self.reason_codes.iter().all(ReasonCode::is_time_bound)
         {
             return None;
         }

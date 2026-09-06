@@ -159,6 +159,187 @@ fn read_signing_key(path: &std::path::Path) -> Result<ed25519_dalek::SigningKey>
     Ok(ed25519_dalek::SigningKey::from_bytes(&arr))
 }
 
+/// One plan entry, fetched and turned into a bundle entry with its bytes and
+/// digest. `None` when it could not be carried, with the reason pushed onto
+/// `skipped`.
+async fn export_one(
+    client: &BatleHubClient,
+    entry: &crate::api::mise_plan::PlanEntry,
+    skipped: &mut Vec<String>,
+) -> Option<(
+    batlehub_core::services::bundle::BundleEntry,
+    Vec<u8>,
+    String,
+)> {
+    use batlehub_core::services::bundle::BundleEntry;
+    let (Some(path), Some(key), Some(registry)) = (&entry.proxy_path, &entry.key, &entry.registry)
+    else {
+        skipped.push(format!("{} [{}]: no mirror", entry.tool, entry.platform));
+        return None;
+    };
+    let fetched = match client.fetch_for_bundle(path).await {
+        Ok(b) => b,
+        Err(e) => {
+            skipped.push(format!("{} [{}]: {e}", entry.tool, entry.platform));
+            return None;
+        }
+    };
+    let bytes = fetched.bytes;
+    let digest = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(&bytes);
+        hex::encode(h.finalize())
+    };
+    if let Some(expected) = &entry.sha256 {
+        if !expected.eq_ignore_ascii_case(&digest) {
+            // A bundle built from bytes that disagree with the lock
+            // would be a bundle nobody can verify on the other side.
+            skipped.push(format!(
+                "{} [{}]: the lock says {expected}, the server served {digest}",
+                entry.tool, entry.platform
+            ));
+            return None;
+        }
+    }
+    // The key the *server* keeps these bytes under, taken off the
+    // response rather than derived here. A storage key is a function of
+    // the route — the same GitHub asset is `…/{tag}/filename/{file}` by
+    // name and `…/unknown/{id}` by id, a generic mirror is `…/repo/_/…`,
+    // a forge archive is keyed by its commit — and a bundle whose keys
+    // were guessed plants bytes where the disconnected instance's read
+    // path never looks. The plan's own key is the fallback, and the line
+    // below says when it was used.
+    let stored_key = match fetched.storage_key.as_deref() {
+        Some(k) => k.strip_prefix("artifact:").unwrap_or(k).to_owned(),
+        None => {
+            skipped.push(format!(
+                "{} [{}]: the server did not report a storage key; falling back to the \
+                 plan's derived key '{key}', which older routes may not read back",
+                entry.tool, entry.platform
+            ));
+            key.clone()
+        }
+    };
+    // The judgement this instance made about these bytes, if it made one.
+    // The headers the fetch already carried settle the `warned` and held
+    // cases; this settles `allowed`, which says nothing on the wire.
+    let carried = match (&fetched.package_name, &fetched.version) {
+        (Some(name), Some(version)) => client
+            .get_verdict(&registry.name, name, version)
+            .await
+            .unwrap_or(None),
+        _ => None,
+    };
+    // RFC 0008-bis §13.7: a Terraform provider archive is installed
+    // through a download document that names the publisher's signing
+    // keys and the protocols the provider speaks — facts the archive,
+    // the checksum list and the signature do not carry, and a document
+    // composed without the keys leads the client to a refusal. Read off
+    // the connected instance's own document, carried as evidence.
+    let facts = match terraform_provider_facts(client, registry, path).await {
+        Ok(facts) => facts,
+        Err(note) => {
+            skipped.push(format!("{} [{}]: {note}", entry.tool, entry.platform));
+            None
+        }
+    };
+    let bundle_entry = BundleEntry {
+        registry: registry.name.clone(),
+        key: stored_key,
+        size: bytes.len() as u64,
+        digest: digest.clone(),
+        package_name: fetched.package_name.clone(),
+        version: fetched
+            .version
+            .clone()
+            .or_else(|| Some(entry.version.clone())),
+        // RFC 0008 §13 decision 4: the verdict crosses the gap with the
+        // bytes. Without it every imported artifact is `SCAN_PENDING` on
+        // an instance with `[security]`, and fail-closed means the
+        // bundle it just accepted serves nothing.
+        //
+        // Asked for rather than read off the response, because the
+        // response only carries the RFC 0018 headers when there is
+        // something to *say* — a hold or a warning. An `allowed` verdict
+        // is silent on the wire, and silence is the case that has to
+        // cross: it is the one that lets the disconnected instance serve.
+        verdict: carried.as_ref().map(|v| v.state.clone()),
+        reason_codes: carried
+            .as_ref()
+            .map(|v| v.reason_codes.clone())
+            .unwrap_or_default(),
+        verified_at: carried.as_ref().map(|_| chrono::Utc::now()),
+        // RFC 0008 §13.3: the ref → commit pair travels with the bytes.
+        // A disconnected instance resolves a ref before it fetches
+        // anything and has no forge to ask, so without this row a forge
+        // registry answers `503` to every coordinate in the bundle it
+        // just imported.
+        git_ref: match (
+            &fetched.package_name,
+            &fetched.requested_ref,
+            &fetched.ref_kind,
+            &fetched.resolved_commit,
+        ) {
+            (Some(owner_repo), Some(git_ref), Some(kind), Some(sha)) => {
+                Some(batlehub_core::services::bundle::BundleRef {
+                    owner_repo: owner_repo.clone(),
+                    git_ref: git_ref.clone(),
+                    kind: kind.clone(),
+                    sha: sha.clone(),
+                })
+            }
+            _ => None,
+        },
+        facts,
+    };
+    Some((bundle_entry, bytes, digest))
+}
+
+/// What `mise export` printed, in either shape.
+fn print_export_report(
+    json: bool,
+    out: &std::path::Path,
+    manifest: &batlehub_core::services::bundle::BundleManifest,
+    written: usize,
+    public_key: &str,
+    skipped: &[String],
+) -> Result<()> {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "bundle_id": manifest.bundle_id,
+                "path": out.display().to_string(),
+                "entries": manifest.entries.len(),
+                "blobs": written,
+                "signer_key": public_key,
+                "skipped": skipped,
+            }))?
+        );
+    } else {
+        println!(
+            "{} · {} entr{} · {written} blob(s) · signed",
+            out.display(),
+            manifest.entries.len(),
+            if manifest.entries.len() == 1 {
+                "y"
+            } else {
+                "ies"
+            },
+        );
+        for line in skipped {
+            println!("  skipped: {line}");
+        }
+        println!("  signed by {public_key}");
+        println!(
+            "  the disconnected instance must list that key in \
+             [air_gap].bundle_trusted_keys"
+        );
+    }
+    Ok(())
+}
+
 async fn run_export(args: ExportArgs, client: &BatleHubClient, json: bool) -> Result<()> {
     use batlehub_core::services::bundle::{BundleEntry, BundleManifest, BUNDLE_VERSION};
     use ed25519_dalek::Signer;
@@ -175,128 +356,11 @@ async fn run_export(args: ExportArgs, client: &BatleHubClient, json: bool) -> Re
     let mut entries: Vec<BundleEntry> = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
     for entry in &plan.entries {
-        let (Some(path), Some(key), Some(registry)) =
-            (&entry.proxy_path, &entry.key, &entry.registry)
+        let Some((bundle_entry, bytes, digest)) = export_one(client, entry, &mut skipped).await
         else {
-            skipped.push(format!("{} [{}]: no mirror", entry.tool, entry.platform));
             continue;
         };
-        let fetched = match client.fetch_for_bundle(path).await {
-            Ok(b) => b,
-            Err(e) => {
-                skipped.push(format!("{} [{}]: {e}", entry.tool, entry.platform));
-                continue;
-            }
-        };
-        let bytes = fetched.bytes;
-        let digest = {
-            use sha2::{Digest, Sha256};
-            let mut h = Sha256::new();
-            h.update(&bytes);
-            hex::encode(h.finalize())
-        };
-        if let Some(expected) = &entry.sha256 {
-            if !expected.eq_ignore_ascii_case(&digest) {
-                // A bundle built from bytes that disagree with the lock
-                // would be a bundle nobody can verify on the other side.
-                skipped.push(format!(
-                    "{} [{}]: the lock says {expected}, the server served {digest}",
-                    entry.tool, entry.platform
-                ));
-                continue;
-            }
-        }
-        // The key the *server* keeps these bytes under, taken off the
-        // response rather than derived here. A storage key is a function of
-        // the route — the same GitHub asset is `…/{tag}/filename/{file}` by
-        // name and `…/unknown/{id}` by id, a generic mirror is `…/repo/_/…`,
-        // a forge archive is keyed by its commit — and a bundle whose keys
-        // were guessed plants bytes where the disconnected instance's read
-        // path never looks. The plan's own key is the fallback, and the line
-        // below says when it was used.
-        let stored_key = match fetched.storage_key.as_deref() {
-            Some(k) => k.strip_prefix("artifact:").unwrap_or(k).to_owned(),
-            None => {
-                skipped.push(format!(
-                    "{} [{}]: the server did not report a storage key; falling back to the \
-                     plan's derived key '{key}', which older routes may not read back",
-                    entry.tool, entry.platform
-                ));
-                key.clone()
-            }
-        };
-        // The judgement this instance made about these bytes, if it made one.
-        // The headers the fetch already carried settle the `warned` and held
-        // cases; this settles `allowed`, which says nothing on the wire.
-        let carried = match (&fetched.package_name, &fetched.version) {
-            (Some(name), Some(version)) => client
-                .get_verdict(&registry.name, name, version)
-                .await
-                .unwrap_or(None),
-            _ => None,
-        };
-        // RFC 0008-bis §13.7: a Terraform provider archive is installed
-        // through a download document that names the publisher's signing
-        // keys and the protocols the provider speaks — facts the archive,
-        // the checksum list and the signature do not carry, and a document
-        // composed without the keys leads the client to a refusal. Read off
-        // the connected instance's own document, carried as evidence.
-        let facts = match terraform_provider_facts(client, registry, path).await {
-            Ok(facts) => facts,
-            Err(note) => {
-                skipped.push(format!("{} [{}]: {note}", entry.tool, entry.platform));
-                None
-            }
-        };
-        entries.push(BundleEntry {
-            registry: registry.name.clone(),
-            key: stored_key,
-            size: bytes.len() as u64,
-            digest: digest.clone(),
-            package_name: fetched.package_name.clone(),
-            version: fetched
-                .version
-                .clone()
-                .or_else(|| Some(entry.version.clone())),
-            // RFC 0008 §13 decision 4: the verdict crosses the gap with the
-            // bytes. Without it every imported artifact is `SCAN_PENDING` on
-            // an instance with `[security]`, and fail-closed means the
-            // bundle it just accepted serves nothing.
-            //
-            // Asked for rather than read off the response, because the
-            // response only carries the RFC 0018 headers when there is
-            // something to *say* — a hold or a warning. An `allowed` verdict
-            // is silent on the wire, and silence is the case that has to
-            // cross: it is the one that lets the disconnected instance serve.
-            verdict: carried.as_ref().map(|v| v.state.clone()),
-            reason_codes: carried
-                .as_ref()
-                .map(|v| v.reason_codes.clone())
-                .unwrap_or_default(),
-            verified_at: carried.as_ref().map(|_| chrono::Utc::now()),
-            // RFC 0008 §13.3: the ref → commit pair travels with the bytes.
-            // A disconnected instance resolves a ref before it fetches
-            // anything and has no forge to ask, so without this row a forge
-            // registry answers `503` to every coordinate in the bundle it
-            // just imported.
-            git_ref: match (
-                &fetched.package_name,
-                &fetched.requested_ref,
-                &fetched.ref_kind,
-                &fetched.resolved_commit,
-            ) {
-                (Some(owner_repo), Some(git_ref), Some(kind), Some(sha)) => {
-                    Some(batlehub_core::services::bundle::BundleRef {
-                        owner_repo: owner_repo.clone(),
-                        git_ref: git_ref.clone(),
-                        kind: kind.clone(),
-                        sha: sha.clone(),
-                    })
-                }
-                _ => None,
-            },
-            facts,
-        });
+        entries.push(bundle_entry);
         blobs.entry(digest).or_insert(bytes);
     }
 
@@ -338,38 +402,7 @@ async fn run_export(args: ExportArgs, client: &BatleHubClient, json: bool) -> Re
         |digest| blobs.get(digest).cloned(),
     )?;
 
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "bundle_id": manifest.bundle_id,
-                "path": args.out.display().to_string(),
-                "entries": manifest.entries.len(),
-                "blobs": written,
-                "signer_key": public_key,
-                "skipped": skipped,
-            }))?
-        );
-    } else {
-        println!(
-            "{} · {} entr{} · {written} blob(s) · signed",
-            args.out.display(),
-            manifest.entries.len(),
-            if manifest.entries.len() == 1 {
-                "y"
-            } else {
-                "ies"
-            },
-        );
-        for line in &skipped {
-            println!("  skipped: {line}");
-        }
-        println!("  signed by {public_key}");
-        println!(
-            "  the disconnected instance must list that key in \
-             [air_gap].bundle_trusted_keys"
-        );
-    }
+    print_export_report(json, &args.out, &manifest, written, &public_key, &skipped)?;
     Ok(())
 }
 
@@ -390,6 +423,130 @@ struct SeedOutcome {
     detail: Option<String>,
 }
 
+/// The outcome of seeding one plan entry.
+async fn seed_one(
+    client: &BatleHubClient,
+    entry: &crate::api::mise_plan::PlanEntry,
+    verify: bool,
+) -> SeedOutcome {
+    let (Some(path), Some(key)) = (&entry.proxy_path, &entry.key) else {
+        // No registry mirrors this host: `plan` already said so, and seeding
+        // cannot invent one. Reported rather than skipped, so the count at the
+        // end is the whole lock.
+        return SeedOutcome {
+            tool: entry.tool.clone(),
+            platform: entry.platform.clone(),
+            key: entry.url.clone(),
+            status: 0,
+            bytes: 0,
+            result: "unmirrored",
+            detail: Some("no registry on this server mirrors this host".into()),
+        };
+    };
+    let mut outcome = SeedOutcome {
+        tool: entry.tool.clone(),
+        platform: entry.platform.clone(),
+        key: key.clone(),
+        status: 0,
+        bytes: 0,
+        result: "failed",
+        detail: None,
+    };
+    let f = match client.seed_fetch(path).await {
+        Err(e) => {
+            outcome.detail = Some(e.to_string());
+            return outcome;
+        }
+        Ok(f) => f,
+    };
+    outcome.status = f.status;
+    outcome.bytes = f.size;
+    judge_seed_fetch(&mut outcome, &f, entry.sha256.as_deref());
+    if verify {
+        if let Some(v) = &f.verdict {
+            let note = format!("verdict {v} ({})", f.reasons);
+            outcome.detail = Some(match outcome.detail.take() {
+                Some(d) => format!("{d}; {note}"),
+                None => note,
+            });
+        }
+    }
+    outcome
+}
+
+/// What one fetch means: a refusal, a digest that matches the lock, one that
+/// does not, or a fetch with nothing to compare against.
+fn judge_seed_fetch(outcome: &mut SeedOutcome, f: &crate::api::SeedFetch, expected: Option<&str>) {
+    if f.error.is_some() || f.status >= 400 {
+        outcome.detail = f.error.clone().or(Some(format!("HTTP {}", f.status)));
+        // A refusal with a verdict is a *judgement*, not a fetch failure, and
+        // the two lead an operator to different places.
+        if f.verdict.as_deref() == Some("denied") {
+            outcome.result = "denied";
+            outcome.detail = Some(f.reasons.clone());
+        }
+        return;
+    }
+    let Some(expected) = expected else {
+        // No digest in the lock: fetched and cached, and this says so rather
+        // than claiming a match nobody made.
+        outcome.result = "ok";
+        outcome.detail = Some("the lock records no checksum for this entry".into());
+        return;
+    };
+    // The lock's digest against what BatleHub actually stored. This is the
+    // check that makes a bundle's contents provable on the disconnected side
+    // without reference to anything the bundle itself claims.
+    if expected.eq_ignore_ascii_case(&f.sha256) {
+        outcome.result = "ok";
+        return;
+    }
+    outcome.result = "digest_mismatch";
+    outcome.detail = Some(format!("lock says {expected}, server served {}", f.sha256));
+}
+
+/// What `mise seed` printed, in either shape.
+fn print_seed_report(json: bool, verify: bool, outcomes: &[SeedOutcome], ok: usize) -> Result<()> {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "seeded": ok,
+                "total": outcomes.len(),
+                "entries": outcomes,
+            }))?
+        );
+        return Ok(());
+    }
+    println!("{ok}/{} fetched and verified", outcomes.len());
+    for o in outcomes.iter().filter(|o| o.result != "ok") {
+        println!(
+            "  {} [{}] {}: {}{}",
+            o.result,
+            o.platform,
+            o.tool,
+            o.key,
+            o.detail
+                .as_deref()
+                .map(|d| format!(" — {d}"))
+                .unwrap_or_default()
+        );
+    }
+    if verify {
+        let denied = outcomes.iter().filter(|o| o.result == "denied").count();
+        let provenance = outcomes
+            .iter()
+            .filter(|o| {
+                o.detail
+                    .as_deref()
+                    .is_some_and(|d| d.contains("PROVENANCE_MISSING"))
+            })
+            .count();
+        println!("  {denied} denied · {provenance} with no provenance");
+    }
+    Ok(())
+}
+
 async fn run_seed(args: SeedArgs, client: &BatleHubClient, json: bool) -> Result<()> {
     let text = std::fs::read_to_string(&args.plan)
         .with_context(|| format!("reading {}", args.plan.display()))?;
@@ -406,116 +563,12 @@ async fn run_seed(args: SeedArgs, client: &BatleHubClient, json: bool) -> Result
 
     let mut outcomes: Vec<SeedOutcome> = Vec::new();
     for entry in &plan.entries {
-        let (Some(path), Some(key)) = (&entry.proxy_path, &entry.key) else {
-            // No registry mirrors this host: `plan` already said so, and
-            // seeding cannot invent one. Reported rather than skipped, so
-            // the count at the end is the whole lock.
-            outcomes.push(SeedOutcome {
-                tool: entry.tool.clone(),
-                platform: entry.platform.clone(),
-                key: entry.url.clone(),
-                status: 0,
-                bytes: 0,
-                result: "unmirrored",
-                detail: Some("no registry on this server mirrors this host".into()),
-            });
-            continue;
-        };
-        let fetched = client.seed_fetch(path).await;
-        let mut outcome = SeedOutcome {
-            tool: entry.tool.clone(),
-            platform: entry.platform.clone(),
-            key: key.clone(),
-            status: 0,
-            bytes: 0,
-            result: "failed",
-            detail: None,
-        };
-        match fetched {
-            Err(e) => outcome.detail = Some(e.to_string()),
-            Ok(f) => {
-                outcome.status = f.status;
-                outcome.bytes = f.size;
-                if f.error.is_some() || f.status >= 400 {
-                    outcome.detail = f.error.or(Some(format!("HTTP {}", f.status)));
-                    // A refusal with a verdict is a *judgement*, not a
-                    // fetch failure, and the two lead an operator to
-                    // different places.
-                    if f.verdict.as_deref() == Some("denied") {
-                        outcome.result = "denied";
-                        outcome.detail = Some(f.reasons.clone());
-                    }
-                } else if let Some(expected) = &entry.sha256 {
-                    // The lock's digest against what BatleHub actually
-                    // stored. This is the check that makes a bundle's
-                    // contents provable on the disconnected side without
-                    // reference to anything the bundle itself claims.
-                    if expected.eq_ignore_ascii_case(&f.sha256) {
-                        outcome.result = "ok";
-                    } else {
-                        outcome.result = "digest_mismatch";
-                        outcome.detail =
-                            Some(format!("lock says {expected}, server served {}", f.sha256));
-                    }
-                } else {
-                    // No digest in the lock: fetched and cached, and this
-                    // says so rather than claiming a match nobody made.
-                    outcome.result = "ok";
-                    outcome.detail = Some("the lock records no checksum for this entry".into());
-                }
-                if args.verify {
-                    if let Some(v) = &f.verdict {
-                        let note = format!("verdict {v} ({})", f.reasons);
-                        outcome.detail = Some(match outcome.detail.take() {
-                            Some(d) => format!("{d}; {note}"),
-                            None => note,
-                        });
-                    }
-                }
-            }
-        }
-        outcomes.push(outcome);
+        outcomes.push(seed_one(client, entry, args.verify).await);
     }
 
     let ok = outcomes.iter().filter(|o| o.result == "ok").count();
     let failed = outcomes.len() - ok;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "seeded": ok,
-                "total": outcomes.len(),
-                "entries": outcomes,
-            }))?
-        );
-    } else {
-        println!("{ok}/{} fetched and verified", outcomes.len());
-        for o in outcomes.iter().filter(|o| o.result != "ok") {
-            println!(
-                "  {} [{}] {}: {}{}",
-                o.result,
-                o.platform,
-                o.tool,
-                o.key,
-                o.detail
-                    .as_deref()
-                    .map(|d| format!(" — {d}"))
-                    .unwrap_or_default()
-            );
-        }
-        if args.verify {
-            let denied = outcomes.iter().filter(|o| o.result == "denied").count();
-            let provenance = outcomes
-                .iter()
-                .filter(|o| {
-                    o.detail
-                        .as_deref()
-                        .is_some_and(|d| d.contains("PROVENANCE_MISSING"))
-                })
-                .count();
-            println!("  {denied} denied · {provenance} with no provenance");
-        }
-    }
+    print_seed_report(json, args.verify, &outcomes, ok)?;
     if failed > 0 {
         // A CI gate on the connected side: the run failed, and the lines
         // above say which entries and why.

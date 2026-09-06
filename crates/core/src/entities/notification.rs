@@ -44,7 +44,7 @@ impl NotificationEventType {
 
     /// Every variant, in wire order — what the console's picker and the
     /// CLI's help list, so neither enumerates the enum by hand.
-    pub const ALL: &'static [Self] = &[
+    pub const ALL: &[Self] = &[
         Self::PackagePublished,
         Self::PackageYanked,
         Self::PackageUnyanked,

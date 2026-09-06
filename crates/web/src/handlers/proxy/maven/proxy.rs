@@ -49,21 +49,7 @@ pub async fn maven_get(
     let kind = parse_maven_path(&registry, &maven_path)?;
 
     if matches!(mode, RegistryMode::Local | RegistryMode::Hybrid) {
-        // Enforce registry RBAC before any local read. `maven_local_response`
-        // reads generated metadata and artifact bytes straight from local storage
-        // without running the registry rule chain (only the proxy fall-through
-        // does), so a local hit would otherwise bypass `[registries.rbac]`.
-        let (auth_name, auth_version) = match &kind {
-            MavenPathKind::Metadata { name } => (name.clone(), "maven-metadata.xml".to_owned()),
-            MavenPathKind::Artifact { name, version, .. } => (name.clone(), version.clone()),
-        };
-        svc.authorize_read(
-            &PackageId::new(&registry, auth_name, auth_version),
-            &identity.0,
-            Action::ReleasesRead,
-        )
-        .await
-        .map_err(AppError::from)?;
+        authorize_local_read(&svc, &registry, &kind, &identity).await?;
         if let Some(resp) =
             maven_local_response(&local_svc, &registry, &kind, &identity, mode).await?
         {
@@ -83,31 +69,8 @@ pub async fn maven_get(
     // the held set there is no upstream `.sha1` to fetch, and Maven retries
     // the `503` for minutes (RFC 0008-bis §13.4). The composed bytes answer
     // their own digest; a held document keeps upstream's file, below.
-    if let Some((name, algo)) = super::routing::metadata_checksum_of(&maven_path) {
-        let doc = fetch_proxy_document(
-            svc.clone(),
-            PackageId::new(&registry, name, "maven-metadata.xml"),
-            AuthIdentity(identity.0.clone()),
-            Action::ReleasesRead,
-            batlehub_core::ports::DocumentKind::Versions,
-            String::new(),
-        )
-        .await;
-        if let Ok(doc) = doc {
-            if doc.synthesised.is_some() {
-                let bytes = match &doc.body {
-                    batlehub_core::ports::DocumentBody::Text(t) => t.as_bytes().to_vec(),
-                    batlehub_core::ports::DocumentBody::Json(v) => {
-                        serde_json::to_vec(v).unwrap_or_default()
-                    }
-                };
-                let digest = digest_hex(algo, &bytes);
-                let mut builder = HttpResponse::Ok();
-                builder.content_type("text/plain; charset=utf-8");
-                crate::handlers::proxy::common::listing_headers(&mut builder, &doc);
-                return Ok(builder.body(digest));
-            }
-        }
+    if let Some(resp) = composed_metadata_checksum(&svc, &registry, &maven_path, &identity).await {
+        return Ok(resp);
     }
 
     match &kind {
@@ -138,6 +101,66 @@ pub async fn maven_get(
             .await
         }
     }
+}
+
+/// Enforce registry RBAC before any local read.
+///
+/// `maven_local_response` reads generated metadata and artifact bytes straight
+/// from local storage without running the registry rule chain (only the proxy
+/// fall-through does), so a local hit would otherwise bypass
+/// `[registries.rbac]`.
+async fn authorize_local_read(
+    svc: &ProxyService,
+    registry: &str,
+    kind: &MavenPathKind,
+    identity: &AuthIdentity,
+) -> Result<(), AppError> {
+    let (name, version) = match kind {
+        MavenPathKind::Metadata { name } => (name.clone(), "maven-metadata.xml".to_owned()),
+        MavenPathKind::Artifact { name, version, .. } => (name.clone(), version.clone()),
+    };
+    svc.authorize_read(
+        &PackageId::new(registry, name, version),
+        &identity.0,
+        Action::ReleasesRead,
+    )
+    .await
+    .map_err(AppError::from)
+}
+
+/// A checksum of `maven-metadata.xml` for a document this instance *composed*.
+///
+/// When the document is composed from the held set there is no upstream
+/// `.sha1` to fetch, and Maven retries the `503` for minutes (RFC 0008-bis
+/// §13.4). The composed bytes answer their own digest; a held document keeps
+/// upstream's file, so this returns `None` and the request falls through.
+async fn composed_metadata_checksum(
+    svc: &web::Data<Arc<ProxyService>>,
+    registry: &str,
+    maven_path: &str,
+    identity: &AuthIdentity,
+) -> Option<HttpResponse> {
+    let (name, algo) = super::routing::metadata_checksum_of(maven_path)?;
+    let doc = fetch_proxy_document(
+        svc.clone(),
+        PackageId::new(registry, name, "maven-metadata.xml"),
+        AuthIdentity(identity.0.clone()),
+        Action::ReleasesRead,
+        batlehub_core::ports::DocumentKind::Versions,
+        String::new(),
+    )
+    .await
+    .ok()?;
+    doc.synthesised.as_ref()?;
+    let bytes = match &doc.body {
+        batlehub_core::ports::DocumentBody::Text(t) => t.as_bytes().to_vec(),
+        batlehub_core::ports::DocumentBody::Json(v) => serde_json::to_vec(v).unwrap_or_default(),
+    };
+    let digest = digest_hex(algo, &bytes);
+    let mut builder = HttpResponse::Ok();
+    builder.content_type("text/plain; charset=utf-8");
+    crate::handlers::proxy::common::listing_headers(&mut builder, &doc);
+    Some(builder.body(digest))
 }
 
 /// Upload a Maven artifact to the local registry.

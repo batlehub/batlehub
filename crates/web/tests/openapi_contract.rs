@@ -192,6 +192,63 @@ fn delimited_after(text: &str, from: usize, open: char, close: char) -> Option<&
 /// responder took a status argument in June and every publish path passes one
 /// — and the point of this test is that nobody has to re-read the tree to
 /// know it. It is the item that finding became.
+/// The statuses a handler body literally constructs, from `CONSTRUCTORS`.
+fn constructed_statuses(body: &str) -> Vec<&'static str> {
+    let mut constructs: Vec<&str> = Vec::new();
+    for (fragment, status) in CONSTRUCTORS {
+        if body.contains(fragment) && !constructs.contains(&status) {
+            constructs.push(status);
+        }
+    }
+    constructs
+}
+
+/// Where the two disagree, in both directions, for one handler.
+fn disagreements(short: &str, name: &str, declared: &[String], constructs: &[&str]) -> Vec<String> {
+    let mut out = Vec::new();
+    for sent in constructs {
+        if !declared.iter().any(|d| d == sent) {
+            out.push(format!(
+                "{short}::{name} sends {sent} but its utoipa::path declares {declared:?}"
+            ));
+        }
+    }
+    for d in declared {
+        if !constructs.contains(&d.as_str()) {
+            out.push(format!(
+                "{short}::{name} declares {d} but its body only constructs {constructs:?}"
+            ));
+        }
+    }
+    out
+}
+
+/// One `#[utoipa::path(…)]` and the handler under it. `None` when this lint
+/// cannot read the pair — a missing declaration, a body whose status comes
+/// from somewhere it cannot follow — and a guess would be worse than a skip.
+fn compare_one(text: &str, short: &str, at: &mut usize, start: usize) -> Option<Vec<String>> {
+    let attr = delimited_after(text, start, '(', ')')?;
+    *at = start + attr.len();
+
+    let declared = declared_successes(attr);
+    if declared.is_empty() {
+        return None;
+    }
+    // The handler is the next `async fn` after the annotation.
+    let fn_start = *at + text[*at..].find("async fn ")?;
+    let name: String = text[fn_start + "async fn ".len()..]
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    let body = delimited_after(text, fn_start, '{', '}')?;
+
+    let constructs = constructed_statuses(body);
+    if constructs.is_empty() {
+        return None;
+    }
+    Some(disagreements(short, &name, &declared, &constructs))
+}
+
 #[test]
 fn every_declared_success_status_is_one_the_handler_can_actually_send() {
     let mut offenders: Vec<String> = Vec::new();
@@ -208,54 +265,16 @@ fn every_declared_success_status_is_one_the_handler_can_actually_send() {
         let mut at = 0usize;
         while let Some(found) = text[at..].find("#[utoipa::path(") {
             let start = at + found;
-            let Some(attr) = delimited_after(&text, start, '(', ')') else {
-                break;
-            };
-            at = start + attr.len();
-
-            let declared = declared_successes(attr);
-            if declared.is_empty() {
-                continue;
-            }
-            // The handler is the next `async fn` after the annotation.
-            let Some(fn_at) = text[at..].find("async fn ") else {
-                continue;
-            };
-            let fn_start = at + fn_at;
-            let name: String = text[fn_start + "async fn ".len()..]
-                .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .collect();
-            let Some(body) = delimited_after(&text, fn_start, '{', '}') else {
-                continue;
-            };
-
-            let mut constructs: Vec<&str> = Vec::new();
-            for (fragment, status) in CONSTRUCTORS {
-                if body.contains(fragment) && !constructs.contains(&status) {
-                    constructs.push(status);
+            let before = at;
+            match compare_one(&text, &short, &mut at, start) {
+                Some(found) => {
+                    checked += 1;
+                    offenders.extend(found);
                 }
-            }
-            // Nothing literal in the body: the status comes from somewhere
-            // this lint cannot follow, and a guess would be worse than a skip.
-            if constructs.is_empty() {
-                continue;
-            }
-            checked += 1;
-
-            for sent in &constructs {
-                if !declared.iter().any(|d| d == sent) {
-                    offenders.push(format!(
-                        "{short}::{name} sends {sent} but its utoipa::path declares {declared:?}"
-                    ));
-                }
-            }
-            for d in &declared {
-                if !constructs.contains(&d.as_str()) {
-                    offenders.push(format!(
-                        "{short}::{name} declares {d} but its body only constructs {constructs:?}"
-                    ));
-                }
+                // `compare_one` advances `at` past the attribute before it can
+                // fail; if it failed before that, do it here or the scan spins.
+                None if at == before => break,
+                None => {}
             }
         }
     }

@@ -47,6 +47,11 @@ heavy_need node "nodejs"
 heavy_need curl "curl"
 
 REG="vsx-$HEAVY_RUN"
+
+# A JSON body sent without this header is a 400 from an extractor that runs
+# before the handler, so the request never reaches what the assertion is about.
+# Named for the same reason `authz.sh` names it.
+HDR_JSON="Content-Type: application/json"
 EXT_ID="batleforc.weebo-bridge-notify"
 WEEBO_VERSION="${WEEBO_VERSION:-0.5.0}"
 WEEBO_BASE_URL="${WEEBO_BASE_URL:-https://github.com/batleforc/weebo-che-notify/releases/download}"
@@ -124,14 +129,14 @@ count_of() {  # <json> → the number of extensions in the first result
 # empty `200` of a registry that grants anonymous read — which is exactly
 # the status that blanks an Extensions view (§4.4.2), and exactly why the
 # proxy below answers an unauthenticated query itself.
-ANON_CODE="$(curl -s -o "$HEAVY_WORK/anon-registry.json" -w '%{http_code}' -X POST -H "Content-Type: application/json" -d "$SEARCH_BODY" \
+ANON_CODE="$(curl -s -o "$HEAVY_WORK/anon-registry.json" -w '%{http_code}' -X POST -H "$HDR_JSON" -d "$SEARCH_BODY" \
   "$REGISTRY_BASE/vscode/gallery/extensionquery")"
 case "$ANON_CODE" in
   403) ANON=0 ;;
   200) ANON="$(count_of <"$HEAVY_WORK/anon-registry.json" || echo "?")" ;;
   *) heavy_fail "the registry answered an anonymous search with $ANON_CODE" ;;
 esac
-AUTHED="$(curl -sS -X POST -H "Content-Type: application/json" -H "Authorization: Bearer $USER_TOKEN" -d "$SEARCH_BODY" \
+AUTHED="$(curl -sS -X POST -H "$HDR_JSON" -H "Authorization: Bearer $USER_TOKEN" -d "$SEARCH_BODY" \
   "$REGISTRY_BASE/vscode/gallery/extensionquery" | count_of || echo "?")"
 [[ "$ANON" == "0" ]] || heavy_fail "the registry answered an anonymous search with $ANON extension(s); it must answer none for this suite to prove anything"
 [[ "$AUTHED" == "1" ]] || heavy_fail "the registry answered a user's search with $AUTHED extension(s), expected the fixture"
@@ -174,12 +179,12 @@ PY
 
 # A wrong session segment is a 404 (§4.4.1): the port protects nothing.
 PROXY_ORIGIN="${GALLERY%%/vsx}"; PROXY_ORIGIN="${PROXY_ORIGIN%/*}"
-WRONG="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/json" -d "$SEARCH_BODY" \
+WRONG="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$HDR_JSON" -d "$SEARCH_BODY" \
   "$PROXY_ORIGIN/not-the-session/vsx/vscode/gallery/extensionquery")"
 [[ "$WRONG" == "404" ]] || heavy_fail "a request outside the session segment answered $WRONG, expected 404"
 
 heavy_mark "anon-search"
-curl -sS -X POST -H "Content-Type: application/json" -d "$SEARCH_BODY" \
+curl -sS -X POST -H "$HDR_JSON" -d "$SEARCH_BODY" \
   "$GALLERY/vscode/gallery/extensionquery" >"$HEAVY_WORK/anon-search.json"
 python3 - "$HEAVY_WORK/anon-search.json" <<'PY' || { cat "$HEAVY_WORK/anon-search.json" >&2; heavy_fail "an unauthenticated search through the proxy is not the one sign-in entry with Code.Engine"; }
 import json, sys
@@ -245,7 +250,7 @@ grep -q "ok" "$HEAVY_WORK/status.txt" || { cat "$HEAVY_WORK/status.txt" >&2; hea
 if grep -q "$USER_TOKEN" "$HEAVY_WORK/status.txt"; then heavy_fail "auth status printed the credential"; fi
 
 heavy_mark "authed-search"
-curl -sS -X POST -H "Content-Type: application/json" -d "$SEARCH_BODY" \
+curl -sS -X POST -H "$HDR_JSON" -d "$SEARCH_BODY" \
   "$GALLERY/vscode/gallery/extensionquery" >"$HEAVY_WORK/authed-search.json"
 python3 - "$HEAVY_WORK/authed-search.json" "$GALLERY" "$EXT_ID" <<'PY' || { cat "$HEAVY_WORK/authed-search.json" >&2; heavy_fail "an authenticated search through the proxy is not the fixture with its assets on the proxy"; }
 import json, sys

@@ -1519,7 +1519,7 @@ impl crate::ports::UpstreamStatusPort for FixedHold {
 }
 
 fn held(keys: &[&str]) -> Arc<dyn crate::ports::UpstreamStatusPort> {
-    Arc::new(FixedHold(keys.iter().map(|k| k.to_string()).collect()))
+    Arc::new(FixedHold(keys.iter().map(ToString::to_string).collect()))
 }
 
 /// Two expired artifacts, one held by version and one by its whole package,

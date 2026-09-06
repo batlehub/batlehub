@@ -91,7 +91,7 @@ export function resolveGalleryToken(
 		}
 	}
 	const inline = env['VSX_REGISTRY_AUTH_TOKEN'];
-	return inline && inline.trim() ? inline.trim() : undefined;
+	return inline?.trim() || undefined;
 }
 
 /**

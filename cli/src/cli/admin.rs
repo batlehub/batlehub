@@ -516,6 +516,168 @@ pub enum BulkCommand {
     },
 }
 
+/// RFC 0002 §13's exposure report.
+async fn handle_exposure(q: ExposureQuery, client: &BatleHubClient, json: bool) -> Result<()> {
+    let resp = client.exposure(q).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&resp)?);
+    } else {
+        print_exposure(&resp);
+    }
+    Ok(())
+}
+
+/// The pushed flags a source has raised.
+async fn handle_flags(cmd: FlagsCommand, client: &BatleHubClient, json: bool) -> Result<()> {
+    let FlagsCommand::List {
+        registry,
+        package,
+        source,
+        effect,
+        include_dead,
+        page,
+        per_page,
+    } = cmd;
+    let resp = client
+        .list_flags(FlagsQuery {
+            registry,
+            package_name: package,
+            source,
+            effect,
+            include_dead,
+            page,
+            per_page,
+        })
+        .await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&resp)?);
+    } else {
+        print_flags(&resp);
+    }
+    Ok(())
+}
+
+/// Every bundle this instance has imported (RFC 0008).
+async fn handle_bundles(client: &BatleHubClient, json: bool) -> Result<()> {
+    let items = client.list_bundles().await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&items)?);
+        return Ok(());
+    }
+    let mut table = Table::new();
+    table.set_header(["Bundle", "Signer", "Imported", "By", "Blobs", "Rejected"]);
+    for b in &items {
+        table.add_row([
+            b.bundle_id.clone(),
+            b.signer_key.chars().take(8).collect(),
+            b.imported_at.format("%Y-%m-%d %H:%M").to_string(),
+            b.imported_by.clone().unwrap_or_else(|| "-".into()),
+            b.blobs.to_string(),
+            b.rejected.to_string(),
+        ]);
+    }
+    println!("{table}");
+    println!("{} bundle(s)", items.len());
+    if items.is_empty() {
+        println!(
+            "nothing has been imported. On an air-gapped instance that means it \
+             holds only what it was seeded with before the gap."
+        );
+    }
+    Ok(())
+}
+
+/// The miss log (RFC 0008 §6.3).
+///
+/// `Requested` and `Held` together are the next plan's diff (RFC 0008-bis
+/// §4.4): not "left-pad is missing" but "1.2.0 was asked for; 1.3.0 is held".
+/// Absent when the request named no version — a listing — or the instance held
+/// nothing.
+async fn handle_air_gap_missing(
+    q: MissingQuery,
+    client: &BatleHubClient,
+    json: bool,
+) -> Result<()> {
+    let resp = client.air_gap_missing(q).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&resp)?);
+        return Ok(());
+    }
+    let mut table = Table::new();
+    table.set_header([
+        "Registry",
+        "Kind",
+        "Key",
+        "Requested",
+        "Held",
+        "Asked",
+        "Last seen",
+    ]);
+    for m in &resp.items {
+        table.add_row([
+            m.registry.clone(),
+            m.kind.clone(),
+            m.storage_key.clone(),
+            m.requested_version
+                .clone()
+                .unwrap_or_else(|| "—".to_owned()),
+            held_versions_cell(&m.held_versions),
+            m.count.to_string(),
+            m.last_seen.format("%Y-%m-%d %H:%M").to_string(),
+        ]);
+    }
+    println!("{table}");
+    println!("{} of {} row(s)", resp.items.len(), resp.total);
+    if !resp.air_gapped {
+        println!(
+            "this instance is not air-gapped, so a miss is fetched rather than \
+             recorded: an empty list here is not the same as nothing missing."
+        );
+    }
+    Ok(())
+}
+
+/// The `Held` cell: at most four versions, then a count of the rest.
+fn held_versions_cell(held: &[String]) -> String {
+    match held.len() {
+        0 => "—".to_owned(),
+        n if n > 4 => format!("{} (+{})", held[..4].join(", "), n - 4),
+        _ => held.join(", "),
+    }
+}
+
+async fn handle_stats(client: &BatleHubClient, json: bool) -> Result<()> {
+    let resp = client.admin_stats().await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&resp)?);
+    } else {
+        print_stats(&resp);
+    }
+    Ok(())
+}
+
+async fn handle_health(client: &BatleHubClient, json: bool) -> Result<()> {
+    let resp = client.registry_health().await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&resp)?);
+    } else {
+        print_health_table(&resp);
+    }
+    Ok(())
+}
+
+/// An export goes to the named file, or to stdout when none was named.
+fn write_or_print(output: Option<&str>, text: &str) -> Result<()> {
+    match output {
+        Some(path) => {
+            std::fs::write(path, text)?;
+            println!("Exported to {path}");
+        }
+        None => print!("{text}"),
+    }
+    Ok(())
+}
+
 pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Result<()> {
     match cmd {
         AdminCommand::Quota { cmd } => handle_quota(cmd, client, json).await?,
@@ -569,8 +731,8 @@ pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Resu
             after,
             limit,
         } => {
-            let resp = client
-                .exposure(ExposureQuery {
+            handle_exposure(
+                ExposureQuery {
                     from,
                     to,
                     registry,
@@ -580,144 +742,34 @@ pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Resu
                     when: when.map(|w| w.replace('-', "_")),
                     after,
                     limit,
-                })
-                .await?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
-            } else {
-                print_exposure(&resp);
-            }
+                },
+                client,
+                json,
+            )
+            .await?
         }
-        AdminCommand::Flags { cmd } => match cmd {
-            FlagsCommand::List {
-                registry,
-                package,
-                source,
-                effect,
-                include_dead,
-                page,
-                per_page,
-            } => {
-                let resp = client
-                    .list_flags(FlagsQuery {
-                        registry,
-                        package_name: package,
-                        source,
-                        effect,
-                        include_dead,
-                        page,
-                        per_page,
-                    })
-                    .await?;
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&resp)?);
-                } else {
-                    print_flags(&resp);
-                }
-            }
-        },
-        AdminCommand::Bundles => {
-            let items = client.list_bundles().await?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&items)?);
-            } else {
-                let mut table = Table::new();
-                table.set_header(["Bundle", "Signer", "Imported", "By", "Blobs", "Rejected"]);
-                for b in &items {
-                    table.add_row([
-                        b.bundle_id.clone(),
-                        b.signer_key.chars().take(8).collect(),
-                        b.imported_at.format("%Y-%m-%d %H:%M").to_string(),
-                        b.imported_by.clone().unwrap_or_else(|| "-".into()),
-                        b.blobs.to_string(),
-                        b.rejected.to_string(),
-                    ]);
-                }
-                println!("{table}");
-                println!("{} bundle(s)", items.len());
-                if items.is_empty() {
-                    println!(
-                        "nothing has been imported. On an air-gapped instance that means it \
-                         holds only what it was seeded with before the gap."
-                    );
-                }
-            }
-        }
+        AdminCommand::Flags { cmd } => handle_flags(cmd, client, json).await?,
+        AdminCommand::Bundles => handle_bundles(client, json).await?,
         AdminCommand::AirGapMissing {
             registry,
             kind,
             page,
             per_page,
         } => {
-            let resp = client
-                .air_gap_missing(MissingQuery {
+            handle_air_gap_missing(
+                MissingQuery {
                     registry,
                     kind,
                     page,
                     per_page,
-                })
-                .await?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
-            } else {
-                let mut table = Table::new();
-                // `Requested` and `Held` together are the next plan's diff
-                // (RFC 0008-bis §4.4): not "left-pad is missing" but "1.2.0
-                // was asked for; 1.3.0 is held". Absent when the request named
-                // no version — a listing — or the instance held nothing.
-                table.set_header([
-                    "Registry",
-                    "Kind",
-                    "Key",
-                    "Requested",
-                    "Held",
-                    "Asked",
-                    "Last seen",
-                ]);
-                for m in &resp.items {
-                    let held = match m.held_versions.len() {
-                        0 => "—".to_owned(),
-                        n if n > 4 => format!("{} (+{})", m.held_versions[..4].join(", "), n - 4),
-                        _ => m.held_versions.join(", "),
-                    };
-                    table.add_row([
-                        m.registry.clone(),
-                        m.kind.clone(),
-                        m.storage_key.clone(),
-                        m.requested_version
-                            .clone()
-                            .unwrap_or_else(|| "—".to_owned()),
-                        held,
-                        m.count.to_string(),
-                        m.last_seen.format("%Y-%m-%d %H:%M").to_string(),
-                    ]);
-                }
-                println!("{table}");
-                println!("{} of {} row(s)", resp.items.len(), resp.total);
-                if !resp.air_gapped {
-                    println!(
-                        "this instance is not air-gapped, so a miss is fetched rather than \
-                         recorded: an empty list here is not the same as nothing missing."
-                    );
-                }
-            }
+                },
+                client,
+                json,
+            )
+            .await?
         }
-        AdminCommand::Stats => {
-            let resp = client.admin_stats().await?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
-            } else {
-                print_stats(&resp);
-            }
-        }
-        AdminCommand::Health => {
-            let resp = client.registry_health().await?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
-            } else {
-                print_health_table(&resp);
-            }
-        }
+        AdminCommand::Stats => handle_stats(client, json).await?,
+        AdminCommand::Health => handle_health(client, json).await?,
         AdminCommand::Visibility { cmd } => handle_visibility(cmd, client, json).await?,
         AdminCommand::Grants { cmd } => handle_grants(cmd, client, json).await?,
         AdminCommand::Namespace { cmd } => handle_namespace(cmd, client, json).await?,
@@ -801,13 +853,7 @@ pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Resu
                     &format,
                 )
                 .await?;
-            match output {
-                Some(path) => {
-                    std::fs::write(&path, &text)?;
-                    println!("Exported to {path}");
-                }
-                None => print!("{text}"),
-            }
+            write_or_print(output.as_deref(), &text)?;
         }
     }
     Ok(())

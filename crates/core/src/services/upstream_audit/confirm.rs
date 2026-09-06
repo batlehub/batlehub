@@ -35,6 +35,90 @@ pub(super) struct Applied {
     pub disappeared: Vec<UpstreamStatus>,
 }
 
+/// Count what the probes said, before anything is written. Returns the number
+/// of conclusive answers, which is the denominator of the outage ratio.
+fn tally(outcomes: &[(String, Vec<String>, (ProbeOutcome, bool))], applied: &mut Applied) -> usize {
+    let mut conclusive = 0usize;
+    for (_, _, (outcome, capped)) in outcomes {
+        if *capped {
+            applied.capped += 1;
+        }
+        if matches!(outcome, ProbeOutcome::Inconclusive(_)) {
+            applied.inconclusive += 1;
+            continue;
+        }
+        conclusive += 1;
+        if outcome.is_missing() {
+            applied.missing += 1;
+        }
+    }
+    conclusive
+}
+
+/// A package the probe found: the package row and every version row clear.
+async fn present(
+    status: &dyn UpstreamStatusPort,
+    registry: &str,
+    name: &str,
+    versions: &[String],
+    applied: &mut Applied,
+) {
+    clear(status, registry, name, None, versions, applied).await;
+    for v in versions {
+        clear(
+            status,
+            registry,
+            name,
+            Some(v),
+            std::slice::from_ref(v),
+            applied,
+        )
+        .await;
+    }
+}
+
+/// A package that is still there with some versions gone: its package-level
+/// row, if any, clears, and each version is recorded on its own answer.
+#[allow(clippy::too_many_arguments)]
+async fn missing_versions(
+    status: &dyn UpstreamStatusPort,
+    registry: &str,
+    name: &str,
+    versions: &[String],
+    missing: &[String],
+    policy: &UpstreamAuditPolicy,
+    now: DateTime<Utc>,
+    applied: &mut Applied,
+) {
+    clear(status, registry, name, None, versions, applied).await;
+    for v in versions {
+        if missing.contains(v) {
+            miss(
+                status,
+                registry,
+                name,
+                Some(v),
+                std::slice::from_ref(v),
+                policy,
+                now,
+                None,
+                applied,
+            )
+            .await;
+        } else {
+            clear(
+                status,
+                registry,
+                name,
+                Some(v),
+                std::slice::from_ref(v),
+                applied,
+            )
+            .await;
+        }
+    }
+}
+
 /// Apply one registry's probe outcomes to the store.
 pub(super) async fn apply(
     status: &dyn UpstreamStatusPort,
@@ -51,21 +135,7 @@ pub(super) async fn apply(
         transitions: Vec::new(),
         disappeared: Vec::new(),
     };
-    let mut conclusive = 0usize;
-    for (_, _, (outcome, capped)) in outcomes {
-        if *capped {
-            applied.capped += 1;
-        }
-        match outcome {
-            ProbeOutcome::Inconclusive(_) => applied.inconclusive += 1,
-            o => {
-                conclusive += 1;
-                if o.is_missing() {
-                    applied.missing += 1;
-                }
-            }
-        }
-    }
+    let conclusive = tally(outcomes, &mut applied);
 
     // The population gate. Below the floor the ratio says nothing (one
     // package is a quarter of four) and the count and age carry the decision.
@@ -79,21 +149,7 @@ pub(super) async fn apply(
     for (name, versions, (outcome, _)) in outcomes {
         match outcome {
             ProbeOutcome::Inconclusive(_) => {}
-            ProbeOutcome::Present => {
-                // Clear the package row and every version row.
-                clear(status, registry, name, None, versions, &mut applied).await;
-                for v in versions {
-                    clear(
-                        status,
-                        registry,
-                        name,
-                        Some(v),
-                        std::slice::from_ref(v),
-                        &mut applied,
-                    )
-                    .await;
-                }
-            }
+            ProbeOutcome::Present => present(status, registry, name, versions, &mut applied).await,
             ProbeOutcome::MissingPackage => {
                 miss(
                     status,
@@ -109,34 +165,17 @@ pub(super) async fn apply(
                 .await;
             }
             ProbeOutcome::MissingVersions(missing) => {
-                // The package exists: its package-level row, if any, clears.
-                clear(status, registry, name, None, versions, &mut applied).await;
-                for v in versions {
-                    if missing.contains(v) {
-                        miss(
-                            status,
-                            registry,
-                            name,
-                            Some(v),
-                            std::slice::from_ref(v),
-                            policy,
-                            now,
-                            None,
-                            &mut applied,
-                        )
-                        .await;
-                    } else {
-                        clear(
-                            status,
-                            registry,
-                            name,
-                            Some(v),
-                            std::slice::from_ref(v),
-                            &mut applied,
-                        )
-                        .await;
-                    }
-                }
+                missing_versions(
+                    status,
+                    registry,
+                    name,
+                    versions,
+                    missing,
+                    policy,
+                    now,
+                    &mut applied,
+                )
+                .await;
             }
         }
     }

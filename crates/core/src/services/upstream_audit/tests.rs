@@ -59,7 +59,7 @@ impl ScriptedRegistry {
     fn has(&self, name: &str, versions: &[&str]) {
         self.listing.lock().unwrap().insert(
             name.into(),
-            Some(versions.iter().map(|v| v.to_string()).collect()),
+            Some(versions.iter().map(ToString::to_string).collect()),
         );
     }
     fn gone(&self, name: &str) {

@@ -57,7 +57,115 @@ pub struct GithubRegistryClient {
     pub(super) token_fingerprint: String,
 }
 
+/// The asset a coordinate names, from a release's asset list: by filename
+/// where the selector is `filename/…`, by numeric id otherwise. `None` when
+/// the coordinate names the release rather than one of its assets.
+fn selected_asset<'a>(
+    assets: &'a [GhAsset],
+    artifact: Option<&str>,
+) -> Result<Option<&'a GhAsset>, CoreError> {
+    let Some(artifact) = artifact else {
+        return Ok(None);
+    };
+    if let Some(filename) = artifact.strip_prefix("filename/") {
+        return Ok(assets.iter().find(|a| a.name == filename));
+    }
+    let asset_id: u64 = artifact
+        .parse()
+        .map_err(|_| CoreError::Registry(format!("invalid asset id: {artifact}")))?;
+    Ok(assets.iter().find(|a| a.id == asset_id))
+}
+
 impl GithubRegistryClient {
+    /// Raw file and archive downloads name a git ref, not a release, so they
+    /// never resolve through one. Once `ProxyService` has resolved that ref
+    /// the version is a commit SHA, and the commit is what dates the
+    /// coordinate (RFC 0019 §4.2: release → tag → commit). A ref that was not
+    /// resolved — no resolver wired — stays undated.
+    ///
+    /// `None` when the coordinate is not one of those, so the caller carries
+    /// on with the release path.
+    async fn ref_metadata(
+        &self,
+        pkg: &PackageId,
+        owner_repo: &str,
+    ) -> Result<Option<PackageMetadata>, CoreError> {
+        let Some(artifact) = pkg.artifact.as_deref() else {
+            return Ok(None);
+        };
+        let names_a_ref = artifact.starts_with("raw/")
+            || artifact.starts_with("tarball/")
+            || artifact == "zipball";
+        if !names_a_ref {
+            return Ok(None);
+        }
+        if !is_commit_sha(&pkg.version) {
+            return Ok(Some(PackageMetadata::minimal(
+                pkg.clone(),
+                serde_json::Value::Null,
+            )));
+        }
+        Ok(Some(commit_dated_metadata(
+            pkg,
+            self.commit(owner_repo, &pkg.version).await,
+        )))
+    }
+
+    /// The release tag for a coordinate that carries none.
+    ///
+    /// `/releases/assets/{id}` with no `?tag=`: the asset's own JSON names its
+    /// release through `browser_download_url`
+    /// (`…/releases/download/{tag}/{name}`), so the release is looked up from
+    /// there. Found by `tests/heavy/mise.sh`: mise addresses an asset by id
+    /// alone, and this path answered 404 to it — the placeholder tag was being
+    /// looked up as a release.
+    async fn tag_of(&self, pkg: &PackageId, owner_repo: &str) -> Result<Option<String>, CoreError> {
+        if pkg.version != UNKNOWN_TAG {
+            return Ok(None);
+        }
+        let Some(id) = pkg.artifact.as_deref().and_then(|a| a.parse::<u64>().ok()) else {
+            return Ok(None);
+        };
+        let asset = self.asset_by_id(owner_repo, id).await?;
+        let tag = tag_from_download_url(&asset.browser_download_url).ok_or_else(|| {
+            CoreError::Registry(format!(
+                "asset {id} of {owner_repo}: cannot tell its release from '{}'",
+                asset.browser_download_url
+            ))
+        })?;
+        Ok(Some(tag))
+    }
+
+    /// The `releases` pseudo-version: every release of the repository, as the
+    /// listing the resolver reads.
+    async fn release_list_metadata(
+        &self,
+        pkg: &PackageId,
+        owner_repo: &str,
+    ) -> Result<PackageMetadata, CoreError> {
+        let url = format!("{}/repos/{}/releases", self.base_url, owner_repo);
+        let resp = self.api_get(&url).await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(CoreError::NotFound(format!("{owner_repo} not found")));
+        }
+        let releases: Vec<GhRelease> = resp
+            .error_for_status()
+            .map_err(to_registry_error)?
+            .json()
+            .await
+            .map_err(to_registry_error)?;
+        let extra = serde_json::to_value(
+            releases
+                .iter()
+                .map(|r| {
+                    serde_json::json!({ "id": r.id, "tag_name": r.tag_name, "published_at": r.published_at })
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_default();
+        Ok(PackageMetadata::minimal(pkg.clone(), extra))
+    }
+
     pub fn new(base_url: impl Into<String>, opts: &UpstreamHttpOptions) -> Result<Self, CoreError> {
         // GitHub-specific default headers merged with any auth headers from opts.
         let mut headers = reqwest::header::HeaderMap::new();
@@ -569,77 +677,21 @@ impl RegistryClient for GithubRegistryClient {
     async fn resolve_metadata(&self, pkg: &PackageId) -> Result<PackageMetadata, CoreError> {
         let owner_repo = &pkg.name;
 
-        // Raw file and archive downloads name a git ref, not a release. Once
-        // `ProxyService` has resolved that ref the version is a commit SHA, and
-        // the commit is what dates the coordinate (RFC 0019 §4.2: release →
-        // tag → commit). A ref that was not resolved — no resolver wired —
-        // stays undated, exactly as before.
-        if let Some(ref artifact) = pkg.artifact {
-            if artifact.starts_with("raw/")
-                || artifact.starts_with("tarball/")
-                || artifact == "zipball"
-            {
-                if !is_commit_sha(&pkg.version) {
-                    return Ok(PackageMetadata::minimal(
-                        pkg.clone(),
-                        serde_json::Value::Null,
-                    ));
-                }
-                return Ok(commit_dated_metadata(
-                    pkg,
-                    self.commit(owner_repo, &pkg.version).await,
-                ));
-            }
+        if let Some(meta) = self.ref_metadata(pkg, owner_repo).await? {
+            return Ok(meta);
         }
 
-        // `/releases/assets/{id}` with no `?tag=`: the asset's own JSON names
-        // its release through `browser_download_url`
-        // (`…/releases/download/{tag}/{name}`), so the release is looked up
-        // from there. Found by `tests/heavy/mise.sh`: mise addresses an asset
-        // by id alone, and this path answered 404 to it — the placeholder tag
-        // was being looked up as a release.
         let tag_owned;
-        let version = if pkg.version == UNKNOWN_TAG {
-            match pkg.artifact.as_deref().and_then(|a| a.parse::<u64>().ok()) {
-                Some(id) => {
-                    let asset = self.asset_by_id(owner_repo, id).await?;
-                    tag_owned =
-                        tag_from_download_url(&asset.browser_download_url).ok_or_else(|| {
-                            CoreError::Registry(format!(
-                                "asset {id} of {owner_repo}: cannot tell its release from '{}'",
-                                asset.browser_download_url
-                            ))
-                        })?;
-                    tag_owned.as_str()
-                }
-                None => pkg.version.as_str(),
+        let version = match self.tag_of(pkg, owner_repo).await? {
+            Some(tag) => {
+                tag_owned = tag;
+                tag_owned.as_str()
             }
-        } else {
-            pkg.version.as_str()
+            None => pkg.version.as_str(),
         };
 
         match version {
-            "releases" => {
-                let url = format!("{}/repos/{}/releases", self.base_url, owner_repo);
-                let resp = self.api_get(&url).await?;
-
-                if resp.status() == reqwest::StatusCode::NOT_FOUND {
-                    return Err(CoreError::NotFound(format!("{owner_repo} not found")));
-                }
-
-                let releases: Vec<GhRelease> = resp
-                    .error_for_status()
-                    .map_err(to_registry_error)?
-                    .json()
-                    .await
-                    .map_err(to_registry_error)?;
-
-                let extra = serde_json::to_value(releases.iter().map(|r| {
-                    serde_json::json!({ "id": r.id, "tag_name": r.tag_name, "published_at": r.published_at })
-                }).collect::<Vec<_>>()).unwrap_or_default();
-
-                Ok(PackageMetadata::minimal(pkg.clone(), extra))
-            }
+            "releases" => self.release_list_metadata(pkg, owner_repo).await,
 
             tag => {
                 let release = self.fetch_release_by_tag(owner_repo, tag).await?;
@@ -656,18 +708,7 @@ impl RegistryClient for GithubRegistryClient {
                 // stream and the digest RFC 0019's `ASSET_REPLACED` compares
                 // come from the same object, and finding it twice was how
                 // the two could disagree.
-                let selected = if let Some(artifact_str) = &pkg.artifact {
-                    if let Some(filename) = artifact_str.strip_prefix("filename/") {
-                        release.assets.iter().find(|a| a.name == filename)
-                    } else {
-                        let asset_id: u64 = artifact_str.parse().map_err(|_| {
-                            CoreError::Registry(format!("invalid asset id: {artifact_str}"))
-                        })?;
-                        release.assets.iter().find(|a| a.id == asset_id)
-                    }
-                } else {
-                    None
-                };
+                let selected = selected_asset(&release.assets, pkg.artifact.as_deref())?;
                 let download_url = selected.map(|a| a.browser_download_url.clone());
                 let selected_digest = selected.and_then(|a| a.digest.clone());
 

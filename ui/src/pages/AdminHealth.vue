@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
-import { ref } from "vue";
+import { onMounted, ref } from "vue";
 import { registryHealth, clearRegistryCache, invalidateExploreCache } from "@/client/sdk.gen";
 import type { RegistryHealthDto } from "@/client/types.gen";
 import { useApi, extractMessage } from "@/composables/useApi";
 import { useAuth } from "@/composables/useAuth";
 import { useAuthFetch } from "@/composables/useAuthFetch";
 import { API_BASE_URL } from "@/config";
-import { onMounted } from "vue";
 import {
   formatBytes as fmtBytes,
   formatDate as fmtDate,

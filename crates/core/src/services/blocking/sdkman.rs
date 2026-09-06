@@ -111,6 +111,75 @@ fn vendor_table_identifier_column(body: &str) -> Option<usize> {
         .find_map(|l| l.split('|').position(|cell| cell.trim() == "Identifier"))
 }
 
+/// The state carried across the lines of a rendered vendor table.
+struct VendorTable<'a> {
+    id_col: usize,
+    blocked: &'a BlockedVersions,
+    in_table: bool,
+    /// The vendor cell of a dropped first-of-block line, waiting for the next
+    /// surviving line of that block.
+    pending_vendor: Option<String>,
+    out: Vec<String>,
+    removed: Vec<String>,
+}
+
+impl VendorTable<'_> {
+    /// A line with no `|`. The `----` rule under the header separates it from
+    /// the rows; a `====` rule (or anything else) closes the table. Either way
+    /// no vendor block continues across it.
+    fn rule(&mut self, line: &str) {
+        if !line.starts_with('-') {
+            self.in_table = false;
+        }
+        self.pending_vendor = None;
+        self.out.push(line.to_owned());
+    }
+
+    /// A surviving row: it keeps its own vendor cell, or takes the one a
+    /// dropped first-of-block line left behind, in the same fixed-width field.
+    fn keep(&mut self, line: &str, cells: &[&str], starts_block: bool) {
+        if starts_block {
+            self.pending_vendor = None;
+            self.out.push(line.to_owned());
+            return;
+        }
+        match self.pending_vendor.take() {
+            Some(vendor) => {
+                let mut promoted: Vec<&str> = cells.to_vec();
+                promoted[0] = &vendor;
+                self.out.push(promoted.join("|"));
+            }
+            None => self.out.push(line.to_owned()),
+        }
+    }
+
+    /// A line with a `|`: the header, one row of the table, or a `|` that
+    /// belongs to something else on the page.
+    fn row(&mut self, line: &str) {
+        let cells: Vec<&str> = line.split('|').collect();
+        if cells.get(self.id_col).map(|c| c.trim()) == Some("Identifier") {
+            self.in_table = true;
+            self.out.push(line.to_owned());
+            return;
+        }
+        if !self.in_table || cells.len() <= self.id_col {
+            self.out.push(line.to_owned());
+            return;
+        }
+        let identifier = cells[self.id_col].trim();
+        let vendor_cell = cells[0];
+        let starts_block = !vendor_cell.trim().is_empty();
+        if !identifier.is_empty() && self.blocked.contains(identifier) {
+            self.removed.push(identifier.to_owned());
+            if starts_block {
+                self.pending_vendor = Some(vendor_cell.to_owned());
+            }
+            return;
+        }
+        self.keep(line, &cells, starts_block);
+    }
+}
+
 /// The vendor-grouped table: a blocked version is one whole line, matched on
 /// its `Identifier` cell.
 ///
@@ -125,69 +194,32 @@ fn strip_vendor_table(body: &mut String, blocked: &BlockedVersions) -> Vec<Strin
         return Vec::new();
     };
     let trailing_newline = body.ends_with('\n');
-    let mut removed = Vec::new();
-    let mut out: Vec<String> = Vec::new();
-    // The vendor cell of a dropped first-of-block line, waiting for the next
-    // surviving line of that block.
-    let mut pending_vendor: Option<String> = None;
-    let mut in_table = false;
+    let mut table = VendorTable {
+        id_col,
+        blocked,
+        in_table: false,
+        pending_vendor: None,
+        out: Vec::new(),
+        removed: Vec::new(),
+    };
 
     for line in body.lines() {
-        let is_row = line.contains('|');
-        if !is_row {
-            // The `----` rule under the header separates it from the rows;
-            // a `====` rule (or anything else) closes the table. Either way
-            // no vendor block continues across it.
-            if !line.starts_with('-') {
-                in_table = false;
-            }
-            pending_vendor = None;
-            out.push(line.to_owned());
-            continue;
-        }
-        let cells: Vec<&str> = line.split('|').collect();
-        if cells.get(id_col).map(|c| c.trim()) == Some("Identifier") {
-            in_table = true;
-            out.push(line.to_owned());
-            continue;
-        }
-        if !in_table || cells.len() <= id_col {
-            out.push(line.to_owned());
-            continue;
-        }
-        let identifier = cells[id_col].trim();
-        let vendor_cell = cells[0];
-        let starts_block = !vendor_cell.trim().is_empty();
-
-        if !identifier.is_empty() && blocked.contains(identifier) {
-            removed.push(identifier.to_owned());
-            if starts_block {
-                pending_vendor = Some(vendor_cell.to_owned());
-            }
-            continue;
-        }
-
-        if starts_block {
-            pending_vendor = None;
-            out.push(line.to_owned());
-        } else if let Some(vendor) = pending_vendor.take() {
-            let mut promoted = cells.clone();
-            promoted[0] = &vendor;
-            out.push(promoted.join("|"));
+        if line.contains('|') {
+            table.row(line);
         } else {
-            out.push(line.to_owned());
+            table.rule(line);
         }
     }
 
-    if removed.is_empty() {
-        return removed;
+    if table.removed.is_empty() {
+        return table.removed;
     }
-    let mut rebuilt = out.join("\n");
+    let mut rebuilt = table.out.join("\n");
     if trailing_newline {
         rebuilt.push('\n');
     }
     *body = rebuilt;
-    removed
+    table.removed
 }
 
 /// The column-major grid: a blocked version is one whitespace-delimited

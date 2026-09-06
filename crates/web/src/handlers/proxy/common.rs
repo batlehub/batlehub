@@ -478,17 +478,12 @@ pub async fn proxy_stream(
         .await),
         ProxyResponse::Denied { reason, .. } => Err(AppError::forbidden(reason)),
         ProxyResponse::Stream(stream) => {
-            let body = stream
-                .filter_map(|chunk| async move { chunk.ok().map(Ok::<Bytes, actix_web::Error>) });
             let mut builder = HttpResponse::Ok();
             builder.content_type(content_type.unwrap_or(DEFAULT_ARTIFACT_CONTENT_TYPE));
             for header in served_identity(&coordinate) {
                 builder.insert_header(header);
             }
-            if let Some(v) = &warned {
-                crate::handlers::security::verdict_headers(&mut builder, v, now);
-            }
-            Ok(builder.streaming(body))
+            Ok(finish_stream(builder, stream, warned.as_deref(), now))
         }
         // RFC 0008-bis: a release composed from the held assets, on the
         // route that otherwise streams the forge's own JSON. Its own
@@ -506,47 +501,62 @@ pub async fn proxy_stream(
                 DocumentBody::Text(s) => builder.body(s),
             })
         }
-        // RFC 0019 §4.2 *Response headers*: which kind of ref was asked for and
-        // which commit answered. Spelled like the existing `X-BatleHub-Cache`.
         ProxyResponse::ForgeStream {
             stream,
             resolved,
             keyed,
         } => {
-            let body = stream
-                .filter_map(|chunk| async move { chunk.ok().map(Ok::<Bytes, actix_web::Error>) });
             let mut builder = HttpResponse::Ok();
-            builder
-                .content_type(content_type.unwrap_or(DEFAULT_ARTIFACT_CONTENT_TYPE))
-                .insert_header(("X-BatleHub-Ref-Kind", resolved.kind.as_str()))
-                .insert_header(("X-BatleHub-Resolved-Commit", resolved.sha.as_str()))
-                // The ref as the *client* spelled it. On a commit-keyed
-                // archive the coordinate below has already become the SHA,
-                // so this is the only place the asked-for name survives —
-                // and RFC 0008's bundle has to carry the pair, because a
-                // disconnected instance cannot resolve a ref at all.
-                .insert_header(("X-BatleHub-Ref-Requested", resolved.requested.as_str()));
+            builder.content_type(content_type.unwrap_or(DEFAULT_ARTIFACT_CONTENT_TYPE));
+            forge_ref_headers(&mut builder, &resolved);
             // The commit-keyed coordinate, not the one asked for.
             for header in served_identity(&keyed) {
                 builder.insert_header(header);
             }
-            // RFC 0019 phase 2 — the commit this ref answered with last time,
-            // when it differs. On a registry with `[security]` the same fact
-            // is `TAG_MOVED` in the verdict; on one without there is no
-            // verdict to carry it, and this header is the whole of the `warn`
-            // outcome §6.1 promises. Present for a branch too, where it is
-            // the ordinary "the branch advanced".
-            if let Some(previous) = resolved.previous.as_deref() {
-                builder.insert_header(("X-BatleHub-Ref-Previous-Commit", previous));
-            }
-            if let Some(v) = &warned {
-                crate::handlers::security::verdict_headers(&mut builder, v, now);
-            }
-            Ok(builder.streaming(body))
+            Ok(finish_stream(builder, stream, warned.as_deref(), now))
         }
         // A `Warned` never wraps a `Warned`; unwrapped above.
         ProxyResponse::Warned { .. } => Err(AppError::internal("nested verdict response")),
     }
+}
+
+/// RFC 0019 §4.2 *Response headers*: which kind of ref was asked for and which
+/// commit answered. Spelled like the existing `X-BatleHub-Cache`.
+fn forge_ref_headers(
+    builder: &mut actix_web::HttpResponseBuilder,
+    resolved: &batlehub_core::entities::ResolvedRef,
+) {
+    builder
+        .insert_header(("X-BatleHub-Ref-Kind", resolved.kind.as_str()))
+        .insert_header(("X-BatleHub-Resolved-Commit", resolved.sha.as_str()))
+        // The ref as the *client* spelled it. On a commit-keyed archive the
+        // coordinate has already become the SHA, so this is the only place the
+        // asked-for name survives — and RFC 0008's bundle has to carry the
+        // pair, because a disconnected instance cannot resolve a ref at all.
+        .insert_header(("X-BatleHub-Ref-Requested", resolved.requested.as_str()));
+    // RFC 0019 phase 2 — the commit this ref answered with last time, when it
+    // differs. On a registry with `[security]` the same fact is `TAG_MOVED` in
+    // the verdict; on one without there is no verdict to carry it, and this
+    // header is the whole of the `warn` outcome §6.1 promises. Present for a
+    // branch too, where it is the ordinary "the branch advanced".
+    if let Some(previous) = resolved.previous.as_deref() {
+        builder.insert_header(("X-BatleHub-Ref-Previous-Commit", previous));
+    }
+}
+
+/// The verdict headers a `warned` artifact carries, then the body.
+fn finish_stream(
+    mut builder: actix_web::HttpResponseBuilder,
+    stream: batlehub_core::ports::ByteStream,
+    warned: Option<&batlehub_core::entities::Verdict>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> HttpResponse {
+    if let Some(v) = warned {
+        crate::handlers::security::verdict_headers(&mut builder, v, now);
+    }
+    let body =
+        stream.filter_map(|chunk| async move { chunk.ok().map(Ok::<Bytes, actix_web::Error>) });
+    builder.streaming(body)
 }
 
 /// [`proxy_stream`] for a *version listing* rather than an artifact.

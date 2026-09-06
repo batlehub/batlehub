@@ -1020,68 +1020,9 @@ pub fn render_mise_toml(
     let mut body = String::new();
     body.push_str("[settings.url_replacements]\n");
 
-    let mut any = false;
-    let mut skipped: Vec<&str> = Vec::new();
-    for reg in regs {
-        let rules = reg.mise_url_replacements(server_url);
-        if rules.is_empty() {
-            if !skipped.contains(&reg.registry_type.as_str()) {
-                skipped.push(&reg.registry_type);
-            }
-            continue;
-        }
-        any = true;
-        body.push_str(&format!("\n# {} ({})\n", reg.name, reg.registry_type));
-        for (pattern, replacement) in rules {
-            body.push_str(&format!(
-                "{} = {}\n",
-                toml_quote(&format!("regex:{pattern}")),
-                toml_quote(&replacement)
-            ));
-        }
-    }
-
-    if !any {
-        body.push_str("# (nothing mise downloads itself — see the note below)\n");
-    }
+    let skipped = push_mise_registry_rules(&mut body, regs, server_url);
     if catch_all {
-        // The proxy's own host, first. The catch-all matches *any* https URL,
-        // BatleHub's included, so an operator who has already pointed a
-        // backend at the proxy — `NODEJS_ORG_MIRROR`, a `[settings]` entry, a
-        // hand-written rule below — would have that URL rewritten into the
-        // `501` sink and lose a registry that was working. Matching stops at
-        // the first hit, so one identity rule ahead of the catch-all is the
-        // whole fix (RFC 0008 §13, *Coverage, stated*).
-        if let Some((pattern, replacement)) = mise_proxy_identity_rule(server_url) {
-            body.push('\n');
-            for line in wrap_comment(
-                "This server's own URLs are left alone. The catch-all below matches every \
-                 https host, so without this line a backend already pointed at BatleHub \
-                 would be rewritten into the unmirrored sink.",
-            ) {
-                body.push_str(&format!("# {line}\n"));
-            }
-            body.push_str(&format!(
-                "{} = {}\n",
-                toml_quote(&format!("regex:{pattern}")),
-                toml_quote(&replacement)
-            ));
-        }
-        let (pattern, replacement) = mise_catch_all_rule(server_url);
-        body.push('\n');
-        for line in wrap_comment(
-            "Air gap (RFC 0008): anything no rule above matched lands here. Nothing is \
-             fetched — the proxy answers 501, names the host and records it, so an \
-             unmirrored host is a line in the console instead of a connect timeout. \
-             This rule must stay last: mise stops at the first match.",
-        ) {
-            body.push_str(&format!("# {line}\n"));
-        }
-        body.push_str(&format!(
-            "{} = {}\n",
-            toml_quote(&format!("regex:{pattern}")),
-            toml_quote(&replacement)
-        ));
+        push_mise_catch_all(&mut body, server_url);
     }
     push_mise_skipped_note(&mut body, &skipped);
 
@@ -1099,6 +1040,83 @@ pub fn render_mise_toml(
         return full;
     }
     comment_every_line(&full)
+}
+
+/// One block of rules per registry mise can rewrite for. Returns the registry
+/// types it could not, for the trailing note.
+fn push_mise_registry_rules<'a>(
+    body: &mut String,
+    regs: &'a [SuggestedRegistry],
+    server_url: &str,
+) -> Vec<&'a str> {
+    let mut any = false;
+    let mut skipped: Vec<&str> = Vec::new();
+    for reg in regs {
+        let rules = reg.mise_url_replacements(server_url);
+        if rules.is_empty() {
+            if !skipped.contains(&reg.registry_type.as_str()) {
+                skipped.push(&reg.registry_type);
+            }
+            continue;
+        }
+        any = true;
+        body.push_str(&format!("\n# {} ({})\n", reg.name, reg.registry_type));
+        for (pattern, replacement) in rules {
+            push_replacement(body, &pattern, &replacement);
+        }
+    }
+    if !any {
+        body.push_str("# (nothing mise downloads itself — see the note below)\n");
+    }
+    skipped
+}
+
+/// One `"regex:…" = "…"` line.
+fn push_replacement(body: &mut String, pattern: &str, replacement: &str) {
+    body.push_str(&format!(
+        "{} = {}\n",
+        toml_quote(&format!("regex:{pattern}")),
+        toml_quote(replacement)
+    ));
+}
+
+/// A commented paragraph, wrapped.
+fn push_note(body: &mut String, text: &str) {
+    for line in wrap_comment(text) {
+        body.push_str(&format!("# {line}\n"));
+    }
+}
+
+/// The two rules that close RFC 0008 §4.4's coverage, in the order mise reads
+/// them.
+///
+/// The proxy's own host comes first. The catch-all matches *any* https URL,
+/// BatleHub's included, so an operator who has already pointed a backend at the
+/// proxy — `NODEJS_ORG_MIRROR`, a `[settings]` entry, a hand-written rule below
+/// — would have that URL rewritten into the `501` sink and lose a registry that
+/// was working. Matching stops at the first hit, so one identity rule ahead of
+/// the catch-all is the whole fix (RFC 0008 §13, *Coverage, stated*).
+fn push_mise_catch_all(body: &mut String, server_url: &str) {
+    if let Some((pattern, replacement)) = mise_proxy_identity_rule(server_url) {
+        body.push('\n');
+        push_note(
+            body,
+            "This server's own URLs are left alone. The catch-all below matches every \
+             https host, so without this line a backend already pointed at BatleHub \
+             would be rewritten into the unmirrored sink.",
+        );
+        push_replacement(body, &pattern, &replacement);
+    }
+    let (pattern, replacement) = mise_catch_all_rule(server_url);
+    body.push('\n');
+    push_note(
+        body,
+        "Air gap (RFC 0008): anything no rule above matched lands here. Nothing is \
+         fetched — the proxy answers 501, names the host and records it, so an \
+         unmirrored host is a line in the console instead of a connect timeout. \
+         This rule must stay last: mise stops at the first match.",
+    );
+    push_replacement(body, &pattern, &replacement);
 }
 
 /// The trailing note naming the registry types `url_replacements` cannot cover.
