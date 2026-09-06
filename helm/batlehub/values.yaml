@@ -291,10 +291,10 @@ podDisruptionBudget:
 # allowed or *every* upstream lookup fails.
 # ── The scan worker (RFC 0018 §5.4) ──────────────────────────────────────────
 # A second Deployment of the same binary, started with `--roles worker` from
-# the worker image — the one that carries bubblewrap, postmortem, GuardDog and
-# the Trivy client (Containerfile.worker). It leases scan jobs from the
-# database, opens artifacts inside a `bwrap` sandbox and records verdicts; it
-# answers no HTTP but /livez and /metrics.
+# the worker image — the one that carries bubblewrap, postmortem and the Trivy
+# client (Containerfile.worker). It leases scan jobs from the database, opens
+# artifacts inside a `bwrap` sandbox and records verdicts; it answers no HTTP
+# but /livez and /metrics.
 #
 # Off by default: every existing deployment keeps the embedded worker in the
 # proxy pod. When you enable this, set `config.server.roles = ["proxy"]` so the
@@ -319,6 +319,12 @@ worker:
     # label in the adapter's rule; the query here selects it by name only.
     metricName: batlehub_scan_jobs_queued
   image:
+    # `…-worker` carries every scanner but GuardDog, which is optional and is
+    # the only one with a Python toolchain behind it. Enabling
+    # `[scanners.guarddog]` in the config means pointing this at
+    # `ghcr.io/batleforc/batlehub-worker-guarddog`, the same image with
+    # GuardDog added; the scanner is refused at load if its `command` is not
+    # on the image.
     repository: ghcr.io/batleforc/batlehub-worker
     pullPolicy: IfNotPresent
     # Defaults to Chart.appVersion — the worker and the proxy are one release.

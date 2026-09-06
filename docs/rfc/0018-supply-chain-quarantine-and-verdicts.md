@@ -854,8 +854,10 @@ scan; the worker never answers HTTP. Consequences the design relies on:
 - **A dead or saturated worker degrades, it does not fail.** Versions below
   `mature_age_secs` stay refused with `SCAN_PENDING`; versions above are
   served `warned`. The proxy's latency is independent of scanner cost.
-- **Only the worker image needs the scanner toolchains** (postmortem and
-  GuardDog binaries, Trivy client); the proxy image stays as it is today.
+- **Only the worker image needs the scanner toolchains** (postmortem, the
+  Trivy client; GuardDog on a `-guarddog` variant of that image, it being the
+  one scanner with an interpreter behind it); the proxy image stays as it is
+  today.
 - **Only the worker needs upstream artifact egress and storage write**; the
   proxy needs upstream metadata and storage read. NetworkPolicies tighten.
 - **Jobs are leased, not consumed**: a row carries `leased_until` and
@@ -1089,7 +1091,8 @@ scan; the worker never answers HTTP. Consequences the design relies on:
   and its per-ecosystem caveats.
 - `worker.enabled` (default `false` → embedded); when `true`, a separate
   Deployment with the `batlehub-worker` image (server binary + postmortem +
-  GuardDog + Trivy client), `roles = ["worker"]` on it and `["proxy"]` on the proxy,
+  Trivy client, or `batlehub-worker-guarddog` where that scanner is on),
+  `roles = ["worker"]` on it and `["proxy"]` on the proxy,
   HPA on `batlehub_scan_jobs_queued`. Optional Trivy server sub-chart.
   `docs/guide/security.md`.
 

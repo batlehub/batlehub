@@ -2,7 +2,8 @@
 {{- $configEntry := include "batlehub.configManifestEntry" . | fromYaml }}
 # The worker role (RFC 0018 §5.4): the same config, the same database and
 # storage, started with `--roles worker` from the worker image — the one that
-# carries bubblewrap, postmortem, GuardDog and the Trivy client. It answers no
+# carries bubblewrap, postmortem and the Trivy client, or its `-guarddog`
+# variant where that optional scanner is enabled. It answers no
 # HTTP but /livez and /metrics, opens artifacts nothing else opens, and is
 # where a scanner's egress is allowed. The proxy Deployment keeps running its
 # embedded worker unless `config.server.roles` says otherwise; set it to

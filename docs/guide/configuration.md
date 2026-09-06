@@ -2481,7 +2481,7 @@ require_for = ["npm"]                # PROVENANCE_MISSING on these kinds; elsewh
 | `osv` | now | `api_url` | The OSV.dev query already behind `cve_gate`, as a scanner: a vulnerability at or above the registry's `max_severity` is a finding. Runs on every kind with a package URL; the path-proxy kinds, `nodedist`, the marketplaces and Terraform have none. |
 | `postmortem` | now | `command`, `online`, `timeline` | The archive is extracted under the sandbox's policy into the layout its ecosystem keeps a dependency in (`node_modules/<name>`, `site-packages/…`, `vendor/…`), a lockfile is written from the coordinate — never by running the ecosystem's tool — and `postmortem scan --json --no-config` runs inside `bwrap`. Findings: `INSTALL_HOOK`, `MALWARE_SIGNAL` (IOC, obfuscation, sensitive API), `TYPOSQUAT_SUSPECT`; with `timeline`, the transition codes at the scanned version (npm). Covers npm, PyPI, Cargo, RubyGems, Composer, Go, Maven. |
 | `trivy` | now | `endpoint`, `timeout_secs` | The Trivy **client**, against the server at `endpoint` (the chart's `trivy.enabled` deploys one) or its own database when empty. Scans the CycloneDX SBOM this instance already recorded for the artifact, else the extracted archive. Findings: `VULNERABILITY` with the CVE as reference. |
-| `guarddog` | now | `command`, `ecosystems` | DataDog GuardDog on npm, PyPI and Go archives, under the same sandbox. Optional second opinion; not in the default profile. The rule-to-finding mapping is by rule family and is *read, not observed* until the worker image runs it. |
+| `guarddog` | now | `command`, `ecosystems` | DataDog GuardDog on npm, PyPI and Go archives, under the same sandbox. Optional second opinion; not in the default profile, and the only scanner that is not on the worker image — it ships on the `-worker-guarddog` variant, which a deployment runs instead. The rule-to-finding mapping is by rule family and is *read, not observed* until that image runs it. |
 | `sigstore` | now | `rekor_url`, `require_for` | npm provenance: the attestations the packument announces for the version are fetched and every transparency-log entry they cite is looked up in Rekor. `PROVENANCE_MISSING` on the kinds in `require_for`, `PROVENANCE_INVALID` when a cited entry is not in the log. An existence-and-inclusion check, not a full Sigstore verification. |
 | `socket`, `mlab` | RFC 0018 phase 5 | `api_key` for `socket` | `socket` is refused at load without one (a `401` nobody reads otherwise); `mlab`'s CVE API answers unauthenticated, so its key is a rate-limit courtesy rather than a requirement. `mlab` only enriches other findings and is refused in `required_scanners` (`security.enrichment-required`). |
 
@@ -2504,10 +2504,19 @@ artifact to hand over, and those scanners answer `SCANNER_UNSUPPORTED` for
 it rather than pretending to have looked.
 
 **Where the toolchains live.** Only the worker role opens artifacts, so only
-the worker image (`Containerfile.worker`: bubblewrap, postmortem, GuardDog,
-the Trivy client) carries the tools; the proxy image stays distroless. In
-the chart, `worker.enabled` deploys it as its own Deployment from that image
-and `config.server.roles = ["proxy"]` stops the proxy pod scanning.
+the worker image (`Containerfile.worker`: bubblewrap, postmortem, the Trivy
+client) carries the tools; the proxy image stays distroless. In the chart,
+`worker.enabled` deploys it as its own Deployment from that image and
+`config.server.roles = ["proxy"]` stops the proxy pod scanning.
+
+GuardDog is the exception. It is the one scanner that is not a static binary
+— it brings a Python interpreter and its own venv — and it is optional, so
+it has an image of its own: `Containerfile.worker-guarddog`, published as
+`…-worker-guarddog`, which is the worker image with GuardDog added. Enabling
+`[scanners.guarddog]` therefore means pointing `worker.image.repository` at
+that variant; the process refuses to start if the `command` is not on the
+image it is running. Nothing else changes — GuardDog is still a subprocess of
+the worker role under the same sandbox.
 
 **How the queue behaves.** Jobs carry a trigger — `FirstSeen` (a user is
 waiting) is dequeued before `Webhook`, `Rescan` and `Backfill`; within a

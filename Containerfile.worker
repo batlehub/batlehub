@@ -1,12 +1,18 @@
 # The worker image (RFC 0018 §5.4, §6.3): the same `batlehub` binary as the
 # proxy image, started with `--roles worker`, plus the scanner toolchains the
 # proxy image deliberately does not carry — bubblewrap for the sandbox,
-# postmortem, GuardDog and the Trivy client.
+# postmortem and the Trivy client.
 #
 # Why a second image rather than a fatter proxy image: only the worker opens
 # artifacts, so only the worker needs the tools that open them, and the proxy
 # keeps its distroless, shell-less runtime. The two roles share nothing but the
 # database and the storage backend; NetworkPolicies tighten around that.
+#
+# GuardDog is *not* here. It is the one scanner with an interpreter behind it,
+# and it is optional (RFC 0018 §13) — so it lives in a third image that adds it
+# to this one, `Containerfile.worker-guarddog`, and a deployment that enables
+# `[scanners.guarddog]` runs that image instead of this one. Everything this
+# image carries is a static binary.
 #
 # Every tool is pinned. `mise.toml` pins the same postmortem and trivy for the
 # developer machine and CI, so the three run the identical scanner.
@@ -16,7 +22,6 @@
 
 ARG POSTMORTEM_VERSION=2.3.1
 ARG TRIVY_VERSION=0.74.0
-ARG GUARDDOG_VERSION=3.2.0
 
 # ── Build stage: the server binary, as the proxy image builds it ─────────────
 FROM rust:1.98-slim-bookworm@sha256:1469a27c125cb5a3aebfa4f4e4665d935b02fb72cc093b2c974b3d740e43f157 AS builder
@@ -52,9 +57,8 @@ RUN touch crates/*/src/lib.rs server/src/main.rs cli/src/main.rs && \
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS tools
 ARG POSTMORTEM_VERSION
 ARG TRIVY_VERSION
-ARG GUARDDOG_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates tar gzip python3 python3-pip python3-venv \
+    curl ca-certificates tar gzip \
     && rm -rf /var/lib/apt/lists/*
 # postmortem: the release binary (the asset names are the ones the project
 # publishes: `postmortem-<version>-x86_64-unknown-linux-gnu.tar.gz`).
@@ -64,26 +68,15 @@ RUN mkdir -p /tmp/pm && curl -fsSL "https://github.com/mlab-sh/postmortem/releas
 # (`[scanners.trivy] endpoint`), or is downloaded on first use.
 RUN mkdir -p /tmp/tv && curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
     | tar -xz -C /tmp/tv && install -m 0755 "$(find /tmp/tv -type f -name trivy | head -1)" /usr/local/bin/trivy && rm -rf /tmp/tv
-# GuardDog: a Python tool, in its own venv so its dependency tree stays out of
-# the system interpreter.
-# `python3 -m venv` seeds the venv with bookworm's python3.11 pip and
-# setuptools (pip 23.0.1, setuptools 66.1.1), and that setuptools carries
-# CVE-2024-6345 (fixed in 70.0.0) and CVE-2025-47273 (fixed in 78.1.1) —
-# Trivy reads the venv's dist-info and blocks the image on both. Upgrade the
-# seeds before installing GuardDog; setuptools stays present because GuardDog
-# still imports pkg_resources at runtime.
-RUN python3 -m venv /opt/guarddog \
-    && /opt/guarddog/bin/pip install --no-cache-dir --upgrade "pip>=25.2" "setuptools>=80.9.0" \
-    && /opt/guarddog/bin/pip install --no-cache-dir "guarddog==${GUARDDOG_VERSION}" \
-    && ln -s /opt/guarddog/bin/guarddog /usr/local/bin/guarddog
 
 # ── Runtime image ─────────────────────────────────────────────────────────────
-# Debian rather than distroless: `bwrap` and the Python GuardDog need a
-# userland. Still no shell on the entrypoint path — the runner passes argv
-# directly — and the process runs as the same non-root uid as the proxy.
+# Debian rather than distroless: `bwrap` needs a userland, and the GuardDog
+# image builds on this one. Still no shell on the entrypoint path — the runner
+# passes argv directly — and the process runs as the same non-root uid as the
+# proxy.
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bubblewrap ca-certificates python3 \
+    bubblewrap ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 65532 nonroot && useradd -u 65532 -g 65532 -M -s /usr/sbin/nologin nonroot \
     && mkdir -p /var/cache/batlehub /tmp/batlehub && chown 65532:65532 /var/cache/batlehub /tmp/batlehub
@@ -91,8 +84,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /build/target/release/batlehub /usr/local/bin/batlehub
 COPY --from=tools /usr/local/bin/postmortem /usr/local/bin/postmortem
 COPY --from=tools /usr/local/bin/trivy      /usr/local/bin/trivy
-COPY --from=tools /opt/guarddog             /opt/guarddog
-RUN ln -s /opt/guarddog/bin/guarddog /usr/local/bin/guarddog
 
 # The sandbox's per-job work directories go under TMPDIR; the chart mounts an
 # emptyDir here (`noexec` where the node allows it).

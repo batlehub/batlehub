@@ -5,6 +5,7 @@ on:
     paths:
       - "Containerfile"
       - "Containerfile.worker"
+      - "Containerfile.worker-guarddog"
       - "Cargo.lock"
       - "ui/pnpm-lock.yaml"
       - ".github/workflows/image-scan.yaml"
@@ -13,6 +14,7 @@ on:
     paths:
       - "Containerfile"
       - "Containerfile.worker"
+      - "Containerfile.worker-guarddog"
       - "Cargo.lock"
       - "ui/pnpm-lock.yaml"
       - ".github/workflows/image-scan.yaml"
@@ -69,30 +71,63 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
 
+  # Both worker images in one job, because the GuardDog image is built FROM the
+  # worker one.
   scan-worker:
-    name: Build & Trivy scan (Containerfile.worker)
+    name: Build & Trivy scan (worker images)
     runs-on: ubuntu-latest
     permissions:
       contents: read
       security-events: write # upload SARIF to the Security tab
+    # A buildx `docker-container` builder cannot resolve a base image out of
+    # the runner's Docker image store, so the worker image goes to a registry
+    # that lives only as long as this job and the GuardDog build pulls its base
+    # from there. Docker's own recipe for chaining two builds; nothing leaves
+    # the runner. The worker image is `load`ed as well, so Trivy scans the
+    # local copy rather than pulling it back.
+    services:
+      registry:
+        image: registry:3.1.1@sha256:1be55279f18a2fe1a74edf2664cac61c1bea305b7b4642dab412e7affdcb3e33
+        ports:
+          - 5000:5000
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-      - name: Build image (load, no push)
+        with:
+          driver-opts: network=host
+      - name: Build worker image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: ./Containerfile.worker
           load: true
+          push: true
+          tags: localhost:5000/batlehub-worker:scan
+          # Distinct scopes: the default one is shared, so two builds in the
+          # same workflow otherwise overwrite each other's cache manifest.
+          cache-from: type=gha,scope=worker
+          cache-to: type=gha,mode=max,scope=worker
+      # The optional GuardDog scanner and its Python toolchain, on top of the
+      # image above (RFC 0018 §6.3). Built and gated separately, so that
+      # toolchain answers for its own CVEs and the image that does not carry it
+      # is not blocked by them.
+      - name: Build GuardDog worker image (load, no push)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Containerfile.worker-guarddog
+          load: true
           push: false
-          tags: batlehub-worker:scan
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          build-args: |
+            WORKER_IMAGE=localhost:5000/batlehub-worker:scan
+          tags: batlehub-worker-guarddog:scan
+          cache-from: type=gha,scope=worker-guarddog
+          cache-to: type=gha,mode=max,scope=worker-guarddog
       # Produce SARIF for the Security tab (does not fail the build).
       - name: Trivy scan (SARIF)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: batlehub-worker:scan
+          image-ref: localhost:5000/batlehub-worker:scan
           format: sarif
           output: trivy-results.sarif
           severity: HIGH,CRITICAL
@@ -108,7 +143,34 @@ jobs:
       - name: Trivy scan (gate)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: batlehub-worker:scan
+          image-ref: localhost:5000/batlehub-worker:scan
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          trivyignores: .trivyignore.yaml
+      - name: Trivy scan of the GuardDog image (SARIF)
+        if: ${{ !cancelled() }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: batlehub-worker-guarddog:scan
+          format: sarif
+          output: trivy-results-guarddog.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+      - name: Upload GuardDog SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: trivy-results-guarddog.sarif
+          category: trivy-containerfile-worker-guarddog
+      # Runs even when the worker gate above failed, so one run reports both.
+      - name: Trivy scan of the GuardDog image (gate)
+        if: ${{ !cancelled() }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: batlehub-worker-guarddog:scan
           format: table
           severity: HIGH,CRITICAL
           ignore-unfixed: true

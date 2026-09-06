@@ -12,7 +12,7 @@ you have already deployed.
 | Rust advisories + bans + licenses + sources | `cargo deny` (`deny.toml`) | `back-dep-audit.yaml` | block |
 | JS dependencies | `pnpm audit --audit-level high` | `dep-audit-frontend.yaml` (PR + daily) | block on high/critical |
 | Dependency supply chain (reputation + vulns) | [postmortem](https://github.com/mlab-sh/postmortem) | `postmortem.yaml` (PR + daily) — one job per dependency root: Rust, UI, Website | block on high/critical vulns (Rust, UI); report-only (Website) |
-| Container / OS layers | Trivy | `image-scan.yaml` (PR + daily, GitHub) runs Trivy directly on the proxy image (`Containerfile`) and the worker image (`Containerfile.worker`, RFC 0018 — the one that carries bubblewrap, postmortem, GuardDog and the Trivy client); `.forgejo/workflows/build.yaml` (both images) polls Harbor's own scan-on-push report instead | block on fixable HIGH/CRITICAL |
+| Container / OS layers | Trivy | `image-scan.yaml` (PR + daily, GitHub) runs Trivy directly on the proxy image (`Containerfile`), the worker image (`Containerfile.worker`, RFC 0018 — the one that carries bubblewrap, postmortem and the Trivy client) and the GuardDog variant of the worker image (`Containerfile.worker-guarddog`, which adds the optional Python scanner and is gated separately, so its toolchain answers for its own CVEs); `.forgejo/workflows/build.yaml` (the proxy and hardened images, the two it builds) polls Harbor's own scan-on-push report instead | block on fixable HIGH/CRITICAL |
 | Static analysis | CodeQL + Semgrep | `codeql.yaml`, `semgrep.yaml` | CodeQL report / Semgrep block on ERROR |
 | Secrets | gitleaks | `secret-scan.yaml` (PR + push) | block |
 | Lint / unsafe hygiene | clippy `-D warnings` | `test.yaml` `lint` job | block |

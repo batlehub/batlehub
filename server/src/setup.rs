@@ -414,7 +414,8 @@ pub(super) fn build_scanners(config: &batlehub_config::schema::AppConfig) -> Res
         if !batlehub_adapters::scanners::subprocess::command_exists(&path) {
             anyhow::bail!(
                 "[scanners.{name}] command '{command}' is not an executable file (or on PATH); \
-                 the worker image is where the scanner toolchains live (RFC 0018 §5.4)"
+                 the worker image is where the scanner toolchains live (RFC 0018 §5.4), \
+                 and GuardDog only on its `-guarddog` variant"
             );
         }
         Ok(path)

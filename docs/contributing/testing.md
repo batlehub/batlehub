@@ -139,7 +139,7 @@ additionally cover SSRF protection and the shared upstream HTTP client
 
 ## 4. In-process integration tests
 
-`crates/web/tests/*.rs` — **~38 files, ~570 test functions** (point-in-time).
+`crates/web/tests/*.rs` — **88 files, 1 325 test functions** (counted 2026-09-06).
 Shared app-factory infrastructure (`make_app`, `make_local_svc`,
 `access_config*`, `LocalRegistryAppParts` / `build_local_registry_app`) lives in
 `crates/web/tests/common/mod.rs`; every other file begins with
@@ -170,6 +170,21 @@ Feature areas covered (file → area):
 | `vuln_proxy_endpoints.rs`, `vuln_findings.rs` | Vulnerability proxy endpoints + findings store |
 | `sbom_and_misc.rs` | SBOM read endpoints |
 | `publish_traversal_guards.rs`, `upload_traversal_and_enforcement.rs` | Cross-registry publish/upload traversal guards + policy enforcement |
+| `air_gap.rs` | RFC 0008: an instance that will not dial out, and what it answers instead |
+| `security_registry.rs`, `flags.rs` | RFC 0018 quarantine end to end; RFC 0002 pushed flags on a registry with no `[security]` |
+| `vsx_signing.rs` | RFC 0020: the VSIX signature asset the registry signs |
+| `forge_refs.rs`, `forge_security.rs`, `forge_api_reads.rs` | RFC 0019 phases 1–3: ref resolution and commit keying, what a ref does to a request, the raw policy and typed reads |
+| `authz_matrix.rs`, `authz_explain_oracle.rs`, `vocabulary_dead_ends.rs` | The route-by-route authorization matrix, `explain` agreeing with the decision, and RFC 0015 §11.5's no-dead-ends property |
+| `grants_editor.rs`, `grants_shadow.rs`, `gate_exemptions.rs` | RFC 0017's grants editor, shadow mode, and the `gates:exempt` verb |
+| `admin_policy.rs`, `admin_subjects.rs`, `tiered_versioning.rs` | The policy table's admin API, `GET /admin/subjects`, and `immutable` / `monotonic` on publish |
+| `local_read_authorization.rs` | Per-package visibility on the artifact routes that read storage directly |
+| `blocked_versions_hidden*.rs` | **Twelve files, 91 tests.** One property per ecosystem: a blocked version disappears from the *listing*, not only from the download, and whatever the protocol calls "newest" is repaired |
+| `tombstones.rs`, `upstream_audit.rs`, `listing_audit.rs` | RFC 0016 coordinate reuse, RFC 0014 confirmed disappearance, and what a listing writes to the audit trail |
+| `explore_fetch.rs`, `explore_upstream_detail.rs` | The Explorer's fetch-this-version button, and the package page for something this instance holds nothing of |
+| `package_readmes.rs`, `readme_images.rs`, `readme_search.rs`, `search.rs` | README capture, the image endpoint's refusals, README search, and search across the five ecosystems that share one path |
+| `host_routing.rs`, `spa_csp.rs`, `oidc_sso.rs`, `me_endpoints.rs` | RFC 0001 subdomain routing, the console's CSP, the browser sign-in flow, and the caller-scoped `/me` reads |
+| `upstream_calls_are_cached.rs`, `document_cache_audience.rs` | Two invariants rather than features: every outbound call goes through the caching helper, and one caller's document is never replayed to another |
+| `protocol_conformance.rs`, `vscode_gallery.rs`, `misc_standalone_endpoints.rs` | The paths clients actually send, BatleHub as an editor marketplace, and the endpoints that belong to no group |
 
 ---
 
@@ -193,6 +208,9 @@ local-vs-proxy precedence.
 | `local_vsx_registry.rs` | VSIX publish + download-after-publish (shared by OpenVSX & VS Code Marketplace) |
 | `local_jetbrains_marketplace_registry.rs` | Plugin publish (jar / nested-zip / descriptor validation), `updatePlugins.xml` build filtering, search, compatible-updates, offline/stale serving |
 | `local_rubygems_proxy.rs` | Proxy-mode gem download, info, versions, specs (full/latest/prerelease); publish/yank return 404 in proxy mode |
+| `local_rubygems_compact_index.rs` | The compact index (`/versions`, `/info/{gem}`) served from a local registry — what Bundler actually reads |
+| `local_nodedist_registry.rs` | The `nodejs.org/dist` tree as a typed registry (RFC 0010 phases 2–3) |
+| `local_sdkman_registry.rs` | SDKMAN as a typed registry (RFC 0010 phases 5–6): candidates, the broker, the post-install hook |
 
 Additional local-registry coverage (Deb, RPM, Pacman, Conda, PyPI, Terraform)
 lives in the feature-area files above (`repo_deb_rpm_pacman.rs`, `terraform.rs`,
@@ -479,12 +497,14 @@ logic:
   `on*=` handler and no scheme outside the allow-list, and rendering is stable.
 - `fuzz_svg_sanitize.rs` — the SVG allow-list: output is well-formed XML and
   reaches outside its own document nowhere.
+- `fuzz_grant_resolution.rs` — grant resolution over arbitrary hierarchies:
+  the tier order holds, a seal stops inheritance, and widening never narrows.
 
 **The targets are a separate workspace, and that is a trap.** `cargo check
 --workspace`, `cargo clippy --workspace` and `cargo test --workspace` do not see
 `fuzz/`, so a target can stop compiling against a type it uses and nothing says
 so — the module docs go on naming a guard that is no longer running. Four of the
-six had drifted that way before `task fuzz:check` existed. That check is a plain
+seven had drifted that way before `task fuzz:check` existed. That check is a plain
 `cargo check` over `fuzz/Cargo.toml`, needs no nightly, and runs on every PR in
 the `Fuzz targets` job of `test.yaml`; the same job fuzzes each target for 60
 seconds on the nightly schedule and uploads any crash artefact.
@@ -533,8 +553,9 @@ to start under a restricted `ptrace_scope`, not a finding — re-run with
     against a local rubygems registry).
   - `heavy-client` (matrix): one job per ecosystem — `npm`, `pypi`, `openvsx`,
     `conda`, `nuget`, `composer`, `terraform`, `nvm`, `sdkman`, `mise`,
-    `cargo`, `go`, `maven`, `pathproxy`, `quarantine`, `upstream_audit` — each
-    running `tests/heavy/<suite>.sh`. A matrix rather than sixteen jobs because only
+    `cargo`, `go`, `maven`, `pathproxy`, `quarantine`, `upstream_audit`,
+    `airgap` — each
+    running `tests/heavy/<suite>.sh`. A matrix rather than seventeen jobs because only
     the toolchain setup differs; `fail-fast: false`, because one unhappy
     client says nothing about the others.
   - `heavy-authz` (matrix): one job per target of `tests/heavy/authz.sh` —
