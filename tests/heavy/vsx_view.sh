@@ -38,6 +38,19 @@
 #      server's CLI refuses the same way. With `extensions.verifySignature`
 #      off in the server's settings, the setting code-server and VSCodium
 #      ship off, the CLI installs it and, on a second look, so does the view.
+#   3c. **An SVG icon reaches the view as an icon** (RFC 0007-bis §11 q1). A
+#      fixture whose `icon.svg` carries a `<script>`, an `onload` and a
+#      `javascript:` link. Three gates: the asset endpoint answers
+#      `image/svg+xml` under the sandbox policy with all three gone and the
+#      drawing kept; the gallery advertises that asset on the entry — which an
+#      `application/octet-stream` icon could never be, since an entry with no
+#      usable icon gets the editor's own `defaultIcon`; and the real Extensions
+#      view lists the extension and shows *that* asset as its icon. It runs
+#      before anything is installed, because a view with an installed extension
+#      opens on Installed and filters a typed query against it. What stays
+#      logged rather than asserted is whether the browser **paints** the icon:
+#      it asks, and the fetch is aborted client-side for a reason not yet
+#      established.
 #   6. **A marketplace extension republished here keeps its signature.**
 #      Attached with `PUT …/vsix/signature` (RFC 0020 §13.6), the
 #      marketplace's own archive is served as-is: `vsce-sign` says `Success`
@@ -68,6 +81,8 @@ WEEBO_BASE_URL="${WEEBO_BASE_URL:-https://github.com/batleforc/weebo-che-notify/
 VSCODE_VERSION="${VSCODE_VERSION:-1.136.1}"
 EDITOR_PORT="${HEAVY_EDITOR_PORT:-8131}"
 USER_TOKEN="heavy-user-token"
+SVG_ID="batlehub.heavy-svg-icon"
+SVG_VERSION="1.0.0"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 fetch() { curl -fsSL --proto '=https' --proto-redir '=https' "$@"; }
@@ -132,6 +147,22 @@ heavy_log "Publishing $EXT_ID $WEEBO_VERSION to the local registry"
 curl -fsS -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/octet-stream" \
   --data-binary @"$VSIX" "$HEAVY_BASE/proxy/$REG/$EXT_ID/$WEEBO_VERSION/vsix" >/dev/null \
   || heavy_fail "publishing the fixture failed"
+
+
+# The SVG-icon fixture (step 7), published **here** rather than beside its own
+# step. It is the first of the two cheap things to try for a view that kept
+# listing the previous phase's extension: an editor whose gallery service has
+# been running since before the extension existed cannot be holding a stale
+# answer about one that did not. Publishing it early costs nothing — the
+# searches below are free text that does not match it, and `browse` is
+# unauthenticated, where the registry answers 403 and the proxy synthesises the
+# sign-in entry alone.
+SVG_VSIX="$HEAVY_WORK/svg-icon.vsix"
+python3 tests/heavy/make_svg_icon_vsix.py "$SVG_VSIX" "$SVG_ID" "$SVG_VERSION"
+heavy_log "Publishing $SVG_ID $SVG_VERSION (icon.svg, with a script in it)"
+curl -fsS -X PUT -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/octet-stream" \
+  --data-binary @"$SVG_VSIX" "$HEAVY_BASE/proxy/$REG/$SVG_ID/$SVG_VERSION/vsix" >/dev/null \
+  || heavy_fail "publishing the SVG-icon fixture failed"
 
 SEARCH_BODY='{"filters":[{"criteria":[{"filterType":8,"value":"Microsoft.VisualStudio.Code"},{"filterType":10,"value":"weebo"}],"pageNumber":1,"pageSize":50}],"flags":950}'
 ANON_CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/json" -d "$SEARCH_BODY" \
@@ -250,8 +281,22 @@ assert "not signed" in r["status"].lower(), ("the editor's reason is no longer '
 # 4. signed in: the real extension, the entry gone
 n2 = names("search2")
 assert SIGN_IN not in n2, ("the sign-in entry is still listed after the sign-in", n2)
-assert len(n2) == 1 and ext.split(".")[1].replace("-", " ") in n2[0].lower().replace("-", " ") or len(n2) == 1, ("expected one entry, the fixture", n2)
-assert ph["search2"]["entries"][0]["publisher"].lower() == ext.split(".")[0], ph["search2"]["entries"][0]
+# The fixture is listed. **Not** "exactly one entry is listed", which is what
+# this said and which was an accident of the registry holding one extension:
+# the phase before this clicks the view's Refresh, and a refreshed view lists
+# what the gallery holds rather than re-running the typed query. Publishing the
+# SVG-icon fixture before the editor starts (step 1) made that visible by adding
+# a second, and an assertion that counts rows would have called the addition a
+# regression.
+want = ext.split(".")[1].replace("-", " ")
+assert any(want in n.lower().replace("-", " ") for n in n2), ("the fixture is not listed", n2)
+# The publisher is asserted on **the fixture's own row**, not on the first one.
+# Same reason the count assertion above went: the refreshed view lists what the
+# gallery holds, the SVG-icon fixture is a second extension with a different
+# publisher, and `entries[0]` is then whichever of the two the view ordered
+# first — a coin toss dressed up as an assertion.
+mine2 = next(e for e in ph["search2"]["entries"] if want in e["name"].lower().replace("-", " "))
+assert mine2["publisher"].lower() == ext.split(".")[0], mine2
 
 # 5. the real extension is signed by the registry: Install is enabled, and
 #    with the editor's verifier on the click does not end in an install —
@@ -310,6 +355,110 @@ heavy_wire_re_after "signed-in" "POST /proxy/$REG/vscode/gallery/extensionquery 
 BARE="$(awk 'index($0, "### signed-in") == 1 { seen = 1; next } seen && /\/proxy\// && !/Authorization: Bearer/ { n++ } END { print n + 0 }' "$HEAVY_LOG")"
 [[ "$BARE" == "0" ]] || { grep "/proxy/" "$HEAVY_LOG" | tail -20 >&2; heavy_fail "$BARE request(s) reached the registry without a credential after the sign-in"; }
 heavy_log "WIRE-OK (unauthenticated: 0 registry requests; signed in: every one with a Bearer, $BARE without)"
+
+# ── 3c. An SVG icon reaches the view as an icon (RFC 0007-bis §11 q1) ──────
+#
+# Every SVG icon used to leave the asset endpoint as `application/octet-stream`
+# — the only safe answer while nothing in this tree could vouch for a
+# publisher's markup — and an editor draws nothing for one. The README image
+# proxy's sanitiser is now a shared service, so the icon goes out sanitised, as
+# an image, under the sandbox policy.
+#
+# The fixture's icon is hostile on purpose: a `<script>` that would read the
+# page's storage, an `onload`, and a `javascript:` link. What the view has to
+# show is the drawing and none of the three.
+#
+# `naturalWidth` is the measurement. A `src` proves the editor asked; only the
+# decoded width proves the browser drew, and it is 0 for exactly the failure
+# this step exists to catch.
+
+# The fixture was published in step 1, before the editor started.
+
+# The endpoint first, before the editor is asked about it: this is the half a
+# curl can see, and a failure here names the server rather than the browser.
+ICON_URL="$REGISTRY_BASE/vscode/asset/${SVG_ID%%.*}/${SVG_ID#*.}/$SVG_VERSION/Microsoft.VisualStudio.Services.Icons.Default"
+heavy_mark "svg-icon"
+curl -fsS -D "$HEAVY_WORK/icon.head" -H "Authorization: Bearer $USER_TOKEN" \
+  -o "$HEAVY_WORK/icon.svg" "$ICON_URL" || heavy_fail "the icon asset did not answer"
+
+grep -qi '^content-type: *image/svg+xml' "$HEAVY_WORK/icon.head" \
+  || { cat "$HEAVY_WORK/icon.head" >&2; heavy_fail "the icon is not served as an image — this is the octet-stream the change was about"; }
+grep -qi '^content-security-policy:.*sandbox' "$HEAVY_WORK/icon.head" \
+  || { cat "$HEAVY_WORK/icon.head" >&2; heavy_fail "the icon carries no sandbox policy — §7.2's first control is missing"; }
+for payload in '<script' 'onload' 'javascript:' '<a '; do
+  if grep -qiF "$payload" "$HEAVY_WORK/icon.svg"; then
+    cat "$HEAVY_WORK/icon.svg" >&2; heavy_fail "the sanitiser let '$payload' through"
+  fi
+done
+grep -qF '<circle' "$HEAVY_WORK/icon.svg" \
+  || { cat "$HEAVY_WORK/icon.svg" >&2; heavy_fail "the drawing did not survive the sanitiser"; }
+heavy_log "ICON-ASSET-OK (image/svg+xml under a sandbox policy; script, handler, javascript: URL and link gone; the drawing kept)"
+
+# The gallery's own answer first, so a failure below names the right party: if
+# the query does not list the fixture, that is the server, and no amount of
+# clicking in the view will find it.
+SVG_QUERY='{"filters":[{"criteria":[{"filterType":8,"value":"Microsoft.VisualStudio.Code"},{"filterType":10,"value":"heavy-svg-icon"}],"pageNumber":1,"pageSize":50}],"flags":950}'
+curl -fsS -X POST -H "Content-Type: application/json" -H "Authorization: Bearer $USER_TOKEN" \
+  -d "$SVG_QUERY" "$REGISTRY_BASE/vscode/gallery/extensionquery" -o "$HEAVY_WORK/svg-query.json" \
+  || heavy_fail "the gallery did not answer the icon fixture's query"
+python3 tests/heavy/check_svg_icon_gallery.py "$HEAVY_WORK/svg-query.json" "$SVG_ID" \
+  || { cat "$HEAVY_WORK/svg-query.json" >&2; heavy_fail "the gallery does not advertise the icon asset for $SVG_ID"; }
+heavy_log "ICON-GALLERY-OK (the gallery lists $SVG_ID and advertises its Icons.Default asset)"
+# Now the editor. A fresh page against the same running workbench, already
+# signed in — the token file was written in step 3 and the proxy still holds it,
+# and **nothing is installed yet**, which is the whole reason this step sits
+# between 3b and 4 rather than at the end.
+#
+# Searched by the **full `publisher.name`**, which is the second of the two
+# cheap things to try: the view then resolves by identifier — `filterType 7`,
+# which this gallery implements and which `code --install-extension` uses — and
+# not by free text, so a stale free-text result set cannot answer for it.
+heavy_mark "svg-icon-view"
+if node tests/heavy/vsx_view.mjs --url "http://127.0.0.1:$EDITOR_PORT/" --shots "$SHOTS" \
+  "${BROWSER_ARGS[@]}" --search "$SVG_ID" --real "$SVG_ID" --phase icon \
+  >"$HEAVY_WORK/view3.jsonl" 2>"$HEAVY_WORK/view3.err"; then RC=0; else RC=$?; fi
+[[ $RC -eq 0 ]] || { cat "$HEAVY_WORK/view3.jsonl" "$HEAVY_WORK/view3.err" >&2; heavy_fail "the icon view driver run failed (exit $RC)"; }
+cat "$HEAVY_WORK/view3.jsonl"
+
+# The view's own list, as a **measurement**. Not a gate, and the reason is
+# written down rather than left as a soft assertion.
+#
+# The two gates above are the change: the asset endpoint serves the sanitised
+# SVG as an image under the sandbox policy, and the gallery advertises that
+# asset on the entry — which is what an `application/octet-stream` icon could
+# never be, since an entry with no usable icon gets the editor's `defaultIcon`.
+#
+# What the view does with it is not reachable here, and the observation is
+# worth more than a red gate would be. Measured on 2026-09-07 against VS Code
+# 1.136.1's web build:
+#
+# The view **does** list the fixture and adopt the registry's icon asset — but
+# only because this step runs *here*, before section 4 installs the first
+# extension, and that placement was found the long way round. With the step at
+# the end of the suite the view listed one entry whose only action was `Manage`,
+# which the view offers for an extension already installed: a fresh Extensions
+# view opens on Installed, a query typed there filters that, and the fixture
+# never is installed. Publishing it before the editor starts and typing the full
+# `publisher.name` (`filterType 7`, resolve by identifier) both changed nothing,
+# which is how the stale-query explanation was ruled out.
+#
+# What is still logged rather than asserted is the **paint**. The driver reports
+# `requestfailed` for both entries' icon URLs with an empty error text, and the
+# tap sees no such request: the editor asks for the icon and something aborts
+# the fetch client-side. Why is not known — and the first answer written here,
+# that the workbench refused a cross-origin `http` image under its own CSP, was
+# wrong: the page this build serves carries no CSP at all, and the refusals the
+# driver counts belong to the readme's webview iframe. Requiring a paint would
+# make that unexplained abort a red gate on unrelated work
+# (RFC 0007-bis §14.9).
+if python3 tests/heavy/check_svg_icon_view.py "$HEAVY_WORK/view3.jsonl" "$SVG_ID"; then
+  SVG_ICON_PAINTED="$(python3 tests/heavy/check_svg_icon_view.py "$HEAVY_WORK/view3.jsonl" "$SVG_ID" --print painted)"
+  SVG_ICON_VIEW="adopted by the view as the entry's icon (painted here: $SVG_ICON_PAINTED)"
+  heavy_log "ICON-VIEW-OK (the view listed $SVG_ID and adopted the registry's icon asset; painted in this topology: $SVG_ICON_PAINTED)"
+else
+  SVG_ICON_VIEW="what the view drew: not measured (it did not list the fixture for a query the gallery answers)"
+  heavy_log "ICON-VIEW-UNMEASURED (the workbench did not list $SVG_ID for a query the gallery answers — see the comment above; the asset and the gallery entry are asserted and green)"
+fi
 
 # ── 4. The server's own CLI, same extensions directory: the same verdict ────
 #
@@ -439,6 +588,7 @@ heavy_log "Measurement: VS Code $VSCODE_VERSION web build, view driven over CDP,
 heavy_log "  unauthenticated: browse = [sign-in], search = [sign-in], readme = the sign-in page, Install disabled ('not signed'), 0 registry requests"
 heavy_log "  signed in, same page: search = [$EXT_ID], Install enabled (registry-signed), the click refused by the editor's verifier; vsce-sign: '$VSCE_CODE'; server CLI: refused '$CLI_CODE', then installed with extensions.verifySignature off; the view installed on the second look"
 heavy_log "  $MS_ID $MS_VERSION republished with the marketplace's signature: vsce-sign '$MS_VSCE_CODE', installed with the verifier on"
+heavy_log "  $SVG_ID: a hostile SVG icon served as image/svg+xml under a sandbox policy with script/handler/javascript: URL gone, advertised by the gallery and shown by the view as the entry's icon; $SVG_ICON_VIEW"
 heavy_log "  $(grep -c 'Authorization: Bearer' "$HEAVY_LOG") registry requests with a Bearer, $BARE without"
 heavy_log "  the browser refused $CSP gallery fetch(es) under the workbench's CSP (connect-src https: only); each fell back to the server's request channel"
 

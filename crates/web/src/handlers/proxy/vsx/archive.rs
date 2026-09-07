@@ -289,16 +289,35 @@ pub fn find_entry(bytes: &[u8], predicate: impl Fn(&str) -> bool) -> Option<Stri
     names.into_iter().find(|n| predicate(n))
 }
 
+/// Whether this entry is an SVG, and so goes out through the sanitiser.
+///
+/// Split from [`content_type_for`] rather than folded into it because the answer
+/// is not a type: an SVG's type depends on whether the document survived
+/// [`batlehub_core::services::svg::sanitize_svg`], which this function cannot
+/// know. `assets::serve_svg` asks, sanitises, and picks the type from the
+/// outcome.
+pub fn is_svg_path(path: &str) -> bool {
+    path.rsplit('.')
+        .next()
+        .is_some_and(|e| e.eq_ignore_ascii_case("svg"))
+}
+
 /// The `Content-Type` for a file served out of a VSIX.
 ///
 /// These bytes are attacker-influenced and served from the same origin as the
 /// admin console, which holds a bearer token — so the type is chosen from a
 /// closed allowlist rather than guessed from the extension.
 ///
-/// **SVG is deliberately not `image/svg+xml`.** An SVG served with that type
-/// executes script in the document's origin, which would turn "an extension
-/// shipped an icon" into console-session theft. It goes out as an opaque
-/// download instead; the editor renders no icon, which is the correct trade.
+/// **SVG is deliberately absent here, and for two reasons now.** An SVG served
+/// as `image/svg+xml` executes script in the document's origin, which would turn
+/// "an extension shipped an icon" into console-session theft, and for as long as
+/// nothing in this tree could sanitise one, the opaque download this function
+/// returns was the only safe answer. The sanitiser is now a shared service
+/// (RFC 0007-bis §11 q1) — but it is applied to the gallery's **icon asset**
+/// alone (`assets::SvgHandling`), because the other routes `serve_entry` backs
+/// serve arbitrary files inside the extension and must hand back what the
+/// publisher shipped. So an SVG reaches this allow-list on every route but one,
+/// and on that one only when the sanitiser *refused* it.
 pub fn content_type_for(path: &str) -> &'static str {
     let lower = path.to_ascii_lowercase();
     match lower.rsplit('.').next() {
@@ -519,7 +538,11 @@ mod tests {
         assert_eq!(found.as_deref(), Some("README.md"));
     }
 
-    /// SVG must never be served as `image/svg+xml` from the console's origin.
+    /// An SVG never takes a type from this allow-list.
+    ///
+    /// On the icon asset it is routed to the sanitiser before this is consulted
+    /// and only a refused document falls through; on the file routes this *is*
+    /// the answer. Either way it must stay opaque.
     #[test]
     fn svg_is_not_served_as_a_renderable_image() {
         assert_eq!(content_type_for("icon.svg"), "application/octet-stream");

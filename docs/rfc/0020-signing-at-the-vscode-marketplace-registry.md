@@ -2,7 +2,7 @@
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | **In review** — phases 1, 2, 3 and 5 landed 2026-09-06 (§13), plus the provided-signature path (§13.6): a marketplace extension republished here keeps its signature and a stock build verifies it; phase 4 is deferred until a VSIX crosses the gap at all (§13.4). Measured by `tests/heavy/vsx_view.sh`: the view enables Install on a registry-signed extension, the editor's verifier refuses it as §4.5 said, and with the setting off the view installs it and the extension activates |
+| Status      | **Implemented** — phases 1, 2, 3 and 5 landed 2026-09-06 (§13), plus the provided-signature path (§13.6): a marketplace extension republished here keeps its signature and a stock build verifies it. Phase 4 is **deferred**, and decided in principle, until a VSIX crosses the gap at all (§13.4, §11 decision 10). Measured by `tests/heavy/vsx_view.sh`, re-run green at sign-off on 2026-09-07 (§13.7): the view enables Install on a registry-signed extension, the editor's verifier refuses it as §4.5 said, and with the setting off the view installs it and the extension activates |
 | Short       | Signed VSIX assets                                            |
 | Settles     | Making what a BatleHub VSX registry serves installable from a current editor's Extensions view: a signature asset per version, the registry's own Ed25519 key in Open VSX's format, the upstream's signature relayed in proxy mode, and the one setting a stock build still needs |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -751,3 +751,29 @@ this registry serves, and the reason the registry never signs over a
 provided archive.
 
 Left for the registry page: nothing. Left for this RFC: sign-off.
+
+### 13.7 The canary, re-run at sign-off (2026-09-07)
+
+`vsx_view.sh` was re-run against VS Code 1.136.1's web build, its workbench
+driven in the workspace's Chrome over CDP, before this RFC left review.
+Every row held, and the two that matter most are the two ends of §4.5:
+
+- **What this registry signs, a stock editor still refuses.** The view
+  offers Install on the registry-signed fixture — which is what phase 2
+  bought, since without a signature asset Install is greyed out and the
+  entry is unusable — and the click gets as far as fetching the package
+  and the signature before the editor's own `vsce-sign` answers
+  `UnhandledException`. `batlehub-cli vsx verify` verifies the same three
+  Open VSX entries against the served key, so the archive is well formed
+  and the refusal is the verifier's policy, not a malformed asset. With
+  `extensions.verifySignature` off, the view installs it.
+- **What an upstream signed, a stock editor accepts.** `ms-vscode.hexeditor`
+  1.11.1 republished here with the marketplace's own archive attached
+  (§13.6) is `Success` to the same verifier, and installs with verification
+  *on*. That is the difference this RFC draws, measured in one run: the
+  marketplace's signature is the one a stock build trusts, and relaying it
+  byte for byte is why proxy mode needs nothing turned off.
+
+The wire says the rest: unauthenticated, the proxy forwards nothing;
+signed in, every registry request carries a Bearer and none arrives
+without one.

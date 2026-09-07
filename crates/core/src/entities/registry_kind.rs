@@ -839,6 +839,82 @@ impl RegistryKind {
         self.warm_artifact()
             .map(|artifact| artifact.coordinate(registry, name, version))
     }
+
+    /// The spelling this instance stores and reads `name` under.
+    ///
+    /// Three kinds answer to more than one spelling of the same package and
+    /// their read paths pick one: NuGet lower-cases the id (the flat and
+    /// registration handlers, the client, and [`FetchArtifact::NugetFlat`] all
+    /// do), PyPI applies PEP 503, and a Go module path reaches the proxy from
+    /// the `go` client with every upper-case letter escaped as `!` followed by
+    /// its lower-case form. Every other kind is stored as it was given.
+    ///
+    /// An upstream *search* answers in the display spelling instead — NuGet's
+    /// returns `Newtonsoft.Json`, pkg.go.dev's returns
+    /// `github.com/BurntSushi/toml` — so anything comparing a search hit
+    /// against what the instance holds has to bring both sides here first, or
+    /// it reports a held package as missing and offers to fetch it again
+    /// (RFC 0007-bis §14.11).
+    ///
+    /// Idempotent on every arm: a canonical name is its own canonical form,
+    /// which is what lets a caller apply this to a stored name whose
+    /// provenance it does not know.
+    pub fn canonical_package_name<'a>(&self, name: &'a str) -> std::borrow::Cow<'a, str> {
+        let canonical = match self {
+            Self::Nuget => name.to_lowercase(),
+            Self::Pypi => pep503_name(name),
+            Self::Goproxy => go_module_escape(name),
+            _ => return std::borrow::Cow::Borrowed(name),
+        };
+        if canonical == name {
+            std::borrow::Cow::Borrowed(name)
+        } else {
+            std::borrow::Cow::Owned(canonical)
+        }
+    }
+}
+
+/// PEP 503 name normalisation: lower-case, and runs of `-`, `_` and `.`
+/// collapsed to a single `-`.
+///
+/// The definition the PyPI adapter's `normalize_name` delegates to, so the
+/// simple-index read path and anything comparing against what it stored cannot
+/// drift apart.
+fn pep503_name(name: &str) -> String {
+    let lower = name.to_lowercase();
+    let mut out = String::with_capacity(lower.len());
+    let mut prev_dash = false;
+    for ch in lower.chars() {
+        if ch == '-' || ch == '_' || ch == '.' {
+            if !prev_dash {
+                out.push('-');
+                prev_dash = true;
+            }
+        } else {
+            out.push(ch);
+            prev_dash = false;
+        }
+    }
+    out
+}
+
+/// The GOPROXY protocol's case encoding: an upper-case letter travels as `!`
+/// followed by its lower-case form, because the protocol's paths land on
+/// case-insensitive filesystems.
+///
+/// Idempotent because an already-encoded path has no upper-case letter left to
+/// encode.
+fn go_module_escape(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_uppercase() {
+            out.push('!');
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 /// Whether a version can be fetched by coordinate alone
@@ -1208,6 +1284,69 @@ mod tests {
                 .fetch_coordinate("r", "lodash", "4.17.21")
                 .unwrap_or_else(|| panic!("{kind} should be fetchable by version"));
             assert_eq!(pkg.cache_key(), expected, "{kind}");
+        }
+    }
+
+    /// The three kinds whose read path stores a package under a name their own
+    /// upstream search does not return.
+    ///
+    /// The catalogue compares a search hit against what the instance holds, and
+    /// an exact comparison is wrong for exactly these: the row says "not held"
+    /// for a package `dotnet restore`, `pip` or `go` would find (RFC 0007-bis
+    /// §14.11).
+    #[test]
+    fn a_kind_canonicalises_a_name_the_way_its_read_path_stores_it() {
+        for (kind, display, stored) in [
+            (RegistryKind::Nuget, "Newtonsoft.Json", "newtonsoft.json"),
+            (RegistryKind::Pypi, "Pillow", "pillow"),
+            (RegistryKind::Pypi, "My_Package.Name", "my-package-name"),
+            (
+                RegistryKind::Goproxy,
+                "github.com/BurntSushi/toml",
+                "github.com/!burnt!sushi/toml",
+            ),
+        ] {
+            assert_eq!(kind.canonical_package_name(display), stored, "{kind}");
+        }
+    }
+
+    /// Applied to a name of unknown provenance — a stored one, say — the answer
+    /// has to be the name itself, or asking in both spellings would ask twice
+    /// for two different wrong things.
+    #[test]
+    fn canonicalising_a_canonical_name_changes_nothing() {
+        for kind in RegistryKind::ALL {
+            for name in [
+                "newtonsoft.json",
+                "pillow",
+                "github.com/!burnt!sushi/toml",
+                "lodash",
+                "@stdlib/string-left-pad",
+            ] {
+                let once = kind.canonical_package_name(name).into_owned();
+                assert_eq!(
+                    kind.canonical_package_name(&once),
+                    once,
+                    "{kind} is not idempotent on {name}"
+                );
+            }
+        }
+    }
+
+    /// Every other kind stores the name it was given, and a canonicaliser that
+    /// invented a rule for one would report a package it holds as missing.
+    #[test]
+    fn a_kind_with_no_rule_leaves_the_name_alone() {
+        for kind in RegistryKind::ALL {
+            if matches!(
+                kind,
+                RegistryKind::Nuget | RegistryKind::Pypi | RegistryKind::Goproxy
+            ) {
+                continue;
+            }
+            for name in ["Lodash", "org.slf4j:slf4j-api", "@scope/Thing"] {
+                assert_eq!(kind.canonical_package_name(name), name, "{kind}");
+            }
         }
     }
 

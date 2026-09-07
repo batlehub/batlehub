@@ -228,6 +228,61 @@ function cmdStatus({ json }) {
   );
 }
 
+/* ── What was put off ─────────────────────────────────────────────────────── */
+
+/**
+ * Every choice the RFCs took *not* to make, in one list.
+ *
+ * Two classes, and the difference is the whole point of the report. A
+ * **deferral** is decided: somebody argued it, wrote why not now, and often
+ * wrote what would reopen it. An **open question** is not: it sits under
+ * "Still open" in a document that has not been signed off, and it is owed.
+ * A deferral with no reopen condition is flagged, because that is the one
+ * that quietly becomes a permanent hole.
+ */
+function cmdDeferred({ json }) {
+  const rfcs = readRfcs(RFC_DIR);
+  const deferred = rfcs.flatMap((r) =>
+    r.deferrals.map((d) => ({ rfc: r.id, short: r.short, ...d })),
+  );
+  const owed = rfcs.filter((r) => r.openQuestions > 0);
+
+  if (json) {
+    console.log(
+      JSON.stringify(
+        { deferred, owed: owed.map((r) => ({ rfc: r.id, short: r.short, open: r.openQuestions })) },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  console.log("Deferred — decided, and not now\n");
+  for (const d of deferred) {
+    const name = d.lead.replace(/^Deferred[^:]*:[ \t]*/, "").replace(/^Deferred\b[, ]*/, "");
+    console.log(`${d.rfc.padEnd(9)}${d.where}`);
+    console.log(`         ${name ? `${name} — ` : ""}${d.claim}`.replace(/\s+$/, ""));
+    if (!d.reopens) console.log("         (no reopen condition recorded)");
+    console.log();
+  }
+
+  if (owed.length) {
+    console.log("Still owed — under \"Still open\", in a document not yet settled\n");
+    for (const r of owed) {
+      console.log(`${r.id.padEnd(9)}${String(r.openQuestions).padEnd(3)}${r.short}`);
+    }
+    console.log();
+  }
+
+  const silent = deferred.filter((d) => !d.reopens).length;
+  console.log(
+    `${deferred.length} deferral(s) across ${new Set(deferred.map((d) => d.rfc)).size} document(s), ` +
+      `${silent} with no reopen condition; ` +
+      `${owed.reduce((n, r) => n + r.openQuestions, 0)} question(s) still owed across ${owed.length}`,
+  );
+}
+
 /* ── A new document ───────────────────────────────────────────────────────── */
 
 const kebab = (s) =>
@@ -376,9 +431,10 @@ for (let i = 0; i < rest.length; i++) {
 try {
   if (command === "index") cmdIndex(opts);
   else if (command === "status") cmdStatus(opts);
+  else if (command === "deferred") cmdDeferred(opts);
   else if (command === "new") cmdNew(opts);
   else {
-    console.error("usage: rfc.mjs new|index|status  (see the header of this file)");
+    console.error("usage: rfc.mjs new|index|status|deferred  (see the header of this file)");
     process.exit(2);
   }
 } catch (err) {

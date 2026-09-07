@@ -281,9 +281,14 @@ tasks:
       - bash tests/heavy/vsx_login.sh
 
   test:vsx-view-heavy:
-    desc: "Heavy RFC 0011 §4.4.2 + RFC 0020 suite: a real Extensions view — the VS Code server build's workbench in Chrome over CDP (a sidecar via CDP_URL, or a headless CHROME_BIN) — the sign-in entry and its page, then after `auth write-token-file` the registry-signed fixture with Install enabled, the editor's verifier refusing it (vsce-sign pinned), the view installing it with extensions.verifySignature off, and a marketplace extension republished with its own signature verified and installed with the verifier on (needs DATABASE_URL, a Chrome, ui/node_modules, network once for VS Code, the webview frame and the marketplace extension)"
+    desc: "Heavy RFC 0011 §4.4.2 + RFC 0020 suite: a real Extensions view — the VS Code server build's workbench in Chrome over CDP (a sidecar via CDP_URL, or a headless CHROME_BIN) — the sign-in entry and its page, then after `auth write-token-file` the registry-signed fixture with Install enabled, the editor's verifier refusing it (vsce-sign pinned), the view installing it with extensions.verifySignature off, a marketplace extension republished with its own signature verified and installed with the verifier on, and an extension's hostile SVG icon sanitised, served as an image, advertised by the gallery and shown by the view as the entry's icon (needs DATABASE_URL, a Chrome, ui/node_modules, network once for VS Code, the webview frame and the marketplace extension)"
     cmds:
       - bash tests/heavy/vsx_view.sh
+
+  test:console-fetch-heavy:
+    desc: "Heavy RFC 0007-bis §11 q3 suite: the catalogue's Fetch button pressed in a real browser — the built console and the API on one origin, an anonymous reader shown the upstream row and no button, a signed-in reader shown a button naming the version, clicked by its accessible name, and the bytes then held, downloadable through npm's own path, and attributed in the audit to the reader who pressed it (needs DATABASE_URL, a Chrome via CDP_URL or CHROME_BIN, ui/node_modules, network for one npm search and tarball)"
+    cmds:
+      - bash tests/heavy/console_fetch.sh
 
   test:conda-heavy:
     desc: "Heavy conda integration: micromamba's `HEAD` probe for repodata.json.zst, and a package published after the compressed channel was warmed (needs DATABASE_URL; downloads micromamba on first run)"
@@ -341,7 +346,7 @@ tasks:
       - bash tests/heavy/pathproxy.sh
 
   test:quarantine-heavy:
-    desc: "Heavy quarantine integration (RFC 0018): npm against a [registries.security] registry backed by npmjs.org and the real OSV — first contact held on SCAN_PENDING with the reason code in npm's output, `batlehub wait` clearing it and the same cache recovering, a real advisory refused on the wire and named by `batlehub why`, the packument hiding the denied version, a config reload to warn serving it with the verdict headers, a scanner under bwrap failing to reach the tap, and the phase-4 flip — clean scan, install, the suite's own OSV learns an advisory, the scheduler's rescan refuses the next install and the alert names the puller (needs DATABASE_URL + network + bubblewrap; HEAVY_QUARANTINE_SKIP_SANDBOX=1 leaves the egress row unmeasured on a host without user namespaces)"
+    desc: "Heavy quarantine integration (RFC 0018): npm against a [registries.security] registry backed by npmjs.org and the real OSV — first contact held on SCAN_PENDING with the reason code in npm's output, `batlehub wait` clearing it and the same cache recovering, a real advisory refused on the wire and named by `batlehub why`, the packument hiding the denied version, a config reload to warn serving it with the verdict headers, a scanner under bwrap failing to reach the tap, and the phase-4 flip — clean scan, install, the suite's own OSV learns an advisory, the scheduler's rescan refuses the next install and the alert names the puller, and RFC 0002's pushed flag — a signed hard_block refusing `npm ci` with SOC_VERDICT on the wire, the exposure report naming the pull that preceded it, and the revoke lifting it (needs DATABASE_URL + network + bubblewrap; HEAVY_QUARANTINE_SKIP_SANDBOX=1 leaves the egress row unmeasured on a host without user namespaces)"
     cmds:
       - bash tests/heavy/quarantine.sh
 

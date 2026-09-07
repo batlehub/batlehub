@@ -2,7 +2,7 @@
 
 | Field      | Value                                                                  |
 | ---------- | ---------------------------------------------------------------------- |
-| Status     | **In review** — §13's cut landed 2026-09-04 (§14): the credential contract file with its normative JSON Schema, `auth token`/`write-token-file`/`status`, and the editor patch carried in `patches/che-code/`. The loopback proxy and the bootstrap entry followed on 2026-09-05 (§14.8), and the same evening the **canary with a real Extensions view** (§14.9): VS Code 1.136.1's server build, its workbench driven in a browser, measured by `tests/heavy/vsx_view.sh` — the entry, its page, and the one thing the view will not do with it. What remains is the `batlehub-vsx` extension, a separate repository (§11 q6). Phases 1–2's server half was already shipped under RFC 0015/0017; the PAT model in the body above is not the shipped one, and §13 says so |
+| Status     | **Implemented** — §13's cut landed 2026-09-04 (§14) and the cut itself is now gone: the credential contract file with its normative JSON Schema, `auth token`/`write-token-file`/`status` and the editor patch in `patches/che-code/`; the loopback proxy and the bootstrap entry on 2026-09-05 (§14.8); the **canary with a real Extensions view** the same evening (§14.9), VS Code 1.136.1's workbench driven in a browser by `tests/heavy/vsx_view.sh`; and the `batlehub-vsx` extension on 2026-09-06 in the separate repository §11 q6 chose, both modes measured in a real editor (§14.11). Eight of §12's nine phases are built; phase 9 is an upstream pull request against che-code that this RFC does not wait on. Phases 1–2's server half shipped under RFC 0015/0017; the PAT model in the body above is not the shipped one, and §13 says so |
 | Short      | Authenticated OpenVSX access |
 | Settles    | Giving an editor that has no credential hook a way to send one: a contract file that may point at a secret rather than hold it, the pod's own Kubernetes identity, a loopback proxy for editors we do not build, and a sign-in entry in the Extensions view instead of a blank one |
 | Author     | batleforc                                                              |
@@ -972,6 +972,18 @@ loopback proxy and the extension, which §13 moves to a follow-up RFC.
 
 ## 12. Implementation phases
 
+**Eight of the nine were built, and phase 9 is not this repository's to
+finish.** Phases 1–2's server half shipped under RFC 0015/0017 (§13), 3–4
+landed on 2026-09-05 (§14.8), 5 the same evening (§14.9), 6 with the TUI,
+and 7–8 on 2026-09-06 in the `batlehub-vsx` repository (§14.11). **Deferred: phase 9.** It is an upstream pull request against
+`che-incubator/che-code` — somebody else's merge button — and the row itself
+says the proxy and the fallback stand regardless of its outcome, so it does
+not gate this RFC. Reopen it when che-code takes or refuses the patch, and
+record which. Two items
+inside the built phases were never started and §14.7 names them: `auth
+source`/`auth doctor`, and phase 2's `--kubernetes`/`--kubeconfig` login
+modes, whose consumer-visible half ships as `--kubernetes-token-path`.
+
 | Phase | Content | Depends on |
 | ----- | ------- | ---------- |
 | 1 | `server`: Bearer middleware (OIDC + PAT), multi-issuer JWT path, PAT management API. `cli/`: `auth token`, `auth write-token-file`, and `auth status`/`source`/`doctor` — the last three land here rather than later, because they are how every subsequent phase is debugged. | — |
@@ -1164,16 +1176,19 @@ counted the requests could tell.
 ### 14.7 Still cut
 
 Of what §13 moved out, the loopback `proxy serve` and the unauthenticated
-bootstrap entry landed on 2026-09-05 — §14.8 — and the canary with a real
-Extensions view the same evening — §14.9. Still out: the `batlehub-vsx`
-extension and `auth source`/`auth doctor`. The extension is a separate
-repository (§11 q6) and waits on an editor build whose gallery URL cannot
-be repointed at all (its fallback-marketplace role, phase 8); the last two
-are conveniences over a format whose validation now happens at write time,
-which was the failure they were mostly there to explain.
+bootstrap entry landed on 2026-09-05 — §14.8 — the canary with a real
+Extensions view the same evening — §14.9 — and the `batlehub-vsx`
+extension on 2026-09-06, in the separate repository §11 q6 named (§14.11).
+Nothing of the cut is left.
 
-The `--kubernetes` and `--kubeconfig` login modes of §4.5 are not built
-either. `--kubernetes-token-path` ships, and `write-token-file --from-file`
+**Deferred: `auth source` and `auth doctor`.** Not cut work but
+never-started work — conveniences over a format whose validation now happens
+at write time, which was the failure they were mostly there to explain.
+Reopen them on the first contract file that goes wrong in a way the
+write-time validation did not catch, and name the failure.
+
+**Deferred: the `--kubernetes` and `--kubeconfig` login modes of §4.5.**
+They are not built either. `--kubernetes-token-path` ships, and `write-token-file --from-file`
 turns it into the `file` + `reresolve` contract entry the RFC describes, which
 is the part a consumer sees; the audience assertion and `TokenRequest` minting
 remain phase 2's.
@@ -1372,3 +1387,29 @@ path-carrying URL files and finds the same entry as its origin, a default
 port collapses, a different port or scheme does not, and a non-URL is left
 alone. `vsx_login.sh` passes unchanged — the two halves now agree on the
 right key rather than on the wrong one.
+
+### 14.11 The extension, in a real editor (2026-09-06)
+
+Phases 7 and 8 — the last of §13's cut — were built in `batlehub-vsx`, the
+separate repository §11 q6 chose, and measured the way §14.9 measured the
+view: a real VS Code web build, its workbench driven in a browser over CDP,
+against a real BatleHub. Both modes, one run:
+
+- **Marketplace mode** (phase 8, the build whose gallery URL cannot be
+  repointed): the extension's own view lists what the registry shows *this*
+  credential, an inline Install hands the VSIX to the editor's own install
+  command, the editor's Extensions view then lists it as installed, and the
+  extension verified RFC 0020's Ed25519 signature with the registry's key
+  before installing it.
+- **Broker mode** (phase 7): anonymous, the Account view and the status bar
+  offer sign-in and the proxy's bootstrap entry stands alone in the view.
+  After sign-in the extension writes the §4.1 contract file itself, `0600`,
+  leaving the refresh to the CLI and never logging the token; the credential
+  it wrote authenticates the gallery; and the re-query of §4.4.2 is the
+  editor's own Extensions-view refresh, so the same workbench lists the
+  registry's extension with no reload and nobody clicking anything.
+
+Building it also found the defect §14.10 records: the contract file is keyed
+by origin, and this repository's `normalize_origin` was not computing one.
+Two halves of one suite can be wrong the same way and agree; a second
+implementation is what made them disagree.

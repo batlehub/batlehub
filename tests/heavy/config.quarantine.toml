@@ -151,3 +151,45 @@ pullers_window_days = 30
 # version scanned clean at the start of the step is due by the time the
 # fake OSV has changed its answer.
 interval_secs = 1
+
+# ── The flags registry: a SOC push, and who already pulled it (RFC 0002) ─────
+#
+# Step 8. The same real OSV as the first registry, so what denies a version
+# here is the pushed flag and nothing else: `left-pad@1.3.0` is clean in OSV
+# (step 6 serves it), it is installed once so there is a pull to report on,
+# and then a `hard_block` arrives from the `soc` source below. RFC 0002 §13.1
+# decision 3 makes that push act at once — the stored verdict is denied
+# synchronously and a rescan is queued — so the refusal needs no tick to
+# wait for. The revoke does: `interval_secs = 1` is what lets the scheduler
+# re-derive an allowed verdict within the step rather than at the next hour.
+[[registries]]
+type = "npm"
+name = "npm-flags-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://registry.npmjs.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]
+
+[registries.security]
+mode = "block"
+min_age_secs = 3600
+mature_age_secs = 0
+scanners = ["osv"]
+required_scanners = ["osv"]
+max_severity = "high"
+
+[registries.security.rescan]
+interval_secs = 1
+
+# The SOC's push credential. `max_effect = "hard_block"` is the ceiling this
+# source may set, and the step asserts the effect arrives uncapped; the
+# registry scope means a secret leaked from here cannot flag the rest of the
+# estate.
+[[flag_sources]]
+name = "soc"
+secret = "heavy-soc-secret"
+max_effect = "hard_block"
+registries = ["npm-flags-${HEAVY_RUN}"]

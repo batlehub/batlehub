@@ -18,8 +18,7 @@ use actix_web::HttpResponse;
 use super::readme::{resolve_readme, ResolveInput, Resolved};
 use super::{get, web, AdminService, AppError, Arc, AuthIdentity, Deserialize, IntoParams};
 use batlehub_core::services::{
-    hot_config::RemoteImagePolicy,
-    readme::{image::IMAGE_CSP, ReadmeImageConfig},
+    hot_config::RemoteImagePolicy, readme::ReadmeImageConfig, svg::SVG_SANDBOX_CSP,
     LocalRegistryService, ProxyService,
 };
 
@@ -141,14 +140,11 @@ pub async fn explore_readme_image(
     Ok(HttpResponse::Ok()
         .content_type(image.content_type)
         // §7.2's first control, and the one that does not depend on the SVG
-        // sanitiser being right: it stops script in *every* mode a browser has,
-        // including the top-level navigation a reader performs by opening the
-        // image in a new tab — the one mode in which an SVG served from this
-        // origin would otherwise execute with it. Applied to every type, not
-        // only to SVG: a PNG loses nothing by it, and a type-sniffing bug is
-        // exactly the case where a policy conditioned on the type would be
-        // absent when it mattered.
-        .insert_header(("Content-Security-Policy", IMAGE_CSP))
+        // sanitiser being right. Applied to every type and not only to SVG, for
+        // the reason the constant gives — which is the marketplace's icon
+        // endpoint's reason too, and why the header travels with the sanitiser
+        // rather than being written out at each call site.
+        .insert_header(("Content-Security-Policy", SVG_SANDBOX_CSP))
         .insert_header(("Content-Disposition", "inline"))
         // `private`, not `public`: the response is behind the visibility gate,
         // so a shared cache must not hold an internal package's badge where the

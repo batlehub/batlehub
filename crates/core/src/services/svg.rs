@@ -1,4 +1,4 @@
-//! An allow-list over SVG, for the two-thirds of README images that are one.
+//! An allow-list over SVG, for every SVG this server hands a browser.
 //!
 //! RFC 0007-bis was drafted refusing to serve SVG at all, on reasoning that is
 //! correct as far as it goes: an SVG is a *document*, it can carry script, and
@@ -11,16 +11,43 @@
 //! So they are served, behind **two independent controls, either sufficient on
 //! its own** (RFC 0007-bis §7.2):
 //!
-//! - the response carries `Content-Security-Policy: default-src 'none'; …;
-//!   sandbox`, which stops script in every mode a browser has, including the
-//!   top-level navigation an `<img>` never performs but a reader opening the
-//!   image in a new tab does. That control does not depend on this file being
-//!   right.
+//! - the response carries [`SVG_SANDBOX_CSP`], which stops script in every mode
+//!   a browser has, including the top-level navigation an `<img>` never performs
+//!   but a reader opening the image in a new tab does. That control does not
+//!   depend on this file being right.
 //! - this module, which does not depend on the browser being right.
 //!
 //! Belt and braces here and nowhere else in the RFC, for the reason RFC 0007
 //! §7.1 gives about the HTML sanitiser: this is markup an arbitrary publisher
 //! authored, rendered on an origin an administrator is authenticated to.
+//!
+//! ## Why this is a service and not `readme::svg`
+//!
+//! It was `readme::svg` while the README image proxy was its only caller, and
+//! RFC 0007-bis §11 q1 asked whether to move it and answered *not until there
+//! are two* — generalising a security boundary that has never served two masters
+//! is how it acquires an option nobody needs.
+//!
+//! There are two. A VSIX ships an `icon` its manifest names, the marketplace
+//! asset endpoint serves it out of the archive, and it was going out as
+//! `application/octet-stream` — an undownloadable non-icon — for want of exactly
+//! this file (`handlers/proxy/vsx/assets.rs`). The trade that comment recorded
+//! ("the editor renders no icon, which is the correct trade") was only correct
+//! while the alternative was serving the bytes unexamined.
+//!
+//! Two callers, and both of them serve an SVG the browser is *meant to draw*.
+//! That is the boundary, not "the bytes came out of an archive": the same
+//! handler module serves arbitrary files inside an extension, and those keep
+//! going out verbatim under an allow-list with no SVG in it, because a file
+//! server that returns something other than what the publisher shipped is worse
+//! than an icon that does not render.
+//!
+//! The move is to a *sibling of* the README service rather than inside it, so
+//! neither caller reaches through the other: an extension icon has nothing to do
+//! with a README, and a `use crate::services::readme::svg` in the marketplace
+//! handler would have said it did. The CSP moved with it for the same reason —
+//! the two controls are one decision, and a caller that took the sanitiser and
+//! left the header behind would have kept the half that can be wrong.
 //!
 //! ## Why a re-serialising allow-list rather than a filter
 //!
@@ -38,6 +65,30 @@ use std::io::Cursor;
 
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, Writer};
+
+/// The one spelling of the type an SVG goes out under.
+///
+/// Shared with the sanitiser rather than written at each call site, because the
+/// two decisions are the same decision: these bytes are declared a renderable
+/// document, so they went through [`sanitize_svg`] first.
+pub const SVG_CONTENT_TYPE: &str = "image/svg+xml";
+
+/// The `Content-Security-Policy` every response carrying an SVG must send.
+///
+/// §7.2's first control, and the one that does not depend on this module being
+/// right: `sandbox` stops script in **every** mode a browser has, including the
+/// top-level navigation a reader performs by opening the image in a new tab —
+/// the one mode in which an SVG served from this origin would otherwise execute
+/// with it.
+///
+/// Callers apply it to whatever they are serving and not only to SVG. A PNG has
+/// nothing to lose by it, and a type-sniffing bug is exactly the case where a
+/// policy conditioned on the type would be absent when it mattered.
+///
+/// `style-src 'unsafe-inline'` is the one relaxation: the allow-list keeps
+/// presentation attributes, and a badge that lost its fills would be sanitised
+/// into a blank rectangle. A style cannot read `localStorage`.
+pub const SVG_SANDBOX_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
 
 /// Every element an SVG we serve may contain.
 ///

@@ -6313,6 +6313,7 @@
           {
             "name": "limit",
             "in": "query",
+            "description": "Results asked of each registry searched: 10 by default, 100 at most.\nA larger value is not an error, it is simply not honoured.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -23791,7 +23792,8 @@
           "registry",
           "name",
           "latest_version",
-          "already_cached"
+          "already_cached",
+          "fetch"
         ],
         "properties": {
           "already_cached": {
@@ -23803,6 +23805,10 @@
               "string",
               "null"
             ]
+          },
+          "fetch": {
+            "$ref": "#/components/schemas/FetchOfferDto",
+            "description": "Whether the catalogue may offer **Fetch** on this row (RFC 0007-bis\n§11 q3).\n\nPer row rather than per response: a listing with no registry filter fans\nout across every registry the caller may browse, and `console_fetch` and\nthe kind's own answer are both per registry — so one flag for the page\nwould be wrong for some of its rows."
           },
           "latest_version": {
             "type": "string"

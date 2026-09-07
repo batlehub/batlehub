@@ -59,3 +59,22 @@ tasks:
     dir: docs
     cmds:
       - node build/rfc.mjs status --json
+
+  rfc:deferred:
+    desc: Every choice the RFCs put off — decided deferrals, and the questions still owed
+    dir: docs
+    # Two classes, and the difference is why the report exists. A *deferral*
+    # was argued and written down ("**Deferred, …**", "**Decided: not now.**")
+    # and usually says what would reopen it; the report flags the ones that do
+    # not, because those are the ones that quietly become permanent. A
+    # *question still owed* is an unstruck item under "Still open" in a
+    # document nobody has signed off, which is `rfc:status`'s count, listed
+    # here beside the deferrals so one command answers "what did we put off".
+    cmds:
+      - node build/rfc.mjs deferred
+
+  rfc:deferred:json:
+    desc: The same list as machine-readable JSON
+    dir: docs
+    cmds:
+      - node build/rfc.mjs deferred --json

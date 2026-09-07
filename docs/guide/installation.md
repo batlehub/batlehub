@@ -246,6 +246,49 @@ persistence:
   enabled: false   # PVC not needed with S3
 ```
 
+### Scan worker (RFC 0018) {#helm-worker}
+
+The scanners that hold an artifact until it has a verdict need toolchains the
+proxy image does not carry, so the chart can run them in a deployment of their
+own. Turn the worker on and take the `worker` role off the proxy:
+
+```yaml
+config:
+  server:
+    roles: ["proxy"]   # the proxy stops scanning
+
+worker:
+  enabled: true
+  replicaCount: 1
+  # gVisor or Kata around the whole pod, on top of bubblewrap around each
+  # scanner. Leave empty when the node has neither.
+  runtimeClassName: ""
+  autoscaling:
+    enabled: false     # needs a metrics adapter, see below
+```
+
+The worker image (`ghcr.io/batleforc/batlehub-worker`) carries every scanner
+but GuardDog. Enabling `[scanners.guarddog]` means pointing
+`worker.image.repository` at `ghcr.io/batleforc/batlehub-worker-guarddog`
+instead, otherwise the scanner is refused when the config loads.
+
+Each scanner runs under bubblewrap, which needs unprivileged user namespaces on
+the node. Where the node forbids them, run the pod under a sandboxed runtime
+class and set `runtime = "none"` in `[worker.sandbox]`.
+
+`worker.autoscaling` renders a HorizontalPodAutoscaler on the external metric
+`batlehub_scan_jobs_queued`, which a metrics adapter such as prometheus-adapter
+or KEDA's Prometheus scaler must expose first. `worker.replicaCount` is ignored
+while it is on.
+
+Only the worker needs egress to upstream artifacts, the Trivy server and Rekor.
+`trivy.enabled` pulls in the Trivy server sub-chart and the endpoint is then
+`http://<release>-trivy:4954`.
+
+Which scanners run, on which registries, and what a scanner error does are all
+config, not chart values: see
+[`[scanners]` and `[worker]`](/guide/configuration#scanners-and-worker).
+
 ### Key values reference
 
 | Key | Default | Description |
@@ -262,6 +305,12 @@ persistence:
 | `persistence.enabled` | `true` | Create a PVC for cache |
 | `persistence.size` | `10Gi` | PVC capacity |
 | `existingSecret` | `""` | Use a pre-existing Secret for config |
+| `worker.enabled` | `false` | Run the scan worker in its own Deployment |
+| `worker.image.repository` | `ghcr.io/batleforc/batlehub-worker` | Worker image; the `-worker-guarddog` variant adds GuardDog |
+| `worker.autoscaling.enabled` | `false` | HPA on the queued-jobs metric |
+| `worker.runtimeClassName` | `""` | Sandboxed runtime class around the worker pod |
+| `trivy.enabled` | `false` | Deploy the Trivy server sub-chart |
+| `networkPolicy.enabled` | `false` | Create a NetworkPolicy for the service |
 
 ### Injecting secrets via environment variables {#helm-env-vars}
 

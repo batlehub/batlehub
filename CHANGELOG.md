@@ -10,6 +10,99 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Fetch a package from the catalogue, not only from its page (RFC 0007-bis
+  §11 q3).** A search that finds a package upstream lists it as an `upstream`
+  row, and that row was a wall: the only way to pull it was to open its page
+  first. The row now carries a button naming the version the upstream search
+  returned — **Fetch 4.17.21** — which runs the same download the package
+  page's button runs, under the caller's own identity and through every gate,
+  the quota and the audit. Cached rows are offered nothing, because there is
+  nothing to go and get. Off with `console_fetch = false`, the same switch that
+  governs the package page, and not offered where a version is not a single
+  artifact.
+- **An extension's SVG icon renders (RFC 0007-bis §11 q1).** The VS Code
+  marketplace asset endpoint served every SVG icon as an opaque download, so
+  the editor's Extensions view and the console both showed no icon at all —
+  the only safe answer while nothing in the tree could vouch for a publisher's
+  markup. The README image proxy's sanitiser is now a shared service rather
+  than a detail of the README service, and the icon goes out sanitised, as an
+  image, under the same sandbox policy. A document the sanitiser refuses is
+  still an opaque download.
+- **A disconnected instance answers the listing a client resolves through
+  (RFC 0008-bis).** A bundle carries artifacts and the entry that finds
+  them, never the document a package manager reads first, so `npm install
+  left-pad@1.3.0` and `pip install six==1.17.0` used to stop at a `503`
+  on an instance that held the very thing they wanted. An `[air_gap]`
+  instance now composes that document from what it holds — one version per
+  held key, nothing else — and marks it `X-BatleHub-Listing: synthesised`
+  with the count in `X-BatleHub-Listing-Held`. Every kind with a listing is
+  rendered in its own shape, including the four whose answer lives inside
+  the artifact and is read at import (RubyGems' compact index, conda's
+  `repodata.json`, NuGet's registration pages, Composer's `p2`) and
+  Terraform's download document, composed from the held archive, checksum
+  list and signature with the publisher's own keys carried on the manifest,
+  since this instance signs nothing. A version the instance does not hold
+  is absent from the listing rather than served, so the client fails the way
+  it fails upstream. The miss log gained the version the client asked for
+  and the versions held beside it, in the API, the CLI and the console.
+  `synthesise_listings = false` restores the old refusal.
+
+- **An editor with no credential hook can sign in to a private extension
+  registry (RFC 0011).** A credential contract file, keyed by origin and
+  described by a normative JSON Schema, carries a token or a path to one:
+  `batlehub-cli auth token`, `auth write-token-file` and `auth status`
+  write and read it, and `--kubernetes-token-path` turns the pod's own
+  service-account token into an entry that is re-read per request. For an
+  editor whose gallery URL can be repointed, `batlehub-cli proxy serve`
+  binds a loopback gallery proxy that attaches the credential, rewrites
+  absolute URLs and streams; with no credential it answers a search with
+  exactly one entry, the sign-in bootstrap, instead of a blank view. A
+  che-code patch in `patches/che-code/` reads the same file, origin-scoped,
+  and retries once on `401`. `tests/heavy/vsx_login.sh` drives the real VS
+  Code core through all of it, and the editor extension that pairs with it
+  lives in the `batlehub-vsx` repository.
+
+- **A security team can push a flag, and ask who already pulled it (RFC
+  0002).** A `[[flag_sources]]` entry signs a batch to `POST
+  /api/v1/flags/{source}` with `X-Hub-Signature-256`, one item per
+  coordinate at an exact version or `*`, and `DELETE
+  /api/v1/flags/{source}/{external_id}` revokes it. The effect is capped by
+  the source's `max_effect` and scoped to the registries it names. On a
+  registry with `[registries.security]` the flag becomes a finding of kind
+  `SocVerdict`: a `hard_block` denies the stored verdict at once and
+  re-derives on rescan, a `gate` is judged against the registry's
+  `max_severity`, and the only relief is a `GateExemption`, since `flags`
+  joined the exemptible gates. On a registry without a profile the same
+  store is read by a rule of its own beside the block list. The inbound
+  `security.verdict` webhook is the degenerate case of the same push and
+  lands in the same table, so its name may not collide with a flag source.
+  `GET /api/v1/admin/exposure` answers the question the flag raises: one row
+  per consumer, coordinate and flag, with how many pulls preceded the flag,
+  a coverage block saying what the report could not see, keyset paging and a
+  CSV or JSON export. `batlehub admin flags list` and `batlehub admin
+  exposure` are the terminal side, and the console carries the flags and
+  exposure panels. Step 8 of `tests/heavy/quarantine.sh` drives the whole
+  lifecycle with npm.
+
+- **Git-forge registries serve refs, releases and raw content (RFC 0019).**
+  `github`, `gitlab` and `forgejo` registries now take a tag, a branch or a
+  commit where they used to take a release tag only. The ref is resolved
+  once and the coordinate becomes its commit SHA, so a cache entry is a
+  commit and never a name that moves; `X-BatleHub-Ref-Kind`,
+  `-Commit`, `-Requested` and `-Previous-Commit` say what the name resolved
+  to and what it answered last time. `[registries.refs]` sets the branch
+  TTL and what a mutable ref costs (`MUTABLE_REF` warned by default, a
+  moved tag and a replaced asset denied). `[registries.raw]` serves single
+  files, off by default, bounded by size, allowlisted by repository glob and
+  path, and refusing a shell script (`RAW_SCRIPT`) on any registry that
+  opted into a quarantine. `[registries.api_reads]` turns on three typed
+  read-only families — `tags`, `commits`, `branches` — with no wildcard
+  passthrough, and every download URL in a release document is repointed at
+  the proxy. The commit date, the publisher and the forge's own
+  attestations and signatures ride the version into RFC 0018's verdict, and
+  the console's package page shows the moving refs and the short SHA.
+  `tests/heavy/mise.sh` drives a real `mise` through the whole of it.
+
 - **Signed VSIX assets for `openvsx` / `vscode-marketplace` registries (RFC 0020).**
   A current VS Code's Extensions view greys out Install on any gallery entry
   without a signature asset. A registry that holds an Ed25519 key
@@ -28,6 +121,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **A package found by an upstream search was reported as not held, however
+  often it had been pulled.** An upstream search is a relevance search: npm
+  answers `left-pad` with `pad-left` and `lpad`, and neither contains the query.
+  The catalogue decided "do we already have this?" by looking for packages whose
+  name *contains the query*, so no fuzzy hit could ever be credited. It asks by
+  the names that came back now.
+- **A NuGet, PyPI or Go package the instance held was still reported as
+  missing.** NuGet's search answers `Newtonsoft.Json` where `dotnet restore`
+  stores `newtonsoft.json`, PyPI's answers `Pillow` where the simple index
+  stores `pillow`, and pkg.go.dev answers `github.com/BurntSushi/toml` where the
+  `go` client stores `github.com/!burnt!sushi/toml`. The catalogue compared the
+  two spellings exactly, so it offered **Fetch** on a package it already had and
+  the button answered `409`. Each kind's own naming rule now decides, and the
+  read path's normalisers share that one definition.
+- **A version fetched from the console stayed missing from the catalogue for ten
+  minutes.** The listing is served from a cache invalidated on a publish and on
+  a yank; a console fetch is a third write and was not on the list, so the row
+  went on offering to fetch a version the instance already held, and a second
+  press answered `409`. A package manager's download still does not invalidate
+  it, deliberately.
 - **Proxied extensions lost their upstream signature.** The gallery proxy
   re-rendered every entry with a fixed six-asset list, so an extension
   proxied from the Microsoft marketplace arrived unsigned and a current
@@ -56,6 +169,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     fallback when the server cannot be reached.
 
 ### Changed
+
+- **The upstream search's `limit` is capped at 100 per registry.** The search
+  fans out across every registry the caller may browse, and each hit costs a
+  coordinate in the "do we already hold this?" query, so an uncapped `limit` let
+  one request size this instance's database work. Nothing observable changes
+  today: every registry client already clamped the number lower before sending
+  it upstream. A larger value is not an error, it is simply not honoured.
 
 - **One documentation tree, and it wears the design system** (RFC 0005). The
   repository had two: `website/`, published, and `docs/`, in the repo and

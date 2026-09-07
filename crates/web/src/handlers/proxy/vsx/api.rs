@@ -527,7 +527,7 @@ pub async fn openvsx_file(
 
     batlehub_core::services::validate_path_safe("extension file", &filename)
         .map_err(AppError::from)?;
-    super::assets::serve_entry(&bytes, &filename)
+    super::assets::serve_entry(&bytes, &filename, super::assets::SvgHandling::Verbatim)
 }
 
 // ── RFC 0015 §4.2 — `openvsx:namespace:claim` ────────────────────────────────

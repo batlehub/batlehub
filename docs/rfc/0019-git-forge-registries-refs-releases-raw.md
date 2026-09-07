@@ -2,7 +2,7 @@
 
 | Field       | Value                                                                                 |
 | ----------- | ------------------------------------------------------------------------------------- |
-| Status      | **In review** — all five phases of §12 landed: phase 1 on 2026-09-03 (§13.1) and phases 2–5 on 2026-09-04 (§13.2), each parity cell probed live before the code that relies on it; every §11 question is decided. What is left is presentation (the Explorer's short-SHA column) and client-side proof of phases 3–5 in `tests/heavy/mise.sh` |
+| Status      | **Implemented** — all five phases of §12 landed: phase 1 on 2026-09-03 (§13.1), phases 2–5 on 2026-09-04 (§13.2) and the two tails on 2026-09-05 (§13.3), each parity cell probed live before the code that relies on it. Every §11 question is decided, nothing in §12 is outstanding, and phases 3–5 are proven client-side by `tests/heavy/mise.sh` |
 | Short       | Forge registries: refs, releases, raw                                                 |
 | Settles     | What a "version" is for GitHub/GitLab/Forgejo, how mutable refs are served, what raw content is allowed, and what metadata these registries hand to RFC 0018 |
 | Author      | Maxime <maxleriche.60@gmail.com>                                                       |
@@ -407,7 +407,7 @@ Warnings (`AppConfig::warnings()`, stable codes, surfaced like
 | --- | --- | --- |
 | `forge.anonymous-upstream` | a forge registry with no upstream token | Anonymous GitHub is 60 requests/hour; with ref resolution that is a few minutes of use. |
 | `forge.raw-disabled-but-linked` | `[raw]` absent or disabled while the registry's generated `url_replacements` rewrite `raw.githubusercontent.com` | The snippet the operator hands out points at a path that refuses. |
-| `security.timestamp-hold-unavailable` (RFC 0018) | `[security]` with `hold_missing_timestamp = true` on a forge whose `[refs]` derivation is not yet built | Retired for the forges by this RFC's phase 1; until then it fires. |
+| `security.timestamp-hold-unavailable` (RFC 0018) | `[security]` with `hold_missing_timestamp = true` on a forge whose `[refs]` derivation is not yet built | Retired for the forges by this RFC's phase 1, which dates every ref; the warning now fires for the path-addressed kinds only. |
 
 ---
 
@@ -923,7 +923,8 @@ raw policy, the link rewriting on both forge shapes, GitLab's five endpoints
 against mockito bodies copied from gitlab.com, and the provenance guarantee
 over every GitHub and Forgejo path.
 
-**Left for later.** The `mise.sh` heavy suite still drives phase 1's routes
+**Left for later** — both closed the next day, in §13.3. The `mise.sh`
+heavy suite still drives phase 1's routes
 only; a moved tag cannot be staged against a real forge, so the wire
 assertions for `TAG_MOVED` live in the in-process suite. The Explorer's
 version rows do not yet show a short SHA — the moving-refs panel is the half

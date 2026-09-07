@@ -27,7 +27,10 @@
 //   csp       how many gallery requests the browser itself refused
 //
 // `--phase signed` runs search2 and install2 only, for a second look at an
-// editor that is already signed in (after a settings change).
+// editor that is already signed in (after a settings change). `--phase icon`
+// runs one search and reports what the view drew for each entry's icon —
+// `naturalWidth`, which is 0 for an image the browser refused or could not
+// decode and is therefore the only honest way to ask "did the icon render".
 //
 // Browser: `--cdp` connects to a running Chrome (a workspace's sidecar); the
 // page lives in its own browser context, so nothing of the browser's other
@@ -66,13 +69,24 @@ const snap = (page, name) => page.screenshot({ path: path.join(SHOTS, `${String(
 // Every entry the view currently lists: display name, publisher, and the
 // visible actions with their enablement (Install / Installing / Manage …).
 const listed = (page) => page.$$eval(".extensions-viewlet .extension-list-item", (els) =>
-  els.map((e) => ({
-    name: e.querySelector(".name")?.textContent?.trim() ?? "",
-    publisher: e.querySelector(".publisher-name, .publisher")?.textContent?.trim() ?? "",
-    actions: [...e.querySelectorAll(".extension-action")]
-      .filter((a) => !a.classList.contains("hide") && a.offsetParent !== null)
-      .map((a) => (a.textContent.trim() || a.getAttribute("aria-label") || [...a.classList].filter((c) => c.startsWith("codicon-")).join(" ")) + (a.classList.contains("disabled") ? " (disabled)" : "")),
-  })));
+  els.map((e) => {
+    // The icon the editor actually drew. `naturalWidth` is the fact worth
+    // having: it is 0 for an image the browser refused or could not decode,
+    // and a `src` alone cannot tell those apart from one that rendered. This
+    // is how "the marketplace serves an SVG icon as application/octet-stream"
+    // is visible from outside the server (RFC 0007-bis §11 q1).
+    const img = e.querySelector("img.icon, .icon img, .icon-container img");
+    return {
+      name: e.querySelector(".name")?.textContent?.trim() ?? "",
+      publisher: e.querySelector(".publisher-name, .publisher")?.textContent?.trim() ?? "",
+      icon: img
+        ? { src: img.getAttribute("src") ?? "", naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight, complete: img.complete }
+        : null,
+      actions: [...e.querySelectorAll(".extension-action")]
+        .filter((a) => !a.classList.contains("hide") && a.offsetParent !== null)
+        .map((a) => (a.textContent.trim() || a.getAttribute("aria-label") || [...a.classList].filter((c) => c.startsWith("codicon-")).join(" ")) + (a.classList.contains("disabled") ? " (disabled)" : "")),
+    };
+  }));
 
 // Poll the list until `ok` holds or the timeout passes; the last observation
 // either way, so the suite sees what the view showed rather than a timeout.
@@ -193,6 +207,23 @@ await page.setViewport({ width: 1280, height: 900 });
 const csp = [];
 page.on("console", (m) => { if (m.type() === "error" && /Content Security Policy/.test(m.text())) csp.push(m.text().slice(0, 160)); });
 
+// What became of every icon request. `naturalWidth: 0` says the browser drew
+// nothing and nothing else; it cannot tell "the request never left" from "it
+// left and came back a 404" from "it arrived and would not decode". The first
+// answer written down for this was a guess and it was wrong, so the driver
+// reports the three facts that separate them instead.
+const iconTraffic = [];
+const isIcon = (url) => /Icons\.Default/.test(url);
+page.on("response", (r) => {
+  if (isIcon(r.url())) iconTraffic.push({ what: "response", status: r.status(), type: r.headers()["content-type"] ?? "", url: r.url().slice(-90) });
+});
+page.on("requestfailed", (r) => {
+  if (isIcon(r.url())) iconTraffic.push({ what: "failed", reason: r.failure()?.errorText ?? "", url: r.url().slice(-90) });
+});
+page.on("requestfinished", (r) => {
+  if (isIcon(r.url())) iconTraffic.push({ what: "finished", url: r.url().slice(-90) });
+});
+
 try {
   await page.goto(URL_, { waitUntil: "load", timeout: 60000 });
   await page.waitForSelector(".monaco-workbench", { timeout: 60000 });
@@ -206,7 +237,45 @@ try {
   await (await page.waitForSelector('.activitybar [aria-label^="Extensions"]', { timeout: 30000 })).click();
   await page.waitForSelector(".extensions-viewlet", { timeout: 30000 });
 
-  if (PHASE === "signed") {
+  if (PHASE === "icon") {
+    // One search, one measurement: the icon the view drew for `--real`. The
+    // editor is already signed in (the suite wrote the token file before this
+    // run), so no sign-in entry is expected and none is waited for.
+    //
+    // Settled on **that extension appearing**, not merely on "some row that is
+    // not the sign-in entry": the view answers a new query from its own cache
+    // first, so the looser predicate was satisfied by the previous search's
+    // rows and the phase measured the wrong extension's icon.
+    const [pub, name] = REAL.split(".");
+    const mine = (r) => r.some((x) => x.publisher.toLowerCase() === pub.toLowerCase()
+      || x.name.toLowerCase().replace(/[\s-]/g, "") === name.toLowerCase().replace(/[\s-]/g, ""));
+    // Refresh first, and it is not belt and braces. The view answers a query
+    // from its own cache, and this editor has been running since before the
+    // extension was published — so without it the search returns the rows of an
+    // earlier phase and the measurement is of the wrong extension's icon. The
+    // signed-in phase clicks the same control for the same reason.
+    await typeSearch(page, SEARCH);
+    let entries = await settle(page, (r) => r.length > 0 && !r.some((x) => x.name === SIGN_IN) && mine(r), 8000);
+    if (!mine(entries)) {
+      const refresh = await page.$('.sidebar [aria-label^="Refresh"], .sidebar .codicon-extensions-refresh');
+      if (refresh) await refresh.click();
+      emit({ phase: "refresh", clicked: !!refresh });
+      await sleep(1500);
+      await typeSearch(page, SEARCH);
+      entries = await settle(page, (r) => r.length > 0 && !r.some((x) => x.name === SIGN_IN) && mine(r));
+    }
+    // An `<img>` decodes after its row is listed, so a measurement taken the
+    // instant the row appeared reads `naturalWidth: 0` on a perfectly good
+    // icon. Give the pixels their own wait — and go on without them, because
+    // whether the workbench *paints* a cross-origin icon is its CSP's decision
+    // and the suite reports that rather than requiring it.
+    const drawn = await settle(page, (r) => mine(r)
+      && r.every((x) => !x.icon || !x.icon.src || x.icon.naturalWidth > 0), 15000);
+    if (drawn.length && mine(drawn)) entries = drawn;
+    await snap(page, "icon");
+    emit({ phase: "icon", entries, iconTraffic });
+    emit({ phase: "csp", refused: csp.length, sample: csp[0] ?? "" });
+  } else if (PHASE === "signed") {
     await typeSearch(page, SEARCH);
     const [pub, name] = REAL.split(".");
     const search2 = await settle(page, (r) => r.length > 0 && !r.some((x) => x.name === SIGN_IN)

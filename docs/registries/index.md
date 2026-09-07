@@ -131,7 +131,8 @@ says the README arrives when one is first downloaded; **neither** means the page
 answers from what this instance holds and nothing else.
 
 **Fetchable** is whether the page offers a *Fetch this version* button on those
-upstream-only rows. `no` is not a limitation of the button but of the
+upstream-only rows, and whether the catalogue offers one on an upstream search
+result. `no` is not a limitation of the button but of the
 coordinate: a Maven version is a set of files, a Terraform provider is addressed
 by OS and architecture as well as version, a PyPI version is an sdist plus one
 wheel per interpreter and platform, and a conda artifact carries a channel
@@ -177,7 +178,8 @@ instance](/operations/egress#the-console-s-discovery-read).
 
 Two settings shape what else the page can do: `remote_images = "proxy"` renders
 a README's images through this server rather than charting them, and
-`console_fetch` (on by default) is the *Fetch this version* button. Prose search
+`console_fetch` (on by default) is the *Fetch this version* button, on the
+package page and on the catalogue's upstream rows alike. Prose search
 across stored READMEs is instance-wide and off by default —
 [`[search] readmes`](/guide/admin-config#search-readmes).
 

@@ -532,6 +532,13 @@ The discovery read above makes the package page honest about what it holds: it
 lists every version upstream knows about and marks each one **not held here**.
 That is a wall. This is the door — a **Fetch this version** button on those rows.
 
+The catalogue has the same door. A search that finds a package upstream lists it
+as an `upstream` row, and that row offers a button naming the version the
+upstream search returned: **Fetch 4.17.21**. It is the same endpoint, the same
+gates and the same audit row as the button on the package page; one switch turns
+both off. Where a registry does not offer it, the listing draws nothing and the
+package page states the reason.
+
 ```toml
 [[registries]]
 console_fetch = true   # default

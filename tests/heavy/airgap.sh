@@ -117,8 +117,16 @@ if ! "$RUBY_BIN_DIR/gem" list -i bundler -v "$BUNDLER_VERSION" >/dev/null 2>&1; 
   heavy_log "Installing bundler $BUNDLER_VERSION into $GEM_HOME"
   "$RUBY_BIN_DIR/gem" install bundler -v "$BUNDLER_VERSION" --no-document >/dev/null
 fi
-# `bundle` is in the prefix it was installed into, not beside the interpreter.
-BUNDLE=("$GEM_HOME/bin/bundle" "_${BUNDLER_VERSION}_")
+# `bundle` is in the prefix it was installed into, not beside the interpreter,
+# and it is run *by* that interpreter rather than executed. RubyGems writes its
+# binstubs as an sh/ruby polyglot whose sh half is `exec "${0%/*}/ruby"` — the
+# interpreter is expected to sit beside the binstub, which is true in a
+# ruby's own GEM_HOME and false in the private prefix above: executing it
+# directly is `exec: …/gems/bin/ruby: not found`, exit 127 before bundler
+# starts. Naming the interpreter skips the sh half entirely (the polyglot's
+# `=begin`/`=end` hides it from ruby), and no PATH can fix it, because the
+# path the sh half computes is the binstub's own directory.
+BUNDLE=("$RUBY_BIN_DIR/ruby" "$GEM_HOME/bin/bundle" "_${BUNDLER_VERSION}_")
 # micromamba, as conda.sh gets it: one archive, cached across runs.
 MICROMAMBA_VERSION="${MICROMAMBA_VERSION:-2.9.0}"
 MM_DIR="$(heavy_cached_dir "micromamba-$MICROMAMBA_VERSION" \

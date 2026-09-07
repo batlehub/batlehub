@@ -39,6 +39,13 @@
 #      same one. The rescan is the *scheduler's* — `interval_secs = 1`, a
 #      tick a minute — not an admin's request.
 #
+#   8. **A pushed flag.** (RFC 0002.) A version scanned clean, served and
+#      pulled, then the SOC pushes a signed `hard_block` for it: the next
+#      `npm install` from a clean cache is refused, `batlehub why` names the
+#      flag, and the exposure report says who already had it and that the
+#      pull came *before* the flag. The revoke lifts it and npm installs
+#      again — the lifecycle of §4.5, driven by npm rather than asserted.
+#
 # Run via `task test:quarantine-heavy` or directly. With `COVERAGE=1` the
 # server runs under `cargo llvm-cov run --no-report` (see lib.sh).
 #
@@ -58,6 +65,7 @@ heavy_need python3 "python3"
 REG="npm-quarantine-$HEAVY_RUN"
 EGRESS_REG="npm-egress-$HEAVY_RUN"
 RESCAN_REG="npm-rescan-$HEAVY_RUN"
+FLAGS_REG="npm-flags-$HEAVY_RUN"
 OSV_PORT="${HEAVY_OSV_PORT:-8127}"
 SINK_PORT="${HEAVY_SINK_PORT:-8137}"
 export HEAVY_OSV_URL="http://127.0.0.1:$OSV_PORT"
@@ -157,6 +165,7 @@ registry=$REG_URL
 //127.0.0.1:$HEAVY_TAP_PORT/proxy/$REG/:_authToken=$ADMIN_TOKEN
 //127.0.0.1:$HEAVY_TAP_PORT/proxy/$EGRESS_REG/:_authToken=$ADMIN_TOKEN
 //127.0.0.1:$HEAVY_TAP_PORT/proxy/$RESCAN_REG/:_authToken=$ADMIN_TOKEN
+//127.0.0.1:$HEAVY_TAP_PORT/proxy/$FLAGS_REG/:_authToken=$ADMIN_TOKEN
 EOF
 export NPM_CONFIG_USERCONFIG="$NPMRC"
 export NPM_CONFIG_FUND=false NPM_CONFIG_AUDIT=false NPM_CONFIG_UPDATE_NOTIFIER=false
@@ -540,5 +549,199 @@ head -1 "$HEAVY_WORK/pullers.csv" | grep -q '^identity,role,first_pull,last_pull
 grep -q '^ci-admin,admin,' "$HEAVY_WORK/pullers.csv" \
   || { cat "$HEAVY_WORK/pullers.csv" >&2; heavy_fail "the CSV does not name ci-admin"; }
 heavy_log "FLIP-OK (scheduled rescan denied a served version; alert, pullers and the refusal all seen)"
+
+# ── 8. A pushed flag (RFC 0002) ──────────────────────────────────────────────
+#
+# The other producer of a denial. Everything above is a scanner's answer;
+# this is a human organisation's, pushed over the wire and signed, and RFC
+# 0002 §13.1 decision 1 makes it a finding of kind `SocVerdict` on a
+# `[security]` registry rather than a second engine. What a client sees is
+# therefore the same refusal — which is the claim: one producer, one gate.
+#
+# The order matters. The version is installed *first*, so the pull is on the
+# record before the flag exists and the exposure report has a retroactive
+# row to classify (§4.8's `before_flag`). That row is the question this RFC
+# exists to answer: who already has the thing you just learned about.
+
+FLAGS_URL="$HEAVY_TAP_BASE/proxy/$FLAGS_REG/"
+FLAG_PKG="left-pad"
+FLAG_VERSION="1.3.0"
+FLAG_ID="BATLEHUB-HEAVY-SOC-$HEAVY_RUN"
+# `%{http_code}` is the whole of every status assertion in this step.
+CURL_CODE='%{http_code}'
+
+# The push credential, as `[[flag_sources]] soc` holds it.
+SOC_SECRET="heavy-soc-secret"
+# sign <body> — the `X-Hub-Signature-256` value over the raw bytes, the same
+# scheme `[[notifications.inbound]]` uses.
+sign() {
+  python3 -c 'import hashlib, hmac, sys; print("sha256=" + hmac.new(sys.argv[1].encode(), sys.argv[2].encode(), hashlib.sha256).hexdigest())' "$SOC_SECRET" "$1"
+}
+
+FLAG_CONSUMER="$HEAVY_WORK/consumer-flags"
+new_consumer "$FLAG_CONSUMER"
+export NPM_CONFIG_CACHE="$HEAVY_WORK/npm-cache-flags"
+heavy_mark "flags-pull"
+heavy_log "npm install $FLAG_PKG@$FLAG_VERSION through $FLAGS_REG — the pull the report will find"
+set +e
+(cd "$FLAG_CONSUMER" && npm install "$FLAG_PKG@$FLAG_VERSION" --registry "$FLAGS_URL") \
+  >"$HEAVY_WORK/install-11.out" 2>"$HEAVY_WORK/install-11.err"
+set -e
+"$CLI" wait "$FLAGS_REG:$FLAG_PKG@$FLAG_VERSION" --timeout 5m --interval 3s >"$HEAVY_WORK/wait-5.out" 2>&1 \
+  || { cat "$HEAVY_WORK/wait-5.out" >&2; heavy_fail "OSV did not clear $FLAG_PKG@$FLAG_VERSION on $FLAGS_REG"; }
+(cd "$FLAG_CONSUMER" && npm install "$FLAG_PKG@$FLAG_VERSION" --registry "$FLAGS_URL") \
+  >"$HEAVY_WORK/install-12.out" 2>"$HEAVY_WORK/install-12.err" \
+  || { cat "$HEAVY_WORK/install-12.err" >&2; heavy_fail "npm install through $FLAGS_REG failed after the clean scan"; }
+[[ -f "$FLAG_CONSUMER/node_modules/$FLAG_PKG/package.json" ]] \
+  || heavy_fail "$FLAG_PKG is not installed, so there is no pull for the report to find"
+heavy_wire_re_after "flags-pull" "GET /proxy/$FLAGS_REG/$FLAG_PKG/$FLAG_VERSION/tarball -> 200" \
+  "the tarball was not served before the flag"
+
+heavy_log "POST /api/v1/flags/soc — a signed hard_block for $FLAG_PKG@$FLAG_VERSION"
+PUSH_BODY="$(python3 - "$FLAGS_REG" "$FLAG_PKG" "$FLAG_VERSION" "$FLAG_ID" <<'PY'
+import json, sys
+reg, pkg, ver, ext = sys.argv[1:5]
+print(json.dumps({"flags": [{
+    "external_id": ext,
+    "registry": reg,
+    "package_name": pkg,
+    "version": ver,
+    "kind": "malware",
+    "effect": "hard_block",
+    "severity": "critical",
+    "summary": "BATLEHUB-HEAVY-SOC: pushed by tests/heavy/quarantine.sh",
+    "url": "https://example.invalid/soc/heavy",
+}]}, separators=(",", ":")))
+PY
+)"
+PUSH_CODE="$(curl -sS -o "$HEAVY_WORK/push.json" -w "$CURL_CODE" -X POST "$HEAVY_BASE/api/v1/flags/soc" \
+  -H "Content-Type: application/json" -H "X-Hub-Signature-256: $(sign "$PUSH_BODY")" \
+  --data-raw "$PUSH_BODY")"
+[[ "$PUSH_CODE" == "200" ]] || { cat "$HEAVY_WORK/push.json" >&2; heavy_fail "the flag push answered $PUSH_CODE"; }
+python3 - "$HEAVY_WORK/push.json" <<'PY' || { cat "$HEAVY_WORK/push.json" >&2; heavy_fail "the push was not accepted uncapped"; }
+import json, sys
+r = json.load(open(sys.argv[1]))
+item = r["items"][0] if isinstance(r.get("items"), list) and r["items"] else {}
+ok = r.get("accepted") == 1 and r.get("rejected", 0) == 0 and item.get("status") == "accepted" \
+     and not item.get("effect_capped", False)
+sys.exit(0 if ok else 1)
+PY
+
+# An unsigned push must not be a way in, and must not confirm the name.
+BAD_CODE="$(curl -sS -o /dev/null -w "$CURL_CODE" -X POST "$HEAVY_BASE/api/v1/flags/soc" \
+  -H "Content-Type: application/json" -H "X-Hub-Signature-256: sha256=$(printf 'f%.0s' {1..64})" \
+  --data-raw "$PUSH_BODY")"
+[[ "$BAD_CODE" == "404" ]] || heavy_fail "a bad signature answered $BAD_CODE, expected 404"
+
+# A denied version is hidden from the packument (step 4), so a plain
+# `npm install` would stop at the resolve. The lockfile is what makes npm
+# ask for the tarball, which is the gate this step is about — the same
+# shape step 3 uses for a scanner's denial.
+heavy_mark "flags-refused"
+FLAG_PINNED="$HEAVY_WORK/consumer-flags-pinned"
+mkdir -p "$FLAG_PINNED"
+# `npm ci` refuses a package.json that does not declare what the lock holds,
+# and refusing for *that* reason would look exactly like the refusal this
+# step is trying to observe. Both files name the dependency.
+cat > "$FLAG_PINNED/package.json" <<EOF
+{ "name": "consumer", "version": "1.0.0", "private": true, "dependencies": { "$FLAG_PKG": "$FLAG_VERSION" } }
+EOF
+cat > "$FLAG_PINNED/package-lock.json" <<EOF
+{
+  "name": "consumer", "version": "1.0.0", "lockfileVersion": 3, "requires": true,
+  "packages": {
+    "": { "name": "consumer", "version": "1.0.0", "dependencies": { "$FLAG_PKG": "$FLAG_VERSION" } },
+    "node_modules/$FLAG_PKG": { "version": "$FLAG_VERSION", "resolved": "$FLAGS_URL$FLAG_PKG/$FLAG_VERSION/tarball", "license": "WTFPL" }
+  }
+}
+EOF
+export NPM_CONFIG_CACHE="$HEAVY_WORK/npm-cache-flags-again"
+heavy_log "npm ci with a lockfile pinning $FLAG_PKG@$FLAG_VERSION — the flag refuses the download"
+set +e
+(cd "$FLAG_PINNED" && npm ci --registry "$FLAGS_URL") \
+  >"$HEAVY_WORK/install-13.out" 2>"$HEAVY_WORK/install-13.err"
+RC=$?
+set -e
+[[ $RC -ne 0 ]] || heavy_fail "npm ci installed $FLAG_PKG@$FLAG_VERSION over a pushed hard_block"
+heavy_wire_re_after "flags-refused" "GET /proxy/$FLAGS_REG/$FLAG_PKG/$FLAG_VERSION/tarball -> 403 .*X-BatleHub-Verdict: denied.*X-BatleHub-Reason: SOC_VERDICT" \
+  "the flagged tarball was not refused as denied/SOC_VERDICT on the wire"
+[[ ! -d "$FLAG_PINNED/node_modules/$FLAG_PKG" ]] \
+  || heavy_fail "npm ci left $FLAG_PKG in node_modules after a refused tarball"
+# The body names the flag, not just the code: the tap keeps no bodies, so it
+# is read once more directly — after npm, not instead of it.
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_BASE/proxy/$FLAGS_REG/$FLAG_PKG/$FLAG_VERSION/tarball" >"$HEAVY_WORK/flag-refusal.json"
+grep -q "BATLEHUB-HEAVY-SOC" "$HEAVY_WORK/flag-refusal.json" \
+  || { head -c 400 "$HEAVY_WORK/flag-refusal.json" >&2; heavy_fail "the refusal body does not name the pushed flag"; }
+
+heavy_log "batlehub why $FLAGS_REG:$FLAG_PKG@$FLAG_VERSION"
+"$CLI" why "$FLAGS_REG:$FLAG_PKG@$FLAG_VERSION" >"$HEAVY_WORK/why-2.out" 2>&1 || true
+grep -q "BATLEHUB-HEAVY-SOC" "$HEAVY_WORK/why-2.out" \
+  || { cat "$HEAVY_WORK/why-2.out" >&2; heavy_fail "'batlehub why' does not name the pushed flag"; }
+
+heavy_log "GET /api/v1/admin/exposure — who already pulled it, and when"
+curl -fsS -o "$HEAVY_WORK/exposure.json" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "$HEAVY_BASE/api/v1/admin/exposure?registry=$FLAGS_REG" \
+  || heavy_fail "the exposure report was not served"
+python3 - "$HEAVY_WORK/exposure.json" "$FLAG_PKG" "$FLAG_VERSION" "$FLAG_ID" <<'PY' || { head -c 600 "$HEAVY_WORK/exposure.json" >&2; heavy_fail "the exposure report does not name ci-admin's pull before the flag"; }
+import json, sys
+r = json.load(open(sys.argv[1])); pkg, ver, ext = sys.argv[2:5]
+rows = [x for x in r["rows"] if x["package_name"] == pkg and x["version"] == ver and x["external_id"] == ext]
+if not rows:
+    print("no row for the flagged coordinate", file=sys.stderr); sys.exit(1)
+row = rows[0]
+checks = [
+    row["consumer"] == "ci-admin",
+    row["effect"] == "hard_block",
+    row["source"] == "soc",
+    row["pulls"] >= 1,
+    row["pulls_before_flag"] >= 1,          # the install above predates the push
+]
+# The coverage block is the other half of §4.9: it says what the report could
+# not see, and this registry has a security profile and a scan behind it.
+cov = r.get("coverage") or {}
+checks.append(cov.get("registries_total", 0) >= 1)
+for i, c in enumerate(checks):
+    if not c:
+        print(f"check {i} failed: {json.dumps(row)[:300]}", file=sys.stderr)
+sys.exit(0 if all(checks) else 1)
+PY
+
+"$CLI" admin flags list --registry "$FLAGS_REG" >"$HEAVY_WORK/flags-list.out" 2>&1 \
+  || { cat "$HEAVY_WORK/flags-list.out" >&2; heavy_fail "batlehub admin flags list failed"; }
+grep -q "$FLAG_ID" "$HEAVY_WORK/flags-list.out" \
+  || { cat "$HEAVY_WORK/flags-list.out" >&2; heavy_fail "batlehub admin flags list does not name the flag"; }
+"$CLI" admin exposure --registry "$FLAGS_REG" >"$HEAVY_WORK/exposure.out" 2>&1 \
+  || { cat "$HEAVY_WORK/exposure.out" >&2; heavy_fail "batlehub admin exposure failed"; }
+grep -q "ci-admin" "$HEAVY_WORK/exposure.out" \
+  || { cat "$HEAVY_WORK/exposure.out" >&2; heavy_fail "batlehub admin exposure does not name ci-admin"; }
+
+heavy_log "DELETE /api/v1/flags/soc/$FLAG_ID — the revoke, and the scheduler re-deriving"
+REVOKE_CODE="$(curl -sS -o "$HEAVY_WORK/revoke.json" -w "$CURL_CODE" -X DELETE \
+  "$HEAVY_BASE/api/v1/flags/soc/$FLAG_ID" -H "X-Hub-Signature-256: $(sign "")")"
+[[ "$REVOKE_CODE" == "200" ]] || { cat "$HEAVY_WORK/revoke.json" >&2; heavy_fail "the revoke answered $REVOKE_CODE"; }
+grep -q '"revoked":true' "$HEAVY_WORK/revoke.json" \
+  || { cat "$HEAVY_WORK/revoke.json" >&2; heavy_fail "the revoke did not report the flag gone"; }
+# The revoke queues a rescan (§13.1 decision 3), so the lift is the
+# worker's, not the API call's. `batlehub wait` is the wrong instrument
+# here: it exits 1 on the first poll of a *denied* verdict by design, and
+# the verdict is denied until the rescan lands. The tarball itself is the
+# signal, polled until it is served or the minute is out.
+LIFTED=0
+for _ in $(seq 1 60); do
+  if [[ "$(curl -sS -o /dev/null -w "$CURL_CODE" -H "Authorization: Bearer $ADMIN_TOKEN" \
+      "$HEAVY_BASE/proxy/$FLAGS_REG/$FLAG_PKG/$FLAG_VERSION/tarball")" == "200" ]]; then
+    LIFTED=1
+    break
+  fi
+  sleep 1
+done
+[[ "$LIFTED" == "1" ]] || heavy_fail "the revoke did not clear the hard block within 60s"
+export NPM_CONFIG_CACHE="$HEAVY_WORK/npm-cache-flags-after"
+(cd "$FLAG_PINNED" && npm ci --registry "$FLAGS_URL") \
+  >"$HEAVY_WORK/install-14.out" 2>"$HEAVY_WORK/install-14.err" \
+  || { cat "$HEAVY_WORK/install-14.err" >&2; heavy_fail "npm ci failed after the revoke"; }
+[[ -f "$FLAG_PINNED/node_modules/$FLAG_PKG/package.json" ]] \
+  || heavy_fail "$FLAG_PKG is not installed after the revoke — the same lockfile that was refused"
+heavy_log "FLAGS-OK (a signed hard_block refused npm, the report named the pull before it, the revoke lifted it)"
 
 heavy_done QUARANTINE-HEAVY-OK

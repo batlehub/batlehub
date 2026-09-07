@@ -2,7 +2,7 @@
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | **In review** — all five phases of §12 landed 2026-09-05 (§13.1–§13.5), and the renderers that open the artifact at import followed the same day (§13.6): RubyGems' compact index, conda's `repodata.json`, NuGet's registration page and Composer's `p2`. Terraform's provider download document followed (§13.7), composed from the held archive, checksum list and signature with the publisher's keys carried on the manifest — this instance signs nothing. Ten clients prove the whole in `tests/heavy/airgap.sh` |
+| Status      | **Implemented** — all six phases of §12 landed 2026-09-05 (§13.1–§13.5), and the renderers that open the artifact at import followed the same day (§13.6): RubyGems' compact index, conda's `repodata.json`, NuGet's registration page and Composer's `p2`. Terraform's provider download document followed (§13.7), composed from the held archive, checksum list and signature with the publisher's keys carried on the manifest — this instance signs nothing. Ten clients prove the whole in `tests/heavy/airgap.sh`, re-run green on 2026-09-07 (§13.8); the two §11 questions were decided the same day, both *not now* |
 | Short       | Listings across the gap                                       |
 | Settles     | What a disconnected instance answers when a client resolves through a listing it does not hold: a bundle that carries the documents, or listings synthesised from what the instance holds |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -535,18 +535,42 @@ sequenceDiagram
 
 ### Still open
 
-1. **A plan-pinned pointer.** Whether `mise-plan.json` should carry a
+Both were closed on 2026-09-06, when the RFC left review. Neither was a
+condition of the design: they are the two places where this RFC could grow
+a feature, and the decision in both is *not until someone asks*, with the
+sentence that would reopen it written down.
+
+1. ~~**A plan-pinned pointer.**~~ Whether `mise-plan.json` should carry a
    `latest` per package for the estates that want `npm install left-pad`
    with no version to land on something other than the highest held.
-   Deferred: nobody has asked, and the default is what the client would
-   compute.
-2. **A planner for the package registries.** `mise plan` reads a
+
+   **Decided: not now.** A synthesised listing names only what the
+   instance holds, so a no-version install already lands on the highest
+   held version — which for an estate that carried one version is the
+   version it carried, and for one that carried several is what the client
+   would have computed connected. A pointer would be a second opinion
+   about which of the held versions is right, and this RFC has no input
+   the client does not. Reopen it on the first estate that wants a held
+   version *not* to be reachable by name, and record which one and why:
+   that is a policy about the holdings, and it may well be a block
+   (RFC 0006) rather than a plan field.
+
+2. ~~**A planner for the package registries.**~~ `mise plan` reads a
    `mise.lock`; the phase-0 suite hand-writes the npm and PyPI plan
    entries, because nothing turns a `package-lock.json` or a
-   `requirements.txt` into proxy paths. RFC 0008 scoped the plan to mise
-   on purpose; whether the same estate wants `batlehub-cli plan
-   --npm-lock` is a question for it to ask, and §6.4 lists it as a CLI
-   item only.
+   `requirements.txt` into proxy paths.
+
+   **Decided: not now, and not in this RFC.** RFC 0008 scoped the plan to
+   mise on purpose, and a `batlehub-cli plan --npm-lock` is a lockfile
+   parser per ecosystem — each with its own shapes, its own optional
+   dependencies and its own platform matrix — which is a deliverable with
+   its own RFC, not a phase of this one. What this RFC owed the estate was
+   the *answer* on the disconnected side, and it is built for every kind
+   with a listing; the input to the connected side stays a lock the
+   operator writes, exactly as §13.3 decided for `--from-misses` and for
+   the same reason: a planner that guesses plants entries the connected
+   side cannot fetch. §6.4 keeps the row as a CLI item so it is not
+   forgotten.
 
 ---
 
@@ -717,7 +741,7 @@ held — and it means §4.4's example row for npm (`requested 1.3.1`) is
 reachable only through a lock. The column is honest about it: absent
 means the client never asked for a version this instance could record.
 
-**`mise plan --from-misses` is deliberately not built.** RFC 0008 §14.1
+**Deferred: `mise plan --from-misses`, deliberately not built.** RFC 0008 §14.1
 established that a storage key is a function of the route, not of the
 URL, and the inverse — a miss row's key back to a proxy path — holds for
 the simple shapes (`npm/left-pad/1.2.0/tarball`) and not for several
@@ -976,3 +1000,26 @@ archive's digest and whose `filename` is the list's entry for it, and
 the three bytes; an archive carried without its list gets a `503` on
 its download document while its version is still listed.
 
+### 13.8 The suite, re-run at sign-off (2026-09-07)
+
+`airgap.sh` was re-run end to end before this RFC left review, and every
+row of §10 held: the artifacts served from the disconnected instance, the
+lock-driven installs that never ask a listing, then, after the reload,
+each of the ten clients resolving through a document this instance
+composed — npm and pip by version string, mise by tag with no lock, cargo
+through a sparse index, `go get` unpinned, Maven and NuGet through a
+range, bundler through a compact index, micromamba through a `repodata`,
+and Terraform installing and *verifying* a provider through a download
+document. The unheld cases still fail the way they fail upstream, and the
+miss log after the synthesised half names no listing and nothing the
+bundle carried.
+
+One thing the re-run found, and it was in the instrument rather than the
+feature. RubyGems writes its binstubs as an sh/ruby polyglot whose sh half
+is `exec "${0%/*}/ruby"` — the interpreter is expected to sit beside the
+binstub, which is true in a ruby's own `GEM_HOME` and false in the private
+prefix this suite installs bundler into so it writes nothing on a
+developer's machine. Executing it directly is `exit 127` before bundler
+starts, and no `PATH` can fix it, because the path the sh half computes is
+the binstub's own directory. The suite now names the interpreter, which
+skips the sh half entirely.

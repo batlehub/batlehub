@@ -596,6 +596,50 @@ async fn explore_packages_cache_hit_skips_repo() {
     assert_eq!(items[0].name, "lodash");
 }
 
+/// A `name_in` lookup must leave nothing behind in the explore cache.
+///
+/// The cache holds entries for ten minutes and frees them only on an explicit
+/// `invalidate`, and the upstream search's `already_cached` flag is a query
+/// keyed on *the exact set of names a third-party relevance search returned*.
+/// Two such keys match only if the upstream answered identically for the same
+/// viewer, so a cached entry would be written, never read again and never
+/// freed — one growing map per varied query string. `explore_packages_uncached`
+/// is what the caller uses, and this is the property that keeps it that way.
+#[tokio::test]
+async fn a_name_in_lookup_leaves_nothing_in_the_cache() {
+    let cache = Arc::new(ExploreCache::new());
+    let filter = ExploreFilter {
+        name_in: vec![("npm".to_owned(), "lodash".to_owned())],
+        ..default_filter()
+    };
+    let key = crate::services::explore_cache::packages_cache_key(&filter);
+    let svc = make_svc_with_cache(
+        StubExploreRepo::arc(vec![sample_entry()], 1, vec![]),
+        Arc::clone(&cache),
+    );
+
+    let items = svc.explore_packages_uncached(filter.clone()).await.unwrap();
+    assert_eq!(items.len(), 1, "the lookup still answers");
+    assert!(
+        cache
+            .get_stale_packages(&format!("items:{key}"))
+            .await
+            .is_none(),
+        "the lookup wrote an entry nothing will ever read"
+    );
+
+    // And the cached path is unchanged for the queries whose keys *do* repeat.
+    let (cached, _) = svc.explore_packages(filter.clone()).await.unwrap();
+    assert_eq!(cached.len(), 1);
+    assert!(
+        cache
+            .get_stale_packages(&format!("items:{key}"))
+            .await
+            .is_some(),
+        "explore_packages still caches"
+    );
+}
+
 #[tokio::test]
 async fn explore_packages_cache_miss_queries_repo_and_caches() {
     let cache = Arc::new(ExploreCache::new());

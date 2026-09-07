@@ -903,14 +903,45 @@ the measurements; this is what they decided.
 | 17 | Fetch the newest version, or the row's? | **The row's.** `express` has 288 versions and `dist-tags.latest` is `5.2.1` while a great many consumers want `4.x`; "newest" is a claim the page's sort makes, not a fact about the package. A button that fetches something other than the row it sits on is a surprise that costs bytes. |
 | 18 | What does the console show while a fetch runs? | **Synchronous, with a spinner.** Measured against real upstreams: median 0.57 MB in 66 ms, and the largest artifact in the sample — `next` at 41.7 MB — took 417 ms (§13.4). A spinner holds that comfortably. The endpoint returns the size so the row can say what arrived. |
 
-### Still open
+### Resolved by building
 
-1. **Should the SVG sanitiser be shared with anything else?** Nothing else in the
-   tree renders SVG today, so it has exactly one caller. If a future feature
+The last two were open on the day this was labelled *Implemented*, and both were
+recommended **no** — each with a real argument, and each argument resting on a
+fact about the tree rather than on a principle. Both facts turned out to be
+wrong, and finding that out cost less than the deferral would have.
+
+1. ~~**Should the SVG sanitiser be shared with anything else?** Nothing else in
+   the tree renders SVG today, so it has exactly one caller. If a future feature
    grows a second, the question is whether it should move to `crates/core`
    beside `readme/sanitize.rs`. Recommendation: leave it where its caller is
    until there are two, and resist the urge to generalise a security boundary
-   that has never been asked to serve two masters.
+   that has never been asked to serve two masters.~~
+
+   **Decided: yes, moved — because there were already two.** "Nothing else in
+   the tree renders SVG" was the premise, and it was false when it was written.
+   A VSIX ships an `icon` its manifest names, the marketplace asset endpoint
+   serves it out of the archive, and `vsx/archive.rs` sent every SVG icon out as
+   `application/octet-stream` with a comment calling that "the correct trade" —
+   which it was, exactly as long as the alternative was serving a publisher's
+   markup unexamined as a document on the origin the console holds a bearer
+   token for. It stopped being the alternative when this RFC's phase 1 landed.
+   The premise was not "no second caller exists"; it was "no second caller had
+   asked", and a caller that has quietly given up asking is the one a survey
+   never finds.
+
+   The trigger the recommendation named was therefore already met, and the move
+   is the one it described: `readme::svg` → `services::svg`, a **sibling** of
+   the README service rather than a module inside it, so neither caller reaches
+   through the other. `SVG_SANDBOX_CSP` and `SVG_CONTENT_TYPE` moved with it —
+   §7.2's two controls are one decision, and a second caller that took the
+   sanitiser and left the header behind would have kept the half that can be
+   wrong. Nothing about the allow-list changed; it did not need to serve two
+   masters, because both masters want exactly the same thing.
+
+   What it bought: an extension's SVG icon now renders, in the editor's
+   Extensions view and in the console. A document the sanitiser refuses falls
+   back to the opaque download it always was — not to a `404`, because the bytes
+   are still the extension's. §14.9.
 2. ~~**Should `text_config` be validated against the server's installed
    configurations?**~~ **Answered in the building: yes, and it had to be.** The
    recommendation was to leave it to the migration, on the grounds that a
@@ -921,12 +952,39 @@ the measurements; this is what they decided.
    configuration reaches SQL as a literal, so `SELECT cfgname FROM pg_ts_config
    WHERE cfgname = $1` is simultaneously the validation and the reason
    interpolating it is safe. §14.1.
-3. **Does the fetch button belong on the *listing* page as well?** The search
+3. ~~**Does the fetch button belong on the *listing* page as well?** The search
    result for a package this instance holds nothing of has the same wall the
    detail page had. Against: the listing has no version, and fetching "the
    package" means choosing one — which is question 17 again, one screen earlier.
    Recommendation: no, and reconsider only if readers turn out to fetch from the
-   detail page and then complain about the trip to get there.
+   detail page and then complain about the trip to get there.~~
+
+   **Decided: yes, on the upstream rows only — and question 17 never arises
+   there.** "The listing has no version" is true of a *cached* row, whose
+   version column shows the newest version this instance obtained and which
+   therefore has nothing to fetch. It is not true of the rows the button would
+   exist for. An upstream row came from `/api/v1/explore/upstream`, whose every
+   item carries the `latest_version` the upstream's own search returned; the
+   listing already prints it in the version column. So the button names that
+   version — *Fetch 9.9.9*, not *Fetch* — and nothing is chosen on this screen.
+   Question 17's answer, "the row's version", is honoured rather than dodged:
+   the row has one.
+
+   A cached row is offered nothing, which is where the recommendation's
+   objection does hold and where it stays refused.
+
+   The offer is answered by the server, per row, exactly as on the package page
+   — `UpstreamPackageDto` gained a `fetch` field, and `fetch_offer` moved out of
+   `explore/detail.rs` into `explore/fetch.rs` so both surfaces ask the same
+   function rather than one reaching through the other. Per *row* and not per
+   response, because a listing with no registry filter spans every registry the
+   caller may browse, and both halves of the answer — `console_fetch` and
+   `RegistryKind::fetchable_by_version` — are per registry.
+
+   Where the offer is not made the listing draws **nothing**: no button, and no
+   sentence either. The package page states the reason once, in a sentence, and
+   the name in every row links to it; repeating a per-registry sentence under
+   fifty hits would drown the rows it explains. §14.10.
 
 ## 12. Implementation phases
 
@@ -1080,7 +1138,7 @@ that is not true.
 | Phase | Landed as |
 | --- | --- |
 | 0 | `render::chip_html_images` — shipped ahead of this RFC under [RFC 0007 §13.10](/rfc/0007-package-readmes#_13-10-an-image-written-as-html-rendered-to-nothing), because a broken promise should not wait on a feature |
-| 1 | `sanitize::sanitize_capturing_images` and the index rewrite, `render::{render_capturing_images, image_urls, proxy_prefix}`, `readme/image.rs` (the allow-list, `FetchedImage`, `IMAGE_CSP`), `readme/svg.rs` + its corpus, `ports::ReadmeImageFetcher`, `http_client::fetch_image`, `registry/readme_image.rs`, `fuzz_svg_sanitize`, `RENDERER_VERSION` → `3` |
+| 1 | `sanitize::sanitize_capturing_images` and the index rewrite, `render::{render_capturing_images, image_urls, proxy_prefix}`, `readme/image.rs` (the allow-list, `FetchedImage`), `svg.rs` + its corpus (`readme/svg.rs` until §14.9 moved it, with `SVG_SANDBOX_CSP` — `IMAGE_CSP` as it then was), `ports::ReadmeImageFetcher`, `http_client::fetch_image`, `registry/readme_image.rs`, `fuzz_svg_sanitize`, `RENDERER_VERSION` → `3` |
 | 2 | `explore/image.rs`, `ReadmeService::{image_at, ReadmeImageConfig}` with the positive and negative cache, `image_max_bytes` in config and `HotConfig` with its two refusals, `ReadmePanel.vue`'s image styling, removal of `readme.image-proxy-unimplemented`, `crates/web/tests/readme_images.rs` |
 | 3 | migration `035`, `ReadmeRepository::search` + `ReadmeSearchHit`, the Postgres query, the in-memory substring double, `ensure_readme_text_config`, `[search]` in config with its refusals and its warning, six new tests in `pg_readmes.rs` |
 | 4 | `SearchScope`, `matched_in`/`snippet`/`readme_search_enabled`/`searched_in`/`truncated` on the listing, `ExploreFilter::name_in` in both backends, `SearchConfigLock` through `configure_app` **and the reload path**, `crates/web/tests/readme_search.rs` |
@@ -1193,6 +1251,254 @@ helper now says why.
   answer.
 - **Fetch**: `explore_fetch.rs`, including the two assertions that would pass
   against a warming-service implementation and therefore have to exist — the
-  refusal with the rule's own reason, and the audit event naming the caller.
+  refusal with the rule's own reason, and the audit event naming the caller;
+  plus the listing's own offer, anonymous and signed-in (§14.10).
+- **The listing's button**: `PackageCatalog.test.ts` — the version it names and
+  fetches, the refusal shown in the rule's words, the refetch of both halves of
+  the page, and the three cases that draw nothing: not offered, no session, and
+  a row from a server that predates the field.
+- **The shared sanitiser**: `vscode_gallery.rs` — an extension's SVG icon
+  sanitised and served as an image under the sandbox policy, a refused one still
+  an opaque download, and the same file fetched through `vscode/unpkg` coming
+  back byte for byte as a download, sprite intact (§14.9).
 - **Fuzz**: `fuzz_svg_sanitize` over arbitrary bytes, asserting well-formedness,
   no script, no handler, no external reference, and idempotence.
+
+### 14.9 The sanitiser had two callers before it had one
+
+`readme::svg` was written for the image proxy and §11 q1 asked whether to share
+it, answering *not until there are two*. The count was wrong at the time of
+asking: `handlers/proxy/vsx/assets.rs` serves the file an extension's manifest
+names as its `icon`, and `archive::content_type_for` mapped every `.svg` to
+`application/octet-stream` — no icon in the editor's Extensions view, no icon in
+the console, and a comment describing that as the correct trade.
+
+It was the correct trade. Nothing in the tree could vouch for a publisher's SVG,
+and serving one as `image/svg+xml` from the origin the console holds a bearer
+token for is the console-session theft RFC 0007 §7.1 is about. What made it stop
+being correct was this RFC's own phase 1, which built the thing that vouches —
+and left it addressable only as a detail of the README service, where the one
+caller that needed it would have had to write `use crate::services::readme::svg`
+in a marketplace handler to reach it.
+
+So the module moved to `services::svg`, a sibling of `services::readme` rather
+than a child. `SVG_SANDBOX_CSP` (§7.2's first control) and `SVG_CONTENT_TYPE`
+moved with it, because the sanitiser and the header are one decision and a caller
+that took one without the other would keep the half that can be wrong. The
+allow-list itself is unchanged.
+
+`serve_entry` routes an SVG to `serve_svg`, which sanitises, serves
+`image/svg+xml` under the sandbox policy and `Content-Disposition: inline`, and
+on refusal serves the original bytes as the opaque download they used to be —
+not a `404`, because the bytes are the extension's and a client that wants them
+for something other than rendering may still have them.
+
+**On the icon asset alone**, and that scoping is the point rather than a
+detail. `serve_entry` backs three routes: the gallery's asset endpoint, the
+`vscode/unpkg` template an editor resolves a *web extension's own resources*
+through, and OpenVSX's `…/file/{name}`. Only the first advertises a file as an
+image a browser should draw. The other two are file servers, and a file server
+that hands back something other than what the publisher shipped is a worse thing
+than an icon that does not render — an extension shipping a `<symbol>`/`<use>`
+icon sprite would get a blank drawing, since the allow-list drops both. So
+`SvgHandling::Render` is passed for `Icons.Default` and `SvgHandling::Verbatim`
+everywhere else, where an SVG keeps going out opaque exactly as before. `content_type_for`'s SVG
+row therefore became the fallback rather than the rule, and its comment now says
+which.
+
+**What a real editor showed, and what it could not.** `tests/heavy/vsx_view.sh`
+step 7 publishes an extension whose manifest names an `icon.svg` carrying a
+`<script>` that reads the page's storage, an `onload` and a `javascript:` link.
+The asset endpoint's half is asserted with `curl`: `image/svg+xml`, the sandbox
+policy on the response, all three payloads gone, the drawing kept. The gallery's
+half is asserted the same way: the entry it renders for that extension
+advertises the `Icons.Default` asset, which is precisely what an
+`application/octet-stream` icon could never be — an entry whose gallery
+advertises no usable icon gets the editor's own `defaultIcon`.
+
+Two things the suite could not measure, both about the editor rather than about
+what was served, and both worth writing down because a later reader will
+otherwise re-derive them:
+
+- **The Extensions view lists what is *installed*, and the step now runs before
+  anything is.** That was the whole of it. Two changes ruled out the
+  stale-query explanation — publishing the fixture *before* the editor server
+  starts, and typing the full `publisher.name` so the view resolves by
+  identifier (`filterType 7`) rather than by free text — and neither moved the
+  needle. What gave the answer was the one entry the view *did* list: its only
+  action was **Manage**, which the view offers for an extension already
+  installed. A fresh Extensions view opens on Installed, and a query typed there
+  filters that; the SVG fixture never is installed. Moving the step from the end
+  of the suite to between §3b and §4 — before the first thing that installs
+  anything — makes the view list the fixture and adopt the registry's icon
+  asset. `ICON-VIEW-OK`.
+- **The icon request leaves the browser and fails before reaching the server.**
+  Measured, not guessed: the driver reports `requestfailed` for both entries'
+  `Icons.Default` URLs, with an empty `errorText`, and the tap sees no such
+  request. So the entry advertises the right asset, the editor asks for it, and
+  something aborts the fetch client-side. Why is still not known — and the first
+  answer written down here, that the workbench refused a cross-origin `http`
+  image under its own Content-Security-Policy, was **wrong**: the page this
+  build serves carries no CSP at all, and the refusals the driver counts belong
+  to the readme's webview iframe, a different document.
+
+Publishing the fixture early also corrected an assertion that was true by
+accident: the signed-in search asserted *exactly one* entry, which encoded "the
+registry holds one extension" rather than "the fixture is listed" — the phase
+before it clicks the view's Refresh, and a refreshed view lists what the gallery
+holds rather than re-running the typed query. It asserts the fixture is listed
+now.
+
+The step asserts what is now reachable — the view lists the extension and shows
+the registry's icon — and logs the paint rather than requiring it, because
+requiring it would make an unexplained client-side abort a red gate on unrelated
+work. The two gates that are squarely about this change stay hard either way:
+the bytes the endpoint serves, and the asset the gallery advertises on the
+entry.
+
+Two tests in `crates/web/tests/vscode_gallery.rs` pin it: an icon carrying a
+`<script>`, a `javascript:` link and an `onload` comes back as an image with the
+drawing intact and none of the three; a document whose encoding the reader
+refuses comes back as a download. The first found the behaviour the module
+documents and a test written from the prose had got wrong — a disallowed element
+is dropped **with its subtree**, so a `<circle>` inside the `<a>` goes with the
+link.
+
+### 14.10 The listing's fetch, and the offer both surfaces ask for
+
+§11 q3 was recommended *no* on the grounds that "the listing has no version".
+The catalogue's upstream rows have one: `/api/v1/explore/upstream` returns each
+hit's `latest_version` and the table already prints it. The button names it, so
+the reader sees what they are asking for and the page chooses nothing. Cached
+rows get no button, which is where the objection holds.
+
+Three things moved rather than being duplicated:
+
+- `FetchOfferDto`, `fetch_offer` and `fetch_offer_for_registry` left
+  `explore/detail.rs` for `explore/fetch.rs`, beside the endpoint they have to
+  agree with. `fetch_offer_for_registry` now takes the `HotConfigLock` directly
+  instead of a `LocalRegistryService` it only used to reach the lock, which is
+  what let the listing handler call it at all.
+- `UpstreamPackageDto` gained `fetch`, filled **once per registry** and copied
+  to its rows: the offer takes the hot-config read lock, and a page of fifty
+  hits from one registry would otherwise take it fifty times for one answer.
+- The console's action is a row of its own beneath the package row — the shape
+  the snippet and the refusal note already use on this page, and the one the
+  package page arrived at after its own button spent a while as a 24 px chip in
+  a table cell.
+
+Two things the tests caught. The console reads `row.fetch?.offered`, optional
+although the generated type says the field is always present: the upstream half
+of the catalogue is served from a ten-minute in-memory cache, so a tab that
+outlived a deploy holds rows from the server that had no such field, and a hard
+read throws inside the render and takes the whole listing down — including the
+cached rows, which had nothing to do with it. And the post-fetch invalidation is
+scoped by the **selected** registry rather than by the row's: with no registry
+selected both cache stores key on the empty string, so invalidating `npm` cleared
+nothing, the ten-minute upstream cache served the row straight back as a
+discovery, and the button looked as though it had done nothing.
+
+### 14.11 What a real client found, twice
+
+Both changes above passed their unit tests, their integration tests and the
+component suite before anything drove them. Then `tests/heavy/console_fetch.sh`
+put a browser in front of the built console and pressed the button, and the row
+did not change: the version arrived, the catalogue went on offering to fetch it,
+and a second press answered `409 fetch.already-held` — the console disagreeing
+with itself in the one place a reader is looking.
+
+Two independent defects, neither of them in the button:
+
+**The `already_cached` flag was asked by the wrong question.** An upstream
+search is a *relevance* search. npm answers `left-pad` with `pad-left`, `lpad`
+and `@stdlib/string-left-pad`, and not one of those contains the query as a
+substring — but the flag was computed by asking the catalogue for packages whose
+name **contains the query**, so the answer could not credit the rows it was
+annotating. Every fuzzy hit was reported as not held however many times the
+instance had pulled it. The fix asks by the names that came back (`name_in`,
+which carries the registry with the name, so a namesake in another registry
+cannot be credited either), and asks nothing at all when the search returned
+nothing — an empty `name_in` means *no restriction*, which would have fetched the
+whole catalogue to annotate zero rows.
+
+This was reachable before the button existed and nothing had found it, because
+the flag's only consumer was a chip nobody had a reason to disbelieve.
+
+**A console fetch did not invalidate the catalogue's cache.** The explore
+listing is served from a ten-minute cache invalidated on a local publish and on
+a yank — the two writes that used to change what the catalogue holds. A fetch is
+a third, and it was not on the list, so the row stayed stale for ten minutes
+whatever the flag said. The fix invalidates that registry's entries at the end
+of the fetch, and reaches the cache through `AdminService`, which **owns** the
+one the listing reads from, rather than through `LocalRegistryService`'s
+`Option` that happens to hold the same `Arc` because `main.rs` clones it in: the
+test fixture leaves that option `None`, so a fix written against it would have
+been a no-op everywhere the tests can see. A package manager's download
+deliberately still does not invalidate — it has no reader waiting on a fresh
+listing, and flushing on every proxied download trades a correct listing for a
+cache that never warms.
+
+`a_hit_the_instance_already_holds_is_marked_however_it_was_matched` in
+`crates/web/tests/explore_fetch.rs` covers both at once, and needs a registry
+client the shared fixture cannot provide: `FixedRegistry`'s search filters on
+`name.contains(query)`, so its answers always contain the query and it cannot
+express the case. The test's first search is not scene-setting either — it is
+what puts the stale "we hold none of these" answer in the cache, so the second
+search is only correct if the fetch invalidated it.
+
+### 14.12 The flag was still wrong wherever a name is spelled twice
+
+Asking by the names that came back (§14.11) fixed the fuzzy-hit case and left a
+narrower one standing: the comparison was exact, and three registry kinds hold a
+package under a name their own search does not return. NuGet's search API
+answers `Newtonsoft.Json` where `dotnet restore` addresses — and this proxy
+stores — `newtonsoft.json`; PyPI's answers `Pillow` where the simple index
+stored the PEP 503 `pillow`; pkg.go.dev answers `github.com/BurntSushi/toml`
+where the `go` client stores the case-encoded `github.com/!burnt!sushi/toml`.
+In each, the row reported `already_cached: false` for a package the instance
+holds, the catalogue offered **Fetch**, and the button answered
+`409 fetch.already-held` — §14.11's symptom exactly, in the ecosystems that
+spell a name two ways.
+
+The rule now has one home: `RegistryKind::canonical_package_name`, next to
+`fetch_coordinate`, which already normalised NuGet's coordinate the way the flat
+container addresses it. The NuGet and PyPI adapters' own normalisers
+(`normalize_id`, `normalize_name`) delegate to it, so the read path and anything
+comparing against what that path stored cannot drift apart — a second definition
+beside the first is how the two spellings diverged in the first place.
+
+The held-set query asks in **both** spellings and answers against the canonical
+one. `name_in` is an exact match, so a row stored before its handler normalised
+would go unseen if only the canonical spelling were asked for; at most two
+coordinates per hit, and either one credits the row. Every arm is idempotent,
+which is what makes it safe to apply to a stored name whose provenance the
+handler does not know.
+
+`a_hit_is_matched_in_the_spelling_the_read_path_stores` in
+`crates/web/tests/explore_fetch.rs` drives it through the real fetch rather than
+asserting against a name the test wrote by hand: the coordinate is built by the
+kind, stored by the proxy, and read back through the same canonicalisation the
+flag uses.
+
+### 14.13 The search's `limit` is the caller sizing our work
+
+Fixing §14.12 by asking in both spellings put a second constant in front of a
+number the caller controls. The held-set query's array and its `LIMIT` are both
+sized from the hits, the hits are the fan-out across every registry the caller
+may browse, and `limit` had no ceiling of its own — so one request could bind an
+arbitrarily large array. The flag's correctness did not depend on that; the
+bound is worth having anyway, and it is ours to set rather than borrowed from
+whatever each upstream happens to enforce.
+
+`MAX_UPSTREAM_SEARCH_LIMIT` is 100, and it is deliberately invisible: every
+client that honours the limit already clamps it lower before it reaches the
+upstream — NuGet and cargo at 100, npm, Composer, OpenVSX, Maven and JetBrains
+at 50, Terraform at 25 — so no registry gives a different answer than it did.
+It is the bound that stops a future adapter passing the number through, or a
+local search answering it exactly. A caller asking for more is not refused; the
+ceiling is applied and the search runs.
+
+`a_registry_is_never_asked_for_more_than_the_ceiling` asserts on the number the
+*client was handed*, not on how many rows came back — the rows are capped by
+each real client long before the ceiling is reached, so a test written against
+them would pass with no ceiling at all.

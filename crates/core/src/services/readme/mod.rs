@@ -16,12 +16,12 @@ use crate::entities::{
 use crate::error::CoreError;
 use crate::ports::{CacheEntry, CacheStore, ReadmeRepository};
 use crate::services::hot_config::ReadmeConfig;
+use crate::services::svg;
 
 pub mod detect;
 pub mod image;
 pub mod render;
 pub mod sanitize;
-pub mod svg;
 
 /// Storing and serving the README of a version.
 pub struct ReadmeService {

@@ -23,8 +23,11 @@ use common::*;
 
 use actix_web::test::{call_service, read_body_json, TestRequest};
 
+use std::sync::Arc;
+
 use batlehub_config::schema::RegistryMode;
 use batlehub_core::entities::{AccessAction, EventFilter};
+use batlehub_core::ports::RegistryClient;
 
 const REG: &str = "local-npm";
 
@@ -42,10 +45,10 @@ async fn app(
         Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
         Error = actix_web::Error,
     >,
-    std::sync::Arc<dyn batlehub_core::ports::PackageRepository>,
+    Arc<dyn batlehub_core::ports::PackageRepository>,
 ) {
     let parts = local_registry_app_parts(REG, kind, RegistryMode::Proxy, None);
-    let repo = std::sync::Arc::clone(&parts.proxy_svc.repo);
+    let repo = Arc::clone(&parts.proxy_svc.repo);
     let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
     (app, repo)
 }
@@ -102,7 +105,7 @@ async fn a_fetch_pulls_the_version_and_reports_what_arrived() {
 #[actix_web::test]
 async fn the_fetched_bytes_are_actually_held_afterwards() {
     let parts = local_registry_app_parts(REG, "npm", RegistryMode::Proxy, None);
-    let storage = std::sync::Arc::clone(&parts.proxy_svc.storage);
+    let storage = Arc::clone(&parts.proxy_svc.storage);
     let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
 
     // The **proxy** key. `artifact_storage_key` is the `local:` one a *published*
@@ -197,7 +200,7 @@ async fn a_caller_the_rules_would_refuse_is_refused_with_the_rules_reason() {
         ]);
         hot.policies.insert(
             REG.to_owned(),
-            std::sync::Arc::new(batlehub_core::services::RegistryPolicy {
+            Arc::new(batlehub_core::services::RegistryPolicy {
                 metadata_ttl: Some(std::time::Duration::from_secs(300)),
                 firewall_only: false,
                 serve_stale_metadata: false,
@@ -321,7 +324,7 @@ async fn a_kind_with_no_single_artifact_per_version_refuses_with_its_reason() {
 #[actix_web::test]
 async fn console_fetch_off_refuses_before_anything_is_fetched() {
     let parts = local_registry_app_parts(REG, "npm", RegistryMode::Proxy, None);
-    let storage = std::sync::Arc::clone(&parts.proxy_svc.storage);
+    let storage = Arc::clone(&parts.proxy_svc.storage);
     {
         let mut hot = parts.local_svc.hot.write().await;
         hot.console_fetch.insert(REG.to_owned(), false);
@@ -406,7 +409,7 @@ async fn an_anonymous_caller_cannot_pull_at_all() {
 #[actix_web::test]
 async fn an_anonymous_attempt_pulls_nothing() {
     let parts = local_registry_app_parts(REG, "npm", RegistryMode::Proxy, None);
-    let storage = std::sync::Arc::clone(&parts.proxy_svc.storage);
+    let storage = Arc::clone(&parts.proxy_svc.storage);
     let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
 
     let key = batlehub_core::services::proxy::proxy_artifact_key(
@@ -452,11 +455,11 @@ async fn an_anonymous_refusal_does_not_disclose_a_private_package() {
 
     let ns_port: std::sync::Arc<dyn TeamNamespacePort> = ns_store;
     let mut parts = local_registry_app_parts(REG, "npm", RegistryMode::Proxy, None);
-    let base = std::sync::Arc::clone(&parts.local_svc);
-    parts.local_svc = std::sync::Arc::new(batlehub_core::services::LocalRegistryService {
-        backend: std::sync::Arc::clone(&base.backend),
-        storage: std::sync::Arc::clone(&base.storage),
-        hot: std::sync::Arc::clone(&base.hot),
+    let base = Arc::clone(&parts.local_svc);
+    parts.local_svc = Arc::new(batlehub_core::services::LocalRegistryService {
+        backend: Arc::clone(&base.backend),
+        storage: Arc::clone(&base.storage),
+        hot: Arc::clone(&base.hot),
         quota: None,
         ownership: None,
         team_namespace: Some(ns_port),
@@ -481,6 +484,357 @@ async fn an_anonymous_refusal_does_not_disclose_a_private_package() {
             "{name}: an anonymous caller must be refused identically, existing or not"
         );
     }
+}
+
+/// The **listing** is told too (RFC 0007-bis §11 q3).
+///
+/// The catalogue offers the fetch on an upstream-only row, and it has to ask the
+/// same question the package page asks — one screen earlier and once per
+/// registry, because a listing with no registry filter spans every registry the
+/// caller may browse and `console_fetch` is per registry.
+///
+/// Anonymous first, for the reason the test below gives: a page that drew the
+/// button for a signed-out reader would be promising a `401`.
+#[actix_web::test]
+async fn the_listing_is_told_whether_it_may_offer_a_fetch() {
+    let app = app_open_to_anonymous("npm").await;
+    let uri = "/api/v1/explore/upstream?name=fixed";
+
+    let anon: serde_json::Value =
+        read_body_json(call_service(&app, TestRequest::get().uri(uri).to_request()).await).await;
+    let items = anon["items"].as_array().expect("items");
+    assert!(
+        !items.is_empty(),
+        "the fixture upstream should answer: {anon}"
+    );
+    for item in items {
+        assert_eq!(
+            item["fetch"]["offered"], false,
+            "a signed-out reader is offered nothing: {item}"
+        );
+    }
+
+    let signed_in: serde_json::Value = read_body_json(
+        call_service(
+            &app,
+            TestRequest::get()
+                .uri(uri)
+                .insert_header(("Authorization", bearer(USER_TOKEN)))
+                .to_request(),
+        )
+        .await,
+    )
+    .await;
+    for item in signed_in["items"].as_array().expect("items") {
+        assert_eq!(
+            item["fetch"]["offered"], true,
+            "a signed-in reader is: {item}"
+        );
+        assert!(
+            item["latest_version"]
+                .as_str()
+                .is_some_and(|v| !v.is_empty()),
+            "the row must name the version the button would fetch: {item}"
+        );
+    }
+}
+
+/// The `already_cached` flag has to be asked by the **names that came back**.
+///
+/// An upstream search is a relevance search: npm answers `left-pad` with
+/// `pad-left`, `lpad` and `@stdlib/string-left-pad`, and not one of those
+/// contains the query as a substring. The flag used to be computed by asking
+/// the catalogue for packages whose name *contains the query*, so every such
+/// row was reported as not held however many times the instance had pulled it.
+///
+/// Nothing noticed until the Fetch button reached the listing (§11 q3): pressing
+/// it fetched the version, the row went on offering to fetch it, and a second
+/// press answered `409 fetch.already-held`. Found in `console_fetch.sh` against
+/// a real browser and the real npm registry (§14.11).
+///
+/// The `before` call is not scene-setting. It is what makes this a test of both
+/// halves: it populates the ten-minute explore cache with the answer "we hold
+/// none of these", and the fetch has to invalidate that cache or the `after`
+/// call is served the same stale row whatever the filter asks.
+///
+/// `FixedRegistry` cannot reproduce it — its search filters on
+/// `name.contains(query)`, so its answers always contain the query. This client
+/// answers any query with one fixed name, which is what a relevance search does.
+#[derive(Clone)]
+struct RelevanceSearch {
+    inner: Arc<dyn RegistryClient>,
+    /// The one name every query is answered with, in the spelling the upstream
+    /// *displays* — which is not always the one the read path stores.
+    answers: String,
+}
+
+#[async_trait::async_trait]
+impl RegistryClient for RelevanceSearch {
+    fn registry_type(&self) -> &str {
+        self.inner.registry_type()
+    }
+    async fn resolve_metadata(
+        &self,
+        pkg: &batlehub_core::entities::PackageId,
+    ) -> Result<batlehub_core::entities::PackageMetadata, batlehub_core::error::CoreError> {
+        self.inner.resolve_metadata(pkg).await
+    }
+    async fn fetch_artifact(
+        &self,
+        pkg: &batlehub_core::entities::PackageId,
+    ) -> Result<batlehub_core::ports::FetchedArtifact, batlehub_core::error::CoreError> {
+        self.inner.fetch_artifact(pkg).await
+    }
+    async fn list_versions(
+        &self,
+        name: &str,
+    ) -> Result<Vec<String>, batlehub_core::error::CoreError> {
+        self.inner.list_versions(name).await
+    }
+    /// Whatever you asked for, here is the one name — `widget` for the
+    /// relevance test, whose name shares no substring with the queries below.
+    async fn search_packages(
+        &self,
+        _query: &str,
+        _limit: usize,
+    ) -> Result<Vec<batlehub_core::ports::UpstreamPackage>, batlehub_core::error::CoreError> {
+        Ok(vec![batlehub_core::ports::UpstreamPackage {
+            name: self.answers.clone(),
+            latest_version: "1.0.0".to_owned(),
+            description: None,
+        }])
+    }
+}
+
+/// Swap the fixture's client for one that answers every search with `answers`.
+async fn answer_every_search_with(parts: &LocalRegistryAppParts, registry: &str, answers: &str) {
+    let mut hot = parts.proxy_svc.hot.write().await;
+    let inner = hot
+        .registries
+        .get(registry)
+        .expect("the fixture registry")
+        .clone();
+    hot.registries.insert(
+        registry.to_owned(),
+        Arc::new(RelevanceSearch {
+            inner,
+            answers: answers.to_owned(),
+        }),
+    );
+}
+
+#[actix_web::test]
+async fn a_hit_the_instance_already_holds_is_marked_however_it_was_matched() {
+    let parts = local_registry_app_parts(REG, "npm", RegistryMode::Proxy, None);
+    answer_every_search_with(&parts, REG, "widget").await;
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+
+    // A query `widget` does not contain, which is the whole point.
+    let search_uri = "/api/v1/explore/upstream?name=tegdiw";
+    macro_rules! search {
+        () => {{
+            let resp = call_service(
+                &app,
+                TestRequest::get()
+                    .uri(search_uri)
+                    .insert_header(("Authorization", bearer(USER_TOKEN)))
+                    .to_request(),
+            )
+            .await;
+            read_body_json::<serde_json::Value, _>(resp).await
+        }};
+    }
+
+    let before = search!();
+    assert_eq!(before["items"][0]["name"], "widget", "{before}");
+    assert_eq!(
+        before["items"][0]["already_cached"], false,
+        "nothing is held yet: {before}"
+    );
+
+    let resp = call_service(
+        &app,
+        TestRequest::post()
+            .uri(&fetch_uri("widget", "1.0.0"))
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "the fetch should succeed");
+
+    let after = search!();
+    assert_eq!(
+        after["items"][0]["already_cached"], true,
+        "the instance holds it now, and the row has to say so however the \
+         upstream matched it: {after}"
+    );
+}
+
+/// …and matched in the spelling the *read path* stores, not the one the
+/// upstream displays.
+///
+/// NuGet ids are case-insensitive: the search API answers `Widget.Core`, while
+/// `dotnet restore` — and the flat handler, the client and the fetch coordinate
+/// with it — address `widget.core`. PyPI (PEP 503) and the GOPROXY case
+/// encoding do the same thing in their own alphabets. Compared exactly, the two
+/// spellings never match, so the row reported a package the instance holds as
+/// missing and the button beside it answered `409 fetch.already-held` — §14.11's
+/// symptom surviving in the ecosystems that spell a name two ways.
+///
+/// The fetch here is the real one, so nothing in this test asserts against a
+/// name a test wrote by hand: the coordinate is built by the kind, stored by the
+/// proxy, and read back through the same canonicalisation the flag uses.
+#[actix_web::test]
+async fn a_hit_is_matched_in_the_spelling_the_read_path_stores() {
+    const NUGET_REG: &str = "local-npm";
+    let parts = local_registry_app_parts(NUGET_REG, "nuget", RegistryMode::Proxy, None);
+    answer_every_search_with(&parts, NUGET_REG, "Widget.Core").await;
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+
+    let search_uri = "/api/v1/explore/upstream?name=widget";
+    macro_rules! search {
+        () => {{
+            let resp = call_service(
+                &app,
+                TestRequest::get()
+                    .uri(search_uri)
+                    .insert_header(("Authorization", bearer(USER_TOKEN)))
+                    .to_request(),
+            )
+            .await;
+            read_body_json::<serde_json::Value, _>(resp).await
+        }};
+    }
+
+    let before = search!();
+    assert_eq!(
+        before["items"][0]["name"], "Widget.Core",
+        "the row keeps the upstream's display spelling: {before}"
+    );
+    assert_eq!(
+        before["items"][0]["already_cached"], false,
+        "nothing is held yet: {before}"
+    );
+
+    let resp = call_service(
+        &app,
+        TestRequest::post()
+            .uri(&fetch_uri("Widget.Core", "1.0.0"))
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "the fetch should succeed");
+
+    let after = search!();
+    assert_eq!(
+        after["items"][0]["already_cached"], true,
+        "the instance holds it as `widget.core`, and the row has to say so \
+         though the search spells it `Widget.Core`: {after}"
+    );
+}
+
+/// What the caller asks for is not what the registries are asked for.
+///
+/// The search fans out across every registry the reader may browse, and each
+/// hit becomes up to two coordinates in the held-set query's array and one unit
+/// of its `LIMIT`. An unbounded `limit` is therefore a caller sizing this
+/// instance's database work, and the honest bound is ours to set rather than
+/// one borrowed from whatever each upstream happens to enforce.
+///
+/// A client that reports the number it was handed, because that is the fact
+/// under test — not how many rows came back, which every real client caps on
+/// its own long before the ceiling is reached.
+#[derive(Clone)]
+struct EchoLimit(Arc<dyn RegistryClient>);
+
+#[async_trait::async_trait]
+impl RegistryClient for EchoLimit {
+    fn registry_type(&self) -> &str {
+        self.0.registry_type()
+    }
+    async fn resolve_metadata(
+        &self,
+        pkg: &batlehub_core::entities::PackageId,
+    ) -> Result<batlehub_core::entities::PackageMetadata, batlehub_core::error::CoreError> {
+        self.0.resolve_metadata(pkg).await
+    }
+    async fn fetch_artifact(
+        &self,
+        pkg: &batlehub_core::entities::PackageId,
+    ) -> Result<batlehub_core::ports::FetchedArtifact, batlehub_core::error::CoreError> {
+        self.0.fetch_artifact(pkg).await
+    }
+    async fn list_versions(
+        &self,
+        name: &str,
+    ) -> Result<Vec<String>, batlehub_core::error::CoreError> {
+        self.0.list_versions(name).await
+    }
+    async fn search_packages(
+        &self,
+        _query: &str,
+        limit: usize,
+    ) -> Result<Vec<batlehub_core::ports::UpstreamPackage>, batlehub_core::error::CoreError> {
+        Ok(vec![batlehub_core::ports::UpstreamPackage {
+            name: format!("asked-for-{limit}"),
+            latest_version: "1.0.0".to_owned(),
+            description: None,
+        }])
+    }
+}
+
+#[actix_web::test]
+async fn a_registry_is_never_asked_for_more_than_the_ceiling() {
+    let parts = local_registry_app_parts(REG, "npm", RegistryMode::Proxy, None);
+    {
+        let mut hot = parts.proxy_svc.hot.write().await;
+        let inner = hot
+            .registries
+            .get(REG)
+            .expect("the fixture registry")
+            .clone();
+        hot.registries
+            .insert(REG.to_owned(), Arc::new(EchoLimit(inner)));
+    }
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+
+    let asked_for = |uri: &'static str| {
+        let app = &app;
+        async move {
+            let resp = call_service(
+                app,
+                TestRequest::get()
+                    .uri(uri)
+                    .insert_header(("Authorization", bearer(USER_TOKEN)))
+                    .to_request(),
+            )
+            .await;
+            let body: serde_json::Value = read_body_json(resp).await;
+            body["items"][0]["name"].as_str().unwrap_or("").to_owned()
+        }
+    };
+
+    assert_eq!(
+        asked_for("/api/v1/explore/upstream?name=x&limit=100000").await,
+        format!(
+            "asked-for-{}",
+            batlehub_web::handlers::front_office::explore::MAX_UPSTREAM_SEARCH_LIMIT
+        ),
+        "a caller may not size this instance's work"
+    );
+    // A ceiling, not a fixed size: below it the caller's number is the one used,
+    // and the default is what an unasked caller gets.
+    assert_eq!(
+        asked_for("/api/v1/explore/upstream?name=x&limit=3").await,
+        "asked-for-3",
+        "asking for less is honoured"
+    );
+    assert_eq!(
+        asked_for("/api/v1/explore/upstream?name=x").await,
+        "asked-for-10",
+        "the default is unchanged"
+    );
 }
 
 /// The console is told, so it does not draw a button the API will refuse.
@@ -545,7 +899,7 @@ async fn a_registry_the_caller_may_not_browse_is_not_fetchable_either() {
         let mut hot = parts.proxy_svc.hot.write().await;
         hot.grants = [(
             REG.to_owned(),
-            std::sync::Arc::new(fixture_grants_with_explore(
+            Arc::new(fixture_grants_with_explore(
                 REG,
                 "npm",
                 &RegistryMode::Proxy,
@@ -555,7 +909,7 @@ async fn a_registry_the_caller_may_not_browse_is_not_fetchable_either() {
         )]
         .into();
     }
-    let storage = std::sync::Arc::clone(&parts.proxy_svc.storage);
+    let storage = Arc::clone(&parts.proxy_svc.storage);
     let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
 
     let key = batlehub_core::services::proxy::proxy_artifact_key(

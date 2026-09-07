@@ -40,6 +40,10 @@ anyone what we are looking for" is a disclosure worth knowing about.
 
 Turn it off per registry with `search_url = ""`.
 
+One request asks each registry for at most 100 results — the `limit` parameter's
+ceiling — so the egress a single search can cause is bounded by the number of
+registries the caller may browse, not by what the caller asks for.
+
 ## The console's discovery read {#the-console-s-discovery-read}
 
 **New behaviour, on by default.** When somebody opens the package page for a
@@ -128,7 +132,9 @@ unacceptable keeps `"strip"`, which remains the default. See
 
 The package page lists versions this instance holds nothing of and marks each one
 **not held here**. On those rows there is a **Fetch this version** button, and
-pressing it downloads the artifact from upstream.
+pressing it downloads the artifact from upstream. The catalogue offers the same
+button on a search result this instance holds nothing of, for the version the
+upstream search named.
 
 This is the only thing on the list that is **a decision rather than a side
 effect**. Everything else here happens because a page was opened or a build ran;
