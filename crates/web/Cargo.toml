@@ -60,7 +60,7 @@ bzip2 = "0.6"
 flate2 = "1"
 # Test-only: build `.rpm` fixtures via `rpm::PackageBuilder` (the `payload` feature).
 # No `rsa` — that only arrives via `signature-pgp`, which we never enable.
-rpm = { version = "0.27", default-features = false, features = ["payload", "gzip-compression"] }
+rpm = { version = "0.28", default-features = false, features = ["payload", "gzip-compression"] }
 tar = "0.4"
 tempfile.workspace = true
 toml.workspace = true

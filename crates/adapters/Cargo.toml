@@ -31,7 +31,7 @@ ar = { version = "0.9", optional = true }
 lzma-rs = { version = "0.3", optional = true }
 sha1 = { version = "0.11", optional = true }
 ed25519-dalek = { version = "3", optional = true }
-rpm = { version = "0.27", default-features = false, features = [
+rpm = { version = "0.28", default-features = false, features = [
   "gzip-compression",
   "xz-compression",
   "zstd-compression",
@@ -78,7 +78,7 @@ rcgen = "0.14"
 # Test-only: the `payload` feature unlocks `rpm::PackageBuilder` / `FileOptions` for
 # building `.rpm` fixtures. Pulls no extra crates (`payload = []`) — notably not the
 # banned `rsa`, which only arrives via `signature-pgp`.
-rpm = { version = "0.27", default-features = false, features = ["payload", "gzip-compression"] }
+rpm = { version = "0.28", default-features = false, features = ["payload", "gzip-compression"] }
 rustls = { version = "0.23", features = ["aws-lc-rs"] }
 tar = "0.4"
 tokio-rustls = "0.26"
