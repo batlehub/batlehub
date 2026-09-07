@@ -40,6 +40,9 @@
 #   ADMIN_TOKEN     publish credential, matching the suite's config
 #   COVERAGE=1      run the server under `cargo llvm-cov run --no-report`
 #   HEAVY_CACHE     cacheable client downloads (default ~/.cache/batlehub-heavy)
+#   HEAVY_FORGE_TOKEN  a GitHub/GitLab/Forgejo token the forge suites
+#                   authenticate their upstream with; unset, they stay
+#                   anonymous (see `heavy_forge_auth_config`)
 
 set -euo pipefail
 
@@ -53,6 +56,7 @@ HEAVY_TAP_PID=""
 HEAVY_EXTRA_PIDS=()
 HEAVY_SERVER2_PID=""
 HEAVY_BASE2=""
+HEAVY_CONFIG=""
 
 heavy_log() { printf '\n==> %s\n' "$*"; }
 
@@ -235,6 +239,77 @@ heavy_init() {
   # suite is told apart from a finding about the server.
   trap 'echo "ERROR: $HEAVY_SUITE died at line $LINENO of ${BASH_SOURCE[0]}: $BASH_COMMAND (exit $?)" >&2' ERR
   heavy_log "[$HEAVY_SUITE] work dir $HEAVY_WORK, run id $HEAVY_RUN"
+}
+
+# heavy_forge_auth_config <config-path> — set `HEAVY_CONFIG` to the config to
+# actually start: the one given, with its forge registries authenticated when
+# this run has a token, and the given path itself when it does not.
+#
+# The forge configs are anonymous on purpose: a suite has to run on a fork and
+# on a developer's machine, neither of which has a secret. What anonymous costs
+# is that GitHub's 60 API requests an hour are counted *per source IP*, and a
+# hosted runner's IP is shared with every other job on that machine, so the
+# budget is regularly spent before this suite makes its first call. The proxy
+# then refuses the next one below its 10 % reserve (RFC 0019 §5.2) and answers
+# 502 — which airgap.sh reads as "a planned path the server does not answer",
+# naming the seed rather than the budget.
+#
+# So: `HEAVY_FORGE_TOKEN` set (`${{ github.token }}` in CI — 1 000 requests an
+# hour, per repository rather than per IP) writes a copy of the config with
+# `[registries.upstream_auth]` on every forge registry it declares. Unset,
+# `HEAVY_CONFIG` is the path given and nothing changes, so an anonymous run
+# behaves exactly as before.
+#
+# A variable rather than a printed path, as `heavy_runner_for` sets
+# `HEAVY_RUNNER`: `heavy_fail` inside a `$(…)` ends the subshell only, and the
+# suite would carry on and start a server with an empty `--config`.
+#
+# The token is never written to the file: the copy carries the placeholder and
+# the server expands it from its own environment, the way it does `${DATABASE_URL}`.
+heavy_forge_auth_config() {
+  local src="$1"
+  HEAVY_CONFIG="$src"
+  [[ -n "${HEAVY_FORGE_TOKEN:-}" ]] || return 0
+  export HEAVY_FORGE_TOKEN
+  local dst="$HEAVY_WORK/$(basename "$src")"
+  python3 - "$src" "$dst" <<'PY' || heavy_fail "could not authenticate the forge registries in $src"
+import sys
+
+src, dst = sys.argv[1], sys.argv[2]
+lines = open(src).read().splitlines(True)
+FORGES = ('"github"', '"gitlab"', '"forgejo"')
+starts = [i for i, l in enumerate(lines) if l.strip() == "[[registries]]"]
+bounds = [(s, starts[k + 1] if k + 1 < len(starts) else len(lines)) for k, s in enumerate(starts)]
+
+
+def is_forge(start, end):
+    for l in lines[start:end]:
+        t = l.strip()
+        if t.startswith("type") and "=" in t and t.split("=", 1)[1].strip() in FORGES:
+            return True
+    return False
+
+
+forges = [(s, e) for s, e in bounds if is_forge(s, e)]
+if not forges:
+    sys.exit(f"{src} declares no github/gitlab/forgejo registry to authenticate")
+
+out, prev = [], 0
+for start, end in forges:
+    # Before the trailing blanks and the comment block that introduces the
+    # *next* registry: a subtable after those is still this registry's, but it
+    # reads as if it belonged to the one the comment describes.
+    at = end
+    while at > start and (lines[at - 1].strip() == "" or lines[at - 1].lstrip().startswith("#")):
+        at -= 1
+    out.extend(lines[prev:at])
+    out.append('\n[registries.upstream_auth]\ntype = "bearer"\ntoken = "${HEAVY_FORGE_TOKEN}"\n')
+    prev = at
+out.extend(lines[prev:])
+open(dst, "w").write("".join(out))
+PY
+  HEAVY_CONFIG="$dst"
+  heavy_log "forge registries in $src: authenticated from \$HEAVY_FORGE_TOKEN"
 }
 
 # heavy_start_server <config-path>

@@ -26,8 +26,11 @@ user_id = "ci-admin"
 type = "filesystem"
 path = "./tmp/heavy-airgap-storage"
 
-# Anonymous GitHub, as in config.mise.toml: the seed spends about three of
-# the sixty requests an hour.
+# GitHub, as in config.mise.toml: the seed spends about three requests. Kept
+# anonymous here, and authenticated by `heavy_forge_auth_config` (lib.sh) when
+# the run has a $HEAVY_FORGE_TOKEN — the sixty anonymous requests an hour are
+# counted per source IP, which a hosted runner shares with every other job on
+# the machine, so the seed's first call regularly meets a spent budget.
 [[registries]]
 type = "github"
 name = "github-${HEAVY_RUN}"

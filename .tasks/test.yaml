@@ -316,12 +316,12 @@ tasks:
       - bash tests/heavy/sdkman.sh
 
   test:mise-heavy:
-    desc: "Heavy mise integration: `mise install` from a GitHub release through a github registry, the RFC 0019 ref headers on branch, tag and commit archives, and RFC 0008's air gap end to end — plan, seed, export, import into a second `[air_gap]` instance, then install again with egress denied (needs DATABASE_URL + network; anonymous GitHub, ~8 requests)"
+    desc: "Heavy mise integration: `mise install` from a GitHub release through a github registry, the RFC 0019 ref headers on branch, tag and commit archives, and RFC 0008's air gap end to end — plan, seed, export, import into a second `[air_gap]` instance, then install again with egress denied (needs DATABASE_URL + network; ~8 GitHub API requests, anonymous unless HEAVY_FORGE_TOKEN names a token)"
     cmds:
       - bash tests/heavy/mise.sh
 
   test:airgap-heavy:
-    desc: "Heavy air-gap measurement (RFC 0008-bis phase 0): one version of an npm package, a PyPI wheel and a GitHub release asset seeded, exported and imported into a second `[air_gap]` instance, then npm, pip and mise driven against it with egress denied — a version string resolves through a listing and is a 503, a lock (npm ci, a PEP 508 direct reference) resolves nothing and installs; the miss log names the three listings (needs DATABASE_URL + network; anonymous GitHub, ~3 requests)"
+    desc: "Heavy air-gap measurement (RFC 0008-bis phase 0): one version of an npm package, a PyPI wheel and a GitHub release asset seeded, exported and imported into a second `[air_gap]` instance, then npm, pip and mise driven against it with egress denied — a version string resolves through a listing and is a 503, a lock (npm ci, a PEP 508 direct reference) resolves nothing and installs; the miss log names the three listings (needs DATABASE_URL + network; ~3 GitHub API requests, anonymous unless HEAVY_FORGE_TOKEN names a token)"
     cmds:
       - bash tests/heavy/airgap.sh
 

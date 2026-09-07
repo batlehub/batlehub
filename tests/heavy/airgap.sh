@@ -61,8 +61,10 @@
 # have anything to carry across.
 #
 # Run via `task test:airgap-heavy` or directly. Needs network for the seed
-# (registry.npmjs.org, pypi.org, and api.github.com anonymously — about
-# three of the sixty requests an hour). Environment knobs: DATABASE_URL
+# (registry.npmjs.org, pypi.org, and api.github.com — about three API
+# requests, anonymous unless HEAVY_FORGE_TOKEN names one, in which case the
+# github registry is authenticated with it: the sixty anonymous requests an
+# hour are per source IP, and a shared runner's is regularly already spent). Environment knobs: DATABASE_URL
 # (required), HEAVY_PORT (8110, the connected instance), HEAVY_TAP_PORT
 # (8119, in front of the disconnected instance), HEAVY_TF_TAP_PORT (8121, a
 # TLS tap in front of the same instance, for Terraform's host-routed
@@ -215,7 +217,8 @@ MARK_TERRAFORM_SYNTH="terraform-synth"
 
 # ── 0. The connected side: seed one version of each, export a bundle ────────
 
-heavy_start_server tests/heavy/config.airgap.toml
+heavy_forge_auth_config tests/heavy/config.airgap.toml
+heavy_start_server "$HEAVY_CONFIG"
 
 cargo build --quiet -p batlehub-cli >"$HEAVY_WORK/cli-build.txt" 2>&1 \
   || { cat "$HEAVY_WORK/cli-build.txt" >&2; heavy_fail "the CLI did not build"; }

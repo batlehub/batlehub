@@ -70,7 +70,8 @@ TOOL_SPEC="${TOOL}[exe=gh]@$VERSION"
 heavy_runner_for mise "mise@latest"
 MISE=("${HEAVY_RUNNER[@]}" mise)
 
-heavy_start_server tests/heavy/config.mise.toml
+heavy_forge_auth_config tests/heavy/config.mise.toml
+heavy_start_server "$HEAVY_CONFIG"
 heavy_start_tap
 
 PROXY="$HEAVY_TAP_BASE/proxy/$REG"

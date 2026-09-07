@@ -28,7 +28,11 @@ path = "./tmp/heavy-mise-storage"
 #
 # Anonymous on purpose: the suite must run on a fork with no secret, and the
 # whole of it costs a handful of the 60 requests an hour GitHub allows. The
-# server warns `forge.anonymous-upstream` at load, which is correct. A short
+# server warns `forge.anonymous-upstream` at load, which is correct. Those 60
+# are per source IP, though, and a hosted runner's IP is shared, so
+# `heavy_forge_auth_config` (lib.sh) adds `[registries.upstream_auth]` to this
+# registry when the run has a $HEAVY_FORGE_TOKEN; with none it stays anonymous
+# and a spent budget answers 502, as the matrix comment in test.yaml says. A short
 # branch TTL so the second pull of a branch in the same run re-resolves.
 #
 # mise reads release JSON, asset bytes and source tarballs; those are three

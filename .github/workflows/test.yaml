@@ -439,11 +439,13 @@ jobs:
           # tar, all on the runner image. Installs one JDK (~200 MB) from the
           # vendor CDN the broker names.
           - suite: sdkman
-          # mise: installed by the job below. Anonymous GitHub, and the run
-          # spends about eighteen of the sixty requests an hour that allows —
-          # RFC 0019 phase 1's ref headers, plus RFC 0008 §4's air gap, which
-          # seeds a second instance and installs through it with egress
-          # denied. A 502 on `releases/assets/{id}` is the budget, not a bug.
+          # mise: installed by the job below. The run spends about eighteen
+          # GitHub API requests — RFC 0019 phase 1's ref headers, plus RFC 0008
+          # §4's air gap, which seeds a second instance and installs through it
+          # with egress denied. They are drawn on the workflow token
+          # (HEAVY_FORGE_TOKEN below); with no token, as on a developer's
+          # machine, a 502 on `releases/assets/{id}` is the anonymous budget,
+          # not a bug.
           - suite: mise
           # RFC 0018 phase 0a — the rejection survey. cargo, go, mvn and java
           # are on the runner image; the path-proxy suite drives apt (on the
@@ -465,8 +467,10 @@ jobs:
           # RFC 0008-bis phase 0 — the measurement: npm, pip and mise against
           # a second `[air_gap]` instance holding one version of each, with
           # egress denied. Needs Node and mise (installed below), python3
-          # with venv (on the image), and about three anonymous GitHub
-          # requests for the seed.
+          # with venv (on the image), and about three GitHub API requests for
+          # the seed — on the workflow token (HEAVY_FORGE_TOKEN below),
+          # because the seed *fails* on a spent anonymous budget rather than
+          # tolerating it.
           - suite: airgap
     services:
       postgres:
@@ -613,6 +617,16 @@ jobs:
         run: bash tests/heavy/${{ matrix.suite }}.sh
         env:
           COVERAGE: "1"
+          # The forge suites (mise, airgap) drive a `github` registry. Read by
+          # `heavy_forge_auth_config` (tests/heavy/lib.sh), which authenticates
+          # that registry's upstream with it: anonymous GitHub is 60 API
+          # requests an hour *per source IP*, and a hosted runner's IP is shared
+          # with every other job on the machine, so the budget is regularly
+          # already spent and the proxy refuses below its 10 % reserve. The
+          # workflow token is 1 000 an hour per repository, is issued on forks
+          # too, and needs no more than the `contents: read` this workflow
+          # already declares. Every other suite ignores it.
+          HEAVY_FORGE_TOKEN: ${{ github.token }}
       - name: Generate LCOV
         run: >-
           cargo llvm-cov report --lcov --output-path coverage-heavy-${{ matrix.suite }}.lcov

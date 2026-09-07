@@ -114,6 +114,18 @@ The Redis adapter tests (`redis_cache`, `redis_rate_limit`,
 `redis_warm_coordinator`) and `pg_rate_limit` / `actions_oidc` have no dedicated
 `task test:*` wrapper but run under `task coverage` and in CI.
 
+The two suites that drive a forge registry — `mise` and `airgap` — read
+`HEAVY_FORGE_TOKEN`. Set, `heavy_forge_auth_config` (`tests/heavy/lib.sh`)
+copies the suite's config with `[registries.upstream_auth]` on its `github`
+registry and starts from the copy, the token expanded from the environment
+rather than written to the file. Unset, both stay anonymous and nothing
+changes — which is the point: neither suite may require a secret. What
+anonymous costs is that GitHub counts its 60 API requests an hour per source
+IP: a hosted runner shares that IP with every other job on the machine, so the
+budget is often already spent, the proxy refuses below its 10 % reserve
+(RFC 0019 §5.2) and the air-gap seed fails on a `502`. CI therefore passes the
+workflow token (1 000 an hour, per repository, issued on forks too).
+
 ---
 
 ## 3. Unit tests
