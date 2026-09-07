@@ -575,7 +575,8 @@ SOC_SECRET="heavy-soc-secret"
 # sign <body> — the `X-Hub-Signature-256` value over the raw bytes, the same
 # scheme `[[notifications.inbound]]` uses.
 sign() {
-  python3 -c 'import hashlib, hmac, sys; print("sha256=" + hmac.new(sys.argv[1].encode(), sys.argv[2].encode(), hashlib.sha256).hexdigest())' "$SOC_SECRET" "$1"
+  local body="$1"
+  python3 -c 'import hashlib, hmac, sys; print("sha256=" + hmac.new(sys.argv[1].encode(), sys.argv[2].encode(), hashlib.sha256).hexdigest())' "$SOC_SECRET" "$body"
 }
 
 FLAG_CONSUMER="$HEAVY_WORK/consumer-flags"

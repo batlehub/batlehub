@@ -88,7 +88,7 @@ const rows = (page) => page.$$eval("tbody tr", (trs) => {
         under: [],
       });
     } else if (out.length) {
-      const subject = out[out.length - 1];
+      const subject = out.at(-1);
       subject.under.push(text);
       if (button) {
         subject.button = {

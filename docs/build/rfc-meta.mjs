@@ -101,6 +101,77 @@ export function parseFilename(file) {
   };
 }
 
+/** The bold lead a deferral is written with, wherever it sits on the line. */
+const DEFERRAL_LEAD = /\*\*(Deferred[^*]*|Decided:[ \t]*not now[^*]*)\*\*/;
+
+/** A `##`…`####` heading, and the text of it. */
+const HEADING = /^#{2,4}[ \t]+(.+)$/;
+
+/** A table row whose first cell is the question's own number (`| O7 |`). */
+const ROW_ID = /^\|[ \t]*([A-Za-z]?\d+)[ \t]*\|/;
+
+/** Whether an argument says what would undo it. */
+const REOPENS = /\breopen(s|ed|ing)?\b|\bwhen (one|someone|an? \w+) (does|asks|wants)\b/i;
+
+/**
+ * Drop trailing `chars` from `s`.
+ *
+ * A scan rather than a `/[…]+$/` replace: the anchored quantifier is retried
+ * from every position in the string, which is super-linear on a long run of
+ * the characters it strips.
+ */
+function trimEndOf(s, chars) {
+  let end = s.length;
+  while (end > 0 && chars.includes(s[end - 1])) end -= 1;
+  return s.slice(0, end);
+}
+
+/**
+ * The argument one lead introduces: what follows it on its own line, and the
+ * rest of the paragraph that line starts.
+ *
+ * What follows the lead on the same line is the argument's first clause; a
+ * lead that ends its line (0015's blockquotes) has its sentence on the next
+ * one, which the caller does not need — the lead names the choice. These
+ * documents wrap at 80 columns, so the argument runs past the line the lead is
+ * on, and the claim is the rest of the *paragraph* — up to a blank line.
+ */
+function claimAfter(lines, i, match) {
+  const line = lines[i];
+  let rest = line.slice(match.index + match[0].length);
+  if (!line.startsWith("|")) {
+    for (let j = i + 1; j < lines.length && lines[j].trim() !== ""; j++) {
+      if (HEADING.test(lines[j])) break;
+      // The *next* deferral ends this one. A markdown list writes its items
+      // on adjacent lines with no blank between them, so without this a
+      // second `**Decided: not now.**` item is swallowed into the first
+      // one's claim and then reported again on its own — the same argument
+      // printed twice, once with somebody else's sentence attached.
+      if (DEFERRAL_LEAD.test(lines[j])) break;
+      // Two of these are written as blockquotes (0015): the `>` markers are
+      // the quoting, not the sentence.
+      rest += ` ${lines[j].replace(/^[ \t>]+/, "")}`;
+    }
+  }
+  rest = trimEndOf(rest.replace(/^[\s:—-]+/, "").replace(/\s+/g, " "), " ");
+  // A table cell ends at the row's closing pipe, which is punctuation of the
+  // table rather than of the sentence.
+  return rest.endsWith("|") ? trimEndOf(rest.slice(0, -1), " ") : rest;
+}
+
+/**
+ * The claim, cut at the first sentence end that leaves a sentence behind.
+ *
+ * A cut at the first `. ` alone gives "(§7.2)." for 0012, whose lead ends in a
+ * cross-reference — true, and useless in a listing.
+ */
+function firstSentence(claim) {
+  for (const stop of claim.matchAll(/(?<!\b[A-Z])(?<!§\d)\.[ \t]/g)) {
+    if (stop.index >= 40) return claim.slice(0, stop.index + 1);
+  }
+  return claim;
+}
+
 /**
  * The deferrals of one document: the choices an RFC took *not* to make, and
  * said so in the same breath.
@@ -129,7 +200,7 @@ export function readDeferrals(raw) {
   const lines = raw.split(/\r?\n/);
   let heading = "";
   for (const [i, line] of lines.entries()) {
-    const h = /^#{2,4}[ \t]+(.+?)[ \t]*$/.exec(line);
+    const h = HEADING.exec(line);
     if (h) {
       heading = h[1].trim();
       continue;
@@ -137,59 +208,21 @@ export function readDeferrals(raw) {
     // The bold lead, wherever it sits: a paragraph of its own, a list item
     // ("   **Decided: not now.**"), a blockquote (0015 writes both of its
     // deferrals as one), or a table cell (0012 and 0020 write theirs there).
-    const m = /\*\*(Deferred[^*]*|Decided:[ \t]*not now[^*]*)\*\*/.exec(line);
+    const m = DEFERRAL_LEAD.exec(line);
     if (!m) continue;
-    const lead = m[1].replace(/[:,.\s]+$/, "").trim();
-    // What follows the lead on the same line is the argument's first clause;
-    // a lead that ends its line (0015's blockquotes) has its sentence on the
-    // next one, which the caller does not need — the lead names the choice.
-    // These documents wrap at 80 columns, so the argument runs past the line
-    // the lead is on. The claim is the rest of the *paragraph* — up to a blank
-    // line — cut at its first sentence, which is where these leads put the
-    // decision itself and the rest puts the reasoning.
-    let rest = line.slice(m.index + m[0].length);
-    if (!/^\|/.test(line)) {
-      for (let j = i + 1; j < lines.length && lines[j].trim() !== ""; j++) {
-        if (/^#{2,4}[ \t]/.test(lines[j])) break;
-        // The *next* deferral ends this one. A markdown list writes its items
-        // on adjacent lines with no blank between them, so without this a
-        // second `**Decided: not now.**` item is swallowed into the first
-        // one's claim and then reported again on its own — the same argument
-        // printed twice, once with somebody else's sentence attached.
-        if (/\*\*(Deferred[^*]*|Decided:[ \t]*not now[^*]*)\*\*/.test(lines[j])) break;
-        // Two of these are written as blockquotes (0015): the `>` markers are
-        // the quoting, not the sentence.
-        rest += ` ${lines[j].replace(/^[ \t>]+/, "")}`;
-      }
-    }
-    rest = rest
-      .replace(/^[\s:—-]+/, "")
-      .replace(/\s*\|\s*$/, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    // Whether the deferral says what would undo it is a property of the whole
-    // argument, not of its first sentence: these paragraphs put the decision
-    // first and the reopen condition last.
-    const reopens = /\breopen(s|ed|ing)?\b|\bwhen (one|someone|an? \w+) (does|asks|wants)\b/i.test(rest);
-    // The first sentence end that leaves a sentence behind. A cut at the
-    // first `. ` alone gives "(§7.2)." for 0012, whose lead ends in a
-    // cross-reference — true, and useless in a listing.
-    for (const stop of rest.matchAll(/(?<!\b[A-Z])(?<!§\d)\.[ \t]/g)) {
-      if (stop.index >= 40) {
-        rest = rest.slice(0, stop.index + 1);
-        break;
-      }
-    }
+    const claim = claimAfter(lines, i, m);
     // A table row starts with `| <id> |`: that first cell is the question's
     // own number (O7, 10), which is a better location than the section.
-    const cell = /^\|[ \t]*([A-Za-z]?\d+)[ \t]*\|/.exec(line);
+    const cell = ROW_ID.exec(line);
     out.push({
-      lead,
+      lead: trimEndOf(m[1], ":,. \t").trim(),
       where: cell ? `${heading} (${cell[1]})` : heading,
-      claim: rest,
+      claim: firstSentence(claim),
       // A deferral that says what would undo it is a decision; one that does
-      // not is a wish. The report says which, and does not judge.
-      reopens,
+      // not is a wish. The report says which, and does not judge. Whether it
+      // does is a property of the whole argument, not of its first sentence:
+      // these paragraphs put the decision first and the reopen condition last.
+      reopens: REOPENS.test(claim),
     });
   }
   return out;

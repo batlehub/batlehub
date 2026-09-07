@@ -27,7 +27,7 @@ ARG TRIVY_VERSION=0.74.0
 FROM rust:1.98-slim-bookworm@sha256:1469a27c125cb5a3aebfa4f4e4665d935b02fb72cc093b2c974b3d740e43f157 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config libssl-dev curl make \
+    curl libssl-dev make pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -41,33 +41,45 @@ COPY server/Cargo.toml             server/Cargo.toml
 COPY cli/Cargo.toml                cli/Cargo.toml
 COPY patches/ patches/
 RUN for crate in crates/core crates/config crates/adapters crates/web; do \
-    mkdir -p $crate/src && echo "pub fn _stub() {}" > $crate/src/lib.rs; \
+    mkdir -p "$crate/src" && echo "pub fn _stub() {}" > "$crate/src/lib.rs"; \
     done && \
     mkdir -p crates/examples/src && echo "pub fn _stub() {}" > crates/examples/src/lib.rs && \
     mkdir -p server/src && echo "fn main() {}" > server/src/main.rs && \
     mkdir -p cli/src    && echo "fn main() {}" > cli/src/main.rs
-RUN cargo build --release -p batlehub-server 2>/dev/null; exit 0
+RUN cargo build --locked --release -p batlehub-server 2>/dev/null; exit 0
 COPY crates/ crates/
 COPY server/ server/
 COPY cli/ cli/
 RUN touch crates/*/src/lib.rs server/src/main.rs cli/src/main.rs && \
-    cargo build --release -p batlehub-server
+    cargo build --locked --release -p batlehub-server
 
 # ── Scanner toolchains ───────────────────────────────────────────────────────
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS tools
 ARG POSTMORTEM_VERSION
 ARG TRIVY_VERSION
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates tar gzip \
+    ca-certificates curl gzip tar \
     && rm -rf /var/lib/apt/lists/*
 # postmortem: the release binary (the asset names are the ones the project
 # publishes: `postmortem-<version>-x86_64-unknown-linux-gnu.tar.gz`).
-RUN mkdir -p /tmp/pm && curl -fsSL "https://github.com/mlab-sh/postmortem/releases/download/v${POSTMORTEM_VERSION}/postmortem-${POSTMORTEM_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
-    | tar -xz -C /tmp/pm && install -m 0755 "$(find /tmp/pm -type f -name postmortem | head -1)" /usr/local/bin/postmortem && rm -rf /tmp/pm
+# `--proto '=https' --proto-redir '=https'`: the release host answers with a
+# redirect to its object store, and neither hop may be talked out of TLS.
+RUN releases="https://github.com/mlab-sh/postmortem/releases/download" \
+    && mkdir -p /tmp/pm \
+    && curl -fsSL --proto '=https' --proto-redir '=https' \
+        "$releases/v${POSTMORTEM_VERSION}/postmortem-${POSTMORTEM_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+    | tar -xz -C /tmp/pm \
+    && install -m 0755 "$(find /tmp/pm -type f -name postmortem | head -1)" /usr/local/bin/postmortem \
+    && rm -rf /tmp/pm
 # Trivy: the client; the database lives on the Trivy server the chart deploys
 # (`[scanners.trivy] endpoint`), or is downloaded on first use.
-RUN mkdir -p /tmp/tv && curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
-    | tar -xz -C /tmp/tv && install -m 0755 "$(find /tmp/tv -type f -name trivy | head -1)" /usr/local/bin/trivy && rm -rf /tmp/tv
+RUN releases="https://github.com/aquasecurity/trivy/releases/download" \
+    && mkdir -p /tmp/tv \
+    && curl -fsSL --proto '=https' --proto-redir '=https' \
+        "$releases/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+    | tar -xz -C /tmp/tv \
+    && install -m 0755 "$(find /tmp/tv -type f -name trivy | head -1)" /usr/local/bin/trivy \
+    && rm -rf /tmp/tv
 
 # ── Runtime image ─────────────────────────────────────────────────────────────
 # Debian rather than distroless: `bwrap` needs a userland, and the GuardDog

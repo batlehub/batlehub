@@ -270,7 +270,7 @@ try {
     // whether the workbench *paints* a cross-origin icon is its CSP's decision
     // and the suite reports that rather than requiring it.
     const drawn = await settle(page, (r) => mine(r)
-      && r.every((x) => !x.icon || !x.icon.src || x.icon.naturalWidth > 0), 15000);
+      && r.every((x) => !x.icon?.src || x.icon.naturalWidth > 0), 15000);
     if (drawn.length && mine(drawn)) entries = drawn;
     await snap(page, "icon");
     emit({ phase: "icon", entries, iconTraffic });

@@ -261,8 +261,12 @@ function cmdDeferred({ json }) {
   console.log("Deferred — decided, and not now\n");
   for (const d of deferred) {
     const name = d.lead.replace(/^Deferred[^:]*:[ \t]*/, "").replace(/^Deferred\b[, ]*/, "");
+    // `trimEnd` rather than `/\s+$/`, which is retried from every position in
+    // the line; the nested template it used to interpolate is a `lead` of its
+    // own for the same reason a reader would ask for one.
+    const lead = name ? `${name} — ` : "";
     console.log(`${d.rfc.padEnd(9)}${d.where}`);
-    console.log(`         ${name ? `${name} — ` : ""}${d.claim}`.replace(/\s+$/, ""));
+    console.log(`         ${lead}${d.claim}`.trimEnd());
     if (!d.reopens) console.log("         (no reopen condition recorded)");
     console.log();
   }

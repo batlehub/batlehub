@@ -175,59 +175,20 @@ pub async fn explore_upstream_search(
         "upstream search: resolving clients"
     );
 
-    // Collect registry clients to search (snapshot from hot config)
-    let clients_to_search: Vec<(String, Arc<dyn batlehub_core::ports::RegistryClient>)> = {
-        let hot = proxy_svc.hot.read().await;
-        hot.registries
-            .iter()
-            .filter(|(name, _)| {
-                if let Some(ref reg) = query.registry {
-                    name.as_str() == reg && accessible.contains(name.as_str())
-                } else {
-                    accessible.contains(name.as_str())
-                }
-            })
-            .map(|(name, client)| (name.clone(), Arc::clone(client)))
-            .collect()
-    };
+    let clients_to_search =
+        search_clients(&proxy_svc, &accessible, query.registry.as_deref()).await;
 
     tracing::info!(
         clients = ?clients_to_search.iter().map(|(n, _)| n).collect::<Vec<_>>(),
         "upstream search: clients selected"
     );
 
-    // Fan out search across all matching registry clients concurrently
-    let search_futures: Vec<_> = clients_to_search
-        .iter()
-        .map(|(reg_name, client)| {
-            let reg = reg_name.clone();
-            let q = query.name.clone();
-            let lim = query.limit.min(MAX_UPSTREAM_SEARCH_LIMIT);
-            let client = Arc::clone(client);
-            async move {
-                let results = match client.search_packages(&q, lim).await {
-                    Ok(r) => {
-                        tracing::info!(registry = %reg, count = r.len(), "upstream search: got results");
-                        r
-                    }
-                    Err(e) => {
-                        tracing::warn!(registry = %reg, error = %e, "upstream search: client error");
-                        vec![]
-                    }
-                };
-                results
-                    .into_iter()
-                    .map(move |p| (reg.clone(), p))
-                    .collect::<Vec<_>>()
-            }
-        })
-        .collect();
-
-    let hits: Vec<_> = futures::future::join_all(search_futures)
-        .await
-        .into_iter()
-        .flatten()
-        .collect();
+    let hits = search_upstreams(
+        &clients_to_search,
+        &query.name,
+        query.limit.min(MAX_UPSTREAM_SEARCH_LIMIT),
+    )
+    .await;
 
     // Which of those we already hold, asked **by the names that came back**.
     //
@@ -245,44 +206,7 @@ pub async fn explore_upstream_search(
     // goes through the same visibility gate as before: marking a package the
     // caller may not see as "already cached" would disclose its existence just
     // as surely as listing it.
-    //
-    // Asked in **both** spellings, and answered against the canonical one.
-    // Three kinds hold a package under a name their own search does not return:
-    // NuGet's search says `Newtonsoft.Json` where `dotnet restore` stored
-    // `newtonsoft.json`, PyPI's says `Pillow` where the simple index stored
-    // `pillow`, and pkg.go.dev says `github.com/BurntSushi/toml` where the `go`
-    // client stored `github.com/!burnt!sushi/toml`. Comparing the two
-    // spellings exactly is §14.11's symptom surviving in exactly the
-    // ecosystems that spell a name two ways: the row reports
-    // `already_cached: false` for a package the instance holds, and the Fetch
-    // button beside it answers `409 fetch.already-held`.
-    //
-    // `RegistryKind::canonical_package_name` is the read path's own rule — the
-    // NuGet and PyPI adapters' normalisers now delegate to it — so the flag
-    // agrees with what the package manager will actually find. The raw
-    // spelling is asked for as well, and dropped when it is the canonical one:
-    // `name_in` is an exact match, so a row stored before its handler
-    // normalised (or by a kind whose upstream is looser than its read path)
-    // would otherwise go unseen. At most two coordinates per hit, and the
-    // canonical comparison below credits either.
-    let canonical = |registry: &str, name: &str| -> String {
-        registry_map
-            .type_of(registry)
-            .and_then(|t| t.parse::<batlehub_core::entities::RegistryKind>().ok())
-            .map(|kind| kind.canonical_package_name(name).into_owned())
-            .unwrap_or_else(|| name.to_string())
-    };
-    let mut asked: Vec<(String, String)> = Vec::with_capacity(hits.len());
-    let mut asked_seen: std::collections::HashSet<(String, String)> =
-        std::collections::HashSet::new();
-    for (reg, pkg) in &hits {
-        for spelling in [canonical(reg, &pkg.name), pkg.name.clone()] {
-            let coordinate = (reg.clone(), spelling);
-            if asked_seen.insert(coordinate.clone()) {
-                asked.push(coordinate);
-            }
-        }
-    }
+    let asked = asked_coordinates(&registry_map, &hits);
     let known_filter = ExploreFilter {
         registry: query.registry.clone(),
         registries: if query.registry.is_none() {
@@ -305,60 +229,20 @@ pub async fn explore_upstream_search(
         offset: 0,
         viewer: crate::handlers::explore_viewer_for(&identity),
     };
-    // Nothing came back, so there is nothing to ask about — and an empty
-    // `name_in` is "no restriction", which would fetch the whole catalogue to
-    // annotate zero rows.
-    //
-    // **Uncached**, and deliberately: `explore_packages` writes every answer to
-    // the ten-minute explore cache, which frees entries only on an explicit
-    // invalidation, and this filter's key carries the exact set of names a
-    // third-party relevance search happened to return. Two such keys match only
-    // if the upstream answered identically for the same viewer, so the entry
-    // would be written, never read and never freed — a caller varying `name`
-    // would grow the map for nothing. `explore_packages_uncached` says the rest.
-    //
-    // A repository error leaves the set empty rather than failing the search:
-    // the third-party hits are what the reader asked for and the flag only
-    // decorates them, and the safe direction is the conservative one — a Fetch
-    // button offered on a package the instance already holds answers
-    // `409 fetch.already-held`, where a button withheld hides a fetch that
-    // would have worked.
-    let known_set: std::collections::HashSet<(String, String)> = if known_filter.name_in.is_empty()
-    {
-        std::collections::HashSet::new()
-    } else {
-        admin_svc
-            .explore_packages_uncached(known_filter)
-            .await
-            .inspect_err(|e| {
-                tracing::warn!(error = %e, "upstream search: the held-set lookup failed; every row will say it is not held");
-            })
-            .unwrap_or_default()
-            .iter()
-            .map(|e| (e.registry.clone(), canonical(&e.registry, &e.name)))
-            .collect()
-    };
+    let known_set = held_set(&admin_svc, &registry_map, known_filter).await;
 
     let results: Vec<_> = hits
         .into_iter()
         .map(|(registry, pkg)| {
-            let already_cached =
-                known_set.contains(&(registry.clone(), canonical(&registry, &pkg.name)));
+            let already_cached = known_set.contains(&(
+                registry.clone(),
+                canonical_name(&registry_map, &registry, &pkg.name),
+            ));
             (registry, pkg, already_cached)
         })
         .collect();
 
-    // One answer per registry, not per row: `fetch_offer` takes the hot-config
-    // read lock, and a page of fifty hits from one registry would otherwise take
-    // it fifty times to compute the same thing.
-    let mut offers: std::collections::HashMap<String, FetchOfferDto> =
-        std::collections::HashMap::new();
-    for (registry, ..) in &results {
-        if !offers.contains_key(registry) {
-            let offer = super::fetch::fetch_offer(&hot, &registry_map, registry, &identity.0).await;
-            offers.insert(registry.clone(), offer);
-        }
-    }
+    let offers = fetch_offers(&hot, &registry_map, &identity.0, &results).await;
 
     let items = results
         .into_iter()
@@ -379,4 +263,178 @@ pub async fn explore_upstream_search(
         .collect();
 
     Ok(web::Json(UpstreamSearchResponse { items }))
+}
+
+/// The clients the search fans out to: a snapshot of the hot config's
+/// registries, kept to the ones this caller may browse and, when they named
+/// one, to that one.
+///
+/// A snapshot rather than a held lock: the search below awaits an upstream per
+/// client, and holding the hot-config read lock across those would block a
+/// reload for as long as the slowest registry takes to answer.
+async fn search_clients(
+    proxy_svc: &ProxyService,
+    accessible: &std::collections::HashSet<String>,
+    only: Option<&str>,
+) -> Vec<(String, Arc<dyn batlehub_core::ports::RegistryClient>)> {
+    let hot = proxy_svc.hot.read().await;
+    hot.registries
+        .iter()
+        .filter(|(name, _)| {
+            accessible.contains(name.as_str()) && only.is_none_or(|reg| name.as_str() == reg)
+        })
+        .map(|(name, client)| (name.clone(), Arc::clone(client)))
+        .collect()
+}
+
+/// Every hit from every client, searched concurrently and tagged with the
+/// registry it came from.
+///
+/// A client that errors contributes nothing rather than failing the whole
+/// search: one unreachable upstream would otherwise empty a page the other
+/// registries could have filled.
+async fn search_upstreams(
+    clients: &[(String, Arc<dyn batlehub_core::ports::RegistryClient>)],
+    name: &str,
+    limit: usize,
+) -> Vec<(String, batlehub_core::ports::UpstreamPackage)> {
+    let searches = clients.iter().map(|(reg_name, client)| {
+        let reg = reg_name.clone();
+        let q = name.to_owned();
+        let client = Arc::clone(client);
+        async move {
+            let results = match client.search_packages(&q, limit).await {
+                Ok(r) => {
+                    tracing::info!(registry = %reg, count = r.len(), "upstream search: got results");
+                    r
+                }
+                Err(e) => {
+                    tracing::warn!(registry = %reg, error = %e, "upstream search: client error");
+                    vec![]
+                }
+            };
+            results
+                .into_iter()
+                .map(move |p| (reg.clone(), p))
+                .collect::<Vec<_>>()
+        }
+    });
+
+    futures::future::join_all(searches)
+        .await
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// The name the read path stores this package under, for the registry's kind.
+///
+/// `RegistryKind::canonical_package_name` is that read path's own rule — the
+/// NuGet and PyPI adapters' normalisers delegate to it — so a flag computed
+/// from it agrees with what the package manager will actually find.
+fn canonical_name(registry_map: &crate::RegistryMap, registry: &str, name: &str) -> String {
+    registry_map
+        .type_of(registry)
+        .and_then(|t| t.parse::<batlehub_core::entities::RegistryKind>().ok())
+        .map(|kind| kind.canonical_package_name(name).into_owned())
+        .unwrap_or_else(|| name.to_string())
+}
+
+/// The `(registry, name)` coordinates the held-set lookup asks about, in both
+/// spellings and without repeats.
+///
+/// Three kinds hold a package under a name their own search does not return:
+/// NuGet's search says `Newtonsoft.Json` where `dotnet restore` stored
+/// `newtonsoft.json`, PyPI's says `Pillow` where the simple index stored
+/// `pillow`, and pkg.go.dev says `github.com/BurntSushi/toml` where the `go`
+/// client stored `github.com/!burnt!sushi/toml`. Comparing the two spellings
+/// exactly is §14.11's symptom surviving in exactly the ecosystems that spell
+/// a name two ways: the row reports `already_cached: false` for a package the
+/// instance holds, and the Fetch button beside it answers
+/// `409 fetch.already-held`.
+///
+/// The raw spelling is asked for as well, and dropped when it is the canonical
+/// one: `name_in` is an exact match, so a row stored before its handler
+/// normalised (or by a kind whose upstream is looser than its read path) would
+/// otherwise go unseen. At most two coordinates per hit, and the canonical
+/// comparison in the caller credits either.
+fn asked_coordinates(
+    registry_map: &crate::RegistryMap,
+    hits: &[(String, batlehub_core::ports::UpstreamPackage)],
+) -> Vec<(String, String)> {
+    let mut asked: Vec<(String, String)> = Vec::with_capacity(hits.len());
+    let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    for (reg, pkg) in hits {
+        for spelling in [
+            canonical_name(registry_map, reg, &pkg.name),
+            pkg.name.clone(),
+        ] {
+            let coordinate = (reg.clone(), spelling);
+            if seen.insert(coordinate.clone()) {
+                asked.push(coordinate);
+            }
+        }
+    }
+    asked
+}
+
+/// Which of the asked coordinates this instance already holds, by canonical
+/// name.
+///
+/// Nothing came back, so there is nothing to ask about — and an empty
+/// `name_in` is "no restriction", which would fetch the whole catalogue to
+/// annotate zero rows.
+///
+/// **Uncached**, and deliberately: `explore_packages` writes every answer to
+/// the ten-minute explore cache, which frees entries only on an explicit
+/// invalidation, and this filter's key carries the exact set of names a
+/// third-party relevance search happened to return. Two such keys match only
+/// if the upstream answered identically for the same viewer, so the entry
+/// would be written, never read and never freed — a caller varying `name`
+/// would grow the map for nothing. `explore_packages_uncached` says the rest.
+///
+/// A repository error leaves the set empty rather than failing the search: the
+/// third-party hits are what the reader asked for and the flag only decorates
+/// them, and the safe direction is the conservative one — a Fetch button
+/// offered on a package the instance already holds answers
+/// `409 fetch.already-held`, where a button withheld hides a fetch that would
+/// have worked.
+async fn held_set(
+    admin_svc: &AdminService,
+    registry_map: &crate::RegistryMap,
+    filter: ExploreFilter,
+) -> std::collections::HashSet<(String, String)> {
+    if filter.name_in.is_empty() {
+        return std::collections::HashSet::new();
+    }
+    admin_svc
+        .explore_packages_uncached(filter)
+        .await
+        .inspect_err(|e| {
+            tracing::warn!(error = %e, "upstream search: the held-set lookup failed; every row will say it is not held");
+        })
+        .unwrap_or_default()
+        .iter()
+        .map(|e| (e.registry.clone(), canonical_name(registry_map, &e.registry, &e.name)))
+        .collect()
+}
+
+/// One offer per registry, not per row: `fetch_offer` takes the hot-config
+/// read lock, and a page of fifty hits from one registry would otherwise take
+/// it fifty times to compute the same thing.
+async fn fetch_offers(
+    hot: &batlehub_core::services::hot_config::HotConfigLock,
+    registry_map: &crate::RegistryMap,
+    identity: &batlehub_core::entities::Identity,
+    results: &[(String, batlehub_core::ports::UpstreamPackage, bool)],
+) -> std::collections::HashMap<String, FetchOfferDto> {
+    let mut offers: std::collections::HashMap<String, FetchOfferDto> =
+        std::collections::HashMap::new();
+    for (registry, ..) in results {
+        if !offers.contains_key(registry) {
+            let offer = super::fetch::fetch_offer(hot, registry_map, registry, identity).await;
+            offers.insert(registry.clone(), offer);
+        }
+    }
+    offers
 }
