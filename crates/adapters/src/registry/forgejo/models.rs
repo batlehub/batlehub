@@ -11,6 +11,14 @@ pub(super) struct FjRelease {
     pub id: u64,
     pub tag_name: String,
     pub published_at: Option<String>,
+    /// Not published, and never imported (RFC 0021 §4.2). Defaulted for the
+    /// same reason GitHub's is: a strict model must not fail a decode over a
+    /// flag an older Gitea does not send.
+    #[serde(default)]
+    pub draft: bool,
+    /// Published and marked as not the default download.
+    #[serde(default)]
+    pub prerelease: bool,
     #[serde(default)]
     pub assets: Vec<FjAsset>,
 }

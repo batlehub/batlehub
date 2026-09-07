@@ -19,6 +19,7 @@ use batlehub_core::services::{
     ProxyService, QuotaService, SbomService,
 };
 use batlehub_web::handlers::back_office::ops::eviction::EvictionServiceMap;
+use batlehub_web::handlers::back_office::ops::release_import::ReleaseImportMap;
 use batlehub_web::handlers::back_office::ops::warming::WarmingServiceMap;
 use batlehub_web::services::{BannerService, ConfigReloadService, NotificationService};
 use batlehub_web::{
@@ -164,6 +165,8 @@ pub(super) struct ServerParams {
     /// One-time store for in-flight OIDC authorization requests.
     pub login_states: Arc<dyn batlehub_core::ports::LoginStateStore>,
     pub warming_map: WarmingServiceMap,
+    /// Target registry → the imports configured into it (RFC 0021).
+    pub release_imports: ReleaseImportMap,
     pub eviction_map: EvictionServiceMap,
     pub proxy_metrics: Arc<ProxyMetrics>,
     /// `None` when `[stats] metrics_enabled = false`: the recorder is never
@@ -236,6 +239,7 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
         oidc_provider_names,
         login_states,
         warming_map,
+        release_imports,
         eviction_map,
         proxy_metrics,
         prometheus_handle,
@@ -289,6 +293,7 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
             oidc_provider_names.clone(),
             Arc::clone(&login_states),
             warming_map.clone(),
+            release_imports.clone(),
             eviction_map.clone(),
             Arc::clone(&proxy_metrics),
             prometheus_handle.clone(),

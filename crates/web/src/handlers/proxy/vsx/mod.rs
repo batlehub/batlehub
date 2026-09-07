@@ -42,6 +42,7 @@ pub mod api;
 pub mod archive;
 pub mod assets;
 pub mod gallery;
+pub mod import;
 pub mod protocol;
 pub mod render;
 pub mod signing;

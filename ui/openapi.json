@@ -3367,6 +3367,59 @@
         ]
       }
     },
+    "/api/v1/admin/registries/{registry}/import": {
+      "post": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "Import a forge release into this registry now.",
+        "operationId": "import_registry",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "The registry imported into",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Import run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cache:warm` required"
+          },
+          "404": {
+            "description": "No import is configured into this registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/registries/{registry}/namespaces": {
       "get": {
         "tags": [
@@ -20679,6 +20732,76 @@
           "released",
           "always"
         ]
+      },
+      "ImportFailureDto": {
+        "type": "object",
+        "description": "One asset that did not import, named rather than counted.",
+        "required": [
+          "tag",
+          "asset",
+          "error"
+        ],
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "tag": {
+            "type": "string"
+          }
+        }
+      },
+      "ImportRequest": {
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Only run the imports whose `repo` is this one. Absent: every import\nconfigured into the registry."
+          },
+          "tag": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Import this tag instead of what the configuration selects. The only way\nto reach a pre-release deliberately: `latest` will not choose one."
+          }
+        }
+      },
+      "ImportResponse": {
+        "type": "object",
+        "required": [
+          "imported",
+          "skipped",
+          "errors",
+          "failures"
+        ],
+        "properties": {
+          "errors": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "failures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportFailureDto"
+            }
+          },
+          "imported": {
+            "type": "integer",
+            "description": "Assets fetched and published.",
+            "minimum": 0
+          },
+          "skipped": {
+            "type": "integer",
+            "description": "Assets whose version this registry already holds. Not an error: it is\nwhat makes a scheduled import free to re-run.",
+            "minimum": 0
+          }
+        }
       },
       "InboundEventsResponse": {
         "type": "object",

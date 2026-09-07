@@ -83,6 +83,64 @@ pub(super) fn spawn_startup_warming(config: &AppConfig, warming_map: &WarmingSer
     }
 }
 
+// ── Periodic release import ─────────────────────────────────────────────────
+
+/// One task per `[[release_imports]]` that declares an `interval_secs`
+/// (RFC 0021 §6.4).
+///
+/// The first run is immediate: an operator who has just written the block and
+/// restarted wants the extension to be there, not to be there in an hour. Every
+/// run after that is free when nothing has been released — a version the target
+/// already holds is skipped, and for a kind whose coordinate is in the asset
+/// name nothing is even downloaded.
+///
+/// Detached, like the startup warming above: an import that cannot reach its
+/// forge must not stop the server from serving what it already holds.
+pub(super) fn spawn_release_imports(
+    config: &AppConfig,
+    imports: &batlehub_web::handlers::back_office::ops::release_import::ReleaseImportMap,
+) {
+    for imp in &config.release_imports {
+        let Some(secs) = imp.interval_secs.filter(|s| *s > 0) else {
+            continue;
+        };
+        let Some(svc) = imports
+            .get(&imp.into)
+            .and_then(|v| v.iter().find(|s| s.repo == imp.repo))
+            .cloned()
+        else {
+            continue;
+        };
+        let (into, repo) = (imp.into.clone(), imp.repo.clone());
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(secs));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                let report = svc.import().await;
+                // Logged at info even when nothing happened: "the import ran
+                // and found nothing new" and "the import has not run" are the
+                // two states an operator needs to tell apart, and only one of
+                // them is a problem.
+                tracing::info!(
+                    registry = %into, repo = %repo,
+                    imported = report.imported,
+                    skipped = report.skipped,
+                    errors = report.errors,
+                    "release import: scheduled run complete"
+                );
+                for failure in &report.failures {
+                    tracing::warn!(
+                        registry = %into, repo = %repo,
+                        tag = %failure.tag, asset = %failure.asset, error = %failure.error,
+                        "release import: asset did not import"
+                    );
+                }
+            }
+        });
+    }
+}
+
 // ── Periodic vulnerability scan ─────────────────────────────────────────────────
 
 /// Spawn a background task that re-checks all cached SBOMs against the OSV

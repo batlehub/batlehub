@@ -21,6 +21,7 @@ pub mod proxy;
 pub mod pullers;
 pub mod quota;
 pub mod readme;
+pub mod release_import;
 pub mod rescan;
 pub mod retention;
 pub mod sbom;
@@ -76,6 +77,11 @@ pub use quota::{
     RegistryQuotaStatus,
 };
 pub use readme::{truncate_to, ReadmeCapture, ReadmeService, RecordOutcome};
+pub use release_import::{
+    coordinate_from_filename, CoordinateReader, FilenameCoordinate, FilenameCoordinates,
+    ImportFailure, ImportPrincipal, ImportReport, PostPublish, ReleaseImportService,
+    ReleaseSelector, CONFIG_GROUP_PREFIX,
+};
 pub use rescan::{RescanReport, RescanScheduler, RESCAN_LEADER_KEY, RESCAN_TICK};
 pub use retention::{
     KeepReason, RetentionDecision, RetentionPolicy as RetentionRunPolicy, RetentionReport,

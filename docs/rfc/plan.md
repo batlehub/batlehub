@@ -120,6 +120,13 @@ and against `task rfc:status`.
   Proven the way everything else here is: a real VS Code 1.136.1 web build
   driven in a browser over CDP, both modes, against a real BatleHub. Left:
   a release of that repository, and deciding whether this instance hosts it.
+  **How it would host it is now written down**, 2026-09-07, as
+  [RFC 0021](/rfc/0021-forge-releases-into-registries): the release asset is
+  imported into a local `openvsx` registry through the publish path, so the
+  entry is signed, scanned and audited like any other version. Draft, six open
+  questions, phase 1 useful alone. Warming cannot do this and never could —
+  it pulls through the target registry's own client, which for a gallery is
+  open-vsx.org.
   Building it also found and fixed a defect in this repository's CLI: the
   contract file is keyed by origin, and `contract::normalize_origin` only
   trimmed a trailing slash, so `proxy serve` looked its entry up under the

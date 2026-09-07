@@ -4036,3 +4036,176 @@ fn vsx_signing_on_a_proxy_registry_warns_and_is_not_an_error() {
     assert_eq!(w.path, "registries[0].vsx_signing");
     assert!(w.message.contains("relayed"), "{}", w.message);
 }
+
+// ── Release imports (RFC 0021) ────────────────────────────────────────────────
+
+/// A config with one working import, plus whatever `extra` overrides.
+fn import_config(import: &str) -> String {
+    format!(
+        r#"
+        [[registries]]
+        type = "openvsx"
+        name = "vsx"
+        upstream_url = "https://open-vsx.org"
+        mode = "local"
+
+        [[registries]]
+        type = "github"
+        name = "gh"
+        upstream_url = "https://api.github.com"
+
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        upstream_url = "https://registry.npmjs.org"
+
+{import}
+        "#
+    )
+}
+
+const GOOD_IMPORT: &str = r#"
+        [[release_imports]]
+        into = "vsx"
+        from = "gh"
+        repo = "acme/ext"
+        assets = ["*.vsix"]
+
+        [release_imports.as]
+        user_id = "svc-import"
+        groups = ["config:publishers"]
+"#;
+
+#[test]
+fn a_release_import_of_a_forge_into_a_local_registry_loads() {
+    let cfg = parse_config(&import_config(GOOD_IMPORT));
+    cfg.validate().expect("the worked example loads");
+    assert_eq!(cfg.release_imports.len(), 1);
+    assert_eq!(cfg.release_imports[0].releases, "latest", "the default");
+    assert!(cfg.release_imports[0].interval_secs.is_none());
+}
+
+/// An import is a publish, and a publish into a proxy-mode registry is a 404 at
+/// request time. Refusing at load is the same answer a day earlier.
+#[test]
+fn an_import_into_a_proxy_mode_registry_is_refused() {
+    let err = validation_error(
+        &import_config(&GOOD_IMPORT.replace(r#"into = "vsx""#, r#"into = "npm""#)),
+        "an import into a proxy-mode registry must not load",
+    );
+    assert!(err.contains("proxy-mode"), "{err}");
+}
+
+/// Only three registry kinds serve releases.
+#[test]
+fn an_import_from_something_that_is_not_a_forge_is_refused() {
+    let err = validation_error(
+        &import_config(&GOOD_IMPORT.replace(r#"from = "gh""#, r#"from = "npm""#)),
+        "an import from a package registry must not load",
+    );
+    assert!(err.contains("serve releases"), "{err}");
+}
+
+/// "Every asset" is never what an operator means: a release's checksums and
+/// source tarballs would be published as packages.
+#[test]
+fn an_import_with_no_asset_glob_is_refused() {
+    let err = validation_error(
+        &import_config(&GOOD_IMPORT.replace(r#"assets = ["*.vsix"]"#, "assets = []")),
+        "an import with no globs must not load",
+    );
+    assert!(err.contains("assets is empty"), "{err}");
+}
+
+/// The two rules that do not fail at run time — they *succeed*, at something
+/// wider than the operator asked for. An admin skips the namespace-membership
+/// check outright, and a bare group is indistinguishable from one an identity
+/// provider minted.
+#[test]
+fn a_principal_that_would_widen_silently_is_refused_at_load() {
+    let admin_id = GOOD_IMPORT.replace(r#"user_id = "svc-import""#, r#"user_id = "root""#);
+    let err = validation_error(
+        &format!(
+            r#"
+        [[auth]]
+        type = "token"
+
+        [[auth.tokens]]
+        value = "t"
+        role = "admin"
+        user_id = "root"
+{}"#,
+            import_config(&admin_id)
+        ),
+        "an import running as an admin token must not load",
+    );
+    assert!(err.contains("namespace"), "{err}");
+
+    let bare_group = GOOD_IMPORT.replace(r#"["config:publishers"]"#, r#"["publishers"]"#);
+    let err = validation_error(
+        &import_config(&bare_group),
+        "an unprefixed group must not load",
+    );
+    assert!(err.contains("config:"), "{err}");
+
+    let system = GOOD_IMPORT.replace(r#"user_id = "svc-import""#, r#"user_id = "system""#);
+    let err = validation_error(&import_config(&system), "the reserved id must not load");
+    assert!(err.contains("reserved"), "{err}");
+}
+
+/// The floor is per source registry: the forge's rate limit is spent by the
+/// credential, which belongs to the source and not to any one import.
+#[test]
+fn the_polling_floor_counts_the_imports_that_share_a_source() {
+    let two_per_source = r#"
+        [[release_imports]]
+        into = "vsx"
+        from = "gh"
+        repo = "acme/one"
+        assets = ["*.vsix"]
+        interval_secs = 360
+
+        [release_imports.as]
+        user_id = "svc-import"
+
+        [[release_imports]]
+        into = "vsx"
+        from = "gh"
+        repo = "acme/two"
+        assets = ["*.vsix"]
+        interval_secs = 360
+
+        [release_imports.as]
+        user_id = "svc-import"
+"#;
+    let err = validation_error(
+        &import_config(two_per_source),
+        "two imports over the combined floor must not load",
+    );
+    assert!(err.contains("combined rate"), "{err}");
+
+    // Each one alone is comfortably inside it.
+    let one = two_per_source
+        .split("        [[release_imports]]")
+        .nth(1)
+        .map(|s| format!("        [[release_imports]]{s}"))
+        .unwrap();
+    parse_config(&import_config(&one))
+        .validate()
+        .expect("one import at that interval is fine");
+}
+
+/// A gallery target with no signing key imports extensions a current editor
+/// will not install. Not an error — the import works, the entry arrives — so it
+/// is a warning, at load, where an operator is looking.
+#[test]
+fn an_unsigned_gallery_target_warns() {
+    let cfg = parse_config(&import_config(GOOD_IMPORT));
+    cfg.validate().expect("loads");
+    let warnings = cfg.warnings();
+    let codes: Vec<&str> = warnings.iter().map(|w| w.code.as_str()).collect();
+    assert!(
+        codes.contains(&crate::schema::warnings::RELEASE_IMPORT_UNSIGNED_GALLERY),
+        "{codes:?}"
+    );
+}

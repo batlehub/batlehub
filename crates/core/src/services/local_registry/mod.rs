@@ -276,6 +276,9 @@ pub fn terraform_provider_binary_storage_key(
 }
 
 #[cfg(test)]
+pub(crate) mod test_support;
+
+#[cfg(test)]
 mod tests;
 
 /// Returns `true` when `version` is a pre-release.

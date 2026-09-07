@@ -7,6 +7,18 @@ pub(super) struct GhRelease {
     pub id: u64,
     pub tag_name: String,
     pub published_at: Option<String>,
+    /// Not published: visible only to those who can edit the repository, and
+    /// never imported (RFC 0021 §4.2). `#[serde(default)]` because the field is
+    /// absent from a release object embedded elsewhere, and a missing flag must
+    /// read as "not a draft" rather than fail the whole decode — this model is
+    /// strict, and a required field it did not need has broken a real client
+    /// before.
+    #[serde(default)]
+    pub draft: bool,
+    /// Published and marked as not the default download. `latest` skips it;
+    /// a tag or `releases = "all"` reaches it.
+    #[serde(default)]
+    pub prerelease: bool,
     pub assets: Vec<GhAsset>,
 }
 

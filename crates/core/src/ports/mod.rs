@@ -43,8 +43,9 @@ pub use ops::{
 pub use readme::{ReadmeImageFetcher, ReadmeRepository, ReadmeSearchHit};
 pub use registry::{
     ArtifactCacheMeta, ArtifactInventory, ArtifactMeta, ArtifactMetaRecord, ArtifactMetaRepository,
-    ArtifactStream, BulkResult, DocumentBody, DocumentKind, FetchedArtifact, LocalRegistryBackend,
-    PackageRepository, RecentErrorRecord, RegistryClient, UpstreamPackage, VersionDocument,
+    ArtifactStream, BulkResult, DocumentBody, DocumentKind, FetchedArtifact, ForgeAsset,
+    ForgeRelease, ForgeReleaseSource, LocalRegistryBackend, PackageRepository, RecentErrorRecord,
+    RegistryClient, UpstreamPackage, VersionDocument,
 };
 pub use sbom::{
     ExtractedManifest, ExtractedReadme, SbomDependency, SbomExtractor, SbomRepository,

@@ -21,8 +21,9 @@ use batlehub_core::{
     },
     error::CoreError,
     ports::{
-        BudgetRole, DocumentKind, FetchedArtifact, ForgeCommit, ForgeRegistry, ForgeTag,
-        RateLimitBudget, RegistryClient, ResolvedTarget, VersionDocument,
+        BudgetRole, DocumentKind, FetchedArtifact, ForgeAsset, ForgeCommit, ForgeRegistry,
+        ForgeRelease, ForgeReleaseSource, ForgeTag, RateLimitBudget, RegistryClient,
+        ResolvedTarget, VersionDocument,
     },
 };
 
@@ -344,6 +345,52 @@ impl GithubRegistryClient {
     }
 }
 
+// ── ForgeReleaseSource impl (RFC 0021 §5.2) ───────────────────────────────────
+
+/// GitHub addresses a release asset by file name: the `filename/<name>`
+/// sub-coordinate is what `download_asset_by_name` builds and what
+/// `selected_asset` reads back, so an import fetching through
+/// `RegistryClient::fetch_artifact` takes the same path a client's own download
+/// takes — credential, allowlist and SSRF guard included.
+fn gh_release(release: GhRelease) -> ForgeRelease {
+    ForgeRelease {
+        tag: release.tag_name,
+        draft: release.draft,
+        prerelease: release.prerelease,
+        assets: release
+            .assets
+            .into_iter()
+            .map(|a| ForgeAsset {
+                artifact: format!("filename/{}", a.name),
+                name: a.name,
+                size: Some(a.size),
+            })
+            .collect(),
+    }
+}
+
+#[async_trait]
+impl ForgeReleaseSource for GithubRegistryClient {
+    async fn list_releases(&self, repo: &str) -> Result<Vec<ForgeRelease>, CoreError> {
+        let url = format!("{}/repos/{}/releases", self.base_url, repo);
+        let resp = self.api_get(&url).await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(CoreError::NotFound(format!("{repo} not found")));
+        }
+        let releases: Vec<GhRelease> = resp
+            .error_for_status()
+            .map_err(to_registry_error)?
+            .json()
+            .await
+            .map_err(to_registry_error)?;
+        Ok(releases.into_iter().map(gh_release).collect())
+    }
+
+    async fn release_by_tag(&self, repo: &str, tag: &str) -> Result<ForgeRelease, CoreError> {
+        self.fetch_release_by_tag(repo, tag).await.map(gh_release)
+    }
+}
+
 // ── ForgeRegistry impl (RFC 0019 §6.3) ────────────────────────────────────────
 
 /// GitHub's (and Forgejo's) `verification` object, as a provenance state.
@@ -657,6 +704,10 @@ pub(super) fn next_link(headers: &reqwest::header::HeaderMap) -> Option<String> 
 
 #[async_trait]
 impl RegistryClient for GithubRegistryClient {
+    fn releases(&self) -> Option<&dyn batlehub_core::ports::ForgeReleaseSource> {
+        Some(self)
+    }
+
     fn registry_type(&self) -> &str {
         "github"
     }
@@ -1082,6 +1133,61 @@ mod forge_tests {
 
     fn client(server: &Server) -> GithubRegistryClient {
         GithubRegistryClient::new(server.url(), &UpstreamHttpOptions::default()).unwrap()
+    }
+
+    /// The three facts an import chooses a release by, out of the shape
+    /// api.github.com returns for `/repos/{owner}/{repo}/releases`
+    /// (RFC 0021 §5.2). `draft` and `prerelease` are the fields this model did
+    /// not carry until the import needed them.
+    #[tokio::test]
+    async fn releases_are_normalised_with_their_draft_and_prerelease_flags() {
+        let mut server = Server::new_async().await;
+        let _m = server
+            .mock("GET", "/repos/acme/ext/releases")
+            .with_body(
+                r#"[
+                  {"id":3,"tag_name":"v3","draft":true,"prerelease":false,"assets":[]},
+                  {"id":2,"tag_name":"v2","draft":false,"prerelease":true,"assets":[]},
+                  {"id":1,"tag_name":"v1","draft":false,"prerelease":false,
+                   "assets":[{"id":9,"name":"ext-1.0.0.vsix","size":12,
+                              "browser_download_url":"https://example.invalid/ext-1.0.0.vsix"}]}
+                ]"#,
+            )
+            .create_async()
+            .await;
+
+        let got = client(&server).list_releases("acme/ext").await.unwrap();
+
+        assert_eq!(got.len(), 3);
+        assert!(got[0].draft && !got[0].is_stable());
+        assert!(got[1].prerelease && !got[1].is_stable());
+        assert!(got[2].is_stable(), "the one `latest` may choose");
+        // The sub-coordinate is the one the download route builds, so an
+        // import fetches by the path a client's own download takes.
+        assert_eq!(got[2].assets[0].artifact, "filename/ext-1.0.0.vsix");
+        assert_eq!(got[2].assets[0].size, Some(12));
+    }
+
+    /// A release older than the first page is reached by name, not by paging.
+    #[tokio::test]
+    async fn a_release_is_reachable_by_tag() {
+        let mut server = Server::new_async().await;
+        let _m = server
+            .mock("GET", "/repos/acme/ext/releases/tags/v0.1.0")
+            .with_body(r#"{"id":1,"tag_name":"v0.1.0","prerelease":true,"assets":[]}"#)
+            .create_async()
+            .await;
+
+        let got = client(&server)
+            .release_by_tag("acme/ext", "v0.1.0")
+            .await
+            .unwrap();
+
+        assert_eq!(got.tag, "v0.1.0");
+        assert!(got.prerelease);
+        // Absent in the response and defaulted, rather than failing the decode:
+        // a strictly-modelled release has broken a real client here before.
+        assert!(!got.draft);
     }
 
     /// The shape api.github.com returned for `cli/cli` `v2.60.0` on 2026-09-03.

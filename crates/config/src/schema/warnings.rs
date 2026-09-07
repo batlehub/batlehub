@@ -71,6 +71,16 @@ pub const SUBDOMAIN_INVALID_DNS_LABEL: &str = "subdomain.invalid-dns-label";
 /// relayed regardless (RFC 0020 §4.3).
 pub const VSX_SIGNING_PROXY_MODE: &str = "vsx-signing.proxy-mode";
 
+/// A `[[release_imports]]` target is a gallery registry with no
+/// `[registries.vsx_signing]` key: the extensions it imports install nowhere
+/// with a current editor (RFC 0021 §4.4).
+pub const RELEASE_IMPORT_UNSIGNED_GALLERY: &str = "release-import.unsigned-gallery";
+
+/// A `[[release_imports]]` asset glob matches nothing a release carries. Not an
+/// error — the release this runs against may not exist yet — but a renamed
+/// artifact is otherwise an import that silently does nothing.
+pub const RELEASE_IMPORT_NO_INTERVAL: &str = "release-import.no-interval";
+
 /// `[server].cors_allowed_origins` contains `"*"`, so any website may issue
 /// cross-origin requests to this server and read the responses. Legitimate for a
 /// public mirror, rarely what an internal deployment wants — and since 1.1.0 it

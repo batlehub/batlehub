@@ -18,6 +18,12 @@ pub(super) struct GlRelease {
     pub evidences: Vec<serde_json::Value>,
     /// GitLab uses `released_at` (not `published_at`).
     pub released_at: Option<String>,
+    /// GitLab's own name for the idea GitHub calls a pre-release: a release
+    /// whose `released_at` is in the future. There is no draft — GitLab
+    /// removed them — so an import reads this as "not the default download"
+    /// and nothing as a draft (RFC 0021 §11 q5).
+    #[serde(default)]
+    pub upcoming_release: bool,
     #[serde(default)]
     pub assets: GlAssets,
 }

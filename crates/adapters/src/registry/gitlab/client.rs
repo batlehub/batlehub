@@ -16,8 +16,9 @@ use batlehub_core::{
     entities::{PackageId, PackageMetadata},
     error::CoreError,
     ports::{
-        BudgetRole, DocumentKind, FetchedArtifact, ForgeCommit, ForgeRegistry, ForgeTag,
-        RateLimitBudget, RegistryClient, ResolvedTarget, VersionDocument,
+        BudgetRole, DocumentKind, FetchedArtifact, ForgeAsset, ForgeCommit, ForgeRegistry,
+        ForgeRelease, ForgeReleaseSource, ForgeTag, RateLimitBudget, RegistryClient,
+        ResolvedTarget, VersionDocument,
     },
 };
 
@@ -250,6 +251,49 @@ pub(super) fn source_format(artifact: &str) -> Option<&str> {
     artifact.strip_prefix("source/")
 }
 
+// ── ForgeReleaseSource impl (RFC 0021 §5.2) ───────────────────────────────────
+
+/// GitLab attaches *links*, not files, and addresses them `link/<name>` — the
+/// same sub-coordinate `resolve_metadata` reads back, so an import fetches
+/// through `RegistryClient::fetch_artifact` and the link's own host still goes
+/// through this registry's SSRF guard.
+///
+/// `sources` are deliberately not offered: they are the repository tarball the
+/// forge generates, not something a team released.
+fn gl_release(release: GlRelease) -> ForgeRelease {
+    ForgeRelease {
+        tag: release.tag_name,
+        // GitLab has no drafts.
+        draft: false,
+        prerelease: release.upcoming_release,
+        assets: release
+            .assets
+            .links
+            .into_iter()
+            .map(|l| ForgeAsset {
+                artifact: format!("link/{}", l.name),
+                name: l.name,
+                size: None,
+            })
+            .collect(),
+    }
+}
+
+#[async_trait]
+impl ForgeReleaseSource for GitlabRegistryClient {
+    async fn list_releases(&self, repo: &str) -> Result<Vec<ForgeRelease>, CoreError> {
+        match self.fetch_all_releases(repo).await {
+            Ok(releases) => Ok(releases.into_iter().map(gl_release).collect()),
+            Err(CoreError::NotFound(_)) => Ok(vec![]),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn release_by_tag(&self, repo: &str, tag: &str) -> Result<ForgeRelease, CoreError> {
+        self.fetch_release_by_tag(repo, tag).await.map(gl_release)
+    }
+}
+
 // ── RegistryClient impl ───────────────────────────────────────────────────────
 
 /// RFC 0019 phase 4 — GitLab at the parity the other two forges reached in
@@ -444,6 +488,10 @@ impl GitlabRegistryClient {
 
 #[async_trait]
 impl RegistryClient for GitlabRegistryClient {
+    fn releases(&self) -> Option<&dyn batlehub_core::ports::ForgeReleaseSource> {
+        Some(self)
+    }
+
     fn registry_type(&self) -> &str {
         "gitlab"
     }
@@ -972,6 +1020,41 @@ mod tests {
         })
         .await
         .unwrap()
+    }
+
+    /// GitLab attaches *links*, not files, and has no drafts — its own name for
+    /// "not the default download" is `upcoming_release` (RFC 0021 §11 q5).
+    #[tokio::test]
+    async fn releases_are_normalised_from_links_and_upcoming_release() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/api/v4/projects/grp%2Fproj/releases?per_page=100")
+            .with_body(
+                r#"[
+                  {"tag_name":"v2","upcoming_release":true,
+                   "assets":{"links":[],"sources":[]}},
+                  {"tag_name":"v1",
+                   "assets":{"links":[{"name":"ext-1.0.0.vsix",
+                                       "url":"https://example.invalid/a.vsix"}],
+                             "sources":[]}}
+                ]"#,
+            )
+            .create_async()
+            .await;
+        let client =
+            GitlabRegistryClient::new(server.url(), &UpstreamHttpOptions::default()).unwrap();
+
+        let got = client.list_releases("grp/proj").await.unwrap();
+
+        assert_eq!(got.len(), 2);
+        assert!(
+            got[0].prerelease,
+            "upcoming_release is GitLab's pre-release"
+        );
+        assert!(!got[0].draft, "GitLab has no drafts");
+        assert!(got[1].is_stable());
+        assert_eq!(got[1].assets[0].artifact, "link/ext-1.0.0.vsix");
+        assert_eq!(got[1].assets[0].size, None, "a link reports no size");
     }
 
     #[tokio::test]

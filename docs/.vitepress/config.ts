@@ -553,6 +553,10 @@ const config = withMermaid(defineConfig({
               text: "0020 — Signed VSIX assets",
               link: "/rfc/0020-signing-at-the-vscode-marketplace-registry",
             },
+            {
+              text: "0021 — releases into registries",
+              link: "/rfc/0021-forge-releases-into-registries",
+            },
             // END rfc-sidebar
           ],
         },

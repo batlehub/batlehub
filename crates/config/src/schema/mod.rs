@@ -5,6 +5,7 @@ pub mod forge;
 pub mod network;
 pub mod notifications;
 pub mod registry;
+pub mod release_imports;
 pub mod routing;
 pub mod rules;
 pub mod security;
@@ -45,6 +46,7 @@ pub use registry::{
     RegistryConfig, RegistryMode, RepoSigningConfig, RetentionConfig, SbomConfig, SigningConfig,
     UpstreamDetailConfig, VersioningPolicy,
 };
+pub use release_imports::{ImportPrincipalConfig, ReleaseImportConfig, MIN_IMPORT_INTERVAL_SECS};
 pub use routing::{
     is_dns_label, normalise_host, validate_host_entry, wildcard_host, HostSyntaxError,
     RegistryHostBinding, SubdomainRoutingConfig,
@@ -124,6 +126,10 @@ pub struct AppConfig {
     /// Third parties that may push vulnerability flags (RFC 0002 §4.3).
     #[serde(default)]
     pub flag_sources: Vec<FlagSourceConfig>,
+    /// Forge releases imported into the registries that serve them
+    /// (RFC 0021 §4.1). Empty means no import runs and nothing changes.
+    #[serde(default)]
+    pub release_imports: Vec<ReleaseImportConfig>,
     /// A server that will not dial out (RFC 0008 §4.1). Absent means today's
     /// behaviour.
     #[serde(default)]
@@ -694,6 +700,7 @@ impl AppConfig {
         self.signed_url_warnings(&mut out);
         self.require_signed_release_warnings(&mut out);
         self.vsx_signing_warnings(&mut out);
+        self.release_import_warnings(&mut out);
         self.forge_warnings(&mut out);
         self.security_warnings(&mut out);
         self.upstream_audit_warnings(&mut out);
@@ -1097,6 +1104,44 @@ impl AppConfig {
                          nothing is published there, so the key signs nothing. An upstream's \
                          signature is relayed whether or not a key is configured.",
                         registry.name
+                    ),
+                ));
+            }
+        }
+    }
+
+    /// What an import cannot fail on, and an operator still wants told at load
+    /// (RFC 0021 §4.4).
+    fn release_import_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        const GALLERY_KINDS: [&str; 2] = ["openvsx", "vscode-marketplace"];
+        for (index, imp) in self.release_imports.iter().enumerate() {
+            let Some(target) = self.registries.iter().find(|r| r.name == imp.into) else {
+                continue;
+            };
+            if GALLERY_KINDS.contains(&target.registry_type.as_str())
+                && target.vsx_signing.is_none()
+            {
+                out.push(ConfigWarning::new(
+                    warnings::RELEASE_IMPORT_UNSIGNED_GALLERY,
+                    format!("release_imports[{index}].into"),
+                    format!(
+                        "imports land in '{}', a gallery registry with no \
+                         [registries.vsx_signing] key. A current VS Code greys out Install on an \
+                         entry it cannot verify, so every imported extension would arrive and be \
+                         uninstallable (RFC 0020).",
+                        imp.into
+                    ),
+                ));
+            }
+            if imp.interval_secs.is_none() {
+                out.push(ConfigWarning::new(
+                    warnings::RELEASE_IMPORT_NO_INTERVAL,
+                    format!("release_imports[{index}].interval_secs"),
+                    format!(
+                        "the import of '{}' into '{}' has no interval, so it runs only when an \
+                         operator asks. That is a supported way to use it; set interval_secs to \
+                         have new releases arrive on their own.",
+                        imp.repo, imp.into
                     ),
                 ));
             }
@@ -2081,6 +2126,7 @@ impl AppConfig {
         self.validate_registries()?;
         self.validate_security_globals()?;
         self.validate_upstream_audit()?;
+        self.validate_release_imports()?;
         Ok(())
     }
 
@@ -2689,6 +2735,151 @@ impl AppConfig {
     }
 
     /// `[upstream_audit]` (RFC 0014 §4.4).
+    /// `[[release_imports]]` (RFC 0021 §4.4).
+    ///
+    /// Every rule here is one an import would otherwise discover at run time,
+    /// against a forge, under an identity — and two of them (the admin
+    /// principal, the unprefixed group) would not fail at all: they would
+    /// succeed at something wider than the operator asked for.
+    fn validate_release_imports(&self) -> Result<()> {
+        use crate::schema::release_imports::{ALL, LATEST};
+
+        const FORGE_KINDS: [&str; 3] = ["github", "gitlab", "forgejo"];
+        for (i, imp) in self.release_imports.iter().enumerate() {
+            let path = format!("release_imports[{i}]");
+
+            let Some(target) = self.registries.iter().find(|r| r.name == imp.into) else {
+                bail!("{path}: into = '{}' names no configured registry", imp.into);
+            };
+            if matches!(target.mode, RegistryMode::Proxy) {
+                bail!(
+                    "{path}: into = '{}' is a proxy-mode registry. An import is a publish, and a \
+                     publish into it answers 404 at request time — this is the same answer, a day \
+                     earlier",
+                    imp.into
+                );
+            }
+
+            let Some(source) = self.registries.iter().find(|r| r.name == imp.from) else {
+                bail!("{path}: from = '{}' names no configured registry", imp.from);
+            };
+            if !FORGE_KINDS.contains(&source.registry_type.as_str()) {
+                bail!(
+                    "{path}: from = '{}' is a '{}' registry; only {} serve releases",
+                    imp.from,
+                    source.registry_type,
+                    FORGE_KINDS.join(", ")
+                );
+            }
+
+            if imp.repo.split('/').filter(|s| !s.is_empty()).count() < 2 {
+                bail!(
+                    "{path}: repo = '{}' is not an 'owner/repo' path on the forge",
+                    imp.repo
+                );
+            }
+
+            if imp.assets.iter().all(|a| a.trim().is_empty()) {
+                bail!(
+                    "{path}: assets is empty. 'every asset' is never what an operator means — a \
+                     release's checksums and source tarballs would be published as packages — so \
+                     the globs are required"
+                );
+            }
+
+            if imp.releases.trim().is_empty() {
+                bail!("{path}: releases must be '{LATEST}', '{ALL}', or a tag");
+            }
+
+            self.validate_import_principal(&path, imp)?;
+        }
+        self.validate_import_poll_rate()?;
+        Ok(())
+    }
+
+    /// The principal one import publishes as (RFC 0021 §4.3).
+    fn validate_import_principal(&self, path: &str, imp: &ReleaseImportConfig) -> Result<()> {
+        let who = &imp.principal;
+        if who.user_id.trim().is_empty() {
+            bail!(
+                "{path}: as.user_id is empty. A publish with no publisher is a row the audit \
+                 cannot answer for, and a quota nothing is charged against"
+            );
+        }
+        if who.user_id == batlehub_core::entities::Identity::SYSTEM_USER_ID {
+            bail!(
+                "{path}: as.user_id = '{}' is reserved for the schedule's own identity, which is \
+                 an admin and means 'the schedule did this' — the wrong subject for a version \
+                 that lands in a team's namespace",
+                who.user_id
+            );
+        }
+        // An admin skips `check_namespace_membership` outright, so an import
+        // configured as one publishes into **any** namespace on the target and
+        // nothing at request time says so. The principal is user-shaped by
+        // construction (`ImportPrincipal::identity`); this catches the operator
+        // who made the same id an admin token, where the two would disagree
+        // about what the name means.
+        for auth in &self.auth {
+            let AuthConfig::Token(t) = auth else {
+                continue;
+            };
+            for entry in &t.tokens {
+                if entry.user_id.as_deref() == Some(who.user_id.as_str())
+                    && entry.role.eq_ignore_ascii_case("admin")
+                {
+                    bail!(
+                        "{path}: as.user_id = '{}' is also an admin token. An admin skips the \
+                         namespace-membership check, so this import could publish into any \
+                         namespace on '{}' — give the import its own id",
+                        who.user_id,
+                        imp.into
+                    );
+                }
+            }
+        }
+        for group in &who.groups {
+            let ok = group
+                .strip_prefix(batlehub_core::services::CONFIG_GROUP_PREFIX)
+                .is_some_and(|name| !name.trim().is_empty());
+            if !ok {
+                bail!(
+                    "{path}: as.groups entry '{group}' must be written \
+                     '{}<name>'. A config file that could mint an identity provider's group \
+                     string would collect that group's grants",
+                    batlehub_core::services::CONFIG_GROUP_PREFIX
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// The polling floor, per source registry rather than per import.
+    ///
+    /// Ten imports from one forge on a ten-minute interval are one poll a
+    /// minute against a rate limit that belongs to the credential they share.
+    fn validate_import_poll_rate(&self) -> Result<()> {
+        use crate::schema::release_imports::MIN_IMPORT_INTERVAL_SECS;
+
+        let ceiling = 3600.0 / MIN_IMPORT_INTERVAL_SECS as f64;
+        let mut per_source: std::collections::BTreeMap<&str, f64> =
+            std::collections::BTreeMap::new();
+        for imp in &self.release_imports {
+            *per_source.entry(imp.from.as_str()).or_default() += imp.polls_per_hour();
+        }
+        for (source, rate) in per_source {
+            if rate > ceiling {
+                bail!(
+                    "[[release_imports]] from = '{source}': the imports sharing this source poll \
+                     it {rate:.0} times an hour, over the ceiling of {ceiling:.0}. The rate limit \
+                     is spent by the source registry's credential, not by any one import, so the \
+                     floor of {MIN_IMPORT_INTERVAL_SECS}s applies to their combined rate"
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn validate_upstream_audit(&self) -> Result<()> {
         let a = &self.upstream_audit;
         if a.confirm_after == 0 {

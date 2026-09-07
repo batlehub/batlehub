@@ -1079,6 +1079,10 @@ pub struct ConfigureAppDefaults {
     pub notification_store: Arc<dyn NotificationPort + 'static>,
     pub notifications_config: Option<NotificationsConfig>,
     pub warming_map: WarmingServiceMap,
+    /// The `[[release_imports]]` configured into each registry (RFC 0021).
+    /// Empty by default: a test app configures none, which is every deployment
+    /// until an operator writes the block.
+    pub release_imports: batlehub_web::handlers::back_office::ops::release_import::ReleaseImportMap,
     pub eviction_map: EvictionServiceMap,
     /// The two block stores the *middleware* enforces and `access-check` now
     /// consults (RFC 0004-bis A1). Registered on every test app, empty by
@@ -1124,6 +1128,7 @@ impl Default for ConfigureAppDefaults {
             notification_store: Arc::new(InMemoryNotificationStore::new()),
             notifications_config: None,
             warming_map: WarmingServiceMap::default(),
+            release_imports: Default::default(),
             eviction_map: EvictionServiceMap::default(),
             user_block_repo: Arc::new(InMemoryUserBlockRepository::new()),
             ip_block_store: Arc::new(InMemoryIpBlockStore::new()),
@@ -1157,6 +1162,7 @@ pub fn configure_test_app(
         defaults.oidc_provider_names,
         defaults.login_states,
         defaults.warming_map,
+        defaults.release_imports,
         defaults.eviction_map,
         defaults.proxy_metrics,
         None,

@@ -322,7 +322,8 @@ impl TestServer {
             vec![],
             batlehub_web::OidcProviderNames::default(),
             batlehub_adapters::in_memory::InMemoryLoginStateStore::arc(),
-            HashMap::new(), // warming_map
+            HashMap::new(),     // warming_map
+            Default::default(), // release_imports
             // One eviction service, so `admin cache evict` and `admin cache
             // coherence` have something to reach. `keep_latest_n` is set
             // because `/evict` answers `404` for a registry with no strategy

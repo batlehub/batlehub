@@ -362,6 +362,17 @@ pub trait RegistryClient: Send + Sync {
         None
     }
 
+    /// This client's releases, normalised across forges (RFC 0021 §5.2).
+    ///
+    /// `None` for every package registry, and `Some(self)` for the three that
+    /// serve releases — the same arrangement [`Self::forge`] uses, and for the
+    /// same reason: an import chooses a release without knowing which forge
+    /// answered, and `AppConfig::validate()` has already refused a `from` that
+    /// is not one of the three.
+    fn releases(&self) -> Option<&dyn super::ForgeReleaseSource> {
+        None
+    }
+
     /// Search the upstream registry for packages matching `query`.
     ///
     /// Returns up to `limit` results. The default implementation returns an empty

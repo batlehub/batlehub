@@ -2637,6 +2637,78 @@ blocked package is not a gap in the mirror. See
 [the air-gap runbook](/operations/air-gap) and
 [pointing mise at BatleHub](/use/mise).
 
+### 3.13 `[[release_imports]]` (optional) {#release-imports}
+
+A forge release into the registry that serves it
+([RFC 0021](/rfc/0021-forge-releases-into-registries)). CI builds an artifact
+and attaches it to a release; a `github`, `gitlab` or `forgejo` registry makes
+that asset *downloadable*, and this makes it **installable** — the extension
+appears in an editor's Extensions view, the package in `pip`'s index, because
+the import publishes it into the registry whose protocol the client speaks.
+
+```toml
+[[release_imports]]
+into          = "vsx-local"              # a local or hybrid registry
+from          = "gh"                     # a configured github/gitlab/forgejo registry
+repo          = "batleforc/batlehub-vsx" # owner/repo on that forge
+assets        = ["*.vsix"]               # globs; never empty
+releases      = "latest"                 # latest | all | a tag
+interval_secs = 3600                     # absent: runs only when asked
+
+[release_imports.as]
+user_id = "svc-release-import"
+groups  = ["config:extension-publishers"]
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `into` | — | The registry published into. Local or hybrid: an import is a publish, and a publish into a proxy-mode registry is a `404`. |
+| `from` | — | The registry fetched through — a configured forge registry, never a URL, so the fetch keeps that registry's credential, allowlist and SSRF guard. |
+| `repo` | — | `owner/repo` on the source forge. |
+| `assets` | — | Asset-name globs, `*` matching any run of characters. Required: a release carries checksums and signatures beside the artifact, and publishing those as packages is what an empty list would do. |
+| `releases` | `latest` | `latest` is the newest release that is neither a draft nor a pre-release. `all` is every published release. Anything else is read as one tag — the only way to import a pre-release. A **draft is never imported**, by any setting. |
+| `interval_secs` | absent | How often this import runs on its own. The floor is 300 s and it applies to the **combined** rate of every import sharing a `from`: a forge's rate limit is spent by the credential, not by any one import. |
+| `as.user_id` | — | Who the publish is. What grants name (`user:<id>`), what quota is charged to, and what the audit row records. |
+| `as.groups` | `[]` | Groups, each written `config:<name>`. The prefix is reserved so a config file cannot mint a group string an identity provider owns. |
+
+**Who it publishes as.** The `as` block declares a *principal*, not a
+credential: no token is minted, stored or sent, because the server is not
+authenticating to itself. It is always a **user**, never an admin — an admin
+skips the namespace-membership check, so an import configured as one could
+publish into any namespace on the target. Check what it may do before the
+first run:
+
+```bash
+batlehub authz explain vsx-local \
+  --subject user:svc-release-import \
+  --action releases:publish \
+  --package batlehub.batlehub-vsx
+```
+
+**Run one now**, whatever the interval says, and import a pre-release by name:
+
+```bash
+curl -fX POST -H "Authorization: Bearer $TOKEN" \
+  "$HUB/api/v1/admin/registries/vsx-local/import"
+
+curl -fX POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"tag": "v1.1.0-rc.1"}' \
+  "$HUB/api/v1/admin/registries/vsx-local/import"
+```
+
+Asking needs `cache:warm`; the publish itself runs as the principal and needs
+that principal's own `releases:publish`. The response counts what was
+imported, what was **skipped** because the registry already holds it — which is
+what makes an interval free to set — and names every asset that failed.
+
+**On a gallery registry, configure
+[`[registries.vsx_signing]`](#vsx-signing).** An imported extension is signed
+at publish exactly as an uploaded one is, and a current VS Code greys out
+Install on an entry it cannot verify. The config warns at load when the target
+has no key.
+
+---
+
 ## 4. Permissions Reference
 
 ### Roles

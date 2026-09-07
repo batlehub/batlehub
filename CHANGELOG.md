@@ -103,6 +103,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the console's package page shows the moving refs and the short SHA.
   `tests/heavy/mise.sh` drives a real `mise` through the whole of it.
 
+- **A forge release becomes an installable package (RFC 0021).** CI builds an
+  artifact and attaches it to a release; a `github`, `gitlab` or `forgejo`
+  registry made that asset downloadable, and an editor still could not see it,
+  because a gallery is served by a registry of its own kind. A
+  `[[release_imports]]` block now names a repository, its asset globs and a
+  target registry, and the instance publishes what the release carries into it:
+  the extension appears in the Extensions view, signed at publish exactly as an
+  uploaded one is, scanned and audited like any other version. An import **is**
+  a publish, so every gate on that path applies and there is no second door.
+  `POST /api/v1/admin/registries/{registry}/import` runs one now (`cache:warm`
+  to ask; the configured principal's own `releases:publish` to do it), and
+  `interval_secs` runs it on a schedule — free when nothing has been released,
+  since a version the registry already holds is skipped. `latest` means the
+  newest release that is neither a draft nor a pre-release; a draft is never
+  imported. The publisher is a principal declared in the config, never an
+  admin: an admin would skip the namespace-membership check and could publish
+  into any namespace on the target, so the config refuses one at load. Beyond
+  galleries, the coordinate comes from the asset's file name by the convention
+  each ecosystem's own tooling produces — the rules `batlehub publish` has
+  always used, now shared with the server rather than copied.
+
 - **Signed VSIX assets for `openvsx` / `vscode-marketplace` registries (RFC 0020).**
   A current VS Code's Extensions view greys out Install on any gallery entry
   without a signature asset. A registry that holds an Ed25519 key

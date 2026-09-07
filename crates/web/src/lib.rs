@@ -561,6 +561,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 quota::{
                     get_quota_for_user, list_quota, list_quota_for_registry, reset_quota_for_user,
                 },
+                release_import::import_registry,
                 upstream::{get_upstream_status, list_disappeared, recheck_upstream},
                 warming::{get_warming_status, warm_registry},
             },
@@ -1051,6 +1052,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(crate::handlers::flags::revoke_flag); // DELETE /api/v1/flags/{source}/{external_id}
     cfg.service(get_warming_status);
     cfg.service(warm_registry);
+    cfg.service(import_registry);
     cfg.service(recheck_upstream); // POST /api/v1/admin/upstream/recheck (RFC 0014 §4.6)
     cfg.service(list_disappeared); // GET  /api/v1/admin/upstream/disappeared
     cfg.service(get_upstream_status); // GET  /api/v1/admin/upstream/status/{registry}/{name}
@@ -1470,6 +1472,10 @@ pub fn configure_app(
     // provider and the caller's own CSRF value.
     login_states: Arc<dyn batlehub_core::ports::LoginStateStore>,
     warming_map: WarmingServiceMap,
+    // Target registry → the `[[release_imports]]` configured into it
+    // (RFC 0021). Empty in a deployment that configures none, which is every
+    // deployment until an operator writes the block.
+    release_imports: handlers::back_office::ops::release_import::ReleaseImportMap,
     eviction_map: EvictionServiceMap,
     proxy_metrics: Arc<ProxyMetrics>,
     prometheus_handle: Option<PrometheusHandle>,
@@ -1522,6 +1528,7 @@ pub fn configure_app(
         cfg.app_data(web::Data::new(login_states.clone()));
         cfg.app_data(web::Data::new(Arc::clone(&refresh_limiter)));
         cfg.app_data(web::Data::new(warming_map.clone()));
+        cfg.app_data(web::Data::new(release_imports.clone()));
         cfg.app_data(web::Data::new(eviction_map.clone()));
         cfg.app_data(web::Data::new(proxy_metrics.clone()));
         if let Some(ref h) = prometheus_handle {

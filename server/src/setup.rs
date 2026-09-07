@@ -244,6 +244,85 @@ pub(super) fn build_initial_cargo_index_map(
 
 // ── Warming map ───────────────────────────────────────────────────────────────
 
+/// The `[[release_imports]]` block, as one service per import (RFC 0021 §6.4).
+///
+/// Keyed by the **target** registry, because that is what the admin route names
+/// and what an operator is looking at when they ask for one. A block whose
+/// principal `AppConfig::validate()` would have refused never reaches here; the
+/// constructor is asked again anyway, and an import it rejects is dropped with a
+/// log line rather than silently running as something else.
+pub(super) fn build_release_import_map(
+    config: &batlehub_config::schema::AppConfig,
+    clients: &HashMap<String, Arc<dyn batlehub_core::ports::RegistryClient>>,
+    local_svc: &Arc<batlehub_core::services::LocalRegistryService>,
+) -> batlehub_web::handlers::back_office::ops::release_import::ReleaseImportMap {
+    use batlehub_core::services::{
+        CoordinateReader, FilenameCoordinates, ImportPrincipal, ReleaseImportService,
+        ReleaseSelector,
+    };
+    use batlehub_web::handlers::proxy::vsx::import::{SignAfterPublish, VsixCoordinates};
+
+    let mut map: batlehub_web::handlers::back_office::ops::release_import::ReleaseImportMap =
+        HashMap::new();
+    for (index, imp) in config.release_imports.iter().enumerate() {
+        let Some(client) = clients.get(&imp.from) else {
+            tracing::warn!(
+                index,
+                from = %imp.from,
+                "release import: the source registry has no client; import disabled"
+            );
+            continue;
+        };
+        let principal = match ImportPrincipal::new(
+            imp.principal.user_id.clone(),
+            imp.principal.groups.clone(),
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!(index, error = %e, "release import: principal refused; import disabled");
+                continue;
+            }
+        };
+        // How the artifact names itself, and the kind decides which: an
+        // extension carries its coordinate in the archive, everything else in
+        // the file name its own tooling produced. A target kind neither reader
+        // covers — Maven, whose coordinate needs a `groupId` no file name
+        // carries — publishes nothing rather than guessing (RFC 0021 §11 q8).
+        let target_type = config
+            .registries
+            .iter()
+            .find(|r| r.name == imp.into)
+            .map(|r| r.registry_type.clone())
+            .unwrap_or_default();
+        let coordinates: Arc<dyn CoordinateReader> = match target_type.as_str() {
+            "openvsx" | "vscode-marketplace" => Arc::new(VsixCoordinates),
+            other => Arc::new(FilenameCoordinates {
+                registry_type: other.to_owned(),
+            }),
+        };
+        let svc = Arc::new(ReleaseImportService {
+            local: Arc::clone(local_svc),
+            client: Arc::clone(client),
+            coordinates,
+            into: imp.into.clone(),
+            from: imp.from.clone(),
+            repo: imp.repo.clone(),
+            assets: imp.assets.clone(),
+            select: ReleaseSelector::parse(&imp.releases),
+            principal,
+            // The same signing the `PUT …/vsix` route runs, so an imported
+            // entry installs where a published one does. A no-op on a target
+            // that is not a gallery, and on one with no
+            // `[registries.vsx_signing]` key.
+            after_publish: Some(Arc::new(SignAfterPublish {
+                local: Arc::clone(local_svc),
+            })),
+        });
+        map.entry(imp.into.clone()).or_default().push(svc);
+    }
+    map
+}
+
 pub(super) fn build_warming_map(
     config: &batlehub_config::schema::AppConfig,
     warming_clients: &HashMap<String, Arc<dyn batlehub_core::ports::RegistryClient>>,

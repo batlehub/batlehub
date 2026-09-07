@@ -440,8 +440,9 @@ impl RealProxy {
             vec![],
             batlehub_web::OidcProviderNames::default(),
             batlehub_adapters::in_memory::InMemoryLoginStateStore::arc(),
-            HashMap::new(), // warming_map
-            HashMap::new(), // eviction_map
+            HashMap::new(),     // warming_map
+            Default::default(), // release_imports
+            HashMap::new(),     // eviction_map
             Arc::new(ProxyMetrics::new(&[])),
             None,
             None,                                       // sbom_svc
@@ -593,8 +594,9 @@ impl RealProxy {
             vec![],
             batlehub_web::OidcProviderNames::default(),
             batlehub_adapters::in_memory::InMemoryLoginStateStore::arc(),
-            HashMap::new(), // warming_map
-            HashMap::new(), // eviction_map
+            HashMap::new(),     // warming_map
+            Default::default(), // release_imports
+            HashMap::new(),     // eviction_map
             Arc::new(ProxyMetrics::new(&[])),
             None,
             None,                                       // sbom_svc

@@ -769,6 +769,7 @@ async fn main() -> Result<()> {
         warm_coordinator,
         Arc::clone(&proxy_metrics),
     );
+    let release_imports = setup::build_release_import_map(&config, &warming_clients, &local_svc);
     let eviction_map = setup::build_eviction_map(
         &config,
         storage.clone(),
@@ -854,6 +855,7 @@ async fn main() -> Result<()> {
         "listening"
     );
     watcher::spawn_startup_warming(&config, &warming_map);
+    watcher::spawn_release_imports(&config, &release_imports);
 
     // Hourly cache-statistics rollup, so the dashboard's trend survives a
     // deploy (RFC 0004 §2.3). `history_enabled = false` restores the previous
@@ -952,6 +954,7 @@ async fn main() -> Result<()> {
         oidc_provider_names,
         login_states,
         warming_map,
+        release_imports,
         eviction_map,
         proxy_metrics,
         prometheus_handle,

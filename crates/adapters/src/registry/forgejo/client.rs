@@ -16,8 +16,9 @@ use batlehub_core::{
     entities::{is_commit_sha, ForgeProvenance, PackageId, PackageMetadata, RefKind},
     error::CoreError,
     ports::{
-        BudgetRole, DocumentKind, FetchedArtifact, ForgeCommit, ForgeRegistry, ForgeTag,
-        RateLimitBudget, RegistryClient, ResolvedTarget, VersionDocument,
+        BudgetRole, DocumentKind, FetchedArtifact, ForgeAsset, ForgeCommit, ForgeRegistry,
+        ForgeRelease, ForgeReleaseSource, ForgeTag, RateLimitBudget, RegistryClient,
+        ResolvedTarget, VersionDocument,
     },
 };
 
@@ -193,6 +194,50 @@ impl ForgejoRegistryClient {
 }
 
 // ── ForgeRegistry impl (RFC 0019 §6.3) ────────────────────────────────────────
+
+// ── ForgeReleaseSource impl (RFC 0021 §5.2) ───────────────────────────────────
+
+/// Forgejo addresses an asset the way GitHub does — `filename/<name>` — so an
+/// import fetches through `RegistryClient::fetch_artifact` and inherits this
+/// registry's credential and SSRF guard.
+fn fj_release(release: FjRelease) -> ForgeRelease {
+    ForgeRelease {
+        tag: release.tag_name,
+        draft: release.draft,
+        prerelease: release.prerelease,
+        assets: release
+            .assets
+            .into_iter()
+            .map(|a| ForgeAsset {
+                artifact: format!("filename/{}", a.name),
+                name: a.name,
+                size: Some(a.size),
+            })
+            .collect(),
+    }
+}
+
+#[async_trait]
+impl ForgeReleaseSource for ForgejoRegistryClient {
+    async fn list_releases(&self, repo: &str) -> Result<Vec<ForgeRelease>, CoreError> {
+        let url = format!("{}/repos/{}/releases", self.api_base_url, repo);
+        let resp = self.api_get(&url).await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(CoreError::NotFound(format!("{repo} not found")));
+        }
+        let releases: Vec<FjRelease> = resp
+            .error_for_status()
+            .map_err(to_registry_error)?
+            .json()
+            .await
+            .map_err(to_registry_error)?;
+        Ok(releases.into_iter().map(fj_release).collect())
+    }
+
+    async fn release_by_tag(&self, repo: &str, tag: &str) -> Result<ForgeRelease, CoreError> {
+        self.fetch_release_by_tag(repo, tag).await.map(fj_release)
+    }
+}
 
 #[async_trait]
 impl ForgeRegistry for ForgejoRegistryClient {
@@ -389,6 +434,10 @@ pub(super) fn static_artifact_url(
 
 #[async_trait]
 impl RegistryClient for ForgejoRegistryClient {
+    fn releases(&self) -> Option<&dyn batlehub_core::ports::ForgeReleaseSource> {
+        Some(self)
+    }
+
     fn registry_type(&self) -> &str {
         "forgejo"
     }
@@ -874,6 +923,33 @@ mod forge_tests {
 
     fn client(server: &Server) -> ForgejoRegistryClient {
         ForgejoRegistryClient::new(server.url(), &UpstreamHttpOptions::default()).unwrap()
+    }
+
+    /// Forgejo's releases, normalised the way GitHub's are (RFC 0021 §5.2) —
+    /// including the two flags this model did not carry until the import
+    /// needed them.
+    #[tokio::test]
+    async fn releases_are_normalised_with_their_draft_and_prerelease_flags() {
+        let mut server = Server::new_async().await;
+        let _m = server
+            .mock("GET", "/api/v1/repos/acme/ext/releases")
+            .with_body(
+                r#"[
+                  {"id":2,"tag_name":"v2","draft":true,"prerelease":false,"assets":[]},
+                  {"id":1,"tag_name":"v1","draft":false,"prerelease":false,
+                   "assets":[{"id":7,"name":"ext-1.0.0.vsix","size":3,
+                              "browser_download_url":"https://example.invalid/a.vsix"}]}
+                ]"#,
+            )
+            .create_async()
+            .await;
+
+        let got = client(&server).list_releases("acme/ext").await.unwrap();
+
+        assert_eq!(got.len(), 2);
+        assert!(got[0].draft);
+        assert!(got[1].is_stable());
+        assert_eq!(got[1].assets[0].artifact, "filename/ext-1.0.0.vsix");
     }
 
     /// The shape codeberg.org returned for `forgejo/forgejo` `v10.0.0` on
