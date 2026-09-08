@@ -587,3 +587,37 @@ heavy_cached_dir() {
   fi
   echo "$dest"
 }
+
+# ── The [[flag_sources]] push credential (RFC 0002 §4.3) ─────────────────────
+#
+# A SOC signs `X-Hub-Signature-256: sha256=<hex>` with the source's secret.
+# A `POST` signs the raw body; a `DELETE` has none, so it signs the canonical
+# string below instead — which binds the proof to the one flag it lifts, where
+# signing the empty string made any observed revoke signature a standing key to
+# lift every flag the source had ever pushed, a `hard_block` on live malware
+# included.
+#
+# These live here, and not in the one suite that uses them, because the server
+# and this file are two implementations of one wire contract and the endpoint
+# cannot tell you when they disagree: an unknown source and a bad signature
+# both answer `404 unknown flag source`, deliberately, so a revoke signed the
+# old way reads as a source that is missing from a config it is plainly in.
+# `crates/web/tests/flag_revoke_canonical.rs` holds these two definitions to
+# `revoke_canonical` in `crates/web/src/handlers/flags.rs`, in `cargo test`,
+# where a heavy suite would not have said so until CI ran it.
+
+# heavy_flag_revoke_canonical <source> <external_id> — the bytes a DELETE signs.
+heavy_flag_revoke_canonical() {
+  printf 'DELETE\n/api/v1/flags/%s/%s' "$1" "$2"
+}
+
+# heavy_flag_sign <secret> <body> — the header value over arbitrary bytes.
+heavy_flag_sign() {
+  python3 -c 'import hashlib, hmac, sys; print("sha256=" + hmac.new(sys.argv[1].encode(), sys.argv[2].encode(), hashlib.sha256).hexdigest())' "$1" "$2"
+}
+
+# heavy_flag_sign_revoke <secret> <source> <external_id> — the header value for
+# a revoke of that one flag.
+heavy_flag_sign_revoke() {
+  heavy_flag_sign "$1" "$(heavy_flag_revoke_canonical "$2" "$3")"
+}

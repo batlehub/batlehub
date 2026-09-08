@@ -572,12 +572,13 @@ CURL_CODE='%{http_code}'
 
 # The push credential, as `[[flag_sources]] soc` holds it.
 SOC_SECRET="heavy-soc-secret"
-# sign <body> — the `X-Hub-Signature-256` value over the raw bytes, the same
-# scheme `[[notifications.inbound]]` uses.
-sign() {
-  local body="$1"
-  python3 -c 'import hashlib, hmac, sys; print("sha256=" + hmac.new(sys.argv[1].encode(), sys.argv[2].encode(), hashlib.sha256).hexdigest())' "$SOC_SECRET" "$body"
-}
+# The two credentials this step computes, as `soc` would. Both defined in
+# lib.sh and gated against the server's own formatter by
+# `crates/web/tests/flag_revoke_canonical.rs`: a `POST` signs the raw body, a
+# `DELETE` signs `DELETE\n/api/v1/flags/{source}/{external_id}`, and the
+# endpoint answers a stale signature as an unknown source rather than saying so.
+sign() { heavy_flag_sign "$SOC_SECRET" "$1"; }
+sign_revoke() { heavy_flag_sign_revoke "$SOC_SECRET" soc "$1"; }
 
 FLAG_CONSUMER="$HEAVY_WORK/consumer-flags"
 new_consumer "$FLAG_CONSUMER"
@@ -718,7 +719,7 @@ grep -q "ci-admin" "$HEAVY_WORK/exposure.out" \
 
 heavy_log "DELETE /api/v1/flags/soc/$FLAG_ID — the revoke, and the scheduler re-deriving"
 REVOKE_CODE="$(curl -sS -o "$HEAVY_WORK/revoke.json" -w "$CURL_CODE" -X DELETE \
-  "$HEAVY_BASE/api/v1/flags/soc/$FLAG_ID" -H "X-Hub-Signature-256: $(sign "")")"
+  "$HEAVY_BASE/api/v1/flags/soc/$FLAG_ID" -H "X-Hub-Signature-256: $(sign_revoke "$FLAG_ID")")"
 [[ "$REVOKE_CODE" == "200" ]] || { cat "$HEAVY_WORK/revoke.json" >&2; heavy_fail "the revoke answered $REVOKE_CODE"; }
 grep -q '"revoked":true' "$HEAVY_WORK/revoke.json" \
   || { cat "$HEAVY_WORK/revoke.json" >&2; heavy_fail "the revoke did not report the flag gone"; }

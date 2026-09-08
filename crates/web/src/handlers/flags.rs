@@ -66,7 +66,16 @@ const MAX_PUSH_BYTES: u64 = 5 * 1024 * 1024;
 /// flag it was issued for, so a captured signature revokes only what it
 /// already revoked — a replay with no new effect, since a revoke is
 /// idempotent.
-fn revoke_canonical(source: &str, external_id: &str) -> String {
+///
+/// # This is the contract, and it has three other readers
+///
+/// A `[[flag_sources]]` operator computes this string from the documentation,
+/// not from this file, so changing it silently breaks every caller that had it
+/// right. `crates/web/tests/flag_revoke_canonical.rs` holds the other three to
+/// this function: the heavy suite's `heavy_flag_revoke_canonical`, and the
+/// literal quoted in the configuration guide, the incident-response runbook and
+/// RFC 0002. It is `pub` so that gate can call it.
+pub fn revoke_canonical(source: &str, external_id: &str) -> String {
     format!("DELETE\n/api/v1/flags/{source}/{external_id}")
 }
 
@@ -83,6 +92,9 @@ async fn authenticate(
     sources: &FlagSources,
 ) -> Result<(FlagSourceConfig, bytes::Bytes), AppError> {
     let Some(source) = sources.0.iter().find(|s| s.name == name).cloned() else {
+        // Debug, not warn: an unknown name is what a scan of the endpoint
+        // produces, and a warn per probe is a log an operator learns to ignore.
+        tracing::debug!(source = %name, "flags: no such source");
         return Err(AppError::not_found(format!("unknown flag source: {name}")));
     };
     let mut raw = BytesMut::new();
@@ -112,6 +124,18 @@ async fn authenticate(
     if !verify_inbound_hmac(&source.secret, &body, header) {
         // The same answer as an unknown name: a bad signature must not
         // confirm the name was right.
+        //
+        // The *log* is not the attacker's channel, so it says which half
+        // failed. Without this line the two cases are indistinguishable to the
+        // operator as well, and the `404` reads as "the source is missing"
+        // when the source is right there in the config — a `DELETE` signed
+        // over the empty body instead of `revoke_canonical` cost an afternoon
+        // reading configuration that was never wrong.
+        tracing::warn!(
+            source = %name,
+            signed_bytes = body.len(),
+            "flags: signature mismatch, answered as an unknown source"
+        );
         return Err(AppError::not_found(format!("unknown flag source: {name}")));
     }
     Ok((source, body))
