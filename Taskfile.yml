@@ -15,6 +15,7 @@ includes:
   security: { taskfile: .tasks/security.yaml, flatten: true }
   ui: { taskfile: .tasks/ui.yaml, flatten: true }
   docs: { taskfile: .tasks/docs.yaml, flatten: true }
+  helm: { taskfile: .tasks/helm.yaml, flatten: true }
   rfc: { taskfile: .tasks/rfc.yaml, flatten: true }
   compose: { taskfile: .tasks/compose.yaml, flatten: true }
   browser: { taskfile: .tasks/browser.yaml, flatten: true }

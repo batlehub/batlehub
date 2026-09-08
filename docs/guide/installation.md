@@ -291,20 +291,26 @@ config, not chart values: see
 
 ### Key values reference
 
+The chart's own `README.md` carries the full table, generated from `values.yaml`
+and kept in step with it by a drift gate. This is the shortlist.
+
 | Key | Default | Description |
 |-----|---------|-------------|
 | `image.repository` | `ghcr.io/batleforc/batlehub` | Container image |
 | `image.tag` | Chart appVersion | Image tag |
 | `replicaCount` | `1` | Pod replicas |
-| `database.url` | — | PostgreSQL connection string |
-| `storage.type` | `filesystem` | `filesystem` or `s3` |
-| `auth.tokens` | `[]` | Static token list |
-| `auth.oidc` | `[]` | OIDC provider list |
-| `registriesRaw` | npm example | Raw TOML `[[registries]]` blocks |
+| `config` | see `values.yaml` | The whole application config, serialised verbatim to `config.toml` |
+| `config.database.url` | — | PostgreSQL connection string |
+| `config.storage.type` | `filesystem` | `filesystem` or `s3` |
+| `config.auth` | one static admin token | `[[auth]]` blocks: `token`, `oidc`, `kubernetes`, `actions-oidc` |
+| `config.registries` | npm example | `[[registries]]` blocks |
+| `credentials.enabled` | `false` | Mount a second config file, merged over `config`, from its own Secret |
+| `credentials.existingSecret` | `""` | Use a Secret managed elsewhere instead of one this chart renders |
+| `credentials.config` | `{}` | The contents of that second file, same shape as `config` |
 | `ingress.enabled` | `false` | Create an Ingress resource |
 | `persistence.enabled` | `true` | Create a PVC for cache |
 | `persistence.size` | `10Gi` | PVC capacity |
-| `existingSecret` | `""` | Use a pre-existing Secret for config |
+| `externalManifest[].mount.asConfig` | — | Replace the chart-managed config Secret with one of your own |
 | `worker.enabled` | `false` | Run the scan worker in its own Deployment |
 | `worker.image.repository` | `ghcr.io/batleforc/batlehub-worker` | Worker image; the `-worker-guarddog` variant adds GuardDog |
 | `worker.autoscaling.enabled` | `false` | HPA on the queued-jobs metric |
@@ -390,6 +396,75 @@ If a placeholder references a variable that is not set in the container, BatleHu
 
 ---
 
+### A separate config file for the credentials {#helm-credentials}
+
+The placeholders above put one secret in one field. When whole *sections* belong
+to a different lifecycle — the database URL, the `[[auth]]` block, a registry's
+upstream token — the second config file is the better fit: the chart mounts it
+from its own Secret, and `--config` merges it over the main one.
+
+```yaml
+# my-values.yaml
+config:
+  # Everything that is not a secret, rendered into the chart-managed Secret.
+  registries:
+    - type: "npm"
+      name: "internal-npm"
+      upstreams:
+        - "https://registry.corp.example.com/npm"
+
+credentials:
+  enabled: true
+  config:
+    database:
+      type: "postgresql"
+      url: "postgresql://batlehub:the-real-password@postgres:5432/batlehub"
+    auth:
+      - type: "token"
+        tokens:
+          - value: "the-real-admin-token"
+            role: "admin"
+            user_id: "admin"
+    # Merged onto the registry declared above, matched by `name` — the upstream
+    # list is not restated.
+    registries:
+      - name: "internal-npm"
+        upstream_auth:
+          type: "bearer"
+          token: "npat-xxxxxxxxxxxx"
+```
+
+Three things follow from this that are worth knowing before you rely on it:
+
+- **Rotating the credentials Secret does not roll the pods.** The kubelet
+  updates the mounted file in place and the config file watcher picks the change
+  up. Nothing in the chart puts a `checksum/` annotation on this Secret, on
+  purpose — a rollout is exactly what hot reload is there to avoid.
+- **The console's config editor never sees it.** The editor reads and rewrites
+  the first layer only, so a file holding credentials is not served to a browser
+  and cannot be overwritten from one. What the editor validates and diffs is
+  still the merged config.
+- **Arrays merge on `name`, not by position.** That is what lets the block above
+  add a token to one registry without restating the other twenty. The rules in
+  full are in
+  [Layered config files](/guide/configuration#layered-config-files).
+
+To keep the credentials out of Helm entirely, point at a Secret something else
+manages and leave `credentials.config` empty:
+
+```yaml
+credentials:
+  enabled: true
+  existingSecret: batlehub-credentials   # from ESO, Sealed Secrets, Vault Agent
+  key: credentials.toml
+```
+
+The chart then renders no Secret of its own and mounts that one. Its `key` must
+hold a TOML document — the same shape as `config`, and only the parts you want
+kept separate.
+
+---
+
 ### Using an external secret (GitOps / Sealed Secrets)
 
 If you manage secrets externally (Sealed Secrets, External Secrets Operator, Vault), create the Secret yourself:
@@ -427,13 +502,28 @@ stringData:
     anonymous = ["releases:read", "source:read"]
 ```
 
-Then install the chart with `existingSecret`:
+Then tell the chart to mount it as the config, with an `externalManifest` entry
+that carries no `manifest` of its own — nothing is rendered, the Secret is only
+referenced:
+
+```yaml
+# my-values.yaml
+externalManifest:
+  - name: batlehub-config
+    kind: Secret
+    mount:
+      asConfig: true
+      items:
+        - key: config.toml
+          path: config.toml
+```
 
 ```sh
-helm install batlehub ./helm/batlehub \
-  --namespace batlehub \
-  --set existingSecret=batlehub-config
+helm install batlehub ./helm/batlehub --namespace batlehub -f my-values.yaml
 ```
+
+At most one entry may set `asConfig`. A `credentials` layer still works
+alongside it, and is merged over whatever that Secret carries.
 
 ---
 

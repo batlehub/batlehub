@@ -65,9 +65,94 @@ curl -H "Authorization: Bearer my-admin-token" http://localhost:8080/...
 
 ### Loading order
 
-1. The TOML file at the path given to `--config` is parsed (default: `config.toml` in the working directory).
+1. Every TOML file given to `--config` is parsed, in order, and merged into one document (default: `config.toml` in the working directory). See [Layered config files](#layered-config-files) below.
 2. Environment variables matching `PROXY_CACHE__<SECTION>__<FIELD>` are applied on top of the file values.
 3. The config is validated: `config_version` (if set) must not exceed what this binary supports, registry names must not be empty, and registry types must be one of `github`, `npm`, `cargo`, `openvsx`, `vscode-marketplace`, `goproxy`, `maven`, `terraform`, `rubygems`, `composer`, `pypi`, `conda`.
+
+### Layered config files
+
+`--config` is repeatable. Each further file is a **layer** merged over the ones
+before it, so a deployment can keep its credentials in a file with a different
+lifecycle from the rest of its configuration — a Kubernetes Secret beside a
+ConfigMap, a `0600` file beside a readable one — without giving up hot reload on
+either.
+
+```sh
+batlehub --config /etc/batlehub/config.toml --config /etc/batlehub/credentials.toml
+```
+
+Where only environment variables are available, `BATLEHUB_CONFIG` accepts the
+same list separated by `:`, in the same order:
+
+```sh
+BATLEHUB_CONFIG=/etc/batlehub/config.toml:/etc/batlehub/credentials.toml batlehub
+```
+
+#### Merge rules
+
+Later layers win. The merge happens on the TOML documents, before the config is
+deserialised, so a later layer can complete a table an earlier one opened.
+
+| Shape | Rule |
+| --- | --- |
+| Table over table | Merged key by key. A later layer adds keys without erasing the ones it does not mention. |
+| Array of tables, both sides keyed | Merged entry by entry on `name`, or on `type` when no `name` is present. An entry the base does not have is appended. |
+| Anything else | The later layer replaces the earlier one outright. |
+
+The keyed merge is what lets a credentials layer complete one registry out of
+twenty without restating the other nineteen:
+
+```toml
+# config.toml
+[[registries]]
+name = "npm-priv"
+type = "npm"
+upstreams = ["https://npm.acme.io"]
+
+[[registries]]
+name = "crates"
+type = "cargo"
+```
+
+```toml
+# credentials.toml
+[[registries]]
+name = "npm-priv"
+
+[registries.upstream_auth]
+type = "bearer"
+token = "s3cr3t"
+```
+
+The result is two registries, and `npm-priv` keeps both its upstream and its
+token.
+
+Three details decide the rest:
+
+- **Keying requires the key to be unique on both sides.** Two `[[auth]]` entries
+  that both read `type = "token"` and carry no `name` have no single counterpart
+  in the other layer, so the later array replaces the earlier one rather than
+  the merge guessing which entry pairs with which.
+- **Scalar arrays are replaced, never appended.** Restating `upstreams` in a
+  later layer sets the list; it does not grow it.
+- **An empty array clears the list.** `registries = []` in a later layer means
+  what it says.
+
+Environment placeholders are expanded per layer, before the merge, so a
+`${VAR}` is resolved in the file that wrote it. Validation runs once, on the
+merged document — a layer that is incomplete on its own is the normal case.
+
+#### Hot reload across layers
+
+Every layer is watched, and every reload re-reads all of them. Rotating a
+credential touches only the credentials file, and that alone stages a pending
+reload; see [Hot reload](/guide/hot-reload).
+
+The config editor in the console is the exception, deliberately. It reads and
+rewrites **only the first layer**, so a file holding credentials is never sent
+to a browser and never rewritten from one. What the editor validates and diffs
+is still the merged document, so its preview describes the config that would
+actually be in force.
 
 ### Auth evaluation order
 

@@ -72,6 +72,63 @@ jobs:
             grep -q "$key" /tmp/rendered.yaml || { echo "::error::default values dropped '$key'"; exit 1; }
           done
 
+      # ── The credentials layer (a second --config) ──────────────────────────
+      #
+      # Rendering it is the only test this feature has at the chart level, and
+      # each assertion below is one way it has a silent failure mode: an arg
+      # that is not passed leaves the credentials unread while every manifest
+      # still looks right, and a checksum annotation would turn a credential
+      # rotation into a pod rollout, which is what the hot reload exists to
+      # avoid.
+      - name: Render with the credentials layer
+        run: |
+          helm template batlehub helm/batlehub \
+            --set credentials.enabled=true \
+            --set credentials.config.database.url=postgresql://x \
+            --set worker.enabled=true \
+            > /tmp/credentials.yaml
+
+      - name: Both Deployments must pass the second --config
+        run: |
+          count=$(grep -c -- '- /etc/batlehub/credentials/credentials.toml' /tmp/credentials.yaml || true)
+          [ "$count" = "2" ] || {
+            echo "::error::expected the credentials layer on both the proxy and the worker, found $count"
+            exit 1
+          }
+          # Order decides the merge: the primary has to come first, or the base
+          # config would win over the credentials it is supposed to complete.
+          grep -A3 -- '- --config' /tmp/credentials.yaml \
+            | grep -q -- '- /etc/batlehub/config.toml' \
+            || { echo "::error::the primary config is not the first layer"; exit 1; }
+
+      - name: The credentials Secret must not trigger a rollout
+        run: |
+          if grep -E '^\s+checksum/.*credential' /tmp/credentials.yaml; then
+            echo "::error::a checksum annotation on the credentials Secret turns a rotation into a pod rollout"
+            exit 1
+          fi
+
+      - name: An existing Secret replaces the chart-rendered one
+        run: |
+          helm template batlehub helm/batlehub \
+            --set credentials.enabled=true \
+            --set credentials.existingSecret=managed-elsewhere \
+            > /tmp/existing.yaml
+          grep -q 'secretName: managed-elsewhere' /tmp/existing.yaml \
+            || { echo "::error::the named Secret is not mounted"; exit 1; }
+          if grep -q 'batlehub-credentials' /tmp/existing.yaml; then
+            echo "::error::the chart rendered its own credentials Secret alongside the named one"
+            exit 1
+          fi
+
+      - name: The layer is absent by default
+        run: |
+          helm template batlehub helm/batlehub > /tmp/default.yaml
+          if grep -q '/etc/batlehub/credentials' /tmp/default.yaml; then
+            echo "::error::the credentials layer is mounted with credentials.enabled=false"
+            exit 1
+          fi
+
       # Rendering with a non-default combination catches template errors that
       # the default path never reaches (ingress rules, PDB, extra manifests).
       - name: Render a non-default configuration
@@ -83,3 +140,37 @@ jobs:
             --set persistence.enabled=false \
             --set config.storage.type=s3 \
             > /dev/null
+
+  docs:
+    name: chart README matches values.yaml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Pinned to the version in mise.toml, not "latest": the generated table
+      # carries the generator's own version in its footer, and two versions of
+      # helm-docs do not have to agree on the rest of it either. A drifting
+      # version here would fail the gate on a commit that changed nothing.
+      - name: Install helm-docs
+        env:
+          HELM_DOCS_VERSION: "1.14.2"
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/helm-docs.tar.gz \
+            "https://github.com/norwoodj/helm-docs/releases/download/v${HELM_DOCS_VERSION}/helm-docs_${HELM_DOCS_VERSION}_Linux_x86_64.tar.gz"
+          tar -xzf /tmp/helm-docs.tar.gz -C /tmp helm-docs
+          sudo install -m 0755 /tmp/helm-docs /usr/local/bin/helm-docs
+          helm-docs --version
+
+      # Regenerates and diffs. `helm/batlehub/README.md` is generated from
+      # Chart.yaml and the `# --` comments in values.yaml, so a value added
+      # without a description, or with a stale one, is caught here rather than
+      # read by an operator as the truth about the chart.
+      - name: helm-docs drift
+        run: |
+          set -euo pipefail
+          helm-docs --chart-search-root=helm/batlehub --sort-values-order=file
+          if ! git diff --exit-code -- helm/batlehub/README.md; then
+            echo "::error::helm/batlehub/README.md is out of date. Run 'task helm:docs' and commit the result."
+            exit 1
+          fi

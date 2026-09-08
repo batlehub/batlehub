@@ -17,5 +17,9 @@ toml.workspace = true
 utoipa.workspace = true
 anyhow.workspace = true
 
+[dev-dependencies]
+# Layered loading reads real files, so its tests write real files.
+tempfile.workspace = true
+
 [lints]
 workspace = true

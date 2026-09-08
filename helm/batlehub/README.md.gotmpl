@@ -1,0 +1,79 @@
+{{/*
+  The source of helm/batlehub/README.md. Regenerate with `task helm:docs`
+  after any change to Chart.yaml or values.yaml; `task helm:docs:check` is
+  the drift gate and runs in the Helm chart lint workflow.
+
+  Everything outside the {{ template }} calls is hand-written and survives
+  regeneration. The values table is not: it comes from the `# --` comments in
+  values.yaml, so a value is documented by annotating it there, never by
+  editing README.md.
+*/}}
+{{ template "chart.header" . }}
+
+{{ template "chart.deprecationWarning" . }}
+
+{{ template "chart.badgesSection" . }}
+
+{{ template "chart.description" . }}
+
+{{ template "chart.homepageLine" . }}
+
+## Install
+
+```sh
+helm repo add batlehub https://batleforc.git.batleforc.fr/batlehub/charts
+helm install batlehub batlehub/batlehub -f my-values.yaml
+```
+
+Or straight from a checkout of the repository:
+
+```sh
+helm dependency build helm/batlehub
+helm install batlehub ./helm/batlehub -f my-values.yaml
+```
+
+The chart needs a PostgreSQL database it does not create. Point
+`config.database.url` at one before installing.
+
+## What you have to change before exposing it
+
+The defaults start a working server, not a safe one. Three values decide that:
+
+- `config.auth` ships a single static admin token, literally `change-me-admin-token`.
+  Replace it, or replace the whole block with an OIDC provider.
+- `config.database.url` carries a placeholder password and points at a host
+  named `postgres`.
+- `config.server.trusted_proxies` is unset, which keeps the permissive
+  behaviour. It becomes a startup error the moment host routing is configured
+  through `config.subdomain_routing` or a registry's `hosts`.
+
+There are two ways to keep those out of the values file, and they compose:
+
+- `env` as a `secretKeyRef`, referenced from `config` as a `${VAR_NAME}`
+  placeholder. Best for one field inside a larger block.
+- `credentials`, a second config file merged over `config` and mounted from its
+  own Secret. Best when whole sections belong to a different lifecycle. Rotating
+  that Secret does not roll the pods: the file watcher picks the change up, which
+  is why nothing in this chart puts a checksum annotation on it.
+
+## Storage and replicas
+
+`config.storage.type` decides whether more than one replica is possible. The
+default `filesystem` backend is backed by the `persistence` PVC, and
+`ReadWriteOnce` cannot be shared by replicas on different nodes. Either keep one
+replica, or switch to `s3`, which is the only backend every replica can write to
+concurrently.
+
+{{ template "chart.requirementsSection" . }}
+
+{{ template "chart.valuesSection" . }}
+
+## Further reading
+
+The table above is the chart's surface. What goes *inside* `config` is the
+server's own configuration, documented in full at
+[`docs/guide/configuration.md`](../../docs/guide/configuration.md), with the
+installation guide at
+[`docs/guide/installation.md`](../../docs/guide/installation.md).
+
+{{ template "helm-docs.versionFooter" . }}

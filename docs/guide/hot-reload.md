@@ -21,6 +21,17 @@ The following components **require a process restart**:
 
 When the config file changes on disk, BatleHub automatically validates the new config (schema check + connectivity probes) and stores a **pending reload**. The admin then confirms or discards it via the UI or API. Pending reloads expire after 10 minutes.
 
+When the process was started with more than one `--config`, **every layer is
+watched and every reload re-reads all of them**. Rotating a credential touches
+only the credentials file, and that alone stages a pending reload: the
+byte-identical-rewrite dedup that exists for `touch` and atomic saves compares
+all the layers, not just the first. See
+[Layered config files](/guide/configuration#layered-config-files).
+
+A layer that cannot be watched is logged and skipped rather than taking the
+watcher down for the others; the reload path re-reads every layer anyway, so a
+change to a watched file still picks up whatever the unwatched one now says.
+
 The file watcher is enabled by default. Disable it with:
 
 ```sh

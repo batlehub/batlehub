@@ -383,3 +383,111 @@ async fn a_tag_archive_is_dated_by_its_tag() {
         .to_request();
     assert_eq!(call_service(&app, req).await.status(), 200);
 }
+
+// ── the console's panel: GET /api/v1/explore/{registry}/{name}/refs ──────────
+//
+// The read side of the same table the headers above are derived from. It answers
+// what this instance resolved, not what the forge currently has, so every row it
+// returns has to have been put there by a request that actually went through.
+
+/// `owner/repo` as the console sends it: one path segment, slash encoded.
+fn refs_uri(registry: &str, repo: &str) -> String {
+    format!(
+        "/api/v1/explore/{registry}/{}/refs",
+        repo.replace('/', "%2F")
+    )
+}
+
+#[actix_web::test]
+async fn explore_refs_lists_the_branch_this_instance_resolved() {
+    let (app, _forge, _storage) = fixture(Default::default(), None).await;
+
+    // Nothing has been pulled yet, so the instance remembers nothing about it.
+    let empty: serde_json::Value =
+        actix_web::test::read_body_json(get(&app, &refs_uri(REG, REPO)).await).await;
+    assert_eq!(empty["remembered"], true, "the store is wired");
+    assert!(empty["refs"].as_array().expect("refs array").is_empty());
+
+    assert_eq!(
+        get(&app, &format!("/proxy/{REG}/{REPO}/tarball/main"))
+            .await
+            .status(),
+        200
+    );
+
+    let resp = get(&app, &refs_uri(REG, REPO)).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(body["registry"], REG);
+    assert_eq!(body["package"], REPO);
+    let refs = body["refs"].as_array().expect("refs array");
+    assert_eq!(refs.len(), 1, "one ref was resolved: {body}");
+    assert_eq!(refs[0]["git_ref"], "main");
+    assert_eq!(refs[0]["ref_kind"], "branch");
+    assert_eq!(refs[0]["sha"], A);
+    assert!(
+        refs[0].get("previous_sha").is_none(),
+        "a first sight has nothing to have moved from: {body}"
+    );
+}
+
+/// The field the panel exists for: a branch that advanced names both commits.
+#[actix_web::test]
+async fn explore_refs_names_the_previous_commit_when_a_branch_advances() {
+    let (app, forge, _storage) = fixture(
+        ForgeRefsPolicy {
+            branch_ttl: Duration::ZERO,
+            tag_ttl: Duration::from_secs(3600),
+            ..ForgeRefsPolicy::default()
+        },
+        None,
+    )
+    .await;
+    let url = format!("/proxy/{REG}/{REPO}/tarball/main");
+
+    assert_eq!(get(&app, &url).await.status(), 200);
+    forge.move_branch("main", B, Utc::now() - chrono::Duration::days(1));
+    assert_eq!(get(&app, &url).await.status(), 200);
+
+    let body: serde_json::Value =
+        actix_web::test::read_body_json(get(&app, &refs_uri(REG, REPO)).await).await;
+    let refs = body["refs"].as_array().expect("refs array");
+    assert_eq!(refs.len(), 1, "one ref, not one row per resolution: {body}");
+    assert_eq!(refs[0]["sha"], B);
+    assert_eq!(refs[0]["previous_sha"], A);
+}
+
+/// A repository nobody pulled is an empty list, not a 404: the instance has
+/// nothing to say about it, which is a different answer from "no such registry".
+#[actix_web::test]
+async fn explore_refs_of_an_unvisited_repository_is_empty() {
+    let (app, _forge, _storage) = fixture(Default::default(), None).await;
+    let body: serde_json::Value =
+        actix_web::test::read_body_json(get(&app, &refs_uri(REG, "cli/never-pulled")).await).await;
+    assert!(body["refs"].as_array().expect("refs array").is_empty());
+}
+
+#[actix_web::test]
+async fn explore_refs_returns_404_for_a_registry_that_is_not_a_forge() {
+    // Same fixture shape, an npm registry: refs are a forge concept, and an
+    // empty list here would read as "this npm registry has no moving refs".
+    let parts = local_registry_app_parts(REG, "npm", RegistryMode::Proxy, None);
+    {
+        let mut hot = parts.proxy_svc.hot.write().await;
+        hot.ref_resolutions = Some(InMemoryRefResolutionRepository::new());
+    }
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+
+    let resp = get(&app, &refs_uri(REG, "left-pad")).await;
+    assert_eq!(resp.status(), 404);
+}
+
+/// The browse check runs before the registry is even looked up, so a registry
+/// the caller may not browse answers `403` rather than disclosing, through a
+/// `404`, that it is not one this instance has.
+#[actix_web::test]
+async fn explore_refs_refuses_a_registry_the_caller_cannot_browse() {
+    let (app, _forge, _storage) = fixture(Default::default(), None).await;
+    let resp = get(&app, &refs_uri("not-in-the-config", REPO)).await;
+    assert_eq!(resp.status(), 403);
+}

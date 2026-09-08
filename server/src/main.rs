@@ -43,8 +43,14 @@ use crate::explain::explain_config;
     about = "BatleHub — smart artifact hub for package registries"
 )]
 struct Cli {
+    /// Config file to read. Repeatable: each further `--config` is a layer
+    /// merged over the ones before it, so credentials can live in a file with
+    /// a different lifecycle from the rest of the configuration (a Kubernetes
+    /// Secret beside a ConfigMap, a 0600 file beside a readable one). Every
+    /// layer is watched for hot reload; only the first is served to, or
+    /// rewritten by, the config editor.
     #[arg(short, long)]
-    config: Option<String>,
+    config: Vec<String>,
 
     /// What this process does (RFC 0018 §4.1): `proxy`, `worker`, or
     /// `proxy,worker`. Overrides `[server].roles`; absent means the config's
@@ -90,15 +96,52 @@ fn run_subcommand(cli: &Cli) -> Result<bool> {
             println!("{}", batlehub_adapters::auth::hash_static_token(token));
         }
         Some(Command::ExplainConfig { path }) => {
-            let path = path
-                .clone()
-                .or_else(|| cli.config.clone())
-                .unwrap_or_else(|| "config.toml".to_owned());
-            explain_config(&path)?;
+            // An explicit path explains that one file on its own; otherwise the
+            // whole layer stack, because what a `"*"` expands to is a property
+            // of the merged config and explaining only the primary would print
+            // an expansion the server never uses.
+            let paths = match path {
+                Some(p) => vec![p.clone()],
+                None => config_paths(cli),
+            };
+            explain_config(&paths)?;
         }
         None => return Ok(false),
     }
     Ok(true)
+}
+
+/// The config files to load, first to last, later layers winning.
+///
+/// `--config` is repeatable. With none given, `BATLEHUB_CONFIG` is read and
+/// split on `:` so a layered setup can be expressed in an environment where
+/// only variables are available (a container image's `ENV`, a systemd unit).
+/// With neither, the historical single `config.toml`.
+///
+/// Never empty: the callers rely on a first element being there to be the
+/// editor's file.
+fn config_paths(cli: &Cli) -> Vec<String> {
+    if !cli.config.is_empty() {
+        return cli.config.clone();
+    }
+    match std::env::var("BATLEHUB_CONFIG") {
+        // `filter` rather than trusting the split: `BATLEHUB_CONFIG=""` and a
+        // trailing `:` both produce empty segments, and an empty path is a
+        // confusing "No such file or directory" rather than the default.
+        Ok(raw) => {
+            let paths: Vec<String> = raw
+                .split(':')
+                .filter(|p| !p.is_empty())
+                .map(str::to_owned)
+                .collect();
+            if paths.is_empty() {
+                vec!["config.toml".to_owned()]
+            } else {
+                paths
+            }
+        }
+        Err(_) => vec!["config.toml".to_owned()],
+    }
 }
 
 /// `--roles`, parsed. Overrides `[server].roles`.
@@ -481,12 +524,15 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let config_path = cli
-        .config
-        .or_else(|| std::env::var("BATLEHUB_CONFIG").ok())
-        .unwrap_or_else(|| "config.toml".to_string());
-    let mut config = batlehub_config::load(&config_path)
-        .with_context(|| format!("loading config from '{config_path}'"))?;
+    let config_paths = config_paths(&cli);
+    let mut config = batlehub_config::load_layered(&config_paths)
+        .with_context(|| format!("loading config from {}", config_paths.join(", ")))?;
+    // The first layer is the one the config editor reads and rewrites; the rest
+    // are merged over it and never leave the process.
+    let (config_path, config_overlays) = config_paths
+        .split_first()
+        .map(|(first, rest)| (first.clone(), rest.to_vec()))
+        .expect("config_paths is never empty");
     if let Some(roles) = cli.roles {
         config.server.roles = parse_roles(&roles)?;
     }
@@ -498,7 +544,7 @@ async fn main() -> Result<()> {
     let prometheus_handle = install_metrics_recorder(&config)?;
 
     let _tracer_provider = watcher::init_tracing(config.otel.as_ref());
-    tracing::info!(config = %config_path, "batlehub starting");
+    tracing::info!(config = %config_paths.join(", "), "batlehub starting");
 
     let repo = Arc::new(
         PgPackageRepository::new(
@@ -833,6 +879,7 @@ async fn main() -> Result<()> {
         // reach the policy those two actually read.
         proxy_trust: proxy_trust.clone(),
         config_path: config_path.clone(),
+        config_overlays: config_overlays.clone(),
         config_change_repo: Some(Arc::clone(&config_change_repo)),
         hot_reload_enabled,
         builder: hot_builder,
@@ -844,8 +891,8 @@ async fn main() -> Result<()> {
     reload_svc.set_warnings(config.warnings());
 
     if hot_reload_enabled {
-        watcher::spawn_config_watcher(config_path.clone(), Arc::clone(&reload_svc));
-        tracing::info!("hot reload: enabled (watching {})", config_path);
+        watcher::spawn_config_watcher(config_paths.clone(), Arc::clone(&reload_svc));
+        tracing::info!("hot reload: enabled (watching {})", config_paths.join(", "));
     } else {
         tracing::info!("hot reload: disabled (BATLEHUB_DISABLE_HOT_RELOAD=1)");
     }
@@ -1009,4 +1056,158 @@ fn hostname_or(fallback: &str) -> String {
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| fallback.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `config_paths` reads `BATLEHUB_CONFIG` from the single process-wide
+    /// environment table, so the tests that set it must not interleave.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Run `f` with `BATLEHUB_CONFIG` set to `value`, or unset when `None`,
+    /// restoring whatever was there before.
+    fn with_env<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var("BATLEHUB_CONFIG").ok();
+        // SAFETY: serialised by ENV_LOCK, so no other thread in this binary's
+        // test run reads or writes the variable while it is being changed.
+        unsafe {
+            match value {
+                Some(v) => std::env::set_var("BATLEHUB_CONFIG", v),
+                None => std::env::remove_var("BATLEHUB_CONFIG"),
+            }
+        }
+        let out = f();
+        unsafe {
+            match previous {
+                Some(v) => std::env::set_var("BATLEHUB_CONFIG", v),
+                None => std::env::remove_var("BATLEHUB_CONFIG"),
+            }
+        }
+        out
+    }
+
+    fn cli(args: &[&str]) -> Cli {
+        let mut argv = vec!["batlehub"];
+        argv.extend_from_slice(args);
+        Cli::parse_from(argv)
+    }
+
+    // ── Layer order ───────────────────────────────────────────────────────────
+    //
+    // Order is the whole semantics: later layers win, and the *first* is the one
+    // the config editor reads and rewrites. A resolver that returned the paths in
+    // any other order would put credentials in the editor and let the base config
+    // overwrite them, both silently.
+
+    #[test]
+    fn a_single_config_flag_is_one_layer() {
+        let paths = with_env(None, || config_paths(&cli(&["--config", "a.toml"])));
+        assert_eq!(paths, vec!["a.toml".to_owned()]);
+    }
+
+    #[test]
+    fn repeated_config_flags_keep_their_order() {
+        let paths = with_env(None, || {
+            config_paths(&cli(&[
+                "--config",
+                "base.toml",
+                "--config",
+                "credentials.toml",
+            ]))
+        });
+        assert_eq!(
+            paths,
+            vec!["base.toml".to_owned(), "credentials.toml".to_owned()]
+        );
+    }
+
+    #[test]
+    fn the_short_flag_repeats_the_same_way() {
+        let paths = with_env(None, || {
+            config_paths(&cli(&["-c", "base.toml", "-c", "credentials.toml"]))
+        });
+        assert_eq!(
+            paths,
+            vec!["base.toml".to_owned(), "credentials.toml".to_owned()]
+        );
+    }
+
+    // ── The environment fallback ──────────────────────────────────────────────
+
+    #[test]
+    fn batlehub_config_supplies_one_path() {
+        let paths = with_env(Some("/etc/batlehub/config.toml"), || {
+            config_paths(&cli(&[]))
+        });
+        assert_eq!(paths, vec!["/etc/batlehub/config.toml".to_owned()]);
+    }
+
+    /// The list form, for the places where only environment variables are
+    /// available — a container image's `ENV`, a systemd unit.
+    #[test]
+    fn batlehub_config_splits_a_colon_separated_list_in_order() {
+        let paths = with_env(
+            Some("/etc/batlehub/config.toml:/etc/batlehub/credentials/credentials.toml"),
+            || config_paths(&cli(&[])),
+        );
+        assert_eq!(
+            paths,
+            vec![
+                "/etc/batlehub/config.toml".to_owned(),
+                "/etc/batlehub/credentials/credentials.toml".to_owned(),
+            ]
+        );
+    }
+
+    /// An empty segment is a path of `""`, which fails to open with a "No such
+    /// file or directory" naming nothing — far worse than falling back.
+    #[test]
+    fn empty_segments_are_dropped_rather_than_becoming_empty_paths() {
+        let paths = with_env(Some("/etc/batlehub/config.toml:"), || {
+            config_paths(&cli(&[]))
+        });
+        assert_eq!(paths, vec!["/etc/batlehub/config.toml".to_owned()]);
+    }
+
+    #[test]
+    fn an_empty_batlehub_config_falls_back_to_the_default() {
+        let paths = with_env(Some(""), || config_paths(&cli(&[])));
+        assert_eq!(paths, vec!["config.toml".to_owned()]);
+
+        let only_separators = with_env(Some("::"), || config_paths(&cli(&[])));
+        assert_eq!(only_separators, vec!["config.toml".to_owned()]);
+    }
+
+    // ── Precedence and the default ────────────────────────────────────────────
+
+    /// The flag is the explicit instruction and the variable is the ambient one,
+    /// so the flag wins outright rather than the two being concatenated — a
+    /// merge of the two would make the effective config depend on an
+    /// environment the operator did not mention on the command line.
+    #[test]
+    fn the_flag_wins_over_the_environment_entirely() {
+        let paths = with_env(Some("/etc/batlehub/from-env.toml"), || {
+            config_paths(&cli(&["--config", "from-flag.toml"]))
+        });
+        assert_eq!(paths, vec!["from-flag.toml".to_owned()]);
+    }
+
+    #[test]
+    fn with_neither_flag_nor_variable_the_default_is_a_single_config_toml() {
+        let paths = with_env(None, || config_paths(&cli(&[])));
+        assert_eq!(paths, vec!["config.toml".to_owned()]);
+    }
+
+    /// Every caller indexes the first element to find the editor's file, so an
+    /// empty result would be a panic at startup rather than a bad config.
+    #[test]
+    fn the_result_is_never_empty() {
+        for env in [None, Some(""), Some(":"), Some("a.toml")] {
+            let paths = with_env(env, || config_paths(&cli(&[])));
+            assert!(!paths.is_empty(), "empty for BATLEHUB_CONFIG={env:?}");
+        }
+    }
 }

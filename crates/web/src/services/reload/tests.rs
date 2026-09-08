@@ -64,7 +64,8 @@ fn built_hot_state(hot: batlehub_core::services::HotConfig) -> BuiltHotState {
     }
 }
 
-/// The service's construction parameters. Three of the sixteen ever vary.
+/// The service's construction parameters. Three of the seventeen ever vary;
+/// `config_overlays` is empty here and exercised by its own tests below.
 fn reload_params(
     config_path: String,
     hot_reload_enabled: bool,
@@ -84,6 +85,7 @@ fn reload_params(
         registry_host_map: crate::RegistryHostMap::default(),
         proxy_trust: crate::middleware::ProxyTrust::default(),
         config_path,
+        config_overlays: Vec::new(),
         config_change_repo: None,
         hot_reload_enabled,
         builder,
@@ -717,4 +719,228 @@ async fn apply_with_no_content_leaves_file_unchanged() {
 
     let on_disk = tokio::fs::read_to_string(tmp.path()).await.unwrap();
     assert_eq!(on_disk, initial);
+}
+
+// ── Layered config files ──────────────────────────────────────────────────────
+//
+// Two files, one process: the credentials layer has a different lifecycle from
+// the rest of the configuration, and both have to hot-reload. What these tests
+// pin down is the part that is easy to get subtly wrong — that a change to the
+// *overlay* alone still produces a reload, and that the overlay never reaches
+// the editor's read or write path.
+
+/// A service over a primary file plus one overlay, both real files on disk.
+async fn make_svc_with_layers(
+    primary_content: &str,
+    overlay_content: &str,
+    builder: HotConfigBuilder,
+) -> (
+    Arc<ConfigReloadService>,
+    tempfile::NamedTempFile,
+    tempfile::NamedTempFile,
+) {
+    use std::io::Write as _;
+    let mut primary = tempfile::NamedTempFile::new().expect("temp file");
+    primary
+        .write_all(primary_content.as_bytes())
+        .expect("write");
+    let mut overlay = tempfile::NamedTempFile::new().expect("temp file");
+    overlay
+        .write_all(overlay_content.as_bytes())
+        .expect("write");
+
+    let mut params = reload_params(primary.path().to_str().unwrap().to_owned(), true, builder);
+    params.config_overlays = vec![overlay.path().to_str().unwrap().to_owned()];
+    (Arc::new(ConfigReloadService::new(params)), primary, overlay)
+}
+
+/// The credentials layer in these tests: the piece the primary deliberately
+/// does not carry.
+const CREDENTIALS_LAYER: &str = r#"
+[database]
+url = "postgresql://real:s3cr3t@db/batlehub"
+"#;
+
+/// The reason the feature exists. A rotation touches only the overlay; the
+/// primary's bytes are identical, and the dedup that exists for `touch` and
+/// atomic saves must not read that as "nothing changed".
+#[tokio::test]
+async fn a_change_to_the_overlay_alone_is_not_deduplicated_away() {
+    let (svc, _primary, overlay) =
+        make_svc_with_layers(MINIMAL_CONFIG, CREDENTIALS_LAYER, noop_builder()).await;
+
+    // First load: establishes the baseline the dedup compares against.
+    svc.load_pending(ReloadSource::FileWatcher)
+        .await
+        .expect("first load failed");
+    let first_id = svc
+        .pending_snapshot()
+        .expect("first load stores a pending")
+        .id;
+
+    // Rotate the credential. Nothing about the primary changes.
+    tokio::fs::write(
+        overlay.path(),
+        "[database]\nurl = \"postgresql://real:rotated@db/batlehub\"\n",
+    )
+    .await
+    .expect("overlay rewrite failed");
+
+    svc.load_pending(ReloadSource::FileWatcher)
+        .await
+        .expect("reload after rotation failed");
+
+    assert_ne!(
+        svc.pending_snapshot()
+            .expect("the rotation stages a pending")
+            .id,
+        first_id,
+        "a credentials-only change was deduplicated away, so the rotation never took effect"
+    );
+}
+
+/// The other half: an untouched overlay must still dedup, or every spurious
+/// watcher event on the primary rebuilds the world.
+#[tokio::test]
+async fn an_unchanged_pair_of_layers_still_deduplicates() {
+    let (svc, _primary, _overlay) =
+        make_svc_with_layers(MINIMAL_CONFIG, CREDENTIALS_LAYER, noop_builder()).await;
+
+    svc.load_pending(ReloadSource::FileWatcher)
+        .await
+        .expect("first load failed");
+    let first_id = svc
+        .pending_snapshot()
+        .expect("first load stores a pending")
+        .id;
+
+    let second = svc
+        .load_pending(ReloadSource::FileWatcher)
+        .await
+        .expect("second load failed");
+
+    assert!(second.is_noop());
+    assert_eq!(
+        svc.pending_snapshot().expect("pending left untouched").id,
+        first_id,
+        "a byte-identical rewrite of both layers replaced the pending reload"
+    );
+}
+
+/// The editor reads the primary and nothing else. This is what keeps the
+/// credentials layer out of the admin API's responses.
+#[tokio::test]
+async fn the_editor_reads_the_primary_layer_only() {
+    let (svc, _primary, _overlay) =
+        make_svc_with_layers(MINIMAL_CONFIG, CREDENTIALS_LAYER, noop_builder()).await;
+
+    let served = svc.config_content().await.expect("config_content failed");
+
+    assert_eq!(served, MINIMAL_CONFIG);
+    assert!(
+        !served.contains("s3cr3t"),
+        "the credentials layer was served to the config editor"
+    );
+}
+
+/// And it writes the primary and nothing else, so a save cannot inline the
+/// overlay's secrets into the file the editor owns.
+#[tokio::test]
+async fn applying_editor_content_leaves_the_overlay_untouched() {
+    let (svc, primary, overlay) =
+        make_svc_with_layers(MINIMAL_CONFIG, CREDENTIALS_LAYER, noop_builder()).await;
+
+    let edited = format!("{MINIMAL_CONFIG}\n# edited by the console\n");
+    svc.load_pending_from_content(&edited, ReloadSource::AdminRequest)
+        .await
+        .expect("editor load failed");
+    svc.apply("test-user").await.expect("apply failed");
+
+    let primary_on_disk = tokio::fs::read_to_string(primary.path()).await.unwrap();
+    assert_eq!(primary_on_disk, edited);
+    assert!(
+        !primary_on_disk.contains("s3cr3t"),
+        "the editor's write-back copied the credentials layer into the primary file"
+    );
+
+    let overlay_on_disk = tokio::fs::read_to_string(overlay.path()).await.unwrap();
+    assert_eq!(
+        overlay_on_disk, CREDENTIALS_LAYER,
+        "the editor rewrote a layer it does not own"
+    );
+}
+
+/// The editor's preview has to describe the config that would actually be in
+/// force, which means validating the merge rather than the primary alone. A
+/// primary that is incomplete on its own is the normal case here.
+#[tokio::test]
+async fn validate_content_validates_the_merged_document() {
+    // The primary carries no [database] at all — invalid by itself, valid once
+    // the credentials layer is merged over it.
+    const NO_DATABASE: &str = r#"
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[storage]
+type = "filesystem"
+path = "./tmp"
+"#;
+    const WHOLE_DATABASE_BLOCK: &str = r#"
+[database]
+type = "postgresql"
+url = "postgresql://real:s3cr3t@db/batlehub"
+"#;
+    let (svc, _primary, _overlay) =
+        make_svc_with_layers(NO_DATABASE, WHOLE_DATABASE_BLOCK, noop_builder()).await;
+
+    svc.validate_content(NO_DATABASE)
+        .await
+        .expect("a primary that only validates once merged was refused");
+}
+
+/// An overlay that has gone missing is an error naming the file, not a silent
+/// fallback to the primary. Falling back would drop every credential the
+/// process was running with and look like a successful reload.
+#[tokio::test]
+async fn a_missing_overlay_fails_the_reload_by_name() {
+    let (svc, _primary, overlay) =
+        make_svc_with_layers(MINIMAL_CONFIG, CREDENTIALS_LAYER, noop_builder()).await;
+    let overlay_path = overlay.path().to_owned();
+    drop(overlay);
+
+    let err = svc
+        .load_pending(ReloadSource::FileWatcher)
+        .await
+        .expect_err("a missing overlay was accepted");
+
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains(&overlay_path.to_string_lossy().to_string()),
+        "the error does not name the missing overlay: {msg}"
+    );
+}
+
+/// A deleted overlay must not fingerprint like an empty one. The dedup runs
+/// before the parse, so an overlay that was empty and is now gone would
+/// otherwise be read as "nothing changed" and the error never reported.
+#[tokio::test]
+async fn a_deleted_overlay_is_not_mistaken_for_an_empty_one() {
+    let (svc, _primary, overlay) = make_svc_with_layers(MINIMAL_CONFIG, "", noop_builder()).await;
+
+    svc.load_pending(ReloadSource::FileWatcher)
+        .await
+        .expect("first load failed");
+
+    let overlay_path = overlay.path().to_owned();
+    drop(overlay);
+
+    let err = svc
+        .load_pending(ReloadSource::FileWatcher)
+        .await
+        .expect_err("a deleted overlay was deduplicated away as unchanged");
+    assert!(
+        format!("{err:#}").contains(&overlay_path.to_string_lossy().to_string()),
+        "the error does not name the deleted overlay: {err:#}"
+    );
 }

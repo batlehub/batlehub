@@ -23,6 +23,177 @@ pub fn load_from_str(raw: &str) -> Result<AppConfig> {
     Ok(config)
 }
 
+// ── Layered configuration ─────────────────────────────────────────────────────
+//
+// One process, several config files: the point is to keep credentials in a file
+// with a different lifecycle from the rest of the configuration — a Kubernetes
+// Secret beside a ConfigMap, a 0600 file beside a world-readable one — without
+// giving up hot reload on either.
+//
+// The layers are merged as TOML *documents*, before deserialization, for two
+// reasons. Merging `AppConfig` values after the fact would need every field to
+// be an `Option` to tell "absent" from "at its default", which is a change to
+// every schema struct in the crate and would weaken the single-file error
+// messages. And merging documents is what lets a later layer complete a table
+// the earlier one opened — `upstream_auth` on a registry declared elsewhere —
+// which is the case this feature exists for.
+//
+// Env-var placeholders are expanded per layer, before the merge, so a `${VAR}`
+// is resolved in the file that wrote it.
+
+/// The key an array-of-tables merges on, when it has one.
+///
+/// `name` before `type` because a `[[registries]]` entry carries both and only
+/// `name` identifies it; `[[auth]]` entries of the OIDC family carry a `name`
+/// too, and the static-token provider carries only its `type`.
+const IDENTITY_KEYS: [&str; 2] = ["name", "type"];
+
+/// The identity key `base` and `overlay` can be merged on, if any.
+///
+/// Requires the key to be present, a string, and **unique** on both sides.
+/// Uniqueness is what makes the merge well defined: two entries answering to
+/// the same name have no single counterpart in the other layer, and quietly
+/// picking the first would be a rule nobody could predict from the file.
+/// Empty arrays are excluded so that `x = []` in a later layer clears the list
+/// rather than being a vacuous no-op.
+fn array_identity_key(base: &[toml::Value], overlay: &[toml::Value]) -> Option<&'static str> {
+    if base.is_empty() || overlay.is_empty() {
+        return None;
+    }
+    IDENTITY_KEYS.into_iter().find(|key| {
+        [base, overlay].into_iter().all(|side| {
+            let mut seen = std::collections::HashSet::new();
+            side.iter().all(|entry| {
+                entry
+                    .as_table()
+                    .and_then(|t| t.get(*key))
+                    .and_then(toml::Value::as_str)
+                    .is_some_and(|id| seen.insert(id))
+            })
+        })
+    })
+}
+
+/// Merge `overlay` into `base`, in place. Later layers win.
+///
+/// - Table over table: recurse, so a later layer adds keys without erasing the
+///   ones it does not mention.
+/// - Array-of-tables over array-of-tables, when both sides key cleanly on
+///   `name` (else `type`): merge entry by entry on that key, appending entries
+///   the base does not have. This is the only rule that lets a credentials
+///   layer complete one registry out of twenty without restating the other
+///   nineteen.
+/// - Everything else: the overlay replaces the base outright. That covers
+///   scalars, scalar arrays such as `upstreams`, and arrays of tables with no
+///   usable identity — where entry-by-entry merging would have to guess.
+fn merge_value(base: &mut toml::Value, overlay: toml::Value) {
+    match (base, overlay) {
+        (toml::Value::Table(base), toml::Value::Table(overlay)) => {
+            for (key, value) in overlay {
+                match base.get_mut(&key) {
+                    Some(existing) => merge_value(existing, value),
+                    None => {
+                        base.insert(key, value);
+                    }
+                }
+            }
+        }
+        (toml::Value::Array(base), toml::Value::Array(overlay)) => {
+            let Some(key) = array_identity_key(base, &overlay) else {
+                *base = overlay;
+                return;
+            };
+            let id_of = |entry: &toml::Value| {
+                entry
+                    .as_table()
+                    .and_then(|t| t.get(key))
+                    .and_then(toml::Value::as_str)
+                    .map(str::to_owned)
+            };
+            for entry in overlay {
+                match id_of(&entry)
+                    .and_then(|id| base.iter_mut().find(|e| id_of(e).as_deref() == Some(&id)))
+                {
+                    Some(existing) => merge_value(existing, entry),
+                    None => base.push(entry),
+                }
+            }
+        }
+        (base, overlay) => *base = overlay,
+    }
+}
+
+/// Read one layer: the file's bytes, with `${VAR}` placeholders expanded.
+fn read_layer(path: &Path) -> Result<String> {
+    std::fs::read_to_string(path)
+        .with_context(|| format!("reading config file: {}", path.display()))
+}
+
+/// Load a config from one or more layered TOML files, later layers winning.
+///
+/// With a single path this is exactly [`load`], including its error messages:
+/// the merge path parses through `toml::Value` and so loses the line and column
+/// a direct `toml::from_str::<AppConfig>` reports, and the single-file case is
+/// the one almost every deployment is in.
+pub fn load_layered(paths: &[impl AsRef<Path>]) -> Result<AppConfig> {
+    match paths {
+        [] => bail!("no config file given"),
+        [only] => load(only),
+        _ => {
+            let mut layers = paths.iter().map(|p| {
+                let path = p.as_ref();
+                read_layer(path).and_then(|raw| {
+                    merged_layer_value(&raw)
+                        .with_context(|| format!("parsing config file: {}", path.display()))
+                })
+            });
+            // `paths` has at least two entries here, so the first is present.
+            let mut merged = layers.next().expect("at least two layers")?;
+            for layer in layers {
+                merge_value(&mut merged, layer?);
+            }
+            config_from_value(merged)
+        }
+    }
+}
+
+/// One layer as a TOML document, with its env placeholders already expanded.
+fn merged_layer_value(raw: &str) -> Result<toml::Value> {
+    let expanded = expand_env_vars(raw)?;
+    let value: toml::Value = toml::from_str(&expanded)?;
+    Ok(value)
+}
+
+/// Deserialize, apply env overrides and validate — the tail of [`load_from_str`],
+/// shared so a layered config goes through exactly the same checks as a single
+/// file rather than a parallel set that could drift.
+fn config_from_value(value: toml::Value) -> Result<AppConfig> {
+    let mut config: AppConfig = value
+        .try_into()
+        .with_context(|| "parsing merged config TOML")?;
+    config.apply_env_overrides();
+    config.validate()?;
+    Ok(config)
+}
+
+/// Merge already-read layer contents, in order. The in-memory twin of
+/// [`load_layered`], for the hot-reload path, which holds the primary layer's
+/// text (from the file watcher or the config editor) and re-reads the rest.
+pub fn load_layered_from_str(layers: &[impl AsRef<str>]) -> Result<AppConfig> {
+    match layers {
+        [] => bail!("no config content given"),
+        [only] => load_from_str(only.as_ref()),
+        _ => {
+            let mut values = layers.iter().map(|l| merged_layer_value(l.as_ref()));
+            let mut merged = values.next().expect("at least two layers")?;
+            for value in values {
+                merge_value(&mut merged, value?);
+            }
+            config_from_value(merged)
+        }
+    }
+}
+
 /// Expand `${VAR_NAME}` placeholders in a raw config string with their
 /// environment variable values.
 ///
@@ -178,6 +349,380 @@ mod tests {
         type = "filesystem"
         path = "./tmp"
         "#
+    }
+
+    // ── Layered config ────────────────────────────────────────────────────────
+    //
+    // The rules these pin down are the ones an operator has to be able to
+    // predict from reading two files, so each test is named for the rule rather
+    // than for the function under test.
+
+    /// The base layer every layering test starts from: two registries, so a test
+    /// can show that completing one leaves the other alone.
+    fn two_registries() -> String {
+        format!(
+            "{}\n{}",
+            minimal(),
+            r#"
+        [[registries]]
+        name = "npm-priv"
+        type = "npm"
+        upstreams = ["https://npm.acme.io"]
+
+        [[registries]]
+        name = "crates"
+        type = "cargo"
+        "#
+        )
+    }
+
+    #[test]
+    fn a_later_layer_completes_a_registry_without_restating_the_others() {
+        let cfg = crate::load_layered_from_str(&[
+            two_registries(),
+            r#"
+            [[registries]]
+            name = "npm-priv"
+            [registries.upstream_auth]
+            type = "bearer"
+            token = "s3cr3t"
+            "#
+            .to_owned(),
+        ])
+        .expect("layered load failed");
+
+        // The registry the overlay named kept the fields only the base had.
+        let npm = cfg
+            .registries
+            .iter()
+            .find(|r| r.name == "npm-priv")
+            .expect("npm-priv missing");
+        assert_eq!(npm.upstreams, vec!["https://npm.acme.io".to_owned()]);
+        assert!(
+            npm.upstream_auth.is_some(),
+            "credentials layer not merged in"
+        );
+
+        // And the one it did not name survived, which is the whole difference
+        // from replacing the array.
+        assert_eq!(cfg.registries.len(), 2);
+        assert!(cfg.registries.iter().any(|r| r.name == "crates"));
+    }
+
+    #[test]
+    fn a_later_layer_appends_a_registry_the_base_does_not_have() {
+        let cfg = crate::load_layered_from_str(&[
+            two_registries(),
+            r#"
+            [[registries]]
+            name = "pypi-priv"
+            type = "pypi"
+            "#
+            .to_owned(),
+        ])
+        .expect("layered load failed");
+
+        assert_eq!(cfg.registries.len(), 3);
+        assert!(cfg.registries.iter().any(|r| r.name == "pypi-priv"));
+    }
+
+    #[test]
+    fn a_later_layer_wins_on_a_scalar() {
+        let cfg = crate::load_layered_from_str(&[
+            minimal().to_owned(),
+            r#"
+            [database]
+            url = "postgresql://real:secret@db/batlehub"
+            "#
+            .to_owned(),
+        ])
+        .expect("layered load failed");
+
+        assert_eq!(cfg.database.url, "postgresql://real:secret@db/batlehub");
+        // `type` came from the base: a table merges rather than replaces.
+        assert_eq!(cfg.server.port, 8080);
+    }
+
+    /// A scalar array has no identity to merge on, so the later layer replaces
+    /// it. Appending would make a list of upstreams grow every time someone
+    /// restated it, which is not what writing a list means.
+    #[test]
+    fn a_scalar_array_is_replaced_not_appended() {
+        let cfg = crate::load_layered_from_str(&[
+            two_registries(),
+            r#"
+            [[registries]]
+            name = "npm-priv"
+            upstreams = ["https://mirror.internal"]
+            "#
+            .to_owned(),
+        ])
+        .expect("layered load failed");
+
+        let npm = cfg
+            .registries
+            .iter()
+            .find(|r| r.name == "npm-priv")
+            .expect("npm-priv missing");
+        assert_eq!(npm.upstreams, vec!["https://mirror.internal".to_owned()]);
+    }
+
+    /// The case the whole feature is for: the credentials layer carries the
+    /// `[[auth]]` block and the base carries none.
+    #[test]
+    fn the_credentials_layer_can_carry_the_whole_auth_block() {
+        let cfg = crate::load_layered_from_str(&[
+            minimal().to_owned(),
+            r#"
+            [[auth]]
+            type = "token"
+            [[auth.tokens]]
+            value = "real-admin-token"
+            role = "admin"
+            user_id = "admin"
+            "#
+            .to_owned(),
+        ])
+        .expect("layered load failed");
+
+        assert_eq!(cfg.auth.len(), 1);
+        assert!(matches!(cfg.auth[0], AuthConfig::Token(_)));
+    }
+
+    /// `[[auth]]` entries of the OIDC family carry a `name`, so two different
+    /// providers stay two entries rather than collapsing on their shared
+    /// `type`.
+    #[test]
+    fn two_named_auth_providers_do_not_collapse_onto_their_type() {
+        let cfg = crate::load_layered_from_str(&[
+            format!(
+                "{}\n{}",
+                minimal(),
+                r#"
+            [[auth]]
+            type = "oidc"
+            name = "corp"
+            issuer_url = "https://sso.example.com/"
+            client_id = "batlehub"
+            client_secret = "placeholder"
+            redirect_uri = "https://batlehub.example.com/api/v1/auth/oidc/callback"
+            "#
+            ),
+            r#"
+            [[auth]]
+            type = "oidc"
+            name = "partners"
+            issuer_url = "https://partners.example.com/"
+            client_id = "batlehub"
+            client_secret = "placeholder"
+            redirect_uri = "https://batlehub.example.com/api/v1/auth/oidc/callback"
+            "#
+            .to_owned(),
+        ])
+        .expect("layered load failed");
+
+        assert_eq!(cfg.auth.len(), 2);
+    }
+
+    /// An empty array in a later layer clears the list. Treating it as "nothing
+    /// to merge" would make a deliberate `registries = []` unwritable.
+    #[test]
+    fn an_empty_array_in_a_later_layer_clears_the_list() {
+        let cfg = crate::load_layered_from_str(&[two_registries(), "registries = []\n".to_owned()])
+            .expect("layered load failed");
+
+        assert!(cfg.registries.is_empty());
+    }
+
+    /// With no unique identity on both sides the merge would have to guess
+    /// which entry pairs with which, so the later layer replaces the array
+    /// outright. Two `type = "token"` blocks are the realistic way to get here.
+    #[test]
+    fn an_array_with_a_repeated_identity_is_replaced_not_merged() {
+        let cfg = crate::load_layered_from_str(&[
+            format!(
+                "{}\n{}",
+                minimal(),
+                r#"
+            [[auth]]
+            type = "token"
+            [[auth.tokens]]
+            value = "first"
+            role = "admin"
+
+            [[auth]]
+            type = "token"
+            [[auth.tokens]]
+            value = "second"
+            role = "user"
+            "#
+            ),
+            r#"
+            [[auth]]
+            type = "token"
+            [[auth.tokens]]
+            value = "only-this-one"
+            role = "admin"
+            "#
+            .to_owned(),
+        ])
+        .expect("layered load failed");
+
+        assert_eq!(cfg.auth.len(), 1);
+    }
+
+    /// Placeholders are expanded per layer, before the merge, so a `${VAR}` is
+    /// resolved in the file that wrote it rather than wherever it lands.
+    #[test]
+    fn env_placeholders_are_expanded_per_layer() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: single-threaded within this test thanks to ENV_LOCK.
+        unsafe { std::env::set_var("BATLEHUB_TEST_LAYER_SECRET", "from-the-env") };
+
+        let cfg = crate::load_layered_from_str(&[
+            minimal().to_owned(),
+            r#"
+            [database]
+            url = "postgresql://u:${BATLEHUB_TEST_LAYER_SECRET}@db/batlehub"
+            "#
+            .to_owned(),
+        ])
+        .expect("layered load failed");
+
+        unsafe { std::env::remove_var("BATLEHUB_TEST_LAYER_SECRET") };
+        assert_eq!(cfg.database.url, "postgresql://u:from-the-env@db/batlehub");
+    }
+
+    /// Validation runs on the merged document, not per layer: a layer that is
+    /// incomplete on its own is the normal case, and only the result has to
+    /// hold together.
+    #[test]
+    fn validation_runs_on_the_merged_document() {
+        // The overlay alone has no [server]/[database]/[storage] and would never
+        // deserialize; merged, it is a valid config.
+        let cfg = crate::load_layered_from_str(&[
+            minimal().to_owned(),
+            "[server]\nport = 9090\n".to_owned(),
+        ])
+        .expect("layered load failed");
+        assert_eq!(cfg.server.port, 9090);
+
+        // And a merge that produces an invalid config is still refused.
+        let err = crate::load_layered_from_str(&[
+            minimal().to_owned(),
+            r#"
+            [[registries]]
+            name = "bad"
+            type = "not-a-registry-type"
+            "#
+            .to_owned(),
+        ])
+        .expect_err("an invalid merged config was accepted");
+        assert!(
+            format!("{err:#}").contains("not-a-registry-type"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    /// One layer behaves exactly like `load_from_str`, error messages included:
+    /// the merge path parses through `toml::Value` and loses the span, so the
+    /// single-file case must not take it.
+    #[test]
+    fn a_single_layer_takes_the_unlayered_path() {
+        let one = crate::load_layered_from_str(&[minimal()]).expect("single layer failed");
+        let direct = crate::load_from_str(minimal()).expect("direct load failed");
+        assert_eq!(one.server.port, direct.server.port);
+    }
+
+    // ── Layering from disk ────────────────────────────────────────────────────
+    //
+    // The tests above drive `load_layered_from_str`, which is the shape the hot
+    // reload path uses. These drive `load_layered`, which is what the process
+    // actually starts with: the file reads, and the error messages that have to
+    // name the file a reader must go and fix.
+
+    /// Write `contents` into `dir` as `name` and return the path.
+    fn layer_file(dir: &std::path::Path, name: &str, contents: &str) -> String {
+        let path = dir.join(name);
+        std::fs::write(&path, contents).expect("write layer");
+        path.to_str().expect("utf-8 path").to_owned()
+    }
+
+    #[test]
+    fn load_layered_merges_two_files_on_disk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = layer_file(dir.path(), "config.toml", minimal());
+        let creds = layer_file(
+            dir.path(),
+            "credentials.toml",
+            "[database]\nurl = \"postgresql://real:s3cr3t@db/batlehub\"\n",
+        );
+
+        let cfg = crate::load_layered(&[base, creds]).expect("layered load failed");
+
+        assert_eq!(cfg.database.url, "postgresql://real:s3cr3t@db/batlehub");
+        // From the base: the later layer completed the table rather than
+        // replacing it.
+        assert_eq!(cfg.server.port, 8080);
+    }
+
+    /// A missing layer names the file. The whole point of the feature is that
+    /// the two files have different lifecycles, so "one of them is not there"
+    /// is a normal deployment mistake and the message has to say which.
+    #[test]
+    fn load_layered_names_the_file_it_could_not_read() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = layer_file(dir.path(), "config.toml", minimal());
+        let missing = dir.path().join("credentials.toml");
+
+        let err = crate::load_layered(&[base, missing.to_str().unwrap().to_owned()])
+            .expect_err("a missing layer was accepted");
+
+        assert!(
+            format!("{err:#}").contains("credentials.toml"),
+            "the error does not name the missing layer: {err:#}"
+        );
+    }
+
+    /// And a layer that is present but malformed names itself too, rather than
+    /// reporting a parse error against a merged document no file contains.
+    #[test]
+    fn load_layered_names_the_file_that_would_not_parse() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = layer_file(dir.path(), "config.toml", minimal());
+        let broken = layer_file(dir.path(), "credentials.toml", "this is not = = toml\n");
+
+        let err = crate::load_layered(&[base, broken]).expect_err("a broken layer was accepted");
+
+        assert!(
+            format!("{err:#}").contains("credentials.toml"),
+            "the error does not name the unparseable layer: {err:#}"
+        );
+    }
+
+    /// One path takes the unlayered code path, which is what keeps the line and
+    /// column in the parse error for the case almost every deployment is in.
+    #[test]
+    fn load_layered_with_one_path_reports_the_position_of_a_syntax_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let broken = layer_file(dir.path(), "config.toml", "[server]\nport = = 8080\n");
+
+        let err = crate::load_layered(&[broken]).expect_err("broken TOML was accepted");
+        let msg = format!("{err:#}");
+
+        assert!(
+            msg.contains("line 2") || msg.contains("2:"),
+            "the single-file path lost its error position: {msg}"
+        );
+    }
+
+    #[test]
+    fn load_layered_with_no_paths_is_an_error_rather_than_a_default() {
+        // `impl Trait` cannot be turbofished, so the empty slice needs a type
+        // from somewhere: an empty `Vec<String>` gives it one.
+        let none: Vec<String> = Vec::new();
+        let err = crate::load_layered(&none).expect_err("no paths was accepted");
+        assert!(format!("{err:#}").contains("no config file"), "{err:#}");
     }
 
     #[test]

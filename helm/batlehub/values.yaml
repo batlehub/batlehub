@@ -1,18 +1,27 @@
 # Default values for batlehub.
 # Override with: helm install batlehub ./helm/batlehub -f my-values.yaml
 
+# -- Proxy replicas. Filesystem storage is effectively single-replica; see `persistence`.
 replicaCount: 1
 
+# -- Proxy image. The worker has its own under `worker.image`.
 image:
   repository: ghcr.io/batleforc/batlehub
   pullPolicy: IfNotPresent
   # Overrides the image tag. Defaults to Chart.appVersion.
+  # -- Overrides the image tag.
+  # @default -- `Chart.appVersion`
   tag: ""
 
+# -- Pull secrets, for images held in a private registry.
 imagePullSecrets: []
+# -- Replaces the chart name in generated resource names.
 nameOverride: ""
+# -- Replaces the full generated name of every resource.
 fullnameOverride: ""
 
+# -- ServiceAccount for the proxy pod, and the TokenReview RBAC that
+# `type = "kubernetes"` auth needs.
 serviceAccount:
   create: true
   annotations: {}
@@ -31,6 +40,7 @@ serviceAccount:
     # at an existing ServiceAccount that already has it.
     autoTokenReview: true
 
+# -- Annotations added to the proxy pod.
 podAnnotations: {}
 
 # ── Security context ──────────────────────────────────────────────────────────
@@ -41,6 +51,9 @@ podAnnotations: {}
 # fsGroup makes the artifact-cache PVC writable by that UID; without it a
 # filesystem-storage deployment fails its first write. Drop the whole block only
 # if you have a specific reason, and know the workload then runs as root.
+# -- Pod-level security context. Matches the `USER 65532` the image already
+# declares, so a Pod Security Admission "restricted" namespace admits the pod
+# unmodified. `fsGroup` is what makes the cache PVC writable.
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65532
@@ -52,6 +65,8 @@ podSecurityContext:
 # readOnlyRootFilesystem is safe here: the server writes only to the cache mount
 # (its own volume) and never to a temp directory. If you add a feature that needs
 # scratch space, mount an emptyDir rather than relaxing this.
+# -- Container-level security context. The server writes only to the cache
+# mount, so the root filesystem stays read-only.
 securityContext:
   allowPrivilegeEscalation: false
   readOnlyRootFilesystem: true
@@ -59,10 +74,12 @@ securityContext:
     drop:
       - ALL
 
+# -- Service fronting the proxy.
 service:
   type: ClusterIP
   port: 8080
 
+# -- Ingress for the proxy.
 ingress:
   enabled: false
   className: ""
@@ -83,7 +100,13 @@ ingress:
   # from `config.subdomain_routing` or a registry's `hosts`, and it is *those*
   # that make `config.server.trusted_proxies` mandatory (the server refuses to
   # start with host routing configured and no proxy-trust policy). Set both.
+  # -- Additional hostnames routed to BatleHub, for host-based registry routing.
+  # Extends the Ingress only: host routing itself comes from
+  # `config.subdomain_routing` or a registry's `hosts`, and those make
+  # `config.server.trusted_proxies` mandatory.
   extraHosts: []
+  # -- TLS blocks for the Ingress. The certificate needs a SAN for every extra
+  # host, the wildcard included.
   tls: []
   #  - secretName: batlehub-tls
   #    hosts:
@@ -92,6 +115,7 @@ ingress:
   #      # wildcard: "*.batlehub.example.com".
   #      - "*.batlehub.example.com"
 
+# -- Resource requests and limits for the proxy container.
 resources:
   requests:
     cpu: 100m
@@ -126,6 +150,9 @@ resources:
 #       secretKeyRef:
 #         name: batlehub-secrets
 #         key: registry-token
+# -- Environment variables injected into the container. Reference them as
+# `${VAR_NAME}` inside `config`; a placeholder with no variable behind it is a
+# startup error naming the variable.
 env: []
 
 # Inject every key from a Secret or ConfigMap as env vars (bulk import):
@@ -134,10 +161,14 @@ env: []
 #       name: batlehub-secrets      # all keys become env vars
 #   - configMapRef:
 #       name: batlehub-env
+# -- Bulk-import every key of a Secret or ConfigMap as environment variables.
 envFrom: []
 
+# -- Node selector for the proxy pod.
 nodeSelector: {}
+# -- Tolerations for the proxy pod.
 tolerations: []
+# -- Affinity rules for the proxy pod.
 affinity: {}
 
 # ── BatleHub application config ───────────────────────────────────────────────
@@ -145,9 +176,16 @@ affinity: {}
 # All keys must be snake_case to match batlehub's TOML field names.
 # Optional top-level sections (otel, cache, limits, ip_blocking) must be
 # entirely absent — not null or {} — to be omitted from the rendered TOML.
+# -- The BatleHub application config, serialised verbatim to `config.toml`.
+# Keys are snake_case to match the TOML field names, and an optional section
+# must be absent rather than null or `{}` to be left out of the rendered file.
+# Full reference: `docs/guide/configuration.md`.
+# @default -- one npm registry, filesystem storage, one static admin token
 config:
 
   # ── [server] ────────────────────────────────────────────────────────────────
+  # -- The `[server]` block: bind address, CORS origins and the proxy-trust
+  # policy that host routing requires.
   server:
     host: "0.0.0.0"
     port: 8080
@@ -188,12 +226,16 @@ config:
   #   scheme: "https"          # only used to advertise public URLs
 
   # ── [database] ──────────────────────────────────────────────────────────────
+  # -- The `[database]` block. PostgreSQL is the only supported type.
   database:
     type: "postgresql"
     url: "postgresql://batlehub:changeme@postgres:5432/batlehub"
 
   # ── [storage] ───────────────────────────────────────────────────────────────
   # Filesystem (default):
+  # -- The `[storage]` block: `filesystem` (the default, backed by
+  # `persistence`) or `s3`. S3 is the only backend several replicas can write
+  # to at once.
   storage:
     type: "filesystem"
     path: "/var/cache/batlehub"
@@ -209,6 +251,8 @@ config:
   # ── [[auth]] ────────────────────────────────────────────────────────────────
   # Each list entry becomes a [[auth]] TOML block. The "type" key is required.
   # Supported types: token | oidc | kubernetes | actions-oidc
+  # -- One `[[auth]]` block per entry. Types: `token`, `oidc`, `kubernetes`,
+  # `actions-oidc`. Replace the default admin token before exposing the server.
   auth:
     - type: "token"
       tokens:
@@ -237,6 +281,8 @@ config:
   # Supported types: npm | cargo | goproxy | pypi | conda | maven | terraform
   #                  rubygems | github | openvsx | vscode-marketplace | composer
   # mode: proxy (default) | local | hybrid
+  # -- One `[[registries]]` block per entry, each with its own type, mode and
+  # RBAC. See the registry table in the repository README.
   registries:
     - type: "npm"
       name: "npm"
@@ -273,9 +319,61 @@ config:
   #   violation_window_secs: 300
   #   ban_duration_secs: 3600
 
+# ── A second config file, for credentials ────────────────────────────────────
+#
+# `--config` is repeatable, and each further file is merged over the ones before
+# it (later wins, tables merge key by key, arrays of tables merge on `name` or
+# `type`). That is what lets the credentials live in a Secret with its own
+# lifecycle while the rest of the configuration stays in the chart-managed one.
+#
+# The two halves are mounted separately on purpose: rotating the credentials
+# Secret does not touch the main config, and the file watcher picks the change
+# up without a pod roll. There is deliberately no checksum annotation on this
+# Secret, because rolling the pods is exactly what hot reload exists to avoid.
+#
+# The config editor in the console reads and rewrites the *first* file only, so
+# nothing here is ever served to a browser or rewritten from one.
+#
+#   credentials:
+#     enabled: true
+#     config:
+#       database:
+#         url: "postgresql://batlehub:${DB_PASSWORD}@postgres:5432/batlehub"
+#       auth:
+#         - type: "token"
+#           tokens:
+#             - value: "a-real-admin-token"
+#               role: "admin"
+#               user_id: "admin"
+#
+# Or point at a Secret something else manages (External Secrets Operator,
+# Sealed Secrets, Vault Agent) and leave `config` empty:
+#
+#   credentials:
+#     enabled: true
+#     existingSecret: batlehub-credentials
+#     key: credentials.toml
+#
+# -- A second config file merged over `config`, for the values with a different
+# lifecycle from the rest. Either rendered into a chart-managed Secret from
+# `credentials.config`, or read from `credentials.existingSecret`.
+# @default -- disabled
+credentials:
+  enabled: false
+  # The Secret to mount. Empty means the chart renders one from
+  # `credentials.config`; naming one here means the chart renders nothing and
+  # `credentials.config` is ignored.
+  existingSecret: ""
+  # The key inside the Secret, and the file name it is mounted under.
+  key: credentials.toml
+  # Same shape as `config`, serialised to TOML the same way. Only the parts you
+  # want to keep separate — it is merged over `config`, not a replacement for it.
+  config: {}
+
 # ── Disruption budget ─────────────────────────────────────────────────────────
 # Only rendered when replicaCount > 1 — a PDB over a single replica blocks node
 # drains without buying any availability.
+# -- Disruption budget. Rendered only when `replicaCount` is above 1.
 podDisruptionBudget:
   enabled: true
   minAvailable: 1
@@ -301,6 +399,11 @@ podDisruptionBudget:
 # proxy stops scanning and the toolchains live only here. Only the worker needs
 # egress to upstream artifacts, the Trivy server and Rekor; a NetworkPolicy
 # that says so is the next thing to write once this is on.
+# -- The scan worker: a second Deployment of the same binary run with
+# `--roles worker` from the worker image (RFC 0018). Off by default, and
+# turning it on means setting `config.server.roles = ["proxy"]` so the proxy
+# stops scanning.
+# @default -- disabled
 worker:
   enabled: false
   replicaCount: 1
@@ -310,6 +413,9 @@ worker:
   # metrics adapter (prometheus-adapter or KEDA's prometheus scaler) to expose
   # it to the HPA. `targetQueued` is the average number of open jobs per
   # worker replica to aim for; `replicaCount` is ignored while this is on.
+  # -- HorizontalPodAutoscaler on the external metric
+  # `batlehub_scan_jobs_queued`. Needs a metrics adapter to expose that gauge;
+  # `worker.replicaCount` is ignored while this is on.
   autoscaling:
     enabled: false
     minReplicas: 1
@@ -325,6 +431,8 @@ worker:
     # `ghcr.io/batleforc/batlehub-worker-guarddog`, the same image with
     # GuardDog added; the scanner is refused at load if its `command` is not
     # on the image.
+    # -- Worker image. Point it at `batlehub-worker-guarddog` to enable the
+    # `[scanners.guarddog]` scanner, which is the only one not on the base image.
     repository: ghcr.io/batleforc/batlehub-worker
     pullPolicy: IfNotPresent
     # Defaults to Chart.appVersion — the worker and the proxy are one release.
@@ -343,27 +451,40 @@ worker:
         - ALL
   # The opt-in fourth wall (RFC 0018 §7): gVisor (`gvisor`) or Kata around the
   # whole pod, on top of bubblewrap around each scanner.
+  # -- Optional sandboxed runtime (gVisor, Kata) around the whole worker pod, on
+  # top of the bubblewrap sandbox around each scanner.
   runtimeClassName: ""
   # The per-job work directories: a memory-backed emptyDir, so a hostile
   # archive never touches the node's disk. Size it for `max_concurrent` jobs
   # of `[worker.sandbox] max_extracted_mb` each.
+  # -- Per-job work directories, as a memory-backed emptyDir so a hostile archive
+  # never touches the node's disk. Size it for `max_concurrent` jobs of
+  # `[worker.sandbox] max_extracted_mb` each.
   scratch:
     sizeLimit: 4Gi
+  # -- Resource requests and limits for the worker container.
   resources: {}
   #  limits:
   #    memory: 4Gi
   #  requests:
   #    cpu: 500m
   #    memory: 1Gi
+  # -- Node selector for the worker pod.
   nodeSelector: {}
+  # -- Tolerations for the worker pod.
   tolerations: []
 
 # The Trivy server sub-chart (aquasecurity/trivy), for `[scanners.trivy]
 # endpoint`. Off by default; `helm dependency update` fetches it when you turn
 # it on, and the endpoint is then `http://<release>-trivy:4954`.
+# -- The Trivy server sub-chart, for `[scanners.trivy] endpoint`. Turning it on
+# makes the endpoint `http://<release>-trivy:4954`.
 trivy:
   enabled: false
 
+# -- NetworkPolicy for the proxy. Off by default because the right egress set
+# depends on which upstreams you proxy, and a default-deny policy written
+# without that list breaks every cache miss.
 networkPolicy:
   enabled: false
   # Peers allowed to reach the service port. Leaving this empty renders an
@@ -372,11 +493,15 @@ networkPolicy:
   # applies, but the policy places no limit on who may connect to it, so an
   # empty list gives you far less than it looks like. Name the ingress
   # controller (or whatever fronts BatleHub) to actually narrow it.
+  # -- Peers allowed to reach the service port. An empty list renders an ingress
+  # rule with no `from`, which the NetworkPolicy spec reads as **any source** —
+  # name the ingress controller to actually narrow it.
   ingressFrom: []
   #  - namespaceSelector:
   #      matchLabels:
   #        kubernetes.io/metadata.name: ingress-nginx
   # Extra egress rules, appended to the always-present DNS rule.
+  # -- Extra egress rules, appended to the always-present DNS rule.
   egressTo: []
   #  - to:
   #      - ipBlock:
@@ -392,6 +517,9 @@ networkPolicy:
 # multi-replica deployment either switch `config.storage` to `s3` (recommended —
 # it is the only backend all replicas can write to concurrently) or supply a
 # storageClass that provides `ReadWriteMany` and set accessMode accordingly.
+# -- PersistentVolumeClaim for the artifact cache in filesystem mode.
+# `ReadWriteOnce` cannot be shared across nodes, so a multi-replica deployment
+# needs either S3 storage or a `ReadWriteMany` class.
 persistence:
   enabled: true
   storageClass: ""
@@ -426,6 +554,9 @@ persistence:
 #     items     - optional [{key, path}] projection; defaults to projecting
 #                 every key in the resource under its own name.
 #     readOnly  - default true.
+# -- Extra Kubernetes manifests this chart renders or merely references, each
+# optionally mounted into the pod. One entry may set `mount.asConfig` to
+# replace the chart-managed config Secret.
 externalManifest: []
 # Examples:
 # externalManifest:
@@ -464,3 +595,4 @@ externalManifest: []
 #         name: batlehub-allow-egress
 #       spec:
 #         ...
+ 

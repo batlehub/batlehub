@@ -61,6 +61,11 @@ task dump-spec                # refresh ui/openapi.json from running server
 # Fuzz
 task fuzz:check                                 # every target compiles — the per-PR CI gate
 task fuzz TARGET=fuzz_rbac_evaluate MAX_TIME=30 # actually fuzz one (nightly)
+
+# Helm chart
+task helm:docs        # regenerate helm/batlehub/README.md (helm-docs)
+task helm:docs:check  # drift gate, mirrored by the `docs` job of helm-lint.yaml
+task helm:lint        # helm dependency build + helm lint
 ```
 
 ## Architecture
@@ -96,6 +101,23 @@ The dependency direction is strict: `core` ← `adapters` ← `web` ← `server`
    - Resolves metadata (cache-first, stale-on-error optional)
    - Evaluates rules (`RbacRule`, `DenyLatestRule`, `BlockListRule`, `ReleaseAgeGateRule`)
    - Streams artifact from upstream (or serves from storage cache)
+
+### Config loading
+
+`--config` is repeatable. Each further path is a layer merged over the ones
+before it by `batlehub_config::load_layered`, which merges the TOML *documents*
+(tables key by key, arrays of tables on `name` then `type`, everything else
+replaced) before deserializing once. The single-file case deliberately keeps the
+old `toml::from_str::<AppConfig>` path so its error spans survive. The first
+layer is the only one the config editor reads or rewrites; every layer is
+watched and re-read on reload. See `docs/guide/configuration.md § Layered config
+files`.
+
+The file watcher watches each layer's **directory**, not the file: an atomic
+rename and a Kubernetes `..data` symlink swap both replace the inode, so a
+file watch is attached to something nothing writes to again. `is_relevant` in
+`server/src/watcher.rs` is what keeps a directory watch from firing on every
+build artefact beside a `config.toml`.
 
 ### Hot reload
 
@@ -213,6 +235,13 @@ Two files in the tree are **generated and must not be hand-edited**:
 `docs/.vitepress/theme/tokens.css` (`task ui:tokens`, from
 `ui/src/design/tokens.css`) and `docs/guide/roadmap.md` (`task docs:roadmap`,
 from `ROADMAP.md`). Both have a drift check that fails the build.
+
+`helm/batlehub/README.md` is generated the same way, by helm-docs
+(`task helm:docs`), and has the same kind of drift gate. A value is documented
+by writing a `# --` comment above it in `helm/batlehub/values.yaml`, never by
+editing the README; prose that is not a value description goes in
+`helm/batlehub/README.md.gotmpl`. Documenting a parent object rolls its children
+into one table row, which is how the table stays readable.
 
 ### RFCs (`docs/rfc/`)
 

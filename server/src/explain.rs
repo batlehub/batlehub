@@ -29,14 +29,18 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
 
-use batlehub_config::load;
+use batlehub_config::load_layered;
 use batlehub_core::entities::{expand_patterns, RegistryKind, WildcardScope};
 
 /// Read `path` and print the expanded permission set per registry.
-pub(crate) fn explain_config(path: &str) -> Result<()> {
-    let cfg = load(path).with_context(|| format!("loading {path}"))?;
+pub(crate) fn explain_config(paths: &[String]) -> Result<()> {
+    // The merged config, not the primary: a `"*"` is expanded at load, so what
+    // it covers is a property of the layers taken together. Explaining only the
+    // first file would print an expansion the server never runs with.
+    let label = paths.join(" + ");
+    let cfg = load_layered(paths).with_context(|| format!("loading {label}"))?;
 
-    println!("# {path}");
+    println!("# {label}");
     println!(
         "#\n# Permissions after expansion. A `\"*\"` in [registries.rbac] expands to the\n\
          # four read verbs it has always meant (RFC 0015 §10 rule 3), not to every verb\n\

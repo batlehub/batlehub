@@ -331,20 +331,20 @@ async fn list_package_owners_requires_admin() {
     assert_eq!(call_service(&app, req).await.status(), 403);
 }
 
+/// The admin gets past the verb check and is stopped by the missing port, not
+/// by authorization — the distinction the operator needs to fix the deployment.
+///
+/// This assertion used to accept success, client error *and* server error, which
+/// is every status there is: the row passed whatever the handler did.
 #[actix_web::test]
-async fn list_package_owners_returns_200_for_admin() {
+async fn list_package_owners_returns_503_when_ownership_is_not_configured() {
     let app = make_app(InMemoryRepo::new()).await;
     let req = TestRequest::get()
         .uri("/api/v1/admin/registries/npm/packages/lodash/owners")
         .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
         .to_request();
     let resp = call_service(&app, req).await;
-    // ownership is not configured in make_app → 503 or 403 for admin
-    assert!(
-        resp.status().is_success()
-            || resp.status().is_client_error()
-            || resp.status().is_server_error()
-    );
+    assert_eq!(resp.status(), 503);
 }
 
 #[actix_web::test]
@@ -358,6 +358,90 @@ async fn add_package_owner_requires_admin() {
         )
         .to_request();
     assert_eq!(call_service(&app, req).await.status(), 403);
+}
+
+#[actix_web::test]
+async fn remove_package_owner_requires_admin() {
+    let app = make_app(InMemoryRepo::new()).await;
+    let req = TestRequest::delete()
+        .uri("/api/v1/admin/registries/npm/packages/lodash/owners/user/alice")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 403);
+}
+
+#[actix_web::test]
+async fn remove_package_owner_returns_503_when_ownership_is_not_configured() {
+    let app = make_app(InMemoryRepo::new()).await;
+    let req = TestRequest::delete()
+        .uri("/api/v1/admin/registries/npm/packages/lodash/owners/user/alice")
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 503);
+}
+
+/// Add, list, remove, list — the whole administrative ownership surface against
+/// a store that is actually wired, which is the only fixture where the three
+/// routes do more than refuse.
+#[actix_web::test]
+async fn package_owner_add_list_remove_round_trip() {
+    let (app, _ownership, _grants) = make_local_cargo_ownership_app(RegistryMode::Local).await;
+    let owners_uri = "/api/v1/admin/registries/local-cargo/packages/pkg/owners";
+
+    let added = call_service(
+        &app,
+        TestRequest::post()
+            .uri(owners_uri)
+            .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+            .set_json(serde_json::json!({
+                "principal_type": "user", "principal_id": "alice", "role": "maintainer"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(added.status(), 204);
+
+    let listed: Value = read_body_json(
+        call_service(
+            &app,
+            TestRequest::get()
+                .uri(owners_uri)
+                .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+                .to_request(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(listed.as_array().expect("owner array").len(), 1);
+    assert_eq!(listed[0]["principal_id"], "alice");
+
+    let removed = call_service(
+        &app,
+        TestRequest::delete()
+            .uri(&format!("{owners_uri}/user/alice"))
+            .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(removed.status(), 204);
+
+    // Removed for real: the listing is the only place an admin can confirm it,
+    // and a `204` that leaves the row behind is the failure worth catching.
+    let after: Value = read_body_json(
+        call_service(
+            &app,
+            TestRequest::get()
+                .uri(owners_uri)
+                .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+                .to_request(),
+        )
+        .await,
+    )
+    .await;
+    assert!(
+        after.as_array().expect("owner array").is_empty(),
+        "the owner survived its removal: {after}"
+    );
 }
 
 // ── Cache invalidation ────────────────────────────────────────────────────────

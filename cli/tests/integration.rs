@@ -305,11 +305,20 @@ impl TestServer {
             registry_host_map: batlehub_web::RegistryHostMap::default(),
             proxy_trust: batlehub_web::ProxyTrust::default(),
             config_path: "config.toml".to_owned(),
+            config_overlays: Vec::new(),
             config_change_repo: None,
             hot_reload_enabled: false,
             builder: reload_builder,
             banner: Some(Arc::clone(&banner_svc)),
         }));
+
+        let advisory_repo: Arc<dyn batlehub_core::ports::AdvisoryRepository> = Arc::new(
+            batlehub_adapters::in_memory::InMemoryAdvisoryRepository::with_events(
+                repo.clone() as Arc<dyn PackageRepository>
+            ),
+        );
+        let artifact_inventory: Arc<dyn batlehub_core::ports::ArtifactInventory> =
+            NoopArtifactMetaRepository::arc();
 
         let configure = configure_app(
             proxy_svc,
@@ -371,6 +380,8 @@ impl TestServer {
             let user_block_repo = user_block_repo.clone();
             let team_namespace_store = team_namespace_store.clone();
             let host_map = host_map.clone();
+            let advisory_repo = advisory_repo.clone();
+            let artifact_inventory = artifact_inventory.clone();
 
             let server = HttpServer::new(move || {
                 let (app, _) = App::new()
@@ -399,6 +410,15 @@ impl TestServer {
                     .app_data(web::Data::new(user_block_repo.clone()))
                     .app_data(web::Data::new(team_namespace_store.clone()))
                     .app_data(web::Data::new(host_map.clone()))
+                    // RFC 0002's exposure report and RFC 0018's backfill each
+                    // extract one store the rest of the fixture does not build.
+                    // Absent, both answer `500 application data is not
+                    // configured` — an actix wiring artifact, not a server
+                    // behaviour, and a CLI test asserting it would be measuring
+                    // this file rather than the command.
+                    .app_data(web::Data::new(advisory_repo.clone()))
+                    .app_data(web::Data::new(batlehub_web::ExposureConfig::default()))
+                    .app_data(web::Data::new(artifact_inventory.clone()))
                     .wrap(AuthMiddlewareFactory::new(auth_providers.clone()))
             })
             .bind("127.0.0.1:0")
@@ -4090,4 +4110,184 @@ fn from_file_warns_but_still_records_a_path_that_yields_nothing_yet() {
     let rows: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(rows[0]["state"], "ok");
     assert!(!stdout.contains("arrived-later"), "{stdout}");
+}
+
+// ── The read-only admin reports ───────────────────────────────────────────────
+//
+// Four commands whose value is that they answer at all on an instance where the
+// feature behind them is not configured: an operator running them on a fresh
+// server must get the reason, not a stack trace.
+
+#[test]
+fn admin_exposure_reports_no_rows_and_its_coverage() {
+    let srv = TestServer::start();
+    let (ok, stdout, stderr) = cli_cmd(
+        &["admin", "exposure", "--json"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(ok, "exposure should succeed; stderr: {stderr}");
+    let body: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON object");
+    assert!(body["rows"].as_array().expect("rows array").is_empty());
+    // The coverage block is the half that says how much of the estate the report
+    // can even see — an empty `rows` without it reads as "nothing is exposed".
+    assert!(body["coverage"]["registries_total"].is_number());
+    assert!(body["coverage"]["flag_sources"].is_array());
+}
+
+#[test]
+fn admin_bundles_reports_that_nothing_was_imported() {
+    let srv = TestServer::start();
+    let (ok, stdout, stderr) = cli_cmd(&["admin", "bundles"], &srv.base_url(), AUTH_TOKEN);
+    assert!(ok, "bundles should succeed; stderr: {stderr}");
+    assert!(stdout.contains("0 bundle(s)"), "stdout: {stdout}");
+}
+
+#[test]
+fn admin_air_gap_missing_says_why_it_records_nothing() {
+    // No database in this server, so there is no miss log to page through. The
+    // command has to say that rather than print an empty table, which an
+    // operator would read as "nothing was ever missed".
+    let srv = TestServer::start();
+    let (ok, _stdout, stderr) = cli_cmd(&["admin", "air-gap-missing"], &srv.base_url(), AUTH_TOKEN);
+    assert!(!ok, "air-gap-missing cannot succeed without a database");
+    assert!(
+        stderr.contains("HTTP 503") && stderr.contains("no database"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn admin_retention_refuses_a_registry_that_keeps_everything() {
+    let srv = TestServer::start();
+    let (ok, _stdout, stderr) = cli_cmd(
+        &["admin", "retention", REGISTRY],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(!ok, "retention needs a [registries.retention] block");
+    assert!(
+        stderr.contains("HTTP 409") && stderr.contains("keeps every published version forever"),
+        "stderr: {stderr}"
+    );
+}
+
+// ── Verdicts (RFC 0018) ───────────────────────────────────────────────────────
+
+/// The three verdict commands on a registry with no `[registries.security]`
+/// block: a `404` naming the missing profile, not a scan that silently queues
+/// nothing.
+#[test]
+fn verdicts_commands_report_a_registry_with_no_security_profile() {
+    let srv = TestServer::start();
+    let base = srv.base_url();
+
+    for args in [
+        vec!["verdicts", "backfill", "--registry", REGISTRY],
+        vec!["verdicts", "rescan", "--registry", REGISTRY],
+        vec!["verdicts", "pullers", "test-nuget:DepLib@1.0.0"],
+    ] {
+        let (ok, _stdout, stderr) = cli_cmd(&args, &base, AUTH_TOKEN);
+        assert!(!ok, "{args:?} should fail without a security profile");
+        assert!(
+            stderr.contains("404") && stderr.contains("has no security profile"),
+            "{args:?} stderr: {stderr}"
+        );
+    }
+}
+
+// ── version unpin ─────────────────────────────────────────────────────────────
+
+#[test]
+fn version_pin_and_unpin_report_the_coordinate() {
+    let srv = TestServer::start();
+    let base = srv.base_url();
+    http_publish_nuget(&base, REGISTRY, "PinLib", "1.0.0");
+
+    let (ok, stdout, stderr) = cli_cmd(
+        &["version", "pin", REGISTRY, "PinLib", "1.0.0"],
+        &base,
+        AUTH_TOKEN,
+    );
+    assert!(ok, "pin should succeed; stderr: {stderr}");
+    assert!(stdout.contains("PinLib"), "stdout: {stdout}");
+
+    let (ok, stdout, stderr) = cli_cmd(
+        &["version", "unpin", REGISTRY, "PinLib", "1.0.0"],
+        &base,
+        AUTH_TOKEN,
+    );
+    assert!(ok, "unpin should succeed; stderr: {stderr}");
+    assert!(
+        stdout.contains("Unpinned") && stdout.contains("PinLib"),
+        "stdout: {stdout}"
+    );
+}
+
+// ── vsx keygen ────────────────────────────────────────────────────────────────
+
+/// The one command in the suite that talks to no server: it mints a signing
+/// seed and prints the two values derived from it, in the shape of the config
+/// block they go into.
+#[test]
+fn vsx_keygen_prints_a_fresh_seed_and_the_key_derived_from_it() {
+    let srv = TestServer::start();
+    let base = srv.base_url();
+
+    let field = |out: &str, key: &str| -> String {
+        out.lines()
+            .find(|l| l.starts_with(key))
+            .and_then(|l| l.split('"').nth(1))
+            .unwrap_or_else(|| panic!("no {key} in:\n{out}"))
+            .to_owned()
+    };
+
+    let (ok, first, stderr) = cli_cmd(&["vsx", "keygen"], &base, AUTH_TOKEN);
+    assert!(ok, "keygen should succeed; stderr: {stderr}");
+    let seed = field(&first, "seed_hex");
+    assert_eq!(seed.len(), 64, "a 32-byte seed, hex-encoded: {seed}");
+    assert!(seed.chars().all(|c| c.is_ascii_hexdigit()), "seed: {seed}");
+    assert_eq!(field(&first, "key_id").len(), 16);
+    assert_eq!(field(&first, "public_key").len(), 64);
+
+    // Fresh every time: a keygen that returned a fixed seed would hand every
+    // deployment that ran it the same signing key.
+    let (_, second, _) = cli_cmd(&["vsx", "keygen"], &base, AUTH_TOKEN);
+    assert_ne!(seed, field(&second, "seed_hex"));
+}
+
+// ── admin config validate ─────────────────────────────────────────────────────
+
+#[test]
+fn admin_config_validate_reports_a_file_it_cannot_read() {
+    // Refused locally, before any request: the server never sees a path.
+    let srv = TestServer::start();
+    let (ok, _stdout, stderr) = cli_cmd(
+        &["admin", "config", "validate", "/nonexistent/batlehub.toml"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(!ok, "validate should fail on an unreadable file");
+    assert!(stderr.contains("could not read"), "stderr: {stderr}");
+}
+
+#[test]
+fn admin_config_validate_sends_the_file_to_the_server() {
+    // Hot reload is off in this fixture, so the round trip ends in the `503`
+    // that says so — which is the proof the contents reached the endpoint.
+    let srv = TestServer::start();
+    let dir = scratch_home();
+    let file = dir.path().join("batlehub.toml");
+    std::fs::write(&file, "[server]\nhost = \"127.0.0.1\"\nport = 8080\n").expect("write config");
+
+    let (ok, _stdout, stderr) = cli_cmd(
+        &["admin", "config", "validate", file.to_str().unwrap()],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(!ok, "validate cannot succeed with hot reload disabled");
+    assert!(
+        stderr.contains("HTTP 503") && stderr.contains("hot reload is disabled"),
+        "stderr: {stderr}"
+    );
 }
