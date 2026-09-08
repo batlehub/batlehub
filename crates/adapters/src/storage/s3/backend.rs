@@ -322,7 +322,6 @@ impl StorageBackend for S3StorageBackend {
         use aws_sdk_s3::types::{Delete, ObjectIdentifier};
 
         let s3_prefix = self.object_key(prefix)?;
-        let configured_prefix_len = self.prefix.len();
         let mut total = 0usize;
         let mut continuation_token: Option<String> = None;
 
@@ -340,16 +339,18 @@ impl StorageBackend for S3StorageBackend {
                 .await
                 .map_err(|e| CoreError::Storage(format!("S3 list_objects {s3_prefix}: {e}")))?;
 
+            // `DeleteObjects` addresses objects by their *full* key, exactly as
+            // `list_objects_v2` returned them. The configured backend prefix is
+            // already part of that key and must not be stripped here — unlike
+            // `list_keys`, which strips it because it returns logical keys to a
+            // caller that never sees the prefix. Stripping it here would ask S3
+            // to delete keys that do not exist, leaving the bucket untouched
+            // while reporting a successful purge.
             let object_keys: Vec<ObjectIdentifier> = resp
                 .contents()
                 .iter()
                 .filter_map(|o| o.key())
-                .filter_map(|k| {
-                    ObjectIdentifier::builder()
-                        .key(k[configured_prefix_len..].to_owned())
-                        .build()
-                        .ok()
-                })
+                .filter_map(|k| ObjectIdentifier::builder().key(k.to_owned()).build().ok())
                 .collect();
 
             let batch_len = object_keys.len();
@@ -358,14 +359,26 @@ impl StorageBackend for S3StorageBackend {
                     .set_objects(Some(object_keys))
                     .build()
                     .map_err(|e| CoreError::Storage(format!("S3 delete build: {e}")))?;
-                self.client
+                let resp = self
+                    .client
                     .delete_objects()
                     .bucket(&self.bucket)
                     .delete(delete)
                     .send()
                     .await
                     .map_err(|e| CoreError::Storage(format!("S3 delete_objects: {e}")))?;
-                total += batch_len;
+
+                // Per-object failures come back in the body of a `200`, not as a
+                // request error, so a batch can partially fail silently. Count
+                // only what S3 confirmed and surface the rest.
+                for err in resp.errors() {
+                    tracing::warn!(
+                        key = err.key().unwrap_or("<unknown>"),
+                        code = err.code().unwrap_or("<none>"),
+                        "S3 delete_objects: object not deleted"
+                    );
+                }
+                total += batch_len.saturating_sub(resp.errors().len());
             }
 
             let is_truncated = resp.is_truncated().unwrap_or(false);

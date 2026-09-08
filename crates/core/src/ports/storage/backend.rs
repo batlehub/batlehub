@@ -128,14 +128,35 @@ pub trait StorageBackend: Send + Sync {
     /// successful delete call.
     async fn delete(&self, key: &str) -> Result<bool, CoreError>;
 
-    /// Remove all artifacts whose keys start with `prefix` and return the count deleted.
+    // ── The prefix trio ───────────────────────────────────────────────────────
+    //
+    // **A leaf backend's implementation of the three methods below is never
+    // reached by the running server.** `initialize_storage` always wraps the
+    // configured backends in a `StorageRouter`, including the single-backend
+    // case, and the router overrides all three to answer from its database
+    // tables rather than delegating to the backend underneath it. It has to:
+    // once dedup is in play the physical objects live at `blob/<sha256>`, so no
+    // scan of the backend by a logical prefix such as `artifact:npm/` could
+    // find them.
+    //
+    // A leaf implementation is therefore exercised only by its own tests. That
+    // is not a licence to leave it approximate: it is part of the contract, the
+    // trait is public API of the adapters crate, and the shadowing is a wiring
+    // decision that a future caller holding an `Arc<dyn StorageBackend>` for a
+    // leaf is under no obligation to preserve. Implement it correctly and test
+    // it, and in particular never report having deleted what is still there.
+
+    /// Remove all artifacts whose keys start with `prefix` and return the count
+    /// deleted. Read the note above before implementing this: in the wired
+    /// server the router's override is what runs.
     async fn delete_by_prefix(&self, prefix: &str) -> Result<usize, CoreError>;
 
     /// Count artifacts and sum their sizes for keys starting with `prefix`.
-    /// Returns `(count, total_bytes)`.
+    /// Returns `(count, total_bytes)`. Shadowed by the router, as above.
     async fn stat_by_prefix(&self, prefix: &str) -> Result<(u64, u64), CoreError>;
 
     /// List all keys starting with `prefix`. Returns the logical keys (not
     /// backend-internal paths). Used by eviction, coherence, and deduplication.
+    /// Shadowed by the router, as above.
     async fn list_keys(&self, prefix: &str) -> Result<Vec<String>, CoreError>;
 }

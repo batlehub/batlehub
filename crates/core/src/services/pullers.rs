@@ -150,13 +150,7 @@ pub async fn refused_for(
 
 /// The CSV the export and the CLI print: one header, one row per identity.
 pub fn to_csv(rows: &[Puller]) -> String {
-    fn field(s: &str) -> String {
-        if s.contains([',', '"', '\n', '\r']) {
-            format!("\"{}\"", s.replace('"', "\"\""))
-        } else {
-            s.to_owned()
-        }
-    }
+    use crate::services::csv::field;
     let mut out = String::from("identity,role,first_pull,last_pull,count\n");
     for r in rows {
         out.push_str(&format!(

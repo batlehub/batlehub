@@ -44,9 +44,28 @@ fn push_req(source: &str, secret: &str, body: &str) -> actix_http::Request {
 }
 
 fn revoke_req(source: &str, secret: &str, external_id: &str) -> actix_http::Request {
+    // A DELETE has no body, so the signature covers the method and path. It has
+    // to name the flag: signing a constant would make one captured header a
+    // standing key to lift every flag the source ever pushed.
+    let canonical = format!("DELETE\n/api/v1/flags/{source}/{external_id}");
     TestRequest::delete()
         .uri(&format!("/api/v1/flags/{source}/{external_id}"))
-        .insert_header(("X-Hub-Signature-256", sign(secret, b"")))
+        .insert_header(("X-Hub-Signature-256", sign(secret, canonical.as_bytes())))
+        .to_request()
+}
+
+/// A revoke signed for a *different* flag of the same source: the signature is
+/// valid HMAC over the wrong message, so it must not lift this one.
+fn revoke_req_signed_for(
+    source: &str,
+    secret: &str,
+    external_id: &str,
+    signed_for: &str,
+) -> actix_http::Request {
+    let canonical = format!("DELETE\n/api/v1/flags/{source}/{signed_for}");
+    TestRequest::delete()
+        .uri(&format!("/api/v1/flags/{source}/{external_id}"))
+        .insert_header(("X-Hub-Signature-256", sign(secret, canonical.as_bytes())))
         .to_request()
 }
 
@@ -259,6 +278,22 @@ async fn a_hard_block_denies_the_download_and_the_report_names_who_pulled_before
         lines[1].contains("CASE-7") && lines[1].contains(",1,1,"),
         "{csv}"
     );
+
+    // A revoke signature is bound to the flag it names. One captured from
+    // another case of the same source must not lift this block — otherwise a
+    // single observed header is a standing key to every flag the source pushed.
+    let resp = call_service(
+        &app,
+        revoke_req_signed_for(SOURCE, SECRET, "CASE-7", "CASE-OTHER"),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        404,
+        "a signature issued for another flag must not revoke this one"
+    );
+    let resp = call_service(&app, user_get(&tarball("1.0.0"))).await;
+    assert_eq!(resp.status(), 403, "the block must still stand");
 
     // A revoke lifts the block and keeps the tombstone for the report.
     let resp = call_service(&app, revoke_req(SOURCE, SECRET, "CASE-7")).await;

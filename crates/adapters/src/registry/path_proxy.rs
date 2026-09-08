@@ -94,6 +94,21 @@ impl PathProxyRegistryClient {
             "path '{path}' is not in this registry's path_allow allowlist"
         )))
     }
+
+    /// Join `path` onto the base URL, then re-read the result to confirm it
+    /// still sits under the base's path.
+    ///
+    /// `check_path_allowed` runs the glob and the traversal check against the
+    /// path as written. `Url::parse` then normalises what that produced, and
+    /// the two do not have to agree — a dot segment the validator did not
+    /// recognise is resolved here, silently moving the request out of the
+    /// subtree the allowlist was written against. Comparing after the parse is
+    /// what makes the allowlist mean what it says.
+    fn upstream_url(&self, path: &str) -> Result<String, CoreError> {
+        let url = format!("{}/{}", self.base_url, path);
+        super::http_client::ensure_url_under_base(&url, &self.base_url)?;
+        Ok(url)
+    }
 }
 
 #[async_trait]
@@ -127,7 +142,7 @@ impl RegistryClient for PathProxyRegistryClient {
     async fn probe_artifact(&self, pkg: &PackageId) -> Result<(), CoreError> {
         let path = Self::upstream_path(pkg)?;
         self.check_path_allowed(path)?;
-        let url = format!("{}/{}", self.base_url, path);
+        let url = self.upstream_url(path)?;
         tracing::debug!(url = %url, "probing {} artifact", self.registry_type);
 
         let mut req = self.http.head(&url);
@@ -154,7 +169,7 @@ impl RegistryClient for PathProxyRegistryClient {
     async fn fetch_artifact(&self, pkg: &PackageId) -> Result<FetchedArtifact, CoreError> {
         let path = Self::upstream_path(pkg)?;
         self.check_path_allowed(path)?;
-        let url = format!("{}/{}", self.base_url, path);
+        let url = self.upstream_url(path)?;
         tracing::debug!(url = %url, "fetching {} artifact", self.registry_type);
 
         let resp = basic_auth_get(&self.http, &self.basic_auth, &url)

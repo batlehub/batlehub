@@ -3,6 +3,7 @@ pub mod authz;
 pub mod blocking;
 pub mod bundle;
 pub mod cache_control;
+pub mod csv;
 pub mod document_cache;
 pub mod escaping;
 pub mod eviction;
@@ -64,7 +65,7 @@ pub use hot_config::{
 };
 pub use integrity::{sha1_hex, verify as verify_checksum, ChecksumAlgo, IntegrityOutcome};
 pub use local_registry::{
-    artifact_storage_key, build_in_range, maven_artifact_storage_key,
+    artifact_storage_key, build_in_range, has_traversal_after_decoding, maven_artifact_storage_key,
     terraform_provider_binary_storage_key, validate_coordinate, validate_package_name,
     validate_path_safe, JetbrainsPluginVersion, LocalRegistryService, OpenVsxExtensionVersion,
     PublishPolicyRequest, PublishRequest, TerraformPlatform, COMPOSER_DIST_SHA1,

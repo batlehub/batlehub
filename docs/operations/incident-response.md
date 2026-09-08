@@ -109,7 +109,7 @@ curl -sS -X POST "$BATLEHUB/api/v1/flags/soc" \
 `version_range = "*"` flags every version of the package. On a registry with
 a `[registries.security]` profile the version is denied at once; elsewhere
 `FlagsRule` refuses it on the next request. Lift it with
-`DELETE /api/v1/flags/soc/CASE-2026-0912` (signed over the empty body): the
+`DELETE /api/v1/flags/soc/CASE-2026-0912` (signed over `DELETE\n/api/v1/flags/{source}/{external_id}`, so the signature is bound to the flag it lifts): the
 row stays as a tombstone so the report below still answers.
 
 ### Who pulled a flagged version {#who-pulled-a-flagged-version}

@@ -356,6 +356,12 @@ async fn sdkman_download_traversal_version_returns_400() {
         "candidates/..%2Fx/linuxx64/versions/all",
         "hooks/post/java/..%2Fx/linuxx64",
         "selfupdate/stable/plan9",
+        // Double-encoded: `%252e%252e` reaches the handler as `%2e%2e`, which
+        // a byte comparison does not read as a dot segment but a URL parser
+        // does.
+        "broker/download/java/%252e%252e/linuxx64",
+        "broker/download/java/1.1.0/%252e%252e",
+        "candidates/validate/java/..%252Fx/linuxx64",
     ] {
         let resp = call_service(&app, admin_get(&url(path))).await;
         assert_eq!(resp.status(), 400, "{path}");

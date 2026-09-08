@@ -6,8 +6,9 @@ use std::sync::Arc;
 
 use super::super::forge_api::{parse_date, person_label, BudgetedApi};
 use super::super::http_client::{
-    apply_upstream_tls, basic_auth_get, ensure_same_origin, fetch_release_listing, percent_encode,
-    to_registry_error, upstream_auth_headers, UpstreamHttpOptions,
+    apply_upstream_tls, basic_auth_get, ensure_same_origin, ensure_url_under_base,
+    fetch_release_listing, percent_encode, to_registry_error, upstream_auth_headers,
+    UpstreamHttpOptions,
 };
 use super::super::ssrf;
 use super::models::{GlBranch, GlCommit, GlLink, GlRelease, GlSignature, GlTag};
@@ -197,9 +198,19 @@ impl GitlabRegistryClient {
     }
 
     /// Package-registry passthrough URL: `{instance_root}/{relative}` (the relative
-    /// path already includes `api/v4/...`).
-    pub(super) fn passthrough_url(&self, relative: &str) -> String {
-        format!("{}/{}", self.root, relative)
+    /// path already includes `api/v4/...`), confined to the API subtree.
+    ///
+    /// `relative` reaches here from the request path, so the join is the point
+    /// where a dot segment would take the request outside `/api/v4` — to
+    /// somewhere else on the instance, still same-origin and so still carrying
+    /// the operator's `PRIVATE-TOKEN`. `validate_path_safe` rejects those at the
+    /// edge; re-reading the assembled URL means the confinement does not rest on
+    /// that one check, and it holds on a sub-path install where same-origin says
+    /// nothing about staying inside the instance.
+    pub(super) fn passthrough_url(&self, relative: &str) -> Result<String, CoreError> {
+        let url = format!("{}/{}", self.root, relative);
+        ensure_url_under_base(&url, &self.api_base_url)?;
+        Ok(url)
     }
 
     pub(super) async fn fetch_release_by_tag(
@@ -613,7 +624,10 @@ impl RegistryClient for GitlabRegistryClient {
                     self.raw_file_url(project, git_ref, path)
                 } else if let Some(rest) = artifact.strip_prefix("pkgpath/") {
                     // Package-registry passthrough (`api/v4/projects/.../packages/…`).
-                    self.passthrough_url(rest)
+                    // Fallible since the assembled URL is re-read against the
+                    // API base: a selector that escapes `/api/v4` is refused
+                    // here rather than fetched with the operator's token.
+                    self.passthrough_url(rest)?
                 } else {
                     return Err(CoreError::Registry(format!(
                         "unsupported gitlab artifact selector: {artifact}"
@@ -947,9 +961,33 @@ mod tests {
             "https://gitlab.com/api/v4/projects/grp%2Fproj/repository/files/src%2Fx.rs/raw?ref=main"
         );
         assert_eq!(
-            client.passthrough_url("api/v4/projects/1/packages/generic/a/1.0/f.bin"),
+            client
+                .passthrough_url("api/v4/projects/1/packages/generic/a/1.0/f.bin")
+                .unwrap(),
             "https://gitlab.com/api/v4/projects/1/packages/generic/a/1.0/f.bin"
         );
+    }
+
+    /// A `pkgpath/` selector that walks out of `/api/v4` stays on the instance,
+    /// so `ensure_same_origin` would wave it through and the request would carry
+    /// the operator's `PRIVATE-TOKEN` to somewhere the selector never named.
+    /// Both spellings are covered: a literal dot segment, and the encoded one
+    /// that `Url::parse` folds only once the URL is assembled.
+    #[test]
+    fn passthrough_url_refuses_escaping_the_api_subtree() {
+        let opts = UpstreamHttpOptions::default();
+        let client = GitlabRegistryClient::new("https://gitlab.com", &opts).unwrap();
+
+        for selector in [
+            "api/v4/../../admin/users",
+            "api/v4/projects/1/packages/../../../../admin/users",
+            "api/v4/%2e%2e/%2e%2e/admin/users",
+        ] {
+            assert!(
+                client.passthrough_url(selector).is_err(),
+                "selector should be refused: {selector}"
+            );
+        }
     }
 
     #[tokio::test]

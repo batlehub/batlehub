@@ -72,6 +72,22 @@ function state(f: PackageFlag): string {
   return t("flagsPanel.live");
 }
 
+/**
+ * The flag URL, if it is a page we are willing to link to.
+ *
+ * The server normalises this through the same http(s) allow-list every other
+ * externally supplied link goes through, so this is the second of two checks,
+ * not the only one — but a flag arrives from an integration rather than from
+ * us, an `:href` is a navigation sink, and the same guard already sits in
+ * `RichText`. Matching the scheme rather than blocking `javascript:` by name
+ * leaves nothing to spell around.
+ */
+function pageUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const href = url.trim();
+  return /^https?:\/\/[^\s/\\]/i.test(href) ? href : null;
+}
+
 function effectVariant(effect: string) {
   switch (effect) {
     case "hard_block":
@@ -136,8 +152,8 @@ onMounted(load);
             <TableCell class="text-sm">
               {{ f.summary }}
               <a
-                v-if="f.url"
-                :href="f.url"
+                v-if="pageUrl(f.url)"
+                :href="pageUrl(f.url)!"
                 class="ml-1 underline text-muted-foreground"
                 target="_blank"
                 rel="noopener noreferrer"

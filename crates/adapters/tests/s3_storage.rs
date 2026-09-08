@@ -28,7 +28,7 @@ fn s3_endpoint() -> Option<String> {
     std::env::var("S3_TEST_ENDPOINT").ok()
 }
 
-async fn make_backend(endpoint: &str) -> S3StorageBackend {
+async fn s3_client(endpoint: &str) -> Client {
     let sdk_config = aws_config::defaults(BehaviorVersion::latest())
         .region(aws_config::Region::new(REGION))
         .endpoint_url(endpoint)
@@ -44,7 +44,22 @@ async fn make_backend(endpoint: &str) -> S3StorageBackend {
     // Idempotent — no-op if the bucket was created by a previous test run.
     let _ = client.create_bucket().bucket(BUCKET).send().await;
 
-    S3StorageBackend::from_client(client, BUCKET.to_owned(), String::new())
+    client
+}
+
+async fn make_backend(endpoint: &str) -> S3StorageBackend {
+    S3StorageBackend::from_client(s3_client(endpoint).await, BUCKET.to_owned(), String::new())
+}
+
+/// A backend scoped to a configured object prefix, plus the raw client behind
+/// it — so a test can assert against the *full* object key S3 actually sees,
+/// not only against the prefix-stripped view the backend presents.
+async fn make_prefixed_backend(endpoint: &str, prefix: &str) -> (S3StorageBackend, Client) {
+    let client = s3_client(endpoint).await;
+    (
+        S3StorageBackend::from_client(client.clone(), BUCKET.to_owned(), prefix.to_owned()),
+        client,
+    )
 }
 
 async fn collect(artifact: StoredArtifact) -> Vec<u8> {
@@ -203,6 +218,69 @@ async fn delete_by_prefix_removes_only_matching_keys() {
     assert_eq!(remaining, 0);
 
     assert!(backend.exists("artifact:cargo/del-pkg-0").await.unwrap());
+}
+
+/// A configured backend prefix must not change *what* `delete_by_prefix`
+/// deletes. The keys `list_objects_v2` hands back already carry the prefix;
+/// addressing the delete by the prefix-stripped logical key instead asks S3 to
+/// remove objects that do not exist, which it reports as a success — a purge
+/// that claims to have cleared the registry while every artifact is still in
+/// the bucket. The unprefixed test above cannot see that, because with an empty
+/// prefix the stripped key and the real key are the same string.
+#[tokio::test]
+async fn delete_by_prefix_removes_objects_under_a_configured_prefix() {
+    let Some(ep) = s3_endpoint() else { return };
+    let (backend, client) = make_prefixed_backend(&ep, "tenant-del/").await;
+
+    for i in 0..3u8 {
+        backend
+            .store(
+                &format!("artifact:npm/pfx-del-{i}"),
+                Bytes::from(vec![0u8; 10]),
+                StorageMeta::default(),
+            )
+            .await
+            .unwrap();
+    }
+    // Same tenant, outside the deleted prefix: must survive.
+    backend
+        .store(
+            "artifact:cargo/pfx-del-0",
+            Bytes::from_static(b"keep"),
+            StorageMeta::default(),
+        )
+        .await
+        .unwrap();
+
+    let deleted = backend
+        .delete_by_prefix("artifact:npm/pfx-del-")
+        .await
+        .unwrap();
+    assert_eq!(deleted, 3);
+
+    let (remaining, _) = backend
+        .stat_by_prefix("artifact:npm/pfx-del-")
+        .await
+        .unwrap();
+    assert_eq!(
+        remaining, 0,
+        "delete_by_prefix reported a purge it did not perform"
+    );
+
+    // Stated in S3's own terms: the object is gone at its full key, prefix
+    // included, so the count above cannot be satisfied by a delete that missed.
+    let head = client
+        .head_object()
+        .bucket(BUCKET)
+        .key("tenant-del/artifact:npm/pfx-del-0")
+        .send()
+        .await;
+    assert!(
+        head.is_err(),
+        "object should no longer exist at its full, prefixed key"
+    );
+
+    assert!(backend.exists("artifact:cargo/pfx-del-0").await.unwrap());
 }
 
 fn byte_stream(chunks: Vec<Vec<u8>>) -> ByteStream {

@@ -7,8 +7,9 @@ use std::sync::Arc;
 use super::super::forge_api::{parse_date, person_label, BudgetedApi};
 use super::super::github::commit_dated_metadata;
 use super::super::http_client::{
-    apply_upstream_tls, basic_auth_get, ensure_same_origin, fetch_release_listing,
-    to_registry_error, upstream_auth_headers, UpstreamHttpOptions,
+    apply_upstream_tls, basic_auth_get, ensure_same_origin, ensure_url_under_base,
+    fetch_release_listing, percent_encode_path, to_registry_error, upstream_auth_headers,
+    UpstreamHttpOptions,
 };
 use super::super::ssrf;
 use super::models::{FjAsset, FjBranch, FjCommit, FjRelease, FjTag};
@@ -121,6 +122,29 @@ impl ForgejoRegistryClient {
     pub fn with_budget(mut self, registry: &str, budget: Arc<dyn RateLimitBudget>) -> Self {
         self.api = BudgetedApi::new(budget, registry, self.token_fingerprint.clone());
         self
+    }
+
+    /// The one subtree a `pkgpath/` selector may address: the instance's
+    /// package registry. The handler prefixes `api/packages/` when it builds the
+    /// selector, and this is that prefix as a URL to measure the result against.
+    fn packages_base(&self) -> String {
+        format!("{}/api/packages", self.base_url)
+    }
+
+    /// The package-registry passthrough URL, confined to the package subtree.
+    ///
+    /// `relative` reaches here from the request path, so the join is the point
+    /// where a dot segment would take the request somewhere the selector never
+    /// named — the instance's admin API, say, still on this origin and so still
+    /// carrying the instance token that `ensure_same_origin` is happy to send.
+    /// `validate_path_safe` rejects those at the edge; re-reading the assembled
+    /// URL here means the confinement does not rest on that one check, and it
+    /// holds on a sub-path install (`https://forge.example/gitea`) where
+    /// same-origin says nothing about staying inside the instance at all.
+    fn passthrough_url(&self, relative: &str) -> Result<String, CoreError> {
+        let url = format!("{}/{}", self.base_url, relative);
+        ensure_url_under_base(&url, &self.packages_base())?;
+        Ok(url)
     }
 
     pub(super) fn get(&self, url: &str) -> reqwest::RequestBuilder {
@@ -424,9 +448,14 @@ pub(super) fn static_artifact_url(
     } else if artifact == "zipball" {
         Some(format!("{base}/{owner_repo}/archive/{git_ref}.zip"))
     } else {
-        artifact
-            .strip_prefix("raw/")
-            .map(|file_path| format!("{base}/{owner_repo}/raw/{git_ref}/{file_path}"))
+        // Encoded segment-wise for the same reason as the GitHub client: an
+        // unencoded `%2e%2e` in the caller-supplied path is a dot segment to
+        // `Url::parse` and would walk out of `{owner_repo}/raw/{git_ref}` into
+        // another repository on the same instance, carrying the instance token.
+        artifact.strip_prefix("raw/").map(|file_path| {
+            let file_path = percent_encode_path(file_path);
+            format!("{base}/{owner_repo}/raw/{git_ref}/{file_path}")
+        })
     }
 }
 
@@ -553,7 +582,7 @@ impl RegistryClient for ForgejoRegistryClient {
             // Package-registry passthrough: `pkgpath/<instance-relative-path>` →
             // `{instance}/<path>` (e.g. `api/packages/{owner}/generic/…`).
             Some(artifact) if artifact.starts_with("pkgpath/") => {
-                format!("{}/{}", self.base_url, &artifact["pkgpath/".len()..])
+                self.passthrough_url(&artifact["pkgpath/".len()..])?
             }
             Some(artifact) => {
                 if let Some(url) =
@@ -657,6 +686,32 @@ mod tests {
             name: name.to_string(),
             browser_download_url: format!("https://example.com/{name}"),
             size: 0,
+        }
+    }
+
+    /// A `pkgpath/` selector may address the package registry and nothing else.
+    /// One that walks out of `/api/packages` is still same-origin, so it would
+    /// otherwise be fetched with the instance token; the assembled URL is
+    /// re-read against the package subtree to refuse it. The encoded spelling
+    /// matters because it only becomes a dot segment once `Url::parse` sees it.
+    #[test]
+    fn passthrough_url_refuses_escaping_the_package_subtree() {
+        let opts = UpstreamHttpOptions::default();
+        let client = ForgejoRegistryClient::new("https://codeberg.org", &opts).unwrap();
+
+        assert!(client
+            .passthrough_url("api/packages/owner/generic/pkg/1.0/f.bin")
+            .is_ok());
+
+        for selector in [
+            "api/v1/admin/users",
+            "api/packages/../v1/admin/users",
+            "api/packages/%2e%2e/v1/admin/users",
+        ] {
+            assert!(
+                client.passthrough_url(selector).is_err(),
+                "selector should be refused: {selector}"
+            );
         }
     }
 

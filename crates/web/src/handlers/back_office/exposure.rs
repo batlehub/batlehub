@@ -168,13 +168,7 @@ pub async fn exposure_report(
     }))
 }
 
-fn csv_field(s: &str) -> String {
-    if s.contains([',', '"', '\n', '\r']) {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_owned()
-    }
-}
+use batlehub_core::services::csv::field as csv_field;
 
 /// The whole report, every page walked, as CSV or JSON.
 #[utoipa::path(

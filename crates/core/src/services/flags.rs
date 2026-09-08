@@ -31,8 +31,8 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::entities::{
-    FlagEffect, FlagItemOutcome, FlagPush, FlagPushResponse, PackageFlag, PackageId, ReasonCode,
-    ScanTrigger, Verdict, VerdictState, ANY_VERSION, FLAGS_SCANNER,
+    normalize_url, FlagEffect, FlagItemOutcome, FlagPush, FlagPushResponse, PackageFlag, PackageId,
+    ReasonCode, ScanTrigger, Verdict, VerdictState, ANY_VERSION, FLAGS_SCANNER,
 };
 use crate::error::CoreError;
 use crate::ports::{AdvisoryRepository, VerdictRepository};
@@ -231,7 +231,14 @@ impl FlagService {
             effect,
             severity: item.severity,
             summary,
-            url: item.url.filter(|u| !u.trim().is_empty()),
+            // Through the same http(s) allow-list every other externally
+            // supplied link goes through. The console renders this in an
+            // `:href`, so a `javascript:` or `data:` URL pushed by a source is
+            // a one-click sink in an authenticated admin session; nothing but
+            // the CSP stands behind it. A URL that is not a page is dropped
+            // rather than rejecting the flag — the flag is the signal, the link
+            // is a convenience.
+            url: item.url.as_deref().and_then(normalize_url),
             first_seen: now,
             updated_at: now,
             expires_at: item.expires_at,

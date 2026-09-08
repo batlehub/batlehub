@@ -83,17 +83,74 @@ pub fn validate_path_safe(kind: &str, value: &str) -> Result<(), CoreError> {
     if value.is_empty() {
         return Err(CoreError::InvalidInput(format!("{kind} must not be empty")));
     }
-    if value.contains('\0') || value.contains('\\') {
-        return Err(CoreError::InvalidInput(format!(
-            "{kind} '{value}' contains an illegal character"
-        )));
-    }
     if value.starts_with('/') || value.ends_with('/') {
         return Err(CoreError::InvalidInput(format!(
             "{kind} '{value}' must not start or end with '/'"
         )));
     }
-    if value.split('/').any(|segment| segment == "..") {
+    // Check the literal form *and* every successive percent-decoding of it.
+    //
+    // Comparing raw bytes alone is not enough. `actix-router` decodes a path
+    // parameter twice with two different protected sets — `Quoter::new(b"",
+    // b"%/+")` while matching the route (so `%25` survives) and then
+    // `Quoter::new(b"", b"")` in the `web::Path` extractor (which decodes it) —
+    // so a request carrying `%252e%252e` reaches the handler as the literal
+    // `%2e%2e`. That is not a `..` segment to `split('/')`, but `url::Url::parse`
+    // *does* treat it as a dot segment and pops a path component, so a value
+    // that passed this check still escaped its base once interpolated into an
+    // upstream URL. Decoding to a fixed point closes the gap here, at the one
+    // chokepoint every adapter funnels through, rather than per-adapter.
+    check_decoded_rounds(kind, value)
+}
+
+/// Run [`reject_traversal`] over `value` and every percent-decoding of it.
+fn check_decoded_rounds(kind: &str, value: &str) -> Result<(), CoreError> {
+    let mut current = value.to_owned();
+    for _ in 0..MAX_PERCENT_DECODE_ROUNDS {
+        reject_traversal(kind, value, &current)?;
+        match percent_decode_round(&current) {
+            Some(next) => current = next,
+            // Fixed point: nothing further decodes, the value is fully checked.
+            None => return Ok(()),
+        }
+    }
+    // Still decoding after this many rounds: no real coordinate is nested
+    // percent-encoding that deeply, so treat it as an attack rather than
+    // decoding forever.
+    Err(CoreError::InvalidInput(format!(
+        "{kind} '{value}' is excessively percent-encoded"
+    )))
+}
+
+/// Whether `value` — or anything a percent-decoder could turn it into — carries
+/// a `..` path segment, a backslash, or a NUL.
+///
+/// The predicate form of [`validate_path_safe`]'s traversal rules, for callers
+/// that already have their own error type and their own notion of what the
+/// value is. The storage-backend `ensure_safe_key` chokepoint uses it so the
+/// edge and the last line of defence agree on what a dot segment is.
+pub fn has_traversal_after_decoding(value: &str) -> bool {
+    check_decoded_rounds("path", value).is_err()
+}
+
+/// How many percent-decoding rounds [`validate_path_safe`] inspects before it
+/// gives up and rejects. Each round strictly shrinks the string (three bytes
+/// become one), so a legitimate value reaches its fixed point almost
+/// immediately; the real attack needs two.
+const MAX_PERCENT_DECODE_ROUNDS: usize = 8;
+
+/// The traversal rules, applied to one decoding round of `value`.
+///
+/// `value` is the caller-facing original and is used only for the error
+/// message, so a rejection names what was actually sent rather than a
+/// half-decoded intermediate.
+fn reject_traversal(kind: &str, value: &str, decoded: &str) -> Result<(), CoreError> {
+    if decoded.contains('\0') || decoded.contains('\\') {
+        return Err(CoreError::InvalidInput(format!(
+            "{kind} '{value}' contains an illegal character"
+        )));
+    }
+    if decoded.split('/').any(|segment| segment == "..") {
         return Err(CoreError::InvalidInput(format!(
             "{kind} '{value}' contains a path-traversal segment"
         )));
@@ -104,16 +161,50 @@ pub fn validate_path_safe(kind: &str, value: &str) -> Result<(), CoreError> {
     // distinct coordinates collapse onto the same key — e.g. name `foo` +
     // version `bar/1.0.0` produces the same key as name `foo/bar` + version
     // `1.0.0`, enabling cross-package artifact overwrite / cache poisoning. The
-    // `..`/absolute checks above don't catch that, so reject `/` outright for
-    // the version. Names, upstream paths, and the `artifact` selector legitimately
+    // `..` check above doesn't catch that, so reject `/` outright for the
+    // version — encoded as readily as literal, since either form collapses the
+    // key. Names, upstream paths, and the `artifact` selector legitimately
     // contain `/` (npm scopes, `owner/repo`, git-forge `raw/{ref}/{path}` and
     // `link/{name}` selectors, mirrored file trees) and stay exempt.
-    if kind == "version" && value.contains('/') {
+    if kind == "version" && decoded.contains('/') {
         return Err(CoreError::InvalidInput(format!(
             "{kind} '{value}' must not contain '/'"
         )));
     }
     Ok(())
+}
+
+/// Percent-decode one round of `%XX` escapes, returning `None` once nothing
+/// decodes (the fixed point).
+///
+/// A malformed escape (`%zz`, a trailing `%`) is left literal rather than
+/// erroring: this is a security check, not a parser, and the question is only
+/// what an upstream URL parser could still turn the value into. Decoded bytes
+/// are appended raw and the result is read back lossily, so a multi-byte UTF-8
+/// sequence split across escapes still reassembles.
+fn percent_decode_round(value: &str) -> Option<String> {
+    if !value.contains('%') {
+        return None;
+    }
+    let bytes = value.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut decoded_any = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push((hi * 16 + lo) as u8);
+                decoded_any = true;
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    decoded_any.then(|| String::from_utf8_lossy(&out).into_owned())
 }
 
 /// Validate a package name is safe to use as a storage-key component.

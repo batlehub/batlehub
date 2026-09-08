@@ -304,6 +304,18 @@ pub async fn get_verdict(
     let requested = PackageId::new(&registry, &name, &version);
     batlehub_core::services::validate_coordinate(&name, &version, None).map_err(AppError::from)?;
 
+    // Gate on the coordinate as asked *before* resolving it, the way the proxy
+    // read path does (`ProxyService::handle`, RFC 0019 §6.1): resolution spends
+    // the shared rate-limit budget and sends the operator's forge credential
+    // upstream, and neither should happen for a caller who may not read the
+    // answer. The resolved coordinate is checked again below — this only
+    // decides whether the resolution is worth doing.
+    if hold_visibility(&svc.hot, &requested, &identity.0).await == HoldVisibility::Hidden {
+        return Err(AppError::not_found(format!(
+            "no verdict for {registry}:{name}@{version}"
+        )));
+    }
+
     // RFC 0019 phase 2: on a forge the caller names a ref and the verdict is
     // keyed on the commit. Resolving here is what lets `batlehub why
     // github:cli/cli@main` answer at all — and it is the same resolution the
@@ -402,16 +414,33 @@ pub async fn rescan_verdict(
     let (registry, name, version) = path.into_inner();
     batlehub_core::services::validate_coordinate(&name, &version, None).map_err(AppError::from)?;
     let requested = PackageId::new(&registry, &name, &version);
+    // The same grant the exemption endpoints read: `gates:exempt` resolved
+    // against the coordinate, which `role:admin` holds everywhere.
+    //
+    // Checked on the coordinate as asked before it is resolved, then again on
+    // the resolved one: resolution spends the shared rate-limit budget and
+    // sends the operator's forge credential upstream, which a caller without
+    // the grant must not be able to trigger. Same ordering as the proxy read
+    // path (`ProxyService::handle`).
+    let require_grant = |pkg: &PackageId| {
+        let pkg = pkg.clone();
+        let svc = svc.clone();
+        let identity = identity.0.clone();
+        async move {
+            authz::authorize_grants_public(&svc.hot, &pkg, &identity, Action::GatesExempt)
+                .await
+                .map_err(|_| {
+                    AppError::forbidden("this endpoint requires the 'gates:exempt' permission")
+                })
+        }
+    };
+    require_grant(&requested).await?;
     // The queue is keyed on the commit, as the verdict is (RFC 0019 phase 2).
     let pkg = match resolve_ref_for(&svc, &requested).await {
         Some(r) => PackageId::new(&registry, &name, &r.sha),
         None => requested,
     };
-    // The same grant the exemption endpoints read: `gates:exempt` resolved
-    // against the coordinate, which `role:admin` holds everywhere.
-    authz::authorize_grants_public(&svc.hot, &pkg, &identity.0, Action::GatesExempt)
-        .await
-        .map_err(|_| AppError::forbidden("this endpoint requires the 'gates:exempt' permission"))?;
+    require_grant(&pkg).await?;
     let (has_profile, queue) = {
         let hot = svc.hot.read().await;
         (hot.security.contains_key(&registry), hot.scan_queue.clone())

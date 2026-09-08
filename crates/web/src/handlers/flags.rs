@@ -56,18 +56,41 @@ pub struct FlagRevokeResponse {
 /// memory than the check needs.
 const MAX_PUSH_BYTES: u64 = 5 * 1024 * 1024;
 
+/// What the signature covers when there is no body to cover.
+///
+/// A `DELETE` carries nothing, so signing "the request" used to mean signing
+/// the empty string — one fixed value per source, naming neither the flag nor
+/// the moment. Any observed revoke signature was then a standing key to lift
+/// *every* flag that source had pushed, a `hard_block` on live malware
+/// included. Signing the method and path instead binds the proof to the one
+/// flag it was issued for, so a captured signature revokes only what it
+/// already revoked — a replay with no new effect, since a revoke is
+/// idempotent.
+fn revoke_canonical(source: &str, external_id: &str) -> String {
+    format!("DELETE\n/api/v1/flags/{source}/{external_id}")
+}
+
 /// Find the source, read the body within bounds, check the signature.
+///
+/// `canonical` is the message to verify when the request has no body; passing
+/// both a payload and a canonical string is a caller error and the payload
+/// wins.
 async fn authenticate(
     req: &HttpRequest,
     name: &str,
     payload: Option<&mut web::Payload>,
+    canonical: Option<&str>,
     sources: &FlagSources,
 ) -> Result<(FlagSourceConfig, bytes::Bytes), AppError> {
     let Some(source) = sources.0.iter().find(|s| s.name == name).cloned() else {
         return Err(AppError::not_found(format!("unknown flag source: {name}")));
     };
     let mut raw = BytesMut::new();
+    if let Some(canonical) = canonical {
+        raw.extend_from_slice(canonical.as_bytes());
+    }
     if let Some(payload) = payload {
+        raw.clear();
         let mut total: u64 = 0;
         while let Some(chunk) = payload.next().await {
             let chunk = chunk.map_err(|e| AppError::bad_request(e.to_string()))?;
@@ -117,7 +140,7 @@ pub async fn push_flags(
     svc: web::Data<Arc<FlagService>>,
 ) -> Result<impl Responder, AppError> {
     let name = path.into_inner();
-    let (source, body) = authenticate(&req, &name, Some(&mut payload), &sources).await?;
+    let (source, body) = authenticate(&req, &name, Some(&mut payload), None, &sources).await?;
     let parsed: FlagPushBody = serde_json::from_slice(&body)
         .map_err(|e| AppError::bad_request(format!("request body is not a flag push: {e}")))?;
     let now = Utc::now();
@@ -171,8 +194,10 @@ pub async fn revoke_flag(
     svc: web::Data<Arc<FlagService>>,
 ) -> Result<impl Responder, AppError> {
     let (name, external_id) = path.into_inner();
-    // A DELETE has no body: the signature is over the empty string.
-    let (_, _) = authenticate(&req, &name, None, &sources).await?;
+    // A DELETE has no body, so the signature covers the method and path
+    // instead — see `revoke_canonical`.
+    let canonical = revoke_canonical(&name, &external_id);
+    let (_, _) = authenticate(&req, &name, None, Some(&canonical), &sources).await?;
     let revoked = svc
         .revoke(&name, &external_id, Utc::now())
         .await

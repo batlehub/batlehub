@@ -72,7 +72,13 @@ pub(crate) fn ensure_safe_key(key: &str) -> Result<(), batlehub_core::error::Cor
             "storage key {key:?} must not be absolute"
         )));
     }
-    if key.split('/').any(|segment| segment == "..") {
+    // Checks every percent-decoding of the key, not just its literal bytes: a
+    // `%2e%2e` segment is a dot segment to anything that decodes the key later
+    // (a URL parser, a path rebuilt from a decoded form), and `%252e%252e`
+    // survives one round of decoding as `%2e%2e`. `validate_path_safe` rejects
+    // these at the edge; this chokepoint is the last line of defence for a key
+    // an adapter built without going through it.
+    if batlehub_core::services::has_traversal_after_decoding(key) {
         return Err(CoreError::InvalidInput(format!(
             "storage key {key:?} contains a path-traversal segment"
         )));

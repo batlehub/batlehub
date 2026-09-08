@@ -429,16 +429,29 @@ impl VerdictService {
         let key = coordinate_key(&package.id);
         let stored = self.verdicts.get(&key).await?;
         if let Some(prev) = &stored {
+            // Whether the `flags` scanner actually answered *this* run. Read
+            // before the carry-forward loop below, which appends to `done`.
+            let flags_answered = done.iter().any(|s| s == crate::entities::FLAGS_SCANNER);
             // The `flags` scanner re-emits every live pushed flag on each
             // run (RFC 0002 §13), so its previous findings are not kept:
             // keeping them would outlive a revoke. Every other SOC finding
             // — an administrator's word — stays.
+            //
+            // That reasoning holds only when `flags` *ran*. `run_scanner` adds
+            // a scanner to `done` on `Ok` alone, so a `flags` run that errored
+            // — the store unreadable, or the job timed out — re-emits nothing,
+            // and dropping its stored findings anyway erased a live SOC
+            // `hard_block` while the marker inherited below still suppressed
+            // `SCAN_PENDING`. What was left was a lone `SCANNER_ERROR`, which
+            // is maturity-bypassable, so a denied version was downgraded to
+            // `warned` and served. A scanner that did not answer revokes
+            // nothing.
             findings.extend(
                 prev.findings
                     .iter()
                     .filter(|f| {
                         f.kind == FindingKind::SocVerdict
-                            && f.scanner != crate::entities::FLAGS_SCANNER
+                            && !(flags_answered && f.scanner == crate::entities::FLAGS_SCANNER)
                     })
                     .cloned(),
             );
@@ -452,21 +465,19 @@ impl VerdictService {
             // `SCANNER_ERROR`, which is maturity-bypassable, so the version was
             // downgraded to `warned` and served.
             //
-            // `flags` is the exception in both halves: it re-emits every live
-            // pushed flag on each run, so re-adding its stored findings would
-            // outlive a revoke.
+            // `flags` needs no exception here: a `flags` run that succeeded is
+            // already in `done` and is skipped by the guard below, so anything
+            // reaching this point did not run and has nothing to revoke with.
             for s in &prev.scanners_done {
                 if done.contains(s) {
                     continue;
                 }
-                if s != crate::entities::FLAGS_SCANNER {
-                    findings.extend(
-                        prev.findings
-                            .iter()
-                            .filter(|f| &f.scanner == s && f.kind != FindingKind::SocVerdict)
-                            .cloned(),
-                    );
-                }
+                findings.extend(
+                    prev.findings
+                        .iter()
+                        .filter(|f| &f.scanner == s && f.kind != FindingKind::SocVerdict)
+                        .cloned(),
+                );
                 done.push(s.clone());
             }
         }
@@ -934,6 +945,250 @@ mod tests {
         assert_eq!(
             coordinate_key(&id),
             PackageId::new("npm", "left-pad", "1.3.1")
+        );
+    }
+}
+
+/// `record_scan`'s carry-forward, which decides what a rescan is allowed to
+/// forget.
+///
+/// The `flags` scanner re-emits every live flag on each run, so a run that
+/// succeeded revokes what it no longer emits. A run that *errored* emits
+/// nothing and must revoke nothing. The two used to be indistinguishable here,
+/// because the scanner's "done" marker was inherited without its findings, and
+/// these tests hold both halves of the distinction in place.
+#[cfg(test)]
+mod record_scan_tests {
+    use super::*;
+    use crate::entities::{PackageId, PackageMetadata, ScanJob, ScanTrigger};
+    use crate::ports::{QueuedCount, ScanQueue, VerdictRepository};
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    /// One verdict, in memory. Only `upsert`/`get` are exercised; the listing
+    /// methods belong to the read side and are not on this path.
+    #[derive(Default)]
+    struct OneVerdict(Mutex<Option<Verdict>>);
+
+    #[async_trait::async_trait]
+    impl VerdictRepository for OneVerdict {
+        async fn upsert(&self, verdict: &Verdict) -> Result<(), CoreError> {
+            *self.0.lock().expect("test mutex") = Some(verdict.clone());
+            Ok(())
+        }
+        async fn get(&self, _package: &PackageId) -> Result<Option<Verdict>, CoreError> {
+            Ok(self.0.lock().expect("test mutex").clone())
+        }
+        async fn list_for_package(
+            &self,
+            _registry: &str,
+            _package: &str,
+        ) -> Result<Vec<Verdict>, CoreError> {
+            Ok(vec![])
+        }
+        async fn list_by_state(
+            &self,
+            _registry: &str,
+            _state: VerdictState,
+            _limit: u64,
+        ) -> Result<Vec<Verdict>, CoreError> {
+            Ok(vec![])
+        }
+        async fn list_due_for_rescan(
+            &self,
+            _registry: &str,
+            _before: DateTime<Utc>,
+            _limit: u64,
+        ) -> Result<Vec<PackageId>, CoreError> {
+            Ok(vec![])
+        }
+    }
+
+    #[derive(Default)]
+    struct NoQueue;
+
+    #[async_trait::async_trait]
+    impl ScanQueue for NoQueue {
+        async fn enqueue(
+            &self,
+            _package: &PackageId,
+            _published_at: Option<DateTime<Utc>>,
+            _trigger: ScanTrigger,
+        ) -> Result<bool, CoreError> {
+            Ok(false)
+        }
+        async fn lease(
+            &self,
+            _worker_id: &str,
+            _registries: &[String],
+            _n: u32,
+            _lease_secs: u64,
+            _max_attempts: u32,
+        ) -> Result<Vec<ScanJob>, CoreError> {
+            Ok(vec![])
+        }
+        async fn heartbeat(&self, _job_id: uuid::Uuid, _lease_secs: u64) -> Result<(), CoreError> {
+            Ok(())
+        }
+        async fn complete(&self, _job_id: uuid::Uuid) -> Result<(), CoreError> {
+            Ok(())
+        }
+        async fn fail(&self, _job_id: uuid::Uuid, _error: &str) -> Result<(), CoreError> {
+            Ok(())
+        }
+        async fn exhausted(&self, _max: u32, _n: u32) -> Result<Vec<ScanJob>, CoreError> {
+            Ok(vec![])
+        }
+        async fn queued(&self) -> Result<Vec<QueuedCount>, CoreError> {
+            Ok(vec![])
+        }
+        async fn try_lead(&self, _key: i64) -> Result<bool, CoreError> {
+            Ok(true)
+        }
+    }
+
+    fn svc() -> VerdictService {
+        VerdictService::new(Arc::new(OneVerdict::default()), Arc::new(NoQueue))
+    }
+
+    /// A version published long enough ago that `mature_age` would lift a
+    /// bypassable hold — which is what made the erasure serve bytes rather than
+    /// merely lose a finding.
+    fn mature_package(now: DateTime<Utc>) -> PackageMetadata {
+        let mut m = PackageMetadata::minimal(
+            PackageId::new("npm-public", "evil-pkg", "1.0.0"),
+            serde_json::Value::Null,
+        );
+        m.published_at = Some(now - chrono::Duration::days(30));
+        m
+    }
+
+    fn policy() -> SecurityPolicy {
+        let mut p = SecurityPolicy::defaults_for("npm-public");
+        p.min_age = Duration::from_secs(0);
+        p.mature_age = Duration::from_secs(86_400);
+        p
+    }
+
+    /// What a SOC `hard_block` push stores.
+    fn soc_hard_block() -> Finding {
+        Finding::new(
+            crate::entities::FLAGS_SCANNER,
+            FindingKind::SocVerdict,
+            ReasonCode::SocVerdict,
+            Severity::Critical,
+            "malware confirmed",
+        )
+    }
+
+    fn scanner_error() -> Finding {
+        Finding::new(
+            crate::entities::FLAGS_SCANNER,
+            FindingKind::ScannerError,
+            ReasonCode::ScannerError,
+            Severity::High,
+            "flag store unreadable: connection timed out",
+        )
+    }
+
+    /// The regression: a rescan in which the flags scanner *errored* must not
+    /// drop the block it could not re-read.
+    #[tokio::test]
+    async fn a_flags_error_does_not_erase_a_hard_block() {
+        let now = Utc::now();
+        let s = svc();
+        let pkg = mature_package(now);
+
+        // The push: denied, on the SOC's word.
+        let (_, first) = s
+            .record_scan(
+                &pkg,
+                &policy(),
+                vec![soc_hard_block()],
+                vec![crate::entities::FLAGS_SCANNER.into(), "osv".into()],
+                now,
+            )
+            .await
+            .expect("record the push");
+        assert_eq!(first.state, VerdictState::Denied);
+
+        // The rescan it enqueues, with the flag store unreadable. `run_scanner`
+        // adds a scanner to `done` only on success, so `flags` is absent here.
+        let (_, after) = s
+            .record_scan(
+                &pkg,
+                &policy(),
+                vec![scanner_error()],
+                vec!["osv".into()],
+                now,
+            )
+            .await
+            .expect("record the failed rescan");
+
+        assert_eq!(
+            after.state,
+            VerdictState::Denied,
+            "a flags outage must not downgrade a hard block; got {:?} with {:?}",
+            after.state,
+            after.reason_codes
+        );
+        assert!(
+            !after.state.is_served(),
+            "the artifact must not be served while the block stands"
+        );
+        assert!(
+            after
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::SocVerdict),
+            "the SOC finding itself must survive the outage"
+        );
+    }
+
+    /// The other half: a flags run that *succeeded* and emitted nothing is a
+    /// revoke, and must still clear the block. Without this the fix above would
+    /// make a hard block permanent.
+    #[tokio::test]
+    async fn a_successful_flags_run_still_revokes() {
+        let now = Utc::now();
+        let s = svc();
+        let pkg = mature_package(now);
+
+        s.record_scan(
+            &pkg,
+            &policy(),
+            vec![soc_hard_block()],
+            vec![crate::entities::FLAGS_SCANNER.into(), "osv".into()],
+            now,
+        )
+        .await
+        .expect("record the push");
+
+        // The revoke: flags ran, found nothing live, and says so by being in
+        // `done` with no findings.
+        let (_, after) = s
+            .record_scan(
+                &pkg,
+                &policy(),
+                vec![],
+                vec![crate::entities::FLAGS_SCANNER.into(), "osv".into()],
+                now,
+            )
+            .await
+            .expect("record the revoke");
+
+        assert!(
+            after.state.is_served(),
+            "a revoke must lift the block; got {:?} with {:?}",
+            after.state,
+            after.reason_codes
+        );
+        assert!(
+            !after
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::SocVerdict),
+            "the revoked finding must not survive a successful run"
         );
     }
 }

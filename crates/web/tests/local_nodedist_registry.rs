@@ -240,6 +240,16 @@ async fn nodedist_file_traversal_returns_400() {
         format!("/proxy/{REG}/nodedist/%2e%2e/SHASUMS256.txt"),
         format!("/proxy/{REG}/nodedist/v1.1.0/%2e%2e"),
         format!("/proxy/{REG}/nodedist/v1.1.0/..%2Fetc%2Fpasswd"),
+        // Double-encoded. `actix-router` decodes a path parameter twice with
+        // two different protected sets, so `%252e%252e` reaches the handler as
+        // the literal `%2e%2e` — not a `..` segment to a byte comparison, but
+        // a dot segment to `url::Url::parse`, which is what builds the upstream
+        // URL. Single-encoding alone was tested; this is the spelling that got
+        // through.
+        format!("/proxy/{REG}/nodedist/%252e%252e/SHASUMS256.txt"),
+        format!("/proxy/{REG}/nodedist/v1.1.0/%252e%252e"),
+        format!("/proxy/{REG}/nodedist/v1.1.0/..%252Fetc%252Fpasswd"),
+        format!("/proxy/{REG}/nodedist/%25252e%25252e/SHASUMS256.txt"),
     ] {
         let resp = call_service(&app, admin_get(&url)).await;
         assert!(

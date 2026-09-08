@@ -7,7 +7,7 @@ use std::sync::Arc;
 use super::super::forge_api::{parse_date, person_label, BudgetedApi};
 use super::super::http_client::{
     apply_upstream_tls, basic_auth_get, ensure_same_origin, fetch_release_listing,
-    to_registry_error, upstream_auth_headers, UpstreamHttpOptions,
+    percent_encode_path, to_registry_error, upstream_auth_headers, UpstreamHttpOptions,
 };
 use super::super::ssrf;
 use super::models::{
@@ -673,9 +673,22 @@ pub(super) fn static_artifact_url(
             archive_base, owner_repo, git_ref
         ))
     } else {
-        artifact
-            .strip_prefix("raw/")
-            .map(|file_path| format!("{}/{}/{}/{}", raw_base, owner_repo, git_ref, file_path))
+        // The file path is caller-supplied and is the one component here that
+        // is not drawn from config or an already-validated coordinate, so it is
+        // encoded segment-wise: an unencoded `%2e%2e` is a dot segment to
+        // `Url::parse` and would walk out of `{owner_repo}/{git_ref}` into
+        // another repository, still on this origin and so still carrying the
+        // operator's token. `validate_path_safe` rejects that at the edge; this
+        // keeps the URL join correct on its own terms.
+        artifact.strip_prefix("raw/").map(|file_path| {
+            format!(
+                "{}/{}/{}/{}",
+                raw_base,
+                owner_repo,
+                git_ref,
+                percent_encode_path(file_path)
+            )
+        })
     }
 }
 

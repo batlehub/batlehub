@@ -3776,3 +3776,114 @@ mod version_grant_filter {
         assert!(versions_seen(&s).await.is_empty());
     }
 }
+
+/// Traversal spelled through percent-encoding.
+///
+/// `actix-router` decodes a path parameter twice — once while matching the
+/// route with `%` protected, once in the `web::Path` extractor with nothing
+/// protected — so `%252e%252e` reaches a handler as the literal `%2e%2e`, which
+/// is not a `..` segment to `split('/')`. `url::Url::parse` *is* willing to read
+/// it as one, so the validator has to decode before it decides.
+mod encoded_traversal {
+    use super::*;
+    use crate::services::{has_traversal_after_decoding, validate_path_safe};
+
+    /// Every spelling `url`'s own parser folds to a dot segment, plus the
+    /// nested forms that survive a decoding round to become one.
+    const ESCAPES: &[&str] = &[
+        // Single-encoded: caught before this change, and still caught.
+        "a/%2e%2e/b",
+        "a/%2E%2E/b",
+        // The mixed spellings the URL spec lists alongside `..`.
+        "a/%2e./b",
+        "a/.%2e/b",
+        "a/%2E./b",
+        // Double-encoded: what actually reaches a handler.
+        "a/%252e%252e/b",
+        "a/%252E%252E/b",
+        // Triple, for the same reason.
+        "a/%25252e%25252e/b",
+        // The separator encoded rather than the dots.
+        "a%2f..%2fb",
+        "..%252fetc%252fpasswd",
+        // Backslash, which WHATWG folds into `/` for special schemes.
+        "a/%5c..%5cb",
+    ];
+
+    #[test]
+    fn every_encoded_spelling_of_a_dot_segment_is_rejected() {
+        for value in ESCAPES {
+            let err = validate_path_safe("package name", value)
+                .expect_err("must reject encoded traversal in {value}");
+            assert!(
+                matches!(err, CoreError::InvalidInput(_)),
+                "{value} must be InvalidInput, got {err:?}"
+            );
+            assert!(
+                has_traversal_after_decoding(value),
+                "{value} must also be caught at the storage chokepoint"
+            );
+        }
+    }
+
+    /// The exact request shape from the review: three encoded dot segments walk
+    /// out of `{owner}/{repo}/{ref}` into another repository.
+    #[test]
+    fn the_credentialed_cross_repo_read_is_rejected() {
+        let artifact = "raw/main/%252e%252e/%252e%252e/%252e%252e/victim/private/main/.env";
+        assert!(
+            validate_path_safe("artifact", artifact).is_err(),
+            "the cross-repository raw read must not validate"
+        );
+    }
+
+    /// Nested past any plausible real coordinate: rejected rather than decoded
+    /// forever.
+    #[test]
+    fn absurdly_nested_encoding_is_rejected() {
+        let mut value = "..".to_owned();
+        for _ in 0..12 {
+            value = value.replace('%', "%25").replace("..", "%2e%2e");
+        }
+        assert!(validate_path_safe("package name", &value).is_err());
+    }
+
+    /// The check decodes, so it must not start rejecting names that merely
+    /// contain a percent escape or a dot.
+    #[test]
+    fn legitimate_coordinates_still_pass() {
+        for value in [
+            "@scope/name",
+            "owner/repo",
+            "com.example:lib",
+            "raw/main/src/main.rs",
+            "some-package",
+            "a/.hidden/b",
+            "a/.../b",
+            // A file whose name genuinely contains an escape, once decoded to
+            // something harmless.
+            "docs/50%25-off.md",
+            "raw/main/a%20b/c.txt",
+        ] {
+            validate_path_safe("package name", value)
+                .unwrap_or_else(|e| panic!("{value} must stay valid, got {e:?}"));
+            assert!(
+                !has_traversal_after_decoding(value),
+                "{value} must stay valid at the storage chokepoint too"
+            );
+        }
+    }
+
+    /// An encoded `/` collapses two coordinates onto one storage key exactly as
+    /// a literal one does.
+    #[test]
+    fn a_version_may_not_smuggle_a_separator() {
+        for value in ["1.0.0%2f2", "1.0.0%2F2", "1.0.0%252f2"] {
+            assert!(
+                validate_path_safe("version", value).is_err(),
+                "{value} must not pass as a version"
+            );
+        }
+        validate_path_safe("version", "1.0.0+build.1").expect("a real version still passes");
+    }
+}

@@ -62,6 +62,33 @@ describe("FlagsPanel", () => {
     );
   });
 
+  it("links a flag URL only when it is an http(s) page", async () => {
+    // The server normalises this, so a non-page URL means the store predates
+    // that or something bypassed it. Either way the console must not render a
+    // navigation sink: `:href` is one, and the CSP is not a reason to rely on
+    // it alone.
+    listFlags.mockResolvedValue({
+      data: {
+        items: [
+          flag({ id: "a", external_id: "OK", url: "https://soc.example/CASE-7" }),
+          flag({ id: "b", external_id: "JS", url: "javascript:alert(1)" }),
+          flag({ id: "c", external_id: "UP", url: "JavaScript:alert(1)" }),
+          flag({ id: "d", external_id: "DATA", url: "data:text/html,<script>x</script>" }),
+          flag({ id: "e", external_id: "SLASH", url: "//evil.example/x" }),
+          flag({ id: "f", external_id: "BACK", url: "https:/\\evil.example" }),
+        ],
+        total: 6,
+        page: 0,
+        per_page: 25,
+      },
+      error: undefined,
+    });
+    const w = mount(FlagsPanel);
+    await flushPromises();
+    const hrefs = w.findAll("tbody a").map((a) => a.attributes("href"));
+    expect(hrefs).toEqual(["https://soc.example/CASE-7"]);
+  });
+
   it("names the missing permission on a 403", async () => {
     listFlags.mockResolvedValue({
       data: undefined,

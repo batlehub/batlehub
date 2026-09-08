@@ -9,7 +9,7 @@ use utoipa::{IntoParams, ToSchema};
 use batlehub_core::{
     entities::{AccessAction, AccessEvent, EventFilter},
     error::CoreError,
-    services::AdminService,
+    services::{csv::field as csv_field, AdminService},
 };
 
 use crate::{error::AppError, extractors::AuthIdentity, handlers::schemas::ProtocolDocument};
@@ -245,33 +245,47 @@ pub async fn export_audit_log(
                 batlehub_core::entities::AccessResult::Denied { .. } => "denied",
                 batlehub_core::entities::AccessResult::ProxyError { .. } => "error",
             };
+            // Every text column goes through `csv_field`. Four of them are
+            // written by the client being audited — `user_agent` and
+            // `ip_address` outright, `package_name` and `deny_reason` by way of
+            // what it asked for — so an unquoted comma or newline in a
+            // `User-Agent` used to shift the columns of the row it appears in,
+            // or forge whole rows in an auditor's export, and a leading `=`
+            // made the cell a formula. The numeric and timestamp columns are
+            // ours and need no escaping.
             csv.push_str(&format!(
                 "{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
                 e.id,
                 e.timestamp.to_rfc3339(),
-                e.user_id.as_deref().unwrap_or(""),
-                e.user_role,
-                e.package_id
-                    .as_ref()
-                    .map(|p| p.registry.as_str())
-                    .unwrap_or(""),
-                e.package_id.as_ref().map(|p| p.name.as_str()).unwrap_or(""),
-                e.package_id
-                    .as_ref()
-                    .map(|p| p.version.as_str())
-                    .unwrap_or(""),
-                e.package_id
-                    .as_ref()
-                    .and_then(|p| p.artifact.as_deref())
-                    .unwrap_or(""),
+                csv_field(e.user_id.as_deref().unwrap_or("")),
+                csv_field(&e.user_role.to_string()),
+                csv_field(
+                    e.package_id
+                        .as_ref()
+                        .map(|p| p.registry.as_str())
+                        .unwrap_or("")
+                ),
+                csv_field(e.package_id.as_ref().map(|p| p.name.as_str()).unwrap_or("")),
+                csv_field(
+                    e.package_id
+                        .as_ref()
+                        .map(|p| p.version.as_str())
+                        .unwrap_or("")
+                ),
+                csv_field(
+                    e.package_id
+                        .as_ref()
+                        .and_then(|p| p.artifact.as_deref())
+                        .unwrap_or("")
+                ),
                 // `as_str`, not `{:?}`: the debug spelling squashes the words
                 // together (`viewmetadata`), and this column is the one an
                 // auditor pastes back into `?action=`.
                 e.action.as_str(),
                 outcome,
-                deny_reason,
-                e.ip_address.as_deref().unwrap_or(""),
-                e.user_agent.as_deref().unwrap_or(""),
+                csv_field(deny_reason),
+                csv_field(e.ip_address.as_deref().unwrap_or("")),
+                csv_field(e.user_agent.as_deref().unwrap_or("")),
             ));
         }
         Ok(HttpResponse::Ok()
