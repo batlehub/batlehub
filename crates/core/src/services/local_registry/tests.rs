@@ -7,7 +7,7 @@ use chrono::Utc;
 
 use super::test_support::*;
 use super::*;
-use crate::entities::Action;
+use crate::entities::{Action, CallerNet};
 use crate::{
     entities::{Identity, Role},
     error::CoreError,
@@ -1562,7 +1562,14 @@ async fn get_artifact_reverify_passes_when_bytes_match() {
 
     let s = download_svc(backend, storage, Some(reverify_policy(true)), None);
     let out = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap();
     assert_eq!(out.as_ref(), body);
@@ -1587,7 +1594,14 @@ async fn get_artifact_reverify_detects_corruption() {
 
     let s = download_svc(backend, storage, Some(reverify_policy(true)), None);
     let err = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -1614,7 +1628,14 @@ async fn get_artifact_reverify_off_serves_corrupted_bytes() {
 
     let s = download_svc(backend, storage, Some(reverify_policy(false)), None);
     assert!(s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .is_ok());
 }
@@ -1634,7 +1655,14 @@ async fn get_artifact_reverify_fails_closed_when_metadata_row_missing() {
 
     let s = download_svc(backend, storage, Some(reverify_policy(true)), None);
     let err = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -1671,7 +1699,14 @@ async fn get_artifact_verifies_ed25519_signature() {
     };
     let s = download_svc(backend, storage, None, Some(signing));
     assert!(s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .is_ok());
 }
@@ -1708,7 +1743,14 @@ async fn get_artifact_rejects_signature_from_untrusted_key() {
     };
     let s = download_svc(backend, storage, None, Some(signing));
     let err = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -1748,7 +1790,14 @@ async fn get_artifact_refuses_stored_signature_bytes_with_no_type() {
     };
     let s = download_svc(backend, storage, None, Some(signing));
     let err = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -1784,7 +1833,14 @@ async fn get_artifact_still_serves_an_unsigned_artifact_under_verify_on_download
     };
     let s = download_svc(backend, storage, None, Some(signing));
     assert!(s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .is_ok());
 }
@@ -1841,9 +1897,16 @@ async fn get_artifact_judges_the_chain_against_the_versions_real_metadata() {
         );
 
         assert!(
-            s.get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
-                .await
-                .is_ok(),
+            s.get_artifact(
+                "npm",
+                "pkg",
+                "1.0.0",
+                Action::ReleasesRead,
+                &user(),
+                &CallerNet::unknown(),
+            )
+            .await
+            .is_ok(),
             "{label} refused a version whose stored row satisfies it"
         );
     }
@@ -1878,7 +1941,14 @@ async fn get_artifact_defers_the_version_gates_for_a_coordinate_it_has_no_row_fo
     );
 
     let err = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -1968,7 +2038,14 @@ async fn get_artifact_still_applies_the_block_list_when_it_has_no_row() {
     );
 
     let err = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -2005,7 +2082,14 @@ async fn get_artifact_still_applies_rbac_when_it_has_no_row() {
     );
 
     let err = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -2048,7 +2132,14 @@ async fn get_artifact_still_refuses_an_unsigned_version_under_require_signed_rel
     );
 
     let err = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -2495,9 +2586,16 @@ async fn get_artifact_records_allowed_download_when_access_log_configured() {
 
     let spy = SpyRepo::new();
     let s = download_svc_with_access_log(backend, storage, None, None, Some(spy.clone()));
-    s.get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
-        .await
-        .unwrap();
+    s.get_artifact(
+        "npm",
+        "pkg",
+        "1.0.0",
+        Action::ReleasesRead,
+        &user(),
+        &CallerNet::unknown(),
+    )
+    .await
+    .unwrap();
 
     let events = spy.events();
     assert_eq!(events.len(), 1);
@@ -2506,6 +2604,94 @@ async fn get_artifact_records_allowed_download_when_access_log_configured() {
         crate::entities::AccessResult::Allowed
     ));
     assert_eq!(events[0].package_id.as_ref().unwrap().name, "pkg");
+}
+
+/// A local download reaches the trail with the caller's address and agent, the
+/// two columns `audit pulls` reports beside the count (RFC 0018 §13.10).
+///
+/// The report reads them off the event, so an event that never carried them is
+/// indistinguishable there from a caller that sent no `User-Agent` — a `count`
+/// with two blanks next to it, on exactly the deployments that publish their own
+/// packages. This is the assertion that the local path now records what the
+/// proxy path has always recorded.
+#[tokio::test]
+async fn get_artifact_records_the_callers_address_and_agent() {
+    let body: &[u8] = b"local-artifact-bytes";
+    let backend = InMemBackend::arc();
+    seed_version(
+        &backend,
+        &crate::services::integrity::sha256_hex(body),
+        None,
+        None,
+    );
+    let storage = MemStore::arc();
+    storage.put(
+        &artifact_storage_key("npm", "pkg", "1.0.0"),
+        Bytes::from_static(body),
+    );
+
+    let spy = SpyRepo::new();
+    let s = download_svc_with_access_log(backend, storage, None, None, Some(spy.clone()));
+    let net = CallerNet {
+        ip: Some("10.0.0.7".to_owned()),
+        user_agent: Some("npm/10.9.2 node/v22.14.0".to_owned()),
+    };
+    s.get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user(), &net)
+        .await
+        .unwrap();
+
+    let events = spy.events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].ip_address.as_deref(), Some("10.0.0.7"));
+    assert_eq!(
+        events[0].user_agent.as_deref(),
+        Some("npm/10.9.2 node/v22.14.0")
+    );
+}
+
+/// The same for a refusal, which `authorize_artifact_read` records on its own.
+///
+/// A denied download is the row an incident starts from — "which address was
+/// turned away, and what was it running" — so the enrichment cannot be limited
+/// to the path that delivered bytes.
+#[tokio::test]
+async fn denied_local_download_records_the_callers_address_and_agent() {
+    let backend = InMemBackend::arc();
+    let ns = MockTeamNamespace::with_visibility("npm", "pkg", Visibility::Internal);
+    let spy = SpyRepo::new();
+    let s = LocalRegistryService {
+        backend,
+        storage: Arc::new(NoopStorage),
+        hot: new_hot_lock(HotConfig {
+            registries: HashMap::new(),
+            policies: HashMap::new(),
+            ..Default::default()
+        }),
+        quota: None,
+        ownership: None,
+        team_namespace: Some(ns),
+        sbom: None,
+        explore_cache: None,
+        package_repo: Some(spy.clone()),
+        readme: None,
+    };
+
+    let net = CallerNet {
+        ip: Some("192.0.2.9".to_owned()),
+        user_agent: Some("curl/8.7.1".to_owned()),
+    };
+    s.get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &anon(), &net)
+        .await
+        .unwrap_err();
+
+    let events = spy.events();
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        events[0].result,
+        crate::entities::AccessResult::Denied { .. }
+    ));
+    assert_eq!(events[0].ip_address.as_deref(), Some("192.0.2.9"));
+    assert_eq!(events[0].user_agent.as_deref(), Some("curl/8.7.1"));
 }
 
 #[tokio::test]
@@ -2532,7 +2718,14 @@ async fn get_artifact_records_denied_download_when_visibility_check_fails() {
 
     // Anonymous identity can't see an `Internal` package.
     let err = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &anon())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &anon(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, CoreError::AccessDenied(_)));
@@ -2565,7 +2758,14 @@ async fn get_artifact_is_a_noop_for_audit_when_access_log_is_none() {
 
     let s = download_svc(backend, storage, None, None);
     let out = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap();
     assert_eq!(out.as_ref(), body);
@@ -2963,7 +3163,14 @@ mod listing_verb {
     async fn list_without_read_is_refused_the_artifact() {
         let (s, _b) = svc_granting(&[Action::ReleasesList]);
         let err = s
-            .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+            .get_artifact(
+                "npm",
+                "pkg",
+                "1.0.0",
+                Action::ReleasesRead,
+                &user(),
+                &CallerNet::unknown(),
+            )
             .await
             .expect_err("releases:list must not carry the bytes");
         assert!(matches!(err, CoreError::AccessDenied(_)), "{err:?}");

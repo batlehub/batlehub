@@ -37,12 +37,12 @@ use crate::services::pullers::{identity_of, read_all};
 /// report, and pretending one field carries it would be worse than saying which
 /// one this is.
 ///
-/// Both are **empty for a local or hybrid registry's own downloads**, and that
-/// is a gap in the recording layer rather than in this aggregation:
-/// `LocalRegistryService::record_download` builds its event from the `Identity`
-/// alone, while the proxy path threads the address and agent through
-/// `ProxyRequest`. Until those two agree, an operator reading this report
-/// against a locally published package sees the columns and no values.
+/// Both are recorded on **every** delivered download, local and proxied alike:
+/// the proxy path threads them through `ProxyRequest`, and the local read path
+/// takes a `CallerNet` down to `LocalRegistryService::record_download`. They were
+/// empty for a local or hybrid registry's own downloads until that second half
+/// landed, which is why an old row can still carry a count and no values —
+/// nothing backfills a column that was never written.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Pull {
     pub registry: String,

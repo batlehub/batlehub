@@ -1309,11 +1309,11 @@ Both this and `verdicts pullers` need `audit:read`, and both count **delivered
 bytes only**: a refusal transferred nothing and is a different question. Rows are
 grouped by coordinate, newest pull first.
 
-::: warning
-The `client_user_agent` and `source_ip` columns are **empty for a local or
-hybrid registry's own downloads**. The proxy path records both; the
-local-registry path builds its audit event from the identity alone. That is a
-gap in the recording layer, not in this report, and it is the reason those two
-columns can be blank on a row whose `count` is not.
+::: tip
+The `client_user_agent` and `source_ip` columns are filled on every delivered
+download, whether it was proxied or served from a local or hybrid registry's own
+storage. Rows recorded before that second half landed have neither, and nothing
+backfills them — so a blank pair beside a non-zero `count` dates the row rather
+than describing the caller.
 :::
 

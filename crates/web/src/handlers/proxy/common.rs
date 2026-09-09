@@ -686,7 +686,7 @@ pub async fn serve_local_or_proxy_artifact(
                 .map_err(AppError::from)?;
         }
         match local_svc
-            .get_artifact(registry, name, version, opts.action, &identity)
+            .get_artifact(registry, name, version, opts.action, &identity, &identity.1)
             .await
         {
             Ok(bytes) => {

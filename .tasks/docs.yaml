@@ -69,19 +69,26 @@ tasks:
   # Only the block between the two markers is replaced, so the surrounding prose
   # stays hand-written.
 
+  # Both locales get the same block. The cells are prose generated from the Rust
+  # source — `RegistryKind::listing_filter()`'s own words — so translating them
+  # would mean a second source of truth for a sentence the code owns. The French
+  # page says so above its table and carries the English one, which is the
+  # explicit decision rather than an oversight nobody wrote down.
   docs:listing-coverage:
     desc: Regenerate the listing-filter coverage table in the admin guide
     cmds:
       - |
         set -euo pipefail
-        page=docs/guide/admin-policies.md
         table=$(cargo run -q -p batlehub-server --bin listing_coverage)
-        awk -v table="$table" '
-          /^<!-- BEGIN listing-coverage/ { print; print table; skip = 1; next }
-          /^<!-- END listing-coverage/   { skip = 0 }
-          !skip                          { print }
-        ' "$page" > "$page.tmp"
-        mv "$page.tmp" "$page"
+        for page in docs/guide/admin-policies.md docs/fr/guide/admin-policies.md; do
+          [ -f "$page" ] || continue
+          awk -v table="$table" '
+            /^<!-- BEGIN listing-coverage/ { print; print table; skip = 1; next }
+            /^<!-- END listing-coverage/   { skip = 0 }
+            !skip                          { print }
+          ' "$page" > "$page.tmp"
+          mv "$page.tmp" "$page"
+        done
 
   # ── README coverage (RFC 0007 §4.3) ──────────────────────────────────────────
   # Which registries carry a README, where it comes from, and whether the
@@ -95,36 +102,41 @@ tasks:
 
   docs:readme-coverage:
     desc: Regenerate the README support table in the registries index
+    # Both locales, for the reason given above `docs:listing-coverage`.
     cmds:
       - |
         set -euo pipefail
-        page=docs/registries/index.md
         table=$(cargo run -q -p batlehub-server --bin readme_coverage)
-        awk -v table="$table" '
-          /^<!-- BEGIN readme-coverage/ { print; print table; skip = 1; next }
-          /^<!-- END readme-coverage/   { skip = 0 }
-          !skip                          { print }
-        ' "$page" > "$page.tmp"
-        mv "$page.tmp" "$page"
+        for page in docs/registries/index.md docs/fr/registries/index.md; do
+          [ -f "$page" ] || continue
+          awk -v table="$table" '
+            /^<!-- BEGIN readme-coverage/ { print; print table; skip = 1; next }
+            /^<!-- END readme-coverage/   { skip = 0 }
+            !skip                          { print }
+          ' "$page" > "$page.tmp"
+          mv "$page.tmp" "$page"
+        done
 
   docs:readme-coverage:check:
     desc: Fail if the registries index's README table has drifted from the code
     cmds:
       - |
         set -euo pipefail
-        page=docs/registries/index.md
         block() {
           awk '/^<!-- BEGIN readme-coverage/ { skip = 1; next }
                /^<!-- END readme-coverage/   { skip = 0 }
                skip                          { print }' "$1"
         }
-        committed=$(block "$page")
         generated=$(cargo run -q -p batlehub-server --bin readme_coverage)
-        if [ "$committed" != "$generated" ]; then
-          echo "the README support table has drifted — run 'task docs:readme-coverage' and commit the result" >&2
-          diff <(echo "$committed") <(echo "$generated") >&2 || true
-          exit 1
-        fi
+        for page in docs/registries/index.md docs/fr/registries/index.md; do
+          [ -f "$page" ] || continue
+          committed=$(block "$page")
+          if [ "$committed" != "$generated" ]; then
+            echo "the README support table has drifted in $page — run 'task docs:readme-coverage' and commit the result" >&2
+            diff <(echo "$committed") <(echo "$generated") >&2 || true
+            exit 1
+          fi
+        done
         echo "the published README support table matches the code"
 
   docs:listing-coverage:check:
@@ -137,15 +149,24 @@ tasks:
     cmds:
       - |
         set -euo pipefail
-        page=docs/guide/admin-policies.md
         block() {
           awk '/^<!-- BEGIN listing-coverage/{f=1} f{print} /^<!-- END listing-coverage/{f=0}' "$1"
         }
-        before=$(block "$page")
+        pages="docs/guide/admin-policies.md docs/fr/guide/admin-policies.md"
+        before=""
+        for page in $pages; do
+          [ -f "$page" ] || continue
+          before="$before$(block "$page")"
+        done
         task docs:listing-coverage >/dev/null
-        if [ "$before" != "$(block "$page")" ]; then
+        after=""
+        for page in $pages; do
+          [ -f "$page" ] || continue
+          after="$after$(block "$page")"
+        done
+        if [ "$before" != "$after" ]; then
           echo "the listing-coverage table is stale — run 'task docs:listing-coverage' and commit the result" >&2
-          diff <(printf '%s\n' "$before") <(block "$page") >&2 || true
+          diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") >&2 || true
           exit 1
         fi
         echo "the listing-coverage table matches the code"
@@ -216,7 +237,35 @@ tasks:
       - task: docs:links
       - task: docs:structure
       - task: docs:audience
+      - task: docs:i18n:check
       - task: docs:mermaid
+
+  # ── The French tree's freshness (todo.md phase 3) ────────────────────────────
+  # A translation is two files saying the same thing, one of which gets edited —
+  # the arrangement RFC 0005 found drifted by 296 lines across four documents.
+  # Every page under `docs/fr/` therefore declares the English page it
+  # translates and that page's hash, and this fails when the source has moved on.
+
+  docs:i18n:check:
+    desc: Every French page names its English source and matches its current revision
+    dir: docs
+    cmds:
+      - node build/check-i18n.mjs
+
+  docs:i18n:status:
+    desc: Translated, stale and not-yet-translated pages — a report, not a gate
+    dir: docs
+    cmds:
+      - node build/check-i18n.mjs --status
+
+  docs:i18n:stamp:
+    desc: Re-stamp French pages at their source's current hash — after updating the text
+    dir: docs
+    cmds:
+      # Deliberately separate from the check: stamping is the claim "I have read
+      # what changed and the French text now says it". Nothing can verify that
+      # claim, which is exactly why nothing does it for you.
+      - node build/check-i18n.mjs --stamp
 
   docs:mermaid:
     desc: Every ```mermaid fence parses — the plugin renders on the client, so the build cannot

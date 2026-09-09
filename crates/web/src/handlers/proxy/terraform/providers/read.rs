@@ -522,7 +522,7 @@ pub async fn terraform_provider_artifact(
     // Terraform installs.
     let pkg = PackageId::new(&registry, &auth_name, &version).with_artifact(format!("{os}/{arch}"));
     let buf = local_svc
-        .get_artifact_at_key(&pkg, &key, Action::ReleasesRead, &identity)
+        .get_artifact_at_key(&pkg, &key, Action::ReleasesRead, &identity, &identity.1)
         .await
         .map_err(AppError::from)?
         .ok_or_else(|| {

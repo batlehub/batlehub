@@ -23,7 +23,7 @@ pub mod team_namespace;
 pub mod upstream_status;
 pub mod vulnerability;
 
-pub use access_log::{AccessAction, AccessEvent, AccessResult, EventFilter};
+pub use access_log::{AccessAction, AccessEvent, AccessResult, CallerNet, EventFilter};
 pub use advisory::{
     ExposureCoverage, ExposureCursor, ExposurePage, ExposureQuery, ExposureRow, ExposureWhen,
     FlagEffect, FlagFilter, FlagItemOutcome, FlagKind, FlagPush, FlagPushResponse,

@@ -7,6 +7,7 @@ name: Frontend Design Gates
 #
 #   - impeccable detect  — anti-pattern rules over source
 #   - i18n:check         — no hardcoded user-visible strings (pinned at 0)
+#   - docs i18n:check    — every French page is current with its English source
 #   - ui:tokens:check    — the docs site's token copy has not drifted
 #   - rendered pass      — the detector against real pages at two viewports,
 #                          plus axe. Contrast on painted pixels, focus rings and
@@ -105,6 +106,14 @@ jobs:
       # One sidebar per page, no "see also" that loops back, and the counts.
       - name: Documentation audience
         run: node build/check-audience.mjs
+        working-directory: docs
+
+      # Every French page names the English page it translates and the revision
+      # it was translated from. A translation is two files saying the same thing
+      # with one of them being edited — the arrangement RFC 0005 found drifted by
+      # 296 lines across four documents, with a second language on top of it.
+      - name: Translation freshness
+        run: node build/check-i18n.mjs
         working-directory: docs
 
       # The config generator's own harness: its pure half renders each scenario
@@ -289,6 +298,24 @@ jobs:
       # axe at WCAG 2.2 AA, the two type ramps per face, zero radius, no blurred
       # shadow, no off-box request, and both authored renditions — over every
       # built page at 1440 and 390.
+      #
+      # The French tree lands here automatically, because the route list is the
+      # build output rather than a list: 113 pages became 178 when `/fr/` was
+      # published, so this job's page count grew by half. That is the right
+      # default — a translated page is a page a reader paints, and French runs
+      # about 15% longer, which is exactly what makes a line wrap or a table
+      # overflow where the English did not.
+      #
+      # If the job outgrows its budget, `ROUTES` is the lever rather than
+      # dropping the gate: it takes a comma-separated list of built paths and
+      # measures only those. Scanning the English tree plus the French home and
+      # one long French page would keep the width-dependent findings without
+      # the second full sweep:
+      #
+      #   ROUTES=$(cd docs/.vitepress/dist && ls *.html **/*.html | grep -v '^fr/' | sed 's|^|/|' | paste -sd,)
+      #
+      # Measure before narrowing — `task docs:design:survey` reports the same
+      # findings without failing, which is the way to see what a filter costs.
       - name: Rendered gates — every page, both renditions
         env:
           BASE: http://127.0.0.1:4173

@@ -90,7 +90,13 @@ pub async fn handle_maven_artifact(
     let pkg =
         batlehub_core::entities::PackageId::new(registry, name, version).with_artifact(filename);
     match local_svc
-        .get_artifact_at_key(&pkg, &storage_key, Action::ReleasesRead, identity)
+        .get_artifact_at_key(
+            &pkg,
+            &storage_key,
+            Action::ReleasesRead,
+            identity,
+            &identity.1,
+        )
         .await
     {
         Ok(Some(buf)) => Ok(Some(

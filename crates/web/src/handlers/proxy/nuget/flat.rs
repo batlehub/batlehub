@@ -154,7 +154,13 @@ pub async fn nuget_flat_download(
         let pkg = batlehub_core::entities::PackageId::new(&registry, &id, &version)
             .with_artifact(&filename);
         match local_svc
-            .get_artifact_at_key(&pkg, &storage_key, Action::ReleasesRead, &identity)
+            .get_artifact_at_key(
+                &pkg,
+                &storage_key,
+                Action::ReleasesRead,
+                &identity,
+                &identity.1,
+            )
             .await
         {
             Ok(Some(buf)) => {

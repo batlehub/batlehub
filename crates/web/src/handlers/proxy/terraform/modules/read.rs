@@ -260,6 +260,7 @@ pub async fn terraform_module_artifact(
             &version,
             Action::ReleasesRead,
             &identity,
+            &identity.1,
         )
         .await
         .map_err(AppError::from)?;

@@ -2,7 +2,7 @@ use super::{
     artifact_storage_key, AccessEvent, Bytes, CoreError, Identity, LocalRegistryService, PackageId,
     PublishedPackage, StreamExt,
 };
-use crate::entities::Action;
+use crate::entities::{Action, CallerNet};
 use crate::services::authz::filter::Readable;
 
 /// What [`LocalRegistryService::load_visible_versions_reporting`] returned.
@@ -247,6 +247,7 @@ impl LocalRegistryService {
         version: &str,
         action: Action,
         identity: &Identity,
+        net: &CallerNet,
     ) -> Result<Option<PublishedPackage>, CoreError> {
         super::validate_coordinate(name, version, None)?;
         match self
@@ -255,8 +256,13 @@ impl LocalRegistryService {
         {
             Ok(row) => Ok(row),
             Err(e) => {
-                self.record_download(registry, name, version, None, identity, Some(e.to_string()))
-                    .await;
+                self.record_download(
+                    PackageId::new(registry, name, version),
+                    identity,
+                    net,
+                    Some(e.to_string()),
+                )
+                .await;
                 Err(e)
             }
         }
@@ -380,9 +386,10 @@ impl LocalRegistryService {
         version: &str,
         action: Action,
         identity: &Identity,
+        net: &CallerNet,
     ) -> Result<Bytes, CoreError> {
         let row = self
-            .authorize_artifact_read(registry, name, version, action, identity)
+            .authorize_artifact_read(registry, name, version, action, identity, net)
             .await?;
         let key = artifact_storage_key(registry, name, version);
         let artifact = self.storage.retrieve(&key).await?.ok_or_else(|| {
@@ -438,7 +445,7 @@ impl LocalRegistryService {
             }
         }
 
-        self.record_download(registry, name, version, None, identity, None)
+        self.record_download(PackageId::new(registry, name, version), identity, net, None)
             .await;
         Ok(bytes)
     }
@@ -478,9 +485,17 @@ impl LocalRegistryService {
         key: &str,
         action: Action,
         identity: &Identity,
+        net: &CallerNet,
     ) -> Result<Option<Bytes>, CoreError> {
-        self.authorize_artifact_read(&pkg.registry, &pkg.name, &pkg.version, action, identity)
-            .await?;
+        self.authorize_artifact_read(
+            &pkg.registry,
+            &pkg.name,
+            &pkg.version,
+            action,
+            identity,
+            net,
+        )
+        .await?;
         let Some(stored) = self.storage.retrieve(key).await? else {
             return Ok(None);
         };
@@ -490,15 +505,7 @@ impl LocalRegistryService {
             buf.extend_from_slice(&chunk?);
         }
         let bytes = Bytes::from(buf);
-        self.record_download(
-            &pkg.registry,
-            &pkg.name,
-            &pkg.version,
-            pkg.artifact.as_deref(),
-            identity,
-            None,
-        )
-        .await;
+        self.record_download(pkg.clone(), identity, net, None).await;
         Ok(Some(bytes))
     }
 
@@ -508,27 +515,29 @@ impl LocalRegistryService {
     /// recording so Local/Hybrid-mode reads produce the same audit trail as the
     /// proxy-fallback path, instead of the audit gap this closes: no-op when
     /// `package_repo` is `None` (audit logging is opt-in, matching `quota`/`ownership`).
+    ///
+    /// `net` is the second half of that mirroring. The proxy path threads the
+    /// address and agent through `ProxyRequest`; this path built the event from
+    /// the `Identity` alone, which left `audit pulls` reporting a `count` with no
+    /// `source_ip` and no `client_user_agent` beside it — on precisely the
+    /// deployments that publish their own packages (RFC 0018 §13.10). A caller
+    /// with no request behind it passes [`CallerNet::unknown`].
+    /// The coordinate arrives as a whole [`PackageId`] rather than as its parts,
+    /// which is also what keeps the parameter list readable: the artifact name
+    /// is what lets a multi-file version be told apart here, and the proxy path
+    /// has always carried it (`with_artifact` in the Maven and NuGet handlers).
+    /// Without it every file of a version collapsed onto one coordinate, and
+    /// `allowed_read` could not see that a `.sha1` is not a download.
     async fn record_download(
         &self,
-        registry: &str,
-        name: &str,
-        version: &str,
-        artifact: Option<&str>,
+        pkg: PackageId,
         identity: &Identity,
+        net: &CallerNet,
         denial_reason: Option<String>,
     ) {
         let Some(repo) = self.package_repo.as_ref() else {
             return;
         };
-        // The artifact name is what lets a multi-file version be told apart
-        // here, and the proxy path has always carried it (`with_artifact` in the
-        // Maven and NuGet handlers). Without it every file of a version
-        // collapsed onto one coordinate, and `allowed_read` could not see that a
-        // `.sha1` is not a download.
-        let mut pkg = PackageId::new(registry, name, version);
-        if let Some(artifact) = artifact {
-            pkg = pkg.with_artifact(artifact);
-        }
         let event = match denial_reason {
             Some(reason) => AccessEvent::denied_download(
                 pkg,
@@ -537,7 +546,8 @@ impl LocalRegistryService {
                 reason,
             ),
             None => AccessEvent::allowed_read(pkg, identity.user_id.clone(), identity.role.clone()),
-        };
+        }
+        .with_ip_ua(net.ip.clone(), net.user_agent.clone());
         if let Err(e) = repo.record_access(event).await {
             tracing::warn!(error = %e, "audit log write failed for local registry download");
         }

@@ -550,6 +550,7 @@ pub(super) async fn vsix_bytes_with_source(
                 version,
                 Action::SourceRead,
                 &identity.0,
+                &identity.1,
             )
             .await
         {

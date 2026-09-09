@@ -1889,10 +1889,17 @@ Two things §4.2 left open, decided here:
   inconsistent endpoint or retrofitting three others. Declined, and recorded
   rather than left as a sentence the code contradicts.
 
-One limit worth naming, and it is not in this report: a local or hybrid
-registry's own downloads reach the audit log **without** an address or an agent,
-because `LocalRegistryService::record_download` builds its event from the
-`Identity` alone while the proxy path threads both through `ProxyRequest`. The
-columns are therefore empty on exactly the deployments that publish their own
-packages. Fixing it means changing the local read path's signatures, which is its
-own change.
+One limit was named here and has since been closed. A local or hybrid registry's
+own downloads reached the audit log **without** an address or an agent, because
+`LocalRegistryService::record_download` built its event from the `Identity` alone
+while the proxy path threaded both through `ProxyRequest` — so the columns were
+empty on exactly the deployments that publish their own packages. The fix was the
+change this section said it would be: `CallerNet` moved into `core` as a named
+pair, and `authorize_artifact_read`, `get_artifact` and `get_artifact_at_key`
+each take one and hand it to the event. Two adjacent `Option<String>` parameters
+would have been two a caller could transpose in silence, through four
+signatures; the pair cannot be got wrong.
+
+Rows written before that are not backfilled — a column that was never recorded
+has nothing to recover from — so a blank pair beside a non-zero `count` dates the
+row rather than describing the caller.

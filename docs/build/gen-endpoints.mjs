@@ -24,14 +24,25 @@
 //
 // Usage: node build/gen-endpoints.mjs [--check]
 
-import { readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const docsDir = join(here, "..");
-const registriesDir = join(docsDir, "registries");
 const specPath = join(docsDir, "..", "ui", "openapi.json");
+
+// One tree per locale. The rows are the API surface — a method, a path, and the
+// operation's own summary from the spec — so they are the same in both: a route
+// is not translated, and a summary written in the Rust source is the string the
+// spec carries. The header is the one part of the block that is prose, so it is
+// the one part that changes. A locale whose tree does not exist yet is skipped
+// rather than reported: the translation lands in waves, and this generator has
+// nothing to say about a page nobody has written.
+const TREES = [
+  { dir: join(docsDir, "registries"), label: "registries", header: "| Method | Path | Description |" },
+  { dir: join(docsDir, "fr", "registries"), label: "fr/registries", header: "| Méthode | Chemin | Description |" },
+];
 
 // The tag list is captured raw and trimmed by the caller: a `\s*(…*?)\s*`
 // sandwich around a lazy group is ambiguous, and the scanner has to backtrack
@@ -68,15 +79,15 @@ function rowsFor(spec, tags) {
   return rows;
 }
 
-function renderTable(rows) {
-  const out = ["| Method | Path | Description |", "|--------|------|-------------|"];
+function renderTable(rows, header) {
+  const out = [header, "|--------|------|-------------|"];
   for (const r of rows) {
     out.push(`| \`${r.method}\` | \`${r.path}\` | ${r.summary} |`);
   }
   return out.join("\n");
 }
 
-function rewrite(source, spec, file) {
+function rewrite(source, spec, file, header) {
   const lines = source.split("\n");
   const out = [];
   let i = 0;
@@ -101,7 +112,7 @@ function rewrite(source, spec, file) {
           `either the tag is misspelled or the spec is stale (run 'task dump-spec')`,
       );
     }
-    out.push(lines[i++], renderTable(rows)); // the BEGIN marker, then the table
+    out.push(lines[i++], renderTable(rows, header)); // the BEGIN marker, then the table
     while (i < lines.length && !END.test(lines[i])) i++;
     if (i >= lines.length) {
       throw new Error(`${file}: BEGIN endpoints marker has no matching END`);
@@ -117,16 +128,20 @@ const check = process.argv.includes("--check");
 
 let pages = 0;
 let stale = [];
-for (const name of readdirSync(registriesDir).sort((a, b) => a.localeCompare(b))) {
-  if (!name.endsWith(".md")) continue;
-  const file = join(registriesDir, name);
-  const before = readFileSync(file, "utf8");
-  if (!before.split("\n").some((l) => BEGIN.test(l))) continue;
-  const { text, blocks } = rewrite(before, spec, `registries/${name}`);
-  pages += blocks;
-  if (text !== before) {
-    if (check) stale.push(`registries/${name}`);
-    else writeFileSync(file, text);
+for (const tree of TREES) {
+  if (!existsSync(tree.dir)) continue;
+  for (const name of readdirSync(tree.dir).sort((a, b) => a.localeCompare(b))) {
+    if (!name.endsWith(".md")) continue;
+    const file = join(tree.dir, name);
+    const before = readFileSync(file, "utf8");
+    if (!before.split("\n").some((l) => BEGIN.test(l))) continue;
+    const where = `${tree.label}/${name}`;
+    const { text, blocks } = rewrite(before, spec, where, tree.header);
+    pages += blocks;
+    if (text !== before) {
+      if (check) stale.push(where);
+      else writeFileSync(file, text);
+    }
   }
 }
 

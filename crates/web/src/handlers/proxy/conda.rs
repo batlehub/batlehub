@@ -605,7 +605,14 @@ pub async fn conda_file_download(
             .map_err(AppError::from)?
             .ok_or_else(|| AppError::not_found(format!("conda package not found: {filename}")))?;
         let bytes = local_svc
-            .get_artifact(&registry, &name, &version, Action::ReleasesRead, &identity)
+            .get_artifact(
+                &registry,
+                &name,
+                &version,
+                Action::ReleasesRead,
+                &identity,
+                &identity.1,
+            )
             .await
             .map_err(AppError::from)?;
         return Ok(HttpResponse::Ok()
@@ -620,7 +627,14 @@ pub async fn conda_file_download(
             .map_err(AppError::from)?
         {
             match local_svc
-                .get_artifact(&registry, &name, &version, Action::ReleasesRead, &identity)
+                .get_artifact(
+                    &registry,
+                    &name,
+                    &version,
+                    Action::ReleasesRead,
+                    &identity,
+                    &identity.1,
+                )
                 .await
             {
                 Ok(bytes) => {

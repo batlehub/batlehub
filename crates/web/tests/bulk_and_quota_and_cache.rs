@@ -669,6 +669,59 @@ async fn a_downloads_audit_row_carries_the_callers_address_and_agent() {
     assert_eq!(e.user_agent.as_deref(), Some("npm/10.2.4 node/v20.11.0"));
 }
 
+/// The same row, from a **local** registry's own download.
+///
+/// The regression this guards is the second half of the one above, and it
+/// outlived it: the proxy path threaded the address and agent through
+/// `ProxyRequest` while `LocalRegistryService::record_download` built its event
+/// from the `Identity` alone, so `audit pulls` reported a count with two blank
+/// columns beside it — on exactly the deployments that publish their own
+/// packages (RFC 0018 §13.10). A local download and a proxied one must be the
+/// same row.
+#[actix_web::test]
+async fn a_local_downloads_audit_row_carries_the_callers_address_and_agent() {
+    let parts = local_registry_app_parts("local-npm", "npm", RegistryMode::Local, None);
+    let repo = Arc::clone(&parts.proxy_svc.repo);
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+
+    let tarball = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        b"fake-tarball-content",
+    );
+    let publish = TestRequest::put()
+        .uri("/proxy/local-npm/dl-pkg")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_json(serde_json::json!({
+            "name": "dl-pkg",
+            "versions": { "1.2.3": {
+                "name": "dl-pkg",
+                "version": "1.2.3",
+                "dist": { "shasum": "abc123" },
+            }},
+            "_attachments": { "dl-pkg-1.2.3.tgz": {
+                "content_type": "application/octet-stream",
+                "data": tarball,
+                "length": 20,
+            }},
+        }))
+        .to_request();
+    assert!(call_service(&app, publish).await.status().is_success());
+
+    let req = TestRequest::get()
+        .uri("/proxy/local-npm/dl-pkg/1.2.3/tarball")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .insert_header(("User-Agent", "npm/10.2.4 node/v20.11.0"))
+        .peer_addr("203.0.113.9:54321".parse().unwrap())
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert!(resp.status().is_success(), "{}", resp.status());
+
+    let events = recorded(&repo, AccessAction::Download).await;
+    let e = events.first().expect("the local download was audited");
+    assert_eq!(e.ip_address.as_deref(), Some("203.0.113.9"));
+    assert_eq!(e.user_agent.as_deref(), Some("npm/10.2.4 node/v20.11.0"));
+}
+
 /// And it is the peer's address, not one the caller asked for.
 ///
 /// With no trusted proxy configured, `X-Forwarded-For` is attacker-supplied:

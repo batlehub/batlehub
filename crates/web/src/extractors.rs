@@ -11,34 +11,32 @@ use crate::error::AppError;
 ///
 /// Two ambient facts about the caller that no handler argument carries: the
 /// address the proxy-trust verdict says it came from, and the `User-Agent` it
-/// sent. Both are read once, here, so every audit row that records them agrees
-/// about what they mean.
-#[derive(Debug, Clone, Default)]
-pub struct CallerNet {
-    pub ip: Option<String>,
-    pub user_agent: Option<String>,
-}
+/// sent. Both are read once, by [`caller_net`], so every audit row that records
+/// them agrees about what they mean.
+///
+/// The type itself lives in `core`, because the local read path takes it as an
+/// argument all the way down to the event it writes (RFC 0018 §13.10) and a web
+/// type it converted from would be a second spelling of the same two fields.
+pub use batlehub_core::entities::CallerNet;
 
-impl CallerNet {
-    /// Read both off the request.
-    ///
-    /// The address goes through [`crate::middleware::proxy_trust::client_ip`]
-    /// rather than `connection_info().realip_remote_addr()`, which believes
-    /// `X-Forwarded-For` from any peer: that would let a caller write whatever
-    /// source address it liked into its own audit row. Same verdict as every
-    /// other IP-consuming path, so they cannot disagree.
-    pub fn from_request(req: &HttpRequest) -> Self {
-        Self {
-            ip: Some(crate::middleware::proxy_trust::client_ip(
-                req,
-                crate::middleware::proxy_trust::peer_trust(req),
-            )),
-            user_agent: req
-                .headers()
-                .get(actix_web::http::header::USER_AGENT)
-                .and_then(|v| v.to_str().ok())
-                .map(str::to_owned),
-        }
+/// Read the caller's address and agent off the request.
+///
+/// The address goes through [`crate::middleware::proxy_trust::client_ip`]
+/// rather than `connection_info().realip_remote_addr()`, which believes
+/// `X-Forwarded-For` from any peer: that would let a caller write whatever
+/// source address it liked into its own audit row. Same verdict as every other
+/// IP-consuming path, so they cannot disagree.
+pub fn caller_net(req: &HttpRequest) -> CallerNet {
+    CallerNet {
+        ip: Some(crate::middleware::proxy_trust::client_ip(
+            req,
+            crate::middleware::proxy_trust::peer_trust(req),
+        )),
+        user_agent: req
+            .headers()
+            .get(actix_web::http::header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned),
     }
 }
 
@@ -60,7 +58,7 @@ impl FromRequest for AuthIdentity {
             .get::<Identity>()
             .cloned()
             .unwrap_or_else(Identity::anonymous);
-        ready(Ok(AuthIdentity(identity, CallerNet::from_request(req))))
+        ready(Ok(AuthIdentity(identity, caller_net(req))))
     }
 }
 

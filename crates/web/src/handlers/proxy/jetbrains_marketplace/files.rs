@@ -529,6 +529,7 @@ pub async fn jbm_plugin_manager(
                         &best.version,
                         Action::ReleasesRead,
                         &identity,
+                        &identity.1,
                     )
                     .await
                     .map_err(AppError::from)?;
