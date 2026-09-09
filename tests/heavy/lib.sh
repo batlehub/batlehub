@@ -608,16 +608,19 @@ heavy_cached_dir() {
 
 # heavy_flag_revoke_canonical <source> <external_id> — the bytes a DELETE signs.
 heavy_flag_revoke_canonical() {
-  printf 'DELETE\n/api/v1/flags/%s/%s' "$1" "$2"
+  local source="$1" external_id="$2"
+  printf 'DELETE\n/api/v1/flags/%s/%s' "$source" "$external_id"
 }
 
 # heavy_flag_sign <secret> <body> — the header value over arbitrary bytes.
 heavy_flag_sign() {
-  python3 -c 'import hashlib, hmac, sys; print("sha256=" + hmac.new(sys.argv[1].encode(), sys.argv[2].encode(), hashlib.sha256).hexdigest())' "$1" "$2"
+  local secret="$1" body="$2"
+  python3 -c 'import hashlib, hmac, sys; print("sha256=" + hmac.new(sys.argv[1].encode(), sys.argv[2].encode(), hashlib.sha256).hexdigest())' "$secret" "$body"
 }
 
 # heavy_flag_sign_revoke <secret> <source> <external_id> — the header value for
 # a revoke of that one flag.
 heavy_flag_sign_revoke() {
-  heavy_flag_sign "$1" "$(heavy_flag_revoke_canonical "$2" "$3")"
+  local secret="$1" source="$2" external_id="$3"
+  heavy_flag_sign "$secret" "$(heavy_flag_revoke_canonical "$source" "$external_id")"
 }

@@ -225,6 +225,7 @@ export const sidebar = {
         { text: "Registry health check", link: "/operations/check-registries" },
         { text: "Air gap", link: "/operations/air-gap" },
         { text: "Upstream disappearance", link: "/operations/upstream-disappearance" },
+        { text: "The scan worker", link: "/operations/scan-worker" },
       ],
     },
     {

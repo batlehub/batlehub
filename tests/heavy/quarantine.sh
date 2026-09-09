@@ -577,8 +577,8 @@ SOC_SECRET="heavy-soc-secret"
 # `crates/web/tests/flag_revoke_canonical.rs`: a `POST` signs the raw body, a
 # `DELETE` signs `DELETE\n/api/v1/flags/{source}/{external_id}`, and the
 # endpoint answers a stale signature as an unknown source rather than saying so.
-sign() { heavy_flag_sign "$SOC_SECRET" "$1"; }
-sign_revoke() { heavy_flag_sign_revoke "$SOC_SECRET" soc "$1"; }
+sign() { local body="$1"; heavy_flag_sign "$SOC_SECRET" "$body"; }
+sign_revoke() { local external_id="$1"; heavy_flag_sign_revoke "$SOC_SECRET" soc "$external_id"; }
 
 FLAG_CONSUMER="$HEAVY_WORK/consumer-flags"
 new_consumer "$FLAG_CONSUMER"

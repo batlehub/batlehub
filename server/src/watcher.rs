@@ -515,54 +515,52 @@ fn is_relevant(
     }
 }
 
-fn run_watcher_thread(config_paths: Vec<String>, event_tx: tokio::sync::mpsc::UnboundedSender<()>) {
-    use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
-    use std::sync::mpsc::channel;
+/// The directory whose events stand in for one config layer's file.
+///
+/// `parent()` is `Some("")` for a bare relative name like `config.toml`, which
+/// is not a directory anything can watch — the file is in the current one.
+fn watch_dir_of(path: &str) -> std::path::PathBuf {
+    match std::path::Path::new(path).parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => std::path::PathBuf::from("."),
+    }
+}
 
-    let (notify_tx, notify_rx) = channel();
-    let mut watcher = match RecommendedWatcher::new(
-        notify_tx,
-        NotifyConfig::default().with_poll_interval(Duration::from_secs(2)),
-    ) {
-        Ok(w) => w,
-        Err(e) => {
-            tracing::error!(error = %e, "config file watcher init failed");
-            return;
-        }
-    };
-    // Every layer, not just the primary: a credentials rotation touches only the
-    // overlay, and a watcher blind to it would leave the process running with
-    // the old secret until something else happened to rewrite the main file.
-    //
-    // Each layer's *directory* is watched, not the file. inotify resolves a
-    // path to an inode at watch time, and the two ways a config file actually
-    // changes in production both replace that inode rather than writing through
-    // it: an atomic save renames a new file over the old one (this process does
-    // it itself, in `persist_config_to_disk`), and a Kubernetes ConfigMap or
-    // Secret mount swaps the `..data` symlink the file points through. Watching
-    // the file means the watch is silently attached to an inode nothing writes
-    // to again — the first rewrite is missed, and every one after it, which is
-    // the difference between hot reload working under the Helm chart and only
-    // appearing to.
-    //
-    // Directories are deduplicated: two layers in `/etc/batlehub` are one watch,
-    // and one event, rather than two reloads of the same change.
-    //
-    // A directory that cannot be watched is logged and skipped rather than
-    // fatal. Returning here would take the watcher down for the *other* layers
-    // too, so one unwatchable path would silently cost hot reload on all of
-    // them; the reload path re-reads every layer anyway, so a change to a
-    // watched file still picks up whatever the unwatched one now says.
+/// Attaches one watch per config layer. `false` means not one of them could be
+/// watched, and there is nothing left for the caller to run.
+///
+/// Every layer, not just the primary: a credentials rotation touches only the
+/// overlay, and a watcher blind to it would leave the process running with the
+/// old secret until something else happened to rewrite the main file.
+///
+/// Each layer's *directory* is watched, not the file. inotify resolves a path
+/// to an inode at watch time, and the two ways a config file actually changes
+/// in production both replace that inode rather than writing through it: an
+/// atomic save renames a new file over the old one (this process does it
+/// itself, in `persist_config_to_disk`), and a Kubernetes ConfigMap or Secret
+/// mount swaps the `..data` symlink the file points through. Watching the file
+/// means the watch is silently attached to an inode nothing writes to again —
+/// the first rewrite is missed, and every one after it, which is the difference
+/// between hot reload working under the Helm chart and only appearing to.
+///
+/// Directories are deduplicated: two layers in `/etc/batlehub` are one watch,
+/// and one event, rather than two reloads of the same change.
+///
+/// A directory that cannot be watched is logged and skipped rather than fatal.
+/// Returning here would take the watcher down for the *other* layers too, so
+/// one unwatchable path would silently cost hot reload on all of them; the
+/// reload path re-reads every layer anyway, so a change to a watched file still
+/// picks up whatever the unwatched one now says.
+fn attach_directory_watches(
+    watcher: &mut notify::RecommendedWatcher,
+    config_paths: &[String],
+) -> bool {
+    use notify::{RecursiveMode, Watcher};
+
     let mut watched = 0usize;
     let mut seen_dirs = std::collections::HashSet::new();
-    for path in &config_paths {
-        // `parent()` is `Some("")` for a bare relative name like `config.toml`,
-        // which is not a directory anything can watch — the file is in the
-        // current one.
-        let dir = match std::path::Path::new(path).parent() {
-            Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
-            _ => std::path::PathBuf::from("."),
-        };
+    for path in config_paths {
+        let dir = watch_dir_of(path);
         if !seen_dirs.insert(dir.clone()) {
             watched += 1;
             continue;
@@ -578,30 +576,31 @@ fn run_watcher_thread(config_paths: Vec<String>, event_tx: tokio::sync::mpsc::Un
             }
         }
     }
+
     if watched == 0 {
         tracing::error!("config file watcher: no config file could be watched");
-        return;
+        return false;
     }
-    tracing::info!(paths = %config_paths.join(", "), "config file watcher started");
+    true
+}
 
-    // The watch is on directories, so most of what arrives is about files this
-    // process does not care about — its own atomic-save temp file, and in a
-    // development checkout (where the config sits in the working directory)
-    // every artefact a build writes. Without this filter, one `cargo build`
-    // beside a `config.toml` is a reload storm.
-    let names = watched_names(&config_paths);
-
+/// Forwards one signal per burst of relevant events, until either end hangs up.
+///
+/// The burst is drained before deciding: an atomic save arrives as several
+/// events and a ConfigMap update as a dozen, and they are one change. Deciding
+/// on the first alone would send a reload for a temp-file creation and then
+/// swallow the rename that actually mattered.
+fn forward_relevant_events(
+    notify_rx: &std::sync::mpsc::Receiver<notify::Result<notify::Event>>,
+    names: &std::collections::HashSet<std::ffi::OsString>,
+    event_tx: &tokio::sync::mpsc::UnboundedSender<()>,
+) {
     loop {
         match notify_rx.recv_timeout(Duration::from_secs(2)) {
             Ok(first) => {
-                // Drain the burst before deciding: an atomic save arrives as
-                // several events and a ConfigMap update as a dozen, and they
-                // are one change. Deciding on the first alone would send a
-                // reload for a temp-file creation and then swallow the rename
-                // that actually mattered.
-                let mut relevant = is_relevant(&first, &names);
+                let mut relevant = is_relevant(&first, names);
                 while let Ok(event) = notify_rx.try_recv() {
-                    relevant |= is_relevant(&event, &names);
+                    relevant |= is_relevant(&event, names);
                 }
                 if relevant && event_tx.send(()).is_err() {
                     break;
@@ -615,6 +614,37 @@ fn run_watcher_thread(config_paths: Vec<String>, event_tx: tokio::sync::mpsc::Un
             Err(_) => break,
         }
     }
+}
+
+fn run_watcher_thread(config_paths: Vec<String>, event_tx: tokio::sync::mpsc::UnboundedSender<()>) {
+    use notify::{Config as NotifyConfig, RecommendedWatcher, Watcher};
+    use std::sync::mpsc::channel;
+
+    let (notify_tx, notify_rx) = channel();
+    let mut watcher = match RecommendedWatcher::new(
+        notify_tx,
+        NotifyConfig::default().with_poll_interval(Duration::from_secs(2)),
+    ) {
+        Ok(w) => w,
+        Err(e) => {
+            tracing::error!(error = %e, "config file watcher init failed");
+            return;
+        }
+    };
+
+    if !attach_directory_watches(&mut watcher, &config_paths) {
+        return;
+    }
+    tracing::info!(paths = %config_paths.join(", "), "config file watcher started");
+
+    // The watch is on directories, so most of what arrives is about files this
+    // process does not care about — its own atomic-save temp file, and in a
+    // development checkout (where the config sits in the working directory)
+    // every artefact a build writes. Without this filter, one `cargo build`
+    // beside a `config.toml` is a reload storm.
+    let names = watched_names(&config_paths);
+
+    forward_relevant_events(&notify_rx, &names, &event_tx);
 
     tracing::info!("config file watcher stopped");
 }

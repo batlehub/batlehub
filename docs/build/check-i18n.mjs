@@ -104,7 +104,8 @@ const rel = (file) => relative(DOCS, file).split(sep).join("/");
 function frontmatter(src) {
   const m = /^---\n([\s\S]*?)\n---/.exec(src);
   if (!m) return null;
-  const read = (key) => new RegExp(`^${key}:\\s*(\\S+)\\s*$`, "m").exec(m[1])?.[1];
+  const read = (key) =>
+    new RegExp(String.raw`^${key}:\s*(\S+)\s*$`, "m").exec(m[1])?.[1];
   return { block: m[1], sourcePath: read("sourcePath"), sourceHash: read("sourceHash") };
 }
 
@@ -143,10 +144,7 @@ for (const file of translatedPages()) {
   if (STAMP) {
     writeFileSync(
       file,
-      src.replace(
-        new RegExp(`^sourceHash:\\s*\\S+\\s*$`, "m"),
-        `sourceHash: ${actual}`,
-      ),
+      src.replace(/^sourceHash:\s*\S+\s*$/m, `sourceHash: ${actual}`),
     );
     continue;
   }

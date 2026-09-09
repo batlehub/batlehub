@@ -23,7 +23,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::entities::{AccessAction, AccessEvent, AccessResult, EventFilter};
+use crate::entities::{AccessAction, AccessEvent, AccessResult, EventFilter, PackageId};
 use crate::error::CoreError;
 use crate::ports::PackageRepository;
 use crate::services::pullers::{identity_of, read_all};
@@ -82,6 +82,41 @@ pub fn pulls_filter(
     }
 }
 
+/// The coordinate an event counts against, or `None` when it is not one of
+/// `identity`'s delivered pulls.
+///
+/// An event with no coordinate is an account-wide admin action rather than a
+/// pull; [`pulls_filter`]'s `actions` already excludes those, so that arm is
+/// belt.
+fn counted_coordinate<'a>(e: &'a AccessEvent, identity: &str) -> Option<&'a PackageId> {
+    if !matches!(e.result, AccessResult::Allowed) || identity_of(e) != identity {
+        return None;
+    }
+    e.package_id.as_ref()
+}
+
+/// Fold one further event into the row its coordinate already has.
+///
+/// `count` takes every event, but `client_user_agent` and `source_ip` are
+/// *last seen*: only an event at or after `last_pull` replaces them, and one
+/// that recorded neither does not blank what an earlier one knew.
+fn merge_event(pull: &mut Pull, e: &AccessEvent) {
+    pull.count += 1;
+    if e.timestamp < pull.first_pull {
+        pull.first_pull = e.timestamp;
+    }
+    if e.timestamp < pull.last_pull {
+        return;
+    }
+    pull.last_pull = e.timestamp;
+    if e.user_agent.is_some() {
+        pull.client_user_agent = e.user_agent.clone();
+    }
+    if e.ip_address.is_some() {
+        pull.source_ip = e.ip_address.clone();
+    }
+}
+
 /// Group one identity's events by coordinate, newest pull first.
 pub fn aggregate(events: &[AccessEvent], identity: &str) -> Vec<Pull> {
     // Keyed by the coordinate rather than by a formatted string, so two
@@ -89,39 +124,14 @@ pub fn aggregate(events: &[AccessEvent], identity: &str) -> Vec<Pull> {
     let mut by_coordinate: BTreeMap<(String, String, Option<String>), Pull> = BTreeMap::new();
 
     for e in events {
-        if !matches!(e.result, AccessResult::Allowed) {
-            continue;
-        }
-        if identity_of(e) != identity {
-            continue;
-        }
-        let Some(id) = &e.package_id else {
-            // An event with no coordinate is an account-wide admin action, not
-            // a pull; `actions` already excludes those, so this is belt.
+        let Some(id) = counted_coordinate(e, identity) else {
             continue;
         };
         let version = (!id.version.is_empty()).then(|| id.version.clone());
         let key = (id.registry.clone(), id.name.clone(), version.clone());
         by_coordinate
             .entry(key)
-            .and_modify(|p| {
-                p.count += 1;
-                if e.timestamp < p.first_pull {
-                    p.first_pull = e.timestamp;
-                }
-                if e.timestamp >= p.last_pull {
-                    p.last_pull = e.timestamp;
-                    // Last seen: only the newer event replaces them, and an
-                    // event that recorded neither does not blank what an
-                    // earlier one knew.
-                    if e.user_agent.is_some() {
-                        p.client_user_agent = e.user_agent.clone();
-                    }
-                    if e.ip_address.is_some() {
-                        p.source_ip = e.ip_address.clone();
-                    }
-                }
-            })
+            .and_modify(|p| merge_event(p, e))
             .or_insert_with(|| Pull {
                 registry: id.registry.clone(),
                 package_name: id.name.clone(),

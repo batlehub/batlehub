@@ -655,12 +655,12 @@ mod tests {
         let creds = layer_file(
             dir.path(),
             "credentials.toml",
-            "[database]\nurl = \"postgresql://real:s3cr3t@db/batlehub\"\n",
+            "[database]\nurl = \"postgresql://real:secret@db/batlehub\"\n",
         );
 
         let cfg = crate::load_layered(&[base, creds]).expect("layered load failed");
 
-        assert_eq!(cfg.database.url, "postgresql://real:s3cr3t@db/batlehub");
+        assert_eq!(cfg.database.url, "postgresql://real:secret@db/batlehub");
         // From the base: the later layer completed the table rather than
         // replacing it.
         assert_eq!(cfg.server.port, 8080);

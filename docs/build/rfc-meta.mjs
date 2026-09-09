@@ -105,7 +105,10 @@ export function parseFilename(file) {
 const DEFERRAL_LEAD = /\*\*(Deferred[^*]*|Decided:[ \t]*not now[^*]*)\*\*/;
 
 /** A `##`…`####` heading, and the text of it. */
-const HEADING = /^#{2,4}[ \t]+(.+)$/;
+// The capture opens on a non-space so the `[ \t]+` before it has nothing to
+// hand back: `(.+)` could match the same spaces, and a heading marker followed
+// by nothing else made the engine retry the split from every one of them.
+const HEADING = /^#{2,4}[ \t]+([^ \t].*)$/;
 
 /** A table row whose first cell is the question's own number (`| O7 |`). */
 const ROW_ID = /^\|[ \t]*([A-Za-z]?\d+)[ \t]*\|/;

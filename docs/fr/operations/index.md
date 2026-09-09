@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/index.md
-sourceHash: e14aeb07dd09b518
+sourceHash: c9f30a203e5250b1
 ---
 
 # Exploitation
@@ -38,6 +38,9 @@ votre organisation a réellement convenu avec ses utilisateurs.
 - **[Ce qui sort de cette instance](/fr/operations/egress)** — toutes les
   requêtes sortantes que ce serveur émet, ce qui les déclenche, et comment les
   arrêter.
+- **[Le worker d'analyse](/fr/operations/scan-worker)** — le rôle qui analyse ce
+  que le proxy s'apprête à servir : la file, le bac à sable, et ce que veut dire
+  une installation retenue.
 
 ## Conformité
 

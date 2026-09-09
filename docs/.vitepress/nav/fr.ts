@@ -259,6 +259,7 @@ export const sidebar = {
           text: "Disparition d'un amont",
           link: "/fr/operations/upstream-disappearance",
         },
+        { text: "Le worker d'analyse", link: "/fr/operations/scan-worker" },
       ],
     },
     {

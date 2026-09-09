@@ -176,6 +176,21 @@ than rediscover — the reasoning lives next to the declaration in `Cargo.toml`,
 `deny.toml`'s `[bans].deny`, so re-enabling the feature fails CI instead of silently restoring the
 advisory. Check whether a feature can be dropped before concluding an advisory is unfixable.
 
+### An advisory inside a third party's binary
+
+`.trivyignore.yaml` is the third case: a CVE in a dependency of a **prebuilt binary the image
+copies in**, where the fix is neither an upgrade of ours nor a feature we can drop. The worked
+example is the pair of grpc-go advisories against `/usr/local/bin/trivy`. Trivy vendors
+`google.golang.org/grpc` v1.82.1; both are fixed upstream, and no Trivy release carries the fix
+yet, so `TRIVY_VERSION` in `Containerfile.worker` has nowhere to move.
+
+The entries are pinned to that one path, each says why the vulnerable code is unreachable here —
+the advisories are against xDS *servers*, and the worker runs `trivy … --server <endpoint>`, the
+client half — and each carries an `expired_at`, so the gate reopens on its own instead of the
+entry outliving its reason. The file is the register: read it before renewing an entry, and check
+the `go.mod` of the Trivy tag first, because the version that closes it retires the entry rather
+than renewing it.
+
 ### Scanner rule ignores are a different thing
 
 The stance above is about **dependency advisories** — a CVE in something we pull in, where the fix
