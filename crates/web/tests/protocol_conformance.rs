@@ -578,6 +578,114 @@ const LONG_TAIL: &[Conformance] = &[
     ),
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// nodedist — nvm (RFC 0010)
+//
+// nvm resolves *every* install through `index.tab`, then fetches the checksum
+// file and the tarball from the release directory. All three lines are read
+// from nvm.sh v0.40.3; the heavy suite (`tests/heavy/nvm.sh`) is what turns
+// "read" into "observed". `index.tab` and `{version}/{file}` are the pair that
+// proves route ordering: a listing must be a document, never a file.
+// ─────────────────────────────────────────────────────────────────────────────
+const NODEDIST: &[Conformance] = &[
+    Conformance::get(
+        "/proxy/nodedist/nodedist/index.tab",
+        "/proxy/{registry}/nodedist/index.tab",
+        "nvm.sh 0.40.3:1657, `nvm_ls_remote_index_tab` — `nvm ls-remote` and every `nvm install`",
+    )
+    .must_find("v1.1.0"),
+    Conformance::get(
+        "/proxy/nodedist/nodedist/index.json",
+        "/proxy/{registry}/nodedist/index.json",
+        "fnm src/remote_node_index.rs and mise's core node plugin — the same table as JSON",
+    )
+    .must_find("v1.1.0"),
+    Conformance::get(
+        "/proxy/nodedist/nodedist/v1.1.0/SHASUMS256.txt",
+        "/proxy/{registry}/nodedist/{version}/{file}",
+        "nvm.sh 0.40.3:1853, `nvm_get_checksum` — read before every download",
+    ),
+    Conformance::get(
+        "/proxy/nodedist/nodedist/v1.1.0/node-v1.1.0-linux-x64.tar.xz",
+        "/proxy/{registry}/nodedist/{version}/{file}",
+        "nvm.sh 0.40.3:2466, `nvm_download_artifact` — `${MIRROR}/${VERSION}/${SLUG}.${COMPRESSION}`",
+    ),
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// sdkman — the `sdk` shell function (RFC 0010)
+//
+// Every line is read from sdkman-cli 5.23.0's bash sources (the zip the
+// broker serves as `sdkman-cli-5.23.0.zip`); `tests/heavy/sdkman.sh` turns
+// "read" into "observed". `candidates/default/{c}` against
+// `candidates/{c}/{plat}/versions/all`, and `candidates/validate/…` against
+// the same, are the pairs that prove route ordering: a candidate called
+// `default` or `validate` must not shadow the literal routes.
+// ─────────────────────────────────────────────────────────────────────────────
+const SDKMAN: &[Conformance] = &[
+    Conformance::get(
+        "/proxy/sdkman/sdkman/healthcheck",
+        "/proxy/{registry}/sdkman/healthcheck",
+        "sdkman-availability.sh:28, `__sdkman_determine_healthcheck_status` — every `sdk` invocation",
+    ),
+    Conformance::get(
+        "/proxy/sdkman/sdkman/candidates/all",
+        "/proxy/{registry}/sdkman/candidates/all",
+        "sdkman-update.sh:20 — `sdk update`, and the installer's initial candidate cache",
+    )
+    .must_find("java"),
+    Conformance::get(
+        "/proxy/sdkman/sdkman/candidates/list",
+        "/proxy/{registry}/sdkman/candidates/list",
+        "sdkman-list.sh:33, `__sdkman_list_candidates` — `sdk list`",
+    )
+    .must_find("fixture"),
+    Conformance::get(
+        "/proxy/sdkman/sdkman/candidates/java/linuxx64/versions/list?current=&installed=",
+        "/proxy/{registry}/sdkman/candidates/{candidate}/{platform}/versions/list",
+        "sdkman-list.sh:47, `__sdkman_list_versions` — `sdk list java`, with the query it always sends",
+    )
+    .must_find("1.1.0"),
+    Conformance::get(
+        "/proxy/sdkman/sdkman/candidates/java/linuxx64/versions/all",
+        "/proxy/{registry}/sdkman/candidates/{candidate}/{platform}/versions/all",
+        "api.sdkman.io/2 documented endpoint, read by the native component; not called by the 5.23.0 bash client, which reads versions/list",
+    )
+    .must_find("1.1.0"),
+    Conformance::get(
+        "/proxy/sdkman/sdkman/candidates/default/java",
+        "/proxy/{registry}/sdkman/candidates/default/{candidate}",
+        "sdkman-env-helpers.sh:64, `__sdkman_determine_version` — `sdk install java` with no version",
+    )
+    .must_find("1.1.0"),
+    Conformance::get(
+        "/proxy/sdkman/sdkman/candidates/validate/java/1.1.0/linuxx64",
+        "/proxy/{registry}/sdkman/candidates/validate/{candidate}/{version}/{platform}",
+        "sdkman-env-helpers.sh:67, `__sdkman_determine_version` — every `sdk install`",
+    )
+    .must_find("valid"),
+    Conformance::get(
+        "/proxy/sdkman/sdkman/hooks/post/java/1.1.0/linuxx64",
+        "/proxy/{registry}/sdkman/hooks/{phase}/{candidate}/{version}/{platform}",
+        "sdkman-install.sh:149, `__sdkman_download` — sourced and run after every download",
+    ),
+    Conformance::get(
+        "/proxy/sdkman/sdkman/broker/download/java/1.1.0/linuxx64",
+        "/proxy/{registry}/sdkman/broker/download/{candidate}/{version}/{platform}",
+        "sdkman-install.sh:126, `__sdkman_download` — `${SDKMAN_BROKER_API}/download/…`",
+    ),
+    Conformance::get(
+        "/proxy/sdkman/sdkman/broker/version/sdkman/script/stable",
+        "/proxy/{registry}/sdkman/broker/version/sdkman/{component}/{channel}",
+        "sdkman-selfupdate.sh:33 — `sdk selfupdate` and the daily upgrade check",
+    ),
+    Conformance::get(
+        "/proxy/sdkman/sdkman/selfupdate/stable/linuxx64",
+        "/proxy/{registry}/sdkman/selfupdate/{channel}/{platform}",
+        "sdkman-selfupdate.sh:53 — piped into bash by `sdk selfupdate`",
+    ),
+];
+
 const SUITES: &[(&str, &[Conformance])] = &[
     ("npm", NPM),
     ("rubygems", RUBYGEMS),
@@ -585,6 +693,8 @@ const SUITES: &[(&str, &[Conformance])] = &[
     ("goproxy", GOPROXY),
     ("terraform", TERRAFORM),
     ("nuget", NUGET),
+    ("nodedist", NODEDIST),
+    ("sdkman", SDKMAN),
     ("others", OTHERS),
     ("long-tail", LONG_TAIL),
 ];

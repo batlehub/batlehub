@@ -914,6 +914,17 @@ because an anonymous publish creates an owner-less package and \`can_publish\` a
   authz_denied tombstones:read "$WHO_DENIED" \
     GET "$T_DENIED" "/api/v1/admin/registries/$NPM/tombstones"
 
+  # `flags:read` (RFC 0002 recast, §13). Instance-wide as `audit:read` is: the
+  # listing spans every registry, so the filter narrows what is shown and not
+  # who may look. It is `role:admin` only — a pushed flag names its source, and
+  # naming the source is the same disclosure as a finding's SOC case — so the
+  # denied user, who is `role:user`, is the negative arm without any grant row
+  # having to withhold it.
+  authz_allowed flags:read "the administrator lists pushed flags" \
+    GET "$T_ADMIN" "/api/v1/admin/flags"
+  authz_denied flags:read "$WHO_DENIED, who is role:user" \
+    GET "$T_DENIED" "/api/v1/admin/flags"
+
   # ── 14. The ecosystem verbs ────────────────────────────────────────────────
   #
   # All three shipped **unreachable**: no §10 rule produces a verb no legacy
@@ -2277,6 +2288,23 @@ drifted from the file and this check is no longer checking anything"
       # `latest`, and storing them has no good answer when the tagged version is
       # withdrawn. There is nothing to drive, so there is nothing to assert.
       npm:dist-tags:write) continue ;;
+      # Visibility verbs, not refusal verbs (RFC 0018 §4.2). Neither ever
+      # produces a `403`: `quarantine:read` chooses between a held version's
+      # refusal and a plain `404` — that is §4.4 rule 2, a held version must not
+      # be enumerable — and `findings:read` chooses between a reason-only body
+      # and one that also carries the findings. The `authz_denied` /
+      # `authz_allowed` pair this suite is built on asserts exactly `403` and
+      # not-`403`, so it cannot express either without asserting the very
+      # conflation (`404` as refusal) the pair exists to rule out.
+      #
+      # They are covered on the wire, elsewhere: `tests/heavy/quarantine.sh`
+      # drives a real hold through npm and asserts the refusal body, the
+      # `X-BatleHub-Reason` header and the findings `batlehub why` prints, and
+      # `crates/web/tests/security_registry.rs` asserts all three visibility
+      # tiers against the verdict endpoint. Both need a scanner verdict to
+      # exist, which is why they are not here: this suite deliberately runs
+      # without a security profile.
+      quarantine:read | findings:read) continue ;;
       # Every other verb falls through to the coverage check below, which is the
       # point: a verb added tomorrow is not in this list, so it is required to
       # have been exercised.
@@ -2292,7 +2320,7 @@ drifted from the file and this check is no longer checking anything"
 in this run: ${missing[*]}. Either add the pair, or add it to the exception list above with \
 the reason."
   fi
-  heavy_log "vocabulary covered: ${#all[@]} verbs in the enum, one deliberate exception"
+  heavy_log "vocabulary covered: ${#all[@]} verbs in the enum, three deliberate exceptions"
   return 0
 }
 

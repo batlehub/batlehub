@@ -2,12 +2,13 @@
 
 | Field      | Value                                                                  |
 | ---------- | ---------------------------------------------------------------------- |
-| Status     | Draft — revised 2026-09-02: phases 1–2 are largely shipped, the PAT model here is not the shipped one; see §13 |
+| Status     | **Implemented** — §13's cut landed 2026-09-04 (§14) and the cut itself is now gone: the credential contract file with its normative JSON Schema, `auth token`/`write-token-file`/`status` and the editor patch in `patches/che-code/`; the loopback proxy and the bootstrap entry on 2026-09-05 (§14.8); the **canary with a real Extensions view** the same evening (§14.9), VS Code 1.136.1's workbench driven in a browser by `tests/heavy/vsx_view.sh`; and the `batlehub-vsx` extension on 2026-09-06 in the separate repository §11 q6 chose, both modes measured in a real editor (§14.11). Eight of §12's nine phases are built; phase 9 is an upstream pull request against che-code that this RFC does not wait on. Phases 1–2's server half shipped under RFC 0015/0017; the PAT model in the body above is not the shipped one, and §13 says so |
 | Short      | Authenticated OpenVSX access |
 | Settles    | Giving an editor that has no credential hook a way to send one: a contract file that may point at a secret rather than hold it, the pod's own Kubernetes identity, a loopback proxy for editors we do not build, and a sign-in entry in the Extensions view instead of a blank one |
 | Author     | batleforc                                                              |
 | Co-author  | —                                                                      |
 | Created    | 2026-08-18                                                             |
+| Revised    | 2026-09-02 — §13, re-read against the tree: what shipped elsewhere, what was wrong when drafted, and the cut. 2026-09-04 — §14, what building the cut found. 2026-09-05 — §14.8 the proxy against the editor core, §14.9 the view |
 | Supersedes | —                                                                      |
 | Touches    | `server` (VSX API auth: OIDC, PAT, Kubernetes), `cli/` (**existing** `batlehub-cli`: auth sources, local gallery proxy, TUI credential screen), `vscode-ext` (new), `che-code` patch (external), docs |
 
@@ -915,7 +916,7 @@ flowchart TD
 - **Unit** (`cli/`, source resolver): every `from` resolves; every failure mode — missing variable, absent file, refusing STS — yields "no credential" and one log line; an unknown `from` warns once; an `exchange` endpoint outside the trusted set is refused **before** the request is made; `subject` nested two levels is rejected at parse; a resolved value is never written back; `file` rejects a relative path and caps the read.
 - **Unit** (`cli/`, Kubernetes): `--kubernetes` auto-selection when `KUBERNETES_SERVICE_HOST` is set; a token whose `aud` lacks the Batlehub audience is rejected **client-side, before any TokenReview round trip**, with a message naming the audience it did carry; `--kubeconfig` never emits the token it read.
 - **Existing suite** (`crates/adapters`, `auth/kubernetes.rs`): must pass unchanged. In particular the case that refuses a token the API server authenticated but did not confirm bound to a requested audience — that test is the audience property, and a caching layer added in phase 2 must not be able to serve around it.
-- **Unit** (`cli/`, proxy): a request without the session segment is `404`; a bind to a non-loopback address is refused at startup; `assetUri`/`fallbackAssetUri` are rewritten to the capability base and foreign origins are left alone; a `.vsix` body streams rather than buffers.
+- **Unit** (`cli/`, proxy): a request without the session segment is `404`; a bind to a non-loopback address is refused at startup; `assetUri`/`fallbackAssetUri` are rewritten to the capability base and foreign origins are left alone; a `.vsix` body streams rather than buffers. And a regression test for a finding rather than a hypothesis: a forwarded path containing a dot segment — literal or percent-encoded — is `404` and reaches no upstream at all, because the credential is attached to whatever that path resolves to and `..` would have climbed out of the registry's prefix into the rest of the API. The escape target is mocked so a leak is a recorded hit, not a connection error.
 - **Unit** (`cli/`, bootstrap) — each row of §4.4.2, and the first two are regression tests for findings, not hypotheses: the synthetic entry always carries `Microsoft.VisualStudio.Code.Engine`; it always carries manifest and package assets; a `filterType: 7` query returns an empty `200` and a `filterType: 10` query returns exactly one entry; neither returns `401`; with a credential the entry is absent from both; an expired unrefreshable credential brings it back; the details asset escapes the device code.
 - **Unit** (`cli/`, status and doctor): `auth status` distinguishes `ok`/`expired`/`unset`/`refused`/`unreachable` as the underlying source changes; **no output path can emit a credential** — the summary type has no field for one; `doctor` exits non-zero on each failed step in turn, and its editor-URL step fails when the configured gallery URL does not match the proxy the CLI would start.
 - **Integration** (`cli/tests/integration.rs`, existing subprocess pattern): `auth status --json` against a seeded contract file; `auth source set` then `auth status` reflects the new source without a restart.
@@ -970,6 +971,18 @@ loopback proxy and the extension, which §13 moves to a follow-up RFC.
 ---
 
 ## 12. Implementation phases
+
+**Eight of the nine were built, and phase 9 is not this repository's to
+finish.** Phases 1–2's server half shipped under RFC 0015/0017 (§13), 3–4
+landed on 2026-09-05 (§14.8), 5 the same evening (§14.9), 6 with the TUI,
+and 7–8 on 2026-09-06 in the `batlehub-vsx` repository (§14.11). **Deferred: phase 9.** It is an upstream pull request against
+`che-incubator/che-code` — somebody else's merge button — and the row itself
+says the proxy and the fallback stand regardless of its outcome, so it does
+not gate this RFC. Reopen it when che-code takes or refuses the patch, and
+record which. Two items
+inside the built phases were never started and §14.7 names them: `auth
+source`/`auth doctor`, and phase 2's `--kubernetes`/`--kubeconfig` login
+modes, whose consumer-visible half ships as `--kubernetes-token-path`.
 
 | Phase | Content | Depends on |
 | ----- | ------- | ---------- |
@@ -1055,3 +1068,350 @@ through what the server returns and never re-decide. 4 (offline cache): fail
 visibly, as the gallery already does. 6 (where the extension lives): a
 separate repository, when it exists. 7 (TokenReview → offline JWKS): no; the
 cache bounds the cost. Zero remain.
+
+---
+
+## 14. Landed (2026-09-04)
+
+§13's cut is built: the contract file, three CLI verbs, and the editor patch.
+Roughly what §13 estimated, and it closes the one thing this RFC could deliver
+without an editor build in front of us — a Batlehub gallery that requires a
+credential is no longer a gallery that answers every query with an empty list.
+
+**What is there.** `cli/src/contract.rs` — the document, the resolver and the
+atomic read-modify-write writer, with `cli/schema/vsx-token.schema.json` as
+the normative shape §4.1 asked for. `batlehub-cli auth token`,
+`auth write-token-file` and `auth status` (§4.1.3, §4.6).
+`patches/che-code/` — the credential module and the steps to integrate it,
+carried in this repository so both halves of the contract change together.
+`docs/registries/openvsx.md` gains the section, beside the warning it answers,
+and `docs/use/cli.md` the three verbs.
+
+### 14.1 Two sources, and the rest named rather than silent
+
+The cut says "one source: `file`, plus a literal for tests". Built as
+`inline` and `file` — the literal the CLI writes after a login, and the
+projected token something else keeps fresh, which is the pair a Kubernetes
+workspace actually needs.
+
+`env`, `exchange` and `keychain` are **in the schema as reserved**, and read
+as "no credential" with one warning. That is §4.1.2 rule 4 taken seriously:
+naming them is what lets a later implementation arrive without a `version`
+bump, and refusing to guess at them is what stops this build sending the wrong
+thing. A schema that omitted them would make the first one to land look like a
+breaking change.
+
+### 14.2 The schema is the document, and a test says so
+
+§4.1 argued the normative schema belongs beside the CLI rather than in the
+prose, because "four refresh sources times six token sources with one level of
+nesting is more than prose keeps honest". Taking that seriously means the two
+cannot be allowed to drift, so the CLI's tests read the shipped schema and
+assert against it in **both** directions: a vocabulary the schema documents
+and the model cannot parse is a lie to whoever writes the second
+implementation, and a value the model accepts and the schema omits is a second
+implementation written against the wrong document. Every example the schema
+carries is parsed and resolved by the same code path a consumer uses.
+
+No JSON Schema validator was added to do it. The drift that matters here is
+vocabulary and field names, and walking the schema for those costs sixty lines
+and no dependency — which is the right trade in a tree whose supply chain is
+its own §7.
+
+### 14.3 `auth token` is the bare verb, not a fourth name
+
+§4.1.3 spells it `batlehub auth token --output raw`, and §4.2's credential
+chain hardcodes that string. But `auth token` was already the personal-access-
+token subcommand group. **Decision:** the subcommand is optional — `auth
+token` prints a credential, `auth token list|create|revoke` are unchanged. A
+fourth name would have been easier and would have made the RFC's own
+integration snippet wrong.
+
+### 14.4 Redaction is a property of a type
+
+§4.6's rule is that a secret is never printed or logged, and the way it is
+kept is that `EntrySummary` — what the status table, the JSON output and any
+future TUI widget render — has **no field able to hold one**. The resolution
+that does carry the credential is a different type. A log line added later
+cannot leak what the type it was handed never had, which is the only version
+of this rule that survives a year of edits.
+
+### 14.5 What the patch will not do, and why it is short
+
+The module reads a literal `token` string, scopes the header to the gallery's
+own origin, retries once on `401`, and never throws. It does **not** read the
+`refresh` block, resolve a token *source*, or send a request of its own —
+each would mean an IDP client id or a second file open in the editor's own
+process, and each belongs to a broker. That is §4.1.1 rule 3 and decision 6,
+and it is also what keeps the patch to one added file and a handful of call
+sites, which is what a rebase-friendly series has to be.
+
+**It is carried, not applied.** This repository builds no editor, so the
+honest artifact is the module plus the integration steps rather than a diff
+with invented context lines that would fail to apply against whatever upstream
+looks like on the day. `patches/che-code/README.md` says so in those words.
+
+### 14.6 The patch is tested, and testing it found a bug
+
+§10 names five properties for the patch — resolution order, origin scoping
+including the redirect drop, the single 401 retry, an unparseable file as no
+credential, and a token *source* object falling through to the environment
+variable. All five are asserted, in `patches/che-code/vsxRegistryAuth.test.ts`,
+which travels with the module so whoever rebases it can tell in one command
+whether it still does what the contract says.
+
+**Plain `node --test`, no toolchain.** Node strips the types itself, so the
+module that goes into an editor build is tested with no dependency, no bundler
+and no config — which is what makes it reasonable to carry tests for code this
+repository does not compile.
+
+Writing them found a defect in the retry: the guard that stops a second
+identical request compared the retry's `Authorization` against the *base*
+headers, which never carried one, so every `401` retried whether the
+credential had changed or not. `sendWithCredential` compares against the
+headers it actually sent now. It is the same lesson as 0008 §14.5 at a smaller
+scale — the code read correctly and did something else, and only a test that
+counted the requests could tell.
+
+### 14.7 Still cut
+
+Of what §13 moved out, the loopback `proxy serve` and the unauthenticated
+bootstrap entry landed on 2026-09-05 — §14.8 — the canary with a real
+Extensions view the same evening — §14.9 — and the `batlehub-vsx`
+extension on 2026-09-06, in the separate repository §11 q6 named (§14.11).
+Nothing of the cut is left.
+
+**`auth logout` was listed as shipped before it existed.** §4.1.3's command block claims it, and it was not in `AuthCommand` — an error in that list rather than a deferral anybody recorded. It is built now: it clears the profile's tokens and this server's contract entry, per profile, and nothing else. Local only, as §4.5.1 already said it would have to be — there is no end-session route and no refresh-token revocation, so the identity provider is not told. It never deletes a file a `from = "file"` entry points at, and it is exempt from the pre-dispatch token resolution, so logging out of a server that is down still works.
+
+**Deferred: `auth source` and `auth doctor`.** Not cut work but
+never-started work — conveniences over a format whose validation now happens
+at write time, which was the failure they were mostly there to explain.
+Reopen them on the first contract file that goes wrong in a way the
+write-time validation did not catch, and name the failure.
+
+**Deferred: the `--kubernetes` and `--kubeconfig` login modes of §4.5.**
+They are not built either. `--kubernetes-token-path` ships, and `write-token-file --from-file`
+turns it into the `file` + `reresolve` contract entry the RFC describes, which
+is the part a consumer sees; the audience assertion and `TokenRequest` minting
+remain phase 2's.
+
+### 14.8 The proxy and the bootstrap, against the real editor core (2026-09-05)
+
+§13 deferred phases 3–4 until "a build that cannot repoint its gallery URL
+is actually in front of us". The premise was that no editor here could be
+pointed at a loopback proxy. The recipe §4.4.4 itself used says otherwise
+for a *test*: the stock VS Code download reads `extensionsGallery` from
+`product.json`, that file is editable, and the CLI (`cli.js` under
+`ELECTRON_RUN_AS_NODE`) drives the real `extensionGalleryService`. It is not
+a configuration we can ship — §3's non-goal stands, updates overwrite the
+file — but it is the editor a heavy suite can put in front of the proxy,
+which is what the deferral was waiting for. So phases 3 and 4 are built,
+and `tests/heavy/vsx_login.sh` measures them.
+
+**What is there.** `cli/src/gallery_proxy.rs` — the server: the session
+segment (§4.4.1), the credential read off the contract file on every
+request, the absolute-URL rewrite (§4.4.3), the `filterType` classifier
+and the sign-in entry with its three assets (§4.4.2), and the `.vsix` it
+serves, generated at startup. `cli/src/cli/proxy.rs` — `batlehub-cli proxy
+serve`: loopback-only bind, `--print-gallery-url`, `gallery-proxy.json`
+at `0600`. Unit tests hold every row of §4.4.2's table, and the two
+findings of §4.4.4 — `Code.Engine` mandatory, a package mandatory — are
+regression tests rather than notes.
+
+**What differs from §6.3, each deliberate.**
+
+- **No login surface on the proxy.** §6.3 wanted `/{session}/login` as a
+  PKCE redirect target or a device-code display. §13 recorded that neither
+  flow exists in the shipped CLI — the login is server-brokered — so the
+  sign-in page names the two commands that do, `auth login` then `auth
+  write-token-file`, and the proxy re-reads the contract file on every
+  request. A login lands without a restart, which is the property the
+  page promised; the device code was one way to get it.
+- **The package is generated, not `batlehub-vsx`.** The entry's `.vsix`
+  is a manifest, a readme and nothing else: installing it changes nothing
+  about the editor. §12 phase 7 makes the extension the package; until
+  then the Install button is not a dead end, which is what §4.4.4 found
+  it had to not be.
+- **Every string on the registry's origin is rewritten, not two fields.**
+  §4.4.3 named `assetUri` and `fallbackAssetUri`; the proxy rewrites any
+  string in the document that starts with the registry base, and leaves
+  every other origin alone. Two fields was the measured minimum; a
+  prefix rewrite is what stays true when the document gains a third.
+- **A lookup by name for the entry itself is answered with the entry.**
+  §4.4.2's rule — never on a query by extension name — exists so that
+  startup's lookup of every installed extension is answered empty rather
+  than with an error. The suite's first run found the rule, read
+  literally, made the entry uninstallable: `--install-extension
+  batlehub.sign-in` *is* a `filterType: 7` lookup, and an empty answer is
+  *Extension 'batlehub.sign-in' not found*. The proxy now answers a lookup
+  whose name is the entry's own; every other name stays empty.
+- **The package carries no `activationEvents`.** The second run found the
+  editor's manifest validator refusing the key on an extension with no
+  `main` or `browser` — *Cannot read the extension from …* — so the
+  generated manifest is name, publisher, version and `engines` and nothing
+  that implies code. Read off `--verbose --log trace`, which is the only
+  place the editor says why.
+- **The tap records the credential's scheme.** `http_tap.py` now logs
+  `Authorization: Bearer` when a request carries one — the scheme only,
+  never the value — so the suite can assert that every registry request
+  the proxy forwarded was authenticated and none arrived bare.
+
+**Measured** (`tests/heavy/vsx_login.sh`, VS Code 1.96.4's `cli.js` under
+node, a local `vscode-marketplace` registry whose `anonymous` holds no
+verb, the tap between the proxy and the registry). The registry answers an
+anonymous `extensionquery` with `403` — not the empty `200` §13 assumed of
+a gallery, which holds only where anonymous read is granted — and a
+user's with the one fixture. Unauthenticated, through the proxy: a search
+is `200` with one entry, `batlehub.sign-in`, `Code.Engine` set, and the tap
+saw nothing; `--install-extension batleforc.weebo-bridge-notify` printed
+*Extension 'batleforc.weebo-bridge-notify' not found* and the tap saw
+nothing; `--install-extension batlehub.sign-in` printed *was successfully
+installed* and the entry is listed; a request outside the session segment
+was `404`. Then `auth write-token-file` with the user token, nothing
+restarted: a search through the proxy is `[batleforc.weebo-bridge-notify]`
+with both asset URIs on the proxy; `--install-extension` by id succeeded;
+the tap recorded six registry requests, every one `Authorization: Bearer`
+— two `extensionquery`, two `Code.Manifest`, the `VSIXPackage` with
+`?redirect=true&install=true` — and none without. `auth status` reported
+the entry `ok` and printed no credential. Four runs to green, each a
+finding: the anonymous `403`, the lookup-by-name rule read too literally,
+the manifest validator's `activationEvents`, all recorded above. What this
+does not measure, still: the Extensions view itself, and the che-code build
+with the patch of §14.5.
+
+### 14.9 The Extensions view itself (2026-09-05, evening)
+
+§4.4.4 ended on "the Extensions **view** itself could not be exercised";
+§14.8 repeated it. The premise was Electron: the desktop build cannot start
+here. The server build can — `server-linux-x64-web`, the same server a
+che-code workspace runs, under the node it bundles — and it serves the
+workbench to any browser, which a Chrome over the DevTools protocol is: a
+workspace's own sidecar, or a headless one. The browser opens the
+workbench, clicks the Extensions icon, types in the search box, opens an
+entry, and what the view *shows* is read off its DOM. That is the canary
+§10 asked for, minus the short-TTL tokens, and `tests/heavy/vsx_view.sh`
+runs it with `tests/heavy/vsx_view.mjs` as the driver.
+
+**Measured** (VS Code 1.136.1, the server build with `product.json`
+repointed, the workbench in the sidecar Chrome, the registry of §14.8).
+Unauthenticated: browse — the empty box, whose *Popular* section asks the
+gallery — and a search for `weebo` both list exactly one entry, *Sign in to
+BatleHub* by *BatleHub*; opening it renders the sign-in page in the
+editor's readme pane, registry URL and both commands verbatim; the tap saw
+nothing. Then `auth write-token-file`, the same page, no reload: the view's
+Refresh lists *Weebo Bridge Notify* by *batleforc* and the sign-in entry is
+gone; the two `extensionquery` and the manifest and details assets the tap
+saw all carried a Bearer, none arrived bare. Five findings, three of them
+about claims this document made.
+
+- **The view will not install an unsigned entry — any unsigned entry.**
+  §4.4.4's row *an unsigned `.vsix` from a custom gallery installs on stock
+  VS Code — holds* was measured through `code --install-extension`; the
+  view's own gate is `ExtensionsWorkbenchService.canInstall`, which on
+  1.96.4 refuses outright any gallery entry with no signature asset, and
+  on 1.136.1 refuses it whenever the gallery manifest says the repository
+  signs its public extensions — and the manifest an editor builds from
+  `product.json` says exactly that. The Install button is greyed out and
+  the editor says *This extension is not signed by the Extension
+  Marketplace.* The registry's own extension gets the same verdict after
+  the sign-in: it is as unsigned as the entry. So §4.4.2's second rule —
+  a package, so that Install is not a dead end — buys nothing in the view;
+  what the entry is for is its page, which renders, and the sign-in page
+  now says why its button is grey. The suite pins the reason, so an
+  editor that changes its mind is a red run.
+- **1.136.1 refuses on the CLI path too.** `code --install-extension` of
+  the same package: *Signature verification failed with 'NotSigned'* —
+  the 1.96.4 core of §14.8 verified nothing there. What lets it through is
+  `extensions.verifySignature: false`, the setting the code-server and
+  VSCodium families ship off; for a server build it is read from
+  `<server-data-dir>/data/User/settings.json` (measured against the five
+  candidate files — not the machine settings under either data directory).
+  The view's `canInstall` does not read that setting. Both suites now
+  measure the refusal first and the install after. This is not the proxy's
+  finding: a BatleHub `vscode-marketplace` registry serves no
+  `VsixSignature` asset for anything, so on a current stock build nothing
+  it holds installs from the view, and nothing installs from the CLI
+  either until the setting is off. Signing at the registry — a
+  `VsixSignature` asset the editor would at least *see*, and a key the
+  builds that trust one could carry — is a registry RFC's, not this one's:
+  [RFC 0020](/rfc/0020-signing-at-the-vscode-marketplace-registry).
+- **A repeated search is answered from the view's cache.** After the
+  sign-in, the same text typed again listed the sign-in entry: the view
+  never re-asked the gallery. Refresh does, and a user who has just signed
+  in presses it; the sign-in page says so now, and the driver clicks it.
+- **The browser refuses the loopback gallery; the server answers it.** The
+  workbench's content-security policy allows `connect-src` on `https:` and
+  its own origin only, so every fetch of `http://127.0.0.1:…/extensionquery`
+  from the page is refused — twenty in the run — and the request service
+  falls back to the remote agent's request channel: the *server* process
+  asks the proxy, on the pod's loopback. Which is where §4.4.1 put the
+  boundary anyway; it is now also where the requests come from.
+- **Two dates the page could not print.** The editor's details page reads
+  `publishedDate` and `releaseDate` off the extension, not the version;
+  the entry carried neither, and the page said *Invalid Date* twice. It
+  carries them now.
+
+**The desktop core is no longer a headless client here.** `vsx_login.sh`
+drove 1.96.4's `cli.js` under `ELECTRON_RUN_AS_NODE`; 1.136.1's imports its
+dependencies as ES modules out of `node_modules.asar`, which plain node
+cannot open. Both suites now drive the server build's CLI — the same
+`extensionGalleryService`, the same `ExtensionManagementCLI` — and share
+one download. What the view suite still does not measure: a che-code
+build with the patch of §14.5 (this repo builds no editor), and short-TTL
+tokens across a `.vsix` longer than one lifetime (§10's other half).
+
+### 14.10 The key was not an origin (2026-09-06)
+
+§4.1 fixes one rule about the contract file that both consumers depend on:
+**it is keyed by origin.** The JSON Schema says so in as many words, and
+the che-code patch reads it that way — `new URL(url).origin`, §4.2's
+"consumer resolution order", `patches/che-code/vsxRegistryAuth.ts`.
+
+`contract::normalize_origin` did not. It was `registry.trim_end_matches('/')`,
+which is an origin only for a URL that has no path. `proxy serve --registry
+https://hub.example.dev/proxy/vsx` therefore looked its entry up under that
+whole string, and `auth write-token-file --server https://hub.example.dev`
+filed one under the origin: two consumers of one file, two keys, and an
+editor behind the proxy shown the sign-in entry of §4.4.2 while it was in
+fact signed in.
+
+The suites did not catch it because both halves of each were wrong the same
+way: `vsx_login.sh` and `vsx_view.sh` pass `--server "$REGISTRY_BASE"` to
+`write-token-file`, which produced exactly the key the proxy computed. It
+took a second implementation — the `batlehub-vsx` extension of §6.5, in its
+own repository, which writes what the schema says — to make the two
+disagree, and its heavy suite is where it surfaced.
+
+`normalize_origin` now parses the origin (`reqwest::Url`, falling back to
+the old trim for anything that is not a URL, so a lookup key never becomes
+an error). Three tests in `cli/src/contract/tests.rs` hold it: a
+path-carrying URL files and finds the same entry as its origin, a default
+port collapses, a different port or scheme does not, and a non-URL is left
+alone. `vsx_login.sh` passes unchanged — the two halves now agree on the
+right key rather than on the wrong one.
+
+### 14.11 The extension, in a real editor (2026-09-06)
+
+Phases 7 and 8 — the last of §13's cut — were built in `batlehub-vsx`, the
+separate repository §11 q6 chose, and measured the way §14.9 measured the
+view: a real VS Code web build, its workbench driven in a browser over CDP,
+against a real BatleHub. Both modes, one run:
+
+- **Marketplace mode** (phase 8, the build whose gallery URL cannot be
+  repointed): the extension's own view lists what the registry shows *this*
+  credential, an inline Install hands the VSIX to the editor's own install
+  command, the editor's Extensions view then lists it as installed, and the
+  extension verified RFC 0020's Ed25519 signature with the registry's key
+  before installing it.
+- **Broker mode** (phase 7): anonymous, the Account view and the status bar
+  offer sign-in and the proxy's bootstrap entry stands alone in the view.
+  After sign-in the extension writes the §4.1 contract file itself, `0600`,
+  leaving the refresh to the CLI and never logging the token; the credential
+  it wrote authenticates the gallery; and the re-query of §4.4.2 is the
+  editor's own Extensions-view refresh, so the same workbench lists the
+  registry's extension with no reload and nobody clicking anything.
+
+Building it also found the defect §14.10 records: the contract file is keyed
+by origin, and this repository's `normalize_origin` was not computing one.
+Two halves of one suite can be wrong the same way and agree; a second
+implementation is what made them disagree.

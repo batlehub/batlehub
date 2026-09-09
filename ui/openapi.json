@@ -35,6 +35,31 @@
         }
       }
     },
+    "/_air-gap/unmirrored/{tail}": {
+      "get": {
+        "tags": [
+          "air-gap"
+        ],
+        "summary": "The sink for a host nothing rewrites.",
+        "operationId": "unmirrored_sink",
+        "parameters": [
+          {
+            "name": "tail",
+            "in": "path",
+            "description": "`{host}/{rest of the original URL}`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Recorded; this host has no mirror on this instance"
+          }
+        }
+      }
+    },
     "/api/v1/admin/access-check": {
       "post": {
         "tags": [
@@ -68,6 +93,139 @@
           },
           "404": {
             "description": "Registry not configured"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/air-gap/missing": {
+      "get": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "What this instance was asked for and did not hold.",
+        "operationId": "list_missing",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "`artifact`, `document`, `checksum`, `ref` or `unmirrored_host`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recorded misses, most-asked first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MissingResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`system:read` required"
+          },
+          "503": {
+            "description": "No store to record into"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "Forget recorded misses.",
+        "operationId": "purge_missing",
+        "parameters": [
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Forget rows last seen before this instant. Absent forgets every row\nolder than the configured retention, which is the ordinary sweep.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "registry",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How many rows were forgotten",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurgeMissingResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`system:write` required"
+          },
+          "503": {
+            "description": "No store to purge"
           }
         },
         "security": [
@@ -565,6 +723,82 @@
         ]
       }
     },
+    "/api/v1/admin/bundle": {
+      "get": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "What came across the gap, newest first.",
+        "operationId": "list_bundles",
+        "responses": {
+          "200": {
+            "description": "Imported bundles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BundleHistoryResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`system:read` required"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/bundle/import": {
+      "post": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "Import a bundle.",
+        "operationId": "import_bundle",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What was imported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BundleImportResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a bundle, or a manifest this build cannot read"
+          },
+          "403": {
+            "description": "`system:write` required, or the signature does not verify"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/config/changes": {
       "get": {
         "tags": [
@@ -945,6 +1179,390 @@
         ]
       }
     },
+    "/api/v1/admin/exposure": {
+      "get": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "The exposure report, one page.",
+        "operationId": "exposure_report",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "registry",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "package_name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "min_effect",
+            "in": "query",
+            "description": "Keep flags at this effect or stronger: `inform | warn | gate | hard_block`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "when",
+            "in": "query",
+            "description": "`any` (default), `before_flag` (pulled before the flag was known),\n`after_flag`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "The `next` cursor of the previous page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rows newest pull first, a cursor when more follow, and the coverage block",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExposureResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad filter or cursor"
+          },
+          "403": {
+            "description": "`audit:read` required"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/exposure/export": {
+      "get": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "The whole report, every page walked, as CSV or JSON.",
+        "operationId": "export_exposure",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "registry",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "package_name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "min_effect",
+            "in": "query",
+            "description": "Keep flags at this effect or stronger: `inform | warn | gate | hard_block`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "when",
+            "in": "query",
+            "description": "`any` (default), `before_flag` (pulled before the flag was known),\n`after_flag`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "The `next` cursor of the previous page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every row of the report; `?format=csv` selects CSV, anything else JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExposureRow"
+                  }
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`audit:read` required"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/flags": {
+      "get": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "List pushed flags.",
+        "operationId": "list_flags",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "package_name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "effect",
+            "in": "query",
+            "description": "`inform | warn | gate | hard_block`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "include_dead",
+            "in": "query",
+            "description": "Include revoked and expired flags.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Flags, newest update first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlagsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`flags:read` required"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/health": {
       "get": {
         "tags": [
@@ -968,6 +1586,36 @@
           },
           "403": {
             "description": "`system:read` required"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/imports": {
+      "get": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "Every configured import, with each one's last run (admin).",
+        "description": "Unscoped, like `GET /api/v1/admin/warming` and for the same reason: the\nconsole's first question is *which registries have imports at all*, and a\npage that had to ask per registry would be N requests to render one table.",
+        "operationId": "list_all_imports",
+        "responses": {
+          "200": {
+            "description": "Every configured import and its last run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AllImportsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cache:warm` required"
           }
         },
         "security": [
@@ -2749,6 +3397,102 @@
         ]
       }
     },
+    "/api/v1/admin/registries/{registry}/import": {
+      "post": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "Import a forge release into this registry now.",
+        "operationId": "import_registry",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "The registry imported into",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Import run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cache:warm` required"
+          },
+          "404": {
+            "description": "No import is configured into this registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/registries/{registry}/imports": {
+      "get": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "The imports configured into a registry, and each one's last run (admin).",
+        "operationId": "list_registry_imports",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "The registry imported into",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Configured imports and their last runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryImportsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cache:warm` required"
+          },
+          "404": {
+            "description": "No import is configured into this registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/registries/{registry}/namespaces": {
       "get": {
         "tags": [
@@ -4401,6 +5145,189 @@
         ]
       }
     },
+    "/api/v1/admin/upstream/disappeared": {
+      "get": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "The rows the audit holds: packages seen missing and packages confirmed\ngone (RFC 0014 §4.6). `system:read`. Pages by\n`[limits].packages_per_page` when `per_page` is absent.",
+        "operationId": "list_disappeared",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "query",
+            "description": "One registry; absent lists every audited registry.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "`missing` (seen missing, unconfirmed) or `disappeared` (confirmed);\nabsent lists both.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Absent (or `0`) takes `[limits].packages_per_page`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of rows, with the active policy and the per-registry counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamStatusPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unknown `state`"
+          },
+          "403": {
+            "description": "`system:read` required"
+          },
+          "503": {
+            "description": "The upstream audit is not running in this process"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/upstream/recheck": {
+      "post": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "Probe one cached package against its upstream now (RFC 0014 §4.6).",
+        "description": "The same ladder and state machine as the periodic sweep — a miss here\ncounts towards confirmation like any other, a success clears the row —\nso an admin who has heard from upstream does not wait an interval. It\nis a probe, not an override: it cannot confirm a disappearance the\ncount and age floors would not.",
+        "operationId": "recheck_upstream",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Probed; what the probe found and the row it left",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecheckResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`system:write` required"
+          },
+          "404": {
+            "description": "Not an audited registry, or nothing cached under the name"
+          },
+          "503": {
+            "description": "The upstream audit is not running in this process"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/upstream/status/{registry}/{name}": {
+      "get": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "One package's rows (RFC 0014 §4.6). `system:read`. A package with no row\nanswers `200` with an empty list — \"present\" is the absence of a row,\nand a `404` here would read as \"no such package\".",
+        "operationId": "get_upstream_status",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Package name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The package's rows, possibly none",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamPackageStatus"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`system:read` required"
+          },
+          "404": {
+            "description": "Not an audited registry"
+          },
+          "503": {
+            "description": "The upstream audit is not running in this process"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/users/blocked": {
       "get": {
         "tags": [
@@ -4507,6 +5434,164 @@
         ]
       }
     },
+    "/api/v1/admin/verdicts": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "The verdicts of a registry, by state. `system:read`. Findings are\nincluded: the reader is an administrator, and the listing exists to\nanswer \"what is held, and why\" in one page.",
+        "operationId": "list_verdicts",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "`allowed`, `warned`, `quarantined` or `denied`; absent lists every\nstate.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Per state; default 100, at most 1000.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The verdicts, newest first per state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerdictListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unknown `state`"
+          },
+          "403": {
+            "description": "`system:read` required"
+          },
+          "404": {
+            "description": "The registry has no security profile"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/verdicts/backfill": {
+      "post": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Queue a `Backfill` — the lowest priority — for every cached version of\na registry (RFC 0018 §4.2 *CLI*: `batlehub verdicts backfill`), so an\nestate that turned `[security]` on with a warm cache judges what it\nalready holds without a user waiting on any of it. `system:write`.",
+        "operationId": "backfill_verdicts",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkScanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The backfill is queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkScanResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`system:write` required"
+          },
+          "404": {
+            "description": "The registry has no security profile"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/verdicts/rescan": {
+      "post": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Queue a `Rescan` for every verdict of a registry, or every verdict in\none state (RFC 0018 §4.2 *CLI*). `system:write`.",
+        "operationId": "bulk_rescan",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkScanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The rescans are queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkScanResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unknown `state`"
+          },
+          "403": {
+            "description": "`system:write` required"
+          },
+          "404": {
+            "description": "The registry has no security profile"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/warming": {
       "get": {
         "tags": [
@@ -4527,6 +5612,103 @@
           },
           "403": {
             "description": "`cache:warm` required"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/audit/pulls": {
+      "get": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "What one identity pulled inside a window (admin).",
+        "description": "The transpose of `/api/v1/verdicts/{registry}/{name}/{version}/pullers`:\nthat one pins a version and asks who took it, this one pins an identity and\nasks what it took. Both are `audit:read` at the instance tier and both read\n`access_events`, so an auditor handed either can reconcile it against the\nother.",
+        "operationId": "audit_pulls",
+        "parameters": [
+          {
+            "name": "identity",
+            "in": "query",
+            "description": "Whose pulls: a user id, or `ip:<addr>` for an anonymous caller.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "registry",
+            "in": "query",
+            "description": "Narrow to one registry.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "package",
+            "in": "query",
+            "description": "Narrow to one package name.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "`30d` / `12h` / `90m` back from now, or an RFC 3339 instant. Absent: 30 days.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "`csv` for the export; anything else is JSON.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What the identity pulled; `?format=csv` selects CSV",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullsResponse"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`since` is not a window or an instant"
+          },
+          "403": {
+            "description": "`audit:read` required"
           }
         },
         "security": [
@@ -5354,6 +6536,7 @@
           {
             "name": "limit",
             "in": "query",
+            "description": "Results asked of each registry searched: 10 by default, 100 at most.\nA larger value is not an error, it is simply not honoured.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5378,6 +6561,153 @@
             "bearer_token": []
           }
         ]
+      }
+    },
+    "/api/v1/explore/{registry}/{name}/refs": {
+      "get": {
+        "tags": [
+          "explore"
+        ],
+        "summary": "Every ref this instance has resolved for a forge repository.",
+        "operationId": "explore_forge_refs",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "`owner/repo`, percent-encoded",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The remembered refs, newest resolution first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForgeRefsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`catalogue:browse` required on the registry"
+          },
+          "404": {
+            "description": "Not a forge registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/flags/{source}": {
+      "post": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Push a batch of flags from a configured source.",
+        "operationId": "push_flags",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "description": "The `[[flag_sources]]` name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FlagPushBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "One outcome per item, in order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlagPushResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not JSON, or over the batch size"
+          },
+          "404": {
+            "description": "Unknown source or bad signature"
+          },
+          "429": {
+            "description": "Over the source's per-minute budget; `Retry-After` set"
+          }
+        }
+      }
+    },
+    "/api/v1/flags/{source}/{external_id}": {
+      "delete": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Revoke one flag. The row stays as a tombstone for the exposure report.",
+        "operationId": "revoke_flag",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "description": "The `[[flag_sources]]` name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "external_id",
+            "in": "path",
+            "description": "The source's own id for the flag",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Whether a live flag was revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlagRevokeResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown source or bad signature"
+          }
+        }
       }
     },
     "/api/v1/me": {
@@ -5941,6 +7271,220 @@
           },
           "404": {
             "description": "No SBOM found for this artifact"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/verdicts/{registry}/{name}/{version}": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "The current verdict for one version (RFC 0018 §4.2 *Verdict endpoint*).",
+        "description": "Re-judged against the clock when the version's metadata is cached — the\ncase for any version a refused request just resolved — so a time-bound\nhold whose clock has run out answers as served rather than as the stale\nrow. A version this instance has never looked at answers `404`, as does a\ncaller without `quarantine:read`: a held version cannot be enumerated.",
+        "operationId": "get_verdict",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Package name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "Version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The verdict; `findings` present only with findings:read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerdictResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No verdict, no security profile on the registry, or no quarantine:read"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/verdicts/{registry}/{name}/{version}/pullers": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Who pulled this version inside a window — the incident question,\nanswered from `access_events` through the same query the flip alert\ncarried (RFC 0018 decision 28: one who-pulled query, not two).",
+        "description": "`audit:read` on the registry: the report is a view of the access log,\nand the same reader holds both. Exposure only — allowed downloads; a\nrefused request delivered no bytes (RFC 0002 decision 5). Anonymous\npulls are kept under `ip:<addr>`.",
+        "operationId": "list_pullers",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Package name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "Version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "A window back from now — `30d`, `12h`, `90m`, `3600s`, or a bare\nnumber of seconds — or an RFC 3339 instant. Default: the registry's\n`pullers_window_days`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "`json` (default) or `csv`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Who pulled the version in the window; `?format=csv` selects CSV, anything else JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullersResponse"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unparseable `since`"
+          },
+          "403": {
+            "description": "`audit:read` on the registry required"
+          },
+          "404": {
+            "description": "The registry has no security profile"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/verdicts/{registry}/{name}/{version}/rescan": {
+      "post": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Queue a rescan of one version (RFC 0018 §4.2): `gates:exempt`, which\n`role:admin` holds, on the registry.",
+        "operationId": "rescan_verdict",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Package name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "Version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "A rescan job is queued (or was already open)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RescanResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Requires gates:exempt on the registry"
+          },
+          "404": {
+            "description": "The registry has no security profile"
           }
         },
         "security": [
@@ -6599,6 +8143,50 @@
             "bearer_token": []
           }
         ]
+      }
+    },
+    "/proxy/{registry}/api/-/public-key/{key_id}": {
+      "get": {
+        "tags": [
+          "proxy/openvsx"
+        ],
+        "summary": "`GET /proxy/{registry}/api/-/public-key/{key_id}` — the key this\nregistry's VSIX signatures verify under (RFC 0020 §4.2), PEM\n(`SubjectPublicKeyInfo`), the shape Open VSX serves and its clients\nparse. Anonymous: a public key is public, and the id names a key, not an\nextension. `404` for any id but the current key's.",
+        "operationId": "openvsx_public_key",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key_id",
+            "in": "path",
+            "description": "The key id the gallery's PublicKey asset names",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The public key, PEM",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown registry, or not this registry's key"
+          }
+        }
       }
     },
     "/proxy/{registry}/api/-/publish": {
@@ -9563,6 +11151,159 @@
         ]
       }
     },
+    "/proxy/{registry}/nodedist/index.json": {
+      "get": {
+        "tags": [
+          "proxy/nodedist"
+        ],
+        "summary": "The same release table as JSON — what fnm and mise read.",
+        "operationId": "nodedist_index_json",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Release table as a JSON array, blocked releases removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UpstreamDocument"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/nodedist/index.tab": {
+      "get": {
+        "tags": [
+          "proxy/nodedist"
+        ],
+        "summary": "The release table nvm resolves every install through, blocked releases\nremoved.",
+        "operationId": "nodedist_index_tab",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tab-separated release table, header preserved, blocked releases removed",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/nodedist/{version}/{file}": {
+      "get": {
+        "tags": [
+          "proxy/nodedist"
+        ],
+        "summary": "One file of one release: a tarball, `SHASUMS256.txt`, or a signature.",
+        "operationId": "nodedist_file",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "Release directory, as the tree spells it (e.g. v22.11.0)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "description": "File inside the release directory (e.g. node-v22.11.0-linux-x64.tar.xz, SHASUMS256.txt)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File streamed from upstream (cached), byte-exact",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe version or file name"
+          },
+          "403": {
+            "description": "Access denied, or the release is blocked"
+          },
+          "404": {
+            "description": "Not found upstream, or unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/proxy/{registry}/nuget/api/v2/package": {
       "put": {
         "tags": [
@@ -10930,6 +12671,692 @@
           },
           "404": {
             "description": "Not found or unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/sdkman/broker/download/{candidate}/{version}/{platform}": {
+      "get": {
+        "tags": [
+          "proxy/sdkman"
+        ],
+        "summary": "The archive for one version on one platform, streamed through the\nbroker's redirect chain and cached under `{candidate}/{version}/{platform}`.",
+        "description": "A direct request for a blocked version gets the download gate's `403`\nhere even though `validate` already said `invalid`: hiding governs\nresolution, it does not replace diagnosis.",
+        "operationId": "sdkman_download",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "candidate",
+            "in": "path",
+            "description": "Candidate (e.g. java)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "Version identifier (e.g. 21.0.5-tem)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "path",
+            "description": "SDKMAN platform (e.g. linuxx64)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The archive, streamed from the vendor's CDN through the broker's redirect (cached)",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe candidate, version or unknown platform"
+          },
+          "403": {
+            "description": "Access denied, or the version is blocked"
+          },
+          "404": {
+            "description": "Not found upstream, or unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/sdkman/broker/version/sdkman/{component}/{channel}": {
+      "get": {
+        "tags": [
+          "proxy/sdkman"
+        ],
+        "summary": "The current SDKMAN script or native version on a channel — what `sdk\nselfupdate` and the daily upgrade check read.",
+        "operationId": "sdkman_selfupdate_version",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "component",
+            "in": "path",
+            "description": "`script` or `native`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "path",
+            "description": "`stable` or `beta`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The version string, byte-exact",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry, component or channel"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/sdkman/candidates/all": {
+      "get": {
+        "tags": [
+          "proxy/sdkman"
+        ],
+        "summary": "Every candidate name, comma-separated — what `sdk update` caches and\n`sdkman-init.sh` reads at every shell start.",
+        "operationId": "sdkman_candidates_all",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Comma-separated candidate names, relayed byte-exact",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/sdkman/candidates/default/{candidate}": {
+      "get": {
+        "tags": [
+          "proxy/sdkman"
+        ],
+        "summary": "The version `sdk install <candidate>` resolves to with no version given,\nrepaired to the newest allowed version when the upstream default is\nblocked.",
+        "description": "The repair reads the filtered `versions/all` for the default platform:\n`candidates/default/{c}` carries no platform, and every vendor publishes\nfor Linux x64, so its list is the nearest thing to the union of the eight.\nA default that names a version some other platform lacks fails at\n`validate`, which is where a wrong version has always failed.",
+        "operationId": "sdkman_candidate_default",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "candidate",
+            "in": "path",
+            "description": "Candidate (e.g. java, maven)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The default version identifier, repaired past a blocked one",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe candidate name"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry or candidate"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/sdkman/candidates/list": {
+      "get": {
+        "tags": [
+          "proxy/sdkman"
+        ],
+        "summary": "The rendered candidate table `sdk list` prints with no argument.",
+        "operationId": "sdkman_candidates_list",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rendered candidate table, relayed byte-exact",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/sdkman/candidates/validate/{candidate}/{version}/{platform}": {
+      "get": {
+        "tags": [
+          "proxy/sdkman"
+        ],
+        "summary": "The chokepoint: `valid` or `invalid` for one version on one platform. A\nblocked version is `invalid` here, and upstream is not asked.",
+        "operationId": "sdkman_validate",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "candidate",
+            "in": "path",
+            "description": "Candidate (e.g. java)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "Version identifier (e.g. 21.0.5-tem)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "path",
+            "description": "One of linuxx64, linuxx32, linuxarm32hf, linuxarm64, darwinx64, darwinarm64, windowsx64, exotic",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`valid` or `invalid`; a blocked version is `invalid`",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe candidate, version or unknown platform"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/sdkman/candidates/{candidate}/{platform}/versions/all": {
+      "get": {
+        "tags": [
+          "proxy/sdkman"
+        ],
+        "summary": "Every version of a candidate on a platform, comma-separated, blocked\nversions removed.",
+        "operationId": "sdkman_versions_all",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "candidate",
+            "in": "path",
+            "description": "Candidate (e.g. java)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "path",
+            "description": "SDKMAN platform (e.g. linuxx64)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Comma-separated version identifiers, blocked versions removed",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe candidate or unknown platform"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry or candidate"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/sdkman/candidates/{candidate}/{platform}/versions/list": {
+      "get": {
+        "tags": [
+          "proxy/sdkman"
+        ],
+        "summary": "The rendered table `sdk list <candidate>` prints, in either of its two\nlayouts, with blocked versions removed (a whole row of the vendor table,\na blanked cell of the grid).",
+        "description": "The client's `current`/`installed` query is forwarded, because the table\nmarks those versions; it is also part of the cache key, so two clients\nwith different installed sets never share an entry.",
+        "operationId": "sdkman_versions_list",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "candidate",
+            "in": "path",
+            "description": "Candidate (e.g. java)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "path",
+            "description": "SDKMAN platform (e.g. linuxx64)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "current",
+            "in": "query",
+            "description": "The client's current version, as `sdk list` sends it",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "installed",
+            "in": "query",
+            "description": "The client's installed versions, comma-separated",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rendered version table, blocked versions removed, layout preserved",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe candidate, unknown platform or malformed query"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry or candidate"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/sdkman/healthcheck": {
+      "get": {
+        "tags": [
+          "proxy/sdkman"
+        ],
+        "summary": "The API's health token, read by every `sdk` invocation. Relayed as-is:\nthe client treats an HTML body as \"proxy detected\" and an empty one as\n\"offline\", so neither may be synthesised here.",
+        "operationId": "sdkman_healthcheck",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The upstream health token, byte-exact",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/sdkman/hooks/{phase}/{candidate}/{version}/{platform}": {
+      "get": {
+        "tags": [
+          "proxy/sdkman"
+        ],
+        "summary": "A pre- or post-install hook: bash the client sources and runs, relayed\nbyte-exact (RFC 0010 §7).",
+        "operationId": "sdkman_hook",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "phase",
+            "in": "path",
+            "description": "`pre` or `post`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "candidate",
+            "in": "path",
+            "description": "Candidate (e.g. java)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "Version identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "path",
+            "description": "SDKMAN platform",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The hook script, byte-exact",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe candidate, version or unknown platform"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry, phase or hook"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/sdkman/selfupdate/{channel}/{platform}": {
+      "get": {
+        "tags": [
+          "proxy/sdkman"
+        ],
+        "summary": "The self-update script for a channel and platform — bash the client\npipes into `bash`, relayed byte-exact for the same reason the hooks are.",
+        "operationId": "sdkman_selfupdate",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "path",
+            "description": "`stable` or `beta`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "path",
+            "description": "SDKMAN platform",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The self-update script, byte-exact",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown platform"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry or channel"
           }
         },
         "security": [
@@ -13132,6 +15559,86 @@
         ]
       }
     },
+    "/proxy/{registry}/{extension_id}/{version}/vsix/signature": {
+      "put": {
+        "tags": [
+          "proxy/openvsx"
+        ],
+        "summary": "`PUT /proxy/{registry}/{extension_id}/{version}/vsix/signature` — attach an\nupstream's signature archive to a version this registry holds (RFC 0020\n§13.6). A marketplace extension republished locally keeps, this way, the\nsignature a stock editor verifies; the registry checks the archive's\nmanifest against the stored bytes, keeps it as-is, and never signs over\nit. Authorised as a publish of the same version.",
+        "operationId": "vsix_signature_attach",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "extension_id",
+            "in": "path",
+            "description": "Extension ID (publisher.name)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "Published version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The signature archive: `.signature.manifest` plus `.signature.p7s` and/or `.signature.sig`",
+          "content": {
+            "application/zip": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signature attached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a signature archive, or its manifest does not describe the stored VSIX"
+          },
+          "403": {
+            "description": "Not allowed to publish this version"
+          },
+          "404": {
+            "description": "Unknown registry, or version not published here"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/proxy/{registry}/{hostname}/{namespace}/{ptype}/index.json": {
       "get": {
         "tags": [
@@ -13643,6 +16150,146 @@
         ]
       }
     },
+    "/proxy/{registry}/{owner}/{repo}/branches/{branch}": {
+      "get": {
+        "tags": [
+          "proxy/github"
+        ],
+        "summary": "A branch head.",
+        "operationId": "forge_branch",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "path",
+            "description": "Repository owner",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "description": "Repository name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "branch",
+            "in": "path",
+            "description": "Branch name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The branch head",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForgeBranchResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`releases:read` required"
+          },
+          "404": {
+            "description": "Unknown registry, not a forge, the family is not enabled, or no such branch"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/{owner}/{repo}/commits/{sha}": {
+      "get": {
+        "tags": [
+          "proxy/github"
+        ],
+        "summary": "One commit's date and committer.",
+        "operationId": "forge_commit",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "path",
+            "description": "Repository owner",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "description": "Repository name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sha",
+            "in": "path",
+            "description": "Commit SHA",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The commit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForgeCommitResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`releases:read` required"
+          },
+          "404": {
+            "description": "Unknown registry, not a forge, or the family is not enabled"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/proxy/{registry}/{owner}/{repo}/raw/{git_ref}/{path}": {
       "get": {
         "tags": [
@@ -13999,6 +16646,67 @@
           },
           "404": {
             "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/{owner}/{repo}/tags": {
+      "get": {
+        "tags": [
+          "proxy/github"
+        ],
+        "summary": "List a repository's tags.",
+        "operationId": "forge_tags",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "path",
+            "description": "Repository owner",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repo",
+            "in": "path",
+            "description": "Repository name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The repository's tags",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForgeTagsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`releases:read` required"
+          },
+          "404": {
+            "description": "Unknown registry, not a forge, or the family is not enabled"
           }
         },
         "security": [
@@ -15387,6 +18095,20 @@
           }
         }
       },
+      "AllImportsResponse": {
+        "type": "object",
+        "required": [
+          "registries"
+        ],
+        "properties": {
+          "registries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RegistryImports"
+            }
+          }
+        }
+      },
       "ArtifactBytes": {
         "type": "string",
         "format": "binary",
@@ -15818,6 +18540,53 @@
           }
         }
       },
+      "BulkScanRequest": {
+        "type": "object",
+        "description": "A bulk rescan or a backfill.",
+        "required": [
+          "registry"
+        ],
+        "properties": {
+          "registry": {
+            "type": "string"
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Rescan only the verdicts in this state; absent rescans every\nverdict of the registry. Ignored by `backfill`."
+          }
+        }
+      },
+      "BulkScanResponse": {
+        "type": "object",
+        "description": "What a bulk operation queued.",
+        "required": [
+          "registry",
+          "considered",
+          "queued",
+          "trigger"
+        ],
+        "properties": {
+          "considered": {
+            "type": "integer",
+            "description": "Coordinates considered.",
+            "minimum": 0
+          },
+          "queued": {
+            "type": "integer",
+            "description": "Jobs created; a coordinate with an open job already is not counted.",
+            "minimum": 0
+          },
+          "registry": {
+            "type": "string"
+          },
+          "trigger": {
+            "type": "string"
+          }
+        }
+      },
       "BulkUnblockRequest": {
         "type": "object",
         "required": [
@@ -15853,6 +18622,126 @@
             "type": "string"
           },
           "version": {
+            "type": "string"
+          }
+        }
+      },
+      "BundleHistoryResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BundleImport"
+            }
+          }
+        }
+      },
+      "BundleImport": {
+        "type": "object",
+        "description": "One accepted bundle, as the admin surface reads it.",
+        "required": [
+          "bundle_id",
+          "signer_key",
+          "imported_at",
+          "entries",
+          "blobs",
+          "rejected"
+        ],
+        "properties": {
+          "blobs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "bundle_id": {
+            "type": "string"
+          },
+          "created_from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The plan the bundle was built from, when the builder recorded one."
+          },
+          "entries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "imported_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "imported_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rejected": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "rejected_sample": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A few of what was rejected, for the line an operator reads before\ndeciding whether to care."
+          },
+          "signer_key": {
+            "type": "string",
+            "description": "The public key whose signature verified. Naming it is how an operator\ntells two signers apart; it is the public half and not a secret."
+          }
+        }
+      },
+      "BundleImportResponse": {
+        "type": "object",
+        "required": [
+          "bundle_id",
+          "signer_key",
+          "imported",
+          "entries",
+          "rejected",
+          "already_imported"
+        ],
+        "properties": {
+          "already_imported": {
+            "type": "boolean",
+            "description": "`true` when this bundle id was already imported and nothing was\nwritten again."
+          },
+          "bundle_id": {
+            "type": "string"
+          },
+          "entries": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "imported": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Blobs written. A bundle carrying bytes this instance already holds\nwrites them again under their key — the store dedups by content, so\nthe count is of keys, not of bytes moved.",
+            "minimum": 0
+          },
+          "rejected": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Entries refused: a blob that did not hash to its name, a key that is\nnot a storage key, a registry this instance does not have.",
+            "minimum": 0
+          },
+          "rejections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "signer_key": {
             "type": "string"
           }
         }
@@ -16236,6 +19125,38 @@
             "items": {
               "$ref": "#/components/schemas/ConfigWarning"
             }
+          }
+        }
+      },
+      "ConfiguredImport": {
+        "type": "object",
+        "description": "One configured import, and its last run.",
+        "required": [
+          "repo",
+          "assets"
+        ],
+        "properties": {
+          "assets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The asset globs a release is matched against."
+          },
+          "last_run": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ImportRun",
+                "description": "The last completed run, or `null` when none has happened.\n\nThe distinction the console exists to show: \"ran and found nothing new\"\nis a run with `imported: 0`, \"has not run\" is this being absent, and a\npage that could not tell them apart would be worse than no page."
+              }
+            ]
+          },
+          "repo": {
+            "type": "string",
+            "description": "The source repository, `owner/name`."
           }
         }
       },
@@ -17076,6 +19997,173 @@
           }
         }
       },
+      "ExposureCoverage": {
+        "type": "object",
+        "description": "What the report can and cannot see, printed beside its rows.",
+        "required": [
+          "registries_total",
+          "sbom_configured",
+          "security_profiles",
+          "last_scan",
+          "flag_sources"
+        ],
+        "properties": {
+          "flag_sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FlagSourceCoverage"
+            }
+          },
+          "last_scan": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RegistryScanState"
+            }
+          },
+          "registries_total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "sbom_configured": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Registries with an SBOM extractor, so the CVE scan can cover them.",
+            "minimum": 0
+          },
+          "security_profiles": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Registries with a `[security]` profile, where a flag denies at once.",
+            "minimum": 0
+          },
+          "window_truncated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Events older than this are gone (audit retention), so a window that\nreaches past it is silently shorter than asked."
+          }
+        }
+      },
+      "ExposureResponse": {
+        "type": "object",
+        "required": [
+          "rows",
+          "coverage"
+        ],
+        "properties": {
+          "coverage": {
+            "$ref": "#/components/schemas/ExposureCoverage"
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExposureRow"
+            }
+          }
+        }
+      },
+      "ExposureRow": {
+        "type": "object",
+        "description": "One consumer × one coordinate × one flag.",
+        "required": [
+          "consumer",
+          "consumer_role",
+          "registry",
+          "package_name",
+          "version",
+          "flag_id",
+          "source",
+          "external_id",
+          "kind",
+          "effect",
+          "summary",
+          "flag_first_seen",
+          "pulls",
+          "pulls_before_flag",
+          "first_pull",
+          "last_pull"
+        ],
+        "properties": {
+          "consumer": {
+            "type": "string",
+            "description": "The user id, or `anonymous`."
+          },
+          "consumer_role": {
+            "type": "string"
+          },
+          "effect": {
+            "$ref": "#/components/schemas/FlagEffect"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "first_pull": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "flag_first_seen": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the flag was first known here."
+          },
+          "flag_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/FlagKind"
+          },
+          "last_pull": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "package_name": {
+            "type": "string"
+          },
+          "pulls": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Pulls in the window, and how many of them preceded the flag.",
+            "minimum": 0
+          },
+          "pulls_before_flag": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "registry": {
+            "type": "string"
+          },
+          "severity": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Severity"
+              }
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "ExtensionQueryRequest": {
         "type": "object",
         "description": "`POST …/vscode/gallery/extensionquery`.\n\nEvery field is `#[serde(default)]`: a hand-written `product.json` or a\nnon-VS-Code client that omits half of this should get results, not a `400`.",
@@ -17158,6 +20246,82 @@
           }
         }
       },
+      "Finding": {
+        "type": "object",
+        "description": "One thing one scanner said about one artifact.",
+        "required": [
+          "scanner",
+          "kind",
+          "code",
+          "severity",
+          "summary"
+        ],
+        "properties": {
+          "available_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "For a time-bound hold: when it lifts."
+          },
+          "code": {
+            "$ref": "#/components/schemas/ReasonCode"
+          },
+          "confidence": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "kind": {
+            "$ref": "#/components/schemas/FindingKind"
+          },
+          "raw": {
+            "description": "The scanner's own output, untouched. Hostile data: never interpolated."
+          },
+          "reference": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A CVE id, an OSV id, a SOC case id — whatever the scanner cites."
+          },
+          "scanner": {
+            "type": "string",
+            "description": "The scanner's name (`osv`, `age`, `block_list`, `cve_gate`, …)."
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity"
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      },
+      "FindingKind": {
+        "type": "string",
+        "description": "What kind of thing a finding is — the axis escalation and the console\ngroup on.",
+        "enum": [
+          "vulnerability",
+          "malware_signal",
+          "install_hook",
+          "provenance",
+          "signature",
+          "license",
+          "publisher",
+          "typosquat",
+          "transition",
+          "age",
+          "pending",
+          "soc_verdict",
+          "scanner_error",
+          "block_list",
+          "ref"
+        ]
+      },
       "FirewallDto": {
         "oneOf": [
           {
@@ -17215,6 +20379,474 @@
             }
           }
         ]
+      },
+      "FlagEffect": {
+        "type": "string",
+        "description": "How hard a flag wants the proxy to react. Ordered: `HardBlock` is the\nstrongest, and a source's configured ceiling caps a pushed effect down.",
+        "enum": [
+          "inform",
+          "warn",
+          "gate",
+          "hard_block"
+        ]
+      },
+      "FlagItemOutcome": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "external_id",
+              "id",
+              "created",
+              "effect",
+              "effect_capped",
+              "status"
+            ],
+            "properties": {
+              "created": {
+                "type": "boolean",
+                "description": "`false` on an update of a flag already known."
+              },
+              "effect": {
+                "$ref": "#/components/schemas/FlagEffect",
+                "description": "The effect stored, after the source's ceiling was applied."
+              },
+              "effect_capped": {
+                "type": "boolean",
+                "description": "The push asked for more than the source may do."
+              },
+              "external_id": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "accepted"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "external_id",
+              "error",
+              "status"
+            ],
+            "properties": {
+              "error": {
+                "type": "string"
+              },
+              "external_id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "rejected"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What became of one pushed item."
+      },
+      "FlagKind": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "A published vulnerability (a CVE, a GHSA, an OSV id).",
+            "enum": [
+              "cve"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A malicious release: an install hook, a credential stealer.",
+            "enum": [
+              "malware"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "A licence the estate does not accept.",
+            "enum": [
+              "license"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "An internal policy: end of life, a vendor ban.",
+            "enum": [
+              "policy"
+            ]
+          },
+          {
+            "type": "object",
+            "description": "Anything else, under the source's own name.",
+            "required": [
+              "other"
+            ],
+            "properties": {
+              "other": {
+                "type": "string",
+                "description": "Anything else, under the source's own name."
+              }
+            }
+          }
+        ],
+        "description": "What a flag asserts. Open on purpose: a source's taxonomy is its own,\nand an unknown kind is stored as it came rather than refused."
+      },
+      "FlagPush": {
+        "type": "object",
+        "description": "One item of a push, as the source sends it.",
+        "required": [
+          "external_id",
+          "registry",
+          "package_name",
+          "effect",
+          "summary"
+        ],
+        "properties": {
+          "effect": {
+            "$ref": "#/components/schemas/FlagEffect"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/FlagKind"
+          },
+          "package_name": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "severity": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Severity"
+              }
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An exact version. Exactly one of `version` and `version_range`."
+          },
+          "version_range": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Only `*` is accepted (every version); ranges wait for the\nversion-scheme RFC."
+          }
+        }
+      },
+      "FlagPushBody": {
+        "type": "object",
+        "description": "A push: the items, and nothing else — the source is the path, the\ncredential the header.",
+        "required": [
+          "flags"
+        ],
+        "properties": {
+          "flags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FlagPush"
+            }
+          }
+        }
+      },
+      "FlagPushResponse": {
+        "type": "object",
+        "description": "The answer to a push: one outcome per item, in order.",
+        "required": [
+          "accepted",
+          "rejected",
+          "items"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FlagItemOutcome"
+            }
+          },
+          "rejected": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "FlagRevokeResponse": {
+        "type": "object",
+        "required": [
+          "revoked"
+        ],
+        "properties": {
+          "revoked": {
+            "type": "boolean"
+          }
+        }
+      },
+      "FlagSourceCoverage": {
+        "type": "object",
+        "description": "One source's standing, for the coverage block.",
+        "required": [
+          "source",
+          "live_flags"
+        ],
+        "properties": {
+          "last_push_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "live_flags": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "FlagsResponse": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "per_page"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PackageFlag"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "ForgeBranchResponse": {
+        "type": "object",
+        "required": [
+          "registry",
+          "package",
+          "branch",
+          "sha"
+        ],
+        "properties": {
+          "branch": {
+            "type": "string"
+          },
+          "committed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "committer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "package": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "sha": {
+            "type": "string"
+          }
+        }
+      },
+      "ForgeCommitResponse": {
+        "type": "object",
+        "required": [
+          "registry",
+          "package",
+          "sha"
+        ],
+        "properties": {
+          "committed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "committer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "package": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "sha": {
+            "type": "string"
+          }
+        }
+      },
+      "ForgeRefDto": {
+        "type": "object",
+        "required": [
+          "git_ref",
+          "ref_kind",
+          "sha",
+          "resolved_at"
+        ],
+        "properties": {
+          "git_ref": {
+            "type": "string",
+            "description": "The ref as a client spelled it: `main`, `v2.60.0`."
+          },
+          "previous_sha": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it resolved to before, when that differs: a branch that advanced,\nor a tag that moved."
+          },
+          "ref_kind": {
+            "type": "string",
+            "description": "`tag` or `branch`; a commit is never recorded — it cannot move."
+          },
+          "resolved_at": {
+            "type": "string"
+          },
+          "sha": {
+            "type": "string"
+          }
+        }
+      },
+      "ForgeRefsResponse": {
+        "type": "object",
+        "required": [
+          "registry",
+          "package",
+          "refs",
+          "remembered"
+        ],
+        "properties": {
+          "package": {
+            "type": "string",
+            "description": "`owner/repo`."
+          },
+          "refs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ForgeRefDto"
+            }
+          },
+          "registry": {
+            "type": "string"
+          },
+          "remembered": {
+            "type": "boolean",
+            "description": "`false` when this deployment remembers no resolutions at all (no\ndatabase): the panel then says so rather than showing an empty list\nthat reads as \"nothing moves here\"."
+          }
+        }
+      },
+      "ForgeTagDto": {
+        "type": "object",
+        "required": [
+          "name",
+          "sha"
+        ],
+        "properties": {
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "sha": {
+            "type": "string"
+          }
+        }
+      },
+      "ForgeTagsResponse": {
+        "type": "object",
+        "required": [
+          "registry",
+          "package",
+          "tags"
+        ],
+        "properties": {
+          "package": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ForgeTagDto"
+            }
+          }
+        }
       },
       "GateDto": {
         "type": "object",
@@ -17316,6 +20948,141 @@
           "released",
           "always"
         ]
+      },
+      "ImportFailureDto": {
+        "type": "object",
+        "description": "One asset that did not import, named rather than counted.",
+        "required": [
+          "tag",
+          "asset",
+          "error"
+        ],
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "tag": {
+            "type": "string"
+          }
+        }
+      },
+      "ImportRequest": {
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Only run the imports whose `repo` is this one. Absent: every import\nconfigured into the registry."
+          },
+          "tag": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Import this tag instead of what the configuration selects. The only way\nto reach a pre-release deliberately: `latest` will not choose one."
+          }
+        }
+      },
+      "ImportResponse": {
+        "type": "object",
+        "required": [
+          "imported",
+          "skipped",
+          "errors",
+          "failures"
+        ],
+        "properties": {
+          "errors": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "failures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportFailureDto"
+            }
+          },
+          "imported": {
+            "type": "integer",
+            "description": "Assets fetched and published.",
+            "minimum": 0
+          },
+          "skipped": {
+            "type": "integer",
+            "description": "Assets whose version this registry already holds. Not an error: it is\nwhat makes a scheduled import free to re-run.",
+            "minimum": 0
+          }
+        }
+      },
+      "ImportRun": {
+        "type": "object",
+        "description": "One completed run of one configured import.",
+        "required": [
+          "id",
+          "registry",
+          "repo",
+          "started_at",
+          "finished_at",
+          "imported",
+          "skipped",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "failures": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What failed, named rather than counted — the same reason the HTTP report\nlists them: \"3 errors\" is not something an operator can act on."
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "imported": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "registry": {
+            "type": "string",
+            "description": "The registry the versions landed in — what the console groups by."
+          },
+          "repo": {
+            "type": "string",
+            "description": "The source repository. One registry can have several imports configured\ninto it and they fail independently, so a run names which one it was."
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "triggered_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who asked. `None` is the scheduler: an interval that fired has no\noperator behind it, and naming one would be a lie an audit reads."
+          }
+        }
       },
       "InboundEventsResponse": {
         "type": "object",
@@ -17439,6 +21206,61 @@
           "message": {
             "type": "string",
             "description": "Human-readable confirmation of what happened."
+          }
+        }
+      },
+      "MissKind": {
+        "type": "string",
+        "description": "What kind of thing was missing. One table, one column — the same shape\nRFC 0018 uses for its single verdict table with reason codes.",
+        "enum": [
+          "artifact",
+          "document",
+          "checksum",
+          "ref",
+          "unmirrored_host"
+        ]
+      },
+      "MissingResponse": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "per_page",
+          "air_gapped"
+        ],
+        "properties": {
+          "air_gapped": {
+            "type": "boolean",
+            "description": "Whether this instance is actually air-gapped. A connected instance\nanswers with an empty list and this `false`, which is a different\nfact from \"nothing is missing\"."
+          },
+          "empty_registries": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Proxy registries holding no cached artifact at all (RFC 0008 §4.5).\n\nOn an air-gapped instance such a registry answers `503` to\n*everything*, and that is worth saying plainly rather than leaving an\noperator to read it off an empty miss log. Empty on a connected\ninstance, where a registry with no cache is simply one nobody has\nasked for yet."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecordedMiss"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -17733,7 +21555,12 @@
           "package_published",
           "package_yanked",
           "package_unyanked",
-          "package_deleted"
+          "package_deleted",
+          "package_disappeared_upstream",
+          "package_reappeared_upstream",
+          "upstream_unreachable",
+          "verdict_changed",
+          "artifact_released"
         ]
       },
       "NotificationSubscription": {
@@ -17920,6 +21747,99 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "PackageFlag": {
+        "type": "object",
+        "description": "One assertion about a package version, from one source.",
+        "required": [
+          "id",
+          "source",
+          "external_id",
+          "registry",
+          "package_name",
+          "version",
+          "kind",
+          "effect",
+          "summary",
+          "first_seen",
+          "updated_at"
+        ],
+        "properties": {
+          "effect": {
+            "$ref": "#/components/schemas/FlagEffect"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "After this instant the flag is dead without a revoke."
+          },
+          "external_id": {
+            "type": "string",
+            "description": "The source's own id for the flag; `(source, external_id)` is the\nidentity a re-push updates and a revoke names."
+          },
+          "first_seen": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the source first told this proxy: the retroactive line of the\nexposure report."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/FlagKind"
+          },
+          "package_name": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The tombstone: a revoked flag stays for the report and stops judging."
+          },
+          "severity": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Severity",
+                "description": "The severity a `gate` flag is judged at; absent, `High`."
+              }
+            ]
+          },
+          "source": {
+            "type": "string",
+            "description": "The `[[flag_sources]]` entry that pushed it."
+          },
+          "summary": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the source says more."
+          },
+          "version": {
+            "type": "string",
+            "description": "An exact version, or [`ANY_VERSION`]."
           }
         }
       },
@@ -18454,6 +22374,162 @@
         "description": "A non-JSON registry protocol document — `maven-metadata.xml`,\n`updatePlugins.xml`, a PyPI simple-index HTML page, an APT `Release` file, a\nGo `go.mod`, a plain-text token or version list.\n\nAs with [`UpstreamDocument`], the format belongs to the registry protocol.\nThe `Content-Type` header identifies which one.",
         "example": "<registry protocol document>"
       },
+      "Pull": {
+        "type": "object",
+        "description": "One coordinate an identity pulled inside the window.\n\n`user_agent` and `source_ip` are **last seen**, not a distinct set. Both are\nmulti-valued across a window — a runner is redeployed, an agent is upgraded —\nand RFC 0018 §4.2 names them singular. The last value is the one an incident\nacts on (\"where is it pulling from *now*\"); the full set is a different\nreport, and pretending one field carries it would be worse than saying which\none this is.\n\nBoth are **empty for a local or hybrid registry's own downloads**, and that\nis a gap in the recording layer rather than in this aggregation:\n`LocalRegistryService::record_download` builds its event from the `Identity`\nalone, while the proxy path threads the address and agent through\n`ProxyRequest`. Until those two agree, an operator reading this report\nagainst a locally published package sees the columns and no values.",
+        "required": [
+          "registry",
+          "package_name",
+          "first_pull",
+          "last_pull",
+          "count"
+        ],
+        "properties": {
+          "client_user_agent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The User-Agent of the most recent pull, when one was recorded."
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "first_pull": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_pull": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "package_name": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "source_ip": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The address of the most recent pull, when one was recorded."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Absent when the event recorded no version — a whole-package coordinate."
+          }
+        }
+      },
+      "Puller": {
+        "type": "object",
+        "description": "One identity's pulls of one version inside the window.",
+        "required": [
+          "identity",
+          "role",
+          "first_pull",
+          "last_pull",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "first_pull": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "identity": {
+            "type": "string",
+            "description": "The user id, or `ip:<addr>` for an anonymous pull, or `anonymous`\nwhen not even the address was recorded."
+          },
+          "last_pull": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      },
+      "PullersResponse": {
+        "type": "object",
+        "description": "Who pulled one version (RFC 0018 §4.2 *Who pulled what*).",
+        "required": [
+          "registry",
+          "package_name",
+          "version",
+          "since",
+          "pullers"
+        ],
+        "properties": {
+          "package_name": {
+            "type": "string"
+          },
+          "pullers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Puller"
+            }
+          },
+          "registry": {
+            "type": "string"
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The start of the window the rows cover."
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "PullsResponse": {
+        "type": "object",
+        "required": [
+          "identity",
+          "since",
+          "pulls"
+        ],
+        "properties": {
+          "identity": {
+            "type": "string"
+          },
+          "pulls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Pull"
+            }
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The start of the window the rows cover."
+          }
+        }
+      },
+      "PurgeMissingResponse": {
+        "type": "object",
+        "required": [
+          "deleted"
+        ],
+        "properties": {
+          "deleted": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "PurgeResponse": {
         "type": "object",
         "required": [
@@ -18737,6 +22813,41 @@
           "unknown"
         ]
       },
+      "ReasonCode": {
+        "type": "string",
+        "description": "The closed set of reasons a verdict can carry (RFC 0018 §4.2 — this list\nis the master; RFC 0019 adds its ref-level codes here).",
+        "enum": [
+          "MIN_AGE_NOT_MET",
+          "TIMESTAMP_MISSING",
+          "SCAN_PENDING",
+          "SCANNER_ERROR",
+          "SCANNER_UNSUPPORTED",
+          "VULNERABILITY",
+          "MALWARE_SIGNAL",
+          "INSTALL_HOOK",
+          "TYPOSQUAT_SUSPECT",
+          "PUBLISHER_CHANGED",
+          "INSTALL_HOOK_ADDED",
+          "REPOSITORY_MOVED",
+          "DORMANT_RELEASE",
+          "UNPUBLISHED_UPSTREAM",
+          "PROVENANCE_MISSING",
+          "PROVENANCE_INVALID",
+          "PROVENANCE_UNVERIFIABLE",
+          "PROVENANCE_REMOVED",
+          "SIGNATURE_MISSING",
+          "LICENSE_DENIED",
+          "UNTRUSTED_PUBLISHER",
+          "BLOCK_LIST",
+          "SOC_VERDICT",
+          "ADMIN_OVERRIDE",
+          "MUTABLE_REF",
+          "TAG_MOVED",
+          "ASSET_REPLACED",
+          "PINNED_REF_REQUIRED",
+          "RAW_SCRIPT"
+        ]
+      },
       "RecentErrorDto": {
         "type": "object",
         "required": [
@@ -18768,6 +22879,138 @@
             ]
           },
           "version": {
+            "type": "string"
+          }
+        }
+      },
+      "RecheckRequest": {
+        "type": "object",
+        "required": [
+          "registry",
+          "package_name"
+        ],
+        "properties": {
+          "package_name": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "One cached version; absent means every cached version of the name."
+          }
+        }
+      },
+      "RecheckResponse": {
+        "type": "object",
+        "description": "What one probe did (RFC 0014 §4.6).",
+        "required": [
+          "registry",
+          "package_name",
+          "probed",
+          "missing",
+          "inconclusive",
+          "transitions"
+        ],
+        "properties": {
+          "inconclusive": {
+            "type": "integer",
+            "description": "Packages upstream could not answer for.",
+            "minimum": 0
+          },
+          "missing": {
+            "type": "integer",
+            "description": "Packages (or versions of them) upstream denied.",
+            "minimum": 0
+          },
+          "package_name": {
+            "type": "string"
+          },
+          "probed": {
+            "type": "integer",
+            "description": "Packages the probe asked upstream about: one, or zero when nothing\nis cached under the name any more.",
+            "minimum": 0
+          },
+          "registry": {
+            "type": "string"
+          },
+          "status": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UpstreamStatus",
+                "description": "The row after the probe: absent when upstream has the package and no\nmiss is on record."
+              }
+            ]
+          },
+          "transitions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`confirmed` or `reappeared`, one per state change the probe produced.\nEmpty when the row only moved to — or stayed — `missing`, or when\nupstream simply has it."
+          }
+        }
+      },
+      "RecordedMiss": {
+        "type": "object",
+        "description": "A recorded miss, as the admin surface and the next plan read it.",
+        "required": [
+          "registry",
+          "storage_key",
+          "kind",
+          "first_seen",
+          "last_seen",
+          "count"
+        ],
+        "properties": {
+          "coordinate": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many times it was asked for. mise retries; this is the number\nthat tells an operator which gap actually hurts.",
+            "minimum": 0
+          },
+          "first_seen": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "held_versions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "See [`ContentMiss::held_versions`], as of the last request."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MissKind"
+          },
+          "last_seen": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "requested_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "See [`ContentMiss::requested_version`]. The last one asked for, when\nthe requests differed."
+          },
+          "storage_key": {
             "type": "string"
           }
         }
@@ -18916,6 +23159,42 @@
           }
         }
       },
+      "RegistryImports": {
+        "type": "object",
+        "required": [
+          "registry",
+          "imports"
+        ],
+        "properties": {
+          "imports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfiguredImport"
+            }
+          },
+          "registry": {
+            "type": "string"
+          }
+        }
+      },
+      "RegistryImportsResponse": {
+        "type": "object",
+        "required": [
+          "registry",
+          "imports"
+        ],
+        "properties": {
+          "imports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfiguredImport"
+            }
+          },
+          "registry": {
+            "type": "string"
+          }
+        }
+      },
       "RegistryInfo": {
         "type": "object",
         "required": [
@@ -18951,6 +23230,41 @@
               "null"
             ],
             "description": "The upstream this registry proxies (`https://registry.npmjs.org`), or\n`null` for a local-only registry that has none.\n\nThe design proof's catalog caption names it — *\"hybrid ·\nregistry.npmjs.org · 1,284 packages · 6.1 GB cached\"* — because \"which\nupstream is behind this\" is the first thing an operator asks of a\nregistry they did not configure themselves.\n\nVisible to anonymous callers on the same terms as `public_url` above,\nand for the same reason: this endpoint already filters by\n`accessible_registries_for`, so a caller only ever sees registries they\ncan already pull through — and pulling through one reveals the upstream\nanyway, in the artifacts it returns."
+          }
+        }
+      },
+      "RegistryScanState": {
+        "type": "object",
+        "description": "When the SBOM re-scan last covered a registry (RFC 0002 §4.6): a report\nthat cannot say when it last looked is not a report.",
+        "required": [
+          "registry",
+          "last_scan_at",
+          "artifacts_scanned",
+          "findings",
+          "errors"
+        ],
+        "properties": {
+          "artifacts_scanned": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "errors": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "findings": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_scan_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "registry": {
+            "type": "string"
           }
         }
       },
@@ -19129,6 +23443,23 @@
           "file_watcher",
           "admin_request"
         ]
+      },
+      "RescanResponse": {
+        "type": "object",
+        "description": "What a rescan request did.",
+        "required": [
+          "queued",
+          "trigger"
+        ],
+        "properties": {
+          "queued": {
+            "type": "boolean",
+            "description": "`false` when an open job for the coordinate already existed."
+          },
+          "trigger": {
+            "type": "string"
+          }
+        }
       },
       "ResolvedVerb": {
         "type": "object",
@@ -19978,7 +24309,8 @@
           "registry",
           "name",
           "latest_version",
-          "already_cached"
+          "already_cached",
+          "fetch"
         ],
         "properties": {
           "already_cached": {
@@ -19991,6 +24323,10 @@
               "null"
             ]
           },
+          "fetch": {
+            "$ref": "#/components/schemas/FetchOfferDto",
+            "description": "Whether the catalogue may offer **Fetch** on this row (RFC 0007-bis\n§11 q3).\n\nPer row rather than per response: a listing with no registry filter fans\nout across every registry the caller may browse, and `console_fetch` and\nthe kind's own answer are both per registry — so one flag for the page\nwould be wrong for some of its rows."
+          },
           "latest_version": {
             "type": "string"
           },
@@ -19999,6 +24335,35 @@
           },
           "registry": {
             "type": "string"
+          }
+        }
+      },
+      "UpstreamPackageStatus": {
+        "type": "object",
+        "description": "What the audit knows about one package: its rows, whole-package and\nper-version (RFC 0014 §4.6).",
+        "required": [
+          "registry",
+          "package_name",
+          "policy",
+          "rows"
+        ],
+        "properties": {
+          "package_name": {
+            "type": "string"
+          },
+          "policy": {
+            "type": "string",
+            "description": "`audit` or `block`."
+          },
+          "registry": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UpstreamStatusSummary"
+            },
+            "description": "Empty when upstream has it and no miss is on record."
           }
         }
       },
@@ -20040,6 +24405,40 @@
           }
         }
       },
+      "UpstreamRegistryCounts": {
+        "type": "object",
+        "description": "One audited registry's row counts.",
+        "required": [
+          "registry",
+          "missing",
+          "disappeared",
+          "policy",
+          "overridden"
+        ],
+        "properties": {
+          "disappeared": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "missing": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "overridden": {
+            "type": "boolean",
+            "description": "Whether `policy` is the registry's own row rather than the estate's key."
+          },
+          "policy": {
+            "type": "string",
+            "description": "The policy that applies to this registry (RFC 0014 §13 O6): its own\n`on_confirmed` row when it has one, else the page's `policy`."
+          },
+          "registry": {
+            "type": "string"
+          }
+        }
+      },
       "UpstreamSearchResponse": {
         "type": "object",
         "required": [
@@ -20051,6 +24450,182 @@
             "items": {
               "$ref": "#/components/schemas/UpstreamPackageDto"
             }
+          }
+        }
+      },
+      "UpstreamState": {
+        "type": "string",
+        "enum": [
+          "missing",
+          "disappeared"
+        ]
+      },
+      "UpstreamStatus": {
+        "type": "object",
+        "description": "One row of `upstream_status`.",
+        "required": [
+          "registry",
+          "package_name",
+          "state",
+          "first_missed_at",
+          "last_checked_at",
+          "consecutive_misses"
+        ],
+        "properties": {
+          "confirmed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "consecutive_misses": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "first_missed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The upstream error as last seen, for the console. Never parsed."
+          },
+          "package_name": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/UpstreamState"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`None` = the whole package is gone, not one version."
+          }
+        }
+      },
+      "UpstreamStatusPage": {
+        "type": "object",
+        "description": "A page of rows (RFC 0014 §4.6).",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "per_page",
+          "policy",
+          "registries",
+          "counts"
+        ],
+        "properties": {
+          "counts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UpstreamRegistryCounts"
+            },
+            "description": "Per audited registry, how many rows are `missing` and how many\n`disappeared` — the health card's numbers, unfiltered."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UpstreamStatusSummary"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "policy": {
+            "type": "string",
+            "description": "`audit` or `block`: what a confirmation does on this instance. On the\nlisting so a console never has to answer \"check the config file\"."
+          },
+          "registries": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The registries the sweep covers."
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Rows matching the filter, every page included.",
+            "minimum": 0
+          }
+        }
+      },
+      "UpstreamStatusSummary": {
+        "type": "object",
+        "description": "One `upstream_status` row, as the console shows it (RFC 0014 §4.6\n`UpstreamStatusSummary`).",
+        "required": [
+          "registry",
+          "package_name",
+          "state",
+          "first_missed_at",
+          "last_checked_at",
+          "consecutive_misses"
+        ],
+        "properties": {
+          "confirmed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "consecutive_misses": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "first_missed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The upstream's last error, verbatim and bounded; never parsed."
+          },
+          "package_name": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/UpstreamState"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Absent for a whole-package row: every cached version went at once."
           }
         }
       },
@@ -20079,6 +24654,136 @@
             "type": "string"
           }
         }
+      },
+      "Verdict": {
+        "type": "object",
+        "description": "The persisted decision about one version (RFC 0018 §6.1).",
+        "required": [
+          "package",
+          "state",
+          "reason_codes",
+          "findings",
+          "policy_ref",
+          "evaluated_at"
+        ],
+        "properties": {
+          "available_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When a time-bound hold lifts, if this verdict is one."
+          },
+          "evaluated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            }
+          },
+          "last_scanned_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "package": {
+            "$ref": "#/components/schemas/PackageId"
+          },
+          "policy_ref": {
+            "type": "string",
+            "description": "`<registry>/<profile>` — which policy judged it."
+          },
+          "reason_codes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReasonCode"
+            }
+          },
+          "scanners_done": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The scanners that have answered for this version, so \"pending\" is\nderived rather than guessed on every read."
+          },
+          "state": {
+            "$ref": "#/components/schemas/VerdictState"
+          }
+        }
+      },
+      "VerdictListResponse": {
+        "type": "object",
+        "description": "The admin listing: the verdicts of one registry, newest evaluation\nfirst, per state (RFC 0018 §4.2 *CLI*: `batlehub verdicts list`).",
+        "required": [
+          "registry",
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Verdict"
+            }
+          },
+          "registry": {
+            "type": "string"
+          }
+        }
+      },
+      "VerdictResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Verdict"
+          },
+          {
+            "type": "object",
+            "required": [
+              "findings_withheld"
+            ],
+            "properties": {
+              "findings_withheld": {
+                "type": "boolean",
+                "description": "Whether `findings` was withheld for lack of `findings:read`, so a\nclient can tell \"no findings\" from \"not allowed to see them\"."
+              },
+              "ref_kind": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "requested_ref": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "RFC 0019 phase 2 — on a forge, what the ref in the request resolved\nto. `batlehub why github:cli/cli@main` asks about a branch; the\nverdict is keyed on the commit, and these three fields are how the\nanswer says which one."
+              },
+              "resolved_commit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A verdict as the endpoint serves it: the stored row, findings only for a\ncaller with `findings:read`."
+      },
+      "VerdictState": {
+        "type": "string",
+        "description": "What the proxy does with an artifact under this verdict.",
+        "enum": [
+          "allowed",
+          "warned",
+          "quarantined",
+          "denied"
+        ]
       },
       "VersionPageDto": {
         "type": "object",
@@ -20415,12 +25120,24 @@
       "description": "Generic file mirror — path-addressed proxy cache for upstreams with no package protocol (toolchain tarballs, vendor CDNs), restricted by a path_allow allowlist"
     },
     {
+      "name": "proxy/nodedist",
+      "description": "Node distributions (nvm, fnm, n, mise) — the nodejs.org/dist tree as a typed registry: filtered index.tab/index.json listings, per-release tarballs and SHASUMS256.txt byte-exact"
+    },
+    {
+      "name": "proxy/sdkman",
+      "description": "SDKMAN — the candidates API and the download broker as one registry: filtered versions/all, candidates/default and the rendered sdk list table, a blocked version answered `invalid` at candidates/validate, hook scripts relayed byte-exact, the broker's 302 followed server-side and cached"
+    },
+    {
       "name": "front-office",
       "description": "User-facing package information"
     },
     {
       "name": "user",
       "description": "Caller-scoped reads — quota, downloads and advisories for whoever holds the token, never for anyone else"
+    },
+    {
+      "name": "security",
+      "description": "Supply-chain verdicts (RFC 0018) — what a held or warned version is held for, when it lifts, and a rescan request; what `batlehub why` and `batlehub wait` read"
     },
     {
       "name": "explore",

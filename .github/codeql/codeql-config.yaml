@@ -17,16 +17,29 @@ name: BatleHub CodeQL config
 # stays in the analysis; excluding a path because its alerts are inconvenient
 # is how a real finding gets filed under "benchmark noise".
 #
-# There is deliberately **no `query-filters` block here**, and the four standing
+# There is deliberately **no `query-filters` block here**, and the standing
 # `High` alerts on shipped code are not silenced by one. They are dismissed
-# per-alert in Code scanning, on `main`, with the reasoning written down in
-# `docs/internal/codeql-triage-2026-08-30.md`:
+# per-alert in Code scanning, on `main`, with the reasoning written down in the
+# dated `docs/internal/codeql-triage-<date>.md` notes:
 #
 #   - `rust/uncontrolled-allocation-size` on
 #     `crates/web/src/middleware/proxy_trust.rs` — the same `connection_info()`
 #     header copy as the `perf/` pair above, bounded by the same 128 KiB.
+#     (2026-08-30, relocated 2026-09-06.)
 #   - `rust/path-injection` ×3 on `crates/web/src/services/reload/applier.rs` —
 #     the `--config` path, read once at boot; no request-borne route reaches it.
+#     (2026-08-30.)
+#   - `rust/path-injection` ×2 on `cli/src/contract.rs` — `--contract`, the
+#     same CLI-argument-as-path shape, in a binary that is not a service.
+#     (2026-09-06.)
+#   - `rust/uncontrolled-allocation-size` ×3 on
+#     `crates/web/src/services/reload/applier.rs` — the overlay `Vec`'s capacity
+#     hint, sized by the *number* of `--config` flags; the request supplies the
+#     config text, never the overlay list. (2026-09-09.)
+#   - `rust/hardcoded-cryptographic-value` ×3 on `crates/web/tests/flags.rs` and
+#     `crates/web/tests/flag_revoke_canonical.rs` — HMAC fixtures in the
+#     integration suite, one of which exists only to be rejected. Dismissed as
+#     *used in tests*, not as a false positive. (2026-09-09.)
 #
 # A query-filter would have been the easy fix and the wrong one:
 # `rust/path-injection` is a query this codebase needs live, because several

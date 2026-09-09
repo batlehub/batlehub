@@ -2739,3 +2739,1473 @@ fn a_short_coherence_interval_warns() {
     assert_eq!(w.path, "cache_coherence.interval_secs");
     assert!(w.message.contains("30s"), "{}", w.message);
 }
+
+// ── RFC 0010 §4.5: the age gate on a toolchain kind must state the field ─────
+
+/// The validation error for `extra`, or a failure naming what was accepted.
+fn validation_error(extra: &str, what: &str) -> String {
+    match parse_config(extra).validate() {
+        Ok(()) => panic!("{what}"),
+        Err(e) => e.to_string(),
+    }
+}
+
+/// On `nodedist` the field *is* the gate for every release `index.tab` no
+/// longer lists, so inheriting npm's default silently is refused.
+#[test]
+fn an_age_gate_on_nodedist_must_state_deny_missing_timestamp() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "nodedist"
+        name = "node"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 86400
+        "#,
+        "an age gate on nodedist without deny_missing_timestamp must not load",
+    );
+    assert!(err.contains("deny_missing_timestamp"), "{err}");
+    assert!(err.contains("nodedist"), "the error names the kind: {err}");
+    assert!(
+        err.contains("'node'"),
+        "the error names the registry: {err}"
+    );
+}
+
+/// Either value is a legitimate posture; what is refused is not choosing.
+#[test]
+fn an_age_gate_on_nodedist_loads_with_either_value() {
+    for value in ["true", "false"] {
+        let cfg = parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "nodedist"
+        name = "node"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 86400
+        deny_missing_timestamp = {value}
+        "#
+        ));
+        cfg.validate()
+            .unwrap_or_else(|e| panic!("deny_missing_timestamp = {value} must load: {e}"));
+    }
+}
+
+/// A namespace that re-tunes the gate re-inherits the same silent default, so
+/// it is held to the same rule.
+#[test]
+fn a_namespace_age_gate_override_on_nodedist_must_state_the_field_too() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "nodedist"
+        name = "node"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 86400
+        deny_missing_timestamp = false
+
+        [[registries.namespaces]]
+        match = "node"
+
+        [[registries.namespaces.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 0
+        "#,
+        "a namespace override without deny_missing_timestamp must not load",
+    );
+    assert!(err.contains("deny_missing_timestamp"), "{err}");
+}
+
+/// Everywhere else the field stays optional and the default is unchanged.
+#[test]
+fn an_age_gate_elsewhere_keeps_its_optional_default() {
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 3600
+        "#,
+    );
+    cfg.validate().expect("npm needs no explicit value");
+    let RuleConfig::ReleaseAgeGate(gate) = &cfg.registries[0].rules[0] else {
+        panic!("expected the age gate");
+    };
+    assert_eq!(gate.deny_missing_timestamp, None);
+    assert!(!gate.deny_missing_timestamp());
+}
+
+/// The kind itself: proxy-only, and its default upstream is the one the
+/// client uses, so `upstreams` may be omitted.
+#[test]
+fn nodedist_is_proxy_only_and_needs_no_explicit_upstream() {
+    parse_config(
+        r#"
+        [[registries]]
+        type = "nodedist"
+        name = "node"
+        "#,
+    )
+    .validate()
+    .expect("a bare nodedist registry loads");
+
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "nodedist"
+        name = "node"
+        mode = "local"
+        "#,
+        "nodedist has no publish protocol, so local mode must be refused",
+    );
+    assert!(err.contains("not supported for nodedist"), "{err}");
+}
+
+// ── RFC 0010 phase 6: sdkman ─────────────────────────────────────────────────
+
+/// On `sdkman` the field *is* the rule: no artifact ever carries a date.
+#[test]
+fn an_age_gate_on_sdkman_must_state_deny_missing_timestamp() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 86400
+        "#,
+        "an age gate on sdkman without deny_missing_timestamp must not load",
+    );
+    assert!(err.contains("deny_missing_timestamp"), "{err}");
+    assert!(err.contains("sdkman"), "the error names the kind: {err}");
+    assert!(
+        err.contains("no dates at all"),
+        "the error says what the field decides on this kind: {err}"
+    );
+    for value in ["true", "false"] {
+        parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 86400
+        deny_missing_timestamp = {value}
+        "#
+        ))
+        .validate()
+        .unwrap_or_else(|e| panic!("deny_missing_timestamp = {value} must load: {e}"));
+    }
+}
+
+/// Proxy-only, default upstream, and `broker_url` optional.
+#[test]
+fn sdkman_is_proxy_only_and_needs_no_explicit_upstream() {
+    parse_config(
+        r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+        "#,
+    )
+    .validate()
+    .expect("a bare sdkman registry loads");
+
+    parse_config(
+        r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+        upstreams = ["https://api.sdkman.io/2"]
+        broker_url = "https://broker.sdkman.io"
+        "#,
+    )
+    .validate()
+    .expect("both hosts stated loads");
+
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+        mode = "hybrid"
+        "#,
+        "sdkman has no publish protocol, so hybrid mode must be refused",
+    );
+    assert!(err.contains("not supported for sdkman"), "{err}");
+}
+
+/// `broker_url` is SDKMAN's second host and nobody else's; silently ignored
+/// elsewhere it would read as a working option that does nothing.
+#[test]
+fn broker_url_is_refused_off_sdkman_and_must_be_absolute() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        broker_url = "https://broker.sdkman.io"
+        "#,
+        "broker_url on npm must not load",
+    );
+    assert!(err.contains("broker_url"), "{err}");
+    assert!(err.contains("sdkman"), "{err}");
+
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+        broker_url = "broker.sdkman.io"
+        "#,
+        "a relative broker_url must not load",
+    );
+    assert!(err.contains("absolute http(s) URL"), "{err}");
+}
+
+/// `path_allow` means nothing on a typed kind; the existing rule refuses it
+/// on `sdkman` exactly as on `nodedist` (RFC 0010 §13.1).
+#[test]
+fn path_allow_on_sdkman_is_refused() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+        path_allow = ["**"]
+        "#,
+        "path_allow on sdkman must not load",
+    );
+    assert!(err.contains("path_allow"), "{err}");
+}
+
+/// `warm_platforms` names the files warming fetches on the two
+/// platform-addressed kinds; on `sdkman` the set is closed (RFC 0010 §6.9).
+#[test]
+fn warm_platforms_is_checked_on_sdkman_and_refused_elsewhere() {
+    parse_config(
+        r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+
+        [registries.cache]
+        warm_packages = ["java@21.0.5-tem"]
+        warm_platforms = ["linuxx64", "darwinarm64"]
+        "#,
+    )
+    .validate()
+    .expect("two SDKMAN platforms load");
+    parse_config(
+        r#"
+        [[registries]]
+        type = "nodedist"
+        name = "node"
+
+        [registries.cache]
+        warm_platforms = ["linux-x64", "darwin-arm64"]
+        "#,
+    )
+    .validate()
+    .expect("Node's platform tags load");
+
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+
+        [registries.cache]
+        warm_platforms = ["linux-x64"]
+        "#,
+        "a Node spelling is not an SDKMAN platform",
+    );
+    assert!(err.contains("not an SDKMAN platform"), "{err}");
+
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+
+        [registries.cache]
+        warm_platforms = ["linuxx64"]
+        "#,
+        "warm_platforms means nothing on npm",
+    );
+    assert!(err.contains("warm_platforms"), "{err}");
+}
+
+/// An upstream without the `/2` is served as given and warned about.
+#[test]
+fn an_sdkman_upstream_without_the_api_version_is_warned_not_refused() {
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+        upstreams = ["https://sdkman.internal.example"]
+        "#,
+    );
+    cfg.validate().expect("served as given");
+    let warning = cfg
+        .warnings()
+        .into_iter()
+        .find(|w| w.code == warnings::SDKMAN_UPSTREAM_WITHOUT_API_VERSION)
+        .expect("a warning names the upstream");
+    assert_eq!(warning.path, "registries[0].upstreams[0]");
+
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "sdkman"
+        name = "jvm"
+        upstreams = ["https://api.sdkman.io/2/"]
+        "#,
+    );
+    assert!(
+        !cfg.warnings()
+            .iter()
+            .any(|w| w.code == warnings::SDKMAN_UPSTREAM_WITHOUT_API_VERSION),
+        "a trailing slash after the version is not a missing version"
+    );
+}
+
+// ── RFC 0019 §4.3: [registries.refs] and the anonymous-forge warning ─────────
+
+#[test]
+fn refs_is_refused_on_a_registry_that_is_not_a_forge() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+
+        [registries.refs]
+        branch_ttl_secs = 60
+        "#,
+        "[registries.refs] on npm must not load",
+    );
+    assert!(err.contains("refs"), "{err}");
+    assert!(err.contains("npm"), "{err}");
+}
+
+#[test]
+fn a_branch_ttl_below_the_floor_is_refused_and_the_defaults_load() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "github"
+        name = "gh"
+
+        [registries.refs]
+        branch_ttl_secs = 5
+        "#,
+        "a 5-second branch TTL must not load",
+    );
+    assert!(err.contains("branch_ttl_secs"), "{err}");
+
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "forgejo"
+        name = "fj"
+        upstreams = ["https://codeberg.org"]
+
+        [registries.refs]
+        "#,
+    );
+    cfg.validate()
+        .expect("an empty refs block takes the defaults");
+    let refs = cfg.registries[0].refs.as_ref().unwrap();
+    assert_eq!((refs.branch_ttl_secs, refs.tag_ttl_secs), (60, 3600));
+}
+
+#[test]
+fn a_forge_registry_without_a_token_warns_and_one_with_a_token_does_not() {
+    let anonymous = parse_config(
+        r#"
+        [[registries]]
+        type = "github"
+        name = "gh"
+        "#,
+    );
+    assert!(
+        warning_codes(&anonymous).contains(&warnings::FORGE_ANONYMOUS_UPSTREAM.to_owned()),
+        "{:?}",
+        warning_codes(&anonymous)
+    );
+
+    let authenticated = parse_config(
+        r#"
+        [[registries]]
+        type = "github"
+        name = "gh"
+
+        [registries.upstream_auth]
+        type = "bearer"
+        token = "ghp_x"
+        "#,
+    );
+    assert!(!warning_codes(&authenticated).contains(&warnings::FORGE_ANONYMOUS_UPSTREAM.to_owned()));
+
+    let npm = parse_config(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        "#,
+    );
+    assert!(
+        !warning_codes(&npm).contains(&warnings::FORGE_ANONYMOUS_UPSTREAM.to_owned()),
+        "a package registry is not metered like a forge"
+    );
+}
+
+// ── RFC 0018 §4.3: [registries.security] ─────────────────────────────────────
+
+fn security_config(body: &str, extra: &str) -> String {
+    format!(
+        r#"
+{extra}
+        [[registries]]
+        type = "npm"
+        name = "npm"
+
+        [registries.security]
+{body}
+        "#
+    )
+}
+
+#[test]
+fn a_security_section_with_only_mode_loads_with_the_documented_defaults() {
+    let cfg = parse_config(&security_config(r#"        mode = "block""#, ""));
+    cfg.validate().expect("mode alone is a complete profile");
+    let sec = cfg.registries[0].security.as_ref().unwrap();
+    assert_eq!((sec.min_age_secs, sec.mature_age_secs), (86_400, 86_400));
+    assert_eq!(sec.scanners, vec!["osv"]);
+    assert_eq!(sec.required_scanners, vec!["osv"]);
+    assert!(sec.hold_missing_timestamp);
+    let policy = sec.to_policy("npm", &cfg.scanners);
+    assert_eq!(policy.policy_ref, "npm/default");
+    assert_eq!(policy.max_severity, batlehub_core::entities::Severity::High);
+}
+
+#[test]
+fn min_age_below_one_hour_is_refused() {
+    let err = validation_error(
+        &security_config(r#"        min_age_secs = 600"#, ""),
+        "a 10-minute quarantine must not load",
+    );
+    assert!(err.contains("min_age_secs"), "{err}");
+    assert!(err.contains("3600"), "{err}");
+}
+
+#[test]
+fn security_and_a_release_age_rule_on_one_registry_are_refused() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+
+        [registries.security]
+        mode = "block"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 7200
+        "#,
+        "two owners of the age gate must not load",
+    );
+    assert!(err.contains("release_age_gate"), "{err}");
+}
+
+#[test]
+fn an_undeclared_scanner_and_a_required_scanner_outside_scanners_are_refused() {
+    let err = validation_error(
+        &security_config(r#"        scanners = ["osv", "trivy"]"#, ""),
+        "an undeclared scanner must not load",
+    );
+    assert!(err.contains("trivy") && err.contains("[scanners]"), "{err}");
+
+    let err = validation_error(
+        &security_config(
+            r#"        scanners = ["osv"]
+        required_scanners = ["osv", "postmortem"]"#,
+            "",
+        ),
+        "a required scanner that never runs must not load",
+    );
+    assert!(err.contains("required_scanners"), "{err}");
+}
+
+/// RFC 0018 phase 5 (§13.7): the external scanners ship, so declaring one
+/// is accepted — the refusal that used to stand here was "not before it
+/// ships", and it has.
+#[test]
+fn the_phase_5_scanners_load_when_declared() {
+    parse_config(&security_config(
+        r#"        scanners = ["osv", "socket", "mlab"]"#,
+        r#"
+        [scanners.socket]
+        type = "socket"
+        api_key = "k"
+
+        [scanners.mlab]
+        type = "mlab"
+        "#,
+    ))
+    .validate()
+    .expect("the phase-5 scanners are runnable now");
+}
+
+/// RFC 0018 phase 3: the archive and provenance scanners are runnable now.
+#[test]
+fn the_phase_3_scanners_load_when_declared() {
+    parse_config(&security_config(
+        r#"        scanners = ["osv", "trivy", "sigstore"]"#,
+        r#"
+        [scanners.trivy]
+        type = "trivy"
+        endpoint = "http://trivy:4954"
+
+        [scanners.sigstore]
+        type = "sigstore"
+        require_for = ["npm"]
+        "#,
+    ))
+    .validate()
+    .expect("phase-3 scanners load");
+}
+
+#[test]
+fn a_socket_scanner_without_a_key_and_a_bad_command_are_refused() {
+    let err = validation_error(
+        r#"
+        [scanners.socket]
+        type = "socket"
+        "#,
+        "socket without api_key must not load",
+    );
+    assert!(err.contains("api_key"), "{err}");
+
+    let err = validation_error(
+        r#"
+        [scanners.pm]
+        type = "postmortem"
+        command = "/nonexistent/postmortem"
+        "#,
+        "a missing command must not load",
+    );
+    assert!(err.contains("executable"), "{err}");
+
+    parse_config(
+        r#"
+        [scanners.pm]
+        type = "postmortem"
+        command = "/bin/sh"
+        "#,
+    )
+    .validate()
+    .expect("an executable command loads");
+}
+
+#[test]
+fn mature_age_below_min_age_and_an_unknown_severity_are_refused() {
+    let err = validation_error(
+        &security_config(
+            r#"        min_age_secs = 7200
+        mature_age_secs = 3600"#,
+            "",
+        ),
+        "mature before servable is nonsense",
+    );
+    assert!(err.contains("mature_age_secs"), "{err}");
+    let err = validation_error(
+        &security_config(r#"        max_severity = "scary""#, ""),
+        "an unknown severity must not load",
+    );
+    assert!(err.contains("max_severity"), "{err}");
+}
+
+#[test]
+fn an_unsigned_webhook_is_refused_once_any_registry_is_quarantined() {
+    let err = validation_error(
+        &security_config(
+            r#"        mode = "block""#,
+            r#"
+        [notifications]
+        enabled = true
+
+        [[notifications.inbound]]
+        name = "soc"
+        "#,
+        ),
+        "an unsigned webhook beside a quarantine must not load",
+    );
+    assert!(err.contains("secret"), "{err}");
+}
+
+/// A flag source and an inbound webhook must not share a name.
+///
+/// A `security.verdict` event stores its `hard_block` under the webhook's name
+/// as the flag source, and the revoke endpoint authenticates against
+/// `[[flag_sources]]` alone — so a source capped to `gate` would hold the key
+/// that lifts a security feed's `hard_block`.
+#[test]
+fn a_flag_source_may_not_share_a_name_with_an_inbound_webhook() {
+    let blocks = r#"
+        [notifications]
+        enabled = true
+
+        [[notifications.inbound]]
+        name = "soc"
+        secret = "s3cret"
+
+        [[flag_sources]]
+        name = "soc"
+        secret = "other"
+        max_effect = "gate"
+        "#;
+    let err = validation_error(
+        &security_config(r#"        mode = "block""#, blocks),
+        "a name shared by a flag source and an inbound webhook must not load",
+    );
+    assert!(err.contains("notifications.inbound"), "{err}");
+
+    // Distinct names are the whole requirement: the same pair loads.
+    let ok = blocks.replace(
+        r#"[[flag_sources]]
+        name = "soc""#,
+        r#"[[flag_sources]]
+        name = "soc-push""#,
+    );
+    parse_config(&security_config(r#"        mode = "block""#, &ok))
+        .validate()
+        .expect("distinct names load");
+}
+
+#[test]
+fn roles_and_worker_scoping_are_checked() {
+    let err = validation_error(
+        r#"
+        roles = []
+        "#,
+        "an empty roles list must not load",
+    );
+    assert!(err.contains("roles"), "{err}");
+
+    let cfg = parse_config("");
+    assert_eq!(cfg.server.roles, default_roles(), "absent means both");
+
+    let err = validation_error(
+        r#"
+        [worker]
+        registries = ["nope"]
+        "#,
+        "an unknown worker registry must not load",
+    );
+    assert!(err.contains("nope"), "{err}");
+}
+
+#[test]
+fn warn_mode_with_nothing_required_and_a_dateless_kind_warn() {
+    let cfg = parse_config(&security_config(
+        r#"        mode = "warn"
+        required_scanners = []"#,
+        "",
+    ));
+    assert!(warning_codes(&cfg).contains(&warnings::SECURITY_UNPROTECTED.to_owned()));
+
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "deb"
+        name = "deb"
+        upstreams = ["https://deb.debian.org/debian"]
+
+        [registries.security]
+        mode = "block"
+        "#,
+    );
+    assert!(warning_codes(&cfg).contains(&warnings::SECURITY_TIMESTAMP_HOLD_UNAVAILABLE.to_owned()));
+
+    let quiet = parse_config(&security_config(r#"        mode = "block""#, ""));
+    assert!(
+        !warning_codes(&quiet).contains(&warnings::SECURITY_TIMESTAMP_HOLD_UNAVAILABLE.to_owned()),
+        "npm dates its versions"
+    );
+}
+
+// ── RFC 0014 §4.4: [upstream_audit] ──────────────────────────────────────────
+
+fn audit_config(body: &str) -> String {
+    format!(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+
+        [[registries]]
+        type = "npm"
+        name = "mine"
+        mode = "local"
+
+        [upstream_audit]
+{body}
+        "#
+    )
+}
+
+#[test]
+fn an_absent_upstream_audit_block_is_off_with_the_documented_defaults() {
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        "#,
+    );
+    cfg.validate().unwrap();
+    let a = &cfg.upstream_audit;
+    assert!(!a.enabled);
+    assert_eq!(
+        a.on_confirmed, "audit",
+        "the single most important default in RFC 0014"
+    );
+    assert_eq!((a.confirm_after, a.confirm_min_age_secs), (3, 86_400));
+    assert_eq!(a.interval_secs, 21_600);
+    assert!(a.retain_disappeared && a.skip_recently_seen);
+    assert_eq!(cfg.upstream_audit_registries(), vec!["npm"]);
+}
+
+#[test]
+fn the_audited_set_is_every_proxy_or_hybrid_registry_unless_named() {
+    let cfg = parse_config(&audit_config("        enabled = true"));
+    cfg.validate().unwrap();
+    assert_eq!(
+        cfg.upstream_audit_registries(),
+        vec!["npm"],
+        "the local one is never in"
+    );
+    let cfg = parse_config(&audit_config(
+        r#"        enabled = true
+        registries = ["npm"]"#,
+    ));
+    cfg.validate().unwrap();
+    assert_eq!(cfg.upstream_audit_registries(), vec!["npm"]);
+}
+
+#[test]
+fn upstream_audit_rejections() {
+    for (body, needle) in [
+        ("        confirm_after = 0", "confirm_after"),
+        ("        outage_ratio = 0.0", "outage_ratio"),
+        ("        outage_ratio = 1.5", "outage_ratio"),
+        ("        interval_secs = 60", "interval_secs"),
+        (
+            r#"        registries = ["nope"]"#,
+            "not a configured registry",
+        ),
+        (r#"        registries = ["mine"]"#, "local registry"),
+        (
+            r#"        on_confirmed = "blocked""#,
+            "not \"audit\" or \"block\"",
+        ),
+        (r#"        on_confirmed = "block""#, "enabled = false"),
+    ] {
+        let err = validation_error(&audit_config(body), body);
+        assert!(err.contains(needle), "{body}: {err}");
+    }
+}
+
+/// RFC 0014 phase 6: `"block"` is accepted with the audit enabled, and the
+/// one combination §5.4 shows is quietly destructive warns.
+#[test]
+fn on_confirmed_block_is_accepted_and_warns_without_the_hold() {
+    let ok = audit_config(
+        r#"        enabled = true
+        on_confirmed = "block""#,
+    );
+    let cfg = parse_config(&ok);
+    cfg.validate()
+        .expect("block is RFC 0014 phase 6, and it is built");
+    assert_eq!(cfg.upstream_audit.on_confirmed, "block");
+    let codes: Vec<String> = cfg.warnings().iter().map(|w| w.code.clone()).collect();
+    assert!(
+        !codes
+            .iter()
+            .any(|c| c == warnings::UPSTREAM_AUDIT_BLOCK_WITHOUT_HOLD),
+        "the hold is on by default: {codes:?}"
+    );
+
+    let cfg = parse_config(&audit_config(
+        r#"        enabled = true
+        on_confirmed = "block"
+        retain_disappeared = false"#,
+    ));
+    cfg.validate().unwrap();
+    let codes: Vec<String> = cfg.warnings().iter().map(|w| w.code.clone()).collect();
+    assert!(
+        codes
+            .iter()
+            .any(|c| c == warnings::UPSTREAM_AUDIT_BLOCK_WITHOUT_HOLD),
+        "{codes:?}"
+    );
+}
+
+#[test]
+fn a_misspelled_upstream_audit_key_fails_the_load() {
+    let raw = audit_config("        confirm_afer = 3");
+    assert!(
+        crate::load_from_str(&raw).is_err(),
+        "a typo must not silently take the default"
+    );
+}
+
+#[test]
+fn upstream_audit_warnings_name_the_missing_registry_and_the_missing_role() {
+    let cfg = crate::load_from_str(
+        r#"
+        [database]
+        type = "postgresql"
+        url = "postgresql://localhost/test"
+
+        [storage]
+        type = "filesystem"
+        path = "/tmp/batlehub-test"
+
+        [server]
+        roles = ["proxy"]
+
+        [[registries]]
+        type = "npm"
+        name = "mine"
+        mode = "local"
+
+        [upstream_audit]
+        enabled = true
+        "#,
+    )
+    .expect("loads");
+    let ws = cfg.warnings();
+    let codes: Vec<&str> = ws.iter().map(|w| w.code.as_str()).collect();
+    assert!(
+        codes.contains(&warnings::UPSTREAM_AUDIT_NOTHING_TO_AUDIT),
+        "{codes:?}"
+    );
+    assert!(
+        codes.contains(&warnings::UPSTREAM_AUDIT_NO_WORKER),
+        "{codes:?}"
+    );
+    let quiet = parse_config(&audit_config("        enabled = true"));
+    let codes: Vec<String> = quiet.warnings().into_iter().map(|w| w.code).collect();
+    assert!(
+        !codes.iter().any(|c| c.starts_with("upstream-audit")),
+        "{codes:?}"
+    );
+}
+
+// ── RFC 0008 §4.5: the air gap is a promise about the whole instance ──────────
+//
+// Everything that contradicts it is refused at load rather than discovered
+// from a log, and the two things that *narrow* behaviour without breaking it
+// are warnings rather than refusals.
+
+/// A proxy registry plus whatever `extra` adds, with `[air_gap]` on and a
+/// usable key — the shape every rejection below deviates from by one line.
+fn air_gapped_config(extra: &str) -> AppConfig {
+    parse_config(&format!(
+        r#"
+        [air_gap]
+        enabled = true
+        bundle_trusted_keys = ["{key}"]
+
+        [[registries]]
+        type = "npm"
+        name = "npm-mirror"
+        mode = "proxy"
+        upstreams = ["https://registry.npmjs.org"]
+{extra}
+        "#,
+        key = "a".repeat(64),
+    ))
+}
+
+#[test]
+fn an_air_gapped_instance_with_a_usable_key_and_no_egress_is_valid() {
+    air_gapped_config("")
+        .validate()
+        .expect("the ordinary shape");
+}
+
+#[test]
+fn the_section_is_absent_by_default_and_changes_nothing() {
+    let cfg = parse_config("");
+    assert!(cfg.air_gap.is_none());
+    cfg.validate().expect("today's config still validates");
+}
+
+#[test]
+fn an_air_gap_with_no_trusted_key_is_refused() {
+    let err = parse_config(
+        r#"
+        [air_gap]
+        enabled = true
+        "#,
+    )
+    .validate()
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("bundle_trusted_keys"), "{err}");
+    assert!(
+        err.contains("any bundle"),
+        "the message says what an empty list means: {err}"
+    );
+}
+
+#[test]
+fn a_trusted_key_that_is_not_thirty_two_hex_bytes_is_refused_whether_or_not_the_mode_is_on() {
+    for enabled in ["true", "false"] {
+        let err = parse_config(&format!(
+            r#"
+            [air_gap]
+            enabled = {enabled}
+            bundle_trusted_keys = ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5"]
+            "#
+        ))
+        .validate()
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("hex-encoded 32-byte"), "{enabled}: {err}");
+    }
+}
+
+/// The check `signing.trusted_keys` never had. It was parsed at verify time,
+/// so a typo read as "signing is configured" and surfaced as a `502` on the
+/// first download, naming nothing.
+#[test]
+fn a_malformed_signing_key_is_refused_at_load_rather_than_at_the_first_download() {
+    let err = parse_config(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm-mirror"
+        mode = "proxy"
+        upstreams = ["https://registry.npmjs.org"]
+
+        [registries.signing]
+        trusted_keys = ["not-a-key"]
+        "#,
+    )
+    .validate()
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("signing.trusted_keys"), "{err}");
+    assert!(err.contains("npm-mirror"), "the message names it: {err}");
+}
+
+#[test]
+fn an_egress_proxy_and_an_air_gap_together_are_refused_at_both_levels() {
+    let err = parse_config(&format!(
+        r#"
+        [air_gap]
+        enabled = true
+        bundle_trusted_keys = ["{key}"]
+
+        [proxy]
+        url = "http://egress.corp:3128"
+        "#,
+        key = "a".repeat(64),
+    ))
+    .validate()
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("[proxy]"), "{err}");
+
+    let err = air_gapped_config(
+        r#"
+        [registries.proxy]
+        url = "http://egress.corp:3128"
+        "#,
+    )
+    .validate()
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("route off the site"), "{err}");
+}
+
+/// Warming fetches from an upstream this mode guarantees will never be
+/// dialled. Failing at boot beats a startup task logging a connect error per
+/// path, forever.
+#[test]
+fn warming_configured_on_an_air_gapped_instance_is_refused() {
+    for line in [
+        r#"warm_packages = ["lodash"]"#,
+        r#"warm_paths = ["/lodash/-/lodash-4.17.21.tgz"]"#,
+    ] {
+        let err = air_gapped_config(&format!(
+            r#"
+            [registries.cache]
+            {line}
+            "#
+        ))
+        .validate()
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("warming"), "{line}: {err}");
+        assert!(err.contains("bundle"), "it says what to do instead: {err}");
+    }
+}
+
+/// A hybrid registry keeps working — publishing to a disconnected instance is
+/// legitimate — but its fall-through can never happen, so it behaves as a
+/// local registry and an operator should not have to deduce that.
+#[test]
+fn a_hybrid_registry_under_an_air_gap_warns_rather_than_failing() {
+    let cfg = parse_config(&format!(
+        r#"
+        [air_gap]
+        enabled = true
+        bundle_trusted_keys = ["{key}"]
+
+        [[registries]]
+        type = "npm"
+        name = "npm-mirror"
+        mode = "hybrid"
+        upstreams = ["https://registry.npmjs.org"]
+        "#,
+        key = "a".repeat(64),
+    ));
+    cfg.validate().expect("allowed, and warned about");
+    assert!(
+        warning_codes(&cfg).contains(&warnings::AIR_GAP_HYBRID_REGISTRY.to_owned()),
+        "{:?}",
+        warning_codes(&cfg)
+    );
+}
+
+/// Staging a bundle on a *connected* instance is how one is built, so keys
+/// with the mode off are kept — and the warning says they authorise imports
+/// and nothing else.
+#[test]
+fn trusted_keys_without_the_mode_are_kept_and_explained() {
+    let cfg = parse_config(&format!(
+        r#"
+        [air_gap]
+        enabled = false
+        bundle_trusted_keys = ["{key}"]
+        "#,
+        key = "b".repeat(64),
+    ));
+    cfg.validate().expect("valid: this is the staging instance");
+    assert!(warning_codes(&cfg).contains(&warnings::AIR_GAP_KEYS_UNUSED.to_owned()));
+}
+
+/// RFC 0014 §13 O6: the registry-tier `on_confirmed` row, held to the
+/// estate key's own rules.
+#[test]
+fn a_registry_tier_on_confirmed_is_validated_like_the_estate_key() {
+    let with = |registry_line: &str, audit: &str| {
+        format!(
+            r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+{registry_line}
+
+        [[registries]]
+        type = "npm"
+        name = "mine"
+        mode = "local"
+
+        [upstream_audit]
+{audit}
+        "#
+        )
+    };
+    // A proxy registry may say block once the audit sweeps it.
+    let cfg = parse_config(&with(
+        r#"        on_confirmed = "block""#,
+        "        enabled = true",
+    ));
+    cfg.validate()
+        .expect("a registry-tier block under an enabled audit");
+    assert_eq!(cfg.registries[0].on_confirmed.as_deref(), Some("block"));
+    // …and warns without the hold, exactly as the estate key does.
+    let cfg = parse_config(&with(
+        r#"        on_confirmed = "block""#,
+        "        enabled = true\n        retain_disappeared = false",
+    ));
+    cfg.validate().unwrap();
+    let codes: Vec<String> = cfg.warnings().iter().map(|w| w.code.clone()).collect();
+    assert!(
+        codes
+            .iter()
+            .any(|c| c == warnings::UPSTREAM_AUDIT_BLOCK_WITHOUT_HOLD),
+        "{codes:?}"
+    );
+    // Audit is always accepted, sweeping or not.
+    parse_config(&with(
+        r#"        on_confirmed = "audit""#,
+        "        enabled = false",
+    ))
+    .validate()
+    .expect("audit is the default and never a lie");
+
+    // Block with nothing sweeping reads as if blocking were active.
+    let err = parse_config(&with(
+        r#"        on_confirmed = "block""#,
+        "        enabled = false",
+    ))
+    .validate()
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("'npm'") && err.contains("not enabled"),
+        "{err}"
+    );
+    // Block on a registry the audit does not sweep.
+    let err = parse_config(&with(
+        r#"        on_confirmed = "block""#,
+        r#"        enabled = true
+        registries = ["mine-too"]"#,
+    ))
+    .validate()
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("mine-too") || err.contains("not audited"),
+        "{err}"
+    );
+    // A typo never falls back.
+    let err = parse_config(&with(
+        r#"        on_confirmed = "blocked""#,
+        "        enabled = true",
+    ))
+    .validate()
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("\"blocked\"") && err.contains("'npm'"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_local_registry_cannot_say_block() {
+    let text = r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+
+        [[registries]]
+        type = "npm"
+        name = "mine"
+        mode = "local"
+        on_confirmed = "block"
+
+        [upstream_audit]
+        enabled = true
+        "#;
+    let err = parse_config(text).validate().unwrap_err().to_string();
+    assert!(
+        err.contains("'mine'") && err.contains("not audited"),
+        "{err}"
+    );
+}
+
+// ── [registries.vsx_signing] (RFC 0020 §4.3) ───────────────────────────────
+
+#[test]
+fn vsx_signing_is_accepted_on_the_two_kinds_that_speak_the_protocol() {
+    for kind in ["vscode-marketplace", "openvsx"] {
+        let cfg = parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "{kind}"
+        name = "vsx"
+        mode = "local"
+
+        [registries.vsx_signing]
+        seed_hex = "{}"
+        key_id = "2026-09""#,
+            "ab".repeat(32)
+        ));
+        cfg.validate().expect("a key on a VSIX registry is valid");
+        assert!(
+            !cfg.warnings()
+                .iter()
+                .any(|w| w.code == warnings::VSX_SIGNING_PROXY_MODE),
+            "{:?}",
+            cfg.warnings()
+        );
+    }
+}
+
+#[test]
+fn vsx_signing_on_another_kind_is_rejected() {
+    let cfg = parse_config(&format!(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        mode = "local"
+
+        [registries.vsx_signing]
+        seed_hex = "{}""#,
+        "ab".repeat(32)
+    ));
+    let err = cfg.validate().unwrap_err().to_string();
+    assert!(err.contains("vsx_signing"), "{err}");
+    assert!(err.contains("npm"), "{err}");
+}
+
+#[test]
+fn vsx_signing_seed_must_be_a_32_byte_hex_string() {
+    for seed in ["abcd", &"zz".repeat(32), &"ab".repeat(33)] {
+        let cfg = parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "openvsx"
+        name = "vsx"
+        mode = "local"
+
+        [registries.vsx_signing]
+        seed_hex = "{seed}""#
+        ));
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("64 hex characters"), "{seed}: {err}");
+    }
+}
+
+#[test]
+fn vsx_signing_key_id_is_a_path_segment() {
+    for id in ["", "a/b", "with space", "é"] {
+        let cfg = parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "openvsx"
+        name = "vsx"
+        mode = "local"
+
+        [registries.vsx_signing]
+        seed_hex = "{}"
+        key_id = "{id}""#,
+            "ab".repeat(32)
+        ));
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("key_id"), "{id:?}: {err}");
+    }
+}
+
+#[test]
+fn vsx_signing_on_a_proxy_registry_warns_and_is_not_an_error() {
+    let cfg = parse_config(&format!(
+        r#"
+        [[registries]]
+        type = "openvsx"
+        name = "vsx"
+        mode = "proxy"
+
+        [registries.vsx_signing]
+        seed_hex = "{}""#,
+        "ab".repeat(32)
+    ));
+    cfg.validate().expect("a warning, not an error");
+    let w = cfg
+        .warnings()
+        .into_iter()
+        .find(|w| w.code == warnings::VSX_SIGNING_PROXY_MODE)
+        .expect("warning emitted");
+    assert_eq!(w.path, "registries[0].vsx_signing");
+    assert!(w.message.contains("relayed"), "{}", w.message);
+}
+
+// ── Release imports (RFC 0021) ────────────────────────────────────────────────
+
+/// A config with one working import, plus whatever `extra` overrides.
+fn import_config(import: &str) -> String {
+    format!(
+        r#"
+        [[registries]]
+        type = "openvsx"
+        name = "vsx"
+        upstream_url = "https://open-vsx.org"
+        mode = "local"
+
+        [[registries]]
+        type = "github"
+        name = "gh"
+        upstream_url = "https://api.github.com"
+
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        upstream_url = "https://registry.npmjs.org"
+
+{import}
+        "#
+    )
+}
+
+const GOOD_IMPORT: &str = r#"
+        [[release_imports]]
+        into = "vsx"
+        from = "gh"
+        repo = "acme/ext"
+        assets = ["*.vsix"]
+
+        [release_imports.as]
+        user_id = "svc-import"
+        groups = ["config:publishers"]
+"#;
+
+#[test]
+fn a_release_import_of_a_forge_into_a_local_registry_loads() {
+    let cfg = parse_config(&import_config(GOOD_IMPORT));
+    cfg.validate().expect("the worked example loads");
+    assert_eq!(cfg.release_imports.len(), 1);
+    assert_eq!(cfg.release_imports[0].releases, "latest", "the default");
+    assert!(cfg.release_imports[0].interval_secs.is_none());
+}
+
+/// An import is a publish, and a publish into a proxy-mode registry is a 404 at
+/// request time. Refusing at load is the same answer a day earlier.
+#[test]
+fn an_import_into_a_proxy_mode_registry_is_refused() {
+    let err = validation_error(
+        &import_config(&GOOD_IMPORT.replace(r#"into = "vsx""#, r#"into = "npm""#)),
+        "an import into a proxy-mode registry must not load",
+    );
+    assert!(err.contains("proxy-mode"), "{err}");
+}
+
+/// Only three registry kinds serve releases.
+#[test]
+fn an_import_from_something_that_is_not_a_forge_is_refused() {
+    let err = validation_error(
+        &import_config(&GOOD_IMPORT.replace(r#"from = "gh""#, r#"from = "npm""#)),
+        "an import from a package registry must not load",
+    );
+    assert!(err.contains("serve releases"), "{err}");
+}
+
+/// "Every asset" is never what an operator means: a release's checksums and
+/// source tarballs would be published as packages.
+#[test]
+fn an_import_with_no_asset_glob_is_refused() {
+    let err = validation_error(
+        &import_config(&GOOD_IMPORT.replace(r#"assets = ["*.vsix"]"#, "assets = []")),
+        "an import with no globs must not load",
+    );
+    assert!(err.contains("assets is empty"), "{err}");
+}
+
+/// The two rules that do not fail at run time — they *succeed*, at something
+/// wider than the operator asked for. An admin skips the namespace-membership
+/// check outright, and a bare group is indistinguishable from one an identity
+/// provider minted.
+#[test]
+fn a_principal_that_would_widen_silently_is_refused_at_load() {
+    let admin_id = GOOD_IMPORT.replace(r#"user_id = "svc-import""#, r#"user_id = "root""#);
+    let err = validation_error(
+        &format!(
+            r#"
+        [[auth]]
+        type = "token"
+
+        [[auth.tokens]]
+        value = "t"
+        role = "admin"
+        user_id = "root"
+{}"#,
+            import_config(&admin_id)
+        ),
+        "an import running as an admin token must not load",
+    );
+    assert!(err.contains("namespace"), "{err}");
+
+    let bare_group = GOOD_IMPORT.replace(r#"["config:publishers"]"#, r#"["publishers"]"#);
+    let err = validation_error(
+        &import_config(&bare_group),
+        "an unprefixed group must not load",
+    );
+    assert!(err.contains("config:"), "{err}");
+
+    let system = GOOD_IMPORT.replace(r#"user_id = "svc-import""#, r#"user_id = "system""#);
+    let err = validation_error(&import_config(&system), "the reserved id must not load");
+    assert!(err.contains("reserved"), "{err}");
+}
+
+/// The floor is per source registry: the forge's rate limit is spent by the
+/// credential, which belongs to the source and not to any one import.
+#[test]
+fn the_polling_floor_counts_the_imports_that_share_a_source() {
+    let two_per_source = r#"
+        [[release_imports]]
+        into = "vsx"
+        from = "gh"
+        repo = "acme/one"
+        assets = ["*.vsix"]
+        interval_secs = 360
+
+        [release_imports.as]
+        user_id = "svc-import"
+
+        [[release_imports]]
+        into = "vsx"
+        from = "gh"
+        repo = "acme/two"
+        assets = ["*.vsix"]
+        interval_secs = 360
+
+        [release_imports.as]
+        user_id = "svc-import"
+"#;
+    let err = validation_error(
+        &import_config(two_per_source),
+        "two imports over the combined floor must not load",
+    );
+    assert!(err.contains("combined rate"), "{err}");
+
+    // Each one alone is comfortably inside it.
+    let one = two_per_source
+        .split("        [[release_imports]]")
+        .nth(1)
+        .map(|s| format!("        [[release_imports]]{s}"))
+        .unwrap();
+    parse_config(&import_config(&one))
+        .validate()
+        .expect("one import at that interval is fine");
+}
+
+/// A gallery target with no signing key imports extensions a current editor
+/// will not install. Not an error — the import works, the entry arrives — so it
+/// is a warning, at load, where an operator is looking.
+#[test]
+fn an_unsigned_gallery_target_warns() {
+    let cfg = parse_config(&import_config(GOOD_IMPORT));
+    cfg.validate().expect("loads");
+    let warnings = cfg.warnings();
+    let codes: Vec<&str> = warnings.iter().map(|w| w.code.as_str()).collect();
+    assert!(
+        codes.contains(&crate::schema::warnings::RELEASE_IMPORT_UNSIGNED_GALLERY),
+        "{codes:?}"
+    );
+}

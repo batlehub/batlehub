@@ -2,7 +2,7 @@
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Draft — revised 2026-09-02 onto RFC 0018's worker; O2, O4, O6 closed in §13 |
+| Status      | **Implemented** — all nine phases of §12 landed 2026-09-04 (§13.1–§13.4): the sweep, the state machine, the hold, the notifications, the block arm, the admin API, the console and the operations page, each proven in process and by `tests/heavy/upstream_audit.sh` against a served upstream and a real receiver. Revised 2026-09-02 onto RFC 0018's worker |
 | Short       | Upstream disappearance                                        |
 | Settles     | How a package that vanished upstream is detected, held, and reported to the admin |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -363,7 +363,7 @@ alternative is a second event shape for one field.
   "metadata": {
     "first_missed_at": "2026-08-20T04:09:55Z",
     "consecutive_misses": 3,
-    "probe": "version_listing",
+    "probe": "version_listing",   // or "package", "per_version", "artifact" (§13.5)
     "cached_at": "2026-08-11T09:22:31Z",
     "held_from_eviction": true,
     "policy": "block",
@@ -1044,7 +1044,7 @@ Each phase leaves the tree building, clippy-clean and green.
 | 1 | Entity, `UpstreamStatusPort`, migration `039`, Postgres + in-memory adapters, adapter tests. Nothing calls it yet. |
 | 2 | `UpstreamAuditService`: probe ladder, ratio gate, state machine, `SweepReport`, unit tests. Fills in the O2 coverage matrix. Still not wired. |
 | 3 | `UpstreamAuditConfig` + validation + `spawn_upstream_audit` + metrics. **First shippable point**: sweeps run and the state is recorded, visible in logs and `/metrics`. |
-| 4 | The three `NotificationEventType` variants and dispatch on transition. Completes the ask: the admin is notified. |
+| 4 | The three `NotificationEventType` variants of §4.5 — `package_disappeared_upstream`, `package_reappeared_upstream` and the registry-scoped `upstream_unreachable` — and dispatch on transition. Completes the ask: the admin is notified. (The block arm of phase 6 is not a fourth type: it is the `blocked` / `unblocked` field on the same events, §4.5.) |
 | 5 | Eviction hold. **Independently valuable** — it is the only phase that prevents data loss, and it is useful even if the rest never lands. **Precedes phase 6 deliberately**: §5.4 shows `"block"` is quietly destructive without it, so the hold must exist before the policy that needs it. |
 | 6 | `on_confirmed` — the policy enum, the `AdminService` wiring, the conditional unblock, the reconciliation pass, the startup logs. The `"audit"` path is already what phases 1–5 do, so this phase is entirely the `"block"` arm. |
 | 7 | Admin API + OpenAPI + regenerated TypeScript client. |
@@ -1111,10 +1111,281 @@ empty `Vec`.
 | # | Question | Decision |
 | - | -------- | -------- |
 | O1 | Hold the metadata cache too? | Yes, in phase 5: a `disappeared` row pins the metadata key's stale copy, otherwise motivation 3 returns one layer up. |
-| O2 | Which kinds reach rung 1? | Answered by `upstream_detail()`: 9 by document, 4 by listing, 8 cannot (3 forges, 5 path-proxy). The matrix is generated from the enum, not maintained in `docs/internal/`. |
+| O2 | Which kinds reach rung 1? | Answered by `upstream_detail()`: 9 by document, 4 by listing, 8 cannot (3 forges, 5 path-proxy). The matrix is generated from the enum, not maintained in `docs/internal/`. The five path-proxy kinds reach a rung of their own since §13.5 — a `HEAD` per held file. |
 | O3 | Flip `enabled` default? | Later; unchanged. |
 | O4 | `outage_ratio` on three packages | `min_probed = 10` (a constant, not config): below it the ratio gate is skipped and `confirm_after`/`confirm_min_age` carry the decision, **and** `"block"` is refused under the floor — hold and notify only, the event carrying `policy_downgraded: "small_population"`. The one place the population argument is weak is no longer the one place the destructive arm fires. This was the decision the index said was owed before phase 2. |
 | O5 | Block a freed name | RFC 0002 §13 allows a `version = '*'` sentinel on `Opaque` kinds; a package-level confirmation writes it once 0002 lands. Until then, versions only, as written. |
-| O6 | Per-registry `on_confirmed` | RFC 0015's `policy` table already composes per-tier `rules` and `retention`; `on_confirmed` is a registry-tier policy row, deepest wins. No global key. |
+| O6 | Per-registry `on_confirmed` | RFC 0015's `policy` table already composes per-tier `rules` and `retention`; `on_confirmed` is a registry-tier policy row, deepest wins. Landed §13.6 — with the global key kept as the estate tier the row falls back to, not removed: it is what every operator guide and the heavy suite describe, and "absent means the estate's key" is the same rule `visibility` follows. |
 
 Zero remain open.
+
+### 13.1 Phases 1–3 and 5 landed (2026-09-04)
+
+Built and verified: `entities/upstream_status.rs` and the
+`UpstreamStatusPort` under `ports/ops/` (phase 1, migration **053** — the
+next free number by the time it landed — with Postgres and in-memory
+stores, the `''` sentinel converted at the adapter and round-tripped in
+`pg_upstream_status.rs`); `services/upstream_audit/` — the probe ladder
+dispatching on `RegistryKind::upstream_detail()`, the ratio gate with
+`min_probed = 10`, the state machine, `SweepReport` — with the §10 unit
+cases against a recording fake (a voided sweep asserted to have written
+*nothing*, the age floor holding a met count, a clear rather than a
+decrement, whole-package as one row and one transition, the rung-3 cap
+reported, traffic as a free probe, a local registry never in the input)
+(phase 2); `[upstream_audit]` with every §4.4 rejection and the two
+warnings, `spawn_upstream_audit` on the worker role, the §6.10 metrics
+(phase 3); and the eviction hold on TTL, idle and keep-latest-N with held
+keys sorted last in the size cap, `held` on the report, and the metadata
+pin of O1 (phase 5). What differs from the text, each deliberate:
+
+- **The 0018 seam is a scanner that reads, not one that probes.**
+  Decision 29 has the probe "run as an `ArtifactScanner`". A scan is one
+  coordinate, and §5.1's whole argument is that one coordinate's 404 proves
+  nothing — so the sweep stays a sweep (it needs the population), and
+  `UpstreamPresenceScanner` (`upstream-presence`) reads the row the sweep
+  wrote and says `UNPUBLISHED_UPSTREAM` when it is confirmed: `low` under
+  `"audit"`, `high` under `"block"`. A confirmation or reappearance on a
+  `[security]` registry queues a `Rescan` per affected version, which is
+  how the verdict notices. On a registry without the section the row is
+  the whole record until phase 6.
+- **`interval_secs` stays.** §13 said the timer knob goes to `[worker]`;
+  `[worker]` has no cadence — the scan queue is demand-driven — and a sweep
+  needs one. Concurrency did move: it is `[worker].max_concurrent`.
+- **`on_confirmed = "block"` parses and is refused**, naming phase 6, the
+  way `[scanners]` refuses a scanner that has not shipped. The key exists
+  so a config written for the full feature round-trips and a typo is a
+  startup error today rather than a silent `"audit"` later.
+- **The negative-cache seed is not taken.** §13's "a remembered absence is
+  a free first miss" would seed from `UpstreamDetailCoordinator`'s
+  per-process, console-only cache; the sweep's own first miss costs one
+  request and the seed would have made the first confirmation depend on
+  whether someone had opened the console. Left out.
+- **The metadata pin re-stores the entry, it does not read on the serve
+  path.** O1 is met by the sweep re-`set`ting `meta:<coordinate>` with a
+  TTL of two intervals for every `disappeared` version each sweep, so
+  `serve_stale_metadata` keeps answering; `ProxyService` reads none of
+  this, as §6.11 promised.
+- **Phase 6 (the block arm) and 7–9 (API, console, the operations page)
+  are not started.** The config reference carries the section so the keys
+  are documented from the day they parse.
+
+### 13.2 Phase 4 landed (2026-09-04)
+
+The three `NotificationEventType` variants of §4.5 (`as_str`/`FromStr`,
+the console's picker and badge, the CLI's mirror), a `NotificationSink`
+port in `crates/core` — outbound dispatch as the domain sees it, fire and
+forget — implemented over the web crate's `NotificationService`, and
+`UpstreamAuditService::with_notifier`: one event per transition, emitted
+from the sweep after the row is written. Measured by the §10 unit cases
+(one event per *package* on a whole-package confirmation, none on a silent
+miss, `upstream_unreachable` and no package event on a voided sweep, a
+reappearance reported only for a row that had reached `disappeared`), by
+`crates/web/tests/upstream_audit.rs` (a confirmation dispatched through
+`InMemoryNotificationStore` to a `mockito` webhook subscribed to the new
+type and not to one subscribed to `package_published` — the proof the new
+types route through the existing filter), and by `tests/heavy/upstream_audit.sh`:
+a directory the suite serves as an npm registry, `npm install` seeding the
+cache, the packument and tarball removed, two probes confirming, and one
+`package_disappeared_upstream` read back from a receiver the suite runs —
+a real 404, a real state machine and a real HTTP delivery. What differs
+from the text, each deliberate:
+
+- **`recheck` landed here, not in phase 7.** §4.6's `POST
+  /api/v1/admin/upstream/recheck` runs the same ladder and state machine
+  on one package, on demand; the heavy suite needed it because the sweep
+  interval has a five-minute floor and a confirmation takes two. It is a
+  probe, not an override — below the population floor by construction,
+  and it confirms nothing the count and age floors would not. The listing
+  and the per-package status stay in phase 7.
+- **The plan that ordered this phase read §4.5 as two variants and §12 as
+  three;** §4.5 lists three, the third registry-scoped. §12 now says so,
+  and says that phase 6's block is not a fourth type but the `blocked` /
+  `unblocked` field on the same events.
+- **`policy` is reported on every event, `blocked` is `false` until
+  phase 6.** `UpstreamAuditPolicy` gained `on_confirmed` as the enum
+  §4.3 describes, parsed from the string the config already validates.
+- **The path-proxy family cannot be probed.** Rung 3 calls
+  `resolve_metadata`, which for `deb`/`rpm`/`pacman`/`generic`/`jetbrains`
+  answers without asking upstream — so a vanished file reads as *present*,
+  not as inconclusive. O2's "8 cannot reach rung 1" understated it: they
+  reach no rung. The heavy fixture the plan wanted in `pathproxy.sh` is
+  therefore an npm directory instead, and a `HEAD` probe for path kinds
+  is a gap this RFC records rather than closes. *Closed in §13.5.*
+
+### 13.3 Phase 6 landed (2026-09-04)
+
+The block arm. `on_confirmed = "block"` is accepted (§4.4's refusal
+naming this phase is gone; the `enabled = false` refusal stays), and
+`UpstreamAuditService::with_admin` hands the sweep `AdminService` — the
+same pen an admin's block goes through, so a block written here is in
+shape and in the audit trail exactly theirs (§6.5). A version-level
+confirmation blocks that version; a package-level one blocks every held
+version of the name; the row carries §4.3's reason and
+`blocked_by = system:upstream-audit`. A reappearance lifts a block only
+when it is this audit's own, and an admin's — or one this audit wrote and
+an admin then edited — stays, with `unblock_skipped_reason:
+"blocked_by_admin"` on the event and a warning in the log. `blocked` on
+the event is what happened, not what was configured: a failed write says
+`false`. The reconciliation pass of §6.5 runs on every sweep: each
+`disappeared` row whose versions are not all blocked is blocked then, so
+a crash between the status write and the block heals on the next sweep,
+and enabling the policy on an estate with existing confirmed rows blocks
+them on the first. Startup logs the policy once at `INFO`, and
+`"block"` with `retain_disappeared = false` raises
+`upstream-audit.block-without-hold` (§4.4). Measured by the §10 unit
+cases against a block table that *panics* on any write under `"audit"`
+(version-level, package-level, the conditional unblock and the flagged
+admin block, the failed write, the reconciliation on the next sweep and on
+first enabling), by `crates/web/tests/upstream_audit.rs` — after a
+confirmed disappearance in `"block"` mode the npm packument and the NuGet
+flat index omit the version and list it again on reappearance, asserted
+through the protocol endpoints and not `get_status` — by
+`local_npm_registry.rs`'s §6.2 invariant (a hybrid registry's local publish
+records nothing the sweep would read, against a recording artifact-meta
+store), and by `tests/heavy/upstream_audit.sh` under `"block"`: after the
+deletion and the probes, a fresh `npm install` stops at the packument and a
+pinned `npm ci` is answered `403` on the tarball; after the restore and one
+probe both install again. What differs from the text, each deliberate:
+
+- **`on_confirmed` is still one value for the estate.** §13 O6 decided a
+  registry-tier policy row; nothing reads one yet, and the config key is
+  what the heavy suite and the operator guide describe. The row is phase
+  7's to add beside the listing, where the console can show it. *Landed
+  in §13.6.*
+- **The reconciliation reads the held versions from the sweep's own
+  input**, so a package-level row is reconciled against what the cache
+  holds *now*: a version evicted since the confirmation is not blocked
+  after the fact, and one cached since (the hold keeps the others) is.
+
+### 13.4 Phases 7–9 landed (2026-09-04)
+
+The admin API of §4.6 — `GET /api/v1/admin/upstream/disappeared` (filters
+on registry and state, pages by `[limits].packages_per_page`, and carries
+the active policy and per-registry counts so a console never opens the
+config file) and `GET /api/v1/admin/upstream/status/{registry}/{name}`
+(the package's rows, whole-package and per-version; an empty list is
+*present*), beside phase 4's `recheck` — with `openapi_contract.rs`
+unchanged and the TypeScript client regenerated. The console:
+`AdminUpstream.vue` under *Operations → Upstream* (the policy first, the
+filterable table, *Recheck* per row, the first-sweep empty state that says
+why it is empty, and the "not running in this process" state that a `503`
+is), the *Upstream audit* card on `AdminHealth.vue` with the policy and the
+counts, and the badge on the package page's selected version — *missing
+upstream*, *disappeared upstream*, or *blocked by the upstream audit* under
+`"block"` — fetched only for an admin. The docs:
+`docs/operations/upstream-disappearance.md` in the `/operations/` sidebar
+(the loop, the two policies and what a false confirmation costs under each,
+the console, the log and the metrics, what the audit cannot see), and the
+configuration reference's `on_confirmed` row with §7's paragraph on what
+`"block"` costs. Measured by `crates/web/tests/upstream_audit.rs` (the
+listing's shape, filters, pagination, the per-package status, `403` for a
+non-admin, `503` without the audit), `AdminUpstream.test.ts` (each state:
+not running, empty, missing and confirmed rows, the filters on the wire,
+`recheck`'s outcome), `AdminHealth.test.ts` and `PackageDetailPage.test.ts`
+(the card and the badge, absent without the audit), the catalogue test for
+the French strings, and `task docs:audience` / `task docs:structure`. Two
+things differ from the text:
+
+- **The listing sorts newest confirmation first**, then the most recently
+  missed: the row an operator came to see is the one that just happened,
+  and the port has no ordering of its own.
+- **The package badge asks the status endpoint, not the package detail.**
+  §4.6 wanted the badge on the row the detail already renders; threading
+  the audit's rows through `PackageDetailResponse` would have made every
+  package view read the audit table. One more admin-only request on the
+  page that wants it is the cheaper coupling.
+
+With this, every phase of §12 has landed.
+
+### 13.5 The path-addressed kinds, probed per file (2026-09-05)
+
+§13.2 recorded that `deb`, `rpm`, `pacman`, `jetbrains` and `generic` reach
+no rung: their client's `resolve_metadata` answers without asking upstream,
+so a vanished file read as *present*. Closed, on the status page's
+"path-proxy probe" item, by giving them a rung of their own rather than by
+bending rung 3.
+
+- **A path kind has one package and one version.** Every file is filed
+  under `repo/_` with its upstream path as the artifact selector
+  (`generic.rs`, `repo/mod.rs`), so the sweep's "versions" for such a
+  registry were a list of `_`s — one per file, all the same — and a probe
+  per version had nothing to ask about. The audit now carries **the file's
+  path** as the version for these kinds (`held_version`, read off the
+  artifact key `{registry}/repo/_/{path}`), so a status row, an event and
+  a block name the file.
+- **The probe is a `HEAD`.** `RegistryClient::probe_artifact`, default
+  `NotSupported` — a capability gap stays inconclusive — implemented by
+  `PathProxyRegistryClient` as `HEAD {upstream}/{path}` through the same
+  allowlist as a fetch, with a `GET` whose body is dropped when the server
+  answers `405`/`501`. `404` is the file gone; anything but `2xx` is an
+  upstream that did not answer. `probe_package` takes this rung for
+  `is_path_addressed()` kinds, capped at the same 25 per package per sweep
+  and inconclusive on the first failure to answer, as rung 3 is; the
+  event's `probe` is `"artifact"`.
+- **The block lands on the file.** `audit_coordinate` builds
+  `repo/_` *with the path as the artifact* for these kinds — the exact
+  coordinate a request on the file carries, which `BlockListRule` checks
+  first. A block on the bare `repo/_` would have been every file of the
+  registry: the in-process test asserts the sibling file stays served, and
+  the heavy suite reads it off the route. The unblock on reappearance,
+  the reconciliation pass, the metadata pin and the rescan all address the
+  same coordinate. `recheck` with a `version` selects one file by its path.
+- **What did not change.** The population floor counts what is probed —
+  files, here — and the ratio gate reads as before; `upstream_detail()`
+  still says *no package identity to ask about*, because that method is
+  about the console asking upstream for a package held nowhere, which a
+  path kind still cannot do.
+
+**Measured** (`tests/heavy/upstream_audit.sh` §7, 2026-09-05): the
+suite's served directory configured a second time as a `generic` registry
+with `path_allow = ["**"]`; two files fetched through it with `curl`
+(`tarballs/left-pad-1.3.0.tgz` and `left-pad`, both `200`, both held under
+`repo/_`); the tarball removed from the directory. `recheck` on `repo`:
+probed 1, missing 1, no transition, and the served directory's own log
+shows `HEAD /tarballs/left-pad-1.3.0.tgz`; the second `recheck` confirms,
+and the receiver gets `package_disappeared_upstream` with `package_name:
+"repo"`, `version: "tarballs/left-pad-1.3.0.tgz"`, `probe: "artifact"`,
+`policy: "block"`, `blocked: true`. On the wire the file then answers
+`403` and its sibling `200` — the block is the file's, not the
+registry's. Restored, one `recheck` clears the row, the receiver gets
+`package_reappeared_upstream` with `unblocked: true`, and the file is
+`200` again. In process (`crates/core` and `crates/web/tests/upstream_audit.rs`):
+the row is filed under the path, an upstream that refuses the probe is
+inconclusive, `recheck` selects one file by its path, and the sibling
+route is never refused.
+
+### 13.6 The registry-tier `on_confirmed` (2026-09-05)
+
+§13 O6's row, on the status page's last build item. `on_confirmed` is now a
+field of the policy node (`PolicyNode::on_confirmed`, RFC 0015's tier
+model), written at the registry tier from `[registries] on_confirmed` and
+resolved the way `visibility` is: deepest wins, absent means the tier above
+— and the tier above the registry is the estate's `[upstream_audit]` key,
+which stays. O6 said "no global key"; the key is kept as the estate tier
+rather than removed, because it is what the operator guide, the heavy
+suite and every existing config say, and a row that falls back to it is
+the same rule the other scalars follow.
+
+- **Resolved per registry, at apply time.** `UpstreamAuditService::policy_for`
+  reads the registry's tier row off the hot config and falls back to the
+  estate key; the block arm and the reconciliation pass are gated on it,
+  not on whether the pen was handed over — `with_admin` now always keeps
+  `AdminService`, since a registry-tier `"block"` under an estate-wide
+  `"audit"` needs it. The event's `policy` is the one that applied.
+- **Validated like the estate key.** `"block"` on a registry the audit
+  does not sweep — a local registry, one left out of `[upstream_audit]
+  registries`, or any registry when the audit is off — is refused, and a
+  value other than the two is a typo, never a fallback. One `"block"`
+  anywhere with `retain_disappeared = false` raises §5.4's warning.
+- **Shown where the decision is made.** The listing's page carries the
+  estate's `policy` and, per registry, `policy` and `overridden`; a
+  package's status carries its registry's; the console's policy card puts
+  a badge beside a registry whose row differs, so "audit" at the top is
+  never read as "everywhere". The `upstream-presence` scanner's block flag
+  is the registry's too.
+- **Measured** by `tests/heavy/upstream_audit.sh`, whose estate key is
+  now `"audit"` with `on_confirmed = "block"` on both audited registries:
+  every step §13.3 and §13.5 read off the wire — the `403`s, the lifted
+  blocks, the events saying `policy: "block"` — holds under the
+  registry-tier row, and the admin listing reports the estate as `audit`
+  with both registries overridden to `block`.

@@ -91,6 +91,18 @@ const ALL_EVENT_TYPES: NotificationEventType[] = [
   "package_yanked",
   "package_unyanked",
   "package_deleted",
+  // RFC 0014 §4.5 — the upstream audit's three. `upstream_unreachable` is
+  // registry-scoped (its package is `*`), so a subscription with a package
+  // filter never sees it.
+  "package_disappeared_upstream",
+  "package_reappeared_upstream",
+  "upstream_unreachable",
+  // RFC 0018 §4.2 — the verdict pipeline's two. Without them the chip row this
+  // array renders offered no way to subscribe to a verdict flip or a released
+  // hold at all, and `unknownEventTypes` flagged an existing subscription for
+  // either one as a type this console has no chip for.
+  "verdict_changed",
+  "artifact_released",
 ];
 
 const dialogOpen = ref(false);

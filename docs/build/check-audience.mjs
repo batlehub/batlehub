@@ -8,11 +8,15 @@
  * with "point npm at it". A rule with no call site is a rule nobody adopted,
  * which is the finding RFC 0005 kept making about itself.
  *
- * Four assertions. `check-links.mjs` already owns the orphan half — a page in
+ * Five assertions. `check-links.mjs` already owns the orphan half — a page in
  * *no* sidebar — and this owns its mirror image and the counts.
  *
  *   one sidebar     A page listed in two sidebars will be edited for one reader
- *                   and read by the other.
+ *                   and read by the other. Scoped to a locale: `/guide/roadmap`
+ *                   is in the English guide sidebar and in the French one too,
+ *                   because the roadmap is generated from `ROADMAP.md` and is
+ *                   not translated. Those are two lists for two readers, not
+ *                   one page filed twice.
  *
  *   no loops        A "See also" must not point at an index that lists the page
  *                   it is on. Twenty-one registry pages ended with
@@ -28,11 +32,19 @@
  *                   hand had every numbered entry dead, because VitePress
  *                   prefixes a leading digit with `_`.
  *
+ *   locale shape    A French sidebar entry points inside `/fr/`, unless the page
+ *                   it names is one of the three the project decided not to
+ *                   translate. Getting this wrong is invisible in review and a
+ *                   404 in the browser, because VitePress does not fall back.
+ *
  *   node build/check-audience.mjs
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import * as en from "../.vitepress/nav/en.ts";
+import * as fr from "../.vitepress/nav/fr.ts";
 
 const DOCS = fileURLToPath(new URL("..", import.meta.url));
 /**
@@ -52,47 +64,95 @@ const MAX_SIDEBAR = 20;
  * sidebar, and the size cap is a proxy for it that does not apply where the
  * list is an index.
  */
-const CATALOGUE = new Set(["/registries/", "/rfc/"]);
+const CATALOGUE = new Set(["/registries/", "/rfc/", "/fr/registries/"]);
 const HOME_CARDS = 3;
 /** A page with this many links into one directory is an index of it. */
 const INDEX_THRESHOLD = 10;
+
+/**
+ * The locales, and the navigation each one publishes. Imported rather than
+ * scraped out of `config.ts`: these are ordinary modules, `config.ts` imports
+ * the same two, and a regex over a literal that has moved matches nothing and
+ * reports every page as an orphan instead of failing.
+ */
+const LOCALES = [
+  { code: "root", prefix: "/", nav: en.nav, sidebar: en.sidebar },
+  { code: "fr", prefix: "/fr/", nav: fr.nav, sidebar: fr.sidebar },
+];
+
+/**
+ * What the French navigation may point at outside `/fr/`, and why.
+ *
+ * The three spaces the project decided not to translate: `contributing/` and
+ * `rfc/` are read by people changing the code, and the roadmap page is
+ * generated from `ROADMAP.md`, which is canonical and English. Linking them at
+ * their English URL is the decided behaviour — see `nav/fr.ts`. Anything else
+ * outside `/fr/` is a prefix someone forgot.
+ */
+const UNTRANSLATED = [/^\/contributing\//, /^\/rfc\//, /^\/guide\/roadmap$/];
 
 const findings = [];
 const sizes = [];
 const add = (kind, detail) => findings.push({ kind, detail });
 
-/* ── One sidebar per page ─────────────────────────────────────────────────── */
-
-const config = readFileSync(join(DOCS, ".vitepress", "config.ts"), "utf8");
-const sidebars = [...config.matchAll(/^ {6}"(\/[^"]*)": \[$/gm)].map((m) => m[1]);
-
-/** Every `link:` under each sidebar key, keyed by the sidebar it belongs to. */
-const listedIn = new Map(); // link → [sidebar, …]
-for (const key of sidebars) {
-  const start = config.indexOf(`      "${key}": [`);
-  // The last sidebar has no successor to stop at, so it runs to the close of the
-  // object literal instead.
-  const later = sidebars
-    .map((k) => config.indexOf(`      "${k}": [`))
-    .filter((i) => i > start)
-    .sort((a, b) => a - b);
-  const end = later.length > 0 ? later[0] : config.indexOf("\n    },", start);
-  const body = config.slice(start, end);
-  const links = [...body.matchAll(/link:\s*"([^"]+)"/g)].map((m) => m[1]);
-
-  sizes.push(`${key} ${links.length}`);
-  if (links.length > MAX_SIDEBAR && !CATALOGUE.has(key)) {
-    add("sidebar too long", `${key} — ${links.length} links, over ${MAX_SIDEBAR}`);
+/** Every `link:` in a nav tree, however deeply the dropdowns nest. */
+function links(node, acc = []) {
+  if (Array.isArray(node)) {
+    for (const item of node) links(item, acc);
+    return acc;
   }
-  for (const l of links) {
-    if (!listedIn.has(l)) listedIn.set(l, []);
-    listedIn.get(l).push(key);
+  if (node && typeof node === "object") {
+    if (typeof node.link === "string") acc.push(node.link);
+    if (node.items) links(node.items, acc);
   }
+  return acc;
 }
 
-for (const [link, keys] of listedIn) {
-  if (keys.length > 1) {
-    add("two sidebars", `${link} — listed in ${keys.join(" and ")}`);
+/* ── One sidebar per page, within a locale ────────────────────────────────── */
+
+for (const locale of LOCALES) {
+  const listedIn = new Map(); // link → [sidebar key, …]
+
+  for (const [key, tree] of Object.entries(locale.sidebar)) {
+    const entries = links(tree);
+    sizes.push(`${key} ${entries.length}`);
+    if (entries.length > MAX_SIDEBAR && !CATALOGUE.has(key)) {
+      add(
+        "sidebar too long",
+        `${key} — ${entries.length} links, over ${MAX_SIDEBAR}`,
+      );
+    }
+    for (const l of entries) {
+      if (!listedIn.has(l)) listedIn.set(l, []);
+      listedIn.get(l).push(key);
+    }
+  }
+
+  for (const [link, keys] of listedIn) {
+    if (keys.length > 1) {
+      add(
+        "two sidebars",
+        `${link} — listed in ${keys.join(" and ")} (${locale.code})`,
+      );
+    }
+  }
+
+  // A sidebar key and every link under it belong to their locale's prefix. The
+  // exception is deliberate and enumerated: see UNTRANSLATED.
+  if (locale.code === "root") continue;
+  for (const key of Object.keys(locale.sidebar)) {
+    if (!key.startsWith(locale.prefix)) {
+      add("sidebar outside its locale", `${key} — expected ${locale.prefix}…`);
+    }
+  }
+  for (const link of [...links(locale.nav), ...links(Object.values(locale.sidebar))]) {
+    if (!link.startsWith("/") || link.startsWith(locale.prefix)) continue;
+    if (UNTRANSLATED.some((p) => p.test(link))) continue;
+    add(
+      "link outside its locale",
+      `${link} — in the ${locale.code} navigation, and not one of the pages ` +
+        `that stay in English`,
+    );
   }
 }
 
@@ -114,6 +174,9 @@ const urlOf = (file) =>
   "/" + relative(DOCS, file).split(sep).join("/").replace(/(index)?\.md$/, "");
 const textOf = new Map(all.map((f) => [f, readFileSync(f, "utf8")]));
 
+/** The heading a "See also" section carries, in each locale that has pages. */
+const SEE_ALSO = /^## (?:See also|Voir aussi)\n/m;
+
 for (const file of all) {
   const src = textOf.get(file);
   // Split rather than a lazy `[\s\S]*?` with a `(?=^## |\Z)` lookahead: JS has no
@@ -124,7 +187,7 @@ for (const file of all) {
   // element type is `string`, so that comparison reads as always-false to a
   // static analyser (sonar javascript:S3403) even though the index really is
   // out of range on a page with no "See also".
-  const parts = src.split(/^## See also\n/m);
+  const parts = src.split(SEE_ALSO);
   if (parts.length < 2) continue;
   const seeAlso = parts[1].split(/^## /m)[0];
   const here = urlOf(file);
@@ -151,15 +214,23 @@ for (const file of all) {
 
 /* ── The counts, because "we reduced it" is not a test ────────────────────── */
 
-const home = readFileSync(join(DOCS, "index.md"), "utf8");
-const cards = (home.match(/^ {2}- icon:/gm) ?? []).length;
-if (cards !== HOME_CARDS) {
-  add("home page", `${cards} feature cards, expected ${HOME_CARDS}`);
+// One home page per locale, and the same three cards on each: a translation
+// that drops a card is a translation that makes a different argument.
+for (const home of ["index.md", join("fr", "index.md")]) {
+  const src = readFileSync(join(DOCS, home), "utf8");
+  const cards = (src.match(/^ {2}- icon:/gm) ?? []).length;
+  if (cards !== HOME_CARDS) {
+    add("home page", `${home} — ${cards} feature cards, expected ${HOME_CARDS}`);
+  }
 }
 
 for (const file of all) {
   const src = textOf.get(file);
-  if (/^## Table of [Cc]ontents$/m.test(src) || /^\[\[toc\]\]$/m.test(src)) {
+  if (
+    /^## Table of [Cc]ontents$/m.test(src) ||
+    /^## Sommaire$/m.test(src) ||
+    /^\[\[toc\]\]$/m.test(src)
+  ) {
     add("typed table of contents", relative(DOCS, file));
   }
 }
@@ -172,5 +243,6 @@ if (findings.length) {
   process.exit(1);
 }
 console.log(
-  `each page is in one sidebar and no "see also" loops back — ` + sizes.join(" · "),
+  `each page is in one sidebar of its locale and no "see also" loops back — ` +
+    sizes.join(" · "),
 );

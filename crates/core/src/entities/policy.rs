@@ -137,6 +137,11 @@ pub struct PolicyNode {
     /// Gate overrides, keyed by the gate's own name (`release_age`,
     /// `cve_gate`, …). Composes per rule, so this is a map rather than a list.
     pub rules: Vec<RuleOverride>,
+    /// RFC 0014 §13 O6: what the upstream audit does with a confirmed
+    /// disappearance under this node — a scalar, deepest wins, like
+    /// `visibility`. Written at the registry tier (`[registries]
+    /// on_confirmed`); absent means the estate's `[upstream_audit]` key.
+    pub on_confirmed: Option<super::OnConfirmed>,
 }
 
 impl PolicyNode {
@@ -149,6 +154,7 @@ impl PolicyNode {
             versioning: None,
             quota: None,
             rules: Vec::new(),
+            on_confirmed: None,
         }
     }
 }
@@ -238,6 +244,9 @@ pub struct ResolvedPolicy {
     pub quota: Option<QuotaRules>,
     /// Gate overrides, merged per rule across the path.
     pub rules: Vec<RuleOverride>,
+    /// RFC 0014 §13 O6: the audit's policy for a confirmed disappearance
+    /// here, when a tier declared one; `None` is the estate's key.
+    pub on_confirmed: Option<super::OnConfirmed>,
     /// Which node supplied each answer, for `explain` (§4.8) and for the
     /// narrowing warnings. Empty entries mean "the default", not "the registry".
     pub sources: PolicySources,
@@ -267,6 +276,7 @@ pub struct PolicySources {
     pub prerelease_visibility: Option<String>,
     pub versioning: Option<String>,
     pub quota: Option<String>,
+    pub on_confirmed: Option<String>,
     /// Gate name → the node that last set it.
     pub rules: Vec<(String, String)>,
 }
@@ -307,6 +317,10 @@ impl PolicyPath {
             if let Some(q) = &node.quota {
                 out.quota = Some(q.clone());
                 out.sources.quota = Some(node.key.clone());
+            }
+            if let Some(o) = node.on_confirmed {
+                out.on_confirmed = Some(o);
+                out.sources.on_confirmed = Some(node.key.clone());
             }
 
             // ── deepest wins, per rule ───────────────────────────────────────
@@ -453,7 +467,16 @@ impl PolicyPath {
 /// A future gate is exemptible only if it falls on the first side of that
 /// sentence, and **adding it here is the decision** — not a config value someone
 /// can set.
-pub const EXEMPTIBLE_GATES: &[&str] = &["cve_gate", "license_gate"];
+///
+/// `security_verdict` (RFC 0018 §4.1) is the one addition: an exemption on it
+/// overrides a verdict, and the service folds it in as `ADMIN_OVERRIDE` — the
+/// result is `warned`, never `allowed`, so the override stays visible.
+///
+/// `flags` (RFC 0002 §13 decision 4): an exemption on it silences a pushed
+/// flag on one version — on a `[security]` registry through the verdict, on
+/// any other through `FlagsRule`. It replaces the suppress endpoint and the
+/// role bypass RFC 0002 first designed: one mechanism, one audit trail.
+pub const EXEMPTIBLE_GATES: &[&str] = &["cve_gate", "license_gate", "security_verdict", "flags"];
 
 /// A gate exemption, as it is written on a version-tier node.
 ///
@@ -914,5 +937,35 @@ mod tests {
             .path_for("@acme/cards")
             .resolve();
         assert_eq!(resolved, ResolvedPolicy::default());
+    }
+
+    #[test]
+    fn on_confirmed_is_a_scalar_the_deepest_tier_decides_and_absence_is_the_estates() {
+        use super::super::OnConfirmed;
+        let mut registry = PolicyNode::new(Tier::Registry, "registry:npm1");
+        registry.on_confirmed = Some(OnConfirmed::Block);
+        let namespace = PolicyNode::new(Tier::Namespace, "namespace:@acme");
+        let resolved = path(vec![registry.clone(), namespace.clone()]).resolve();
+        assert_eq!(resolved.on_confirmed, Some(OnConfirmed::Block));
+        assert_eq!(
+            resolved.sources.on_confirmed.as_deref(),
+            Some("registry:npm1")
+        );
+
+        let mut deeper = namespace;
+        deeper.on_confirmed = Some(OnConfirmed::Audit);
+        let resolved = path(vec![registry, deeper]).resolve();
+        assert_eq!(resolved.on_confirmed, Some(OnConfirmed::Audit));
+        assert_eq!(
+            resolved.sources.on_confirmed.as_deref(),
+            Some("namespace:@acme")
+        );
+
+        let none = path(vec![PolicyNode::new(Tier::Registry, "registry:npm1")]).resolve();
+        assert_eq!(
+            none.on_confirmed, None,
+            "absent is the estate key, not audit"
+        );
+        assert_eq!(none.sources.on_confirmed, None);
     }
 }

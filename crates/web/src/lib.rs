@@ -139,15 +139,6 @@ impl RegistryMap {
         self.0.entries()
     }
 
-    /// Registry names with the given type.
-    pub fn names_of_type(&self, registry_type: &str) -> Vec<String> {
-        self.entries()
-            .into_iter()
-            .filter(|(_, t)| t == registry_type)
-            .map(|(n, _)| n)
-            .collect()
-    }
-
     /// Replace this map's contents with `other`'s (called by the hot-reload applier).
     pub fn replace_from(&self, other: &Self) {
         self.0.replace_from(&other.0);
@@ -450,6 +441,8 @@ use batlehub_core::{
 use metrics_exporter_prometheus::PrometheusHandle;
 
 pub use handlers::auth::OidcProviderNames;
+pub use handlers::back_office::exposure::ExposureConfig;
+pub use handlers::flags::FlagSources;
 pub use handlers::front_office::cli_download::CliBinaryPath;
 pub use handlers::healthz::{healthz, livez};
 pub use handlers::metrics::prometheus_metrics;
@@ -486,8 +479,11 @@ pub use spa::{configure_spa, narrow_csp, SpaDir};
         (name = "proxy/nuget",      description = "NuGet registry — service index, flat container, registration metadata, .nupkg download, and private package publishing"),
         (name = "proxy/jetbrains-marketplace", description = "JetBrains Marketplace — IDE-facing plugin API (search, compatible updates, meta.json, downloads), updatePlugins.xml custom repository, and marketplace-compatible plugin publishing"),
         (name = "proxy/generic",    description = "Generic file mirror — path-addressed proxy cache for upstreams with no package protocol (toolchain tarballs, vendor CDNs), restricted by a path_allow allowlist"),
+        (name = "proxy/nodedist",   description = "Node distributions (nvm, fnm, n, mise) — the nodejs.org/dist tree as a typed registry: filtered index.tab/index.json listings, per-release tarballs and SHASUMS256.txt byte-exact"),
+        (name = "proxy/sdkman",     description = "SDKMAN — the candidates API and the download broker as one registry: filtered versions/all, candidates/default and the rendered sdk list table, a blocked version answered `invalid` at candidates/validate, hook scripts relayed byte-exact, the broker's 302 followed server-side and cached"),
         (name = "front-office",     description = "User-facing package information"),
         (name = "user",             description = "Caller-scoped reads — quota, downloads and advisories for whoever holds the token, never for anyone else"),
+        (name = "security",         description = "Supply-chain verdicts (RFC 0018) — what a held or warned version is held for, when it lifts, and a rescan request; what `batlehub why` and `batlehub wait` read"),
         (name = "explore",          description = "Package explorer — browse and search across registries"),
         (name = "back-office",    description = "Admin management (requires Admin role)"),
         (name = "notifications",  description = "Inbound webhook receiver — accepts events from external systems"),
@@ -521,7 +517,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
         },
         back_office::{
             access_check::admin_access_check,
-            audit::{audit_log, export_audit_log, purge_audit_log},
+            audit::{audit_log, audit_pulls, export_audit_log, purge_audit_log},
             authz_explain::admin_authz_explain,
             authz_shadow::authz_shadow,
             bulk::{
@@ -565,6 +561,8 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 quota::{
                     get_quota_for_user, list_quota, list_quota_for_registry, reset_quota_for_user,
                 },
+                release_import::{import_registry, list_all_imports, list_registry_imports},
+                upstream::{get_upstream_status, list_disappeared, recheck_upstream},
                 warming::{get_warming_status, warm_registry},
             },
             packages::{
@@ -643,6 +641,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 jbm_update_plugins_xml, jbm_upload,
             },
             maven::{maven_get, maven_put},
+            nodedist::{nodedist_file, nodedist_index_json, nodedist_index_tab},
             npm::{
                 audit_bulk, audit_bulk_legacy, audit_quick, audit_quick_legacy,
                 download_tarball as npm_download_tarball, get_packument, get_version,
@@ -654,7 +653,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 nuget_registration, nuget_search, nuget_service_index, nuget_symbol_publish,
                 nuget_vuln_index, nuget_vuln_page, nuget_yank,
             },
-            openvsx::{download_vsix, vsix_publish},
+            openvsx::{download_vsix, vsix_publish, vsix_signature_attach},
             pypi::{
                 pypi_file_download, pypi_json, pypi_publish, pypi_simple_package, pypi_simple_root,
             },
@@ -667,6 +666,12 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 gem_compact_info, gem_compact_names, gem_compact_versions, gem_download,
                 gem_gemspec, gem_info, gem_publish, gem_specs_full, gem_specs_latest,
                 gem_specs_prerelease, gem_unyank, gem_versions, gem_yank,
+            },
+            sdkman::{
+                sdkman_candidate_default, sdkman_candidates_all, sdkman_candidates_list,
+                sdkman_download, sdkman_healthcheck, sdkman_hook, sdkman_selfupdate,
+                sdkman_selfupdate_version, sdkman_validate, sdkman_versions_all,
+                sdkman_versions_list,
             },
             search::{cargo_search, composer_list, composer_search, npm_search},
             terraform::{
@@ -681,8 +686,9 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
             },
             vsx::{
                 openvsx_extension, openvsx_extension_version, openvsx_file, openvsx_namespace,
-                openvsx_namespace_create, openvsx_publish, openvsx_search, openvsx_version,
-                vsx_asset, vsx_extension_query, vsx_item, vsx_unpkg, vsx_vspackage,
+                openvsx_namespace_create, openvsx_public_key, openvsx_publish, openvsx_search,
+                openvsx_version, vsx_asset, vsx_extension_query, vsx_item, vsx_unpkg,
+                vsx_vspackage,
             },
         },
     };
@@ -725,6 +731,11 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(download_zipball);
     cfg.service(download_raw);
     // GitLab (distinct `/-/` delimiter; most-specific first)
+    // RFC 0019 §4.1 `[api_reads]` — typed, read-only, opt-in. Before the
+    // archive and raw routes so `/tags` is not read as a ref.
+    cfg.service(crate::handlers::proxy::forge_api::forge_tags); // …/{o}/{r}/tags
+    cfg.service(crate::handlers::proxy::forge_api::forge_commit); // …/{o}/{r}/commits/{sha}
+    cfg.service(crate::handlers::proxy::forge_api::forge_branch); // …/{o}/{r}/branches/{name}
     cfg.service(gl_download_link); // …/-/releases/{tag}/downloads/{name}
     cfg.service(gl_get_release); // …/-/releases/{tag}
     cfg.service(gl_list_releases); // …/-/releases
@@ -739,7 +750,30 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(pacman_get); // GET …/pacman/{path}
     cfg.service(jetbrains_get); // GET …/jetbrains/{path} (proxy-only cache)
     cfg.service(generic_get); // GET …/generic/{path}   (proxy-only cache)
-                              // Cargo download (literal "download" suffix)
+                              // Node dist tree (RFC 0010): the two listing documents before the
+                              // `{version}/{file}` artifact route, so `index.tab` is a document
+                              // and never a file; all three before the npm catch-alls below.
+    cfg.service(nodedist_index_tab); // GET …/nodedist/index.tab   (filtered document)
+    cfg.service(nodedist_index_json); // GET …/nodedist/index.json  (filtered document)
+    cfg.service(nodedist_file); // GET …/nodedist/{version}/{file}
+                                // SDKMAN (RFC 0010 phase 6). The literal `candidates/all`,
+                                // `candidates/list`, `candidates/default/{c}` and
+                                // `candidates/validate/…` routes before the
+                                // `candidates/{c}/{plat}/…` ones, so a candidate named
+                                // `default` or `validate` cannot shadow them; every one
+                                // before the npm catch-alls below.
+    cfg.service(sdkman_candidates_all); // GET …/sdkman/candidates/all      (relayed)
+    cfg.service(sdkman_candidates_list); // GET …/sdkman/candidates/list     (relayed)
+    cfg.service(sdkman_candidate_default); // GET …/sdkman/candidates/default/{c}  (filtered, composed)
+    cfg.service(sdkman_validate); // GET …/sdkman/candidates/validate/{c}/{v}/{plat}  (blocked ⇒ invalid)
+    cfg.service(sdkman_versions_all); // GET …/sdkman/candidates/{c}/{plat}/versions/all   (filtered)
+    cfg.service(sdkman_versions_list); // GET …/sdkman/candidates/{c}/{plat}/versions/list  (filtered)
+    cfg.service(sdkman_hook); // GET …/sdkman/hooks/{phase}/{c}/{v}/{plat}  (relayed, byte-exact)
+    cfg.service(sdkman_healthcheck); // GET …/sdkman/healthcheck             (relayed)
+    cfg.service(sdkman_selfupdate_version); // GET …/sdkman/broker/version/sdkman/{component}/{channel}
+    cfg.service(sdkman_selfupdate); // GET …/sdkman/selfupdate/{channel}/{plat}  (relayed)
+    cfg.service(sdkman_download); // GET …/sdkman/broker/download/{c}/{v}/{plat}  (artifact)
+                                  // Cargo download (literal "download" suffix)
     cfg.service(download_crate);
     // Go module proxy (multi-segment module paths — must precede generic packument routes)
     // Vuln DB passthrough: literal /v1/ paths registered before the module wildcard routes.
@@ -874,6 +908,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(vsx_item); // GET  …/vscode/item
                            // OpenVSX/VSCode VSIX publish (PUT) and download (GET) — same path, different method
     cfg.service(vsix_publish);
+    cfg.service(vsix_signature_attach); // PUT …/{ext}/{version}/vsix/signature (RFC 0020 §13.6)
     cfg.service(download_vsix);
     // JetBrains Marketplace — literal-prefix routes, most-specific first; must all
     // precede the shared npm version/packument wildcards below, which would
@@ -913,6 +948,10 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(openvsx_version); // GET …/api/version
     cfg.service(openvsx_publish); // POST …/api/-/publish
     cfg.service(openvsx_search); // GET …/api/-/search
+                                 // RFC 0020 §4.2: `/api/-/public-key/{id}` sits under the same `-` segment
+                                 // as search, and for the same reason is registered before the greedy
+                                 // `api/{ns}/{ext}` route below.
+    cfg.service(openvsx_public_key);
     cfg.service(openvsx_file); // GET …/api/{ns}/{ext}/{v}/file/{name}
     cfg.service(openvsx_extension_version); // GET …/api/{ns}/{ext}/{v}
     cfg.service(openvsx_extension); // GET …/api/{ns}/{ext}
@@ -955,6 +994,13 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(my_quota);
     cfg.service(my_downloads);
     cfg.service(my_advisories);
+    // RFC 0018 phase 2: the verdict endpoint.
+    cfg.service(crate::handlers::security::get_verdict); // GET  /api/v1/verdicts/{registry}/{name}/{version}
+    cfg.service(crate::handlers::security::rescan_verdict); // POST /api/v1/verdicts/{registry}/{name}/{version}/rescan
+    cfg.service(crate::handlers::security::list_pullers); // GET  /api/v1/verdicts/{registry}/{name}/{version}/pullers
+    cfg.service(crate::handlers::security::list_verdicts); // GET  /api/v1/admin/verdicts
+    cfg.service(crate::handlers::security::bulk_rescan); // POST /api/v1/admin/verdicts/rescan
+    cfg.service(crate::handlers::security::backfill_verdicts); // POST /api/v1/admin/verdicts/backfill
     cfg.service(download_cli);
     cfg.service(list_registries);
     // Explore: detail path before list (more specific first); upstream before
@@ -972,6 +1018,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(explore_package_detail);
     cfg.service(explore_upstream_search);
     cfg.service(explore_packages);
+    cfg.service(crate::handlers::front_office::explore::explore_forge_refs); // RFC 0019 §6.5
     cfg.service(explore_registry_stats);
     cfg.service(list_packages);
     cfg.service(check_access);
@@ -990,8 +1037,29 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(export_audit_log); // specific path before parameterised handlers
     cfg.service(audit_log);
     cfg.service(purge_audit_log);
+    // The identity-scoped half of RFC 0018 §4.2, transposing `verdicts pullers`.
+    cfg.service(audit_pulls); // GET /api/v1/audit/pulls
+                              // RFC 0002 (recast): pushed flags and the exposure report.
+    cfg.service(crate::handlers::back_office::exposure::export_exposure); // GET /api/v1/admin/exposure/export
+    cfg.service(crate::handlers::back_office::exposure::exposure_report); // GET /api/v1/admin/exposure
+    cfg.service(crate::handlers::back_office::flags::list_flags); // GET /api/v1/admin/flags
+                                                                  // RFC 0008 §6.4 — the air gap's record, and the sink for a host nothing
+                                                                  // rewrites.
+    cfg.service(crate::handlers::air_gap::list_missing); // GET    /api/v1/admin/air-gap/missing
+    cfg.service(crate::handlers::air_gap::purge_missing); // DELETE /api/v1/admin/air-gap/missing
+    cfg.service(crate::handlers::air_gap::unmirrored_sink); // GET  /_air-gap/unmirrored/{tail}
+    cfg.service(crate::handlers::air_gap::import_bundle); // POST /api/v1/admin/bundle/import
+    cfg.service(crate::handlers::air_gap::list_bundles); // GET  /api/v1/admin/bundle
+    cfg.service(crate::handlers::flags::push_flags); // POST   /api/v1/flags/{source}
+    cfg.service(crate::handlers::flags::revoke_flag); // DELETE /api/v1/flags/{source}/{external_id}
     cfg.service(get_warming_status);
     cfg.service(warm_registry);
+    cfg.service(list_all_imports); // GET, what the console reads
+    cfg.service(list_registry_imports); // GET, one registry
+    cfg.service(import_registry);
+    cfg.service(recheck_upstream); // POST /api/v1/admin/upstream/recheck (RFC 0014 §4.6)
+    cfg.service(list_disappeared); // GET  /api/v1/admin/upstream/disappeared
+    cfg.service(get_upstream_status); // GET  /api/v1/admin/upstream/status/{registry}/{name}
     cfg.service(evict_registry);
     cfg.service(coherence_sweep);
     cfg.service(delete_cached_artifact);
@@ -1408,6 +1476,14 @@ pub fn configure_app(
     // provider and the caller's own CSRF value.
     login_states: Arc<dyn batlehub_core::ports::LoginStateStore>,
     warming_map: WarmingServiceMap,
+    // Target registry → the `[[release_imports]]` configured into it
+    // (RFC 0021). Empty in a deployment that configures none, which is every
+    // deployment until an operator writes the block.
+    release_imports: handlers::back_office::ops::release_import::ReleaseImportMap,
+    // Where a run's history goes. `None` in every in-process test and in a
+    // deployment with no database: a history that is not recorded must not turn
+    // a working import into a failed request.
+    import_history: handlers::back_office::ops::release_import::ImportHistoryHandle,
     eviction_map: EvictionServiceMap,
     proxy_metrics: Arc<ProxyMetrics>,
     prometheus_handle: Option<PrometheusHandle>,
@@ -1460,6 +1536,8 @@ pub fn configure_app(
         cfg.app_data(web::Data::new(login_states.clone()));
         cfg.app_data(web::Data::new(Arc::clone(&refresh_limiter)));
         cfg.app_data(web::Data::new(warming_map.clone()));
+        cfg.app_data(web::Data::new(release_imports.clone()));
+        cfg.app_data(web::Data::new(import_history.clone()));
         cfg.app_data(web::Data::new(eviction_map.clone()));
         cfg.app_data(web::Data::new(proxy_metrics.clone()));
         if let Some(ref h) = prometheus_handle {

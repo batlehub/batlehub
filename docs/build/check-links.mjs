@@ -23,11 +23,23 @@
  *     entry or other page links to is published and unreachable, which is the
  *     same defect as a dead link seen from the other end.
  *
+ *   - VitePress does not know about the second tree. `/fr/` is a translation of
+ *     the site, not a second site, and the two ways it can go wrong are both
+ *     silent: a French page that links `/guide/caching` when
+ *     `/fr/guide/caching` exists drops the reader back into English mid-page,
+ *     and a French page that links `/fr/guide/x` where no translation exists
+ *     is a 404, because VitePress falls back to nothing. The first is checked
+ *     here; the second is the ordinary dead-link check, which resolves
+ *     `/fr/…` against `docs/fr/` like any other path.
+ *
  *   node build/check-links.mjs
  */
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, dirname, resolve, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import * as navEn from "../.vitepress/nav/en.ts";
+import * as navFr from "../.vitepress/nav/fr.ts";
 
 const DOCS = fileURLToPath(new URL("..", import.meta.url));
 const REPO = resolve(DOCS, "..");
@@ -243,12 +255,33 @@ const GENERATED = [
 const findings = [];
 const linkedFromPages = new Set();
 
-/** Nav and sidebar entries. Parsed rather than imported: config.ts is
- *  TypeScript with a Vite plugin in it, and this check must not need a build. */
-const configSrc = readFileSync(join(DOCS, ".vitepress", "config.ts"), "utf8");
-const reachable = new Set(
-  [...configSrc.matchAll(/link:\s*"([^"]+)"/g)].map((m) => m[1]),
-);
+/**
+ * Nav and sidebar entries, from both locales.
+ *
+ * Imported, not scraped. These used to be literals inside `config.ts` and this
+ * check read them with a regex; they are now a module per locale, which
+ * `config.ts` imports too. A regex over a literal that has moved matches
+ * nothing and reports every page in the tree as an orphan — a gate that fails
+ * loudly for the wrong reason is the one thing worse than a gate that passes
+ * quietly for the wrong reason.
+ */
+function navLinks(node, acc = []) {
+  if (Array.isArray(node)) {
+    for (const item of node) navLinks(item, acc);
+    return acc;
+  }
+  if (node && typeof node === "object") {
+    if (typeof node.link === "string") acc.push(node.link);
+    if (node.items) navLinks(node.items, acc);
+  }
+  return acc;
+}
+const reachable = new Set([
+  ...navLinks(navEn.nav),
+  ...navLinks(Object.values(navEn.sidebar)),
+  ...navLinks(navFr.nav),
+  ...navLinks(Object.values(navFr.sidebar)),
+]);
 
 for (const file of markdownFiles(REPO)) {
   const src = readFileSync(file, "utf8");
@@ -268,6 +301,27 @@ for (const file of markdownFiles(REPO)) {
       continue;
     }
     if (target.startsWith("/")) linkedFromPages.add(target.split("#")[0]);
+
+    // A French page linking into the English tree. Legitimate exactly when
+    // there is no French page to link — `contributing/`, `rfc/` and the
+    // generated roadmap are not translated, and the fallback is the decision
+    // recorded in `nav/fr.ts`. It is a defect when the translation exists,
+    // because the reader is then dropped back into English by a link they had
+    // no way to see coming.
+    if (
+      rel.startsWith("docs/fr/") &&
+      target.startsWith("/") &&
+      !target.startsWith("/fr/")
+    ) {
+      const translated = resolveTarget(file, "/fr" + target.split("#")[0]);
+      if (translated.ok) {
+        findings.push({
+          rel,
+          kind: "English link where a translation exists",
+          target: `${target} — say /fr${target.split("#")[0]}`,
+        });
+      }
+    }
 
     // The fragment. A `#` that names no heading lands the reader at the top of
     // the page it was meant to skip to — silently, which is why two of these
@@ -320,7 +374,9 @@ for (const file of pathBearingFiles(REPO)) {
 // link seen from the other end.
 for (const page of publishedPages()) {
   const rel = relative(DOCS, page).split(sep).join("/");
-  if (rel === "index.md") continue; // the home page is the entry point
+  // Each locale's home page is its entry point: nothing links to it because it
+  // is where the reader arrives, and the language switcher moves between them.
+  if (rel === "index.md" || rel === "fr/index.md") continue;
   // A stub is a redirect this host cannot otherwise issue (RFC 0005-bis §6.5).
   // It is deliberately in no sidebar — it exists for an address, not a reader —
   // so it is not an orphan. Its target is checked like any other link above,

@@ -44,10 +44,10 @@ docker run -p 8080:8080 \
 
 ### Pre-built binary
 
-A statically linked `batlehub` binary for Linux is attached to each [GitHub Release](https://github.com/batleforc/batlehub/releases). Download it, make it executable, and run:
+A statically linked `batlehub` binary for Linux is attached to each [GitHub Release](https://github.com/batlehub/batlehub/releases). Download it, make it executable, and run:
 
 ```sh
-curl -L -o batlehub https://github.com/batleforc/batlehub/releases/download/<version>/batlehub
+curl -L -o batlehub https://github.com/batlehub/batlehub/releases/download/<version>/batlehub
 chmod +x batlehub
 ./batlehub --config config.toml
 ```
@@ -61,7 +61,7 @@ The fastest way to get a running instance for local development or evaluation.
 **1. Clone the repository:**
 
 ```sh
-git clone https://github.com/batleforc/batlehub
+git clone https://github.com/batlehub/batlehub
 cd batlehub
 ```
 
@@ -155,50 +155,58 @@ Deploy BatleHub on Kubernetes using the bundled Helm chart.
 
 ```sh
 # Clone the repo (chart is bundled in helm/batlehub/)
-git clone https://github.com/batleforc/batlehub
+git clone https://github.com/batlehub/batlehub
 cd batlehub
 
 helm install batlehub ./helm/batlehub \
   --namespace batlehub \
   --create-namespace \
-  --set database.url="postgresql://batlehub:changeme@postgres-svc:5432/batlehub" \
-  --set "auth.tokens[0].value=my-admin-token" \
-  --set "auth.tokens[0].role=admin" \
-  --set "auth.tokens[0].userId=admin"
+  --set config.database.url="postgresql://batlehub:changeme@postgres-svc:5432/batlehub" \
+  --set "config.auth[0].type=token" \
+  --set "config.auth[0].tokens[0].value=my-admin-token" \
+  --set "config.auth[0].tokens[0].role=admin" \
+  --set "config.auth[0].tokens[0].user_id=admin"
 ```
+
+::: warning
+Every key lives under `config`, which is the object serialised verbatim to
+`config.toml`. Helm accepts a `--set` for a key the chart does not have without
+complaining, so a mistyped path here installs quietly with the defaults — the
+placeholder database and the `change-me-admin-token` admin token. Check what you
+are about to install with `helm template` before `helm install`.
+:::
 
 ### Recommended: values file
 
 Create a `my-values.yaml` for a reproducible installation:
 
 ```yaml
-database:
-  url: "postgresql://batlehub:changeme@postgres-svc:5432/batlehub"
+config:
+  database:
+    type: "postgresql"
+    url: "postgresql://batlehub:changeme@postgres-svc:5432/batlehub"
 
-auth:
-  tokens:
-    - value: "my-admin-token"
-      role: admin
-      userId: admin
+  auth:
+    - type: "token"
+      tokens:
+        - value: "my-admin-token"
+          role: "admin"
+          user_id: "admin"
 
-registriesRaw: |
-  [[registries]]
-  type = "npm"
-  name = "npm"
+  registries:
+    - type: "npm"
+      name: "npm"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
 
-  [registries.rbac]
-  anonymous = ["releases:read", "source:read"]
-  user      = ["releases:read", "source:read"]
-  admin     = ["*"]
-
-  [[registries]]
-  type = "cargo"
-  name = "internal"
-  mode = "local"
-
-  [registries.rbac]
-  user  = ["source:read"]
-  admin = ["*"]
+    - type: "cargo"
+      name: "internal"
+      mode: "local"
+      rbac:
+        user: ["source:read"]
+        admin: ["*"]
 
 ingress:
   enabled: true
@@ -229,39 +237,105 @@ helm upgrade batlehub ./helm/batlehub \
   -f my-values.yaml
 ```
 
-Any change to the values that affects the rendered `config.toml` will automatically trigger a Pod rollout via the `checksum/secret` annotation on the Deployment.
+Any change to the values that affects the rendered `config.toml` triggers a Pod rollout, via the `checksum/config` annotation on both Deployments. The `credentials` layer is deliberately outside that: it has no checksum annotation, so rotating it reloads in place instead. See [A separate config file for the credentials](#helm-credentials).
 
 ### S3 storage
 
 ```yaml
-storage:
-  type: s3
-  s3:
-    bucket: batlehub-artifacts
-    region: us-east-1
-    accessKeyId: "AKIAIOSFODNN7EXAMPLE"
-    secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+config:
+  storage:
+    type: "s3"
+    bucket: "batlehub-artifacts"
+    region: "us-east-1"
+    # endpoint_url and force_path_style are for MinIO, RustFS and the like;
+    # omit both for AWS S3.
 
 persistence:
   enabled: false   # PVC not needed with S3
 ```
 
+The storage block carries no access key, because there is no such field: S3
+credentials come from the standard AWS SDK chain — the pod's IAM role, or
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` supplied through `env` or
+`envFrom`.
+
+```yaml
+envFrom:
+  - secretRef:
+      name: batlehub-s3-credentials   # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+```
+
+### Scan worker (RFC 0018) {#helm-worker}
+
+The scanners that hold an artifact until it has a verdict need toolchains the
+proxy image does not carry, so the chart can run them in a deployment of their
+own. Turn the worker on and take the `worker` role off the proxy:
+
+```yaml
+config:
+  server:
+    roles: ["proxy"]   # the proxy stops scanning
+
+worker:
+  enabled: true
+  replicaCount: 1
+  # gVisor or Kata around the whole pod, on top of bubblewrap around each
+  # scanner. Leave empty when the node has neither.
+  runtimeClassName: ""
+  autoscaling:
+    enabled: false     # needs a metrics adapter, see below
+```
+
+The worker image (`ghcr.io/batleforc/batlehub-worker`) carries every scanner
+but GuardDog. Enabling `[scanners.guarddog]` means pointing
+`worker.image.repository` at `ghcr.io/batleforc/batlehub-worker-guarddog`
+instead, otherwise the scanner is refused when the config loads.
+
+Each scanner runs under bubblewrap, which needs unprivileged user namespaces on
+the node. Where the node forbids them, run the pod under a sandboxed runtime
+class and set `runtime = "none"` in `[worker.sandbox]`.
+
+`worker.autoscaling` renders a HorizontalPodAutoscaler on the external metric
+`batlehub_scan_jobs_queued`, which a metrics adapter such as prometheus-adapter
+or KEDA's Prometheus scaler must expose first. `worker.replicaCount` is ignored
+while it is on.
+
+Only the worker needs egress to upstream artifacts, the Trivy server and Rekor.
+`trivy.enabled` pulls in the Trivy server sub-chart and the endpoint is then
+`http://<release>-trivy:4954`.
+
+Which scanners run, on which registries, and what a scanner error does are all
+config, not chart values: see
+[`[scanners]` and `[worker]`](/guide/configuration#scanners-and-worker).
+
 ### Key values reference
+
+The chart's own `README.md` carries the full table, generated from `values.yaml`
+and kept in step with it by a drift gate. This is the shortlist.
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `image.repository` | `ghcr.io/batleforc/batlehub` | Container image |
 | `image.tag` | Chart appVersion | Image tag |
 | `replicaCount` | `1` | Pod replicas |
-| `database.url` | — | PostgreSQL connection string |
-| `storage.type` | `filesystem` | `filesystem` or `s3` |
-| `auth.tokens` | `[]` | Static token list |
-| `auth.oidc` | `[]` | OIDC provider list |
-| `registriesRaw` | npm example | Raw TOML `[[registries]]` blocks |
+| `config` | see `values.yaml` | The whole application config, serialised verbatim to `config.toml` |
+| `config.database.url` | — | PostgreSQL connection string |
+| `config.storage.type` | `filesystem` | `filesystem` or `s3` |
+| `config.auth` | one static admin token | `[[auth]]` blocks: `token`, `oidc`, `kubernetes`, `actions-oidc` |
+| `config.registries` | npm example | `[[registries]]` blocks |
+| `credentials.enabled` | `false` | Mount a second config file, merged over `config`, from its own Secret |
+| `credentials.existingSecret` | `""` | Use a Secret managed elsewhere instead of one this chart renders |
+| `credentials.config` | `{}` | The contents of that second file, same shape as `config` |
 | `ingress.enabled` | `false` | Create an Ingress resource |
 | `persistence.enabled` | `true` | Create a PVC for cache |
 | `persistence.size` | `10Gi` | PVC capacity |
-| `existingSecret` | `""` | Use a pre-existing Secret for config |
+| `externalManifest[].mount.asConfig` | — | Replace the chart-managed config Secret with one of your own |
+| `worker.enabled` | `false` | Run the scan worker in its own Deployment |
+| `worker.image.repository` | `ghcr.io/batleforc/batlehub-worker` | Worker image; the `-worker-guarddog` variant adds GuardDog |
+| `worker.autoscaling.enabled` | `false` | HPA on the queued-jobs metric |
+| `worker.runtimeClassName` | `""` | Sandboxed runtime class around the worker pod |
+| `trivy.enabled` | `false` | Deploy the Trivy server sub-chart |
+| `networkPolicy.enabled` | `false` | Create a NetworkPolicy for the service |
 
 ### Injecting secrets via environment variables {#helm-env-vars}
 
@@ -341,6 +415,75 @@ If a placeholder references a variable that is not set in the container, BatleHu
 
 ---
 
+### A separate config file for the credentials {#helm-credentials}
+
+The placeholders above put one secret in one field. When whole *sections* belong
+to a different lifecycle — the database URL, the `[[auth]]` block, a registry's
+upstream token — the second config file is the better fit: the chart mounts it
+from its own Secret, and `--config` merges it over the main one.
+
+```yaml
+# my-values.yaml
+config:
+  # Everything that is not a secret, rendered into the chart-managed Secret.
+  registries:
+    - type: "npm"
+      name: "internal-npm"
+      upstreams:
+        - "https://registry.corp.example.com/npm"
+
+credentials:
+  enabled: true
+  config:
+    database:
+      type: "postgresql"
+      url: "postgresql://batlehub:the-real-password@postgres:5432/batlehub"
+    auth:
+      - type: "token"
+        tokens:
+          - value: "the-real-admin-token"
+            role: "admin"
+            user_id: "admin"
+    # Merged onto the registry declared above, matched by `name` — the upstream
+    # list is not restated.
+    registries:
+      - name: "internal-npm"
+        upstream_auth:
+          type: "bearer"
+          token: "npat-xxxxxxxxxxxx"
+```
+
+Three things follow from this that are worth knowing before you rely on it:
+
+- **Rotating the credentials Secret does not roll the pods.** The kubelet
+  updates the mounted file in place and the config file watcher picks the change
+  up. Nothing in the chart puts a `checksum/` annotation on this Secret, on
+  purpose — a rollout is exactly what hot reload is there to avoid.
+- **The console's config editor never sees it.** The editor reads and rewrites
+  the first layer only, so a file holding credentials is not served to a browser
+  and cannot be overwritten from one. What the editor validates and diffs is
+  still the merged config.
+- **Arrays merge on `name`, not by position.** That is what lets the block above
+  add a token to one registry without restating the other twenty. The rules in
+  full are in
+  [Layered config files](/guide/configuration#layered-config-files).
+
+To keep the credentials out of Helm entirely, point at a Secret something else
+manages and leave `credentials.config` empty:
+
+```yaml
+credentials:
+  enabled: true
+  existingSecret: batlehub-credentials   # from ESO, Sealed Secrets, Vault Agent
+  key: credentials.toml
+```
+
+The chart then renders no Secret of its own and mounts that one. Its `key` must
+hold a TOML document — the same shape as `config`, and only the parts you want
+kept separate.
+
+---
+
 ### Using an external secret (GitOps / Sealed Secrets)
 
 If you manage secrets externally (Sealed Secrets, External Secrets Operator, Vault), create the Secret yourself:
@@ -378,13 +521,28 @@ stringData:
     anonymous = ["releases:read", "source:read"]
 ```
 
-Then install the chart with `existingSecret`:
+Then tell the chart to mount it as the config, with an `externalManifest` entry
+that carries no `manifest` of its own — nothing is rendered, the Secret is only
+referenced:
+
+```yaml
+# my-values.yaml
+externalManifest:
+  - name: batlehub-config
+    kind: Secret
+    mount:
+      asConfig: true
+      items:
+        - key: config.toml
+          path: config.toml
+```
 
 ```sh
-helm install batlehub ./helm/batlehub \
-  --namespace batlehub \
-  --set existingSecret=batlehub-config
+helm install batlehub ./helm/batlehub --namespace batlehub -f my-values.yaml
 ```
+
+At most one entry may set `asConfig`. A `credentials` layer still works
+alongside it, and is merged over whatever that Secret carries.
 
 ---
 

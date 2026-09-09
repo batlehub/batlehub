@@ -31,6 +31,8 @@ and to what your organisation has actually agreed with its own users.
   company.
 - **[What leaves this instance](/operations/egress)** — every outbound request
   this server makes, what starts it, and how to stop it.
+- **[The scan worker](/operations/scan-worker)** — the role that scans what the
+  proxy is about to serve: the queue, the sandbox, and what a held install means.
 
 ## Compliance
 

@@ -58,7 +58,13 @@ pub async fn extension_entry(
             // The local path is already filtered: `get_openvsx_versions` goes
             // through `load_visible_versions_or_not_found`, which runs
             // `filter_unlisted → filter_blocked → filter_for_identity`.
-            Ok(versions) => return Ok(GalleryEntry::from_local(&versions)),
+            Ok(versions) => {
+                let mut entry = GalleryEntry::from_local(&versions);
+                if let Some(e) = entry.as_mut() {
+                    apply_registry_key(local_svc, registry, e).await;
+                }
+                return Ok(entry);
+            }
             Err(CoreError::NotFound(_)) if mode == RegistryMode::Hybrid => {}
             Err(CoreError::NotFound(_)) => return Ok(None),
             Err(e) => return Err(AppError::from(e)),
@@ -72,8 +78,8 @@ pub async fn extension_entry(
         package_id: PackageId::new(registry, extension_id, "latest"),
         identity: identity.0.clone(),
         action: Action::SourceRead.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
     };
     let meta = match svc.resolve_metadata_for(&req).await {
         Ok(m) => m,
@@ -131,27 +137,10 @@ pub async fn search_entries(
         return Ok((paginate(found, query), total));
     }
 
-    let mut entries = Vec::new();
-    if matches!(mode, RegistryMode::Local | RegistryMode::Hybrid) {
-        authorize_gallery_read(svc, registry, "__search__", identity).await?;
-        let local = local_svc
-            .get_openvsx_extensions(
-                registry,
-                query.search_text.as_deref().unwrap_or(""),
-                &identity.0,
-            )
-            .await
-            .map_err(AppError::from)?;
-        // One group per extension, carrying every visible version — an entry
-        // built from the newest version alone would answer a uuid lookup with a
-        // one-version history, and the editor needs the whole list to fall back
-        // from a pre-release to the last release.
-        for versions in local {
-            if let Some(e) = GalleryEntry::from_local(&versions) {
-                entries.push(e);
-            }
-        }
-    }
+    let mut entries = match matches!(mode, RegistryMode::Local | RegistryMode::Hybrid) {
+        false => Vec::new(),
+        true => local_entries(svc, local_svc, registry, query, identity).await?,
+    };
 
     // Upstream search is deliberately not implemented for the free-text case
     // yet: forwarding an `extensionquery` verbatim and re-rendering it is the
@@ -172,6 +161,42 @@ pub async fn search_entries(
     sort_entries(&mut entries, query);
     let total = entries.len();
     Ok((paginate(entries, query), total))
+}
+
+/// Every locally published extension the search text matches.
+///
+/// One group per extension, carrying every visible version — an entry built
+/// from the newest version alone would answer a uuid lookup with a
+/// one-version history, and the editor needs the whole list to fall back from
+/// a pre-release to the last release.
+async fn local_entries(
+    svc: &Arc<ProxyService>,
+    local_svc: &Arc<LocalRegistryService>,
+    registry: &str,
+    query: &GalleryQuery,
+    identity: &AuthIdentity,
+) -> Result<Vec<GalleryEntry>, AppError> {
+    authorize_gallery_read(svc, registry, "__search__", identity).await?;
+    let local = local_svc
+        .get_openvsx_extensions(
+            registry,
+            query.search_text.as_deref().unwrap_or(""),
+            &identity.0,
+        )
+        .await
+        .map_err(AppError::from)?;
+    let key_id = registry_key_id(local_svc, registry).await;
+    let mut entries = Vec::new();
+    for versions in local {
+        let Some(mut e) = GalleryEntry::from_local(&versions) else {
+            continue;
+        };
+        if let Some(id) = &key_id {
+            e.sign_locally(id);
+        }
+        entries.push(e);
+    }
+    Ok(entries)
 }
 
 /// Run the registry's rule chain before a local read.
@@ -276,6 +301,26 @@ async fn filter_blocked(
     }
 }
 
+/// The id of this registry's VSIX signing key, when it holds one
+/// (`[registries.vsx_signing]`, RFC 0020).
+async fn registry_key_id(local_svc: &LocalRegistryService, registry: &str) -> Option<String> {
+    super::signing::registry_key(local_svc, registry)
+        .await
+        .map(|k| k.key_id().to_owned())
+}
+
+/// RFC 0020 §5.1's local branch: every version this registry holds is signed
+/// by its key, so every version advertises the signature and the key.
+async fn apply_registry_key(
+    local_svc: &LocalRegistryService,
+    registry: &str,
+    entry: &mut GalleryEntry,
+) {
+    if let Some(id) = registry_key_id(local_svc, registry).await {
+        entry.sign_locally(&id);
+    }
+}
+
 /// Build an entry from the metadata an adapter resolved.
 ///
 /// Both adapters populate `PackageMetadata.extra`; OpenVSX's is the richer of
@@ -323,6 +368,14 @@ fn entry_from_metadata(
             extension_pack: Vec::new(),
             extension_dependencies: Vec::new(),
             pre_release: false,
+            // RFC 0020 §5.1's relay branch: the upstream signed it, this
+            // registry advertises the archive at its own route and fetches
+            // it on request. Never re-signed.
+            signature: (meta.is_signed == Some(true)).then(|| {
+                super::render::SignatureSource::Upstream {
+                    public_key: s("public_key_url").is_some(),
+                }
+            }),
         }],
         upstream: None,
     })

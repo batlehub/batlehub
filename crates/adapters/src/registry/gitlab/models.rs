@@ -9,8 +9,21 @@ use super::client::GitlabRegistryClient;
 #[derive(Debug, Deserialize)]
 pub(super) struct GlRelease {
     pub tag_name: String,
+    /// RFC 0019 decision 8 — GitLab collects a JSON "evidence" blob per
+    /// release and signs nothing. Confirmed against gitlab.com on
+    /// 2026-09-04: `[{sha, filepath, collected_at}]`. It exists, it cannot be
+    /// cryptographically verified, and it is the **only** source in this
+    /// codebase that reports `Unverifiable`.
+    #[serde(default)]
+    pub evidences: Vec<serde_json::Value>,
     /// GitLab uses `released_at` (not `published_at`).
     pub released_at: Option<String>,
+    /// GitLab's own name for the idea GitHub calls a pre-release: a release
+    /// whose `released_at` is in the future. There is no draft — GitLab
+    /// removed them — so an import reads this as "not the default download"
+    /// and nothing as a draft (RFC 0021 §11 q5).
+    #[serde(default)]
+    pub upcoming_release: bool,
     #[serde(default)]
     pub assets: GlAssets,
 }
@@ -35,6 +48,62 @@ pub(super) struct GlLink {
 pub(super) struct GlSource {
     pub format: String,
     pub url: String,
+}
+
+// ── Refs, tags, commits and branches (RFC 0019 phase 4) ───────────────────────
+//
+// Shapes confirmed against gitlab.com on 2026-09-04, on `gitlab-org/cli`:
+//
+// * `/repository/tags/{tag}` → `{name, message, target, created_at,
+//   commit:{id, committed_date, committer_name, committer_email, ...}}`.
+//   `target` is the tag object for an annotated tag and the commit for a
+//   lightweight one; `created_at` is the tag's own date when annotated.
+// * `/repository/commits/{sha}` → `{id, committed_date, committer_name,
+//   committer_email, ...}` — flat, unlike GitHub's nested `commit.committer`.
+// * `/repository/branches/{name}` → `{name, commit:{id, committed_date,
+//   committer_name, committer_email}}`.
+// * `/repository/commits/{sha}/signature` → `404 {"message":"404 Signature
+//   Not Found"}` on an unsigned commit; the endpoint exists, and its absence
+//   is the answer rather than an error.
+
+/// One commit as GitLab's repository API returns it — flat, with the person
+/// as two strings rather than an object.
+#[derive(Debug, Deserialize)]
+pub(super) struct GlCommit {
+    pub id: String,
+    #[serde(default)]
+    pub committed_date: Option<String>,
+    #[serde(default)]
+    pub committer_name: Option<String>,
+    #[serde(default)]
+    pub committer_email: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct GlTag {
+    pub name: String,
+    /// The tag's own creation date; present for an annotated tag.
+    #[serde(default)]
+    pub created_at: Option<String>,
+    pub commit: GlCommit,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct GlBranch {
+    pub commit: GlCommit,
+}
+
+/// `/repository/commits/{sha}/signature`, when there is one. GitLab answers
+/// `404` when the commit is unsigned, so this type is only ever built from a
+/// `200`.
+#[derive(Debug, Deserialize)]
+pub(super) struct GlSignature {
+    /// `PGP`, `X509`, `SSH`.
+    #[serde(default)]
+    pub signature_type: Option<String>,
+    /// `verified`, `unverified`, `unknown_key`, `unverified_key`, …
+    #[serde(default)]
+    pub verification_status: Option<String>,
 }
 
 impl GitlabRegistryClient {

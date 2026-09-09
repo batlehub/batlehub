@@ -98,6 +98,28 @@ fn build_integrity_map(registries: &[RegistryConfig]) -> HashMap<String, Integri
     )
 }
 
+/// RFC 0020 §4.1: the VSIX signing key per registry that configured one. A
+/// seed `validate()` let through and this cannot read is a bug, not a
+/// configuration error, and is reported as one.
+fn build_vsx_signing_map(
+    registries: &[RegistryConfig],
+) -> anyhow::Result<HashMap<String, Arc<batlehub_core::services::signature::VsxSigningKey>>> {
+    let mut out = HashMap::new();
+    for reg in registries {
+        if let Some(cfg) = &reg.vsx_signing {
+            let key = batlehub_core::services::signature::VsxSigningKey::from_seed_hex(
+                &cfg.seed_hex,
+                cfg.key_id.as_deref(),
+            )
+            .map_err(|e| {
+                anyhow::anyhow!("building the VSIX signing key for '{}': {e}", reg.name)
+            })?;
+            out.insert(reg.name.clone(), Arc::new(key));
+        }
+    }
+    Ok(out)
+}
+
 fn build_signing_map(registries: &[RegistryConfig]) -> HashMap<String, CoreSigningConfig> {
     map_registries(
         registries,
@@ -164,6 +186,109 @@ fn build_sbom_map(registries: &[RegistryConfig]) -> HashMap<String, HotSbomConfi
 /// A map keyed only by the registries that wrote the block down would make the
 /// default "off" for everyone else, which is the wrong default and would be
 /// invisible.
+/// The two stores RFC 0019 §5.2 keeps in the database, as one handle so the
+/// builder's parameter list names one thing rather than two more.
+#[derive(Clone, Default)]
+pub(super) struct ForgeStores {
+    pub ref_resolutions: Option<Arc<dyn batlehub_core::ports::RefResolutionRepository>>,
+    pub rate_limit_budget: Option<Arc<dyn batlehub_core::ports::RateLimitBudget>>,
+    /// RFC 0019 phase 2 — the digest of the bytes already cached under a
+    /// coordinate, which is what `ASSET_REPLACED` compares the forge's
+    /// advertised digest against. `None` disables that one detection.
+    pub artifact_meta: Option<Arc<dyn batlehub_core::ports::ArtifactCacheMeta>>,
+}
+
+/// The store RFC 0008 keeps in the database: what this instance was asked
+/// for and did not hold.
+#[derive(Clone, Default)]
+pub(super) struct AirGapStores {
+    pub miss_recorder: Option<Arc<dyn batlehub_core::ports::MissRecorder>>,
+    pub bundle_history: Option<Arc<dyn batlehub_core::ports::BundleHistory>>,
+}
+
+/// The stores RFC 0018 keeps in the database: verdicts, the scan queue and
+/// the worker heartbeats.
+#[derive(Clone, Default)]
+pub(super) struct SecurityStores {
+    pub verdicts: Option<Arc<dyn batlehub_core::ports::VerdictRepository>>,
+    pub queue: Option<Arc<dyn batlehub_core::ports::ScanQueue>>,
+    pub workers: Option<Arc<dyn batlehub_core::ports::WorkerRegistry>>,
+    /// RFC 0014's rows, when `[upstream_audit]` is enabled: the
+    /// `upstream-presence` scanner reads them on a `[security]` registry.
+    pub upstream_status: Option<Arc<dyn batlehub_core::ports::UpstreamStatusPort>>,
+    /// RFC 0002 (recast): the pushed flags — the `flags` scanner on a
+    /// `[security]` registry, `FlagsRule` on every other.
+    pub advisories: Option<Arc<dyn batlehub_core::ports::AdvisoryRepository>>,
+}
+
+impl SecurityStores {
+    /// The read-side service, when both stores exist.
+    pub fn service(&self) -> Option<Arc<batlehub_core::services::VerdictService>> {
+        match (&self.verdicts, &self.queue) {
+            (Some(v), Some(q)) => Some(Arc::new(batlehub_core::services::VerdictService::new(
+                Arc::clone(v),
+                Arc::clone(q),
+            ))),
+            _ => None,
+        }
+    }
+}
+
+/// `[registries.refs]` per forge registry (RFC 0019 §4.1). Only registries
+/// that wrote the block get an entry; the rest take the defaults on read.
+fn build_forge_refs_map(
+    registries: &[RegistryConfig],
+) -> HashMap<String, batlehub_core::entities::ForgeRefsPolicy> {
+    registries
+        .iter()
+        .filter_map(|reg| {
+            reg.refs
+                .as_ref()
+                .map(|_| (reg.name.clone(), crate::builders::forge_refs_policy(reg)))
+        })
+        .collect()
+}
+
+/// `[registries.raw]` per forge registry (RFC 0019 §4.1, phase 3).
+///
+/// Only registries that wrote the block get an entry; every other forge
+/// registry takes the default, which is **off**. `scripts` defaults to
+/// `deny` when the registry also has `[registries.security]` (§11 q2).
+fn build_forge_raw_map(
+    registries: &[RegistryConfig],
+) -> HashMap<String, batlehub_core::entities::RawPolicy> {
+    registries
+        .iter()
+        .filter_map(|reg| {
+            reg.raw
+                .as_ref()
+                .map(|raw| (reg.name.clone(), raw.policy(reg.security.is_some())))
+        })
+        .collect()
+}
+
+/// `[registries.api_reads]` per forge registry (RFC 0019 §4.1, phase 3).
+/// Validation has already refused an unknown family, so an unparsable one
+/// here is dropped rather than guessed at.
+fn build_api_reads_map(
+    registries: &[RegistryConfig],
+) -> HashMap<String, Vec<batlehub_core::entities::ApiReadFamily>> {
+    registries
+        .iter()
+        .filter_map(|reg| {
+            reg.api_reads.as_ref().map(|a| {
+                (
+                    reg.name.clone(),
+                    a.families
+                        .iter()
+                        .filter_map(|f| batlehub_core::entities::ApiReadFamily::parse(f))
+                        .collect(),
+                )
+            })
+        })
+        .collect()
+}
+
 fn build_readme_map(registries: &[RegistryConfig]) -> HashMap<String, HotReadmeConfig> {
     registries
         .iter()
@@ -252,6 +377,9 @@ pub(super) fn upstream_url_for(reg: &RegistryConfig) -> Option<String> {
         RegistryKind::Nuget => "https://api.nuget.org",
         RegistryKind::Composer => "https://packagist.org",
         RegistryKind::JetbrainsMarketplace => "https://plugins.jetbrains.com",
+        // The nodedist handlers read it to name the package: `iojs` on the
+        // io.js tree, `node` everywhere else (RFC 0010 §4.3).
+        RegistryKind::Nodedist => "https://nodejs.org/dist",
         _ => return None,
     };
     Some(
@@ -312,6 +440,18 @@ pub(super) fn build_hot_bundle(
     grant_repo: &Option<Arc<dyn batlehub_core::ports::GrantRepository>>,
     policy_repo: &Option<Arc<dyn batlehub_core::ports::PolicyRepository>>,
     signing_keys: &Option<Arc<dyn batlehub_core::ports::SigningKeyPort>>,
+    // RFC 0019 §5.2 — the two forge stores. Threaded for the same reason as
+    // `grant_repo`: a `None` on the reload path would silently forget every
+    // recorded resolution and unshare the budget on every config change.
+    forge_stores: &ForgeStores,
+    // RFC 0018 §6.5 — the verdict store and the scan queue. A registry with
+    // `[security]` and no store is refused here: serving it would mean serving
+    // unscanned, which is the one thing the section promises not to do.
+    security_stores: &SecurityStores,
+    // RFC 0008 §6.3 — where a miss is written. Threaded like the other
+    // stores: a `None` on the reload path would silently stop recording on
+    // every config change.
+    air_gap_stores: &AirGapStores,
 ) -> anyhow::Result<(
     HotConfig,
     AccessConfig,
@@ -339,16 +479,92 @@ pub(super) fn build_hot_bundle(
     let mut reg_policy: HashMap<String, Arc<batlehub_core::entities::RegistryPolicyTiers>> =
         HashMap::new();
 
+    let mut reg_security: HashMap<String, batlehub_core::entities::SecurityPolicy> = HashMap::new();
+    let mut reg_internal_scanners: HashMap<
+        String,
+        Vec<Arc<dyn batlehub_core::ports::ArtifactScanner>>,
+    > = HashMap::new();
+    let verdict_service = security_stores.service();
+    // RFC 0008 §13 decision 1 — one read of the switch, applied to every
+    // client, so "never dials" is a property of construction rather than a
+    // check each of the seven dial-out paths has to remember.
+    let air_gapped = cfg.air_gap.as_ref().is_some_and(|a| a.enabled);
+
     for reg in &cfg.registries {
-        let client = crate::builders::build_registry_client(reg, cfg.proxy.as_ref())
-            .with_context(|| format!("building registry client for '{}'", reg.name))?;
-        reg_clients.insert(reg.name.clone(), client);
-        let policy = crate::builders::build_policy(
+        let client = crate::builders::build_registry_client(
             reg,
-            Arc::clone(repo),
-            Arc::clone(vuln_repo),
-            Arc::clone(sbom_repo),
+            cfg.proxy.as_ref(),
+            forge_stores.rate_limit_budget.as_ref(),
+            air_gapped,
         )
+        .with_context(|| format!("building registry client for '{}'", reg.name))?;
+        reg_clients.insert(reg.name.clone(), client);
+        // The optional stores the newer gates read: RFC 0002's pushed flags
+        // and RFC 0019's artifact digests.
+        let gate_stores = crate::builders::GateStores {
+            advisories: security_stores.advisories.clone(),
+            artifact_meta: forge_stores.artifact_meta.clone(),
+        };
+        // RFC 0018 §6.5: a `[security]` registry gets the verdict gate first
+        // and its five covered gates as scanners; every other registry keeps
+        // the chain it always had.
+        let wiring = match &reg.security {
+            Some(sec) => {
+                let Some(service) = verdict_service.clone() else {
+                    anyhow::bail!(
+                        "registry '{}' has [registries.security] but this process has no verdict \
+                         store: a quarantine without a database would serve unscanned, which is \
+                         the one thing the section promises not to do",
+                        reg.name
+                    );
+                };
+                let policy = sec.to_policy(&reg.name, &cfg.scanners);
+                reg_security.insert(reg.name.clone(), policy.clone());
+                reg_internal_scanners.insert(
+                    reg.name.clone(),
+                    crate::builders::build_internal_scanners(
+                        reg,
+                        Arc::clone(repo),
+                        Arc::clone(vuln_repo),
+                        Arc::clone(sbom_repo),
+                        security_stores.upstream_status.as_ref().map(|s| {
+                            // RFC 0014 §13 O6: the registry's own row first.
+                            let policy = reg
+                                .on_confirmed
+                                .as_deref()
+                                .unwrap_or(&cfg.upstream_audit.on_confirmed);
+                            (Arc::clone(s), policy == "block")
+                        }),
+                        security_stores.advisories.clone(),
+                        reg_clients.get(&reg.name).map(Arc::clone),
+                    )
+                    .with_context(|| format!("building internal scanners for '{}'", reg.name))?,
+                );
+                Some(crate::builders::SecurityWiring {
+                    service,
+                    policy,
+                    policy_repo: policy_repo.clone(),
+                })
+            }
+            None => None,
+        };
+        let policy = match wiring.clone() {
+            Some(w) => crate::builders::build_security_policy(
+                reg,
+                Arc::clone(repo),
+                Arc::clone(vuln_repo),
+                Arc::clone(sbom_repo),
+                gate_stores.clone(),
+                w,
+            ),
+            None => crate::builders::build_policy(
+                reg,
+                Arc::clone(repo),
+                Arc::clone(vuln_repo),
+                Arc::clone(sbom_repo),
+                gate_stores.clone(),
+            ),
+        }
         .with_context(|| format!("building policy for '{}'", reg.name))?;
         reg_policies.insert(reg.name.clone(), Arc::new(policy));
         // RFC 0015 §4.1 — one chain per namespace that overrides a gate. Empty
@@ -359,6 +575,8 @@ pub(super) fn build_hot_bundle(
             Arc::clone(repo),
             Arc::clone(vuln_repo),
             Arc::clone(sbom_repo),
+            gate_stores.clone(),
+            wiring,
         )
         .with_context(|| format!("building namespace rule overrides for '{}'", reg.name))?;
         if !ns.is_empty() {
@@ -412,6 +630,27 @@ pub(super) fn build_hot_bundle(
         grant_repo: grant_repo.clone(),
         policy_repo: policy_repo.clone(),
         signing_keys: signing_keys.clone(),
+        ref_resolutions: forge_stores.ref_resolutions.clone(),
+        rate_limit_budget: forge_stores.rate_limit_budget.clone(),
+        forge_refs: build_forge_refs_map(&cfg.registries),
+        forge_raw: build_forge_raw_map(&cfg.registries),
+        forge_api_reads: build_api_reads_map(&cfg.registries),
+        air_gap: cfg
+            .air_gap
+            .as_ref()
+            .map(|a| batlehub_core::entities::AirGapPolicy {
+                enabled: a.enabled,
+                record_misses: a.record_misses,
+                miss_retention_days: a.miss_retention_days,
+                bundle_trusted_keys: a.bundle_trusted_keys.clone(),
+                synthesise_listings: a.synthesises_listings(),
+            })
+            .unwrap_or_default(),
+        miss_recorder: air_gap_stores.miss_recorder.clone(),
+        security: reg_security,
+        internal_scanners: reg_internal_scanners,
+        verdicts: security_stores.verdicts.clone(),
+        scan_queue: security_stores.queue.clone(),
         // A fresh cache per reload. Config that changes what a grant resolves to
         // must not be answered from documents built under the old one — and a
         // reload is rare enough that rebuilding a handful of documents costs
@@ -427,6 +666,7 @@ pub(super) fn build_hot_bundle(
         namespace_policies: ns_policies,
         versioning: build_versioning_map(&cfg.registries),
         signing: build_signing_map(&cfg.registries),
+        vsx_signing: build_vsx_signing_map(&cfg.registries)?,
         sbom: build_sbom_map(&cfg.registries),
         readme: build_readme_map(&cfg.registries),
         upstream_detail: build_upstream_detail_map(&cfg.registries),
@@ -724,6 +964,9 @@ pub(super) fn make_hot_builder(
     grant_repo: Option<Arc<dyn batlehub_core::ports::GrantRepository>>,
     policy_repo: Option<Arc<dyn batlehub_core::ports::PolicyRepository>>,
     signing_keys: Option<Arc<dyn batlehub_core::ports::SigningKeyPort>>,
+    forge_stores: ForgeStores,
+    security_stores: SecurityStores,
+    air_gap_stores: AirGapStores,
     text_config: SettledTextConfig,
 ) -> batlehub_web::services::HotConfigBuilder {
     Arc::new(move |cfg: &AppConfig| {
@@ -740,6 +983,9 @@ pub(super) fn make_hot_builder(
             &grant_repo,
             &policy_repo,
             &signing_keys,
+            &forge_stores,
+            &security_stores,
+            &air_gap_stores,
         )?;
         let mut cargo_map: HashMap<String, CargoIndexProxy> = HashMap::new();
         for reg in &cfg.registries {

@@ -1202,32 +1202,69 @@ model and it needs stating rather than assuming, so:
 | 17 | `has_readme: bool`, or something that can say "we do not know"? | **A tri-state.** The moment the page answers for unheld versions, *unknown* is the common case, and a `false` meaning "we have not looked" is the NuGet-search-stub failure again: a definite answer with no evidence. Same reasoning for `vulnerabilities_scanned`. §4.2. |
 | 18 | Does an upstream-only version get the block treatment? | **Yes, for display.** The blocked set is consulted and the row shows `Blocked` with the reason. The gate that matters still runs on the download; the page describes rather than admits. §4.4. |
 
-### Still open
+### Where the seven landed
 
-Three of the seven below — 1, 2 and 6 — are taken up by
-[RFC 0007-bis](/rfc/0007-bis-images-search-and-fetch), which settles them. The
-recommendations here are what it argues from; the decisions are there. The other
-four were answered in the building and are recorded in §13.8.
+**Nothing here is open.** The seven below were this RFC's open questions and all
+seven are decided: four were answered in the building, and three — 1, 2 and 6 —
+were taken up by [RFC 0007-bis](/rfc/0007-bis-images-search-and-fetch), which is
+*Implemented*. The struck text is each question as it was asked, kept because the
+recommendation under it is what 0007-bis argues from; the decision follows.
+§13.8 is the same seven in one table.
 
-1. **`remote_images = "proxy"` — phase 5, or never?** It is the only way images render at all, and
+This heading used to say *Still open*, and went on saying it for a month after
+the last of the seven was decided — so `task rfc:status` reported seven open
+questions against an Implemented document, and this was the loudest unfinished
+thing in the tree while being one of the most finished. A listing is only worth
+reading if a row in it means something.
+
+1. ~~**`remote_images = "proxy"` — phase 5, or never?**~~ It is the only way images render at all, and
    there is real demand for badge rows in READMEs. Against: it makes BatleHub an open-ish image proxy
    for whatever a package author writes, and the SSRF surface has to be exactly right. Recommendation:
    phase 5, opt-in, with the fetch confined to the same `ssrf.rs` guards as upstream fetches, a hard
    size cap, an image-type allow-list that excludes SVG, and a cache. If phase 5 does not land, the
    chip in §7.3 is a complete answer to "was there an image and where did it point".
-2. **Should README text feed the catalogue's search?** It would make "which internal package does
+
+   **Decided: phase 5, and it is [RFC
+   0007-bis](/rfc/0007-bis-images-search-and-fetch) §4.2's phase 1.** Not built
+   here — the setting was accepted, validated, carried to the renderer and
+   inert, with a `readme.image-proxy-unimplemented` warning that said so.
+   0007-bis built the endpoint on the shape recommended here: no URL in the
+   request, the same `ssrf.rs` guards, a hard cap, a cache. Against one half of
+   the recommendation, SVG is **served** rather than excluded — sanitised and
+   sandboxed — because two-thirds of README images are one, and excluding them
+   refuses the case that justifies the feature (0007-bis §11 q14). §13.3.
+
+2. ~~**Should README text feed the catalogue's search?**~~ It would make "which internal package does
    X" answerable, which nothing currently answers. Against: a full-text index over prose is a
    different storage and ranking problem, and the search box currently promises name matching.
    Recommendation: no, and revisit as its own RFC if asked for.
-3. **RubyGems convention matching.** There is no declared README field in a gemspec, so §4.3's
+
+   **Decided: not here, as recommended — and it was asked for, so it became
+   [RFC 0007-bis](/rfc/0007-bis-images-search-and-fetch) §4.3.** Opt-in and off
+   by default, a Postgres generated column under a GIN index, a name match
+   always outranking a prose match, and every result saying which it was.
+
+3. ~~**RubyGems convention matching.**~~ There is no declared README field in a gemspec, so §4.3's
    RubyGems row is a filename convention over `data.tar.gz` — a double untar for a guess.
    Recommendation: phase 3, and drop the row if the fixture work shows the hit rate is poor.
-4. **Refresh policy for a mutated upstream README.** §4.4 refreshes when metadata is re-resolved and
+
+   **Decided: built, as recommended, and the row stays.** The fixture work did
+   not show a poor hit rate: a gem's `data.tar.gz` carries `README*` at its
+   root in the ordinary case, and a gem that names its documentation something
+   else reports none rather than showing the wrong file. §13.8.
+
+4. ~~**Refresh policy for a mutated upstream README.**~~ §4.4 refreshes when metadata is re-resolved and
    the digest differs. npm permits this; most registries do not. Recommendation: keep it, and record
    nothing about the previous text — this is a cache of what upstream says, not an audit log of what
    it used to say. Reviewers who disagree should say so now, because adding history later is a
    schema change.
-5. **Should the discovery read default to on?** §9 says yes, and it is the one default in this RFC that
+
+   **Decided: kept, as recommended.** A re-resolve compares digests and
+   replaces on a change; nothing is recorded about the previous text. No
+   reviewer asked for history, and adding it later remains a schema change.
+   §13.8.
+
+5. ~~**Should the discovery read default to on?**~~ §9 says yes, and it is the one default in this RFC that
    changes an instance's outbound traffic without the operator asking. For: the page is wrong today and
    an off-by-default fix is a fix nobody finds; the request is the same one the first `npm install` of
    that package would make anyway; it is cached, coalesced and bounded. Against: an operator whose
@@ -1235,19 +1272,39 @@ four were answered in the building and are recorded in §13.8.
    upstream when someone browses, and will find out from a traffic graph. Recommendation: keep it on,
    name it in the release notes (§9) and in `docs/operations/`, and reconsider if review disagrees —
    flipping the default is a one-line change now and a breaking one after it ships.
-6. **Should an upstream-only version be offered as a download from the page?** A **Fetch this version**
+
+   **Decided: on, as recommended** — and named in `docs/operations/egress.md`
+   rather than left to a traffic graph. Flipping it is still one line, per
+   registry: `[registries.upstream_detail] enabled = false`. §13.8.
+
+6. ~~**Should an upstream-only version be offered as a download from the page?**~~ A **Fetch this version**
    button would take the decision §4.4 refuses to take implicitly, explicitly and with a named actor —
    which is a better answer than making the reader guess the coordinate and use their package manager.
    It also means the console can start artifact fetches, which is a new capability with quota and
    authorisation questions of its own. Recommendation: not in this RFC; it is a small, well-shaped
    follow-up once the page is honest about what it holds, and the design should not be rushed into a
    README change.
-7. **PyPI's per-version description costs one request per version.** Unlike npm's packument, the
+
+   **Decided: not in this RFC, as recommended, and it is [RFC
+   0007-bis](/rfc/0007-bis-images-search-and-fetch) §4.4.** The stated
+   precondition held — the page is honest about what it holds — and the
+   follow-up answered the two questions this paragraph raised rather than
+   deferring them: the button runs `ProxyService::handle` under the caller's
+   own identity, so the quota it spends and the authorisation it passes are the
+   download's own (0007-bis §5.3). It is on the catalogue listing as well as
+   the package page (0007-bis §11 q3).
+
+7. ~~**PyPI's per-version description costs one request per version.**~~ Unlike npm's packument, the
    description lives in `/pypi/{name}/{version}/json`, so filling `readme` for every row of a PyPI
    version table would be N requests. §4.3 says the panel fetches on selection instead, which means
    PyPI rows report `readme: "unknown"` until selected. Recommendation: accept it — the alternative is
    either N upstream requests per page view or a boolean that guesses. Revisit if PEP 691's JSON simple
    page grows a description field.
+
+   **Decided: accepted, as recommended**, and it took a second pass to deliver:
+   the version table reports `unknown` and resolves nothing, and the panel
+   resolves the one version selected. Revisit if PEP 691's JSON simple page
+   grows a description field. §13.4.
 
 ---
 

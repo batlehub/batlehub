@@ -68,6 +68,21 @@ async fn cargo_publish_user_can_publish() {
     );
 }
 
+/// cargo sends `Authorization: <token>` with no scheme (registry web API);
+/// measured against cargo 1.98 in tests/heavy/cargo.sh, where a publish that
+/// carried the admin token was refused as anonymous.
+#[actix_web::test]
+async fn cargo_publish_with_a_bare_token_authenticates() {
+    let app = make_local_registry_app(RegistryMode::Local).await;
+    let req = TestRequest::put()
+        .uri("/proxy/local-cargo/api/v1/crates/new")
+        .insert_header(("Authorization", USER_TOKEN))
+        .set_payload(make_publish_payload("bare-crate", "0.1.0"))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+}
+
 #[actix_web::test]
 async fn cargo_publish_traversal_version_returns_400() {
     let app = make_local_registry_app(RegistryMode::Local).await;

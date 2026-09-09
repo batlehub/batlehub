@@ -60,7 +60,31 @@ use batlehub_core::services::LocalRegistryService;
 
 /// Render a text document as the compact index expects it.
 fn text_response(req: &HttpRequest, doc: batlehub_core::ports::VersionDocument) -> HttpResponse {
-    compact_response(req, document_text(doc))
+    let synthesised = doc.synthesised;
+    let mut resp = compact_response(req, document_text(doc));
+    mark_synthesised(&mut resp, synthesised);
+    resp
+}
+
+/// A compact document composed from the held set says so (RFC 0008-bis
+/// §4.2), the way every other listing response does. On the response
+/// rather than its builder, because a compact answer may be a `206` or a
+/// `304` that `compact_response` decided on.
+fn mark_synthesised(resp: &mut HttpResponse, synthesised: Option<u32>) {
+    let Some(held) = synthesised else {
+        return;
+    };
+    let headers = resp.headers_mut();
+    headers.insert(
+        actix_web::http::header::HeaderName::from_static("x-batlehub-listing"),
+        actix_web::http::header::HeaderValue::from_static("synthesised"),
+    );
+    if let Ok(v) = actix_web::http::header::HeaderValue::from_str(&held.to_string()) {
+        headers.insert(
+            actix_web::http::header::HeaderName::from_static("x-batlehub-listing-held"),
+            v,
+        );
+    }
 }
 
 /// Which whole-registry compact document is being served.
@@ -145,17 +169,17 @@ async fn serve_compact(
         package_id: PackageId::new(&registry, which.coordinate(), "__compact__"),
         identity: identity.0,
         action: Action::ReleasesRead.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
     };
     let doc = svc
         .multi_package_document(&req, which.document_kind(), "")
         .await
         .map_err(AppError::from)?;
-    Ok(text_body(
-        http_req,
-        merge_compact(document_text(doc), &local),
-    ))
+    let synthesised = doc.synthesised;
+    let mut resp = text_body(http_req, merge_compact(document_text(doc), &local));
+    mark_synthesised(&mut resp, synthesised);
+    Ok(resp)
 }
 
 /// The whole-registry version list Bundler fetches first.
@@ -344,8 +368,8 @@ pub async fn gem_compact_info(
         package_id: PackageId::new(&registry, &gem, "__compact__"),
         identity: identity.0,
         action: Action::ReleasesRead.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
     };
     let doc = svc
         .version_document(&req, batlehub_core::ports::DocumentKind::COMPACT_INFO, "")

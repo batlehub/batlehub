@@ -11,7 +11,7 @@ use serde_json::Value;
 use std::sync::Arc;
 
 use batlehub_adapters::in_memory::InMemoryPackageRepository as InMemoryRepo;
-use batlehub_core::entities::{AccessAction, AccessEvent, EventFilter};
+use batlehub_core::entities::{AccessAction, AccessEvent, EventFilter, PackageId, Role};
 use batlehub_core::ports::PackageRepository;
 
 /// Every event of one action in a repository.
@@ -301,4 +301,90 @@ async fn invalidate_admin_returns_200() {
     assert_eq!(resp.status(), 200);
     let body: Value = read_body_json(resp).await;
     assert_eq!(body["success"], true);
+}
+
+// ── /api/v1/admin/packages/bulk-delete ───────────────────────────────────────
+//
+// The instance-tier sibling of bulk-block: it removes the package records and
+// purges whatever the proxy had cached for them.
+
+#[actix_web::test]
+async fn bulk_delete_non_admin_returns_403() {
+    // Empty items on purpose. The verb is resolved on the instance tier rather
+    // than on the registries the body names, so a request that names nothing is
+    // still authorized — a check a caller can skip by sending less is not a check.
+    let app = make_app(InMemoryRepo::new()).await;
+    let req = TestRequest::post()
+        .uri("/api/v1/admin/packages/bulk-delete")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_json(serde_json::json!({ "items": [] }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 403);
+}
+
+#[actix_web::test]
+async fn bulk_delete_admin_empty_items_returns_200() {
+    let app = make_app(InMemoryRepo::new()).await;
+    let req = TestRequest::post()
+        .uri("/api/v1/admin/packages/bulk-delete")
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .set_json(serde_json::json!({ "items": [] }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = read_body_json(resp).await;
+    assert_eq!(body["succeeded_count"], 0);
+    assert_eq!(body["failed_count"], 0);
+}
+
+#[actix_web::test]
+async fn bulk_delete_removes_the_known_package_and_reports_the_unknown_one() {
+    // One of each in a single request: a bulk endpoint that stopped at the first
+    // failure would leave the caller unable to tell which half went through.
+    let repo = InMemoryRepo::new();
+    repo.record_access(AccessEvent::allowed_download(
+        PackageId::new("npm", "lodash", "4.17.21"),
+        Some("user-1".to_owned()),
+        Role::User,
+    ))
+    .await
+    .unwrap();
+    let app = make_app(repo.clone()).await;
+
+    let req = TestRequest::post()
+        .uri("/api/v1/admin/packages/bulk-delete")
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .set_json(serde_json::json!({
+            "items": [
+                { "registry": "npm", "name": "lodash", "version": "4.17.21", "artifact": null },
+                { "registry": "npm", "name": "never-seen", "version": "1.0.0", "artifact": null }
+            ]
+        }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = read_body_json(resp).await;
+    assert_eq!(body["succeeded_count"], 1);
+    assert_eq!(body["failed_count"], 1);
+    assert_eq!(body["failures"][0]["name"], "never-seen");
+    assert_eq!(body["failures"][0]["error"], "package not found");
+
+    // The record is gone from the catalogue, not merely reported as deleted.
+    let listed = call_service(
+        &app,
+        TestRequest::get().uri("/api/v1/packages").to_request(),
+    )
+    .await;
+    let listed: Value = read_body_json(listed).await;
+    assert_eq!(listed["total"], 0, "the deleted package is still listed");
+
+    // And the deletion is on the audit trail, as every admin mutation is.
+    let deletes = recorded(&repo, AccessAction::Delete).await;
+    assert_eq!(deletes.len(), 1);
+    let deleted = deletes[0]
+        .package_id
+        .as_ref()
+        .expect("the event names a package");
+    assert_eq!(deleted.name, "lodash");
 }

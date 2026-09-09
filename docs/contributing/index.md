@@ -15,6 +15,8 @@ is the canonical one; the GitHub copy is a mirror.
   new registry type has to be wired in, in order.
 - **[Adding a vulnerability scanner](/contributing/adding-a-vulnerability-scanner)**
   — the same, for a CVE source.
+- **[Translating the docs](/contributing/translating)** — where a French page
+  lives, and what to do when you edit an English page that has one.
 
 If you want to know *why* something works the way it does rather than how to
 change it, the [design history](/rfc/) is the place that argues it out.

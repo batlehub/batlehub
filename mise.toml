@@ -3,6 +3,7 @@ claude = "latest"
 cocogitto = "latest"
 go = "latest"
 helm = "latest"
+helm-docs = "1.14.2" # generates helm/batlehub/README.md; pinned so CI and local agree
 k6 = "latest"
 lazydocker = "latest"
 mc = "latest"

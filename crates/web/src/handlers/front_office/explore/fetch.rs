@@ -28,8 +28,8 @@ use futures::StreamExt;
 
 use super::{web, AppError, Arc, AuthIdentity, Deserialize, IntoParams, Serialize, ToSchema};
 use batlehub_core::{
-    entities::{RegistryKind, Role},
-    services::{LocalRegistryService, ProxyRequest, ProxyResponse, ProxyService},
+    entities::{Identity, RegistryKind, Role},
+    services::{hot_config::HotConfigLock, LocalRegistryService, ProxyRequest, ProxyService},
 };
 
 use crate::RegistryMap;
@@ -46,6 +46,109 @@ pub const FETCH_UNSUPPORTED: &str = "fetch.unsupported";
 
 /// The caller has no session. Pulling is an authenticated act (§4.1 revisited).
 pub const FETCH_UNAUTHENTICATED: &str = "fetch.unauthenticated";
+
+// ── whether to draw the button ───────────────────────────────────────────────
+//
+// Both surfaces that offer a fetch ask here: the package page, per package, and
+// the catalogue listing, per registry across a page of upstream hits. It lives
+// beside the endpoint rather than beside either caller because the offer and the
+// refusal must agree — a page that drew a button the endpoint refuses is the
+// "disabled control with no explanation" §4.4 rules out, one screen earlier.
+
+/// Whether the fetch button is offered here, and why not when it is not.
+///
+/// Answered by the server because both halves are the server's to know: whether
+/// the operator turned `console_fetch` off, and whether "fetch this version" has
+/// a single meaning for this registry kind. A console that guessed would offer a
+/// button that always fails on Maven, which is the "disabled control with no
+/// explanation" §4.4 refuses.
+#[derive(Serialize, ToSchema, Clone)]
+pub struct FetchOfferDto {
+    pub offered: bool,
+    /// The kind's own reason, verbatim, when `offered` is `false` and the reason
+    /// is about the registry type rather than about the switch. `null` when the
+    /// operator simply turned it off — that is not a fact about the package and
+    /// the page says nothing rather than explaining the operator to themselves.
+    pub reason: Option<String>,
+}
+
+/// Whether the console may offer **Fetch this version**, and why not.
+///
+/// Both halves are the server's to know — the operator's switch and whether the
+/// registry kind has one artifact per version — so the page is told rather than
+/// left to guess. A console that guessed would draw a button that always fails
+/// on Maven (RFC 0007-bis §4.4).
+pub async fn fetch_offer(
+    hot: &HotConfigLock,
+    registry_map: &RegistryMap,
+    registry: &str,
+    identity: &Identity,
+) -> FetchOfferDto {
+    // A reader with no session cannot pull — `explore_fetch_version` answers
+    // `401 fetch.unauthenticated` — so the button is not offered to one. Decided
+    // here rather than by the console for the same reason the other two halves
+    // are: the offer and the endpoint must agree, and a page that drew the button
+    // anyway would be promising something the API refuses.
+    //
+    // The kind's reason is computed first and kept, so it survives the override:
+    // on a Maven registry the honest answer is still "this kind has no single
+    // artifact per version", and "sign in" would be advice that does not help.
+    // Where the offer *would* have been made, the reason is `None` and the
+    // console says the one thing it knows better than the server — that this
+    // viewer has no session — in its own translated words.
+    if identity.role == Role::Anonymous {
+        let would_offer = fetch_offer_for_registry(hot, registry_map, registry).await;
+        return FetchOfferDto {
+            offered: false,
+            reason: would_offer.reason,
+        };
+    }
+    fetch_offer_for_registry(hot, registry_map, registry).await
+}
+
+/// The half that is about the registry: the operator's switch and whether the
+/// kind has one artifact per version.
+pub async fn fetch_offer_for_registry(
+    hot: &HotConfigLock,
+    registry_map: &RegistryMap,
+    registry: &str,
+) -> FetchOfferDto {
+    let enabled = hot
+        .read()
+        .await
+        .console_fetch
+        .get(registry)
+        .copied()
+        .unwrap_or(batlehub_core::services::DEFAULT_CONSOLE_FETCH);
+    if !enabled {
+        // No reason given: the operator turned it off, and explaining an
+        // operator's own configuration back to them on a package page is noise.
+        return FetchOfferDto {
+            offered: false,
+            reason: None,
+        };
+    }
+    match registry_map
+        .type_of(registry)
+        .and_then(|t| t.parse::<RegistryKind>().ok())
+        .map(|kind| kind.fetchable_by_version())
+    {
+        Some(support) if support.is_supported() => FetchOfferDto {
+            offered: true,
+            reason: None,
+        },
+        // The kind's own reason, verbatim — so the published support table, the
+        // endpoint's refusal and this page cannot disagree.
+        Some(support) => FetchOfferDto {
+            offered: false,
+            reason: support.reason().map(str::to_owned),
+        },
+        None => FetchOfferDto {
+            offered: false,
+            reason: None,
+        },
+    }
+}
 
 #[derive(Deserialize, IntoParams)]
 pub struct FetchPath {
@@ -92,6 +195,7 @@ pub async fn explore_fetch_version(
     identity: AuthIdentity,
     local_svc: web::Data<Arc<LocalRegistryService>>,
     proxy_svc: web::Data<Arc<ProxyService>>,
+    admin_svc: web::Data<Arc<batlehub_core::services::AdminService>>,
     registry_map: web::Data<RegistryMap>,
     hot: web::Data<batlehub_core::services::hot_config::HotConfigLock>,
 ) -> Result<web::Json<FetchResponse>, AppError> {
@@ -278,22 +382,20 @@ pub async fn explore_fetch_version(
             package_id,
             identity: identity.0.clone(),
             action: Action::SourceRead,
-            ip_address: None,
-            user_agent: None,
+            ip_address: identity.1.ip.clone(),
+            user_agent: identity.1.user_agent.clone(),
         })
         .await
         .map_err(AppError::from)?;
 
-    let stream = match response {
-        // The rule's own reason, which is the same string the download would
-        // have given — so the console shows the operator *why*, and the
-        // `/tools/access-check` page it already links to explains the same
-        // verdict (§4.4).
-        ProxyResponse::Denied { reason } => {
-            return Err(AppError::forbidden(reason).coded(FETCH_DENIED))
-        }
-        ProxyResponse::Stream(stream) => stream,
-    };
+    // The rule's own reason, which is the same string the download would
+    // have given — so the console shows the operator *why*, and the
+    // `/tools/access-check` page it already links to explains the same
+    // verdict (§4.4). A security verdict's headers are not needed here: the
+    // console reads the verdict endpoint for those.
+    let stream = response
+        .into_stream()
+        .map_err(|(reason, _)| AppError::forbidden(reason).coded(FETCH_DENIED))?;
 
     // Drained, not forwarded: this wants the side effect, not the bytes.
     // Everything that makes a download safe has already applied because it *is*
@@ -314,6 +416,30 @@ pub async fn explore_fetch_version(
             }
         }
     }
+
+    // The catalogue has a new row, so the snapshot it is served from is wrong.
+    //
+    // The explore listing is cached for ten minutes, invalidated on a local
+    // publish and on a yank — the two writes that used to change what the
+    // catalogue holds. A console fetch is now a third, and it was not on the
+    // list: the reader pressed the button, the bytes arrived, and the row went
+    // on saying the instance held nothing of this package until the TTL
+    // expired. Pressing again answered `409 fetch.already-held`, which is the
+    // console disagreeing with itself.
+    //
+    // Scoped to this registry, like the publish path's. A package manager's
+    // download deliberately does *not* do this: it has no reader waiting on a
+    // fresh listing, and flushing the catalogue's cache on every proxied
+    // download would trade a correct listing for a cache that never warms.
+    //
+    // Reached through `AdminService`, which **owns** the cache the listing and
+    // the upstream search read from, rather than through
+    // `LocalRegistryService::explore_cache`, which is an `Option` that happens
+    // to hold the same `Arc` because `main.rs` clones it in. Invalidating the
+    // one the reader is served from should not depend on a wiring coincidence:
+    // the test fixture leaves that option `None`, so a fix written against it
+    // would have been a no-op everywhere the tests can see.
+    admin_svc.explore_cache.invalidate(Some(&registry)).await;
 
     Ok(web::Json(FetchResponse {
         fetched: true,

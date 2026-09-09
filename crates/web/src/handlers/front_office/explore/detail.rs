@@ -1,10 +1,11 @@
+use super::fetch::{fetch_offer, FetchOfferDto};
 use super::{
     format_dt, get, web, AdminService, AppError, Arc, AuthIdentity, Deserialize, IntoParams,
     LocalRegistryService, PackageFilter, PackageStatus, Responder, Serialize, ToSchema,
 };
 use batlehub_config::schema::RegistryMode;
 use batlehub_core::{
-    entities::{absent_readme_state_for, Identity, ReadmeState, RegistryKind, Role},
+    entities::{absent_readme_state_for, Identity, ReadmeState, RegistryKind},
     services::{proxy::Freshness, ProxyService, SbomService},
 };
 
@@ -293,23 +294,6 @@ pub struct PackageLinksDto {
     pub repository: Option<String>,
     /// The package's own site, when it declared one.
     pub homepage: Option<String>,
-}
-
-/// Whether the fetch button is offered here, and why not when it is not.
-///
-/// Answered by the server because both halves are the server's to know: whether
-/// the operator turned `console_fetch` off, and whether "fetch this version" has
-/// a single meaning for this registry kind. A console that guessed would offer a
-/// button that always fails on Maven, which is the "disabled control with no
-/// explanation" §4.4 refuses.
-#[derive(Serialize, ToSchema)]
-pub struct FetchOfferDto {
-    pub offered: bool,
-    /// The kind's own reason, verbatim, when `offered` is `false` and the reason
-    /// is about the registry type rather than about the switch. `null` when the
-    /// operator simply turned it off — that is not a fact about the package and
-    /// the page says nothing rather than explaining the operator to themselves.
-    pub reason: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -704,7 +688,13 @@ pub async fn explore_package_detail(
         selected,
         upstream_unavailable,
         upstream: upstream.dto,
-        fetch: fetch_offer(&local_svc, &registry_map, registry.as_str(), &identity.0).await,
+        fetch: fetch_offer(
+            &local_svc.hot,
+            &registry_map,
+            registry.as_str(),
+            &identity.0,
+        )
+        .await,
         links: package_links(LinkInput {
             proxy_svc: &proxy_svc,
             local_svc: &local_svc,
@@ -1300,6 +1290,10 @@ async fn package_links(input: LinkInput<'_>) -> Option<PackageLinksDto> {
                     package_id,
                     identity: identity.clone(),
                     action: Action::ReleasesRead.to_owned(),
+                    // Left `None` deliberately, unlike every other
+                    // `ProxyRequest`: this read is `_uncaptured_` (below) and
+                    // writes no audit row, so there is nothing for a caller
+                    // address to enrich. A page view is not a download.
                     ip_address: None,
                     user_agent: None,
                 };
@@ -1410,85 +1404,6 @@ fn version_state(row: &ExploreVersionDto) -> &'static str {
         // No bytes here, and we know about it only because we asked upstream.
         _ if row.source == "upstream" => "pending",
         FirewallDto::Clear => "cached",
-    }
-}
-
-/// Whether the console may offer **Fetch this version**, and why not.
-///
-/// Both halves are the server's to know — the operator's switch and whether the
-/// registry kind has one artifact per version — so the page is told rather than
-/// left to guess. A console that guessed would draw a button that always fails
-/// on Maven (RFC 0007-bis §4.4).
-async fn fetch_offer(
-    local_svc: &LocalRegistryService,
-    registry_map: &RegistryMap,
-    registry: &str,
-    identity: &Identity,
-) -> FetchOfferDto {
-    // A reader with no session cannot pull — `explore_fetch_version` answers
-    // `401 fetch.unauthenticated` — so the button is not offered to one. Decided
-    // here rather than by the console for the same reason the other two halves
-    // are: the offer and the endpoint must agree, and a page that drew the button
-    // anyway would be promising something the API refuses.
-    //
-    // The kind's reason is computed first and kept, so it survives the override:
-    // on a Maven registry the honest answer is still "this kind has no single
-    // artifact per version", and "sign in" would be advice that does not help.
-    // Where the offer *would* have been made, the reason is `None` and the
-    // console says the one thing it knows better than the server — that this
-    // viewer has no session — in its own translated words.
-    if identity.role == Role::Anonymous {
-        let would_offer = fetch_offer_for_registry(local_svc, registry_map, registry).await;
-        return FetchOfferDto {
-            offered: false,
-            reason: would_offer.reason,
-        };
-    }
-    fetch_offer_for_registry(local_svc, registry_map, registry).await
-}
-
-/// The half that is about the registry: the operator's switch and whether the
-/// kind has one artifact per version.
-async fn fetch_offer_for_registry(
-    local_svc: &LocalRegistryService,
-    registry_map: &RegistryMap,
-    registry: &str,
-) -> FetchOfferDto {
-    let enabled = local_svc
-        .hot
-        .read()
-        .await
-        .console_fetch
-        .get(registry)
-        .copied()
-        .unwrap_or(batlehub_core::services::DEFAULT_CONSOLE_FETCH);
-    if !enabled {
-        // No reason given: the operator turned it off, and explaining an
-        // operator's own configuration back to them on a package page is noise.
-        return FetchOfferDto {
-            offered: false,
-            reason: None,
-        };
-    }
-    match registry_map
-        .type_of(registry)
-        .and_then(|t| t.parse::<RegistryKind>().ok())
-        .map(|kind| kind.fetchable_by_version())
-    {
-        Some(support) if support.is_supported() => FetchOfferDto {
-            offered: true,
-            reason: None,
-        },
-        // The kind's own reason, verbatim — so the published support table, the
-        // endpoint's refusal and this page cannot disagree.
-        Some(support) => FetchOfferDto {
-            offered: false,
-            reason: support.reason().map(str::to_owned),
-        },
-        None => FetchOfferDto {
-            offered: false,
-            reason: None,
-        },
     }
 }
 

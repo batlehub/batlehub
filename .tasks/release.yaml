@@ -1,0 +1,75 @@
+version: "3"
+
+# The release version is written in six places, and they have to agree: the
+# Rust workspace (which every crate inherits with `version.workspace = true`,
+# and which the binary reports at `/livez`), the lockfile that records those
+# crates, the two pnpm projects, and the chart — twice, as `version` (the
+# chart's own) and `appVersion` (the image tag it deploys). The chart README
+# carries both in a badge and is generated, so it moves with them.
+#
+# `cog bump` calls `version:set` as its pre-bump hook (see cog.toml), so the
+# tag and the files it points at can never disagree. Run it by hand for a
+# release cut that does not go through cog.
+
+tasks:
+  version:set:
+    desc: Set the release version everywhere it is written (VERSION=1.2.0)
+    silent: true
+    requires:
+      vars: [VERSION]
+    cmds:
+      - |
+        set -euo pipefail
+        v='{{.VERSION}}'
+        # cocogitto hands the version with no `v`; a tag prefix reaching the
+        # files would produce `version = "vv1.2.0"` in Cargo.toml and a chart
+        # that no longer parses as semver.
+        case "$v" in
+          [0-9]*.[0-9]*.[0-9]*) ;;
+          *) echo "VERSION must be a bare semver like 1.2.0, got '$v'" >&2; exit 1 ;;
+        esac
+
+        # Scoped to the [workspace.package] table: `version = ` also appears
+        # under every [dependencies] entry that pins one.
+        sed -i '/^\[workspace\.package\]/,/^\[/ s/^version = ".*"$/version = "'"$v"'"/' Cargo.toml
+
+        # The first `"version":` in a package.json is the package's own; a
+        # dependency is `"name": "^1.2.3"` and has no such key.
+        sed -i '0,/"version": ".*"/s//"version": "'"$v"'"/' ui/package.json
+        sed -i '0,/"version": ".*"/s//"version": "'"$v"'"/' docs/package.json
+
+        sed -i 's/^version: .*/version: '"$v"'/; s/^appVersion: .*/appVersion: "'"$v"'"/' helm/batlehub/Chart.yaml
+
+        # Rewrites the seven workspace entries in Cargo.lock and nothing else.
+        # Offline so a release cut never depends on crates.io being reachable.
+        cargo metadata --format-version 1 --offline >/dev/null
+
+        helm-docs --chart-search-root=helm/batlehub --sort-values-order=file >/dev/null
+      - task: version:check
+
+  version:check:
+    desc: Fail if the six version declarations disagree
+    silent: true
+    cmds:
+      - |
+        set -euo pipefail
+        cargo_v=$(sed -n '/^\[workspace\.package\]/,/^\[/ s/^version = "\(.*\)"$/\1/p' Cargo.toml)
+        lock_v=$(sed -n '/^name = "batlehub-server"$/{n;s/^version = "\(.*\)"$/\1/p;}' Cargo.lock)
+        ui_v=$(node -p 'require("./ui/package.json").version')
+        docs_v=$(node -p 'require("./docs/package.json").version')
+        chart_v=$(sed -n 's/^version: //p' helm/batlehub/Chart.yaml)
+        app_v=$(sed -n 's/^appVersion: "\(.*\)"$/\1/p' helm/batlehub/Chart.yaml)
+        readme_v=$(sed -n 's/.*badge\/AppVersion-\([0-9][^-]*\)-.*/\1/p' helm/batlehub/README.md | head -1)
+
+        fail=0
+        for pair in "Cargo.toml:$cargo_v" "Cargo.lock:$lock_v" "ui/package.json:$ui_v" \
+                    "docs/package.json:$docs_v" "Chart.yaml version:$chart_v" \
+                    "Chart.yaml appVersion:$app_v" "chart README badge:$readme_v"; do
+          where=${pair%:*}; got=${pair##*:}
+          if [ "$got" != "$cargo_v" ]; then
+            echo "$where says '$got', Cargo.toml says '$cargo_v'" >&2
+            fail=1
+          fi
+        done
+        [ "$fail" -eq 0 ] || { echo "run 'task version:set VERSION=<x.y.z>'" >&2; exit 1; }
+        echo "every version declaration says $cargo_v"

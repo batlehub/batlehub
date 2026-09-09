@@ -227,6 +227,12 @@ tasks:
     cmds:
       - pnpm run test
 
+  test:patch:
+    desc: "Run the editor credential patch's tests (RFC 0011) — plain `node --test`, no dependencies, types stripped by Node itself"
+    dir: .
+    cmds:
+      - node --test patches/che-code/vsxRegistryAuth.test.ts
+
   ui:coverage:
     desc: Run the frontend test suite with coverage (enforces threshold)
     dir: ui

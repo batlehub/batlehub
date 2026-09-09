@@ -42,6 +42,12 @@ pub mod asset_type {
 
     /// Every type the gallery advertises, in the order they appear in `files`.
     pub const ALL: &[&str] = &[VSIX_PACKAGE, MANIFEST, DETAILS, CHANGELOG, LICENSE, ICON];
+    /// The signature archive beside the package (RFC 0020): what the editor's
+    /// `canInstall` looks for before it enables Install. Advertised only for
+    /// a version this registry signed or whose upstream did.
+    pub const SIGNATURE: &str = "Microsoft.VisualStudio.Services.VsixSignature";
+    /// The key the signature verifies under, Open VSX's asset for it.
+    pub const PUBLIC_KEY: &str = "Microsoft.VisualStudio.Services.PublicKey";
 }
 
 /// `versions[].properties[].key` values the editor reads.

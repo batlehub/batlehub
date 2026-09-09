@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::entities::AccessEvent;
+use crate::entities::MissKind;
 use crate::error::CoreError;
 use crate::ports::{DocumentKind, VersionDocument};
 use crate::rules::{evaluate_rules, RuleContext, RuleDecision};
@@ -31,6 +32,69 @@ pub(super) struct RequestPrelude {
     pub(super) registry_label: Arc<str>,
 }
 
+/// Whether the coordinate names a raw file — the one forge kind with its own
+/// size ceiling and its own script policy.
+fn is_raw_coordinate(pkg: &crate::entities::PackageId) -> bool {
+    matches!(
+        crate::entities::ForgeCoordinate::from_package_id(pkg).map(|c| c.kind),
+        Some(crate::entities::ForgeKind::Raw { .. })
+    )
+}
+
+/// Merge a ref resolution into the metadata the rules and the cache see
+/// (RFC 0019 §4.2 *Metadata contract*), under `extra.forge`.
+///
+/// `published_at` is filled only when the client left it empty — a release
+/// keeps its release date, which is the better answer — from the tagger or
+/// committer date the resolution carried. Keys the client already wrote under
+/// `forge` (a commit's `committed_at`, its `committer`) are kept; the
+/// resolution adds the ref kind and the two SHAs beside them.
+fn overlay_forge_metadata(
+    mut metadata: crate::entities::PackageMetadata,
+    resolved: &crate::entities::ResolvedRef,
+) -> crate::entities::PackageMetadata {
+    use crate::entities::FORGE_EXTRA_KEY;
+    if metadata.published_at.is_none() {
+        metadata.published_at = resolved.object_date;
+    }
+    let mut forge = match metadata.extra.get(FORGE_EXTRA_KEY) {
+        Some(serde_json::Value::Object(existing)) => existing.clone(),
+        _ => serde_json::Map::new(),
+    };
+    forge.insert("ref_kind".into(), resolved.kind.as_str().into());
+    forge.insert("requested_ref".into(), resolved.requested.clone().into());
+    forge.insert("resolved_commit".into(), resolved.sha.clone().into());
+    forge.insert(
+        "previous_commit".into(),
+        resolved
+            .previous
+            .clone()
+            .map(serde_json::Value::from)
+            .unwrap_or(serde_json::Value::Null),
+    );
+    if let Some(p) = &resolved.publisher {
+        forge.entry("publisher").or_insert_with(|| p.clone().into());
+    }
+    match &mut metadata.extra {
+        serde_json::Value::Object(map) => {
+            map.insert(FORGE_EXTRA_KEY.into(), serde_json::Value::Object(forge));
+        }
+        other => {
+            // `minimal()` metadata carries `Null`; a listing carries an array.
+            // Neither has room for a key, so the object is built around it
+            // rather than lost: the previous value moves under `upstream`.
+            let previous = std::mem::take(other);
+            let mut map = serde_json::Map::new();
+            if !previous.is_null() {
+                map.insert("upstream".into(), previous);
+            }
+            map.insert(FORGE_EXTRA_KEY.into(), serde_json::Value::Object(forge));
+            *other = serde_json::Value::Object(map);
+        }
+    }
+    metadata
+}
+
 impl ProxyService {
     /// Validate the coordinate, snapshot the registry's hot config (one brief
     /// read lock, released before any async I/O), and derive the metadata
@@ -55,7 +119,7 @@ impl ProxyService {
         // bytes on every `counter!`/`histogram!` invocation.
         let registry_label: Arc<str> = Arc::from(registry_name);
 
-        let (client, policy, integrity, limit) = {
+        let (client, policy, integrity, limit, raw_limit) = {
             let hot = self.hot.read().await;
             let client = hot
                 .registries
@@ -71,7 +135,23 @@ impl ProxyService {
                 .cloned()
                 .unwrap_or_default();
             let limit = hot.max_artifact_size_bytes.unwrap_or(500 * 1024 * 1024);
-            (client, policy, integrity, limit)
+            // RFC 0019 §4.2 *Raw content*: a raw file has its own, lower
+            // ceiling. Applied here rather than in the client so it is the
+            // *stream* that stops — the file is refused, never truncated —
+            // and so every forge gets it from one place. `min` because the
+            // global limit still wins if it is the smaller of the two, which
+            // validation makes impossible for a written policy and possible
+            // for the default one.
+            let raw_limit = hot
+                .forge_raw
+                .get(registry_name)
+                .filter(|p| p.enabled)
+                .map(|p| p.max_size_bytes);
+            (client, policy, integrity, limit, raw_limit)
+        };
+        let limit = match (raw_limit, is_raw_coordinate(&req.package_id)) {
+            (Some(raw), true) => limit.min(raw),
+            _ => limit,
         };
 
         let cache_key = super::proxy_meta_key(&req.package_id);
@@ -227,9 +307,337 @@ impl ProxyService {
         Ok(metadata)
     }
 
-    pub async fn handle(&self, req: ProxyRequest) -> Result<ProxyResponse, CoreError> {
+    pub async fn handle(&self, mut req: ProxyRequest) -> Result<ProxyResponse, CoreError> {
+        // RFC 0019 §4.2: on a forge, the ref is resolved to a commit *before*
+        // anything else, and an archive or raw coordinate is rewritten onto
+        // that commit so the cache, the metadata and the rules all see the
+        // SHA. Everything below this line is unchanged for every other kind.
+        let coordinate = req.package_id.clone();
+        // Kept past the move below for the one path that answers after the
+        // resolved request has failed: a forge release composed from the
+        // held assets (RFC 0008-bis), which still has to be authorised.
+        let identity = req.identity.clone();
+        let action = req.action;
+        let resolved = match self.resolve_forge_ref(&mut req).await {
+            Ok(r) => r,
+            Err(e) => return Err(self.record_if_missing(e, &coordinate, MissKind::Ref).await),
+        };
+        // The coordinate the bytes are stored under, captured after the ref
+        // rewrite and before `req` is consumed. RFC 0008's export reads it
+        // back off the response so a bundle names the key this instance
+        // serves from rather than one the client derived from a URL.
+        let served = req.package_id.clone();
+        let response = match self.handle_resolved(req, resolved.as_ref()).await {
+            Ok(r) => r,
+            // RFC 0008 §5.3: the record is written *here*, above the rule
+            // chain's own exits, so a coordinate a rule denied is never
+            // proposed for the next bundle — a blocked package is not a gap
+            // in the mirror. Only the offline client's refusal reaches this
+            // arm; every other error passes through untouched.
+            Err(e) => {
+                if let Some(answer) = self
+                    .synthesised_artifact_document(&coordinate, &identity, action, &e)
+                    .await
+                {
+                    return Ok(answer);
+                }
+                // A forge release by tag, Go's `.info`: a document about one
+                // version, served through this route; its miss is filed as
+                // one, under the package, naming the version (RFC 0008-bis
+                // §4.4) — not as an artifact under a key nothing will ever
+                // be stored at.
+                if let Some(key) = self.document_by_version_key(&coordinate).await {
+                    return Err(self
+                        .record_miss(
+                            e,
+                            &coordinate,
+                            MissKind::Document,
+                            Some(key),
+                            Some(coordinate.version.clone()),
+                        )
+                        .await);
+                }
+                return Err(self
+                    .record_if_missing(e, &coordinate, MissKind::Artifact)
+                    .await);
+            }
+        };
+        Ok(match (response, resolved) {
+            (ProxyResponse::Stream(stream), Some(resolved)) => ProxyResponse::ForgeStream {
+                stream,
+                resolved: Box::new(resolved),
+                keyed: Box::new(served),
+            },
+            // A warned forge artifact carries both: the ref it resolved to
+            // and the verdict it was served under.
+            (ProxyResponse::Warned { response, verdict }, Some(resolved)) => {
+                ProxyResponse::Warned {
+                    response: Box::new(match *response {
+                        ProxyResponse::Stream(stream) => ProxyResponse::ForgeStream {
+                            stream,
+                            resolved: Box::new(resolved),
+                            keyed: Box::new(served),
+                        },
+                        other => other,
+                    }),
+                    verdict,
+                }
+            }
+            (other, _) => other,
+        })
+    }
+
+    /// Record a `ContentUnavailable` and hand the error back unchanged.
+    ///
+    /// Fire-and-forget by design (RFC 0008 §6.2): a recorder that cannot
+    /// write must never turn a `503` into a `500`. The estate loses one line
+    /// of its next bundle list, which is worth strictly less than the
+    /// request it would otherwise break.
+    pub(super) async fn record_if_missing(
+        &self,
+        error: CoreError,
+        coordinate: &crate::entities::PackageId,
+        kind: MissKind,
+    ) -> CoreError {
+        // An artifact, a ref or a checksum request names its version; a
+        // listing does not, and a placeholder version (`__simple__`,
+        // `releases`) is not one.
+        let requested = match kind {
+            MissKind::Artifact | MissKind::Ref | MissKind::Checksum => {
+                Some(coordinate.version.clone())
+                    .filter(|v| !v.is_empty() && !v.starts_with("__") && v != "releases")
+            }
+            MissKind::Document | MissKind::UnmirroredHost => None,
+        };
+        self.record_miss(error, coordinate, kind, None, requested)
+            .await
+    }
+
+    /// [`Self::record_if_missing`] with the row's shape chosen by the caller:
+    /// the storage key to file it under (the error's own when `None`) and
+    /// the version the request named. The held set of the package is read
+    /// under synthesis, so the row says what the listing the client saw
+    /// had offered (RFC 0008-bis §4.4).
+    async fn record_miss(
+        &self,
+        error: CoreError,
+        coordinate: &crate::entities::PackageId,
+        kind: MissKind,
+        storage_key: Option<String>,
+        requested_version: Option<String>,
+    ) -> CoreError {
+        let CoreError::ContentUnavailable { registry, key } = &error else {
+            return error;
+        };
+        // RFC 0008 §5.3 and decision 7: *a blocked package is not a gap in
+        // the mirror.* The RFC put this after the rule chain, and on an
+        // air-gapped instance the chain never runs: the offline client
+        // refuses metadata resolution first, so the block list is never
+        // consulted and an administrator's own refusal would arrive as
+        // "the next bundle needs this". The check is therefore made here,
+        // on the miss path only, where it costs one lookup on a request
+        // that has already failed — and it changes the *answer* too, which
+        // is the half that matters to the operator reading the `503`.
+        if let Some(reason) = self.blocked_reason(coordinate).await {
+            return CoreError::AccessDenied(reason);
+        }
+        let recorder = {
+            let hot = self.hot.read().await;
+            hot.air_gap
+                .record_misses
+                .then(|| hot.miss_recorder.clone())
+                .flatten()
+        };
+        let Some(recorder) = recorder else {
+            return error;
+        };
+        let held_versions = self
+            .held_version_names(&coordinate.registry, &coordinate.name)
+            .await;
+        let miss = crate::entities::ContentMiss {
+            registry: registry.clone(),
+            storage_key: storage_key.unwrap_or_else(|| key.clone()),
+            kind,
+            coordinate: Some(coordinate.cache_key()),
+            requested_version,
+            held_versions,
+        };
+        if let Err(e) = recorder.record(&miss, chrono::Utc::now()).await {
+            tracing::warn!(key = %key, error = %e, "air gap: could not record the miss");
+        }
+        error
+    }
+
+    /// The distinct versions this instance holds of a package, newest first —
+    /// what a synthesised listing named — or nothing when listings are not
+    /// synthesised, in which case the client saw no listing to compare with.
+    async fn held_version_names(&self, registry: &str, name: &str) -> Vec<String> {
+        if !self.hot.read().await.air_gap.synthesises_listings() {
+            return Vec::new();
+        }
+        let mut versions: Vec<String> = crate::services::listing_synthesis::held_versions(
+            self.artifact_meta.as_ref(),
+            self.cache.as_ref(),
+            registry,
+            name,
+        )
+        .await
+        .into_iter()
+        .map(|h| h.version)
+        .collect();
+        versions.sort_by(|a, b| crate::services::version_order::newest_first(a, b));
+        versions.dedup();
+        versions
+    }
+
+    /// The miss key of a by-version document — a forge release by tag,
+    /// Go's `.info` — when the coordinate is one, else `None`
+    /// (`listing_synthesis::is_document_by_version`).
+    async fn document_by_version_key(
+        &self,
+        coordinate: &crate::entities::PackageId,
+    ) -> Option<String> {
+        let kind = {
+            let hot = self.hot.read().await;
+            let client = hot.registries.get(&coordinate.registry)?;
+            client
+                .registry_type()
+                .parse::<crate::entities::RegistryKind>()
+                .ok()?
+        };
+        crate::services::listing_synthesis::is_document_by_version(
+            kind,
+            &coordinate.version,
+            coordinate.artifact.as_deref(),
+        )
+        .then(|| {
+            crate::services::listing_synthesis::document_by_version_key(kind, &coordinate.name)
+        })
+    }
+
+    /// The administrator's reason for blocking this coordinate, if they did.
+    ///
+    /// The same widening `BlockListRule` does — the requested coordinate,
+    /// then the bare version — because a block on a version covers every
+    /// file of it, and a download addresses a file.
+    ///
+    /// Fails **open**, as the rule does: an unreadable store must not turn a
+    /// miss into a refusal that names a block nobody wrote.
+    async fn blocked_reason(&self, id: &crate::entities::PackageId) -> Option<String> {
+        use crate::entities::PackageStatus;
+        for candidate in [
+            Some(id.clone()),
+            id.artifact.as_ref().map(|_| crate::entities::PackageId {
+                artifact: None,
+                ..id.clone()
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Ok(PackageStatus::Blocked { reason, .. }) =
+                self.repo.get_status(&candidate).await
+            {
+                return Some(reason);
+            }
+        }
+        None
+    }
+
+    /// Resolve a forge coordinate's ref and rewrite the request onto the
+    /// commit (RFC 0019 §4.2 *Cache key*). `None` for anything that is not a
+    /// forge read of a ref — every package registry, a release listing, the
+    /// Forgejo packages passthrough — and for a forge client that does not
+    /// answer [`crate::ports::RegistryClient::forge`] (a fan-out over several
+    /// upstreams, today).
+    ///
+    /// Releases and assets are resolved but **not** rewritten: their bytes are
+    /// identified by the upload, not the commit, so the tag stays the key. The
+    /// resolution is still recorded, which is what makes a moved tag
+    /// detectable.
+    async fn resolve_forge_ref(
+        &self,
+        req: &mut ProxyRequest,
+    ) -> Result<Option<crate::entities::ResolvedRef>, CoreError> {
+        let Some(coord) = crate::entities::ForgeCoordinate::from_package_id(&req.package_id) else {
+            return Ok(None);
+        };
+        let Some(git_ref) = coord.git_ref().map(str::to_owned) else {
+            return Ok(None);
+        };
+        let registry = req.package_id.registry.clone();
+        let (client, store, policy) = {
+            let hot = self.hot.read().await;
+            let Some(client) = hot.registries.get(&registry) else {
+                // Unknown registry: the prelude answers that with the right
+                // error, so nothing is said here.
+                return Ok(None);
+            };
+            (Arc::clone(client), hot.ref_resolutions.clone(), {
+                let mut p = hot.forge_refs.get(&registry).copied().unwrap_or_default();
+                // RFC 0008 §13.3: an air-gapped instance re-resolves
+                // nothing, because there is nothing to re-resolve
+                // against.
+                p.frozen = hot.air_gap.enabled;
+                p
+            })
+        };
+        let Some(forge) = client.forge() else {
+            return Ok(None);
+        };
+        // Everything past this point is an authenticated upstream call with the
+        // operator's forge token plus a `ref_resolutions` write, and `handle`
+        // calls this *before* the prelude and the grant check. So both run here
+        // first: without them an anonymous caller could ask about a tag in a
+        // repository they may not read and tell "no such tag" (the 404
+        // `resolve_ref` returns) from "not yours" (the 403 the grant check
+        // returns later) — an existence oracle over the proxy's credential, and
+        // an unauthenticated way to spend the shared rate-limit budget — while
+        // an unvalidated `owner/repo` or ref reached the upstream URL and the
+        // store before the edge chokepoint saw it.
+        //
+        // A denial is deliberately *not* returned as an error: `handle_resolved`
+        // owns the audit record and the `Denied` response for it, and taking the
+        // exit here would lose both. The ref is left unresolved instead, and the
+        // request is denied where it always was.
+        if crate::services::validate_coordinate(
+            &req.package_id.name,
+            &req.package_id.version,
+            req.package_id.artifact.as_deref(),
+        )
+        .is_err()
+            || crate::services::authz::authorize_grants_public(
+                &self.hot,
+                &req.package_id,
+                &req.identity,
+                req.action,
+            )
+            .await
+            .is_err()
+        {
+            return Ok(None);
+        }
+        let resolved = crate::services::forge_refs::resolve_ref(
+            &registry,
+            forge,
+            store.as_ref(),
+            policy,
+            &coord.owner_repo,
+            &git_ref,
+        )
+        .await?;
+        if coord.keyed_by_commit() {
+            req.package_id = coord.rewrite_onto(&req.package_id, &resolved.sha);
+        }
+        Ok(Some(resolved))
+    }
+
+    async fn handle_resolved(
+        &self,
+        req: ProxyRequest,
+        resolved: Option<&crate::entities::ResolvedRef>,
+    ) -> Result<ProxyResponse, CoreError> {
         let start = Instant::now();
-        let registry_name: &str = req.package_id.registry.as_str();
         let RequestPrelude {
             client,
             policy,
@@ -244,6 +652,15 @@ impl ProxyService {
         let metadata = self
             .resolve_metadata_cached(&client, &policy, &req, &cache_key, ttl, &registry_label)
             .await?;
+        // RFC 0019 §4.2 *Metadata contract*: what the ref resolved to rides in
+        // `extra.forge`, and a coordinate the client could not date takes the
+        // object's date from the resolution. Per request rather than cached:
+        // the same commit reached through a tag and through a branch is one
+        // cached entry and two ref kinds.
+        let metadata = match resolved {
+            Some(r) => overlay_forge_metadata(metadata, r),
+            None => metadata,
+        };
 
         // ── 2. Evaluate grants, then rules ─────────────────────────────────────
         //
@@ -263,17 +680,23 @@ impl ProxyService {
             let reason = e.to_string();
             super::warn_if_audit_failed(
                 self.repo
-                    .record_access(AccessEvent::denied_download(
-                        req.package_id,
-                        req.identity.user_id,
-                        req.identity.role,
-                        reason.clone(),
-                    ))
+                    .record_access(
+                        AccessEvent::denied_download(
+                            req.package_id,
+                            req.identity.user_id,
+                            req.identity.role,
+                            reason.clone(),
+                        )
+                        .with_ip_ua(req.ip_address.clone(), req.user_agent.clone()),
+                    )
                     .await,
                 "denied download",
             );
             super::finish_request(&registry_label, "denied", start);
-            return Ok(ProxyResponse::Denied { reason });
+            return Ok(ProxyResponse::Denied {
+                reason,
+                verdict: None,
+            });
         }
 
         let empty: Vec<Box<dyn crate::rules::Rule>> = vec![];
@@ -290,21 +713,73 @@ impl ProxyService {
             requested_version: Some(&req.package_id.version),
         };
 
-        if let RuleDecision::Deny { reason } = evaluate_rules(rules, &ctx).await {
+        // The verdict gate leaves the verdict it judged under beside its
+        // decision (RFC 0018 §4.2), so a refusal can carry the reason codes
+        // and a `warned` stream its headers, without the chain's other rules
+        // knowing anything about it.
+        let (decision, verdict) =
+            crate::services::verdict::with_request_verdict(evaluate_rules(rules, &ctx)).await;
+        if let RuleDecision::Deny { reason } = decision {
             super::warn_if_audit_failed(
                 self.repo
-                    .record_access(AccessEvent::denied_download(
-                        req.package_id,
-                        req.identity.user_id,
-                        req.identity.role,
-                        reason.clone(),
-                    ))
+                    .record_access(
+                        AccessEvent::denied_download(
+                            req.package_id,
+                            req.identity.user_id,
+                            req.identity.role,
+                            reason.clone(),
+                        )
+                        .with_ip_ua(req.ip_address.clone(), req.user_agent.clone()),
+                    )
                     .await,
                 "denied download",
             );
             super::finish_request(&registry_label, "denied", start);
-            return Ok(ProxyResponse::Denied { reason });
+            return Ok(ProxyResponse::Denied {
+                reason,
+                verdict: verdict.map(Box::new),
+            });
         }
+        let warned = verdict
+            .filter(|v| v.state == crate::entities::VerdictState::Warned)
+            .map(Box::new);
+
+        let response = self
+            .serve_after_rules(
+                req,
+                client,
+                policy,
+                metadata,
+                integrity,
+                limit,
+                registry_label,
+                start,
+            )
+            .await?;
+        Ok(match warned {
+            Some(verdict) => ProxyResponse::Warned {
+                response: Box::new(response),
+                verdict,
+            },
+            None => response,
+        })
+    }
+
+    /// Everything after the rules have allowed the request: the firewall
+    /// stream, the cache hit, or the fetch-and-cache.
+    #[allow(clippy::too_many_arguments)]
+    async fn serve_after_rules(
+        &self,
+        req: ProxyRequest,
+        client: Arc<dyn crate::ports::RegistryClient>,
+        policy: Option<Arc<crate::services::hot_config::RegistryPolicy>>,
+        metadata: crate::entities::PackageMetadata,
+        integrity: crate::services::hot_config::IntegrityPolicy,
+        limit: u64,
+        registry_label: Arc<str>,
+        start: Instant,
+    ) -> Result<ProxyResponse, CoreError> {
+        let registry_name: &str = req.package_id.registry.as_str();
 
         // ── 3. Firewall-only: stream directly from upstream, skip all caching ──
         let firewall_only = policy.as_ref().map(|p| p.firewall_only).unwrap_or(false);
@@ -332,11 +807,14 @@ impl ProxyService {
                 // path calls the same function — see
                 // `PackageId::is_verification_sidecar`.
                 self.repo
-                    .record_access(AccessEvent::allowed_read(
-                        req.package_id,
-                        req.identity.user_id,
-                        req.identity.role,
-                    ))
+                    .record_access(
+                        AccessEvent::allowed_read(
+                            req.package_id,
+                            req.identity.user_id,
+                            req.identity.role,
+                        )
+                        .with_ip_ua(req.ip_address.clone(), req.user_agent.clone()),
+                    )
                     .await,
                 "allowed download",
             );
@@ -445,12 +923,15 @@ impl ProxyService {
         if let CoreError::AccessDenied(reason) = &e {
             super::warn_if_audit_failed(
                 self.repo
-                    .record_access(AccessEvent::denied_metadata(
-                        req.package_id.clone(),
-                        req.identity.user_id.clone(),
-                        req.identity.role.clone(),
-                        reason.clone(),
-                    ))
+                    .record_access(
+                        AccessEvent::denied_metadata(
+                            req.package_id.clone(),
+                            req.identity.user_id.clone(),
+                            req.identity.role.clone(),
+                            reason.clone(),
+                        )
+                        .with_ip_ua(req.ip_address.clone(), req.user_agent.clone()),
+                    )
                     .await,
                 what,
             );
@@ -491,9 +972,28 @@ impl ProxyService {
             .await?;
 
         let name = req.package_id.name.as_str();
-        let mut doc = self
+        let mut doc = match self
             .cached_version_document(&prelude, req, name, doc_kind)
-            .await?;
+            .await
+        {
+            Ok(d) => d,
+            // A listing an air-gapped instance does not hold is answered
+            // from what it does hold (RFC 0008-bis) — through the same
+            // filters below as a fetched one — and, where nothing can be
+            // composed, is the other half of RFC 0008's record: the next
+            // bundle needs the document as much as the bytes.
+            Err(e) => match self
+                .synthesised_listing(&prelude, req, name, doc_kind, public_base, &e)
+                .await
+            {
+                Some(doc) => doc,
+                None => {
+                    return Err(self
+                        .record_if_missing(e, &req.package_id, MissKind::Document)
+                        .await)
+                }
+            },
+        };
 
         let kind = prelude.client.registry_type().parse().unwrap_or_else(|_| {
             // Unreachable in practice: `registry_type()` returns the same
@@ -506,16 +1006,21 @@ impl ProxyService {
             );
             crate::entities::RegistryKind::Generic
         });
+        // The blocked set is a statement about the *package*, and for one kind
+        // the listing coordinate says more than that: SDKMAN's carries the
+        // platform (`java/linuxx64`), and a block on a JDK must cover all of
+        // them (RFC 0010 §6.2). Every other kind returns `name` unchanged.
+        let blocking_name = kind.blocking_package_name(name);
         let ctx = crate::services::blocking::ListingContext {
             registry: &req.package_id.registry,
             kind,
             document: doc_kind,
-            package: name,
+            package: blocking_name,
             public_base,
         };
 
         let blocked = self
-            .blocked_versions_for(&req.package_id.registry, name, kind)
+            .blocked_versions_for(&req.package_id.registry, blocking_name, kind)
             .await;
 
         crate::services::blocking::dispatch(&ctx, &mut doc, &blocked);
@@ -530,6 +1035,161 @@ impl ProxyService {
         self.metrics.record_listing_read(&req.package_id.registry);
 
         Ok(doc)
+    }
+
+    /// RFC 0008-bis §5.1: a listing this instance holds no document for,
+    /// composed from the versions it does hold. `None` — the `503` of RFC
+    /// 0008 — unless the miss is the offline client's, the mode is on with
+    /// synthesis, something is held, and the kind has a shape to render.
+    async fn synthesised_listing(
+        &self,
+        prelude: &RequestPrelude,
+        req: &ProxyRequest,
+        name: &str,
+        doc_kind: DocumentKind,
+        public_base: &str,
+        error: &CoreError,
+    ) -> Option<VersionDocument> {
+        if !matches!(error, CoreError::ContentUnavailable { .. }) {
+            return None;
+        }
+        if !self.hot.read().await.air_gap.synthesises_listings() {
+            return None;
+        }
+        let kind: crate::entities::RegistryKind = prelude.client.registry_type().parse().ok()?;
+        if crate::services::listing_synthesis::is_registry_wide(kind, doc_kind) {
+            let held = crate::services::listing_synthesis::held_registry(
+                self.artifact_meta.as_ref(),
+                self.cache.as_ref(),
+                &req.package_id.registry,
+            )
+            .await;
+            let doc =
+                crate::services::listing_synthesis::render_registry(kind, doc_kind, name, &held)?;
+            tracing::info!(
+                registry = %req.package_id.registry,
+                document = %doc_kind.as_str(),
+                held = held.len(),
+                "air gap: registry-wide listing synthesised from the held set"
+            );
+            return Some(doc);
+        }
+        let held = crate::services::listing_synthesis::held_versions_of(
+            self.artifact_meta.as_ref(),
+            self.cache.as_ref(),
+            &req.package_id.registry,
+            &crate::services::listing_synthesis::package_names_for(kind, name),
+        )
+        .await;
+        let doc =
+            crate::services::listing_synthesis::render(kind, doc_kind, name, &held, public_base)?;
+        tracing::info!(
+            registry = %req.package_id.registry,
+            package = %name,
+            document = %doc_kind.as_str(),
+            held = held.len(),
+            "air gap: listing synthesised from the held set"
+        );
+        Some(doc)
+    }
+
+    /// RFC 0008-bis §4.3: a document about one version, on a route that
+    /// streams bytes — a forge release by tag (the document a pinned `mise
+    /// install` asks for first, §13.1), Go's `@v/{v}.info` — composed from
+    /// the held set.
+    ///
+    /// The resolved path failed before its rules ran, so they run here on a
+    /// minimal metadata for the coordinate — the grant check, the block
+    /// list, the registry's rule chain — and a refusal is a refusal, not a
+    /// listing. The URLs are left for the handler to point home, as it does
+    /// for the forge's own document.
+    async fn synthesised_artifact_document(
+        &self,
+        coordinate: &crate::entities::PackageId,
+        identity: &crate::entities::Identity,
+        action: Action,
+        error: &CoreError,
+    ) -> Option<ProxyResponse> {
+        if !matches!(error, CoreError::ContentUnavailable { .. }) {
+            return None;
+        }
+        let (kind, policy) = {
+            let hot = self.hot.read().await;
+            if !hot.air_gap.synthesises_listings() {
+                return None;
+            }
+            let client = hot.registries.get(&coordinate.registry)?;
+            let kind: crate::entities::RegistryKind = client.registry_type().parse().ok()?;
+            (kind, hot.policies.get(&coordinate.registry).cloned())
+        };
+        if !crate::services::listing_synthesis::is_document_by_version(
+            kind,
+            &coordinate.version,
+            coordinate.artifact.as_deref(),
+        ) {
+            return None;
+        }
+        let held = crate::services::listing_synthesis::held_versions(
+            self.artifact_meta.as_ref(),
+            self.cache.as_ref(),
+            &coordinate.registry,
+            &coordinate.name,
+        )
+        .await;
+        let doc = crate::services::listing_synthesis::render_artifact_document(
+            kind,
+            &coordinate.name,
+            &coordinate.version,
+            &held,
+            "",
+        )?;
+        if let Err(e) =
+            crate::services::authz::authorize_grants_public(&self.hot, coordinate, identity, action)
+                .await
+        {
+            return Some(ProxyResponse::Denied {
+                reason: e.to_string(),
+                verdict: None,
+            });
+        }
+        if let Some(reason) = self.blocked_reason(coordinate).await {
+            return Some(ProxyResponse::Denied {
+                reason,
+                verdict: None,
+            });
+        }
+        let metadata = crate::entities::PackageMetadata::minimal(
+            coordinate.clone(),
+            serde_json::json!({ "tag_name": coordinate.version, "synthesised": true }),
+        );
+        let empty: Vec<Box<dyn crate::rules::Rule>> = vec![];
+        let rules = policy
+            .as_ref()
+            .map(|p| p.rules.as_slice())
+            .unwrap_or(empty.as_slice());
+        let ctx = RuleContext {
+            identity,
+            package: &metadata,
+            action,
+            cache_entry: None,
+            requested_version: Some(&coordinate.version),
+        };
+        let (decision, verdict) =
+            crate::services::verdict::with_request_verdict(evaluate_rules(rules, &ctx)).await;
+        if let RuleDecision::Deny { reason } = decision {
+            return Some(ProxyResponse::Denied {
+                reason,
+                verdict: verdict.map(Box::new),
+            });
+        }
+        tracing::info!(
+            registry = %coordinate.registry,
+            package = %coordinate.name,
+            version = %coordinate.version,
+            held = doc.synthesised.unwrap_or(0),
+            "air gap: by-version document composed from the held set"
+        );
+        Some(ProxyResponse::Document(doc))
     }
 
     /// One package's blocked versions, normalised for its protocol, **failing
@@ -552,7 +1212,7 @@ impl ProxyService {
         package: &str,
         kind: crate::entities::RegistryKind,
     ) -> crate::services::blocking::BlockedVersions {
-        let versions = self
+        let mut versions = self
             .repo
             .blocked_versions(registry, package)
             .await
@@ -565,7 +1225,51 @@ impl ProxyService {
                 );
                 Vec::new()
             });
+        versions.extend(self.held_versions_for(registry, package).await);
         crate::services::blocking::BlockedVersions::new(kind, versions)
+    }
+
+    /// The versions a security verdict keeps out of the listings (RFC 0018
+    /// §4.2 *Listings*), hidden **by the same mechanism as a block** — so
+    /// cargo marks them `yanked`, conda drops them from the channel summary,
+    /// and every per-registry caveat of RFC 0006 applies unchanged.
+    ///
+    /// Empty for a registry without `[security]`, and empty on a store error:
+    /// a listing fails open like a block does, because the download gate
+    /// re-checks the concrete coordinate on every request and no failure here
+    /// makes held bytes retrievable.
+    async fn held_versions_for(&self, registry: &str, package: &str) -> Vec<String> {
+        let (verdicts, mode) = {
+            let hot = self.hot.read().await;
+            let Some(policy) = hot.security.get(registry) else {
+                return Vec::new();
+            };
+            (hot.verdicts.clone(), policy.mode)
+        };
+        let Some(verdicts) = verdicts else {
+            return Vec::new();
+        };
+        let now = chrono::Utc::now();
+        // Judged under the registry's *current* mode, not the one the row
+        // was written under: a `denied` from before a flip to `warn` must
+        // not keep hiding a version the gate would now serve (see
+        // `Verdict::hides_from_listings_under`).
+        match verdicts.list_for_package(registry, package).await {
+            Ok(rows) => rows
+                .into_iter()
+                .filter(|v| v.hides_from_listings_under(now, mode))
+                .map(|v| v.package.version)
+                .collect(),
+            Err(e) => {
+                tracing::warn!(
+                    registry = %registry,
+                    package = %package,
+                    error = %e,
+                    "failed to load verdicts for listing, failing open"
+                );
+                Vec::new()
+            }
+        }
     }
 
     /// The blocked `(package, version)` set for a whole registry, behind a
@@ -681,9 +1385,27 @@ impl ProxyService {
             .await?;
 
         let name = req.package_id.name.as_str();
-        let mut doc = self
+        // A registry-wide listing an air-gapped instance does not hold is
+        // composed from everything it holds (RFC 0008-bis §13.6) — a conda
+        // subdir's `repodata.json` — and, where nothing can be, is RFC
+        // 0008's recorded miss, as for a per-package listing.
+        let mut doc = match self
             .cached_version_document(&prelude, req, name, doc_kind)
-            .await?;
+            .await
+        {
+            Ok(d) => d,
+            Err(e) => match self
+                .synthesised_listing(&prelude, req, name, doc_kind, public_base, &e)
+                .await
+            {
+                Some(doc) => doc,
+                None => {
+                    return Err(self
+                        .record_if_missing(e, &req.package_id, MissKind::Document)
+                        .await)
+                }
+            },
+        };
 
         let kind = prelude
             .client

@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 
-use super::{CoreError, Identity, LocalRegistryService, PublishedPackage};
+use super::{artifact_storage_key, CoreError, Identity, LocalRegistryService, PublishedPackage};
+use crate::entities::Action;
+use crate::ports::{collect_byte_stream, StorageMeta};
 
 /// One published VS Code extension version, decoded from the per-version
 /// `index_metadata` written at publish time.
@@ -39,6 +41,10 @@ pub struct OpenVsxExtensionVersion {
     /// SHA-256 hex of the VSIX bytes.
     pub checksum: String,
     pub published_at: DateTime<Utc>,
+    /// RFC 0020 §13.6: the version's signature archive was provided at
+    /// publish time (an upstream's, served as-is) rather than made by the
+    /// registry's key.
+    pub signature_provided: bool,
 }
 
 impl OpenVsxExtensionVersion {
@@ -93,6 +99,7 @@ impl OpenVsxExtensionVersion {
                 .unwrap_or(false),
             checksum: pkg.checksum.clone(),
             published_at: pkg.published_at,
+            signature_provided: m.get("vsixSignature").and_then(|v| v.as_str()) == Some("provided"),
         }
     }
 
@@ -117,7 +124,93 @@ impl OpenVsxExtensionVersion {
     }
 }
 
+/// The sibling key a **provided** signature archive is kept under (RFC 0020
+/// §13.6) — distinct from the registry-signed `.sigzip`, so the
+/// verify-or-rebuild of the latter never touches it.
+pub fn provided_vsix_signature_key(registry: &str, name: &str, version: &str) -> String {
+    format!(
+        "{}.sigzip.upstream",
+        artifact_storage_key(registry, name, version)
+    )
+}
+
 impl LocalRegistryService {
+    /// Attach an upstream's signature archive to a version this registry
+    /// holds (RFC 0020 §13.6): a marketplace extension republished locally
+    /// keeps the signature a stock editor verifies. The archive must be a
+    /// zip holding `.signature.manifest` — checked against the stored VSIX
+    /// bytes, so an archive made over other bytes is refused — and at least
+    /// one signature entry. The registry vouches for nothing in it and
+    /// never rewrites it. Authorised as a publish of the same version.
+    pub async fn attach_vsix_signature(
+        &self,
+        registry: &str,
+        name: &str,
+        version: &str,
+        archive: bytes::Bytes,
+        identity: &Identity,
+    ) -> Result<(), CoreError> {
+        self.authorize_write(registry, name, version, identity, Action::ReleasesPublish)
+            .await?;
+        let versions = self.backend.get_versions(registry, name).await?;
+        if !versions.iter().any(|p| p.version == version) {
+            return Err(CoreError::NotFound(format!(
+                "{name}@{version} is not published in registry '{registry}'"
+            )));
+        }
+        let vsix_key = artifact_storage_key(registry, name, version);
+        let stored = self.storage.retrieve(&vsix_key).await?.ok_or_else(|| {
+            CoreError::NotFound(format!("{name}@{version}: no stored VSIX to sign for"))
+        })?;
+        let vsix = collect_byte_stream(stored.stream).await?;
+
+        let provided = crate::services::vsx_signature::read_provided_archive(&archive)?;
+        if !crate::services::vsx_signature::manifest_matches(&provided.manifest, &vsix)? {
+            return Err(CoreError::InvalidInput(format!(
+                "the signature manifest does not describe the stored {name}@{version}: \
+                 the archive was made over other bytes"
+            )));
+        }
+
+        let key = provided_vsix_signature_key(registry, name, version);
+        self.storage
+            .store(
+                &key,
+                archive.clone(),
+                StorageMeta {
+                    content_type: Some("application/zip".to_owned()),
+                    size: Some(archive.len() as u64),
+                    checksum: None,
+                },
+            )
+            .await?;
+        self.backend
+            .set_vsix_signature_provided(registry, name, version, true)
+            .await?;
+        tracing::info!(
+            registry,
+            name,
+            version,
+            entries = ?provided.entries,
+            "attached a provided VSIX signature archive"
+        );
+        Ok(())
+    }
+
+    /// The provided archive for a version, when one was attached.
+    pub async fn provided_vsix_signature(
+        &self,
+        registry: &str,
+        name: &str,
+        version: &str,
+    ) -> Result<Option<bytes::Bytes>, CoreError> {
+        let key = provided_vsix_signature_key(registry, name, version);
+        match self.storage.retrieve(&key).await? {
+            Some(stored) => Ok(Some(collect_byte_stream(stored.stream).await?)),
+            None => Ok(None),
+        }
+    }
+
     /// All visible, non-yanked versions of one extension, oldest first.
     ///
     /// Goes through `load_visible_versions_or_not_found`, the chokepoint that

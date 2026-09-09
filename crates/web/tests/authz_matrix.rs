@@ -533,6 +533,76 @@ fn matrix() -> Vec<Row> {
                 "path mirror: the coordinate is repo/_ and no local package is read",
             ))
             .no_control(),
+        // ── nodedist (RFC 0010) ──────────────────────────────────────────────
+        // Proxy-only like `generic`, so axis B has no local package to read —
+        // but unlike `generic` the coordinate is real (`node` / `v9.8.7`), which
+        // is exactly what makes a Node release blockable. The two listings are
+        // whole-registry documents: one package, every release.
+        Row::new("nodedist", "/proxy/reg/nodedist/v9.8.7/SHASUMS256.txt")
+            .coord("node", "v9.8.7")
+            .vis(Expect::NotChecked(
+                "proxy-only: the file is streamed from upstream and no local package is read",
+            )),
+        Row::new("nodedist", "/proxy/reg/nodedist/index.tab")
+            .coord("node", "v9.8.7")
+            .token("v1.1.0")
+            .vis(WHOLE_REGISTRY),
+        Row::new("nodedist", "/proxy/reg/nodedist/index.json")
+            .coord("node", "v9.8.7")
+            .token("v1.1.0")
+            .vis(WHOLE_REGISTRY),
+        // ── sdkman (RFC 0010 phase 6) ────────────────────────────────────────
+        // Proxy-only like `nodedist`, with a real coordinate: the candidate is
+        // the package and the platform the artifact. The per-candidate listings
+        // carry no local package to check; the three relayed API documents that
+        // name no package at all (`healthcheck`, `broker/version`, `selfupdate`)
+        // are `NoPackage` in the inventory rather than rows.
+        Row::new(
+            "sdkman",
+            "/proxy/reg/sdkman/broker/download/pkg/9.8.7/linuxx64",
+        )
+        .vis(Expect::NotChecked(
+            "proxy-only: the archive is streamed through the broker and no local package is read",
+        )),
+        Row::new(
+            "sdkman",
+            "/proxy/reg/sdkman/candidates/pkg/linuxx64/versions/all",
+        )
+        .token("1.1.0")
+        .vis(Expect::NotChecked(
+            "proxy-only listing: no local package to gate on",
+        )),
+        Row::new(
+            "sdkman",
+            "/proxy/reg/sdkman/candidates/pkg/linuxx64/versions/list?current=&installed=",
+        )
+        .vis(Expect::NotChecked(
+            "proxy-only listing: no local package to gate on",
+        )),
+        Row::new("sdkman", "/proxy/reg/sdkman/candidates/default/pkg")
+            .token("1.1.0")
+            .vis(Expect::NotChecked(
+                "proxy-only listing: no local package to gate on",
+            )),
+        Row::new(
+            "sdkman",
+            "/proxy/reg/sdkman/candidates/validate/pkg/9.8.7/linuxx64",
+        )
+        .token("valid")
+        .vis(Expect::NotChecked(
+            "proxy-only: the answer is one word about an upstream version",
+        )),
+        Row::new("sdkman", "/proxy/reg/sdkman/hooks/post/pkg/9.8.7/linuxx64").vis(
+            Expect::NotChecked(
+                "proxy-only: a hook script relayed byte-exact, no local package is read",
+            ),
+        ),
+        Row::new("sdkman", "/proxy/reg/sdkman/candidates/all")
+            .token("java")
+            .vis(WHOLE_REGISTRY),
+        Row::new("sdkman", "/proxy/reg/sdkman/candidates/list")
+            .token("fixture")
+            .vis(WHOLE_REGISTRY),
         Row::new(
             "vscode-marketplace",
             "/proxy/reg/vscode/asset/acme/ext/9.8.7/Microsoft.VisualStudio.Services.VSIXPackage",
@@ -845,6 +915,7 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/-/whoami", Coverage::NoPackage("echoes the caller's own identity, never a package")),
     ("/proxy/{registry}/.well-known/terraform.json", Coverage::NoPackage("Terraform service discovery; static endpoint map")),
     ("/proxy/{registry}/api/-/search", Coverage::NoRow("package read, not yet exercised")),
+    ("/proxy/{registry}/api/-/public-key/{key_id}", Coverage::NoRow("anonymous by design (RFC 0020 §4.2): serves the registry's own VSIX signing public key, which names a key id and no coordinate — no package is read, and a public key is public. `vsx_signing.rs` asserts the anonymous `200` and the `404` for any other id")),
     ("/proxy/{registry}/api/packages/{path}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/api/plugins/{id}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/api/plugins/{id}/updates", Coverage::NoRow("package read, not yet exercised")),
@@ -882,6 +953,20 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/list.json", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/maven2/{path}", Coverage::Row),
     ("/proxy/{registry}/names", Coverage::Row),
+    ("/proxy/{registry}/nodedist/index.json", Coverage::Row),
+    ("/proxy/{registry}/nodedist/index.tab", Coverage::Row),
+    ("/proxy/{registry}/nodedist/{version}/{file}", Coverage::Row),
+    ("/proxy/{registry}/sdkman/broker/download/{candidate}/{version}/{platform}", Coverage::Row),
+    ("/proxy/{registry}/sdkman/broker/version/sdkman/{component}/{channel}", Coverage::NoPackage("the SDKMAN script/native version on a channel; names no package")),
+    ("/proxy/{registry}/sdkman/candidates/all", Coverage::Row),
+    ("/proxy/{registry}/sdkman/candidates/default/{candidate}", Coverage::Row),
+    ("/proxy/{registry}/sdkman/candidates/list", Coverage::Row),
+    ("/proxy/{registry}/sdkman/candidates/validate/{candidate}/{version}/{platform}", Coverage::Row),
+    ("/proxy/{registry}/sdkman/candidates/{candidate}/{platform}/versions/all", Coverage::Row),
+    ("/proxy/{registry}/sdkman/candidates/{candidate}/{platform}/versions/list", Coverage::Row),
+    ("/proxy/{registry}/sdkman/healthcheck", Coverage::NoPackage("the upstream health token, relayed as-is; names no package")),
+    ("/proxy/{registry}/sdkman/hooks/{phase}/{candidate}/{version}/{platform}", Coverage::Row),
+    ("/proxy/{registry}/sdkman/selfupdate/{channel}/{platform}", Coverage::NoPackage("the SDKMAN self-update script for a channel; names no package")),
     ("/proxy/{registry}/nuget/v3/autocomplete", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/nuget/v3/flat/{id}/index.json", Coverage::Row),
     ("/proxy/{registry}/nuget/v3/flat/{id}/{version}/{filename}", Coverage::Row),
@@ -932,11 +1017,14 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/{module}/@v/list", Coverage::Row),
     ("/proxy/{registry}/{module}/@v/{filename}", Coverage::Row),
     ("/proxy/{registry}/{name}/{version}/download", Coverage::Row),
+    ("/proxy/{registry}/{owner}/{repo}/branches/{branch}", Coverage::NoRow("RFC 0019 [api_reads]: opt-in, off by default, exercised in forge_api_reads.rs")),
+    ("/proxy/{registry}/{owner}/{repo}/commits/{sha}", Coverage::NoRow("RFC 0019 [api_reads]: opt-in, off by default, exercised in forge_api_reads.rs")),
     ("/proxy/{registry}/{owner}/{repo}/raw/{git_ref}/{path}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{owner}/{repo}/releases", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{owner}/{repo}/releases/assets/{asset_id}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{owner}/{repo}/releases/download/{tag}/{filename}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{owner}/{repo}/releases/tags/{tag}", Coverage::NoRow("package read, not yet exercised")),
+    ("/proxy/{registry}/{owner}/{repo}/tags", Coverage::NoRow("RFC 0019 [api_reads]: opt-in, off by default, exercised in forge_api_reads.rs")),
     ("/proxy/{registry}/{owner}/{repo}/tarball/{tag}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{owner}/{repo}/zipball/{tag}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{package}", Coverage::Row),
@@ -2024,6 +2112,7 @@ const WRITE_ROUTE_INVENTORY: &[(&str, &str, WriteCoverage)] = &[
     // ── openvsx / vscode ─────────────────────────────────────────────────────
     ("PUT", "/proxy/{registry}/{extension_id}/{version}/vsix", WriteCoverage::Row),
     ("POST", "/proxy/{registry}/api/-/publish", WriteCoverage::NoRow("write, not yet exercised: the OpenVSX REST publish, which takes its coordinate from the VSIX manifest rather than the URL")),
+    ("PUT", "/proxy/{registry}/{extension_id}/{version}/vsix/signature", WriteCoverage::NoRow("write, covered outside this matrix: `vsx_signing.rs` asserts the anonymous 403, the 404 for a version not published, the 400 for a manifest over other bytes, and the positive control. It authorises through `authorize_write` with `ReleasesPublish`, the same gate as the publish it follows, and publishes nothing itself, so a row here would fingerprint identically to its control")),
     ("POST", "/proxy/{registry}/api/-/namespace/create", WriteCoverage::NoRow("write, covered outside this matrix: `local_vsx_registry.rs`'s `openvsx_namespace_claim_*` rows assert the refusal, the empty store afterwards, and a working positive control. It cannot be a `Row` here because a write row's fingerprint is `get_versions` for a coordinate and a namespace claim publishes nothing — both the denial and its control would fingerprint identically, so the control could not pass")),
     ("POST", "/proxy/{registry}/vscode/gallery/extensionquery", WriteCoverage::ReadRow),
     // ── maven ────────────────────────────────────────────────────────────────

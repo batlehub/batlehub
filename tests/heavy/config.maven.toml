@@ -1,0 +1,47 @@
+# Server configuration for the heavy Maven integration test
+# (tests/heavy/maven.sh). See tests/heavy/config.npm.toml for the env-var
+# conventions; `${HEAVY_RUN}` keeps each run's registries out of the last one's.
+
+[server]
+host = "127.0.0.1"
+port = 8104
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-maven-storage"
+
+# ── Proxy registry: Maven Central; the mirror for *everything* mvn asks for ──
+[[registries]]
+type = "maven"
+name = "mvn-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://repo1.maven.org/maven2/"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── Local registry: `mvn deploy:deploy-file` lands here (the Publish axis) ──
+[[registries]]
+type = "maven"
+name = "mvn-local-${HEAVY_RUN}"
+mode = "local"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

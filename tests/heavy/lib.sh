@@ -40,6 +40,9 @@
 #   ADMIN_TOKEN     publish credential, matching the suite's config
 #   COVERAGE=1      run the server under `cargo llvm-cov run --no-report`
 #   HEAVY_CACHE     cacheable client downloads (default ~/.cache/batlehub-heavy)
+#   HEAVY_FORGE_TOKEN  a GitHub/GitLab/Forgejo token the forge suites
+#                   authenticate their upstream with; unset, they stay
+#                   anonymous (see `heavy_forge_auth_config`)
 
 set -euo pipefail
 
@@ -50,8 +53,41 @@ HEAVY_SUITE=""
 HEAVY_WORK=""
 HEAVY_SERVER_PID=""
 HEAVY_TAP_PID=""
+HEAVY_EXTRA_PIDS=()
+HEAVY_SERVER2_PID=""
+HEAVY_BASE2=""
+HEAVY_CONFIG=""
 
 heavy_log() { printf '\n==> %s\n' "$*"; }
+
+# heavy_client_said <file> <ere> [count] — quote to stderr what the client said,
+# for whoever reads the log.
+#
+# **A report, never an assertion.** Under `set -o pipefail` a
+# `grep … | head -3 >&2` that matches nothing exits 1 and takes the whole suite
+# with it — a run killed by the line that was only trying to quote it, because
+# a client changed its wording. Measured on pathproxy: dnf's refusal contained
+# neither "error" nor "fail", and the suite died three phases from the end with
+# every assertion already passed.
+#
+# When nothing matches, the tail is printed instead. The reason to read this
+# line is to find out what the client actually said, and "it said nothing
+# matching my guess" is the least useful possible answer.
+heavy_client_said() {
+  local file="$1" ere="$2" count="${3:-3}" matched
+  if [[ ! -s "$file" ]]; then
+    echo "  (the client printed nothing)" >&2
+    return 0
+  fi
+  matched="$(grep -iE "$ere" "$file" 2>/dev/null | head -"$count" || true)"
+  if [[ -n "$matched" ]]; then
+    printf '%s\n' "$matched" >&2
+  else
+    echo "  (nothing matching /$ere/ — last $count line(s):)" >&2
+    tail -n "$count" "$file" >&2
+  fi
+  return 0
+}
 
 # Every failure dumps the transcript: the sequence is the evidence, and a bare
 # "assertion failed" from a heavy test is unactionable without it.
@@ -64,6 +100,10 @@ heavy_fail() {
   if [[ -n "${HEAVY_WORK:-}" && -s "$HEAVY_WORK/server.log" ]]; then
     echo "── server log (tail) ──" >&2
     tail -60 "$HEAVY_WORK/server.log" >&2
+  fi
+  if [[ -n "${HEAVY_WORK:-}" && -s "$HEAVY_WORK/server2.log" ]]; then
+    echo "── second server log (tail) ──" >&2
+    tail -40 "$HEAVY_WORK/server2.log" >&2
   fi
   exit 1
 }
@@ -89,8 +129,70 @@ heavy_stop_server() {
   HEAVY_SERVER_PID=""
 }
 
+# heavy_start_second_server <config> <port> [storage-dir]
+#
+# A second BatleHub, beside the first, on its own port and its own storage.
+# One suite needs it — RFC 0008's air gap, where the whole claim is that a
+# *disconnected* instance serves what a *connected* one exported, and one
+# process cannot be both.
+#
+# The two share the database, because the suites have one `DATABASE_URL`. What
+# that does and does not cost is worth stating: the metadata cache is
+# in-process and the storage directory is separate, so the second instance
+# holds no *bytes* until something is imported into it — the refusal and the
+# serve are both real. But the storage router's inventory is a table in that
+# shared database, so the second instance can *see* rows for keys it does not
+# hold, and any assertion about what it reports holding is meaningless here.
+# A real pair shares nothing.
+heavy_start_second_server() {
+  local config="$1" port="$2" storage="${3:-$HEAVY_WORK/storage2}"
+  mkdir -p "$storage"
+  HEAVY_BASE2="http://127.0.0.1:$port"
+  heavy_log "Starting the second BatleHub (config=$config, port=$port)"
+  # Its own port and path, through the loader's env-override path so the
+  # config file stays valid TOML. Exported for this launch only: the parent
+  # shell keeps the first instance's values.
+  (
+    export PROXY_CACHE__SERVER__PORT="$port"
+    export PROXY_CACHE__STORAGE__PATH="$storage"
+    setsid cargo run -p batlehub-server -- \
+      --config "$config" >"$HEAVY_WORK/server2.log" 2>&1 &
+    echo $! > "$HEAVY_WORK/server2.pid"
+  )
+  HEAVY_SERVER2_PID="$(cat "$HEAVY_WORK/server2.pid")"
+  for i in $(seq 1 120); do
+    if curl -sf "$HEAVY_BASE2/healthz" >/dev/null 2>&1; then
+      heavy_log "Second server healthy at $HEAVY_BASE2"
+      return 0
+    fi
+    if ! kill -0 "$HEAVY_SERVER2_PID" 2>/dev/null; then
+      tail -40 "$HEAVY_WORK/server2.log" >&2
+      HEAVY_SERVER2_PID=""
+      heavy_fail "the second server exited before becoming healthy"
+    fi
+    sleep 2
+    [[ "$i" == 120 ]] && heavy_fail "the second server did not become healthy within 4 minutes"
+  done
+}
+
+heavy_stop_second_server() {
+  if [[ -n "${HEAVY_SERVER2_PID:-}" ]]; then
+    kill -TERM -- "-$HEAVY_SERVER2_PID" 2>/dev/null \
+      || kill -TERM "$HEAVY_SERVER2_PID" 2>/dev/null || true
+    wait "$HEAVY_SERVER2_PID" 2>/dev/null || true
+  fi
+  HEAVY_SERVER2_PID=""
+}
+
 heavy_cleanup() {
   [[ -n "$HEAVY_TAP_PID" ]] && kill "$HEAVY_TAP_PID" 2>/dev/null
+  # A suite that starts a second tap (or anything else) registers its pid
+  # here, so a failure mid-way leaves no listener behind on the port the
+  # next run needs.
+  for pid in "${HEAVY_EXTRA_PIDS[@]:-}"; do
+    [[ -n "$pid" ]] && kill "$pid" 2>/dev/null
+  done
+  heavy_stop_second_server
   heavy_stop_server
   [[ -n "$HEAVY_WORK" ]] && rm -rf "$HEAVY_WORK"
   return 0
@@ -116,6 +218,8 @@ heavy_init() {
   HEAVY_TAP_BASE="http://127.0.0.1:$HEAVY_TAP_PORT"
   HEAVY_LOG="$HEAVY_WORK/tap.log"
   : > "$HEAVY_LOG"
+  # The tap's status-rewrite rules (RFC 0018 §4.4); see `heavy_tap_rewrite`.
+  export TAP_REWRITE_FILE="$HEAVY_WORK/tap.rewrite"
 
   # `${HEAVY_RUN}` is read by the suite configs through the loader's `${VAR}`
   # expansion, which happens on the raw text; the port and storage path go
@@ -129,7 +233,83 @@ heavy_init() {
   mkdir -p "$HEAVY_STORAGE"
 
   trap heavy_cleanup EXIT
+  # `set -e` ends a suite on the first failing command it does not test,
+  # and does so silently: the transcript is never printed and the run
+  # reads as "stopped". Name the line and the command, so a bug in the
+  # suite is told apart from a finding about the server.
+  trap 'echo "ERROR: $HEAVY_SUITE died at line $LINENO of ${BASH_SOURCE[0]}: $BASH_COMMAND (exit $?)" >&2' ERR
   heavy_log "[$HEAVY_SUITE] work dir $HEAVY_WORK, run id $HEAVY_RUN"
+}
+
+# heavy_forge_auth_config <config-path> — set `HEAVY_CONFIG` to the config to
+# actually start: the one given, with its forge registries authenticated when
+# this run has a token, and the given path itself when it does not.
+#
+# The forge configs are anonymous on purpose: a suite has to run on a fork and
+# on a developer's machine, neither of which has a secret. What anonymous costs
+# is that GitHub's 60 API requests an hour are counted *per source IP*, and a
+# hosted runner's IP is shared with every other job on that machine, so the
+# budget is regularly spent before this suite makes its first call. The proxy
+# then refuses the next one below its 10 % reserve (RFC 0019 §5.2) and answers
+# 502 — which airgap.sh reads as "a planned path the server does not answer",
+# naming the seed rather than the budget.
+#
+# So: `HEAVY_FORGE_TOKEN` set (`${{ github.token }}` in CI — 1 000 requests an
+# hour, per repository rather than per IP) writes a copy of the config with
+# `[registries.upstream_auth]` on every forge registry it declares. Unset,
+# `HEAVY_CONFIG` is the path given and nothing changes, so an anonymous run
+# behaves exactly as before.
+#
+# A variable rather than a printed path, as `heavy_runner_for` sets
+# `HEAVY_RUNNER`: `heavy_fail` inside a `$(…)` ends the subshell only, and the
+# suite would carry on and start a server with an empty `--config`.
+#
+# The token is never written to the file: the copy carries the placeholder and
+# the server expands it from its own environment, the way it does `${DATABASE_URL}`.
+heavy_forge_auth_config() {
+  local src="$1"
+  HEAVY_CONFIG="$src"
+  [[ -n "${HEAVY_FORGE_TOKEN:-}" ]] || return 0
+  export HEAVY_FORGE_TOKEN
+  local dst="$HEAVY_WORK/$(basename "$src")"
+  python3 - "$src" "$dst" <<'PY' || heavy_fail "could not authenticate the forge registries in $src"
+import sys
+
+src, dst = sys.argv[1], sys.argv[2]
+lines = open(src).read().splitlines(True)
+FORGES = ('"github"', '"gitlab"', '"forgejo"')
+starts = [i for i, l in enumerate(lines) if l.strip() == "[[registries]]"]
+bounds = [(s, starts[k + 1] if k + 1 < len(starts) else len(lines)) for k, s in enumerate(starts)]
+
+
+def is_forge(start, end):
+    for l in lines[start:end]:
+        t = l.strip()
+        if t.startswith("type") and "=" in t and t.split("=", 1)[1].strip() in FORGES:
+            return True
+    return False
+
+
+forges = [(s, e) for s, e in bounds if is_forge(s, e)]
+if not forges:
+    sys.exit(f"{src} declares no github/gitlab/forgejo registry to authenticate")
+
+out, prev = [], 0
+for start, end in forges:
+    # Before the trailing blanks and the comment block that introduces the
+    # *next* registry: a subtable after those is still this registry's, but it
+    # reads as if it belonged to the one the comment describes.
+    at = end
+    while at > start and (lines[at - 1].strip() == "" or lines[at - 1].lstrip().startswith("#")):
+        at -= 1
+    out.extend(lines[prev:at])
+    out.append('\n[registries.upstream_auth]\ntype = "bearer"\ntoken = "${HEAVY_FORGE_TOKEN}"\n')
+    prev = at
+out.extend(lines[prev:])
+open(dst, "w").write("".join(out))
+PY
+  HEAVY_CONFIG="$dst"
+  heavy_log "forge registries in $src: authenticated from \$HEAVY_FORGE_TOKEN"
 }
 
 # heavy_start_server <config-path>
@@ -225,6 +405,47 @@ heavy_self_signed() {
 # run rather than to everything the client has ever asked for.
 heavy_mark() { echo "### $*" >> "$HEAVY_LOG"; }
 
+# heavy_tap_rewrite <METHOD> <path-prefix> <from> <to> [Header: value]... —
+# from now on the tap answers <to> where the server answered <from> on that
+# path, with the headers added. This is the instrument of RFC 0018 §4.4: the
+# server does not emit a quarantine's `403` + `Retry-After` yet (phase 2), and
+# what each client *does* with one is the measurement. The transcript shows
+# `-> 200=>202` for a rewritten line, so the assertion can tell the two apart.
+# Rules accumulate until `heavy_tap_rewrite_clear`.
+heavy_tap_rewrite() {
+  local method="$1" prefix="$2" from="$3" to="$4"
+  shift 4
+  local headers=""
+  local h
+  for h in "$@"; do headers="${headers:+$headers ;; }$h"; done
+  echo "$method $prefix $from $to${headers:+ $headers}" >> "$TAP_REWRITE_FILE"
+}
+heavy_tap_rewrite_clear() { rm -f "$TAP_REWRITE_FILE"; }
+
+# heavy_block <registry> <name> <version> [artifact] — block one coordinate
+# through the admin API; `heavy_unblock` lifts it. The path-proxy kinds have
+# one package (`repo`, version `_`) and address a file by its artifact path.
+heavy_block() {
+  local registry="$1" name="$2" version="$3" artifact="${4:-}"
+  local body
+  body=$(printf '{"registry":"%s","name":"%s","version":"%s",%s"reason":"heavy: administratively blocked"}' \
+    "$registry" "$name" "$version" "${artifact:+\"artifact\":\"$artifact\",}")
+  curl -fsS -X POST "$HEAVY_BASE/api/v1/admin/packages/block" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+    -d "$body" >"$HEAVY_WORK/block.json" \
+    || { cat "$HEAVY_WORK/block.json" >&2; heavy_fail "the block request failed"; }
+}
+heavy_unblock() {
+  local registry="$1" name="$2" version="$3" artifact="${4:-}"
+  local body
+  body=$(printf '{"registry":"%s","name":"%s","version":"%s"%s}' \
+    "$registry" "$name" "$version" "${artifact:+,\"artifact\":\"$artifact\"}")
+  curl -fsS -X POST "$HEAVY_BASE/api/v1/admin/packages/unblock" \
+    -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+    -d "$body" >"$HEAVY_WORK/unblock.json" \
+    || { cat "$HEAVY_WORK/unblock.json" >&2; heavy_fail "the unblock request failed"; }
+}
+
 # heavy_wire <fixed-string> [explanation] — the line must be in the transcript.
 heavy_wire() {
   local needle="$1" explanation="${2:-}"
@@ -262,6 +483,36 @@ heavy_wire_after() {
     || heavy_fail "${explanation:-no request matching \"$needle\" after mark \"$label\"}"
 }
 
+# heavy_wire_re_after <mark> <regex> [explanation] — like heavy_wire_after
+# with a regex, for the lines that carry headers after the status: the
+# assertion is about the verdict on the answer, not only the status. The
+# tarball path is the one this server writes into the packument
+# (`{name}/{version}/tarball`), not npm's own `{name}/-/{name}-{v}.tgz`.
+#
+# **Write a literal metacharacter as a character class, never as `\x`.** The
+# regex reaches awk through `-v`, which runs its own escape processing before
+# the ERE engine ever sees it: gawk turns `\?` into a bare `?` (warning:
+# "escape sequence `\?' treated as plain `?'") and the ERE then reads it as a
+# quantifier, so the assertion matches nothing and passes for the wrong reason
+# on the negative arms. mawk leaves `\?` alone — which is exactly why this
+# reads as green on a developer's machine and fails only on CI. `[?]` survives
+# both layers unchanged. Measured on the airgap suite's `releases?per_page=100`.
+heavy_wire_re_after() {
+  local label="$1" re="$2" explanation="${3:-}"
+  awk -v mark="### $label" -v re="$re" '
+    index($0, mark) == 1 { seen = 1; next }
+    seen && $0 ~ re { found = 1 }
+    END { exit found ? 0 : 1 }' "$HEAVY_LOG" \
+    || heavy_fail "${explanation:-no request matching /$re/ after mark \"$label\"}"
+}
+heavy_wire_count_after() {  # mark, regex → count on stdout
+  local label="$1" re="$2"
+  awk -v mark="### $label" -v re="$re" '
+    index($0, mark) == 1 { seen = 1; next }
+    seen && $0 ~ re { n++ }
+    END { print n + 0 }' "$HEAVY_LOG"
+}
+
 # heavy_done <banner> — stop the server first, so the coverage profiles are
 # flushed before the caller runs `cargo llvm-cov report`, then print the
 # transcript and the banner CI greps for.
@@ -284,24 +535,26 @@ heavy_need() {
     || heavy_fail "$bin not found on PATH — install it ($provided_by) before running this suite"
 }
 
-# heavy_runner_for <binary> <mise-spec> — set HEAVY_RUNNER to the prefix that
-# runs <binary>: empty when it works on PATH, `mise x <spec> --` when only a
-# directory-scoped mise toolchain has it.
+# heavy_runner_for <binary> <mise-spec>... — set HEAVY_RUNNER to the prefix
+# that runs <binary>: empty when it works on PATH, `mise x <spec>... --` when
+# only a directory-scoped mise toolchain has it. Several specs when the tool
+# needs a second one to run at all (Maven needs a JDK).
 #
 # `command -v` is not the test. mise installs shims: the binary is on PATH and
 # exits non-zero with "No version is set for shim" because no version is pinned
 # for this directory. Probe by *running* it.
 heavy_runner_for() {
-  local bin="$1" spec="$2"
+  local bin="$1"
+  shift
   HEAVY_RUNNER=()
   if "$bin" --version >/dev/null 2>&1; then
     return 0
   fi
-  if command -v mise >/dev/null 2>&1 && mise x "$spec" -- "$bin" --version >/dev/null 2>&1; then
-    HEAVY_RUNNER=(mise x "$spec" --)
+  if command -v mise >/dev/null 2>&1 && mise x "$@" -- "$bin" --version >/dev/null 2>&1; then
+    HEAVY_RUNNER=(mise x "$@" --)
     return 0
   fi
-  heavy_fail "no working $bin (and no mise toolchain for $spec)"
+  heavy_fail "no working $bin (and no mise toolchain for $*)"
 }
 
 # heavy_cached_dir <name> <url> [format] — download and unpack once into
@@ -333,4 +586,41 @@ heavy_cached_dir() {
     mv "$dest.tmp" "$dest"
   fi
   echo "$dest"
+}
+
+# ── The [[flag_sources]] push credential (RFC 0002 §4.3) ─────────────────────
+#
+# A SOC signs `X-Hub-Signature-256: sha256=<hex>` with the source's secret.
+# A `POST` signs the raw body; a `DELETE` has none, so it signs the canonical
+# string below instead — which binds the proof to the one flag it lifts, where
+# signing the empty string made any observed revoke signature a standing key to
+# lift every flag the source had ever pushed, a `hard_block` on live malware
+# included.
+#
+# These live here, and not in the one suite that uses them, because the server
+# and this file are two implementations of one wire contract and the endpoint
+# cannot tell you when they disagree: an unknown source and a bad signature
+# both answer `404 unknown flag source`, deliberately, so a revoke signed the
+# old way reads as a source that is missing from a config it is plainly in.
+# `crates/web/tests/flag_revoke_canonical.rs` holds these two definitions to
+# `revoke_canonical` in `crates/web/src/handlers/flags.rs`, in `cargo test`,
+# where a heavy suite would not have said so until CI ran it.
+
+# heavy_flag_revoke_canonical <source> <external_id> — the bytes a DELETE signs.
+heavy_flag_revoke_canonical() {
+  local source="$1" external_id="$2"
+  printf 'DELETE\n/api/v1/flags/%s/%s' "$source" "$external_id"
+}
+
+# heavy_flag_sign <secret> <body> — the header value over arbitrary bytes.
+heavy_flag_sign() {
+  local secret="$1" body="$2"
+  python3 -c 'import hashlib, hmac, sys; print("sha256=" + hmac.new(sys.argv[1].encode(), sys.argv[2].encode(), hashlib.sha256).hexdigest())' "$secret" "$body"
+}
+
+# heavy_flag_sign_revoke <secret> <source> <external_id> — the header value for
+# a revoke of that one flag.
+heavy_flag_sign_revoke() {
+  local secret="$1" source="$2" external_id="$3"
+  heavy_flag_sign "$secret" "$(heavy_flag_revoke_canonical "$source" "$external_id")"
 }

@@ -11,6 +11,7 @@ Proxy and cache Go modules via the [GOPROXY protocol](https://go.dev/ref/mod#gop
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
 | **Private publish** | ✅ (module zip upload) |
+| **Air gap** | offline,`@v/list`, `@latest` and `.info` are composed from the held zips; `.mod` must be bundled beside the zip, and `GOSUMDB` is the client's to turn off |
 
 ## Proxy setup
 

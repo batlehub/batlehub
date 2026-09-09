@@ -34,7 +34,7 @@
 
 use libfuzzer_sys::fuzz_target;
 
-use batlehub_core::services::readme::svg::sanitize_svg;
+use batlehub_core::services::svg::sanitize_svg;
 
 fuzz_target!(|data: &[u8]| {
     let Ok(out) = sanitize_svg(data) else {

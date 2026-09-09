@@ -70,5 +70,10 @@ export function eventBadgeVariant(eventType: string): BadgeVariant {
   if (eventType === "package_published") return "default";
   if (eventType === "package_yanked") return "destructive";
   if (eventType === "package_unyanked") return "secondary";
+  // RFC 0014 §4.5: a confirmed disappearance and a voided sweep are the
+  // two an operator acts on; a reappearance is the all-clear.
+  if (eventType === "package_disappeared_upstream") return "destructive";
+  if (eventType === "upstream_unreachable") return "copper";
+  if (eventType === "package_reappeared_upstream") return "secondary";
   return "outline";
 }

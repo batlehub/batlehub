@@ -633,16 +633,25 @@ pub async fn authorize_read_against(
 /// that an exemption stops on its own rather than being revisited by someone who
 /// remembers to.
 async fn exempt_gates(hot: &HotConfigLock, id: &PackageId) -> Vec<String> {
+    let repo = {
+        let hot = hot.read().await;
+        hot.policy_repo.clone()
+    };
+    exempt_gates_in(repo.as_ref(), id).await
+}
+
+/// [`exempt_gates`] against a policy store handed in directly — for the
+/// verdict gate (RFC 0018), which holds its store rather than the hot lock.
+pub async fn exempt_gates_in(
+    repo: Option<&Arc<dyn crate::ports::PolicyRepository>>,
+    id: &PackageId,
+) -> Vec<String> {
     use crate::entities::{PolicyNode, PolicyPath, Tier};
     use crate::ports::NodeKind;
 
     if id.name.is_empty() || id.version.is_empty() {
         return Vec::new();
     }
-    let repo = {
-        let hot = hot.read().await;
-        hot.policy_repo.clone()
-    };
     let Some(repo) = repo else {
         return Vec::new();
     };
@@ -680,7 +689,13 @@ async fn exempt_gates(hot: &HotConfigLock, id: &PackageId) -> Vec<String> {
 /// right answer for an upstream that did not supply the fact — which is what the
 /// flags are named for — and the wrong one for a coordinate this instance simply
 /// does not hold a row for.
-const METADATA_DERIVED_RULES: &[&str] = &["release_age_gate", "require_signed_release"];
+///
+/// `verdict_gate` (RFC 0018) is here for the same reason: it dates the
+/// coordinate from `published_at`, and judging a synthetic `None` would hold
+/// every hybrid read open-ended instead of letting it fall through to the
+/// path that resolves the real date.
+const METADATA_DERIVED_RULES: &[&str] =
+    &["release_age_gate", "require_signed_release", "verdict_gate"];
 
 /// The chain for a coordinate this instance holds **no version row for**.
 ///

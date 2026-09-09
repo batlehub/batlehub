@@ -5,8 +5,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
 
+use super::test_support::*;
 use super::*;
-use crate::entities::Action;
+use crate::entities::{Action, CallerNet};
 use crate::{
     entities::{Identity, Role},
     error::CoreError,
@@ -16,190 +17,6 @@ use crate::{
     services::hot_config::{new_hot_lock, HotConfig},
     services::{IntegrityPolicy, QuotaEnforcement, RegistryQuotaConfig, SigningConfig},
 };
-
-// ── Minimal mock backend ──────────────────────────────────────────────────
-
-#[derive(Default)]
-struct InMemBackend {
-    versions: Mutex<Vec<PublishedPackage>>,
-}
-
-impl InMemBackend {
-    fn arc() -> Arc<Self> {
-        Arc::new(Self::default())
-    }
-    fn seed(&self, pkg: PublishedPackage) {
-        self.versions.lock().unwrap().push(pkg);
-    }
-}
-
-#[async_trait]
-impl crate::ports::LocalRegistryBackend for InMemBackend {
-    async fn publish(&self, pkg: PublishedPackage) -> Result<(), CoreError> {
-        self.versions.lock().unwrap().push(pkg);
-        Ok(())
-    }
-    /// The port's default returns an empty vec, which made every
-    /// whole-registry document in this module build from no names at all — a
-    /// green assertion about a document that could not have had anything in it.
-    async fn list_package_names(&self, registry: &str) -> Result<Vec<String>, CoreError> {
-        let mut names: Vec<String> = self
-            .versions
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|p| p.registry == registry)
-            .map(|p| p.name.clone())
-            .collect();
-        names.sort();
-        names.dedup();
-        Ok(names)
-    }
-    async fn yank(&self, _: &str, _: &str, _: &str) -> Result<(), CoreError> {
-        Ok(())
-    }
-    async fn unyank(&self, _: &str, _: &str, _: &str) -> Result<(), CoreError> {
-        Ok(())
-    }
-    async fn deprecate(&self, _: &str, _: &str, _: &str, _: Option<&str>) -> Result<(), CoreError> {
-        Ok(())
-    }
-    async fn undeprecate(&self, _: &str, _: &str, _: &str) -> Result<(), CoreError> {
-        Ok(())
-    }
-    async fn set_channel(
-        &self,
-        registry: &str,
-        name: &str,
-        version: &str,
-        channel: &str,
-    ) -> Result<bool, CoreError> {
-        let mut v = self.versions.lock().unwrap();
-        match v
-            .iter_mut()
-            .find(|p| p.registry == registry && p.name == name && p.version == version)
-        {
-            Some(p) => {
-                let current = p
-                    .index_metadata
-                    .get("channel")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or_default();
-                if current == channel {
-                    return Ok(false);
-                }
-                if let Some(obj) = p.index_metadata.as_object_mut() {
-                    obj.insert("channel".to_owned(), serde_json::json!(channel));
-                }
-                Ok(true)
-            }
-            None => Ok(false),
-        }
-    }
-
-    async fn unlist(&self, _: &str, _: &str, _: &str) -> Result<(), CoreError> {
-        Ok(())
-    }
-    async fn relist(&self, _: &str, _: &str, _: &str) -> Result<(), CoreError> {
-        Ok(())
-    }
-    async fn get_versions(
-        &self,
-        registry: &str,
-        name: &str,
-    ) -> Result<Vec<PublishedPackage>, CoreError> {
-        Ok(self
-            .versions
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|p| p.registry == registry && p.name == name)
-            .cloned()
-            .collect())
-    }
-    async fn exists(&self, registry: &str, name: &str) -> Result<bool, CoreError> {
-        Ok(self
-            .versions
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|p| p.registry == registry && p.name == name))
-    }
-}
-
-/// In-memory storage that actually round-trips bytes, for download-path tests
-/// (re-serve checksum + signature verification).
-#[derive(Default)]
-struct MemStore {
-    data: Mutex<HashMap<String, Bytes>>,
-}
-impl MemStore {
-    fn arc() -> Arc<Self> {
-        Arc::new(Self::default())
-    }
-    fn put(&self, key: &str, bytes: Bytes) {
-        self.data.lock().unwrap().insert(key.to_owned(), bytes);
-    }
-}
-#[async_trait]
-impl StorageBackend for MemStore {
-    async fn store(&self, key: &str, data: Bytes, _: StorageMeta) -> Result<(), CoreError> {
-        self.data.lock().unwrap().insert(key.to_owned(), data);
-        Ok(())
-    }
-    async fn retrieve(&self, key: &str) -> Result<Option<StoredArtifact>, CoreError> {
-        Ok(self.data.lock().unwrap().get(key).cloned().map(|bytes| {
-            let s: crate::ports::ByteStream =
-                Box::pin(futures::stream::once(async move { Ok(bytes) }));
-            StoredArtifact {
-                stream: s,
-                meta: StorageMeta::default(),
-            }
-        }))
-    }
-    async fn exists(&self, key: &str) -> Result<bool, CoreError> {
-        Ok(self.data.lock().unwrap().contains_key(key))
-    }
-    async fn delete(&self, key: &str) -> Result<bool, CoreError> {
-        Ok(self.data.lock().unwrap().remove(key).is_some())
-    }
-    async fn delete_by_prefix(&self, _: &str) -> Result<usize, CoreError> {
-        Ok(0)
-    }
-    async fn stat_by_prefix(&self, _: &str) -> Result<(u64, u64), CoreError> {
-        Ok((0, 0))
-    }
-    async fn list_keys(&self, _: &str) -> Result<Vec<String>, CoreError> {
-        Ok(vec![])
-    }
-}
-
-struct NoopStorage;
-
-#[async_trait]
-impl StorageBackend for NoopStorage {
-    async fn store(&self, _: &str, _: Bytes, _: StorageMeta) -> Result<(), CoreError> {
-        Ok(())
-    }
-    async fn retrieve(&self, _: &str) -> Result<Option<StoredArtifact>, CoreError> {
-        Ok(None)
-    }
-    async fn exists(&self, _: &str) -> Result<bool, CoreError> {
-        Ok(false)
-    }
-    async fn delete(&self, _: &str) -> Result<bool, CoreError> {
-        Ok(false)
-    }
-    async fn delete_by_prefix(&self, _: &str) -> Result<usize, CoreError> {
-        Ok(0)
-    }
-    async fn stat_by_prefix(&self, _: &str) -> Result<(u64, u64), CoreError> {
-        Ok((0, 0))
-    }
-    async fn list_keys(&self, _: &str) -> Result<Vec<String>, CoreError> {
-        Ok(vec![])
-    }
-}
 
 fn svc(
     backend: Arc<dyn crate::ports::LocalRegistryBackend>,
@@ -1745,7 +1562,14 @@ async fn get_artifact_reverify_passes_when_bytes_match() {
 
     let s = download_svc(backend, storage, Some(reverify_policy(true)), None);
     let out = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap();
     assert_eq!(out.as_ref(), body);
@@ -1770,7 +1594,14 @@ async fn get_artifact_reverify_detects_corruption() {
 
     let s = download_svc(backend, storage, Some(reverify_policy(true)), None);
     let err = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -1797,7 +1628,14 @@ async fn get_artifact_reverify_off_serves_corrupted_bytes() {
 
     let s = download_svc(backend, storage, Some(reverify_policy(false)), None);
     assert!(s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .is_ok());
 }
@@ -1817,7 +1655,14 @@ async fn get_artifact_reverify_fails_closed_when_metadata_row_missing() {
 
     let s = download_svc(backend, storage, Some(reverify_policy(true)), None);
     let err = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -1854,7 +1699,14 @@ async fn get_artifact_verifies_ed25519_signature() {
     };
     let s = download_svc(backend, storage, None, Some(signing));
     assert!(s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .is_ok());
 }
@@ -1891,7 +1743,14 @@ async fn get_artifact_rejects_signature_from_untrusted_key() {
     };
     let s = download_svc(backend, storage, None, Some(signing));
     let err = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -1931,7 +1790,14 @@ async fn get_artifact_refuses_stored_signature_bytes_with_no_type() {
     };
     let s = download_svc(backend, storage, None, Some(signing));
     let err = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -1967,7 +1833,14 @@ async fn get_artifact_still_serves_an_unsigned_artifact_under_verify_on_download
     };
     let s = download_svc(backend, storage, None, Some(signing));
     assert!(s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .is_ok());
 }
@@ -2024,9 +1897,16 @@ async fn get_artifact_judges_the_chain_against_the_versions_real_metadata() {
         );
 
         assert!(
-            s.get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
-                .await
-                .is_ok(),
+            s.get_artifact(
+                "npm",
+                "pkg",
+                "1.0.0",
+                Action::ReleasesRead,
+                &user(),
+                &CallerNet::unknown(),
+            )
+            .await
+            .is_ok(),
             "{label} refused a version whose stored row satisfies it"
         );
     }
@@ -2061,7 +1941,14 @@ async fn get_artifact_defers_the_version_gates_for_a_coordinate_it_has_no_row_fo
     );
 
     let err = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -2151,7 +2038,14 @@ async fn get_artifact_still_applies_the_block_list_when_it_has_no_row() {
     );
 
     let err = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -2188,7 +2082,14 @@ async fn get_artifact_still_applies_rbac_when_it_has_no_row() {
     );
 
     let err = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -2231,7 +2132,14 @@ async fn get_artifact_still_refuses_an_unsigned_version_under_require_signed_rel
     );
 
     let err = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -2678,9 +2586,16 @@ async fn get_artifact_records_allowed_download_when_access_log_configured() {
 
     let spy = SpyRepo::new();
     let s = download_svc_with_access_log(backend, storage, None, None, Some(spy.clone()));
-    s.get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
-        .await
-        .unwrap();
+    s.get_artifact(
+        "npm",
+        "pkg",
+        "1.0.0",
+        Action::ReleasesRead,
+        &user(),
+        &CallerNet::unknown(),
+    )
+    .await
+    .unwrap();
 
     let events = spy.events();
     assert_eq!(events.len(), 1);
@@ -2689,6 +2604,94 @@ async fn get_artifact_records_allowed_download_when_access_log_configured() {
         crate::entities::AccessResult::Allowed
     ));
     assert_eq!(events[0].package_id.as_ref().unwrap().name, "pkg");
+}
+
+/// A local download reaches the trail with the caller's address and agent, the
+/// two columns `audit pulls` reports beside the count (RFC 0018 §13.10).
+///
+/// The report reads them off the event, so an event that never carried them is
+/// indistinguishable there from a caller that sent no `User-Agent` — a `count`
+/// with two blanks next to it, on exactly the deployments that publish their own
+/// packages. This is the assertion that the local path now records what the
+/// proxy path has always recorded.
+#[tokio::test]
+async fn get_artifact_records_the_callers_address_and_agent() {
+    let body: &[u8] = b"local-artifact-bytes";
+    let backend = InMemBackend::arc();
+    seed_version(
+        &backend,
+        &crate::services::integrity::sha256_hex(body),
+        None,
+        None,
+    );
+    let storage = MemStore::arc();
+    storage.put(
+        &artifact_storage_key("npm", "pkg", "1.0.0"),
+        Bytes::from_static(body),
+    );
+
+    let spy = SpyRepo::new();
+    let s = download_svc_with_access_log(backend, storage, None, None, Some(spy.clone()));
+    let net = CallerNet {
+        ip: Some("10.0.0.7".to_owned()),
+        user_agent: Some("npm/10.9.2 node/v22.14.0".to_owned()),
+    };
+    s.get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user(), &net)
+        .await
+        .unwrap();
+
+    let events = spy.events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].ip_address.as_deref(), Some("10.0.0.7"));
+    assert_eq!(
+        events[0].user_agent.as_deref(),
+        Some("npm/10.9.2 node/v22.14.0")
+    );
+}
+
+/// The same for a refusal, which `authorize_artifact_read` records on its own.
+///
+/// A denied download is the row an incident starts from — "which address was
+/// turned away, and what was it running" — so the enrichment cannot be limited
+/// to the path that delivered bytes.
+#[tokio::test]
+async fn denied_local_download_records_the_callers_address_and_agent() {
+    let backend = InMemBackend::arc();
+    let ns = MockTeamNamespace::with_visibility("npm", "pkg", Visibility::Internal);
+    let spy = SpyRepo::new();
+    let s = LocalRegistryService {
+        backend,
+        storage: Arc::new(NoopStorage),
+        hot: new_hot_lock(HotConfig {
+            registries: HashMap::new(),
+            policies: HashMap::new(),
+            ..Default::default()
+        }),
+        quota: None,
+        ownership: None,
+        team_namespace: Some(ns),
+        sbom: None,
+        explore_cache: None,
+        package_repo: Some(spy.clone()),
+        readme: None,
+    };
+
+    let net = CallerNet {
+        ip: Some("192.0.2.9".to_owned()),
+        user_agent: Some("curl/8.7.1".to_owned()),
+    };
+    s.get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &anon(), &net)
+        .await
+        .unwrap_err();
+
+    let events = spy.events();
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        events[0].result,
+        crate::entities::AccessResult::Denied { .. }
+    ));
+    assert_eq!(events[0].ip_address.as_deref(), Some("192.0.2.9"));
+    assert_eq!(events[0].user_agent.as_deref(), Some("curl/8.7.1"));
 }
 
 #[tokio::test]
@@ -2715,7 +2718,14 @@ async fn get_artifact_records_denied_download_when_visibility_check_fails() {
 
     // Anonymous identity can't see an `Internal` package.
     let err = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &anon())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &anon(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, CoreError::AccessDenied(_)));
@@ -2748,7 +2758,14 @@ async fn get_artifact_is_a_noop_for_audit_when_access_log_is_none() {
 
     let s = download_svc(backend, storage, None, None);
     let out = s
-        .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+        .get_artifact(
+            "npm",
+            "pkg",
+            "1.0.0",
+            Action::ReleasesRead,
+            &user(),
+            &CallerNet::unknown(),
+        )
         .await
         .unwrap();
     assert_eq!(out.as_ref(), body);
@@ -3146,7 +3163,14 @@ mod listing_verb {
     async fn list_without_read_is_refused_the_artifact() {
         let (s, _b) = svc_granting(&[Action::ReleasesList]);
         let err = s
-            .get_artifact("npm", "pkg", "1.0.0", Action::ReleasesRead, &user())
+            .get_artifact(
+                "npm",
+                "pkg",
+                "1.0.0",
+                Action::ReleasesRead,
+                &user(),
+                &CallerNet::unknown(),
+            )
             .await
             .expect_err("releases:list must not carry the bytes");
         assert!(matches!(err, CoreError::AccessDenied(_)), "{err:?}");
@@ -3957,5 +3981,116 @@ mod version_grant_filter {
             .unwrap();
         let s = service(backend, registry_granting(&[Action::ReleasesList]), rows);
         assert!(versions_seen(&s).await.is_empty());
+    }
+}
+
+/// Traversal spelled through percent-encoding.
+///
+/// `actix-router` decodes a path parameter twice — once while matching the
+/// route with `%` protected, once in the `web::Path` extractor with nothing
+/// protected — so `%252e%252e` reaches a handler as the literal `%2e%2e`, which
+/// is not a `..` segment to `split('/')`. `url::Url::parse` *is* willing to read
+/// it as one, so the validator has to decode before it decides.
+mod encoded_traversal {
+    use super::*;
+    use crate::services::{has_traversal_after_decoding, validate_path_safe};
+
+    /// Every spelling `url`'s own parser folds to a dot segment, plus the
+    /// nested forms that survive a decoding round to become one.
+    const ESCAPES: &[&str] = &[
+        // Single-encoded: caught before this change, and still caught.
+        "a/%2e%2e/b",
+        "a/%2E%2E/b",
+        // The mixed spellings the URL spec lists alongside `..`.
+        "a/%2e./b",
+        "a/.%2e/b",
+        "a/%2E./b",
+        // Double-encoded: what actually reaches a handler.
+        "a/%252e%252e/b",
+        "a/%252E%252E/b",
+        // Triple, for the same reason.
+        "a/%25252e%25252e/b",
+        // The separator encoded rather than the dots.
+        "a%2f..%2fb",
+        "..%252fetc%252fpasswd",
+        // Backslash, which WHATWG folds into `/` for special schemes.
+        "a/%5c..%5cb",
+    ];
+
+    #[test]
+    fn every_encoded_spelling_of_a_dot_segment_is_rejected() {
+        for value in ESCAPES {
+            let err = validate_path_safe("package name", value)
+                .expect_err("must reject encoded traversal in {value}");
+            assert!(
+                matches!(err, CoreError::InvalidInput(_)),
+                "{value} must be InvalidInput, got {err:?}"
+            );
+            assert!(
+                has_traversal_after_decoding(value),
+                "{value} must also be caught at the storage chokepoint"
+            );
+        }
+    }
+
+    /// The exact request shape from the review: three encoded dot segments walk
+    /// out of `{owner}/{repo}/{ref}` into another repository.
+    #[test]
+    fn the_credentialed_cross_repo_read_is_rejected() {
+        let artifact = "raw/main/%252e%252e/%252e%252e/%252e%252e/victim/private/main/.env";
+        assert!(
+            validate_path_safe("artifact", artifact).is_err(),
+            "the cross-repository raw read must not validate"
+        );
+    }
+
+    /// Nested past any plausible real coordinate: rejected rather than decoded
+    /// forever.
+    #[test]
+    fn absurdly_nested_encoding_is_rejected() {
+        let mut value = "..".to_owned();
+        for _ in 0..12 {
+            value = value.replace('%', "%25").replace("..", "%2e%2e");
+        }
+        assert!(validate_path_safe("package name", &value).is_err());
+    }
+
+    /// The check decodes, so it must not start rejecting names that merely
+    /// contain a percent escape or a dot.
+    #[test]
+    fn legitimate_coordinates_still_pass() {
+        for value in [
+            "@scope/name",
+            "owner/repo",
+            "com.example:lib",
+            "raw/main/src/main.rs",
+            "some-package",
+            "a/.hidden/b",
+            "a/.../b",
+            // A file whose name genuinely contains an escape, once decoded to
+            // something harmless.
+            "docs/50%25-off.md",
+            "raw/main/a%20b/c.txt",
+        ] {
+            validate_path_safe("package name", value)
+                .unwrap_or_else(|e| panic!("{value} must stay valid, got {e:?}"));
+            assert!(
+                !has_traversal_after_decoding(value),
+                "{value} must stay valid at the storage chokepoint too"
+            );
+        }
+    }
+
+    /// An encoded `/` collapses two coordinates onto one storage key exactly as
+    /// a literal one does.
+    #[test]
+    fn a_version_may_not_smuggle_a_separator() {
+        for value in ["1.0.0%2f2", "1.0.0%2F2", "1.0.0%252f2"] {
+            assert!(
+                validate_path_safe("version", value).is_err(),
+                "{value} must not pass as a version"
+            );
+        }
+        validate_path_safe("version", "1.0.0+build.1").expect("a real version still passes");
     }
 }

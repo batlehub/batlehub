@@ -36,9 +36,38 @@ pub struct GalleryEntry {
     pub upstream: Option<Value>,
 }
 
+/// Where a version's signature asset comes from (RFC 0020 §5.1). `None` is
+/// a version nobody signed, and it advertises no signature asset: an
+/// advertised asset a request cannot fetch is the failure the editor reports
+/// worst.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignatureSource {
+    /// Signed by this registry's key; the public key is this registry's.
+    Registry { key_id: String },
+    /// Relayed from the upstream that signed it; `public_key` when that
+    /// upstream names one (Open VSX does, the Microsoft marketplace does not).
+    Upstream { public_key: bool },
+    /// Provided at publish time (RFC 0020 §13.6): an upstream's archive
+    /// attached to a locally held version, served as-is. Its key is its
+    /// signer's, so no `PublicKey` asset is advertised.
+    Provided,
+}
+
+impl SignatureSource {
+    fn has_public_key(&self) -> bool {
+        match self {
+            Self::Registry { .. } => true,
+            Self::Upstream { public_key } => *public_key,
+            Self::Provided => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GalleryVersion {
     pub version: String,
+    /// The signature asset this version carries, if any.
+    pub signature: Option<SignatureSource>,
     /// RFC 3339.
     pub last_updated: String,
     /// `engines.vscode`. Absent is **not** the same as permissive: the editor
@@ -108,6 +137,7 @@ impl GalleryEntry {
                     extension_pack: v.extension_pack.clone(),
                     extension_dependencies: v.dependencies.clone(),
                     pre_release: v.pre_release,
+                    signature: v.signature_provided.then_some(SignatureSource::Provided),
                 })
                 .collect(),
             upstream: None,
@@ -165,6 +195,22 @@ impl GalleryEntry {
             versions,
             upstream: Some(obj.clone()),
         })
+    }
+
+    /// Every version is signed by this registry's key (RFC 0020 §4.2): the
+    /// local branch of `source.rs`, once the registry is known to hold one.
+    ///
+    /// A version whose archive was provided keeps it (§13.6): the registry
+    /// signs nothing that someone else signed.
+    pub fn sign_locally(&mut self, key_id: &str) {
+        for v in &mut self.versions {
+            if v.signature == Some(SignatureSource::Provided) {
+                continue;
+            }
+            v.signature = Some(SignatureSource::Registry {
+                key_id: key_id.to_owned(),
+            });
+        }
     }
 
     pub fn qualified_name(&self) -> String {
@@ -257,7 +303,21 @@ impl GalleryVersion {
             extension_pack: csv(property_key::EXTENSION_PACK),
             extension_dependencies: csv(property_key::EXTENSION_DEPENDENCIES),
             pre_release: prop(property_key::PRE_RELEASE).as_deref() == Some("true"),
+            signature: None,
         })
+    }
+
+    /// The asset types this version advertises: the six every version has,
+    /// plus the signature and its key when the version carries them.
+    pub fn asset_types(&self) -> Vec<&'static str> {
+        let mut types: Vec<&'static str> = asset_type::ALL.to_vec();
+        if let Some(sig) = &self.signature {
+            types.push(asset_type::SIGNATURE);
+            if sig.has_public_key() {
+                types.push(asset_type::PUBLIC_KEY);
+            }
+        }
+        types
     }
 }
 
@@ -441,8 +501,9 @@ fn version_json(
     if query.wants(flag::INCLUDE_FILES) {
         obj.insert(
             "files".to_owned(),
-            json!(asset_type::ALL
-                .iter()
+            json!(v
+                .asset_types()
+                .into_iter()
                 .map(|t| json!({
                     "assetType": t,
                     "source": urls.asset(&entry.publisher, &entry.extension_name, &v.version, t),
@@ -530,6 +591,21 @@ pub fn openvsx_extension_json(
     urls: &GalleryUrls,
 ) -> Value {
     let file = |t: &str| urls.asset(&entry.publisher, &entry.extension_name, &version.version, t);
+    let mut files = serde_json::Map::new();
+    files.insert("download".to_owned(), json!(file(asset_type::VSIX_PACKAGE)));
+    files.insert("manifest".to_owned(), json!(file(asset_type::MANIFEST)));
+    files.insert("readme".to_owned(), json!(file(asset_type::DETAILS)));
+    files.insert("changelog".to_owned(), json!(file(asset_type::CHANGELOG)));
+    files.insert("license".to_owned(), json!(file(asset_type::LICENSE)));
+    files.insert("icon".to_owned(), json!(file(asset_type::ICON)));
+    // Open VSX's own two keys for them (RFC 0020 §4.2), under Open VSX's
+    // rule: present only when the version is signed.
+    if let Some(sig) = &version.signature {
+        files.insert("signature".to_owned(), json!(file(asset_type::SIGNATURE)));
+        if sig.has_public_key() {
+            files.insert("publicKey".to_owned(), json!(file(asset_type::PUBLIC_KEY)));
+        }
+    }
     json!({
         "namespace": entry.publisher,
         "name": entry.extension_name,
@@ -545,14 +621,7 @@ pub fn openvsx_extension_json(
         // label a pre-release. Same bit the gallery sends as the
         // `Microsoft.VisualStudio.Code.PreRelease` property.
         "preRelease": version.pre_release,
-        "files": {
-            "download": file(asset_type::VSIX_PACKAGE),
-            "manifest": file(asset_type::MANIFEST),
-            "readme":   file(asset_type::DETAILS),
-            "changelog": file(asset_type::CHANGELOG),
-            "license":  file(asset_type::LICENSE),
-            "icon":     file(asset_type::ICON),
-        },
+        "files": files,
         "allVersions": all_versions
             .iter()
             .map(|v| {
@@ -635,6 +704,7 @@ mod tests {
                     extension_pack: vec!["acme.other".to_owned()],
                     extension_dependencies: vec![],
                     pre_release: false,
+                    signature: None,
                 },
                 GalleryVersion {
                     version: "1.0.0".to_owned(),
@@ -643,6 +713,7 @@ mod tests {
                     extension_pack: vec![],
                     extension_dependencies: vec![],
                     pre_release: false,
+                    signature: None,
                 },
             ],
             upstream: None,
@@ -704,6 +775,49 @@ mod tests {
             .map(|f| f["assetType"].as_str().unwrap())
             .collect();
         assert_eq!(types, asset_type::ALL);
+    }
+
+    #[test]
+    fn a_signed_version_advertises_the_signature_and_its_key() {
+        let mut e = entry();
+        e.sign_locally("abc123");
+        let doc = extension_json(&e, &urls(), &q(ALL_FLAGS));
+        let types: Vec<&str> = doc["versions"][0]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["assetType"].as_str().unwrap())
+            .collect();
+        assert!(types.contains(&asset_type::SIGNATURE), "{types:?}");
+        assert!(types.contains(&asset_type::PUBLIC_KEY), "{types:?}");
+        let ovsx = openvsx_extension_json(&e, &e.versions[0], &e.versions, &urls());
+        assert!(ovsx["files"]["signature"]
+            .as_str()
+            .unwrap()
+            .ends_with(asset_type::SIGNATURE));
+        assert!(ovsx["files"]["publicKey"].is_string());
+
+        // A relayed signature from an upstream that names no key: the
+        // archive, not the key.
+        let mut e = entry();
+        e.versions[0].signature = Some(SignatureSource::Upstream { public_key: false });
+        let doc = extension_json(&e, &urls(), &q(ALL_FLAGS));
+        let types: Vec<&str> = doc["versions"][0]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["assetType"].as_str().unwrap())
+            .collect();
+        assert!(types.contains(&asset_type::SIGNATURE));
+        assert!(!types.contains(&asset_type::PUBLIC_KEY));
+        let ovsx = openvsx_extension_json(&e, &e.versions[0], &e.versions, &urls());
+        assert!(ovsx["files"]["signature"].is_string());
+        assert!(ovsx["files"].get("publicKey").is_none());
+
+        // Unsigned: neither, as before (`all_six_asset_types_are_advertised`).
+        let ovsx =
+            openvsx_extension_json(&entry(), &entry().versions[0], &entry().versions, &urls());
+        assert!(ovsx["files"].get("signature").is_none());
     }
 
     #[test]

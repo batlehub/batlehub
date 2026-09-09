@@ -12,7 +12,7 @@ you have already deployed.
 | Rust advisories + bans + licenses + sources | `cargo deny` (`deny.toml`) | `back-dep-audit.yaml` | block |
 | JS dependencies | `pnpm audit --audit-level high` | `dep-audit-frontend.yaml` (PR + daily) | block on high/critical |
 | Dependency supply chain (reputation + vulns) | [postmortem](https://github.com/mlab-sh/postmortem) | `postmortem.yaml` (PR + daily) — one job per dependency root: Rust, UI, Website | block on high/critical vulns (Rust, UI); report-only (Website) |
-| Container / OS layers | Trivy | `image-scan.yaml` (PR + daily, GitHub) runs Trivy directly; `.forgejo/workflows/build.yaml` (both images) polls Harbor's own scan-on-push report instead | block on fixable HIGH/CRITICAL |
+| Container / OS layers | Trivy | `image-scan.yaml` (PR + daily, GitHub) runs Trivy directly on the proxy image (`Containerfile`), the worker image (`Containerfile.worker`, RFC 0018 — the one that carries bubblewrap, postmortem and the Trivy client) and the GuardDog variant of the worker image (`Containerfile.worker-guarddog`, which adds the optional Python scanner and is gated separately, so its toolchain answers for its own CVEs); `.forgejo/workflows/build.yaml` (the proxy and hardened images, the two it builds) polls Harbor's own scan-on-push report instead | block on fixable HIGH/CRITICAL |
 | Static analysis | CodeQL + Semgrep | `codeql.yaml`, `semgrep.yaml` | CodeQL report / Semgrep block on ERROR |
 | Secrets | gitleaks | `secret-scan.yaml` (PR + push) | block |
 | Lint / unsafe hygiene | clippy `-D warnings` | `test.yaml` `lint` job | block |
@@ -175,6 +175,21 @@ already present for the hyper/reqwest path — but `actix-http` still requires t
 than rediscover — the reasoning lives next to the declaration in `Cargo.toml`, and `h2 <0.4` is in
 `deny.toml`'s `[bans].deny`, so re-enabling the feature fails CI instead of silently restoring the
 advisory. Check whether a feature can be dropped before concluding an advisory is unfixable.
+
+### An advisory inside a third party's binary
+
+`.trivyignore.yaml` is the third case: a CVE in a dependency of a **prebuilt binary the image
+copies in**, where the fix is neither an upgrade of ours nor a feature we can drop. The worked
+example is the pair of grpc-go advisories against `/usr/local/bin/trivy`. Trivy vendors
+`google.golang.org/grpc` v1.82.1; both are fixed upstream, and no Trivy release carries the fix
+yet, so `TRIVY_VERSION` in `Containerfile.worker` has nowhere to move.
+
+The entries are pinned to that one path, each says why the vulnerable code is unreachable here —
+the advisories are against xDS *servers*, and the worker runs `trivy … --server <endpoint>`, the
+client half — and each carries an `expired_at`, so the gate reopens on its own instead of the
+entry outliving its reason. The file is the register: read it before renewing an entry, and check
+the `go.mod` of the Trivy tag first, because the version that closes it retires the entry rather
+than renewing it.
 
 ### Scanner rule ignores are a different thing
 

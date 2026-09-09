@@ -230,6 +230,14 @@ pub struct RegistryConfig {
     /// Set this for self-hosted registries (e.g. Gitea/Forgejo package feeds).
     #[serde(default)]
     pub index_url: Option<String>,
+    /// SDKMAN only: URL of the download broker, the second host of the one
+    /// protocol. Defaults to `https://broker.sdkman.io`; `upstreams` is the
+    /// candidates API (`https://api.sdkman.io/2`). Rejected on any other type,
+    /// for the same reason `index_url` would be on a non-cargo registry: a
+    /// silently ignored option is a misconfiguration that looks like a proxy
+    /// bug (RFC 0010 §4.1, §4.5).
+    #[serde(default)]
+    pub broker_url: Option<String>,
     #[serde(default)]
     pub cache: CachePolicy,
     #[serde(default)]
@@ -300,6 +308,14 @@ pub struct RegistryConfig {
     /// stop such an instance booting on upgrade. §4.9 warns instead.
     #[serde(default)]
     pub prerelease_visibility: Option<Visibility>,
+    /// RFC 0014 §13 O6 — the registry-tier `on_confirmed`: what the upstream
+    /// audit does with a disappearance confirmed on *this* registry,
+    /// `"audit"` or `"block"`. Deepest wins: set, it overrides
+    /// `[upstream_audit] on_confirmed` for this registry alone; absent, the
+    /// estate's key applies. `"block"` needs the audit enabled and this
+    /// registry audited, which §4.9-style validation checks.
+    #[serde(default)]
+    pub on_confirmed: Option<String>,
     /// Optional artifact signing configuration (local/hybrid mode only).
     #[serde(default)]
     pub signing: Option<SigningConfig>,
@@ -308,6 +324,12 @@ pub struct RegistryConfig {
     /// absent, the hosted repository is unsigned.
     #[serde(default)]
     pub repo_signing: Option<RepoSigningConfig>,
+    /// Optional Ed25519 key a `vscode-marketplace`/`openvsx` registry signs
+    /// every VSIX it publishes with (RFC 0020). The signature is served as the
+    /// gallery's `VsixSignature` asset, which is what a current editor's
+    /// Extensions view requires before it enables Install.
+    #[serde(default)]
+    pub vsx_signing: Option<VsxSigningConfig>,
     /// Optional beta-channel configuration (local/hybrid mode only).
     /// When enabled, pre-release versions are only visible to registered beta-channel members.
     #[serde(default)]
@@ -333,6 +355,24 @@ pub struct RegistryConfig {
     /// (RFC 0007 §4.1).
     #[serde(default)]
     pub readme: Option<ReadmeConfig>,
+    /// `[registries.security]` — the quarantine profile (RFC 0018 §4.1).
+    /// Absent means no quarantine: the gates run as rules, exactly as before.
+    #[serde(default)]
+    pub security: Option<super::security::SecurityConfig>,
+    /// `[registries.refs]` — how long a forge ref → commit resolution is
+    /// trusted (RFC 0019 §4.1). Forge kinds only; validation refuses it
+    /// elsewhere. Absent means the defaults: branches every minute, tags every
+    /// hour.
+    #[serde(default)]
+    pub refs: Option<super::forge::RefsConfig>,
+    /// `[registries.raw]` — raw file serving, off unless written (RFC 0019
+    /// §4.1, phase 3).
+    #[serde(default)]
+    pub raw: Option<super::forge::RawConfig>,
+    /// `[registries.api_reads]` — the typed read-only JSON routes to add
+    /// beside the release listing.
+    #[serde(default)]
+    pub api_reads: Option<super::forge::ApiReadsConfig>,
     /// Optional configuration for the console's discovery read — whether this
     /// instance may ask upstream about a package it holds nothing of.
     ///
@@ -732,6 +772,26 @@ pub struct RepoSigningConfig {
     pub created: Option<u32>,
 }
 
+/// Ed25519 VSIX signing key for `vscode-marketplace`/`openvsx` registries
+/// (RFC 0020 §4.1).
+///
+/// ```toml
+/// [registries.vsx_signing]
+/// seed_hex = "${VSX_SIGNING_SEED}"   # 32-byte Ed25519 seed, hex-encoded
+/// key_id   = "2026-09"               # optional; default: 16 hex chars of SHA-256(public key)
+/// ```
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct VsxSigningConfig {
+    /// Hex-encoded 32-byte Ed25519 seed. A secret of the same class as
+    /// `repo_signing.seed_hex`: keep it out of the file with `${VAR}`.
+    pub seed_hex: String,
+    /// The id the public key is served under
+    /// (`/proxy/{registry}/api/-/public-key/{key_id}`). Must change when the
+    /// key does; the default derives it from the key, so it does.
+    #[serde(default)]
+    pub key_id: Option<String>,
+}
+
 // ── SBOM generation ───────────────────────────────────────────────────────────
 
 fn default_sbom_formats() -> Vec<String> {
@@ -1012,6 +1072,14 @@ pub struct CachePolicy {
     /// startup and via the `/warm` admin endpoint (`paths`).
     #[serde(default)]
     pub warm_paths: Vec<String>,
+    /// The platforms `warm_packages` warms, for the two kinds whose artifact
+    /// is one file per platform: `sdkman` (`linuxx64`, `darwinarm64`, …) and
+    /// `nodedist` (`linux-x64`, `darwin-arm64`, …). Empty — the default —
+    /// means the platform this server runs on; guessing every platform would
+    /// fetch 1.6 GB of JDK to satisfy a one-line `.sdkmanrc` (RFC 0010 §6.9).
+    /// Rejected on any other kind.
+    #[serde(default)]
+    pub warm_platforms: Vec<String>,
     /// Number of most-recent versions to pre-warm per package (default: 1 = latest only).
     #[serde(default = "default_warm_latest_n")]
     pub warm_latest_n: usize,
@@ -1047,6 +1115,7 @@ impl Default for CachePolicy {
             keep_latest_n: None,
             warm_packages: vec![],
             warm_paths: vec![],
+            warm_platforms: vec![],
             warm_latest_n: default_warm_latest_n(),
             warm_concurrency: default_warm_concurrency(),
         }

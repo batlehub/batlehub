@@ -194,3 +194,36 @@ calling toToml so the TOML output contains bare integers (e.g. 8080).
 {{- end -}}
 {{- $c | toToml -}}
 {{- end }}
+
+{{/*
+  The credentials layer, as TOML.
+
+  `credentials.config` has the same shape as `config` and is serialised the same
+  way, so a section written in one is written the same in the other. It runs
+  through the same integer coercions because `toToml` renders an unmarked Helm
+  number as a float, and `port = 8080.0` is not a port.
+*/}}
+{{- define "batlehub.credentialsConfig" -}}
+{{- $c := .Values.credentials.config | deepCopy -}}
+{{- if $c.server -}}
+  {{- if hasKey $c.server "port" -}}
+    {{- $_ := set $c.server "port" (int $c.server.port) -}}
+  {{- end -}}
+{{- end -}}
+{{- if $c.database -}}
+  {{- if hasKey $c.database "max_connections" -}}
+    {{- $_ := set $c.database "max_connections" (int (index $c.database "max_connections")) -}}
+  {{- end -}}
+{{- end -}}
+{{- toToml $c -}}
+{{- end }}
+
+{{/*
+  The Secret holding the credentials layer: the one named in values, or the one
+  this chart renders. Empty when the layer is off.
+*/}}
+{{- define "batlehub.credentialsSecretName" -}}
+{{- if .Values.credentials.enabled -}}
+{{- .Values.credentials.existingSecret | default (printf "%s-credentials" (include "batlehub.fullname" .)) -}}
+{{- end -}}
+{{- end }}

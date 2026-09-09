@@ -1,14 +1,16 @@
 mod api;
 mod cli;
 mod config;
+mod contract;
+mod gallery_proxy;
 mod tui;
 
 use anyhow::Result;
 use clap::Parser;
 
 use cli::{
-    admin, auth, authz, config_cmd, download, owner, package, publish, registry, setup, version,
-    Cli, Command,
+    admin, auth, authz, config_cmd, download, mise, owner, package, proxy, publish, registry,
+    security, setup, version, vsx, Cli, Command,
 };
 use config::ConfigFile;
 
@@ -63,8 +65,21 @@ async fn main() -> Result<()> {
 
     // If the user supplied --token, use it directly; otherwise auto-resolve
     // (reads K8s token file or refreshes expiring OIDC token).
+    //
+    // `logout` is exempt: `resolve_token` can perform a network refresh, so a
+    // logout against a server that is down would fail before clearing anything
+    // — and refreshing a credential that is about to be discarded is work for
+    // nothing even when the server answers.
+    let logging_out = matches!(
+        cli.command,
+        Command::Auth {
+            cmd: cli::auth::AuthCommand::Logout { .. }
+        }
+    );
     let effective_token = if let Some(ref t) = cli.token {
         Some(t.clone())
+    } else if logging_out {
+        None
     } else {
         api::auth::resolve_token(&base_url_for_refresh, cli.profile.as_deref(), &mut cfg).await?
     };
@@ -86,11 +101,32 @@ async fn main() -> Result<()> {
         Command::Version { cmd } => version::run(cmd, &client).await?,
         Command::Owners { cmd } => owner::run(cmd, &client, cli.json).await?,
         Command::Authz { cmd } => authz::run(cmd, &client, cli.json).await?,
+        Command::Mise { cmd } => mise::run(cmd, &client, cli.json).await?,
+        Command::Proxy { cmd } => proxy::run(cmd).await?,
+        Command::Vsx { cmd } => vsx::run(cmd, cli.token.as_deref()).await?,
+        Command::Why(args) => security::run_why(args, &client, cli.json).await?,
+        Command::Audit { cmd } => security::run_audit(cmd, &client, cli.json).await?,
+        Command::Verdicts { cmd } => security::run_verdicts(cmd, &client, cli.json).await?,
+        Command::Wait(args) => {
+            let code = security::run_wait(args, &client, cli.json).await?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
         Command::Publish(args) => publish::run(args, &client, resolved.registry.as_deref()).await?,
         Command::Download(args) => {
             download::run(args, &client, resolved.registry.as_deref()).await?
         }
-        Command::Auth { cmd } => auth::run(cmd, &client, cli.json, cli.profile.as_deref()).await?,
+        Command::Auth { cmd } => {
+            auth::run(
+                cmd,
+                &client,
+                cli.json,
+                cli.profile.as_deref(),
+                cli.token.as_deref(),
+            )
+            .await?
+        }
         Command::Admin { cmd } => admin::run(cmd, &client, cli.json).await?,
         Command::Tui => tui::run(client).await?,
         Command::Config { .. } | Command::Completion { .. } | Command::Setup { .. } => {

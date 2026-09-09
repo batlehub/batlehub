@@ -20,6 +20,10 @@ paths = [
     # `curl -H "Authorization: Bearer <token>"` usage examples in the docs.
     '''docs/guide/installation\.md''',
     '''docs/guide/configuration\.md''',
+    # The French translations of those same two pages (added 2026-09-09), which
+    # carry the same `my-admin-token` placeholder in the same `curl -H` shape.
+    '''docs/fr/guide/installation\.md''',
+    '''docs/fr/guide/configuration\.md''',
     # The same two documents at the paths they had before RFC 0005 merged
     # `website/` into `docs/`. The scan walks full history (`fetch-depth: 0`),
     # and history keeps the old path, so allowlisting only the current one
@@ -36,4 +40,15 @@ paths = [
     # shape `curl-auth-header` matches — so the README is the only file of the
     # set the scan flags.
     '''perf/README-authz-11-7\.md''',
+]
+# Matched on the value rather than the file, because the scan walks full
+# history: an inline `gitleaks:allow` fixes the working tree and leaves the
+# commit that introduced the line flagged forever. Same reason the two
+# pre-RFC-0005 `website/` paths are still listed above.
+regexes = [
+    # base64 of "extension.vsixmanifest" — the entry key vsce-sign writes into
+    # a `.signature.manifest`, asserted literally in `vsx_signature.rs` so the
+    # shape stays measured off the real signer. `generic-api-key` reads the
+    # trailing `==` as a token.
+    '''ZXh0ZW5zaW9uLnZzaXhtYW5pZmVzdA==''',
 ]

@@ -11,6 +11,7 @@ Proxy and cache the npm registry, or host private npm packages. BatleHub serves 
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
 | **Private publish** | ✅ `npm publish` |
+| **Air gap** | offline, the packument is composed from the held versions ([RFC 0008-bis](/rfc/0008-bis-listings-across-the-gap)); a fresh `npm install` resolves against it |
 
 ## Proxy setup
 

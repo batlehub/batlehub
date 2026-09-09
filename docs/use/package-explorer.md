@@ -34,7 +34,15 @@ The left panel lists **every accessible registry**, including those that have no
 Type in the search box. After a 300 ms debounce two things happen:
 
 1. The main table is filtered by substring match on the package name (server-side, case-insensitive).
-2. An **upstream search** fires for registries that support it (see [Upstream search](/use/package-explorer-search#upstream-search)). Results appear at the bottom of the same table, marked **Not Yet Proxied**.
+2. An **upstream search** fires for registries that support it (see [Upstream search](/use/package-explorer-search#upstream-search)). Results appear at the bottom of the same table, marked **upstream**.
+
+An upstream row is a package this instance holds nothing of. If the operator has
+left [`console_fetch`](/guide/admin-config#console-fetch) on and the registry can
+be addressed by version alone, the row offers a button naming the version the
+upstream search returned — **Fetch 4.17.21** — which pulls it through this
+instance under your own identity, gates, quota and audit row included. The row
+then joins the held half of the table. Where the button is not offered the row
+shows none, and the package page says why.
 
 ### Sort {#sort}
 

@@ -622,6 +622,64 @@ pub fn ensure_linked_origin(
     )))
 }
 
+/// Refuse a built URL that no longer sits under `base`'s path prefix.
+///
+/// [`ensure_same_origin`] compares scheme, host and port, which is the wrong
+/// question for a URL assembled by interpolating a caller-supplied path: a dot
+/// segment walks *within* the origin, so the result is still same-origin while
+/// naming something the caller was never authorised to read — another
+/// repository, or a path outside a mirror's subtree. `Url::parse` has already
+/// applied its own normalisation by the time this runs, so comparing the parsed
+/// path against the base's is what catches the escape.
+pub fn ensure_url_under_base(url: &str, base_url: &str) -> Result<(), CoreError> {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|e| CoreError::Registry(format!("invalid upstream URL '{url}': {e}")))?;
+    let base = reqwest::Url::parse(base_url)
+        .map_err(|e| CoreError::Registry(format!("invalid base URL '{base_url}': {e}")))?;
+    if !same_origin(&parsed, &base) {
+        return Err(CoreError::Registry(format!(
+            "refusing to fetch cross-origin upstream URL '{url}' (expected origin of '{base_url}')"
+        )));
+    }
+    let prefix = base.path().trim_end_matches('/');
+    // An empty prefix means the base is the origin root, which every path is
+    // under; otherwise the path must be the prefix itself or sit beneath it,
+    // matched on a `/` boundary so `/repo-evil` does not pass for `/repo`.
+    if prefix.is_empty()
+        || parsed.path() == prefix
+        || parsed.path().starts_with(&format!("{prefix}/"))
+    {
+        return Ok(());
+    }
+    Err(CoreError::Registry(format!(
+        "refusing to fetch '{url}': it escapes the base path of '{base_url}'"
+    )))
+}
+
+/// Percent-encode a slash-separated path, encoding each segment but keeping the
+/// `/` separators literal.
+///
+/// Interpolating a caller-supplied path straight into an upstream URL lets the
+/// URL parser reinterpret it: `%2e%2e` is a dot segment to `url::Url::parse`
+/// and pops a path component, so a path that cleared the edge validator can
+/// still escape the base it was joined to. Encoding here makes the segment mean
+/// itself — a literal `%2e%2e` filename — rather than a navigation instruction.
+///
+/// `.` is unreserved, so `percent_encode` leaves it alone and a segment of
+/// nothing but dots would survive as navigation. Those are encoded here
+/// explicitly; every other segment keeps its dots, so `main.rs` stays readable.
+pub fn percent_encode_path(path: &str) -> String {
+    path.split('/')
+        .map(|segment| {
+            if !segment.is_empty() && segment.bytes().all(|b| b == b'.') {
+                return segment.replace('.', "%2E");
+            }
+            percent_encode(segment)
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// Percent-encode a query string value, encoding all characters except
 /// unreserved ones (letters, digits, `-`, `_`, `.`, `~`).
 pub fn percent_encode(s: &str) -> String {
@@ -844,6 +902,68 @@ mod tests {
     #[test]
     fn percent_encode_alphanumeric_and_safe_chars_unchanged() {
         assert_eq!(percent_encode("abc123-_.~"), "abc123-_.~");
+    }
+
+    #[test]
+    fn percent_encode_path_keeps_separators_and_encodes_the_segments() {
+        assert_eq!(percent_encode_path("src/main.rs"), "src/main.rs");
+        // The dot segments a URL parser would act on become literal filenames.
+        assert_eq!(percent_encode_path("a/../b"), "a/%2E%2E/b");
+        assert_eq!(percent_encode_path("a/%2e%2e/b"), "a/%252e%252e/b");
+        assert_eq!(percent_encode_path("a b/c"), "a%20b/c");
+        // A single dot is navigation too, and a filename keeps its dots.
+        assert_eq!(percent_encode_path("a/./b"), "a/%2E/b");
+        assert_eq!(percent_encode_path("a/main.rs"), "a/main.rs");
+        assert_eq!(percent_encode_path("a/...hidden/b"), "a/...hidden/b");
+    }
+
+    /// A path that walks out of the base is refused even though it never
+    /// leaves the origin — which is the only thing `ensure_same_origin` asks.
+    #[test]
+    fn a_dot_segment_that_escapes_the_base_path_is_refused() {
+        let base = "https://forge.example/org/repo";
+        for url in [
+            "https://forge.example/org/repo/../../victim/private",
+            "https://forge.example/org/repo/%2e%2e/%2e%2e/victim/private",
+            "https://forge.example/other/repo",
+            // A prefix that merely starts with the base's is not under it.
+            "https://forge.example/org/repo-evil/x",
+        ] {
+            assert!(
+                ensure_url_under_base(url, base).is_err(),
+                "{url} must not pass as under {base}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_path_under_the_base_passes() {
+        let base = "https://forge.example/org/repo";
+        for url in [
+            "https://forge.example/org/repo",
+            "https://forge.example/org/repo/raw/main/src/main.rs",
+            // An encoded dot segment that `Url::parse` leaves alone: it is a
+            // filename, not navigation, so it stays under the base.
+            "https://forge.example/org/repo/raw/main/%252e%252e",
+        ] {
+            ensure_url_under_base(url, base)
+                .unwrap_or_else(|e| panic!("{url} must be under {base}, got {e:?}"));
+        }
+        // A base at the origin root has no prefix to escape.
+        ensure_url_under_base(
+            "https://forge.example/anything/at/all",
+            "https://forge.example",
+        )
+        .expect("an origin-root base admits every path");
+    }
+
+    #[test]
+    fn a_cross_origin_url_is_still_refused_by_the_base_check() {
+        assert!(ensure_url_under_base(
+            "https://evil.example/org/repo/x",
+            "https://forge.example/org/repo"
+        )
+        .is_err());
     }
 
     #[test]

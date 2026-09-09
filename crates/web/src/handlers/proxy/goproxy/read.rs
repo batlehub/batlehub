@@ -30,6 +30,7 @@ async fn local_goproxy_file(
     version: &str,
     ext: &str,
     identity: &batlehub_core::entities::Identity,
+    net: &batlehub_core::entities::CallerNet,
 ) -> Result<HttpResponse, batlehub_core::error::CoreError> {
     let resp = match ext {
         "info" => local_svc
@@ -53,7 +54,7 @@ async fn local_goproxy_file(
             // the same way. A registry that grants a role releases-only must not
             // hand it the source because the module happens to be local.
             local_svc
-                .get_artifact(registry, module, version, Action::SourceRead, identity)
+                .get_artifact(registry, module, version, Action::SourceRead, identity, net)
                 .await
                 .map(|bytes| {
                     HttpResponse::Ok()
@@ -171,7 +172,7 @@ async fn proxy_go_latest(
     let latest = fetch_proxy_document(
         svc.clone(),
         PackageId::new(&registry, &module, "latest"),
-        AuthIdentity(identity.0.clone()),
+        AuthIdentity(identity.0.clone(), identity.1.clone()),
         Action::ReleasesRead,
         DocumentKind::LATEST,
         String::new(),
@@ -312,7 +313,17 @@ pub async fn goproxy_file(
         .ok_or_else(|| AppError::not_found(format!("unknown goproxy file '{filename}'")))?;
 
     if matches!(mode, RegistryMode::Local | RegistryMode::Hybrid) {
-        match local_goproxy_file(&local_svc, &registry, module, version, ext, &identity).await {
+        match local_goproxy_file(
+            &local_svc,
+            &registry,
+            module,
+            version,
+            ext,
+            &identity,
+            &identity.1,
+        )
+        .await
+        {
             Ok(resp) => return Ok(resp),
             Err(CoreError::NotFound(_)) if matches!(mode, RegistryMode::Hybrid) => {}
             Err(CoreError::NotFound(msg)) => return Err(AppError::not_found(msg)),

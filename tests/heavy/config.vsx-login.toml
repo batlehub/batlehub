@@ -1,0 +1,42 @@
+# The VS Code gallery of tests/heavy/vsx_login.sh (RFC 0011 §4.4): a local
+# `vscode-marketplace` registry that **requires a credential to read**.
+# `anonymous` holds no verb, so an editor that sends nothing sees an empty
+# gallery — which is the situation the local gallery proxy exists for. The
+# `user` token is what the proxy attaches once `auth write-token-file` has
+# run; the admin token publishes the fixture.
+
+[server]
+host = "127.0.0.1"
+port = 8122
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[[auth.tokens]]
+value = "heavy-user-token"
+role = "user"
+user_id = "ci-user"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-vsx-login-storage"
+
+[[registries]]
+type = "vscode-marketplace"
+name = "vsx-${HEAVY_RUN}"
+mode = "local"
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

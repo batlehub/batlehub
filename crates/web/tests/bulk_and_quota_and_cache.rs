@@ -15,6 +15,7 @@ use batlehub_adapters::in_memory::{
     InMemoryPackageRepository as InMemoryRepo, InMemoryStorageBackend as InMemoryStorage,
     NoopArtifactMetaRepository as NoopArtifactMeta,
 };
+use batlehub_config::schema::RegistryMode;
 use batlehub_core::entities::EventFilter;
 use batlehub_core::entities::{AccessAction, AccessEvent, PackageId, Role};
 use batlehub_core::ports::{NoopWarmCoordinator, PackageRepository, StorageBackend, StorageMeta};
@@ -330,20 +331,20 @@ async fn list_package_owners_requires_admin() {
     assert_eq!(call_service(&app, req).await.status(), 403);
 }
 
+/// The admin gets past the verb check and is stopped by the missing port, not
+/// by authorization — the distinction the operator needs to fix the deployment.
+///
+/// This assertion used to accept success, client error *and* server error, which
+/// is every status there is: the row passed whatever the handler did.
 #[actix_web::test]
-async fn list_package_owners_returns_200_for_admin() {
+async fn list_package_owners_returns_503_when_ownership_is_not_configured() {
     let app = make_app(InMemoryRepo::new()).await;
     let req = TestRequest::get()
         .uri("/api/v1/admin/registries/npm/packages/lodash/owners")
         .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
         .to_request();
     let resp = call_service(&app, req).await;
-    // ownership is not configured in make_app → 503 or 403 for admin
-    assert!(
-        resp.status().is_success()
-            || resp.status().is_client_error()
-            || resp.status().is_server_error()
-    );
+    assert_eq!(resp.status(), 503);
 }
 
 #[actix_web::test]
@@ -357,6 +358,90 @@ async fn add_package_owner_requires_admin() {
         )
         .to_request();
     assert_eq!(call_service(&app, req).await.status(), 403);
+}
+
+#[actix_web::test]
+async fn remove_package_owner_requires_admin() {
+    let app = make_app(InMemoryRepo::new()).await;
+    let req = TestRequest::delete()
+        .uri("/api/v1/admin/registries/npm/packages/lodash/owners/user/alice")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 403);
+}
+
+#[actix_web::test]
+async fn remove_package_owner_returns_503_when_ownership_is_not_configured() {
+    let app = make_app(InMemoryRepo::new()).await;
+    let req = TestRequest::delete()
+        .uri("/api/v1/admin/registries/npm/packages/lodash/owners/user/alice")
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 503);
+}
+
+/// Add, list, remove, list — the whole administrative ownership surface against
+/// a store that is actually wired, which is the only fixture where the three
+/// routes do more than refuse.
+#[actix_web::test]
+async fn package_owner_add_list_remove_round_trip() {
+    let (app, _ownership, _grants) = make_local_cargo_ownership_app(RegistryMode::Local).await;
+    let owners_uri = "/api/v1/admin/registries/local-cargo/packages/pkg/owners";
+
+    let added = call_service(
+        &app,
+        TestRequest::post()
+            .uri(owners_uri)
+            .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+            .set_json(serde_json::json!({
+                "principal_type": "user", "principal_id": "alice", "role": "maintainer"
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(added.status(), 204);
+
+    let listed: Value = read_body_json(
+        call_service(
+            &app,
+            TestRequest::get()
+                .uri(owners_uri)
+                .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+                .to_request(),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(listed.as_array().expect("owner array").len(), 1);
+    assert_eq!(listed[0]["principal_id"], "alice");
+
+    let removed = call_service(
+        &app,
+        TestRequest::delete()
+            .uri(&format!("{owners_uri}/user/alice"))
+            .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(removed.status(), 204);
+
+    // Removed for real: the listing is the only place an admin can confirm it,
+    // and a `204` that leaves the row behind is the failure worth catching.
+    let after: Value = read_body_json(
+        call_service(
+            &app,
+            TestRequest::get()
+                .uri(owners_uri)
+                .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+                .to_request(),
+        )
+        .await,
+    )
+    .await;
+    assert!(
+        after.as_array().expect("owner array").is_empty(),
+        "the owner survived its removal: {after}"
+    );
 }
 
 // ── Cache invalidation ────────────────────────────────────────────────────────
@@ -425,6 +510,7 @@ fn npm_warming_service(storage: Arc<dyn StorageBackend>) -> Arc<WarmingService> 
         latest_n: 3,
         concurrency: 4,
         coordinator: Arc::new(NoopWarmCoordinator),
+        platforms: Vec::new(),
         metrics: Arc::new(ProxyMetrics::new(&["npm".to_owned()])),
     })
 }
@@ -554,6 +640,115 @@ async fn recorded(
     })
     .await
     .unwrap()
+}
+
+/// A download's audit row carries the caller's address and agent.
+///
+/// The regression this guards: `ProxyRequest` documented both fields as being
+/// "for audit log enrichment", the column existed, the CSV export printed it and
+/// `list_pullers` grouped by it — but nothing ever set them, so every row was
+/// null and the audit trail could attribute nothing to an address.
+#[actix_web::test]
+async fn a_downloads_audit_row_carries_the_callers_address_and_agent() {
+    let parts = local_registry_app_parts("npm", "npm", RegistryMode::Proxy, None);
+    let repo = Arc::clone(&parts.proxy_svc.repo);
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+
+    let req = TestRequest::get()
+        .uri("/proxy/npm/pkg/1.1.0/tarball")
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .insert_header(("User-Agent", "npm/10.2.4 node/v20.11.0"))
+        .peer_addr("203.0.113.9:54321".parse().unwrap())
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert!(resp.status().is_success(), "{}", resp.status());
+
+    let events = recorded(&repo, AccessAction::Download).await;
+    let e = events.first().expect("the download was audited");
+    assert_eq!(e.ip_address.as_deref(), Some("203.0.113.9"));
+    assert_eq!(e.user_agent.as_deref(), Some("npm/10.2.4 node/v20.11.0"));
+}
+
+/// The same row, from a **local** registry's own download.
+///
+/// The regression this guards is the second half of the one above, and it
+/// outlived it: the proxy path threaded the address and agent through
+/// `ProxyRequest` while `LocalRegistryService::record_download` built its event
+/// from the `Identity` alone, so `audit pulls` reported a count with two blank
+/// columns beside it — on exactly the deployments that publish their own
+/// packages (RFC 0018 §13.10). A local download and a proxied one must be the
+/// same row.
+#[actix_web::test]
+async fn a_local_downloads_audit_row_carries_the_callers_address_and_agent() {
+    let parts = local_registry_app_parts("local-npm", "npm", RegistryMode::Local, None);
+    let repo = Arc::clone(&parts.proxy_svc.repo);
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+
+    let tarball = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        b"fake-tarball-content",
+    );
+    let publish = TestRequest::put()
+        .uri("/proxy/local-npm/dl-pkg")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_json(serde_json::json!({
+            "name": "dl-pkg",
+            "versions": { "1.2.3": {
+                "name": "dl-pkg",
+                "version": "1.2.3",
+                "dist": { "shasum": "abc123" },
+            }},
+            "_attachments": { "dl-pkg-1.2.3.tgz": {
+                "content_type": "application/octet-stream",
+                "data": tarball,
+                "length": 20,
+            }},
+        }))
+        .to_request();
+    assert!(call_service(&app, publish).await.status().is_success());
+
+    let req = TestRequest::get()
+        .uri("/proxy/local-npm/dl-pkg/1.2.3/tarball")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .insert_header(("User-Agent", "npm/10.2.4 node/v20.11.0"))
+        .peer_addr("203.0.113.9:54321".parse().unwrap())
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert!(resp.status().is_success(), "{}", resp.status());
+
+    let events = recorded(&repo, AccessAction::Download).await;
+    let e = events.first().expect("the local download was audited");
+    assert_eq!(e.ip_address.as_deref(), Some("203.0.113.9"));
+    assert_eq!(e.user_agent.as_deref(), Some("npm/10.2.4 node/v20.11.0"));
+}
+
+/// And it is the peer's address, not one the caller asked for.
+///
+/// With no trusted proxy configured, `X-Forwarded-For` is attacker-supplied:
+/// believing it would let any caller write whatever source address it liked into
+/// its own audit row, which is the one field an operator reads to find out who
+/// pulled something.
+#[actix_web::test]
+async fn a_forwarded_for_header_cannot_forge_the_audited_address() {
+    let parts = local_registry_app_parts("npm", "npm", RegistryMode::Proxy, None);
+    let repo = Arc::clone(&parts.proxy_svc.repo);
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+
+    let req = TestRequest::get()
+        .uri("/proxy/npm/pkg/1.1.0/tarball")
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .insert_header(("X-Forwarded-For", "198.51.100.7"))
+        .peer_addr("203.0.113.9:54321".parse().unwrap())
+        .to_request();
+    assert!(call_service(&app, req).await.status().is_success());
+
+    let events = recorded(&repo, AccessAction::Download).await;
+    let e = events.first().expect("the download was audited");
+    assert_eq!(
+        e.ip_address.as_deref(),
+        Some("203.0.113.9"),
+        "the peer, never the header"
+    );
 }
 
 #[actix_web::test]

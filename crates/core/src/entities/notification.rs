@@ -3,13 +3,28 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NotificationEventType {
     PackagePublished,
     PackageYanked,
     PackageUnyanked,
     PackageDeleted,
+    /// RFC 0014 §4.5: the upstream audit confirmed a cached package (or one
+    /// version of it — `version` says which) is no longer at its upstream.
+    PackageDisappearedUpstream,
+    /// RFC 0014 §4.5: a package the audit had confirmed gone answered again.
+    PackageReappearedUpstream,
+    /// RFC 0014 §4.5: a sweep was voided — too many misses at once to be
+    /// unpublishes. Registry-scoped: `package_name` is `"*"`.
+    UpstreamUnreachable,
+    /// RFC 0018 §4.2 (decision 23): a rescan moved a *served* verdict to
+    /// `denied`. The admin alert — it carries the identities that pulled
+    /// the version inside `pullers_window_days`, and is sent to nobody else.
+    VerdictChanged,
+    /// RFC 0018 §4.2: a hold lifted and the version is served; carries the
+    /// identities that were refused it while it was held.
+    ArtifactReleased,
 }
 
 impl NotificationEventType {
@@ -19,8 +34,27 @@ impl NotificationEventType {
             Self::PackageYanked => "package_yanked",
             Self::PackageUnyanked => "package_unyanked",
             Self::PackageDeleted => "package_deleted",
+            Self::PackageDisappearedUpstream => "package_disappeared_upstream",
+            Self::PackageReappearedUpstream => "package_reappeared_upstream",
+            Self::UpstreamUnreachable => "upstream_unreachable",
+            Self::VerdictChanged => "verdict_changed",
+            Self::ArtifactReleased => "artifact_released",
         }
     }
+
+    /// Every variant, in wire order — what the console's picker and the
+    /// CLI's help list, so neither enumerates the enum by hand.
+    pub const ALL: &[Self] = &[
+        Self::PackagePublished,
+        Self::PackageYanked,
+        Self::PackageUnyanked,
+        Self::PackageDeleted,
+        Self::PackageDisappearedUpstream,
+        Self::PackageReappearedUpstream,
+        Self::UpstreamUnreachable,
+        Self::VerdictChanged,
+        Self::ArtifactReleased,
+    ];
 }
 
 impl std::fmt::Display for NotificationEventType {
@@ -37,6 +71,11 @@ impl std::str::FromStr for NotificationEventType {
             "package_yanked" => Ok(Self::PackageYanked),
             "package_unyanked" => Ok(Self::PackageUnyanked),
             "package_deleted" => Ok(Self::PackageDeleted),
+            "package_disappeared_upstream" => Ok(Self::PackageDisappearedUpstream),
+            "package_reappeared_upstream" => Ok(Self::PackageReappearedUpstream),
+            "upstream_unreachable" => Ok(Self::UpstreamUnreachable),
+            "verdict_changed" => Ok(Self::VerdictChanged),
+            "artifact_released" => Ok(Self::ArtifactReleased),
             other => Err(format!("unknown event type: {other}")),
         }
     }

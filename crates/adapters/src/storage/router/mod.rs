@@ -45,6 +45,29 @@ fn like_prefix_pattern(prefix: &str) -> String {
 ///   the ref count reaches zero.
 /// - Artifacts written before this feature was enabled have no dedup entries and are
 ///   served via the legacy path (direct logical-key lookup).
+///
+/// **What the router delegates, and what it answers itself.** Per-key operations
+/// reach the backend underneath: `store`, `retrieve`, `exists` and `delete` all
+/// resolve a backend and call it, `delete` on the physical `blob/<hash>` key
+/// once the last reference is gone.
+///
+/// The three prefix operations do not. [`delete_by_prefix`], [`stat_by_prefix`]
+/// and [`list_keys`] are answered from `artifact_dedup_refs` unioned with
+/// `artifact_storage`, and never call their namesake on a backend. They cannot
+/// delegate: the caller's prefix is a *logical* one such as `artifact:npm/`,
+/// while the physical objects sit at `blob/<sha256>`, so a backend-side scan
+/// would match nothing. `delete_by_prefix` accordingly resolves the logical keys
+/// here and deletes them one at a time through [`delete`].
+///
+/// The practical consequence is that a leaf backend's own implementation of
+/// those three is dead code in the wired server, since `initialize_storage`
+/// wraps even a single backend in a router. It still has to be correct; see the
+/// note on the `StorageBackend` trait.
+///
+/// [`delete_by_prefix`]: StorageBackend::delete_by_prefix
+/// [`stat_by_prefix`]: StorageBackend::stat_by_prefix
+/// [`list_keys`]: StorageBackend::list_keys
+/// [`delete`]: StorageBackend::delete
 pub struct StorageRouter {
     pub(super) backends: HashMap<String, Arc<dyn StorageBackend>>,
     pub(super) default_name: String,

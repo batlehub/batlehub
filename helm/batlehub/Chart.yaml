@@ -2,11 +2,11 @@ apiVersion: v2
 name: batlehub
 description: Smart proxy and cache for package registries
 type: application
-version: 1.1.0
-appVersion: "1.1.0"
-home: https://github.com/batleforc/batlehub
+version: 1.2.0
+appVersion: "1.2.0"
+home: https://github.com/batlehub/batlehub
 sources:
-  - https://github.com/batleforc/batlehub
+  - https://github.com/batlehub/batlehub
 maintainers:
   - name: Max Batleforc
     email: maxleriche.60@gmail.com
@@ -18,3 +18,10 @@ keywords:
   - cargo
   - go
   - helm
+dependencies:
+  # The Trivy server for `[scanners.trivy]` (RFC 0018 §6.3). Optional: the
+  # worker's Trivy client can also download its own database.
+  - name: trivy
+    version: "0.14.1"
+    repository: https://aquasecurity.github.io/helm-charts/
+    condition: trivy.enabled

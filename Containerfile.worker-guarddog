@@ -1,0 +1,75 @@
+# The GuardDog worker image (RFC 0018 §6.3): the worker image, plus DataDog's
+# GuardDog, for the deployments that turn on the optional `[scanners.guarddog]`
+# second opinion on npm, PyPI and Go.
+#
+# Why GuardDog gets an image of its own rather than a place in the worker
+# image: it is the only scanner that is not a static binary. It brings an
+# interpreter, a venv and some forty Python packages, and it is not in the
+# default profile — the RFC keeps it optional for that exact reason (§13,
+# "GuardDog as the default behavioural scanner"). A deployment that has not
+# asked for it should not carry it, nor answer for its CVEs.
+#
+# Nothing about how GuardDog runs changes: it is still a subprocess of the
+# worker role under the same `bwrap` sandbox (RFC 0018 §13, row 17). This image
+# only decides which files that role has on disk, so `worker.image.repository`
+# is the only thing a deployment switches.
+#
+#   podman build -f Containerfile.worker -t batlehub-worker .
+#   podman build -f Containerfile.worker-guarddog \
+#     --build-arg WORKER_IMAGE=batlehub-worker -t batlehub-worker-guarddog .
+
+# The worker image to add GuardDog to. CI passes the digest it has just built,
+# so the two images always carry the same `batlehub` binary; the default is
+# there for a local build against the published one.
+ARG WORKER_IMAGE=ghcr.io/batleforc/batlehub-worker:latest
+ARG GUARDDOG_VERSION=3.2.0
+
+# ── GuardDog's venv, built away from the image that carries it ───────────────
+# The same bookworm-slim digest the worker image is built from, so the
+# interpreter the venv's `bin/python3` symlink points at is the one installed
+# below.
+FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS guarddog
+ARG GUARDDOG_VERSION
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+# GuardDog goes in its own venv so its dependency tree stays out of the system
+# interpreter.
+# `python3 -m venv` seeds the venv with bookworm's python3.11 pip and
+# setuptools (pip 23.0.1, setuptools 66.1.1), and that setuptools carries
+# CVE-2024-6345 (fixed in 70.0.0) and CVE-2025-47273 (fixed in 78.1.1) —
+# Trivy reads the venv's dist-info and blocks the image on both. Upgrade the
+# seeds before installing GuardDog; setuptools stays behind, because a
+# dependency can still reach for pkg_resources at runtime and the upgraded
+# version is clean.
+#
+# pip is then deleted from the venv. It has no runtime role — GuardDog never
+# imports it, and the one subprocess it spawns is `sys.executable -m guarddog`
+# — and since pip 26.2 the wheel carries `pip/_vendor/bom.cdx.json`, a
+# CycloneDX SBOM describing pip's own vendored copies. Trivy treats that file
+# as a package source ("Third-party SBOM may lead to inaccurate vulnerability
+# detection") and reports two HIGHs against components that are pip's, not
+# ours: msgpack 1.1.2 (GHSA-6v7p-g79w-8964) and setuptools 70.3.0
+# (CVE-2025-47273), neither of which the installed tree exposes. Dropping the
+# installer from a runtime image removes the finding at the root; a
+# suppression would only hide it, and this cuts the image down as well.
+RUN python3 -m venv /opt/guarddog \
+    && /opt/guarddog/bin/pip install --no-cache-dir --upgrade "pip>=25.2" "setuptools>=80.9.0" \
+    && /opt/guarddog/bin/pip install --no-cache-dir "guarddog==${GUARDDOG_VERSION}" \
+    && rm -rf /opt/guarddog/lib/python3*/site-packages/pip \
+              /opt/guarddog/lib/python3*/site-packages/pip-*.dist-info \
+              /opt/guarddog/bin/pip /opt/guarddog/bin/pip3 /opt/guarddog/bin/pip3.*
+
+# ── The worker image, with GuardDog on it ────────────────────────────────────
+# ENTRYPOINT, CMD, TMPDIR, EXPOSE and the uid are the worker image's and are
+# inherited; only root can write /opt and run apt, so the uid is restored at
+# the end. `python3` is the interpreter alone — pip and venv were needed to
+# build the venv above, not to run it.
+FROM ${WORKER_IMAGE} AS runtime
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=guarddog /opt/guarddog /opt/guarddog
+RUN ln -s /opt/guarddog/bin/guarddog /usr/local/bin/guarddog
+USER 65532:65532

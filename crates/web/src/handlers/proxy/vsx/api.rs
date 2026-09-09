@@ -88,6 +88,8 @@ pub async fn openvsx_publish(
             crate::handlers::proxy::common::extract_signature_headers(&req)?,
         );
 
+    let signed_bytes = vsix_bytes.clone();
+    let registry_name = registry.clone();
     let quota = local_svc
         .publish(batlehub_core::services::PublishRequest {
             unlisted: false,
@@ -103,6 +105,14 @@ pub async fn openvsx_publish(
         })
         .await
         .map_err(AppError::from)?;
+    super::signing::sign_after_publish(
+        &local_svc,
+        &registry_name,
+        &extension_id,
+        &version,
+        &signed_bytes,
+    )
+    .await;
 
     let mut resp = HttpResponse::Created();
     for (name, value) in quota.headers() {
@@ -517,7 +527,7 @@ pub async fn openvsx_file(
 
     batlehub_core::services::validate_path_safe("extension file", &filename)
         .map_err(AppError::from)?;
-    super::assets::serve_entry(&bytes, &filename)
+    super::assets::serve_entry(&bytes, &filename, super::assets::SvgHandling::Verbatim)
 }
 
 // ── RFC 0015 §4.2 — `openvsx:namespace:claim` ────────────────────────────────
@@ -585,4 +595,42 @@ pub async fn openvsx_namespace_create(
         .map_err(AppError::from)?;
 
     Ok(HttpResponse::Ok().json(crate::handlers::schemas::OkResponse { ok: true }))
+}
+
+/// `GET /proxy/{registry}/api/-/public-key/{key_id}` — the key this
+/// registry's VSIX signatures verify under (RFC 0020 §4.2), PEM
+/// (`SubjectPublicKeyInfo`), the shape Open VSX serves and its clients
+/// parse. Anonymous: a public key is public, and the id names a key, not an
+/// extension. `404` for any id but the current key's.
+#[utoipa::path(
+    get,
+    path = "/proxy/{registry}/api/-/public-key/{key_id}",
+    tag = "proxy/openvsx",
+    params(
+        ("registry" = String, Path, description = "Registry name"),
+        ("key_id"   = String, Path, description = "The key id the gallery's PublicKey asset names"),
+    ),
+    responses(
+        (status = 200, description = "The public key, PEM", body = ProtocolDocument, content_type = "text/plain"),
+        (status = 404, description = "Unknown registry, or not this registry's key"),
+    ),
+)]
+#[get("/proxy/{registry}/api/-/public-key/{key_id}")]
+pub async fn openvsx_public_key(
+    path: web::Path<(String, String)>,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
+    map: web::Data<RegistryMap>,
+) -> Result<impl Responder, AppError> {
+    let (registry, key_id) = path.into_inner();
+    require_vsx(&registry, &map)?;
+    require_single_segment("key id", &key_id)?;
+    match super::signing::registry_key(&local_svc, &registry).await {
+        Some(key) if key.key_id() == key_id => Ok(HttpResponse::Ok()
+            .content_type("text/plain; charset=utf-8")
+            .insert_header(("Cache-Control", "public, max-age=86400"))
+            .body(key.public_key_pem())),
+        _ => Err(AppError::not_found(format!(
+            "registry '{registry}' holds no VSIX signing key '{key_id}'"
+        ))),
+    }
 }

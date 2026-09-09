@@ -1,0 +1,57 @@
+# The *disconnected* half of the heavy mise suite (tests/heavy/mise.sh §4).
+#
+# Same registry name as tests/heavy/config.mise.toml, because a bundle names
+# the registry its entries belong to and the two instances have to agree on
+# it. Everything else differs: its own port and its own storage directory, so
+# it starts holding nothing, and `[air_gap]` on, so it holds nothing more
+# until a bundle is imported.
+#
+# `[air_gap] enabled = true` is not a hint. Every registry client on this
+# instance is wrapped at build time in one that refuses to dial (RFC 0008 §13
+# decision 1), so there is no path off the host through this process at all —
+# which is what makes the `mise install` the suite runs afterwards a real
+# measurement rather than a lucky cache hit.
+
+[server]
+host = "127.0.0.1"
+port = 8107
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-mise-airgap-storage"
+
+# The gap itself. The trusted key is the public half of the fixed signing key
+# the suite writes into its work directory — a test key, generated nowhere and
+# secret to nobody, which is why it can live in a file in the repository.
+[air_gap]
+enabled = true
+bundle_trusted_keys = ["${HEAVY_BUNDLE_PUBKEY}"]
+record_misses = true
+miss_retention_days = 90
+
+[[registries]]
+type = "github"
+name = "github-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.refs]
+branch_ttl_secs = 10
+tag_ttl_secs = 3600
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

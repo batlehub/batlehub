@@ -416,8 +416,8 @@ async fn plugin_entries(
         package_id: PackageId::new(registry, xml_id, "latest"),
         identity: identity.0,
         action: Action::ReleasesRead.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
     };
     let meta = svc
         .resolve_metadata_for(&proxy_req)

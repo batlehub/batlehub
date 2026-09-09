@@ -1,0 +1,48 @@
+# The VS Code gallery of tests/heavy/vsx_view.sh (RFC 0011 §4.4): a local
+# `vscode-marketplace` registry that **requires a credential to read**.
+# `anonymous` holds no verb, so an editor that sends nothing sees an empty
+# gallery — which is the situation the local gallery proxy exists for. The
+# `user` token is what the proxy attaches once `auth write-token-file` has
+# run; the admin token publishes the fixture.
+
+[server]
+host = "127.0.0.1"
+port = 8123
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[[auth.tokens]]
+value = "heavy-user-token"
+role = "user"
+user_id = "ci-user"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-vsx-view-storage"
+
+[[registries]]
+type = "vscode-marketplace"
+name = "vsx-${HEAVY_RUN}"
+mode = "local"
+
+# RFC 0020: the registry signs what it hosts, so the Extensions view enables
+# Install on the fixture. A fixed seed — a test's key, not a secret.
+[registries.vsx_signing]
+seed_hex = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"
+key_id = "heavy"
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

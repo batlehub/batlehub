@@ -16,7 +16,7 @@ use batlehub_config::schema::RegistryMode;
 use batlehub_core::{
     entities::PackageId,
     error::CoreError,
-    services::{LocalRegistryService, ProxyRequest, ProxyResponse, ProxyService},
+    services::{LocalRegistryService, ProxyRequest, ProxyService},
 };
 
 use super::protocol::asset_type;
@@ -110,7 +110,7 @@ pub async fn vsx_asset(
     require_vsx(&registry, &map)?;
     let extension_id = qualified(&publisher, &name)?;
 
-    let bytes = vsix_bytes(
+    let (bytes, served) = vsix_bytes_with_source(
         &svc,
         &local_svc,
         &mode_map,
@@ -128,12 +128,110 @@ pub async fn vsx_asset(
             .body(bytes));
     }
 
+    // RFC 0020: the signature archive and its key are not files in the
+    // VSIX either — they are this registry's (built or read beside the
+    // artifact) or the upstream's (fetched through the proxy, cached beside
+    // it), by the same branch that produced the bytes.
+    if requested == asset_type::SIGNATURE {
+        let body = match served {
+            Served::Local => {
+                // A provided archive (RFC 0020 §13.6) is served as-is and
+                // wins over the registry's own signature.
+                if let Some(provided) = local_svc
+                    .provided_vsix_signature(&registry, &extension_id, &version)
+                    .await?
+                {
+                    return Ok(HttpResponse::Ok()
+                        .content_type("application/zip")
+                        .body(provided));
+                }
+                let Some(key) = super::signing::registry_key(&local_svc, &registry).await else {
+                    return Err(AppError::not_found(format!(
+                        "registry '{registry}' does not sign what it publishes"
+                    )));
+                };
+                super::signing::ensure_signature_archive(
+                    &local_svc,
+                    &key,
+                    &registry,
+                    &extension_id,
+                    &version,
+                    &bytes,
+                )
+                .await?
+            }
+            Served::Proxied => {
+                proxied_artifact(
+                    &svc,
+                    &registry,
+                    &extension_id,
+                    &version,
+                    batlehub_core::services::vsx_signature::SIGNATURE_ARTIFACT,
+                    &identity,
+                )
+                .await?
+            }
+        };
+        return Ok(HttpResponse::Ok()
+            .content_type("application/zip")
+            .body(body));
+    }
+    if requested == asset_type::PUBLIC_KEY {
+        return match served {
+            Served::Local => {
+                // A provided archive's key is its signer's, not this
+                // registry's: the asset is not advertised for such a version
+                // and must not answer with a key that verifies nothing.
+                if local_svc
+                    .provided_vsix_signature(&registry, &extension_id, &version)
+                    .await?
+                    .is_some()
+                {
+                    return Err(AppError::not_found(format!(
+                        "{extension_id}@{version} carries a provided signature; its key is its signer's"
+                    )));
+                }
+                let Some(key) = super::signing::registry_key(&local_svc, &registry).await else {
+                    return Err(AppError::not_found(format!(
+                        "registry '{registry}' does not sign what it publishes"
+                    )));
+                };
+                Ok(HttpResponse::Ok()
+                    .content_type("text/plain; charset=utf-8")
+                    .body(key.public_key_pem()))
+            }
+            Served::Proxied => {
+                let body = proxied_artifact(
+                    &svc,
+                    &registry,
+                    &extension_id,
+                    &version,
+                    batlehub_core::services::vsx_signature::PUBLIC_KEY_ARTIFACT,
+                    &identity,
+                )
+                .await?;
+                Ok(HttpResponse::Ok()
+                    .content_type("text/plain; charset=utf-8")
+                    .body(body))
+            }
+        };
+    }
+
     let Some(path_in_vsix) = resolve_asset_path(&bytes, &requested) else {
         return Err(AppError::not_found(format!(
             "extension {extension_id}@{version} has no '{requested}' asset"
         )));
     };
-    serve_entry(&bytes, &path_in_vsix)
+    // Only the icon. The other asset types this route serves are prose and a
+    // manifest, never an image the gallery advertises — so nothing else needs
+    // the rendering trade, and scoping it to the one asset that does keeps the
+    // rewrite off two routes that serve arbitrary files.
+    let svg = if requested == asset_type::ICON {
+        SvgHandling::Render
+    } else {
+        SvgHandling::Verbatim
+    };
+    serve_entry(&bytes, &path_in_vsix, svg)
 }
 
 /// `GET …/vscode/unpkg/{publisher}/{name}/{version}/{path}`
@@ -186,7 +284,7 @@ pub async fn vsx_unpkg(
         &identity,
     )
     .await?;
-    serve_entry(&bytes, &inner)
+    serve_entry(&bytes, &inner, SvgHandling::Verbatim)
 }
 
 /// `GET …/vscode/item?itemName=publisher.name`
@@ -279,15 +377,121 @@ fn resolve_asset_path(vsix: &[u8], requested: &str) -> Option<String> {
     }
 }
 
-pub(super) fn serve_entry(vsix: &[u8], path_in_vsix: &str) -> Result<HttpResponse, AppError> {
+/// Whether an SVG served out of this archive is meant to be *rendered*.
+///
+/// The distinction is not about the file, it is about the route. Only one of
+/// the three routes `serve_entry` backs advertises a file as an image the
+/// browser should draw — the gallery's `Icons.Default` asset — and that is the
+/// only one where rewriting the bytes is the right trade. The other two
+/// (`vscode/unpkg/…/{path}` and OpenVSX's `…/file/{name}`) hand out *arbitrary
+/// files inside the extension*, including the resources a web extension loads
+/// for itself, and a file server that silently returns something other than
+/// what the publisher shipped is a worse thing than an icon that does not draw.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum SvgHandling {
+    /// Sanitise and serve as `image/svg+xml` under the sandbox policy.
+    Render,
+    /// The publisher's bytes, under the closed allow-list — which has no entry
+    /// for SVG, so one goes out as an opaque download.
+    Verbatim,
+}
+
+pub(super) fn serve_entry(
+    vsix: &[u8],
+    path_in_vsix: &str,
+    svg: SvgHandling,
+) -> Result<HttpResponse, AppError> {
     match archive::read_entry(vsix, path_in_vsix)? {
-        Some(body) => Ok(HttpResponse::Ok()
-            .content_type(archive::content_type_for(path_in_vsix))
-            .body(body)),
+        Some(body) => {
+            if svg == SvgHandling::Render && archive::is_svg_path(path_in_vsix) {
+                return Ok(serve_svg(body));
+            }
+            Ok(HttpResponse::Ok()
+                .content_type(archive::content_type_for(path_in_vsix))
+                .body(body))
+        }
         None => Err(AppError::not_found(format!(
             "'{path_in_vsix}' is not in this extension"
         ))),
     }
+}
+
+/// An SVG out of a VSIX, sanitised, or the opaque download it used to be.
+///
+/// An extension's `icon` is very often an SVG, and this endpoint used to answer
+/// every one of them with `application/octet-stream` — the editor and the
+/// console both render nothing, and `archive::content_type_for` called that
+/// "the correct trade". It was correct only while the alternative was serving
+/// bytes a publisher authored, unexamined, as a document on the origin the
+/// console holds a bearer token for.
+///
+/// It is not the alternative any more. RFC 0007-bis §7.2's two controls are
+/// exactly this case — third-party markup rendered on this origin — and they are
+/// now shared rather than README-only (§11 q1): the document is rewritten from
+/// an allow-list, and the response carries the `sandbox` policy that holds even
+/// if the rewrite is wrong.
+///
+/// A document the sanitiser refuses falls back to the opaque download rather
+/// than to a `404`: the bytes are still the extension's, a client that wants
+/// them for something other than rendering may still have them, and the one
+/// thing that must not happen — a browser parsing them as a document from here
+/// — does not.
+fn serve_svg(body: Bytes) -> HttpResponse {
+    match batlehub_core::services::svg::sanitize_svg(&body) {
+        Ok(clean) => HttpResponse::Ok()
+            .content_type(batlehub_core::services::svg::SVG_CONTENT_TYPE)
+            .insert_header((
+                "Content-Security-Policy",
+                batlehub_core::services::svg::SVG_SANDBOX_CSP,
+            ))
+            // The editor loads the icon in an `<img>`, where a response CSP is
+            // not consulted at all; `inline` is for the other reader, who opened
+            // the asset URL directly and is the one the policy is there for.
+            .insert_header(("Content-Disposition", "inline"))
+            .body(clean),
+        Err(reason) => {
+            tracing::debug!(%reason, "vsx asset: SVG refused by the sanitiser, served opaque");
+            HttpResponse::Ok()
+                .content_type("application/octet-stream")
+                .body(body)
+        }
+    }
+}
+
+/// Which branch of [`vsix_bytes_with_source`] answered: the local registry's
+/// storage, or the proxy (a proxy registry, or a hybrid miss). The signature
+/// assets follow the same branch (RFC 0020 §5.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Served {
+    Local,
+    Proxied,
+}
+
+/// One more artifact of the same version through the proxy — the signature
+/// archive or the public key an upstream serves — behind the same rule chain
+/// and cache as the package (`artifact:{registry}/{ext}/{version}/{selector}`).
+async fn proxied_artifact(
+    svc: &web::Data<Arc<ProxyService>>,
+    registry: &str,
+    extension_id: &str,
+    version: &str,
+    selector: &str,
+    identity: &AuthIdentity,
+) -> Result<Bytes, AppError> {
+    let req = ProxyRequest {
+        package_id: PackageId::new(registry, extension_id, version).with_artifact(selector),
+        identity: identity.0.clone(),
+        action: Action::SourceRead.to_owned(),
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
+    };
+    let stream = svc
+        .handle(req)
+        .await
+        .map_err(AppError::from)?
+        .into_stream()
+        .map_err(|(reason, _)| AppError::forbidden(reason))?;
+    super::super::common::collect_storage_stream(stream).await
 }
 
 /// The VSIX bytes for one extension version, from wherever this registry keeps
@@ -308,6 +512,29 @@ pub(super) async fn vsix_bytes(
     version: &str,
     identity: &AuthIdentity,
 ) -> Result<Bytes, AppError> {
+    vsix_bytes_with_source(
+        svc,
+        local_svc,
+        mode_map,
+        registry,
+        extension_id,
+        version,
+        identity,
+    )
+    .await
+    .map(|(bytes, _)| bytes)
+}
+
+/// [`vsix_bytes`], and which branch answered.
+pub(super) async fn vsix_bytes_with_source(
+    svc: &web::Data<Arc<ProxyService>>,
+    local_svc: &web::Data<Arc<LocalRegistryService>>,
+    mode_map: &RegistryModeMap,
+    registry: &str,
+    extension_id: &str,
+    version: &str,
+    identity: &AuthIdentity,
+) -> Result<(Bytes, Served), AppError> {
     let mode = mode_map.get(registry);
     let pkg = PackageId::new(registry, extension_id, version);
 
@@ -323,10 +550,11 @@ pub(super) async fn vsix_bytes(
                 version,
                 Action::SourceRead,
                 &identity.0,
+                &identity.1,
             )
             .await
         {
-            Ok(bytes) => return Ok(bytes),
+            Ok(bytes) => return Ok((bytes, Served::Local)),
             Err(CoreError::NotFound(_)) if mode == RegistryMode::Hybrid => {}
             Err(e) => return Err(AppError::from(e)),
         }
@@ -341,13 +569,19 @@ pub(super) async fn vsix_bytes(
         package_id: pkg.with_artifact(VSIX_ARTIFACT),
         identity: identity.0.clone(),
         action: Action::SourceRead.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
     };
-    match svc.handle(req).await.map_err(AppError::from)? {
-        ProxyResponse::Denied { reason } => Err(AppError::forbidden(reason)),
-        ProxyResponse::Stream(stream) => super::super::common::collect_storage_stream(stream).await,
-    }
+    let stream = svc
+        .handle(req)
+        .await
+        .map_err(AppError::from)?
+        .into_stream()
+        .map_err(|(reason, _)| AppError::forbidden(reason))?;
+    Ok((
+        super::super::common::collect_storage_stream(stream).await?,
+        Served::Proxied,
+    ))
 }
 
 #[cfg(test)]

@@ -1,3 +1,11 @@
+---
+# Just over 4 000 words: the block/hide/quota surface, and each of the three
+# behaves differently on a `[security]` registry, which is where the length
+# comes from. `docs:structure` asks for this line above 4 000 words — not a cap,
+# a declaration someone had to type (RFC 0005-bis §4.5).
+reference: true
+---
+
 # Policies & packages
 
 ## Cache policy {#cache-policy}
@@ -216,6 +224,10 @@ A block does two things, and both matter:
    have it. Pinning `lodash@4.17.20` in a lockfile fails with a message that
    says why, rather than looking like a missing package.
 
+On a `[security]` registry the download gate is the version's verdict, so the
+block is written into it as a `BLOCK_LIST` finding the moment you record it, and
+the `block_list` scanner re-derives it on every later scan. Same `403`.
+
 A block recorded against a version covers every file in it — the npm tarball,
 a Maven classifier, a Terraform provider binary.
 
@@ -225,6 +237,12 @@ disappears from listings**. A resolver that selects a version whose bytes are
 partly refused has no way to know which of its files it may have, so a version
 with a blocked artifact is not advertised as installable. Someone who knows the
 exact coordinate of an unblocked sibling file can still fetch it.
+
+On a `[security]` registry the per-file form has **no effect on downloads**: that
+gate is the version's verdict, and a verdict is keyed on the version, so it
+cannot express "this file but not its siblings". The block is still recorded and
+still hides the version from listings, and the server logs a warning saying so.
+Block the whole version when you need the bytes refused there.
 
 ```sh
 curl -X POST \
@@ -269,6 +287,11 @@ protocol has one and editing it is safe:
 | jetbrains | — | no listing document |
 | jetbrains-marketplace | `updatePlugins.xml`, `/plugins/list` and the plugin-updates API | yes |
 | generic | — | no listing document |
+| nodedist | `index.tab` | yes |
+| nodedist | `index.json` | yes |
+| sdkman | `versions/all` | yes |
+| sdkman | `candidates/default` | yes |
+| sdkman | the rendered `versions/list` table (`sdk list`) | yes |
 <!-- END listing-coverage -->
 
 Filtering is invisible when it works, which is exactly when you want evidence
@@ -674,4 +697,4 @@ Publisher support by registry type (matching is case-insensitive):
 - **OpenVSX**, **VS Code Marketplace** — the publisher segment of the extension id (`"publisher.extension"` → `"publisher"`)
 - **Not yet supported: Cargo** and any other registry type — configuring this rule there denies every request (fail-closed)
 
-See [`docs/guide/configuration.md`](https://github.com/batleforc/batlehub/blob/main/docs/guide/configuration.md) for the full field table.
+See [`docs/guide/configuration.md`](https://github.com/batlehub/batlehub/blob/main/docs/guide/configuration.md) for the full field table.

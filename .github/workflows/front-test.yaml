@@ -15,6 +15,11 @@ on:
       # one that fixes a drift and should lower the pinned baseline, has to run
       # it too. A gate that does not run is not a gate.
       - "docs/registries/**"
+      # The editor credential patch (RFC 0011) is TypeScript with no build
+      # and no dependencies — `node --test` strips its types. It runs here
+      # because this is the workflow that has a Node, not because it is part
+      # of the console.
+      - "patches/che-code/**"
   pull_request:
     branches: ["main"]
     paths:
@@ -30,6 +35,11 @@ on:
       # one that fixes a drift and should lower the pinned baseline, has to run
       # it too. A gate that does not run is not a gate.
       - "docs/registries/**"
+      # The editor credential patch (RFC 0011) is TypeScript with no build
+      # and no dependencies — `node --test` strips its types. It runs here
+      # because this is the workflow that has a Node, not because it is part
+      # of the console.
+      - "patches/che-code/**"
   schedule:
     - cron: "50 23 * * *"
   workflow_dispatch:
@@ -63,6 +73,13 @@ jobs:
       # command line rather than relying on pnpm's default deny + the `allowBuilds`
       # list in ui/pnpm-workspace.yaml alone; neither package.json here declares a
       # lifecycle script, so nothing this project needs is skipped.
+      # Before the install, deliberately: it needs no dependency at all, so a
+      # broken lockfile should not be able to hide a broken patch.
+      - name: Editor credential patch (RFC 0011)
+        # The patch lives at the repo root, not under `ui/`, so it opts out of
+        # this job's `working-directory: ui` default.
+        working-directory: .
+        run: node --test patches/che-code/vsxRegistryAuth.test.ts
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Generate OpenAPI spec

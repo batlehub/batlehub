@@ -80,6 +80,18 @@ spec:
               - key: config.toml
                 path: config.toml
           {{- end }}
+        {{- with (include "batlehub.credentialsSecretName" .) }}
+        # Mounted as its own volume rather than a second key in the config one:
+        # the two have different lifecycles, which is the whole reason the layer
+        # exists, and a Secret the operator manages elsewhere cannot be projected
+        # into a Secret this chart renders.
+        - name: credentials
+          secret:
+            secretName: {{ . }}
+            items:
+              - key: {{ $.Values.credentials.key }}
+                path: {{ $.Values.credentials.key }}
+        {{- end }}
         {{- if eq .Values.config.storage.type "filesystem" }}
         - name: cache
           {{- if .Values.persistence.enabled }}
@@ -125,6 +137,10 @@ spec:
           args:
             - --config
             - /etc/batlehub/config.toml
+            {{- if (include "batlehub.credentialsSecretName" .) }}
+            - --config
+            - /etc/batlehub/credentials/{{ .Values.credentials.key }}
+            {{- end }}
           {{- with .Values.env }}
           env:
             {{- toYaml . | nindent 12 }}
@@ -164,6 +180,11 @@ spec:
             - name: config
               mountPath: /etc/batlehub
               readOnly: true
+            {{- if (include "batlehub.credentialsSecretName" .) }}
+            - name: credentials
+              mountPath: /etc/batlehub/credentials
+              readOnly: true
+            {{- end }}
             {{- if eq .Values.config.storage.type "filesystem" }}
             - name: cache
               mountPath: {{ .Values.config.storage.path }}

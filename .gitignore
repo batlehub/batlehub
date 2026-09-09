@@ -90,3 +90,5 @@ ui/eslint-results.sarif
 # journal), `shots/`, `questions/`, `quality-bar/` and the generated `design.json`
 # sidecar, which is rebuilt from the tracked DESIGN.md.
 !/.impeccable/surfaces/
+# Sub-charts fetched by `helm dependency build` (Chart.lock is committed).
+helm/batlehub/charts/

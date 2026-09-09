@@ -1,0 +1,65 @@
+# Server configuration for the console fetch-button suite
+# (tests/heavy/console_fetch.sh, RFC 0007-bis §11 q3).
+#
+# `${DATABASE_URL}` and `${HEAVY_RUN}` are interpolated from the environment
+# before TOML parsing; the port, the storage path and `static_dir` come from
+# `PROXY_CACHE__SERVER__PORT` / `PROXY_CACHE__STORAGE__PATH` /
+# `PROXY_CACHE__SERVER__STATIC_DIR`, which the suite exports. A placeholder in
+# a scalar position would leave this file unparseable by every TOML tool.
+#
+# The SPA is served by this same server, which is the deployed shape and the
+# one that makes the suite honest: the console and the API are one origin, so
+# nothing here is proved by a CORS arrangement no real deployment uses.
+
+[server]
+host = "127.0.0.1"
+port = 8125
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[[auth.tokens]]
+# The reader who presses the button. A `user`, deliberately: the fetch is not
+# an administrator's act, and a suite that pressed it as one would prove
+# nothing about the permission it actually needs (RFC 0007-bis §11 q9, q10).
+value = "heavy-user-token"
+role = "user"
+user_id = "ci-user"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-console-fetch-storage"
+
+# ── The registry the catalogue searches ──────────────────────────────────────
+#
+# Proxy mode against the real npm registry: the upstream row the button sits on
+# comes from `/-/v1/search`, and there is no way to get one without an upstream
+# that answers a search.
+[[registries]]
+type = "npm"
+name = "npm-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://registry.npmjs.org"]
+# The default, stated: this is the switch the button is behind, and a suite
+# about the button should say which way it is set.
+console_fetch = true
+
+[registries.rbac]
+# `anonymous` can **browse**, deliberately. A registry the anonymous reader
+# cannot see at all would make "no button without a session" pass for the wrong
+# reason — there would be no rows either. With the catalogue open to them, the
+# absence of the button is a fact about the offer rather than about visibility,
+# which is what RFC 0007-bis §11 q9 is asserting.
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]

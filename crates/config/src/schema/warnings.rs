@@ -66,6 +66,21 @@ pub const PROXY_TRUST_INVALID_DEPRECATED_ENTRY: &str = "proxy-trust.invalid-depr
 /// label, so no wildcard host is derived for it.
 pub const SUBDOMAIN_INVALID_DNS_LABEL: &str = "subdomain.invalid-dns-label";
 
+/// `[registries.vsx_signing]` on a registry in `proxy` mode: nothing is ever
+/// published there, so the key signs nothing; the upstream's signature is
+/// relayed regardless (RFC 0020 §4.3).
+pub const VSX_SIGNING_PROXY_MODE: &str = "vsx-signing.proxy-mode";
+
+/// A `[[release_imports]]` target is a gallery registry with no
+/// `[registries.vsx_signing]` key: the extensions it imports install nowhere
+/// with a current editor (RFC 0021 §4.4).
+pub const RELEASE_IMPORT_UNSIGNED_GALLERY: &str = "release-import.unsigned-gallery";
+
+/// A `[[release_imports]]` asset glob matches nothing a release carries. Not an
+/// error — the release this runs against may not exist yet — but a renamed
+/// artifact is otherwise an import that silently does nothing.
+pub const RELEASE_IMPORT_NO_INTERVAL: &str = "release-import.no-interval";
+
 /// `[server].cors_allowed_origins` contains `"*"`, so any website may issue
 /// cross-origin requests to this server and read the responses. Legitimate for a
 /// public mirror, rarely what an internal deployment wants — and since 1.1.0 it
@@ -78,6 +93,11 @@ pub const CORS_ANY_ORIGIN: &str = "cors.any-origin";
 /// and verified, and the registry is open to everyone anyway, so nothing is
 /// actually closed (RFC 0012 §7).
 pub const SIGNED_URLS_ANONYMOUS_STILL_GRANTED: &str = "signed-urls.anonymous-still-granted";
+
+/// An `sdkman` registry's `upstreams` entry does not end in `/2`. SDKMAN
+/// versions its candidates API in the path; the URL is served as given, but a
+/// missing version segment is more likely a typo than a choice (RFC 0010 §4.5).
+pub const SDKMAN_UPSTREAM_WITHOUT_API_VERSION: &str = "sdkman.upstream-without-api-version";
 
 /// `[server.signed_urls]` is configured and no registry sets
 /// `signed_downloads = true`, so the secret signs nothing. Harmless, and worth
@@ -301,3 +321,53 @@ pub const VERSIONING_IN_DRY_RUN: &str = "versioning.dry-run-active";
 /// second guard. But it is the one setting here that trades away the margin on
 /// data this must never delete, so it says so.
 pub const COHERENCE_INTERVAL_TOO_SHORT: &str = "cache-coherence.interval-too-short";
+
+/// A `github`, `gitlab` or `forgejo` registry with no `[registries.upstream_auth]`
+/// (RFC 0019 §4.3). Anonymous GitHub is 60 requests an hour, and ref resolution
+/// spends one or two per new ref.
+/// `[air_gap]` is on and a registry is hybrid: its fall-through can never
+/// reach upstream, so it behaves as local (RFC 0008 §4.5).
+pub const AIR_GAP_HYBRID_REGISTRY: &str = "air-gap.hybrid-registry";
+
+/// Bundle keys configured on a connected instance: legitimate — that is how
+/// a bundle is staged — and worth saying they authorise imports only.
+pub const AIR_GAP_KEYS_UNUSED: &str = "air-gap.keys-unused";
+
+/// `[air_gap]` is on with listings synthesised, and a registry is of a kind
+/// whose index this instance cannot compose (RFC 0008-bis §4.3).
+pub const AIR_GAP_LISTING_NOT_SYNTHESISED: &str = "air-gap.listing-not-synthesised";
+
+pub const FORGE_ANONYMOUS_UPSTREAM: &str = "forge.anonymous-upstream";
+
+/// A forge registry serves no raw content while the setup snippet it hands
+/// out rewrites the forge's raw host at it (RFC 0019 §4.1, phase 3).
+pub const FORGE_RAW_DISABLED_BUT_LINKED: &str = "forge.raw-disabled-but-linked";
+
+/// `[registries.security]` with `mode = "warn"` and no `required_scanners`:
+/// nothing can ever hold a version (RFC 0018 §4.3).
+pub const SECURITY_UNPROTECTED: &str = "security.unprotected";
+
+/// A `[[flag_sources]]` entry may push `hard_block` (RFC 0002 §4.3).
+pub const FLAG_SOURCE_CAN_HARD_BLOCK: &str = "flag-source.can-hard-block";
+
+/// A `required_scanners` entry that only enriches other findings and never
+/// creates one (RFC 0018 §6.3, `mlab`).
+pub const SECURITY_ENRICHMENT_REQUIRED: &str = "security.enrichment-required";
+
+/// `[registries.security]` with `hold_missing_timestamp = true` on a kind that
+/// structurally has no publish date — the path-proxy family — so every version
+/// is held open-ended (RFC 0018 §4.3, decision 27).
+pub const SECURITY_TIMESTAMP_HOLD_UNAVAILABLE: &str = "security.timestamp-hold-unavailable";
+
+/// `[upstream_audit]` enabled with no registry in `proxy`/`hybrid` mode
+/// (RFC 0014 §4.4): a config in transition is legitimate, so a warning.
+pub const UPSTREAM_AUDIT_NOTHING_TO_AUDIT: &str = "upstream-audit.nothing-to-audit";
+
+/// `[upstream_audit]` enabled on a process without the `worker` role (RFC
+/// 0014 §13): the sweep runs on a worker, and this one is not it.
+pub const UPSTREAM_AUDIT_NO_WORKER: &str = "upstream-audit.no-worker-role";
+
+/// `on_confirmed = "block"` with `retain_disappeared = false` (RFC 0014
+/// §4.4): a blocked package is never read, so idle eviction deletes the
+/// bytes the block was keeping.
+pub const UPSTREAM_AUDIT_BLOCK_WITHOUT_HOLD: &str = "upstream-audit.block-without-hold";

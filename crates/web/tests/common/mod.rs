@@ -381,6 +381,7 @@ impl RegistryClient for FixedRegistry {
                           "url": format!("https://files.invalid/{package}-2.0.0b1-py3-none-any.whl") }
                     ]
                 })),
+                synthesised: None,
             }),
 
             ("cargo", DocumentKind::Versions) => Ok(VersionDocument::text(
@@ -404,6 +405,82 @@ impl RegistryClient for FixedRegistry {
                 "Version": "v1.1.0",
                 "Time": "2020-02-01T00:00:00Z"
             }))),
+
+            // The `nodejs.org/dist` release table, in both encodings, with the
+            // tree's own spellings: `v`-prefixed versions, newest first, eleven
+            // columns, `-` for "no LTS codename" in the TSV and `false` in the
+            // JSON. The same three versions as everywhere else; `v1.1.0` and
+            // `v1.0.0` share an LTS line so a block on the newer one visibly
+            // moves the alias nvm derives from the `lts` column.
+            ("nodedist", DocumentKind::Versions) => Ok(VersionDocument::text(
+                "text/plain; charset=utf-8",
+                "version\tdate\tfiles\tnpm\tv8\tuv\tzlib\topenssl\tmodules\tlts\tsecurity\n\
+                 v2.0.0-beta.1\t2020-03-01\theaders,linux-x64,src\t7.0.0\t9.0\t1.40.0\t1.2.11\t1.1.1\t90\t-\t-\n\
+                 v1.1.0\t2020-02-01\theaders,linux-x64,src\t6.14.0\t8.4\t1.34.0\t1.2.11\t1.1.1\t83\tArgon\t-\n\
+                 v1.0.0\t2020-01-02\theaders,linux-x64,src\t6.13.0\t8.4\t1.34.0\t1.2.11\t1.1.1\t83\tArgon\ttrue\n",
+            )),
+            ("nodedist", DocumentKind::INDEX_JSON) => Ok(VersionDocument::json(serde_json::json!([
+                { "version": "v2.0.0-beta.1", "date": "2020-03-01", "files": ["headers", "linux-x64", "src"],
+                  "npm": "7.0.0", "lts": false, "security": false },
+                { "version": "v1.1.0", "date": "2020-02-01", "files": ["headers", "linux-x64", "src"],
+                  "npm": "6.14.0", "lts": "Argon", "security": false },
+                { "version": "v1.0.0", "date": "2020-01-02", "files": ["headers", "linux-x64", "src"],
+                  "npm": "6.13.0", "lts": "Argon", "security": true }
+            ]))),
+
+            // SDKMAN's text documents (RFC 0010 phase 6). The same three
+            // versions as everywhere else. `java` renders the vendor-table
+            // layout of `sdk list` and every other candidate the grid, so
+            // both filters are exercised; the rendered list echoes the package
+            // string on a comment line so a test can see the query the
+            // handler forwarded. Relayed documents answer by path.
+            ("sdkman", DocumentKind::Versions) => Ok(VersionDocument::text(
+                "text/plain; charset=utf-8",
+                "1.0.0,1.1.0,2.0.0-beta.1",
+            )),
+            ("sdkman", DocumentKind::SDKMAN_DEFAULT) => Ok(VersionDocument::text(
+                "text/plain; charset=utf-8",
+                "1.1.0",
+            )),
+            ("sdkman", DocumentKind::SDKMAN_VERSIONS_LIST) => {
+                let body = if package.starts_with("java/") {
+                    format!(
+                        "# {package}\n\
+                         ================================================================================\n\
+                         Available Java Versions for Linux 64bit\n\
+                         ================================================================================\n\
+                         \x20Vendor         | Use | Version            | Identifier\n\
+                         --------------------------------------------------------------------------------\n\
+                         \x20Fixture        |     | 2.0.0-beta.1       | 2.0.0-beta.1\n\
+                         \x20               |     | 1.1.0              | 1.1.0\n\
+                         \x20               |     | 1.0.0              | 1.0.0\n\
+                         ================================================================================\n"
+                    )
+                } else {
+                    format!(
+                        "# {package}\n\
+                         ================================================================================\n\
+                         Available Fixture Versions\n\
+                         ================================================================================\n\
+                         \x20    2.0.0-beta.1        1.1.0               1.0.0\n\
+                         ================================================================================\n"
+                    )
+                };
+                Ok(VersionDocument::text("text/plain; charset=utf-8", body))
+            }
+            ("sdkman", DocumentKind::RELAYED) => {
+                let body = match package {
+                    "candidates/all" => "fixture,java,maven".to_owned(),
+                    "candidates/list" => "Available Candidates\nfixture (1.1.0)\n".to_owned(),
+                    "healthcheck" => "000000000000000000000000".to_owned(),
+                    p if p.starts_with("candidates/validate/") => "valid".to_owned(),
+                    p if p.starts_with("hooks/") => {
+                        format!("#!/bin/bash\n#Hook: {p}\nfunction __sdkman_post_installation_hook {{ :; }}\n")
+                    }
+                    p => format!("relayed:{p}"),
+                };
+                Ok(VersionDocument::text("text/plain; charset=utf-8", body))
+            }
 
             _ => unsupported(),
         }
@@ -1002,6 +1079,15 @@ pub struct ConfigureAppDefaults {
     pub notification_store: Arc<dyn NotificationPort + 'static>,
     pub notifications_config: Option<NotificationsConfig>,
     pub warming_map: WarmingServiceMap,
+    /// The `[[release_imports]]` configured into each registry (RFC 0021).
+    /// Empty by default: a test app configures none, which is every deployment
+    /// until an operator writes the block.
+    pub release_imports: batlehub_web::handlers::back_office::ops::release_import::ReleaseImportMap,
+    /// Where a run's history goes (RFC 0021 §6.5). `None` by default: an app
+    /// that records no history still imports, and a test that needs the last
+    /// run supplies `InMemoryImportHistory`.
+    pub import_history:
+        batlehub_web::handlers::back_office::ops::release_import::ImportHistoryHandle,
     pub eviction_map: EvictionServiceMap,
     /// The two block stores the *middleware* enforces and `access-check` now
     /// consults (RFC 0004-bis A1). Registered on every test app, empty by
@@ -1021,9 +1107,20 @@ pub struct ConfigureAppDefaults {
     /// One-time store for in-flight OIDC logins. Process-local by default; the
     /// SSO suite keeps its own handle so it can seed and inspect entries.
     pub login_states: Arc<dyn batlehub_core::ports::LoginStateStore>,
+    /// RFC 0014's audit, registered the way `server_factory` registers it —
+    /// only when present, so the admin routes answer `503` without it, as a
+    /// proxy-only process does. `None` by default.
+    pub upstream_audit: Option<Arc<batlehub_core::services::UpstreamAuditService>>,
     /// Browser-login flows. Empty by default, so `/auth/oidc/*` answers 503 in
     /// every suite that is not about SSO; the SSO suite points one at a mock IdP.
     pub sso_flows: Vec<batlehub_adapters::auth::OidcSsoFlow>,
+    /// RFC 0002 (recast): the flag store. `None` builds one over the app's
+    /// own access log; a suite that also puts `FlagsRule` in a policy chain
+    /// passes the same store here so the rule and the endpoints agree.
+    pub advisory_repo: Option<Arc<dyn batlehub_core::ports::AdvisoryRepository>>,
+    /// The `[[flag_sources]]` the push endpoint accepts. Empty by default:
+    /// no source means every push is a `404`.
+    pub flag_sources: batlehub_web::FlagSources,
 }
 
 impl Default for ConfigureAppDefaults {
@@ -1036,13 +1133,18 @@ impl Default for ConfigureAppDefaults {
             notification_store: Arc::new(InMemoryNotificationStore::new()),
             notifications_config: None,
             warming_map: WarmingServiceMap::default(),
+            release_imports: Default::default(),
+            import_history: None,
             eviction_map: EvictionServiceMap::default(),
             user_block_repo: Arc::new(InMemoryUserBlockRepository::new()),
             ip_block_store: Arc::new(InMemoryIpBlockStore::new()),
             readme_search: false,
             oidc_provider_names: batlehub_web::OidcProviderNames::default(),
             login_states: batlehub_adapters::in_memory::InMemoryLoginStateStore::arc(),
+            upstream_audit: None,
             sso_flows: Vec::new(),
+            advisory_repo: None,
+            flag_sources: batlehub_web::FlagSources::default(),
         }
     }
 }
@@ -1066,6 +1168,8 @@ pub fn configure_test_app(
         defaults.oidc_provider_names,
         defaults.login_states,
         defaults.warming_map,
+        defaults.release_imports,
+        defaults.import_history,
         defaults.eviction_map,
         defaults.proxy_metrics,
         None,
@@ -1099,6 +1203,25 @@ pub async fn finish_test_app(
 > {
     let user_block_repo = Arc::clone(&defaults.user_block_repo);
     let ip_block_store = Arc::clone(&defaults.ip_block_store);
+    let upstream_audit = defaults.upstream_audit.clone();
+    // RFC 0002 (recast): the flag store joins the exposure report against
+    // this app's own access log, and the push funnel judges over its hot
+    // config. Present on every app so the routes answer `403`/`404` rather
+    // than `500` for a missing extractor; a test that seeds flags passes its
+    // own store as `extra`, which wins.
+    let advisory_repo: Arc<dyn batlehub_core::ports::AdvisoryRepository> =
+        defaults.advisory_repo.clone().unwrap_or_else(|| {
+            Arc::new(
+                batlehub_adapters::in_memory::InMemoryAdvisoryRepository::with_events(Arc::clone(
+                    &admin_svc.repo,
+                )),
+            )
+        });
+    let flag_sources = defaults.flag_sources.clone();
+    let flag_svc = Arc::new(batlehub_core::services::FlagService::new(
+        Arc::clone(&advisory_repo),
+        local_svc.hot.clone(),
+    ));
     let (app, _) = App::new()
         .into_utoipa_app()
         .configure(configure_test_app(
@@ -1114,6 +1237,19 @@ pub async fn finish_test_app(
         .app_data(actix_web::web::Data::new(user_block_repo))
         .app_data(actix_web::web::Data::new(ip_block_store))
         .app_data(actix_web::web::Data::new(cargo_indexes))
+        // RFC 0014: present only when the suite runs the audit, as in
+        // production; the handlers extract it as `Option<Data<_>>`.
+        .configure(move |cfg| {
+            if let Some(audit) = upstream_audit.clone() {
+                cfg.app_data(actix_web::web::Data::new(audit));
+            }
+        })
+        // RFC 0018 phase 5: what `backfill` walks. Empty here — the proxy
+        // path records nothing in these apps — so a backfill queues nothing
+        // and says so, rather than 500ing on a missing extractor.
+        .app_data(actix_web::web::Data::new(
+            NoopArtifactMeta::arc() as Arc<dyn batlehub_core::ports::ArtifactInventory>
+        ))
         // RFC 0017 §4.1 — the grants editor, assembled from the same handles
         // `server_factory` uses. Wired unconditionally so a suite that never
         // touches it pays nothing and a suite that does needs no second factory;
@@ -1146,6 +1282,16 @@ pub async fn finish_test_app(
         ))
         .app_data(actix_web::web::Data::new(
             InMemoryStatsHistory::new() as Arc<dyn StatsHistoryRepository>
+        ))
+        .app_data(actix_web::web::Data::new(
+            batlehub_adapters::in_memory::InMemoryBundleHistory::new()
+                as Arc<dyn batlehub_core::ports::BundleHistory>,
+        ))
+        .app_data(actix_web::web::Data::new(advisory_repo))
+        .app_data(actix_web::web::Data::new(flag_svc))
+        .app_data(actix_web::web::Data::new(flag_sources))
+        .app_data(actix_web::web::Data::new(
+            batlehub_web::ExposureConfig::default(),
         ));
 
     init_service(app.wrap(AuthMiddlewareFactory::new(auth_providers))).await
@@ -1170,6 +1316,24 @@ pub async fn finish_test_app_with_extra<E: 'static>(
 > {
     let user_block_repo = Arc::clone(&defaults.user_block_repo);
     let ip_block_store = Arc::clone(&defaults.ip_block_store);
+    // RFC 0002 (recast): the flag store joins the exposure report against
+    // this app's own access log, and the push funnel judges over its hot
+    // config. Present on every app so the routes answer `403`/`404` rather
+    // than `500` for a missing extractor; a test that seeds flags passes its
+    // own store as `extra`, which wins.
+    let advisory_repo: Arc<dyn batlehub_core::ports::AdvisoryRepository> =
+        defaults.advisory_repo.clone().unwrap_or_else(|| {
+            Arc::new(
+                batlehub_adapters::in_memory::InMemoryAdvisoryRepository::with_events(Arc::clone(
+                    &admin_svc.repo,
+                )),
+            )
+        });
+    let flag_sources = defaults.flag_sources.clone();
+    let flag_svc = Arc::new(batlehub_core::services::FlagService::new(
+        Arc::clone(&advisory_repo),
+        local_svc.hot.clone(),
+    ));
     let (app, _) = App::new()
         .into_utoipa_app()
         .configure(configure_test_app(
@@ -1214,6 +1378,16 @@ pub async fn finish_test_app_with_extra<E: 'static>(
         .app_data(actix_web::web::Data::new(
             batlehub_adapters::in_memory::InMemoryPolicyRepository::new()
                 as Arc<dyn batlehub_core::ports::PolicyRepository>,
+        ))
+        .app_data(actix_web::web::Data::new(
+            batlehub_adapters::in_memory::InMemoryBundleHistory::new()
+                as Arc<dyn batlehub_core::ports::BundleHistory>,
+        ))
+        .app_data(actix_web::web::Data::new(advisory_repo))
+        .app_data(actix_web::web::Data::new(flag_svc))
+        .app_data(actix_web::web::Data::new(flag_sources))
+        .app_data(actix_web::web::Data::new(
+            batlehub_web::ExposureConfig::default(),
         ))
         .app_data(actix_web::web::Data::new(extra));
 
@@ -1355,6 +1529,16 @@ pub async fn make_app_with_defaults_and_access(
             "composer".to_owned(),
             FixedRegistry::new("composer") as Arc<dyn RegistryClient>,
         ),
+        // RFC 0010: the conformance fixture asserts nvm's request lines reach
+        // the nodedist routes, which needs a registry of that kind to exist.
+        (
+            "nodedist".to_owned(),
+            FixedRegistry::new("nodedist") as Arc<dyn RegistryClient>,
+        ),
+        (
+            "sdkman".to_owned(),
+            FixedRegistry::new("sdkman") as Arc<dyn RegistryClient>,
+        ),
     ]
     .into();
 
@@ -1387,6 +1571,14 @@ pub async fn make_app_with_defaults_and_access(
         ),
         (
             "composer".to_owned(),
+            Arc::new(rbac_policy(repo_dyn.clone()).0),
+        ),
+        (
+            "nodedist".to_owned(),
+            Arc::new(rbac_policy(repo_dyn.clone()).0),
+        ),
+        (
+            "sdkman".to_owned(),
             Arc::new(rbac_policy(repo_dyn.clone()).0),
         ),
     ]
@@ -1438,7 +1630,7 @@ pub async fn make_app_with_defaults_and_access(
         readme: None,
         discovery: Default::default(),
     });
-    let admin_svc = Arc::new(AdminService::new(repo_dyn));
+    let admin_svc = Arc::new(AdminService::new(repo_dyn).with_hot_config(hot.clone()));
 
     let token_repo: Arc<dyn UserTokenRepository> = Arc::new(NullTokenRepository);
     let access_config = access.unwrap_or_else(|| {
@@ -1460,6 +1652,8 @@ pub async fn make_app_with_defaults_and_access(
         ("jbm", "jetbrains-marketplace"),
         ("nuget", "nuget"),
         ("composer", "composer"),
+        ("nodedist", "nodedist"),
+        ("sdkman", "sdkman"),
     ]);
     let cargo_indexes = batlehub_web::CargoIndexMap::default();
     finish_test_app(
@@ -1506,6 +1700,28 @@ pub fn local_registry_app_parts_with_readme(
     mode: RegistryMode,
     sbom_svc: Option<Arc<SbomService>>,
     readme_svc: Option<Arc<ReadmeService>>,
+) -> LocalRegistryAppParts {
+    local_registry_app_parts_with_artifact_meta(
+        name,
+        registry_type,
+        mode,
+        sbom_svc,
+        readme_svc,
+        NoopArtifactMeta::arc(),
+    )
+}
+
+/// [`local_registry_app_parts_with_readme`] with the artifact-meta store
+/// supplied — for a suite that wants to see what the proxy *records* about
+/// cached artifacts (RFC 0014 §6.2: the local publish path must record
+/// nothing, or the upstream audit would probe a version no upstream has).
+pub fn local_registry_app_parts_with_artifact_meta(
+    name: &str,
+    registry_type: &str,
+    mode: RegistryMode,
+    sbom_svc: Option<Arc<SbomService>>,
+    readme_svc: Option<Arc<ReadmeService>>,
+    artifact_meta: Arc<dyn batlehub_core::ports::ArtifactMetaRepository>,
 ) -> LocalRegistryAppParts {
     let repo_dyn: Arc<dyn PackageRepository> = InMemoryRepo::new();
     let storage: Arc<dyn StorageBackend> = InMemoryStorage::new();
@@ -1554,7 +1770,7 @@ pub fn local_registry_app_parts_with_readme(
         storage,
         cache,
         repo: repo_dyn.clone(),
-        artifact_meta: NoopArtifactMeta::arc(),
+        artifact_meta,
         // Registered by name, not empty: `ProxyMetrics` silently ignores
         // counters for a registry it has never heard of, so an empty map turns
         // every `record_*` in a test into a no-op and makes assertions on them
@@ -1564,7 +1780,7 @@ pub fn local_registry_app_parts_with_readme(
         readme: readme_svc,
         discovery: Default::default(),
     });
-    let admin_svc = Arc::new(AdminService::new(repo_dyn));
+    let admin_svc = Arc::new(AdminService::new(repo_dyn).with_hot_config(hot.clone()));
 
     let mode_map = RegistryModeMap::default();
     mode_map.insert(name.to_owned(), mode);
@@ -1875,7 +2091,7 @@ pub fn empty_app_parts() -> EmptyAppParts {
     });
     EmptyAppParts {
         proxy_svc,
-        admin_svc: Arc::new(AdminService::new(repo_dyn)),
+        admin_svc: Arc::new(AdminService::new(repo_dyn).with_hot_config(hot.clone())),
         token_repo: Arc::new(NullTokenRepository),
         access_config: access_config_for(&[]),
         registry_map: registry_map_for(&[]),
@@ -2032,7 +2248,7 @@ pub async fn make_app_with_eviction_and_repo(
         readme: None,
         discovery: Default::default(),
     });
-    let admin_svc = Arc::new(AdminService::new(repo_dyn));
+    let admin_svc = Arc::new(AdminService::new(repo_dyn).with_hot_config(hot.clone()));
     let token_repo: Arc<dyn UserTokenRepository> = Arc::new(NullTokenRepository);
     let access_config = access_config_for(&["npm"]);
     let registry_map = registry_map_for(&[("npm", "npm")]);
@@ -2093,7 +2309,7 @@ pub async fn make_app_with_warming(
         readme: None,
         discovery: Default::default(),
     });
-    let admin_svc = Arc::new(AdminService::new(repo_dyn));
+    let admin_svc = Arc::new(AdminService::new(repo_dyn).with_hot_config(hot.clone()));
     let token_repo: Arc<dyn UserTokenRepository> = Arc::new(NullTokenRepository);
     let access_config = access_config_for(&["npm"]);
     let registry_map = registry_map_for(&[("npm", "npm")]);
@@ -2411,7 +2627,7 @@ pub async fn make_local_nuget_app(
         readme: None,
         discovery: Default::default(),
     });
-    let admin_svc = Arc::new(AdminService::new(repo_dyn));
+    let admin_svc = Arc::new(AdminService::new(repo_dyn).with_hot_config(hot.clone()));
     let mode_map = RegistryModeMap::default();
     mode_map.insert("local-nuget".to_owned(), mode);
 

@@ -69,6 +69,33 @@ impl AdminService {
         Ok((items, unavailable))
     }
 
+    /// The catalogue rows for a **named set** of coordinates, uncached.
+    ///
+    /// [`Self::explore_packages`] puts every answer in the explore cache, which
+    /// holds entries for ten minutes and frees them only on an explicit
+    /// `invalidate`. That is right for the catalogue's own pages, whose keys
+    /// repeat all day: a registry, a page number, a sort order.
+    ///
+    /// It is wrong for a filter keyed on `name_in`, because the key then
+    /// carries *the exact set of names some other query returned* — for the
+    /// upstream search's `already_cached` flag, whatever a third-party
+    /// relevance search answered this second. Two such keys match only if the
+    /// upstream returned the same set in the same order for the same viewer, so
+    /// the entry is written, never read again, and never freed; and the key
+    /// alone can carry hundreds of coordinates. A caller varying one query
+    /// parameter would grow the map without bound and without ever getting a
+    /// hit for it.
+    ///
+    /// So this one goes straight to the repository. The lookup is a
+    /// primary-key-shaped `IN` over names the caller already named; it is the
+    /// cheap half of that request.
+    pub async fn explore_packages_uncached(
+        &self,
+        filter: ExploreFilter,
+    ) -> Result<Vec<ExploreEntry>, CoreError> {
+        self.repo.explore_packages(filter).await
+    }
+
     /// Returns `(count, upstream_unavailable)`.
     pub async fn count_explore_packages(
         &self,

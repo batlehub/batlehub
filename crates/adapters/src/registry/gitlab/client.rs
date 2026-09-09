@@ -2,16 +2,25 @@ use async_trait::async_trait;
 use chrono::DateTime;
 use futures::TryStreamExt;
 
+use std::sync::Arc;
+
+use super::super::forge_api::{parse_date, person_label, BudgetedApi};
 use super::super::http_client::{
-    apply_upstream_tls, basic_auth_get, ensure_same_origin, fetch_release_listing, percent_encode,
-    to_registry_error, upstream_auth_headers, UpstreamHttpOptions,
+    apply_upstream_tls, basic_auth_get, ensure_same_origin, ensure_url_under_base,
+    fetch_release_listing, percent_encode, to_registry_error, upstream_auth_headers,
+    UpstreamHttpOptions,
 };
 use super::super::ssrf;
-use super::models::{GlLink, GlRelease};
+use super::models::{GlBranch, GlCommit, GlLink, GlRelease, GlSignature, GlTag};
 use batlehub_core::{
+    entities::{ForgeProvenance, RefKind},
     entities::{PackageId, PackageMetadata},
     error::CoreError,
-    ports::{DocumentKind, FetchedArtifact, RegistryClient, VersionDocument},
+    ports::{
+        BudgetRole, DocumentKind, FetchedArtifact, ForgeAsset, ForgeCommit, ForgeRegistry,
+        ForgeRelease, ForgeReleaseSource, ForgeTag, RateLimitBudget, RegistryClient,
+        ResolvedTarget, VersionDocument,
+    },
 };
 
 /// GitLab REST API v4 registry client (releases).
@@ -41,6 +50,13 @@ pub struct GitlabRegistryClient {
     /// API base, derived as `{instance_root}/api/v4`.
     pub(super) api_base_url: String,
     pub(super) basic_auth: Option<(String, String)>,
+    /// RFC 0019 §5.2 — every API call draws on the shared budget, as the
+    /// GitHub and Forgejo clients have since phase 1. GitLab.com meters by
+    /// the minute rather than the hour, and a self-hosted instance meters
+    /// whatever its administrator configured; either way the proxy and the
+    /// worker share one token and must not spend it twice.
+    pub(super) api: BudgetedApi,
+    pub(super) token_fingerprint: String,
 }
 
 impl GitlabRegistryClient {
@@ -83,6 +99,13 @@ impl GitlabRegistryClient {
             .to_owned();
         let api_base_url = format!("{root}/api/v4");
 
+        let token_fingerprint = batlehub_core::ports::token_fingerprint(
+            opts.bearer_token
+                .as_deref()
+                .or(opts.basic_auth.as_ref().map(|(_, p)| p.as_str()))
+                .or(opts.custom_header.as_ref().map(|(_, v)| v.as_str())),
+        );
+
         Ok(Self {
             http,
             dl_credentialed,
@@ -90,7 +113,28 @@ impl GitlabRegistryClient {
             root,
             api_base_url,
             basic_auth: opts.basic_auth.clone(),
+            api: BudgetedApi::unbudgeted(),
+            token_fingerprint,
         })
+    }
+
+    /// Draw every API call on `budget`, under this registry's name.
+    pub fn with_budget(mut self, registry: &str, budget: Arc<dyn RateLimitBudget>) -> Self {
+        self.api = BudgetedApi::new(budget, registry, self.token_fingerprint.clone());
+        self
+    }
+
+    /// An API `GET`, through the budget.
+    pub(super) async fn api_get(&self, url: &str) -> Result<reqwest::Response, CoreError> {
+        self.api.send(self.get(url), BudgetRole::Proxy).await
+    }
+
+    fn repo_url(&self, project: &str, rest: &str) -> String {
+        format!(
+            "{}/projects/{}/repository/{rest}",
+            self.api_base_url,
+            Self::project_selector(project)
+        )
     }
 
     pub(super) fn get(&self, url: &str) -> reqwest::RequestBuilder {
@@ -154,9 +198,19 @@ impl GitlabRegistryClient {
     }
 
     /// Package-registry passthrough URL: `{instance_root}/{relative}` (the relative
-    /// path already includes `api/v4/...`).
-    pub(super) fn passthrough_url(&self, relative: &str) -> String {
-        format!("{}/{}", self.root, relative)
+    /// path already includes `api/v4/...`), confined to the API subtree.
+    ///
+    /// `relative` reaches here from the request path, so the join is the point
+    /// where a dot segment would take the request outside `/api/v4` — to
+    /// somewhere else on the instance, still same-origin and so still carrying
+    /// the operator's `PRIVATE-TOKEN`. `validate_path_safe` rejects those at the
+    /// edge; re-reading the assembled URL means the confinement does not rest on
+    /// that one check, and it holds on a sub-path install where same-origin says
+    /// nothing about staying inside the instance.
+    pub(super) fn passthrough_url(&self, relative: &str) -> Result<String, CoreError> {
+        let url = format!("{}/{}", self.root, relative);
+        ensure_url_under_base(&url, &self.api_base_url)?;
+        Ok(url)
     }
 
     pub(super) async fn fetch_release_by_tag(
@@ -208,12 +262,253 @@ pub(super) fn source_format(artifact: &str) -> Option<&str> {
     artifact.strip_prefix("source/")
 }
 
+// ── ForgeReleaseSource impl (RFC 0021 §5.2) ───────────────────────────────────
+
+/// GitLab attaches *links*, not files, and addresses them `link/<name>` — the
+/// same sub-coordinate `resolve_metadata` reads back, so an import fetches
+/// through `RegistryClient::fetch_artifact` and the link's own host still goes
+/// through this registry's SSRF guard.
+///
+/// `sources` are deliberately not offered: they are the repository tarball the
+/// forge generates, not something a team released.
+fn gl_release(release: GlRelease) -> ForgeRelease {
+    ForgeRelease {
+        tag: release.tag_name,
+        // GitLab has no drafts.
+        draft: false,
+        prerelease: release.upcoming_release,
+        assets: release
+            .assets
+            .links
+            .into_iter()
+            .map(|l| ForgeAsset {
+                artifact: format!("link/{}", l.name),
+                name: l.name,
+                size: None,
+            })
+            .collect(),
+    }
+}
+
+#[async_trait]
+impl ForgeReleaseSource for GitlabRegistryClient {
+    async fn list_releases(&self, repo: &str) -> Result<Vec<ForgeRelease>, CoreError> {
+        match self.fetch_all_releases(repo).await {
+            Ok(releases) => Ok(releases.into_iter().map(gl_release).collect()),
+            Err(CoreError::NotFound(_)) => Ok(vec![]),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn release_by_tag(&self, repo: &str, tag: &str) -> Result<ForgeRelease, CoreError> {
+        self.fetch_release_by_tag(repo, tag).await.map(gl_release)
+    }
+}
+
 // ── RegistryClient impl ───────────────────────────────────────────────────────
+
+/// RFC 0019 phase 4 — GitLab at the parity the other two forges reached in
+/// phase 1. Every endpoint below was confirmed against gitlab.com on
+/// 2026-09-04 (`gitlab-org/cli`); see `models.rs` for the shapes.
+#[async_trait]
+impl ForgeRegistry for GitlabRegistryClient {
+    /// Tag first (`/repository/tags/{tag}`), then branch
+    /// (`/repository/branches/{name}`), then not found — the order §4.2
+    /// documents and the resolver's tests pin.
+    ///
+    /// GitLab returns the tag's *commit* inline, so an annotated tag costs
+    /// one call rather than GitHub's two: `commit.id` is already the commit
+    /// the tag points at, and `created_at` is the tag's own date when it has
+    /// one.
+    async fn resolve_ref(
+        &self,
+        owner_repo: &str,
+        git_ref: &str,
+    ) -> Result<ResolvedTarget, CoreError> {
+        let tag_url = self.repo_url(owner_repo, &format!("tags/{}", percent_encode(git_ref)));
+        let resp = self.api_get(&tag_url).await?;
+        if resp.status() != reqwest::StatusCode::NOT_FOUND {
+            let t: GlTag = resp
+                .error_for_status()
+                .map_err(to_registry_error)?
+                .json()
+                .await
+                .map_err(to_registry_error)?;
+            return Ok(ResolvedTarget {
+                kind: RefKind::Tag,
+                sha: t.commit.id,
+                // The tag's own date for an annotated tag; the commit's
+                // otherwise — RFC 0019 decision 6, so a resolvable tag is
+                // never `TIMESTAMP_MISSING`.
+                object_date: parse_date(t.created_at.as_deref())
+                    .or_else(|| parse_date(t.commit.committed_date.as_deref())),
+                publisher: person_label(
+                    None,
+                    t.commit.committer_name.as_deref(),
+                    t.commit.committer_email.as_deref(),
+                ),
+            });
+        }
+
+        let branch_url =
+            self.repo_url(owner_repo, &format!("branches/{}", percent_encode(git_ref)));
+        let resp = self.api_get(&branch_url).await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(CoreError::NotFound(format!(
+                "{owner_repo}: no tag or branch named '{git_ref}'"
+            )));
+        }
+        let b: GlBranch = resp
+            .error_for_status()
+            .map_err(to_registry_error)?
+            .json()
+            .await
+            .map_err(to_registry_error)?;
+        Ok(ResolvedTarget {
+            kind: RefKind::Branch,
+            sha: b.commit.id,
+            object_date: parse_date(b.commit.committed_date.as_deref()),
+            publisher: person_label(
+                None,
+                b.commit.committer_name.as_deref(),
+                b.commit.committer_email.as_deref(),
+            ),
+        })
+    }
+
+    async fn commit(&self, owner_repo: &str, sha: &str) -> Result<ForgeCommit, CoreError> {
+        let url = self.repo_url(owner_repo, &format!("commits/{}", percent_encode(sha)));
+        let resp = self.api_get(&url).await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(CoreError::NotFound(format!(
+                "{owner_repo}: no commit {sha}"
+            )));
+        }
+        let c: GlCommit = resp
+            .error_for_status()
+            .map_err(to_registry_error)?
+            .json()
+            .await
+            .map_err(to_registry_error)?;
+        Ok(ForgeCommit {
+            sha: c.id,
+            committed_at: parse_date(c.committed_date.as_deref()),
+            committer: person_label(
+                None,
+                c.committer_name.as_deref(),
+                c.committer_email.as_deref(),
+            ),
+        })
+    }
+
+    /// The commit's signature; failing that, the release evidence GitLab
+    /// collects — which exists but cannot be cryptographically verified, and
+    /// is the **one** source in this codebase that reports `Unverifiable`
+    /// (RFC 0019 decision 8).
+    async fn provenance(
+        &self,
+        owner_repo: &str,
+        sha: &str,
+        _asset_digest: Option<&str>,
+    ) -> Result<ForgeProvenance, CoreError> {
+        if let Some(sig) = self.commit_signature(owner_repo, sha).await? {
+            let status = sig.verification_status.unwrap_or_default();
+            let kind = sig.signature_type.unwrap_or_else(|| "signature".to_owned());
+            return Ok(if status == "verified" {
+                ForgeProvenance::Verified {
+                    detail: format!("{kind} signature verified by GitLab"),
+                }
+            } else {
+                ForgeProvenance::Invalid {
+                    reason: format!("{kind} signature is '{status}'"),
+                }
+            });
+        }
+        // No signature. A *release* coordinate may still have GitLab's own
+        // evidence, which exists and cannot be checked — the one place
+        // `Unverifiable` comes from (decision 8). `sha` is the tag for a
+        // release or asset coordinate; for a commit the lookup 404s and the
+        // answer stays `Missing`, which is the honest reading.
+        if let Ok(release) = self.fetch_release_by_tag(owner_repo, sha).await {
+            if !release.evidences.is_empty() {
+                return Ok(ForgeProvenance::Unverifiable {
+                    detail: format!(
+                        "GitLab collected {} release evidence blob(s) for {sha}; they are not \
+                         cryptographically verifiable",
+                        release.evidences.len()
+                    ),
+                });
+            }
+        }
+        Ok(ForgeProvenance::Missing)
+    }
+
+    async fn tags(&self, owner_repo: &str) -> Result<Vec<ForgeTag>, CoreError> {
+        let url = self.repo_url(owner_repo, "tags?per_page=100");
+        let resp = self.api_get(&url).await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(CoreError::NotFound(format!("{owner_repo} not found")));
+        }
+        let tags: Vec<GlTag> = resp
+            .error_for_status()
+            .map_err(to_registry_error)?
+            .json()
+            .await
+            .map_err(to_registry_error)?;
+        Ok(tags
+            .into_iter()
+            .map(|t| ForgeTag {
+                date: parse_date(t.created_at.as_deref())
+                    .or_else(|| parse_date(t.commit.committed_date.as_deref())),
+                name: t.name,
+                sha: t.commit.id,
+            })
+            .collect())
+    }
+}
+
+impl GitlabRegistryClient {
+    /// The commit's signature, or `None` when GitLab says there is none.
+    ///
+    /// `404` is the answer for an unsigned commit — confirmed 2026-09-04,
+    /// body `{"message":"404 Signature Not Found"}` — so it is mapped to
+    /// `None` rather than propagated: "this commit is not signed" is a fact,
+    /// not a failure.
+    pub(super) async fn commit_signature(
+        &self,
+        project: &str,
+        sha: &str,
+    ) -> Result<Option<GlSignature>, CoreError> {
+        let url = self.repo_url(
+            project,
+            &format!("commits/{}/signature", percent_encode(sha)),
+        );
+        let resp = self.api_get(&url).await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        Ok(Some(
+            resp.error_for_status()
+                .map_err(to_registry_error)?
+                .json()
+                .await
+                .map_err(to_registry_error)?,
+        ))
+    }
+}
 
 #[async_trait]
 impl RegistryClient for GitlabRegistryClient {
+    fn releases(&self) -> Option<&dyn batlehub_core::ports::ForgeReleaseSource> {
+        Some(self)
+    }
+
     fn registry_type(&self) -> &str {
         "gitlab"
+    }
+
+    fn forge(&self) -> Option<&dyn ForgeRegistry> {
+        Some(self)
     }
 
     async fn fetch_version_document(
@@ -329,7 +624,10 @@ impl RegistryClient for GitlabRegistryClient {
                     self.raw_file_url(project, git_ref, path)
                 } else if let Some(rest) = artifact.strip_prefix("pkgpath/") {
                     // Package-registry passthrough (`api/v4/projects/.../packages/…`).
-                    self.passthrough_url(rest)
+                    // Fallible since the assembled URL is re-read against the
+                    // API base: a selector that escapes `/api/v4` is refused
+                    // here rather than fetched with the operator's token.
+                    self.passthrough_url(rest)?
                 } else {
                     return Err(CoreError::Registry(format!(
                         "unsupported gitlab artifact selector: {artifact}"
@@ -416,6 +714,238 @@ mod tests {
         assert_eq!(client.api_base_url, "https://gitlab.com/api/v4");
     }
 
+    // ── RFC 0019 phase 4: the ref surface, as gitlab.com answers it ──────
+    //
+    // The bodies below are trimmed copies of what gitlab.com returned for
+    // `gitlab-org/cli` on 2026-09-04, which is what makes these regression
+    // tests rather than assertions about a shape we invented.
+
+    async fn forge_client(server: &mockito::Server) -> GitlabRegistryClient {
+        GitlabRegistryClient::new(server.url(), &UpstreamHttpOptions::default()).unwrap()
+    }
+
+    const TAG_BODY: &str = r#"{
+        "name": "v1.40.0",
+        "message": "",
+        "target": "9ed43f6507f1214b165fcb79f88e5e503f4a3539",
+        "created_at": "2024-04-25T09:00:00.000+00:00",
+        "commit": {
+            "id": "9ed43f6507f1214b165fcb79f88e5e503f4a3539",
+            "committed_date": "2024-04-24T19:27:12.000+00:00",
+            "committer_name": "Oscar Tovar",
+            "committer_email": "otovar@gitlab.com"
+        }
+    }"#;
+
+    #[tokio::test]
+    async fn a_tag_resolves_in_one_call_and_prefers_its_own_date() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/api/v4/projects/grp%2Fproj/repository/tags/v1.40.0")
+            .with_status(200)
+            .with_body(TAG_BODY)
+            .create_async()
+            .await;
+        let c = forge_client(&server).await;
+        let r = c.resolve_ref("grp/proj", "v1.40.0").await.unwrap();
+        assert_eq!(r.kind, RefKind::Tag);
+        assert_eq!(r.sha, "9ed43f6507f1214b165fcb79f88e5e503f4a3539");
+        // The tag's own date, not the commit's — decision 6.
+        assert_eq!(
+            r.object_date.map(|d| d.to_rfc3339()),
+            Some("2024-04-25T09:00:00+00:00".to_owned())
+        );
+        assert!(r.publisher.as_deref().unwrap().contains("Oscar Tovar"));
+    }
+
+    #[tokio::test]
+    async fn a_branch_is_asked_for_only_after_the_tag_is_not_found() {
+        let mut server = mockito::Server::new_async().await;
+        let tag = server
+            .mock("GET", "/api/v4/projects/grp%2Fproj/repository/tags/main")
+            .with_status(404)
+            .with_body(r#"{"message":"404 Tag Not Found"}"#)
+            .create_async()
+            .await;
+        let _branch = server
+            .mock(
+                "GET",
+                "/api/v4/projects/grp%2Fproj/repository/branches/main",
+            )
+            .with_status(200)
+            .with_body(
+                r#"{"name":"main","commit":{"id":"a2f593651954e9023db48f52192e3ed6be600f60",
+                    "committed_date":"2026-09-04T12:01:47.000+02:00",
+                    "committer_name":"GitLab","committer_email":"noreply@gitlab.com"}}"#,
+            )
+            .create_async()
+            .await;
+        let c = forge_client(&server).await;
+        let r = c.resolve_ref("grp/proj", "main").await.unwrap();
+        assert_eq!(r.kind, RefKind::Branch);
+        assert_eq!(r.sha, "a2f593651954e9023db48f52192e3ed6be600f60");
+        assert!(r.object_date.is_some());
+        tag.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn a_ref_that_is_neither_is_not_found() {
+        let mut server = mockito::Server::new_async().await;
+        let _t = server
+            .mock("GET", "/api/v4/projects/grp%2Fproj/repository/tags/nope")
+            .with_status(404)
+            .create_async()
+            .await;
+        let _b = server
+            .mock(
+                "GET",
+                "/api/v4/projects/grp%2Fproj/repository/branches/nope",
+            )
+            .with_status(404)
+            .create_async()
+            .await;
+        let c = forge_client(&server).await;
+        assert!(matches!(
+            c.resolve_ref("grp/proj", "nope").await,
+            Err(CoreError::NotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_commit_is_flat_and_a_tag_list_carries_its_dates() {
+        let mut server = mockito::Server::new_async().await;
+        let _c = server
+            .mock(
+                "GET",
+                "/api/v4/projects/grp%2Fproj/repository/commits/9ed43f6507f1214b165fcb79f88e5e503f4a3539",
+            )
+            .with_status(200)
+            .with_body(
+                r#"{"id":"9ed43f6507f1214b165fcb79f88e5e503f4a3539",
+                    "committed_date":"2024-04-24T19:27:12.000+00:00",
+                    "committer_name":"Oscar Tovar","committer_email":"otovar@gitlab.com"}"#,
+            )
+            .create_async()
+            .await;
+        let _t = server
+            .mock(
+                "GET",
+                "/api/v4/projects/grp%2Fproj/repository/tags?per_page=100",
+            )
+            .with_status(200)
+            .with_body(format!("[{TAG_BODY}]"))
+            .create_async()
+            .await;
+        let c = forge_client(&server).await;
+        let commit = c
+            .commit("grp/proj", "9ed43f6507f1214b165fcb79f88e5e503f4a3539")
+            .await
+            .unwrap();
+        assert_eq!(commit.sha, "9ed43f6507f1214b165fcb79f88e5e503f4a3539");
+        assert!(commit.committed_at.is_some());
+
+        let tags = c.tags("grp/proj").await.unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].name, "v1.40.0");
+        assert!(tags[0].date.is_some(), "GitLab dates its tag list");
+    }
+
+    /// GitLab answers `404` for an unsigned commit, which is a fact about the
+    /// commit rather than a failure of the request.
+    #[tokio::test]
+    async fn an_unsigned_commit_has_no_signature_rather_than_an_error() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock(
+                "GET",
+                "/api/v4/projects/grp%2Fproj/repository/commits/abc/signature",
+            )
+            .with_status(404)
+            .with_body(r#"{"message":"404 Signature Not Found"}"#)
+            .create_async()
+            .await;
+        let c = forge_client(&server).await;
+        assert!(c
+            .commit_signature("grp/proj", "abc")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    /// RFC 0019 decision 8: GitLab's release evidence is the one source of
+    /// `PROVENANCE_UNVERIFIABLE` in this codebase.
+    #[tokio::test]
+    async fn release_evidence_is_unverifiable_and_nothing_else_is() {
+        let mut server = mockito::Server::new_async().await;
+        let _sig = server
+            .mock(
+                "GET",
+                "/api/v4/projects/grp%2Fproj/repository/commits/v1.40.0/signature",
+            )
+            .with_status(404)
+            .create_async()
+            .await;
+        let _rel = server
+            .mock("GET", "/api/v4/projects/grp%2Fproj/releases/v1.40.0")
+            .with_status(200)
+            .with_body(
+                r#"{"tag_name":"v1.40.0","released_at":"2024-04-25T00:00:00Z",
+                    "evidences":[{"sha":"773f18b1","filepath":"https://gitlab.com/x.json",
+                    "collected_at":"2024-04-25T02:55:30.443Z"}],
+                    "assets":{"links":[],"sources":[]}}"#,
+            )
+            .create_async()
+            .await;
+        let c = forge_client(&server).await;
+        let p = c.provenance("grp/proj", "v1.40.0", None).await.unwrap();
+        assert!(
+            matches!(
+                p,
+                batlehub_core::entities::ForgeProvenance::Unverifiable { .. }
+            ),
+            "{p:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_verified_signature_beats_the_evidence_and_no_release_is_missing() {
+        let mut server = mockito::Server::new_async().await;
+        let _sig = server
+            .mock(
+                "GET",
+                "/api/v4/projects/grp%2Fproj/repository/commits/abc/signature",
+            )
+            .with_status(200)
+            .with_body(r#"{"signature_type":"PGP","verification_status":"verified"}"#)
+            .create_async()
+            .await;
+        let c = forge_client(&server).await;
+        assert!(matches!(
+            c.provenance("grp/proj", "abc", None).await.unwrap(),
+            batlehub_core::entities::ForgeProvenance::Verified { .. }
+        ));
+
+        let mut server = mockito::Server::new_async().await;
+        let _sig = server
+            .mock(
+                "GET",
+                "/api/v4/projects/grp%2Fproj/repository/commits/abc/signature",
+            )
+            .with_status(404)
+            .create_async()
+            .await;
+        let _rel = server
+            .mock("GET", "/api/v4/projects/grp%2Fproj/releases/abc")
+            .with_status(404)
+            .create_async()
+            .await;
+        let c = forge_client(&server).await;
+        assert_eq!(
+            c.provenance("grp/proj", "abc", None).await.unwrap(),
+            batlehub_core::entities::ForgeProvenance::Missing
+        );
+    }
+
     #[test]
     fn source_format_extracts() {
         assert_eq!(source_format("source/tar.gz"), Some("tar.gz"));
@@ -431,9 +961,33 @@ mod tests {
             "https://gitlab.com/api/v4/projects/grp%2Fproj/repository/files/src%2Fx.rs/raw?ref=main"
         );
         assert_eq!(
-            client.passthrough_url("api/v4/projects/1/packages/generic/a/1.0/f.bin"),
+            client
+                .passthrough_url("api/v4/projects/1/packages/generic/a/1.0/f.bin")
+                .unwrap(),
             "https://gitlab.com/api/v4/projects/1/packages/generic/a/1.0/f.bin"
         );
+    }
+
+    /// A `pkgpath/` selector that walks out of `/api/v4` stays on the instance,
+    /// so `ensure_same_origin` would wave it through and the request would carry
+    /// the operator's `PRIVATE-TOKEN` to somewhere the selector never named.
+    /// Both spellings are covered: a literal dot segment, and the encoded one
+    /// that `Url::parse` folds only once the URL is assembled.
+    #[test]
+    fn passthrough_url_refuses_escaping_the_api_subtree() {
+        let opts = UpstreamHttpOptions::default();
+        let client = GitlabRegistryClient::new("https://gitlab.com", &opts).unwrap();
+
+        for selector in [
+            "api/v4/../../admin/users",
+            "api/v4/projects/1/packages/../../../../admin/users",
+            "api/v4/%2e%2e/%2e%2e/admin/users",
+        ] {
+            assert!(
+                client.passthrough_url(selector).is_err(),
+                "selector should be refused: {selector}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -504,6 +1058,41 @@ mod tests {
         })
         .await
         .unwrap()
+    }
+
+    /// GitLab attaches *links*, not files, and has no drafts — its own name for
+    /// "not the default download" is `upcoming_release` (RFC 0021 §11 q5).
+    #[tokio::test]
+    async fn releases_are_normalised_from_links_and_upcoming_release() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/api/v4/projects/grp%2Fproj/releases?per_page=100")
+            .with_body(
+                r#"[
+                  {"tag_name":"v2","upcoming_release":true,
+                   "assets":{"links":[],"sources":[]}},
+                  {"tag_name":"v1",
+                   "assets":{"links":[{"name":"ext-1.0.0.vsix",
+                                       "url":"https://example.invalid/a.vsix"}],
+                             "sources":[]}}
+                ]"#,
+            )
+            .create_async()
+            .await;
+        let client =
+            GitlabRegistryClient::new(server.url(), &UpstreamHttpOptions::default()).unwrap();
+
+        let got = client.list_releases("grp/proj").await.unwrap();
+
+        assert_eq!(got.len(), 2);
+        assert!(
+            got[0].prerelease,
+            "upcoming_release is GitLab's pre-release"
+        );
+        assert!(!got[0].draft, "GitLab has no drafts");
+        assert!(got[1].is_stable());
+        assert_eq!(got[1].assets[0].artifact, "link/ext-1.0.0.vsix");
+        assert_eq!(got[1].assets[0].size, None, "a link reports no size");
     }
 
     #[tokio::test]

@@ -1,0 +1,27 @@
+# cocogitto. `cog bump --version 1.2.0` (or `--minor`, or `--auto`) runs the
+# pre-bump hook, commits whatever it changed as `chore(version): vX.Y.Z`, and
+# tags that commit. Two settings make it fit this repository:
+#
+# `tag_prefix` — every tag here is `v`-prefixed (v0.2.0 … v1.1.0), and the
+# compare links at the foot of CHANGELOG.md are built from those names. Without
+# this cog would cut `1.2.0` and the series would have two spellings.
+#
+# `disable_changelog` — CHANGELOG.md is written by hand, one narrative entry per
+# change, and the generated alternative is the list of commit subjects since the
+# last tag. That list reads `wip`, `wip`, `ouais ouais...` for this release, and
+# cog additionally refuses to parse the two commits that are not conventional.
+# A generated section would sit above the written one describing the same
+# release twice, once uselessly. Update the `[Unreleased]` section as the work
+# lands, and rename it when you cut.
+
+tag_prefix = "v"
+disable_changelog = true
+
+# `{{version}}` is the bare version — `1.2.0`, not `v1.2.0` — which is what
+# every file wants; `version:set` refuses anything that is not a bare semver
+# rather than writing `version = "vv1.2.0"` into Cargo.toml. Changes the hook
+# makes are staged into the bump commit, so the tag can never point at a tree
+# that still declares the version before it.
+pre_bump_hooks = [
+  "task version:set VERSION={{version}}",
+]

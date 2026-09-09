@@ -203,6 +203,17 @@ pub struct ConfigReloadService {
     /// field rather than something defaulted here.
     pub(super) proxy_trust: ProxyTrust,
     pub(super) config_path: String,
+    /// The layers merged *over* [`Self::config_path`], in order, when the
+    /// process was started with more than one `--config`. Re-read on every
+    /// reload, exactly like the primary, so a change to a credentials file is
+    /// picked up by the same watcher event that a change to the main file is.
+    ///
+    /// Deliberately absent from the editor path: `config_content` serves the
+    /// primary and `persist_config_to_disk` writes the primary, so a layer
+    /// holding credentials is never sent to a browser and never rewritten from
+    /// one. It is still merged before validation, so the diff and the warnings
+    /// an admin sees describe the config that would actually be in force.
+    pub(super) config_overlays: Vec<String>,
     pub(super) config_change_repo: Option<Arc<dyn ConfigChangeRepository>>,
     pub hot_reload_enabled: bool,
     /// Intentionally panics (`.expect(...)`) rather than recovers on poison, unlike
@@ -260,6 +271,10 @@ pub struct ConfigReloadParams {
     /// detached handle and every reload of it a silent no-op.
     pub proxy_trust: ProxyTrust,
     pub config_path: String,
+    /// Extra config files merged over `config_path`, in order. Empty for the
+    /// single-file case, which is every deployment that has not asked for
+    /// layering.
+    pub config_overlays: Vec<String>,
     pub config_change_repo: Option<Arc<dyn ConfigChangeRepository>>,
     pub hot_reload_enabled: bool,
     pub builder: HotConfigBuilder,
@@ -282,6 +297,7 @@ impl ConfigReloadService {
             registry_host_map,
             proxy_trust,
             config_path,
+            config_overlays,
             config_change_repo,
             hot_reload_enabled,
             builder,
@@ -301,6 +317,7 @@ impl ConfigReloadService {
             registry_host_map,
             proxy_trust,
             config_path,
+            config_overlays,
             config_change_repo,
             hot_reload_enabled,
             pending: Mutex::new(None),

@@ -30,6 +30,7 @@ ipnet.workspace = true
 tokio.workspace = true
 metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
+sha1 = "0.11"
 sha2.workspace = true
 hmac = "0.13"
 hex.workspace = true
@@ -49,6 +50,9 @@ bzip2 = "0.6"
 
 [dev-dependencies]
 batlehub-adapters = { path = "../adapters" }
+# Test-only: sign a bundle manifest, to walk RFC 0008's import through its
+# own door rather than around it.
+ed25519-dalek = "3"
 actix-http = "3"
 ar = "0.9"
 # Test-only: build `.tar.bz2` conda package fixtures.
@@ -56,7 +60,7 @@ bzip2 = "0.6"
 flate2 = "1"
 # Test-only: build `.rpm` fixtures via `rpm::PackageBuilder` (the `payload` feature).
 # No `rsa` — that only arrives via `signature-pgp`, which we never enable.
-rpm = { version = "0.27", default-features = false, features = ["payload", "gzip-compression"] }
+rpm = { version = "0.28", default-features = false, features = ["payload", "gzip-compression"] }
 tar = "0.4"
 tempfile.workspace = true
 toml.workspace = true

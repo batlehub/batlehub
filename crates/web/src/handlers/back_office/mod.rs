@@ -5,6 +5,8 @@ pub mod authz_shadow;
 pub mod bulk;
 pub mod config;
 pub mod explore;
+pub mod exposure;
+pub mod flags;
 pub mod governance;
 pub mod health;
 pub mod notification;

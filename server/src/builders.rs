@@ -6,23 +6,41 @@ use batlehub_adapters::db::PgQuotaRepository;
 use batlehub_adapters::registry::{
     CargoRegistryClient, ComposerRegistryClient, CondaRegistryClient, FanoutRegistryClient,
     ForgejoRegistryClient, GithubRegistryClient, GitlabRegistryClient, GoProxyRegistryClient,
-    JetbrainsMarketplaceRegistryClient, MavenRegistryClient, NpmRegistryClient,
-    NugetRegistryClient, OpenVsxRegistryClient, PathProxyRegistryClient, PypiRegistryClient,
-    RubyGemsRegistryClient, TerraformRegistryClient, UpstreamHttpOptions,
-    VsCodeMarketplaceRegistryClient,
+    JetbrainsMarketplaceRegistryClient, MavenRegistryClient, NodeDistRegistryClient,
+    NpmRegistryClient, NugetRegistryClient, OpenVsxRegistryClient, PathProxyRegistryClient,
+    PypiRegistryClient, RubyGemsRegistryClient, SdkmanRegistryClient, TerraformRegistryClient,
+    UpstreamHttpOptions, VsCodeMarketplaceRegistryClient,
 };
 use batlehub_config::schema::{
     QuotaEnforcement as ConfigQuotaEnforcement, RegistryConfig, RuleConfig, UpstreamAuthConfig,
 };
 use batlehub_core::{
-    entities::{RegistryKind, ReleaseAgeGateParams, ResolutionPolicy, Role, Severity},
-    ports::{SbomRepository, VulnerabilityRepository},
+    entities::{
+        RegistryKind, ReleaseAgeGateParams, ResolutionPolicy, Role, SecurityPolicy, Severity,
+    },
+    ports::{
+        AdvisoryRepository, ArtifactCacheMeta, ArtifactScanner, PolicyRepository, SbomRepository,
+        VulnerabilityRepository,
+    },
     rules::{
         BlockListRule, CveGateRule, DenyLatestRule, LicenseGateRule, RbacRule, ReleaseAgeGateRule,
-        RequireSignedReleaseRule, TrustedPublisherRule, VersionGateRule,
+        RequireSignedReleaseRule, TrustedPublisherRule, VerdictGateRule, VersionGateRule,
     },
-    services::{QuotaEnforcement, QuotaService, RegistryPolicy, RegistryQuotaConfig},
+    services::{
+        BlockListScanner, QuotaEnforcement, QuotaService, RecordedVulnerabilityScanner,
+        RegistryPolicy, RegistryQuotaConfig, RuleAsScanner, VerdictService,
+    },
 };
+
+/// What a `[security]` registry's chain needs that a plain one does not
+/// (RFC 0018 §6.5): the verdict service, its profile, and the policy store
+/// the `security_verdict` exemption is read from.
+#[derive(Clone)]
+pub(super) struct SecurityWiring {
+    pub service: Arc<VerdictService>,
+    pub policy: SecurityPolicy,
+    pub policy_repo: Option<Arc<dyn PolicyRepository>>,
+}
 use batlehub_web::CargoIndexProxy;
 
 /// Parse a config-file role string. Fails on anything but the 3 recognized
@@ -124,71 +142,18 @@ pub(super) fn build_repo_signer_map(
     Ok(batlehub_web::RepoSignerMap::from(map))
 }
 
-pub(super) fn build_registry_client(
-    reg: &RegistryConfig,
-    global_proxy: Option<&batlehub_config::schema::UpstreamProxyConfig>,
-) -> anyhow::Result<Arc<dyn batlehub_core::ports::RegistryClient>> {
-    fn resolve_urls(configured: &[String], default: &str) -> Vec<String> {
-        if configured.is_empty() {
-            vec![default.to_owned()]
-        } else {
-            configured.to_vec()
-        }
+/// The configured upstreams, or the one default this kind ships with.
+fn resolve_urls(configured: &[String], default: &str) -> Vec<String> {
+    if configured.is_empty() {
+        vec![default.to_owned()]
+    } else {
+        configured.to_vec()
     }
-    fn make_one(
-        kind: RegistryKind,
-        url: &str,
-        opts: &UpstreamHttpOptions,
-        path_allow: &[String],
-        cargo_index: &str,
-    ) -> anyhow::Result<Arc<dyn batlehub_core::ports::RegistryClient>> {
-        // The path-addressed kinds all share one client, so the `path_allow`
-        // allowlist is applied uniformly to them. Config validation has already
-        // rejected `path_allow` on any other kind.
-        let path_proxy =
-            |ty: &str| -> anyhow::Result<Arc<dyn batlehub_core::ports::RegistryClient>> {
-                Ok(Arc::new(
-                    PathProxyRegistryClient::new(ty, url, opts)?.with_path_allow(path_allow)?,
-                ))
-            };
-        // Exhaustive match over `RegistryKind`: adding a new variant is a compile
-        // error here until an adapter arm is added, instead of silently falling
-        // through to a runtime "no adapter compiled in" bail.
-        let client: Arc<dyn batlehub_core::ports::RegistryClient> = match kind {
-            RegistryKind::Github => Arc::new(GithubRegistryClient::new(url, opts)?),
-            RegistryKind::Forgejo => Arc::new(ForgejoRegistryClient::new(url, opts)?),
-            RegistryKind::Gitlab => Arc::new(GitlabRegistryClient::new(url, opts)?),
-            RegistryKind::Npm => Arc::new(NpmRegistryClient::new(url, opts)?),
-            RegistryKind::Cargo => {
-                Arc::new(CargoRegistryClient::new(url, opts)?.with_index_url(cargo_index))
-            }
-            RegistryKind::Nuget => Arc::new(NugetRegistryClient::new(url, opts)?),
-            RegistryKind::Openvsx => Arc::new(OpenVsxRegistryClient::new(url, opts)?),
-            RegistryKind::Goproxy => Arc::new(GoProxyRegistryClient::new(url, opts)?),
-            RegistryKind::VscodeMarketplace => {
-                Arc::new(VsCodeMarketplaceRegistryClient::new(url, opts)?)
-            }
-            RegistryKind::Maven => Arc::new(MavenRegistryClient::new(url, opts)?),
-            RegistryKind::Terraform => Arc::new(TerraformRegistryClient::new(url, opts)?),
-            RegistryKind::Rubygems => Arc::new(RubyGemsRegistryClient::new(url, opts)?),
-            RegistryKind::Composer => Arc::new(ComposerRegistryClient::new(url, opts)?),
-            RegistryKind::Pypi => Arc::new(PypiRegistryClient::new(url, opts)?),
-            RegistryKind::Conda => Arc::new(CondaRegistryClient::new(url, opts)?),
-            RegistryKind::JetbrainsMarketplace => {
-                Arc::new(JetbrainsMarketplaceRegistryClient::new(url, opts)?)
-            }
-            RegistryKind::Deb => path_proxy("deb")?,
-            RegistryKind::Rpm => path_proxy("rpm")?,
-            RegistryKind::Pacman => path_proxy("pacman")?,
-            RegistryKind::Jetbrains => path_proxy("jetbrains")?,
-            RegistryKind::Generic => path_proxy("generic")?,
-        };
-        Ok(client)
-    }
+}
 
-    let opts = upstream_options(reg, global_proxy);
-    let kind: RegistryKind = reg.registry_type.parse().map_err(anyhow::Error::msg)?;
-    let urls = match kind {
+/// Every upstream this registry's clients will be built against.
+fn default_upstreams(kind: RegistryKind, reg: &RegistryConfig) -> Vec<String> {
+    match kind {
         RegistryKind::Github => resolve_urls(&reg.upstreams, "https://api.github.com"),
         RegistryKind::Forgejo => resolve_urls(&reg.upstreams, "https://codeberg.org"),
         RegistryKind::Gitlab => resolve_urls(&reg.upstreams, "https://gitlab.com"),
@@ -224,19 +189,171 @@ pub(super) fn build_registry_client(
         // file tree the operator points it at. Config validation already requires an
         // explicit `upstreams` entry, so the placeholder is unreachable in practice.
         RegistryKind::Generic => resolve_urls(&reg.upstreams, "https://example.invalid/generic"),
+        // The tree nvm itself defaults to; io.js takes a second registry
+        // pointed at `https://iojs.org/dist` (RFC 0010 §4.1).
+        RegistryKind::Nodedist => resolve_urls(&reg.upstreams, "https://nodejs.org/dist"),
+        // The candidates API `sdkman-init.sh` defaults to; the broker is
+        // `broker_url`, resolved below (RFC 0010 §4.1).
+        RegistryKind::Sdkman => resolve_urls(
+            &reg.upstreams,
+            batlehub_adapters::registry::sdkman::DEFAULT_API_BASE,
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn make_one(
+    kind: RegistryKind,
+    url: &str,
+    opts: &UpstreamHttpOptions,
+    path_allow: &[String],
+    cargo_index: &str,
+    // SDKMAN only: the download broker, the second host of one protocol.
+    broker_url: &str,
+    registry_name: &str,
+    budget: Option<&Arc<dyn batlehub_core::ports::RateLimitBudget>>,
+) -> anyhow::Result<Arc<dyn batlehub_core::ports::RegistryClient>> {
+    // The path-addressed kinds all share one client, so the `path_allow`
+    // allowlist is applied uniformly to them. Config validation has already
+    // rejected `path_allow` on any other kind.
+    let path_proxy = |ty: &str| -> anyhow::Result<Arc<dyn batlehub_core::ports::RegistryClient>> {
+        Ok(Arc::new(
+            PathProxyRegistryClient::new(ty, url, opts)?.with_path_allow(path_allow)?,
+        ))
     };
+    // Exhaustive match over `RegistryKind`: adding a new variant is a compile
+    // error here until an adapter arm is added, instead of silently falling
+    // through to a runtime "no adapter compiled in" bail.
+    let client: Arc<dyn batlehub_core::ports::RegistryClient> = match kind {
+        // All three forge clients draw every API call on the shared
+        // budget (RFC 0019 §5.2): GitHub and Forgejo since phase 1,
+        // GitLab since phase 4.
+        RegistryKind::Github => {
+            let c = GithubRegistryClient::new(url, opts)?;
+            Arc::new(match budget {
+                Some(b) => c.with_budget(registry_name, Arc::clone(b)),
+                None => c,
+            })
+        }
+        RegistryKind::Forgejo => {
+            let c = ForgejoRegistryClient::new(url, opts)?;
+            Arc::new(match budget {
+                Some(b) => c.with_budget(registry_name, Arc::clone(b)),
+                None => c,
+            })
+        }
+        RegistryKind::Gitlab => {
+            let c = GitlabRegistryClient::new(url, opts)?;
+            Arc::new(match budget {
+                Some(b) => c.with_budget(registry_name, Arc::clone(b)),
+                None => c,
+            })
+        }
+        RegistryKind::Npm => Arc::new(NpmRegistryClient::new(url, opts)?),
+        RegistryKind::Cargo => {
+            Arc::new(CargoRegistryClient::new(url, opts)?.with_index_url(cargo_index))
+        }
+        RegistryKind::Nuget => Arc::new(NugetRegistryClient::new(url, opts)?),
+        RegistryKind::Openvsx => Arc::new(OpenVsxRegistryClient::new(url, opts)?),
+        RegistryKind::Goproxy => Arc::new(GoProxyRegistryClient::new(url, opts)?),
+        RegistryKind::VscodeMarketplace => {
+            Arc::new(VsCodeMarketplaceRegistryClient::new(url, opts)?)
+        }
+        RegistryKind::Maven => Arc::new(MavenRegistryClient::new(url, opts)?),
+        RegistryKind::Terraform => Arc::new(TerraformRegistryClient::new(url, opts)?),
+        RegistryKind::Rubygems => Arc::new(RubyGemsRegistryClient::new(url, opts)?),
+        RegistryKind::Composer => Arc::new(ComposerRegistryClient::new(url, opts)?),
+        RegistryKind::Pypi => Arc::new(PypiRegistryClient::new(url, opts)?),
+        RegistryKind::Conda => Arc::new(CondaRegistryClient::new(url, opts)?),
+        RegistryKind::JetbrainsMarketplace => {
+            Arc::new(JetbrainsMarketplaceRegistryClient::new(url, opts)?)
+        }
+        RegistryKind::Deb => path_proxy("deb")?,
+        RegistryKind::Rpm => path_proxy("rpm")?,
+        RegistryKind::Pacman => path_proxy("pacman")?,
+        RegistryKind::Jetbrains => path_proxy("jetbrains")?,
+        RegistryKind::Generic => path_proxy("generic")?,
+        RegistryKind::Nodedist => Arc::new(NodeDistRegistryClient::new(url, opts)?),
+        RegistryKind::Sdkman => Arc::new(SdkmanRegistryClient::new(url, broker_url, opts)?),
+    };
+    Ok(client)
+}
+
+/// The wrapper, applied once at the end so a fan-out registry is
+/// wrapped as a whole rather than per upstream — there is nothing to be
+/// gained by refusing five times.
+fn offline_if(
+    air_gapped: bool,
+    registry: &str,
+    client: anyhow::Result<Arc<dyn batlehub_core::ports::RegistryClient>>,
+) -> anyhow::Result<Arc<dyn batlehub_core::ports::RegistryClient>> {
+    let client = client?;
+    Ok(if air_gapped {
+        Arc::new(batlehub_adapters::registry::offline::OfflineRegistryClient::new(client, registry))
+    } else {
+        client
+    })
+}
+
+/// Build the upstream client for `reg`, with the rate-limit budget the forge
+/// clients draw on (RFC 0019 §5.2). `None` builds them unbudgeted, which is
+/// what a deployment with no database gets.
+pub(super) fn build_registry_client(
+    reg: &RegistryConfig,
+    global_proxy: Option<&batlehub_config::schema::UpstreamProxyConfig>,
+    budget: Option<&Arc<dyn batlehub_core::ports::RateLimitBudget>>,
+    // RFC 0008 §13 decision 1 — on an air-gapped instance every client is
+    // wrapped so that *no* path can dial out, not just the two artifact
+    // fetch sites §5.3 named.
+    air_gapped: bool,
+) -> anyhow::Result<Arc<dyn batlehub_core::ports::RegistryClient>> {
+    let opts = upstream_options(reg, global_proxy);
+    let kind: RegistryKind = reg.registry_type.parse().map_err(anyhow::Error::msg)?;
+    let urls = default_upstreams(kind, reg);
     let cargo_index = cargo_index_url(reg);
+    let broker_url = reg
+        .broker_url
+        .clone()
+        .unwrap_or_else(|| batlehub_adapters::registry::sdkman::DEFAULT_BROKER_BASE.to_owned());
     if urls.len() == 1 {
-        make_one(kind, &urls[0], &opts, &reg.path_allow, &cargo_index)
+        offline_if(
+            air_gapped,
+            &reg.name,
+            make_one(
+                kind,
+                &urls[0],
+                &opts,
+                &reg.path_allow,
+                &cargo_index,
+                &broker_url,
+                &reg.name,
+                budget,
+            ),
+        )
     } else {
         let clients = urls
             .iter()
-            .map(|u| make_one(kind, u, &opts, &reg.path_allow, &cargo_index))
+            .map(|u| {
+                make_one(
+                    kind,
+                    u,
+                    &opts,
+                    &reg.path_allow,
+                    &cargo_index,
+                    &broker_url,
+                    &reg.name,
+                    budget,
+                )
+            })
             .collect::<anyhow::Result<Vec<_>>>()?;
-        Ok(Arc::new(FanoutRegistryClient::new(
-            &reg.registry_type,
-            clients,
-        )))
+        offline_if(
+            air_gapped,
+            &reg.name,
+            Ok(Arc::new(FanoutRegistryClient::new(
+                &reg.registry_type,
+                clients,
+            ))),
+        )
     }
 }
 
@@ -288,13 +405,163 @@ fn check_action_scoping(
     )
 }
 
+/// `[registries.refs]` as core reads it, or the defaults for a forge
+/// registry that wrote no block. Validation has already refused an
+/// unparsable action, so a stray one here falls back to the default rather
+/// than being invented.
+pub(super) fn forge_refs_policy(reg: &RegistryConfig) -> batlehub_core::entities::ForgeRefsPolicy {
+    let defaults = batlehub_core::entities::ForgeRefsPolicy::default();
+    match &reg.refs {
+        Some(r) => {
+            let (mutable_refs, tag_moved) = r
+                .actions()
+                .unwrap_or((defaults.mutable_refs, defaults.tag_moved));
+            batlehub_core::entities::ForgeRefsPolicy {
+                branch_ttl: std::time::Duration::from_secs(r.branch_ttl_secs),
+                tag_ttl: std::time::Duration::from_secs(r.tag_ttl_secs),
+                mutable_refs,
+                tag_moved,
+                // Not from `[registries.refs]`: the read path sets it from
+                // `air_gap.enabled`, which is a property of the instance
+                // rather than of one registry (RFC 0008 §13.3).
+                frozen: defaults.frozen,
+            }
+        }
+        None => defaults,
+    }
+}
+
+/// The optional stores the newer gates read, bundled so the policy builders
+/// take one handle rather than one parameter each.
+///
+/// Both are `Option` for the same reason: a deployment with no database has
+/// neither, and the gate that reads one degrades rather than refusing to
+/// start. Cloning is cheap — two `Option<Arc<…>>`.
+#[derive(Clone, Default)]
+pub(super) struct GateStores {
+    /// RFC 0002 (recast): the pushed flags, read by `FlagsRule` on a registry
+    /// without `[security]` and by the `flags` scanner on one with it.
+    pub advisories: Option<Arc<dyn AdvisoryRepository>>,
+    /// RFC 0019 phase 2: the digest of the bytes already cached under a
+    /// coordinate, which is what `ASSET_REPLACED` compares against.
+    pub artifact_meta: Option<Arc<dyn ArtifactCacheMeta>>,
+}
+
+/// `[registries.raw]` as the rule reads it, or the default — **off** — for a
+/// forge registry that wrote no block (RFC 0019 §4.1).
+pub(super) fn forge_raw_policy(reg: &RegistryConfig) -> batlehub_core::entities::RawPolicy {
+    match &reg.raw {
+        Some(raw) => raw.policy(reg.security.is_some()),
+        None => batlehub_core::entities::RawPolicy::default(),
+    }
+}
+
 pub(super) fn build_policy(
     reg: &RegistryConfig,
     repo: Arc<dyn batlehub_core::ports::PackageRepository>,
     vuln_repo: Arc<dyn VulnerabilityRepository>,
     sbom_repo: Arc<dyn SbomRepository>,
+    stores: GateStores,
 ) -> anyhow::Result<RegistryPolicy> {
-    build_policy_with_rules(reg, &reg.rules, repo, vuln_repo, sbom_repo)
+    build_policy_with_rules(reg, &reg.rules, repo, vuln_repo, sbom_repo, stores, None)
+}
+
+/// [`build_policy`] for a registry that opted into `[security]` (RFC 0018
+/// §6.5): `VerdictGateRule` first, where `BlockListRule` sits otherwise, and
+/// the five gates the verdict covers left out of the chain — they run as
+/// scanners through [`build_internal_scanners`] instead.
+pub(super) fn build_security_policy(
+    reg: &RegistryConfig,
+    repo: Arc<dyn batlehub_core::ports::PackageRepository>,
+    vuln_repo: Arc<dyn VulnerabilityRepository>,
+    sbom_repo: Arc<dyn SbomRepository>,
+    stores: GateStores,
+    wiring: SecurityWiring,
+) -> anyhow::Result<RegistryPolicy> {
+    build_policy_with_rules(
+        reg,
+        &reg.rules,
+        repo,
+        vuln_repo,
+        sbom_repo,
+        stores,
+        Some(wiring),
+    )
+}
+
+/// The gates a `[security]` registry runs as scanners (RFC 0018 §6.1):
+/// `block_list` always, `cve_gate` and the three metadata gates when the
+/// registry configured them. Every one of them is local and required.
+pub(super) fn build_internal_scanners(
+    reg: &RegistryConfig,
+    repo: Arc<dyn batlehub_core::ports::PackageRepository>,
+    vuln_repo: Arc<dyn VulnerabilityRepository>,
+    sbom_repo: Arc<dyn SbomRepository>,
+    // RFC 0014's rows and whether `on_confirmed = "block"`, when the audit
+    // is enabled: the `upstream-presence` scanner (0018 decision 29).
+    upstream_presence: Option<(Arc<dyn batlehub_core::ports::UpstreamStatusPort>, bool)>,
+    // RFC 0002 (recast) decision 1: pushed flags become findings here.
+    advisories: Option<Arc<dyn AdvisoryRepository>>,
+    // RFC 0019 phase 5: the registry's own client, which the provenance
+    // scanner asks. `None` in the tests that build a chain without one.
+    client: Option<Arc<dyn batlehub_core::ports::RegistryClient>>,
+) -> anyhow::Result<Vec<Arc<dyn ArtifactScanner>>> {
+    let registry_kind: Option<RegistryKind> = reg.registry_type.parse().ok();
+    let mut out: Vec<Arc<dyn ArtifactScanner>> = vec![Arc::new(BlockListScanner { repo })];
+    if let Some(advisories) = advisories {
+        out.push(Arc::new(batlehub_core::services::FlagsScanner {
+            repo: advisories,
+        }));
+    }
+    // RFC 0019 phase 5 — what the forge says about who made the commit.
+    // Built with the hot lock rather than a client handle: the client is
+    // replaced on reload, and a scanner holding the old one would be asking
+    // a registry that no longer exists.
+    if let (true, Some(client)) = (registry_kind.is_some_and(|k| k.is_forge()), client) {
+        out.push(Arc::new(batlehub_core::services::ForgeProvenanceScanner {
+            client,
+        }));
+    }
+    if let Some((status, deny)) = upstream_presence {
+        out.push(Arc::new(batlehub_core::services::UpstreamPresenceScanner {
+            status,
+            deny,
+        }));
+    }
+    for rule_cfg in &reg.rules {
+        let rule: Option<Box<dyn batlehub_core::rules::Rule>> = match rule_cfg {
+            RuleConfig::CveGate(_) => {
+                out.push(Arc::new(RecordedVulnerabilityScanner {
+                    repo: Arc::clone(&vuln_repo),
+                }));
+                None
+            }
+            RuleConfig::LicenseGate(cfg) => Some(Box::new(LicenseGateRule::new(
+                Arc::clone(&sbom_repo),
+                cfg.allow.clone(),
+                cfg.deny.clone(),
+                cfg.allow_unknown,
+                Vec::new(),
+                true,
+            ))),
+            RuleConfig::RequireSignedRelease(cfg) if cfg.enabled => Some(Box::new(
+                RequireSignedReleaseRule::new(Vec::new())
+                    .with_deny_missing_signature(cfg.deny_missing_signature),
+            )),
+            RuleConfig::TrustedPublisher(cfg) => Some(Box::new(TrustedPublisherRule::new(
+                &cfg.allow,
+                Vec::new(),
+                registry_kind,
+            ))),
+            _ => None,
+        };
+        if let Some(rule) = rule {
+            if let Some(scanner) = RuleAsScanner::for_rule(rule) {
+                out.push(Arc::new(scanner));
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// RFC 0015 §4.1 — one rule chain per `[[registries.namespaces]]` block that
@@ -319,6 +586,8 @@ pub(super) fn build_namespace_policies(
     repo: Arc<dyn batlehub_core::ports::PackageRepository>,
     vuln_repo: Arc<dyn VulnerabilityRepository>,
     sbom_repo: Arc<dyn SbomRepository>,
+    stores: GateStores,
+    security: Option<SecurityWiring>,
 ) -> anyhow::Result<Vec<(String, Arc<RegistryPolicy>)>> {
     let mut out = Vec::new();
     for ns in &reg.namespaces {
@@ -334,6 +603,8 @@ pub(super) fn build_namespace_policies(
                 Arc::clone(&repo),
                 Arc::clone(&vuln_repo),
                 Arc::clone(&sbom_repo),
+                stores.clone(),
+                security.clone(),
             )?),
         ));
     }
@@ -387,12 +658,66 @@ fn clone_rule_config(cfg: &RuleConfig) -> anyhow::Result<RuleConfig> {
     Ok(serde_json::from_value(value)?)
 }
 
+/// RFC 0002 (recast) decision 1: on a registry without a verdict the pushed
+/// flags are a rule, beside the block list they resemble. A `gate` flag
+/// borrows the `cve_gate` threshold when one is configured, so "judge it like
+/// a CVE" means this registry's CVE settings and not a default of ours.
+fn push_flags_rule(
+    rules: &mut Vec<Box<dyn batlehub_core::rules::Rule>>,
+    stores: &GateStores,
+    rule_configs: &[RuleConfig],
+) {
+    let Some(advisories) = stores.advisories.clone() else {
+        return;
+    };
+    let mut rule = batlehub_core::rules::FlagsRule::new(advisories);
+    if let Some(RuleConfig::CveGate(cfg)) = rule_configs
+        .iter()
+        .find(|r| matches!(r, RuleConfig::CveGate(_)))
+    {
+        let min = Severity::parse(&cfg.min_severity).unwrap_or(Severity::High);
+        rule = rule.with_gate(min, cfg.block);
+    }
+    rules.push(Box::new(rule));
+}
+
+/// The two rules every forge registry carries: the ref gate, and the raw-path
+/// gate.
+///
+/// RFC 0019 §4.2 *Raw content*, phase 3 — raw is off unless `[registries.raw]`
+/// says otherwise, and bounded when on. Pushed for every forge registry,
+/// because the rule's first job is to refuse a path that was implicitly served
+/// before the section existed.
+fn push_forge_rules(
+    rules: &mut Vec<Box<dyn batlehub_core::rules::Rule>>,
+    reg: &RegistryConfig,
+    stores: &GateStores,
+    quarantined: bool,
+) {
+    let mut rule = batlehub_core::rules::ForgeRefRule::new(forge_refs_policy(reg));
+    if let Some(meta) = stores.artifact_meta.clone() {
+        rule = rule.with_artifact_meta(meta);
+    }
+    if quarantined {
+        rule = rule.carrying_verdict();
+    }
+    rules.push(Box::new(rule));
+
+    let mut raw = batlehub_core::rules::RawPolicyRule::new(forge_raw_policy(reg));
+    if quarantined {
+        raw = raw.carrying_verdict();
+    }
+    rules.push(Box::new(raw));
+}
+
 fn build_policy_with_rules(
     reg: &RegistryConfig,
     rule_configs: &[RuleConfig],
     repo: Arc<dyn batlehub_core::ports::PackageRepository>,
     vuln_repo: Arc<dyn VulnerabilityRepository>,
     sbom_repo: Arc<dyn SbomRepository>,
+    stores: GateStores,
+    security: Option<SecurityWiring>,
 ) -> anyhow::Result<RegistryPolicy> {
     // Best-effort: an unrecognized `registry_type` is already rejected by config
     // validation before this runs, but rules that need the kind (e.g.
@@ -421,14 +746,49 @@ fn build_policy_with_rules(
         .and_then(|r| r.with_group_patterns(reg.rbac.groups.clone()))
         .map_err(|e| anyhow::anyhow!("registry '{}': [registries.rbac]: {e}", reg.name))?;
     check_action_scoping(&rbac, reg, registry_kind)?;
-    rules.push(Box::new(BlockListRule::new(repo)));
+    // RFC 0018 §5.1: on a `[security]` registry the verdict gate is first and
+    // the five gates it covers are not in the chain at all — one answer, and
+    // no second path where a gate can fail open beside the verdict.
+    let quarantined = security.is_some();
+    match security {
+        Some(w) => rules.push(Box::new(VerdictGateRule::new(
+            w.service,
+            w.policy,
+            w.policy_repo,
+        ))),
+        None => {
+            rules.push(Box::new(BlockListRule::new(repo)));
+            push_flags_rule(&mut rules, &stores, rule_configs);
+        }
+    }
+    // RFC 0019 §4.2 phase 2 — the forge-ref gate, on every forge registry.
+    // A rule rather than a scanner: what it judges is how the *request*
+    // addressed the bytes, and the worker sees a coordinate, not a request —
+    // the same commit reached by a tag and by a branch is one artifact and
+    // two ref kinds. With `[security]` its findings ride the request's
+    // verdict; without one, `deny` is a plain `403` and `warn` is the ref
+    // headers alone (§6.1's honest degradation).
+    if registry_kind.is_some_and(|k| k.is_forge()) {
+        push_forge_rules(&mut rules, reg, &stores, quarantined);
+    }
     for rule_cfg in rule_configs {
+        if quarantined
+            && matches!(
+                rule_cfg,
+                RuleConfig::CveGate(_)
+                    | RuleConfig::LicenseGate(_)
+                    | RuleConfig::RequireSignedRelease(_)
+                    | RuleConfig::TrustedPublisher(_)
+            )
+        {
+            continue;
+        }
         match rule_cfg {
             RuleConfig::ReleaseAgeGate(cfg) => {
                 let bypass = parse_bypass_roles(&cfg.bypass_roles)?;
                 rules.push(Box::new(
                     ReleaseAgeGateRule::new(Duration::from_secs(cfg.min_age_secs), bypass)
-                        .with_deny_missing_timestamp(cfg.deny_missing_timestamp),
+                        .with_deny_missing_timestamp(cfg.deny_missing_timestamp()),
                 ));
             }
             RuleConfig::RequireSignedRelease(cfg) => {
@@ -517,9 +877,18 @@ pub(super) fn build_resolution_policy(reg: &RegistryConfig) -> anyhow::Result<Re
             release_age = Some(ReleaseAgeGateParams {
                 min_age: Duration::from_secs(cfg.min_age_secs),
                 bypass_roles: parse_bypass_roles(&cfg.bypass_roles)?,
-                deny_missing_timestamp: cfg.deny_missing_timestamp,
+                deny_missing_timestamp: cfg.deny_missing_timestamp(),
             });
         }
+    }
+    // RFC 0018 §4.1: `security.min_age_secs` replaces the rule, so the
+    // catalog's "would be held" reads the same number the gate holds on.
+    if let Some(sec) = &reg.security {
+        release_age = Some(ReleaseAgeGateParams {
+            min_age: Duration::from_secs(sec.min_age_secs),
+            bypass_roles: Vec::new(),
+            deny_missing_timestamp: sec.hold_missing_timestamp,
+        });
     }
     Ok(ResolutionPolicy {
         artifact_ttl: reg.cache.artifact_ttl_secs.map(Duration::from_secs),
@@ -732,13 +1101,13 @@ mod tests {
     #[test]
     fn build_registry_client_unknown_type_errors() {
         let r = make_registry("not-a-real-type", "reg", "");
-        assert!(build_registry_client(&r, None).is_err());
+        assert!(build_registry_client(&r, None, None, false).is_err());
     }
 
     #[test]
     fn build_registry_client_single_upstream() {
         let r = make_registry("npm", "reg", "");
-        let client = build_registry_client(&r, None).unwrap();
+        let client = build_registry_client(&r, None, None, false).unwrap();
         assert_eq!(client.registry_type(), "npm");
     }
 
@@ -749,7 +1118,7 @@ mod tests {
             "reg",
             r#"upstreams = ["https://a.example.com", "https://b.example.com"]"#,
         );
-        let client = build_registry_client(&r, None).unwrap();
+        let client = build_registry_client(&r, None, None, false).unwrap();
         assert_eq!(client.registry_type(), "npm");
     }
 
@@ -762,6 +1131,7 @@ mod tests {
             repo,
             InMemoryVulnerabilityRepository::arc(),
             NoopSbomRepository::arc(),
+            GateStores::default(),
         )
     }
 
@@ -933,6 +1303,7 @@ mod tests {
             repo,
             InMemoryVulnerabilityRepository::arc(),
             NoopSbomRepository::arc(),
+            GateStores::default(),
         )
         .unwrap();
         let names: Vec<&str> = policy.rules.iter().map(|rule| rule.name()).collect();
@@ -944,6 +1315,69 @@ mod tests {
         assert!(policy.serve_stale_metadata);
         assert_eq!(policy.metadata_ttl, Some(Duration::from_secs(300)));
         assert!(policy.artifact_ttl.is_none());
+    }
+
+    /// RFC 0018 §6.5: a `[security]` registry's chain is the verdict gate
+    /// first, the two selection gates after it, and none of the five the
+    /// verdict covers.
+    #[test]
+    fn a_security_registry_chain_is_the_verdict_gate_and_the_selection_gates() {
+        let r = make_registry(
+            "npm",
+            "reg",
+            r#"
+            [registries.security]
+            mode = "block"
+
+            [[registries.rules]]
+            kind = "cve_gate"
+            min_severity = "high"
+
+            [[registries.rules]]
+            kind = "deny_latest"
+
+            [[registries.rules]]
+            kind = "license_gate"
+            deny = ["AGPL-3.0"]
+            "#,
+        );
+        let repo: Arc<dyn batlehub_core::ports::PackageRepository> =
+            InMemoryPackageRepository::new();
+        let verdicts = batlehub_adapters::in_memory::InMemoryVerdictRepository::new();
+        let queue = batlehub_adapters::in_memory::InMemoryScanQueue::new();
+        let wiring = SecurityWiring {
+            service: Arc::new(VerdictService::new(verdicts, queue)),
+            policy: r
+                .security
+                .as_ref()
+                .unwrap()
+                .to_policy("reg", &Default::default()),
+            policy_repo: None,
+        };
+        let policy = build_security_policy(
+            &r,
+            Arc::clone(&repo),
+            InMemoryVulnerabilityRepository::arc(),
+            NoopSbomRepository::arc(),
+            GateStores::default(),
+            wiring,
+        )
+        .unwrap();
+        let names: Vec<&str> = policy.rules.iter().map(|rule| rule.name()).collect();
+        assert_eq!(names, vec!["verdict_gate", "deny_latest"]);
+
+        let scanners = build_internal_scanners(
+            &r,
+            repo,
+            InMemoryVulnerabilityRepository::arc(),
+            NoopSbomRepository::arc(),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let names: Vec<&str> = scanners.iter().map(|s| s.name()).collect();
+        assert_eq!(names, vec!["block_list", "cve_gate", "license_gate"]);
     }
 
     #[test]
@@ -980,6 +1414,7 @@ mod tests {
             repo,
             InMemoryVulnerabilityRepository::arc(),
             NoopSbomRepository::arc(),
+            GateStores::default(),
         )
         .unwrap();
         let names: Vec<&str> = policy.rules.iter().map(|rule| rule.name()).collect();
@@ -1018,6 +1453,7 @@ mod tests {
             repo,
             InMemoryVulnerabilityRepository::arc(),
             NoopSbomRepository::arc(),
+            GateStores::default(),
         )
         .unwrap();
         let names: Vec<&str> = policy.rules.iter().map(|rule| rule.name()).collect();
@@ -1046,6 +1482,7 @@ mod tests {
             repo,
             InMemoryVulnerabilityRepository::arc(),
             NoopSbomRepository::arc(),
+            GateStores::default(),
         )
         .unwrap();
         let names: Vec<&str> = policy.rules.iter().map(|rule| rule.name()).collect();
@@ -1071,10 +1508,20 @@ mod tests {
             repo,
             InMemoryVulnerabilityRepository::arc(),
             NoopSbomRepository::arc(),
+            GateStores::default(),
         )
         .unwrap();
         let names: Vec<&str> = policy.rules.iter().map(|rule| rule.name()).collect();
-        assert_eq!(names, vec!["block_list", "trusted_publisher"]);
+        // `trusted_publisher` is only meaningful on a forge, and every forge
+        // registry also carries the two gates RFC 0019 always installs: the
+        // ref gate (a branch followed, a tag moved) and the raw policy, which
+        // refuses raw content until `[registries.raw]` turns it on. Neither
+        // is configured by a `[registries.rules]` block, because both judge
+        // facts that exist whether or not an operator wrote anything.
+        assert_eq!(
+            names,
+            vec!["block_list", "forge_ref", "raw", "trusted_publisher"]
+        );
     }
 
     // ── RFC 0015 §4.1: per-gate rule composition ─────────────────────────────

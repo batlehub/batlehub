@@ -1,0 +1,171 @@
+{{- if .Values.worker.enabled }}
+{{- $configEntry := include "batlehub.configManifestEntry" . | fromYaml }}
+# The worker role (RFC 0018 §5.4): the same config, the same database and
+# storage, started with `--roles worker` from the worker image — the one that
+# carries bubblewrap, postmortem and the Trivy client, or its `-guarddog`
+# variant where that optional scanner is enabled. It answers no
+# HTTP but /livez and /metrics, opens artifacts nothing else opens, and is
+# where a scanner's egress is allowed. The proxy Deployment keeps running its
+# embedded worker unless `config.server.roles` says otherwise; set it to
+# `["proxy"]` when this Deployment is enabled so scanning happens here only.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "batlehub.fullname" . }}-worker
+  labels:
+    {{- include "batlehub.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  {{- if not .Values.worker.autoscaling.enabled }}
+  replicas: {{ .Values.worker.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "batlehub.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      annotations:
+        {{- if not $configEntry.name }}
+        checksum/config: {{ include "batlehub.config" . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "batlehub.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "batlehub.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.worker.runtimeClassName }}
+      # The opt-in fourth wall (RFC 0018 §7): gVisor or Kata around the whole
+      # pod, on top of the bubblewrap sandbox around each scanner.
+      runtimeClassName: {{ . }}
+      {{- end }}
+      volumes:
+        - name: config
+          {{- if $configEntry.name }}
+          {{- if eq $configEntry.kind "ConfigMap" }}
+          configMap:
+            name: {{ $configEntry.name }}
+            {{- with $configEntry.mount.items }}
+            items:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+          {{- else }}
+          secret:
+            secretName: {{ $configEntry.name }}
+            {{- with $configEntry.mount.items }}
+            items:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+          {{- end }}
+          {{- else }}
+          secret:
+            secretName: {{ include "batlehub.fullname" . }}-config
+            items:
+              - key: config.toml
+                path: config.toml
+          {{- end }}
+        # The per-job work directories: the only place a scanner writes, and
+        # gone with the pod. Memory-backed so a hostile archive's bytes never
+        # touch the node's disk, bounded by `worker.scratch.sizeLimit`.
+        - name: scratch
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.worker.scratch.sizeLimit }}
+        {{- with (include "batlehub.credentialsSecretName" .) }}
+        # Mounted as its own volume rather than a second key in the config one:
+        # the two have different lifecycles, which is the whole reason the layer
+        # exists, and a Secret the operator manages elsewhere cannot be projected
+        # into a Secret this chart renders.
+        - name: credentials
+          secret:
+            secretName: {{ . }}
+            items:
+              - key: {{ $.Values.credentials.key }}
+                path: {{ $.Values.credentials.key }}
+        {{- end }}
+        {{- if eq .Values.config.storage.type "filesystem" }}
+        - name: cache
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-cache" (include "batlehub.fullname" .)) }}
+          {{- else }}
+          # The same fallback the proxy Deployment carries: with
+          # `persistence.enabled = false` the chart renders no PersistentVolumeClaim
+          # at all, so referencing one here left the worker pod Pending forever
+          # with `persistentvolumeclaim not found`. An emptyDir gives it the
+          # writable path it needs under a read-only root.
+          emptyDir:
+            sizeLimit: {{ .Values.persistence.ephemeralSizeLimit | default "1Gi" }}
+          {{- end }}
+        {{- end }}
+      containers:
+        - name: worker
+          securityContext:
+            {{- toYaml .Values.worker.securityContext | nindent 12 }}
+          image: "{{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.worker.image.pullPolicy }}
+          args:
+            - --config
+            - /etc/batlehub/config.toml
+            {{- if (include "batlehub.credentialsSecretName" .) }}
+            - --config
+            - /etc/batlehub/credentials/{{ .Values.credentials.key }}
+            {{- end }}
+            - --roles
+            - worker
+          env:
+            - name: TMPDIR
+              value: /tmp/batlehub
+            {{- with .Values.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.config.server.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/batlehub
+              readOnly: true
+            {{- if (include "batlehub.credentialsSecretName" .) }}
+            - name: credentials
+              mountPath: /etc/batlehub/credentials
+              readOnly: true
+            {{- end }}
+            - name: scratch
+              mountPath: /tmp/batlehub
+            {{- if eq .Values.config.storage.type "filesystem" }}
+            - name: cache
+              mountPath: {{ .Values.config.storage.path }}
+            {{- end }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

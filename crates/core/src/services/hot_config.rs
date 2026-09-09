@@ -427,6 +427,50 @@ pub struct HotConfig {
     /// wired none, and is *not* the same as "they deny": a tier with no rows
     /// inherits.
     pub grant_repo: Option<Arc<dyn crate::ports::GrantRepository>>,
+    /// Where forge ref resolutions are remembered (RFC 0019 §5.2).
+    ///
+    /// `None` means refs still resolve — resolution is what builds the cache
+    /// key — but nothing is remembered, so a moved tag cannot be detected.
+    /// Correct for a fixture that wired none; the server always wires one.
+    pub ref_resolutions: Option<Arc<dyn crate::ports::RefResolutionRepository>>,
+    /// The rate-limit budget forge clients share (RFC 0019 §5.2). Read by the
+    /// clients, not by the proxy; carried here so a reload replaces it with
+    /// the rest of the registry state.
+    pub rate_limit_budget: Option<Arc<dyn crate::ports::RateLimitBudget>>,
+    /// Per-registry ref TTLs (`[registries.refs]`). A registry with no entry
+    /// takes the defaults, which is what every non-forge registry has.
+    pub forge_refs: HashMap<String, crate::entities::ForgeRefsPolicy>,
+    /// Per-registry `[registries.raw]` (RFC 0019 §4.1, phase 3). A forge
+    /// registry with no entry takes [`crate::entities::RawPolicy::default`],
+    /// which is **off**: raw was implicitly on before the section existed,
+    /// and turning it off is the behaviour change §9 states.
+    pub forge_raw: HashMap<String, crate::entities::RawPolicy>,
+    /// Per-registry `[registries.api_reads]` (RFC 0019 §4.1, phase 3): the
+    /// typed read-only JSON families to serve beside the release routes. A
+    /// registry with no entry serves none — the routes answer `404`, which
+    /// is what an un-opted-in registry has always done.
+    pub forge_api_reads: HashMap<String, Vec<crate::entities::ApiReadFamily>>,
+    /// RFC 0008 §4.1 — whether this instance will dial out at all, and what
+    /// it does with a miss. The default is today's behaviour.
+    pub air_gap: crate::entities::AirGapPolicy,
+    /// Where a miss is written. `None` on a deployment with no database and
+    /// on every connected instance that never records one.
+    pub miss_recorder: Option<Arc<dyn crate::ports::MissRecorder>>,
+    /// Per-registry `[registries.security]` profiles (RFC 0018 §4.1). A
+    /// registry with no entry has no quarantine: its gates run as rules,
+    /// exactly as before the section existed.
+    pub security: HashMap<String, crate::entities::SecurityPolicy>,
+    /// The gates a `[security]` registry runs as scanners instead of rules
+    /// (RFC 0018 §6.1): `block_list`, `cve_gate` and the three wrapped
+    /// metadata gates, built per registry because each holds that registry's
+    /// thresholds. Read by the worker.
+    pub internal_scanners: HashMap<String, Vec<Arc<dyn crate::ports::ArtifactScanner>>>,
+    /// Where verdicts live (RFC 0018 §6.1). `None` on a deployment with no
+    /// database — and then no registry may opt into `[security]`, which the
+    /// server refuses at startup rather than serving unscanned.
+    pub verdicts: Option<Arc<dyn crate::ports::VerdictRepository>>,
+    /// The scan queue the proxy enqueues on and the worker leases from.
+    pub scan_queue: Option<Arc<dyn crate::ports::ScanQueue>>,
     /// Storage for the package and version *policy* tiers (RFC 0015 §6.3).
     ///
     /// `None` means those two tiers contribute nothing, which is the correct
@@ -452,6 +496,10 @@ pub struct HotConfig {
     pub versioning: HashMap<String, VersioningPolicy>,
     /// Per-registry artifact signing configs (Clone, cheap).
     pub signing: HashMap<String, SigningConfig>,
+    /// Per-registry VSIX signing keys (`[registries.vsx_signing]`, RFC 0020):
+    /// a `vscode-marketplace`/`openvsx` registry that holds one signs what it
+    /// publishes and serves the signature as a gallery asset.
+    pub vsx_signing: HashMap<String, Arc<crate::services::signature::VsxSigningKey>>,
     /// Per-registry SBOM generation configs (Clone, cheap).
     pub sbom: HashMap<String, SbomConfig>,
     /// Per-registry README capture configs (Clone, cheap).
@@ -561,11 +609,23 @@ impl Default for HotConfig {
             signing_keys: None,
             policy_tiers: HashMap::new(),
             grant_repo: None,
+            ref_resolutions: None,
+            rate_limit_budget: None,
+            forge_refs: HashMap::new(),
+            security: HashMap::new(),
+            forge_raw: HashMap::new(),
+            forge_api_reads: HashMap::new(),
+            air_gap: crate::entities::AirGapPolicy::default(),
+            miss_recorder: None,
+            internal_scanners: HashMap::new(),
+            verdicts: None,
+            scan_queue: None,
             policy_repo: None,
             shadow_log: None,
             document_cache: None,
             versioning: HashMap::new(),
             signing: HashMap::new(),
+            vsx_signing: HashMap::new(),
             sbom: HashMap::new(),
             readme: HashMap::new(),
             upstream_detail: HashMap::new(),

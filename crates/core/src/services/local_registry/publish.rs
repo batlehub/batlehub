@@ -763,6 +763,13 @@ impl LocalRegistryService {
         self.execute_publish_transaction(pkg, &req, &storage_key, bytes)
             .await?;
 
+        // RFC 0018 §4.2 *Local publish* (phase 2): on a `[security]` registry
+        // the version is `quarantined(SCAN_PENDING)` — invisible in listings
+        // — from the moment it is stored, and a `FirstSeen` job is queued, so
+        // the seconds between publish and first pull are not a window in
+        // which an unscanned version is listed.
+        self.first_sight_after_publish(&req).await;
+
         // Invalidate explore cache so the new version appears without waiting for TTL expiry.
         if let Some(ref cache) = self.explore_cache {
             cache.invalidate(Some(&req.registry)).await;
@@ -781,6 +788,34 @@ impl LocalRegistryService {
             .await;
 
         Ok(quota_check)
+    }
+
+    /// Record the just-published version's first sight on a `[security]`
+    /// registry. A store error is logged, not returned: the publish is
+    /// committed, and the version's first *read* creates the same hold.
+    async fn first_sight_after_publish(&self, req: &PublishRequest) {
+        let (policy, verdicts, queue) = {
+            let hot = self.hot.read().await;
+            let Some(policy) = hot.security.get(&req.registry).cloned() else {
+                return;
+            };
+            (policy, hot.verdicts.clone(), hot.scan_queue.clone())
+        };
+        let (Some(verdicts), Some(queue)) = (verdicts, queue) else {
+            return;
+        };
+        let service = crate::services::VerdictService::new(verdicts, queue);
+        let package = PackageId::new(&req.registry, &req.name, &req.version);
+        if let Err(e) = service
+            .first_sight_local(&package, &policy, chrono::Utc::now())
+            .await
+        {
+            tracing::warn!(
+                package = %package,
+                error = %e,
+                "security: could not record the published version's first sight"
+            );
+        }
     }
 
     /// Steps 1-3 of publish: reserve pending row → store artifact bytes → commit.

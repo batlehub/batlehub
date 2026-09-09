@@ -67,8 +67,77 @@ pub(crate) fn proxy_meta_key(package_id: &crate::entities::PackageId) -> String 
 pub enum ProxyResponse {
     /// Artifact stream to forward to the HTTP client.
     Stream(ArtifactStream),
+    /// [`Self::Stream`] for a forge coordinate whose ref was resolved first
+    /// (RFC 0019 §4.2): the same bytes, plus what the ref resolved to, so the
+    /// handler can say so in `X-BatleHub-Ref-Kind` and
+    /// `X-BatleHub-Resolved-Commit`. A separate variant rather than a field on
+    /// `Stream`, so every non-forge path is untouched.
+    ForgeStream {
+        stream: ArtifactStream,
+        // Boxed together: a `ResolvedRef` and a `PackageId` are ~200 bytes of
+        // strings, and every `ProxyResponse` in the process — one per request,
+        // most of them plain `Stream`s — would otherwise be that wide.
+        resolved: Box<crate::entities::ResolvedRef>,
+        /// The coordinate these bytes are *stored* under, after the ref was
+        /// rewritten onto its commit. It is not the coordinate the client
+        /// asked for — `tarball/main` is stored under the commit — and the
+        /// difference is the whole point of RFC 0019's identity model. The
+        /// handler reports it as `X-BatleHub-Storage-Key`, which is what
+        /// lets RFC 0008's bundle name a key the disconnected instance will
+        /// actually look under.
+        keyed: Box<crate::entities::PackageId>,
+    },
     /// Access was denied; the caller should receive a 403.
-    Denied { reason: String },
+    ///
+    /// `verdict` is present when the refusal is a security verdict (RFC 0018
+    /// §4.2): the handler answers with the registry's native body, the
+    /// `X-BatleHub-*` headers and `Retry-After`, and hides the hold as a 404
+    /// from a caller without `quarantine:read`. `None` is every other
+    /// refusal, answered as it always was.
+    Denied {
+        reason: String,
+        verdict: Option<Box<crate::entities::Verdict>>,
+    },
+    /// A served response under a `warned` verdict (RFC 0018 §4.2): the same
+    /// bytes, plus the verdict so the handler can say so in the
+    /// `X-BatleHub-*` headers. A wrapper rather than a field on each served
+    /// variant, so every non-security path is untouched.
+    Warned {
+        response: Box<ProxyResponse>,
+        verdict: Box<crate::entities::Verdict>,
+    },
+    /// A document composed from what this instance holds, on a route that
+    /// otherwise streams an artifact — a forge's release by tag on an
+    /// air-gapped instance (RFC 0008-bis §4.3). Carries its own content
+    /// type and the `synthesised` count the handler turns into
+    /// `X-BatleHub-Listing`.
+    Document(crate::ports::VersionDocument),
+}
+
+impl ProxyResponse {
+    /// The bytes, whatever they were served under, or the refusal.
+    ///
+    /// For the callers that want the stream and nothing else — the console's
+    /// fetch, an asset read — and would otherwise have to know that a
+    /// `Warned` wraps a `Stream` or a `ForgeStream`.
+    pub fn into_stream(
+        self,
+    ) -> Result<ArtifactStream, (String, Option<Box<crate::entities::Verdict>>)> {
+        match self {
+            Self::Stream(stream) | Self::ForgeStream { stream, .. } => Ok(stream),
+            Self::Document(doc) => {
+                let bytes = match doc.body {
+                    crate::ports::DocumentBody::Json(v) => {
+                        bytes::Bytes::from(serde_json::to_vec(&v).unwrap_or_default())
+                    }
+                    crate::ports::DocumentBody::Text(t) => bytes::Bytes::from(t),
+                };
+                Ok(Box::pin(futures::stream::once(async move { Ok(bytes) })))
+            }
+            Self::Warned { response, .. } => response.into_stream(),
+            Self::Denied { reason, verdict } => Err((reason, verdict)),
+        }
+    }
 }
 
 /// Caching proxy service: resolves metadata, evaluates rules, streams artifacts.
@@ -131,12 +200,15 @@ impl ProxyService {
                 metrics::counter!("batlehub_upstream_errors_total", "registry" => Arc::clone(registry_label)).increment(1);
                 warn_if_audit_failed(
                     self.repo
-                        .record_access(AccessEvent::proxy_error(
-                            req.package_id.clone(),
-                            req.identity.user_id.clone(),
-                            req.identity.role.clone(),
-                            e.to_string(),
-                        ))
+                        .record_access(
+                            AccessEvent::proxy_error(
+                                req.package_id.clone(),
+                                req.identity.user_id.clone(),
+                                req.identity.role.clone(),
+                                e.to_string(),
+                            )
+                            .with_ip_ua(req.ip_address.clone(), req.user_agent.clone()),
+                        )
                         .await,
                     "proxy error",
                 );

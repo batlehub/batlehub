@@ -1,0 +1,46 @@
+# Server configuration for the heavy Cargo integration test
+# (tests/heavy/cargo.sh). See tests/heavy/config.npm.toml for the env-var
+# conventions; `${HEAVY_RUN}` keeps each run's registries out of the last one's.
+
+[server]
+host = "127.0.0.1"
+port = 8102
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-cargo-storage"
+
+# ── Proxy registry: crates.io through the sparse index ───────────────────────
+[[registries]]
+type = "cargo"
+name = "cargo-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── Local registry: `cargo publish` lands here (the Publish axis) ────────────
+[[registries]]
+type = "cargo"
+name = "cargo-local-${HEAVY_RUN}"
+mode = "local"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

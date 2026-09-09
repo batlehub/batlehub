@@ -1,19 +1,47 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
 
-const { explorePackagesMock, exploreUpstreamSearchMock, listRegistriesMock, statsMock } =
-  vi.hoisted(() => ({
-    explorePackagesMock: vi.fn(),
-    exploreUpstreamSearchMock: vi.fn(),
-    listRegistriesMock: vi.fn(),
-    statsMock: vi.fn(),
-  }));
+const {
+  explorePackagesMock,
+  exploreUpstreamSearchMock,
+  listRegistriesMock,
+  statsMock,
+  exploreFetchVersionMock,
+} = vi.hoisted(() => ({
+  explorePackagesMock: vi.fn(),
+  exploreUpstreamSearchMock: vi.fn(),
+  listRegistriesMock: vi.fn(),
+  statsMock: vi.fn(),
+  exploreFetchVersionMock: vi.fn(),
+}));
 vi.mock("@/client/sdk.gen", () => ({
   explorePackages: explorePackagesMock,
   exploreUpstreamSearch: exploreUpstreamSearchMock,
   listRegistries: listRegistriesMock,
   exploreRegistryStats: statsMock,
+  exploreFetchVersion: exploreFetchVersionMock,
 }));
+
+/**
+ * The session the fetch button asks about (RFC 0007-bis §11 q3).
+ *
+ * Real refs, for the reason `PackageDetailPage.test.ts` records at length: a
+ * plain `{ value }` object is truthy in a template however its `.value` reads,
+ * so every `v-if` on an auth flag would be true and the flag untestable.
+ */
+const { authState } = vi.hoisted(() => ({
+  authState: { token: "t", isAdmin: false, isAuthenticated: true },
+}));
+vi.mock("@/composables/useAuth", async () => {
+  const { ref } = await import("vue");
+  return {
+    useAuth: () => ({
+      token: ref(authState.token),
+      isAdmin: ref(authState.isAdmin),
+      isAuthenticated: ref(authState.isAuthenticated),
+    }),
+  };
+});
 
 /**
  * `routeState` stands in for the address bar: the page reads its whole starting
@@ -308,6 +336,11 @@ const upstreamHit = (name: string, over: Record<string, unknown> = {}) => ({
   description: null,
   latest_version: "9.9.9",
   already_cached: false,
+  // The default is *not offered*: most of this file's assertions are about
+  // rows and links, and a button drawn under every upstream hit would put its
+  // label into `row.text()` for every one of them. The fetch tests below opt
+  // in, which is also the shape a registry with `console_fetch = false` sends.
+  fetch: { offered: false, reason: null },
   ...over,
 });
 
@@ -471,6 +504,8 @@ describe("PackageCatalog browsing", () => {
     pushMock.mockReset();
     explorePackagesMock.mockReset().mockResolvedValue(listing(["lodash"]));
     exploreUpstreamSearchMock.mockReset().mockResolvedValue({ data: { items: [] } });
+    exploreFetchVersionMock.mockReset().mockResolvedValue({ data: { fetched: true } });
+    authState.isAuthenticated = true;
     listRegistriesMock.mockReset().mockResolvedValue({
       data: [
         { name: "npm", type: "npm", mode: "proxy" },
@@ -737,6 +772,126 @@ describe("PackageCatalog browsing", () => {
     expect(nameLink(wrapper, "github.com/ttacon/chalk")).toBe(
       "/packages/go/github.com%2Fttacon%2Fchalk",
     );
+  });
+
+  // ── Fetching from the listing (RFC 0007-bis §11 q3) ────────────────────────
+
+  /** Search, with one upstream-only hit the server says is fetchable. */
+  async function searchWithFetchableHit(over: Record<string, unknown> = {}) {
+    exploreUpstreamSearchMock.mockResolvedValue({
+      data: {
+        items: [upstreamHit("left-pad", { fetch: { offered: true, reason: null }, ...over })],
+      },
+    });
+    const wrapper = await mountPage();
+    await typeSearch(wrapper, "left");
+    return wrapper;
+  }
+
+  const fetchButton = (wrapper: VueWrapper) =>
+    wrapper.findAll("tbody button").find((b) => b.text().includes("9.9.9"));
+
+  /**
+   * The button names the version, and asks for that one.
+   *
+   * The version is the upstream search's own answer and is already in the row's
+   * version column — so no choice is being made here, which is the objection
+   * §11 q3 was recommended *no* over.
+   */
+  it("offers the version an upstream row names, and fetches that version", async () => {
+    const wrapper = await searchWithFetchableHit();
+
+    const button = fetchButton(wrapper)!;
+    expect(button.text()).toContain("9.9.9");
+
+    await button.trigger("click");
+    await flushPromises();
+
+    expect(exploreFetchVersionMock).toHaveBeenCalledWith({
+      path: { registry: "npm", name: "left-pad", version: "9.9.9" },
+    });
+  });
+
+  /**
+   * A successful fetch refreshes both halves of the page.
+   *
+   * Without it the ten-minute upstream cache serves the row straight back as a
+   * discovery and the button looks as though it did nothing.
+   */
+  it("refreshes the listing and the upstream results after a fetch", async () => {
+    const wrapper = await searchWithFetchableHit();
+    const listings = explorePackagesMock.mock.calls.length;
+    const upstreams = exploreUpstreamSearchMock.mock.calls.length;
+
+    await fetchButton(wrapper)!.trigger("click");
+    await flushPromises();
+
+    expect(explorePackagesMock.mock.calls.length).toBeGreaterThan(listings);
+    expect(exploreUpstreamSearchMock.mock.calls.length).toBeGreaterThan(upstreams);
+  });
+
+  /** A refusal is the rule's own words, on the row that was refused. */
+  it("shows the rule's reason when the fetch is refused", async () => {
+    exploreFetchVersionMock.mockResolvedValue({
+      error: { code: "fetch.denied", message: "release-age gate: 3 days to go" },
+    });
+    const wrapper = await searchWithFetchableHit();
+
+    await fetchButton(wrapper)!.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("release-age gate: 3 days to go");
+    // The listing was not refetched: nothing changed, and a reload would have
+    // dropped the message that explains why.
+    expect(fetchButton(wrapper)).toBeDefined();
+  });
+
+  /**
+   * Not offered means no button and no sentence.
+   *
+   * The reason for a registry — the operator's switch, or a kind with no single
+   * artifact per version — belongs on the package page, which states it once.
+   * Repeating it under every row of a page of hits would drown the rows.
+   */
+  it("draws nothing when the server does not offer the fetch", async () => {
+    exploreUpstreamSearchMock.mockResolvedValue({
+      data: {
+        items: [
+          upstreamHit("left-pad", {
+            fetch: { offered: false, reason: "maven has no single artifact per version" },
+          }),
+        ],
+      },
+    });
+    const wrapper = await mountPage();
+    await typeSearch(wrapper, "left");
+
+    expect(fetchButton(wrapper)).toBeUndefined();
+    expect(wrapper.text()).not.toContain("no single artifact per version");
+  });
+
+  /** A reader with no session is not offered a button the endpoint would `401`. */
+  it("draws no button for a reader with no session", async () => {
+    authState.isAuthenticated = false;
+    const wrapper = await searchWithFetchableHit();
+    expect(fetchButton(wrapper)).toBeUndefined();
+  });
+
+  /**
+   * A row from a server that predates the field draws nothing rather than
+   * throwing inside the render and taking the whole listing with it — including
+   * its cached rows, which had nothing to do with the upstream half.
+   */
+  it("survives an upstream row with no offer at all", async () => {
+    exploreUpstreamSearchMock.mockResolvedValue({
+      data: { items: [{ registry: "npm", name: "left-pad", latest_version: "9.9.9" }] },
+    });
+    const wrapper = await mountPage();
+    await typeSearch(wrapper, "left");
+
+    expect(wrapper.text()).toContain("left-pad");
+    expect(wrapper.text()).toContain("lodash");
+    expect(fetchButton(wrapper)).toBeUndefined();
   });
 });
 

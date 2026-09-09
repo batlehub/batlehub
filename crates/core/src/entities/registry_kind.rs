@@ -201,6 +201,15 @@ pub enum RegistryKind {
     Jetbrains,
     JetbrainsMarketplace,
     Generic,
+    /// The `nodejs.org/dist` file tree as a *typed* registry — one package
+    /// (`node`), one version per release, one file per platform — so a Node
+    /// release can be blocked rather than merely cached (RFC 0010).
+    Nodedist,
+    /// SDKMAN's candidates API and download broker as one registry: the JDK,
+    /// Gradle, Maven-the-distribution, Kotlin — addressed by
+    /// `{candidate}/{version}/{platform}`, the broker's `302` to a third-party
+    /// CDN followed server-side through the SSRF guard (RFC 0010).
+    Sdkman,
 }
 
 impl RegistryKind {
@@ -228,6 +237,8 @@ impl RegistryKind {
         Self::Jetbrains,
         Self::JetbrainsMarketplace,
         Self::Generic,
+        Self::Nodedist,
+        Self::Sdkman,
     ];
 
     /// The kebab-case wire string for this kind (matches TOML `type = "..."`).
@@ -254,6 +265,24 @@ impl RegistryKind {
             Self::Jetbrains => "jetbrains",
             Self::JetbrainsMarketplace => "jetbrains-marketplace",
             Self::Generic => "generic",
+            Self::Nodedist => "nodedist",
+            Self::Sdkman => "sdkman",
+        }
+    }
+
+    /// The name a blocked-version lookup should use for `package`.
+    ///
+    /// Defaults to the name itself. `sdkman` addresses its listing documents
+    /// by `{candidate}/{platform}` because `fetch_version_document` has
+    /// nowhere else to put the platform, but a block is a statement about the
+    /// candidate: an admin blocking a JDK means all eight platforms, not the
+    /// one whose listing they happened to be looking at (RFC 0010 §6.2,
+    /// decision 8). Every other kind returns `package` unchanged, so the
+    /// call sites in `ProxyService::version_document` are inert for them.
+    pub fn blocking_package_name<'a>(&self, package: &'a str) -> &'a str {
+        match self {
+            Self::Sdkman => crate::services::sdkman::candidate_of(package),
+            _ => package,
         }
     }
 
@@ -261,10 +290,19 @@ impl RegistryKind {
     /// package versions for itself — the read-only source-hosting types
     /// (github/forgejo/gitlab/jetbrains) have no local publish model. `generic`
     /// is proxy-only for now; hosting arbitrary files is a separate roadmap item.
+    /// `nodedist` and `sdkman` have no publish protocol either: Node releases
+    /// are built by the Node project and SDKMAN's candidates by their vendors,
+    /// and hosting a private toolchain is a separate feature (RFC 0010 §3).
     pub fn supports_local_mode(&self) -> bool {
         !matches!(
             self,
-            Self::Github | Self::Forgejo | Self::Gitlab | Self::Jetbrains | Self::Generic
+            Self::Github
+                | Self::Forgejo
+                | Self::Gitlab
+                | Self::Jetbrains
+                | Self::Generic
+                | Self::Nodedist
+                | Self::Sdkman
         )
     }
 
@@ -274,6 +312,13 @@ impl RegistryKind {
     /// `generic` mirrors an arbitrary file tree, so it has no default at all.
     pub fn requires_explicit_upstream_in_proxy_mode(&self) -> bool {
         matches!(self, Self::Deb | Self::Rpm | Self::Generic)
+    }
+
+    /// Whether this kind is a git forge — GitHub, GitLab, Forgejo — and so
+    /// speaks in refs rather than versions (RFC 0019). The kinds
+    /// `[registries.refs]` means something on.
+    pub fn is_forge(&self) -> bool {
+        matches!(self, Self::Github | Self::Gitlab | Self::Forgejo)
     }
 
     /// Whether this kind is addressed purely by upstream file path, with the
@@ -400,6 +445,30 @@ impl RegistryKind {
             "extension gallery (`extensionquery`) and the OpenVSX API",
             &[],
         )];
+        // Two encodings of one document. nvm resolves *every* install through
+        // `index.tab`; fnm and mise read `index.json`. Filtering one and not
+        // the other would leave a second, unfiltered answer to the same
+        // question (RFC 0010 §4.4). `SHASUMS256.txt` is deliberately not a
+        // listing: it is signed by a sibling `.asc`/`.sig` and never rewritten.
+        const NODEDIST: &[ListingDocument] = &[
+            ListingDocument::filtered("`index.tab`", &["versions"]),
+            ListingDocument::filtered("`index.json`", &["index-json"]),
+        ];
+        // Three text documents (RFC 0010 §4.4). `versions/all` and
+        // `candidates/default` are what `sdk install` resolves through; the
+        // rendered `versions/list` is what `sdk list` prints, filtered in both
+        // of its fixed-width layouts so the console never advertises a JDK the
+        // install then refuses (decision 5). The chokepoint itself,
+        // `candidates/validate`, is not a listing: it answers `invalid` for a
+        // blocked version in the handler.
+        const SDKMAN: &[ListingDocument] = &[
+            ListingDocument::filtered("`versions/all`", &["versions"]),
+            ListingDocument::filtered("`candidates/default`", &["sdkman-default"]),
+            ListingDocument::filtered(
+                "the rendered `versions/list` table (`sdk list`)",
+                &["versions-list"],
+            ),
+        ];
 
         match self {
             Self::Npm => NPM,
@@ -416,6 +485,8 @@ impl RegistryKind {
             Self::Github | Self::Gitlab | Self::Forgejo => FORGE,
             Self::Deb | Self::Rpm | Self::Pacman => SIGNED,
             Self::Openvsx | Self::VscodeMarketplace => EXTENSION_GALLERY,
+            Self::Nodedist => NODEDIST,
+            Self::Sdkman => SDKMAN,
             // `generic` and `jetbrains` mirror an arbitrary file tree by path —
             // there is no listing document in the protocol at all, so there is
             // nothing to say beyond that. (JetBrains *plugins* are the separate
@@ -485,6 +556,14 @@ impl RegistryKind {
                  under `raw/{ref}/`, so a second URL for it would be a second answer to a \
                  solved question",
             ),
+            Self::Nodedist => ReadmeSupport::None(
+                "a Node release is a set of tarballs and a checksum file; the dist tree carries \
+                 no prose",
+            ),
+            Self::Sdkman => ReadmeSupport::None(
+                "SDKMAN describes a distribution, not a package: no document in the protocol \
+                 carries prose about a candidate",
+            ),
         }
     }
 
@@ -535,6 +614,11 @@ impl RegistryKind {
                     "path-addressed: there is no package identity to ask about",
                 )
             }
+            // `index.tab`: one row per release, with its date and LTS codename.
+            Self::Nodedist => UpstreamDetailSupport::Document("versions"),
+            // `versions/all` for the candidate on the default platform — the
+            // identifiers and nothing else; SDKMAN publishes no dates.
+            Self::Sdkman => UpstreamDetailSupport::Document("versions"),
         }
     }
 
@@ -622,6 +706,18 @@ impl RegistryKind {
             Self::Github | Self::Gitlab | Self::Forgejo => FetchSupport::None(
                 "a release asset is addressed by its filename, which the page does not know",
             ),
+            // Maven's reasoning, one tree over: the file name is not a
+            // constant, so warming cannot name it either (RFC 0010 §6.1).
+            Self::Nodedist => FetchSupport::None(
+                "a Node release is a set of files — one per platform, plus headers, source and \
+                 checksums — so \"fetch this version\" has no single meaning",
+            ),
+            // Terraform's reasoning: the artifact needs a platform as well as
+            // a version, and the platform is not a constant (RFC 0010 §6.1).
+            Self::Sdkman => FetchSupport::None(
+                "an SDKMAN artifact is addressed by platform as well as version — one archive \
+                 per platform — so \"fetch this version\" has no single meaning",
+            ),
         }
     }
 
@@ -648,6 +744,86 @@ impl RegistryKind {
         }
     }
 
+    /// The artifact sub-coordinates one version of this kind has, one per
+    /// platform — for the two kinds whose "one artifact per version" is
+    /// really one per platform (RFC 0010 §6.9).
+    ///
+    /// `sdkman` and `nodedist` answer [`Self::fetchable_by_version`] with
+    /// `None` because the platform is not a constant, so the console's fetch
+    /// button cannot name the file. Warming can, once it is *told* the
+    /// platforms: `[registries.cache] warm_platforms`, defaulting to the
+    /// platform this server runs on ([`Self::host_platform`]). Guessing all
+    /// eight SDKMAN platforms would fetch 1.6 GB of JDK to satisfy a one-line
+    /// `.sdkmanrc`.
+    ///
+    /// `None` for every other kind, which keeps [`Self::warm_artifact`] the
+    /// single answer for them.
+    pub fn platform_artifacts(
+        &self,
+        name: &str,
+        version: &str,
+        platforms: &[String],
+    ) -> Option<Vec<String>> {
+        let host;
+        let platforms: &[String] = if platforms.is_empty() {
+            host = [self.host_platform()?.to_owned()];
+            &host
+        } else {
+            platforms
+        };
+        match self {
+            // The platform *is* the artifact: `{c}/{v}/{platform}`.
+            Self::Sdkman => Some(platforms.to_vec()),
+            // The tree's own file names: `node-v22.11.0-linux-x64.tar.xz`,
+            // `.zip` on Windows, `iojs-…` on an io.js tree.
+            Self::Nodedist => Some(
+                platforms
+                    .iter()
+                    .map(|p| {
+                        let ext = if p.starts_with("win") {
+                            "zip"
+                        } else {
+                            "tar.xz"
+                        };
+                        format!("{name}-{version}-{p}.{ext}")
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        }
+    }
+
+    /// The platform this server runs on, spelled the way this kind spells
+    /// platforms — the default for `warm_platforms`.
+    ///
+    /// `None` for the kinds that have no platform axis.
+    pub fn host_platform(&self) -> Option<&'static str> {
+        use std::env::consts::{ARCH, OS};
+        match self {
+            Self::Sdkman => Some(match (OS, ARCH) {
+                ("linux", "x86_64") => "linuxx64",
+                ("linux", "x86") => "linuxx32",
+                ("linux", "aarch64") => "linuxarm64",
+                ("linux", "arm") => "linuxarm32hf",
+                ("macos", "x86_64") => "darwinx64",
+                ("macos", "aarch64") => "darwinarm64",
+                ("windows", "x86_64") => "windowsx64",
+                _ => "exotic",
+            }),
+            Self::Nodedist => Some(match (OS, ARCH) {
+                ("linux", "x86_64") => "linux-x64",
+                ("linux", "aarch64") => "linux-arm64",
+                ("linux", "arm") => "linux-armv7l",
+                ("macos", "x86_64") => "darwin-x64",
+                ("macos", "aarch64") => "darwin-arm64",
+                ("windows", "x86_64") => "win-x64",
+                ("windows", "aarch64") => "win-arm64",
+                _ => "linux-x64",
+            }),
+            _ => None,
+        }
+    }
+
     /// The exact `PackageId` a "fetch this version" runs — the same one the
     /// package manager's own download builds, sub-coordinate and normalisation
     /// included.
@@ -663,6 +839,82 @@ impl RegistryKind {
         self.warm_artifact()
             .map(|artifact| artifact.coordinate(registry, name, version))
     }
+
+    /// The spelling this instance stores and reads `name` under.
+    ///
+    /// Three kinds answer to more than one spelling of the same package and
+    /// their read paths pick one: NuGet lower-cases the id (the flat and
+    /// registration handlers, the client, and [`FetchArtifact::NugetFlat`] all
+    /// do), PyPI applies PEP 503, and a Go module path reaches the proxy from
+    /// the `go` client with every upper-case letter escaped as `!` followed by
+    /// its lower-case form. Every other kind is stored as it was given.
+    ///
+    /// An upstream *search* answers in the display spelling instead — NuGet's
+    /// returns `Newtonsoft.Json`, pkg.go.dev's returns
+    /// `github.com/BurntSushi/toml` — so anything comparing a search hit
+    /// against what the instance holds has to bring both sides here first, or
+    /// it reports a held package as missing and offers to fetch it again
+    /// (RFC 0007-bis §14.11).
+    ///
+    /// Idempotent on every arm: a canonical name is its own canonical form,
+    /// which is what lets a caller apply this to a stored name whose
+    /// provenance it does not know.
+    pub fn canonical_package_name<'a>(&self, name: &'a str) -> std::borrow::Cow<'a, str> {
+        let canonical = match self {
+            Self::Nuget => name.to_lowercase(),
+            Self::Pypi => pep503_name(name),
+            Self::Goproxy => go_module_escape(name),
+            _ => return std::borrow::Cow::Borrowed(name),
+        };
+        if canonical == name {
+            std::borrow::Cow::Borrowed(name)
+        } else {
+            std::borrow::Cow::Owned(canonical)
+        }
+    }
+}
+
+/// PEP 503 name normalisation: lower-case, and runs of `-`, `_` and `.`
+/// collapsed to a single `-`.
+///
+/// The definition the PyPI adapter's `normalize_name` delegates to, so the
+/// simple-index read path and anything comparing against what it stored cannot
+/// drift apart.
+fn pep503_name(name: &str) -> String {
+    let lower = name.to_lowercase();
+    let mut out = String::with_capacity(lower.len());
+    let mut prev_dash = false;
+    for ch in lower.chars() {
+        if ch == '-' || ch == '_' || ch == '.' {
+            if !prev_dash {
+                out.push('-');
+                prev_dash = true;
+            }
+        } else {
+            out.push(ch);
+            prev_dash = false;
+        }
+    }
+    out
+}
+
+/// The GOPROXY protocol's case encoding: an upper-case letter travels as `!`
+/// followed by its lower-case form, because the protocol's paths land on
+/// case-insensitive filesystems.
+///
+/// Idempotent because an already-encoded path has no upper-case letter left to
+/// encode.
+fn go_module_escape(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_uppercase() {
+            out.push('!');
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 /// Whether a version can be fetched by coordinate alone
@@ -797,6 +1049,8 @@ mod tests {
         assert!(!RegistryKind::Gitlab.supports_local_mode());
         assert!(!RegistryKind::Jetbrains.supports_local_mode());
         assert!(!RegistryKind::Generic.supports_local_mode());
+        assert!(!RegistryKind::Nodedist.supports_local_mode());
+        assert!(!RegistryKind::Sdkman.supports_local_mode());
         assert!(RegistryKind::Cargo.supports_local_mode());
         assert!(RegistryKind::Deb.supports_local_mode());
         assert!(RegistryKind::JetbrainsMarketplace.supports_local_mode());
@@ -809,6 +1063,10 @@ mod tests {
         assert!(RegistryKind::Generic.requires_explicit_upstream_in_proxy_mode());
         assert!(!RegistryKind::Pacman.requires_explicit_upstream_in_proxy_mode());
         assert!(!RegistryKind::Npm.requires_explicit_upstream_in_proxy_mode());
+        // `https://nodejs.org/dist` is the default the client itself uses.
+        assert!(!RegistryKind::Nodedist.requires_explicit_upstream_in_proxy_mode());
+        // `https://api.sdkman.io/2` is the default `sdkman-init.sh` sets.
+        assert!(!RegistryKind::Sdkman.requires_explicit_upstream_in_proxy_mode());
         assert!(!RegistryKind::JetbrainsMarketplace.requires_explicit_upstream_in_proxy_mode());
     }
 
@@ -903,6 +1161,10 @@ mod tests {
                 "pacman",
                 "jetbrains",
                 "generic",
+                // Tarballs and a checksum file: no prose anywhere in the tree.
+                "nodedist",
+                // A distribution, not a package: no document carries prose.
+                "sdkman",
             ]
         );
     }
@@ -981,6 +1243,10 @@ mod tests {
             RegistryKind::Github,
             RegistryKind::Goproxy,
             RegistryKind::JetbrainsMarketplace,
+            // Typed, not path-addressed, and that is the whole point of the
+            // kind: `generic` mirrors the same tree and can block nothing on it.
+            RegistryKind::Nodedist,
+            RegistryKind::Sdkman,
         ] {
             assert!(
                 !kind.is_path_addressed(),
@@ -1021,6 +1287,69 @@ mod tests {
         }
     }
 
+    /// The three kinds whose read path stores a package under a name their own
+    /// upstream search does not return.
+    ///
+    /// The catalogue compares a search hit against what the instance holds, and
+    /// an exact comparison is wrong for exactly these: the row says "not held"
+    /// for a package `dotnet restore`, `pip` or `go` would find (RFC 0007-bis
+    /// §14.11).
+    #[test]
+    fn a_kind_canonicalises_a_name_the_way_its_read_path_stores_it() {
+        for (kind, display, stored) in [
+            (RegistryKind::Nuget, "Newtonsoft.Json", "newtonsoft.json"),
+            (RegistryKind::Pypi, "Pillow", "pillow"),
+            (RegistryKind::Pypi, "My_Package.Name", "my-package-name"),
+            (
+                RegistryKind::Goproxy,
+                "github.com/BurntSushi/toml",
+                "github.com/!burnt!sushi/toml",
+            ),
+        ] {
+            assert_eq!(kind.canonical_package_name(display), stored, "{kind}");
+        }
+    }
+
+    /// Applied to a name of unknown provenance — a stored one, say — the answer
+    /// has to be the name itself, or asking in both spellings would ask twice
+    /// for two different wrong things.
+    #[test]
+    fn canonicalising_a_canonical_name_changes_nothing() {
+        for kind in RegistryKind::ALL {
+            for name in [
+                "newtonsoft.json",
+                "pillow",
+                "github.com/!burnt!sushi/toml",
+                "lodash",
+                "@stdlib/string-left-pad",
+            ] {
+                let once = kind.canonical_package_name(name).into_owned();
+                assert_eq!(
+                    kind.canonical_package_name(&once),
+                    once,
+                    "{kind} is not idempotent on {name}"
+                );
+            }
+        }
+    }
+
+    /// Every other kind stores the name it was given, and a canonicaliser that
+    /// invented a rule for one would report a package it holds as missing.
+    #[test]
+    fn a_kind_with_no_rule_leaves_the_name_alone() {
+        for kind in RegistryKind::ALL {
+            if matches!(
+                kind,
+                RegistryKind::Nuget | RegistryKind::Pypi | RegistryKind::Goproxy
+            ) {
+                continue;
+            }
+            for name in ["Lodash", "org.slf4j:slf4j-api", "@scope/Thing"] {
+                assert_eq!(kind.canonical_package_name(name), name, "{kind}");
+            }
+        }
+    }
+
     /// NuGet's flat container is addressed by a lower-cased filename, and
     /// `nuget restore` requests the lower-cased URL — so a fetch of the
     /// mixed-case id the console displays has to normalise, or it writes a
@@ -1048,6 +1377,8 @@ mod tests {
             RegistryKind::Conda,
             RegistryKind::Maven,
             RegistryKind::Terraform,
+            RegistryKind::Nodedist,
+            RegistryKind::Sdkman,
         ] {
             assert!(
                 kind.fetchable_by_version().reason().is_some(),
@@ -1057,6 +1388,65 @@ mod tests {
                 kind.fetch_coordinate("r", "numpy", "1.24.0").is_none(),
                 "{kind} should not produce a fetch coordinate"
             );
+        }
+    }
+
+    /// A block on a JDK means all eight platforms (RFC 0010 decision 8): the
+    /// listing coordinate carries the platform, the blocked-set lookup must
+    /// not. Inert for every other kind.
+    #[test]
+    fn the_blocking_name_drops_sdkmans_platform_and_nothing_else() {
+        assert_eq!(
+            RegistryKind::Sdkman.blocking_package_name("java/linuxx64"),
+            "java"
+        );
+        assert_eq!(
+            RegistryKind::Sdkman.blocking_package_name("java/linuxx64?current=&installed="),
+            "java"
+        );
+        assert_eq!(RegistryKind::Sdkman.blocking_package_name("java"), "java");
+        for kind in RegistryKind::ALL
+            .iter()
+            .filter(|k| **k != RegistryKind::Sdkman)
+        {
+            assert_eq!(kind.blocking_package_name("a/b?c"), "a/b?c", "{kind}");
+        }
+    }
+
+    /// The two platform-addressed kinds warm one file per platform, spelled
+    /// as the tree and the broker spell them; everything else has no
+    /// platform axis and answers `None` here as it does for `warm_artifact`.
+    #[test]
+    fn platform_artifacts_name_one_file_per_platform_for_the_toolchain_kinds() {
+        let platforms = ["linux-x64".to_owned(), "win-x64".to_owned()];
+        assert_eq!(
+            RegistryKind::Nodedist.platform_artifacts("node", "v22.11.0", &platforms),
+            Some(vec![
+                "node-v22.11.0-linux-x64.tar.xz".to_owned(),
+                "node-v22.11.0-win-x64.zip".to_owned(),
+            ])
+        );
+        let platforms = ["linuxx64".to_owned(), "darwinarm64".to_owned()];
+        assert_eq!(
+            RegistryKind::Sdkman.platform_artifacts("java", "21.0.5-tem", &platforms),
+            Some(vec!["linuxx64".to_owned(), "darwinarm64".to_owned()])
+        );
+        // No platforms given: the host's own, which is never empty.
+        let host = RegistryKind::Sdkman
+            .platform_artifacts("java", "21.0.5-tem", &[])
+            .unwrap();
+        assert_eq!(host.len(), 1);
+        assert!(crate::services::sdkman::parse_platform(&host[0]).is_some());
+        for kind in RegistryKind::ALL
+            .iter()
+            .filter(|k| !matches!(k, RegistryKind::Sdkman | RegistryKind::Nodedist))
+        {
+            assert_eq!(
+                kind.platform_artifacts("x", "1.0.0", &platforms),
+                None,
+                "{kind}"
+            );
+            assert_eq!(kind.host_platform(), None, "{kind}");
         }
     }
 

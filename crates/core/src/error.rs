@@ -29,6 +29,22 @@ pub enum CoreError {
     #[error("Package not found: {0}")]
     NotFoundWithheld(String),
 
+    /// This instance does not hold it, and this instance will not dial out
+    /// (RFC 0008 §4.4).
+    ///
+    /// # Why not `NotFound`
+    ///
+    /// `NotFound` asserts the artifact does not exist, which is false — it
+    /// exists, it is simply not here. And on a hybrid registry `NotFound` is
+    /// the signal that means *ask upstream*, which is the one thing an
+    /// air-gapped instance must never do: reusing it would reintroduce
+    /// exactly the confusion [`Self::NotFoundWithheld`] exists to prevent.
+    ///
+    /// It renders as **503**, which a client already reads as "try later" —
+    /// and later, here, means after the next bundle.
+    #[error("{registry}: not held by this instance and it will not dial out ({key})")]
+    ContentUnavailable { registry: String, key: String },
+
     #[error("Storage error: {0}")]
     Storage(String),
 

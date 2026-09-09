@@ -12,7 +12,7 @@
 //! Nothing in the document names a preferred release beyond its position, so
 //! there is nothing to repair — dropping the entry is the whole filter.
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::BlockedVersions;
 
@@ -142,5 +142,368 @@ mod tests {
         let before = doc.clone();
         assert!(strip_releases(&mut doc, &blocked(&["v1.0.0"])).is_empty());
         assert_eq!(doc, before);
+    }
+}
+
+/// Repoint a release document's download URLs at this proxy (RFC 0019 §4.2
+/// *API reads*).
+///
+/// The forge's own JSON advertises `tarball_url`, `zipball_url` and each
+/// asset's `browser_download_url` as absolute upstream URLs. A client that
+/// reads them — `mise`, `gh`, anything that follows the release document
+/// rather than building a path — goes straight to the forge and past the
+/// proxy: no policy, no cache, no audit row, and on a private upstream no
+/// credential either. Rewriting them is what makes the release document mean
+/// the same thing as the routes beside it.
+///
+/// Works on one release object or on a list of them, which is the two shapes
+/// the two routes return. Fields the forge does not carry are not invented,
+/// and any other field is left exactly as it came.
+pub fn rewrite_release_urls(doc: &mut Value, public_base: &str, owner_repo: &str) {
+    let base = public_base.trim_end_matches('/');
+    if base.is_empty() {
+        return;
+    }
+    match doc {
+        Value::Array(items) => {
+            for item in items {
+                rewrite_one(item, base, owner_repo);
+            }
+        }
+        other => rewrite_one(other, base, owner_repo),
+    }
+}
+
+/// The generated-archive URLs, where the document has them.
+fn rewrite_archive_urls(obj: &mut Map<String, Value>, tag: &str, base: &str, owner_repo: &str) {
+    let tag_seg = super::encode_package_segment(tag);
+    for field in ["tarball_url", "zipball_url"] {
+        if !obj.contains_key(field) {
+            continue;
+        }
+        let kind = field.trim_end_matches("_url");
+        obj.insert(
+            field.to_owned(),
+            Value::String(format!("{base}/{owner_repo}/{kind}/{tag_seg}")),
+        );
+    }
+}
+
+/// GitLab's `assets.sources` — the generated archives, one entry per format.
+fn rewrite_gitlab_sources(
+    assets: &mut Map<String, Value>,
+    tag: &str,
+    base: &str,
+    owner_repo: &str,
+) {
+    let Some(sources) = assets.get_mut("sources").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let tag_seg = super::encode_package_segment(tag);
+    let repo = owner_repo.rsplit('/').next().unwrap_or(owner_repo);
+    for source in sources {
+        let Some(src) = source.as_object_mut() else {
+            continue;
+        };
+        let format = src
+            .get("format")
+            .and_then(Value::as_str)
+            .unwrap_or("tar.gz")
+            .to_owned();
+        src.insert(
+            "url".to_owned(),
+            Value::String(format!(
+                "{base}/{owner_repo}/-/archive/{tag_seg}/{repo}-{tag_seg}.{format}"
+            )),
+        );
+    }
+}
+
+/// GitLab's `assets.links` — what the maintainer attached, addressed by name
+/// on the downloads route this proxy serves.
+fn rewrite_gitlab_links(assets: &mut Map<String, Value>, tag: &str, base: &str, owner_repo: &str) {
+    let Some(links) = assets.get_mut("links").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let tag_seg = super::encode_package_segment(tag);
+    for link in links {
+        let Some(l) = link.as_object_mut() else {
+            continue;
+        };
+        let Some(name) = l.get("name").and_then(Value::as_str).map(str::to_owned) else {
+            continue;
+        };
+        let url = Value::String(format!(
+            "{base}/{owner_repo}/-/releases/{tag_seg}/downloads/{}",
+            super::encode_package_segment(&name)
+        ));
+        for field in ["url", "direct_asset_url"] {
+            if l.contains_key(field) {
+                l.insert(field.to_owned(), url.clone());
+            }
+        }
+    }
+}
+
+/// One asset of a GitHub-shaped release.
+///
+/// `url` is **repointed, not removed.** Removing it looked safe and is not:
+/// `url` is a required field of an asset in the GitHub API's own schema, and a
+/// client that deserializes the document strictly fails on the whole release
+/// list rather than on one asset. mise does, and an install through a BatleHub
+/// github registry answered `missing field \`url\`` for every repository until
+/// this was measured — a rule that silently broke the clients it was
+/// protecting. This proxy *does* have an equivalent: `releases/assets/{id}` is
+/// a route it serves, under the same rules as every other artifact, so the
+/// bypass is closed by pointing the field here rather than by deleting it. An
+/// asset with no id — a release composed from held assets on an air-gapped
+/// instance (RFC 0008-bis §13.2), which has no forge id to name — is addressed
+/// by name instead, on the download route the instance holds it under;
+/// measured, again, as `missing field \`url\`` from mise before it was. Only an
+/// asset with neither has the field dropped.
+fn rewrite_github_asset(
+    a: &mut Map<String, Value>,
+    tag: Option<&str>,
+    base: &str,
+    owner_repo: &str,
+) {
+    let name = a.get("name").and_then(Value::as_str).map(str::to_owned);
+    let by_id = a
+        .get("id")
+        .and_then(Value::as_u64)
+        .map(|id| format!("{base}/{owner_repo}/releases/assets/{id}"));
+    // By name where the asset has one, by id otherwise: both are routes this
+    // proxy serves, and the name is the one a human reads.
+    let by_name = tag.zip(name.as_deref()).map(|(tag, name)| {
+        format!(
+            "{base}/{owner_repo}/releases/download/{}/{}",
+            super::encode_package_segment(tag),
+            super::encode_package_segment(name)
+        )
+    });
+    if let (Some(url), true) = (
+        by_name.clone().or_else(|| by_id.clone()),
+        a.contains_key("browser_download_url"),
+    ) {
+        a.insert("browser_download_url".to_owned(), Value::String(url));
+    }
+    match by_id.or(by_name) {
+        Some(url) if a.contains_key("url") => {
+            a.insert("url".to_owned(), Value::String(url));
+        }
+        _ => {
+            a.remove("url");
+        }
+    }
+    a.remove("uploader");
+}
+
+fn rewrite_one(release: &mut Value, base: &str, owner_repo: &str) {
+    let Some(obj) = release.as_object_mut() else {
+        return;
+    };
+    // The tag names the archive coordinates; without one there is nothing to
+    // point at and the upstream URL is left alone rather than replaced by a
+    // path that 404s.
+    let tag = obj
+        .get("tag_name")
+        .or_else(|| obj.get("name"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    if let Some(tag) = &tag {
+        rewrite_archive_urls(obj, tag, base, owner_repo);
+    }
+    // GitLab's release document is a different shape: `assets` is an object
+    // with `sources` (the generated archives, by format) and `links` (what
+    // the maintainer attached). Confirmed against gitlab.com on 2026-09-04.
+    if let Some(assets) = obj.get_mut("assets").and_then(Value::as_object_mut) {
+        if let Some(tag) = &tag {
+            rewrite_gitlab_sources(assets, tag, base, owner_repo);
+            rewrite_gitlab_links(assets, tag, base, owner_repo);
+        }
+        // The forge's own API links: no equivalent here, and a working way
+        // around every rule above.
+        obj.remove("_links");
+        return;
+    }
+    let Some(assets) = obj.get_mut("assets").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for asset in assets {
+        if let Some(a) = asset.as_object_mut() {
+            rewrite_github_asset(a, tag.as_deref(), base, owner_repo);
+        }
+    }
+    obj.remove("assets_url");
+    obj.remove("upload_url");
+}
+
+#[cfg(test)]
+mod rewrite_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn an_asset_without_an_id_keeps_a_url_that_points_at_the_download_route() {
+        let mut doc = json!({
+            "tag_name": "v2.60.0",
+            "assets": [{
+                "name": "gh_2.60.0_linux_amd64.tar.gz",
+                "browser_download_url": "/cli/cli/releases/download/v2.60.0/gh_2.60.0_linux_amd64.tar.gz",
+                "url": "/cli/cli/releases/download/v2.60.0/gh_2.60.0_linux_amd64.tar.gz"
+            }]
+        });
+        rewrite_release_urls(&mut doc, "https://hub/proxy/gh", "cli/cli");
+        let a = &doc["assets"][0];
+        assert_eq!(
+            a["url"],
+            "https://hub/proxy/gh/cli/cli/releases/download/v2.60.0/gh_2.60.0_linux_amd64.tar.gz",
+            "mise reads `url`, and an id-less asset is addressed by name"
+        );
+        assert_eq!(a["url"], a["browser_download_url"]);
+    }
+
+    fn release() -> Value {
+        json!({
+            "tag_name": "v2.60.0",
+            "tarball_url": "https://api.github.com/repos/cli/cli/tarball/v2.60.0",
+            "zipball_url": "https://api.github.com/repos/cli/cli/zipball/v2.60.0",
+            "assets_url": "https://api.github.com/repos/cli/cli/releases/1/assets",
+            "upload_url": "https://uploads.github.com/repos/cli/cli/releases/1/assets{?name,label}",
+            "assets": [{
+                "id": 42,
+                "name": "gh_2.60.0_linux_amd64.tar.gz",
+                "browser_download_url": "https://github.com/cli/cli/releases/download/v2.60.0/gh.tar.gz",
+                "url": "https://api.github.com/repos/cli/cli/releases/assets/42",
+                "uploader": { "login": "someone" },
+                "digest": "sha256:abc"
+            }],
+            "body": "notes with a https://github.com link that is prose, not a download"
+        })
+    }
+
+    #[test]
+    fn every_download_url_points_back_at_the_proxy() {
+        let mut doc = release();
+        rewrite_release_urls(&mut doc, "https://hub.example/proxy/gh", "cli/cli");
+        assert_eq!(
+            doc["tarball_url"],
+            "https://hub.example/proxy/gh/cli/cli/tarball/v2.60.0"
+        );
+        assert_eq!(
+            doc["zipball_url"],
+            "https://hub.example/proxy/gh/cli/cli/zipball/v2.60.0"
+        );
+        assert_eq!(
+            doc["assets"][0]["browser_download_url"],
+            "https://hub.example/proxy/gh/cli/cli/releases/download/v2.60.0/gh_2.60.0_linux_amd64.tar.gz"
+        );
+        // The asset's API URL is *repointed*, not removed: it is a required
+        // field of the GitHub schema, and a client that deserializes the
+        // document strictly — mise does — fails on the whole release list
+        // when it is missing. The route it now names is one this proxy
+        // serves, under the same rules, so the way around is still closed.
+        assert_eq!(
+            doc["assets"][0]["url"],
+            "https://hub.example/proxy/gh/cli/cli/releases/assets/42"
+        );
+        // The ways around the proxy with no equivalent here are gone;
+        // everything else is untouched.
+        assert!(doc["assets"][0].get("uploader").is_none());
+        assert!(doc.get("assets_url").is_none());
+        assert!(doc.get("upload_url").is_none());
+        assert_eq!(doc["assets"][0]["digest"], "sha256:abc");
+        assert!(doc["body"].as_str().unwrap().contains("prose"));
+    }
+
+    /// An asset with no id is addressed by name (RFC 0008-bis §13.2); one
+    /// with neither has no route to name, so the field goes rather than
+    /// pointing at something that would 404.
+    #[test]
+    fn an_asset_with_no_id_is_addressed_by_name_and_one_with_neither_loses_the_field() {
+        let mut doc = json!({
+            "tag_name": "v1",
+            "assets": [{
+                "name": "thing.tar.gz",
+                "url": "https://api.github.com/repos/cli/cli/releases/assets/7",
+            }, {
+                "url": "https://api.github.com/repos/cli/cli/releases/assets/8",
+            }],
+        });
+        rewrite_release_urls(&mut doc, "https://hub.example/proxy/gh", "cli/cli");
+        assert_eq!(
+            doc["assets"][0]["url"],
+            "https://hub.example/proxy/gh/cli/cli/releases/download/v1/thing.tar.gz"
+        );
+        assert!(doc["assets"][1].get("url").is_none());
+    }
+
+    #[test]
+    fn a_listing_is_rewritten_release_by_release() {
+        let mut doc = json!([release(), release()]);
+        rewrite_release_urls(&mut doc, "https://hub.example/proxy/gh", "cli/cli");
+        for item in doc.as_array().unwrap() {
+            assert!(item["tarball_url"]
+                .as_str()
+                .unwrap()
+                .starts_with("https://hub.example/proxy/gh/"));
+        }
+    }
+
+    /// GitLab's shape, as gitlab.com answers it (confirmed 2026-09-04):
+    /// `assets` is an object, its `sources` are the generated archives and
+    /// its `links` are what the maintainer attached.
+    #[test]
+    fn a_gitlab_release_is_rewritten_through_its_own_shape() {
+        let mut doc = json!({
+            "tag_name": "v1.40.0",
+            "assets": {
+                "count": 5,
+                "sources": [
+                    { "format": "zip", "url": "https://gitlab.com/gitlab-org/cli/-/archive/v1.40.0/cli-v1.40.0.zip" },
+                    { "format": "tar.gz", "url": "https://gitlab.com/gitlab-org/cli/-/archive/v1.40.0/cli-v1.40.0.tar.gz" }
+                ],
+                "links": [
+                    { "id": 1, "name": "glab_linux", "url": "https://elsewhere.example/glab", "direct_asset_url": "https://elsewhere.example/glab" }
+                ]
+            },
+            "evidences": [{ "sha": "abc" }],
+            "_links": { "self": "https://gitlab.com/gitlab-org/cli/-/releases/v1.40.0" }
+        });
+        rewrite_release_urls(&mut doc, "https://hub.example/proxy/gl", "gitlab-org/cli");
+        assert_eq!(
+            doc["assets"]["sources"][0]["url"],
+            "https://hub.example/proxy/gl/gitlab-org/cli/-/archive/v1.40.0/cli-v1.40.0.zip"
+        );
+        assert_eq!(
+            doc["assets"]["links"][0]["url"],
+            "https://hub.example/proxy/gl/gitlab-org/cli/-/releases/v1.40.0/downloads/glab_linux"
+        );
+        assert_eq!(
+            doc["assets"]["links"][0]["direct_asset_url"],
+            doc["assets"]["links"][0]["url"]
+        );
+        assert!(doc.get("_links").is_none());
+        // The evidence block is GitLab's own provenance and is left alone —
+        // phase 5 reads it.
+        assert_eq!(doc["evidences"][0]["sha"], "abc");
+    }
+
+    #[test]
+    fn nothing_is_invented_and_no_base_means_no_rewrite() {
+        // No `tag_name`: the archive URLs are left as they came rather than
+        // replaced by a path that would 404.
+        let mut doc = json!({ "tarball_url": "https://api.github.com/x" });
+        rewrite_release_urls(&mut doc, "https://hub.example/proxy/gh", "cli/cli");
+        assert_eq!(doc["tarball_url"], "https://api.github.com/x");
+
+        // A registry with no public base (a test, an unrouted host) leaves
+        // the document alone rather than emitting a relative URL.
+        let mut doc = release();
+        rewrite_release_urls(&mut doc, "", "cli/cli");
+        assert_eq!(
+            doc["tarball_url"],
+            "https://api.github.com/repos/cli/cli/tarball/v2.60.0"
+        );
     }
 }

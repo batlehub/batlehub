@@ -65,9 +65,94 @@ curl -H "Authorization: Bearer my-admin-token" http://localhost:8080/...
 
 ### Loading order
 
-1. The TOML file at the path given to `--config` is parsed (default: `config.toml` in the working directory).
+1. Every TOML file given to `--config` is parsed, in order, and merged into one document (default: `config.toml` in the working directory). See [Layered config files](#layered-config-files) below.
 2. Environment variables matching `PROXY_CACHE__<SECTION>__<FIELD>` are applied on top of the file values.
-3. The config is validated: `config_version` (if set) must not exceed what this binary supports, registry names must not be empty, and registry types must be one of `github`, `npm`, `cargo`, `openvsx`, `vscode-marketplace`, `goproxy`, `maven`, `terraform`, `rubygems`, `composer`, `pypi`, `conda`.
+3. The config is validated: `config_version` (if set) must not exceed what this binary supports, registry names must not be empty, and registry types must parse as one of the types in the `type` row of [the `type` row of the registry table](#_3-5-registries) below.
+
+### Layered config files
+
+`--config` is repeatable. Each further file is a **layer** merged over the ones
+before it, so a deployment can keep its credentials in a file with a different
+lifecycle from the rest of its configuration — a Kubernetes Secret beside a
+ConfigMap, a `0600` file beside a readable one — without giving up hot reload on
+either.
+
+```sh
+batlehub --config /etc/batlehub/config.toml --config /etc/batlehub/credentials.toml
+```
+
+Where only environment variables are available, `BATLEHUB_CONFIG` accepts the
+same list separated by `:`, in the same order:
+
+```sh
+BATLEHUB_CONFIG=/etc/batlehub/config.toml:/etc/batlehub/credentials.toml batlehub
+```
+
+#### Merge rules
+
+Later layers win. The merge happens on the TOML documents, before the config is
+deserialised, so a later layer can complete a table an earlier one opened.
+
+| Shape | Rule |
+| --- | --- |
+| Table over table | Merged key by key. A later layer adds keys without erasing the ones it does not mention. |
+| Array of tables, both sides keyed | Merged entry by entry on `name`, or on `type` when no `name` is present. An entry the base does not have is appended. |
+| Anything else | The later layer replaces the earlier one outright. |
+
+The keyed merge is what lets a credentials layer complete one registry out of
+twenty without restating the other nineteen:
+
+```toml
+# config.toml
+[[registries]]
+name = "npm-priv"
+type = "npm"
+upstreams = ["https://npm.acme.io"]
+
+[[registries]]
+name = "crates"
+type = "cargo"
+```
+
+```toml
+# credentials.toml
+[[registries]]
+name = "npm-priv"
+
+[registries.upstream_auth]
+type = "bearer"
+token = "s3cr3t"
+```
+
+The result is two registries, and `npm-priv` keeps both its upstream and its
+token.
+
+Three details decide the rest:
+
+- **Keying requires the key to be unique on both sides.** Two `[[auth]]` entries
+  that both read `type = "token"` and carry no `name` have no single counterpart
+  in the other layer, so the later array replaces the earlier one rather than
+  the merge guessing which entry pairs with which.
+- **Scalar arrays are replaced, never appended.** Restating `upstreams` in a
+  later layer sets the list; it does not grow it.
+- **An empty array clears the list.** `registries = []` in a later layer means
+  what it says.
+
+Environment placeholders are expanded per layer, before the merge, so a
+`${VAR}` is resolved in the file that wrote it. Validation runs once, on the
+merged document — a layer that is incomplete on its own is the normal case.
+
+#### Hot reload across layers
+
+Every layer is watched, and every reload re-reads all of them. Rotating a
+credential touches only the credentials file, and that alone stages a pending
+reload; see [Hot reload](/guide/hot-reload).
+
+The config editor in the console is the exception, deliberately. It reads and
+rewrites **only the first layer**, so a file holding credentials is never sent
+to a browser and never rewritten from one. What the editor validates and diffs
+is still the merged document, so its preview describes the config that would
+actually be in force.
 
 ### Auth evaluation order
 
@@ -112,6 +197,7 @@ port = 8080             # default
 | `cli_binary_path` | string | — | Path to `batlehub-cli`, served at `GET /api/v1/cli/download` |
 | `trusted_proxies` | string[] | *absent* | CIDR ranges (or bare IPs) of reverse proxies whose `X-Forwarded-*` headers are believed |
 | `signed_urls` | table | *absent* | Signing material for download URLs. See [`[server.signed_urls]`](#server-signed-urls) |
+| `roles` | string[] | `["proxy", "worker"]` | What this process does: `proxy` serves requests and queues scan jobs, `worker` dequeues and scans them. The default is both (an embedded worker). `batlehub --roles worker` overrides it for a scan-only process. See [`[registries.security]`](#registries-security) and [`[worker]`](#scanners-and-worker). |
 
 #### CORS
 
@@ -757,13 +843,15 @@ deny_missing_timestamp = false   # set true to block packages with no timestamp
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `type` | string | yes | `"github"`, `"forgejo"`, `"gitlab"`, `"npm"`, `"cargo"`, `"nuget"`, `"openvsx"`, `"vscode-marketplace"`, `"goproxy"`, `"maven"`, `"terraform"`, `"rubygems"`, `"composer"`, `"pypi"`, `"conda"`, `"deb"`, `"rpm"`, `"pacman"`, `"jetbrains"`, `"jetbrains-marketplace"`, `"generic"` |
+| `type` | string | yes | `"github"`, `"forgejo"`, `"gitlab"`, `"npm"`, `"cargo"`, `"nuget"`, `"openvsx"`, `"vscode-marketplace"`, `"goproxy"`, `"maven"`, `"terraform"`, `"rubygems"`, `"composer"`, `"pypi"`, `"conda"`, `"deb"`, `"rpm"`, `"pacman"`, `"jetbrains"`, `"jetbrains-marketplace"`, `"generic"`, `"nodedist"`, `"sdkman"` |
 | `name` | string | yes | Unique identifier; used in proxy URL paths |
-| `mode` | string | no | `"proxy"` (default), `"local"`, or `"hybrid"`. Supported for `cargo`, `npm`, `openvsx`, `vscode-marketplace`, `goproxy`, `maven`, `terraform`, `rubygems`, `composer`, `pypi`, `conda`, and `jetbrains-marketplace`. See [registry modes](#registry-modes). |
+| `mode` | string | no | `"proxy"` (default), `"local"`, or `"hybrid"`. Supported for `cargo`, `npm`, `nuget`, `openvsx`, `vscode-marketplace`, `jetbrains-marketplace`, `goproxy`, `maven`, `terraform`, `rubygems`, `composer`, `pypi`, `conda`, `deb`, `rpm`, and `pacman`. See [registry modes](#registry-modes). |
 | `upstreams` | string[] | no | Upstream URLs tried in order on cache miss; 404 from one falls through to the next. Defaults to the registry's built-in URL. Required for `hybrid` mode. |
 | `index_url` | string | no | Cargo only: sparse crate index URL. Defaults to `https://index.crates.io`. Required for `hybrid` mode and self-hosted Gitea/Forgejo registries. |
+| `broker_url` | string | no | **sdkman only.** The download broker, the second host of the one protocol. Defaults to `https://broker.sdkman.io`; `upstreams` is the candidates API (`https://api.sdkman.io/2`). An absolute http(s) URL; rejected on any other type ([RFC 0010](/rfc/0010-toolchain-managers) §4.5). |
 | `storage` | string | no | Name of the storage backend. Must match a `[[storage.backends]]` name. Omit to use the default backend. |
 | `path_allow` | string[] | no | Glob allowlist of upstream paths this registry may serve. Only valid for the path-addressed types (`deb`, `rpm`, `pacman`, `jetbrains`, `generic`) — using it elsewhere is a config error. **Required and non-empty for `generic`.** Use `["**"]` to allow everything deliberately. |
+| `on_confirmed` | string | no | RFC 0014 §13 O6 — what the upstream audit does with a disappearance confirmed on *this* registry, `"audit"` or `"block"`. Overrides `[upstream_audit] on_confirmed` for this registry alone; absent, the estate's key applies. `"block"` needs the audit enabled and this registry audited, or the config is refused. |
 | `vuln_db_url` | string | no | **goproxy only.** Upstream URL for the Go Vulnerability Database. Default: `https://vuln.go.dev`. Set to `""` to disable the `/v1/` endpoints. See [Vulnerability Proxy](/use/vulnerability-proxy#_1-go-—-govulncheck-go-vulnerability-database). |
 | `sumdb_url` | string | no | **goproxy only.** Upstream URL for the Go checksum database. Default: `https://sum.golang.org`. Set to `""` to disable `/sumdb/{path}` — do that for a registry serving only private modules, where a lookup would leak private module paths to a public log. |
 | `upstream_auth` | table | no | Credentials sent on every upstream request. See [upstream auth](#upstream_auth). |
@@ -773,7 +861,7 @@ deny_missing_timestamp = false   # set true to block packages with no timestamp
 
 #### Registry modes {#registry-modes}
 
-`cargo`, `npm`, `openvsx`, `vscode-marketplace`, `goproxy`, `maven`, `terraform`, `rubygems`, `composer`, `pypi`, `conda`, and `jetbrains-marketplace` registries support three operating modes, set via the `mode` field:
+`cargo`, `npm`, `nuget`, `openvsx`, `vscode-marketplace`, `jetbrains-marketplace`, `goproxy`, `maven`, `terraform`, `rubygems`, `composer`, `pypi`, `conda`, `deb`, `rpm`, and `pacman` registries support three operating modes, set via the `mode` field. The rest — the git forges, `jetbrains`, `generic`, `nodedist` and `sdkman` — are proxy-only, because they have no publish protocol to host:
 
 | Mode | Description |
 |------|-------------|
@@ -1349,6 +1437,138 @@ BatleHub stores physical artifact bytes at a content-addressed key (`blob/{sha25
 | `admin` | string[] | `[]` | Permissions granted to admins (inherits user and anonymous perms) |
 | `groups` | map | `{}` | Dynamic group permissions (see [Section 4](#_4-permissions-reference)) |
 
+**`[registries.refs]` — Git-forge ref resolution (`github`, `gitlab`, `forgejo` only; RFC 0019):**
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `branch_ttl_secs` | u64 | `60` | How long a branch → commit resolution is trusted before the forge is asked again. Below `10` is a config error: re-resolving on every request is a rate-limit self-DoS. |
+| `tag_ttl_secs` | u64 | `3600` | How long a tag → commit resolution is trusted. Also the latency with which a moved tag is noticed. |
+| `mutable_refs` | string | `"warn"` | What following a branch does. `warn` serves it and says so; `deny` refuses every mutable coordinate, which is what a registry that must be reproducible wants. |
+| `tag_moved` | string | `"deny"` | What a tag that now resolves to a different commit does — and a release asset whose digest changed. Denied by default: these are the two forge-native ways to swap bytes under a stable coordinate. `warn` serves and reports. |
+
+> Every archive (`tarball/{ref}`, `zipball/{ref}`) and raw file is resolved to a commit before it is fetched, and cached under that commit — `main` today and `main` tomorrow are two entries. Every forge response carries `X-BatleHub-Ref-Kind` (`commit`, `tag` or `branch`), `X-BatleHub-Resolved-Commit`, and `X-BatleHub-Ref-Previous-Commit` when the ref moved. A forge registry with no `[registries.upstream_auth]` raises the `forge.anonymous-upstream` warning: anonymous GitHub allows 60 API requests an hour, and ref resolution spends one or two per new ref.
+>
+> With `[registries.security]` these three facts ride the version's verdict, so a warned branch answers `X-BatleHub-Verdict: warned` and `batlehub why` explains it. Without it there is no verdict to carry them: a `deny` is a plain `403` naming the code, and a `warn` is the headers above.
+
+**`[registries.raw]` — Raw file serving (forge kinds only; RFC 0019):** {#registries-raw}
+
+**Off unless written.** Raw content used to be served implicitly on all three
+forges; a registry with no `[registries.raw]` block now refuses it, and the
+refusal names this section. Every forge registry without it raises
+`forge.raw-disabled-but-linked`, because the setup snippet the registry
+generates rewrites the forge's raw host at a path that refuses.
+
+```toml
+[registries.raw]
+enabled        = true
+max_size_bytes = 10485760
+repos          = ["cli/*"]
+require_pinned = false
+scripts        = "warn"
+```
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `enabled` | bool | `false` | Serve raw files at all. |
+| `max_size_bytes` | u64 | `10485760` | Ceiling on one raw file; the stream stops there, so the file is refused rather than truncated. `0` with `enabled` is a config error, and a value above `[limits].max_artifact_size_bytes` is refused because the global ceiling would silently win. |
+| `repos` | string[] | `[]` | `owner/repo` globs (`cli/*`). Empty allows any repository; the list narrows and never widens. A malformed entry is a config error. |
+| `require_pinned` | bool | `false` | Refuse a branch ref (`PINNED_REF_REQUIRED`): raw content that changes under the same URL is what a pinned estate does not want. |
+| `scripts` | string | *see below* | `warn`, `deny` or `ignore` for shell, PowerShell, Python and batch payloads (`RAW_SCRIPT`). **Absent means `deny` when the registry has `[registries.security]`** and `warn` otherwise. |
+
+> `scripts` looks at the file's extension always, and under `deny` at its first
+> bytes too — so an extensionless payload beginning with a shebang is refused
+> as well. The default of `deny` under a security profile is RFC 0019 §11 q2:
+> opting into a quarantine is opting into "nothing unscanned is served", and a
+> single script file is the one artifact none of the scanners reads.
+
+**`[registries.api_reads]` — Typed read-only JSON routes (forge kinds only; RFC 0019):** {#registries-api-reads}
+
+```toml
+[registries.api_reads]
+families = ["tags", "commits", "branches"]
+```
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `families` | string[] | `[]` | Any of `tags`, `commits`, `branches`. Anything else is a config error — `contents` and `git/blobs` are raw content by another door, and `[registries.raw]` is where that decision lives. |
+
+> Each family adds one `GET` under `/proxy/<registry>/<owner>/<repo>/`, answering
+> BatleHub's own shape rather than the forge's: no upstream URL to follow, no
+> field that means something different per forge. A family the registry did not
+> ask for answers `404`. Separately and always, the **release documents** —
+> the listing and the release by tag, on all three forges — have their
+> `tarball_url`, `zipball_url` and asset download URLs repointed at this proxy,
+> so a client that reads the document instead of building a path stays behind
+> the policy, the cache and the audit trail.
+
+**`[registries.security]` — Quarantine and verdicts (optional):** {#registries-security}
+
+Opts the registry into the supply-chain layer of RFC 0018. Every version this
+registry serves then carries a **verdict** — `allowed`, `warned`,
+`quarantined` or `denied` — computed from its age, the scanners' findings,
+the operator's blocks and any SOC verdict. A version whose verdict is not
+served is refused on the download path, with its reason codes, until the
+verdict changes. A registry without the section is untouched.
+
+```toml
+[registries.security]
+mode                   = "block"     # "block" | "warn"
+min_age_secs           = 259200      # never served below this age; floor 3600
+mature_age_secs        = 2592000     # served `warned` while a scan is pending above this age
+hold_missing_timestamp = true        # hold a version the upstream did not date
+scanners               = ["osv"]     # names from [scanners]; "osv" needs no declaration
+required_scanners      = ["osv"]     # all must answer before the version is served
+max_severity           = "high"      # findings at or above this deny (block) or warn
+require_provenance     = false
+deny_install_hooks     = "warn"      # "deny" | "warn" | "ignore"
+scanner_error          = "quarantine" # "quarantine" | "warn" | "ignore"
+
+pullers_window_days    = 30          # how far back a flip alert names who pulled the version
+
+[registries.security.rescan]         # the rescan timer (RFC 0018 phase 4)
+interval_secs = 0                    # > 0: every verdict older than this is scanned again
+on_webhook    = true
+```
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `mode` | string | `"block"` | `block` refuses a version whose verdict is `quarantined` or `denied`; `warn` serves it with the verdict visible. `BLOCK_LIST` and `SOC_VERDICT` deny in both modes. |
+| `min_age_secs` | u64 | `86400` | Below this age a version is held (`MIN_AGE_NOT_MET`) whatever the scanners say. Below `3600` is a config error: an hour is the point of the quarantine. |
+| `mature_age_secs` | u64 | `86400` | Above this age a version whose scan has not returned is served `warned` (`SCAN_PENDING`) and scanned behind the request. `0` never serves unscanned. Must be at least `min_age_secs`. With both at their defaults the scan-hold window is empty — the recommended production profile is 3 days / 30 days. |
+| `hold_missing_timestamp` | bool | `true` | Hold a version the upstream did not date (`TIMESTAMP_MISSING`, open-ended: no `available_at`, and the maturity bypass does not reach it). `false` skips the age gate for it, as `release_age_gate` does by default. On the path-proxy kinds (`deb`, `rpm`, `pacman`, `generic`, `jetbrains`) no version is dated, so `true` holds everything and raises `security.timestamp-hold-unavailable`. |
+| `scanners` | string[] | `["osv"]` | Which scanners the worker runs on this registry. Each name is a `[scanners.<name>]` entry; `osv` is implicit. Every type the RFC names is built: `osv`, `postmortem`, `guarddog`, `trivy`, `sigstore`, and the two external services `socket` (Socket.dev, one call per coordinate, needs `api_key`) and `mlab` (mlab.sh's CVE API, an *enrichment*: it attaches CVSS, EPSS and CISA KEV to the vulnerability findings the others produced and raises a KEV-listed CVE to `critical`; it never creates a finding, so listing it under `required_scanners` warns). A scanner answers under its config key, so a second `osv` pointed at another `api_url` is its own name. |
+| `required_scanners` | string[] | `["osv"]` | Must all have answered before the version is served. Must be a subset of `scanners`. Empty with `mode = "warn"` raises `security.unprotected`: nothing can ever hold a version. |
+| `max_severity` | string | `"high"` | `low`, `medium`, `high` or `critical`. A finding at or above it produces `denied` in `block` mode and `warned` in `warn` mode. |
+| `require_provenance` | bool | `false` | A version without a provenance attestation is `PROVENANCE_MISSING` (a finding at `high`). Only meaningful with a scanner that checks provenance (`sigstore`, phase 3). |
+| `deny_install_hooks` | string | `"warn"` | What an install hook (npm `preinstall`, a Python `setup.py`) is: `deny`, `warn` or `ignore`. Read by the archive scanners of phase 3. |
+| `scanner_error` | string | `"quarantine"` | A scanner that cannot answer after `[worker].max_attempts`: `quarantine` holds the version (`SCANNER_ERROR`, time-bound), `warn` serves it warned, `ignore` drops the finding. |
+| `pullers_window_days` | u32 | `30` | When a rescan moves a *served* version to `denied`, the `verdict_changed` notification names every identity that pulled it inside this window, read from the access log (RFC 0018 decision 23); it is also the default window of `GET /api/v1/verdicts/{registry}/{name}/{version}/pullers` and `batlehub verdicts pullers`. Anonymous pulls are kept under `ip:<addr>`. |
+| `rescan.interval_secs` | u64 | `0` | `> 0`: the rescan scheduler — one per estate, elected with a PostgreSQL advisory lock — queues a `Rescan` (below `FirstSeen` and `Webhook`, above `Backfill`) for every verdict of this registry whose last scan is older than the interval. A verdict that flips from served to `denied` raises the alert above; a hold that lifts raises `artifact_released` to the identities that were refused it. `0` never rescans on a clock; `POST …/rescan` and the `security.rescan` webhook still do. |
+
+> **Where the rules go.** `min_age_secs` *replaces* a `release_age_gate` rule
+> on this registry — declaring both is a config error. The `cve_gate`,
+> `license_gate`, `require_signed_release` and `trusted_publisher` rules, and
+> the administrator's block list, are no longer run as rules on this registry:
+> they run as internal scanners whose denial becomes a finding
+> (`VULNERABILITY`, `LICENSE_DENIED`, `SIGNATURE_MISSING`,
+> `UNTRUSTED_PUBLISHER`, `BLOCK_LIST`), so there is one decision per version
+> and no rule that can fail open beside it. `deny_latest` and `version_gate`
+> stay in the chain; they judge the request, not the artifact.
+>
+> **Who sees why.** A refused download is a plain `403` for everyone; the
+> reason codes and the `batlehub why` hint in the body need `quarantine:read`
+> (granted to `user` and `admin` by default) and the findings behind them
+> need `findings:read` (`admin`). An operator override is a `GateExemption`
+> on the gate `security_verdict` (`gates:exempt`): it turns a hold into
+> `warned`, never into `allowed`, so it stays visible.
+>
+> **What must also be true.** Every `[[notifications.inbound]]` webhook must
+> carry a `secret` once any registry has this section — a `security.*` event
+> on an unsigned webhook would let anyone on the network deny packages. And
+> a process with `worker` in its roles must exist somewhere: a proxy that
+> queues jobs nobody dequeues holds every new version until
+> `mature_age_secs`, and logs a warning at startup when it is alone.
+
 **`[[registries.rules]]` — Release age gate:**
 
 | Field | Type | Default | Notes |
@@ -1363,6 +1583,8 @@ BatleHub stores physical artifact bytes at a content-addressed key (`blob/{sha25
 > - **GitHub** — timestamp populated only for specific-tag release requests (asset downloads). Raw files, source tarballs, and release listings return no timestamp; the gate is skipped for those requests.
 > - **Conda** — timestamp is the `timestamp` field (milliseconds since epoch) in `repodata.json`. Most packages carry it, but older or third-party packages may omit it. Use `deny_missing_timestamp = true` to reject packages without a verifiable build date.
 > - **Terraform providers** — timestamp populated by `registry.terraform.io` but not mandated by the official spec; other Terraform registries may omit it.
+> - **Node distributions (`nodedist`)** — the release date is read from `index.tab`, so current releases carry a timestamp; a release the index no longer lists reaches the gate with none. On this kind `deny_missing_timestamp` is **mandatory**: a `release_age_gate` rule without it is a config error, because the field decides the gate for every de-listed release and neither answer is a default this server picks for you (RFC 0010 §6.7). `true` refuses de-listed releases, `false` serves them.
+> - **SDKMAN (`sdkman`)** — the protocol publishes no dates at all, so every artifact reaches the gate with none and `deny_missing_timestamp` *is* the rule: `true` refuses every download on the registry, `false` makes the gate inert. Mandatory here for the same reason, and a `[registries.security]` block holds on a missing timestamp by default instead.
 
 **`[[registries.rules]]` — Require signed release:**
 
@@ -1575,6 +1797,25 @@ trusted_keys = ["<hex pubkey>"]  # hex-encoded 32-byte Ed25519 public keys trust
 | `trusted_keys` | string[] | `[]` | Hex-encoded 32-byte Ed25519 public keys trusted to sign artifacts in this registry. A download verifies against each in turn; any match passes. |
 
 > **Why Ed25519 only?** RSA-based crypto (the `rsa` crate, and therefore PGP / x509 / the default Sigstore paths) is hard-banned from the dependency tree by `deny.toml` (RUSTSEC-2023-0071). Ed25519 detached-signature verification keeps the tree RSA-free; Sigstore / npm provenance verification is left as a future item for that reason.
+
+#### `[registries.vsx_signing]` {#vsx-signing}
+
+The registry's own signature on every VSIX it publishes ([RFC 0020](/rfc/0020-signing-at-the-vscode-marketplace-registry)), for `vscode-marketplace` and `openvsx` registries. A current VS Code's Extensions view greys out Install on any gallery entry without a signature asset — *This extension is not signed by the Extension Marketplace* — and a registry that holds a key serves one for everything it hosts, in the archive shape Open VSX uses: an Ed25519 signature over the whole `.vsix`, a manifest of its entries, an empty `.signature.p7s`. What it proxies from an upstream that signs (the Microsoft marketplace, an Open VSX instance) is relayed with the upstream's own signature whether or not a key is configured, and never re-signed.
+
+```toml
+[registries.vsx_signing]
+seed_hex = "${VSX_SIGNING_SEED}"   # 32-byte Ed25519 seed, hex — `batlehub-cli vsx keygen` prints one
+key_id   = "2026-09"               # optional; default: the first 16 hex characters of SHA-256(public key)
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `seed_hex` | string | — | The seed, 64 hex characters. A secret of the same class as `repo_signing.seed_hex`: keep it out of the file with `${VAR}`. Rejected at load when it is not 32 bytes of hex. |
+| `key_id` | string | derived | The id the public key is served under, `GET /proxy/{registry}/api/-/public-key/{key_id}` (PEM, anonymous, cached a day). A URL path segment: `[A-Za-z0-9._-]`. Must change when the key does; the default derives it from the key, so it does. |
+
+**What it does.** At publish the registry writes the signature archive beside the artifact and the gallery advertises `Microsoft.VisualStudio.Services.VsixSignature` and `…PublicKey` for the version; the Open VSX document carries `files.signature` and `files.publicKey`. A version published before the key existed is signed on the first request for its archive; a rotated key re-signs the same way, and the served key always verifies the served archive. On a registry in `proxy` mode the key signs nothing (nothing is published there) and a warning says so. A version whose signature archive was **provided** — an upstream's, attached after the publish with `PUT …/{extension_id}/{version}/vsix/signature` (see the [Open VSX page](/registries/openvsx#signatures)) — is never signed over: the registry serves that archive as-is and advertises no key for it.
+
+**What it does not do.** Make a stock VS Code's own verifier pass: that one accepts the marketplace's signature and no other, so on a stock build the view's Install button turns on and the install needs `extensions.verifySignature: false` — the setting code-server, VSCodium and che-code ship off. The [CLI page](/use/cli#gallery-proxy) says where it goes; `batlehub-cli vsx verify` is the check that replaces it.
 
 #### `[registries.upstream_auth]` {#upstream_auth}
 
@@ -2063,6 +2304,171 @@ Scheduled sweeps are audited as `cache_coherence_run` with `user_id = "system"`
 
 ---
 
+### 3.8c `[upstream_audit]` (optional) {#upstream-audit}
+
+A periodic sweep that asks each proxy or hybrid upstream whether the artifacts
+cached from it still exist, confirms a disappearance across several sweeps
+before believing it, and **holds a confirmed artifact back from eviction** so
+the last copy in the estate is not garbage-collected precisely because
+upstream stopped refreshing it (RFC 0014). Off unless asked for: it sends
+scheduled requests to third-party registries.
+
+```toml
+[upstream_audit]
+enabled              = true
+interval_secs        = 21600    # 6 h between sweeps; floor 300
+confirm_after        = 3        # consecutive sweeps a miss must survive
+confirm_min_age_secs = 86400    # …and at least this long since the first miss
+outage_ratio         = 0.25     # above this fraction missing, the sweep is void
+on_confirmed         = "audit"  # or "block": refuse a confirmed disappearance on the wire
+retain_disappeared   = true     # hold confirmed artifacts back from eviction
+skip_recently_seen   = true     # real traffic counts as a successful probe
+registries           = []       # empty = every proxy/hybrid registry
+```
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `enabled` | bool | `false` | Nothing sweeps unless asked. |
+| `interval_secs` | u64 | `21600` | Seconds between sweeps. Below `300` is a config error: a faster loop is a denial of service against someone else's registry, from a typo. |
+| `confirm_after` | u32 | `3` | Consecutive misses, each in a valid sweep, before a disappearance is believed. `0` is refused. |
+| `confirm_min_age_secs` | u64 | `86400` | The other floor: at least this long since the first miss. Both must clear, so with the defaults the fastest confirmation is 24 h. Lowering only `interval_secs` buys more probes and the same answer. |
+| `outage_ratio` | f64 | `0.25` | A sweep in which more than this fraction of a registry's probed packages came back missing is **void**: nothing recorded, nothing confirmed. An outage affects nearly everything; an unpublish affects one thing. Must be in `(0.0, 1.0]`. Below ten probed packages the ratio is skipped and the two floors carry the decision alone. |
+| `on_confirmed` | string | `"audit"` | What a confirmation does beyond recording, holding and notifying, for every audited registry that does not say otherwise. `"block"` also blocks every held version of the name through the admin block list (`blocked_by = system:upstream-audit`), and lifts *its own* block when the package reappears — never an admin's. Any other value is a config error rather than a fallback. A registry overrides this for itself with its own `on_confirmed` (RFC 0014 §13 O6; deepest wins) — auto-block a public upstream, audit-only an internal mirror. See the paragraph below before choosing `"block"`, and the [operations page](/operations/upstream-disappearance) for what it looks like from the console. |
+| `retain_disappeared` | bool | `true` | Hold a confirmed artifact back from the TTL, idle and keep-latest-N eviction passes, and re-pin its cached metadata each sweep. **Not** from the LRU size cap: that exists to stop the disk filling, so held artifacts sort last there instead of being exempt. |
+| `skip_recently_seen` | bool | `true` | A package re-cached from upstream since the last sweep started was demonstrably present; its probe is skipped. |
+| `registries` | string[] | `[]` | Only these registries. Empty means every registry in `proxy` or `hybrid` mode. Naming an unknown or a `local` registry is a config error. |
+
+**What `"block"` costs.** Under `"audit"` the worst outcome of a false
+confirmation is an admin reading a wrong alert. Under `"block"` it is a
+targeted denial of service: an attacker who can serve selective `404`s to
+this instance — control of the path to the upstream, held across the whole
+confirmation window, narrowly enough not to trip `outage_ratio` — picks a
+package the estate depends on and the estate blocks it against itself. That
+position already lets them serve fabricated metadata on a cache miss, so the
+*capability* is not new; the cost is, and it is not fully mitigable. Choose
+`"block"` for an estate whose threat is a withdrawn or hijacked package
+reaching a build; keep the confirmation window long, keep
+`retain_disappeared = true` (without it a blocked package is never read and
+idle eviction deletes the copy the block was keeping —
+`upstream-audit.block-without-hold` warns), and know that turning the policy
+off unblocks nothing: the blocks it wrote are administrative state, listed
+under `system:upstream-audit` in the console's block table, and stay until an
+admin lifts them or the package reappears.
+
+**How a sweep decides.** Per registry: every cached package is probed — one
+listing request per package on the kinds that have a listing document, one
+request per version (25 at most per package per sweep) on the kinds that do
+not, and one `HEAD` per held file on the path-addressed kinds (`deb`, `rpm`,
+`pacman`, `jetbrains`, `generic`), whose rows and blocks then name the file's
+path; an upstream that fails to answer is *inconclusive* and counts on neither
+side of the ratio. A miss inserts or increments a row; a successful probe
+deletes it outright, never decrements it. A confirmed row is logged at `WARN`
+with the coordinate and the misses, appears in the `batlehub_upstream_*`
+gauges and in the console's *Operations → Upstream* table, and is sent to
+every subscription on `package_disappeared_upstream`; a reappearance clears
+the row, logs it and sends `package_reappeared_upstream`; a void sweep sends
+`upstream_unreachable` for the registry. `POST
+/api/v1/admin/upstream/recheck` probes one package now, through the same
+ladder and state machine. **The first sweep after
+enabling finds nothing**, by design — every miss starts at one — and the
+first confirmations arrive after `confirm_min_age_secs`.
+
+**Where it runs.** On the `worker` role (see [`[server].roles`](#31-server)):
+the probe is a scanner on RFC 0018's worker, and `[worker].max_concurrent`
+bounds the simultaneous upstream requests. A proxy-only process with the
+section enabled logs a warning and raises `upstream-audit.no-worker-role`.
+On a registry with [`[registries.security]`](#registries-security) a
+confirmed disappearance is also an `UNPUBLISHED_UPSTREAM` finding on the
+version's verdict — recorded and visible in `batlehub why`, never a hold
+under `"audit"`.
+
+**Metrics.** `batlehub_upstream_missing_total` and
+`batlehub_upstream_disappeared_total` (gauges, per registry),
+`batlehub_upstream_audit_sweeps_total` (counter, `outcome` = `ok` / `void`),
+`batlehub_upstream_audit_duration_seconds`. A rising `void` rate is the
+alert that says the feature has stopped working; a gauge of disappearances
+alone would never show it. The eviction report's `held` count says what the
+hold kept on each pass.
+
+---
+
+### 3.8d `[notifications]` (optional)
+
+Where an event goes when something happens: a version quarantined, an artifact
+that disappeared upstream, a config reload. Absent, nothing is sent.
+
+```toml
+[notifications]
+enabled = true                 # default
+
+[[notifications.channels]]
+name = "ops-slack"
+type = "slack"
+url  = "https://hooks.slack.com/services/..."
+
+[[notifications.channels]]
+name    = "ci-webhook"
+type    = "webhook"
+url     = "https://ci.example.com/hooks/batlehub"
+secret  = "${WEBHOOK_SIGNING_SECRET}"   # signs each POST
+timeout_secs = 10                       # default
+
+[[notifications.inbound]]
+name   = "ci-scanner"
+secret = "${INBOUND_SECRET}"
+```
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `enabled` | bool | `true` | Present-but-off is how you keep the channels declared and stop sending |
+| `channels` | array | `[]` | Outbound. One `[[notifications.channels]]` block each |
+| `inbound` | array | `[]` | Webhooks this server *accepts*. One `[[notifications.inbound]]` block each |
+
+**Channel types.** `type` selects the shape, and the fields differ:
+
+| `type` | Required | Optional |
+|---|---|---|
+| `slack` | `name`, `url` | `timeout_secs` (10) |
+| `teams` | `name`, `url` | `timeout_secs` (10) |
+| `webhook` | `name`, `url` | `secret`, `timeout_secs` (10) |
+| `email` | `name`, `smtp_host`, `from`, `to` | `smtp_port` (587), `smtp_user`, `smtp_password`, `tls` (`true`), `timeout_secs` (10) |
+
+**Only the generic `webhook` signs what it sends.** With `secret` set, each POST
+carries `X-BatleHub-Signature-256: sha256=<hex>`, an HMAC-SHA256 over the body.
+Slack and Teams have no such field because their protocol has none: the secrecy
+of the URL is the whole of their authentication, so treat those URLs as
+credentials and inject them through `env` rather than writing them into the file.
+
+**Inbound webhooks.** Each `[[notifications.inbound]]` block accepts events from
+something else, verified against `X-Hub-Signature-256` when `secret` is set.
+Without a secret **any payload is accepted**, which is suitable only on a network
+where nothing untrusted can reach the port. A registry with
+[`[registries.security]`](#registries-security) makes the secret mandatory: a
+`security.*` event on an unsigned webhook would let anyone on the network deny
+packages.
+
+An inbound name must also be distinct from every
+[`[[flag_sources]]`](#flag-sources) name — the two share a namespace because they
+share the verification scheme.
+
+**Manual management via API:**
+
+- `GET /api/v1/admin/notifications/channels` — the configured outbound channels.
+  Never returns a URL or a secret.
+- `GET /api/v1/admin/notifications/inbound` — the inbound webhooks.
+- `GET` / `POST /api/v1/admin/notifications/subscriptions` — list and create.
+- `GET` / `PUT` / `DELETE /api/v1/admin/notifications/subscriptions/{id}` — one
+  subscription.
+- `POST /api/v1/admin/notifications/subscriptions/{id}/test` — send a test event
+  through it, which is the only way to prove a channel's URL and secret before an
+  incident does.
+
+The same three are `batlehub-cli admin notifications channels|list|delete`; see
+[the CLI reference](/use/cli#notifications). Channels themselves are config, so
+adding one is a config change and a reload, not an API call.
+
+---
+
 ### 3.9 `[subdomain_routing]` (optional)
 
 Every registry is always reachable at `/proxy/{name}/…`. This section adds a
@@ -2164,6 +2570,325 @@ had the feature.
 
 ---
 
+### 3.10 `[scanners]` and `[worker]` (optional) {#scanners-and-worker}
+
+Scanners are declared once, globally, and registries opt in by name in
+[`[registries.security]`](#registries-security). The worker is the process
+role that runs them.
+
+```toml
+[scanners.osv]                       # implicit — declare it only to change something
+type = "osv"
+# api_url = "https://api.osv.dev"
+
+[scanners.socket]                    # Socket.dev: metered, opt-in per registry, key required
+type    = "socket"
+api_key = "${SOCKET_API_KEY}"
+# api_url = "https://api.socket.dev"
+
+[scanners.mlab]                      # mlab.sh CVE API: CVSS/EPSS/KEV on CVE findings (enrichment)
+type    = "mlab"
+# api_key = "${MLAB_API_KEY}"        # optional: the endpoint answers unauthenticated
+# api_url = "https://vuln.mlab.sh"
+
+[scanners.osv.escalation]            # optional, per scanner
+kinds = ["vulnerability"]            # FindingKinds that combine
+count = 3                            # this many at or above `from`…
+from  = "medium"
+to    = "high"                       # …are raised to this severity
+
+[server]
+roles = ["proxy", "worker"]
+
+[worker]
+max_concurrent   = 4                 # scan jobs in flight in this process
+registries       = []                # empty = every registry; else only these names
+job_timeout_secs = 600
+max_attempts     = 3                 # then the verdict carries SCANNER_ERROR
+
+[worker.sandbox]                     # what every binary scanner runs under
+runtime          = "bwrap"           # "none" is refused unless BATLEHUB_UNSAFE_NO_SANDBOX=1
+memory_limit_mb  = 2048              # RLIMIT_AS on the scanner process
+cpu_seconds      = 300               # RLIMIT_CPU
+max_extracted_mb = 512               # the extraction policy's ceiling, refused not truncated
+max_entries      = 50000
+
+# The archive scanners of RFC 0018 phase 3. `command` must be an executable
+# file (or on PATH) in the process that runs the worker role — the worker
+# image (Containerfile.worker) carries all three; the proxy image none.
+[scanners.postmortem]
+type     = "postmortem"
+command  = "/usr/local/bin/postmortem"
+timeline = true                      # npm only: the transition signals (publisher changed, …)
+online   = false                     # `--enrich`; keeps the sandbox's network namespace when true
+
+[scanners.trivy]
+type         = "trivy"
+endpoint     = "http://batlehub-trivy:4954"   # a Trivy server; empty = the client's own database
+timeout_secs = 120
+
+[scanners.guarddog]                  # optional second opinion on npm, PyPI and Go
+type       = "guarddog"
+command    = "/usr/local/bin/guarddog"
+ecosystems = ["npm", "pypi"]
+
+[scanners.sigstore]                  # npm provenance attestations, checked against Rekor
+type        = "sigstore"
+rekor_url   = "https://rekor.sigstore.dev"
+require_for = ["npm"]                # PROVENANCE_MISSING on these kinds; elsewhere absence is silent
+```
+
+| Scanner `type` | Ships in | Keys | Notes |
+|---|---|---|---|
+| `osv` | now | `api_url` | The OSV.dev query already behind `cve_gate`, as a scanner: a vulnerability at or above the registry's `max_severity` is a finding. Runs on every kind with a package URL; the path-proxy kinds, `nodedist`, the marketplaces and Terraform have none. |
+| `postmortem` | now | `command`, `online`, `timeline` | The archive is extracted under the sandbox's policy into the layout its ecosystem keeps a dependency in (`node_modules/<name>`, `site-packages/…`, `vendor/…`), a lockfile is written from the coordinate — never by running the ecosystem's tool — and `postmortem scan --json --no-config` runs inside `bwrap`. Findings: `INSTALL_HOOK`, `MALWARE_SIGNAL` (IOC, obfuscation, sensitive API), `TYPOSQUAT_SUSPECT`; with `timeline`, the transition codes at the scanned version (npm). Covers npm, PyPI, Cargo, RubyGems, Composer, Go, Maven. |
+| `trivy` | now | `endpoint`, `timeout_secs` | The Trivy **client**, against the server at `endpoint` (the chart's `trivy.enabled` deploys one) or its own database when empty. Scans the CycloneDX SBOM this instance already recorded for the artifact, else the extracted archive. Findings: `VULNERABILITY` with the CVE as reference. |
+| `guarddog` | now | `command`, `ecosystems` | DataDog GuardDog on npm, PyPI and Go archives, under the same sandbox. Optional second opinion; not in the default profile, and the only scanner that is not on the worker image — it ships on the `-worker-guarddog` variant, which a deployment runs instead. The rule-to-finding mapping is by rule family and is *read, not observed* until that image runs it. |
+| `sigstore` | now | `rekor_url`, `require_for` | npm provenance: the attestations the packument announces for the version are fetched and every transparency-log entry they cite is looked up in Rekor. `PROVENANCE_MISSING` on the kinds in `require_for`, `PROVENANCE_INVALID` when a cited entry is not in the log. An existence-and-inclusion check, not a full Sigstore verification. |
+| `socket`, `mlab` | RFC 0018 phase 5 | `api_key` for `socket` | `socket` is refused at load without one (a `401` nobody reads otherwise); `mlab`'s CVE API answers unauthenticated, so its key is a rate-limit courtesy rather than a requirement. `mlab` only enriches other findings and is refused in `required_scanners` (`security.enrichment-required`). |
+
+| `[worker]` field | Type | Default | Notes |
+|---|---|---|---|
+| `max_concurrent` | u32 | `4` | Jobs leased at once by this process. |
+| `registries` | string[] | `[]` | Scope the worker to these registry names; each must exist. Empty is every registry. |
+| `job_timeout_secs` | u64 | `600` | A lease that is not completed or heartbeated within this time returns to the queue. |
+| `max_attempts` | u32 | `3` | Attempts before the coordinate's verdict records `SCANNER_ERROR` and the job closes. |
+| `sandbox.runtime` | string | `"bwrap"` | What every binary scanner runs under: new user/pid/ipc/uts namespaces, no network unless the scanner declares it, the root read-only, the per-job directory as the only writable mount, an empty environment, argv passed with no shell. `"none"` runs the bare command and is refused unless `BATLEHUB_UNSAFE_NO_SANDBOX=1`. |
+| `sandbox.memory_limit_mb`, `sandbox.cpu_seconds` | u64 | `2048`, `300` | `RLIMIT_AS` and `RLIMIT_CPU` on the scanner process. |
+| `sandbox.max_extracted_mb`, `sandbox.max_entries` | u64 | `512`, `50000` | The extraction policy: an archive over either is **refused**, never truncated, as is one whose decompression ratio passes 100:1, an entry that escapes the root, a symlink, a hardlink, a device. Nested archives are written and not descended; execute bits are dropped. |
+
+**What a scan needs.** A scanner that reads bytes (`postmortem`, `guarddog`,
+`trivy` without an SBOM) has the worker fetch the version's primary
+artifact — from the cache when it is there, else from upstream, not cached
+— so a profile of metadata-only scanners costs no egress. A kind whose
+version is a *set* of files (PyPI, Maven, conda, Terraform) has no single
+artifact to hand over, and those scanners answer `SCANNER_UNSUPPORTED` for
+it rather than pretending to have looked.
+
+**Where the toolchains live.** Only the worker role opens artifacts, so only
+the worker image (`Containerfile.worker`: bubblewrap, postmortem, the Trivy
+client) carries the tools; the proxy image stays distroless. In the chart,
+`worker.enabled` deploys it as its own Deployment from that image and
+`config.server.roles = ["proxy"]` stops the proxy pod scanning.
+
+GuardDog is the exception. It is the one scanner that is not a static binary
+— it brings a Python interpreter and its own venv — and it is optional, so
+it has an image of its own: `Containerfile.worker-guarddog`, published as
+`…-worker-guarddog`, which is the worker image with GuardDog added. Enabling
+`[scanners.guarddog]` therefore means pointing `worker.image.repository` at
+that variant; the process refuses to start if the `command` is not on the
+image it is running. Nothing else changes — GuardDog is still a subprocess of
+the worker role under the same sandbox.
+
+**How the queue behaves.** Jobs carry a trigger — `FirstSeen` (a user is
+waiting) is dequeued before `Webhook`, `Rescan` and `Backfill`; within a
+tier, oldest first. A job is leased with a heartbeat, so a worker that dies
+mid-scan hands its job to the next one after `job_timeout_secs`. Several
+worker processes share one queue through the database; the live ones are
+counted in `batlehub_workers_live`, and a proxy-only process warns at
+startup when that count is zero.
+
+---
+
+### 3.11 `[[flag_sources]]` (optional) {#flag-sources}
+
+The third parties that may push vulnerability flags ([RFC 0002](/rfc/0002-vulnerability-flags-and-exposure),
+recast by its §13): a SOC, a corporate vulnerability platform, an advisory
+feed. A flag says *what* the source asserts about a package version (`cve`,
+`malware`, `license`, `policy`, or a kind of its own) and *how hard* it wants
+this instance to react (`inform`, `warn`, `gate`, `hard_block`).
+
+```toml
+[[flag_sources]]
+name = "soc"                        # the path segment of the push endpoint
+secret = "hmac-key-from-your-vault" # required, non-empty
+max_effect = "hard_block"           # inform | warn | gate | hard_block; default gate
+registries = ["npm", "pypi"]        # empty (default): any registry
+max_flags_per_minute = 600          # 0 disables the limit
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `name` | — | `[a-z0-9][a-z0-9_-]*`, at most 64 characters, unique — and distinct from every `[[notifications.inbound]]` name, because a `security.verdict` event stores its `hard_block` under the webhook's name and this source's secret is what revokes a flag under that name. The source pushes to `POST /api/v1/flags/{name}` and revokes with `DELETE /api/v1/flags/{name}/{external_id}`. |
+| `secret` | — | HMAC-SHA256 key. The push carries `X-Hub-Signature-256: sha256=<hex>` over the raw body (on a `DELETE`, which has none, over the canonical string `DELETE\n/api/v1/flags/{source}/{external_id}`, so a captured revoke signature lifts only the flag it names), the same scheme `[[notifications.inbound]]` verifies. An unknown name and a bad signature answer the same `404`. |
+| `max_effect` | `gate` | The strongest effect this source may set. A push asking for more is stored at the ceiling and told so (`effect_capped: true`). |
+| `registries` | `[]` | The registries the source may flag. An item naming another one is rejected, per item. |
+| `max_flags_per_minute` | `600` | Items per minute across pushes; over it the whole push is `429` with `Retry-After`. |
+
+**What a flag does.** On a registry with a [`[registries.security]`](#security)
+profile the flag is a finding of the version's verdict: `hard_block` is
+`SOC_VERDICT` and denies under any policy — a version this instance has
+already judged is denied the moment the push is accepted, and the rescan
+that follows re-derives the same answer; `gate` is judged at the pushed
+`severity` against `max_severity`; `warn` and `inform` are recorded for the
+report. On a registry without one, `FlagsRule` reads the flags on every
+request: `hard_block` refuses outright, `gate` borrows the registry's
+`cve_gate` threshold (`high` when none is configured), the other two never
+refuse. An operator override is a gate exemption on the gate `flags`
+(`gates:exempt`, time-boxed, with a reason), on either kind of registry.
+
+**What a flag can name.** One exact `version`, or `version_range = "*"` for
+every version of the package. Any other range is refused per item: a range
+needs the registry kind's version ordering, which is its own RFC.
+
+::: warning A `hard_block` source can refuse every download of what it names
+The server warns at startup (`flag-source.can-hard-block`) for every source
+whose ceiling is `hard_block`. There is no threshold and no role bypass on
+that path; the only relief is a gate exemption on the version.
+:::
+
+The administrator reads what was pushed with `GET /api/v1/admin/flags`
+(`flags:read`) and asks *who pulled a flagged version* with
+`GET /api/v1/admin/exposure` (`audit:read`) — see
+[Incident response](/operations/incident-response#who-pulled-a-flagged-version).
+
+### 3.12 `[air_gap]` (optional) {#air-gap}
+
+A server that **will not dial out** ([RFC 0008](/rfc/0008-mise-in-an-air-gapped-estate)).
+Absent, or `enabled = false`, is exactly today's behaviour; this is additive
+and `config_version` does not move.
+
+```toml
+[air_gap]
+enabled             = true
+bundle_trusted_keys = ["3b1f…"]   # hex ed25519 public keys accepted on import
+synthesise_listings = true        # answer a listing from what this instance holds
+record_misses       = true
+miss_retention_days = 90
+```
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `enabled` | bool | `false` | No proxy-mode registry attempts an upstream connection. A cache hit is served exactly as today; a miss is an immediate `503` naming the registry and coordinate, not a connect error some seconds later. |
+| `bundle_trusted_keys` | string[] | `[]` | Hex-encoded 32-byte ed25519 public keys whose signature an imported bundle must carry. **Required** when `enabled`: an instance whose only content path is unauthenticated is worse than one with no content path. |
+| `synthesise_listings` | bool | `true` | A listing this instance holds no document for — the packument `npm install` reads, the simple page `pip` reads, the release a pinned `mise install` asks for — is composed from the versions it *does* hold and answered `200` with `X-BatleHub-Listing: synthesised` (RFC 0008-bis). Every version such a listing names is served by the next request; a version it does not hold is not named, so the client stops by itself (`ETARGET`, "no matching distribution") instead of retrying a `503`. Composed for npm's packument, PyPI's simple page (PEP 691 JSON and PEP 503 HTML), cargo's sparse index (from the crate's own manifest, read at import), Go's `@v/list`, `@latest` and `.info`, `maven-metadata.xml`, NuGet's flat index, GitHub, Forgejo and GitLab releases (listing and by tag), nodedist's `index.tab`/`index.json`, SDKMAN's `versions/all`, RubyGems' compact index, conda's `repodata.json`, NuGet's registration page and Composer's `p2` (the last four from facts the import reads out of the package). Terraform is not composed and stays a `503`. `false` is RFC 0008's behaviour: every unheld listing a `503` and a recorded miss. Read only under `enabled`. |
+| `record_misses` | bool | `true` | Record what was asked for and not held, one row per `(registry, key)` with a counter. This record is the input to the next bundle. |
+| `miss_retention_days` | u32 | `90` | How long a recorded miss is kept. `0` keeps it until purged by hand. |
+
+**Refused at load**, because each is a contradiction an operator should see
+at boot rather than discover from a log:
+
+| Condition | Why |
+|---|---|
+| `enabled = true` with `[proxy]` or a registry's `[registries.proxy]` | An egress proxy is a route off the site. |
+| `enabled = true` with `warm_packages` or `warm_paths` on any registry | Warming fetches from an upstream this mode guarantees will never be dialled. Seed with a bundle instead. |
+| `enabled = true` with `bundle_trusted_keys = []` | Import would accept any bundle. |
+| A `bundle_trusted_keys` entry that is not 64 hex characters | An unusable key must not read as "signing is configured". |
+| `synthesise_listings = true` with `enabled = false` | The key has no effect on a connected instance and reads as if this one answered listings offline. |
+
+The same hex check now applies to every registry's
+`[registries.signing].trusted_keys`, which had none: a typo there used to
+surface as a `502` on the first download and named nothing.
+
+**Warned about**, because each is legitimate and none means what it looks
+like: a hybrid registry under `enabled = true` behaves as local (its
+fall-through can never reach upstream — `air-gap.hybrid-registry`);
+`bundle_trusted_keys` on a connected instance authorise imports only, which
+is how a bundle is staged (`air-gap.keys-unused`); and a `deb`, `rpm`,
+`pacman`, `jetbrains` or `generic` registry under `enabled = true` gets no
+synthesised index — a signed `Packages` file cannot be re-signed here — so
+its listing stays a `503` while a held file is served by path
+(`air-gap.listing-not-synthesised`).
+
+**What an operator sees.** A miss is `503` with
+`{"code": "content_unavailable", "registry", "coordinate", "bundle_hint"}`;
+a host nothing mirrors, reached through the catch-all rewrite rule, is `501`
+at `/_air-gap/unmirrored/{host}/…` and fetches nothing. A coordinate an
+administrator **blocked** answers `403` and is never recorded as missing — a
+blocked package is not a gap in the mirror. See
+[the air-gap runbook](/operations/air-gap) and
+[pointing mise at BatleHub](/use/mise).
+
+### 3.13 `[[release_imports]]` (optional) {#release-imports}
+
+A forge release into the registry that serves it
+([RFC 0021](/rfc/0021-forge-releases-into-registries)). CI builds an artifact
+and attaches it to a release; a `github`, `gitlab` or `forgejo` registry makes
+that asset *downloadable*, and this makes it **installable** — the extension
+appears in an editor's Extensions view, the package in `pip`'s index, because
+the import publishes it into the registry whose protocol the client speaks.
+
+```toml
+[[release_imports]]
+into          = "vsx-local"              # a local or hybrid registry
+from          = "gh"                     # a configured github/gitlab/forgejo registry
+repo          = "batleforc/batlehub-vsx" # owner/repo on that forge
+assets        = ["*.vsix"]               # globs; never empty
+releases      = "latest"                 # latest | all | a tag
+interval_secs = 3600                     # absent: runs only when asked
+
+[release_imports.as]
+user_id = "svc-release-import"
+groups  = ["config:extension-publishers"]
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `into` | — | The registry published into. Local or hybrid: an import is a publish, and a publish into a proxy-mode registry is a `404`. |
+| `from` | — | The registry fetched through — a configured forge registry, never a URL, so the fetch keeps that registry's credential, allowlist and SSRF guard. |
+| `repo` | — | `owner/repo` on the source forge. |
+| `assets` | — | Asset-name globs, `*` matching any run of characters. Required: a release carries checksums and signatures beside the artifact, and publishing those as packages is what an empty list would do. |
+| `releases` | `latest` | `latest` is the newest release that is neither a draft nor a pre-release. `all` is every published release. Anything else is read as one tag — the only way to import a pre-release. A **draft is never imported**, by any setting. |
+| `interval_secs` | absent | How often this import runs on its own. The floor is 300 s and it applies to the **combined** rate of every import sharing a `from`: a forge's rate limit is spent by the credential, not by any one import. |
+| `as.user_id` | — | Who the publish is. What grants name (`user:<id>`), what quota is charged to, and what the audit row records. |
+| `as.groups` | `[]` | Groups, each written `config:<name>`. The prefix is reserved so a config file cannot mint a group string an identity provider owns. |
+
+**Who it publishes as.** The `as` block declares a *principal*, not a
+credential: no token is minted, stored or sent, because the server is not
+authenticating to itself. It is always a **user**, never an admin — an admin
+skips the namespace-membership check, so an import configured as one could
+publish into any namespace on the target. Check what it may do before the
+first run:
+
+```bash
+batlehub authz explain vsx-local \
+  --subject user:svc-release-import \
+  --action releases:publish \
+  --package batlehub.batlehub-vsx
+```
+
+**Run one now**, whatever the interval says, and import a pre-release by name:
+
+```bash
+batlehub-cli admin import vsx-local
+batlehub-cli admin import vsx-local --tag v1.1.0-rc.1
+```
+
+The same over HTTP, for a pipeline with no CLI:
+
+```bash
+curl -fX POST -H "Authorization: Bearer $TOKEN" \
+  "$HUB/api/v1/admin/registries/vsx-local/import"
+
+curl -fX POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"tag": "v1.1.0-rc.1"}' \
+  "$HUB/api/v1/admin/registries/vsx-local/import"
+```
+
+**Read what is configured and when it last ran.** `GET /api/v1/admin/imports`
+lists every configured import with its last run; the per-registry form is
+`GET /api/v1/admin/registries/{registry}/imports`. Both are what the console's
+[Release Imports](/guide/administration) page reads.
+
+A `last_run` of `null` means the import has **not run**; a run with
+`imported: 0` means it ran and found nothing new. The two are different states
+and the interval makes both normal, which is why they are distinguishable rather
+than both being an empty cell. A run carries `triggered_by` when an operator
+asked, and omits it when the schedule fired.
+
+Asking needs `cache:warm`; the publish itself runs as the principal and needs
+that principal's own `releases:publish`. The response counts what was
+imported, what was **skipped** because the registry already holds it — which is
+what makes an interval free to set — and names every asset that failed.
+
+**On a gallery registry, configure
+[`[registries.vsx_signing]`](#vsx-signing).** An imported extension is signed
+at publish exactly as an uploaded one is, and a current VS Code greys out
+Install on an entry it cannot verify. The config warns at load when the target
+has no key.
+
+---
+
 ## 4. Permissions Reference
 
 ### Roles
@@ -2182,6 +2907,8 @@ Three built-in roles are evaluated with inheritance: `admin` inherits all `user`
 |---|---|
 | `releases:read` | List releases and download release assets |
 | `source:read` | Download source tarballs |
+| `quarantine:read` | See that a version is held or denied, its reason codes and when it becomes available (default: `user`, `admin`) |
+| `findings:read` | See the findings behind those codes — CVE ids, scanner output, SOC text (default: `admin`) |
 | `*` | All permissions (wildcard) |
 
 ### Group-based permissions

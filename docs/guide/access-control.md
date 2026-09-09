@@ -67,6 +67,9 @@ granted to nobody.
 | `stats:read` | read the dashboard's aggregates |
 | `audit:read` | read the audit log |
 | `audit:purge` | delete audit-log entries older than a cutoff |
+| `quarantine:read` | see that a version is held or denied by the supply-chain layer, its reason codes and when it becomes available ([RFC 0018](/rfc/0018-supply-chain-quarantine-and-verdicts)) |
+| `findings:read` | see the findings behind those codes — CVE ids, scanner output, SOC text |
+| `flags:read` | list the vulnerability flags pushed by `[[flag_sources]]` — which source said what about which version ([RFC 0002](/rfc/0002-vulnerability-flags-and-exposure)) |
 
 Fourteen more authorise the **control surfaces** — the server itself rather than
 what is published on it. They were one `require_admin` check until they were
@@ -103,7 +106,7 @@ define them:
 | `npm:dist-tags:write` | `npm` | *reserved* — dist-tags are derived here, so nothing requests it ([RFC 0015](/rfc/0015-grants-on-the-resource-hierarchy) §4.2 has the argument) |
 
 ::: tip The list above is the whole vocabulary
-All 33 verbs, checked against the enum by a test rather than maintained by hand
+All 35 verbs, checked against the enum by a test rather than maintained by hand
 — an earlier version of this table listed three verbs that did not exist, and
 copying one into a config file failed the server at startup.
 :::
@@ -376,9 +379,10 @@ PUT /api/v1/admin/registries/{registry}/policy/version/{package}/{version}/rules
 }
 ```
 
-**Only `cve_gate` and `license_gate` are exemptible**, and the line is not
-arbitrary: an exemptible gate reports a finding a human can *assess*, while every
-other gate establishes an *invariant*. A quarantine a version can skip is not a
+**Only `cve_gate`, `license_gate`, `security_verdict` and `flags` are
+exemptible**, and the line is not arbitrary: an exemptible gate reports a
+finding a human can *assess* — a CVE, a licence, a scanner's verdict, a flag a
+SOC pushed — while every other gate establishes an *invariant*. A quarantine a version can skip is not a
 quarantine, and an unsigned artifact is an absence of evidence rather than a
 finding to accept.
 

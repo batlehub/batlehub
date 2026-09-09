@@ -1,6 +1,6 @@
 # Registries
 
-BatleHub proxies, caches, and privately hosts **21 registry types** — from language package managers to OS package repositories, editor extension marketplaces, and generic file mirrors.
+BatleHub proxies, caches, and privately hosts **23 registry types** — from language package managers to OS package repositories, editor extension marketplaces, and generic file mirrors.
 
 Every registry type can run in one of three **modes**, set per registry in the config:
 
@@ -58,6 +58,15 @@ Five types are **proxy-only** (no private publish model): **GitHub**, **Forgejo*
 | [JetBrains IDEs](./jetbrains) | `jetbrains` | IDE installer archives | proxy-only | ❌ | `download.jetbrains.com` |
 | [Generic mirror](./generic) | `generic` | Any HTTP file tree | proxy-only | ❌ | none — set `upstreams` + `path_allow` |
 
+### Toolchains <Badge type="tip" text="RFC 0010" />
+
+Typed, so a release can be *blocked* rather than merely cached — the identity the generic mirror cannot give the same bytes.
+
+| Registry | `type` | What it proxies | Modes | Publish | Default upstream |
+|----------|--------|-----------------|-------|:-------:|------------------|
+| [Node distributions](./nodedist) | `nodedist` | `index.tab`/`index.json` + release tarballs, `SHASUMS256.txt` byte-exact (nvm, fnm, n, mise) | proxy-only | ❌ | `nodejs.org/dist` |
+| [SDKMAN](./sdkman) | `sdkman` | Candidates API + download broker (the JDK, Gradle, Maven, Kotlin, …); the broker's 302 followed server-side | proxy-only | ❌ | `api.sdkman.io/2` + `broker.sdkman.io` |
+
 ## Feature matrix
 
 Every registry and how its capabilities map across BatleHub's features. The
@@ -92,12 +101,18 @@ Legend: **Ver.** version listing · **Src** source archive · **Bin** binary/ext
 | Pacman / Arch ³ | — | — | — | ✓ | ✓ | — | ✓ | — | — |
 | JetBrains IDEs ³ | — | — | — | — | ✓ | — | ✓ | — | — |
 | Generic ³ | — | — | — | — | ✓ | — | ✓ | — | — |
+| Node distributions | ✓ | ✓ | ✓ | — | ✓ | ✓ ⁴ | ✓ | ✓ ⁵ | — |
+| SDKMAN | ✓ | — | ✓ | — | ✓ | ⚠ ⁴ | ✓ | ✓ ⁵ | — |
 
 > ¹ Conda has no dedicated per-package version listing API. BatleHub synthesises one by scanning `repodata.json` across `noarch`, `linux-64`, `osx-64`, `osx-arm64`, and `win-64`; results are the union of versions found on all available platforms.
 >
 > ² Conda timestamps come from the `timestamp` field in `repodata.json` (ms since epoch). Most packages carry it; packages without one skip the gate unless you set `deny_missing_timestamp = true` on the rule.
 >
 > ³ **Path-addressed** type: artifacts are fetched by file path with no per-package version model, so the structural axes show `—`. These types don't enumerate versions but can pre-warm specific files via `cache.warm_paths`, and are gated with a mandatory `path_allow` allowlist. Deb/RPM/Pacman additionally support signed private hosting (`local`/`hybrid`); JetBrains IDE archives and Generic are proxy-only.
+>
+> ⁴ **Toolchain age gates** (RFC 0010 §6.7): `nodedist` reads the release date from `index.tab`, so current releases are gated and a de-listed one reaches the gate undated; `sdkman` publishes no dates at all, so the gate is decided entirely by `deny_missing_timestamp`. On both kinds that field is **mandatory** on a `release_age_gate` rule.
+>
+> ⁵ **Warming by platform**: a Node release and an SDKMAN version are one archive *per platform*, so `warm_packages` warms the platforms in `cache.warm_platforms`, defaulting to the server's own. The console's per-version fetch button is refused for the same reason.
 >
 > Package Explorer upstream ("Not Yet Proxied") search: Go uses pkg.go.dev; PyPI is exact-name lookup; Terraform combines module search with namespace/exact provider lookup. The release proxies (GitHub/Forgejo/GitLab), VS Code Marketplace, Conda, and the path-addressed types have no upstream search API — see the [Package Explorer guide](/use/package-explorer-search#upstream-search).
 
@@ -116,7 +131,8 @@ says the README arrives when one is first downloaded; **neither** means the page
 answers from what this instance holds and nothing else.
 
 **Fetchable** is whether the page offers a *Fetch this version* button on those
-upstream-only rows. `no` is not a limitation of the button but of the
+upstream-only rows, and whether the catalogue offers one on an upstream search
+result. `no` is not a limitation of the button but of the
 coordinate: a Maven version is a set of files, a Terraform provider is addressed
 by OS and architecture as well as version, a PyPI version is an sdist plus one
 wheel per interpreter and platform, and a conda artifact carries a channel
@@ -148,6 +164,8 @@ any of them. The page says which rather than showing a disabled button — see
 | jetbrains | path-addressed: there is no package identity to hang a README on | — | neither | no |
 | jetbrains-marketplace | the metadata document, already fetched | yes | versions + README | yes |
 | generic | path-addressed: there is no package identity to hang a README on | — | neither | no |
+| nodedist | a Node release is a set of tarballs and a checksum file; the dist tree carries no prose | — | versions only | no |
+| sdkman | SDKMAN describes a distribution, not a package: no document in the protocol carries prose about a candidate | — | versions only | no |
 <!-- END readme-coverage -->
 
 Configured per registry with
@@ -160,7 +178,8 @@ instance](/operations/egress#the-console-s-discovery-read).
 
 Two settings shape what else the page can do: `remote_images = "proxy"` renders
 a README's images through this server rather than charting them, and
-`console_fetch` (on by default) is the *Fetch this version* button. Prose search
+`console_fetch` (on by default) is the *Fetch this version* button, on the
+package page and on the catalogue's upstream rows alike. Prose search
 across stored READMEs is instance-wide and off by default —
 [`[search] readmes`](/guide/admin-config#search-readmes).
 

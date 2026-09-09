@@ -15,30 +15,23 @@ use batlehub_core::{
 
 // ── PEP 503 name normalisation ────────────────────────────────────────────────
 
-/// Normalise a PyPI package name per PEP 503: lower-case, collapse runs of
-/// `[-_.]` into a single `-`.
 /// The PEP 691 media type, sent as `Accept` and echoed as the response's
 /// `Content-Type`. Pinned to `v1` rather than the unversioned
 /// `application/vnd.pypi.simple+json`, which servers may answer with a newer
 /// schema this proxy has not been taught to filter.
 pub const SIMPLE_JSON_ACCEPT: &str = "application/vnd.pypi.simple.v1+json";
 
+/// Normalise a PyPI package name per PEP 503: lower-case, collapse runs of
+/// `[-_.]` into a single `-`.
+///
+/// Delegates to `RegistryKind::canonical_package_name`, which is where the rule
+/// is defined once: the explore catalogue compares a search hit's display
+/// spelling against a stored name through that same function, and a second
+/// definition here could drift from it.
 pub fn normalize_name(name: &str) -> String {
-    let lower = name.to_lowercase();
-    let mut result = String::with_capacity(lower.len());
-    let mut prev_dash = false;
-    for ch in lower.chars() {
-        if ch == '-' || ch == '_' || ch == '.' {
-            if !prev_dash {
-                result.push('-');
-                prev_dash = true;
-            }
-        } else {
-            result.push(ch);
-            prev_dash = false;
-        }
-    }
-    result
+    batlehub_core::entities::RegistryKind::Pypi
+        .canonical_package_name(name)
+        .into_owned()
 }
 
 /// Fetch the Simple API HTML (or JSON) page for a package from the upstream.

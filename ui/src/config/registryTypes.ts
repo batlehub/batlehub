@@ -322,6 +322,26 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
       `Extension IDs follow the <code>publisher.name</code> convention.`,
     snippets: [
       {
+        key: "openvsx-gallery-proxy",
+        label: "Local gallery proxy - for an editor that cannot send a credential",
+        lang: "sh",
+        template: (ctx) =>
+          [
+            `# Stock VS Code has nowhere in product.json to put a token. Run the proxy,`,
+            `# then point the editor at the loopback URL it prints (RFC 0011 4.4).`,
+            `batlehub-cli --server ${ctx.base} auth login`,
+            `batlehub-cli --server ${ctx.base} auth write-token-file`,
+            `batlehub-cli proxy serve --registry ${ctx.registryUrl}`,
+          ].join("\n"),
+        note:
+          `The proxy holds the credential; the editor only ever knows a loopback ` +
+          `URL, which is per run. While no credential resolves it answers a search ` +
+          `with a single <strong>Sign in to BatleHub</strong> entry whose details ` +
+          `are these steps, instead of the empty gallery an anonymous editor sees. ` +
+          `It re-reads the credential file on every request, so a login lands ` +
+          `without restarting anything.`,
+      },
+      {
         key: "openvsx-direct",
         label: "Direct VSIX download URL",
         lang: "text",
@@ -378,7 +398,13 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
           `<code>product.json</code> has nowhere to put a token — so this ` +
           `registry needs <code>anonymous = ["releases:read", "source:read"]</code> ` +
           `under <code>[registries.rbac]</code>, or an ingress that authenticates ` +
-          `in front of BatleHub. Without it the editor finds no extensions.` +
+          `in front of BatleHub. Without it the editor finds no extensions. ` +
+          `An editor that cannot read anonymously reaches this registry through ` +
+          `the <strong>local gallery proxy</strong> tab instead. This registry ` +
+          `can also sign what it hosts (<code>[registries.vsx_signing]</code>): ` +
+          `a current editor offers Install only on an entry that carries a ` +
+          `signature asset, and <code>batlehub-cli vsx verify</code> checks a ` +
+          `download against the registry key.` +
           (ctx.isAuthenticated
             ? ` VSCodium does not support HTTP Basic Auth in ` +
               `<code>product.json</code>. ` +
@@ -399,6 +425,26 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
       `(marketplace.visualstudio.com). Use this for extensions that are only on the Microsoft marketplace and not mirrored on open-vsx.org. ` +
       `Extension IDs follow the <code>publisher.name</code> convention.`,
     snippets: [
+      {
+        key: "vscode-marketplace-gallery-proxy",
+        label: "Local gallery proxy - for an editor that cannot send a credential",
+        lang: "sh",
+        template: (ctx) =>
+          [
+            `# Stock VS Code has nowhere in product.json to put a token. Run the proxy,`,
+            `# then point the editor at the loopback URL it prints (RFC 0011 4.4).`,
+            `batlehub-cli --server ${ctx.base} auth login`,
+            `batlehub-cli --server ${ctx.base} auth write-token-file`,
+            `batlehub-cli proxy serve --registry ${ctx.registryUrl}`,
+          ].join("\n"),
+        note:
+          `The proxy holds the credential; the editor only ever knows a loopback ` +
+          `URL, which is per run. While no credential resolves it answers a search ` +
+          `with a single <strong>Sign in to BatleHub</strong> entry whose details ` +
+          `are these steps, instead of the empty gallery an anonymous editor sees. ` +
+          `It re-reads the credential file on every request, so a login lands ` +
+          `without restarting anything.`,
+      },
       {
         key: "vscode-marketplace-direct",
         label: "Direct VSIX download URL",
@@ -456,7 +502,13 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
           `<code>product.json</code> has nowhere to put a token — so this ` +
           `registry needs <code>anonymous = ["releases:read", "source:read"]</code> ` +
           `under <code>[registries.rbac]</code>, or an ingress that authenticates ` +
-          `in front of BatleHub. Without it the editor finds no extensions.` +
+          `in front of BatleHub. Without it the editor finds no extensions. ` +
+          `An editor that cannot read anonymously reaches this registry through ` +
+          `the <strong>local gallery proxy</strong> tab instead. This registry ` +
+          `can also sign what it hosts (<code>[registries.vsx_signing]</code>): ` +
+          `a current editor offers Install only on an entry that carries a ` +
+          `signature asset, and <code>batlehub-cli vsx verify</code> checks a ` +
+          `download against the registry key.` +
           (ctx.isAuthenticated
             ? ` VSCodium does not support HTTP Basic Auth in ` +
               `<code>product.json</code>. ` +
@@ -1832,6 +1884,165 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
           `Each rewritten URL must still pass its registry's ` +
           `<code>path_allow</code> allowlist — widen the globs ` +
           `if <code>mise install</code> reports a 403.`,
+      },
+    ],
+  },
+  {
+    id: "nodedist",
+    label: "Node (nvm, fnm, n, mise)",
+    fileHint: ".nvmrc",
+    description:
+      `The <code>nodejs.org/dist</code> tree as a typed registry, so a Node release can be ` +
+      `<em>blocked</em> rather than merely cached: <code>index.tab</code> and ` +
+      `<code>index.json</code> are filtered listings, the tarballs and ` +
+      `<code>SHASUMS256.txt</code> are served byte-exact. Read by nvm, fnm, ` +
+      `<code>n</code> and mise. Proxy-only: there is no publish protocol.`,
+    snippets: [
+      {
+        key: "nodedist-env",
+        label: "Client setup",
+        lang: "bash",
+        template: (ctx) => {
+          const reg = `${ctx.registryUrl}/nodedist`;
+          return [
+            `# Export before sourcing nvm.sh — in /etc/profile.d, a Containerfile,`,
+            `# or a CI job's env: block. fnm and n read their own variable.`,
+            `export NVM_NODEJS_ORG_MIRROR="${reg}"`,
+            `export FNM_NODE_DIST_MIRROR="${reg}"`,
+            `export N_NODE_MIRROR="${reg}"`,
+            `export NODEJS_ORG_MIRROR="${reg}"   # mise`,
+            ``,
+            `nvm ls-remote        # reads index.tab through the proxy`,
+            `nvm install 22.11.0  # SHASUMS256.txt and the tarball, cached`,
+          ].join("\n");
+        },
+        note: (ctx) =>
+          ctx.isAuthenticated
+            ? `nvm builds its own <code>curl</code> command and has nowhere to put a header; ` +
+              `libcurl reads <code>~/.netrc</code> without being asked, so add an entry for ` +
+              `this host (see the <em>~/.netrc</em> tab).`
+            : `A blocked release disappears from <code>nvm ls-remote</code> and ` +
+              `<code>nvm install &lt;that version&gt;</code> stops on nvm's own ` +
+              `<em>"Version … not found"</em> — no download is attempted.`,
+      },
+      {
+        key: "nodedist-netrc",
+        label: "~/.netrc",
+        lang: "text",
+        showWhen: (ctx) => ctx.isAuthenticated,
+        template: (ctx) =>
+          [`machine ${ctx.netrcHost}`, `login ${ctx.netrcLogin}`, `password ${ctx.token}`].join(
+            "\n",
+          ),
+        note: `Neither nvm nor fnm can send an <code>Authorization</code> header; both use libcurl, which reads this file.`,
+      },
+      {
+        key: "nodedist-config",
+        label: "Server config",
+        lang: "toml",
+        template: (ctx) =>
+          [
+            `[[registries]]`,
+            `name      = "${ctx.registryName}"`,
+            `type      = "nodedist"`,
+            `mode      = "proxy"                       # the only mode: no publish protocol`,
+            `upstreams = ["https://nodejs.org/dist"]  # the default; io.js takes its own block`,
+            ``,
+            `[registries.rbac]`,
+            `# index.tab / index.json are listings; the files are reads. An install needs both.`,
+            `anonymous = ["releases:read", "releases:list"]`,
+            ``,
+            `# An age gate here must say what it does with a release index.tab no`,
+            `# longer lists (it reaches the gate with no date) — there is no default.`,
+            `# [[registries.rules]]`,
+            `# kind = "release_age_gate"`,
+            `# min_age_secs = 86400`,
+            `# deny_missing_timestamp = false`,
+          ].join("\n"),
+        note:
+          `Run <code>batlehub-cli registry suggest</code> in a project with an ` +
+          `<code>.nvmrc</code> to generate this block with the pinned release under ` +
+          `<code>warm_packages</code>.`,
+      },
+    ],
+  },
+  {
+    id: "sdkman",
+    label: "SDKMAN",
+    fileHint: ".sdkmanrc",
+    description:
+      `SDKMAN's candidates API and download broker as one registry: the JDK, Gradle, ` +
+      `Maven, Kotlin and every other candidate. <code>sdk list</code> and ` +
+      `<code>sdk install</code> resolve through filtered listings, a blocked version answers ` +
+      `<code>invalid</code> at <code>candidates/validate</code>, and the broker's redirect to ` +
+      `the vendor's CDN is followed server-side so the archive is cached here. Proxy-only.`,
+    snippets: [
+      {
+        key: "sdkman-env",
+        label: "Client setup",
+        lang: "bash",
+        template: (ctx) => {
+          const reg = `${ctx.registryUrl}/sdkman`;
+          return [
+            `# Export before sourcing sdkman-init.sh — it sets each variable only`,
+            `# when empty. /etc/profile.d, a Containerfile, or a CI job's env: block.`,
+            `export SDKMAN_CANDIDATES_API="${reg}"`,
+            `export SDKMAN_BROKER_API="${reg}/broker"`,
+            ``,
+            `sdk list java                # the rendered table, blocked versions removed`,
+            `sdk install java 21.0.5-tem  # validate, download through the broker route, hook`,
+          ].join("\n");
+        },
+        note: (ctx) =>
+          ctx.isAuthenticated
+            ? `<code>sdk</code> builds its own <code>curl</code> command and has nowhere to put ` +
+              `a header; libcurl reads <code>~/.netrc</code> without being asked, so add an ` +
+              `entry for this host (see the <em>~/.netrc</em> tab).`
+            : `A blocked version answers <code>invalid</code> at ` +
+              `<code>candidates/validate</code>, so <code>sdk install</code> stops on ` +
+              `SDKMAN's own refusal before any download.`,
+      },
+      {
+        key: "sdkman-netrc",
+        label: "~/.netrc",
+        lang: "text",
+        showWhen: (ctx) => ctx.isAuthenticated,
+        template: (ctx) =>
+          [`machine ${ctx.netrcHost}`, `login ${ctx.netrcLogin}`, `password ${ctx.token}`].join(
+            "\n",
+          ),
+        note: `<code>sdk</code> cannot send an <code>Authorization</code> header; it uses libcurl, which reads this file.`,
+      },
+      {
+        key: "sdkman-config",
+        label: "Server config",
+        lang: "toml",
+        template: (ctx) =>
+          [
+            `[[registries]]`,
+            `name       = "${ctx.registryName}"`,
+            `type       = "sdkman"`,
+            `mode       = "proxy"                        # the only mode: no publish protocol`,
+            `upstreams  = ["https://api.sdkman.io/2"]    # the candidates API (the /2 is part of it)`,
+            `broker_url = "https://broker.sdkman.io"     # the download broker`,
+            ``,
+            `[registries.rbac]`,
+            `# candidates, validate, hooks and healthcheck are listings; the download is a read.`,
+            `anonymous = ["releases:read", "releases:list"]`,
+            ``,
+            `# SDKMAN publishes no dates, so an age gate here is decided entirely by`,
+            `# deny_missing_timestamp: true refuses every download, false makes it inert.`,
+            `# [[registries.rules]]`,
+            `# kind = "release_age_gate"`,
+            `# min_age_secs = 86400`,
+            `# deny_missing_timestamp = false`,
+          ].join("\n"),
+        note:
+          `Egress: <code>api.sdkman.io</code>, <code>broker.sdkman.io</code> and the CDNs the ` +
+          `broker redirects to (<code>github.com</code>, <code>repo.maven.apache.org</code>, ` +
+          `<code>services.gradle.org</code>, …). Run <code>batlehub-cli registry suggest</code> ` +
+          `in a project with an <code>.sdkmanrc</code> to generate this block with its ` +
+          `pinned versions under <code>warm_packages</code>.`,
       },
     ],
   },

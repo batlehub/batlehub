@@ -67,7 +67,7 @@ a result.
 | Criterion | Control | Status | Evidence |
 |-----------|---------|--------|---------|
 | CC9.1 – Identify risks | CVE scanning via `cargo audit` + Trivy + OSV | ✅ Implemented | `docs/contributing/security-scanning.md` |
-| CC9.2 – Vendor risk | SBOM generated per release (CycloneDX); supply-chain scanning via socket.dev badge | ✅ Implemented | `GET /api/v1/admin/sbom/export` |
+| CC9.2 – Vendor risk | SBOM generated per release (CycloneDX); supply-chain scanning via socket.dev badge | ✅ Implemented | `GET /api/v1/sbom/export` |
 
 ---
 
@@ -76,7 +76,7 @@ a result.
 | Criterion | Control | Status | Evidence |
 |-----------|---------|--------|---------|
 | A1.1 – Current processing capacity | Prometheus metrics + Grafana dashboard; capacity planning in docs | ✅ Implemented | `deploy/grafana/batlehub-production.json`, `docs/guide/configuration.md` |
-| A1.2 – Environmental protections | Health endpoint; Prometheus alert for `BatleHubDown` | ✅ Implemented | `GET /api/v1/health`, `deploy/prometheus-alerts.yaml` |
+| A1.2 – Environmental protections | Health endpoint; Prometheus alert for `BatleHubDown` | ✅ Implemented | `GET /healthz`, `GET /api/v1/admin/health`, `deploy/prometheus-alerts.yaml` |
 | A1.3 – Backup and recovery | Postgres pg_dump + S3 rclone sync; restore runbooks | Documented | `docs/operations/disaster-recovery.md` |
 
 ---

@@ -43,8 +43,20 @@ use crate::explain::explain_config;
     about = "BatleHub — smart artifact hub for package registries"
 )]
 struct Cli {
+    /// Config file to read. Repeatable: each further `--config` is a layer
+    /// merged over the ones before it, so credentials can live in a file with
+    /// a different lifecycle from the rest of the configuration (a Kubernetes
+    /// Secret beside a ConfigMap, a 0600 file beside a readable one). Every
+    /// layer is watched for hot reload; only the first is served to, or
+    /// rewritten by, the config editor.
     #[arg(short, long)]
-    config: Option<String>,
+    config: Vec<String>,
+
+    /// What this process does (RFC 0018 §4.1): `proxy`, `worker`, or
+    /// `proxy,worker`. Overrides `[server].roles`; absent means the config's
+    /// value, which defaults to both.
+    #[arg(long, value_delimiter = ',')]
+    roles: Option<Vec<String>>,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -71,59 +83,468 @@ enum Command {
     },
 }
 
+// ── Startup steps ─────────────────────────────────────────────────────────────
+
+/// The subcommands that print something and exit. `true` when one ran.
+fn run_subcommand(cli: &Cli) -> Result<bool> {
+    match &cli.command {
+        Some(Command::DumpSpec) => {
+            let spec = openapi_spec();
+            println!("{}", spec.to_pretty_json().expect("serialize openapi spec"));
+        }
+        Some(Command::HashToken { token }) => {
+            println!("{}", batlehub_adapters::auth::hash_static_token(token));
+        }
+        Some(Command::ExplainConfig { path }) => {
+            // An explicit path explains that one file on its own; otherwise the
+            // whole layer stack, because what a `"*"` expands to is a property
+            // of the merged config and explaining only the primary would print
+            // an expansion the server never uses.
+            let paths = match path {
+                Some(p) => vec![p.clone()],
+                None => config_paths(cli),
+            };
+            explain_config(&paths)?;
+        }
+        None => return Ok(false),
+    }
+    Ok(true)
+}
+
+/// The config files to load, first to last, later layers winning.
+///
+/// `--config` is repeatable. With none given, `BATLEHUB_CONFIG` is read and
+/// split on `:` so a layered setup can be expressed in an environment where
+/// only variables are available (a container image's `ENV`, a systemd unit).
+/// With neither, the historical single `config.toml`.
+///
+/// Never empty: the callers rely on a first element being there to be the
+/// editor's file.
+fn config_paths(cli: &Cli) -> Vec<String> {
+    if !cli.config.is_empty() {
+        return cli.config.clone();
+    }
+    match std::env::var("BATLEHUB_CONFIG") {
+        // `filter` rather than trusting the split: `BATLEHUB_CONFIG=""` and a
+        // trailing `:` both produce empty segments, and an empty path is a
+        // confusing "No such file or directory" rather than the default.
+        Ok(raw) => {
+            let paths: Vec<String> = raw
+                .split(':')
+                .filter(|p| !p.is_empty())
+                .map(str::to_owned)
+                .collect();
+            if paths.is_empty() {
+                vec!["config.toml".to_owned()]
+            } else {
+                paths
+            }
+        }
+        Err(_) => vec!["config.toml".to_owned()],
+    }
+}
+
+/// `--roles`, parsed. Overrides `[server].roles`.
+fn parse_roles(roles: &[String]) -> Result<Vec<batlehub_config::schema::ProcessRole>> {
+    let parsed = roles
+        .iter()
+        .map(|r| r.parse::<batlehub_config::schema::ProcessRole>())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(anyhow::Error::msg)
+        .context("--roles")?;
+    if parsed.is_empty() {
+        anyhow::bail!("--roles: a process that is neither proxy nor worker does nothing");
+    }
+    Ok(parsed)
+}
+
+/// `/metrics` is unauthenticated and was, until RFC 0004, unconditional — it
+/// publishes cache hit rates, per-registry pull volumes and upstream latencies
+/// to anyone who can reach the port. Consulting config here is what makes
+/// `[stats] metrics_enabled = false` mean anything, and what makes the
+/// handler's existing "metrics not configured" branch reachable in a real
+/// server for the first time rather than only in tests.
+fn install_metrics_recorder(
+    config: &batlehub_config::schema::AppConfig,
+) -> Result<Option<metrics_exporter_prometheus::PrometheusHandle>> {
+    if !config.stats.metrics_enabled {
+        tracing::info!("[stats] metrics_enabled = false — /metrics will report 503");
+        return Ok(None);
+    }
+    Ok(Some(
+        PrometheusBuilder::new()
+            .install_recorder()
+            .context("installing Prometheus metrics recorder")?,
+    ))
+}
+
+/// One image client for every registry, because an image host is a third party
+/// by construction: it is not the configured upstream, so none of a registry's
+/// credentials apply to it. It does honour the **global** proxy settings, which
+/// are about this network rather than about any one registry.
+///
+/// A failure here is not fatal, and is visible: `remote_images = "proxy"`
+/// charts images instead, which is what `strip` does and is the answer the
+/// panel already knows how to render.
+fn readme_image_fetcher(
+    config: &batlehub_config::schema::AppConfig,
+) -> Option<Arc<batlehub_adapters::registry::HttpReadmeImageFetcher>> {
+    let opts = batlehub_adapters::registry::http_client::UpstreamHttpOptions {
+        proxy_url: config.proxy.as_ref().map(|p| p.url.clone()),
+        proxy_username: config.proxy.as_ref().and_then(|p| p.username.clone()),
+        proxy_password: config.proxy.as_ref().and_then(|p| p.password.clone()),
+        no_proxy: config.proxy.as_ref().and_then(|p| p.no_proxy.clone()),
+        ..Default::default()
+    };
+    match batlehub_adapters::registry::HttpReadmeImageFetcher::new(&opts) {
+        Ok(fetcher) => Some(Arc::new(fetcher)),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "readme: could not build the image fetcher; images will be charted"
+            );
+            None
+        }
+    }
+}
+
+/// RFC 0008 §4.5, the third warning: an air-gapped registry with nothing cached
+/// answers `503` to everything, and that is worth one line at boot rather than
+/// a support ticket about a mirror that "does not work". Said once, here; the
+/// Air gap page recomputes it, so it stays true after the first import rather
+/// than freezing what was true at startup.
+async fn warn_if_air_gapped_and_empty(
+    config: &batlehub_config::schema::AppConfig,
+    proxy_svc: &Arc<ProxyService>,
+) {
+    if !config.air_gap.as_ref().is_some_and(|a| a.enabled) {
+        return;
+    }
+    let empty = batlehub_web::handlers::air_gap::empty_registries(proxy_svc).await;
+    if empty.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        count = empty.len(),
+        registries = %empty.join(", "),
+        "air gap: these registries hold no cached artifact, so they will answer 503 to \
+         every request until a bundle is imported"
+    );
+}
+
+/// Hourly cache-statistics rollup, so the dashboard's trend survives a deploy
+/// (RFC 0004 §2.3). `history_enabled = false` restores the previous behaviour:
+/// counters since this process started, and nothing older.
+fn spawn_stats_rollup_if_enabled(
+    config: &batlehub_config::schema::AppConfig,
+    proxy_metrics: &Arc<ProxyMetrics>,
+    stats_history: &Arc<dyn batlehub_core::ports::StatsHistoryRepository>,
+    proxy_svc: &Arc<ProxyService>,
+    registry_names: &[String],
+) {
+    if !config.stats.history_enabled {
+        tracing::info!("[stats] history_enabled = false — no rollup recorded");
+        return;
+    }
+    let rollup = Arc::new(batlehub_core::services::StatsRollupService::new(
+        Arc::clone(proxy_metrics),
+        Arc::clone(stats_history),
+        config.stats.history_retention_days,
+    ));
+    watcher::spawn_stats_rollup(rollup, Arc::clone(proxy_svc), registry_names.to_vec());
+    tracing::info!(
+        retention_days = config.stats.history_retention_days,
+        "stats-rollup: hourly cache-statistics history enabled"
+    );
+}
+
+/// Periodic SBOM re-check against the OSV vulnerability database.
+fn spawn_vuln_scan_if_enabled(
+    config: &batlehub_config::schema::AppConfig,
+    sbom_svc: &Arc<batlehub_core::services::SbomService>,
+    vuln_repo: &Arc<dyn VulnerabilityRepository>,
+    advisory_repo: &Arc<dyn batlehub_core::ports::AdvisoryRepository>,
+) -> Result<()> {
+    let Some(vuln_cfg) = config.vulnerability_scan.as_ref().filter(|v| v.enabled) else {
+        return Ok(());
+    };
+    let osv_client = reqwest::Client::builder()
+        .user_agent("batlehub/0.1")
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .context("building OSV HTTP client")?;
+    let scanner = Arc::new(OsvScanner::new(osv_client, vuln_cfg.osv_api_url.clone()));
+    let scan_svc = Arc::new(
+        VulnerabilityScanService::new(
+            Arc::clone(&sbom_svc.repo),
+            scanner,
+            Arc::clone(vuln_repo),
+            vuln_cfg.batch_size as u64,
+        )
+        .with_advisories(Arc::clone(advisory_repo)),
+    );
+    watcher::spawn_periodic_vuln_scan(vuln_cfg.interval_secs, scan_svc);
+    tracing::info!(
+        interval_secs = vuln_cfg.interval_secs,
+        "vuln-scan: periodic SBOM re-check enabled"
+    );
+    Ok(())
+}
+
+/// Periodic collection of storage blobs nothing references. Off unless asked
+/// for: it deletes on a timer with nobody watching, and the on-demand endpoint
+/// covers the deployment that would rather look first.
+fn spawn_coherence_sweep_if_enabled(
+    config: &batlehub_config::schema::AppConfig,
+    eviction_map: &batlehub_web::handlers::back_office::ops::eviction::EvictionServiceMap,
+) {
+    let Some(coh_cfg) = config.cache_coherence.as_ref().filter(|c| c.enabled) else {
+        return;
+    };
+    watcher::spawn_periodic_coherence_sweep(coh_cfg.interval_secs, eviction_map.clone());
+    tracing::info!(
+        interval_secs = coh_cfg.interval_secs,
+        registries = eviction_map.len(),
+        "coherence: periodic orphan sweep enabled"
+    );
+}
+
+/// What the scan worker is wired from. A struct rather than a dozen
+/// parameters: every field is a store `main` has already built, and naming
+/// them at the call site is what makes the wiring readable.
+struct StartWorkerParams<'a> {
+    config: &'a batlehub_config::schema::AppConfig,
+    security_stores: &'a hot_config::SecurityStores,
+    sbom_svc: &'a Arc<batlehub_core::services::SbomService>,
+    hot: &'a batlehub_core::services::hot_config::HotConfigLock,
+    storage: &'a Arc<dyn batlehub_core::ports::StorageBackend>,
+    cache: &'a Arc<dyn batlehub_core::ports::CacheStore>,
+    notification_svc: &'a Option<Arc<batlehub_web::services::NotificationService>>,
+    repo: &'a Arc<PgPackageRepository>,
+}
+
+/// RFC 0018 §5.4 — the worker role: lease scan jobs, run the scanners, record
+/// verdicts. Embedded by default; `--roles worker` runs it alone.
+fn start_scan_worker(p: &StartWorkerParams<'_>) -> Result<()> {
+    let setup::BuiltScanners {
+        scanners,
+        enrichers,
+    } = setup::build_scanners(p.config).context("building scanners")?;
+    let worker = Arc::new(batlehub_core::services::ScanWorker {
+        config: batlehub_core::services::WorkerConfig {
+            worker_id: format!("{}-{}", hostname_or("worker"), std::process::id()),
+            max_concurrent: p.config.worker.max_concurrent,
+            registries: p.config.worker.registries.clone(),
+            job_timeout: std::time::Duration::from_secs(p.config.worker.job_timeout_secs),
+            max_attempts: p.config.worker.max_attempts,
+            idle_poll: std::time::Duration::from_secs(2),
+        },
+        queue: Arc::clone(p.security_stores.queue.as_ref().expect("built above")),
+        verdicts: p.security_stores.service().expect("built above"),
+        workers: p.security_stores.workers.clone(),
+        sboms: Some(Arc::clone(&p.sbom_svc.repo)),
+        hot: Arc::clone(p.hot),
+        scanners,
+        enrichers,
+        storage: Some(Arc::clone(p.storage)),
+        max_artifact_bytes: p
+            .config
+            .limits
+            .max_artifact_size_bytes
+            .unwrap_or(500 * 1024 * 1024),
+        // RFC 0018 phase 4: the flip alert and the release announcement
+        // go through the same channels a publish does, with the pullers
+        // read from the same access log the audit page reads.
+        notifier: p.notification_svc.as_ref().map(|n| {
+            Arc::new(batlehub_web::services::NotificationSinkAdapter(Arc::clone(
+                n,
+            ))) as Arc<dyn batlehub_core::ports::NotificationSink>
+        }),
+        events: Some(Arc::clone(p.repo) as Arc<dyn batlehub_core::ports::PackageRepository>),
+    });
+    tokio::spawn(Arc::clone(&worker).run());
+    // RFC 0018 phase 4: the rescan timer, one per estate — every worker
+    // process ticks, the one holding the advisory lock queues.
+    if p.config.registries.iter().any(|r| {
+        r.security
+            .as_ref()
+            .and_then(|s| s.rescan.as_ref())
+            .is_some_and(|x| x.interval_secs > 0)
+    }) {
+        let scheduler = Arc::new(batlehub_core::services::RescanScheduler {
+            verdicts: Arc::clone(p.security_stores.verdicts.as_ref().expect("built above")),
+            queue: Arc::clone(p.security_stores.queue.as_ref().expect("built above")),
+            hot: Arc::clone(p.hot),
+            cache: Some(Arc::clone(p.cache)),
+            batch: 500,
+        });
+        watcher::spawn_rescan_scheduler(scheduler);
+        tracing::info!("security: rescan scheduler started");
+    }
+    tracing::info!(
+        max_concurrent = p.config.worker.max_concurrent,
+        registries = ?p.config.worker.registries,
+        "security worker: started"
+    );
+    Ok(())
+}
+
+/// A proxy-only process with a quarantine and nobody scanning: the §4.3
+/// warning, from the heartbeat table rather than a guess.
+async fn warn_if_no_worker(security_stores: &hot_config::SecurityStores, quarantined: &[String]) {
+    let live = match &security_stores.workers {
+        Some(w) => w.live_count(120).await.unwrap_or(0),
+        None => 0,
+    };
+    metrics::gauge!("batlehub_workers_live").set(live as f64);
+    if live == 0 {
+        tracing::warn!(
+            registries = ?quarantined,
+            "security: no worker has sent a heartbeat in the last two minutes; versions of \
+             these registries below mature_age_secs will stay refused with SCAN_PENDING \
+             until one runs (start a process with --roles worker)"
+        );
+    }
+}
+
+/// What the upstream audit is wired from.
+struct UpstreamAuditParams<'a> {
+    config: &'a batlehub_config::schema::AppConfig,
+    is_worker: bool,
+    security_stores: &'a hot_config::SecurityStores,
+    hot: &'a batlehub_core::services::hot_config::HotConfigLock,
+    cache: &'a Arc<dyn batlehub_core::ports::CacheStore>,
+    repo: &'a Arc<PgPackageRepository>,
+    admin_svc: &'a Arc<AdminService>,
+    notification_svc: &'a Option<Arc<batlehub_web::services::NotificationService>>,
+}
+
+/// RFC 0014: the upstream audit, on the worker role (§13). A proxy-only
+/// process with it enabled is told, once, that it is not the one sweeping. The
+/// handle is returned for the admin surface (§4.6): `recheck` drives the same
+/// probe on demand.
+fn build_upstream_audit(
+    p: &UpstreamAuditParams<'_>,
+) -> Option<Arc<batlehub_core::services::UpstreamAuditService>> {
+    if !p.config.upstream_audit.enabled {
+        return None;
+    }
+    if !p.is_worker {
+        tracing::warn!(
+            "upstream audit: enabled, but this process has no worker role; the sweep runs \
+             on a worker, and unless another process has that role nothing is audited"
+        );
+        return None;
+    }
+    // Built by `SecurityStores` whenever the audit is enabled, so this is the
+    // impossible branch rather than a second "not audited" case.
+    let status = p.security_stores.upstream_status.clone()?;
+    let audit = &p.config.upstream_audit;
+    let svc = batlehub_core::services::UpstreamAuditService::new(
+        Arc::new(batlehub_adapters::db::PgArtifactMetaRepository::new(
+            p.repo.pool(),
+        )) as Arc<dyn batlehub_core::ports::ArtifactInventory>,
+        status,
+        Arc::clone(p.hot),
+        Some(Arc::clone(p.cache)),
+        p.security_stores.queue.clone(),
+        batlehub_core::services::UpstreamAuditPolicy {
+            confirm_after: audit.confirm_after,
+            confirm_min_age: std::time::Duration::from_secs(audit.confirm_min_age_secs),
+            outage_ratio: audit.outage_ratio,
+            retain_disappeared: audit.retain_disappeared,
+            skip_recently_seen: audit.skip_recently_seen,
+            metadata_pin_ttl: std::time::Duration::from_secs(2 * audit.interval_secs),
+            on_confirmed: audit.on_confirmed.parse().unwrap_or_default(),
+        },
+        p.config.worker.max_concurrent as usize,
+        p.config.upstream_audit_registries(),
+    );
+    // RFC 0014 §4.5: a transition is reported through the same channels a
+    // publish is. No notification service (disabled in config) means the sweep
+    // records and holds, and tells nobody.
+    let svc = match p.notification_svc {
+        Some(n) => svc.with_notifier(Arc::new(batlehub_web::services::NotificationSinkAdapter(
+            Arc::clone(n),
+        ))),
+        None => svc,
+    };
+    // RFC 0014 §4.3, §6.5: under `"block"` the sweep writes through the same
+    // service an admin's block goes through, so the block is in shape and in
+    // the audit trail exactly theirs. Whether a registry blocks is decided per
+    // registry (§13 O6), so the pen is always handed over.
+    let svc = svc.with_admin(Arc::clone(p.admin_svc));
+    log_blocking_registries(p.config, &svc);
+    let svc = Arc::new(svc);
+    watcher::spawn_upstream_audit(audit.interval_secs, Arc::clone(&svc));
+    tracing::info!(
+        interval_secs = audit.interval_secs,
+        confirm_after = audit.confirm_after,
+        confirm_min_age_secs = audit.confirm_min_age_secs,
+        on_confirmed = %audit.on_confirmed,
+        registries = ?p.config.upstream_audit_registries(),
+        "upstream audit: enabled"
+    );
+    Some(svc)
+}
+
+/// §4.4: the setting that can break a build is said once, at startup, where an
+/// operator reading the log will see it.
+fn log_blocking_registries(
+    config: &batlehub_config::schema::AppConfig,
+    svc: &batlehub_core::services::UpstreamAuditService,
+) {
+    let blocking_registries: Vec<&str> = config
+        .registries
+        .iter()
+        .filter(|r| r.on_confirmed.as_deref() == Some("block"))
+        .map(|r| r.name.as_str())
+        .collect();
+    if !svc.blocks() && blocking_registries.is_empty() {
+        return;
+    }
+    tracing::info!(
+        blocked_by = batlehub_core::services::upstream_audit::SYSTEM_ACTOR,
+        estate = %config.upstream_audit.on_confirmed,
+        registries_blocking = ?blocking_registries,
+        "upstream audit: on_confirmed = \"block\" — a confirmed disappearance is \
+         refused on the wire through the admin block list; a reappearance lifts only \
+         this audit's own blocks"
+    );
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    match cli.command {
-        Some(Command::DumpSpec) => {
-            let spec = openapi_spec();
-            println!("{}", spec.to_pretty_json().expect("serialize openapi spec"));
-            return Ok(());
-        }
-        Some(Command::HashToken { token }) => {
-            println!("{}", batlehub_adapters::auth::hash_static_token(&token));
-            return Ok(());
-        }
-        Some(Command::ExplainConfig { ref path }) => {
-            let path = path
-                .clone()
-                .or_else(|| cli.config.clone())
-                .unwrap_or_else(|| "config.toml".to_owned());
-            explain_config(&path)?;
-            return Ok(());
-        }
-        None => {}
+    if run_subcommand(&cli)? {
+        return Ok(());
     }
 
-    let config_path = cli
-        .config
-        .or_else(|| std::env::var("BATLEHUB_CONFIG").ok())
-        .unwrap_or_else(|| "config.toml".to_string());
-    let config = batlehub_config::load(&config_path)
-        .with_context(|| format!("loading config from '{config_path}'"))?;
+    let config_paths = config_paths(&cli);
+    let mut config = batlehub_config::load_layered(&config_paths)
+        .with_context(|| format!("loading config from {}", config_paths.join(", ")))?;
+    // The first layer is the one the config editor reads and rewrites; the rest
+    // are merged over it and never leave the process.
+    let (config_path, config_overlays) = config_paths
+        .split_first()
+        .map(|(first, rest)| (first.clone(), rest.to_vec()))
+        .expect("config_paths is never empty");
+    if let Some(roles) = cli.roles {
+        config.server.roles = parse_roles(&roles)?;
+    }
+    let roles = config.server.roles.clone();
+    let is_proxy = roles.contains(&batlehub_config::schema::ProcessRole::Proxy);
+    let is_worker = roles.contains(&batlehub_config::schema::ProcessRole::Worker);
+    tracing::info!(?roles, "process roles");
 
-    // `/metrics` is unauthenticated and was, until RFC 0004, unconditional —
-    // it publishes cache hit rates, per-registry pull volumes and upstream
-    // latencies to anyone who can reach the port. Consulting config here is
-    // what makes `[stats] metrics_enabled = false` mean anything, and what
-    // makes the handler's existing "metrics not configured" branch reachable
-    // in a real server for the first time rather than only in tests.
-    let prometheus_handle = if config.stats.metrics_enabled {
-        Some(
-            PrometheusBuilder::new()
-                .install_recorder()
-                .context("installing Prometheus metrics recorder")?,
-        )
-    } else {
-        tracing::info!("[stats] metrics_enabled = false — /metrics will report 503");
-        None
-    };
+    let prometheus_handle = install_metrics_recorder(&config)?;
 
     let _tracer_provider = watcher::init_tracing(config.otel.as_ref());
-    tracing::info!(config = %config_path, "batlehub starting");
+    tracing::info!(config = %config_paths.join(", "), "batlehub starting");
 
     let repo = Arc::new(
         PgPackageRepository::new(
@@ -177,10 +598,6 @@ async fn main() -> Result<()> {
     let artifact_meta = Arc::new(PgArtifactMetaRepository::new(repo.pool()));
     let vuln_repo: Arc<dyn VulnerabilityRepository> =
         Arc::new(PgVulnerabilityRepository::new(repo.pool()));
-    let admin_svc = Arc::new(
-        AdminService::new(repo.clone() as Arc<dyn batlehub_core::ports::PackageRepository>)
-            .with_vulnerability_repo(Arc::clone(&vuln_repo)),
-    );
     let local_registry_backend = Arc::new(PostgresLocalRegistry::new(repo.pool()));
     stores::spawn_pending_publish_cleanup(Arc::clone(&local_registry_backend));
     let quota_svc = Arc::new(builders::build_quota_service(
@@ -222,6 +639,67 @@ async fn main() -> Result<()> {
     // licence through it; `build_sbom_service` below wraps the same repository.
     let sbom_repo: Arc<dyn batlehub_core::ports::SbomRepository> =
         Arc::new(batlehub_adapters::db::PgSbomRepository::new(repo.pool()));
+    // RFC 0019 §5.2 — where forge refs are remembered and the rate-limit
+    // budget the forge clients share. In the database because it is the one
+    // store every deployment has, and because the budget only means something
+    // if every process on the token reads the same row.
+    let forge_stores = hot_config::ForgeStores {
+        ref_resolutions: Some(Arc::new(
+            batlehub_adapters::db::PgRefResolutionRepository::new(repo.pool()),
+        )),
+        rate_limit_budget: Some(Arc::new(batlehub_adapters::db::PgRateLimitBudget::new(
+            repo.pool(),
+        ))),
+        artifact_meta: Some(
+            Arc::clone(&artifact_meta) as Arc<dyn batlehub_core::ports::ArtifactCacheMeta>
+        ),
+    };
+    // RFC 0018 §6.3 — verdicts, the leased scan queue and worker heartbeats,
+    // all in PostgreSQL: the one store every deployment has, and the only
+    // thing the proxy and worker roles share.
+    // RFC 0002 (recast): pushed flags and the exposure report's scan state.
+    let advisory_repo: Arc<dyn batlehub_core::ports::AdvisoryRepository> = Arc::new(
+        batlehub_adapters::db::PgAdvisoryRepository::new(repo.pool()),
+    );
+    // RFC 0008 §6.3 — the miss log. Always wired: a connected instance
+    // records nothing because nothing refuses, and an instance that later
+    // turns the mode on has the table already.
+    let air_gap_stores = hot_config::AirGapStores {
+        miss_recorder: Some(Arc::new(batlehub_adapters::db::PgMissRecorder::new(
+            repo.pool(),
+        ))),
+        bundle_history: Some(Arc::new(batlehub_adapters::db::PgBundleHistory::new(
+            repo.pool(),
+        ))),
+    };
+    // RFC 0021 §6.5: the console's "last run". Always constructed, like the
+    // air-gap stores above and for the same reason — the table exists whether
+    // or not any `[[release_imports]]` is configured, and one that is added
+    // later has its history from the first run rather than from the next
+    // restart.
+    let import_history: Arc<dyn batlehub_core::ports::ImportHistory> = Arc::new(
+        batlehub_adapters::db::release_import::PgImportHistory::new(repo.pool()),
+    );
+
+    let security_stores = hot_config::SecurityStores {
+        advisories: Some(Arc::clone(&advisory_repo)),
+        verdicts: Some(Arc::new(batlehub_adapters::db::PgVerdictRepository::new(
+            repo.pool(),
+        ))),
+        queue: Some(Arc::new(batlehub_adapters::db::PgScanQueue::new(
+            repo.pool(),
+        ))),
+        workers: Some(Arc::new(batlehub_adapters::db::PgWorkerRegistry::new(
+            repo.pool(),
+        ))),
+        // RFC 0014: only when the audit is on. Absent, the presence scanner is
+        // not built and the eviction hold holds nothing — the pre-0014 tree.
+        upstream_status: config.upstream_audit.enabled.then(|| {
+            Arc::new(batlehub_adapters::db::PgUpstreamStatusStore::new(
+                repo.pool(),
+            )) as Arc<dyn batlehub_core::ports::UpstreamStatusPort>
+        }),
+    };
 
     let (
         init_hot,
@@ -240,6 +718,9 @@ async fn main() -> Result<()> {
         &grant_repo,
         &Some(Arc::clone(&policy_repo)),
         &Some(Arc::clone(&signing_key_store)),
+        &forge_stores,
+        &security_stores,
+        &air_gap_stores,
     )?;
     let warming_clients: HashMap<String, Arc<dyn batlehub_core::ports::RegistryClient>> = init_hot
         .registries
@@ -247,6 +728,15 @@ async fn main() -> Result<()> {
         .map(|(k, v)| (k.clone(), Arc::clone(v)))
         .collect();
     let hot = new_hot_lock(init_hot);
+    // Built after the hot lock because block/unblock propagate into the verdict
+    // pipeline it carries: on a `[security]` registry `BlockListRule` is not in
+    // the download chain, so a block that only writes the status row would never
+    // reach the gate (RFC 0018 §6.1).
+    let admin_svc = Arc::new(
+        AdminService::new(repo.clone() as Arc<dyn batlehub_core::ports::PackageRepository>)
+            .with_vulnerability_repo(Arc::clone(&vuln_repo))
+            .with_hot_config(hot.clone()),
+    );
 
     let sbom_svc = stores::build_sbom_service(repo.pool())?;
     // Per-registry README capture is configured in `HotConfig::readme` and
@@ -276,23 +766,8 @@ async fn main() -> Result<()> {
     // party by construction: it is not the configured upstream, so none of a
     // registry's credentials apply to it. It does honour the **global** proxy
     // settings, which are about this network rather than about any one registry.
-    match batlehub_adapters::registry::HttpReadmeImageFetcher::new(
-        &batlehub_adapters::registry::http_client::UpstreamHttpOptions {
-            proxy_url: config.proxy.as_ref().map(|p| p.url.clone()),
-            proxy_username: config.proxy.as_ref().and_then(|p| p.username.clone()),
-            proxy_password: config.proxy.as_ref().and_then(|p| p.password.clone()),
-            no_proxy: config.proxy.as_ref().and_then(|p| p.no_proxy.clone()),
-            ..Default::default()
-        },
-    ) {
-        Ok(fetcher) => readme_svc = readme_svc.with_image_fetcher(Arc::new(fetcher)),
-        // Not fatal, and visible: `remote_images = "proxy"` charts images
-        // instead, which is what `strip` does and is the answer the panel
-        // already knows how to render.
-        Err(e) => tracing::warn!(
-            error = %e,
-            "readme: could not build the image fetcher; images will be charted"
-        ),
+    if let Some(fetcher) = readme_image_fetcher(&config) {
+        readme_svc = readme_svc.with_image_fetcher(fetcher);
     }
     let readme_svc = Arc::new(readme_svc);
     let proxy_svc = Arc::new(ProxyService {
@@ -300,12 +775,20 @@ async fn main() -> Result<()> {
         storage: storage.clone(),
         cache: cache.clone(),
         repo: repo.clone() as Arc<dyn batlehub_core::ports::PackageRepository>,
-        artifact_meta,
+        artifact_meta: Arc::clone(&artifact_meta)
+            as Arc<dyn batlehub_core::ports::ArtifactCacheMeta>,
         metrics: Arc::clone(&proxy_metrics),
         sbom: Some(Arc::clone(&sbom_svc)),
         readme: Some(Arc::clone(&readme_svc)),
         discovery: Default::default(),
     });
+
+    // RFC 0008 §4.5, the third warning: an air-gapped registry with nothing
+    // cached answers `503` to everything, and that is worth one line at boot
+    // rather than a support ticket about a mirror that "does not work". Said
+    // once, here; the Air gap page recomputes it, so it stays true after the
+    // first import rather than freezing what was true at startup.
+    warn_if_air_gapped_and_empty(&config, &proxy_svc).await;
 
     let ip_block_store = stores::create_ip_block_store(&config, repo.pool()).await?;
     let user_block_repo = stores::create_user_block_repository(repo.pool());
@@ -341,11 +824,16 @@ async fn main() -> Result<()> {
         warm_coordinator,
         Arc::clone(&proxy_metrics),
     );
+    let release_imports = setup::build_release_import_map(&config, &warming_clients, &local_svc);
     let eviction_map = setup::build_eviction_map(
         &config,
         storage.clone(),
         repo.pool(),
         repo.clone() as Arc<dyn batlehub_core::ports::PackageRepository>,
+        security_stores
+            .upstream_status
+            .clone()
+            .filter(|_| config.upstream_audit.retain_disappeared),
     );
     let access_config = new_access_lock(init_access);
     // Prose search, shared between the app and the reload path so an operator
@@ -371,6 +859,9 @@ async fn main() -> Result<()> {
         grant_repo.clone(),
         Some(Arc::clone(&policy_repo)),
         Some(Arc::clone(&signing_key_store)),
+        forge_stores.clone(),
+        security_stores.clone(),
+        air_gap_stores.clone(),
         settled_text_config,
     );
     // Built once here so the same instance is shared with the reload service (for
@@ -397,6 +888,7 @@ async fn main() -> Result<()> {
         // reach the policy those two actually read.
         proxy_trust: proxy_trust.clone(),
         config_path: config_path.clone(),
+        config_overlays: config_overlays.clone(),
         config_change_repo: Some(Arc::clone(&config_change_repo)),
         hot_reload_enabled,
         builder: hot_builder,
@@ -408,8 +900,8 @@ async fn main() -> Result<()> {
     reload_svc.set_warnings(config.warnings());
 
     if hot_reload_enabled {
-        watcher::spawn_config_watcher(config_path.clone(), Arc::clone(&reload_svc));
-        tracing::info!("hot reload: enabled (watching {})", config_path);
+        watcher::spawn_config_watcher(config_paths.clone(), Arc::clone(&reload_svc));
+        tracing::info!("hot reload: enabled (watching {})", config_paths.join(", "));
     } else {
         tracing::info!("hot reload: disabled (BATLEHUB_DISABLE_HOT_RELOAD=1)");
     }
@@ -419,58 +911,77 @@ async fn main() -> Result<()> {
         "listening"
     );
     watcher::spawn_startup_warming(&config, &warming_map);
+    watcher::spawn_release_imports(&config, &release_imports, Some(Arc::clone(&import_history)));
 
     // Hourly cache-statistics rollup, so the dashboard's trend survives a
     // deploy (RFC 0004 §2.3). `history_enabled = false` restores the previous
     // behaviour: counters since this process started, and nothing older.
-    if config.stats.history_enabled {
-        let rollup = Arc::new(batlehub_core::services::StatsRollupService::new(
-            Arc::clone(&proxy_metrics),
-            Arc::clone(&stats_history),
-            config.stats.history_retention_days,
-        ));
-        watcher::spawn_stats_rollup(rollup, Arc::clone(&proxy_svc), registry_names.clone());
-        tracing::info!(
-            retention_days = config.stats.history_retention_days,
-            "stats-rollup: hourly cache-statistics history enabled"
-        );
-    } else {
-        tracing::info!("[stats] history_enabled = false — no rollup recorded");
-    }
+    spawn_stats_rollup_if_enabled(
+        &config,
+        &proxy_metrics,
+        &stats_history,
+        &proxy_svc,
+        &registry_names,
+    );
 
     // Periodic SBOM re-check against the OSV vulnerability database.
-    if let Some(vuln_cfg) = config.vulnerability_scan.as_ref().filter(|v| v.enabled) {
-        let osv_client = reqwest::Client::builder()
-            .user_agent("batlehub/0.1")
-            .connect_timeout(std::time::Duration::from_secs(30))
-            .timeout(std::time::Duration::from_secs(60))
-            .build()
-            .context("building OSV HTTP client")?;
-        let scanner = Arc::new(OsvScanner::new(osv_client, vuln_cfg.osv_api_url.clone()));
-        let scan_svc = Arc::new(VulnerabilityScanService::new(
-            Arc::clone(&sbom_svc.repo),
-            scanner,
-            Arc::clone(&vuln_repo),
-            vuln_cfg.batch_size as u64,
-        ));
-        watcher::spawn_periodic_vuln_scan(vuln_cfg.interval_secs, scan_svc);
-        tracing::info!(
-            interval_secs = vuln_cfg.interval_secs,
-            "vuln-scan: periodic SBOM re-check enabled"
-        );
+    spawn_vuln_scan_if_enabled(&config, &sbom_svc, &vuln_repo, &advisory_repo)?;
+
+    // RFC 0018 §5.4 — the worker role: lease scan jobs, run the scanners,
+    // record verdicts. Embedded by default; `--roles worker` runs it alone.
+    let quarantined: Vec<String> = config
+        .registries
+        .iter()
+        .filter(|r| r.security.is_some())
+        .map(|r| r.name.clone())
+        .collect();
+    if is_worker {
+        start_scan_worker(&StartWorkerParams {
+            config: &config,
+            security_stores: &security_stores,
+            sbom_svc: &sbom_svc,
+            hot: &hot,
+            storage: &storage,
+            cache: &cache,
+            notification_svc: &notification_svc,
+            repo: &repo,
+        })?;
+    } else if !quarantined.is_empty() {
+        warn_if_no_worker(&security_stores, &quarantined).await;
+    }
+    // RFC 0014: the upstream audit, on the worker role (§13). A proxy-only
+    // process with it enabled is told, once, that it is not the one sweeping.
+    // The handle is kept for the admin surface (§4.6): `recheck` drives the
+    // same probe on demand.
+    //
+    // Built *above* the worker-only early return, because the sweep is a worker
+    // job: below it, a `--roles worker` process never reached this call and a
+    // `--roles proxy` process declines to sweep, so the documented split
+    // deployment swept nowhere and no `upstream_status` row was ever written.
+    let upstream_audit = build_upstream_audit(&UpstreamAuditParams {
+        config: &config,
+        is_worker,
+        security_stores: &security_stores,
+        hot: &hot,
+        cache: &cache,
+        repo: &repo,
+        admin_svc: &admin_svc,
+        notification_svc: &notification_svc,
+    });
+
+    if !is_proxy {
+        tracing::info!("proxy role absent: serving only /livez and /metrics");
+        return server_factory::run_worker_only_server(
+            format!("{}:{}", config.server.host, config.server.port),
+            prometheus_handle,
+        )
+        .await;
     }
 
     // Periodic collection of storage blobs nothing references. Off unless asked
     // for: it deletes on a timer with nobody watching, and the on-demand
     // endpoint covers the deployment that would rather look first.
-    if let Some(coh_cfg) = config.cache_coherence.as_ref().filter(|c| c.enabled) {
-        watcher::spawn_periodic_coherence_sweep(coh_cfg.interval_secs, eviction_map.clone());
-        tracing::info!(
-            interval_secs = coh_cfg.interval_secs,
-            registries = eviction_map.len(),
-            "coherence: periodic orphan sweep enabled"
-        );
-    }
+    spawn_coherence_sweep_if_enabled(&config, &eviction_map);
 
     server_factory::run_actix_server(server_factory::ServerParams {
         bind_addr: format!("{}:{}", config.server.host, config.server.port),
@@ -499,6 +1010,8 @@ async fn main() -> Result<()> {
         oidc_provider_names,
         login_states,
         warming_map,
+        release_imports,
+        import_history: Some(Arc::clone(&import_history)),
         eviction_map,
         proxy_metrics,
         prometheus_handle,
@@ -507,6 +1020,9 @@ async fn main() -> Result<()> {
         notification_svc,
         notification_store,
         notifications_config: config.notifications.clone(),
+        upstream_audit,
+        artifact_inventory: Arc::clone(&artifact_meta)
+            as Arc<dyn batlehub_core::ports::ArtifactInventory>,
         local_svc,
         quota_svc,
         registry_mode_map,
@@ -516,6 +1032,20 @@ async fn main() -> Result<()> {
         beta_channel_store,
         team_namespace_store,
         policy_repo,
+        bundle_history: air_gap_stores.bundle_history.clone().expect("built above"),
+        advisory_repo: Arc::clone(&advisory_repo),
+        flag_svc: Arc::new(batlehub_core::services::FlagService::new(
+            Arc::clone(&advisory_repo),
+            Arc::clone(&hot),
+        )),
+        flag_sources: batlehub_web::FlagSources(config.flag_sources.clone()),
+        exposure_config: batlehub_web::ExposureConfig {
+            sbom_registries: config
+                .registries
+                .iter()
+                .filter(|r| r.sbom.is_some())
+                .count() as u64,
+        },
         ip_blocking_cfg,
         proxy_trust,
         registry_host_map,
@@ -527,4 +1057,167 @@ async fn main() -> Result<()> {
         storage_admin_repo,
     })
     .await
+}
+
+/// The host name, for a worker id that says where it ran.
+fn hostname_or(fallback: &str) -> String {
+    std::fs::read_to_string("/etc/hostname")
+        .map(|s| s.trim().to_owned())
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| fallback.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `config_paths` reads `BATLEHUB_CONFIG` from the single process-wide
+    /// environment table, so the tests that set it must not interleave.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Run `f` with `BATLEHUB_CONFIG` set to `value`, or unset when `None`,
+    /// restoring whatever was there before.
+    fn with_env<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var("BATLEHUB_CONFIG").ok();
+        // SAFETY: serialised by ENV_LOCK, so no other thread in this binary's
+        // test run reads or writes the variable while it is being changed.
+        unsafe {
+            match value {
+                Some(v) => std::env::set_var("BATLEHUB_CONFIG", v),
+                None => std::env::remove_var("BATLEHUB_CONFIG"),
+            }
+        }
+        let out = f();
+        unsafe {
+            match previous {
+                Some(v) => std::env::set_var("BATLEHUB_CONFIG", v),
+                None => std::env::remove_var("BATLEHUB_CONFIG"),
+            }
+        }
+        out
+    }
+
+    fn cli(args: &[&str]) -> Cli {
+        let mut argv = vec!["batlehub"];
+        argv.extend_from_slice(args);
+        Cli::parse_from(argv)
+    }
+
+    // ── Layer order ───────────────────────────────────────────────────────────
+    //
+    // Order is the whole semantics: later layers win, and the *first* is the one
+    // the config editor reads and rewrites. A resolver that returned the paths in
+    // any other order would put credentials in the editor and let the base config
+    // overwrite them, both silently.
+
+    #[test]
+    fn a_single_config_flag_is_one_layer() {
+        let paths = with_env(None, || config_paths(&cli(&["--config", "a.toml"])));
+        assert_eq!(paths, vec!["a.toml".to_owned()]);
+    }
+
+    #[test]
+    fn repeated_config_flags_keep_their_order() {
+        let paths = with_env(None, || {
+            config_paths(&cli(&[
+                "--config",
+                "base.toml",
+                "--config",
+                "credentials.toml",
+            ]))
+        });
+        assert_eq!(
+            paths,
+            vec!["base.toml".to_owned(), "credentials.toml".to_owned()]
+        );
+    }
+
+    #[test]
+    fn the_short_flag_repeats_the_same_way() {
+        let paths = with_env(None, || {
+            config_paths(&cli(&["-c", "base.toml", "-c", "credentials.toml"]))
+        });
+        assert_eq!(
+            paths,
+            vec!["base.toml".to_owned(), "credentials.toml".to_owned()]
+        );
+    }
+
+    // ── The environment fallback ──────────────────────────────────────────────
+
+    #[test]
+    fn batlehub_config_supplies_one_path() {
+        let paths = with_env(Some("/etc/batlehub/config.toml"), || {
+            config_paths(&cli(&[]))
+        });
+        assert_eq!(paths, vec!["/etc/batlehub/config.toml".to_owned()]);
+    }
+
+    /// The list form, for the places where only environment variables are
+    /// available — a container image's `ENV`, a systemd unit.
+    #[test]
+    fn batlehub_config_splits_a_colon_separated_list_in_order() {
+        let paths = with_env(
+            Some("/etc/batlehub/config.toml:/etc/batlehub/credentials/credentials.toml"),
+            || config_paths(&cli(&[])),
+        );
+        assert_eq!(
+            paths,
+            vec![
+                "/etc/batlehub/config.toml".to_owned(),
+                "/etc/batlehub/credentials/credentials.toml".to_owned(),
+            ]
+        );
+    }
+
+    /// An empty segment is a path of `""`, which fails to open with a "No such
+    /// file or directory" naming nothing — far worse than falling back.
+    #[test]
+    fn empty_segments_are_dropped_rather_than_becoming_empty_paths() {
+        let paths = with_env(Some("/etc/batlehub/config.toml:"), || {
+            config_paths(&cli(&[]))
+        });
+        assert_eq!(paths, vec!["/etc/batlehub/config.toml".to_owned()]);
+    }
+
+    #[test]
+    fn an_empty_batlehub_config_falls_back_to_the_default() {
+        let paths = with_env(Some(""), || config_paths(&cli(&[])));
+        assert_eq!(paths, vec!["config.toml".to_owned()]);
+
+        let only_separators = with_env(Some("::"), || config_paths(&cli(&[])));
+        assert_eq!(only_separators, vec!["config.toml".to_owned()]);
+    }
+
+    // ── Precedence and the default ────────────────────────────────────────────
+
+    /// The flag is the explicit instruction and the variable is the ambient one,
+    /// so the flag wins outright rather than the two being concatenated — a
+    /// merge of the two would make the effective config depend on an
+    /// environment the operator did not mention on the command line.
+    #[test]
+    fn the_flag_wins_over_the_environment_entirely() {
+        let paths = with_env(Some("/etc/batlehub/from-env.toml"), || {
+            config_paths(&cli(&["--config", "from-flag.toml"]))
+        });
+        assert_eq!(paths, vec!["from-flag.toml".to_owned()]);
+    }
+
+    #[test]
+    fn with_neither_flag_nor_variable_the_default_is_a_single_config_toml() {
+        let paths = with_env(None, || config_paths(&cli(&[])));
+        assert_eq!(paths, vec!["config.toml".to_owned()]);
+    }
+
+    /// Every caller indexes the first element to find the editor's file, so an
+    /// empty result would be a panic at startup rather than a bad config.
+    #[test]
+    fn the_result_is_never_empty() {
+        for env in [None, Some(""), Some(":"), Some("a.toml")] {
+            let paths = with_env(env, || config_paths(&cli(&[])));
+            assert!(!paths.is_empty(), "empty for BATLEHUB_CONFIG={env:?}");
+        }
+    }
 }

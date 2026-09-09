@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://batleforc.git.batleforc.fr/batlehub/schema/vsx-token.schema.json",
+  "title": "Batlehub credential contract file",
+  "description": "The normative schema for $BATLEHUB_HOME/state/vsx-token.json (RFC 0011 §4.1). This file, not the RFC's prose, is what a second implementation should be written against: four refresh sources times five token sources with one level of nesting is more than prose keeps honest. The CLI's tests assert its own model against this document, so the two cannot drift.\n\nThe consumer contract in one line: match the configured gallery origin against a key of `registries`, resolve that entry's `token`, and put the result in an Authorization header. Everything else here is for brokers.",
+  "type": "object",
+  "required": ["version", "registries"],
+  "additionalProperties": true,
+  "properties": {
+    "version": {
+      "description": "Moves only when an existing field changes meaning or disappears. Adding a field is not a break, which is why a consumer must preserve the ones it does not know.",
+      "type": "integer",
+      "const": 1
+    },
+    "registries": {
+      "description": "Keyed by origin, without a trailing slash. One file serves every registry protocol; an empty map is valid and means \"no credentials yet\".",
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/entry" }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": ["token", "kind"],
+      "additionalProperties": true,
+      "properties": {
+        "token": { "$ref": "#/$defs/tokenSource" },
+        "kind": {
+          "description": "What the credential is. It decides nothing — the consumer puts the value in a header either way — and exists so a human, and `batlehub auth status`, can tell a PAT from a login.",
+          "enum": ["oidc", "pat", "kubernetes"]
+        },
+        "expires_at": {
+          "description": "RFC 3339. Absent means \"treat as non-expiring\". An expired entry is not a deleted entry: the owner can still refresh it.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "refresh": { "$ref": "#/$defs/refresh" }
+      }
+    },
+    "tokenSource": {
+      "description": "Either the credential itself, or a description of where to get it. A plain string is shorthand for {\"from\": \"inline\", \"value\": …} and is the only shape the editor patch understands; anything else reads to it as \"no credential\" and falls through to VSX_REGISTRY_AUTH_TOKEN.",
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        { "$ref": "#/$defs/inlineSource" },
+        { "$ref": "#/$defs/fileSource" },
+        { "$ref": "#/$defs/reservedSource" }
+      ]
+    },
+    "inlineSource": {
+      "type": "object",
+      "required": ["from", "value"],
+      "properties": {
+        "from": { "const": "inline" },
+        "value": { "type": "string", "minLength": 1 }
+      }
+    },
+    "fileSource": {
+      "description": "The credential stays where it already is — a projected Kubernetes token, a secret mounted by an operator. The path must be absolute (a relative one resolves against whatever directory the consumer happened to start in), the file must be regular, and the read is capped at 64 KiB.",
+      "type": "object",
+      "required": ["from", "path"],
+      "properties": {
+        "from": { "const": "file" },
+        "path": { "type": "string", "pattern": "^/" },
+        "format": { "enum": ["raw", "json"], "default": "raw" },
+        "pointer": {
+          "description": "JSON Pointer to the credential when `format` is `json`. Defaults to /token.",
+          "type": "string"
+        }
+      }
+    },
+    "reservedSource": {
+      "description": "Named so a later implementation does not arrive as a second mechanism, and so a consumer that meets one knows it is a source rather than a typo. Not implemented in this cut: each reads as \"no credential\" and warns once, which is the safe direction — guessing at an unknown source is how the wrong thing gets sent.",
+      "type": "object",
+      "required": ["from"],
+      "properties": {
+        "from": { "enum": ["env", "exchange", "keychain"] }
+      }
+    },
+    "refresh": {
+      "description": "Answers one question, and it is not \"what is the refresh token\": when this token expires, how does a fresh one appear, and who is allowed to make it appear? A consumer that cannot answer it has two behaviours available on expiry — fail, or send the user through a full login — and both are worse than the truth.",
+      "type": "object",
+      "required": ["source"],
+      "additionalProperties": true,
+      "properties": {
+        "source": {
+          "oneOf": [
+            {
+              "const": "cli",
+              "description": "The refresh material is in the CLI's own profile store. The consumer invokes `batlehub auth token`, or waits for the owner to rewrite this file."
+            },
+            {
+              "const": "reresolve",
+              "description": "There is no refresh token: resolving `token` again yields a fresh one, because something else keeps it fresh. A kubelet rotating a projected token is the reference case. Meaningless on a literal token, and refused there."
+            },
+            {
+              "const": "inline",
+              "description": "The refresh token is in this file. The fallback for a consumer with no secret store, never what a writer with one produces."
+            },
+            {
+              "const": "none",
+              "description": "Nothing to refresh — a PAT, or a login without offline_access. On expiry the answer is a new login."
+            }
+          ]
+        },
+        "owner": {
+          "description": "The one process allowed to redeem. Exactly one refresher per entry: public-client refresh tokens rotate, and two racing refreshers is not a lost update — it is the IDP seeing a replayed token and revoking the chain. A consumer whose name is not this waits and re-reads.",
+          "type": "string"
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "version": 1,
+      "registries": {
+        "https://hub.example.dev": {
+          "token": "<bearer credential>",
+          "kind": "oidc",
+          "expires_at": "2026-08-18T12:00:00Z",
+          "refresh": { "source": "cli", "owner": "batlehub-cli" }
+        },
+        "https://hub.k8s.dev": {
+          "token": { "from": "file", "path": "/var/run/secrets/batlehub/token" },
+          "kind": "kubernetes",
+          "refresh": { "source": "reresolve" }
+        },
+        "https://hub.ci.dev": {
+          "token": "bh_pat_…",
+          "kind": "pat",
+          "refresh": { "source": "none" }
+        }
+      }
+    }
+  ]
+}

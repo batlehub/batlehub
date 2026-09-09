@@ -23,6 +23,12 @@ pub struct AppError {
     pub status: StatusCode,
     pub message: String,
     pub code: Option<String>,
+    /// Extra fields merged into the JSON body, for the one refusal that has
+    /// to carry machine-readable facts rather than a sentence: RFC 0008's
+    /// air-gapped miss names the registry, the coordinate and what to do
+    /// about it, because the thing reading it is a script building the next
+    /// bundle.
+    pub details: Option<serde_json::Value>,
 }
 
 impl AppError {
@@ -37,6 +43,7 @@ impl AppError {
             status,
             message: msg.into(),
             code: None,
+            details: None,
         }
     }
 
@@ -52,6 +59,12 @@ impl AppError {
     /// has to render a statement for one and an error for the other.
     pub fn coded(mut self, code: impl Into<String>) -> Self {
         self.code = Some(code.into());
+        self
+    }
+
+    /// Merge machine-readable facts into the body beside `message`.
+    pub fn with_details(mut self, details: serde_json::Value) -> Self {
+        self.details = Some(details);
         self
     }
 
@@ -114,7 +127,18 @@ impl actix_web::ResponseError for AppError {
             message: self.message.clone(),
             code: self.code.clone(),
         };
-        HttpResponse::build(self.status).json(body)
+        // The extra fields are merged into the same object rather than
+        // nested, so a client that reads `message` is unaffected and one
+        // that reads `registry` does not have to know which refusal it is.
+        match (&self.details, serde_json::to_value(&body)) {
+            (Some(serde_json::Value::Object(extra)), Ok(serde_json::Value::Object(mut base))) => {
+                for (k, v) in extra {
+                    base.insert(k.clone(), v.clone());
+                }
+                HttpResponse::build(self.status).json(serde_json::Value::Object(base))
+            }
+            _ => HttpResponse::build(self.status).json(body),
+        }
     }
 }
 
@@ -137,6 +161,23 @@ impl From<CoreError> for AppError {
             // Same status and same body as `NotFound`: the distinction is for
             // the Hybrid fall-through, never for the client. See the variant.
             CoreError::NotFoundWithheld(msg) => Self::not_found(msg),
+            // RFC 0008 §4.4 — `503`, not `404`: the artifact exists, it is
+            // simply not in this instance, and "try later" is the truth
+            // ("later" being after the next bundle). The body carries the
+            // facts a script needs to build that bundle.
+            CoreError::ContentUnavailable { registry, key } => Self::with_status(
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!(
+                    "{registry} does not hold '{key}' and this instance will not fetch it: \
+                     it is air-gapped. The next bundle needs this coordinate."
+                ),
+            )
+            .coded("content_unavailable")
+            .with_details(serde_json::json!({
+                "registry": registry,
+                "coordinate": key,
+                "bundle_hint": "batlehub-cli admin air-gap-missing",
+            })),
             CoreError::AccessDenied(msg) => Self::forbidden(msg),
             CoreError::UnknownRegistry(name) => {
                 Self::bad_request(format!("unknown registry: {name}"))

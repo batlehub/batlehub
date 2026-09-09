@@ -7,11 +7,46 @@ use batlehub_core::entities::Identity;
 
 use crate::error::AppError;
 
-/// Extracts the `Identity` attached by `AuthMiddleware` from request extensions.
+/// Where a request came from, for the audit trail.
+///
+/// Two ambient facts about the caller that no handler argument carries: the
+/// address the proxy-trust verdict says it came from, and the `User-Agent` it
+/// sent. Both are read once, by [`caller_net`], so every audit row that records
+/// them agrees about what they mean.
+///
+/// The type itself lives in `core`, because the local read path takes it as an
+/// argument all the way down to the event it writes (RFC 0018 §13.10) and a web
+/// type it converted from would be a second spelling of the same two fields.
+pub use batlehub_core::entities::CallerNet;
+
+/// Read the caller's address and agent off the request.
+///
+/// The address goes through [`crate::middleware::proxy_trust::client_ip`]
+/// rather than `connection_info().realip_remote_addr()`, which believes
+/// `X-Forwarded-For` from any peer: that would let a caller write whatever
+/// source address it liked into its own audit row. Same verdict as every other
+/// IP-consuming path, so they cannot disagree.
+pub fn caller_net(req: &HttpRequest) -> CallerNet {
+    CallerNet {
+        ip: Some(crate::middleware::proxy_trust::client_ip(
+            req,
+            crate::middleware::proxy_trust::peer_trust(req),
+        )),
+        user_agent: req
+            .headers()
+            .get(actix_web::http::header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned),
+    }
+}
+
+/// Extracts the `Identity` attached by `AuthMiddleware` from request extensions,
+/// plus the caller's address and agent for the audit trail.
 ///
 /// Falls back to `Identity::anonymous()` if no middleware has run (should not
 /// happen in production, but avoids panics in tests).
-pub struct AuthIdentity(pub Identity);
+#[derive(Debug, Clone)]
+pub struct AuthIdentity(pub Identity, pub CallerNet);
 
 impl FromRequest for AuthIdentity {
     type Error = AppError;
@@ -23,7 +58,7 @@ impl FromRequest for AuthIdentity {
             .get::<Identity>()
             .cloned()
             .unwrap_or_else(Identity::anonymous);
-        ready(Ok(AuthIdentity(identity)))
+        ready(Ok(AuthIdentity(identity, caller_net(req))))
     }
 }
 
@@ -52,6 +87,23 @@ pub fn raw_auth_from_request(req: &HttpRequest) -> batlehub_core::ports::RawAuth
     if !headers.contains_key("authorization") {
         if let Some(key) = headers.get("x-nuget-apikey").cloned() {
             headers.insert("authorization".to_owned(), format!("Bearer {key}"));
+        }
+    }
+
+    // cargo sends its registry token *bare* — `Authorization: <token>`, no
+    // scheme; the registry web API says so and cargo 1.98 does so (measured,
+    // tests/heavy/cargo.sh). Every `AuthProvider` reads a `Bearer`, so a
+    // `cargo publish` arrived anonymous and was refused `releases:publish` by
+    // a registry whose admin token it carried. Normalised here, scoped to
+    // cargo's API namespace: no other client speaks this way, and a bare
+    // value elsewhere stays what it is — a malformed header.
+    if req.path().contains("/api/v1/crates") {
+        if let Some(bare) = headers
+            .get("authorization")
+            .filter(|v| !v.trim().is_empty() && !v.contains(' '))
+            .cloned()
+        {
+            headers.insert("authorization".to_owned(), format!("Bearer {bare}"));
         }
     }
 
@@ -94,6 +146,34 @@ pub fn raw_auth_from_request(req: &HttpRequest) -> batlehub_core::ports::RawAuth
 mod tests {
     use super::*;
     use actix_web::test::TestRequest;
+
+    #[test]
+    fn a_bare_cargo_token_becomes_a_bearer_header_on_the_crates_api_only() {
+        let req = TestRequest::put()
+            .uri("/proxy/crates/api/v1/crates/new")
+            .insert_header(("Authorization", "tok-123"))
+            .to_http_request();
+        assert_eq!(
+            raw_auth_from_request(&req)
+                .headers
+                .get("authorization")
+                .map(String::as_str),
+            Some("Bearer tok-123"),
+            "cargo sends its token without a scheme"
+        );
+        let req = TestRequest::get()
+            .uri("/proxy/npm/pkg")
+            .insert_header(("Authorization", "tok-123"))
+            .to_http_request();
+        assert_eq!(
+            raw_auth_from_request(&req)
+                .headers
+                .get("authorization")
+                .map(String::as_str),
+            Some("tok-123"),
+            "elsewhere a bare value is left alone"
+        );
+    }
 
     #[test]
     fn ovsx_publish_token_in_the_query_becomes_a_bearer_header() {

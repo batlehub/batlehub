@@ -24,6 +24,8 @@ import PackageVisibility from "@/components/admin/PackageVisibility.vue";
 import PackageGrants from "@/components/admin/PackageGrants.vue";
 import PackageEventsTable from "@/components/admin/PackageEventsTable.vue";
 import ReadmePanel from "@/components/package/ReadmePanel.vue";
+import VerdictPanel from "@/components/package/VerdictPanel.vue";
+import MovingRefsPanel from "@/components/package/MovingRefsPanel.vue";
 import UpstreamNotice from "@/components/package/UpstreamNotice.vue";
 import { useAuthFetch } from "@/composables/useAuthFetch";
 import { useApi, extractMessage } from "@/composables/useApi";
@@ -918,6 +920,82 @@ onMounted(() => {
  * server-side, so firing it for everyone would mean a 403 on every package view.
  * Hiding the section is a rendering decision — the server still refuses.
  */
+/**
+ * RFC 0014 §4.6: what the upstream audit knows about this package, for the
+ * badge on the selected version. Admin-only and best-effort — a `503` is
+ * "the audit does not run in this process", a `404` "not an audited
+ * registry", and both mean no badge, not an error.
+ */
+interface UpstreamRow {
+  version?: string | null;
+  state: "missing" | "disappeared";
+  consecutive_misses: number;
+}
+interface UpstreamPackageStatus {
+  policy: "audit" | "block";
+  rows: UpstreamRow[];
+}
+const upstreamStatus = ref<UpstreamPackageStatus | null>(null);
+async function loadUpstreamStatus() {
+  upstreamStatus.value = null;
+  if (!isAdmin.value || !registry.value || !name.value) return;
+  try {
+    const resp = await authFetch(
+      `${API_BASE_URL}/api/v1/admin/upstream/status/${encodeURIComponent(registry.value)}/${encodeURIComponent(name.value)}`,
+    );
+    if (!resp?.ok) return;
+    upstreamStatus.value = (await resp.json()) as UpstreamPackageStatus;
+  } catch {
+    upstreamStatus.value = null;
+  }
+}
+watch([registry, name, isAdmin], loadUpstreamStatus, { immediate: true });
+
+/**
+ * RFC 0019 §6.5: on a forge a "version" is a ref, and the commit it resolved
+ * to is the identity the cache, the audit log and the verdict key on. The
+ * page already reads the resolved refs for the moving-refs panel; the same
+ * answer puts the short SHA beside each version row that names a ref.
+ */
+const refShas = ref<Record<string, string>>({});
+const FORGE_TYPES = new Set(["github", "gitlab", "forgejo"]);
+async function loadRefShas() {
+  refShas.value = {};
+  if (!registryType.value || !FORGE_TYPES.has(registryType.value)) return;
+  try {
+    const resp = await authFetch(
+      `${API_BASE_URL}/api/v1/explore/${encodeURIComponent(registry.value)}/${encodeURIComponent(name.value)}/refs`,
+    );
+    if (!resp?.ok) return;
+    const data = (await resp.json()) as { refs?: { git_ref: string; sha: string }[] };
+    const map: Record<string, string> = {};
+    for (const r of data.refs ?? []) map[r.git_ref] = r.sha;
+    refShas.value = map;
+  } catch {
+    refShas.value = {};
+  }
+}
+watch([registry, name, registryType], loadRefShas, { immediate: true });
+/** git's own abbreviation. */
+const shortSha = (version: string) => refShas.value[version]?.slice(0, 7) ?? null;
+
+/** The audit's row for `version`: its own, or the whole package's. */
+function upstreamRowFor(version: string): UpstreamRow | null {
+  const rows = upstreamStatus.value?.rows ?? [];
+  return rows.find((r) => r.version === version) ?? rows.find((r) => !r.version) ?? null;
+}
+const UPSTREAM_BADGE_KEYS: Record<string, string> = {
+  missing: "packageDetailPage.upstreamMissing",
+  disappeared: "packageDetailPage.upstreamDisappeared",
+  blocked: "packageDetailPage.upstreamBlocked",
+};
+function upstreamBadgeKey(row: UpstreamRow): string {
+  if (row.state === "disappeared" && upstreamStatus.value?.policy === "block") {
+    return UPSTREAM_BADGE_KEYS.blocked;
+  }
+  return UPSTREAM_BADGE_KEYS[row.state];
+}
+
 const {
   data: adminData,
   error: adminError,
@@ -1259,6 +1337,23 @@ const {
             <img :src="selectedRow.socket_badge_url" alt="socket.dev" class="h-5" />
           </a>
 
+          <!-- RFC 0014: the upstream audit's word on this version, for an
+               admin — *missing* is a miss not yet believed, *disappeared* a
+               confirmed one, and under "block" the block it wrote. -->
+          <Badge
+            v-if="upstreamRowFor(selectedRow.version)"
+            :variant="
+              upstreamRowFor(selectedRow.version)!.state === 'disappeared'
+                ? 'destructive'
+                : 'copper'
+            "
+            class="shrink-0"
+            :title="t('packageDetailPage.upstreamBadgeHelp')"
+            data-testid="upstream-badge"
+          >
+            {{ t(upstreamBadgeKey(upstreamRowFor(selectedRow.version)!)) }}
+          </Badge>
+
           <!-- The signature device, on the row it was written for.
                `blocked` used to be the one state of six that never reached it:
                the table's `v-else` handed that row a crimson chip instead, so
@@ -1476,6 +1571,18 @@ const {
            not grow by a megabyte per package (RFC 0007 §5.4). -->
       <ReadmePanel :registry="registry" :name="name" :version="selectedVersion" />
 
+      <!-- The selected version's supply-chain verdict (RFC 0018), when the
+           registry has one: what it is held or warned for, and the findings
+           for a reader who may see them. Silent otherwise. -->
+      <!-- RFC 0019 §6.5: on a forge, what a "version" is needs saying. -->
+      <MovingRefsPanel :registry="registry" :name="name" />
+      <VerdictPanel
+        :registry="registry"
+        :name="name"
+        :version="selectedVersion"
+        :can-rescan="isAdmin"
+      />
+
       <!-- ── The index ─────────────────────────────────────────────────────
            What the table is now: the list you pick the subject from, not the
            page. Everything a reader compares *between* versions stays here;
@@ -1669,6 +1776,14 @@ const {
                   >
                     {{ ver.version }}
                   </RouterLink>
+                  <!-- RFC 0019 §6.5: the commit this ref resolved to. -->
+                  <span
+                    v-if="shortSha(ver.version)"
+                    class="ml-2 text-xs text-muted-foreground"
+                    :title="refShas[ver.version]"
+                    data-testid="ref-sha"
+                    >{{ shortSha(ver.version) }}</span
+                  >
                   <Badge v-if="ver.is_prerelease" variant="outline" class="ml-2 text-xs">
                     {{ t("packageDetailPage.prerelease") }}
                   </Badge>

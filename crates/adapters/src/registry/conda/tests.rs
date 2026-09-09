@@ -38,6 +38,44 @@ async fn resolve_metadata_repodata_returns_download_url() {
         .ends_with("linux-64/numpy-1.26.0-py311h0.tar.bz2"));
 }
 
+/// The proxy route files a package under its name and version and puts the
+/// subdir in the selector; the client reads the platform from there.
+#[tokio::test]
+async fn resolve_metadata_repodata_returns_download_url_under_the_proxy_routes_coordinate() {
+    let mut server = mockito::Server::new_async().await;
+    let repodata = serde_json::json!({
+        "packages": {
+            "numpy-1.26.0-py311h0.tar.bz2": {
+                "name": "numpy",
+                "version": "1.26.0",
+                "build": "py311h0",
+                "sha256": "deadbeef"
+            }
+        },
+        "packages.conda": {}
+    });
+    let _mock = server
+        .mock("GET", "/linux-64/repodata.json")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(repodata.to_string())
+        .create_async()
+        .await;
+
+    let opts = UpstreamHttpOptions::default();
+    let client = CondaRegistryClient::new(server.url(), &opts).unwrap();
+
+    let pkg = PackageId::new("my-conda", "numpy", "1.26.0")
+        .with_artifact("linux-64/numpy-1.26.0-py311h0.tar.bz2");
+    let meta = client.resolve_metadata(&pkg).await.unwrap();
+    assert_eq!(meta.checksum.as_deref(), Some("deadbeef"));
+    assert!(meta
+        .download_url
+        .as_deref()
+        .unwrap()
+        .ends_with("linux-64/numpy-1.26.0-py311h0.tar.bz2"));
+}
+
 #[tokio::test]
 async fn list_versions_aggregates_across_platforms() {
     let mut server = mockito::Server::new_async().await;

@@ -20,6 +20,17 @@ fetches from the configured upstream.
 Turn it off by not running a proxy-mode registry: `mode = "local"` never
 consults an upstream at all.
 
+**One kind fetches from hosts you did not configure.** An `sdkman` registry
+asks `broker.sdkman.io` for a download and is answered with a `302` to
+wherever the vendor publishes — `github.com` (and
+`objects.githubusercontent.com`), `repo.maven.apache.org`,
+`services.gradle.org`, `groovy.jfrog.io` at minimum. The chain is followed
+server-side through the SSRF guard and the operator's credentials stop at the
+two configured origins, but egress to those CDN hosts is a prerequisite of the
+kind. The list is *observed, not exhaustive*: the broker can add a host without
+telling anyone, which is itself an argument for warming ahead of an air gap
+([RFC 0010](/rfc/0010-toolchain-managers) §9).
+
 ## A search box is typed into
 
 `GET /api/v1/explore/upstream` fans a query out across every accessible
@@ -28,6 +39,10 @@ upstream**, which for an operator whose threat model is "this box does not tell
 anyone what we are looking for" is a disclosure worth knowing about.
 
 Turn it off per registry with `search_url = ""`.
+
+One request asks each registry for at most 100 results — the `limit` parameter's
+ceiling — so the egress a single search can cause is bounded by the number of
+registries the caller may browse, not by what the caller asks for.
 
 ## The console's discovery read {#the-console-s-discovery-read}
 
@@ -117,7 +132,9 @@ unacceptable keeps `"strip"`, which remains the default. See
 
 The package page lists versions this instance holds nothing of and marks each one
 **not held here**. On those rows there is a **Fetch this version** button, and
-pressing it downloads the artifact from upstream.
+pressing it downloads the artifact from upstream. The catalogue offers the same
+button on a search result this instance holds nothing of, for the version the
+upstream search named.
 
 This is the only thing on the list that is **a decision rather than a side
 effect**. Everything else here happens because a page was opened or a build ran;
@@ -154,6 +171,35 @@ are dropped the moment a redirect leaves it.
 
 The periodic OSV re-check, when `[vulnerability_scan] enabled = true`. Off by
 default. See [SBOM](/guide/sbom).
+
+## A scan job runs {#a-scan-job-runs}
+
+A registry with a [`[registries.security]`](/guide/configuration#security)
+profile hands each new version to the worker, and the scanners the profile names
+make their own requests. Each is off unless you configured it in `[[scanners]]`.
+
+Most of them dial a host you named: OSV, a Trivy server, the Socket and mlab
+APIs. The binary scanners under the sandbox reach only what the sandbox lets
+them. Two entries are worth stating separately.
+
+**Rekor**, when `sigstore` is enabled: one lookup per transparency-log entry an
+attestation cites, at `rekor_url` (`https://rekor.sigstore.dev` by default).
+A host you configured, like the rest.
+
+**A host the upstream chose**, in that same scanner. npm announces a version's
+attestations in the packument as `dist.attestations.url`, and the bundle is
+fetched from that URL — which means the *upstream index*, not your config,
+names the host. It is treated the way [a linked README](#a-linked-readme) is:
+the scheme must be `http` or `https`, redirects are followed by BatleHub one hop
+at a time rather than by its HTTP client, every hop is re-checked against the
+private, reserved, loopback and link-local ranges before it is dialled, and no
+credential travels with the request at all. An upstream that answers with
+`302 Location: http://169.254.169.254/…` gets no request; the scan reports the
+refusal as a scanner error rather than a finding, so the response body of
+something internal can never reach a finding an operator reads.
+
+Turn the whole class off by leaving `[registries.security]` unwritten, or the
+one entry off by removing `sigstore` from `[[scanners]]`.
 
 ## See also
 

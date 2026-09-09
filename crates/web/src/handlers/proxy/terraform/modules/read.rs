@@ -149,8 +149,8 @@ pub async fn terraform_module_metadata(
         package_id: batlehub_core::entities::PackageId::new(&registry, &pkg_name, "versions"),
         identity: identity.0,
         action: Action::ReleasesRead.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
     };
     let doc = svc
         .version_document(&req, batlehub_core::ports::DocumentKind::Versions, "")
@@ -260,6 +260,7 @@ pub async fn terraform_module_artifact(
             &version,
             Action::ReleasesRead,
             &identity,
+            &identity.1,
         )
         .await
         .map_err(AppError::from)?;

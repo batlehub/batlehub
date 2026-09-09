@@ -68,6 +68,7 @@ async fn github_proxy(
 )]
 #[get("/proxy/{registry}/{owner}/{repo}/releases")]
 pub async fn list_releases(
+    req: HttpRequest,
     path: web::Path<(String, String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
@@ -77,13 +78,18 @@ pub async fn list_releases(
     require_github(&registry, &map)?;
     // A listing, not an artifact: `proxy_document` removes administratively
     // blocked releases before a client picks one and is then refused its assets.
+    //
+    // The public base is what RFC 0019 §4.2 *API reads* needs: every
+    // `tarball_url` and `browser_download_url` in the document is repointed
+    // at this proxy, so a client that follows the release JSON instead of
+    // building a path does not walk past every rule on the way to the forge.
     proxy_document(
         svc,
         PackageId::new(&registry, format!("{owner}/{repo}"), "releases"),
         identity,
         Action::ReleasesRead,
         batlehub_core::ports::DocumentKind::Versions,
-        String::new(),
+        crate::handlers::proxy::common::registry_public_base(&req, &registry),
     )
     .await
 }
@@ -108,21 +114,22 @@ pub async fn list_releases(
 )]
 #[get("/proxy/{registry}/{owner}/{repo}/releases/tags/{tag}")]
 pub async fn get_release(
+    req: HttpRequest,
     path: web::Path<(String, String, String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
     map: web::Data<RegistryMap>,
 ) -> Result<impl Responder, AppError> {
     let (registry, owner, repo, tag) = path.into_inner();
-    github_proxy(
-        &registry,
-        format!("{owner}/{repo}"),
-        tag,
-        None,
-        Action::ReleasesRead,
+    require_github(&registry, &map)?;
+    // The document `mise` reads to find an asset: its URLs are repointed at
+    // this proxy (RFC 0019 §4.2 *API reads*).
+    crate::handlers::proxy::common::proxy_release_document(
         svc,
+        PackageId::new(&registry, format!("{owner}/{repo}"), tag),
         identity,
-        &map,
+        Action::ReleasesRead,
+        crate::handlers::proxy::common::registry_public_base(&req, &registry),
     )
     .await
 }

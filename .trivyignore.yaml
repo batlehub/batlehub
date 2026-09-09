@@ -1,0 +1,46 @@
+# Image-scan suppressions. The stance is the same as `deny.toml`'s: nothing is
+# ignored because it is inconvenient, only because there is no version to move
+# to. Every entry carries an expiry, so the gate reopens on its own and the
+# entry has to be re-justified rather than quietly outliving its reason.
+#
+# Both entries below are the same crate in the same file: `google.golang.org/grpc`
+# v1.82.1, vendored inside the upstream Trivy release binary the worker image
+# carries (`/usr/local/bin/trivy`, Trivy v0.74.0, pinned by `TRIVY_VERSION` in
+# `Containerfile.worker`). They are not BatleHub's dependency and no `cargo` or
+# `pip` change reaches them — the only lever is the Trivy version, and v0.74.0
+# (2026-08-14) is still the latest release.
+#
+# **One release closes both.** Trivy's `main` has moved to grpc v1.83.2, which
+# carries the fix for each. Whichever release ships that, both entries go —
+# check `go.mod` at the tag before renewing either:
+#
+#   curl -s https://raw.githubusercontent.com/aquasecurity/trivy/v<version>/go.mod \
+#     | grep '^\s*google.golang.org/grpc '
+#
+# A third advisory against the same version, CVE-2026-84303 (xDS RBAC header
+# matching), is MODERATE and so does not reach the gate's fixable HIGH/CRITICAL
+# bar. It is listed here because it disappears with the same bump — not as an
+# entry, because nothing is suppressed until the gate actually reports it.
+vulnerabilities:
+  - id: CVE-2026-84304
+    # Heap memory exhaustion (OOM) via HTTP/2 DATA frame fragmentation. Fixed in
+    # grpc-go 1.83.1, but no Trivy release ships it yet. The binary is only ever
+    # run by the worker as a client against the Trivy server the chart deploys;
+    # it terminates no connection of its own.
+    paths:
+      - "usr/local/bin/trivy"
+    expired_at: 2026-12-01
+  - id: CVE-2026-84445
+    # xDS server DoS: a request carrying neither `:authority` nor `Host` panics
+    # the xDS routing interceptor, and the per-RPC goroutine does not recover.
+    # Fixed in grpc-go 1.82.2 and 1.83.2; no Trivy release ships either.
+    #
+    # The vulnerable path is a *server* built with `xds.NewGRPCServer()`, and
+    # this binary never builds one. `crates/adapters/src/scanners/trivy.rs` runs
+    # it as `trivy … --server <endpoint>` — the client half, dialling the Trivy
+    # server the chart deploys. Nothing in the worker image listens, and Trivy's
+    # own server mode is plain gRPC rather than xDS, so the interceptor the
+    # advisory describes is never installed.
+    paths:
+      - "usr/local/bin/trivy"
+    expired_at: 2026-12-01

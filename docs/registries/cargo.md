@@ -11,6 +11,7 @@ Proxy and cache crates.io, or host private crates. BatleHub implements the Cargo
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
 | **Private publish** | ✅ `cargo publish` |
+| **Air gap** | offline, the sparse index is composed from the held crates, their dependencies read off each crate's manifest at import; a crate imported without its manifest is not listed |
 
 ## Proxy setup
 

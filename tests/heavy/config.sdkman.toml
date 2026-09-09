@@ -1,0 +1,54 @@
+# Server configuration for the heavy SDKMAN integration test (tests/heavy/sdkman.sh).
+# See tests/heavy/config.npm.toml for the env-var conventions; `${HEAVY_RUN}`
+# keeps each run's registry out of the last one's, because the database
+# persists and a block recorded by a previous run would make this one green
+# for the wrong reason.
+
+[server]
+host = "127.0.0.1"
+port = 8106
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+# The suite blocks versions through the admin API with this.
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-sdkman-storage"
+
+# A JDK is about 200 MB; the default cap is 500 MiB, stated here so the reader
+# of a failed run does not have to know it.
+[limits]
+max_artifact_size_bytes = 1073741824
+
+# ── SDKMAN: the candidates API and the download broker, one registry (RFC 0010) ──
+#
+# Proxy-only: there is no publish protocol. Both hosts are the defaults
+# `sdkman-init.sh` sets, and are stated so the transcript's reader does not
+# have to know that. The broker answers 302 to the vendor's CDN; the server
+# follows it, which is what makes this a cache rather than a referral.
+#
+# `sdk` reads everything anonymously; `releases:list` is the document verb
+# (candidates, versions, validate, hooks, healthcheck) and `releases:read` the
+# download verb. Both are needed for an install.
+[[registries]]
+type = "sdkman"
+name = "jvm-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://api.sdkman.io/2"]
+broker_url = "https://broker.sdkman.io"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list"]
+admin = ["*"]

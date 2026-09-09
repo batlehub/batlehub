@@ -295,6 +295,37 @@ impl AccessResult {
     }
 }
 
+/// Where a request came from, as the audit trail records it.
+///
+/// The proxy path has carried both fields for as long as the trail has existed,
+/// threaded through `ProxyRequest`. The local read path built its event from the
+/// `Identity` alone, so `audit pulls` reported an empty `source_ip` and
+/// `client_user_agent` on exactly the deployments that publish their own
+/// packages (RFC 0018 §13.10). Both paths now carry this.
+///
+/// A named pair rather than two more positional `Option<String>` parameters: it
+/// travels through four signatures of the local read path, and two adjacent
+/// `Option<String>` arguments are two a caller can transpose without the
+/// compiler ever noticing.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallerNet {
+    /// The caller's address, as the proxy-trust rules resolved it.
+    pub ip: Option<String>,
+    /// The caller's `User-Agent` header.
+    pub user_agent: Option<String>,
+}
+
+impl CallerNet {
+    /// No request behind the call: a scheduled task, an internal read, a test.
+    ///
+    /// Spelled out rather than left to `Default::default()` at the call site,
+    /// because "we did not record this" and "there was nothing to record" read
+    /// identically in the trail and only one of them is a bug.
+    pub fn unknown() -> Self {
+        Self::default()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AccessEvent {
     pub id: Uuid,

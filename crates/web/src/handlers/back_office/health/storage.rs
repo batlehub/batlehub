@@ -52,8 +52,20 @@ pub async fn clear_registry_cache(
 
     tracing::info!(registry = %registry, prefix = %prefix, "clear_registry_cache: starting");
 
-    // Delete all cached artifacts for the registry directly from storage.
-    // This works regardless of whether artifact_storage has records (e.g. single-backend config).
+    // Delete every cached artifact for the registry.
+    //
+    // This does *not* sweep the object store by prefix, despite the shape of the
+    // call: `proxy_svc.storage` is always a `StorageRouter` (`initialize_storage`
+    // wraps even a single backend), and the router answers `delete_by_prefix`
+    // from the database, deleting each logical key it finds. Physical blobs are
+    // content-addressed under `blob/<sha256>`, so a prefix sweep of the backend
+    // could not find them by registry name anyway.
+    //
+    // The coverage that matters is therefore the database's, not the bucket's:
+    // the router resolves keys from `artifact_dedup_refs` unioned with
+    // `artifact_storage`, and every write records both. A row lost to a failed
+    // `record_backend` is still reachable through the dedup table, which is
+    // committed in the store transaction.
     let cleared = proxy_svc
         .storage
         .delete_by_prefix(&prefix)

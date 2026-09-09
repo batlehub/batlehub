@@ -62,6 +62,34 @@ pub trait ArtifactCacheMeta: Send + Sync {
 
     /// Remove the metadata record for a key (called when an artifact is evicted).
     async fn delete_artifact_meta(&self, key: &str) -> Result<(), CoreError>;
+
+    /// The rows this store holds for one package: the held set a
+    /// synthesised listing is a projection of (RFC 0008-bis §5.1).
+    ///
+    /// On the write-side trait rather than [`ArtifactInventory`] because the
+    /// proxy service holds this store and not the inventory, and the join
+    /// is made on the request path. The default answers nothing, which is
+    /// what a store that records nothing holds; the Postgres and in-memory
+    /// stores answer from their rows.
+    async fn list_package_artifacts(
+        &self,
+        registry: &str,
+        package: &str,
+    ) -> Result<Vec<ArtifactMeta>, CoreError> {
+        let _ = (registry, package);
+        Ok(Vec::new())
+    }
+
+    /// Every row this store holds for one registry: the held set a
+    /// registry-wide document — RubyGems' compact `/versions`, a conda
+    /// subdir's `repodata.json` — is a projection of (RFC 0008-bis §13.6).
+    async fn list_registry_artifacts(
+        &self,
+        registry: &str,
+    ) -> Result<Vec<ArtifactMeta>, CoreError> {
+        let _ = registry;
+        Ok(Vec::new())
+    }
 }
 
 /// Inventory / eviction queries over the whole cache-meta table. The narrow

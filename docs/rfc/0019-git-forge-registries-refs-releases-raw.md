@@ -2,7 +2,7 @@
 
 | Field       | Value                                                                                 |
 | ----------- | ------------------------------------------------------------------------------------- |
-| Status      | Draft — revised 2026-09-02 against the tree; see §11 for what that reopened            |
+| Status      | **Implemented** — all five phases of §12 landed: phase 1 on 2026-09-03 (§13.1), phases 2–5 on 2026-09-04 (§13.2) and the two tails on 2026-09-05 (§13.3), each parity cell probed live before the code that relies on it. Every §11 question is decided, nothing in §12 is outstanding, and phases 3–5 are proven client-side by `tests/heavy/mise.sh` |
 | Short       | Forge registries: refs, releases, raw                                                 |
 | Settles     | What a "version" is for GitHub/GitLab/Forgejo, how mutable refs are served, what raw content is allowed, and what metadata these registries hand to RFC 0018 |
 | Author      | Maxime <maxleriche.60@gmail.com>                                                       |
@@ -271,7 +271,10 @@ an immediate re-resolution for named coordinates.
 **Self-hosted forges and GitHub Enterprise.** The client already derives raw
 and archive hosts from a non-`api.github.com` base URL (strip `/api/v3`,
 same host for both); that logic is kept. Attestations are a github.com and
-GHES ≥ 3.13 feature *(to confirm)*; on older GHES the row reads
+GHES ≥ 3.13 feature *(confirmed 2026-09-04: the endpoint is
+anonymous-readable on github.com and answers `200 {"attestations": []}` when
+there is none; a GHES instance without it answers `404`, which the client
+reads as missing)*; on older GHES the row reads
 `PROVENANCE_MISSING` like Forgejo.
 
 **Mutable refs.** A `Branch` ref is served by following it (that is what the
@@ -314,11 +317,11 @@ relies on it, before anything depends on it:
 | Release by tag         | `/repos/{o}/{r}/releases/tags/{tag}` ✓          | `/projects/{id}/releases/{tag}` ✓        | `/repos/{o}/{r}/releases/tags/{tag}` ✓    |
 | Archive                | `github.com/{o}/{r}/archive/{ref}.tar.gz` ✓     | `/repository/archive.{fmt}?sha={ref}` ✓  | `/repos/{o}/{r}/archive/{ref}.tar.gz` ✓   |
 | Raw                    | `raw.githubusercontent.com/{o}/{r}/{ref}/{path}` ✓ | `/repository/files/{path}/raw?ref={ref}` ✓ | `/repos/{o}/{r}/raw/{ref}/{path}` ✓  |
-| Tag object / date      | `/git/ref/tags/{tag}` → `/git/tags/{sha}` *(to confirm)* | `/repository/tags/{tag}` *(to confirm)* | `/repos/{o}/{r}/tags/{tag}` *(to confirm)* |
-| Commit date            | `/commits/{sha}` *(to confirm)*                 | `/repository/commits/{sha}` *(to confirm)* | `/repos/{o}/{r}/git/commits/{sha}` *(to confirm)* |
-| Branch head            | `/branches/{name}` *(to confirm)*               | `/repository/branches/{name}` *(to confirm)* | `/repos/{o}/{r}/branches/{name}` *(to confirm)* |
-| Asset attestation      | `/repos/{o}/{r}/attestations/{sha256}` *(to confirm)* | — (release evidence, not verifiable) | —                                    |
-| Tag/commit signature   | `verification` on commit; tag via `/git/tags` *(to confirm)* | `/repository/commits/{sha}/signature` *(to confirm)* | `verification` on commit/tag *(to confirm — the existing models have no commit or tag struct)* |
+| Tag object / date      | `/git/ref/tags/{tag}` → `/git/tags/{sha}` ✓ *(confirmed 2026-09-03: `object.type` is `commit` for a lightweight tag, `tag` for an annotated one, whose object carries `tagger.date`)* | `/repository/tags/{tag}` ✓ *(confirmed 2026-09-04: one call — `commit.id`, `commit.committed_date`, `commit.committer_name`, and the tag's own `created_at` when annotated)* | `/repos/{o}/{r}/tags/{tag}` ✓ *(confirmed 2026-09-03: `commit.sha` and `commit.created` — the commit's date, not a tagger's; Forgejo exposes none)* |
+| Commit date            | `/commits/{sha}` ✓ *(confirmed 2026-09-03: `commit.committer.date`, `committer.login`)* | `/repository/commits/{sha}` ✓ *(confirmed 2026-09-04: flat — `id`, `committed_date`, `committer_name`, `committer_email`)* | `/repos/{o}/{r}/git/commits/{sha}` ✓ *(confirmed 2026-09-03: `commit.committer.date`, `committer.login`)* |
+| Branch head            | `/branches/{name}` ✓ *(confirmed 2026-09-03: `commit.sha`, `commit.commit.committer.date`)* | `/repository/branches/{name}` ✓ *(confirmed 2026-09-04: `commit.{id, committed_date, committer_name}`)* | `/repos/{o}/{r}/branches/{name}` ✓ *(confirmed 2026-09-03: `commit.id`, `commit.timestamp`, `commit.committer.username`)* |
+| Asset attestation      | `/repos/{o}/{r}/attestations/{sha256:…}` ✓ *(confirmed 2026-09-04: anonymous-readable, `200 {"attestations": []}` when there is none; `404` on GHES < 3.13, which reads the same — missing)* | — (release evidence, not verifiable) | —                                    |
+| Tag/commit signature   | `verification` on commit ✓ *(confirmed 2026-09-04: `{verified, reason, signature, payload}`)* | `/repository/commits/{sha}/signature` ✓ *(confirmed 2026-09-04: `404 {"message":"404 Signature Not Found"}` on an unsigned commit — the absence is the answer)* | `verification` on commit ✓ *(confirmed 2026-09-04: the object is there — `{verified, reason, signature, signer, payload}`, `gpg.error.not_signed_commit` when unsigned; the models did not have it and now do)* |
 
 Where a forge lacks a capability the field is `None` and RFC 0018 reports
 `PROVENANCE_MISSING` — never a guess. GitLab is the one exception: its
@@ -363,7 +366,10 @@ read `tarball_url` follow it straight to the forge and bypass the proxy.
 **Response headers** (all forge kinds): `X-BatleHub-Ref-Kind`,
 `X-BatleHub-Resolved-Commit` — spelled as the existing `X-BatleHub-Cache` is
 — plus RFC 0018's `X-BatleHub-Verdict` / `X-BatleHub-Reason` when a verdict
-exists.
+exists. `X-BatleHub-Ref-Requested` joined them for RFC 0008 §14.4: on a
+commit-keyed archive the coordinate has already become the SHA, so the ref as
+the client spelled it survives nowhere else — and an air-gapped instance's
+bundle has to carry that pair, because it cannot resolve a ref at all.
 
 **What a CI pipeline sees.** Same contract as RFC 0018: a forge coordinate
 held for `min_age` answers 403 with `Retry-After`; `batlehub wait
@@ -401,7 +407,7 @@ Warnings (`AppConfig::warnings()`, stable codes, surfaced like
 | --- | --- | --- |
 | `forge.anonymous-upstream` | a forge registry with no upstream token | Anonymous GitHub is 60 requests/hour; with ref resolution that is a few minutes of use. |
 | `forge.raw-disabled-but-linked` | `[raw]` absent or disabled while the registry's generated `url_replacements` rewrite `raw.githubusercontent.com` | The snippet the operator hands out points at a path that refuses. |
-| `security.timestamp-hold-unavailable` (RFC 0018) | `[security]` with `hold_missing_timestamp = true` on a forge whose `[refs]` derivation is not yet built | Retired for the forges by this RFC's phase 1; until then it fires. |
+| `security.timestamp-hold-unavailable` (RFC 0018) | `[security]` with `hold_missing_timestamp = true` on a forge whose `[refs]` derivation is not yet built | Retired for the forges by this RFC's phase 1, which dates every ref; the warning now fires for the path-addressed kinds only. |
 
 ---
 
@@ -676,26 +682,49 @@ verdict model (this RFC only adds codes and one rule); storage backends;
 
 ### Still open
 
-1. **Endpoints marked *(to confirm)*.** Eleven cells of the parity table are
-   written from documentation, and the first revision of this RFC claimed
-   the Forgejo `verification` object was already in the client's models — it
-   is not. Each is verified against a live forge in the phase that first
-   relies on it (phase 1 for GitHub and Forgejo dates, phase 4 for GitLab,
-   phase 5 for provenance). This RFC does not move to "In review" until the
-   phase-1 cells are confirmed; the table is updated in place.
-2. **Installers through `raw`.** RFC 0010 decision 9 says BatleHub proxies
+1. ~~**Endpoints marked *(to confirm)*.**~~ Eleven cells of the parity table
+   were written from documentation, and the first revision of this RFC
+   claimed the Forgejo `verification` object was already in the client's
+   models — it is not. Each is verified against a live forge in the phase
+   that first relies on it. **Phase 1 confirmed its six cells on 2026-09-03**
+   (GitHub and Forgejo: tag, commit, branch — §13.1); **phases 4 and 5
+   confirmed the last five on 2026-09-04** (GitLab's tag, commit, branch and
+   signature endpoints, GitHub's attestation store, Forgejo's `verification`
+   object — §13.2). Every cell of the table is now a live observation, and
+   the question is closed.
+2. ~~**Installers through `raw`.**~~ RFC 0010 decision 9 says BatleHub proxies
    registries, not installers, and refuses to mirror `install.sh`; this RFC
    serves exactly that file under a `warn` default. The two are reconcilable
    — 0010 is about *hosting* an installer as a package, this is about
    *passing one through* with a policy on it — but the sentence has to be
    written in both documents, and `scripts = "deny"` may be the right default
    for a registry with `[security]`. Decide before phase 3.
-3. **An `archive/{ref}.tar.gz` route alias.** Every forge's own JSON
+
+   **Decided 2026-09-04, before phase 3.** Both halves. (a) The two RFCs are
+   reconciled as stated: 0010 refuses to *host* an installer as a package —
+   a synthetic version, a cache entry, a name in the catalogue — and this
+   RFC passes one *through* under a policy, with a reason code on the
+   response. (b) `scripts` defaults to **`deny` on a registry with
+   `[registries.security]`** and to `warn` on any other. Opting into a
+   quarantine is opting into "nothing unscanned is served", and a shell
+   script passed through is the one artifact no scanner in this codebase
+   reads: `guarddog` and `postmortem` read package archives, `trivy` reads
+   SBOMs and lockfiles, and none of them is handed a single file. A default
+   of `warn` there would have been a hole in the one section that promises
+   there is none.
+3. ~~**An `archive/{ref}.tar.gz` route alias.**~~ Every forge's own JSON
    advertises this shape; the snippet rewrites it and §4.2 rewrites it in
    JSON, so nothing needs it today. Adding it would let an un-rewritten
    `tarball_url` work; it would also be a second name for one coordinate in
-   the cache and the access log. Lean: no, until a client is observed to
-   need it.
+   the cache and the access log.
+
+   **Decided 2026-09-04: no.** The setup snippet and the §4.2 JSON rewrite
+   both point every client at `tarball/{ref}`, and across `mise.sh`'s runs
+   and the live probes of §13.1 and §13.2 no client has been observed to
+   request the alias. Adding it would give one coordinate two names in the
+   cache and the access log — the thing decision 12 exists to prevent — for
+   a request nobody makes. Reopen it on the first client that does, with the
+   client's name.
 
 ---
 
@@ -708,3 +737,217 @@ verdict model (this RFC only adds codes and one rule); storage backends;
 | 3     | `[raw]` policy, off-by-default switch, script sniffing, `[api_reads]` typed routes + link rewriting + verdict filtering of release listings. Decides §11 q2 first. |
 | 4     | GitLab `ForgeRegistry` to parity; the three registry pages updated.                                          |
 | 5     | Provenance (attestations, signatures) wired into 0018 findings; GHES attestation detection; Forgejo/GitLab commit and tag models. |
+
+---
+
+## 13. Revision against the tree
+
+### 13.1 Phase 1 landed (2026-09-03)
+
+Built and verified: `ForgeCoordinate` and `RefKind` (`entities/forge.rs`),
+the `ForgeRegistry`, `RefResolutionRepository` and `RateLimitBudget` ports
+(`ports/forge.rs`), `services::forge_refs::resolve_ref`, `mig!` 047
+(`ref_resolutions`) and 048 (`rate_limit_budget`) with Postgres and in-memory
+stores, the `PackageId` rewrite in `ProxyService::handle`, the two response
+headers, `ForgeRegistry` on the GitHub and Forgejo clients with every API
+call drawn on the budget, the GitHub client on
+`ssrf::fetch_following_redirects_trusting`, `[registries.refs]` with its
+validation, the `forge.anonymous-upstream` warning, and `tests/heavy/mise.sh`.
+The six phase-1 parity cells were probed live against api.github.com and
+codeberg.org before the clients were written; the table above records what
+each returned. Six things differ from the text, each deliberate:
+
+- **`ForgeCoordinate` is read from the `PackageId`, not parsed from the
+  path.** The handlers already encode the request in a small set of artifact
+  conventions (`tarball/{ref}`, `zipball`, `raw/{path}`, `filename/{name}`,
+  an asset id, `version = "releases"`); a second parser over the URL would be
+  a second address for the same request. `from_package_id` reads those
+  conventions back, in the one place that already resolves metadata first.
+- **The access log records the resolved coordinate.** §4.2 asked for the
+  un-rewritten id in the log and both in the headers. The audit row now names
+  the commit that was served, which is the fact an incident needs; the
+  requested ref is in the response headers and in `extra.forge.requested_ref`
+  on the metadata. Threading a second id through every audit call for a row
+  that would say `main` was not worth its surface.
+- **The GitHub client trusts three origins, not one.** GitHub is the API
+  host, `github.com` for archives and `raw.githubusercontent.com` for raw
+  files, and a private repository needs the token on all three. The guard
+  gained a `fetch_following_redirects_trusting` form taking the derived
+  origins; every hop off them is SSRF-checked and re-issued without
+  credentials, and an asset URL not on one of them is refused before any
+  request.
+- **`forge.raw-disabled-but-linked` waits for phase 3.** It describes the
+  `[raw]` section, which does not exist yet; raw stays implicitly on until
+  phase 3 turns it off, and a warning about a switch that is not there would
+  be noise.
+- **`forge.anonymous-upstream` fires for all three kinds.** GitLab.com is
+  metered too, and an anonymous self-hosted Forgejo still sees the proxy's
+  requests as nobody's. The message names GitHub's 60/hour as the reason.
+- **The release listing (`/releases`) is not drawn on the budget.** It goes
+  through the shared `fetch_release_listing` helper, which takes a request
+  rather than a client; the release-by-tag, asset, ref and commit calls are.
+  Closing that gap is a one-line change once the helper takes a client.
+
+**Two shipped defects `mise.sh` found**, both in the three routes §4.2 says a
+client calls today, and both invisible to every route test because
+`FixedRegistry` answers any coordinate with bytes:
+
+- `GET /{o}/{r}/releases/tags/{tag}` answered **500** to every real client.
+  The handler streams it through `proxy_stream`, and both forge clients'
+  `fetch_artifact` refused a coordinate with no artifact selector. mise's
+  `github:` backend asks for exactly this first. Both clients now stream the
+  release's own JSON, byte-exact.
+- `GET /{o}/{r}/releases/assets/{id}` answered **404** unless the caller
+  added `?tag=`, which no client does: the handler's placeholder tag
+  `unknown` was looked up as a release. The GitHub client now reads the
+  asset's own JSON, takes its release from `browser_download_url`, and dates
+  the coordinate by that release; the coordinate model treats the placeholder
+  as naming no ref, so the by-id route carries no ref headers (there is no
+  ref to report until the asset has been read). Forgejo's by-id route still
+  needs the tag — its API addresses an attachment through its release — and
+  is left for phase 4 with the GitLab parity work.
+
+Also observed: mise sends a `HEAD` for the asset by name before falling back
+to the API asset, and the artifact routes answer `404` to `HEAD`. Harmless
+here, since the fallback works, and noted for phase 3's typed reads.
+
+Observed by `mise.sh` against api.github.com anonymously, with mise 2026.8.6
+(the `ubi:` backend was tried first and downloads with its own HTTP client,
+outside mise's `url_replacements` — the suite uses `github:`): `mise install
+github:cli/cli[exe=gh]@2.60.0` read the release JSON, the checksums file and
+the asset through the proxy; the release JSON and the checksums answered
+`X-BatleHub-Ref-Kind: tag` with the tag's commit; `tarball/trunk` answered
+`branch` with the head commit; `tarball/v2.60.0` answered `tag`;
+`tarball/<sha>` answered `commit` resolving to itself; and a second pull of
+`trunk` after its TTL was a cache hit on the commit-keyed entry. Not observed,
+because they are phase 2: the moved-tag refusal and the `MUTABLE_REF` verdict.
+
+Not yet in "In review": §11 q2 and q3 are still open, and the five GitLab
+and provenance cells are still from documentation.
+
+### 13.2 Phases 2–5 landed (2026-09-04)
+
+Built and verified on `feat/idk`. The five parity cells that were still
+written from documentation were probed live against api.github.com,
+gitlab.com and codeberg.org before the code that relies on them, and the
+table above now records what each returned; §11 questions 1 and 2 are closed
+in place.
+
+**Phase 2 — the ref is a finding.** `[registries.refs]` gained
+`mutable_refs` and `tag_moved`; `ForgeRefRule` (`rules/forge_ref.rs`) reads
+the resolution back out of `extra.forge` and produces `MUTABLE_REF`,
+`TAG_MOVED` and `ASSET_REPLACED`, with the detection shared by
+`services::forge_refs::ref_findings` so there is one definition of what a
+moved tag is. `X-BatleHub-Ref-Previous-Commit` joins the two phase-1 headers.
+The verdict endpoint resolves a forge ref, so `batlehub why
+github:cli/cli@main` answers about the commit and says which one; a new
+`GET /api/v1/explore/{registry}/{name}/refs` lists what this instance has
+resolved for a repository, which is the console's moving-refs panel.
+
+**Phase 3 — raw, and the typed reads.** `[registries.raw]` and
+`[registries.api_reads]` with the §4.3 validation; `RawPolicyRule` refuses
+raw that is off, a repository outside the allowlist, a branch under
+`require_pinned` and a script under `scripts = "deny"`; the size ceiling is
+enforced by lowering the *stream* limit, so a file over it is refused and
+never truncated. The three families are typed routes in this proxy's own
+shape. Release documents — the listing and the by-tag route, on all three
+forges — have their download URLs repointed at the proxy and the forge's own
+API links removed.
+
+**Phase 4 — GitLab.** `ForgeRegistry` for the GitLab client (tag, branch,
+commit, tags, signature), and every GitLab API call now draws on the shared
+rate-limit budget, which was the phase-1 gap decision 10 deferred.
+
+**Phase 5 — provenance.** `ForgeProvenance::{Verified, Invalid,
+Unverifiable, Missing}` and `ForgeRegistry::provenance`; GitHub reads the
+attestation store for an asset digest and the commit's `verification`
+otherwise, Forgejo reads `verification`, GitLab reads the signature endpoint
+and falls back to release evidence — the one source of `Unverifiable`, with a
+test over both other clients asserting they never produce it.
+`ForgeProvenanceScanner` turns the answer into a finding on a `[security]`
+registry.
+
+**Seven things differ from the text, each deliberate:**
+
+- **The ref facts are a rule, never a scanner.** §6.1 offered both — a rule
+  without `[security]`, `RuleAsScanner` with it. The scanner half cannot
+  work: the worker judges a *coordinate* and the ref is a fact about a
+  *request*, so `PackageMetadata::minimal(job.package)` has no ref to read,
+  and the same commit reached through a tag and through a branch is one
+  stored verdict and two ref kinds. The rule runs on both kinds of registry
+  and, where there is a verdict, merges its findings into the *request's*
+  verdict through a new `verdict::augment_request_verdict` — so a warned
+  branch answers `X-BatleHub-Verdict: warned` and nothing about the ref is
+  ever written to the verdict store.
+- **`ASSET_REPLACED` compares the forge's advertised digest with the bytes
+  already cached**, not two observations of the bytes. GitHub carries
+  `digest` on the asset JSON (confirmed 2026-09-04, `null` on assets
+  uploaded before the field existed), and the proxy already records the
+  SHA-256 of what it stored. Where either is absent the finding cannot fire,
+  which is a first sight and is trusted.
+- **`RAW_SCRIPT` is judged twice, not once.** §4.2 asks for "first bytes or
+  extension". The extension is checked in the rule, before any fetch, and
+  produces the `warn` as well as the `deny`. The shebang is checked on the
+  first chunk of the response — and only under `deny`, because refusing
+  costs one chunk while warning on bytes would mean peeking at every raw
+  file to say something the name already said.
+- **The three `[api_reads]` families answer BatleHub's own shape**, not the
+  forge's rewritten JSON. §4.2 wrote the rewriting requirement for the
+  release documents, which is where the URLs that matter are; a typed answer
+  for tags, commits and branches has no upstream URL in it at all, which is
+  a stronger reading of §11 q11's "no wildcard" than rewriting would be.
+- **`branches/{name}` answers through the resolver**, not through a direct
+  API call, so the branch head the family reports and the commit
+  `tarball/{branch}` serves are the same fact and the resolution is
+  remembered.
+- **The provenance scanner cannot reach an asset's attestation.** A verdict
+  is about a version, and an asset digest is a sub-coordinate the worker does
+  not have; the scanner asks for the commit's signature. The read path
+  carries the asset digest in `extra.forge`, so the attestation is reachable
+  where a request names one asset — which is the same split §4.2 already
+  makes for byte identity.
+- **`forge.raw-disabled-but-linked` fires for every forge registry that has
+  not enabled raw**, rather than inspecting the generated snippet. The
+  snippet rewrites the forge's raw host unconditionally for all three kinds,
+  so the two conditions are the same condition; checking the generator would
+  have been a second copy of a fact that is already true by construction.
+
+**Measured.** `crates/web/tests/forge_security.rs` (8 tests: a branch served
+and named, refused under `deny`, warned on the wire under `[security]`; a
+moved tag refused by default, warned when configured, denied through the
+verdict; an asset digest change refused and an archive's ignored),
+`crates/web/tests/forge_api_reads.rs` (8: raw off until written, the
+allowlist, `require_pinned`, `scripts` warn/deny, the three families opt-in
+and their shapes, a package registry refusing), unit tests for the rule, the
+raw policy, the link rewriting on both forge shapes, GitLab's five endpoints
+against mockito bodies copied from gitlab.com, and the provenance guarantee
+over every GitHub and Forgejo path.
+
+**Left for later** — both closed the next day, in §13.3. The `mise.sh`
+heavy suite still drives phase 1's routes
+only; a moved tag cannot be staged against a real forge, so the wire
+assertions for `TAG_MOVED` live in the in-process suite. The Explorer's
+version rows do not yet show a short SHA — the moving-refs panel is the half
+of §6.5 that needed a store behind it, and the SHA column is presentation
+over data the page already has.
+
+### 13.3 The tails (2026-09-05)
+
+What the build order that followed this RFC left for last: presentation
+over data the page already had, and client-side proof of phases 3–5.
+The Explorer's version rows now show the short SHA beside a version that
+is a ref (`data-testid="ref-sha"`, from the same `/refs` answer the
+moving-refs panel reads; nothing on a package registry, where there is no
+ref to resolve), tested in `PackageDetailPage.test.ts`. `tests/heavy/mise.sh`
+gained two sections under a `[registries.raw] enabled = true, scripts =
+"deny"` and `[registries.api_reads] families = ["tags"]` config: raw
+`script/createrepo.sh` at a pinned tag is answered `403` naming
+`RAW_SCRIPT` with none of its bytes, `README.md` at the same tag is served
+through the same route; the `tags` family answers and names the tag, the
+`commits` family — not enabled — refuses; and the release document for the
+tag has every `browser_download_url`, `tarball_url` and `zipball_url` on
+the proxy and no `assets_url`/`upload_url`/asset `url` left on
+api.github.com. One thing the run settled: the release's own top-level
+`url` is left as the forge wrote it — it is the release's identity, not a
+link a client follows — and the suite asserts on the links that are.
+

@@ -1468,3 +1468,190 @@ fn a_config_with_no_strategy_evicts_nothing() {
     }
     .evicts_anything());
 }
+
+// ── RFC 0014 §5.3: the upstream-disappearance hold ───────────────────────────
+
+/// A status store that holds a fixed set of `hold_key` forms.
+struct FixedHold(std::collections::HashSet<String>);
+
+#[async_trait]
+impl crate::ports::UpstreamStatusPort for FixedHold {
+    async fn record_miss(
+        &self,
+        _: crate::entities::MissObservation<'_>,
+    ) -> Result<crate::entities::UpstreamStatus, CoreError> {
+        unreachable!("eviction never writes")
+    }
+    async fn confirm(
+        &self,
+        _: &crate::entities::UpstreamKey<'_>,
+        _: chrono::DateTime<Utc>,
+    ) -> Result<(), CoreError> {
+        unreachable!("eviction never writes")
+    }
+    async fn clear(
+        &self,
+        _: &crate::entities::UpstreamKey<'_>,
+    ) -> Result<Option<crate::entities::UpstreamStatus>, CoreError> {
+        unreachable!("eviction never writes")
+    }
+    async fn get(
+        &self,
+        _: &crate::entities::UpstreamKey<'_>,
+    ) -> Result<Option<crate::entities::UpstreamStatus>, CoreError> {
+        Ok(None)
+    }
+    async fn list(
+        &self,
+        _: crate::entities::UpstreamStatusFilter,
+    ) -> Result<Vec<crate::entities::UpstreamStatus>, CoreError> {
+        Ok(vec![])
+    }
+    async fn count(&self, _: crate::entities::UpstreamStatusFilter) -> Result<u64, CoreError> {
+        Ok(0)
+    }
+    async fn disappeared_keys(
+        &self,
+        _: &str,
+    ) -> Result<std::collections::HashSet<String>, CoreError> {
+        Ok(self.0.clone())
+    }
+}
+
+fn held(keys: &[&str]) -> Arc<dyn crate::ports::UpstreamStatusPort> {
+    Arc::new(FixedHold(keys.iter().map(ToString::to_string).collect()))
+}
+
+/// Two expired artifacts, one held by version and one by its whole package,
+/// beside one expired and unheld.
+fn seed_held_trio(meta: &InMemArtifactMeta, storage: &InMemStorage) {
+    for (name, version) in [("gone", "1.0"), ("withdrawn", "2.0"), ("plain", "1.0")] {
+        let key = format!("artifact:npm/{name}:{version}");
+        meta.seed(make_meta(
+            &key,
+            "npm",
+            name,
+            version,
+            100,
+            Duration::days(30),
+            Duration::days(30),
+        ));
+        storage.seed(&key, b"x");
+    }
+}
+
+#[tokio::test]
+async fn the_hold_keeps_a_disappeared_artifact_through_ttl_idle_and_keep_latest() {
+    for pass in ["ttl", "idle", "keep_latest_n"] {
+        let meta = InMemArtifactMeta::arc();
+        let storage = InMemStorage::arc();
+        seed_held_trio(&meta, &storage);
+        // A second, newer version of each, so keep_latest_n = 1 has a tail.
+        for name in ["gone", "withdrawn", "plain"] {
+            let key = format!("artifact:npm/{name}:9.9");
+            meta.seed(make_meta(
+                &key,
+                "npm",
+                name,
+                "9.9",
+                100,
+                Duration::minutes(1),
+                Duration::minutes(1),
+            ));
+            storage.seed(&key, b"x");
+        }
+        let config = EvictionConfig {
+            artifact_ttl_secs: (pass == "ttl").then_some(3600),
+            idle_days: (pass == "idle").then_some(1),
+            keep_latest_n: (pass == "keep_latest_n").then_some(1),
+            registry: "npm".to_owned(),
+            ..Default::default()
+        };
+        let svc = svc(meta.clone(), storage.clone(), config)
+            .with_upstream_status(held(&["gone@1.0", "withdrawn"]));
+        let mut report = EvictionReport::live();
+        let count = match pass {
+            "ttl" => svc.run_ttl(&mut report).await.unwrap(),
+            "idle" => svc.run_idle(&mut report).await.unwrap(),
+            _ => svc.run_keep_latest_n(&mut report).await.unwrap(),
+        };
+        assert_eq!(count, 1, "{pass}: only the unheld artifact goes");
+        assert_eq!(report.held, 2, "{pass}");
+        assert!(
+            storage.contains("artifact:npm/gone:1.0"),
+            "{pass}: held by version"
+        );
+        assert!(
+            storage.contains("artifact:npm/withdrawn:2.0"),
+            "{pass}: held by package"
+        );
+        assert!(!storage.contains("artifact:npm/plain:1.0"), "{pass}");
+    }
+}
+
+#[tokio::test]
+async fn the_size_cap_still_evicts_held_artifacts_but_last() {
+    let meta = InMemArtifactMeta::arc();
+    let storage = InMemStorage::arc();
+    // The held one is the *least* recently used, so LRU order alone would
+    // take it first.
+    for (name, age) in [("gone", 300), ("a", 200), ("b", 100)] {
+        let key = format!("artifact:npm/{name}:1.0");
+        meta.seed(make_meta(
+            &key,
+            "npm",
+            name,
+            "1.0",
+            100,
+            Duration::seconds(age),
+            Duration::seconds(age),
+        ));
+        storage.seed(&key, b"x");
+    }
+    let svc = |cap: u64| {
+        svc(
+            meta.clone(),
+            storage.clone(),
+            EvictionConfig {
+                max_size_bytes: Some(cap),
+                registry: "npm".to_owned(),
+                ..Default::default()
+            },
+        )
+        .with_upstream_status(held(&["gone@1.0"]))
+    };
+    // Over by one artifact: the present LRU candidate goes, the held one stays.
+    let mut report = EvictionReport::live();
+    assert_eq!(svc(200).run_lru_size_cap(&mut report).await.unwrap(), 1);
+    assert!(storage.contains("artifact:npm/gone:1.0"), "held sorts last");
+    assert!(!storage.contains("artifact:npm/a:1.0"));
+    assert_eq!(report.held, 1);
+    // Over by more than the present candidates can cover: the hold yields.
+    let mut report = EvictionReport::live();
+    assert_eq!(svc(0).run_lru_size_cap(&mut report).await.unwrap(), 2);
+    assert!(
+        !storage.contains("artifact:npm/gone:1.0"),
+        "the cap wins over the hold"
+    );
+}
+
+#[tokio::test]
+async fn without_a_status_store_nothing_is_held() {
+    let meta = InMemArtifactMeta::arc();
+    let storage = InMemStorage::arc();
+    seed_held_trio(&meta, &storage);
+    let mut report = EvictionReport::live();
+    let count = svc(
+        meta.clone(),
+        storage.clone(),
+        EvictionConfig {
+            artifact_ttl_secs: Some(3600),
+            registry: "npm".to_owned(),
+            ..Default::default()
+        },
+    )
+    .run_ttl(&mut report)
+    .await
+    .unwrap();
+    assert_eq!((count, report.held), (3, 0));
+}

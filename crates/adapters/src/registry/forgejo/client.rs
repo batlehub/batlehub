@@ -2,16 +2,25 @@ use async_trait::async_trait;
 use chrono::DateTime;
 use futures::TryStreamExt;
 
+use std::sync::Arc;
+
+use super::super::forge_api::{parse_date, person_label, BudgetedApi};
+use super::super::github::commit_dated_metadata;
 use super::super::http_client::{
-    apply_upstream_tls, basic_auth_get, ensure_same_origin, fetch_release_listing,
-    to_registry_error, upstream_auth_headers, UpstreamHttpOptions,
+    apply_upstream_tls, basic_auth_get, ensure_same_origin, ensure_url_under_base,
+    fetch_release_listing, percent_encode_path, to_registry_error, upstream_auth_headers,
+    UpstreamHttpOptions,
 };
 use super::super::ssrf;
-use super::models::{FjAsset, FjRelease};
+use super::models::{FjAsset, FjBranch, FjCommit, FjRelease, FjTag};
 use batlehub_core::{
-    entities::{PackageId, PackageMetadata},
+    entities::{is_commit_sha, ForgeProvenance, PackageId, PackageMetadata, RefKind},
     error::CoreError,
-    ports::{DocumentKind, FetchedArtifact, RegistryClient, VersionDocument},
+    ports::{
+        BudgetRole, DocumentKind, FetchedArtifact, ForgeAsset, ForgeCommit, ForgeRegistry,
+        ForgeRelease, ForgeReleaseSource, ForgeTag, RateLimitBudget, RegistryClient,
+        ResolvedTarget, VersionDocument,
+    },
 };
 
 /// Forgejo / Gitea REST API v1 registry client.
@@ -42,6 +51,11 @@ pub struct ForgejoRegistryClient {
     /// API base, derived as `{base_url}/api/v1`.
     pub(super) api_base_url: String,
     pub(super) basic_auth: Option<(String, String)>,
+    /// The rate-limit budget every API call draws on (RFC 0019 §5.2). Forgejo
+    /// reports no `X-RateLimit-*` headers, so nothing is observed from it —
+    /// the budget still gates the worker's share of the token.
+    pub(super) api: BudgetedApi,
+    pub(super) token_fingerprint: String,
 }
 
 impl ForgejoRegistryClient {
@@ -85,6 +99,13 @@ impl ForgejoRegistryClient {
         let base_url = root.trim_end_matches('/').to_owned();
         let api_base_url = format!("{base_url}/api/v1");
 
+        let token_fingerprint = batlehub_core::ports::token_fingerprint(
+            opts.bearer_token
+                .as_deref()
+                .or(opts.basic_auth.as_ref().map(|(_, p)| p.as_str()))
+                .or(opts.custom_header.as_ref().map(|(_, v)| v.as_str())),
+        );
+
         Ok(Self {
             http,
             dl_credentialed,
@@ -92,11 +113,47 @@ impl ForgejoRegistryClient {
             base_url,
             api_base_url,
             basic_auth: opts.basic_auth.clone(),
+            api: BudgetedApi::unbudgeted(),
+            token_fingerprint,
         })
+    }
+
+    /// Draw every API call on `budget`, under this registry's name.
+    pub fn with_budget(mut self, registry: &str, budget: Arc<dyn RateLimitBudget>) -> Self {
+        self.api = BudgetedApi::new(budget, registry, self.token_fingerprint.clone());
+        self
+    }
+
+    /// The one subtree a `pkgpath/` selector may address: the instance's
+    /// package registry. The handler prefixes `api/packages/` when it builds the
+    /// selector, and this is that prefix as a URL to measure the result against.
+    fn packages_base(&self) -> String {
+        format!("{}/api/packages", self.base_url)
+    }
+
+    /// The package-registry passthrough URL, confined to the package subtree.
+    ///
+    /// `relative` reaches here from the request path, so the join is the point
+    /// where a dot segment would take the request somewhere the selector never
+    /// named — the instance's admin API, say, still on this origin and so still
+    /// carrying the instance token that `ensure_same_origin` is happy to send.
+    /// `validate_path_safe` rejects those at the edge; re-reading the assembled
+    /// URL here means the confinement does not rest on that one check, and it
+    /// holds on a sub-path install (`https://forge.example/gitea`) where
+    /// same-origin says nothing about staying inside the instance at all.
+    fn passthrough_url(&self, relative: &str) -> Result<String, CoreError> {
+        let url = format!("{}/{}", self.base_url, relative);
+        ensure_url_under_base(&url, &self.packages_base())?;
+        Ok(url)
     }
 
     pub(super) fn get(&self, url: &str) -> reqwest::RequestBuilder {
         basic_auth_get(&self.http, &self.basic_auth, url)
+    }
+
+    /// An API `GET`, through the budget.
+    pub(super) async fn api_get(&self, url: &str) -> Result<reqwest::Response, CoreError> {
+        self.api.send(self.get(url), BudgetRole::Proxy).await
     }
 
     /// Fetch every release for `owner_repo`, following `Link: rel="next"`
@@ -113,7 +170,7 @@ impl ForgejoRegistryClient {
         );
         let mut all = Vec::new();
         for page in 0..20 {
-            let resp = self.get(&url).send().await.map_err(to_registry_error)?;
+            let resp = self.api_get(&url).await?;
             if resp.status() == reqwest::StatusCode::NOT_FOUND {
                 if page == 0 {
                     return Err(CoreError::NotFound(format!("{owner_repo} not found")));
@@ -146,7 +203,7 @@ impl ForgejoRegistryClient {
             "{}/repos/{}/releases/tags/{}",
             self.api_base_url, owner_repo, tag
         );
-        let resp = self.get(&url).send().await.map_err(to_registry_error)?;
+        let resp = self.api_get(&url).await?;
 
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(CoreError::NotFound(format!("{owner_repo}@{tag} not found")));
@@ -157,6 +214,214 @@ impl ForgejoRegistryClient {
             .json::<FjRelease>()
             .await
             .map_err(to_registry_error)
+    }
+}
+
+// ── ForgeRegistry impl (RFC 0019 §6.3) ────────────────────────────────────────
+
+// ── ForgeReleaseSource impl (RFC 0021 §5.2) ───────────────────────────────────
+
+/// Forgejo addresses an asset the way GitHub does — `filename/<name>` — so an
+/// import fetches through `RegistryClient::fetch_artifact` and inherits this
+/// registry's credential and SSRF guard.
+fn fj_release(release: FjRelease) -> ForgeRelease {
+    ForgeRelease {
+        tag: release.tag_name,
+        draft: release.draft,
+        prerelease: release.prerelease,
+        assets: release
+            .assets
+            .into_iter()
+            .map(|a| ForgeAsset {
+                artifact: format!("filename/{}", a.name),
+                name: a.name,
+                size: Some(a.size),
+            })
+            .collect(),
+    }
+}
+
+#[async_trait]
+impl ForgeReleaseSource for ForgejoRegistryClient {
+    async fn list_releases(&self, repo: &str) -> Result<Vec<ForgeRelease>, CoreError> {
+        let url = format!("{}/repos/{}/releases", self.api_base_url, repo);
+        let resp = self.api_get(&url).await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(CoreError::NotFound(format!("{repo} not found")));
+        }
+        let releases: Vec<FjRelease> = resp
+            .error_for_status()
+            .map_err(to_registry_error)?
+            .json()
+            .await
+            .map_err(to_registry_error)?;
+        Ok(releases.into_iter().map(fj_release).collect())
+    }
+
+    async fn release_by_tag(&self, repo: &str, tag: &str) -> Result<ForgeRelease, CoreError> {
+        self.fetch_release_by_tag(repo, tag).await.map(fj_release)
+    }
+}
+
+#[async_trait]
+impl ForgeRegistry for ForgejoRegistryClient {
+    /// Tag first (`tags/{tag}`), then branch (`branches/{name}`), then not
+    /// found. Confirmed against codeberg.org on 2026-09-03. Forgejo's tag JSON
+    /// dates the *commit* it points at (`commit.created`), not the tag object,
+    /// which is RFC 0019 decision 6's answer for a lightweight tag and the best
+    /// this API offers for an annotated one.
+    async fn resolve_ref(
+        &self,
+        owner_repo: &str,
+        git_ref: &str,
+    ) -> Result<ResolvedTarget, CoreError> {
+        let tag_url = format!(
+            "{}/repos/{}/tags/{}",
+            self.api_base_url, owner_repo, git_ref
+        );
+        let resp = self.api_get(&tag_url).await?;
+        if resp.status() != reqwest::StatusCode::NOT_FOUND {
+            let t: FjTag = resp
+                .error_for_status()
+                .map_err(to_registry_error)?
+                .json()
+                .await
+                .map_err(to_registry_error)?;
+            return Ok(ResolvedTarget {
+                kind: RefKind::Tag,
+                sha: t.commit.sha,
+                object_date: parse_date(t.commit.created.as_deref()),
+                publisher: None,
+            });
+        }
+
+        let branch_url = format!(
+            "{}/repos/{}/branches/{}",
+            self.api_base_url, owner_repo, git_ref
+        );
+        let resp = self.api_get(&branch_url).await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(CoreError::NotFound(format!(
+                "{owner_repo}: no tag or branch named '{git_ref}'"
+            )));
+        }
+        let b: FjBranch = resp
+            .error_for_status()
+            .map_err(to_registry_error)?
+            .json()
+            .await
+            .map_err(to_registry_error)?;
+        let committer = b.commit.committer.as_ref();
+        Ok(ResolvedTarget {
+            kind: RefKind::Branch,
+            sha: b.commit.id,
+            object_date: parse_date(b.commit.timestamp.as_deref()),
+            publisher: committer.and_then(|c| {
+                person_label(c.username.as_deref(), c.name.as_deref(), c.email.as_deref())
+            }),
+        })
+    }
+
+    /// `GET /repos/{o}/{r}/tags` — confirmed against codeberg.org on
+    /// 2026-09-04: `name`, `id` (the tag object or the commit) and
+    /// `commit.{sha, created}`. Forgejo dates the *commit*, never a tagger,
+    /// which is the same limitation the parity table records for its
+    /// by-name endpoint.
+    async fn tags(&self, owner_repo: &str) -> Result<Vec<ForgeTag>, CoreError> {
+        let url = format!("{}/repos/{}/tags?limit=100", self.api_base_url, owner_repo);
+        let resp = self.api_get(&url).await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(CoreError::NotFound(format!("{owner_repo} not found")));
+        }
+        let tags: Vec<FjTag> = resp
+            .error_for_status()
+            .map_err(to_registry_error)?
+            .json()
+            .await
+            .map_err(to_registry_error)?;
+        Ok(tags
+            .into_iter()
+            .filter_map(|t| {
+                Some(ForgeTag {
+                    name: t.name?,
+                    sha: t.commit.sha,
+                    date: parse_date(t.commit.created.as_deref()),
+                })
+            })
+            .collect())
+    }
+
+    /// The commit's own signature, as Forgejo verified it. Forgejo has no
+    /// attestation store, so a release asset has no provenance of its own and
+    /// the answer is the commit's — never `Unverifiable`, which is GitLab's
+    /// alone (RFC 0019 decision 8).
+    async fn provenance(
+        &self,
+        owner_repo: &str,
+        sha: &str,
+        _asset_digest: Option<&str>,
+    ) -> Result<ForgeProvenance, CoreError> {
+        let url = format!(
+            "{}/repos/{}/git/commits/{}",
+            self.api_base_url, owner_repo, sha
+        );
+        let resp = self.api_get(&url).await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(ForgeProvenance::Missing);
+        }
+        let c: FjCommit = resp
+            .error_for_status()
+            .map_err(to_registry_error)?
+            .json()
+            .await
+            .map_err(to_registry_error)?;
+        let v = c.commit.as_ref().and_then(|d| d.verification.as_ref());
+        Ok(match v {
+            Some(v) if v.verified => ForgeProvenance::Verified {
+                detail: v.reason.clone().unwrap_or_else(|| "valid".to_owned()),
+            },
+            Some(v) => {
+                let reason = v.reason.clone().unwrap_or_default();
+                // `gpg.error.not_signed_commit` is "there is no signature",
+                // which is `Missing`; anything else is a signature that
+                // failed to verify.
+                if reason.is_empty() || reason.contains("not_signed") {
+                    ForgeProvenance::Missing
+                } else {
+                    ForgeProvenance::Invalid { reason }
+                }
+            }
+            None => ForgeProvenance::Missing,
+        })
+    }
+
+    async fn commit(&self, owner_repo: &str, sha: &str) -> Result<ForgeCommit, CoreError> {
+        let url = format!(
+            "{}/repos/{}/git/commits/{}",
+            self.api_base_url, owner_repo, sha
+        );
+        let resp = self.api_get(&url).await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(CoreError::NotFound(format!(
+                "{owner_repo}: no commit {sha}"
+            )));
+        }
+        let c: FjCommit = resp
+            .error_for_status()
+            .map_err(to_registry_error)?
+            .json()
+            .await
+            .map_err(to_registry_error)?;
+        let detail = c.commit.as_ref().and_then(|d| d.committer.as_ref());
+        Ok(ForgeCommit {
+            sha: c.sha,
+            committed_at: parse_date(detail.and_then(|d| d.date.as_deref())),
+            committer: person_label(
+                c.committer.as_ref().and_then(|u| u.login.as_deref()),
+                detail.and_then(|d| d.name.as_deref()),
+                detail.and_then(|d| d.email.as_deref()),
+            ),
+        })
     }
 }
 
@@ -183,9 +448,14 @@ pub(super) fn static_artifact_url(
     } else if artifact == "zipball" {
         Some(format!("{base}/{owner_repo}/archive/{git_ref}.zip"))
     } else {
-        artifact
-            .strip_prefix("raw/")
-            .map(|file_path| format!("{base}/{owner_repo}/raw/{git_ref}/{file_path}"))
+        // Encoded segment-wise for the same reason as the GitHub client: an
+        // unencoded `%2e%2e` in the caller-supplied path is a dot segment to
+        // `Url::parse` and would walk out of `{owner_repo}/raw/{git_ref}` into
+        // another repository on the same instance, carrying the instance token.
+        artifact.strip_prefix("raw/").map(|file_path| {
+            let file_path = percent_encode_path(file_path);
+            format!("{base}/{owner_repo}/raw/{git_ref}/{file_path}")
+        })
     }
 }
 
@@ -193,8 +463,16 @@ pub(super) fn static_artifact_url(
 
 #[async_trait]
 impl RegistryClient for ForgejoRegistryClient {
+    fn releases(&self) -> Option<&dyn batlehub_core::ports::ForgeReleaseSource> {
+        Some(self)
+    }
+
     fn registry_type(&self) -> &str {
         "forgejo"
+    }
+
+    fn forge(&self) -> Option<&dyn ForgeRegistry> {
+        Some(self)
     }
 
     async fn fetch_version_document(
@@ -209,17 +487,30 @@ impl RegistryClient for ForgejoRegistryClient {
     async fn resolve_metadata(&self, pkg: &PackageId) -> Result<PackageMetadata, CoreError> {
         let owner_repo = &pkg.name;
 
-        // Source archive / raw downloads and package-registry passthrough use no
-        // release tag; return minimal metadata.
+        // The package-registry passthrough addresses no repository; an archive
+        // or raw download names a git ref, which `ProxyService` resolves to a
+        // commit before this is called — and the commit is what dates it
+        // (RFC 0019 §4.2). An unresolved ref stays undated, as before.
         if let Some(ref artifact) = pkg.artifact {
-            if artifact.starts_with("raw/")
-                || artifact.starts_with("tarball/")
-                || artifact == "zipball"
-                || artifact.starts_with("pkgpath/")
-            {
+            if artifact.starts_with("pkgpath/") {
                 return Ok(PackageMetadata::minimal(
                     pkg.clone(),
                     serde_json::Value::Null,
+                ));
+            }
+            if artifact.starts_with("raw/")
+                || artifact.starts_with("tarball/")
+                || artifact == "zipball"
+            {
+                if !is_commit_sha(&pkg.version) {
+                    return Ok(PackageMetadata::minimal(
+                        pkg.clone(),
+                        serde_json::Value::Null,
+                    ));
+                }
+                return Ok(commit_dated_metadata(
+                    pkg,
+                    self.commit(owner_repo, &pkg.version).await,
                 ));
             }
         }
@@ -291,7 +582,7 @@ impl RegistryClient for ForgejoRegistryClient {
             // Package-registry passthrough: `pkgpath/<instance-relative-path>` →
             // `{instance}/<path>` (e.g. `api/packages/{owner}/generic/…`).
             Some(artifact) if artifact.starts_with("pkgpath/") => {
-                format!("{}/{}", self.base_url, &artifact["pkgpath/".len()..])
+                self.passthrough_url(&artifact["pkgpath/".len()..])?
             }
             Some(artifact) => {
                 if let Some(url) =
@@ -303,10 +594,34 @@ impl RegistryClient for ForgejoRegistryClient {
                         .await?
                 }
             }
-            None => {
+            None if git_ref == "releases" => {
                 return Err(CoreError::Registry(
-                    "fetch_artifact requires PackageId::artifact to be set".to_owned(),
+                    "the release listing is a document, not an artifact".to_owned(),
                 ));
+            }
+            // `GET /{o}/{r}/releases/tags/{tag}` — the release's own JSON, as the
+            // forge sent it (see the GitHub client for why this arm exists).
+            None => {
+                let url = format!(
+                    "{}/repos/{}/releases/tags/{}",
+                    self.api_base_url, owner_repo, git_ref
+                );
+                let resp = self.api_get(&url).await?;
+                if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                    return Err(CoreError::NotFound(format!(
+                        "{owner_repo}@{git_ref} not found"
+                    )));
+                }
+                let resp = resp.error_for_status().map_err(to_registry_error)?;
+                let cache_control = resp
+                    .headers()
+                    .get("cache-control")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned);
+                return Ok(FetchedArtifact {
+                    stream: Box::pin(resp.bytes_stream().map_err(to_registry_error)),
+                    cache_control,
+                });
             }
         };
 
@@ -371,6 +686,32 @@ mod tests {
             name: name.to_string(),
             browser_download_url: format!("https://example.com/{name}"),
             size: 0,
+        }
+    }
+
+    /// A `pkgpath/` selector may address the package registry and nothing else.
+    /// One that walks out of `/api/packages` is still same-origin, so it would
+    /// otherwise be fetched with the instance token; the assembled URL is
+    /// re-read against the package subtree to refuse it. The encoded spelling
+    /// matters because it only becomes a dot segment once `Url::parse` sees it.
+    #[test]
+    fn passthrough_url_refuses_escaping_the_package_subtree() {
+        let opts = UpstreamHttpOptions::default();
+        let client = ForgejoRegistryClient::new("https://codeberg.org", &opts).unwrap();
+
+        assert!(client
+            .passthrough_url("api/packages/owner/generic/pkg/1.0/f.bin")
+            .is_ok());
+
+        for selector in [
+            "api/v1/admin/users",
+            "api/packages/../v1/admin/users",
+            "api/packages/%2e%2e/v1/admin/users",
+        ] {
+            assert!(
+                client.passthrough_url(selector).is_err(),
+                "selector should be refused: {selector}"
+            );
         }
     }
 
@@ -622,5 +963,163 @@ mod tests {
         let meta = client.resolve_metadata(&pkg).await.unwrap();
         assert_eq!(meta.is_signed, Some(true));
         assert!(meta.published_at.is_some());
+    }
+}
+
+// ── RFC 0019: refs and commits ───────────────────────────────────────────────
+
+#[cfg(test)]
+mod forge_tests {
+    use super::*;
+    use batlehub_core::ports::ForgeRegistry;
+    use mockito::Server;
+
+    const COMMIT: &str = "8295dea704e1c18ded9965dc8a20981df30945b9";
+
+    fn client(server: &Server) -> ForgejoRegistryClient {
+        ForgejoRegistryClient::new(server.url(), &UpstreamHttpOptions::default()).unwrap()
+    }
+
+    /// Forgejo's releases, normalised the way GitHub's are (RFC 0021 §5.2) —
+    /// including the two flags this model did not carry until the import
+    /// needed them.
+    #[tokio::test]
+    async fn releases_are_normalised_with_their_draft_and_prerelease_flags() {
+        let mut server = Server::new_async().await;
+        let _m = server
+            .mock("GET", "/api/v1/repos/acme/ext/releases")
+            .with_body(
+                r#"[
+                  {"id":2,"tag_name":"v2","draft":true,"prerelease":false,"assets":[]},
+                  {"id":1,"tag_name":"v1","draft":false,"prerelease":false,
+                   "assets":[{"id":7,"name":"ext-1.0.0.vsix","size":3,
+                              "browser_download_url":"https://example.invalid/a.vsix"}]}
+                ]"#,
+            )
+            .create_async()
+            .await;
+
+        let got = client(&server).list_releases("acme/ext").await.unwrap();
+
+        assert_eq!(got.len(), 2);
+        assert!(got[0].draft);
+        assert!(got[1].is_stable());
+        assert_eq!(got[1].assets[0].artifact, "filename/ext-1.0.0.vsix");
+    }
+
+    /// The shape codeberg.org returned for `forgejo/forgejo` `v10.0.0` on
+    /// 2026-09-03: the tag names the commit it points at and that commit's date.
+    #[tokio::test]
+    async fn a_tag_resolves_to_its_commit_and_is_dated_by_it() {
+        let mut server = Server::new_async().await;
+        let _t = server
+            .mock("GET", "/api/v1/repos/forgejo/forgejo/tags/v10.0.0")
+            .with_body(format!(
+                r#"{{"name":"v10.0.0","id":"39843ee2b33ea9f3c95112cd306462d350b93d32","commit":{{"sha":"{COMMIT}","created":"2025-01-15T22:48:56Z"}}}}"#
+            ))
+            .create_async()
+            .await;
+        let t = client(&server)
+            .resolve_ref("forgejo/forgejo", "v10.0.0")
+            .await
+            .unwrap();
+        assert_eq!(t.kind, RefKind::Tag);
+        assert_eq!(t.sha, COMMIT);
+        assert_eq!(
+            t.object_date.map(|d| d.to_rfc3339()),
+            Some("2025-01-15T22:48:56+00:00".to_owned())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_branch_resolves_after_the_tag_lookup_misses() {
+        let mut server = Server::new_async().await;
+        let _miss = server
+            .mock("GET", "/api/v1/repos/forgejo/forgejo/tags/forgejo")
+            .with_status(404)
+            .create_async()
+            .await;
+        let _b = server
+            .mock("GET", "/api/v1/repos/forgejo/forgejo/branches/forgejo")
+            .with_body(format!(
+                r#"{{"name":"forgejo","commit":{{"id":"{COMMIT}","timestamp":"2026-09-03T04:45:22+02:00","committer":{{"name":"Mathieu Fenniak","email":"m@x","username":"mfenniak"}}}}}}"#
+            ))
+            .create_async()
+            .await;
+        let t = client(&server)
+            .resolve_ref("forgejo/forgejo", "forgejo")
+            .await
+            .unwrap();
+        assert_eq!(t.kind, RefKind::Branch);
+        assert_eq!(t.sha, COMMIT);
+        assert_eq!(t.publisher.as_deref(), Some("mfenniak"));
+        assert_eq!(
+            t.object_date.map(|d| d.to_rfc3339()),
+            Some("2026-09-03T02:45:22+00:00".to_owned())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_commit_is_dated_by_its_committer() {
+        let mut server = Server::new_async().await;
+        let _c = server
+            .mock("GET", &*format!("/api/v1/repos/o/r/git/commits/{COMMIT}"))
+            .with_body(format!(
+                r#"{{"sha":"{COMMIT}","created":"2026-09-03T04:45:22+02:00","commit":{{"committer":{{"name":"Mathieu","email":"m@x","date":"2026-09-03T04:45:22+02:00"}}}},"committer":{{"login":"mfenniak"}}}}"#
+            ))
+            .create_async()
+            .await;
+        let c = client(&server).commit("o/r", COMMIT).await.unwrap();
+        assert_eq!(c.committer.as_deref(), Some("mfenniak"));
+        assert!(c.committed_at.is_some());
+
+        let pkg = PackageId::new("fj", "o/r", COMMIT).with_artifact("raw/README.md");
+        let meta = client(&server).resolve_metadata(&pkg).await.unwrap();
+        assert!(meta.published_at.is_some());
+        assert_eq!(meta.extra["forge"]["committer"], "mfenniak");
+    }
+
+    #[tokio::test]
+    async fn a_release_by_tag_streams_the_forges_own_json() {
+        let mut server = Server::new_async().await;
+        let body = r#"{"id":1,"tag_name":"v1","assets":[]}"#;
+        let _rel = server
+            .mock("GET", "/api/v1/repos/o/r/releases/tags/v1")
+            .with_body(body)
+            .create_async()
+            .await;
+        let fetched = client(&server)
+            .fetch_artifact(&PackageId::new("fj", "o/r", "v1"))
+            .await
+            .unwrap();
+        let got: Vec<u8> = fetched
+            .stream
+            .try_fold(Vec::new(), |mut a, c| async move {
+                a.extend_from_slice(&c);
+                Ok(a)
+            })
+            .await
+            .unwrap();
+        assert_eq!(got, body.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn an_unknown_ref_is_not_found() {
+        let mut server = Server::new_async().await;
+        let _t = server
+            .mock("GET", "/api/v1/repos/o/r/tags/nope")
+            .with_status(404)
+            .create_async()
+            .await;
+        let _b = server
+            .mock("GET", "/api/v1/repos/o/r/branches/nope")
+            .with_status(404)
+            .create_async()
+            .await;
+        let err = client(&server)
+            .resolve_ref("o/r", "nope")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CoreError::NotFound(_)), "{err}");
     }
 }

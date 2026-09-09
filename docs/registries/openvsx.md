@@ -11,6 +11,8 @@ Proxy and cache VS Code extensions from [open-vsx.org](https://open-vsx.org), or
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
 | **Private publish** | ✅ VSIX upload (`PUT …/vsix`) |
+| **Air gap** | no composed listing offline: a gallery answers by query |
+| **Signatures** | the registry signs what it hosts (`[registries.vsx_signing]`), relays the upstream's for what it proxies, and keeps one attached to a republished version |
 
 ## Proxy setup
 
@@ -47,6 +49,13 @@ or an ingress that authenticates in front of BatleHub. A gallery registry that
 requires a bearer token answers every query with an empty list, and the editor
 reports that no extensions were found — which looks like a broken proxy rather
 than a configuration choice.
+
+**Unless you build the editor yourself.** A build you compile can carry a
+small patch that reads a credential and attaches it, and this repository ships
+the module and the integration steps at
+[`patches/che-code/`](https://batleforc.git.batleforc.fr/batlehub/tree/main/patches/che-code).
+It reads the same file `batlehub-cli auth write-token-file` writes; see
+[the credential contract file](#the-credential-contract-file) below.
 :::
 
 ### Use it with `ovsx`
@@ -128,6 +137,43 @@ curl -s -H "Authorization: Bearer <your-token>" \
 # Should show: 50 4b 03 04 ...
 ```
 
+### Signatures
+
+A current editor's Extensions view installs only entries that carry a signature asset. Give the registry a key ([`[registries.vsx_signing]`](/guide/configuration#vsx-signing)) and every version it hosts gets one, in Open VSX's format; what it proxies from an upstream that signs is relayed with the upstream's signature. The public key is at `GET /proxy/{registry}/api/-/public-key/{key_id}` (PEM), and each version's Open VSX document names it under `files.publicKey`.
+
+```sh
+batlehub-cli vsx keygen            # a seed for the config, and its key id
+batlehub-cli vsx verify my-org.my-extension-1.0.0.vsix \
+  --registry https://batlehub.example.com/proxy/internal-ext \
+  --id my-org.my-extension --version 1.0.0
+# ok: … is signed by key 3f1e… (24503 bytes, manifest matches)
+```
+
+**An extension that already carries a signature keeps it.** What the registry proxies is relayed with the upstream's archive, never re-signed. What is republished here from the marketplace — a VSIX downloaded from `marketplace.visualstudio.com`, uploaded to a local registry — loses nothing either: attach the marketplace's signature archive after the package, and the registry serves it as-is instead of signing over it. That archive is the one a stock VS Code verifies, so such a version installs everywhere with nothing turned off.
+
+```sh
+# the VSIX, then the archive the marketplace served as Microsoft.VisualStudio.Services.VsixSignature
+curl -X PUT -H "Authorization: Bearer <token>" -H "Content-Type: application/octet-stream" \
+  --data-binary @ms-vscode.hexeditor-1.11.1.vsix \
+  "https://batlehub.example.com/proxy/internal-ext/ms-vscode.hexeditor/1.11.1/vsix"
+curl -X PUT -H "Authorization: Bearer <token>" -H "Content-Type: application/zip" \
+  --data-binary @ms-vscode.hexeditor-1.11.1.sigzip \
+  "https://batlehub.example.com/proxy/internal-ext/ms-vscode.hexeditor/1.11.1/vsix/signature"
+```
+
+The registry checks the archive's manifest against the bytes it stores (an archive made over other bytes is a `400`), keeps it under the same publish grant as the version, and advertises the signature without a `PublicKey` asset: the key is the signer's, not this registry's.
+
+What installs where, measured against VS Code 1.136.1 ([RFC 0020](/rfc/0020-signing-at-the-vscode-marketplace-registry) §4.5):
+
+| Editor build | Unsigned registry | Signed registry |
+|---|---|---|
+| Stock VS Code, view | Install greyed out, *not signed* | Install enabled; the install needs `extensions.verifySignature: false` — the editor's own verifier accepts the Microsoft marketplace's signature and no other |
+| Stock VS Code, `code --install-extension` | refused, `NotSigned` (since 1.136) | refused until the same setting is off |
+| code-server, VSCodium (the setting shipped off) | Install greyed out | installs |
+| che-code (ships no verifier; measured on 1.128.1) | view: Install greyed out; `code --install-extension` installs | installs, nothing to configure — *Extension signature verification is not done* in its log |
+| An extension proxied from the Microsoft marketplace | refused: the proxy used to drop the upstream's signature | installs everywhere, nothing to set — the upstream's own signature is relayed and verified by the editor |
+| A marketplace extension republished locally with its signature attached | — | installs everywhere with the verifier on: `vsce-sign` answers `Success` to the marketplace's archive served by this registry (measured, `ms-vscode.hexeditor`) |
+
 ### Endpoint reference
 
 <!-- BEGIN endpoints: proxy/openvsx -->
@@ -135,7 +181,9 @@ curl -s -H "Authorization: Bearer <your-token>" \
 |--------|------|-------------|
 | `GET` | `/proxy/{registry}/{extension_id}/{version}/vsix` | Download a VS Code extension VSIX package. |
 | `PUT` | `/proxy/{registry}/{extension_id}/{version}/vsix` | Upload a VS Code extension VSIX package. |
+| `PUT` | `/proxy/{registry}/{extension_id}/{version}/vsix/signature` | `PUT /proxy/{registry}/{extension_id}/{version}/vsix/signature` — attach an |
 | `POST` | `/proxy/{registry}/api/-/namespace/create` | Claim an OpenVSX publisher namespace. |
+| `GET` | `/proxy/{registry}/api/-/public-key/{key_id}` | `GET /proxy/{registry}/api/-/public-key/{key_id}` — the key this |
 | `POST` | `/proxy/{registry}/api/-/publish` | `ovsx publish` — `POST /api/-/publish`. |
 | `GET` | `/proxy/{registry}/api/-/search` | Search the registry — `GET …/api/-/search`. |
 | `GET` | `/proxy/{registry}/api/{namespace}` | `GET /api/{namespace}` — what a publisher has here. |
@@ -155,6 +203,82 @@ curl -s -H "Authorization: Bearer <your-token>" \
 ## Authentication
 
 Pass a BatleHub token as a Bearer header on the VSIX request. Anonymous access works only when the registry's RBAC grants the `anonymous` role read access.
+
+### The credential contract file
+
+The editor is not the only thing that has to find a credential, and none of
+the things that do can share the CLI's config: a program started by a desktop
+session, a workspace template or a terminal inherits neither an environment
+variable nor a login. So there is one file, written by the CLI and read by
+everything else ([RFC 0011](/rfc/0011-openvsx-login) §4.1):
+
+```sh
+batlehub-cli --server https://hub.example.dev auth write-token-file
+batlehub-cli auth status
+```
+
+```
+REGISTRY                  KIND        TOKEN SOURCE               STATE  EXPIRES  REFRESH
+https://hub.example.dev   oidc        inline (written by cli)    ok     4m12s    cli (batlehub-cli)
+https://hub.k8s.dev       kubernetes  file /var/run/…/token      ok     —        reresolve
+```
+
+`$BATLEHUB_HOME/state/vsx-token.json`, `0600`, `$HOME/.batlehub` by default.
+It is keyed by origin, so one laptop pointed at three BatleHubs keeps three
+credentials in one file and a login to one is not a logout from the others.
+The normative shape is the JSON Schema shipped beside the CLI at
+`cli/schema/vsx-token.schema.json`, not this page.
+
+Two properties are worth knowing before you write a consumer:
+
+- **A credential need not be *in* it.** `{"from": "file", "path": "/var/run/…"}`
+  records where to read one, which is what you want for a projected
+  Kubernetes token something else keeps fresh. Pass `--from-file` to
+  `write-token-file` to record one.
+- **Nothing here fails loudly.** A missing file, an unreadable one, a source
+  a consumer does not implement — all of them mean "no credential", and the
+  editor then behaves exactly as it does against an anonymous gallery. That
+  is deliberate, and it is why `auth status` exists: it resolves every entry
+  at the moment you ask and names the reason when one does not, because
+  *nothing was configured* and *the file went away* look identical from the
+  editor and want opposite fixes.
+
+`batlehub-cli auth token` prints a credential for scripts and brokers,
+refreshing it first when it is close to expiry. It is the only command whose
+job is to emit one; `auth status` renders a summary that has no field able to
+hold a secret.
+
+### An editor that cannot send a credential
+
+Stock VS Code, and every build that reads its gallery from `product.json`,
+has no hook for an `Authorization` header on gallery requests. For those,
+run the local gallery proxy and point the editor at it
+([`batlehub-cli proxy serve`](/use/cli#gallery-proxy), RFC 0011 §4.4):
+
+```sh
+# Sign in once, then run the proxy; the editor is pointed at what it prints.
+batlehub-cli --server https://batlehub.example.com auth login
+batlehub-cli --server https://batlehub.example.com auth write-token-file
+batlehub-cli proxy serve --registry https://batlehub.example.com/proxy/<registry>
+```
+
+```json
+"extensionsGallery": {
+  "serviceUrl": "http://127.0.0.1:<port>/<session>/vsx/vscode/gallery",
+  "itemUrl": "http://127.0.0.1:<port>/<session>/vsx/vscode/item",
+  "resourceUrlTemplate": "http://127.0.0.1:<port>/<session>/vsx/vscode/unpkg/{publisher}/{name}/{version}/{path}"
+}
+```
+
+The proxy attaches the credential from the contract file above, rewrites
+every gallery URL onto itself so the `.vsix` download is authenticated
+too, and — while there is no credential — answers a search with a single
+*Sign in to BatleHub* entry whose details are the steps, instead of the
+empty view an anonymous gallery produces. The editor never holds the
+token; it only knows the proxy's URL, which is per run and is the secret.
+`product.json` is the only place a gallery URL can be set, and updates of
+the editor overwrite it: a workspace startup script that runs the proxy
+with `--print-gallery-url` and rewrites the file is the shape that lasts.
 
 ## Notes
 

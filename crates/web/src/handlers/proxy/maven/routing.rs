@@ -37,6 +37,27 @@ pub enum MavenPathKind {
     },
 }
 
+/// The checksum algorithms Maven asks for beside a file, by suffix.
+pub const METADATA_CHECKSUMS: [&str; 4] = ["sha1", "md5", "sha256", "sha512"];
+
+/// When the path is a checksum file *of* `maven-metadata.xml`
+/// (`…/maven-metadata.xml.sha1`), the metadata's package name and the
+/// algorithm. Maven fetches one beside every document; a composed
+/// document has no upstream file to fetch and answers its own (RFC
+/// 0008-bis §13.5).
+pub fn metadata_checksum_of(maven_path: &str) -> Option<(String, &'static str)> {
+    let filename = maven_path.rsplit('/').next()?;
+    let algo = METADATA_CHECKSUMS
+        .iter()
+        .copied()
+        .find(|a| filename == format!("maven-metadata.xml.{a}"))?;
+    let document_path = maven_path.strip_suffix(&format!(".{algo}"))?;
+    match parse_maven_path("", document_path).ok()? {
+        MavenPathKind::Metadata { name } => Some((name, algo)),
+        MavenPathKind::Artifact { .. } => None,
+    }
+}
+
 pub fn parse_maven_path(_registry: &str, maven_path: &str) -> Result<MavenPathKind, AppError> {
     if maven_path.is_empty() {
         return Err(AppError::not_found("empty Maven path"));
@@ -270,6 +291,21 @@ mod tests {
     }
 
     // ── parse_maven_path ──────────────────────────────────────────────────────
+
+    #[test]
+    fn a_metadata_checksum_path_names_the_document_and_the_algorithm() {
+        let (name, algo) =
+            metadata_checksum_of("org/apache/commons/commons-lang3/maven-metadata.xml.sha1")
+                .unwrap();
+        assert_eq!(name, "org.apache.commons:commons-lang3");
+        assert_eq!(algo, "sha1");
+        assert!(
+            metadata_checksum_of("org/apache/commons/commons-lang3/3.12.0/x.jar.sha1").is_none()
+        );
+        assert!(
+            metadata_checksum_of("org/apache/commons/commons-lang3/maven-metadata.xml").is_none()
+        );
+    }
 
     #[test]
     fn parse_maven_path_metadata() {

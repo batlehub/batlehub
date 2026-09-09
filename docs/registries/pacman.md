@@ -11,6 +11,7 @@ Proxy an Arch Linux mirror and, in `local`/`hybrid` mode, host your own: publish
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | path-addressed |
 | **Private publish** | ✅ `curl -X PUT … /pacman/upload` |
+| **Air gap** | no composed index offline: a signed database cannot be re-signed here; a held file is served by path |
 
 ## Proxy setup
 

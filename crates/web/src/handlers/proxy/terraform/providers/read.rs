@@ -27,6 +27,10 @@ async fn signed_identity(
     artifact: &str,
     identity: AuthIdentity,
 ) -> Result<AuthIdentity, AppError> {
+    // The signed URL replaces *which identity* the request authorises as; where
+    // the request came from is unchanged, so the caller's address and agent are
+    // carried across rather than re-read or dropped.
+    let net = identity.1.clone();
     identity_for_artifact(
         svc,
         req,
@@ -43,7 +47,7 @@ async fn signed_identity(
         identity,
     )
     .await
-    .map(AuthIdentity)
+    .map(|i| AuthIdentity(i, net))
 }
 
 /// List available versions for a Terraform provider.
@@ -161,8 +165,8 @@ pub async fn terraform_provider_download(
         package_id: base_pkg,
         identity: identity.0.clone(),
         action: Action::ReleasesRead.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
     };
     let listing = svc
         .version_document(
@@ -187,8 +191,8 @@ pub async fn terraform_provider_download(
         package_id: PackageId::new(&registry, &download_name, &version),
         identity: identity.0,
         action: Action::ReleasesRead.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
     };
     let mut doc = svc
         .version_document(
@@ -260,6 +264,8 @@ pub async fn terraform_provider_download(
 
     let mut resp = HttpResponse::Ok();
     resp.content_type("application/json");
+    // A document composed from the held set says so (RFC 0008-bis §13.7).
+    crate::handlers::proxy::common::listing_headers(&mut resp, &doc);
     mark_uncacheable_if_signed(&mut resp, signed);
     Ok(resp.body(match doc.body {
         batlehub_core::ports::DocumentBody::Json(v) => {
@@ -516,7 +522,7 @@ pub async fn terraform_provider_artifact(
     // Terraform installs.
     let pkg = PackageId::new(&registry, &auth_name, &version).with_artifact(format!("{os}/{arch}"));
     let buf = local_svc
-        .get_artifact_at_key(&pkg, &key, Action::ReleasesRead, &identity)
+        .get_artifact_at_key(&pkg, &key, Action::ReleasesRead, &identity, &identity.1)
         .await
         .map_err(AppError::from)?
         .ok_or_else(|| {

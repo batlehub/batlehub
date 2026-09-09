@@ -3,12 +3,16 @@ pub mod auth;
 pub mod authz;
 pub mod config_cmd;
 pub mod download;
+pub mod mise;
 pub mod owner;
 pub mod package;
+pub mod proxy;
 pub mod publish;
 pub mod registry;
+pub mod security;
 pub mod setup;
 pub mod version;
+pub mod vsx;
 
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
@@ -66,6 +70,23 @@ pub enum Command {
         #[command(subcommand)]
         cmd: owner::OwnerCommand,
     },
+    /// Air-gap commands: plan a mise.lock as a bill of materials (RFC 0008)
+    Mise {
+        #[command(subcommand)]
+        cmd: mise::MiseCommand,
+    },
+    /// The local gallery proxy for editors that cannot send a credential
+    /// (RFC 0011 §4.4)
+    Proxy {
+        #[command(subcommand)]
+        cmd: proxy::ProxyCommand,
+    },
+    /// A registry's VSIX signature: a seed for `[registries.vsx_signing]`,
+    /// and verifying a download against the served archive and key.
+    Vsx {
+        #[command(subcommand)]
+        cmd: vsx::VsxCommand,
+    },
     /// Publish an artifact to a local/hybrid registry
     Publish(publish::PublishArgs),
     /// Download a file through the proxy cache (warms path-addressed registries)
@@ -94,6 +115,20 @@ pub enum Command {
     Setup {
         #[command(subcommand)]
         cmd: setup::SetupCommand,
+    },
+    /// Explain why a version is held, denied or warned (RFC 0018)
+    Why(security::WhyArgs),
+    /// Wait for a held version to become servable; exit 1 when waiting cannot help, 2 on timeout
+    Wait(security::WaitArgs),
+    /// The audit log's own reports: what an identity pulled (RFC 0018)
+    Audit {
+        #[command(subcommand)]
+        cmd: security::AuditCommand,
+    },
+    /// The admin's side of a verdict: who pulled a version (RFC 0018)
+    Verdicts {
+        #[command(subcommand)]
+        cmd: security::VerdictsCommand,
     },
     /// Launch interactive TUI
     Tui,

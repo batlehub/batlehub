@@ -85,6 +85,13 @@ pub struct VersionDocument {
     /// `proxy_stream`, which served packuments as `application/octet-stream`.
     pub content_type: String,
     pub body: DocumentBody,
+    /// `Some(n)` when this document was not received from upstream but
+    /// composed from the `n` versions this instance holds (RFC 0008-bis
+    /// §4.2). A flag rather than a second type, so every filter and rewrite
+    /// a held document goes through applies to a synthesised one unchanged;
+    /// the response builder turns it into `X-BatleHub-Listing: synthesised`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synthesised: Option<u32>,
 }
 
 impl VersionDocument {
@@ -93,6 +100,7 @@ impl VersionDocument {
         Self {
             content_type: "application/json".to_owned(),
             body: DocumentBody::Json(value),
+            synthesised: None,
         }
     }
 
@@ -101,6 +109,7 @@ impl VersionDocument {
         Self {
             content_type: content_type.into(),
             body: DocumentBody::Text(text.into()),
+            synthesised: None,
         }
     }
 }
@@ -177,6 +186,41 @@ impl DocumentKind {
     /// what addresses the document, and it keeps one cache entry per platform
     /// rather than one per provider.
     pub const PROVIDER_DOWNLOAD: Self = Self::Secondary("provider-download");
+    /// The `nodejs.org/dist` tree's `index.json` — the same release table as
+    /// `index.tab`, as a JSON array — as against the TSV nvm reads.
+    ///
+    /// RFC 0010 §4.4. Two encodings of one document: nvm resolves every
+    /// install through `index.tab`, fnm and mise read `index.json`. A separate
+    /// kind because they are different bytes for different URLs, and because
+    /// filtering one and not the other would leave an unfiltered answer to the
+    /// same question.
+    pub const INDEX_JSON: Self = Self::Secondary("index-json");
+    /// SDKMAN's `candidates/default/{c}` — the one identifier `sdk install
+    /// <candidate>` resolves to when no version is given — as against the
+    /// candidate's `versions/all`.
+    ///
+    /// RFC 0010 §6.2. Names one version and carries no list, so, like Go's
+    /// `@latest`, it is repaired against the filtered `versions/all` in the
+    /// handler that has both rather than inside `strip`.
+    pub const SDKMAN_DEFAULT: Self = Self::Secondary("sdkman-default");
+    /// SDKMAN's rendered `candidates/{c}/{plat}/versions/list` — the table
+    /// `sdk list <candidate>` prints — as against the comma-separated
+    /// `versions/all`.
+    ///
+    /// The client's `?current=&installed=` query travels in the package
+    /// string and is therefore part of the cache key: two clients with
+    /// different installed sets must not share an entry (RFC 0010 §6.4).
+    pub const SDKMAN_VERSIONS_LIST: Self = Self::Secondary("versions-list");
+    /// A protocol document relayed byte-exact, addressed by the upstream path
+    /// carried in `package`.
+    ///
+    /// SDKMAN's `candidates/all`, `candidates/list`, `hooks/{pre,post}/…`,
+    /// `healthcheck`, `broker/version/…` and `selfupdate/…` are all text the
+    /// client reads as-is, and two of them (the hooks) are bash it sources
+    /// and runs — so none is filtered, rewritten or parsed (RFC 0010 §7). One
+    /// kind rather than six, because the only thing that varies is the path;
+    /// each is still its own cache entry, keyed by that path.
+    pub const RELAYED: Self = Self::Secondary("relayed");
 
     /// The cache-key and log discriminant.
     pub fn as_str(&self) -> &'static str {
@@ -212,6 +256,23 @@ pub trait RegistryClient: Send + Sync {
     /// Stream the raw artifact bytes from the upstream registry, along with any
     /// upstream `Cache-Control` header.
     async fn fetch_artifact(&self, pkg: &PackageId) -> Result<FetchedArtifact, CoreError>;
+
+    /// Ask upstream whether one artifact is still there, without fetching it
+    /// (RFC 0014 §13.5) — a `HEAD` on the file, for the kinds addressed purely
+    /// by path, whose [`Self::resolve_metadata`] answers without asking
+    /// upstream and therefore cannot tell the audit sweep a file has gone.
+    ///
+    /// `Ok(())` when upstream confirms it, [`CoreError::NotFound`] when
+    /// upstream denies it, any other error when upstream could not answer.
+    /// The default is [`CoreError::NotSupported`]: a kind with a metadata
+    /// API is probed through that instead, and a capability gap must read
+    /// as inconclusive, never as absence.
+    async fn probe_artifact(&self, pkg: &PackageId) -> Result<(), CoreError> {
+        Err(CoreError::NotSupported(format!(
+            "{} has no artifact probe: {pkg} is asked about through its metadata",
+            self.registry_type()
+        )))
+    }
 
     /// Return all known version strings for `package`, oldest-first.
     ///
@@ -288,6 +349,28 @@ pub trait RegistryClient: Send + Sync {
         Err(CoreError::NotSupported(
             "this registry type does not link to a README".to_owned(),
         ))
+    }
+
+    /// The forge-specific questions this client answers, when it is a forge
+    /// (RFC 0019 §6.1): ref resolution and commit lookup.
+    ///
+    /// `None` for every package registry, and nothing else changes for them.
+    /// A forge client returns `Some(self)`, which is what lets `ProxyService`
+    /// resolve a ref to a commit before it fetches, without the proxy knowing
+    /// which forge it is talking to.
+    fn forge(&self) -> Option<&dyn super::super::forge::ForgeRegistry> {
+        None
+    }
+
+    /// This client's releases, normalised across forges (RFC 0021 §5.2).
+    ///
+    /// `None` for every package registry, and `Some(self)` for the three that
+    /// serve releases — the same arrangement [`Self::forge`] uses, and for the
+    /// same reason: an import chooses a release without knowing which forge
+    /// answered, and `AppConfig::validate()` has already refused a `from` that
+    /// is not one of the three.
+    fn releases(&self) -> Option<&dyn super::ForgeReleaseSource> {
+        None
     }
 
     /// Search the upstream registry for packages matching `query`.

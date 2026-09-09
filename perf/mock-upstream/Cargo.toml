@@ -10,7 +10,21 @@ name = "mock-upstream"
 path = "src/main.rs"
 
 [dependencies]
-actix-web = "4"
+# actix-web 4's own `default` feature set with `http2` removed: that feature is
+# the only thing pulling `h2 0.3` (RUSTSEC-2026-0258) into the tree, the fix is
+# in h2 0.4.16 and `actix-http` still requires the 0.3 line. Nothing is lost —
+# this mock never terminates TLS, so its HTTP/2 would only ever be h2c. Mirrors
+# the workspace-root declaration; keep the two in step.
+actix-web = { version = "4", default-features = false, features = [
+    "macros",
+    "compress-brotli",
+    "compress-gzip",
+    "compress-zstd",
+    "cookies",
+    "unicode",
+    "compat",
+    "ws",
+] }
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"

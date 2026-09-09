@@ -282,6 +282,39 @@ impl LocalRegistryBackend for PostgresLocalRegistry {
         Ok(result.rows_affected() > 0)
     }
 
+    async fn set_vsix_signature_provided(
+        &self,
+        registry: &str,
+        name: &str,
+        version: &str,
+        provided: bool,
+    ) -> Result<bool, CoreError> {
+        let result = if provided {
+            sqlx::query(
+                "UPDATE local_packages \
+                 SET index_metadata = jsonb_set(COALESCE(index_metadata, '{}'::jsonb), \
+                                                '{vsixSignature}', '\"provided\"'::jsonb) \
+                 WHERE registry = $1 AND name = $2 AND version = $3 \
+                   AND status = 'published' AND deleted_at IS NULL \
+                   AND COALESCE(index_metadata->>'vsixSignature', '') <> 'provided'",
+            )
+        } else {
+            sqlx::query(
+                "UPDATE local_packages SET index_metadata = index_metadata - 'vsixSignature' \
+                 WHERE registry = $1 AND name = $2 AND version = $3 \
+                   AND status = 'published' AND deleted_at IS NULL \
+                   AND index_metadata ? 'vsixSignature'",
+            )
+        }
+        .bind(registry)
+        .bind(name)
+        .bind(version)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| CoreError::Database(e.to_string()))?;
+        Ok(result.rows_affected() > 0)
+    }
+
     async fn set_retention_keep(
         &self,
         registry: &str,

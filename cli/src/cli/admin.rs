@@ -5,7 +5,8 @@ use comfy_table::Table;
 use crate::api::{
     admin::{
         AccessSimulationResponse, AuditEntry, AuditQuery, BlockedUserEntry, BulkPackageResult,
-        CoherenceReportDto, EvictionReportDto, NotificationChannelEntry,
+        CoherenceReportDto, EvictionReportDto, ExposureQuery, ExposureResponse, FlagsQuery,
+        FlagsResponse, ImportReportDto, MissingQuery, NotificationChannelEntry,
         NotificationSubscriptionEntry, RegistryHealthEntry, SimulateAccessRequest, StatsResponse,
         TeamNamespaceEntry,
     },
@@ -18,6 +19,31 @@ fn parse_pkg_version(s: &str) -> anyhow::Result<(String, String)> {
         .split_once('@')
         .ok_or_else(|| anyhow::anyhow!("expected name@version, got: {s}"))?;
     Ok((name.to_string(), version.to_string()))
+}
+
+#[derive(Subcommand)]
+pub enum FlagsCommand {
+    /// List the flags pushed by the configured sources
+    List {
+        #[arg(long)]
+        registry: Option<String>,
+        /// Only this package name
+        #[arg(long)]
+        package: Option<String>,
+        /// Only this `[[flag_sources]]` name
+        #[arg(long)]
+        source: Option<String>,
+        /// inform, warn, gate or hard_block
+        #[arg(long)]
+        effect: Option<String>,
+        /// Include revoked and expired flags
+        #[arg(long)]
+        include_dead: bool,
+        #[arg(long, default_value_t = 0)]
+        page: u64,
+        #[arg(long, default_value_t = 50)]
+        per_page: u64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -42,6 +68,23 @@ pub enum AdminCommand {
         #[command(subcommand)]
         cmd: CacheCommand,
     },
+    /// Run a registry's configured release imports now (RFC 0021)
+    ///
+    /// Imports the forge releases the registry's `[[release_imports]]` blocks
+    /// describe, whatever their interval says. Every import is a publish, so it
+    /// runs as the configured principal rather than as the caller.
+    Import {
+        /// Target registry name — the one that will hold the versions
+        registry: String,
+        /// Import this tag instead of what the configuration selects. The only
+        /// way to reach a pre-release deliberately: `latest` will not choose one.
+        #[arg(long)]
+        tag: Option<String>,
+        /// Only run the imports whose `repo` is this one. Absent: every import
+        /// configured into the registry.
+        #[arg(long)]
+        repo: Option<String>,
+    },
     /// Global banner management
     Banner {
         #[command(subcommand)]
@@ -63,6 +106,57 @@ pub enum AdminCommand {
         /// what would be reclaimed.
         #[arg(long)]
         show_kept: bool,
+    },
+    /// Who pulled a flagged version (RFC 0002): the exposure report
+    ///
+    /// One row per consumer, coordinate and flag, newest pull first, with
+    /// how many of the pulls preceded the flag. `--when before-flag` keeps
+    /// the retroactive rows only. Pages by cursor: pass `--after` the value
+    /// the previous page printed.
+    Exposure {
+        #[arg(long)]
+        registry: Option<String>,
+        /// Only this package name
+        #[arg(long)]
+        package: Option<String>,
+        /// Only flags from this `[[flag_sources]]` name
+        #[arg(long)]
+        source: Option<String>,
+        /// Only flags at this effect or stronger: inform, warn, gate, hard_block
+        #[arg(long)]
+        min_effect: Option<String>,
+        /// any (default), before-flag, after-flag
+        #[arg(long)]
+        when: Option<String>,
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        to: Option<String>,
+        /// The cursor the previous page printed
+        #[arg(long)]
+        after: Option<String>,
+        #[arg(long, default_value_t = 100)]
+        limit: u64,
+    },
+    /// What came across the air gap: the bundles this instance imported
+    /// (RFC 0008)
+    Bundles,
+    /// What this instance was asked for and did not hold (RFC 0008)
+    AirGapMissing {
+        #[arg(long)]
+        registry: Option<String>,
+        /// artifact, document, checksum, ref or unmirrored_host
+        #[arg(long)]
+        kind: Option<String>,
+        #[arg(long, default_value_t = 0)]
+        page: u64,
+        #[arg(long, default_value_t = 100)]
+        per_page: u64,
+    },
+    /// Pushed vulnerability flags (RFC 0002)
+    Flags {
+        #[command(subcommand)]
+        cmd: FlagsCommand,
     },
     /// Query the access audit log
     AuditLog {
@@ -440,12 +534,179 @@ pub enum BulkCommand {
     },
 }
 
+/// RFC 0002 §13's exposure report.
+async fn handle_exposure(q: ExposureQuery, client: &BatleHubClient, json: bool) -> Result<()> {
+    let resp = client.exposure(q).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&resp)?);
+    } else {
+        print_exposure(&resp);
+    }
+    Ok(())
+}
+
+/// The pushed flags a source has raised.
+async fn handle_flags(cmd: FlagsCommand, client: &BatleHubClient, json: bool) -> Result<()> {
+    let FlagsCommand::List {
+        registry,
+        package,
+        source,
+        effect,
+        include_dead,
+        page,
+        per_page,
+    } = cmd;
+    let resp = client
+        .list_flags(FlagsQuery {
+            registry,
+            package_name: package,
+            source,
+            effect,
+            include_dead,
+            page,
+            per_page,
+        })
+        .await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&resp)?);
+    } else {
+        print_flags(&resp);
+    }
+    Ok(())
+}
+
+/// Every bundle this instance has imported (RFC 0008).
+async fn handle_bundles(client: &BatleHubClient, json: bool) -> Result<()> {
+    let items = client.list_bundles().await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&items)?);
+        return Ok(());
+    }
+    let mut table = Table::new();
+    table.set_header(["Bundle", "Signer", "Imported", "By", "Blobs", "Rejected"]);
+    for b in &items {
+        table.add_row([
+            b.bundle_id.clone(),
+            b.signer_key.chars().take(8).collect(),
+            b.imported_at.format("%Y-%m-%d %H:%M").to_string(),
+            b.imported_by.clone().unwrap_or_else(|| "-".into()),
+            b.blobs.to_string(),
+            b.rejected.to_string(),
+        ]);
+    }
+    println!("{table}");
+    println!("{} bundle(s)", items.len());
+    if items.is_empty() {
+        println!(
+            "nothing has been imported. On an air-gapped instance that means it \
+             holds only what it was seeded with before the gap."
+        );
+    }
+    Ok(())
+}
+
+/// The miss log (RFC 0008 §6.3).
+///
+/// `Requested` and `Held` together are the next plan's diff (RFC 0008-bis
+/// §4.4): not "left-pad is missing" but "1.2.0 was asked for; 1.3.0 is held".
+/// Absent when the request named no version — a listing — or the instance held
+/// nothing.
+async fn handle_air_gap_missing(
+    q: MissingQuery,
+    client: &BatleHubClient,
+    json: bool,
+) -> Result<()> {
+    let resp = client.air_gap_missing(q).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&resp)?);
+        return Ok(());
+    }
+    let mut table = Table::new();
+    table.set_header([
+        "Registry",
+        "Kind",
+        "Key",
+        "Requested",
+        "Held",
+        "Asked",
+        "Last seen",
+    ]);
+    for m in &resp.items {
+        table.add_row([
+            m.registry.clone(),
+            m.kind.clone(),
+            m.storage_key.clone(),
+            m.requested_version
+                .clone()
+                .unwrap_or_else(|| "—".to_owned()),
+            held_versions_cell(&m.held_versions),
+            m.count.to_string(),
+            m.last_seen.format("%Y-%m-%d %H:%M").to_string(),
+        ]);
+    }
+    println!("{table}");
+    println!("{} of {} row(s)", resp.items.len(), resp.total);
+    if !resp.air_gapped {
+        println!(
+            "this instance is not air-gapped, so a miss is fetched rather than \
+             recorded: an empty list here is not the same as nothing missing."
+        );
+    }
+    Ok(())
+}
+
+/// The `Held` cell: at most four versions, then a count of the rest.
+fn held_versions_cell(held: &[String]) -> String {
+    match held.len() {
+        0 => "—".to_owned(),
+        n if n > 4 => format!("{} (+{})", held[..4].join(", "), n - 4),
+        _ => held.join(", "),
+    }
+}
+
+async fn handle_stats(client: &BatleHubClient, json: bool) -> Result<()> {
+    let resp = client.admin_stats().await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&resp)?);
+    } else {
+        print_stats(&resp);
+    }
+    Ok(())
+}
+
+async fn handle_health(client: &BatleHubClient, json: bool) -> Result<()> {
+    let resp = client.registry_health().await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&resp)?);
+    } else {
+        print_health_table(&resp);
+    }
+    Ok(())
+}
+
+/// An export goes to the named file, or to stdout when none was named.
+fn write_or_print(output: Option<&str>, text: &str) -> Result<()> {
+    match output {
+        Some(path) => {
+            std::fs::write(path, text)?;
+            println!("Exported to {path}");
+        }
+        None => print!("{text}"),
+    }
+    Ok(())
+}
+
 pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Result<()> {
     match cmd {
         AdminCommand::Quota { cmd } => handle_quota(cmd, client, json).await?,
         AdminCommand::IpBlock { cmd } => handle_ip_block(cmd, client, json).await?,
         AdminCommand::Config { cmd } => handle_config_admin(cmd, client, json).await?,
         AdminCommand::Cache { cmd } => handle_cache(cmd, client).await?,
+        AdminCommand::Import {
+            registry,
+            tag,
+            repo,
+        } => handle_import(&registry, tag, repo, client, json).await?,
         AdminCommand::Banner { cmd } => handle_banner(cmd, client).await?,
         AdminCommand::Retention {
             registry,
@@ -482,22 +743,56 @@ pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Resu
             )
             .await?
         }
-        AdminCommand::Stats => {
-            let resp = client.admin_stats().await?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
-            } else {
-                print_stats(&resp);
-            }
+        AdminCommand::Exposure {
+            registry,
+            package,
+            source,
+            min_effect,
+            when,
+            from,
+            to,
+            after,
+            limit,
+        } => {
+            handle_exposure(
+                ExposureQuery {
+                    from,
+                    to,
+                    registry,
+                    package_name: package,
+                    source,
+                    min_effect,
+                    when: when.map(|w| w.replace('-', "_")),
+                    after,
+                    limit,
+                },
+                client,
+                json,
+            )
+            .await?
         }
-        AdminCommand::Health => {
-            let resp = client.registry_health().await?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
-            } else {
-                print_health_table(&resp);
-            }
+        AdminCommand::Flags { cmd } => handle_flags(cmd, client, json).await?,
+        AdminCommand::Bundles => handle_bundles(client, json).await?,
+        AdminCommand::AirGapMissing {
+            registry,
+            kind,
+            page,
+            per_page,
+        } => {
+            handle_air_gap_missing(
+                MissingQuery {
+                    registry,
+                    kind,
+                    page,
+                    per_page,
+                },
+                client,
+                json,
+            )
+            .await?
         }
+        AdminCommand::Stats => handle_stats(client, json).await?,
+        AdminCommand::Health => handle_health(client, json).await?,
         AdminCommand::Visibility { cmd } => handle_visibility(cmd, client, json).await?,
         AdminCommand::Grants { cmd } => handle_grants(cmd, client, json).await?,
         AdminCommand::Namespace { cmd } => handle_namespace(cmd, client, json).await?,
@@ -581,13 +876,7 @@ pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Resu
                     &format,
                 )
                 .await?;
-            match output {
-                Some(path) => {
-                    std::fs::write(&path, &text)?;
-                    println!("Exported to {path}");
-                }
-                None => print!("{text}"),
-            }
+            write_or_print(output.as_deref(), &text)?;
         }
     }
     Ok(())
@@ -874,6 +1163,45 @@ fn print_coherence_report(registry: &str, report: &CoherenceReportDto) {
 ///
 /// The key list is what an operator reads before running a new size cap live —
 /// a count alone cannot be checked against the policy that produced it.
+/// RFC 0021 §6.5's `admin import`.
+async fn handle_import(
+    registry: &str,
+    tag: Option<String>,
+    repo: Option<String>,
+    client: &BatleHubClient,
+    json: bool,
+) -> Result<()> {
+    let report = client.import_registry(registry, tag, repo).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print_import_report(registry, &report);
+    }
+    Ok(())
+}
+
+/// The import report, rendered the way `warm` and `evict` render theirs.
+///
+/// Failures are listed rather than counted, because "3 errors" is not something
+/// an operator can act on and `tag / asset / reason` is. `skipped` is reported
+/// plainly and not as a problem: it is what makes a re-run free.
+fn print_import_report(registry: &str, report: &ImportReportDto) {
+    println!(
+        "Release import on {registry}: imported {}, skipped {}, errors {}",
+        report.imported, report.skipped, report.errors
+    );
+    if report.failures.is_empty() {
+        return;
+    }
+    println!();
+    let mut table = Table::new();
+    table.set_header(vec!["tag", "asset", "error"]);
+    for failure in &report.failures {
+        table.add_row(vec![&failure.tag, &failure.asset, &failure.error]);
+    }
+    println!("{table}");
+}
+
 fn print_eviction_report(registry: &str, report: &EvictionReportDto) {
     let mode = if report.dry_run {
         "dry run — nothing was evicted"
@@ -1432,6 +1760,104 @@ fn print_notification_subscriptions_table(entries: &[NotificationSubscriptionEnt
         ]);
     }
     println!("{table}");
+}
+
+fn print_flags(resp: &FlagsResponse) {
+    let mut table = Table::new();
+    table.set_header([
+        "Source", "Id", "Registry", "Package", "Version", "Effect", "Kind", "State", "Summary",
+    ]);
+    for f in &resp.items {
+        let state = if f.revoked_at.is_some() {
+            "revoked".to_owned()
+        } else if let Some(exp) = f.expires_at {
+            format!("expires {}", exp.format("%Y-%m-%d"))
+        } else {
+            "live".to_owned()
+        };
+        table.add_row([
+            f.source.as_str(),
+            f.external_id.as_str(),
+            f.registry.as_str(),
+            f.package_name.as_str(),
+            f.version.as_str(),
+            f.effect.as_str(),
+            f.kind.as_str(),
+            state.as_str(),
+            f.summary.as_str(),
+        ]);
+    }
+    println!("{table}");
+    println!(
+        "{} of {} flag(s), page {}",
+        resp.items.len(),
+        resp.total,
+        resp.page
+    );
+}
+
+fn print_exposure(resp: &ExposureResponse) {
+    let mut table = Table::new();
+    table.set_header([
+        "Consumer",
+        "Registry",
+        "Package",
+        "Version",
+        "Flag",
+        "Effect",
+        "Pulls",
+        "Before flag",
+        "Last pull",
+    ]);
+    for r in &resp.rows {
+        table.add_row([
+            r.consumer.clone(),
+            r.registry.clone(),
+            r.package_name.clone(),
+            r.version.clone(),
+            format!("{}:{}", r.source, r.external_id),
+            r.effect.clone(),
+            r.pulls.to_string(),
+            r.pulls_before_flag.to_string(),
+            r.last_pull.format("%Y-%m-%d %H:%M").to_string(),
+        ]);
+    }
+    println!("{table}");
+    println!("{} row(s)", resp.rows.len());
+    if let Some(next) = &resp.next {
+        println!("more follow: --after {next}");
+    }
+    let c = &resp.coverage;
+    println!(
+        "coverage: {} registr{}, {} with an SBOM extractor, {} with a security profile",
+        c.registries_total,
+        if c.registries_total == 1 { "y" } else { "ies" },
+        c.sbom_configured,
+        c.security_profiles
+    );
+    if c.last_scan.is_empty() {
+        println!("  CVE scan: never recorded a pass — the report knows only what was pushed");
+    }
+    for s in &c.last_scan {
+        println!(
+            "  {}: scanned {} at {} ({} finding(s), {} error(s))",
+            s.registry,
+            s.artifacts_scanned,
+            s.last_scan_at.format("%Y-%m-%d %H:%M"),
+            s.findings,
+            s.errors
+        );
+    }
+    for s in &c.flag_sources {
+        println!(
+            "  source {}: {} live flag(s), last push {}",
+            s.source,
+            s.live_flags,
+            s.last_push_at
+                .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_else(|| "never".into())
+        );
+    }
 }
 
 fn print_audit_log_table(entries: &[AuditEntry]) {

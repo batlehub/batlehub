@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use actix_web::{get, web, Responder};
+use actix_web::{get, web, HttpRequest, Responder};
 
 use batlehub_core::{entities::PackageId, services::ProxyService};
 
@@ -79,6 +79,7 @@ fn archive_format(filename: &str) -> &'static str {
 )]
 #[get("/proxy/{registry}/{project:.+}/-/releases")]
 pub async fn gl_list_releases(
+    req: HttpRequest,
     path: web::Path<(String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
@@ -87,13 +88,15 @@ pub async fn gl_list_releases(
     let (registry, project) = path.into_inner();
     require_gitlab(&registry, &map)?;
     // A listing, not an artifact — see the GitHub handler for the reasoning.
+    // The public base repoints every archive and link URL at this proxy
+    // (RFC 0019 §4.2 *API reads*).
     proxy_document(
         svc,
         PackageId::new(&registry, project, "releases"),
         identity,
         Action::ReleasesRead,
         batlehub_core::ports::DocumentKind::Versions,
-        String::new(),
+        crate::handlers::proxy::common::registry_public_base(&req, &registry),
     )
     .await
 }
@@ -117,21 +120,20 @@ pub async fn gl_list_releases(
 )]
 #[get("/proxy/{registry}/{project:.+}/-/releases/{tag}")]
 pub async fn gl_get_release(
+    req: HttpRequest,
     path: web::Path<(String, String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
     map: web::Data<RegistryMap>,
 ) -> Result<impl Responder, AppError> {
     let (registry, project, tag) = path.into_inner();
-    gitlab_proxy(
-        &registry,
-        project,
-        tag,
-        None,
-        Action::ReleasesRead,
+    require_gitlab(&registry, &map)?;
+    crate::handlers::proxy::common::proxy_release_document(
         svc,
+        PackageId::new(&registry, project, tag),
         identity,
-        &map,
+        Action::ReleasesRead,
+        crate::handlers::proxy::common::registry_public_base(&req, &registry),
     )
     .await
 }

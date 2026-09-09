@@ -60,7 +60,7 @@ pub async fn conda_repodata(
     let (registry, platform) = path.into_inner();
     require_registry_type(&registry, "conda", &map)?;
 
-    let body = repodata_bytes(
+    let (body, synthesised) = repodata_bytes(
         svc,
         local_svc,
         &registry,
@@ -71,9 +71,10 @@ pub async fn conda_repodata(
     )
     .await?;
 
-    Ok(HttpResponse::Ok()
-        .content_type("application/json")
-        .body(body))
+    let mut builder = HttpResponse::Ok();
+    builder.content_type("application/json");
+    mark_synthesised(&mut builder, synthesised);
+    Ok(builder.body(body))
 }
 
 /// The bytes of one repodata document, mode-aware and filtered.
@@ -81,6 +82,15 @@ pub async fn conda_repodata(
 /// Shared by the plain route and both compressed ones (RFC 0009 §7.5) so the
 /// three encodings cannot come to describe different channels — which is the
 /// failure a second, parallel fetch path would eventually produce.
+/// A repodata composed from the held set says so (RFC 0008-bis §4.2), on
+/// every encoding it is served in.
+fn mark_synthesised(builder: &mut actix_web::HttpResponseBuilder, synthesised: Option<u32>) {
+    if let Some(held) = synthesised {
+        builder.insert_header(("X-BatleHub-Listing", "synthesised"));
+        builder.insert_header(("X-BatleHub-Listing-Held", held.to_string()));
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn repodata_bytes(
     svc: web::Data<Arc<ProxyService>>,
@@ -90,13 +100,13 @@ async fn repodata_bytes(
     identity: AuthIdentity,
     mode: RegistryMode,
     kind: batlehub_core::ports::DocumentKind,
-) -> Result<Vec<u8>, AppError> {
+) -> Result<(Vec<u8>, Option<u32>), AppError> {
     if mode == RegistryMode::Local {
         let repodata = local_svc
             .get_conda_repodata(registry, platform, &identity.0)
             .await
             .map_err(AppError::from)?;
-        return Ok(serde_json::to_vec(&repodata).unwrap_or_default());
+        return Ok((serde_json::to_vec(&repodata).unwrap_or_default(), None));
     }
 
     // Proxy mode, and the upstream half of Hybrid. `multi_package_document`
@@ -112,17 +122,18 @@ async fn repodata_bytes(
     // filter the local half, and the two halves must be filtered for the *same*
     // caller or the merge describes a channel no one is entitled to.
     let caller = identity.0.clone();
-    let upstream = fetch_conda_index(svc, registry, platform, identity, kind).await?;
+    let (upstream, synthesised) =
+        fetch_conda_index(svc, registry, platform, identity, kind).await?;
 
     if mode == RegistryMode::Hybrid {
         let local_repodata = local_svc
             .get_conda_repodata(registry, platform, &caller)
             .await
             .map_err(AppError::from)?;
-        return Ok(merge_repodata(&upstream, &local_repodata));
+        return Ok((merge_repodata(&upstream, &local_repodata), synthesised));
     }
 
-    Ok(upstream)
+    Ok((upstream, synthesised))
 }
 
 /// Fetch and filter one of a conda channel's index documents, as bytes.
@@ -135,24 +146,26 @@ async fn fetch_conda_index(
     platform: &str,
     identity: AuthIdentity,
     kind: batlehub_core::ports::DocumentKind,
-) -> Result<Vec<u8>, AppError> {
+) -> Result<(Vec<u8>, Option<u32>), AppError> {
     // The *platform* is the coordinate: a conda listing is scoped to a subdir,
     // not to a package.
     let req = batlehub_core::services::ProxyRequest {
         package_id: PackageId::new(registry, platform, "__repodata__"),
         identity: identity.0,
         action: Action::ReleasesRead.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
     };
     let doc = svc
         .multi_package_document(&req, kind, "")
         .await
         .map_err(AppError::from)?;
-    Ok(match doc.body {
+    let synthesised = doc.synthesised;
+    let bytes = match doc.body {
         batlehub_core::ports::DocumentBody::Json(v) => serde_json::to_vec(&v).unwrap_or_default(),
         batlehub_core::ports::DocumentBody::Text(t) => t.into_bytes(),
-    })
+    };
+    Ok((bytes, synthesised))
 }
 
 /// `repodata.json.zst` — the first index request conda 23.x and mamba make.
@@ -271,7 +284,7 @@ pub async fn conda_channeldata(
 
     // No platform: `channeldata.json` sits at the channel root and describes
     // every subdir at once.
-    let bytes = fetch_conda_index(
+    let (bytes, synthesised) = fetch_conda_index(
         svc,
         &registry,
         "_channeldata",
@@ -280,9 +293,10 @@ pub async fn conda_channeldata(
     )
     .await?;
 
-    Ok(HttpResponse::Ok()
-        .content_type("application/json")
-        .body(bytes))
+    let mut builder = HttpResponse::Ok();
+    builder.content_type("application/json");
+    mark_synthesised(&mut builder, synthesised);
+    Ok(builder.body(bytes))
 }
 
 // ── Compressed repodata (RFC 0009 §7.5) ───────────────────────────────────────
@@ -414,16 +428,25 @@ async fn serve_compressed_repodata(
                 STANDARD.decode(s).ok()
             })
         {
-            return Ok(HttpResponse::Ok()
-                .content_type(encoding.content_type())
-                .insert_header(("X-BatleHub-Cache", "hit"))
-                .body(bytes));
+            // A composed repodata cached in its encoding is still composed:
+            // the flag was stored beside the bytes.
+            let synthesised = entry
+                .metadata
+                .extra
+                .get("synthesised")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as u32);
+            let mut builder = HttpResponse::Ok();
+            builder.content_type(encoding.content_type());
+            builder.insert_header(("X-BatleHub-Cache", "hit"));
+            mark_synthesised(&mut builder, synthesised);
+            return Ok(builder.body(bytes));
         }
     }
 
     // The uncompressed path, filter and hybrid merge included — so the two
     // encodings cannot describe a different channel from the plain one.
-    let raw = repodata_bytes(
+    let (raw, synthesised) = repodata_bytes(
         svc.clone(),
         local_svc,
         &registry,
@@ -443,7 +466,7 @@ async fn serve_compressed_repodata(
     let entry = batlehub_core::ports::CacheEntry {
         metadata: batlehub_core::entities::PackageMetadata::minimal(
             PackageId::new(&registry, &platform, "__repodata__"),
-            serde_json::json!({ "compressed_b64": encoded }),
+            serde_json::json!({ "compressed_b64": encoded, "synthesised": synthesised }),
         ),
         cached_at: chrono::Utc::now(),
         expires_at: None,
@@ -458,10 +481,11 @@ async fn serve_compressed_repodata(
         }
     }
 
-    Ok(HttpResponse::Ok()
-        .content_type(encoding.content_type())
-        .insert_header(("X-BatleHub-Cache", "miss"))
-        .body(compressed))
+    let mut builder = HttpResponse::Ok();
+    builder.content_type(encoding.content_type());
+    builder.insert_header(("X-BatleHub-Cache", "miss"));
+    mark_synthesised(&mut builder, synthesised);
+    Ok(builder.body(compressed))
 }
 
 /// Merge a locally-built repodata JSON overlay into upstream `repodata.json` bytes.
@@ -524,7 +548,7 @@ pub async fn conda_current_repodata(
         ));
     }
 
-    let body = fetch_conda_index(
+    let (body, synthesised) = fetch_conda_index(
         svc,
         &registry,
         &platform,
@@ -532,9 +556,10 @@ pub async fn conda_current_repodata(
         batlehub_core::ports::DocumentKind::CURRENT_REPODATA,
     )
     .await?;
-    Ok(HttpResponse::Ok()
-        .content_type("application/json")
-        .body(body))
+    let mut builder = HttpResponse::Ok();
+    builder.content_type("application/json");
+    mark_synthesised(&mut builder, synthesised);
+    Ok(builder.body(body))
 }
 
 /// Download a conda package file (`.conda` or `.tar.bz2`) through the proxy cache.
@@ -567,7 +592,7 @@ pub async fn conda_file_download(
     // `platform` is part of the route but not of the coordinate: a conda
     // package's identity is its name and version, and the same release is
     // served under several subdirs.
-    let (registry, _platform, filename) = path.into_inner();
+    let (registry, platform, filename) = path.into_inner();
     require_registry_type(&registry, "conda", &map)?;
 
     let mode = mode_map.get(&registry);
@@ -580,7 +605,14 @@ pub async fn conda_file_download(
             .map_err(AppError::from)?
             .ok_or_else(|| AppError::not_found(format!("conda package not found: {filename}")))?;
         let bytes = local_svc
-            .get_artifact(&registry, &name, &version, Action::ReleasesRead, &identity)
+            .get_artifact(
+                &registry,
+                &name,
+                &version,
+                Action::ReleasesRead,
+                &identity,
+                &identity.1,
+            )
             .await
             .map_err(AppError::from)?;
         return Ok(HttpResponse::Ok()
@@ -595,7 +627,14 @@ pub async fn conda_file_download(
             .map_err(AppError::from)?
         {
             match local_svc
-                .get_artifact(&registry, &name, &version, Action::ReleasesRead, &identity)
+                .get_artifact(
+                    &registry,
+                    &name,
+                    &version,
+                    Action::ReleasesRead,
+                    &identity,
+                    &identity.1,
+                )
                 .await
             {
                 Ok(bytes) => {
@@ -621,7 +660,11 @@ pub async fn conda_file_download(
     // version keep distinct cache entries.
     let (name, version) = parse_conda_filename(&filename)
         .ok_or_else(|| AppError::bad_request(format!("unparseable conda filename: {filename}")))?;
-    let pkg = PackageId::new(&registry, name, version).with_artifact(&filename);
+    // The subdir travels in the selector: the coordinate stays the package's
+    // name and version, which is what a block is placed on, and the client
+    // reads the platform from the selector (`platform_and_file`).
+    let pkg =
+        PackageId::new(&registry, name, version).with_artifact(format!("{platform}/{filename}"));
     proxy_stream(
         svc,
         pkg,

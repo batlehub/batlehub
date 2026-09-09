@@ -3,8 +3,9 @@ name: Test
 # client integrations: the marketplaces (headless VS Code + IntelliJ installing
 # an extension that exists only on this instance), Bundler, and one job per
 # remaining ecosystem in the `heavy-client` matrix (npm, pypi, openvsx, conda,
-# nuget, composer, terraform), each driving that ecosystem's real client against
-# a real server. Each job produces an LCOV file; the final job merges them and
+# nuget, composer, terraform, nvm, sdkman, mise, cargo, go, maven, pathproxy,
+# quarantine, upstream_audit), each driving that ecosystem's real client
+# against a real server. Each job produces an LCOV file; the final job merges them and
 # publishes a coverage table in the run summary.
 #
 # The heavy jobs exist because the layers above them cannot fail on the bugs
@@ -429,6 +430,48 @@ jobs:
           - suite: nuget
           - suite: composer
           - suite: terraform
+          # nvm: the script downloads nvm's release tarball itself (RFC 0010
+          # decision 9 — not the installer) and needs only curl, tar and xz,
+          # all on the runner image.
+          - suite: nvm
+          # sdkman: the script downloads the sdkman-cli release zip itself (RFC
+          # 0010 decision 9 — not the installer) and needs curl, zip, unzip and
+          # tar, all on the runner image. Installs one JDK (~200 MB) from the
+          # vendor CDN the broker names.
+          - suite: sdkman
+          # mise: installed by the job below. The run spends about eighteen
+          # GitHub API requests — RFC 0019 phase 1's ref headers, plus RFC 0008
+          # §4's air gap, which seeds a second instance and installs through it
+          # with egress denied. They are drawn on the workflow token
+          # (HEAVY_FORGE_TOKEN below); with no token, as on a developer's
+          # machine, a 502 on `releases/assets/{id}` is the anonymous budget,
+          # not a bug.
+          - suite: mise
+          # RFC 0018 phase 0a — the rejection survey. cargo, go, mvn and java
+          # are on the runner image; the path-proxy suite drives apt (on the
+          # image) and dnf (installed by the job below).
+          - suite: cargo
+          - suite: go
+          - suite: maven
+          - suite: pathproxy
+          # RFC 0018 from the client side: npm against a `[registries.security]`
+          # registry backed by npmjs.org and the real OSV, the worker embedded.
+          # Needs Node (installed below) and bubblewrap for the egress row —
+          # a scanner under the worker's sandbox trying to reach the tap.
+          - suite: quarantine
+          # RFC 0014 from the receiving end: npm against a directory the
+          # suite serves as a registry, a staged disappearance, and the
+          # notification asserted at a webhook receiver the suite runs.
+          # Needs Node (installed below) and nothing off the runner.
+          - suite: upstream_audit
+          # RFC 0008-bis phase 0 — the measurement: npm, pip and mise against
+          # a second `[air_gap]` instance holding one version of each, with
+          # egress denied. Needs Node and mise (installed below), python3
+          # with venv (on the image), and about three GitHub API requests for
+          # the seed — on the workflow token (HEAVY_FORGE_TOKEN below),
+          # because the seed *fails* on a spent anonymous budget rather than
+          # tolerating it.
+          - suite: airgap
     services:
       postgres:
         image: postgres:17-alpine
@@ -452,6 +495,7 @@ jobs:
       NODE_VERSION: "24"
       DOTNET_CHANNEL: "10.0"
       TERRAFORM_VERSION: "1.8.5"
+      MISE_VERSION: "2026.8.6"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
@@ -468,8 +512,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
 
       # ── Per-ecosystem client setup ──────────────────────────────────────────
-      - name: Set up Node (npm / Open VSX)
-        if: matrix.suite == 'npm' || matrix.suite == 'openvsx'
+      - name: Set up Node (npm / Open VSX / quarantine / upstream_audit / airgap)
+        if: matrix.suite == 'npm' || matrix.suite == 'openvsx' || matrix.suite == 'quarantine' || matrix.suite == 'upstream_audit' || matrix.suite == 'airgap'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -492,6 +536,58 @@ jobs:
             "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
           sudo unzip -o -q /tmp/terraform.zip -d /usr/local/bin
           terraform version
+      - name: Install mise
+        if: matrix.suite == 'mise' || matrix.suite == 'airgap'
+        run: |
+          # From the release archive rather than the `curl | sh` installer:
+          # one URL, one version, and nothing else enters the runner.
+          curl -fsSL --proto '=https' --proto-redir '=https' -o /tmp/mise.tar.gz \
+            "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/mise-v${MISE_VERSION}-linux-x64.tar.gz"
+          tar -xzf /tmp/mise.tar.gz -C /tmp
+          sudo install -m 0755 /tmp/mise/bin/mise /usr/local/bin/mise
+          mise --version
+      - name: Install dnf
+        if: matrix.suite == 'pathproxy'
+        run: |
+          # Ubuntu packages dnf; the suite refuses to run without it rather
+          # than skip the rpm rows (HEAVY_PATHPROXY_SKIP_DNF=1 is the explicit
+          # opt-out, for a developer's machine without root).
+          #
+          # `dnf download` is a *plugin* subcommand, not a built-in: the `dnf`
+          # package alone answers "No such command: download", which the suite
+          # meets four steps in, after it has already built and started a
+          # server. `dnf-plugins-core` is what ships `dnf-plugins/download.py`
+          # on Ubuntu — noble/universe, the same component `dnf` itself comes
+          # from. Not `python3-dnf-plugins-core` (a Debian name Ubuntu does not
+          # carry) and not `dnf5-plugins` (the dnf5 line, which noble predates).
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dnf dnf-plugins-core
+          dnf --version | head -1
+          # The probe, not the install, is the gate: a plugin that installed
+          # but did not register is the same failure as one that never landed,
+          # and both are cheaper to read here than four steps into the suite.
+          dnf download --help >/dev/null 2>&1 \
+            || { echo "::error::dnf has no 'download' subcommand — dnf-plugins-core did not register it"; exit 1; }
+      - name: Install bubblewrap
+        if: matrix.suite == 'quarantine'
+        run: |
+          # The worker's scanner sandbox (RFC 0018 §6.3). The suite refuses to
+          # run without it rather than skip the egress row
+          # (HEAVY_QUARANTINE_SKIP_SANDBOX=1 is the explicit opt-out, for a
+          # developer's machine without user namespaces).
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          bwrap --version
+          # Ubuntu 24.04 ships an AppArmor profile that denies unprivileged
+          # user namespaces, so `bwrap --version` succeeds and every actual
+          # sandbox exits before it writes a byte. The worker reads that as
+          # "scanner output is not JSON: EOF", holds the version SCAN_PENDING,
+          # and the suite only finds out five minutes later when `batlehub
+          # wait` times out. Lift the restriction, then prove a namespace can
+          # really be created before the suite starts.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --unshare-user --unshare-net --ro-bind / / --dev /dev /bin/true \
+            || { echo "::error::bwrap cannot create a user namespace on this runner"; exit 1; }
       - name: Check PHP and Composer
         if: matrix.suite == 'composer'
         run: |
@@ -501,14 +597,15 @@ jobs:
           composer --version || echo "no composer on PATH — the suite will download composer.phar"
       - name: Cache heavy client downloads
         # conda downloads micromamba; Composer may download a static PHP and
-        # composer.phar. The versions are pinned *in the scripts*, so hashing
+        # composer.phar; nvm downloads its own release tarball. The versions
+        # are pinned *in the scripts*, so hashing
         # them is the key that cannot go stale — an env var repeated here would
         # have to be kept in step with the default it shadows.
         #
         # `~` is expanded by the action; it is deliberately not passed to the
         # scripts as `HEAVY_CACHE`, where bash would take it literally and put
         # the downloads in a directory named `~`.
-        if: matrix.suite == 'conda' || matrix.suite == 'composer'
+        if: matrix.suite == 'conda' || matrix.suite == 'composer' || matrix.suite == 'nvm' || matrix.suite == 'sdkman'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/batlehub-heavy
@@ -520,6 +617,16 @@ jobs:
         run: bash tests/heavy/${{ matrix.suite }}.sh
         env:
           COVERAGE: "1"
+          # The forge suites (mise, airgap) drive a `github` registry. Read by
+          # `heavy_forge_auth_config` (tests/heavy/lib.sh), which authenticates
+          # that registry's upstream with it: anonymous GitHub is 60 API
+          # requests an hour *per source IP*, and a hosted runner's IP is shared
+          # with every other job on the machine, so the budget is regularly
+          # already spent and the proxy refuses below its 10 % reserve. The
+          # workflow token is 1 000 an hour per repository, is issued on forks
+          # too, and needs no more than the `contents: read` this workflow
+          # already declares. Every other suite ignores it.
+          HEAVY_FORGE_TOKEN: ${{ github.token }}
       - name: Generate LCOV
         run: >-
           cargo llvm-cov report --lcov --output-path coverage-heavy-${{ matrix.suite }}.lcov

@@ -557,7 +557,7 @@ async fn rule_denial_returns_denied_and_records_event() {
 
     let resp = svc.handle(req("npm")).await.unwrap();
     assert!(
-        matches!(resp, ProxyResponse::Denied { reason } if reason == "test denial"),
+        matches!(resp, ProxyResponse::Denied { reason, .. } if reason == "test denial"),
         "expected Denied response"
     );
     let events = repo.events();

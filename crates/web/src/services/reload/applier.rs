@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use batlehub_config::load_from_str as load_config_from_str;
+use batlehub_config::{load_from_str, load_layered_from_str};
 use batlehub_core::entities::{BannerLevel, GlobalBanner};
 
 use super::{
@@ -35,6 +35,64 @@ pub struct ConfigChangeRow {
 }
 
 impl ConfigReloadService {
+    /// Parse `primary` as the first layer, with the configured overlay files
+    /// read fresh and merged over it.
+    ///
+    /// Every path that turns config text into an `AppConfig` goes through here,
+    /// so the file watcher, the editor's validate button and the editor's save
+    /// all see the same merged document. Reading the overlays here rather than
+    /// caching them is what makes a credentials-only edit reload: the watcher
+    /// fires on the overlay, the primary's bytes are unchanged, and the merge
+    /// still produces a new config.
+    ///
+    /// With no overlays this is `load_from_str`, span-carrying error messages
+    /// included.
+    async fn load_layers(
+        &self,
+        primary: &str,
+    ) -> Result<batlehub_config::AppConfig, anyhow::Error> {
+        if self.config_overlays.is_empty() {
+            return load_from_str(primary);
+        }
+        let mut layers = Vec::with_capacity(self.config_overlays.len() + 1);
+        layers.push(primary.to_owned());
+        for path in &self.config_overlays {
+            layers.push(
+                tokio::fs::read_to_string(path)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("reading config overlay '{path}': {e}"))?,
+            );
+        }
+        load_layered_from_str(&layers)
+    }
+
+    /// A fingerprint of every layer, for the byte-identical-rewrite dedup.
+    ///
+    /// The dedup exists because `touch` and atomic saves fire the watcher with
+    /// unchanged bytes. With layers the question is whether *any* of them
+    /// changed, so the primary's text alone would miss a credentials rotation
+    /// and skip the rebuild that should have happened. The separator cannot
+    /// appear in a TOML file, so two different splits cannot fingerprint alike.
+    async fn layered_fingerprint(&self, primary: &str) -> String {
+        let mut out = primary.to_owned();
+        for path in &self.config_overlays {
+            out.push('\0');
+            match tokio::fs::read_to_string(path).await {
+                Ok(content) => out.push_str(&content),
+                // An unreadable overlay must not fingerprint like an empty one.
+                // The comparison happens *before* `load_layers` runs, so a
+                // deleted overlay that used to be empty would otherwise match
+                // the previous fingerprint, return early as "nothing changed",
+                // and never reach the error that should have been reported.
+                Err(e) => {
+                    out.push_str("\u{1}unreadable: ");
+                    out.push_str(&e.to_string());
+                }
+            }
+        }
+        out
+    }
+
     /// Re-reads the config file, validates, and builds a new HotConfig + AccessConfig.
     /// Stores the result as a pending reload (does NOT apply).
     /// Replaces any existing pending reload.
@@ -43,12 +101,12 @@ impl ConfigReloadService {
             anyhow::bail!("hot reload is disabled (BATLEHUB_DISABLE_HOT_RELOAD=1)");
         }
         let content = tokio::fs::read_to_string(&self.config_path).await?;
-        if self.mark_seen_and_check_unchanged(&content) {
-            // File-watcher fired (touch/atomic-save rewrite) but the bytes on disk are
-            // identical to the last load attempt — nothing to rebuild.
+        if self.mark_seen_and_check_unchanged(&self.layered_fingerprint(&content).await) {
+            // File-watcher fired (touch/atomic-save rewrite) but no layer's bytes
+            // differ from the last load attempt — nothing to rebuild.
             return Ok(ReloadDiff::default());
         }
-        let new_config = load_config_from_str(&content)?;
+        let new_config = self.load_layers(&content).await?;
         self.build_pending(new_config, source).await
     }
 
@@ -59,7 +117,7 @@ impl ConfigReloadService {
         if !self.hot_reload_enabled {
             anyhow::bail!("hot reload is disabled (BATLEHUB_DISABLE_HOT_RELOAD=1)");
         }
-        let new_config = load_config_from_str(content)?;
+        let new_config = self.load_layers(content).await?;
         let built = (self.builder)(&new_config)?;
         Ok(ReloadOutcome {
             diff: self.compute_diff(&built.hot, &built.access).await,
@@ -80,7 +138,7 @@ impl ConfigReloadService {
         if !self.hot_reload_enabled {
             anyhow::bail!("hot reload is disabled (BATLEHUB_DISABLE_HOT_RELOAD=1)");
         }
-        if self.mark_seen_and_check_unchanged(content) {
+        if self.mark_seen_and_check_unchanged(&self.layered_fingerprint(content).await) {
             // Byte-identical to the last load *attempt* — which is not necessarily
             // the config in force: the file watcher may have loaded this content
             // without it being applied yet. Skip the rebuild, but report the
@@ -96,11 +154,11 @@ impl ConfigReloadService {
             // pressing a button is never a spurious event and deserves to be told.
             return Ok(ReloadOutcome {
                 diff: ReloadDiff::default(),
-                warnings: load_config_from_str(content)?.warnings(),
+                warnings: self.load_layers(content).await?.warnings(),
                 pending_created: false,
             });
         }
-        let new_config = load_config_from_str(content)?;
+        let new_config = self.load_layers(content).await?;
         let warnings = new_config.warnings();
         let diff = self.build_pending(new_config, source).await?;
         // Store the raw content so apply() can persist it to disk.

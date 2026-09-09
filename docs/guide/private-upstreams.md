@@ -46,7 +46,7 @@ ca_cert_path = "/etc/ssl/corp-ca.pem"
 
 ## Supported registry types
 
-All registry types support `upstream_auth` and `tls`: `github`, `npm`, `cargo`, `openvsx`, `vscode-marketplace`, `goproxy`, `maven`, `terraform`. For `cargo`, the sparse index proxy (the `index_url` endpoint) also uses the same credentials and TLS settings.
+Every registry type supports `upstream_auth` and `tls`. They are read once, before the client is built, so a type added later gets them without anything here changing. For `cargo`, the sparse index proxy (the `index_url` endpoint) uses the same credentials and TLS settings.
 
 ## Mixing a private upstream with a public fallback
 

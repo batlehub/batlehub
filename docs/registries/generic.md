@@ -11,6 +11,7 @@ A proxy-only, path-addressed mirror of any plain HTTP file tree — for upstream
 | **Modes** | proxy-only |
 | **Addressing** | path-addressed |
 | **Private publish** | ❌ proxy-only |
+| **Air gap** | no index to compose; a held file is served by path |
 
 ## Proxy setup
 
@@ -58,6 +59,7 @@ Embedding HTTP Basic credentials in the mirror URL works as a fallback, but the 
 
 ## Notes
 
+- A `generic` mirror of `nodejs.org/dist` caches Node correctly and can enforce nothing on it: a path-addressed registry has one synthetic package and no version to block. For policy on a Node release — a block that reaches `nvm ls-remote`, an age gate on a release published yesterday — use [`nodedist`](/registries/nodedist) instead; `generic` stays the right answer for a tree you want cached without policy.
 - A request for a path outside the registry's `path_allow` allowlist returns `403`, not 404 — that is the allowlist rejecting it locally, before any upstream request is made. Widen the globs if `mise install` reports a 403.
 - Mirrored archives are often large; the proxy buffers the whole artifact before caching, so raise `limits.max_artifact_size_bytes` (default 500 MiB) for toolchain tarballs.
 - Path-addressed registries pre-warm specific **paths** via `[registries.cache] warm_paths`, not `warm_packages`.

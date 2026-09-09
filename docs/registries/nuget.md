@@ -11,6 +11,7 @@ Proxy and cache the NuGet gallery for `dotnet`, or host private packages. BatleH
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
 | **Private publish** | ✅ `dotnet nuget push` |
+| **Air gap** | offline, the flat index is composed from the held packages and the registration page from each package's `.nuspec` read at import; `dotnet restore` reads the flat index |
 
 ## Proxy setup
 

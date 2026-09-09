@@ -11,6 +11,8 @@ Proxy and cache VS Code extension VSIX downloads from Microsoft's [Visual Studio
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
 | **Private publish** | ✅ VSIX upload (`PUT …/vsix`) |
+| **Air gap** | no composed listing offline: a gallery answers by query |
+| **Signatures** | the registry signs what it hosts (`[registries.vsx_signing]`), relays the upstream's for what it proxies, and keeps one attached to a republished version |
 
 ## Proxy setup
 
@@ -29,6 +31,26 @@ Same protocol, same routes as the [OpenVSX page](/registries/openvsx#use-batlehu
 ```
 
 The editor sends no credentials to its gallery, so this registry needs `anonymous = ["releases:read", "source:read"]` under `[registries.rbac]`, or an authenticating ingress. See the warning on the [OpenVSX page](/registries/openvsx#use-batlehub-as-your-extension-gallery).
+
+### An editor that cannot send a credential
+
+`product.json` has nowhere to put a token, so a registry that refuses
+anonymous reads is reached through the local gallery proxy
+([`batlehub-cli proxy serve`](/use/cli#gallery-proxy), RFC 0011 §4.4)
+rather than by opening the registry up:
+
+```sh
+# Sign in once, then run the proxy; the editor is pointed at what it prints.
+batlehub-cli --server https://batlehub.example.com auth login
+batlehub-cli --server https://batlehub.example.com auth write-token-file
+batlehub-cli proxy serve --registry https://batlehub.example.com/proxy/<registry>
+```
+
+The proxy attaches the credential, rewrites every gallery URL onto itself so
+the `.vsix` download is authenticated too, and — while no credential
+resolves — answers a search with a single *Sign in to BatleHub* entry
+instead of the empty view an anonymous gallery produces. Point the editor at
+the loopback URL it prints, in place of the `serviceUrl` above.
 
 ### Download a VSIX directly
 
@@ -58,6 +80,16 @@ curl -X PUT \
   -H "Content-Type: application/octet-stream" \
   --data-binary @my-org.my-extension-1.0.0.vsix \
   "https://batlehub.example.com/proxy/<registry>/my-org.my-extension/1.0.0/vsix"
+```
+
+### Signatures
+
+A current editor's Extensions view installs only entries that carry a signature asset. This registry gets one three ways, and the [OpenVSX page](/registries/openvsx#signatures) is where each is explained: the marketplace's own signature is relayed for what is proxied (a stock VS Code verifies it, nothing to set); a key under [`[registries.vsx_signing]`](/guide/configuration#vsx-signing) signs what is published here; and a marketplace extension republished here keeps its signature when the archive is attached after the upload:
+
+```sh
+curl -X PUT -H "Authorization: Bearer $BATLEHUB_TOKEN" -H "Content-Type: application/zip" \
+  --data-binary @ms-vscode.hexeditor-1.11.1.sigzip \
+  "https://batlehub.example.com/proxy/<registry>/ms-vscode.hexeditor/1.11.1/vsix/signature"
 ```
 
 ## Authentication

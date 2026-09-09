@@ -1,6 +1,9 @@
 pub mod access_log;
+pub mod advisory;
+pub mod air_gap;
 pub mod banner;
 pub mod explore;
+pub mod forge;
 pub mod grant;
 pub mod identity;
 pub mod links;
@@ -11,18 +14,36 @@ pub mod permission;
 pub mod policy;
 pub mod readme;
 pub mod registry_kind;
+pub mod release_import;
 pub mod sbom;
+pub mod security;
 pub mod signing_key;
 pub mod subject;
 pub mod team_namespace;
+pub mod upstream_status;
 pub mod vulnerability;
 
-pub use access_log::{AccessAction, AccessEvent, AccessResult, EventFilter};
+pub use access_log::{AccessAction, AccessEvent, AccessResult, CallerNet, EventFilter};
+pub use advisory::{
+    ExposureCoverage, ExposureCursor, ExposurePage, ExposureQuery, ExposureRow, ExposureWhen,
+    FlagEffect, FlagFilter, FlagItemOutcome, FlagKind, FlagPush, FlagPushResponse,
+    FlagSourceCoverage, PackageFlag, RegistryScanState, ANY_VERSION, FLAGS_SCANNER,
+};
+pub use air_gap::{
+    AirGapPolicy, BundleImport, ContentMiss, MissFilter, MissKind, RecordedMiss,
+    MAX_MISSES_PER_REGISTRY,
+};
 pub use banner::{BannerLevel, GlobalBanner};
 pub use explore::{
     resolve_state, ExploreEntry, ExploreFilter, ExplorePackageDetail, ExploreSortBy,
     ExploreVersionEntry, ExploreViewer, FirewallInfo, GateInfo, PackageSource, RegistryStat,
     ReleaseAgeGateParams, ResolutionPolicy, ResolutionState,
+};
+pub use forge::{
+    is_commit_sha, ApiReadFamily, ArchiveFormat, ForgeCoordinate, ForgeKind, ForgeProvenance,
+    ForgeRefsPolicy, RawPolicy, RefAction, RefKind, ResolvedRef, ScriptAction, FORGE_ASSET_DIGEST,
+    FORGE_EXTRA_KEY, FORGE_PREVIOUS_COMMIT, FORGE_PROVENANCE, FORGE_REF_KIND, FORGE_REQUESTED_REF,
+    FORGE_RESOLVED_COMMIT, SCRIPT_EXTENSIONS, UNKNOWN_TAG,
 };
 pub use grant::{
     namespace_matches, namespace_separator, pat_is_within_owner, resolve, snapshot_pat_groups,
@@ -54,8 +75,18 @@ pub use registry_kind::{
     FetchArtifact, FetchSupport, ListingDocument, ListingSupport, ReadmeSupport, RegistryKind,
     UpstreamDetailSupport,
 };
+pub use release_import::ImportRun;
 pub use sbom::{ArtifactSbom, SbomFormat, SbomSource};
+pub use security::{
+    coordinate_purl, worse_state, Escalation, Finding, FindingKind, InstallHookMode, ReasonCode,
+    ScanJob, ScanTrigger, ScannerErrorMode, SecurityMode, SecurityPolicy, Verdict, VerdictState,
+    BLOCK_LIST_SCANNER,
+};
 pub use signing_key::SigningKey;
 pub use subject::{Decision, Resource, Subject, Tier};
 pub use team_namespace::{NamespacePackage, TeamNamespace};
+pub use upstream_status::{
+    hold_key, truncate_error, MissObservation, OnConfirmed, UpstreamKey, UpstreamState,
+    UpstreamStatus, UpstreamStatusFilter, LAST_ERROR_MAX_BYTES,
+};
 pub use vulnerability::{ArtifactVulnerability, Severity};

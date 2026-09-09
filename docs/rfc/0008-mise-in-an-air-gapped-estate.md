@@ -2,13 +2,13 @@
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Draft — ready to schedule. The RFC 0009 dependency is discharged: the Go checksum database is proxied and cached (0009 §7.4, §13.12) and Terraform's checksum files are served locally (0009 §12.8), so the two ecosystems that reached upstream at their last step no longer do. §11's one blocking open question is measured and closed (mise 2026.8.6, 2026-08-17) |
+| Status      | **Implemented** — all six phases landed 2026-09-04 (§14), and `tests/heavy/mise.sh` §4 passes: plan, seed, export, import into a second instance running `[air_gap] enabled = true`, then `mise install` completing from the lock with egress denied to both processes. Building it corrected four things this document said about the tree — a storage key is a function of the route and not of the URL, so the server reports the one it used (§14.1); an imported artifact needs the metadata entry that finds it, because metadata resolves before the cache is looked at (§14.2); a forge resolves its ref before it fetches anything, so the resolution has to cross too (§14.4); and `mise.lock` records a quoted platform key and two addresses per asset (§14.5) — and found one defect in shipped code, RFC 0019's release rewrite removing a field the GitHub schema requires (§14.6). §14.8 states what a bundle does not carry: proxied documents, which [RFC 0008-bis](/rfc/0008-bis-listings-across-the-gap) settles |
 | Short       | mise in an air-gapped estate |
 | Settles     | Making `mise install` work with no route off the site: `mise.lock` as the bill of materials, a server that will not dial out, and verification moved to the connected side |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
 | Co-author   | —                                                             |
 | Created     | 2026-08-15                                                    |
-| Revised     | 2026-08-17 — re-verified against the tree after RFC 0009 landed: §2.1's settings survey, §2.7, §4.4's ordering question, §6.5's flag name, §10's layer-4 home |
+| Revised     | 2026-08-17 — re-verified against the tree after RFC 0009 landed: §2.1's settings survey, §2.7, §4.4's ordering question, §6.5's flag name, §10's layer-4 home. 2026-09-02 — §13, four assumptions replaced. 2026-09-04 — §14, what building it found |
 | Supersedes  | —                                                             |
 | Complements | RFC 0004-bis §13.2 (content-addressable dedup), RFC 0002 (what BatleHub knows about a CVE), RFC 0009 §7.4 (the cached sumdb this RFC's Go case rests on) and §12.16 (the real-client suites §10 reuses) |
 | Touches     | `crates/config`, `crates/core`, `crates/adapters`, `crates/web`, `server`, `cli`, `ui`, docs |
@@ -63,7 +63,7 @@ mise all tools installed          # no egress, checksums verified from mise.lock
 $ mise install some-new-tool
 mise ERROR download failed: 503 from batlehub.corp
       not in this instance: github/jdx/mise-tool@v1.2.0
-$ batlehub-cli admin air-gap missing
+$ batlehub-cli admin air-gap-missing
 github  jdx/mise-tool@v1.2.0   4 requests   first 2026-08-14  last 2026-08-15
 ```
 
@@ -240,9 +240,12 @@ Produces a plan describing every download the locked tools imply, resolved per p
 
 Three fields carry the argument of this RFC:
 
-- **`key`** is the storage key the artifact will occupy, derived by the same
-  `artifact_storage_key(registry, name, version)` the proxy and local-registry paths already share.
-  A plan is therefore a statement about BatleHub's storage, not about a URL.
+- **`key`** is the storage key the artifact is expected to occupy — a best guess, and §14.1
+  records why it can be no more than that: a storage key is a function of the *route*, not of the
+  URL, so only the server can name it. The plan's real handle on BatleHub is **`proxy_path`**, the
+  path each download takes through it; a plan is therefore a statement about this instance, not
+  about a list of URLs. The bundle uses the key the server reports on
+  `X-BatleHub-Storage-Key`.
 - **`unsupported`** is the git-backend list from §3, produced at planning time. The operator learns
   that `asdf:` tools will not work *before* the bundle is built, and the message names the backend
   rather than the symptom.
@@ -492,7 +495,7 @@ mirror.
   registry/key resolution, the `unsupported` classification from `BACKEND_REGISTRIES` (a backend not
   in that table and not HTTP-fetching lands in `unsupported`), and the `unmirrored_hosts` diff
   against `GET /api/v1/registries`.
-- `batlehub-cli mise seed [--verify]`, `admin bundle export|import`, `admin air-gap missing`.
+- `batlehub-cli mise seed [--verify]`, `admin bundle export|import`, `admin air-gap-missing`.
 - `registry suggest --mise` gains the catch-all rule in its emitted block, behind
   `--mise-catch-all` (`requires = "mise"`, mirroring the existing `--mise-commented`) so an existing
   user's output does not change shape without asking. `render_mise_toml` grows the flag as a fourth
@@ -747,3 +750,265 @@ BatleHub's own URLs when an operator has already pointed a backend at the proxy
 **Ordering, as a constraint.** RFC 0019 phase 1 (SHA-keyed cache) before this
 RFC's phases 2 and 4; RFC 0018 phase 1 (verdict model) before phase 3; RFC 0010
 before all of it, for the toolchain-coverage reason the index gives.
+
+---
+
+## 14. Landed (2026-09-04)
+
+All six phases are built on `feat/idk` and measured. The design held; five
+things it said about the tree did not, and each was found by a test rather
+than by a re-read. They are recorded below because four of them are the kind
+of mistake this RFC's own §13 exists to catch, and the fifth is a defect this
+work found in shipped code.
+
+**What is there.** `[air_gap]` with the four rejections and two warnings of
+§4.5 (`crates/config/src/schema/air_gap.rs`, `validate_air_gap`); the refusal
+enforced where clients are *built*, per §13 decision 1
+(`registry/offline.rs`, wired in `server/src/builders.rs`);
+`CoreError::ContentUnavailable` rendered as the `503` of §4.4; the miss log
+and the bundle history as ports, in-memory and Postgres adapters, and
+migrations 056/057; `GET`/`DELETE /api/v1/admin/air-gap/missing`,
+`GET /_air-gap/unmirrored/{tail}` → `501`, `POST /api/v1/admin/bundle/import`
+and `GET /api/v1/admin/bundle`; `batlehub-cli mise plan|seed|export|import`
+and `registry suggest --mise-catch-all`; the bundle format in
+`core/services/bundle.rs`; the Air gap console page; `docs/use/mise.md`, the
+[air-gap runbook](/operations/air-gap) and configuration §3.12; and
+`tests/heavy/mise.sh` §4, which plans, seeds, exports, imports into a second
+instance running `[air_gap] enabled = true` and installs through it with
+egress denied to both processes.
+
+### 14.1 A storage key is a function of the route, not of the URL
+
+§4.2 says a plan names "the storage key the artifact will occupy, derived by
+the same `artifact_storage_key(registry, name, version)` the proxy and
+local-registry paths already share". Neither half is true of the proxy path.
+`artifact_storage_key` is the *local-registry* key (`local:…`); the proxy
+writes `artifact:{PackageId::cache_key()}`, and the coordinate in it is built
+by the **handler**, differently per route: npm's tarball is
+`…/{name}/{version}/tarball`, a GitHub asset by name is
+`…/{tag}/filename/{file}`, the same asset by id is `…/unknown/{id}`, a
+generic mirror is `…/repo/_/{path}`, and a forge archive is keyed by its
+commit. §4.2's own example key is none of these.
+
+A bundle whose keys were derived from the download URL imports cleanly,
+reports its blobs written, and answers `503` for every one of them forever.
+
+**Decision: the server reports the key it used.** Every artifact response
+carries `X-BatleHub-Storage-Key`, and `ProxyResponse::ForgeStream` now
+carries the commit-keyed coordinate so the header is right for an archive
+too. `mise export` writes what the header said into the manifest and falls
+back to the plan's derived key only when talking to a server too old to send
+one, saying so in a `skipped` line.
+
+Two more headers ride with it — `X-BatleHub-Package` and
+`X-BatleHub-Version` — because the key cannot be read back into a coordinate:
+a name may contain slashes, so `gh/cli/cli/v2.60.0/filename/gh.tar.gz` splits
+four plausible ways and only one is right. The import needs the coordinate,
+not just the key, for the verdict row of §14.3: a coordinate guessed wrong
+files the judgement against a package nobody will ever ask about, which looks
+exactly like the verdict having been lost. The alternative — a second routing table
+in the CLI — is a table that drifts, and the discovery here is what drift
+looks like. The header discloses nothing: every segment of the key is in the
+URL the caller asked for. `crates/web/tests/air_gap.rs` asserts the header
+against the store, so a route that reports the wrong key fails there rather
+than on a disconnected estate.
+
+### 14.2 An imported artifact needs the entry that finds it
+
+`ProxyService` resolves metadata **before** it looks at the artifact cache.
+On an air-gapped instance that resolve has no upstream to ask, so a bundle
+that carried only bytes would import cleanly and serve none of them — §4.1's
+"a cache hit is served exactly as today" is true of the artifact and not of
+the lookup that reaches it.
+
+**Decision: import writes the metadata entry too.** The two are one
+coordinate under two prefixes (`artifact:` and `meta:`), which is why one
+reported key is enough for both. `published_at` is deliberately `None`: this
+instance knows when the bundle was made, not when the upstream published, and
+dating an artifact by its import would make every age gate read `fresh`. The
+judgement that *did* have the date is the carried verdict.
+
+The entry expires at once on a **connected** instance and never on a
+disconnected one. §4.5's second warning is the case: a connected instance
+imports bundles to stage them, and there an import that pinned a metadata
+answer would beat the upstream that can give a better one.
+
+### 14.3 The verdict crosses, and only in one direction
+
+§13 decision 4 is built: `mise export` asks the connected instance for each
+entry's verdict, and import upserts a row whose `policy_ref` is
+`bundle:<id>` — never a local policy, so nothing here can read as a check
+this instance made.
+
+*Asked for*, not read off the response, and the difference is the whole
+point. RFC 0018's headers say something only when there is something to say:
+a hold or a warning. An `allowed` verdict is silent on the wire — and silence
+is exactly the case that has to cross, because it is the one that lets the
+disconnected instance serve. An export built on the headers alone would carry
+the verdicts for artifacts it should not be shipping and none for the ones it
+should.
+
+**Only a served state crosses.** `allowed` and `warned` are evidence a
+disconnected instance may act on. `denied` and `quarantined` are dropped: a
+bundle is signed by whoever holds the key, and a signer who could write a
+refusal into this instance's verdict table could refuse any package on it.
+A bundle may carry evidence that something was allowed; it may not carry an
+order to refuse.
+
+### 14.4 A forge resolves a ref before it fetches anything
+
+§13.3 said the bundle carries the `ref → commit` rows and that 0019's TTLs
+are frozen under `air_gap.enabled`. Both are built, and neither is optional:
+a forge coordinate resolves its ref *first*, so a disconnected instance
+without the resolution refuses every coordinate in the bundle it just
+accepted — including the ones whose bytes it is holding. An expired row would
+do the same, because an expired row falls through to the forge, which is not
+there.
+
+The export reads the pair off the response — `X-BatleHub-Ref-Kind`,
+`X-BatleHub-Resolved-Commit`, and a new `X-BatleHub-Ref-Requested`, which is
+the only place the asked-for name survives on a commit-keyed archive, where
+the coordinate has already become the SHA — and the import upserts it into
+the resolution table.
+
+Frozen means "do not re-ask", not "answer anyway": a ref this instance has
+never resolved is still refused. What it holds it serves; what it has never
+seen is a gap in the bundle, recorded under the `ref` kind.
+
+It applies to a release *asset* too, not only to an archive: 0019 §4.2 keys
+an asset's cache on the tag but still resolves that tag, so a moved tag is
+recorded. The heavy suite therefore asserts the row in the **manifest**
+rather than on the disconnected instance — the two share a database there, so
+the instance would find the connected side's resolution whether the bundle
+carried one or not. The bundle is the thing under test.
+
+### 14.5 What the lock really looks like
+
+Three corrections to the plan, all from reading `mise.lock` as `mise lock`
+writes it rather than as §4.2 imagines it:
+
+- **The platform is a quoted key**, `[tools.X."platforms.linux-x64"]`, which
+  parses as one key literally named `platforms.linux-x64` on the tool table.
+  Read naively, `--platform linux-x64` matched nothing and planned an empty
+  bundle for a lock full of tools.
+- **A release asset has two addresses.** The lock records `url` *and*
+  `url_api`, and the `aqua:`/`github:` backends usually fetch the second.
+  Both are planned; they are one artifact, they share a digest, and the
+  bundle carries a single blob under two keys.
+- **`proxy_path_for` dropped the type segment** for the path-addressed kinds,
+  so a `generic` plan seeded 404s — while the rewrite rules it emits
+  alongside had the segment. Both now come from one function.
+
+§13 decisions 1 and 2 are built as stated: `--platform` defaults to the
+planning host's with `all` opt-in (plus a guard — a host the lock has nothing
+for plans everything and says so, rather than writing an empty bundle), and
+`--include-mise` carries `github:jdx/mise@<current>`. The identity rule §13
+requires ahead of the catch-all is emitted: without it the catch-all rewrites
+BatleHub's own URLs into the `501` sink and turns a working registry into an
+"unmirrored host".
+
+### 14.6 A defect this found in shipped code
+
+RFC 0019 phase 3's release-document rewrite removed each asset's `url` field,
+on the argument that it points at the forge's own asset endpoint and is "a
+working way around every rule above". `url` is a **required** field of an
+asset in the GitHub API's schema, and a client that deserializes strictly
+fails on the whole release list rather than on one asset. mise does: every
+`mise install` through a BatleHub github registry answered `missing field
+\`url\`` from the moment 0019 phase 3 landed until this suite measured it.
+
+This proxy *does* have an equivalent — `releases/assets/{id}` is a route it
+serves, under the same rules as every other artifact — so the field is now
+repointed there rather than deleted. The bypass stays closed and the document
+stays readable. It is the argument for phase 6 in one line: the rule was
+written, reviewed and unit-tested, and the only thing that could catch it was
+a real client.
+
+### 14.7 Two smaller things
+
+`§4.5`'s third warning — a registry with nothing cached, which answers `503`
+to everything — is logged once at boot **and** recomputed by the missing
+endpoint as `empty_registries`, so it stays true after the first import
+rather than freezing what was true at startup. And `mise import` reports the
+server's refusal instead of decoding it as a success shape; it used to answer
+`missing field \`bundle_id\`` to every rejection, which named nothing.
+
+### 14.8 What is not carried
+
+**Documents.** A bundle carries artifacts and the metadata entry that finds
+them; it does not carry proxied *documents* — a release listing, a packument,
+a flat index.
+
+This is why the lock is the bill of materials, and it was measured rather
+than assumed — on mise 2026.8.6, by pointing every rewrite rule at a closed
+port and reading which URLs the client attempted:
+
+| Install | URLs attempted |
+| --- | --- |
+| `mise install github:cli/cli@2.60.0`, no lock | `/releases?per_page=100` first — the version string is a query |
+| the same tool from `mise.lock` | the asset download URL, and nothing else |
+
+A disconnected instance cannot answer a query, so the first is a correct
+`503`; the second resolves nothing, because the lock already holds the URL and
+the checksum, and takes the artifact the bundle carried. §1's claim is about
+the second, and §4.2's first sentence says so. (Measured again on a `503`
+rather than a closed port, by RFC 0008-bis phase 0: the lockless install asks
+for the release *by tag* first and pages the listing only after that fails —
+0008-bis §2 and §13.1. The conclusion is the same; the first URL is not.)
+
+So it is a gap only for a client that resolves through a listing on the
+disconnected side, and the miss log's `document` kind is exactly where that
+shows up: the estate is told what it asked for and did not get, which is what
+turns the next bundle into a list rather than a guess. [RFC 0008-bis](/rfc/0008-bis-listings-across-the-gap) decides it — a
+disconnected instance answers listings from what it holds — and neither is
+attempted here; §12's phases are complete without it.
+
+**Sigstore, and what actually replaces it.** §2's second motivation lists five
+verifiers mise runs by default. Turning them off one at a time on the
+disconnected side reproduces that section rather than arguing it:
+
+| With | The locked install stops at |
+| --- | --- |
+| everything default | `api.github.com/repos/…/attestations` — the attestation API |
+| `github_attestations = false` | SLSA provenance, which fetches the release *document* and gets §14.8's `503` |
+| all five off | download, checksum, install |
+
+The checksum in `mise.lock` is verified locally throughout: it is the one
+check that needs nothing but the bytes, and it is why an air-gapped install is
+not an unverified one. The suite sets all five off, which is what §2 says
+operators already do.
+
+What §5.2 promised in its place is a verdict made where the check *can* run.
+Half of that is built: `mise seed --verify` reads BatleHub's own RFC 0018
+verdict, the bundle carries it, and the import files it (§14.3). The other
+half is not: **nothing runs cosign, SLSA or the attestation API at seed time**.
+§5.2's sequence diagram shows the CLI doing so; §12 phase 3 scoped it as "the
+attestation store", and §13 decision 4 replaced that store with 0018's verdict
+rows without saying who fills them with *those* checks. Today a disconnected
+estate turns mise's verification off and gets 0018's judgement instead, which
+is a real answer and a narrower one than §1 implies. Closing the difference is
+0018's scanner work — `sigstore.rs` exists — pointed at seed time, and it
+belongs with the `0008-bis` above rather than in a footnote here.
+
+**Measured, not assumed.** `tests/heavy/mise.sh` §4 is the standing proof of
+§1, and it passes: plan, seed, export, a second instance under
+`[air_gap] enabled = true`, a `503` that names itself before the import, the
+import, 13 MB served out of the read path, and `mise install` completing from
+the lock with egress denied to both processes. Two honest bounds on it are
+stated in the script.
+
+The runner's kernel routing is untouched, so egress is denied to the two
+processes under test — the server by `[air_gap]` itself, mise by a proxy
+pointed at a closed port — rather than to the host. That is the strongest
+form available in a job that has to reach GitHub in section 1 to have
+anything to carry across in section 4.
+
+And the two instances share one `DATABASE_URL`, because the heavy suites
+have one. The bytes and the refusal are still real — the metadata cache is
+in-process and the storage directories are separate — but the storage
+router's inventory is a table in that shared database, so the disconnected
+instance can *see* rows for keys it does not hold. Anything asserting what it
+reports holding is therefore asserted in `crates/web/tests/air_gap.rs`
+instead, where the store belongs to one app. A real pair shares nothing, and
+finding this took a failing assertion rather than a re-read: the fixture had
+been described in its own comment as costing nothing.

@@ -24,13 +24,14 @@ bytes.workspace = true
 chrono.workspace = true
 bzip2 = { version = "0.6", optional = true }
 flate2 = { version = "1", optional = true }
+toml = { workspace = true, optional = true }
 zstd = { version = "0.13", optional = true }
 # Deb/RPM repository hosting (all pure-Rust; none pull the banned `rsa` crate).
 ar = { version = "0.9", optional = true }
 lzma-rs = { version = "0.3", optional = true }
 sha1 = { version = "0.11", optional = true }
 ed25519-dalek = { version = "3", optional = true }
-rpm = { version = "0.27", default-features = false, features = [
+rpm = { version = "0.28", default-features = false, features = [
   "gzip-compression",
   "xz-compression",
   "zstd-compression",
@@ -57,6 +58,11 @@ sha2.workspace = true
 sqlx.workspace = true
 tar = { version = "0.4", optional = true }
 tokio.workspace = true
+# The scanner runner (RFC 0018 §6.3): per-job work directories and the
+# rlimits set on a sandboxed scanner before exec.
+tempfile.workspace = true
+libc = "0.2"
+thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 quick-xml = { workspace = true, optional = true }
@@ -72,7 +78,7 @@ rcgen = "0.14"
 # Test-only: the `payload` feature unlocks `rpm::PackageBuilder` / `FileOptions` for
 # building `.rpm` fixtures. Pulls no extra crates (`payload = []`) — notably not the
 # banned `rsa`, which only arrives via `signature-pgp`.
-rpm = { version = "0.27", default-features = false, features = ["payload", "gzip-compression"] }
+rpm = { version = "0.28", default-features = false, features = ["payload", "gzip-compression"] }
 rustls = { version = "0.23", features = ["aws-lc-rs"] }
 tar = "0.4"
 tokio-rustls = "0.26"
@@ -109,6 +115,8 @@ default = [
   "registry-jetbrains",
   "registry-jetbrains-marketplace",
   "registry-generic",
+  "registry-nodedist",
+  "registry-sdkman",
   "sbom",
   "storage-fs",
   "vuln-scan"
@@ -125,7 +133,7 @@ auth-token = []
 cache-redis = ["dep:redis"]
 db-postgres = []
 local-registry = ["db-postgres"]
-registry-cargo = []
+registry-cargo = ["dep:flate2", "dep:tar", "dep:toml"]
 registry-composer = ["dep:zip"]
 registry-forgejo = []
 registry-github = []
@@ -171,6 +179,10 @@ registry-jetbrains-marketplace = ["dep:quick-xml"]
 # Path-addressed mirror of an arbitrary upstream file tree (toolchain tarballs,
 # vendor CDNs). Also reuses `PathProxyRegistryClient`.
 registry-generic = []
+registry-nodedist = []
+# SDKMAN: the candidates API and the download broker as one registry, the
+# broker's 302 followed server-side through the SSRF guard (RFC 0010).
+registry-sdkman = []
 registry-rubygems = ["dep:flate2", "dep:tar"]
 registry-terraform = []
 registry-vscode-marketplace = []

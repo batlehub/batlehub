@@ -159,9 +159,10 @@ pub async fn pypi_simple_package(
         &proxy_base,
     );
 
-    Ok(HttpResponse::Ok()
-        .content_type(content_type)
-        .body(rewritten))
+    let mut builder = HttpResponse::Ok();
+    builder.content_type(content_type);
+    crate::handlers::proxy::common::listing_headers(&mut builder, &doc);
+    Ok(builder.body(rewritten))
 }
 
 /// The PyPI JSON API — `GET /pypi/{package}/json`.
@@ -208,8 +209,8 @@ pub async fn pypi_json(
         package_id: pkg,
         identity: identity.0,
         action: Action::ReleasesRead.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
     };
 
     // PEP 691 JSON rather than the HTML page: same filtered content, already

@@ -778,6 +778,20 @@ async fn sumdb_disabled_returns_404() {
     assert_eq!(call_service(&app, req).await.status(), 404);
 }
 
+/// `go` routes checksum lookups through a proxy only after a 200 on
+/// `supported`, and nothing upstream answers that probe (even
+/// proxy.golang.org is a 404 on it — tests/heavy/go.sh), so it is answered
+/// here: with a log configured, the registry carries it.
+#[actix_web::test]
+async fn sumdb_supported_is_answered_by_the_registry() {
+    let app = sumdb_app(Some("http://127.0.0.1:1")).await;
+    let req = TestRequest::get()
+        .uri("/proxy/go/sumdb/sum.golang.org/supported")
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 200);
+}
+
 #[actix_web::test]
 async fn sumdb_rejects_a_traversing_path() {
     let app = sumdb_app(Some("http://127.0.0.1:1")).await;

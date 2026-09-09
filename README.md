@@ -1,60 +1,104 @@
 # BatleHub - Proxy Cache
 
-claude --resume d0026b84-fb1e-4be0-8067-1fbcf2ee41ac
-
 A self-hosted smart proxy and cache for package registries. It sits between your build tools and the internet, caches artifacts after the first download, and enforces access-control rules before any package reaches a developer or CI pipeline.
 
 ## Supported registries
 
 | Registry | Protocol | Default upstream |
 |----------|----------|-----------------|
-| **GitHub** | Releases, assets, tarballs, raw files | `api.github.com` |
+| **GitHub** | Releases, assets, tarballs, raw files, git refs | `api.github.com` |
+| **Forgejo** | Releases, assets, tarballs, raw files, git refs | `codeberg.org` |
+| **GitLab** | Releases, assets, tarballs, raw files, git refs | `gitlab.com` |
 | **npm** | Full packument + tarball proxy | `registry.npmjs.org` |
 | **Cargo** | Sparse index + `.crate` download | `crates.io` / `index.crates.io` |
+| **NuGet** | V3 flat index + registration pages + `.nupkg` download | `api.nuget.org` |
 | **OpenVSX** | VS Code extension VSIX download | `open-vsx.org` |
 | **VS Code Marketplace** | VS Code extension VSIX download via Microsoft Gallery API | `marketplace.visualstudio.com` |
+| **JetBrains Marketplace** | IDE plugin API (search, compatible updates, downloads) + `updatePlugins.xml` custom repo | `plugins.jetbrains.com` |
 | **Go** | GOPROXY protocol (`.info`, `.mod`, `.zip`, `@latest`, `@v/list`) | `proxy.golang.org` |
-| **Maven** | Maven Central-compatible metadata XML + JAR / POM downloads | `repo1.maven.org` |
+| **Maven** | Maven Central-compatible metadata XML + JAR / POM downloads | `repo1.maven.org/maven2` |
 | **Terraform** | Provider and module proxy protocol (v1 API) | `registry.terraform.io` |
 | **RubyGems** | Gem downloads, version listing, REST info API | `rubygems.org` |
 | **Composer** | Packagist v2 protocol (`packages.json`, p2 metadata, dist downloads) | `repo.packagist.org` |
 | **PyPI** | Simple Repository API (PEP 503/691) + JSON API; URL rewriting for pip/uv/Poetry | `pypi.org` |
 | **Conda** | repodata.json channel proxy; `.conda` and `.tar.bz2` package downloads | `conda.anaconda.org` |
-| **JetBrains Marketplace** | IDE plugin API (search, compatible updates, downloads) + `updatePlugins.xml` custom repo | `plugins.jetbrains.com` |
+| **Debian / APT** | Path-addressed repository mirror; BatleHub-signed indexes in local mode | `deb.debian.org` |
+| **RPM / YUM** | Path-addressed repository mirror; BatleHub-signed `repomd.xml` in local mode | *(explicit upstream required)* |
+| **Pacman** | Path-addressed Arch mirror (`$repo/os/$arch/…`) | `geo.mirror.pkgbuild.com` |
+| **JetBrains IDE** | Path-addressed IDE archive mirror | `download.jetbrains.com` |
+| **Node.js dist** | `index.tab` release listing + dist tarballs (nvm, fnm, Volta) | `nodejs.org/dist` |
+| **SDKMAN** | Candidates API + broker download redirects | `api.sdkman.io/2` |
+| **Generic** | Arbitrary path-addressed file tree mirror | *(explicit upstream required)* |
 
 Multiple instances of the same registry type can run in parallel (e.g. a private npm registry and the public one as fallback).
 
 ### Feature matrix
 
-| Feature | GitHub | npm | Cargo | OpenVSX | VS Code Mkt | Go | Maven | Terraform | RubyGems | Composer | PyPI | Conda |
-|---------|:------:|:---:|:-----:|:-------:|:-----------:|:--:|:-----:|:---------:|:--------:|:--------:|:----:|:-----:|
-| Version listing | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ ⁵ |
-| Latest version resolution | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ | — | ✓ | — |
-| Version metadata | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Source archive download | ✓ | ✓ | ✓ | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Binary / extension download | ✓ | — | — | ✓ | ✓ | — | ✓ | ✓ | — | — | ✓ | ✓ |
-| Raw file access | ✓ | — | — | — | — | — | — | — | — | — | — | — |
-| Sparse index proxy | — | — | ✓ | — | — | — | — | — | — | — | — | — |
-| Module definition file | — | — | — | — | — | ✓ | — | — | — | — | — | — |
-| Publish timestamp | ⚠ ² | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ⚠ ⁴ | ✓ | ✓ | ✓ | ⚠ ⁵ |
-| Signed release detection | — | — | — | ✓ | — | — | — | — | — | — | — | — |
-| Release age gate rule | ⚠ ² | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ⚠ ⁴ | ✓ | ✓ | ✓ | ⚠ ⁵ |
-| Deny latest tag rule | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Multi-upstream fanout | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **Private publish** (`mode = local/hybrid`) | — | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ |
+Four capabilities are protocol-independent and hold for **every** registry type
+above, so they are stated once here rather than repeated as an all-✓ row:
+artifact caching, administrative version blocking, the deny-latest-tag rule, and
+multi-upstream fanout with 404 failover.
 
-> ² **GitHub**: publish timestamp (and therefore the age gate) is only populated for specific-tag release requests. Raw file, source tarball, and release-listing requests return no timestamp and the rule is skipped.
+The rest splits in two, because the two halves are addressed differently and do
+not answer the same questions. **Package registries** are addressed by a package
+coordinate (name and version) and can host versions themselves. **Forges,
+mirrors and toolchain distributions** are addressed by repository ref or by
+upstream file path.
+
+#### Package registries
+
+| Feature | npm | Cargo | NuGet | OpenVSX | VS Code Mkt | JetBrains Mkt | Go | Maven | Terraform | RubyGems | Composer | PyPI | Conda |
+|---------|:---:|:-----:|:-----:|:-------:|:-----------:|:-------------:|:--:|:-----:|:---------:|:--------:|:--------:|:----:|:-----:|
+| Version listing | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ ⁵ |
+| Version metadata | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `latest` pseudo-version ¹ | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | — | — | — | — | — | — |
+| Upstream search | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| Source archive download | ✓ | ✓ | — | — | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Binary / extension download | — | — | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ | — | — | ✓ | ✓ |
+| Sparse index proxy | — | ✓ | — | — | — | — | — | — | — | — | — | — | — |
+| Module definition file | — | — | — | — | — | — | ✓ | — | — | — | — | — | — |
+| Publish timestamp | ✓ | ✓ | ⚠ ⁶ | ✓ | ✓ | ✓ | ✓ | ✓ | ⚠ ⁴ | ✓ | ✓ | ✓ | ⚠ ⁵ |
+| Signed release detection | — | — | — | ✓ | ✓ | — | — | — | — | — | — | — | — |
+| Release age gate rule | ✓ | ✓ | ⚠ ⁶ | ✓ | ✓ | ✓ | ✓ | ✓ | ⚠ ⁴ | ✓ | ✓ | ✓ | ⚠ ⁵ |
+| **Private publish** (`mode = local/hybrid`) | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ |
+
+#### Forges, mirrors and toolchain distributions
+
+| Feature | GitHub | Forgejo | GitLab | Debian | RPM | Pacman | JetBrains IDE | Node.js dist | SDKMAN | Generic |
+|---------|:------:|:-------:|:------:|:------:|:---:|:------:|:-------------:|:------------:|:------:|:-------:|
+| Release / version listing | ✓ | ✓ | ✓ | — | — | — | — | ✓ | ✓ | — |
+| Version metadata | ✓ | ✓ | ✓ | — | — | — | — | ✓ | ✓ | — |
+| Git refs (branches, tags, commits) | ✓ | ✓ | ✓ | — | — | — | — | — | — | — |
+| Raw file access | ✓ | ✓ | ✓ | — | — | — | — | — | — | — |
+| Path-addressed file fetch ⁸ | — | — | — | ✓ | ✓ | ✓ | ✓ | — | — | ✓ |
+| Upstream artifact probe (`HEAD`) | — | — | — | ✓ | ✓ | ✓ | ✓ | — | — | ✓ |
+| Publish timestamp | ⚠ ² | ⚠ ² | ⚠ ² | — | — | — | — | ✓ | — ⁷ | — |
+| Signed release detection | ✓ ⁹ | ✓ ⁹ | ✓ ⁹ | — | — | — | — | — | — | — |
+| Release age gate rule | ⚠ ² | ⚠ ² | ⚠ ² | — | — | — | — | ✓ | — ⁷ | — |
+| **Private publish** (`mode = local/hybrid`) | — | — | — | ✓ ³ | ✓ ³ | ✓ ³ | — | — | — | — |
+
+> ¹ **`latest` pseudo-version**: whether the adapter resolves the literal version string `latest` to a concrete version. Independent of the deny-latest-tag rule, which fires on that string for every registry type whether or not the adapter would have resolved it.
 >
-> ³ **Private publish**: set `mode = "local"` to use BatleHub as the authoritative registry (no upstream needed), or `mode = "hybrid"` to serve locally published packages first and fall through to an upstream for everything else. See [Private registries](#private-registries-local-hybrid-mode) below.
+> ² **Forges (GitHub, Forgejo, GitLab)**: a tag coordinate takes its timestamp from the release, and a ref-addressed raw or archive coordinate from the resolved commit's date. The release-listing pseudo-version carries none, and a commit lookup the forge cannot answer serves the artifact undated — the age gate then does whatever `deny_missing_timestamp` says.
+>
+> ³ **Private publish**: set `mode = "local"` to use BatleHub as the authoritative registry (no upstream needed), or `mode = "hybrid"` to serve locally published packages first and fall through to an upstream for everything else. For Debian, RPM and Pacman, local mode also regenerates and signs the repository indexes and serves the public key. See the self-hosted / private registry example below, and [`docs/guide/configuration.md § Registry modes`](docs/guide/configuration.md#registry-modes) for the full reference.
 >
 > ⁴ **Terraform publish timestamp**: the module version detail endpoint (`/v1/modules/{ns}/{name}/{prov}/{ver}`) is part of the official Terraform Module Registry Protocol and always provides `published_at`. The provider version detail endpoint (`/v1/providers/{ns}/{type}/{ver}`) is supported by `registry.terraform.io` but is not in the official spec — other Terraform registries may omit `published_at`. When absent, the release age gate is skipped rather than blocking access.
 >
 > ⁵ **Conda**: conda has no dedicated per-package version listing API. BatleHub synthesises one by scanning `repodata.json` for `noarch`, `linux-64`, `osx-64`, `osx-arm64`, and `win-64` — the union of versions found across all available platforms is returned. Platforms that return 404 or a network error are silently skipped. The publish timestamp is read from the `timestamp` field in `repodata.json` (milliseconds since epoch); most packages carry it, but some older or third-party packages omit it — when absent the release age gate is skipped rather than blocking access.
+>
+> ⁶ **NuGet publish timestamp**: the V3 flat index carries no publication date, so BatleHub reads the `Last-Modified` header of a `HEAD` on the `.nupkg`. That is the date the file was written on the upstream CDN, which tracks the publication date closely but is not the protocol's own guarantee. When the upstream returns no such header the release age gate is skipped.
+>
+> ⁷ **SDKMAN**: the candidates API publishes no dates at all, so the age gate on this registry type decides every request with `deny_missing_timestamp`. Config validation makes the operator state that value explicitly rather than inherit a default.
+>
+> ⁸ **Path-addressed**: the whole upstream path travels in the coordinate and there is no per-package metadata API, so `path_allow` and `cache.warm_paths` are the controls that apply. These are also the only types whose upstream can be probed with a `HEAD` for the artifact-disappearance sweep.
+>
+> ⁹ **Forge signature detection**: applies to release assets. A ref-addressed raw or archive coordinate is served without a signature verdict.
 
 ## Key features
 
 - **Artifact caching** — first download is fetched from upstream and stored; subsequent requests are served from local or S3 storage.
-- **Private / local registry** — `npm`, `cargo`, `openvsx`, `vscode-marketplace`, `goproxy`, `rubygems`, `maven`, `terraform`, `composer`, `pypi`, `conda`, and `jetbrains-marketplace` registries can be set to `mode = "local"` (fully private, no upstream) or `mode = "hybrid"` (local-first with upstream fallback). Teams publish packages directly to BatleHub using standard tools (`npm publish`, `cargo publish`, `gem push`, `mvn deploy`, `twine upload`, raw VSIX / Go zip / Terraform provider upload / Composer ZIP / conda package upload / JetBrains plugin upload).
+- **Private / local registry** — `npm`, `cargo`, `nuget`, `openvsx`, `vscode-marketplace`, `jetbrains-marketplace`, `goproxy`, `rubygems`, `maven`, `terraform`, `composer`, `pypi`, `conda`, `deb`, `rpm`, and `pacman` registries can be set to `mode = "local"` (fully private, no upstream) or `mode = "hybrid"` (local-first with upstream fallback). Teams publish packages directly to BatleHub using standard tools (`npm publish`, `cargo publish`, `gem push`, `mvn deploy`, `twine upload`, `dotnet nuget push`, raw VSIX / Go zip / Terraform provider upload / Composer ZIP / conda package upload / JetBrains plugin upload / `.deb`, `.rpm` and `.pkg.tar.zst` upload).
 - **Ownership & team management** — per-package owner table (user or group, admin or maintainer role). The first publisher becomes the package admin; subsequent publishes require an owner record. Manage via the admin API or let it be set automatically.
 - **Team namespaces & package visibility** — assign a package name prefix (e.g. `frontend/`) to an auth-provider group so only its members can publish there. Set per-package visibility to `public` (default), `internal` (any authenticated user), or `team` (group members only) to control who can download.
 - **Versioning policies** — enforce semver, block pre-release versions, or restrict accepted version strings with a regex. Violations return HTTP 422 at publish time.
@@ -133,14 +177,14 @@ mise use "github:batleforc/batlehub[asset_pattern=batlehub-cli-*]"
 **via cargo** (builds from source):
 
 ```sh
-cargo install --git https://github.com/batleforc/batlehub batlehub-cli
+cargo install --git https://github.com/batlehub/batlehub batlehub-cli
 ```
 
 ---
 
 ## Configuration at a glance
 
-The server is configured with a single TOML file (`config.toml` by default, override with `--config`). See [`docs/guide/configuration.md`](docs/guide/configuration.md) for the full reference and worked examples.
+The server is configured with a single TOML file (`config.toml` by default, override with `--config`). You can use the [Config Generator](https://batleforc.git.batleforc.fr/batlehub/guide/config-generator.html) to help you create a configuration or see [`docs/guide/configuration.md`](docs/guide/configuration.md) for the full reference and worked examples.
 
 ### Minimal example
 
@@ -221,547 +265,11 @@ go get golang.org/x/text@latest
 
 ---
 
-## Private registries (local / hybrid mode)
-
-`npm`, `cargo`, `openvsx`, `vscode-marketplace`, `goproxy`, `rubygems`, `maven`, `terraform`, `composer`, and `jetbrains-marketplace` registries can act as authoritative private registries — not just caches. Set the `mode` field on any registry entry:
-
-| Mode | Behaviour |
-|------|-----------|
-| `proxy` | Default. Forwards to upstream; publishing is rejected. |
-| `local` | BatleHub is the only source. No upstream needed. Clients publish directly to BatleHub. |
-| `hybrid` | Local-first. Serves locally published packages; falls back to upstream for anything else. |
-
-### Cargo (private crate registry)
-
-```toml
-[[registries]]
-type = "cargo"
-name = "internal"
-mode = "local"
-
-[registries.rbac]
-user  = ["source:read"]
-admin = ["*"]
-```
-
-```toml
-# ~/.cargo/config.toml
-[registries.internal]
-index = "sparse+https://batlehub.example.com/proxy/internal/registry/"
-token = "<your-token>"
-```
-
-```sh
-cargo publish --registry internal
-```
-
-### npm (private package registry)
-
-```toml
-[[registries]]
-type = "npm"
-name = "internal-npm"
-mode = "local"
-
-[registries.rbac]
-user  = ["source:read"]
-admin = ["*"]
-```
-
-```ini
-# .npmrc
-@myorg:registry=https://batlehub.example.com/proxy/internal-npm/
-//batlehub.example.com/proxy/internal-npm/:_authToken=<your-token>
-```
-
-```sh
-npm publish --registry https://batlehub.example.com/proxy/internal-npm/
-```
-
-### RubyGems (private gem registry)
-
-```toml
-[[registries]]
-type = "rubygems"
-name = "internal-gems"
-mode = "local"   # or "hybrid" to fall through to rubygems.org
-
-[registries.rbac]
-user  = ["releases:read", "source:read"]
-admin = ["*"]
-```
-
-```sh
-# Publish
-gem push my-gem-1.0.0.gem --host https://batlehub.example.com/proxy/internal-gems \
-  --key <your-token>
-
-# Install
-gem install my-gem --source https://batlehub.example.com/proxy/internal-gems
-```
-
-### VS Code extensions (private VSIX registry)
-
-```toml
-[[registries]]
-type = "openvsx"     # or "vscode-marketplace"
-name = "internal-ext"
-mode = "local"
-
-[registries.rbac]
-user  = ["source:read"]
-admin = ["*"]
-```
-
-```sh
-# Upload
-curl -X PUT -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/octet-stream" \
-  --data-binary @my-org.my-ext-1.0.0.vsix \
-  "https://batlehub.example.com/proxy/internal-ext/my-org.my-ext/1.0.0/vsix"
-
-# Download
-curl -H "Authorization: Bearer <token>" \
-  "https://batlehub.example.com/proxy/internal-ext/my-org.my-ext/1.0.0/vsix" \
-  -o my-org.my-ext-1.0.0.vsix
-```
-
-### Go (private module proxy)
-
-```toml
-[[registries]]
-type = "goproxy"
-name = "internal-go"
-mode = "local"
-
-[registries.rbac]
-user  = ["source:read"]
-admin = ["*"]
-```
-
-Upload a module (PUT the zip archive — `go.mod` is extracted automatically):
-
-```sh
-curl -X PUT -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/zip" \
-  --data-binary @path/to/module-v1.0.0.zip \
-  "https://batlehub.example.com/proxy/internal-go/example.com/mymod/@v/v1.0.0.zip"
-```
-
-Point the go tool at the private proxy:
-
-```sh
-export GONOSUMCHECK="*"
-export GONOSUMDB="*"
-export GOPROXY="https://batlehub.example.com/proxy/internal-go,direct"
-go get example.com/mymod@v1.0.0
-```
-
-### Maven (private artifact registry)
-
-```toml
-[[registries]]
-type = "maven"
-name = "internal-maven"
-mode = "local"
-
-[registries.rbac]
-user  = ["releases:read", "source:read"]
-admin = ["*"]
-```
-
-```xml
-<!-- ~/.m2/settings.xml — credentials + mirror -->
-<settings>
-  <servers>
-    <server>
-      <id>internal-maven</id>
-      <username>your-user-id</username>
-      <password>your-token</password>
-    </server>
-  </servers>
-  <mirrors>
-    <mirror>
-      <id>internal-maven</id>
-      <url>https://batlehub.example.com/proxy/internal-maven/maven2/</url>
-      <mirrorOf>*</mirrorOf>
-    </mirror>
-  </mirrors>
-</settings>
-```
-
-```xml
-<!-- pom.xml — publish target -->
-<distributionManagement>
-  <repository>
-    <id>internal-maven</id>
-    <url>https://batlehub.example.com/proxy/internal-maven/maven2/</url>
-  </repository>
-</distributionManagement>
-```
-
-```sh
-mvn deploy
-```
-
-Non-POM files (JARs, checksums) can be uploaded before the POM arrives. The version is committed to the registry when the `.pom` file is uploaded. In `hybrid` mode, artifact requests that miss local storage fall back to the configured upstream.
-
-### Terraform (private module and provider registry)
-
-```toml
-[[registries]]
-type = "terraform"
-name = "internal-tf"
-mode = "local"
-
-[registries.rbac]
-user  = ["releases:read", "source:read"]
-admin = ["*"]
-```
-
-```hcl
-# ~/.terraformrc — provider network mirror + credentials
-provider_installation {
-  network_mirror {
-    url = "https://batlehub.example.com/proxy/internal-tf/"
-  }
-}
-credentials "batlehub.example.com" {
-  token = "your-token"
-}
-```
-
-Upload a private module:
-
-```sh
-curl -X POST -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/gzip" \
-  --data-binary @consul-module.tar.gz \
-  "https://batlehub.example.com/proxy/internal-tf/v1/modules/hashicorp/consul/aws/1.0.0"
-```
-
-Upload a provider version manifest (then upload binaries per platform via `PUT .../artifact/{os}/{arch}`):
-
-```sh
-curl -X POST -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{"version":"5.0.0","protocols":["5.0"],"platforms":[{"os":"linux","arch":"amd64","filename":"terraform-provider-aws_5.0.0_linux_amd64.zip","shasum":"abc123..."}]}' \
-  "https://batlehub.example.com/proxy/internal-tf/v1/providers/hashicorp/aws/versions"
-
-# Upload the platform binary
-curl -X PUT -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/zip" \
-  --data-binary @terraform-provider-aws_5.0.0_linux_amd64.zip \
-  "https://batlehub.example.com/proxy/internal-tf/v1/providers/hashicorp/aws/5.0.0/artifact/linux/amd64"
-```
-
-Yank / unyank a module or provider version:
-
-```sh
-# Yank module version (hidden from listings, download still returns stored artifact)
-curl -X DELETE -H "Authorization: Bearer <token>" \
-  "https://batlehub.example.com/proxy/internal-tf/v1/modules/hashicorp/consul/aws/versions/1.0.0"
-
-# Unyank module version
-curl -X POST -H "Authorization: Bearer <token>" \
-  "https://batlehub.example.com/proxy/internal-tf/v1/modules/hashicorp/consul/aws/versions/1.0.0/unyank"
-
-# Yank / unyank a provider version
-curl -X DELETE -H "Authorization: Bearer <token>" \
-  "https://batlehub.example.com/proxy/internal-tf/v1/providers/hashicorp/aws/versions/5.0.0"
-curl -X POST -H "Authorization: Bearer <token>" \
-  "https://batlehub.example.com/proxy/internal-tf/v1/providers/hashicorp/aws/versions/5.0.0/unyank"
-```
-
-Artifact signing is supported on both module and provider manifest uploads — attach `X-Artifact-Signature` (base64) and `X-Signature-Type` headers. The signature is stored and returned on every artifact download or provider download-info response.
-
-See [`docs/guide/configuration.md § Registry modes`](docs/guide/configuration.md#registry-modes) for the full reference including hybrid mode and client-side setup.
-
-### Composer (private PHP package registry)
-
-```toml
-[[registries]]
-type   = "composer"
-name   = "internal-composer"
-mode   = "local"   # or "hybrid" to fall through to Packagist
-
-[registries.rbac]
-user  = ["releases:read", "source:read"]
-admin = ["*"]
-```
-
-Point Composer clients at the proxy by adding a repository entry in `composer.json`:
-
-```json
-{
-  "repositories": [
-    {
-      "type": "composer",
-      "url": "https://batlehub.example.com/proxy/internal-composer/",
-      "options": {
-        "http": {
-          "header": ["Authorization: Bearer <your-token>"]
-        }
-      }
-    }
-  ]
-}
-```
-
-Alternatively, store credentials in `auth.json` (never committed to VCS):
-
-```json
-{
-  "http-basic": {
-    "batlehub.example.com": {
-      "username": "user",
-      "password": "<your-token>"
-    }
-  }
-}
-```
-
-Publish a package by uploading a ZIP archive containing a valid `composer.json` at its root (or inside a single top-level directory, matching the GitHub archive layout):
-
-```sh
-# Create the ZIP (must contain composer.json with "name" and "version" fields)
-zip -r my-vendor-my-package-1.0.0.zip my-vendor-my-package-1.0.0/
-
-# Upload
-curl -X POST \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/zip" \
-  --data-binary @my-vendor-my-package-1.0.0.zip \
-  "https://batlehub.example.com/proxy/internal-composer/api/upload"
-```
-
-Yank a version (hides it from listings; download returns 404):
-
-```sh
-curl -X DELETE \
-  -H "Authorization: Bearer <token>" \
-  "https://batlehub.example.com/proxy/internal-composer/api/packages/my-vendor/my-package/versions/1.0.0"
-```
-
-### PyPI (private Python package registry)
-
-```toml
-[[registries]]
-type = "pypi"
-name = "internal-pypi"
-mode = "local"   # or "hybrid" to fall through to pypi.org
-
-[registries.rbac]
-user  = ["releases:read", "source:read"]
-admin = ["*"]
-```
-
-Point pip and other tools at the proxy:
-
-```ini
-# ~/.pip/pip.conf
-[global]
-index-url = https://batlehub.example.com/proxy/internal-pypi/simple/
-```
-
-```toml
-# pyproject.toml — uv
-[[tool.uv.index]]
-name    = "batlehub"
-url     = "https://batlehub.example.com/proxy/internal-pypi/simple/"
-default = true
-```
-
-Publish with twine:
-
-```sh
-python -m build   # produces dist/*.whl and dist/*.tar.gz
-
-twine upload \
-  --repository-url https://batlehub.example.com/proxy/internal-pypi/legacy/ \
-  --username __token__ \
-  --password $BATLEHUB_TOKEN \
-  dist/*
-```
-
-The wheel filename is parsed automatically to extract name and version — no extra metadata flags needed. In `hybrid` mode, packages not found locally fall through to PyPI and are cached on the way back.
-
-### Conda (private conda channel)
-
-```toml
-[[registries]]
-type = "conda"
-name = "internal-conda"
-mode = "local"   # or "hybrid" to fall through to conda-forge / anaconda
-# upstreams defaults to ["https://conda.anaconda.org"]
-
-[registries.rbac]
-user  = ["releases:read", "source:read"]
-admin = ["*"]
-```
-
-Point conda at the proxy:
-
-```yaml
-# ~/.condarc
-channels:
-  - https://batlehub.example.com/proxy/internal-conda
-  - nodefaults
-```
-
-Publish a package (`.tar.bz2` or `.conda` format):
-
-```sh
-# Build with conda-build
-conda build my-recipe/
-
-# Upload — specify the target platform in the URL
-curl -X POST \
-  -H "Authorization: Bearer $BATLEHUB_TOKEN" \
-  -H "Content-Type: application/octet-stream" \
-  --data-binary @my-pkg-1.0.0-py311h0_0.tar.bz2 \
-  "https://batlehub.example.com/proxy/internal-conda/linux-64/"
-```
-
-Metadata (`name`, `version`, `build`, `depends`) is extracted automatically from `info/index.json` inside the archive. The channel's `repodata.json` is updated immediately and is served merged with upstream in `hybrid` mode.
-
----
-
-## Private registry — advanced features
-
-These features apply to all registry types in `local` or `hybrid` mode.
-
-### Ownership & team management
-
-The first user to publish a package automatically becomes its admin. Subsequent publishes require the caller to be a registered owner. Owners can be users or groups with `admin` or `maintainer` roles.
-
-```sh
-# List owners
-curl -H "Authorization: Bearer <admin-token>" \
-  https://batlehub.example.com/api/v1/admin/registries/internal-npm/packages/my-pkg/owners
-
-# Add a group owner
-curl -X POST -H "Authorization: Bearer <admin-token>" \
-  -H "Content-Type: application/json" \
-  -d '{"principal_type":"group","principal_id":"oidc:backend-team","role":"maintainer"}' \
-  https://batlehub.example.com/api/v1/admin/registries/internal-npm/packages/my-pkg/owners
-
-# Remove an owner
-curl -X DELETE -H "Authorization: Bearer <admin-token>" \
-  https://batlehub.example.com/api/v1/admin/registries/internal-npm/packages/my-pkg/owners/user/alice
-```
-
-### Team namespaces & package visibility
-
-Team namespaces let an auth-provider group (from OIDC claims or Kubernetes) claim a package name prefix within a registry. Only members of that group — plus admins — may publish packages whose name starts with the claimed prefix. Groups are not managed inside BatleHub; membership is read from the `groups` claim delivered by the auth provider on every request.
-
-Package visibility controls who can **download** a package, independently of who can publish it:
-
-| Visibility | Who can download |
-|------------|-----------------|
-| `public` (default) | Everyone, including unauthenticated users |
-| `internal` | Any authenticated user |
-| `team` | Only members of the group that owns the namespace |
-
-Visibility is package-level (all versions share the same setting). Changing visibility takes effect immediately on the next request; no cache flush is required. Publishing a new version inherits the existing package visibility automatically.
-
-```sh
-# Claim the "frontend" namespace for the group "oidc:frontend-team"
-curl -X POST -H "Authorization: Bearer <admin-token>" \
-  -H "Content-Type: application/json" \
-  -d '{"prefix":"frontend","group_id":"oidc:frontend-team"}' \
-  https://batlehub.example.com/api/v1/admin/registries/internal-npm/namespaces
-
-# Only members of "oidc:frontend-team" can now publish "frontend/utils", "frontend/ui", etc.
-
-# List namespace claims for a registry
-curl -H "Authorization: Bearer <admin-token>" \
-  https://batlehub.example.com/api/v1/admin/registries/internal-npm/namespaces
-
-# Set a package to team-only visibility
-curl -X PUT -H "Authorization: Bearer <admin-token>" \
-  -H "Content-Type: application/json" \
-  -d '{"visibility":"team"}' \
-  https://batlehub.example.com/api/v1/admin/registries/internal-npm/packages/frontend%2Futils/visibility
-
-# Release the namespace claim
-curl -X DELETE -H "Authorization: Bearer <admin-token>" \
-  https://batlehub.example.com/api/v1/admin/registries/internal-npm/namespaces/frontend
-```
-
-### Versioning policies
-
-Enforce versioning rules at publish time — violations return HTTP 422.
-
-```toml
-[[registries]]
-type = "cargo"
-name = "internal"
-mode = "local"
-
-[registries.versioning]
-enforce_semver   = true   # reject non-semver versions
-allow_prerelease = false  # reject pre-release versions (e.g. 1.0.0-beta.1)
-# version_pattern = "^\\d+\\.\\d+\\.\\d+$"  # optional regex
-```
-
-### Artifact signing
-
-Attach a signature to any publish; BatleHub stores it and returns it on every download.
-
-```sh
-# Publish with a signature
-SIGNATURE=$(gpg --detach-sign --armor artifact.tgz | base64 -w0)
-curl -X PUT -H "Authorization: Bearer <token>" \
-  -H "X-Artifact-Signature: $SIGNATURE" \
-  -H "X-Signature-Type: pgp" \
-  --data-binary @artifact.tgz \
-  "https://batlehub.example.com/proxy/internal/..."
-
-# Download — response includes the stored headers:
-#   X-Artifact-Signature: <base64>
-#   X-Signature-Type: pgp
-```
-
-Optionally require signatures for all publishes:
-
-```toml
-[registries.signing]
-required      = true
-allowed_types = ["pgp", "ed25519"]
-```
-
-### Bulk operations
-
-Yank, unyank, or permanently delete many versions in one admin API call.
-
-```sh
-curl -X POST -H "Authorization: Bearer <admin-token>" \
-  -H "Content-Type: application/json" \
-  -d '{"packages":[{"name":"my-pkg","version":"1.0.0"},{"name":"my-pkg","version":"1.0.1"}]}' \
-  https://batlehub.example.com/api/v1/admin/registries/internal-npm/bulk-yank
-```
-
-Endpoints: `bulk-yank`, `bulk-unyank`, `bulk-delete`. Response includes `processed`, `succeeded`, and a `failed` list with per-item errors.
-
-### Publish quota
-
-Limit how much each user can publish.
-
-```toml
-[registries.quota]
-max_storage_bytes_per_user = 1073741824   # 1 GiB
-max_packages_per_user      = 500
-enforcement                = "block"      # or "warn"
-```
-
-Quota state is returned on every publish via `X-Quota-Storage-Used`, `X-Quota-Storage-Limit`, `X-Quota-Packages-Used`, `X-Quota-Packages-Limit`, and `X-Quota-Warning` headers.
-
----
-
 ## Client tool configuration
 
 The built-in **Setup Guide** page (`/setup`) generates ready-to-paste config snippets for all supported tools. The snippets below are illustrative; the UI generates them pre-filled with your server's actual address.
+
+More info about each reigstry setup (User Side or Admin Side) can be [found in the doc](https://batleforc.git.batleforc.fr/batlehub/registries/).
 
 ### npm / yarn / pnpm
 
@@ -879,31 +387,33 @@ channels:
 
 ## Architecture
 
-```
-config.toml
-  └─ [[registries]]  type = "npm" | "cargo" | "github" | "openvsx" | "vscode-marketplace"
-                               | "goproxy" | "maven" | "terraform" | "rubygems" | "composer"
-                               | "pypi" | "conda"
-         │
-         ▼
-server/src/main.rs         — builds registry clients, policies, services
-         │
-         ▼
-ProxyService               — orchestrates caching, rules, streaming
-  ├── resolve_metadata()   → registry adapter (fetches version info from upstream)
-  ├── evaluate rules       → RBAC, block list, release age gate, deny latest
-  ├── storage cache        → filesystem or S3
-  └── fetch_artifact()     → registry adapter (streams bytes from upstream)
-         │
-         ▼
-LocalRegistryService       — authoritative local/hybrid registry
-  ├── publish()            → versioning check → ownership check → signing check → quota → store
-  ├── yank() / unyank()
-  ├── bulk_yank() / bulk_unyank() / bulk_remove_versions()
-  └── get_artifact()       → storage + signature headers
-         │
-         ▼
-HTTP handlers (actix-web)  — one module per registry type
+```mermaid
+flowchart TD
+  CFG["config.toml — registries entries<br>type = npm | cargo | github | openvsx | vscode-marketplace<br>| goproxy | maven | terraform | rubygems | composer | pypi | conda"]
+  MAIN["server/src/main.rs<br>builds registry clients, policies, services"]
+  HTTP["HTTP handlers (actix-web)<br>one module per registry type"]
+
+  CFG --> MAIN --> HTTP
+
+  HTTP -->|"proxy mode, or hybrid fallthrough"| proxy
+  HTTP -->|"local or hybrid mode"| local
+
+  subgraph proxy["ProxyService — caching, rules, streaming"]
+    direction TB
+    PM["resolve_metadata()<br>registry adapter: version info from upstream"]
+    PR["evaluate rules<br>RBAC, block list, release age gate, deny latest"]
+    PC["storage cache<br>filesystem or S3"]
+    PF["fetch_artifact()<br>registry adapter: streams bytes from upstream"]
+    PM --> PR --> PC --> PF
+  end
+
+  subgraph local["LocalRegistryService — authoritative local/hybrid registry"]
+    direction TB
+    LP["publish()<br>versioning → ownership → signing → quota → store"]
+    LY["yank() / unyank()"]
+    LB["bulk_yank() / bulk_unyank() / bulk_remove_versions()"]
+    LG["get_artifact()<br>storage + signature headers"]
+  end
 ```
 
 ### Crate structure
@@ -917,17 +427,6 @@ HTTP handlers (actix-web)  — one module per registry type
 | `server` | Binary entry point — wires everything together |
 | `ui` | Vue 3 + Tailwind SPA (package browser, setup guide, admin panel) |
 
----
-
-## Permissions
-
-| Permission | Meaning |
-|-----------|---------|
-| `releases:read` | List versions and download release assets / metadata |
-| `source:read` | Download source archives (tarballs, `.crate`, `.zip`) |
-| `*` | All permissions |
-
-Role inheritance: `admin` ⊃ `user` ⊃ `anonymous`. Group permissions from OIDC or Kubernetes claims are additive on top of role permissions.
 
 ---
 
@@ -944,88 +443,8 @@ task coverage       # generate HTML coverage report (requires PostgreSQL + MinIO
 task coverage-check # enforce ≥80% line coverage (fails the build if below threshold)
 ```
 
-### Fuzzing
-
-The `fuzz/` directory contains libFuzzer targets for the most security-sensitive code paths:
-
-| Target | What it covers |
-|--------|---------------|
-| `fuzz_rbac_evaluate` | RBAC group-string parsing (colon-based provider prefix splitting) |
-| `fuzz_package_id_cache_key` | `PackageId::cache_key()` with arbitrary registry/name/version strings |
-| `fuzz_deny_latest` | Version-string comparison — verifies only exact `"latest"` is blocked |
-| `fuzz_release_age` | Chrono timestamp arithmetic with arbitrary past/future dates |
-
-Requires a nightly Rust toolchain and `cargo-fuzz`:
-
-```sh
-rustup install nightly
-cargo install cargo-fuzz
-
-# Run a specific target (30 s by default)
-task fuzz TARGET=fuzz_deny_latest
-
-# Run longer or with a different target
-task fuzz TARGET=fuzz_rbac_evaluate MAX_TIME=300
-```
-
-Corpus and crash inputs are saved under `fuzz/corpus/<target>/` and `fuzz/artifacts/<target>/` respectively.
-
-### Adding a new registry type
-
-See [`docs/contributing/adding-a-registry.md`](docs/contributing/adding-a-registry.md) for a step-by-step guide with code templates.
-
----
-
-## Deployment
-
-### Pre-built image and binary
-
-Every tagged release publishes:
-
-- A **multi-arch container image** (`linux/amd64` + `linux/arm64`) to the GitHub Container Registry:
-  ```sh
-  docker pull ghcr.io/batleforc/batlehub:<version>
-  ```
-- A **statically linked server binary** attached to the GitHub Release page.
-
-### Docker image (build from source)
-
-```sh
-docker build -t batlehub .
-docker run -p 8080:8080 \
-  -v /path/to/config.toml:/etc/batlehub/config.toml \
-  -v /path/to/cache:/var/cache/batlehub \
-  batlehub
-```
-
-### Helm chart
-
-A Helm chart is available in `helm/batlehub/` for Kubernetes deployments:
-
-```sh
-helm install batlehub ./helm/batlehub \
-  --namespace batlehub --create-namespace \
-  --set database.url="postgresql://batlehub:changeme@postgres:5432/batlehub" \
-  --set "auth.tokens[0].value=my-admin-token" \
-  --set "auth.tokens[0].role=admin"
-```
-
-See [`docs/guide/installation.md`](docs/guide/installation.md) for the full Helm reference including values, S3 storage, and GitOps patterns.
-
-The image uses a multi-stage build (Rust builder → Node UI builder → Debian slim runtime). The compiled binary and built SPA are copied into the final stage.
-
-### Environment variable overrides
-
-Key settings can be overridden at runtime without editing the config file:
-
-| Variable | Config field |
-|----------|-------------|
-| `PROXY_CACHE__SERVER__PORT` | `server.port` |
-| `PROXY_CACHE__DATABASE__URL` | `database.url` |
-| `PROXY_CACHE__STORAGE__PATH` | `storage.path` (single filesystem backend) |
-| `PROXY_CACHE__OTEL__ENDPOINT` | `otel.endpoint` |
-
-Full list in [`docs/guide/configuration.md § Environment Variable Overrides`](docs/guide/configuration.md#_5-environment-variable-overrides).
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — contributor guide (points to [`docs/contributing/contributing.md`](docs/contributing/contributing.md))
+- [`New Registry`](https://batleforc.git.batleforc.fr/batlehub/contributing/contributing.html#new-registry-type-proxy-only)
 
 ---
 
@@ -1045,13 +464,14 @@ Full list in [`docs/guide/configuration.md § Environment Variable Overrides`](d
 | [`docs/contributing/adding-a-registry.md`](docs/contributing/adding-a-registry.md) | Step-by-step guide for implementing a new registry adapter |
 | `/swagger-ui/` (runtime) | Interactive API docs |
 
-## Roadmap
-
-See [`ROADMAP.md`](ROADMAP.md) for the full list of planned features, or browse the [Roadmap page on the documentation site](docs/guide/roadmap.md).
 
 ## Contributing, security, and license
 
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — contributor guide (points to [`docs/contributing/contributing.md`](docs/contributing/contributing.md))
+- [`Deployment`](https://batleforc.git.batleforc.fr/batlehub/guide/installation.html) or [`docs/guide/installation.md`](docs/guide/installation.md)
+- [`ROADMAP.md`](ROADMAP.md) for the full list of planned features, or browse the [Roadmap page on the documentation site](docs/guide/roadmap.md).
+- ['Testing'](docs/contributing/testing.md)
+- ['Access Control'](https://batleforc.git.batleforc.fr/batlehub/guide/access-control.html)
+- ['RFC'](https://batleforc.git.batleforc.fr/batlehub/rfc/)
 - [`SECURITY.md`](SECURITY.md) — supported versions and how to report a vulnerability
 - [`LICENSE`](LICENSE) — Apache License 2.0
 

@@ -51,10 +51,12 @@ pub mod conda;
 pub mod forge;
 pub mod goproxy;
 pub mod maven;
+pub mod nodedist;
 pub mod npm;
 pub mod nuget;
 pub mod pypi;
 pub mod rubygems;
+pub mod sdkman;
 pub mod terraform;
 
 /// Everything a filter needs to know about the request it is filtering for.
@@ -358,6 +360,119 @@ pub fn dispatch(
     removed
 }
 
+/// NuGet's two listing documents. The registration index can carry *paged*
+/// items, whose pages are separate documents this call does not hold.
+fn strip_nuget(
+    ctx: &ListingContext<'_>,
+    doc: &mut VersionDocument,
+    blocked: &BlockedVersions,
+) -> Vec<String> {
+    if ctx.document != DocumentKind::REGISTRATION {
+        return with_json(doc, |json| nuget::strip_flat_index(json, blocked));
+    }
+    with_json(doc, |json| {
+        let (removed, saw_paged) = nuget::strip_registration(json, blocked);
+        if saw_paged {
+            tracing::warn!(
+                registry = %ctx.registry,
+                package = %ctx.package,
+                "NuGet registration has paged items; those pages are served \
+                 unfiltered. The flat index, which is what resolves the version, \
+                 is filtered either way"
+            );
+        }
+        removed
+    })
+}
+
+/// RubyGems' versions API and its compact index (RFC 0009 §7.3).
+fn strip_rubygems(
+    ctx: &ListingContext<'_>,
+    doc: &mut VersionDocument,
+    blocked: &BlockedVersions,
+) -> Vec<String> {
+    match ctx.document {
+        // The gem document names exactly one version and has no list to pick a
+        // replacement from, so repairing it needs the versions API as well.
+        // That composition belongs to the handler, which has both; here the
+        // document passes through untouched.
+        DocumentKind::GEM => Vec::new(),
+        // The compact index's per-gem document — what Bundler reads once
+        // `/versions` has told it which gems to look at.
+        DocumentKind::COMPACT_INFO => {
+            with_text(doc, |text| rubygems::strip_compact_info(text, blocked))
+        }
+        // `/versions` is whole-registry and goes through `dispatch_multi`;
+        // `/names` names no version. Neither reaches here, and both are
+        // `Vec::new()` rather than a fall-through to the versions-API filter,
+        // which would try to parse plain text as JSON.
+        DocumentKind::COMPACT_VERSIONS | DocumentKind::COMPACT_NAMES => Vec::new(),
+        _ => with_json(doc, |json| rubygems::strip_versions(json, blocked)),
+    }
+}
+
+/// Go's `@v/list`. `@latest` names one version and carries no list, so
+/// `goproxy::repaired_latest` does that repair from the filtered list, in the
+/// handler that has both documents.
+fn strip_goproxy(
+    ctx: &ListingContext<'_>,
+    doc: &mut VersionDocument,
+    blocked: &BlockedVersions,
+) -> Vec<String> {
+    match ctx.document {
+        DocumentKind::LATEST => Vec::new(),
+        _ => with_text(doc, |text| goproxy::strip_version_list(text, blocked)),
+    }
+}
+
+/// PyPI's simple index, in either of its two encodings.
+fn strip_pypi(
+    ctx: &ListingContext<'_>,
+    doc: &mut VersionDocument,
+    blocked: &BlockedVersions,
+) -> Vec<String> {
+    match ctx.document {
+        DocumentKind::SIMPLE_JSON => with_json(doc, |json| pypi::strip_simple_json(json, blocked)),
+        _ => with_text(doc, |html| pypi::strip_simple_html(html, blocked)),
+    }
+}
+
+/// Two encodings of the one release table (RFC 0010 §6.2). `index.tab` is what
+/// nvm resolves every install through; `index.json` is the same rows for fnm
+/// and mise. `SHASUMS256.txt` never comes here: it is an artifact, signed by a
+/// sibling, and not rewritten.
+fn strip_nodedist(
+    ctx: &ListingContext<'_>,
+    doc: &mut VersionDocument,
+    blocked: &BlockedVersions,
+) -> Vec<String> {
+    match ctx.document {
+        DocumentKind::INDEX_JSON => {
+            with_json(doc, |json| nodedist::strip_index_json(json, blocked))
+        }
+        _ => with_text(doc, |text| nodedist::strip_index_tab(text, blocked)),
+    }
+}
+
+/// Three text documents (RFC 0010 §6.2). `candidates/default` names one
+/// version and carries no list, so — like Go's `@latest` — it is repaired in
+/// the handler against the filtered `versions/all`. The relayed documents
+/// (hooks, healthcheck, `candidates/all`, …) name no version, or are bash the
+/// client runs, and pass through untouched.
+fn strip_sdkman(
+    ctx: &ListingContext<'_>,
+    doc: &mut VersionDocument,
+    blocked: &BlockedVersions,
+) -> Vec<String> {
+    match ctx.document {
+        DocumentKind::SDKMAN_DEFAULT | DocumentKind::RELAYED => Vec::new(),
+        DocumentKind::SDKMAN_VERSIONS_LIST => {
+            with_text(doc, |text| sdkman::strip_rendered_list(text, blocked))
+        }
+        _ => with_text(doc, |text| sdkman::strip_versions_csv(text, blocked)),
+    }
+}
+
 /// The protocol switch behind [`dispatch`], without the logging.
 ///
 /// `None` means **this kind has no listing filter** — a signed deb index, a
@@ -379,54 +494,15 @@ fn strip(
     match ctx.kind {
         RegistryKind::Npm => Some(with_json(doc, |json| npm::strip_packument(json, blocked))),
 
-        RegistryKind::Nuget => Some(match ctx.document {
-            DocumentKind::REGISTRATION => with_json(doc, |json| {
-                let (removed, saw_paged) = nuget::strip_registration(json, blocked);
-                if saw_paged {
-                    tracing::warn!(
-                        registry = %ctx.registry,
-                        package = %ctx.package,
-                        "NuGet registration has paged items; those pages are served \
-                         unfiltered. The flat index, which is what resolves the version, \
-                         is filtered either way"
-                    );
-                }
-                removed
-            }),
-            _ => with_json(doc, |json| nuget::strip_flat_index(json, blocked)),
-        }),
+        RegistryKind::Nuget => Some(strip_nuget(ctx, doc, blocked)),
 
         RegistryKind::Terraform => Some(with_json(doc, |json| {
             terraform::strip_versions(json, blocked)
         })),
 
-        RegistryKind::Rubygems => Some(match ctx.document {
-            // The gem document names exactly one version and has no list to
-            // pick a replacement from, so repairing it needs the versions API
-            // as well. That composition belongs to the handler, which has both;
-            // here the document passes through untouched.
-            DocumentKind::GEM => Vec::new(),
-            // The compact index's per-gem document — what Bundler reads once
-            // `/versions` has told it which gems to look at (RFC 0009 §7.3).
-            DocumentKind::COMPACT_INFO => {
-                with_text(doc, |text| rubygems::strip_compact_info(text, blocked))
-            }
-            // `/versions` is whole-registry and goes through `dispatch_multi`;
-            // `/names` names no version. Neither reaches here, and both are
-            // `Vec::new()` rather than a fall-through to the versions-API
-            // filter, which would try to parse plain text as JSON.
-            DocumentKind::COMPACT_VERSIONS | DocumentKind::COMPACT_NAMES => Vec::new(),
-            _ => with_json(doc, |json| rubygems::strip_versions(json, blocked)),
-        }),
+        RegistryKind::Rubygems => Some(strip_rubygems(ctx, doc, blocked)),
 
-        RegistryKind::Goproxy => Some(match ctx.document {
-            // Same shape of problem as RubyGems' gem document: `@latest` names
-            // one version and carries no list. `goproxy::repaired_latest` does
-            // the repair from the filtered `@v/list`, in the handler that has
-            // both documents.
-            DocumentKind::LATEST => Vec::new(),
-            _ => with_text(doc, |text| goproxy::strip_version_list(text, blocked)),
-        }),
+        RegistryKind::Goproxy => Some(strip_goproxy(ctx, doc, blocked)),
 
         RegistryKind::Maven => Some(with_text(doc, |xml| maven::strip_metadata(xml, blocked))),
 
@@ -449,12 +525,11 @@ fn strip(
         // diagnostics honest where a deleted line would not.
         RegistryKind::Cargo => Some(with_text(doc, |body| cargo::mark_yanked(body, blocked))),
 
-        RegistryKind::Pypi => Some(match ctx.document {
-            DocumentKind::SIMPLE_JSON => {
-                with_json(doc, |json| pypi::strip_simple_json(json, blocked))
-            }
-            _ => with_text(doc, |html| pypi::strip_simple_html(html, blocked)),
-        }),
+        RegistryKind::Pypi => Some(strip_pypi(ctx, doc, blocked)),
+
+        RegistryKind::Nodedist => Some(strip_nodedist(ctx, doc, blocked)),
+
+        RegistryKind::Sdkman => Some(strip_sdkman(ctx, doc, blocked)),
 
         // No listing document, one that must not be rewritten, or one filtered
         // at a handler chokepoint instead (see `FILTERED_ELSEWHERE`). The
@@ -518,6 +593,14 @@ pub fn rewrite_urls(ctx: &ListingContext<'_>, doc: &mut VersionDocument) {
         RegistryKind::Composer => {
             if let Some(json) = doc.body.as_json_mut() {
                 composer::rewrite_dist_urls(json, ctx.public_base);
+            }
+        }
+        // RFC 0019 §4.2 *API reads* — a forge release document advertises
+        // absolute upstream download URLs, and a client that follows them
+        // goes past the proxy entirely.
+        kind if kind.is_forge() => {
+            if let Some(json) = doc.body.as_json_mut() {
+                forge::rewrite_release_urls(json, ctx.public_base, ctx.package);
             }
         }
         _ => {
@@ -589,7 +672,14 @@ pub fn normalize(kind: RegistryKind, version: &str) -> Cow<'_, str> {
         // repository and `v1.2.3` in the next. Which one a repository uses is a
         // habit rather than a convention, so a block must not depend on whose
         // habit the operator happened to copy.
-        RegistryKind::Github | RegistryKind::Forgejo | RegistryKind::Gitlab => {
+        //
+        // Node's tree spells every version `v22.11.0` and every client accepts
+        // `22.11.0`: `nvm install 22.11.0` is the documented form, so that is
+        // the spelling an operator copies into a block.
+        RegistryKind::Github
+        | RegistryKind::Forgejo
+        | RegistryKind::Gitlab
+        | RegistryKind::Nodedist => {
             let v = version.trim();
             Cow::Borrowed(v.strip_prefix('v').unwrap_or(v))
         }
@@ -909,6 +999,15 @@ mod tests {
         assert!(blocked.contains("v1.2.3"));
     }
 
+    /// `index.tab` spells `v22.11.0`; `nvm install 22.11.0` is the documented
+    /// form and so the one an operator copies into a block.
+    #[test]
+    fn nodedist_versions_compare_with_or_without_their_v_prefix() {
+        assert_eq!(norm(RegistryKind::Nodedist, "v22.11.0"), "22.11.0");
+        let blocked = BlockedVersions::new(RegistryKind::Nodedist, vec!["22.11.0".to_owned()]);
+        assert!(blocked.contains("v22.11.0"));
+    }
+
     #[test]
     fn npm_and_maven_normalisation_is_identity() {
         assert_eq!(norm(RegistryKind::Npm, "4.17.21"), "4.17.21");
@@ -1120,6 +1219,10 @@ mod tests {
             DocumentKind::COMPACT_VERSIONS,
             DocumentKind::COMPACT_INFO,
             DocumentKind::COMPACT_NAMES,
+            DocumentKind::INDEX_JSON,
+            DocumentKind::SDKMAN_DEFAULT,
+            DocumentKind::SDKMAN_VERSIONS_LIST,
+            DocumentKind::RELAYED,
         ];
         KNOWN.iter().find(|k| k.as_str() == name).copied()
     }

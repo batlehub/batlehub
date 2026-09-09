@@ -4,6 +4,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useExploreCache, useUpstreamCache } from "@/composables/useExploreCache";
 import { extractMessage } from "@/composables/useApi";
+import { useAuth } from "@/composables/useAuth";
 import { formatBytes, formatCount, formatRelative } from "@/lib/format";
 import { Facet } from "@/components/ui/facet";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -15,6 +16,7 @@ import {
   exploreRegistryStats,
   explorePackages,
   exploreUpstreamSearch,
+  exploreFetchVersion,
 } from "@/client/sdk.gen";
 import type {
   RegistryInfo,
@@ -499,6 +501,12 @@ async function fetchPackages() {
 async function fetchUpstream() {
   const name = search.value.trim();
   if (!name) return;
+  // The refusal messages belong to the result set being replaced, and they are
+  // keyed by `kind-registry/name` — which is stable across searches. Left
+  // standing, a "Refused: release-age gate" from an earlier query reappears
+  // under the same package the next time a search lists it, with no button
+  // having been pressed and nothing having been refused.
+  fetchResult.value = {};
   const reg = selectedRegistry.value ?? "";
   const seq = ++upstreamSeq;
 
@@ -643,6 +651,96 @@ function onSortChange(val: string) {
  */
 function detailPath(row: ExploreRow): string {
   return `/packages/${encodeURIComponent(row.registry)}/${encodeURIComponent(row.name)}`;
+}
+
+// ── Fetch, from the listing (RFC 0007-bis §11 q3) ────────────────────────────
+//
+// The question this settles was recommended *no*, and the recommendation's
+// reason was sound as far as it went: "the listing has no version, and fetching
+// the package means choosing one." An upstream row is the case where that is
+// not true. It came from an upstream search, and the version it names is the
+// one the search itself returned — the same string already shown in the version
+// column. Nothing is chosen here. The button names that version rather than
+// saying "Fetch", so a reader sees what they are asking for before they ask.
+//
+// A cached row gets no button: this instance holds it, there is nothing to go
+// and get, and "which version" would then be a real question with no answer on
+// this screen. That is question 17 one screen earlier, and it stays refused.
+//
+// When the offer is not made — the operator's switch, a kind with no single
+// artifact per version, or no session — the listing draws nothing and says
+// nothing. The reason belongs on the package page, which the name links to and
+// which states it in a sentence; repeating a per-registry sentence on every row
+// of a page of hits would drown the rows it explains.
+
+const { isAuthenticated } = useAuth();
+
+/** Which row is being fetched, and what came of the last attempt. */
+const fetching = ref<string | null>(null);
+const fetchResult = ref<Record<string, string>>({});
+
+/**
+ * Whether this row offers a fetch: upstream-only, and the server said yes.
+ *
+ * `fetch?.` although the generated type says the field is always there. It is
+ * always there in a *fresh* response; the upstream half of this page is served
+ * from a ten-minute in-memory cache, so a reader whose tab outlived a deploy
+ * has rows from the server that had no such field. Optional chaining draws no
+ * button for them, which is the right answer, where a hard read throws inside
+ * the render and takes the whole listing down — including its cached rows,
+ * which had nothing to do with it.
+ */
+function canFetch(row: ExploreRow): boolean {
+  return row.kind === "upstream" && row.fetch?.offered === true && isAuthenticated.value;
+}
+
+/**
+ * Ask this instance to fetch the version this row names.
+ *
+ * The same endpoint the package page's button calls, so everything §4.4 says
+ * about it holds here unchanged: the rules run, quota is spent, the access event
+ * names the caller. Nothing about being on a listing makes it a lighter act, and
+ * nothing here tries to make it one.
+ */
+async function onFetchRow(row: UpstreamRow) {
+  if (fetching.value) return;
+  const id = rowId(row);
+  fetching.value = id;
+  delete fetchResult.value[id];
+  try {
+    const { error: apiErr } = await exploreFetchVersion({
+      path: { registry: row.registry, name: row.name, version: row.latest_version },
+    });
+    if (apiErr) {
+      const body = apiErr as { code?: string; message?: string };
+      if (body.code === "fetch.already-held") {
+        fetchResult.value[id] = t("packageCatalog.fetchAlreadyHeld");
+      } else if (body.message) {
+        fetchResult.value[id] = t("packageCatalog.fetchDenied", { reason: body.message });
+      } else {
+        fetchResult.value[id] = t("packageCatalog.fetchFailed");
+      }
+      return;
+    }
+    // The package is held now, so both halves of this page are stale: the
+    // listing does not have it, and the upstream results still call it a
+    // discovery. Without this the ten-minute upstream cache serves the row
+    // straight back as a discovery and the button looks as though it did
+    // nothing.
+    //
+    // Scoped by the *selected* registry and not by the row's, which is what the
+    // Refresh button above does and what the cache keys are actually built
+    // from: with no registry selected both stores key on the empty string, so
+    // invalidating `npm` would clear nothing at all and this would silently do
+    // half its job. When a registry is selected the two are the same anyway —
+    // the upstream search only asks that one.
+    exploreCache.invalidate(selectedRegistry.value ?? undefined);
+    await Promise.all([fetchPackages(), fetchUpstream()]);
+  } catch (e) {
+    fetchResult.value[id] = extractMessage(e);
+  } finally {
+    fetching.value = null;
+  }
 }
 
 function goToPage(p: number) {
@@ -1089,6 +1187,69 @@ onMounted(() => {
                     <span class="min-w-0 [overflow-wrap:anywhere]">{{ rowSnippet(row) }}</span>
                   </p>
                 </TableCell>
+              </TableRow>
+
+              <!-- The action for an upstream row, in a row of its own rather
+                 than as a chip in a cell — the shape the snippet and the
+                 refusal note already use here, and the one the package page
+                 arrived at after its own fetch button spent a while as a 24px
+                 chip in a table column.
+
+                 The label names the version, which is the version the upstream
+                 search returned and the one the cell above shows. Nothing is
+                 being chosen on this screen (RFC 0007-bis §11 q3).
+
+                 On success no message is written: the listing and the upstream
+                 results are both refetched, the row leaves the upstream half
+                 and reappears as a held one, and its state chip is a better
+                 answer than a sentence under a row that no longer exists. -->
+              <TableRow
+                v-if="canFetch(row) || fetchResult[rowId(row)]"
+                class="border-dashed border-rule-soft hover:bg-transparent"
+              >
+                <TableCell class="pl-0 pr-3 pb-3 pt-0" />
+                <!-- `colspan="2"` plus the two trailing cells the wide columns
+                   use, exactly as the note row below does. A single
+                   `colspan="4"` declares five columns on a row whose table
+                   renders three below `lg` — the last two `<TableHead>`s are
+                   `hidden lg:table-cell` — and the browser then widens the
+                   whole table to five, shifting the header away from the body
+                   on every viewport under the breakpoint. -->
+                <TableCell colspan="2" class="pl-0 pr-3 pb-3 pt-0">
+                  <div class="flex flex-wrap items-center gap-3">
+                    <!-- The visible label names the version, which is all a
+                       reader who can see the row it sits under needs. The
+                       accessible name adds the package: a screen-reader user
+                       arrives at this button out of that context, and "Fetch
+                       9.9.9" on a page of fifty hits names nothing. -->
+                    <Button
+                      v-if="canFetch(row)"
+                      variant="outline"
+                      size="sm"
+                      :disabled="fetching !== null"
+                      :aria-label="
+                        t('packageCatalog.fetchVersionLabel', {
+                          name: row.name,
+                          version: (row as UpstreamRow).latest_version,
+                        })
+                      "
+                      @click="onFetchRow(row as UpstreamRow)"
+                    >
+                      {{
+                        fetching === rowId(row)
+                          ? t("packageCatalog.fetching")
+                          : t("packageCatalog.fetchVersion", {
+                              version: (row as UpstreamRow).latest_version,
+                            })
+                      }}
+                    </Button>
+                    <output v-if="fetchResult[rowId(row)]" class="text-sm text-muted-foreground">
+                      {{ fetchResult[rowId(row)] }}
+                    </output>
+                  </div>
+                </TableCell>
+                <TableCell class="hidden px-0 pb-3 pt-0 lg:table-cell" />
+                <TableCell class="hidden px-0 pb-3 pt-0 lg:table-cell" />
               </TableRow>
 
               <TableRow

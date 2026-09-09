@@ -1,3 +1,7 @@
+---
+reference: true
+---
+
 # Testing
 
 This document describes how BatleHub is tested: the categories of automated
@@ -21,9 +25,11 @@ BatleHub's tests fall into six layers, in increasing order of infrastructure cos
 | **In-process integration** | `crates/web/tests/*.rs`, `crates/examples/tests/*.rs` | none — full actix app on in-memory backends | `cargo test -p batlehub-web --test '*'` |
 | **CLI subprocess integration** | `cli/tests/integration.rs` | none — CLI binary vs. in-memory actix server | `task test:cli:integration` |
 | **External integration** | `crates/adapters/tests/*.rs` | real Postgres / MinIO(S3) / Redis via Podman | `task test:pg-*`, `task test:s3` |
-| **Heavy client** | `tests/heavy/*.sh` | real Postgres **and a real client** — VS Code, IntelliJ, Bundler, npm, pip, ovsx, micromamba, dotnet, composer, terraform | `task test:heavy`, or one `task test:<ecosystem>-heavy` |
+| **Heavy client** | `tests/heavy/*.sh` | real Postgres **and a real client** — VS Code, IntelliJ, Bundler, npm, pip, ovsx, micromamba, dotnet, composer, terraform, nvm, mise, cargo, go, mvn, apt/dnf | `task test:heavy`, or one `task test:<ecosystem>-heavy` |
 | **Heavy authorization** | `tests/heavy/authz.sh` | real Postgres, grants from a **real config file**, and the same clients | `task test:authz-heavy`, or `task test:authz-matrix-heavy` for the fast half |
 | **Fuzz** | `fuzz/fuzz_targets/*.rs` | nightly toolchain to *run*, none to check | `task fuzz:check`, `task fuzz` |
+| **Editor patch** | `patches/che-code/*.test.ts` | none — Node strips the types itself | `task test:patch` |
+| **API contract** | `crates/web/tests/openapi_contract.rs` | none — walks the generated spec *and* the handler sources | `cargo test -p batlehub-web --test openapi_contract` |
 
 The in-process layer is the workhorse: every test there spins up a real
 actix-web application wired to `InMemoryPackageRepository`,
@@ -60,6 +66,8 @@ task test:pg-local-registry   # Postgres — PostgresLocalRegistry
 task test:pg-storage-router   # Postgres — StorageRouter
 task test:pg-artifact-meta    # Postgres — PgArtifactMetaRepository
 task test:pg-vulnerability    # Postgres — PgVulnerabilityRepository
+task test:pg-air-gap          # Postgres — the miss log's upsert, cap and purge (RFC 0008)
+task test:patch               # the editor credential patch (RFC 0011) — plain `node --test`
 task test:s3                  # MinIO    — S3StorageBackend (feature storage-s3)
 
 # Repo interop (real apt/dnf/pacman consume signed repos)
@@ -76,6 +84,20 @@ task test:conda-heavy         # micromamba: the HEAD probe and a post-warm publi
 task test:nuget-heavy         # `dotnet nuget push` / `package search` / `add package`
 task test:composer-heavy      # local + proxy resolution with Packagist disabled
 task test:terraform-heavy     # `terraform init` over TLS, host-routed discovery
+task test:nvm-heavy           # `nvm ls-remote` / `nvm install` against a nodedist registry
+task test:sdkman-heavy        # `sdk list` / `sdk install java` against an sdkman registry (RFC 0010)
+task test:mise-heavy          # `mise install github:…` through a forge registry (RFC 0019),
+                              # then the whole air gap: plan, seed, export, import into a
+                              # second `[air_gap]` instance, install through it (RFC 0008)
+task test:cargo-heavy         # RFC 0018 §4.4: yanked mark, 403/404 refusal, recovery, `cargo publish`
+task test:go-heavy            # …same axes for `go`, plus the GOPROXY `direct` fallback and the sumdb
+task test:maven-heavy         # …same for `mvn`, incl. its cached failure and `deploy:deploy-file`
+task test:pathproxy-heavy     # …same for `apt` and `dnf`, whose signed indexes cannot hide anything
+task test:quarantine-heavy    # RFC 0018 from npm's side: a hold, the worker clearing it, a real OSV
+                              # (and RFC 0002: a pushed flag refusing npm, then revoked)
+                              # advisory refused, the listing agreeing, warn mode, the sandbox's egress
+task test:upstream-audit-heavy # RFC 0014 from the receiving end: a served directory loses a package,
+                              # two probes confirm it, a webhook receiver the suite runs gets the event
 task test:authz-matrix-heavy  # every verb in the vocabulary, both directions, over curl
 task test:authz-heavy         # …plus signed-URL expiry/rotation and each real client
 
@@ -91,6 +113,18 @@ task fuzz TARGET=fuzz_deny_latest MAX_TIME=30   # actually fuzz one (nightly)
 The Redis adapter tests (`redis_cache`, `redis_rate_limit`,
 `redis_warm_coordinator`) and `pg_rate_limit` / `actions_oidc` have no dedicated
 `task test:*` wrapper but run under `task coverage` and in CI.
+
+The two suites that drive a forge registry — `mise` and `airgap` — read
+`HEAVY_FORGE_TOKEN`. Set, `heavy_forge_auth_config` (`tests/heavy/lib.sh`)
+copies the suite's config with `[registries.upstream_auth]` on its `github`
+registry and starts from the copy, the token expanded from the environment
+rather than written to the file. Unset, both stay anonymous and nothing
+changes — which is the point: neither suite may require a secret. What
+anonymous costs is that GitHub counts its 60 API requests an hour per source
+IP: a hosted runner shares that IP with every other job on the machine, so the
+budget is often already spent, the proxy refuses below its 10 % reserve
+(RFC 0019 §5.2) and the air-gap seed fails on a `502`. CI therefore passes the
+workflow token (1 000 an hour, per repository, issued on forks too).
 
 ---
 
@@ -118,7 +152,7 @@ additionally cover SSRF protection and the shared upstream HTTP client
 
 ## 4. In-process integration tests
 
-`crates/web/tests/*.rs` — **~38 files, ~570 test functions** (point-in-time).
+`crates/web/tests/*.rs` — **88 files, 1 325 test functions** (counted 2026-09-06).
 Shared app-factory infrastructure (`make_app`, `make_local_svc`,
 `access_config*`, `LocalRegistryAppParts` / `build_local_registry_app`) lives in
 `crates/web/tests/common/mod.rs`; every other file begins with
@@ -149,6 +183,21 @@ Feature areas covered (file → area):
 | `vuln_proxy_endpoints.rs`, `vuln_findings.rs` | Vulnerability proxy endpoints + findings store |
 | `sbom_and_misc.rs` | SBOM read endpoints |
 | `publish_traversal_guards.rs`, `upload_traversal_and_enforcement.rs` | Cross-registry publish/upload traversal guards + policy enforcement |
+| `air_gap.rs` | RFC 0008: an instance that will not dial out, and what it answers instead |
+| `security_registry.rs`, `flags.rs` | RFC 0018 quarantine end to end; RFC 0002 pushed flags on a registry with no `[security]` |
+| `vsx_signing.rs` | RFC 0020: the VSIX signature asset the registry signs |
+| `forge_refs.rs`, `forge_security.rs`, `forge_api_reads.rs` | RFC 0019 phases 1–3: ref resolution and commit keying, what a ref does to a request, the raw policy and typed reads |
+| `authz_matrix.rs`, `authz_explain_oracle.rs`, `vocabulary_dead_ends.rs` | The route-by-route authorization matrix, `explain` agreeing with the decision, and RFC 0015 §11.5's no-dead-ends property |
+| `grants_editor.rs`, `grants_shadow.rs`, `gate_exemptions.rs` | RFC 0017's grants editor, shadow mode, and the `gates:exempt` verb |
+| `admin_policy.rs`, `admin_subjects.rs`, `tiered_versioning.rs` | The policy table's admin API, `GET /admin/subjects`, and `immutable` / `monotonic` on publish |
+| `local_read_authorization.rs` | Per-package visibility on the artifact routes that read storage directly |
+| `blocked_versions_hidden*.rs` | **Twelve files, 91 tests.** One property per ecosystem: a blocked version disappears from the *listing*, not only from the download, and whatever the protocol calls "newest" is repaired |
+| `tombstones.rs`, `upstream_audit.rs`, `listing_audit.rs` | RFC 0016 coordinate reuse, RFC 0014 confirmed disappearance, and what a listing writes to the audit trail |
+| `explore_fetch.rs`, `explore_upstream_detail.rs` | The Explorer's fetch-this-version button, and the package page for something this instance holds nothing of |
+| `package_readmes.rs`, `readme_images.rs`, `readme_search.rs`, `search.rs` | README capture, the image endpoint's refusals, README search, and search across the five ecosystems that share one path |
+| `host_routing.rs`, `spa_csp.rs`, `oidc_sso.rs`, `me_endpoints.rs` | RFC 0001 subdomain routing, the console's CSP, the browser sign-in flow, and the caller-scoped `/me` reads |
+| `upstream_calls_are_cached.rs`, `document_cache_audience.rs` | Two invariants rather than features: every outbound call goes through the caching helper, and one caller's document is never replayed to another |
+| `protocol_conformance.rs`, `vscode_gallery.rs`, `misc_standalone_endpoints.rs` | The paths clients actually send, BatleHub as an editor marketplace, and the endpoints that belong to no group |
 
 ---
 
@@ -172,6 +221,9 @@ local-vs-proxy precedence.
 | `local_vsx_registry.rs` | VSIX publish + download-after-publish (shared by OpenVSX & VS Code Marketplace) |
 | `local_jetbrains_marketplace_registry.rs` | Plugin publish (jar / nested-zip / descriptor validation), `updatePlugins.xml` build filtering, search, compatible-updates, offline/stale serving |
 | `local_rubygems_proxy.rs` | Proxy-mode gem download, info, versions, specs (full/latest/prerelease); publish/yank return 404 in proxy mode |
+| `local_rubygems_compact_index.rs` | The compact index (`/versions`, `/info/{gem}`) served from a local registry — what Bundler actually reads |
+| `local_nodedist_registry.rs` | The `nodejs.org/dist` tree as a typed registry (RFC 0010 phases 2–3) |
+| `local_sdkman_registry.rs` | SDKMAN as a typed registry (RFC 0010 phases 5–6): candidates, the broker, the post-install hook |
 
 Additional local-registry coverage (Deb, RPM, Pacman, Conda, PyPI, Terraform)
 lives in the feature-area files above (`repo_deb_rpm_pacman.rs`, `terraform.rs`,
@@ -231,6 +283,26 @@ puts a transparent logging proxy (`http_tap.py`) in front of it, drives that
 ecosystem's **real client**, and asserts on the wire transcript. Shared
 machinery is in `tests/heavy/lib.sh`.
 
+### The config generator's harness
+
+The docs site's config generator (`docs/.vitepress/components/ConfigGenerator.vue`)
+writes TOML nobody used to parse. Its pure half — types, defaults, helpers and
+`renderConfigToml(state)` — lives in `configToml.ts` so it runs without Vue, and
+three things hold it:
+
+- `node --test docs/build/config-generator.test.ts` renders the scenarios of
+  `config-generator-scenarios.ts` and asserts on the sections (plain Node, types
+  stripped by Node itself);
+- `docs/build/config-generator-fixtures.ts` writes each rendering to
+  `crates/config/tests/fixtures/config-generator/*.toml`, and
+  `cargo test -p batlehub-config --test config_generator_fixtures` loads every
+  one with `load_from_str` and `validate()` — the real parser saying the
+  generator emits a config the server accepts;
+- `task docs:generator:check` (part of `task docs:design`) fails when the
+  fixtures drift from the generator. `task docs:generator` regenerates them.
+
+Add a scenario for every section the generator learns to emit.
+
 They exist because the layers above them cannot fail on the defect that matters
 most here: a route that is present, tested, and answering `200` with something
 no client can use. RFC 0009 §5.2 lists the ways — a resource the client cannot
@@ -245,10 +317,16 @@ found by running the client, by nothing else, twice over.
 | `npm.sh` | npm | publish → install → `whoami`/`ping`/`dist-tag`/`search`, and `npm audit` on the path npm really sends |
 | `pypi.sh` | twine, pip | the documented `twine upload` (HTTP Basic) works, and pip's PEP 658 `.metadata` sibling answers |
 | `openvsx.sh` | ovsx | `ovsx publish` with its token in a query parameter, and `ovsx get` following the rewritten download URL |
+| `vsx_login.sh` | VS Code 1.136.1 (the server build's CLI, headless) | RFC 0011 §4.4: `batlehub-cli proxy serve` in front of a registry whose `anonymous` holds no verb, with `product.json` repointed at the proxy. Unauthenticated, a search through the proxy is the one `batlehub.sign-in` entry with `Code.Engine`, an install by id fails as *not found* with no request reaching the registry, and the sign-in package is refused as `NotSigned` until `extensions.verifySignature` is off, then installs; after `auth write-token-file`, without restarting anything, the same editor installs the fixture by id and every registry request on the tap carries `Authorization: Bearer` |
+| `vsx_view.sh` | VS Code 1.136.1 (the server build's workbench, in Chrome over the DevTools protocol — a workspace's sidecar via `CDP_URL`, or a headless `CHROME_BIN`) | RFC 0011 §4.4.2 and RFC 0020 in a **real Extensions view**: unauthenticated, browse and search list the one sign-in entry and opening it renders the sign-in page, with nothing reaching the registry; the entry's Install button is disabled and the editor says *not signed* (pinned — the entry is a page, deliberately unsigned). After `auth write-token-file`, the same page's Refresh lists the fixture with Install **enabled** (the registry signed it); the click passes the publisher-trust dialog, fetches package and signature through the proxy, and the editor's verifier refuses (`UnhandledException`, pinned by running the editor's own `vsce-sign` on the served archive, which `batlehub-cli vsx verify` accepts); the server's CLI refuses the same way and installs once `extensions.verifySignature` is off, and on a second look so does the view. A marketplace extension republished with its own archive attached (`PUT …/vsix/signature`) gets `Success` from `vsce-sign` and installs with the verifier on. Last, RFC 0007-bis §11 q1: an extension whose manifest names an `icon.svg` carrying a `<script>`, an `onload` and a `javascript:` link is served as `image/svg+xml` under the sandbox policy with all three gone and the drawing kept, and the gallery advertises that asset on its entry — which an `application/octet-stream` icon never is, since an entry with no usable icon gets the editor's `defaultIcon`. The real Extensions view lists the extension and shows that asset as its icon, which is why the step runs before anything is installed — a view with an installed extension opens on Installed and filters a typed query against it. Whether the browser *paints* the icon is logged and not asserted: it asks, and the fetch is aborted client-side for a reason not yet established. `tests/heavy/vsx_view.mjs` is the driver |
+| `console_fetch.sh` | Chrome over the DevTools protocol (a workspace's sidecar via `CDP_URL`, or a headless `CHROME_BIN`), against the **built** console | RFC 0007-bis §11 q3: the catalogue's **Fetch** button pressed by a person. The SPA and the API are one origin (`static_dir`), which is the deployed shape and keeps the run from proving anything through a CORS arrangement nobody deploys. An anonymous reader — who *can* browse this registry, so the assertion is about the offer and not about visibility — sees the upstream row and no button. A signed-in reader sees a button whose label carries the version the upstream search returned, clicked by its **accessible** name so the control pressed is the one a keyboard user reaches. Afterwards the row has left the upstream half, the version is held according to the package API, its tarball comes back through npm's own path, the tap saw the console's `POST …/fetch`, and the audit attributes it to the reader who pressed it rather than to an administrator. `tests/heavy/console_fetch.mjs` is the driver |
 | `conda.sh` | micromamba | the `HEAD` probe for `repodata.json.zst` reaches a handler, and a publish is visible in the *compressed* channel |
 | `nuget.sh` | dotnet | the client can *select* the search resource, `skip` advances the page, and `push` hits the path it appends a slash to |
 | `composer.sh` | composer | proxy-mode resolution with Packagist disabled, `dist.shasum` the client accepts, and `search.json` reached through the advertised template |
 | `terraform.sh` | terraform | `init` over TLS: host-routed discovery, download document, shasums, signature and archive, all through the proxy |
+| `upstream_audit.sh` | npm, `webhook_sink.py` | a disappearance is *told*: the suite serves a directory as an npm registry, `npm install` seeds the cache, the files are removed, two `recheck` probes confirm — one miss tells nobody — and `package_disappeared_upstream` lands at a receiver the suite runs, with RFC 0014 §4.5's payload; the restore delivers `package_reappeared_upstream`; then the same directory as a `generic` registry (RFC 0014 §13.5): a held file removed upstream is missed by a `HEAD` on its path, confirmed, refused `403` on its own route while its sibling stays `200`, and served again after the restore |
+| `quarantine.sh` | npm, `batlehub wait`/`why` | a `[registries.security]` registry as a client meets it: first contact **held** with the reason code in npm's own output, the embedded worker clearing it and the same cache recovering, a real OSV advisory refused on the wire and named by `why`, the packument hiding the denied version, a reload to `warn` serving it with the verdict headers, a scanner under `bwrap` that *tries* to reach the tap and cannot, and the flip — a version scanned clean by an OSV the suite runs, installed, then refused after the *scheduler's* rescan, with the admin alert at a receiver the suite runs naming who pulled it; and RFC 0002's other producer — a SOC's signed `hard_block` on a version already installed, which refuses the pinned `npm ci` as `SOC_VERDICT`, shows up in `/api/v1/admin/exposure` as a pull that *preceded* the flag, and lifts on the revoke |
+| `airgap.sh` | npm, pip, mise | RFC 0008-bis, both halves on one disconnected instance: one version of an npm package, a PyPI wheel and a release asset carried by bundle into a second `[air_gap]` instance. With `synthesise_listings = false` (the phase-0 measurement) `npm install` and `pip install` of a version string stop at the packument and the simple page (`503`, retried, the held artifact never asked for) and `mise install` with no lock at the release *by tag* and then the listing, while `npm ci` from a lock and a PEP 508 direct reference fetch the artifact and nothing else. Then the miss log is purged, the key flipped by a hot reload, and the same three commands complete off listings the instance composed — `X-BatleHub-Listing: synthesised` on the packument, the JSON simple page and the release by tag — with an unheld version failing in npm as `ETARGET` and never asked for, an unheld tag refused at the release by tag and recorded as *requested v2.59.0, held v2.60.0*, which `admin air-gap-missing` prints as two columns; then `cargo`, `go`, `mvn` and `dotnet` resolving a range or an unpinned request through the composed sparse index, `@v/list`, `maven-metadata.xml` (whose `.sha1` the instance answers for itself) and flat index (Maven's plugins warmed against the connected instance first, under the same mirror id); then `bundle install` through the composed compact index and `micromamba create` through the composed `repodata.json`, whose entries the import read out of the gem and the package; then `terraform init` through a composed `versions` and a composed provider `download` document, on a TLS tap of its own (8121, `localhost` bound to the Terraform registry) — the archive, checksum list and signature carried as three plan entries, the publisher's keys read off the connected instance's document by `mise export` and carried on the manifest as `facts`, and Terraform reporting the publisher's signature verified |
 | `authz.sh` | all of the above | a caller who **may not pull** is stopped, the one who may is not stopped by accident, and [RFC 0012](/rfc/0012-signed-urls-for-terraform)'s signed URLs let a *closed* Terraform registry install end to end |
 
 Conventions worth knowing before adding one:
@@ -433,12 +511,14 @@ logic:
   `on*=` handler and no scheme outside the allow-list, and rendering is stable.
 - `fuzz_svg_sanitize.rs` — the SVG allow-list: output is well-formed XML and
   reaches outside its own document nowhere.
+- `fuzz_grant_resolution.rs` — grant resolution over arbitrary hierarchies:
+  the tier order holds, a seal stops inheritance, and widening never narrows.
 
 **The targets are a separate workspace, and that is a trap.** `cargo check
 --workspace`, `cargo clippy --workspace` and `cargo test --workspace` do not see
 `fuzz/`, so a target can stop compiling against a type it uses and nothing says
 so — the module docs go on naming a guard that is no longer running. Four of the
-six had drifted that way before `task fuzz:check` existed. That check is a plain
+seven had drifted that way before `task fuzz:check` existed. That check is a plain
 `cargo check` over `fuzz/Cargo.toml`, needs no nightly, and runs on every PR in
 the `Fuzz targets` job of `test.yaml`; the same job fuzzes each target for 60
 seconds on the nightly schedule and uploads any crash artefact.
@@ -486,10 +566,12 @@ to start under a restricted `ptrace_scope`, not a finding — re-run with
   - `heavy-bundler`: `bash tests/heavy/bundler.sh` (a real `bundle install`
     against a local rubygems registry).
   - `heavy-client` (matrix): one job per ecosystem — `npm`, `pypi`, `openvsx`,
-    `conda`, `nuget`, `composer`, `terraform` — each running
-    `tests/heavy/<suite>.sh`. A matrix rather than seven jobs because only the
-    toolchain setup differs; `fail-fast: false`, because one unhappy client says
-    nothing about the other six.
+    `conda`, `nuget`, `composer`, `terraform`, `nvm`, `sdkman`, `mise`,
+    `cargo`, `go`, `maven`, `pathproxy`, `quarantine`, `upstream_audit`,
+    `airgap` — each
+    running `tests/heavy/<suite>.sh`. A matrix rather than seventeen jobs because only
+    the toolchain setup differs; `fail-fast: false`, because one unhappy
+    client says nothing about the others.
   - `heavy-authz` (matrix): one job per target of `tests/heavy/authz.sh` —
     `matrix`, then `npm`, `pypi`, `openvsx`, `conda`, `nuget`, `composer`,
     `rubygems`, `terraform`. Its own job rather than more rows in `heavy-client`
@@ -501,6 +583,13 @@ to start under a restricted `ptrace_scope`, not a finding — re-run with
   exercised counts toward the merged coverage table — the compact-index paths,
   the Terraform provider chain and the conda `HEAD` probe are reached by no
   other job.
+
+  Two heavy suites are **not** in any of those jobs and are run by hand:
+  `vsx_view.sh` and `console_fetch.sh`. Both drive a real browser over the
+  DevTools protocol — one against the VS Code web build's workbench, the other
+  against the built console — and both want a Chrome and a warm download cache
+  that the matrix rows do not carry. They are the same exception
+  `heavy-marketplace` is, for the same reason.
 
   `test.yaml` also runs nightly (`50 23 * * *`). The heavy jobs are why: they
   drive clients fetched from outside this repository — Bundler and npm from

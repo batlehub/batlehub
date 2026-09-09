@@ -183,11 +183,6 @@ impl MetadataReadme {
     pub fn from_extra(extra: &serde_json::Value) -> Option<Self> {
         serde_json::from_value(extra.get("readme")?.clone()).ok()
     }
-
-    /// The `extra` fragment a registry client merges into its own `json!({…})`.
-    pub fn to_extra_value(&self) -> serde_json::Value {
-        serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
-    }
 }
 
 /// Hex SHA-256 of a README body, the render-cache key and change detector.

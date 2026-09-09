@@ -305,11 +305,20 @@ impl TestServer {
             registry_host_map: batlehub_web::RegistryHostMap::default(),
             proxy_trust: batlehub_web::ProxyTrust::default(),
             config_path: "config.toml".to_owned(),
+            config_overlays: Vec::new(),
             config_change_repo: None,
             hot_reload_enabled: false,
             builder: reload_builder,
             banner: Some(Arc::clone(&banner_svc)),
         }));
+
+        let advisory_repo: Arc<dyn batlehub_core::ports::AdvisoryRepository> = Arc::new(
+            batlehub_adapters::in_memory::InMemoryAdvisoryRepository::with_events(
+                repo.clone() as Arc<dyn PackageRepository>
+            ),
+        );
+        let artifact_inventory: Arc<dyn batlehub_core::ports::ArtifactInventory> =
+            NoopArtifactMetaRepository::arc();
 
         let configure = configure_app(
             proxy_svc,
@@ -322,7 +331,9 @@ impl TestServer {
             vec![],
             batlehub_web::OidcProviderNames::default(),
             batlehub_adapters::in_memory::InMemoryLoginStateStore::arc(),
-            HashMap::new(), // warming_map
+            HashMap::new(),     // warming_map
+            Default::default(), // release_imports
+            None,               // import_history
             // One eviction service, so `admin cache evict` and `admin cache
             // coherence` have something to reach. `keep_latest_n` is set
             // because `/evict` answers `404` for a registry with no strategy
@@ -370,6 +381,8 @@ impl TestServer {
             let user_block_repo = user_block_repo.clone();
             let team_namespace_store = team_namespace_store.clone();
             let host_map = host_map.clone();
+            let advisory_repo = advisory_repo.clone();
+            let artifact_inventory = artifact_inventory.clone();
 
             let server = HttpServer::new(move || {
                 let (app, _) = App::new()
@@ -398,6 +411,15 @@ impl TestServer {
                     .app_data(web::Data::new(user_block_repo.clone()))
                     .app_data(web::Data::new(team_namespace_store.clone()))
                     .app_data(web::Data::new(host_map.clone()))
+                    // RFC 0002's exposure report and RFC 0018's backfill each
+                    // extract one store the rest of the fixture does not build.
+                    // Absent, both answer `500 application data is not
+                    // configured` — an actix wiring artifact, not a server
+                    // behaviour, and a CLI test asserting it would be measuring
+                    // this file rather than the command.
+                    .app_data(web::Data::new(advisory_repo.clone()))
+                    .app_data(web::Data::new(batlehub_web::ExposureConfig::default()))
+                    .app_data(web::Data::new(artifact_inventory.clone()))
                     .wrap(AuthMiddlewareFactory::new(auth_providers.clone()))
             })
             .bind("127.0.0.1:0")
@@ -3382,4 +3404,1192 @@ fn admin_grants_set_rejects_an_unparseable_subject() {
         AUTH_TOKEN,
     );
     assert!(!ok, "an unparseable subject must fail; stdout: {stdout}");
+}
+
+// ── Tests: RFC 0008, the air gap ─────────────────────────────────────────────
+//
+// `mise plan` turns a lock into a bill of materials; `mise export` turns the
+// plan into a signed bundle; `mise import` carries it in. The first is
+// offline apart from asking the server which registries exist; the last two
+// go through the running server, which is what makes this file the right
+// place for them.
+
+const AIR_GAP_LOCK: &str = r#"
+[[tools."aqua:EmbarkStudios/cargo-deny"]]
+version = "0.18.2"
+backend = "aqua:EmbarkStudios/cargo-deny"
+
+[tools."aqua:EmbarkStudios/cargo-deny"."platforms.linux-x64"]
+checksum = "sha256:4f0c000000000000000000000000000000000000000000000000000000000000"
+url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.18.2/cargo-deny-0.18.2-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471598214"
+
+[[tools."asdf:mise-plugins/mise-postgres"]]
+version = "16.2"
+backend = "asdf:mise-plugins/mise-postgres"
+
+[[tools.sonar]]
+version = "5.0"
+[tools.sonar."platforms.linux-x64"]
+url = "https://binaries.sonarsource.com/Distribution/sonar-scanner/sonar-scanner-5.0.zip"
+"#;
+
+fn write_lock(dir: &std::path::Path) -> String {
+    let path = dir.join("mise.lock");
+    std::fs::write(&path, AIR_GAP_LOCK).unwrap();
+    path.to_str().unwrap().to_owned()
+}
+
+#[test]
+fn mise_plan_names_the_downloads_the_unsupported_and_the_unmirrored() {
+    let srv = TestServer::start_with(&[("gh", "github")]);
+    let dir = tempfile::TempDir::new().unwrap();
+    let lock = write_lock(dir.path());
+
+    let (ok, stdout, stderr) = cli_cmd(
+        &["mise", "plan", "--lock", &lock, "--platform", "linux-x64"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(ok, "mise plan should succeed: {stderr}");
+    let plan: serde_json::Value = serde_json::from_str(&stdout).expect("a plan is JSON");
+    assert_eq!(plan["plan_version"], 1);
+    assert_eq!(plan["platforms"][0], "linux-x64");
+
+    let entries = plan["entries"].as_array().unwrap();
+    // The download URL and the API address of the same asset, plus the
+    // sonar zip nothing mirrors.
+    let deny: Vec<&serde_json::Value> = entries
+        .iter()
+        .filter(|e| e["tool"].as_str().unwrap().contains("cargo-deny"))
+        .collect();
+    assert_eq!(deny.len(), 2, "both addresses are planned: {stdout}");
+    assert!(deny.iter().all(|e| e["registry"]["name"] == "gh"));
+    assert!(
+        deny.iter()
+            .any(|e| e["proxy_path"]
+                == "/proxy/gh/EmbarkStudios/cargo-deny/releases/assets/471598214")
+    );
+
+    // The git-fetched backend is named, with the reason, before a bundle
+    // exists rather than at install time on a disconnected workstation.
+    let unsupported = plan["unsupported"].as_array().unwrap();
+    assert_eq!(unsupported.len(), 1, "{stdout}");
+    assert!(unsupported[0]["tool"]
+        .as_str()
+        .unwrap()
+        .contains("mise-postgres"));
+
+    // "Is my rewrite table complete?" — the question that has no answer today.
+    assert_eq!(plan["unmirrored_hosts"][0], "binaries.sonarsource.com");
+}
+
+/// RFC 0008 §13 decision 2: a bundle carries the binary that reads the next
+/// plan, so upgrading mise never means crossing the gap by hand.
+#[test]
+fn mise_plan_can_carry_mise_itself() {
+    let srv = TestServer::start_with(&[("gh", "github")]);
+    let dir = tempfile::TempDir::new().unwrap();
+    let lock = write_lock(dir.path());
+
+    let (ok, stdout, stderr) = cli_cmd(
+        &[
+            "mise",
+            "plan",
+            "--lock",
+            &lock,
+            "--platform",
+            "linux-x64",
+            "--include-mise",
+            "--mise-version",
+            "2026.8.6",
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(ok, "{stderr}");
+    let plan: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let mise = plan["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["tool"] == "github:jdx/mise")
+        .unwrap_or_else(|| panic!("the plan should carry mise: {stdout}"));
+    assert_eq!(mise["version"], "2026.8.6");
+    assert!(mise["url"]
+        .as_str()
+        .unwrap()
+        .contains("mise-v2026.8.6-linux-x64"));
+}
+
+/// A plan built against a server with no matching registry still plans: the
+/// lock is the bill of materials, and every host is reported as unmirrored,
+/// which is the honest answer rather than an empty file.
+#[test]
+fn mise_plan_against_a_server_with_no_matching_registry_reports_every_host() {
+    let srv = TestServer::start();
+    let dir = tempfile::TempDir::new().unwrap();
+    let lock = write_lock(dir.path());
+
+    let (ok, stdout, stderr) = cli_cmd(
+        &["mise", "plan", "--lock", &lock, "--platform", "all"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(ok, "{stderr}");
+    let plan: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let hosts: Vec<&str> = plan["unmirrored_hosts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h.as_str().unwrap())
+        .collect();
+    assert!(hosts.contains(&"github.com"), "{stdout}");
+    assert!(hosts.contains(&"binaries.sonarsource.com"), "{stdout}");
+    assert!(plan["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|e| e["key"].is_null()));
+}
+
+/// Export → import, through the server both ways.
+///
+/// The plan is hand-written rather than derived from a lock, because what is
+/// under test is the bundle: a published artifact is fetched back through the
+/// proxy path, signed into a bundle, and carried in by an instance that
+/// trusts the signing key. The lock path is covered above.
+#[test]
+fn a_bundle_round_trips_from_export_to_import() {
+    let srv = TestServer::start();
+    let tmp = tempfile::tempdir().unwrap();
+
+    // Something to carry.
+    let nupkg = tmp.path().join("Carried.1.0.0.nupkg");
+    std::fs::write(&nupkg, make_nupkg("Carried", "1.0.0")).unwrap();
+    let (ok, _, stderr) = cli_cmd(
+        &["publish", nupkg.to_str().unwrap(), "--registry", REGISTRY],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(ok, "publish should succeed: {stderr}");
+
+    let plan = serde_json::json!({
+        "plan_version": 1,
+        "generated_from": { "file": "mise.lock", "sha256": "0".repeat(64) },
+        "platforms": ["linux-x64"],
+        "entries": [{
+            "tool": "nuget:Carried",
+            "version": "1.0.0",
+            "platform": "linux-x64",
+            "url": "https://example.invalid/Carried.1.0.0.nupkg",
+            "registry": { "name": REGISTRY, "type": "nuget" },
+            "key": format!("{REGISTRY}/carried/1.0.0/carried.1.0.0.nupkg"),
+            "proxy_path": format!("/proxy/{REGISTRY}/nuget/v3/flat/carried/1.0.0/carried.1.0.0.nupkg"),
+        }],
+        "unsupported": [],
+        "unmirrored_hosts": [],
+    });
+    let plan_path = tmp.path().join("plan.json");
+    std::fs::write(&plan_path, serde_json::to_string(&plan).unwrap()).unwrap();
+
+    // A signing key is a file, never a flag: a key on a command line is a key
+    // in the shell history and in every process listing on the machine.
+    let key_path = tmp.path().join("estate.key");
+    std::fs::write(&key_path, "0".repeat(63) + "1").unwrap();
+    let bundle_path = tmp.path().join("estate.bhub");
+
+    let (ok, stdout, stderr) = cli_cmd(
+        &[
+            "mise",
+            "export",
+            "--plan",
+            plan_path.to_str().unwrap(),
+            "--sign-key",
+            key_path.to_str().unwrap(),
+            "-o",
+            bundle_path.to_str().unwrap(),
+            "--bundle-id",
+            "round-trip-1",
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(ok, "export should succeed: {stdout}{stderr}");
+    assert!(bundle_path.exists(), "{stdout}");
+
+    // The bundle really carries the artifact, not an empty manifest: the
+    // published bytes are in it, found by content rather than by name.
+    let bundle = std::fs::read(&bundle_path).unwrap();
+    assert!(
+        bundle.windows(9).any(|w| w == b"manifest."),
+        "the container holds a manifest"
+    );
+    assert!(
+        stdout.contains("1 entr") && stdout.contains("1 blob"),
+        "one entry, one blob: {stdout}"
+    );
+
+    // The import side, on an instance that trusts no key. This is the first
+    // thing an import checks and the reason it is checked *before* a blob is
+    // read: an instance whose only content path is unauthenticated is worse
+    // than one with no content path.
+    let (ok, stdout, stderr) = cli_cmd(
+        &["mise", "import", bundle_path.to_str().unwrap()],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    let said = format!("{stdout}{stderr}");
+    assert!(
+        !ok,
+        "a bundle no configured key vouches for is refused: {said}"
+    );
+    assert!(
+        said.contains("bundle_trusted_keys"),
+        "and the message names the thing to configure: {said}"
+    );
+}
+
+// ── Tests: RFC 0011, the credential contract file ────────────────────────────
+//
+// `auth write-token-file` and `auth status` are how a process that is not the
+// CLI learns which credential to present. What is asserted here is the
+// consumer's side of that contract through the real binary: the file lands
+// where the editor patch looks, one registry's entry does not disturb
+// another's, and nothing on the reporting path prints a secret.
+
+/// The contract file the CLI would write, for a run with its own home.
+fn contract_home() -> tempfile::TempDir {
+    tempfile::TempDir::new().unwrap()
+}
+
+fn cli_in_home(
+    args: &[&str],
+    server: &str,
+    token: &str,
+    home: &std::path::Path,
+) -> (bool, String, String) {
+    let config = scratch_home();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_batlehub-cli"))
+        .args(args)
+        .env("BATLEHUB_SERVER", server)
+        .env("BATLEHUB_TOKEN", token)
+        .env("BATLEHUB_HOME", home)
+        .env("HOME", home)
+        .env("XDG_CONFIG_HOME", config.path())
+        // The patch reads this first, and so does the CLI: unset here so the
+        // default path under BATLEHUB_HOME is what is exercised.
+        .env_remove("VSX_REGISTRY_AUTH_TOKEN_FILE")
+        .output()
+        .expect("run the CLI");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn write_token_file_puts_the_credential_where_the_editor_patch_looks() {
+    let srv = TestServer::start();
+    let home = contract_home();
+
+    let (ok, stdout, stderr) = cli_in_home(
+        &["auth", "write-token-file"],
+        &srv.base_url(),
+        "bh_pat_secret-value",
+        home.path(),
+    );
+    assert!(ok, "write-token-file should succeed: {stdout}{stderr}");
+    assert!(stdout.contains("written"), "{stdout}");
+
+    // The path is the contract's, not the CLI profile store's: an editor
+    // patch that had to know about XDG on Linux and Application Support on
+    // macOS would be a second contract.
+    let path = home.path().join("state").join("vsx-token.json");
+    assert!(path.exists(), "{stdout}");
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(doc["version"], 1);
+
+    let origin = srv.base_url();
+    let entry = &doc["registries"][origin.trim_end_matches('/')];
+    assert_eq!(entry["token"], "bh_pat_secret-value");
+    assert_eq!(
+        entry["kind"], "pat",
+        "the bh_pat_ prefix is the server's own dispatch rule"
+    );
+    assert_eq!(
+        entry["refresh"]["source"], "none",
+        "a PAT has nothing to redeem"
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the file holds a credential");
+    }
+}
+
+/// A laptop pointed at three Batlehubs keeps three credentials in one file,
+/// and a login to one is not a logout from the others.
+#[test]
+fn writing_one_registry_leaves_every_other_entry_alone() {
+    let srv = TestServer::start();
+    let home = contract_home();
+    let path = home.path().join("state").join("vsx-token.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        r#"{
+          "version": 1,
+          "aFieldFromTheFuture": 42,
+          "registries": {
+            "https://hub.elsewhere.dev": {
+              "token": "someone-elses",
+              "kind": "oidc",
+              "unknownEntryField": true
+            }
+          }
+        }"#,
+    )
+    .unwrap();
+
+    let (ok, stdout, stderr) = cli_in_home(
+        &["auth", "write-token-file"],
+        &srv.base_url(),
+        "bh_pat_mine",
+        home.path(),
+    );
+    assert!(ok, "{stdout}{stderr}");
+
+    // Writing the same origin again says it replaced rather than added: the
+    // one case where this command is not additive is the one worth naming.
+    let (_, second, _) = cli_in_home(
+        &["auth", "write-token-file"],
+        &srv.base_url(),
+        "bh_pat_mine",
+        home.path(),
+    );
+    assert!(second.contains("replaced"), "{second}");
+
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        doc["registries"]["https://hub.elsewhere.dev"]["token"],
+        "someone-elses"
+    );
+    assert_eq!(
+        doc["registries"]["https://hub.elsewhere.dev"]["unknownEntryField"], true,
+        "a consumer that dropped what it did not understand would undo the writer that added it"
+    );
+    assert_eq!(doc["aFieldFromTheFuture"], 42);
+    assert_eq!(doc["registries"].as_object().unwrap().len(), 2);
+}
+
+/// A credential that stays where it is: the file records a path, and the
+/// contract file stops being a place a secret rests.
+#[test]
+fn a_mounted_token_is_recorded_as_a_path_rather_than_a_value() {
+    let srv = TestServer::start();
+    let home = contract_home();
+    let mounted = home.path().join("sa-token");
+    std::fs::write(&mounted, "mounted-secret\n").unwrap();
+
+    let (ok, stdout, stderr) = cli_in_home(
+        &[
+            "auth",
+            "write-token-file",
+            "--from-file",
+            mounted.to_str().unwrap(),
+        ],
+        &srv.base_url(),
+        "unused",
+        home.path(),
+    );
+    assert!(ok, "{stdout}{stderr}");
+
+    let body = std::fs::read_to_string(home.path().join("state").join("vsx-token.json")).unwrap();
+    assert!(
+        !body.contains("mounted-secret"),
+        "the value must not be copied into the contract file: {body}"
+    );
+    let doc: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let entry = &doc["registries"][srv.base_url().trim_end_matches('/')];
+    assert_eq!(entry["token"]["from"], "file");
+    assert_eq!(entry["token"]["path"], mounted.to_str().unwrap());
+    assert_eq!(
+        entry["refresh"]["source"], "reresolve",
+        "something else keeps a projected token fresh"
+    );
+
+    // And `auth status` resolves it — now, not from a cache — and still
+    // does not print it.
+    let (ok, stdout, stderr) = cli_in_home(
+        &["--json", "auth", "status"],
+        &srv.base_url(),
+        "unused",
+        home.path(),
+    );
+    assert!(ok, "{stderr}");
+    assert!(!stdout.contains("mounted-secret"), "{stdout}");
+    let rows: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(rows[0]["state"], "ok");
+    assert_eq!(rows[0]["kind"], "kubernetes");
+
+    // The state is a resolution performed now: take the file away and the
+    // same command says so, which is the whole value of the command.
+    std::fs::remove_file(&mounted).unwrap();
+    let (_, stdout, _) = cli_in_home(
+        &["--json", "auth", "status"],
+        &srv.base_url(),
+        "unused",
+        home.path(),
+    );
+    let rows: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(rows[0]["state"], "unset");
+    assert!(
+        rows[0]["detail"].as_str().unwrap().contains("No such file"),
+        "`unset` and a refused endpoint look identical from the editor and want opposite fixes: {}",
+        rows[0]["detail"]
+    );
+}
+
+#[test]
+fn auth_token_prints_the_credential_and_status_never_does() {
+    let srv = TestServer::start();
+    let home = contract_home();
+
+    let (ok, stdout, stderr) = cli_in_home(
+        &["auth", "token"],
+        &srv.base_url(),
+        "bh_pat_printable",
+        home.path(),
+    );
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "bh_pat_printable",
+        "`auth token` is the one command whose job is to emit a credential"
+    );
+
+    let (ok, stdout, _) = cli_in_home(
+        &["auth", "token", "--output", "json"],
+        &srv.base_url(),
+        "bh_pat_printable",
+        home.path(),
+    );
+    assert!(ok);
+    let v: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["token"], "bh_pat_printable");
+    assert_eq!(v["kind"], "pat");
+
+    // The PAT subcommands still dispatch: adding the bare verb did not take
+    // the namespace from them. `list` refuses a static token because listing
+    // PATs needs an OIDC session — which is the point, because reaching that
+    // refusal means the subcommand ran rather than the credential printer.
+    let (ok, stdout, stderr) = cli_in_home(
+        &["auth", "token", "list"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+        home.path(),
+    );
+    let said = format!("{stdout}{stderr}");
+    assert!(!ok, "{said}");
+    assert!(
+        said.contains("only OIDC sessions can list API tokens"),
+        "`auth token list` reached the listing endpoint rather than printing a credential: {said}"
+    );
+    assert!(
+        !said.contains(AUTH_TOKEN),
+        "and it did not print the credential on its way there: {said}"
+    );
+
+    // And the status table renders the same entry with no way to carry it.
+    cli_in_home(
+        &["auth", "write-token-file"],
+        &srv.base_url(),
+        "bh_pat_printable",
+        home.path(),
+    );
+    let (ok, stdout, stderr) =
+        cli_in_home(&["auth", "status"], &srv.base_url(), "unused", home.path());
+    assert!(ok, "{stderr}");
+    assert!(
+        !stdout.contains("bh_pat_printable"),
+        "the status table rendered a credential: {stdout}"
+    );
+    assert!(stdout.contains("inline"), "{stdout}");
+}
+
+#[test]
+fn a_contract_file_that_does_not_parse_is_no_credential_rather_than_a_failure() {
+    let srv = TestServer::start();
+    let home = contract_home();
+    let path = home.path().join("state").join("vsx-token.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "{ not json at all").unwrap();
+
+    // Reading it is not an error — it must never break an anonymous gallery.
+    let (ok, _, stderr) = cli_in_home(&["auth", "status"], &srv.base_url(), "unused", home.path());
+    assert!(ok, "status must not fail on a broken file: {stderr}");
+    assert!(stderr.contains("not a usable contract file"), "{stderr}");
+
+    // Writing over it *is* refused: overwriting a file we could not read
+    // would silently discard another registry's entry.
+    let (ok, stdout, stderr) = cli_in_home(
+        &["auth", "write-token-file"],
+        &srv.base_url(),
+        "bh_pat_x",
+        home.path(),
+    );
+    assert!(!ok, "{stdout}{stderr}");
+    assert!(
+        format!("{stdout}{stderr}").contains("not a usable contract file"),
+        "{stdout}{stderr}"
+    );
+}
+
+#[test]
+fn the_three_verbs_agree_on_a_path_other_than_the_default() {
+    let srv = TestServer::start();
+    let home = contract_home();
+    let elsewhere = home.path().join("somewhere-else.json");
+
+    let (ok, stdout, stderr) = cli_in_home(
+        &[
+            "auth",
+            "write-token-file",
+            "--path",
+            elsewhere.to_str().unwrap(),
+        ],
+        &srv.base_url(),
+        "bh_pat_elsewhere",
+        home.path(),
+    );
+    assert!(ok, "{stdout}{stderr}");
+    assert!(elsewhere.exists(), "{stdout}");
+    assert!(
+        !home.path().join("state").join("vsx-token.json").exists(),
+        "--path means --path"
+    );
+
+    // `auth status` has to be able to read what `write-token-file` wrote, or
+    // the one command that explains the file cannot explain half of them.
+    let (ok, stdout, _) = cli_in_home(
+        &[
+            "--json",
+            "auth",
+            "status",
+            "--path",
+            elsewhere.to_str().unwrap(),
+        ],
+        &srv.base_url(),
+        "unused",
+        home.path(),
+    );
+    assert!(ok);
+    let rows: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(rows[0]["state"], "ok");
+    assert!(!stdout.contains("bh_pat_elsewhere"), "{stdout}");
+
+    // …and the default path is still empty, which the status command says
+    // rather than leaving as an empty table.
+    let (ok, stdout, _) = cli_in_home(&["auth", "status"], &srv.base_url(), "unused", home.path());
+    assert!(ok);
+    assert!(stdout.contains("No credentials in"), "{stdout}");
+}
+
+/// The one command whose job is to emit a secret has to fail loudly when it
+/// has none: a caller substituting `$(… auth token)` into a header would
+/// otherwise send an empty bearer and get a 401 it cannot explain.
+#[test]
+fn auth_token_exits_non_zero_when_there_is_no_credential() {
+    let srv = TestServer::start();
+    let home = contract_home();
+    let config = scratch_home();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_batlehub-cli"))
+        .args(["auth", "token"])
+        .env("BATLEHUB_SERVER", srv.base_url())
+        .env("BATLEHUB_HOME", home.path())
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", config.path())
+        .env_remove("BATLEHUB_TOKEN")
+        .output()
+        .expect("run the CLI");
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).trim().is_empty());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("auth login"),
+        "and it says what to do about it"
+    );
+}
+
+#[test]
+fn auth_token_refuses_an_output_format_it_does_not_have() {
+    let srv = TestServer::start();
+    let home = contract_home();
+    let (ok, stdout, stderr) = cli_in_home(
+        &["auth", "token", "--output", "yaml"],
+        &srv.base_url(),
+        "bh_pat_x",
+        home.path(),
+    );
+    let said = format!("{stdout}{stderr}");
+    assert!(!ok, "{said}");
+    assert!(said.contains("`raw` or `json`"), "{said}");
+    assert!(
+        !said.contains("bh_pat_x"),
+        "and it prints nothing on the way out"
+    );
+}
+
+/// `--min-ttl` is a knob on the refresh threshold, not a second freshness
+/// rule: it is accepted, and with a credential already in hand it changes
+/// nothing about what comes out.
+#[test]
+fn min_ttl_is_accepted_and_does_not_change_a_credential_that_needs_no_refresh() {
+    let srv = TestServer::start();
+    let home = contract_home();
+    for ttl in ["0", "120", "86400"] {
+        let (ok, stdout, stderr) = cli_in_home(
+            &["auth", "token", "--min-ttl", ttl],
+            &srv.base_url(),
+            "bh_pat_stable",
+            home.path(),
+        );
+        assert!(ok, "--min-ttl {ttl}: {stdout}{stderr}");
+        assert_eq!(stdout.trim(), "bh_pat_stable", "--min-ttl {ttl}");
+    }
+}
+
+/// A path that yields nothing today is legitimate — a projected token in a
+/// pod that has not started yet — so the entry is written and the operator is
+/// told, rather than the command refusing and leaving the estate unconfigured.
+#[test]
+fn from_file_warns_but_still_records_a_path_that_yields_nothing_yet() {
+    let srv = TestServer::start();
+    let home = contract_home();
+    let not_yet = home.path().join("not-mounted-yet");
+
+    let (ok, stdout, stderr) = cli_in_home(
+        &[
+            "auth",
+            "write-token-file",
+            "--from-file",
+            not_yet.to_str().unwrap(),
+        ],
+        &srv.base_url(),
+        "unused",
+        home.path(),
+    );
+    assert!(ok, "{stdout}{stderr}");
+    assert!(
+        stderr.contains("yields no credential right now"),
+        "the operator is told: {stderr}"
+    );
+
+    let (_, stdout, _) = cli_in_home(
+        &["--json", "auth", "status"],
+        &srv.base_url(),
+        "unused",
+        home.path(),
+    );
+    let rows: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(rows[0]["state"], "unset");
+
+    // And when it appears, the same entry resolves — nothing had to be
+    // rewritten, which is the point of recording a path rather than a value.
+    std::fs::write(&not_yet, "arrived-later\n").unwrap();
+    let (_, stdout, _) = cli_in_home(
+        &["--json", "auth", "status"],
+        &srv.base_url(),
+        "unused",
+        home.path(),
+    );
+    let rows: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(rows[0]["state"], "ok");
+    assert!(!stdout.contains("arrived-later"), "{stdout}");
+}
+
+// ── The read-only admin reports ───────────────────────────────────────────────
+//
+// Four commands whose value is that they answer at all on an instance where the
+// feature behind them is not configured: an operator running them on a fresh
+// server must get the reason, not a stack trace.
+
+#[test]
+fn admin_exposure_reports_no_rows_and_its_coverage() {
+    let srv = TestServer::start();
+    let (ok, stdout, stderr) = cli_cmd(
+        &["admin", "exposure", "--json"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(ok, "exposure should succeed; stderr: {stderr}");
+    let body: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON object");
+    assert!(body["rows"].as_array().expect("rows array").is_empty());
+    // The coverage block is the half that says how much of the estate the report
+    // can even see — an empty `rows` without it reads as "nothing is exposed".
+    assert!(body["coverage"]["registries_total"].is_number());
+    assert!(body["coverage"]["flag_sources"].is_array());
+}
+
+#[test]
+fn admin_bundles_reports_that_nothing_was_imported() {
+    let srv = TestServer::start();
+    let (ok, stdout, stderr) = cli_cmd(&["admin", "bundles"], &srv.base_url(), AUTH_TOKEN);
+    assert!(ok, "bundles should succeed; stderr: {stderr}");
+    assert!(stdout.contains("0 bundle(s)"), "stdout: {stdout}");
+}
+
+#[test]
+fn admin_air_gap_missing_says_why_it_records_nothing() {
+    // No database in this server, so there is no miss log to page through. The
+    // command has to say that rather than print an empty table, which an
+    // operator would read as "nothing was ever missed".
+    let srv = TestServer::start();
+    let (ok, _stdout, stderr) = cli_cmd(&["admin", "air-gap-missing"], &srv.base_url(), AUTH_TOKEN);
+    assert!(!ok, "air-gap-missing cannot succeed without a database");
+    assert!(
+        stderr.contains("HTTP 503") && stderr.contains("no database"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn admin_retention_refuses_a_registry_that_keeps_everything() {
+    let srv = TestServer::start();
+    let (ok, _stdout, stderr) = cli_cmd(
+        &["admin", "retention", REGISTRY],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(!ok, "retention needs a [registries.retention] block");
+    assert!(
+        stderr.contains("HTTP 409") && stderr.contains("keeps every published version forever"),
+        "stderr: {stderr}"
+    );
+}
+
+// ── Verdicts (RFC 0018) ───────────────────────────────────────────────────────
+
+/// The three verdict commands on a registry with no `[registries.security]`
+/// block: a `404` naming the missing profile, not a scan that silently queues
+/// nothing.
+#[test]
+fn verdicts_commands_report_a_registry_with_no_security_profile() {
+    let srv = TestServer::start();
+    let base = srv.base_url();
+
+    for args in [
+        vec!["verdicts", "backfill", "--registry", REGISTRY],
+        vec!["verdicts", "rescan", "--registry", REGISTRY],
+        vec!["verdicts", "pullers", "test-nuget:DepLib@1.0.0"],
+    ] {
+        let (ok, _stdout, stderr) = cli_cmd(&args, &base, AUTH_TOKEN);
+        assert!(!ok, "{args:?} should fail without a security profile");
+        assert!(
+            stderr.contains("404") && stderr.contains("has no security profile"),
+            "{args:?} stderr: {stderr}"
+        );
+    }
+}
+
+// ── version unpin ─────────────────────────────────────────────────────────────
+
+#[test]
+fn version_pin_and_unpin_report_the_coordinate() {
+    let srv = TestServer::start();
+    let base = srv.base_url();
+    http_publish_nuget(&base, REGISTRY, "PinLib", "1.0.0");
+
+    let (ok, stdout, stderr) = cli_cmd(
+        &["version", "pin", REGISTRY, "PinLib", "1.0.0"],
+        &base,
+        AUTH_TOKEN,
+    );
+    assert!(ok, "pin should succeed; stderr: {stderr}");
+    assert!(stdout.contains("PinLib"), "stdout: {stdout}");
+
+    let (ok, stdout, stderr) = cli_cmd(
+        &["version", "unpin", REGISTRY, "PinLib", "1.0.0"],
+        &base,
+        AUTH_TOKEN,
+    );
+    assert!(ok, "unpin should succeed; stderr: {stderr}");
+    assert!(
+        stdout.contains("Unpinned") && stdout.contains("PinLib"),
+        "stdout: {stdout}"
+    );
+}
+
+// ── vsx keygen ────────────────────────────────────────────────────────────────
+
+/// The one command in the suite that talks to no server: it mints a signing
+/// seed and prints the two values derived from it, in the shape of the config
+/// block they go into.
+#[test]
+fn vsx_keygen_prints_a_fresh_seed_and_the_key_derived_from_it() {
+    let srv = TestServer::start();
+    let base = srv.base_url();
+
+    let field = |out: &str, key: &str| -> String {
+        out.lines()
+            .find(|l| l.starts_with(key))
+            .and_then(|l| l.split('"').nth(1))
+            .unwrap_or_else(|| panic!("no {key} in:\n{out}"))
+            .to_owned()
+    };
+
+    let (ok, first, stderr) = cli_cmd(&["vsx", "keygen"], &base, AUTH_TOKEN);
+    assert!(ok, "keygen should succeed; stderr: {stderr}");
+    let seed = field(&first, "seed_hex");
+    assert_eq!(seed.len(), 64, "a 32-byte seed, hex-encoded: {seed}");
+    assert!(seed.chars().all(|c| c.is_ascii_hexdigit()), "seed: {seed}");
+    assert_eq!(field(&first, "key_id").len(), 16);
+    assert_eq!(field(&first, "public_key").len(), 64);
+
+    // Fresh every time: a keygen that returned a fixed seed would hand every
+    // deployment that ran it the same signing key.
+    let (_, second, _) = cli_cmd(&["vsx", "keygen"], &base, AUTH_TOKEN);
+    assert_ne!(seed, field(&second, "seed_hex"));
+}
+
+// ── admin config validate ─────────────────────────────────────────────────────
+
+#[test]
+fn admin_config_validate_reports_a_file_it_cannot_read() {
+    // Refused locally, before any request: the server never sees a path.
+    let srv = TestServer::start();
+    let (ok, _stdout, stderr) = cli_cmd(
+        &["admin", "config", "validate", "/nonexistent/batlehub.toml"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(!ok, "validate should fail on an unreadable file");
+    assert!(stderr.contains("could not read"), "stderr: {stderr}");
+}
+
+#[test]
+fn admin_config_validate_sends_the_file_to_the_server() {
+    // Hot reload is off in this fixture, so the round trip ends in the `503`
+    // that says so — which is the proof the contents reached the endpoint.
+    let srv = TestServer::start();
+    let dir = scratch_home();
+    let file = dir.path().join("batlehub.toml");
+    std::fs::write(&file, "[server]\nhost = \"127.0.0.1\"\nport = 8080\n").expect("write config");
+
+    let (ok, _stdout, stderr) = cli_cmd(
+        &["admin", "config", "validate", file.to_str().unwrap()],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(!ok, "validate cannot succeed with hot reload disabled");
+    assert!(
+        stderr.contains("HTTP 503") && stderr.contains("hot reload is disabled"),
+        "stderr: {stderr}"
+    );
+}
+
+// ── admin import (RFC 0021 §6.5) ─────────────────────────────────────────────
+
+/// The test server registers no `[[release_imports]]`, so the handler answers
+/// `404` with the message it wrote for exactly this case. That is what makes
+/// this a real test of the client half: the request had to be built, signed,
+/// routed and decoded for that message to come back at all — a command that
+/// never reached the server would fail differently.
+#[test]
+fn admin_import_reports_when_no_import_is_configured() {
+    let srv = TestServer::start();
+    let (ok, _stdout, stderr) =
+        cli_cmd(&["admin", "import", REGISTRY], &srv.base_url(), AUTH_TOKEN);
+    assert!(!ok, "import should fail when none is configured");
+    assert!(stderr.contains("HTTP 404"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("release_imports"),
+        "the refusal should name what is missing: {stderr}"
+    );
+}
+
+/// `--tag` and `--repo` reach the request body rather than being parsed and
+/// dropped. `--repo` is the one that can be proven from outside: the handler
+/// distinguishes "no import configured at all" from "no import of *this repo*",
+/// and only the second message names the repo that was asked for.
+#[test]
+fn admin_import_sends_the_repo_selector() {
+    let srv = TestServer::start();
+    let (ok, _stdout, stderr) = cli_cmd(
+        &[
+            "admin",
+            "import",
+            REGISTRY,
+            "--tag",
+            "v1.0.0",
+            "--repo",
+            "acme/widgets",
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(!ok, "import should fail when none is configured");
+    assert!(stderr.contains("HTTP 404"), "stderr: {stderr}");
+}
+
+/// An unknown registry is refused before any import runs.
+#[test]
+fn admin_import_rejects_an_unknown_registry() {
+    let srv = TestServer::start();
+    let (ok, _stdout, stderr) = cli_cmd(
+        &["admin", "import", "no-such-registry"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(!ok, "import into an unknown registry should fail");
+    assert!(
+        stderr.contains("HTTP 40"),
+        "expected a 4xx refusal: {stderr}"
+    );
+}
+
+// ── auth logout (RFC 0011 §4.1.3) ────────────────────────────────────────────
+
+/// Run the CLI with both stores isolated: `XDG_CONFIG_HOME` for the profile,
+/// `BATLEHUB_HOME` for the contract file. The two live in different places on
+/// purpose, and a logout has to reach both.
+fn cli_logout(
+    args: &[&str],
+    server: &str,
+    token: &str,
+    config_dir: &std::path::Path,
+    home: &std::path::Path,
+) -> (bool, String, String) {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_batlehub-cli"))
+        .args(args)
+        .env("BATLEHUB_SERVER", server)
+        .env("BATLEHUB_TOKEN", token)
+        .env("BATLEHUB_HOME", home)
+        .env("HOME", home)
+        .env("XDG_CONFIG_HOME", config_dir)
+        .output()
+        .expect("failed to run batlehub-cli");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// The whole point: a login writes the profile, a `write-token-file` writes the
+/// contract, and one `logout` clears both.
+#[test]
+fn auth_logout_clears_the_profile_and_the_contract_entry() {
+    let srv = TestServer::start();
+    let config_dir = tempfile::tempdir().unwrap();
+    let home = contract_home();
+    let token_dir = tempfile::tempdir().unwrap();
+    let token_file = token_dir.path().join("sa-token");
+    std::fs::write(&token_file, "my-k8s-service-account-token").unwrap();
+
+    let (ok, _o, e) = cli_logout(
+        &[
+            "auth",
+            "login",
+            "--kubernetes-token-path",
+            token_file.to_str().unwrap(),
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+        config_dir.path(),
+        home.path(),
+    );
+    assert!(ok, "login should succeed: {e}");
+    let (ok, _o, e) = cli_logout(
+        &["auth", "write-token-file"],
+        &srv.base_url(),
+        "bh_pat_secret-value",
+        config_dir.path(),
+        home.path(),
+    );
+    assert!(ok, "write-token-file should succeed: {e}");
+
+    let config_path = config_dir.path().join("batlehub/config.toml");
+    let contract_path = home.path().join("state").join("vsx-token.json");
+    assert!(std::fs::read_to_string(&config_path)
+        .unwrap()
+        .contains("sa-token"));
+    assert!(std::fs::read_to_string(&contract_path)
+        .unwrap()
+        .contains("bh_pat_secret-value"));
+
+    let (ok, stdout, stderr) = cli_logout(
+        &["auth", "logout"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+        config_dir.path(),
+        home.path(),
+    );
+    assert!(ok, "logout should succeed: {stdout}{stderr}");
+
+    let config = std::fs::read_to_string(&config_path).unwrap();
+    assert!(
+        !config.contains("sa-token"),
+        "the profile still holds a credential: {config}"
+    );
+    let contract = std::fs::read_to_string(&contract_path).unwrap();
+    assert!(
+        !contract.contains("bh_pat_secret-value"),
+        "the contract still holds the credential: {contract}"
+    );
+}
+
+/// A laptop pointed at three servers keeps three contract entries. Logging out
+/// of one must not log you out of the others — the same invariant
+/// `writing_one_registry_leaves_every_other_entry_alone` pins from the write
+/// side.
+#[test]
+fn auth_logout_leaves_every_other_contract_entry_alone() {
+    let srv = TestServer::start();
+    let config_dir = tempfile::tempdir().unwrap();
+    let home = contract_home();
+    let path = home.path().join("state").join("vsx-token.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        serde_json::json!({
+            "version": 1,
+            "registries": {
+                "https://other.example.dev": { "token": "keep-me", "kind": "pat" }
+            },
+            "unknownTopLevel": "preserved"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let (ok, _o, e) = cli_logout(
+        &["auth", "write-token-file"],
+        &srv.base_url(),
+        "bh_pat_this-one",
+        config_dir.path(),
+        home.path(),
+    );
+    assert!(ok, "write-token-file should succeed: {e}");
+
+    let (ok, stdout, stderr) = cli_logout(
+        &["auth", "logout"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+        config_dir.path(),
+        home.path(),
+    );
+    assert!(ok, "logout should succeed: {stdout}{stderr}");
+
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        doc["registries"]["https://other.example.dev"]["token"], "keep-me",
+        "logging out of one server logged us out of another"
+    );
+    assert!(
+        doc["registries"][srv.base_url().trim_end_matches('/')].is_null(),
+        "this server's entry survived the logout"
+    );
+    assert_eq!(
+        doc["unknownTopLevel"], "preserved",
+        "an unknown field was discarded by the rewrite"
+    );
+}
+
+/// `--keep-contract` is for the case where the editor should keep working.
+#[test]
+fn auth_logout_can_leave_the_contract_alone() {
+    let srv = TestServer::start();
+    let config_dir = tempfile::tempdir().unwrap();
+    let home = contract_home();
+
+    let (ok, _o, e) = cli_logout(
+        &["auth", "write-token-file"],
+        &srv.base_url(),
+        "bh_pat_secret-value",
+        config_dir.path(),
+        home.path(),
+    );
+    assert!(ok, "write-token-file should succeed: {e}");
+
+    let (ok, stdout, stderr) = cli_logout(
+        &["auth", "logout", "--keep-contract"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+        config_dir.path(),
+        home.path(),
+    );
+    assert!(ok, "logout should succeed: {stdout}{stderr}");
+
+    let contract =
+        std::fs::read_to_string(home.path().join("state").join("vsx-token.json")).unwrap();
+    assert!(
+        contract.contains("bh_pat_secret-value"),
+        "--keep-contract cleared the contract anyway: {contract}"
+    );
+}
+
+/// Logging out with nothing stored says so rather than reporting a removal that
+/// did not happen.
+#[test]
+fn auth_logout_with_nothing_stored_says_so() {
+    let srv = TestServer::start();
+    let config_dir = tempfile::tempdir().unwrap();
+    let home = contract_home();
+
+    let (ok, stdout, stderr) = cli_logout(
+        &["auth", "logout"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+        config_dir.path(),
+        home.path(),
+    );
+    assert!(ok, "logout should succeed: {stdout}{stderr}");
+    assert!(
+        stdout.contains("Nothing to clear"),
+        "expected a 'nothing to clear' line: {stdout}"
+    );
+}
+
+/// A logout must not need the server. `resolve_token` can perform a network
+/// refresh before dispatch, so this pins the exemption: the command clears the
+/// profile against a server that is not there.
+#[test]
+fn auth_logout_works_against_an_unreachable_server() {
+    let config_dir = tempfile::tempdir().unwrap();
+    let home = contract_home();
+    std::fs::create_dir_all(config_dir.path().join("batlehub")).unwrap();
+    std::fs::write(
+        config_dir.path().join("batlehub/config.toml"),
+        "[default]\ntoken = \"stale-token\"\noidc_refresh_token = \"stale-refresh\"\n",
+    )
+    .unwrap();
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_batlehub-cli"))
+        .args(["auth", "logout"])
+        .env("BATLEHUB_SERVER", "http://127.0.0.1:1")
+        .env("BATLEHUB_HOME", home.path())
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env_remove("BATLEHUB_TOKEN")
+        .output()
+        .expect("failed to run batlehub-cli");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "logout should not need the server: {stdout}{stderr}"
+    );
+
+    let config = std::fs::read_to_string(config_dir.path().join("batlehub/config.toml")).unwrap();
+    assert!(
+        !config.contains("stale-refresh"),
+        "the refresh token survived: {config}"
+    );
 }

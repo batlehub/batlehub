@@ -4,6 +4,7 @@ import { ref, computed } from "vue";
 import { useAuthFetch } from "@/composables/useAuthFetch";
 import { API_BASE_URL } from "@/config";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
+import FlagsPanel from "@/components/admin/FlagsPanel.vue";
 import { OPERATIONS_TABS } from "@/config/adminSections";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -189,6 +190,11 @@ async function exportSbom() {
         </Button>
       </CardContent>
     </Card>
+
+    <!-- RFC 0002: what the configured flag sources have said. Beside the
+         SBOM export because it is the other half of the same question —
+         what this instance knows about a version's safety. -->
+    <FlagsPanel />
 
     <!-- About card -->
     <Card>

@@ -1,0 +1,40 @@
+{
+ "schema_version": 3,
+ "root": "/work",
+ "ecosystems": [
+  "python"
+ ],
+ "dependencies": [
+  {
+   "name": "canary-pad",
+   "version": "1.0.0",
+   "ecosystem": "python",
+   "direct": true,
+   "scope": "prod",
+   "parents": []
+  }
+ ],
+ "findings": [
+  {
+   "dependency": "canary_pad",
+   "severity": "critical",
+   "category": "install_hook",
+   "detail": "setup.py executes suspicious primitives: os.system, exec(, base64, os.environ",
+   "location": "/work/canary_pad/setup.py"
+  },
+  {
+   "dependency": "canary_pad",
+   "severity": "medium",
+   "category": "obfuscation",
+   "detail": "2 obfuscation signal(s): exec(), base64/codecs decode (entropy 5.42)",
+   "location": "/work/canary_pad/setup.py"
+  },
+  {
+   "dependency": "canary_pad",
+   "severity": "low",
+   "category": "sensitive_api",
+   "detail": "uses os.environ, os.system",
+   "location": "/work/canary_pad/setup.py"
+  }
+ ]
+}

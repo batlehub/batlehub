@@ -221,8 +221,8 @@ async fn load_entries(
         package_id: PackageId::new(registry, xml_id, "latest"),
         identity: identity.0,
         action: Action::ReleasesRead.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
     };
     let meta = svc
         .resolve_metadata_for(&proxy_req)
@@ -529,6 +529,7 @@ pub async fn jbm_plugin_manager(
                         &best.version,
                         Action::ReleasesRead,
                         &identity,
+                        &identity.1,
                     )
                     .await
                     .map_err(AppError::from)?;
@@ -551,8 +552,8 @@ pub async fn jbm_plugin_manager(
         package_id: PackageId::new(&registry, &query.id, "latest"),
         identity: identity.0.clone(),
         action: Action::ReleasesRead.to_owned(),
-        ip_address: None,
-        user_agent: None,
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
     };
     let meta = svc
         .resolve_metadata_for(&proxy_req)

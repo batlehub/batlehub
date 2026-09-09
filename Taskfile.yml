@@ -15,11 +15,13 @@ includes:
   security: { taskfile: .tasks/security.yaml, flatten: true }
   ui: { taskfile: .tasks/ui.yaml, flatten: true }
   docs: { taskfile: .tasks/docs.yaml, flatten: true }
+  helm: { taskfile: .tasks/helm.yaml, flatten: true }
   rfc: { taskfile: .tasks/rfc.yaml, flatten: true }
   compose: { taskfile: .tasks/compose.yaml, flatten: true }
   browser: { taskfile: .tasks/browser.yaml, flatten: true }
   dex: { taskfile: .tasks/dex.yaml, flatten: true }
   perf: { taskfile: .tasks/perf.yaml, flatten: true }
+  release: { taskfile: .tasks/release.yaml, flatten: true }
 
 dotenv: [ .env ]
 
@@ -36,4 +38,4 @@ tasks:
     cmds:
       - mise upgrade
       - git remote set-url origin --add --push https://git.batleforc.fr/batleforc/batlehub
-      - git remote set-url origin --add --push https://github.com/batleforc/batlehub
+      - git remote set-url origin --add --push https://github.com/batlehub/batlehub

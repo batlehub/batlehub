@@ -179,8 +179,24 @@ tasks:
       - task: pg
         vars:
           TEST: pg_user_tokens
+
+  test:pg-advisory:
+    desc: Run PgAdvisoryRepository integration tests — flags and the exposure report (starts a temporary Postgres container via Podman)
+    cmds:
+      - task: pg
+        vars:
+          TEST: pg_advisory
           CONTAINER: batlehub-test-pg-tokens
           PORT: "15440"
+
+  test:pg-air-gap:
+    desc: Run the RFC 0008 air-gap store integration tests — the miss log's upsert, per-registry cap and retention purge, and the bundle history (starts a temporary Postgres container via Podman)
+    cmds:
+      - task: pg
+        vars:
+          TEST: pg_air_gap
+          CONTAINER: batlehub-test-pg-air-gap
+          PORT: "15441"
 
   test:pg-storage-router:
     desc: Run storage_router integration tests (starts a temporary Postgres container via Podman)
@@ -259,6 +275,21 @@ tasks:
     cmds:
       - bash tests/heavy/openvsx.sh
 
+  test:vsx-login-heavy:
+    desc: "Heavy RFC 0011 §4.4 suite: the local gallery proxy (`batlehub-cli proxy serve`) in front of a credential-only vscode-marketplace registry, driven by the real VS Code core's CLI (the server build, product.json repointed) — unauthenticated, a search is the one sign-in entry, refused as NotSigned until extensions.verifySignature is off, then installed; after `auth write-token-file` the same editor installs by id and every registry request carries a Bearer (needs DATABASE_URL + network once for the VS Code download)"
+    cmds:
+      - bash tests/heavy/vsx_login.sh
+
+  test:vsx-view-heavy:
+    desc: "Heavy RFC 0011 §4.4.2 + RFC 0020 suite: a real Extensions view — the VS Code server build's workbench in Chrome over CDP (a sidecar via CDP_URL, or a headless CHROME_BIN) — the sign-in entry and its page, then after `auth write-token-file` the registry-signed fixture with Install enabled, the editor's verifier refusing it (vsce-sign pinned), the view installing it with extensions.verifySignature off, a marketplace extension republished with its own signature verified and installed with the verifier on, and an extension's hostile SVG icon sanitised, served as an image, advertised by the gallery and shown by the view as the entry's icon (needs DATABASE_URL, a Chrome, ui/node_modules, network once for VS Code, the webview frame and the marketplace extension)"
+    cmds:
+      - bash tests/heavy/vsx_view.sh
+
+  test:console-fetch-heavy:
+    desc: "Heavy RFC 0007-bis §11 q3 suite: the catalogue's Fetch button pressed in a real browser — the built console and the API on one origin, an anonymous reader shown the upstream row and no button, a signed-in reader shown a button naming the version, clicked by its accessible name, and the bytes then held, downloadable through npm's own path, and attributed in the audit to the reader who pressed it (needs DATABASE_URL, a Chrome via CDP_URL or CHROME_BIN, ui/node_modules, network for one npm search and tarball)"
+    cmds:
+      - bash tests/heavy/console_fetch.sh
+
   test:conda-heavy:
     desc: "Heavy conda integration: micromamba's `HEAD` probe for repodata.json.zst, and a package published after the compressed channel was warmed (needs DATABASE_URL; downloads micromamba on first run)"
     cmds:
@@ -273,6 +304,56 @@ tasks:
     desc: "Heavy Composer integration: resolve from local and proxy repositories with Packagist disabled, and reach search.json through the advertised URL template (needs DATABASE_URL + network)"
     cmds:
       - bash tests/heavy/composer.sh
+
+  test:nvm-heavy:
+    desc: "Heavy nvm integration: `nvm ls-remote` and `nvm install` against a nodedist registry, a blocked release refused on nvm's own not-found path with nothing requested under it, SHASUMS256.txt byte-exact, second install from cache (needs DATABASE_URL + network)"
+    cmds:
+      - bash tests/heavy/nvm.sh
+
+  test:sdkman-heavy:
+    desc: "Heavy SDKMAN integration: `sdk list` / `sdk list java` / `sdk list maven` against an sdkman registry, a blocked JDK refused on SDKMAN's own invalid-version path with nothing requested from the broker, the vendor table and the grid both filtered, `sdk install java` through the broker's redirect and the relayed post-install hook, second install from cache (needs DATABASE_URL + network + zip/unzip)"
+    cmds:
+      - bash tests/heavy/sdkman.sh
+
+  test:mise-heavy:
+    desc: "Heavy mise integration: `mise install` from a GitHub release through a github registry, the RFC 0019 ref headers on branch, tag and commit archives, and RFC 0008's air gap end to end — plan, seed, export, import into a second `[air_gap]` instance, then install again with egress denied (needs DATABASE_URL + network; ~8 GitHub API requests, anonymous unless HEAVY_FORGE_TOKEN names a token)"
+    cmds:
+      - bash tests/heavy/mise.sh
+
+  test:airgap-heavy:
+    desc: "Heavy air-gap measurement (RFC 0008-bis phase 0): one version of an npm package, a PyPI wheel and a GitHub release asset seeded, exported and imported into a second `[air_gap]` instance, then npm, pip and mise driven against it with egress denied — a version string resolves through a listing and is a 503, a lock (npm ci, a PEP 508 direct reference) resolves nothing and installs; the miss log names the three listings (needs DATABASE_URL + network; ~3 GitHub API requests, anonymous unless HEAVY_FORGE_TOKEN names a token)"
+    cmds:
+      - bash tests/heavy/airgap.sh
+
+  test:cargo-heavy:
+    desc: "Heavy cargo integration (RFC 0018 §4.4): a blocked crate version marked yanked in the sparse index, a pinned Cargo.lock refused at download with 403 and 404, the same CARGO_HOME recovering after the unblock, `cargo publish` to a local registry on 200 and on a rewritten 202 (needs DATABASE_URL + network)"
+    cmds:
+      - bash tests/heavy/cargo.sh
+
+  test:go-heavy:
+    desc: "Heavy Go integration (RFC 0018 §4.4): a blocked module version hidden from @v/list and @latest, a pinned go.mod refused with 403 and 404, GOPROXY=proxy,direct measured on both, the checksum database routed through the proxy, the same module cache recovering after the unblock (needs DATABASE_URL + network)"
+    cmds:
+      - bash tests/heavy/go.sh
+
+  test:maven-heavy:
+    desc: "Heavy Maven integration (RFC 0018 §4.4): a blocked version omitted from maven-metadata.xml so a range picks the previous one, a pinned pom refused with 403 and 404, Maven's cached failure measured on recovery, `mvn deploy:deploy-file` to a local registry on 201 and on a rewritten 202 (needs DATABASE_URL + network)"
+    cmds:
+      - bash tests/heavy/maven.sh
+
+  test:pathproxy-heavy:
+    desc: "Heavy apt/dnf integration (RFC 0018 §4.4): the signed indexes keep naming a blocked .deb/.rpm, the download refused with 403 and 404, the same apt/dnf state recovering after the unblock (needs DATABASE_URL + network; HEAVY_PATHPROXY_SKIP_DNF=1 leaves the rpm rows unmeasured on a host without dnf)"
+    cmds:
+      - bash tests/heavy/pathproxy.sh
+
+  test:quarantine-heavy:
+    desc: "Heavy quarantine integration (RFC 0018): npm against a [registries.security] registry backed by npmjs.org and the real OSV — first contact held on SCAN_PENDING with the reason code in npm's output, `batlehub wait` clearing it and the same cache recovering, a real advisory refused on the wire and named by `batlehub why`, the packument hiding the denied version, a config reload to warn serving it with the verdict headers, a scanner under bwrap failing to reach the tap, and the phase-4 flip — clean scan, install, the suite's own OSV learns an advisory, the scheduler's rescan refuses the next install and the alert names the puller, and RFC 0002's pushed flag — a signed hard_block refusing `npm ci` with SOC_VERDICT on the wire, the exposure report naming the pull that preceded it, and the revoke lifting it (needs DATABASE_URL + network + bubblewrap; HEAVY_QUARANTINE_SKIP_SANDBOX=1 leaves the egress row unmeasured on a host without user namespaces)"
+    cmds:
+      - bash tests/heavy/quarantine.sh
+
+  test:upstream-audit-heavy:
+    desc: "Heavy upstream-audit integration (RFC 0014): an npm registry over a directory the suite serves itself, `npm install` seeding the cache, the packument and tarball removed, two `recheck` probes confirming the disappearance, one `package_disappeared_upstream` delivered to a webhook receiver the suite runs, then the restore and its `package_reappeared_upstream` (needs DATABASE_URL; no network)"
+    cmds:
+      - bash tests/heavy/upstream_audit.sh
 
   test:terraform-heavy:
     desc: "Heavy Terraform integration: `terraform init` over TLS through host-routed discovery — versions, download document, shasums, signature and archive all through the proxy (needs DATABASE_URL + network)"
@@ -311,9 +392,21 @@ tasks:
       - bash tests/heavy/npm.sh
       - bash tests/heavy/pypi.sh
       - bash tests/heavy/openvsx.sh
+      - bash tests/heavy/vsx_login.sh
+      - bash tests/heavy/vsx_view.sh
       - bash tests/heavy/conda.sh
       - bash tests/heavy/nuget.sh
       - bash tests/heavy/composer.sh
       - bash tests/heavy/terraform.sh
+      - bash tests/heavy/nvm.sh
+      - bash tests/heavy/sdkman.sh
+      - bash tests/heavy/mise.sh
+      - bash tests/heavy/cargo.sh
+      - bash tests/heavy/go.sh
+      - bash tests/heavy/maven.sh
+      - bash tests/heavy/pathproxy.sh
+      - bash tests/heavy/quarantine.sh
+      - bash tests/heavy/upstream_audit.sh
+      - bash tests/heavy/airgap.sh
       - task: test:authz-heavy
 

@@ -1,0 +1,195 @@
+# Server configuration for the heavy quarantine integration test
+# (tests/heavy/quarantine.sh) — RFC 0018 seen from the client side.
+#
+# See tests/heavy/config.npm.toml for the env-var conventions: `${HEAVY_RUN}`
+# keeps each run's registries out of the last one's, and the port and storage
+# path arrive through `PROXY_CACHE__SERVER__PORT` / `PROXY_CACHE__STORAGE__PATH`.
+# The suite starts the server on a *copy* of this file, because step 5 edits
+# `mode` in place and asks the running server to reload it.
+
+[server]
+host = "127.0.0.1"
+port = 8108
+# The default, spelled out because it is the point: this one process both
+# serves the requests and drains the scan queue (RFC 0018 §4.1). A separate
+# worker would prove the same thing with a second process to babysit.
+roles = ["proxy", "worker"]
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-quarantine-storage"
+
+[worker]
+max_concurrent = 2
+# One attempt: a scanner that cannot answer is a finding the suite wants to
+# see at once, not after three retries with a backoff between them.
+max_attempts = 1
+job_timeout_secs = 120
+
+# ── The quarantined registry: npmjs.org behind [security] ────────────────────
+#
+# `min_age_secs` at the floor — every version the suite touches is years old,
+# so the age gate never fires and what is measured is the scan hold and the
+# scanners' answers. `mature_age_secs = 0` never serves unscanned: the first
+# contact with a version *must* hold on `SCAN_PENDING`, which is step 1.
+# OSV is the only scanner, so the finding of step 3 is a real advisory from a
+# real database, not a fixture.
+[[registries]]
+type = "npm"
+name = "npm-quarantine-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://registry.npmjs.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]
+
+[registries.security]
+mode = "block"
+min_age_secs = 3600
+mature_age_secs = 0
+scanners = ["osv"]
+required_scanners = ["osv"]
+max_severity = "high"
+
+# ── The egress registry: one binary scanner, in the sandbox ──────────────────
+#
+# Step 6's registry. Its second scanner is the probe the suite writes at
+# start-up — a script the worker runs *as* a postmortem binary, under the same
+# `bwrap` invocation every binary scanner gets, which tries to open a TCP
+# connection to the tap and reports whether it could. `required_scanners`
+# names it, so a version this registry serves is a version the probe answered
+# on; the tap's transcript is where the connection would have shown up.
+#
+# Kept as its own registry so the rest of the suite runs on a host without
+# `bwrap` (HEAVY_QUARANTINE_SKIP_SANDBOX=1): a registry that requires a
+# scanner it cannot start never serves anything, which is the right behaviour
+# and the wrong fixture for steps 1–5.
+[[registries]]
+type = "npm"
+name = "npm-egress-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://registry.npmjs.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]
+
+[registries.security]
+mode = "block"
+min_age_secs = 3600
+mature_age_secs = 0
+scanners = ["osv", "egress"]
+required_scanners = ["osv", "egress"]
+max_severity = "high"
+
+[scanners.egress]
+type = "postmortem"
+command = "${HEAVY_EGRESS_PROBE}"
+online = false
+# The timeline is a network call by design (it asks npmjs.org for the
+# package's history); off, so the only connection this scanner could make is
+# the one the probe attempts.
+timeline = false
+
+# ── The rescan registry: an OSV the suite owns, and a receiver ───────────────
+#
+# Step 7 (RFC 0018 phase 4). `osv_fake.py` answers clean until the suite
+# tells it otherwise, so a version is scanned clean, installed, and then —
+# the database having "learned" an advisory — rescanned and refused. The
+# flip's admin alert goes to the webhook the suite reads, and names who
+# pulled the version inside `pullers_window_days`.
+[notifications]
+enabled = true
+
+[[notifications.channels]]
+type = "webhook"
+name = "sink"
+url = "${HEAVY_WEBHOOK_URL}"
+
+[scanners.osvflip]
+type = "osv"
+api_url = "${HEAVY_OSV_URL}"
+
+[[registries]]
+type = "npm"
+name = "npm-rescan-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://registry.npmjs.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]
+
+[registries.security]
+mode = "block"
+min_age_secs = 3600
+mature_age_secs = 0
+scanners = ["osvflip"]
+required_scanners = ["osvflip"]
+max_severity = "high"
+pullers_window_days = 30
+
+[registries.security.rescan]
+# The scheduler ticks once a minute and queues what is older than this: a
+# version scanned clean at the start of the step is due by the time the
+# fake OSV has changed its answer.
+interval_secs = 1
+
+# ── The flags registry: a SOC push, and who already pulled it (RFC 0002) ─────
+#
+# Step 8. The same real OSV as the first registry, so what denies a version
+# here is the pushed flag and nothing else: `left-pad@1.3.0` is clean in OSV
+# (step 6 serves it), it is installed once so there is a pull to report on,
+# and then a `hard_block` arrives from the `soc` source below. RFC 0002 §13.1
+# decision 3 makes that push act at once — the stored verdict is denied
+# synchronously and a rescan is queued — so the refusal needs no tick to
+# wait for. The revoke does: `interval_secs = 1` is what lets the scheduler
+# re-derive an allowed verdict within the step rather than at the next hour.
+[[registries]]
+type = "npm"
+name = "npm-flags-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://registry.npmjs.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]
+
+[registries.security]
+mode = "block"
+min_age_secs = 3600
+mature_age_secs = 0
+scanners = ["osv"]
+required_scanners = ["osv"]
+max_severity = "high"
+
+[registries.security.rescan]
+interval_secs = 1
+
+# The SOC's push credential. `max_effect = "hard_block"` is the ceiling this
+# source may set, and the step asserts the effect arrives uncapped; the
+# registry scope means a secret leaked from here cannot flag the rest of the
+# estate.
+[[flag_sources]]
+name = "soc"
+secret = "heavy-soc-secret"
+max_effect = "hard_block"
+registries = ["npm-flags-${HEAVY_RUN}"]

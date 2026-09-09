@@ -53,6 +53,9 @@ jobs:
           CHART_VERSION=$(grep '^version:' helm/batlehub/Chart.yaml | awk '{print $2}')
           /usr/local/bin/mise install
           eval "$(/usr/local/bin/mise activate bash)"
+          helm repo add aquasecurity https://aquasecurity.github.io/helm-charts/
+          helm repo update
+          helm dependency build helm/batlehub
           helm package helm/batlehub --destination /tmp/helm-output
           echo "chart_version=${CHART_VERSION}" >> "$GITHUB_OUTPUT"
           echo "chart_path=/tmp/helm-output/batlehub-${CHART_VERSION}.tgz" >> "$GITHUB_OUTPUT"

@@ -131,6 +131,25 @@ pub trait LocalRegistryBackend: Send + Sync {
         channel: &str,
     ) -> Result<bool, CoreError>;
 
+    /// RFC 0020 §13.6: record that a version's signature archive was
+    /// **provided** at publish time (an upstream's, kept as-is) rather than
+    /// made by the registry's key — `index_metadata.vsixSignature =
+    /// "provided"`, or cleared. `Ok(true)` when the row changed.
+    ///
+    /// Default: not supported, for the test backends that model none of
+    /// this; both real backends override it.
+    async fn set_vsix_signature_provided(
+        &self,
+        _registry: &str,
+        _name: &str,
+        _version: &str,
+        _provided: bool,
+    ) -> Result<bool, CoreError> {
+        Err(CoreError::NotSupported(
+            "this backend cannot record a provided VSIX signature".to_owned(),
+        ))
+    }
+
     async fn set_retention_keep(
         &self,
         _registry: &str,

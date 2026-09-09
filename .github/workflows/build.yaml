@@ -69,6 +69,8 @@ jobs:
             - 🖥️ **Server binary** — `batlehub` (Linux x86_64)
             - 🧰 **CLI** — Linux (amd64/arm64), Windows, macOS
             - 🐳 **Container image** — `ghcr.io/${{ github.repository }}:${{ needs.meta.outputs.version }}`
+            - 🔬 **Worker image** (scanner toolchains, RFC 0018) — `ghcr.io/${{ github.repository }}-worker:${{ needs.meta.outputs.version }}`
+            - 🐕 **Worker image + GuardDog** (the optional Python scanner) — `ghcr.io/${{ github.repository }}-worker-guarddog:${{ needs.meta.outputs.version }}`
             - ⎈ **Helm chart** — `${{ env.CHART_NAMESPACE }}`
             - 🛡️ **SBOMs** (CycloneDX) attached & attested for both the binary and the container image
 
@@ -197,6 +199,70 @@ jobs:
           provenance: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # The worker image (RFC 0018 §5.4): the same binary with the scanner
+      # toolchains — bubblewrap, postmortem, the Trivy client — that the proxy
+      # image deliberately does not carry. amd64 only: the Containerfile
+      # fetches the x86_64 postmortem release asset.
+      - name: Build and push worker image
+        id: build_worker
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Containerfile.worker
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-worker:${{ needs.meta.outputs.version }}
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Trivy scan of the worker image (SARIF)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-worker@${{ steps.build_worker.outputs.digest }}
+          format: sarif
+          output: trivy-results-worker.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+      - name: Upload worker SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: trivy-results-worker.sarif
+          category: trivy-worker-image
+      # The GuardDog variant of the worker image (RFC 0018 §6.3): the optional
+      # Python scanner, on top of the image just pushed — by digest, so the two
+      # can never carry different binaries. A deployment that enables
+      # `[scanners.guarddog]` runs this one instead of the worker image.
+      - name: Build and push GuardDog worker image
+        id: build_worker_guarddog
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Containerfile.worker-guarddog
+          push: true
+          platforms: linux/amd64
+          build-args: |
+            WORKER_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-worker@${{ steps.build_worker.outputs.digest }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-worker-guarddog:${{ needs.meta.outputs.version }}
+          provenance: false
+          cache-from: type=gha,scope=worker-guarddog
+          cache-to: type=gha,mode=max,scope=worker-guarddog
+      - name: Trivy scan of the GuardDog worker image (SARIF)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-worker-guarddog@${{ steps.build_worker_guarddog.outputs.digest }}
+          format: sarif
+          output: trivy-results-worker-guarddog.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+      - name: Upload GuardDog worker SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: trivy-results-worker-guarddog.sarif
+          category: trivy-worker-guarddog-image
       # Scan the published image. Prevention happens earlier (image-scan.yaml on
       # PRs + the daily rebuild-and-scan); this is the release backstop and feeds
       # the Security tab.
@@ -272,6 +338,11 @@ jobs:
       - name: Package chart
         shell: bash
         run: |
+          # Helm 4 refuses `dependency build` for a repository it has never
+          # been told about; harmless on the Helm 3 pinned above.
+          helm repo add aquasecurity https://aquasecurity.github.io/helm-charts/
+          helm repo update
+          helm dependency build helm/batlehub
           mkdir -p dist
           helm package helm/batlehub \
             --destination dist \

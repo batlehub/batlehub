@@ -19,6 +19,7 @@ use batlehub_core::services::{
     ProxyService, QuotaService, SbomService,
 };
 use batlehub_web::handlers::back_office::ops::eviction::EvictionServiceMap;
+use batlehub_web::handlers::back_office::ops::release_import::ReleaseImportMap;
 use batlehub_web::handlers::back_office::ops::warming::WarmingServiceMap;
 use batlehub_web::services::{BannerService, ConfigReloadService, NotificationService};
 use batlehub_web::{
@@ -164,6 +165,12 @@ pub(super) struct ServerParams {
     /// One-time store for in-flight OIDC authorization requests.
     pub login_states: Arc<dyn batlehub_core::ports::LoginStateStore>,
     pub warming_map: WarmingServiceMap,
+    /// Target registry → the imports configured into it (RFC 0021).
+    pub release_imports: ReleaseImportMap,
+    /// Where a run's history goes (RFC 0021 §6.5). `None` in a deployment with
+    /// no database and in every in-process test.
+    pub import_history:
+        batlehub_web::handlers::back_office::ops::release_import::ImportHistoryHandle,
     pub eviction_map: EvictionServiceMap,
     pub proxy_metrics: Arc<ProxyMetrics>,
     /// `None` when `[stats] metrics_enabled = false`: the recorder is never
@@ -173,6 +180,12 @@ pub(super) struct ServerParams {
     pub notification_svc: Option<Arc<NotificationService>>,
     pub notification_store: Arc<dyn NotificationPort>,
     pub notifications_config: Option<NotificationsConfig>,
+    /// RFC 0014 §4.6 — the audit, when this process runs it: `recheck` (and,
+    /// with phase 7, the listing) answer 503 without it.
+    pub upstream_audit: Option<Arc<batlehub_core::services::UpstreamAuditService>>,
+    /// RFC 0018 phase 5 — what `backfill` walks: every cached version of a
+    /// registry, from the artifact-meta table.
+    pub artifact_inventory: Arc<dyn batlehub_core::ports::ArtifactInventory>,
     pub local_svc: Arc<LocalRegistryService>,
     pub quota_svc: Arc<QuotaService>,
     pub stats_history: Arc<dyn batlehub_core::ports::StatsHistoryRepository>,
@@ -185,6 +198,14 @@ pub(super) struct ServerParams {
     /// RFC 0015 §6.3 — the package and version policy tiers, written through the
     /// admin API because §4.1 says a config file cannot enumerate them.
     pub policy_repo: Arc<dyn batlehub_core::ports::PolicyRepository>,
+    /// RFC 0002 (recast) — the flag store, the push funnel over it, the
+    /// configured sources and what the exposure coverage block reads.
+    /// RFC 0008 §6.4 — what came across the gap.
+    pub bundle_history: Arc<dyn batlehub_core::ports::BundleHistory>,
+    pub advisory_repo: Arc<dyn batlehub_core::ports::AdvisoryRepository>,
+    pub flag_svc: Arc<batlehub_core::services::FlagService>,
+    pub flag_sources: batlehub_web::FlagSources,
+    pub exposure_config: batlehub_web::ExposureConfig,
     pub ip_blocking_cfg: Option<IpBlockingConfig>,
     /// Resolved `[server].trusted_proxies` (or the deprecated
     /// `[ip_blocking]` fallback). Registered as `app_data` so the middleware
@@ -222,6 +243,8 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
         oidc_provider_names,
         login_states,
         warming_map,
+        release_imports,
+        import_history,
         eviction_map,
         proxy_metrics,
         prometheus_handle,
@@ -229,6 +252,8 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
         notification_svc,
         notification_store,
         notifications_config,
+        upstream_audit,
+        artifact_inventory,
         local_svc,
         quota_svc,
         stats_history,
@@ -239,6 +264,11 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
         beta_channel_store,
         team_namespace_store,
         policy_repo,
+        bundle_history,
+        advisory_repo,
+        flag_svc,
+        flag_sources,
+        exposure_config,
         ip_blocking_cfg,
         proxy_trust,
         registry_host_map,
@@ -268,6 +298,8 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
             oidc_provider_names.clone(),
             Arc::clone(&login_states),
             warming_map.clone(),
+            release_imports.clone(),
+            import_history.clone(),
             eviction_map.clone(),
             Arc::clone(&proxy_metrics),
             prometheus_handle.clone(),
@@ -313,6 +345,11 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
             .app_data(web::Data::new(Arc::clone(&beta_channel_store)))
             .app_data(web::Data::new(Arc::clone(&team_namespace_store)))
             .app_data(web::Data::new(Arc::clone(&policy_repo)))
+            .app_data(web::Data::new(Arc::clone(&bundle_history)))
+            .app_data(web::Data::new(Arc::clone(&advisory_repo)))
+            .app_data(web::Data::new(Arc::clone(&flag_svc)))
+            .app_data(web::Data::new(flag_sources.clone()))
+            .app_data(web::Data::new(exposure_config.clone()))
             .app_data(web::Data::new(Arc::clone(&reload_svc)))
             .app_data(web::Data::new(Arc::clone(&banner_svc)))
             .app_data(web::Data::new(proxy_trust.clone()))
@@ -324,6 +361,12 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
         if let Some(path) = cli_binary_path_inner {
             app = app.app_data(web::Data::new(CliBinaryPath(path)));
         }
+        // Registered only when the audit runs here, so the handlers extract
+        // it as `Option<Data<_>>` and answer 503 on a process without it.
+        if let Some(audit) = &upstream_audit {
+            app = app.app_data(web::Data::new(Arc::clone(audit)));
+        }
+        app = app.app_data(web::Data::new(Arc::clone(&artifact_inventory)));
 
         let cors = crate::watcher::build_cors(&cors_allowed_origins);
         let enabled = ip_blocking_cfg.as_ref().is_some_and(|c| c.enabled);
@@ -407,6 +450,27 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
         svc.shutdown().await;
     }
 
+    Ok(())
+}
+
+/// The HTTP surface of a worker-only process (RFC 0018 §6.5): `/livez` and
+/// `/metrics`, nothing that serves an artifact. `/healthz` needs the proxy
+/// service and is not here; a worker's health is its heartbeat row.
+pub(super) async fn run_worker_only_server(
+    bind_addr: String,
+    prometheus_handle: Option<PrometheusHandle>,
+) -> anyhow::Result<()> {
+    tracing::info!(%bind_addr, "worker-only: listening for /livez and /metrics");
+    HttpServer::new(move || {
+        let mut app = App::new().service(livez).service(prometheus_metrics);
+        if let Some(h) = prometheus_handle.clone() {
+            app = app.app_data(web::Data::new(h));
+        }
+        app
+    })
+    .bind(&bind_addr)?
+    .run()
+    .await?;
     Ok(())
 }
 

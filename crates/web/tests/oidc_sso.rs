@@ -643,3 +643,47 @@ async fn an_oversized_state_is_refused_and_stores_nothing() {
         "an ordinary login must still be stored"
     );
 }
+
+// ── The provider list ─────────────────────────────────────────────────────────
+//
+// The endpoint the login page asks before it draws anything: it decides whether
+// there is an SSO button at all, and how many. It is deliberately unauthenticated
+// — the caller has no token yet, which is the whole point of asking.
+
+#[actix_web::test]
+async fn provider_list_names_every_configured_sso_flow() {
+    let mut idp = mockito::Server::new_async().await;
+    let (app, _states) = make_sso_app(&idp.url()).await;
+
+    let resp = call_service(
+        &app,
+        TestRequest::get()
+            .uri("/api/v1/auth/oidc/providers")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(body, serde_json::json!([{ "name": "authentik" }]));
+
+    // No call to the identity provider: the list is read off the configuration,
+    // so a provider that is down still gets its button.
+    idp.reset();
+}
+
+#[actix_web::test]
+async fn provider_list_is_empty_when_no_sso_is_configured() {
+    // An empty array rather than a 404 or a 503: the SPA branches on the length,
+    // and an error status would show it a failure where the answer is "none".
+    let app = make_app(batlehub_adapters::in_memory::InMemoryPackageRepository::new()).await;
+    let resp = call_service(
+        &app,
+        TestRequest::get()
+            .uri("/api/v1/auth/oidc/providers")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
+    assert_eq!(body, serde_json::json!([]));
+}

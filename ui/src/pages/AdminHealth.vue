@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
-import { ref } from "vue";
+import { onMounted, ref } from "vue";
 import { registryHealth, clearRegistryCache, invalidateExploreCache } from "@/client/sdk.gen";
 import type { RegistryHealthDto } from "@/client/types.gen";
 import { useApi, extractMessage } from "@/composables/useApi";
 import { useAuth } from "@/composables/useAuth";
+import { useAuthFetch } from "@/composables/useAuthFetch";
+import { API_BASE_URL } from "@/config";
 import {
   formatBytes as fmtBytes,
   formatDate as fmtDate,
@@ -104,6 +106,36 @@ function toggleErrors(registry: string) {
   expandedErrors.value = new Set(expandedErrors.value);
 }
 
+/**
+ * RFC 0014 §4.6: the audit's card — the active policy and, per audited
+ * registry, how many packages are missing at their upstream and how many
+ * are confirmed gone. Absent (`503`) when the audit is not running here,
+ * which is a fact about this process and not an error.
+ */
+interface UpstreamSummary {
+  policy: "audit" | "block";
+  counts: { registry: string; missing: number; disappeared: number }[];
+}
+const { authFetch } = useAuthFetch();
+const upstream = ref<UpstreamSummary | null>(null);
+const UPSTREAM_POLICY_KEYS: Record<string, string> = {
+  audit: "adminHealth.upstreamPolicyAudit",
+  block: "adminHealth.upstreamPolicyBlock",
+};
+async function loadUpstream() {
+  try {
+    const res = await authFetch(`${API_BASE_URL}/api/v1/admin/upstream/disappeared?per_page=1`);
+    if (!res?.ok) {
+      upstream.value = null;
+      return;
+    }
+    upstream.value = (await res.json()) as UpstreamSummary;
+  } catch {
+    upstream.value = null;
+  }
+}
+onMounted(loadUpstream);
+
 const ROLE_LABEL_KEYS: Record<string, string> = {
   anonymous: "adminHealth.roleAnonymous",
   user: "adminHealth.roleUsers",
@@ -144,6 +176,32 @@ const ROLE_LABEL_KEYS: Record<string, string> = {
 
         What this page owns is per-registry health, which is everything below.
       -->
+
+      <!-- RFC 0014 §4.6: the upstream audit, when this process runs it. -->
+      <Card v-if="upstream" data-testid="upstream-card">
+        <CardHeader class="pb-2">
+          <CardTitle class="text-base">{{ t("adminHealth.upstreamTitle") }}</CardTitle>
+        </CardHeader>
+        <CardContent class="flex flex-wrap items-center gap-3 text-sm">
+          <Badge :variant="upstream.policy === 'block' ? 'destructive' : 'secondary'">
+            {{ t(UPSTREAM_POLICY_KEYS[upstream.policy]) }}
+          </Badge>
+          <span
+            v-for="c in upstream.counts"
+            :key="c.registry"
+            class="font-mono text-xs"
+            data-testid="upstream-card-count"
+          >
+            {{ c.registry }}:
+            {{
+              t("adminHealth.upstreamCounts", { missing: c.missing, disappeared: c.disappeared })
+            }}
+          </span>
+          <RouterLink to="/admin/operations/upstream" class="text-xs underline">
+            {{ t("adminHealth.upstreamOpen") }}
+          </RouterLink>
+        </CardContent>
+      </Card>
 
       <!-- Registry cards grid -->
       <div

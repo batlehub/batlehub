@@ -11,6 +11,14 @@ pub(super) struct FjRelease {
     pub id: u64,
     pub tag_name: String,
     pub published_at: Option<String>,
+    /// Not published, and never imported (RFC 0021 §4.2). Defaulted for the
+    /// same reason GitHub's is: a strict model must not fail a decode over a
+    /// flag an older Gitea does not send.
+    #[serde(default)]
+    pub draft: bool,
+    /// Published and marked as not the default download.
+    #[serde(default)]
+    pub prerelease: bool,
     #[serde(default)]
     pub assets: Vec<FjAsset>,
 }
@@ -23,6 +31,88 @@ pub(super) struct FjAsset {
     #[allow(dead_code)]
     #[serde(default)]
     pub size: u64,
+}
+
+// ── Tags, branches and commits (RFC 0019) ─────────────────────────────────────
+//
+// Shapes confirmed against codeberg.org on 2026-09-03: `tags/{tag}` carries
+// `commit.sha` and `commit.created`; `branches/{name}` carries `commit.id`,
+// `commit.timestamp` and `commit.committer.username`; `git/commits/{sha}`
+// carries `commit.committer.date` and a top-level `committer.login`.
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FjTag {
+    pub commit: FjTagCommit,
+    /// Present on the *list* endpoint (`/repos/{o}/{r}/tags`), absent on the
+    /// by-name one. Confirmed against codeberg.org on 2026-09-04.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FjTagCommit {
+    pub sha: String,
+    pub created: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FjBranch {
+    pub commit: FjBranchCommit,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FjBranchCommit {
+    pub id: String,
+    pub timestamp: Option<String>,
+    pub committer: Option<FjPayloadUser>,
+}
+
+/// A person as Forgejo's payload objects spell them.
+#[derive(Debug, Deserialize)]
+pub(super) struct FjPayloadUser {
+    pub name: Option<String>,
+    pub email: Option<String>,
+    pub username: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FjGitPerson {
+    pub name: Option<String>,
+    pub email: Option<String>,
+    pub date: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FjCommitDetail {
+    pub committer: Option<FjGitPerson>,
+    /// RFC 0019 phase 5. Confirmed against codeberg.org on 2026-09-04:
+    /// `commit.verification` is `{verified, reason, signature, signer,
+    /// payload}` and reads `gpg.error.not_signed_commit` on an unsigned one.
+    /// The RFC's parity table recorded this as *(to confirm — the existing
+    /// models have no commit or tag struct)*; the object is there, and this
+    /// is it.
+    #[serde(default)]
+    pub verification: Option<FjVerification>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FjVerification {
+    #[serde(default)]
+    pub verified: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FjUser {
+    pub login: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct FjCommit {
+    pub sha: String,
+    pub commit: Option<FjCommitDetail>,
+    pub committer: Option<FjUser>,
 }
 
 impl ForgejoRegistryClient {

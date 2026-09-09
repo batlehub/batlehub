@@ -21,6 +21,17 @@ The following components **require a process restart**:
 
 When the config file changes on disk, BatleHub automatically validates the new config (schema check + connectivity probes) and stores a **pending reload**. The admin then confirms or discards it via the UI or API. Pending reloads expire after 10 minutes.
 
+When the process was started with more than one `--config`, **every layer is
+watched and every reload re-reads all of them**. Rotating a credential touches
+only the credentials file, and that alone stages a pending reload: the
+byte-identical-rewrite dedup that exists for `touch` and atomic saves compares
+all the layers, not just the first. See
+[Layered config files](/guide/configuration#layered-config-files).
+
+A layer that cannot be watched is logged and skipped rather than taking the
+watcher down for the others; the reload path re-reads every layer anyway, so a
+change to a watched file still picks up whatever the unwatched one now says.
+
 The file watcher is enabled by default. Disable it with:
 
 ```sh
@@ -89,6 +100,7 @@ Config Reload admin page renders both.
 | `proxy-trust.invalid-deprecated-entry` | An entry of the deprecated `[ip_blocking].trusted_proxies` is not an IP or CIDR range and was dropped |
 | `proxy-trust.shadowed-deprecated-key` | Both keys are set; `[server]` wins and the deprecated list is ignored entirely |
 | `subdomain.invalid-dns-label` | `[subdomain_routing]` is on but a registry name cannot be a DNS label, so no wildcard host is derived for it |
+| `vsx-signing.proxy-mode` | `[registries.vsx_signing]` on a registry in `proxy` mode: nothing is published there, so the key signs nothing; the upstream's signature is relayed regardless |
 
 ## 9.3 Global Admin Banner
 

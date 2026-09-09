@@ -1,0 +1,48 @@
+# Server configuration for the heavy path-proxy (apt / dnf) integration test
+# (tests/heavy/pathproxy.sh). See tests/heavy/config.npm.toml for the env-var
+# conventions; `${HEAVY_RUN}` keeps each run's registries out of the last one's.
+
+[server]
+host = "127.0.0.1"
+port = 8105
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-pathproxy-storage"
+
+# ── deb: the Ubuntu archive, signed upstream, nothing filterable ─────────────
+[[registries]]
+type = "deb"
+name = "deb-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["http://archive.ubuntu.com/ubuntu"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── rpm: EPEL 9, same family ─────────────────────────────────────────────────
+[[registries]]
+type = "rpm"
+name = "rpm-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://dl.fedoraproject.org/pub/epel/9/Everything/x86_64"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

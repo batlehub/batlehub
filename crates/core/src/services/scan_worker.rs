@@ -1,0 +1,689 @@
+//! The worker role (RFC 0018 §5.4): lease a job, run every configured
+//! scanner that speaks the registry's kind, judge, record, close.
+//!
+//! The two roles share nothing but the database. This loop never answers
+//! HTTP, and the proxy never blocks a request on it: a dead or saturated
+//! worker leaves versions below `mature_age_secs` refused with `SCAN_PENDING`
+//! and versions above served `warned` — it degrades, it does not fail.
+//!
+//! Jobs are leased, not consumed. A lease that expires while a scanner is
+//! still running returns the job to the queue; after `max_attempts` the job
+//! is closed and the verdict carries `SCANNER_ERROR`.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use chrono::Utc;
+
+use crate::entities::{
+    coordinate_purl, Finding, FindingKind, NotificationEvent, NotificationEventType,
+    PackageMetadata, ReasonCode, RegistryKind, ScanJob, SecurityPolicy, Severity, Verdict,
+    VerdictState,
+};
+use crate::error::CoreError;
+use crate::ports::{
+    ArtifactScanner, FindingEnricher, NotificationSink, PackageRepository, SbomRepository,
+    ScanQueue, ScannerError, WorkerRegistry,
+};
+use crate::services::hot_config::HotConfigLock;
+use crate::services::verdict::VerdictService;
+
+/// How the worker is tuned (`[worker]`, RFC 0018 §4.1).
+#[derive(Debug, Clone)]
+pub struct WorkerConfig {
+    pub worker_id: String,
+    pub max_concurrent: u32,
+    /// Empty means every registry.
+    pub registries: Vec<String>,
+    pub job_timeout: Duration,
+    pub max_attempts: u32,
+    /// How long to sleep when the queue is empty.
+    pub idle_poll: Duration,
+}
+
+impl Default for WorkerConfig {
+    fn default() -> Self {
+        Self {
+            worker_id: format!("worker-{}", uuid::Uuid::new_v4()),
+            max_concurrent: 4,
+            registries: Vec::new(),
+            job_timeout: Duration::from_secs(600),
+            max_attempts: 3,
+            idle_poll: Duration::from_secs(2),
+        }
+    }
+}
+
+pub struct ScanWorker {
+    pub config: WorkerConfig,
+    pub queue: Arc<dyn ScanQueue>,
+    pub verdicts: Arc<VerdictService>,
+    pub workers: Option<Arc<dyn WorkerRegistry>>,
+    pub sboms: Option<Arc<dyn SbomRepository>>,
+    /// The hot config: which registries have a `[security]` profile, their
+    /// kinds, and their internal scanners.
+    pub hot: HotConfigLock,
+    /// The scanners built from `[scanners]`, by name.
+    pub scanners: HashMap<String, Arc<dyn ArtifactScanner>>,
+    /// The enrichment scanners (`mlab`), by name: run after the others over
+    /// what they found (RFC 0018 §6.3).
+    pub enrichers: HashMap<String, Arc<dyn FindingEnricher>>,
+    /// The artifact cache, for the scanners that read bytes (phase 3): a
+    /// cached artifact is read from here, an uncached one is fetched from
+    /// upstream through the registry's client and *not* cached — the proxy
+    /// path owns that, with its integrity checks.
+    pub storage: Option<Arc<dyn crate::ports::StorageBackend>>,
+    /// The most bytes the worker will hold for one scan; the proxy's
+    /// `max_artifact_size_bytes`, or 500 MiB.
+    pub max_artifact_bytes: u64,
+    /// Where a flip is reported (RFC 0018 decision 23) and a lifted hold
+    /// announced. `None` records the transition and tells nobody.
+    pub notifier: Option<Arc<dyn NotificationSink>>,
+    /// The access log, for who pulled a version before its verdict flipped
+    /// and who was refused it while it was held. `None` sends the alert
+    /// without a pullers list, and says so on it.
+    pub events: Option<Arc<dyn PackageRepository>>,
+}
+
+/// The actor the worker's own events carry (RFC 0014 decision 12's form).
+pub const WORKER_ACTOR: &str = "system:security-worker";
+
+/// What one pass over the queue did.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PassReport {
+    pub leased: usize,
+    pub completed: usize,
+    pub failed: usize,
+    pub exhausted: usize,
+}
+
+impl ScanWorker {
+    /// Tell the worker table this process is alive, and publish the queue
+    /// depths. Neither is load-bearing for the pass, so neither fails it.
+    async fn report_liveness(&self) {
+        if let Some(w) = &self.workers {
+            if let Err(e) = w
+                .heartbeat(&self.config.worker_id, &self.config.registries)
+                .await
+            {
+                tracing::warn!(error = %e, "security worker: heartbeat failed");
+            }
+        }
+        let Ok(counts) = self.queue.queued().await else {
+            return;
+        };
+        for c in counts {
+            metrics::gauge!(
+                "batlehub_scan_jobs_queued",
+                "registry" => c.registry,
+                "trigger" => c.trigger.as_str(),
+            )
+            .set(c.count as f64);
+        }
+    }
+
+    /// Run one leased job and close its row, whichever way it went.
+    async fn run_and_close(&self, job: &ScanJob, report: &mut PassReport) {
+        let Err(e) = self.run_job(job).await else {
+            report.completed += 1;
+            if let Err(e) = self.queue.complete(job.id).await {
+                tracing::warn!(job = %job.id, error = %e, "security worker: could not close job");
+            }
+            return;
+        };
+        report.failed += 1;
+        tracing::warn!(job = %job.id, package = %job.package, error = %e, "security worker: job failed");
+        if let Err(e) = self.queue.fail(job.id, &e.to_string()).await {
+            tracing::warn!(job = %job.id, error = %e, "security worker: could not record failure");
+        }
+    }
+
+    /// Lease and run one batch, then close out any job whose attempts are
+    /// spent. Returns what happened so an embedded caller can pace itself.
+    pub async fn run_once(&self) -> Result<PassReport, CoreError> {
+        let mut report = PassReport::default();
+        self.report_liveness().await;
+
+        let jobs = self
+            .queue
+            .lease(
+                &self.config.worker_id,
+                &self.config.registries,
+                self.config.max_concurrent,
+                self.config.job_timeout.as_secs(),
+                self.config.max_attempts,
+            )
+            .await?;
+        report.leased = jobs.len();
+        metrics::gauge!("batlehub_scan_jobs_leased", "worker" => self.config.worker_id.clone())
+            .set(jobs.len() as f64);
+
+        for job in jobs {
+            self.run_and_close(&job, &mut report).await;
+        }
+
+        // Jobs nobody could finish: the verdict says so, and the row closes.
+        for job in self
+            .queue
+            .exhausted(self.config.max_attempts, self.config.max_concurrent)
+            .await?
+        {
+            report.exhausted += 1;
+            self.close_exhausted(&job).await;
+        }
+        Ok(report)
+    }
+
+    /// Run forever, pacing on the queue.
+    pub async fn run(self: Arc<Self>) {
+        loop {
+            match self.run_once().await {
+                Ok(r) if r.leased == 0 && r.exhausted == 0 => {
+                    tokio::time::sleep(self.config.idle_poll).await
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, "security worker: pass failed; retrying");
+                    tokio::time::sleep(self.config.idle_poll).await;
+                }
+            }
+        }
+    }
+
+    /// The registry's profile and kind, and the scanners to run for it.
+    async fn plan(
+        &self,
+        registry: &str,
+    ) -> Option<(SecurityPolicy, RegistryKind, Vec<Arc<dyn ArtifactScanner>>)> {
+        let hot = self.hot.read().await;
+        let policy = hot.security.get(registry)?.clone();
+        let kind: RegistryKind = hot.registries.get(registry)?.registry_type().parse().ok()?;
+        let mut scanners: Vec<Arc<dyn ArtifactScanner>> = hot
+            .internal_scanners
+            .get(registry)
+            .cloned()
+            .unwrap_or_default();
+        for name in &policy.scanners {
+            if let Some(s) = self.scanners.get(name) {
+                scanners.push(Arc::clone(s));
+            }
+        }
+        Some((policy, kind, scanners))
+    }
+
+    async fn run_job(&self, job: &ScanJob) -> Result<(), CoreError> {
+        let Some((policy, kind, scanners)) = self.plan(&job.package.registry).await else {
+            // The registry left `[security]` (or the config) since the job
+            // was queued: nothing to judge, and nothing to hold.
+            tracing::info!(package = %job.package, "security worker: registry has no security profile any more; dropping job");
+            return Ok(());
+        };
+        let package = self.dated_metadata(job).await;
+        let applicable: Vec<Arc<dyn ArtifactScanner>> =
+            scanners.into_iter().filter(|s| s.supports(kind)).collect();
+        let input = self.scan_input(job, kind, &package, &applicable).await;
+        let artifact_unavailable = input.artifact.is_none();
+
+        let mut findings: Vec<Finding> = Vec::new();
+        let mut done: Vec<String> = Vec::new();
+        for scanner in applicable {
+            self.run_scanner(
+                job,
+                &scanner,
+                &input,
+                artifact_unavailable,
+                &mut findings,
+                &mut done,
+            )
+            .await;
+            if let Err(e) = self
+                .queue
+                .heartbeat(job.id, self.config.job_timeout.as_secs())
+                .await
+            {
+                tracing::debug!(job = %job.id, error = %e, "security worker: heartbeat failed");
+            }
+        }
+        self.enrich(job, &policy, &mut findings, &mut done).await;
+        self.record(job, &package, &policy, findings, done).await
+    }
+
+    /// The version's metadata, resolved and dated.
+    ///
+    /// The whole document, not just the date: on a `[security]` registry
+    /// `license_gate`, `require_signed_release` and `trusted_publisher` are
+    /// removed from the request chain and run here as `RuleAsScanner`s instead,
+    /// and every one of them judges a field of this metadata (`license`,
+    /// `is_signed`, `extra["publisher"]`). Handing them a
+    /// `PackageMetadata::minimal(_, Null)` made the signature gate a permanent
+    /// no-op under its default (`deny_missing_signature = false`) and made
+    /// `trusted_publisher` fail closed on every package — in both cases judging
+    /// the absence of a field rather than the field.
+    ///
+    /// A rescan queued without the date — the metadata cache had let it go —
+    /// must not re-judge a dated version as `TIMESTAMP_MISSING` either, so the
+    /// job's own `published_at` still wins when it has one.
+    async fn dated_metadata(&self, job: &ScanJob) -> PackageMetadata {
+        let mut package = PackageMetadata::minimal(job.package.clone(), serde_json::Value::Null);
+        package.published_at = job.published_at;
+        let client = self
+            .hot
+            .read()
+            .await
+            .registries
+            .get(&job.package.registry)
+            .cloned();
+        let Some(client) = client else {
+            return package;
+        };
+        match client.resolve_metadata(&job.package).await {
+            Ok(meta) => {
+                let queued_date = package.published_at;
+                package = meta;
+                // The date the job carried is the one the request saw, so it
+                // stays authoritative; upstream's only fills a gap.
+                package.published_at = queued_date.or(package.published_at);
+            }
+            Err(e) => {
+                tracing::debug!(package = %job.package, error = %e, "security worker: upstream did not answer for the rescan; judging on the coordinate alone")
+            }
+        }
+        package
+    }
+
+    /// The CycloneDX SBOM already recorded for the version, where the instance
+    /// keeps one.
+    async fn stored_sbom(&self, job: &ScanJob) -> Option<serde_json::Value> {
+        let repo = self.sboms.as_ref()?;
+        repo.get_sbom_by_coordinates(
+            &job.package.registry,
+            &job.package.name,
+            &job.package.version,
+            &crate::entities::SbomFormat::CycloneDx,
+        )
+        .await
+        .ok()
+        .flatten()
+        .map(|s| s.document)
+    }
+
+    /// Everything the scanners will be given.
+    ///
+    /// Bytes and the listing only when a scanner will read them: a
+    /// metadata-only profile is one row read and no egress.
+    async fn scan_input(
+        &self,
+        job: &ScanJob,
+        kind: RegistryKind,
+        package: &PackageMetadata,
+        applicable: &[Arc<dyn ArtifactScanner>],
+    ) -> crate::ports::ScanInput {
+        let artifact = match applicable.iter().any(|s| s.needs_artifact()) {
+            false => None,
+            true => self
+                .artifact_bytes(&job.package, kind)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(package = %job.package, error = %e, "security worker: could not fetch the artifact for scanning");
+                    None
+                }),
+        };
+        let listing = match applicable.iter().any(|s| s.needs_listing()) {
+            false => None,
+            true => self.listing_document(&job.package).await,
+        };
+        crate::ports::ScanInput {
+            package: package.clone(),
+            kind,
+            purl: coordinate_purl(kind, &job.package.name, &job.package.version),
+            artifact,
+            sbom: self.stored_sbom(job).await,
+            listing,
+        }
+    }
+
+    /// One scanner: what it found, or why it did not answer.
+    async fn run_scanner(
+        &self,
+        job: &ScanJob,
+        scanner: &Arc<dyn ArtifactScanner>,
+        input: &crate::ports::ScanInput,
+        artifact_unavailable: bool,
+        findings: &mut Vec<Finding>,
+        done: &mut Vec<String>,
+    ) {
+        // A scanner that reads bytes it could not be given did not run:
+        // `SCANNER_UNSUPPORTED` names the reason without pretending the scan
+        // happened (RFC 0018 §11 q1).
+        if scanner.needs_artifact() && artifact_unavailable {
+            findings.push(Finding::new(
+                scanner.name(),
+                FindingKind::ScannerError,
+                ReasonCode::ScannerUnsupported,
+                Severity::High,
+                "the artifact bytes could not be obtained for scanning",
+            ));
+            return;
+        }
+        let started = Instant::now();
+        let outcome = tokio::time::timeout(self.config.job_timeout, scanner.scan(input))
+            .await
+            .unwrap_or(Err(ScannerError::Timeout));
+        metrics::histogram!(
+            "batlehub_scan_job_duration_seconds",
+            "registry" => job.package.registry.clone(),
+            "scanner" => scanner.name().to_owned(),
+            "outcome" => if outcome.is_ok() { "ok" } else { "error" },
+        )
+        .record(started.elapsed().as_secs_f64());
+        let e = match outcome {
+            Ok(found) => {
+                findings.extend(found);
+                done.push(scanner.name().to_owned());
+                return;
+            }
+            Err(e) => e,
+        };
+        metrics::counter!(
+            "batlehub_scanner_errors_total",
+            "scanner" => scanner.name().to_owned(),
+            "class" => e.class(),
+        )
+        .increment(1);
+        tracing::warn!(package = %job.package, scanner = scanner.name(), error = %e, "security worker: scanner did not answer");
+        let code = match e {
+            ScannerError::Unsupported(_) => ReasonCode::ScannerUnsupported,
+            _ => ReasonCode::ScannerError,
+        };
+        findings.push(Finding::new(
+            scanner.name(),
+            FindingKind::ScannerError,
+            code,
+            Severity::High,
+            e.to_string(),
+        ));
+    }
+
+    /// Enrichment, over everything the scanners said. A registry names an
+    /// enricher in `scanners` like any other, and it is "done" only when it
+    /// answered.
+    async fn enrich(
+        &self,
+        job: &ScanJob,
+        policy: &SecurityPolicy,
+        findings: &mut Vec<Finding>,
+        done: &mut Vec<String>,
+    ) {
+        for name in &policy.scanners {
+            let Some(enricher) = self.enrichers.get(name) else {
+                continue;
+            };
+            match tokio::time::timeout(self.config.job_timeout, enricher.enrich(findings)).await {
+                Ok(Ok(())) => done.push(enricher.name().to_owned()),
+                Ok(Err(e)) => {
+                    tracing::warn!(package = %job.package, scanner = enricher.name(), error = %e, "security worker: enrichment did not answer");
+                }
+                Err(_) => {
+                    tracing::warn!(package = %job.package, scanner = enricher.name(), "security worker: enrichment timed out");
+                }
+            }
+        }
+    }
+
+    /// Write the verdict, count it, and tell whoever the transition concerns.
+    async fn record(
+        &self,
+        job: &ScanJob,
+        package: &PackageMetadata,
+        policy: &SecurityPolicy,
+        findings: Vec<Finding>,
+        done: Vec<String>,
+    ) -> Result<(), CoreError> {
+        let (from, verdict) = self
+            .verdicts
+            .record_scan(package, policy, findings, done, Utc::now())
+            .await?;
+        metrics::counter!(
+            "batlehub_verdicts_total",
+            "registry" => job.package.registry.clone(),
+            "state" => verdict.state.as_str(),
+            "trigger" => job.trigger.as_str(),
+        )
+        .increment(1);
+        tracing::info!(
+            package = %job.package,
+            from = ?from,
+            to = %verdict.state,
+            codes = ?verdict.reason_codes,
+            "security worker: verdict recorded"
+        );
+        // RFC 0018 decision 23: a version that was being served and is now
+        // refused is the one transition an incident is built on — the admin is
+        // told, with who pulled it. A version that was held and is now served
+        // is told to the ones who were refused.
+        let Some(from) = from else {
+            return Ok(());
+        };
+        if from.is_served() && verdict.state == VerdictState::Denied {
+            self.alert_flip(job, policy, from, &verdict).await;
+        } else if from == VerdictState::Quarantined && verdict.is_served() {
+            self.announce_release(job, policy, from, &verdict).await;
+        }
+        Ok(())
+    }
+
+    /// `verdict_changed` (RFC 0018 §4.2 *Rescan*): the coordinate, the
+    /// codes, the findings, and the identities that pulled it inside
+    /// `pullers_window` — to the operator's subscriptions, never to the
+    /// pullers.
+    async fn alert_flip(
+        &self,
+        job: &ScanJob,
+        policy: &SecurityPolicy,
+        from: VerdictState,
+        verdict: &Verdict,
+    ) {
+        let Some(sink) = &self.notifier else {
+            return;
+        };
+        let window = chrono::Duration::from_std(policy.pullers_window).unwrap_or_default();
+        let since = Utc::now() - window;
+        let (pullers, pullers_known) = match &self.events {
+            Some(repo) => {
+                match crate::services::pullers_for(repo.as_ref(), &job.package, since).await {
+                    Ok(p) => (p, true),
+                    Err(e) => {
+                        tracing::warn!(package = %job.package, error = %e, "security worker: could not list pullers for the alert");
+                        (Vec::new(), false)
+                    }
+                }
+            }
+            None => (Vec::new(), false),
+        };
+        let mut event = NotificationEvent::new(
+            NotificationEventType::VerdictChanged,
+            &job.package.registry,
+            &job.package.name,
+            Some(job.package.version.clone()),
+            WORKER_ACTOR,
+        );
+        event.metadata = serde_json::json!({
+            "from": from.as_str(),
+            "to": verdict.state.as_str(),
+            "reason_codes": verdict.reason_codes,
+            "trigger": job.trigger.as_str(),
+            "findings": verdict.findings.iter().map(|f| serde_json::json!({
+                "scanner": f.scanner,
+                "code": f.code,
+                "severity": f.severity.as_str(),
+                "summary": f.summary,
+                "reference": f.reference,
+            })).collect::<Vec<_>>(),
+            "pullers": pullers,
+            "pullers_known": pullers_known,
+            "pullers_window_days": policy.pullers_window.as_secs() / 86_400,
+            "since": since,
+        });
+        tracing::warn!(
+            package = %job.package,
+            from = %from,
+            to = %verdict.state,
+            pullers = pullers.len(),
+            "security worker: served verdict flipped to denied; admin alert sent"
+        );
+        sink.emit(event);
+    }
+
+    /// `artifact_released` (RFC 0018 §4.2): a hold lifted; carries the
+    /// identities that were refused the version while it was held, and is
+    /// sent only when there is at least one.
+    async fn announce_release(
+        &self,
+        job: &ScanJob,
+        policy: &SecurityPolicy,
+        from: VerdictState,
+        verdict: &Verdict,
+    ) {
+        let (Some(sink), Some(repo)) = (&self.notifier, &self.events) else {
+            return;
+        };
+        let window = chrono::Duration::from_std(policy.pullers_window).unwrap_or_default();
+        let since = Utc::now() - window;
+        let refused = match crate::services::refused_for(repo.as_ref(), &job.package, since).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(package = %job.package, error = %e, "security worker: could not list who was refused");
+                return;
+            }
+        };
+        if refused.is_empty() {
+            return;
+        }
+        let mut event = NotificationEvent::new(
+            NotificationEventType::ArtifactReleased,
+            &job.package.registry,
+            &job.package.name,
+            Some(job.package.version.clone()),
+            WORKER_ACTOR,
+        );
+        event.metadata = serde_json::json!({
+            "from": from.as_str(),
+            "to": verdict.state.as_str(),
+            "reason_codes": verdict.reason_codes,
+            "trigger": job.trigger.as_str(),
+            "recipients": refused,
+            "since": since,
+        });
+        sink.emit(event);
+    }
+
+    /// The bytes of the version's primary artifact — the one file the kind
+    /// names for a version (`RegistryKind::warm_artifact`) — from the cache
+    /// when it is there, else from upstream. `None` for a kind that names a
+    /// set of files (PyPI, Maven, conda, Terraform), which the archive
+    /// scanners answer `SCANNER_UNSUPPORTED` for.
+    async fn artifact_bytes(
+        &self,
+        package: &crate::entities::PackageId,
+        kind: RegistryKind,
+    ) -> Result<Option<bytes::Bytes>, CoreError> {
+        use futures::StreamExt;
+        let Some(coordinate) =
+            kind.fetch_coordinate(&package.registry, &package.name, &package.version)
+        else {
+            return Ok(None);
+        };
+        let limit = self.max_artifact_bytes;
+        let key = format!("artifact:{}", coordinate.cache_key());
+        let mut stream = match &self.storage {
+            Some(storage) => match storage.retrieve(&key).await? {
+                Some(stored) => Some(stored.stream),
+                None => None,
+            },
+            None => None,
+        };
+        if stream.is_none() {
+            let client = {
+                let hot = self.hot.read().await;
+                hot.registries.get(&package.registry).cloned()
+            };
+            let Some(client) = client else {
+                return Ok(None);
+            };
+            stream = Some(client.fetch_artifact(&coordinate).await?.stream);
+        }
+        let mut stream = stream.expect("set above");
+        let mut buf: Vec<u8> = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            if buf.len() as u64 + chunk.len() as u64 > limit {
+                return Err(CoreError::PayloadTooLarge(format!(
+                    "artifact exceeds the {limit}-byte scan limit"
+                )));
+            }
+            buf.extend_from_slice(&chunk);
+        }
+        Ok(Some(bytes::Bytes::from(buf)))
+    }
+
+    /// The registry's listing document for the package, or nothing — a
+    /// scanner that needs it says so in its own finding.
+    async fn listing_document(
+        &self,
+        package: &crate::entities::PackageId,
+    ) -> Option<crate::ports::VersionDocument> {
+        let client = {
+            let hot = self.hot.read().await;
+            hot.registries.get(&package.registry).cloned()
+        }?;
+        client
+            .fetch_version_document(&package.name, crate::ports::DocumentKind::Versions)
+            .await
+            .ok()
+    }
+
+    /// A job whose attempts are spent: every required scanner that never
+    /// answered becomes `SCANNER_ERROR`, and the row closes.
+    async fn close_exhausted(&self, job: &ScanJob) {
+        metrics::counter!(
+            "batlehub_scan_jobs_expired_total",
+            "registry" => job.package.registry.clone(),
+            "scanner" => "job",
+        )
+        .increment(1);
+        if let Some((policy, _, _)) = self.plan(&job.package.registry).await {
+            let mut package =
+                PackageMetadata::minimal(job.package.clone(), serde_json::Value::Null);
+            package.published_at = job.published_at;
+            let findings = policy
+                .required_scanners
+                .iter()
+                .map(|s| {
+                    Finding::new(
+                        s.clone(),
+                        FindingKind::ScannerError,
+                        ReasonCode::ScannerError,
+                        Severity::High,
+                        format!(
+                            "no attempt out of {} completed within {}s",
+                            self.config.max_attempts,
+                            self.config.job_timeout.as_secs()
+                        ),
+                    )
+                })
+                .collect();
+            let done = policy.required_scanners.clone();
+            if let Err(e) = self
+                .verdicts
+                .record_scan(&package, &policy, findings, done, Utc::now())
+                .await
+            {
+                tracing::warn!(package = %job.package, error = %e, "security worker: could not record SCANNER_ERROR");
+            }
+        }
+        if let Err(e) = self.queue.complete(job.id).await {
+            tracing::warn!(job = %job.id, error = %e, "security worker: could not close exhausted job");
+        }
+    }
+}

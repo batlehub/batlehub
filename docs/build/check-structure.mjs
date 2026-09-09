@@ -47,6 +47,10 @@ const WORDS_PER_MINUTE = 180;
 
 const SKIP_DIRS = new Set(["node_modules", ".vitepress", "build", "public"]);
 
+/** An RFC, in any locale that has one. A record read once in order, not a page
+ *  consulted — see the `length` note in the header. */
+const isRecord = (rel) => /^(fr\/)?rfc\//.test(rel);
+
 function pages(dir = DOCS, acc = []) {
   for (const entry of readdirSync(dir)) {
     if (SKIP_DIRS.has(entry)) continue;
@@ -89,7 +93,12 @@ for (const file of pages()) {
     findings.push({ rel, kind: "heading depth", detail: `h${depth}` });
   }
 
-  if (words > DECLARE_ABOVE && !declaresReference(src) && !rel.startsWith("rfc/")) {
+  // Measured per page, in the language the page is written in. French runs
+  // longer than English for the same content — around 15% — so a page that sits
+  // just under the threshold in English can cross it once translated. That is
+  // the answer rather than a defect in it: the declaration is about how long
+  // this page is to read, and the French page really is longer.
+  if (words > DECLARE_ABOVE && !declaresReference(src) && !isRecord(rel)) {
     findings.push({
       rel,
       kind: "undeclared length",

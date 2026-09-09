@@ -188,6 +188,59 @@ pub fn embedded_migrator() -> Migrator {
             "user_tokens_groups",
             "../migrations/046_user_tokens_groups.sql"
         ),
+        mig!(
+            47,
+            "ref_resolutions",
+            "../migrations/047_ref_resolutions.sql"
+        ),
+        mig!(
+            48,
+            "rate_limit_budget",
+            "../migrations/048_rate_limit_budget.sql"
+        ),
+        mig!(
+            49,
+            "artifact_verdicts",
+            "../migrations/049_artifact_verdicts.sql"
+        ),
+        mig!(
+            50,
+            "artifact_findings",
+            "../migrations/050_artifact_findings.sql"
+        ),
+        mig!(51, "scan_jobs", "../migrations/051_scan_jobs.sql"),
+        mig!(
+            52,
+            "worker_heartbeats",
+            "../migrations/052_worker_heartbeats.sql"
+        ),
+        mig!(
+            53,
+            "upstream_status",
+            "../migrations/053_upstream_status.sql"
+        ),
+        mig!(54, "package_flags", "../migrations/054_package_flags.sql"),
+        mig!(
+            55,
+            "registry_scan_state",
+            "../migrations/055_registry_scan_state.sql"
+        ),
+        mig!(
+            56,
+            "missing_content",
+            "../migrations/056_missing_content.sql"
+        ),
+        mig!(57, "bundle_imports", "../migrations/057_bundle_imports.sql"),
+        mig!(
+            58,
+            "missing_content_requested",
+            "../migrations/058_missing_content_requested.sql"
+        ),
+        mig!(
+            59,
+            "release_import_runs",
+            "../migrations/059_release_import_runs.sql"
+        ),
     ])
 }
 

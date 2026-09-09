@@ -9,6 +9,7 @@ import { API_BASE_URL } from "@/config";
 import { useAuth } from "@/composables/useAuth";
 import { formatDate } from "@/lib/format";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
+import ExposurePanel from "@/components/admin/ExposurePanel.vue";
 import { PageHeader } from "@/components/ui/page-header";
 import { OBSERVABILITY_TABS } from "@/config/adminSections";
 import { Button } from "@/components/ui/button";
@@ -464,5 +465,9 @@ async function purge() {
       "
       @confirm="purge"
     />
+
+    <!-- RFC 0002: the same trail, asked a different question — who pulled a
+         version a source has since flagged. Under `audit:read`, as the log. -->
+    <ExposurePanel />
   </div>
 </template>
