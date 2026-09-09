@@ -797,6 +797,180 @@ export function wrongKindVerbs(csv: string, type: RegistryType): string[] {
   });
 }
 
+/// The rest of the closed vocabulary, in `Action::ALL` order
+/// (`crates/core/src/entities/permission.rs`). Two lists because the guide
+/// presents them as two tables and the form offers them as two groups: what is
+/// published on the server, and the server itself.
+///
+/// A hand-maintained copy of a closed set has two definitions and only one of
+/// them compiles — the guide's own table once named three verbs that did not
+/// exist. `config-generator.test.ts` pins these lists to the enum's `as_str`
+/// arms, so the picker cannot offer a verb the server would refuse.
+export const RESOURCE_VERBS: string[] = [
+  "releases:read",
+  "releases:list",
+  "source:read",
+  "catalogue:browse",
+  "releases:publish",
+  "releases:overwrite",
+  "releases:yank",
+  "releases:delete",
+  "owners:read",
+  "owners:write",
+  "packages:block",
+  "gates:exempt",
+  "stats:read",
+  "audit:read",
+  "quarantine:read",
+  "findings:read",
+  "flags:read",
+  "audit:purge",
+];
+
+export const CONTROL_VERBS: string[] = [
+  "config:read",
+  "config:write",
+  "system:read",
+  "system:write",
+  "blocks:read",
+  "blocks:write",
+  "authz:read",
+  "grants:read",
+  "grants:write",
+  "cache:evict",
+  "cache:warm",
+  "quota:read",
+  "quota:write",
+  "retention:run",
+  "tombstones:read",
+  "packages:read",
+];
+
+/// Every verb the server knows, `Action::ALL` order.
+export const ALL_VERBS: string[] = [
+  ...RESOURCE_VERBS,
+  ...CONTROL_VERBS,
+  ...Object.keys(ECOSYSTEM_VERBS),
+];
+
+/// One `<optgroup>` of the verb picker.
+export interface VerbGroup {
+  label: string;
+  verbs: string[];
+}
+
+/// Where a verbs field sits, which decides what the picker offers.
+///
+/// - `instance` — the top-level `[grants]`: kind-neutral, so no ecosystem verb
+///   and no `*` either, because `*` there expands to *every* verb including the
+///   ecosystem ones, and the server refuses the block
+///   (`build_instance_grants` in `server/src/grants.rs`).
+/// - `legacy` — `[registries.rbac]`: `*` is read the old way (§10 rule 3).
+/// - a registry type — a `[registries.grants]` or namespace block on it.
+export type VerbTier = "instance" | "legacy" | RegistryType;
+
+/// The groups a verb picker at `tier` offers, in the order the guide lists them.
+///
+/// An ecosystem verb is only offered where it is grantable (§4.2 rule 2), so a
+/// registry of the wrong kind never sees it — the closed vocabulary reaching the
+/// form rather than being checked after the fact.
+export function verbOptions(tier: VerbTier): VerbGroup[] {
+  const groups: VerbGroup[] = [];
+  if (tier !== "instance") {
+    groups.push({ label: "Expansions", verbs: ["releases:*", "*"] });
+  }
+  groups.push({ label: "Releases and packages", verbs: RESOURCE_VERBS });
+  groups.push({ label: "Control surfaces", verbs: CONTROL_VERBS });
+  if (tier !== "instance" && tier !== "legacy") {
+    const eco = Object.entries(ECOSYSTEM_VERBS)
+      .filter(([, kinds]) => kinds.includes(tier))
+      .map(([v]) => v);
+    if (eco.length) groups.push({ label: `Ecosystem (${tier})`, verbs: eco });
+  }
+  return groups;
+}
+
+/// `csv` with `verb` appended, unless it is already there.
+export function addVerb(csv: string, verb: string): string {
+  const list = csvToList(csv);
+  if (!verb || list.includes(verb)) return csv;
+  return [...list, verb].join(", ");
+}
+
+/// `csv` without `verb`.
+export function removeVerb(csv: string, verb: string): string {
+  return csvToList(csv)
+    .filter((v) => v !== verb)
+    .join(", ");
+}
+
+/// Verbs in `csv` the picker at `tier` would not offer: an ecosystem verb on a
+/// registry that does not define it, any ecosystem verb (or `*`) at the
+/// instance tier, or a token that is not in the vocabulary at all. The form
+/// cannot type one in any more, but a registry's type can change under a grant
+/// already written, and a default state can carry one.
+export function verbsOutOfPlace(csv: string, tier: VerbTier): string[] {
+  const offered = new Set(verbOptions(tier).flatMap((g) => g.verbs));
+  return csvToList(csv).filter((v) => !offered.has(v));
+}
+
+/// The subjects worth proposing for a grant, from the auth providers the form
+/// has configured (§4.3's five forms, filled in with what the operator wrote).
+///
+/// The group forms follow how each provider names a group on the identity
+/// (`resolve_groups` in the OIDC and Kubernetes adapters): a claim value that
+/// is a `role_mappings` key arrives **bare**, so it is matched as
+/// `group::<name>`; any other value is prefixed with the provider name, so it
+/// is `group:<provider>:<name>` — offered as a prefix to complete, since the
+/// form does not know the group names the provider will send. An
+/// actions-oidc rule's static group is pushed as written, its template renders
+/// under the provider name.
+export function subjectSuggestions(auths: AuthProvider[]): string[] {
+  const out: string[] = ["*", "role:anonymous", "role:user", "role:admin"];
+  const push = (s: string) => {
+    if (!out.includes(s)) out.push(s);
+  };
+  for (const auth of auths) {
+    switch (auth.type) {
+      case "token":
+        for (const t of auth.tokens) {
+          const id = t.user_id.trim();
+          if (id) push(`user:${id}`);
+        }
+        break;
+      case "oidc": {
+        const name = auth.oidc_name.trim() || "oidc";
+        for (const m of auth.oidc_role_mappings) {
+          const c = m.claim.trim();
+          if (c) push(`group::${c}`);
+        }
+        push(`group:${name}:`);
+        break;
+      }
+      case "kubernetes": {
+        const name = auth.k8s_name.trim() || "kubernetes";
+        for (const m of auth.k8s_role_mappings) {
+          const c = m.claim.trim();
+          if (c) push(`group::${c}`);
+        }
+        push(`group:${name}:`);
+        break;
+      }
+      case "actions-oidc": {
+        const name = auth.actions_name.trim() || "actions-oidc";
+        for (const r of auth.actions_rules) {
+          const g = r.group.trim();
+          if (g) push(`group::${g}`);
+          if (r.group_template.trim()) push(`group:${name}:`);
+        }
+        break;
+      }
+    }
+  }
+  if (auths.some((a) => a.type !== "token")) push("group:*:");
+  return out;
+}
+
 /// Visibility ordered widest to narrowest, matching the `Visibility` enum's own
 /// declaration order — the ordering is load-bearing there and pinned by a test,
 /// so it is the same order here.

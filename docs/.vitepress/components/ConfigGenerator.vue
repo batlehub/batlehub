@@ -9,6 +9,7 @@ import {
   defaultState,
   namespaceSeparator,
   wrongKindVerbs,
+  verbsOutOfPlace,
   prereleaseWiderThanRelease,
   shadowDateInvalid,
   blankRulePolicy,
@@ -17,7 +18,9 @@ import {
   signingSecretTooShortFor,
   hostRoutingEnabledFor,
   renderConfigToml,
+  subjectSuggestions,
 } from "./configToml";
+import VerbPicker from "./VerbPicker.vue";
 import type {
   RegistryType,
   Enforcement,
@@ -194,6 +197,12 @@ const signingSecretTooShort = computed(() => signingSecretTooShortFor(state()));
 const hostRoutingEnabled = computed(() => hostRoutingEnabledFor(state()));
 
 const toml = computed(() => renderConfigToml(state()));
+
+/// What the subject `<datalist>` proposes: §4.3's forms, filled in from the
+/// auth providers configured above — a token's user id, a role mapping's claim
+/// value, each provider's group prefix. Free text stays free text; this is a
+/// proposal, since the group names a provider sends are not in the form.
+const subjectProposals = computed(() => subjectSuggestions(authProviders.value));
 
 
 // ── Syntax highlighting ─────────────────────────────────────────────────────
@@ -532,6 +541,11 @@ const composerAuthSnippet = `{
 
 <template>
   <div class="cg-root">
+    <!-- One list for every subject field: the proposals are a fact about the
+         configured auth, not about the tier the field sits at. -->
+    <datalist id="cg-subject-proposals">
+      <option v-for="s in subjectProposals" :key="s" :value="s" />
+    </datalist>
     <!-- ── LEFT: form ──────────────────────────────────────────────────── -->
     <div class="cg-form">
       <!-- Server -->
@@ -670,13 +684,24 @@ const composerAuthSnippet = `{
         <div v-for="g in instanceGrants" :key="g.id" class="cg-condition-item">
           <div class="cg-two-col">
             <label
-              >Subject<input v-model="g.subject" placeholder="group:oidc:sre"
+              >Subject<input
+                v-model="g.subject"
+                list="cg-subject-proposals"
+                placeholder="group:oidc:sre"
             /></label>
-            <label
-              >Verbs<input
-                v-model="g.verbs"
-                placeholder="config:read, system:read"
-            /></label>
+            <div class="cg-field">
+              <span class="cg-field-label">Verbs</span>
+              <VerbPicker v-model="g.verbs" tier="instance" label="instance grant verbs" />
+              <span
+                class="cg-field-hint"
+                :class="{ 'cg-hint-required': verbsOutOfPlace(g.verbs, 'instance').length > 0 }"
+                >{{
+                  verbsOutOfPlace(g.verbs, "instance").length
+                    ? `${verbsOutOfPlace(g.verbs, "instance").join(", ")} cannot be held above every registry — grant it on the registry that defines it.`
+                    : "Control-surface verbs, mostly; pick one or more."
+                }}</span
+              >
+            </div>
           </div>
           <button class="cg-btn-remove" @click="removeGrant(instanceGrants, g.id)">
             Remove grant
@@ -1587,23 +1612,23 @@ curl -X POST \
           <p class="cg-field-hint" style="margin-bottom: 0.35rem">
             The verb set is closed — one that is not on the
             <a href="/guide/access-control#verbs">list</a> is a startup error,
-            not a permission granted to nobody. Common ones:
-            <code>releases:read</code>, <code>releases:list</code>,
-            <code>releases:publish</code>, <code>source:read</code>,
-            <code>catalogue:browse</code>.
+            not a permission granted to nobody, so each field below offers
+            exactly that list. <code>*</code> and <code>releases:*</code> are
+            the two expansions.
           </p>
           <div class="cg-three-col">
-            <label
-              >anonymous<input v-model="reg.rbac_anonymous" placeholder=""
-            /></label>
-            <label
-              >user<input
-                v-model="reg.rbac_user"
-                placeholder="releases:read, source:read"
-            /></label>
-            <label
-              >admin<input v-model="reg.rbac_admin" placeholder="*"
-            /></label>
+            <div class="cg-field">
+              <span class="cg-field-label">anonymous</span>
+              <VerbPicker v-model="reg.rbac_anonymous" tier="legacy" label="anonymous permissions" />
+            </div>
+            <div class="cg-field">
+              <span class="cg-field-label">user</span>
+              <VerbPicker v-model="reg.rbac_user" tier="legacy" label="user permissions" />
+            </div>
+            <div class="cg-field">
+              <span class="cg-field-label">admin</span>
+              <VerbPicker v-model="reg.rbac_admin" tier="legacy" label="admin permissions" />
+            </div>
           </div>
 
           <!-- RBAC groups -->
@@ -1623,11 +1648,10 @@ curl -X POST \
                   provider.</span
                 ></label
               >
-              <label
-                >Permissions<input
-                  v-model="g.perms"
-                  placeholder="releases:read, releases:publish"
-              /></label>
+              <div class="cg-field">
+                <span class="cg-field-label">Permissions</span>
+                <VerbPicker v-model="g.perms" tier="legacy" label="group permissions" />
+              </div>
             </div>
             <button class="cg-btn-remove" @click="removeRbacGroup(reg, g.id)">
               Remove group
@@ -1696,28 +1720,30 @@ curl -X POST \
                 <label
                   >Subject<input
                     v-model="g.subject"
+                    list="cg-subject-proposals"
                     placeholder="group:oidc:team-a"
                   /><span class="cg-field-hint"
-                    ><code>*</code>, <code>role:admin</code>,
-                    <code>group:oidc:team-a</code> (or
-                    <code>group:*:team-a</code> across providers),
-                    <code>user:alice</code>.</span
+                    >Proposed from the auth configured above: a mapped claim
+                    value arrives bare (<code>group::team-a</code>), any other
+                    group under its provider (<code>group:oidc:team-a</code>,
+                    or <code>group:*:team-a</code> across providers);
+                    <code>user:alice</code>, <code>role:admin</code>,
+                    <code>*</code>.</span
                   ></label
                 >
-                <label
-                  >Verbs<input
-                    v-model="g.verbs"
-                    placeholder="releases:read, releases:publish"
-                  /><span
+                <div class="cg-field">
+                  <span class="cg-field-label">Verbs</span>
+                  <VerbPicker v-model="g.verbs" :tier="reg.type" label="registry grant verbs" />
+                  <span
                     class="cg-field-hint"
                     :class="{ 'cg-hint-required': wrongKindVerbs(g.verbs, reg.type).length > 0 }"
                     >{{
                       wrongKindVerbs(g.verbs, reg.type).length
                         ? `A ${reg.type} registry does not define ${wrongKindVerbs(g.verbs, reg.type).join(", ")} — an ecosystem verb is only grantable where it is implemented.`
-                        : "Comma-separated, from the closed vocabulary."
+                        : "From the closed vocabulary; pick one or more."
                     }}</span
-                  ></label
-                >
+                  >
+                </div>
               </div>
               <button class="cg-btn-remove" @click="removeGrant(reg.grants, g.id)">
                 Remove grant
@@ -1810,19 +1836,27 @@ curl -X POST \
                   class="cg-two-col"
                 >
                   <label
-                    >Subject<input v-model="g.subject" placeholder="group:oidc:acme"
+                    >Subject<input
+                      v-model="g.subject"
+                      list="cg-subject-proposals"
+                      placeholder="group:oidc:acme"
                   /></label>
-                  <label
-                    >Verbs<input
-                      v-model="g.verbs"
-                      placeholder="releases:read, releases:publish"
-                    /><button
+                  <div class="cg-field">
+                    <span class="cg-field-label">Verbs</span>
+                    <VerbPicker v-model="g.verbs" :tier="reg.type" label="namespace grant verbs" />
+                    <span
+                      v-if="wrongKindVerbs(g.verbs, reg.type).length"
+                      class="cg-field-hint cg-hint-required"
+                      >A {{ reg.type }} registry does not define
+                      {{ wrongKindVerbs(g.verbs, reg.type).join(", ") }}.</span
+                    >
+                    <button
                       class="cg-btn-remove"
                       @click="removeGrant(ns.grants, g.id)"
                     >
                       Remove
-                    </button></label
-                  >
+                    </button>
+                  </div>
                 </div>
                 <button class="cg-btn-add" @click="addGrant(ns.grants)">
                   + Add namespace grant
@@ -3694,6 +3728,23 @@ textarea {
 }
 
 /* ── Labels / hints ──────────────────────────────────────────────── */
+/* A field whose control is a VerbPicker: the same column layout as `label`
+   above, as a `div`, because a label wrapping a select *and* the chips'
+   remove buttons would label several controls at once. The select carries
+   its own accessible name instead. */
+.cg-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: var(--t-body);
+  color: var(--vp-c-text-2);
+  margin-bottom: 0.45rem;
+}
+.cg-field-label {
+  font-size: var(--t-body);
+  color: var(--vp-c-text-2);
+}
+
 .cg-perm-label {
   margin: 0.4rem 0 0.25rem;
   font-size: var(--t-body);
