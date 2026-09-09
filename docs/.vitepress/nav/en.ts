@@ -375,6 +375,10 @@ export const sidebar = {
           text: "0021 — releases into registries",
           link: "/rfc/0021-forge-releases-into-registries",
         },
+        {
+          text: "0022 — Sandbox runtimes",
+          link: "/rfc/0022-sandbox-runtimes",
+        },
         // END rfc-sidebar
       ],
     },

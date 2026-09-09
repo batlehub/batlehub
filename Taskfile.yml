@@ -21,6 +21,7 @@ includes:
   browser: { taskfile: .tasks/browser.yaml, flatten: true }
   dex: { taskfile: .tasks/dex.yaml, flatten: true }
   perf: { taskfile: .tasks/perf.yaml, flatten: true }
+  release: { taskfile: .tasks/release.yaml, flatten: true }
 
 dotenv: [ .env ]
 

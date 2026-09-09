@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+Nothing yet.
+
+---
+
+## [1.2.0] - 2026-09-09
+
 ### Added
 
 - **Fetch a package from the catalogue, not only from its page (RFC 0007-bis
@@ -140,54 +146,216 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   verify` checks a download against the served archive and key.
   `tests/heavy/vsx_view.sh` drives a real Extensions view through all of it.
 
-### Fixed
+- **Authorization became one vocabulary on a hierarchy (RFC 0015).** An operator
+  who wrote `user = ["releases:read", "source:read"]` had configured half of one
+  third of it: those two strings were the entire permission vocabulary, there was
+  no write verb at all, and a grant could only attach to a whole registry, so
+  "the payments team owns `@acme/billing-*`" was not expressible.
+  `[registries.grants]` now attaches a grant at any level of registry →
+  namespace → package → version and inherits it downward, the vocabulary
+  includes the writes, and a namespace carries its own default visibility,
+  immutability policy and gate overrides for everything published beneath it.
+  The nine mechanisms that used to answer "who may do what" one at a time —
+  ownership, visibility, versioning policy, quota, beta channels, console browse,
+  `bypass_roles`, signed URLs, `firewall_only` — are that one model now.
+  `batlehub authz explain` resolves what a subject may do and names the tier that
+  granted each verb; `batlehub authz shadow` reports what the new decision would
+  have refused while it is not yet enforcing.
 
-- **A package found by an upstream search was reported as not held, however
-  often it had been pulled.** An upstream search is a relevance search: npm
-  answers `left-pad` with `pad-left` and `lpad`, and neither contains the query.
-  The catalogue decided "do we already have this?" by looking for packages whose
-  name *contains the query*, so no fuzzy hit could ever be credited. It asks by
-  the names that came back now.
-- **A NuGet, PyPI or Go package the instance held was still reported as
-  missing.** NuGet's search answers `Newtonsoft.Json` where `dotnet restore`
-  stores `newtonsoft.json`, PyPI's answers `Pillow` where the simple index
-  stores `pillow`, and pkg.go.dev answers `github.com/BurntSushi/toml` where the
-  `go` client stores `github.com/!burnt!sushi/toml`. The catalogue compared the
-  two spellings exactly, so it offered **Fetch** on a package it already had and
-  the button answered `409`. Each kind's own naming rule now decides, and the
-  read path's normalisers share that one definition.
-- **A version fetched from the console stayed missing from the catalogue for ten
-  minutes.** The listing is served from a cache invalidated on a publish and on
-  a yank; a console fetch is a third write and was not on the list, so the row
-  went on offering to fetch a version the instance already held, and a second
-  press answered `409`. A package manager's download still does not invalidate
-  it, deliberately.
-- **Proxied extensions lost their upstream signature.** The gallery proxy
-  re-rendered every entry with a fixed six-asset list, so an extension
-  proxied from the Microsoft marketplace arrived unsigned and a current
-  editor refused to install it. The upstream's `VsixSignature` (and Open
-  VSX's `PublicKey`) are now relayed byte for byte, cached beside the VSIX,
-  and never re-signed.
+  It absorbs **RFC 0011-bis**, which is why a team's packages are now visible to
+  that team and to the groups it grants read to: the namespace claim knows each
+  ecosystem's separator, so `digital` covers `digital.pipeline-tools`, and a PAT
+  carries its creator's groups (`--groups` / `--all-groups`, and the group picker
+  on the Tokens page), so automation sees what its owner sees rather than
+  nothing. A PAT's expiry became mandatory with it — 1 to 90 days.
 
-- **Setup snippets name the host the client actually talks to.** With host-based
-  routing (RFC 0001) a registry answers on its own subdomain, and on that host
-  the server prefixes `/proxy/{name}` to every path itself. Three things had not
-  followed:
+- **Grants at the package and version tiers have an editor (RFC 0017).** RFC 0015
+  built the two deepest tiers and left nothing that could write to them: the only
+  caller of `put_grant` was the ownership projection, and no code in the tree had
+  ever written a version row. `grants:read` and `grants:write` join the
+  vocabulary, `batlehub admin grants list|set|rm` and a console panel write
+  either tier, and the per-version listing filter — written for RFC 0015 §4.4 and
+  never called, because with no version row to differ from the package answer
+  there was nothing to filter — ships in the same release as the writer that
+  makes it load-bearing.
 
-  - The Setup Guide's composite tabs (`mise`, and the `generic` mirror rules)
-    rewrite downloads to several registries but printed a single `~/.netrc`
-    stanza — the selected registry's. Every other host got no credentials and
-    would have 401'd. They now print one stanza per host referenced.
-  - Two snippets hand-built `https://{host}/proxy/{name}/…` (the pip.conf
-    embedded-credentials line, the apt `sources.list` alternative), which on a
-    registry host resolves to `/proxy/{name}/proxy/{name}/…` and 404s. Both now
-    derive from the registry's own base URL.
-  - `batlehub-cli setup detect` / `setup ide` ignored host routing entirely:
-    they never read `public_url` and always printed `{server}/proxy/<registry>`.
-    They now ask the server for the registry list, name the real registry, point
-    at its own host when it has one, and end with the matching `~/.netrc`
-    stanzas. `--offline` keeps the old placeholder output, which is also the
-    fallback when the server cannot be reached.
+- **Retention, and a published name that can never mean two things (RFC 0016).**
+  Nothing published locally was ever reclaimed, and nothing published was ever
+  safe from being republished as different bytes. Delete is now a soft delete,
+  and both follow from it. A retention policy attaches to the tier system —
+  `keep_versions`, `keep_for`, and `keep_if_pulled` as a veto, so whatever anyone
+  is actually using stays — and defaults to `dry_run = true`, which reports and
+  reclaims nothing. A **tombstone** keeps the coordinate forever: a deleted
+  `@acme/widgets@1.4.0` is permanently spent, so it cannot become different bytes
+  for the next lockfile that asks. Retention's namespace and package tiers are
+  described but not built; `NamespaceConfig` refuses a `retention` key outright
+  rather than ignoring one.
+
+- **An artifact is scanned before it is served (RFC 0018).** The proxy used to
+  decide with a chain of independent gates, each looking at one signal and
+  answering allow or deny into a free-form string most clients never display.
+  There was no notion of an artifact *not yet known to be safe*. A per-registry
+  `[registries.security]` profile now turns the proxy into a quarantine: what
+  comes from upstream is scanned by a configurable set of scanners, the findings
+  are evaluated into a persisted verdict — `allowed`, `warned`, `quarantined`,
+  `denied` — and only the first two are served. Versions older than a
+  configurable maturity age are served while their scan is pending, so the layer
+  can be switched on over a live cache. The verdict carries machine-readable
+  reason codes and reaches a reader through each registry's own protocol error,
+  `batlehub why`, the Package Explorer and the notification channels, behind two
+  new permissions: `quarantine:read` (that a version is held, and until when) and
+  `findings:read` (why, in detail). Overriding one is an administrator action,
+  and a signed inbound webhook lets a SOC push a rescan or a verdict of its own.
+
+  Scanning runs in a **worker** role of the same binary. `[server] roles`
+  defaults to `["proxy", "worker"]`, so a single process already runs one
+  embedded; `--roles worker` and `--roles proxy` split them across deployments
+  sharing nothing but the `scan_jobs` queue in Postgres. The proxy never blocks a
+  request on the worker, so a dead or saturated one degrades the registries it
+  covers rather than failing them. The scanner toolchains — bubblewrap,
+  `postmortem`, the Trivy client, optionally GuardDog — live only in the worker
+  image, which is why there are now two. See
+  [The scan worker](docs/operations/scan-worker.md).
+
+- **A block is now visible to every ecosystem, not only to npm (RFC 0006).**
+  Blocking has two halves: the download gate, which has answered `403` with the
+  operator's reason for every registry since the block list existed, and the
+  listing half — leaving the version out of what a client is told exists, so a
+  resolver never picks it. The second was built for npm and only for npm, and on
+  the other twenty kinds the client read the upstream listing, resolved `latest`
+  to the blocked version and the install *failed*. The block read as breakage
+  rather than as policy. Every kind that has a listing document filters it now,
+  the ones that cannot are stated rather than left to be discovered, and the
+  coverage is compiler-enforced rather than a paragraph in the admin guide.
+
+- **Every endpoint the client actually calls (RFC 0009).** `npm audit` was served
+  at `/-/npm/v1/audit/bulk`; npm calls `/-/npm/v1/security/advisories/bulk`. Four
+  tests asserted the first path, which is our route and has never been npm's.
+  A survey of the other nineteen kinds found four more of the same class and a
+  long tail — `openvsx` and `vscode-marketplace` cached VSIX bytes and served
+  none of the gallery routes an editor calls, so BatleHub could not be an
+  editor's marketplace at all. All of it is served, and two mechanisms keep the
+  next invented endpoint from passing: a protocol conformance fixture per
+  ecosystem, asserting the client's literal paths route, and generated endpoint
+  tables in the registry pages with a drift check. Each ecosystem is now verified
+  against its real client by a script in CI rather than by a transcript, which
+  found six further shipped bugs.
+
+- **Each version's own README, stored, rendered and shown (RFC 0007).** BatleHub
+  received that text on four code paths and threw all four away, then rendered a
+  package page that could say what a version costs, what it depends on and
+  whether it is vulnerable, but not what it *is*. The README is stored per
+  `(registry, name, version)` from whichever source the kind actually has,
+  rendered to sanitised HTML on the server — allow-listed and fuzzed, because the
+  console serves the console's own origin — and shown under a version selector,
+  with the CLI able to print the source. The page also gained a **discovery
+  read**: one bounded, cached upstream lookup on the console path, so a package
+  this instance holds no bytes of has a version list and a README instead of
+  "no versions yet", which is the state the console's own search leads to.
+
+- **What the console owes a reader looking at one package (RFC 0013).** Eleven
+  things the catalog and the package page knew and could not act on, or acted on
+  and could not say. The search state survives a click rather than dying with the
+  component. The version list keeps what you narrowed it to and which page you
+  were on. The selected version is marked in something other than a 1.06:1 fill.
+  A README rendered from markdown can be read as markdown, and fenced code keeps
+  the language the sanitiser used to erase on the way out. The hosts an image may
+  come from are stated. Two lists page on the operator's numbers rather than on a
+  literal, and the **Fetch this version** button is no longer offered to a reader
+  the endpoint would refuse — which it now does, having previously refused
+  nothing at all.
+
+- **The toolchain layer: the JDK and the Node runtime themselves (RFC 0010).**
+  An instance could proxy every Maven artifact a JVM build resolves and none of
+  the JVM, every npm package a Node build installs and not the Node. Two
+  proxy-only kinds close that: `sdkman`, a protocol this server did not speak,
+  and `nodedist`, a tree it already mirrored as `generic` and could enforce
+  nothing on, because a path-addressed registry has no version to block. SDKMAN's
+  `versions/all`, `candidates/default` and the rendered `sdk list` table are all
+  filtered, and a blocked version is refused at `candidates/validate` so the
+  client prints its own *"is not a valid … version"* rather than failing
+  mid-download. Its broker answers `302` to third-party CDNs, so the redirect
+  chain is followed server-side through the SSRF guard — otherwise the 200 MB JDK
+  leaves the site anyway and the proxy has mediated the policy and none of the
+  bytes. For `nodedist`, `index.tab` is the enforcement chokepoint every `nvm`
+  install resolves through, and `SHASUMS256.txt` is passed through byte-exact
+  because nvm verifies against it. `tests/heavy/nvm.sh` and
+  `tests/heavy/sdkman.sh` drive the real clients.
+
+- **`mise install` on a host with no route off the site (RFC 0008).** Pointing
+  mise at BatleHub was already documented, and none of it was an air gap: it
+  assumed the workstation could still reach whatever the rewrite table failed to
+  mention. `mise.lock` — which already records the exact URL and checksum of
+  every tool, per platform — becomes a plan the instance can be seeded from and
+  audited against: `batlehub mise plan` writes it, `mise seed` fetches every
+  entry through a connected instance and proves it matches the lock (non-zero on
+  a miss or a disagreeing digest, so it is usable as a CI gate), `mise export`
+  builds a signed, content-addressed bundle, and `mise import` verifies the
+  signature before reading a single blob. `[air_gap] enabled = true` makes a
+  proxy-mode registry never dial upstream: a miss fails fast, names itself and is
+  recorded, so the list of what the next bundle needs is produced by the estate
+  rather than guessed. `bundle_trusted_keys` is required with the mode, since an
+  air-gapped instance whose only content path is unauthenticated is worse than
+  one with no content path. Mise's own supply-chain verification — cosign, SLSA,
+  GitHub attestations, all on by default and all unreachable offline — moves to
+  the connected side, performed once at seed time and served as a verdict.
+
+- **A package that vanishes upstream is noticed, held and reported (RFC 0014).**
+  A proxy cache exists so an estate survives its upstreams, and this one survived
+  an upstream that was *down* while missing one that had *changed its mind*: when
+  a version was unpublished, BatleHub kept serving the cached artifact, said
+  nothing, and then deleted it at the next TTL sweep, because eviction had no
+  idea it was holding the last copy in the estate. A periodic audit now asks each
+  proxy/hybrid upstream whether what we cached from it is still there, confirms a
+  disappearance across several sweeps before believing it, notifies through the
+  channels the admin already configured, and exempts a confirmed disappearance
+  from TTL and idle eviction. What happens next is policy: `on_confirmed =
+  "audit"`, the default, reports and holds and changes nothing about serving,
+  while `on_confirmed = "block"` treats an unpublish as hostile and refuses it on
+  the wire. The two are the two honest readings of an unpublish.
+
+- **A closed registry can serve the one request that carries no credential
+  (RFC 0012).** Terraform authenticates the two JSON documents of a provider
+  install and then fetches the archive with no `Authorization` header — measured
+  against a real client, not read, and not a configuration mistake, since the
+  client has no mechanism to send one there. The documented workaround was
+  `anonymous = ["releases:read", "source:read"]`, which is per registry: opening
+  the last step of a provider install opened every read on it, every other
+  provider, every version listing, and in hybrid mode everything published
+  locally. `signed_downloads = true` on a registry now mints a signed, expiring,
+  single-coordinate URL *inside the document that was already authenticated*, and
+  the archive route accepts that signature as evidence of the authentication that
+  happened. The signature carries the identity that fetched the document and
+  verification runs the same rule chain as before: it authenticates a request, it
+  authorises nothing. It requires `[server.signed_urls].secret`, and setting it
+  without one is a startup error rather than a warning, because a registry that
+  believes it is closed and is not is the failure the feature exists to prevent.
+
+- **The documentation is published in French.** 66 pages under `/fr/` — the
+  operator's guide, the package manager's guide, the registry pages and the
+  operations runbooks. A translation lives at `docs/fr/<same path>` and declares
+  in its frontmatter the page it translates and the revision it was translated
+  from, so `task docs:i18n:check` fails when an English page moves ahead of its
+  translation instead of letting the two drift silently. Three spaces stay in
+  English by decision rather than by backlog: `contributing/`, read by people
+  changing the code, `rfc/`, which is a record and gets quoted rather than
+  rewritten in a second language, and the generated roadmap, whose French copy
+  would be a second canonical roadmap no gate could keep true. VitePress does not
+  fall back, so an untranslated page is linked at its English URL rather than
+  omitted into a 404.
+
+- **`--config` is repeatable, and each further file is a layer.** A deployment
+  can keep its credentials in a file with a different lifecycle from the rest of
+  its configuration — a Kubernetes Secret beside a ConfigMap, a `0600` file
+  beside a readable one — without giving up hot reload on either. The merge is on
+  the TOML *documents*, before deserialisation, so a later layer can complete a
+  table an earlier one opened; tables merge key by key, arrays of tables match on
+  `name` then `type`, everything else is replaced, and later layers win.
+  `BATLEHUB_CONFIG` takes the same list separated by `:` where only environment
+  variables are available. Every layer is watched and re-read on reload, and the
+  first layer stays the only one the config editor reads or rewrites. The
+  single-file case keeps its old code path deliberately, so its error spans
+  survive.
 
 ### Changed
 
@@ -253,7 +421,85 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   The home page opens with three cards instead of thirteen. Nothing was deleted
   — the full feature list is at [`docs/guide/features.md`](docs/guide/features.md).
 
+### Security
+
+- **The dependency invariants are enforced by a gate rather than by a comment.**
+  Four constraints held this tree's supply chain in place and lived only in
+  prose, so a routine bump could quietly undo one: `rsa` (RUSTSEC-2023-0071) kept
+  out by stubbing `sqlx-macros` and `sqlx-mysql`, `aws-sdk-s3` and `aws-config`
+  built without default features to avoid the legacy rustls line, `actix-web`
+  built with its own default set **minus `http2`** — that feature is the only
+  thing pulling `h2 0.3` (RUSTSEC-2026-0258), the fix is in 0.4.16, and there is
+  no 0.3 backport — and a lockfile floor of `lru >= 0.18.2`
+  (RUSTSEC-2026-0253). Nothing is lost with `http2`: this process never
+  terminates TLS, so its HTTP/2 would only ever be h2c, and real deployments
+  terminate it at the ingress. All four are now in the `[bans].deny` list of
+  `deny.toml`, so a bump that drags one back into the tree fails `cargo deny`
+  and CI rather than shipping.
+
+- **CVE detection runs on every layer, and nothing is suppressed.** Rust
+  dependencies through `cargo audit` and `cargo deny`, JavaScript through
+  `pnpm audit` for both pnpm projects, the source-repo reputation and lockfile
+  vulnerabilities of every dependency root through
+  [postmortem](https://github.com/mlab-sh/postmortem) with its findings in Code
+  Scanning, the built images through Trivy — the proxy image, the scan-worker
+  image and its GuardDog variant — blocking on fixable HIGH and CRITICAL, and
+  CodeQL, Semgrep and gitleaks over the source. The stance is no suppressions:
+  `advisories.ignore` stays empty in `deny.toml` and in `.cargo/audit.toml`, so
+  a finding is fixed or patched rather than muted. `task security` reproduces the
+  dependency and SBOM gate locally, and
+  [Security scanning](docs/contributing/security-scanning.md) carries the full
+  matrix.
+
 ### Fixed
+
+- **A package found by an upstream search was reported as not held, however
+  often it had been pulled.** An upstream search is a relevance search: npm
+  answers `left-pad` with `pad-left` and `lpad`, and neither contains the query.
+  The catalogue decided "do we already have this?" by looking for packages whose
+  name *contains the query*, so no fuzzy hit could ever be credited. It asks by
+  the names that came back now.
+- **A NuGet, PyPI or Go package the instance held was still reported as
+  missing.** NuGet's search answers `Newtonsoft.Json` where `dotnet restore`
+  stores `newtonsoft.json`, PyPI's answers `Pillow` where the simple index
+  stores `pillow`, and pkg.go.dev answers `github.com/BurntSushi/toml` where the
+  `go` client stores `github.com/!burnt!sushi/toml`. The catalogue compared the
+  two spellings exactly, so it offered **Fetch** on a package it already had and
+  the button answered `409`. Each kind's own naming rule now decides, and the
+  read path's normalisers share that one definition.
+- **A version fetched from the console stayed missing from the catalogue for ten
+  minutes.** The listing is served from a cache invalidated on a publish and on
+  a yank; a console fetch is a third write and was not on the list, so the row
+  went on offering to fetch a version the instance already held, and a second
+  press answered `409`. A package manager's download still does not invalidate
+  it, deliberately.
+- **Proxied extensions lost their upstream signature.** The gallery proxy
+  re-rendered every entry with a fixed six-asset list, so an extension
+  proxied from the Microsoft marketplace arrived unsigned and a current
+  editor refused to install it. The upstream's `VsixSignature` (and Open
+  VSX's `PublicKey`) are now relayed byte for byte, cached beside the VSIX,
+  and never re-signed.
+
+- **Setup snippets name the host the client actually talks to.** With host-based
+  routing (RFC 0001) a registry answers on its own subdomain, and on that host
+  the server prefixes `/proxy/{name}` to every path itself. Three things had not
+  followed:
+
+  - The Setup Guide's composite tabs (`mise`, and the `generic` mirror rules)
+    rewrite downloads to several registries but printed a single `~/.netrc`
+    stanza — the selected registry's. Every other host got no credentials and
+    would have 401'd. They now print one stanza per host referenced.
+  - Two snippets hand-built `https://{host}/proxy/{name}/…` (the pip.conf
+    embedded-credentials line, the apt `sources.list` alternative), which on a
+    registry host resolves to `/proxy/{name}/proxy/{name}/…` and 404s. Both now
+    derive from the registry's own base URL.
+  - `batlehub-cli setup detect` / `setup ide` ignored host routing entirely:
+    they never read `public_url` and always printed `{server}/proxy/<registry>`.
+    They now ask the server for the registry list, name the real registry, point
+    at its own host when it has one, and end with the matching `~/.netrc`
+    stanzas. `--offline` keeps the old placeholder output, which is also the
+    fallback when the server cannot be reached.
+
 
 - **Every hand-written table of contents in the documentation was broken, and
   had always been.** VitePress prefixes an anchor that starts with a digit with
@@ -634,7 +880,8 @@ First stable release.
 
 ---
 
-[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.1.0...HEAD
+[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.2.0...HEAD
+[1.2.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.1.0...v1.2.0
 [1.1.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.0.0...v1.1.0
 [1.0.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v0.5.0...v1.0.0
 [0.5.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v0.2.0...v0.5.0
