@@ -43,6 +43,9 @@ use batlehub_web::services::verify_inbound_hmac;
 /// failure is about the format and never about the sample.
 const SOURCE: &str = "acme-soc";
 const EXTERNAL_ID: &str = "SOC-2026-0412";
+// Both sides of the comparison are handed this same value, so the test asserts
+// what they sign and not what they sign it with. See
+// docs/internal/codeql-triage-2026-09-09.md for why it stays a literal.
 const SECRET: &str = "gate-secret";
 
 fn repo_root() -> PathBuf {

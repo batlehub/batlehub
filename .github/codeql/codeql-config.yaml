@@ -36,6 +36,10 @@ name: BatleHub CodeQL config
 #     `crates/web/src/services/reload/applier.rs` — the overlay `Vec`'s capacity
 #     hint, sized by the *number* of `--config` flags; the request supplies the
 #     config text, never the overlay list. (2026-09-09.)
+#   - `rust/hardcoded-cryptographic-value` ×3 on `crates/web/tests/flags.rs` and
+#     `crates/web/tests/flag_revoke_canonical.rs` — HMAC fixtures in the
+#     integration suite, one of which exists only to be rejected. Dismissed as
+#     *used in tests*, not as a false positive. (2026-09-09.)
 #
 # A query-filter would have been the easy fix and the wrong one:
 # `rust/path-injection` is a query this codebase needs live, because several

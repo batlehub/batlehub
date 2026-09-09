@@ -26,6 +26,11 @@ use batlehub_core::{
 
 const REG: &str = "npm-flagged";
 const SOURCE: &str = "soc";
+// A fixture, not a credential. The suite configures the flag source with this
+// value and signs its request bodies with it, so the assertions are about the
+// HMAC check rather than about the key; the deliberately wrong key further down
+// is a literal for the same reason. CodeQL reports both as hard-coded
+// cryptographic values — see docs/internal/codeql-triage-2026-09-09.md.
 const SECRET: &str = "a-key-from-the-vault";
 
 fn sign(secret: &str, body: &[u8]) -> String {
