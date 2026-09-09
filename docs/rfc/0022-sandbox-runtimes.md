@@ -740,9 +740,9 @@ Two new workspace members, sized for what runs inside the wall:
 
 ### 6.4 `server`
 
-- `builders.rs` — `build_sandbox_runtime(&SandboxConfig, &dyn
-  StorageBackend) -> anyhow::Result<Arc<dyn SandboxRuntime>>`, the one
-  `match` on `SandboxRuntimeKind`; the scanners are built with the result.
+- `builders.rs` — `build_sandbox_runtime(&SandboxConfig, &dyn StorageBackend)`,
+  returning `anyhow::Result<Arc<dyn SandboxRuntime>>`: the one `match` on
+  `SandboxRuntimeKind`; the scanners are built with the result.
   The default image resolution of §4.2 lives here.
 - The worker startup sequence gains the probes before the first pass, with
   the exit semantics of §4.3. No new subcommand: `batlehub` never runs
@@ -1008,9 +1008,9 @@ engine's default profile, which is the same list applied twice.
   shows as a sandbox `Crashed` rather than an extractor error in the worker
   log, and that a scanner which read something off the host root it should
   not have needed — there is none known — would now fail its probe.
-- **The worker image gains `batlehub-sandbox` and one `/opt/sandbox/
-  <scanner>` tree per scanner**, which `bwrap` needs. A worker image without
-  them fails the probe with the assertion named.
+- **The worker image gains `batlehub-sandbox` and one tree per scanner
+  under `/opt/sandbox/`**, which `bwrap` needs. A worker image without them
+  fails the probe with the assertion named.
 - **The probe is new and can stop a worker that started yesterday.** A
   deployment whose `bwrap` never actually held (the AppArmor case) has been
   holding every version as `SCAN_PENDING`; after upgrade its worker refuses
