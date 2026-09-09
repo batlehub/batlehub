@@ -20,6 +20,10 @@ paths = [
     # `curl -H "Authorization: Bearer <token>"` usage examples in the docs.
     '''docs/guide/installation\.md''',
     '''docs/guide/configuration\.md''',
+    # The French translations of those same two pages (added 2026-09-09), which
+    # carry the same `my-admin-token` placeholder in the same `curl -H` shape.
+    '''docs/fr/guide/installation\.md''',
+    '''docs/fr/guide/configuration\.md''',
     # The same two documents at the paths they had before RFC 0005 merged
     # `website/` into `docs/`. The scan walks full history (`fetch-depth: 0`),
     # and history keeps the old path, so allowlisting only the current one
