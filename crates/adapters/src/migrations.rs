@@ -236,6 +236,11 @@ pub fn embedded_migrator() -> Migrator {
             "missing_content_requested",
             "../migrations/058_missing_content_requested.sql"
         ),
+        mig!(
+            59,
+            "release_import_runs",
+            "../migrations/059_release_import_runs.sql"
+        ),
     ])
 }
 

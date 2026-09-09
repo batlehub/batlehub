@@ -20,6 +20,7 @@ pub mod nodedist;
 pub mod ownership_grants;
 pub mod proxy;
 pub mod pullers;
+pub mod pulls;
 pub mod quota;
 pub mod readme;
 pub mod release_import;
@@ -73,6 +74,7 @@ pub use local_registry::{
 pub use metrics::ProxyMetrics;
 pub use proxy::{ProxyRequest, ProxyResponse, ProxyService};
 pub use pullers::{pullers_for, refused_for, Puller};
+pub use pulls::{pulls_for, Pull};
 pub use quota::{
     QuotaCheck, QuotaEnforcement, QuotaService, QuotaState, RegistryQuotaConfig,
     RegistryQuotaStatus,

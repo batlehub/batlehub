@@ -167,6 +167,41 @@ impl BatleHubClient {
         Ok(body)
     }
 
+    /// What one identity pulled inside `since` (RFC 0018 §4.2): the transpose
+    /// of [`Self::pullers`].
+    ///
+    /// Returns the body verbatim, as its sibling does, so `--csv` prints what
+    /// the server rendered rather than something the CLI re-derived — the two
+    /// could then disagree, and the CSV is the artefact an auditor keeps.
+    pub async fn audit_pulls(
+        &self,
+        identity: &str,
+        registry: Option<&str>,
+        package: Option<&str>,
+        since: &str,
+        csv: bool,
+    ) -> Result<String> {
+        let mut path = format!(
+            "/api/v1/audit/pulls?identity={}&since={}&format={}",
+            super::auth::percent_encode(identity),
+            super::auth::percent_encode(since),
+            if csv { "csv" } else { "json" }
+        );
+        if let Some(r) = registry {
+            path.push_str(&format!("&registry={}", super::auth::percent_encode(r)));
+        }
+        if let Some(p) = package {
+            path.push_str(&format!("&package={}", super::auth::percent_encode(p)));
+        }
+        let resp = self.send(self.request(Method::GET, &path)).await?;
+        let status = resp.status();
+        let body = resp.text().await?;
+        if !status.is_success() {
+            anyhow::bail!("{status}: {body}");
+        }
+        Ok(body)
+    }
+
     /// The admin listing (RFC 0018 phase 5), raw: the caller prints it.
     pub async fn list_verdicts(
         &self,

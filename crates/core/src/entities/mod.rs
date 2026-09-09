@@ -14,6 +14,7 @@ pub mod permission;
 pub mod policy;
 pub mod readme;
 pub mod registry_kind;
+pub mod release_import;
 pub mod sbom;
 pub mod security;
 pub mod signing_key;
@@ -74,6 +75,7 @@ pub use registry_kind::{
     FetchArtifact, FetchSupport, ListingDocument, ListingSupport, ReadmeSupport, RegistryKind,
     UpstreamDetailSupport,
 };
+pub use release_import::ImportRun;
 pub use sbom::{ArtifactSbom, SbomFormat, SbomSource};
 pub use security::{
     coordinate_purl, worse_state, Escalation, Finding, FindingKind, InstallHookMode, ReasonCode,

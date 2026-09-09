@@ -333,6 +333,7 @@ impl TestServer {
             batlehub_adapters::in_memory::InMemoryLoginStateStore::arc(),
             HashMap::new(),     // warming_map
             Default::default(), // release_imports
+            None,               // import_history
             // One eviction service, so `admin cache evict` and `admin cache
             // coherence` have something to reach. `keep_latest_n` is set
             // because `/evict` answers `404` for a registry with no strategy
@@ -4289,5 +4290,306 @@ fn admin_config_validate_sends_the_file_to_the_server() {
     assert!(
         stderr.contains("HTTP 503") && stderr.contains("hot reload is disabled"),
         "stderr: {stderr}"
+    );
+}
+
+// ── admin import (RFC 0021 §6.5) ─────────────────────────────────────────────
+
+/// The test server registers no `[[release_imports]]`, so the handler answers
+/// `404` with the message it wrote for exactly this case. That is what makes
+/// this a real test of the client half: the request had to be built, signed,
+/// routed and decoded for that message to come back at all — a command that
+/// never reached the server would fail differently.
+#[test]
+fn admin_import_reports_when_no_import_is_configured() {
+    let srv = TestServer::start();
+    let (ok, _stdout, stderr) =
+        cli_cmd(&["admin", "import", REGISTRY], &srv.base_url(), AUTH_TOKEN);
+    assert!(!ok, "import should fail when none is configured");
+    assert!(stderr.contains("HTTP 404"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("release_imports"),
+        "the refusal should name what is missing: {stderr}"
+    );
+}
+
+/// `--tag` and `--repo` reach the request body rather than being parsed and
+/// dropped. `--repo` is the one that can be proven from outside: the handler
+/// distinguishes "no import configured at all" from "no import of *this repo*",
+/// and only the second message names the repo that was asked for.
+#[test]
+fn admin_import_sends_the_repo_selector() {
+    let srv = TestServer::start();
+    let (ok, _stdout, stderr) = cli_cmd(
+        &[
+            "admin",
+            "import",
+            REGISTRY,
+            "--tag",
+            "v1.0.0",
+            "--repo",
+            "acme/widgets",
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(!ok, "import should fail when none is configured");
+    assert!(stderr.contains("HTTP 404"), "stderr: {stderr}");
+}
+
+/// An unknown registry is refused before any import runs.
+#[test]
+fn admin_import_rejects_an_unknown_registry() {
+    let srv = TestServer::start();
+    let (ok, _stdout, stderr) = cli_cmd(
+        &["admin", "import", "no-such-registry"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(!ok, "import into an unknown registry should fail");
+    assert!(
+        stderr.contains("HTTP 40"),
+        "expected a 4xx refusal: {stderr}"
+    );
+}
+
+// ── auth logout (RFC 0011 §4.1.3) ────────────────────────────────────────────
+
+/// Run the CLI with both stores isolated: `XDG_CONFIG_HOME` for the profile,
+/// `BATLEHUB_HOME` for the contract file. The two live in different places on
+/// purpose, and a logout has to reach both.
+fn cli_logout(
+    args: &[&str],
+    server: &str,
+    token: &str,
+    config_dir: &std::path::Path,
+    home: &std::path::Path,
+) -> (bool, String, String) {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_batlehub-cli"))
+        .args(args)
+        .env("BATLEHUB_SERVER", server)
+        .env("BATLEHUB_TOKEN", token)
+        .env("BATLEHUB_HOME", home)
+        .env("HOME", home)
+        .env("XDG_CONFIG_HOME", config_dir)
+        .output()
+        .expect("failed to run batlehub-cli");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// The whole point: a login writes the profile, a `write-token-file` writes the
+/// contract, and one `logout` clears both.
+#[test]
+fn auth_logout_clears_the_profile_and_the_contract_entry() {
+    let srv = TestServer::start();
+    let config_dir = tempfile::tempdir().unwrap();
+    let home = contract_home();
+    let token_dir = tempfile::tempdir().unwrap();
+    let token_file = token_dir.path().join("sa-token");
+    std::fs::write(&token_file, "my-k8s-service-account-token").unwrap();
+
+    let (ok, _o, e) = cli_logout(
+        &[
+            "auth",
+            "login",
+            "--kubernetes-token-path",
+            token_file.to_str().unwrap(),
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+        config_dir.path(),
+        home.path(),
+    );
+    assert!(ok, "login should succeed: {e}");
+    let (ok, _o, e) = cli_logout(
+        &["auth", "write-token-file"],
+        &srv.base_url(),
+        "bh_pat_secret-value",
+        config_dir.path(),
+        home.path(),
+    );
+    assert!(ok, "write-token-file should succeed: {e}");
+
+    let config_path = config_dir.path().join("batlehub/config.toml");
+    let contract_path = home.path().join("state").join("vsx-token.json");
+    assert!(std::fs::read_to_string(&config_path)
+        .unwrap()
+        .contains("sa-token"));
+    assert!(std::fs::read_to_string(&contract_path)
+        .unwrap()
+        .contains("bh_pat_secret-value"));
+
+    let (ok, stdout, stderr) = cli_logout(
+        &["auth", "logout"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+        config_dir.path(),
+        home.path(),
+    );
+    assert!(ok, "logout should succeed: {stdout}{stderr}");
+
+    let config = std::fs::read_to_string(&config_path).unwrap();
+    assert!(
+        !config.contains("sa-token"),
+        "the profile still holds a credential: {config}"
+    );
+    let contract = std::fs::read_to_string(&contract_path).unwrap();
+    assert!(
+        !contract.contains("bh_pat_secret-value"),
+        "the contract still holds the credential: {contract}"
+    );
+}
+
+/// A laptop pointed at three servers keeps three contract entries. Logging out
+/// of one must not log you out of the others — the same invariant
+/// `writing_one_registry_leaves_every_other_entry_alone` pins from the write
+/// side.
+#[test]
+fn auth_logout_leaves_every_other_contract_entry_alone() {
+    let srv = TestServer::start();
+    let config_dir = tempfile::tempdir().unwrap();
+    let home = contract_home();
+    let path = home.path().join("state").join("vsx-token.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        serde_json::json!({
+            "version": 1,
+            "registries": {
+                "https://other.example.dev": { "token": "keep-me", "kind": "pat" }
+            },
+            "unknownTopLevel": "preserved"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let (ok, _o, e) = cli_logout(
+        &["auth", "write-token-file"],
+        &srv.base_url(),
+        "bh_pat_this-one",
+        config_dir.path(),
+        home.path(),
+    );
+    assert!(ok, "write-token-file should succeed: {e}");
+
+    let (ok, stdout, stderr) = cli_logout(
+        &["auth", "logout"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+        config_dir.path(),
+        home.path(),
+    );
+    assert!(ok, "logout should succeed: {stdout}{stderr}");
+
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        doc["registries"]["https://other.example.dev"]["token"], "keep-me",
+        "logging out of one server logged us out of another"
+    );
+    assert!(
+        doc["registries"][srv.base_url().trim_end_matches('/')].is_null(),
+        "this server's entry survived the logout"
+    );
+    assert_eq!(
+        doc["unknownTopLevel"], "preserved",
+        "an unknown field was discarded by the rewrite"
+    );
+}
+
+/// `--keep-contract` is for the case where the editor should keep working.
+#[test]
+fn auth_logout_can_leave_the_contract_alone() {
+    let srv = TestServer::start();
+    let config_dir = tempfile::tempdir().unwrap();
+    let home = contract_home();
+
+    let (ok, _o, e) = cli_logout(
+        &["auth", "write-token-file"],
+        &srv.base_url(),
+        "bh_pat_secret-value",
+        config_dir.path(),
+        home.path(),
+    );
+    assert!(ok, "write-token-file should succeed: {e}");
+
+    let (ok, stdout, stderr) = cli_logout(
+        &["auth", "logout", "--keep-contract"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+        config_dir.path(),
+        home.path(),
+    );
+    assert!(ok, "logout should succeed: {stdout}{stderr}");
+
+    let contract =
+        std::fs::read_to_string(home.path().join("state").join("vsx-token.json")).unwrap();
+    assert!(
+        contract.contains("bh_pat_secret-value"),
+        "--keep-contract cleared the contract anyway: {contract}"
+    );
+}
+
+/// Logging out with nothing stored says so rather than reporting a removal that
+/// did not happen.
+#[test]
+fn auth_logout_with_nothing_stored_says_so() {
+    let srv = TestServer::start();
+    let config_dir = tempfile::tempdir().unwrap();
+    let home = contract_home();
+
+    let (ok, stdout, stderr) = cli_logout(
+        &["auth", "logout"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+        config_dir.path(),
+        home.path(),
+    );
+    assert!(ok, "logout should succeed: {stdout}{stderr}");
+    assert!(
+        stdout.contains("Nothing to clear"),
+        "expected a 'nothing to clear' line: {stdout}"
+    );
+}
+
+/// A logout must not need the server. `resolve_token` can perform a network
+/// refresh before dispatch, so this pins the exemption: the command clears the
+/// profile against a server that is not there.
+#[test]
+fn auth_logout_works_against_an_unreachable_server() {
+    let config_dir = tempfile::tempdir().unwrap();
+    let home = contract_home();
+    std::fs::create_dir_all(config_dir.path().join("batlehub")).unwrap();
+    std::fs::write(
+        config_dir.path().join("batlehub/config.toml"),
+        "[default]\ntoken = \"stale-token\"\noidc_refresh_token = \"stale-refresh\"\n",
+    )
+    .unwrap();
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_batlehub-cli"))
+        .args(["auth", "logout"])
+        .env("BATLEHUB_SERVER", "http://127.0.0.1:1")
+        .env("BATLEHUB_HOME", home.path())
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .env_remove("BATLEHUB_TOKEN")
+        .output()
+        .expect("failed to run batlehub-cli");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "logout should not need the server: {stdout}{stderr}"
+    );
+
+    let config = std::fs::read_to_string(config_dir.path().join("batlehub/config.toml")).unwrap();
+    assert!(
+        !config.contains("stale-refresh"),
+        "the refresh token survived: {config}"
     );
 }

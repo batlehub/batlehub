@@ -302,6 +302,126 @@ pub async fn export_audit_log(
     }
 }
 
+// ── What one identity pulled (RFC 0018 §4.2) ─────────────────────────────────
+
+/// The default window when the caller names none.
+///
+/// `verdicts pullers` takes its default from the registry's own
+/// `pullers_window_days`, which this cannot: the question is scoped to an
+/// identity and spans every registry, so there is no per-registry policy to
+/// read. Thirty days matches that policy's own default, so the two reports
+/// answer over the same span unless an operator has said otherwise.
+const DEFAULT_PULLS_WINDOW: std::time::Duration = std::time::Duration::from_secs(30 * 86_400);
+
+#[derive(Deserialize, IntoParams)]
+pub struct PullsQuery {
+    /// Whose pulls: a user id, or `ip:<addr>` for an anonymous caller.
+    pub identity: String,
+    /// Narrow to one registry.
+    pub registry: Option<String>,
+    /// Narrow to one package name.
+    pub package: Option<String>,
+    /// `30d` / `12h` / `90m` back from now, or an RFC 3339 instant. Absent: 30 days.
+    pub since: Option<String>,
+    /// `csv` for the export; anything else is JSON.
+    pub format: Option<String>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct PullsResponse {
+    pub identity: String,
+    /// The start of the window the rows cover.
+    pub since: DateTime<Utc>,
+    pub pulls: Vec<batlehub_core::services::Pull>,
+}
+
+/// What one identity pulled inside a window (admin).
+///
+/// The transpose of `/api/v1/verdicts/{registry}/{name}/{version}/pullers`:
+/// that one pins a version and asks who took it, this one pins an identity and
+/// asks what it took. Both are `audit:read` at the instance tier and both read
+/// `access_events`, so an auditor handed either can reconcile it against the
+/// other.
+#[utoipa::path(
+    get,
+    path = "/api/v1/audit/pulls",
+    tag = "back-office",
+    params(PullsQuery),
+    responses(
+        (status = 200, description = "What the identity pulled; `?format=csv` selects CSV", content(
+            (PullsResponse = "application/json"),
+            (ProtocolDocument = "text/csv"),
+        )),
+        (status = 400, description = "`since` is not a window or an instant"),
+        (status = 403, description = "`audit:read` required"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[get("/api/v1/audit/pulls")]
+pub async fn audit_pulls(
+    query: web::Query<PullsQuery>,
+    identity: AuthIdentity,
+    admin_svc: web::Data<Arc<AdminService>>,
+    hot: web::Data<batlehub_core::services::hot_config::HotConfigLock>,
+) -> Result<HttpResponse, AppError> {
+    crate::handlers::back_office::require_verb(
+        &identity,
+        batlehub_core::entities::Action::AuditRead,
+        None,
+        &hot,
+    )
+    .await?;
+
+    let subject = query.identity.trim();
+    if subject.is_empty() {
+        return Err(AppError::bad_request(
+            "identity is required: a user id, or `ip:<addr>` for an anonymous caller",
+        ));
+    }
+
+    // The same parser `verdicts pullers` uses, so the two reports accept and
+    // refuse the same windows.
+    let since = crate::handlers::security::parse_since(
+        query.since.as_deref(),
+        DEFAULT_PULLS_WINDOW,
+        Utc::now(),
+    )?;
+
+    let pulls = batlehub_core::services::pulls_for(
+        admin_svc.repo.as_ref(),
+        subject,
+        since,
+        query.registry.as_deref(),
+        query.package.as_deref(),
+    )
+    .await
+    .map_err(AppError::from)?;
+
+    if query.format.as_deref() == Some("csv") {
+        let disposition = ContentDisposition {
+            disposition: DispositionType::Attachment,
+            parameters: vec![DispositionParam::Filename(format!(
+                "pulls-{}.csv",
+                subject.replace(['/', '\\', ':'], "-")
+            ))],
+        };
+        return Ok(HttpResponse::Ok()
+            .insert_header(disposition)
+            .content_type("text/csv; charset=utf-8")
+            .body(batlehub_core::services::pulls::to_csv(&pulls)));
+    }
+
+    let body = serde_json::to_string(&PullsResponse {
+        identity: subject.to_owned(),
+        since,
+        pulls,
+    })
+    .map_err(|e| CoreError::Other(anyhow::anyhow!("serialize: {e}")))?;
+    Ok(HttpResponse::Ok()
+        .content_type("application/json")
+        .body(body))
+}
+
 #[derive(Deserialize, IntoParams)]
 pub struct PurgeQuery {
     pub before: DateTime<Utc>,

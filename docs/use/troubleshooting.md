@@ -124,7 +124,7 @@ Trigger a config reload: `batlehub-cli admin config reload`.
 **Symptom:** Clients receive `401 Unauthorized` despite passing a token.
 
 **Check:**
-1. Confirm the token exists: `batlehub-cli auth list`.
+1. Confirm the token exists: `batlehub-cli auth token list`.
 2. Check if the token is expired: `batlehub-cli auth whoami`.
 3. Verify the `Authorization: Bearer <token>` header is being sent (or `X-NuGet-ApiKey` for NuGet clients — BatleHub normalises this internally).
 4. If using OIDC, check OIDC provider logs for the token exchange.
@@ -133,11 +133,15 @@ Trigger a config reload: `batlehub-cli admin config reload`.
 
 **Symptom:** The `watcher::spawn_periodic_vuln_scan` task fails and logs errors on startup in environments where the scanner binary is not installed.
 
-**Fix:** Either install the scanner (`mise install`), or disable the scan:
+**Fix:** Either install the scanner (`mise install`), or turn the scan off:
 ```toml
-[security]
-vuln_scan_enabled = false
+[vulnerability_scan]
+enabled = false
 ```
+
+Removing the `[vulnerability_scan]` section entirely does the same thing —
+`enabled` is `false` when the section is absent, so the periodic scan only ever
+runs where an operator asked for it.
 
 ## Getting more diagnostic information
 

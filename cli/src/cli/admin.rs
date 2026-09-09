@@ -6,8 +6,9 @@ use crate::api::{
     admin::{
         AccessSimulationResponse, AuditEntry, AuditQuery, BlockedUserEntry, BulkPackageResult,
         CoherenceReportDto, EvictionReportDto, ExposureQuery, ExposureResponse, FlagsQuery,
-        FlagsResponse, MissingQuery, NotificationChannelEntry, NotificationSubscriptionEntry,
-        RegistryHealthEntry, SimulateAccessRequest, StatsResponse, TeamNamespaceEntry,
+        FlagsResponse, ImportReportDto, MissingQuery, NotificationChannelEntry,
+        NotificationSubscriptionEntry, RegistryHealthEntry, SimulateAccessRequest, StatsResponse,
+        TeamNamespaceEntry,
     },
     version::RetentionReport,
     BatleHubClient,
@@ -66,6 +67,23 @@ pub enum AdminCommand {
     Cache {
         #[command(subcommand)]
         cmd: CacheCommand,
+    },
+    /// Run a registry's configured release imports now (RFC 0021)
+    ///
+    /// Imports the forge releases the registry's `[[release_imports]]` blocks
+    /// describe, whatever their interval says. Every import is a publish, so it
+    /// runs as the configured principal rather than as the caller.
+    Import {
+        /// Target registry name — the one that will hold the versions
+        registry: String,
+        /// Import this tag instead of what the configuration selects. The only
+        /// way to reach a pre-release deliberately: `latest` will not choose one.
+        #[arg(long)]
+        tag: Option<String>,
+        /// Only run the imports whose `repo` is this one. Absent: every import
+        /// configured into the registry.
+        #[arg(long)]
+        repo: Option<String>,
     },
     /// Global banner management
     Banner {
@@ -684,6 +702,11 @@ pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Resu
         AdminCommand::IpBlock { cmd } => handle_ip_block(cmd, client, json).await?,
         AdminCommand::Config { cmd } => handle_config_admin(cmd, client, json).await?,
         AdminCommand::Cache { cmd } => handle_cache(cmd, client).await?,
+        AdminCommand::Import {
+            registry,
+            tag,
+            repo,
+        } => handle_import(&registry, tag, repo, client, json).await?,
         AdminCommand::Banner { cmd } => handle_banner(cmd, client).await?,
         AdminCommand::Retention {
             registry,
@@ -1140,6 +1163,45 @@ fn print_coherence_report(registry: &str, report: &CoherenceReportDto) {
 ///
 /// The key list is what an operator reads before running a new size cap live —
 /// a count alone cannot be checked against the policy that produced it.
+/// RFC 0021 §6.5's `admin import`.
+async fn handle_import(
+    registry: &str,
+    tag: Option<String>,
+    repo: Option<String>,
+    client: &BatleHubClient,
+    json: bool,
+) -> Result<()> {
+    let report = client.import_registry(registry, tag, repo).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print_import_report(registry, &report);
+    }
+    Ok(())
+}
+
+/// The import report, rendered the way `warm` and `evict` render theirs.
+///
+/// Failures are listed rather than counted, because "3 errors" is not something
+/// an operator can act on and `tag / asset / reason` is. `skipped` is reported
+/// plainly and not as a problem: it is what makes a re-run free.
+fn print_import_report(registry: &str, report: &ImportReportDto) {
+    println!(
+        "Release import on {registry}: imported {}, skipped {}, errors {}",
+        report.imported, report.skipped, report.errors
+    );
+    if report.failures.is_empty() {
+        return;
+    }
+    println!();
+    let mut table = Table::new();
+    table.set_header(vec!["tag", "asset", "error"]);
+    for failure in &report.failures {
+        table.add_row(vec![&failure.tag, &failure.asset, &failure.error]);
+    }
+    println!("{table}");
+}
+
 fn print_eviction_report(registry: &str, report: &EvictionReportDto) {
     let mode = if report.dry_run {
         "dry run — nothing was evicted"

@@ -1595,6 +1595,36 @@
         ]
       }
     },
+    "/api/v1/admin/imports": {
+      "get": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "Every configured import, with each one's last run (admin).",
+        "description": "Unscoped, like `GET /api/v1/admin/warming` and for the same reason: the\nconsole's first question is *which registries have imports at all*, and a\npage that had to ask per registry would be N requests to render one table.",
+        "operationId": "list_all_imports",
+        "responses": {
+          "200": {
+            "description": "Every configured import and its last run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AllImportsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cache:warm` required"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/ip-blocks": {
       "get": {
         "tags": [
@@ -3402,6 +3432,49 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ImportResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`cache:warm` required"
+          },
+          "404": {
+            "description": "No import is configured into this registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/registries/{registry}/imports": {
+      "get": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "The imports configured into a registry, and each one's last run (admin).",
+        "operationId": "list_registry_imports",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "The registry imported into",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Configured imports and their last runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryImportsResponse"
                 }
               }
             }
@@ -5539,6 +5612,103 @@
           },
           "403": {
             "description": "`cache:warm` required"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/audit/pulls": {
+      "get": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "What one identity pulled inside a window (admin).",
+        "description": "The transpose of `/api/v1/verdicts/{registry}/{name}/{version}/pullers`:\nthat one pins a version and asks who took it, this one pins an identity and\nasks what it took. Both are `audit:read` at the instance tier and both read\n`access_events`, so an auditor handed either can reconcile it against the\nother.",
+        "operationId": "audit_pulls",
+        "parameters": [
+          {
+            "name": "identity",
+            "in": "query",
+            "description": "Whose pulls: a user id, or `ip:<addr>` for an anonymous caller.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "registry",
+            "in": "query",
+            "description": "Narrow to one registry.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "package",
+            "in": "query",
+            "description": "Narrow to one package name.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "`30d` / `12h` / `90m` back from now, or an RFC 3339 instant. Absent: 30 days.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "`csv` for the export; anything else is JSON.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What the identity pulled; `?format=csv` selects CSV",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullsResponse"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`since` is not a window or an instant"
+          },
+          "403": {
+            "description": "`audit:read` required"
           }
         },
         "security": [
@@ -17925,6 +18095,20 @@
           }
         }
       },
+      "AllImportsResponse": {
+        "type": "object",
+        "required": [
+          "registries"
+        ],
+        "properties": {
+          "registries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RegistryImports"
+            }
+          }
+        }
+      },
       "ArtifactBytes": {
         "type": "string",
         "format": "binary",
@@ -18941,6 +19125,38 @@
             "items": {
               "$ref": "#/components/schemas/ConfigWarning"
             }
+          }
+        }
+      },
+      "ConfiguredImport": {
+        "type": "object",
+        "description": "One configured import, and its last run.",
+        "required": [
+          "repo",
+          "assets"
+        ],
+        "properties": {
+          "assets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The asset globs a release is matched against."
+          },
+          "last_run": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ImportRun",
+                "description": "The last completed run, or `null` when none has happened.\n\nThe distinction the console exists to show: \"ran and found nothing new\"\nis a run with `imported: 0`, \"has not run\" is this being absent, and a\npage that could not tell them apart would be worse than no page."
+              }
+            ]
+          },
+          "repo": {
+            "type": "string",
+            "description": "The source repository, `owner/name`."
           }
         }
       },
@@ -20803,6 +21019,71 @@
           }
         }
       },
+      "ImportRun": {
+        "type": "object",
+        "description": "One completed run of one configured import.",
+        "required": [
+          "id",
+          "registry",
+          "repo",
+          "started_at",
+          "finished_at",
+          "imported",
+          "skipped",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "failures": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What failed, named rather than counted — the same reason the HTTP report\nlists them: \"3 errors\" is not something an operator can act on."
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "imported": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "registry": {
+            "type": "string",
+            "description": "The registry the versions landed in — what the console groups by."
+          },
+          "repo": {
+            "type": "string",
+            "description": "The source repository. One registry can have several imports configured\ninto it and they fail independently, so a run names which one it was."
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "triggered_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who asked. `None` is the scheduler: an interval that fired has no\noperator behind it, and naming one would be a lie an audit reads."
+          }
+        }
+      },
       "InboundEventsResponse": {
         "type": "object",
         "required": [
@@ -22093,6 +22374,59 @@
         "description": "A non-JSON registry protocol document — `maven-metadata.xml`,\n`updatePlugins.xml`, a PyPI simple-index HTML page, an APT `Release` file, a\nGo `go.mod`, a plain-text token or version list.\n\nAs with [`UpstreamDocument`], the format belongs to the registry protocol.\nThe `Content-Type` header identifies which one.",
         "example": "<registry protocol document>"
       },
+      "Pull": {
+        "type": "object",
+        "description": "One coordinate an identity pulled inside the window.\n\n`user_agent` and `source_ip` are **last seen**, not a distinct set. Both are\nmulti-valued across a window — a runner is redeployed, an agent is upgraded —\nand RFC 0018 §4.2 names them singular. The last value is the one an incident\nacts on (\"where is it pulling from *now*\"); the full set is a different\nreport, and pretending one field carries it would be worse than saying which\none this is.\n\nBoth are **empty for a local or hybrid registry's own downloads**, and that\nis a gap in the recording layer rather than in this aggregation:\n`LocalRegistryService::record_download` builds its event from the `Identity`\nalone, while the proxy path threads the address and agent through\n`ProxyRequest`. Until those two agree, an operator reading this report\nagainst a locally published package sees the columns and no values.",
+        "required": [
+          "registry",
+          "package_name",
+          "first_pull",
+          "last_pull",
+          "count"
+        ],
+        "properties": {
+          "client_user_agent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The User-Agent of the most recent pull, when one was recorded."
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "first_pull": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_pull": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "package_name": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "source_ip": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The address of the most recent pull, when one was recorded."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Absent when the event recorded no version — a whole-package coordinate."
+          }
+        }
+      },
       "Puller": {
         "type": "object",
         "description": "One identity's pulls of one version inside the window.",
@@ -22156,6 +22490,30 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "PullsResponse": {
+        "type": "object",
+        "required": [
+          "identity",
+          "since",
+          "pulls"
+        ],
+        "properties": {
+          "identity": {
+            "type": "string"
+          },
+          "pulls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Pull"
+            }
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The start of the window the rows cover."
           }
         }
       },
@@ -22798,6 +23156,42 @@
             ],
             "format": "int64",
             "description": "Sum of artifact sizes in bytes (null when no size data yet)."
+          }
+        }
+      },
+      "RegistryImports": {
+        "type": "object",
+        "required": [
+          "registry",
+          "imports"
+        ],
+        "properties": {
+          "imports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfiguredImport"
+            }
+          },
+          "registry": {
+            "type": "string"
+          }
+        }
+      },
+      "RegistryImportsResponse": {
+        "type": "object",
+        "required": [
+          "registry",
+          "imports"
+        ],
+        "properties": {
+          "imports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfiguredImport"
+            }
+          },
+          "registry": {
+            "type": "string"
           }
         }
       },

@@ -392,6 +392,23 @@ impl ContractFile {
     pub fn entry(&self, registry: &str) -> Option<&Entry> {
         self.registries.get(&normalize_origin(registry))
     }
+
+    /// Remove one registry's entry, leaving every other entry and every unknown
+    /// field alone — the same read-modify-write contract [`Self::set_entry`]
+    /// keeps, from the other direction.
+    ///
+    /// Returns whether there was one to remove, so a caller can say "nothing to
+    /// clear" rather than reporting a removal that did not happen.
+    ///
+    /// It removes the *entry*, never a file the entry points at: a
+    /// [`SourceObject::File`] names a path the CLI does not own — a projected
+    /// Kubernetes token, say — and deleting that would break the workload the
+    /// credential belongs to, not just this CLI's view of it.
+    pub fn clear_entry(&mut self, registry: &str) -> bool {
+        self.registries
+            .remove(&normalize_origin(registry))
+            .is_some()
+    }
 }
 
 /// The key an entry is filed under: the **origin** — scheme, host and port,

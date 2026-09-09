@@ -161,44 +161,52 @@ cd batlehub
 helm install batlehub ./helm/batlehub \
   --namespace batlehub \
   --create-namespace \
-  --set database.url="postgresql://batlehub:changeme@postgres-svc:5432/batlehub" \
-  --set "auth.tokens[0].value=my-admin-token" \
-  --set "auth.tokens[0].role=admin" \
-  --set "auth.tokens[0].userId=admin"
+  --set config.database.url="postgresql://batlehub:changeme@postgres-svc:5432/batlehub" \
+  --set "config.auth[0].type=token" \
+  --set "config.auth[0].tokens[0].value=my-admin-token" \
+  --set "config.auth[0].tokens[0].role=admin" \
+  --set "config.auth[0].tokens[0].user_id=admin"
 ```
+
+::: warning
+Every key lives under `config`, which is the object serialised verbatim to
+`config.toml`. Helm accepts a `--set` for a key the chart does not have without
+complaining, so a mistyped path here installs quietly with the defaults — the
+placeholder database and the `change-me-admin-token` admin token. Check what you
+are about to install with `helm template` before `helm install`.
+:::
 
 ### Recommended: values file
 
 Create a `my-values.yaml` for a reproducible installation:
 
 ```yaml
-database:
-  url: "postgresql://batlehub:changeme@postgres-svc:5432/batlehub"
+config:
+  database:
+    type: "postgresql"
+    url: "postgresql://batlehub:changeme@postgres-svc:5432/batlehub"
 
-auth:
-  tokens:
-    - value: "my-admin-token"
-      role: admin
-      userId: admin
+  auth:
+    - type: "token"
+      tokens:
+        - value: "my-admin-token"
+          role: "admin"
+          user_id: "admin"
 
-registriesRaw: |
-  [[registries]]
-  type = "npm"
-  name = "npm"
+  registries:
+    - type: "npm"
+      name: "npm"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
 
-  [registries.rbac]
-  anonymous = ["releases:read", "source:read"]
-  user      = ["releases:read", "source:read"]
-  admin     = ["*"]
-
-  [[registries]]
-  type = "cargo"
-  name = "internal"
-  mode = "local"
-
-  [registries.rbac]
-  user  = ["source:read"]
-  admin = ["*"]
+    - type: "cargo"
+      name: "internal"
+      mode: "local"
+      rbac:
+        user: ["source:read"]
+        admin: ["*"]
 
 ingress:
   enabled: true
@@ -229,21 +237,32 @@ helm upgrade batlehub ./helm/batlehub \
   -f my-values.yaml
 ```
 
-Any change to the values that affects the rendered `config.toml` will automatically trigger a Pod rollout via the `checksum/secret` annotation on the Deployment.
+Any change to the values that affects the rendered `config.toml` triggers a Pod rollout, via the `checksum/config` annotation on both Deployments. The `credentials` layer is deliberately outside that: it has no checksum annotation, so rotating it reloads in place instead. See [A separate config file for the credentials](#helm-credentials).
 
 ### S3 storage
 
 ```yaml
-storage:
-  type: s3
-  s3:
-    bucket: batlehub-artifacts
-    region: us-east-1
-    accessKeyId: "AKIAIOSFODNN7EXAMPLE"
-    secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+config:
+  storage:
+    type: "s3"
+    bucket: "batlehub-artifacts"
+    region: "us-east-1"
+    # endpoint_url and force_path_style are for MinIO, RustFS and the like;
+    # omit both for AWS S3.
 
 persistence:
   enabled: false   # PVC not needed with S3
+```
+
+The storage block carries no access key, because there is no such field: S3
+credentials come from the standard AWS SDK chain — the pod's IAM role, or
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` supplied through `env` or
+`envFrom`.
+
+```yaml
+envFrom:
+  - secretRef:
+      name: batlehub-s3-credentials   # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 ```
 
 ### Scan worker (RFC 0018) {#helm-worker}

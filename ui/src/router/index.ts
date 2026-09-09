@@ -310,6 +310,7 @@ export const router = createRouter({
           component: () => import("@/pages/AdminConfigReload.vue"),
         },
         { path: "operations/warming", component: () => import("@/pages/AdminWarming.vue") },
+        { path: "operations/imports", component: () => import("@/pages/AdminImports.vue") },
         { path: "observability/health", component: () => import("@/pages/AdminHealth.vue") },
         { path: "operations/sbom", component: () => import("@/pages/AdminSbom.vue") },
         { path: "operations/air-gap", component: () => import("@/pages/AdminAirGap.vue") },

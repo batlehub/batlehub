@@ -67,6 +67,42 @@ pub struct WarmRequest {
     pub paths: Vec<String>,
 }
 
+// ── Release import ────────────────────────────────────────────────────────────
+
+/// The server's `ImportRequest` (RFC 0021 §6.4).
+///
+/// Both fields are skipped when absent rather than sent as `null`: an absent
+/// `tag` means "whatever the configuration selects", and an absent `repo` means
+/// every import configured into the registry. Sending `null` would say the same
+/// thing to serde and something different to a reader of the wire.
+#[derive(Debug, Default, Serialize)]
+pub struct ImportRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
+
+/// One asset that did not import, named rather than counted.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ImportFailureDto {
+    pub tag: String,
+    pub asset: String,
+    pub error: String,
+}
+
+/// The server's `ImportResponse`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ImportReportDto {
+    pub imported: usize,
+    /// Assets whose version this registry already holds. Not an error: it is
+    /// what makes a scheduled import free to re-run.
+    pub skipped: usize,
+    pub errors: usize,
+    #[serde(default)]
+    pub failures: Vec<ImportFailureDto>,
+}
+
 // ── Audit log ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -489,6 +525,25 @@ impl BatleHubClient {
         self.post_no_body_json(&format!(
             "/api/v1/admin/registries/{registry}/evict?dry_run={dry_run}"
         ))
+        .await
+    }
+
+    /// Run a configured release import now (RFC 0021 §6.4).
+    ///
+    /// `post` rather than `post_no_body_json`, which `evict_registry` next door
+    /// uses: this endpoint takes a body, and `tag`/`repo` are how an operator
+    /// reaches a pre-release or one repository out of several.
+    pub async fn import_registry(
+        &self,
+        registry: &str,
+        tag: Option<String>,
+        repo: Option<String>,
+    ) -> Result<ImportReportDto> {
+        let body = ImportRequest { tag, repo };
+        self.post(
+            &format!("/api/v1/admin/registries/{registry}/import"),
+            &body,
+        )
         .await
     }
 

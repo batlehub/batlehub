@@ -149,7 +149,7 @@ If one replica is compromised, remove it from the load balancer before forensics
 ## Phase 4 — Recovery
 
 1. **Deploy patched image** — run `cargo build --release` or trigger CI; push patched container.
-2. **Verify health** — `GET /api/v1/health` returns `200` on all replicas.
+2. **Verify health** — `GET /healthz` returns `200` on all replicas. It is auth-exempt, which is what makes it usable from a probe or a script with no credential; `GET /api/v1/admin/health` is the detailed per-registry view and needs an admin token.
 3. **Unblock legitimate traffic** — remove IP blocks and unblock users that were collateral.
 4. **Monitor** — watch Prometheus for 30 minutes after restoration; confirm error rate returns to baseline.
 

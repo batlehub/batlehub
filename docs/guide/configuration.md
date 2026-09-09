@@ -67,7 +67,7 @@ curl -H "Authorization: Bearer my-admin-token" http://localhost:8080/...
 
 1. Every TOML file given to `--config` is parsed, in order, and merged into one document (default: `config.toml` in the working directory). See [Layered config files](#layered-config-files) below.
 2. Environment variables matching `PROXY_CACHE__<SECTION>__<FIELD>` are applied on top of the file values.
-3. The config is validated: `config_version` (if set) must not exceed what this binary supports, registry names must not be empty, and registry types must be one of `github`, `npm`, `cargo`, `openvsx`, `vscode-marketplace`, `goproxy`, `maven`, `terraform`, `rubygems`, `composer`, `pypi`, `conda`.
+3. The config is validated: `config_version` (if set) must not exceed what this binary supports, registry names must not be empty, and registry types must parse as one of the types in the `type` row of [the `type` row of the registry table](#_3-5-registries) below.
 
 ### Layered config files
 
@@ -845,7 +845,7 @@ deny_missing_timestamp = false   # set true to block packages with no timestamp
 |---|---|---|---|
 | `type` | string | yes | `"github"`, `"forgejo"`, `"gitlab"`, `"npm"`, `"cargo"`, `"nuget"`, `"openvsx"`, `"vscode-marketplace"`, `"goproxy"`, `"maven"`, `"terraform"`, `"rubygems"`, `"composer"`, `"pypi"`, `"conda"`, `"deb"`, `"rpm"`, `"pacman"`, `"jetbrains"`, `"jetbrains-marketplace"`, `"generic"`, `"nodedist"`, `"sdkman"` |
 | `name` | string | yes | Unique identifier; used in proxy URL paths |
-| `mode` | string | no | `"proxy"` (default), `"local"`, or `"hybrid"`. Supported for `cargo`, `npm`, `openvsx`, `vscode-marketplace`, `goproxy`, `maven`, `terraform`, `rubygems`, `composer`, `pypi`, `conda`, and `jetbrains-marketplace`. See [registry modes](#registry-modes). |
+| `mode` | string | no | `"proxy"` (default), `"local"`, or `"hybrid"`. Supported for `cargo`, `npm`, `nuget`, `openvsx`, `vscode-marketplace`, `jetbrains-marketplace`, `goproxy`, `maven`, `terraform`, `rubygems`, `composer`, `pypi`, `conda`, `deb`, `rpm`, and `pacman`. See [registry modes](#registry-modes). |
 | `upstreams` | string[] | no | Upstream URLs tried in order on cache miss; 404 from one falls through to the next. Defaults to the registry's built-in URL. Required for `hybrid` mode. |
 | `index_url` | string | no | Cargo only: sparse crate index URL. Defaults to `https://index.crates.io`. Required for `hybrid` mode and self-hosted Gitea/Forgejo registries. |
 | `broker_url` | string | no | **sdkman only.** The download broker, the second host of the one protocol. Defaults to `https://broker.sdkman.io`; `upstreams` is the candidates API (`https://api.sdkman.io/2`). An absolute http(s) URL; rejected on any other type ([RFC 0010](/rfc/0010-toolchain-managers) §4.5). |
@@ -861,7 +861,7 @@ deny_missing_timestamp = false   # set true to block packages with no timestamp
 
 #### Registry modes {#registry-modes}
 
-`cargo`, `npm`, `openvsx`, `vscode-marketplace`, `goproxy`, `maven`, `terraform`, `rubygems`, `composer`, `pypi`, `conda`, and `jetbrains-marketplace` registries support three operating modes, set via the `mode` field:
+`cargo`, `npm`, `nuget`, `openvsx`, `vscode-marketplace`, `jetbrains-marketplace`, `goproxy`, `maven`, `terraform`, `rubygems`, `composer`, `pypi`, `conda`, `deb`, `rpm`, and `pacman` registries support three operating modes, set via the `mode` field. The rest — the git forges, `jetbrains`, `generic`, `nodedist` and `sdkman` — are proxy-only, because they have no publish protocol to host:
 
 | Mode | Description |
 |------|-------------|
@@ -2392,6 +2392,83 @@ hold kept on each pass.
 
 ---
 
+### 3.8d `[notifications]` (optional)
+
+Where an event goes when something happens: a version quarantined, an artifact
+that disappeared upstream, a config reload. Absent, nothing is sent.
+
+```toml
+[notifications]
+enabled = true                 # default
+
+[[notifications.channels]]
+name = "ops-slack"
+type = "slack"
+url  = "https://hooks.slack.com/services/..."
+
+[[notifications.channels]]
+name    = "ci-webhook"
+type    = "webhook"
+url     = "https://ci.example.com/hooks/batlehub"
+secret  = "${WEBHOOK_SIGNING_SECRET}"   # signs each POST
+timeout_secs = 10                       # default
+
+[[notifications.inbound]]
+name   = "ci-scanner"
+secret = "${INBOUND_SECRET}"
+```
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `enabled` | bool | `true` | Present-but-off is how you keep the channels declared and stop sending |
+| `channels` | array | `[]` | Outbound. One `[[notifications.channels]]` block each |
+| `inbound` | array | `[]` | Webhooks this server *accepts*. One `[[notifications.inbound]]` block each |
+
+**Channel types.** `type` selects the shape, and the fields differ:
+
+| `type` | Required | Optional |
+|---|---|---|
+| `slack` | `name`, `url` | `timeout_secs` (10) |
+| `teams` | `name`, `url` | `timeout_secs` (10) |
+| `webhook` | `name`, `url` | `secret`, `timeout_secs` (10) |
+| `email` | `name`, `smtp_host`, `from`, `to` | `smtp_port` (587), `smtp_user`, `smtp_password`, `tls` (`true`), `timeout_secs` (10) |
+
+**Only the generic `webhook` signs what it sends.** With `secret` set, each POST
+carries `X-BatleHub-Signature-256: sha256=<hex>`, an HMAC-SHA256 over the body.
+Slack and Teams have no such field because their protocol has none: the secrecy
+of the URL is the whole of their authentication, so treat those URLs as
+credentials and inject them through `env` rather than writing them into the file.
+
+**Inbound webhooks.** Each `[[notifications.inbound]]` block accepts events from
+something else, verified against `X-Hub-Signature-256` when `secret` is set.
+Without a secret **any payload is accepted**, which is suitable only on a network
+where nothing untrusted can reach the port. A registry with
+[`[registries.security]`](#registries-security) makes the secret mandatory: a
+`security.*` event on an unsigned webhook would let anyone on the network deny
+packages.
+
+An inbound name must also be distinct from every
+[`[[flag_sources]]`](#flag-sources) name — the two share a namespace because they
+share the verification scheme.
+
+**Manual management via API:**
+
+- `GET /api/v1/admin/notifications/channels` — the configured outbound channels.
+  Never returns a URL or a secret.
+- `GET /api/v1/admin/notifications/inbound` — the inbound webhooks.
+- `GET` / `POST /api/v1/admin/notifications/subscriptions` — list and create.
+- `GET` / `PUT` / `DELETE /api/v1/admin/notifications/subscriptions/{id}` — one
+  subscription.
+- `POST /api/v1/admin/notifications/subscriptions/{id}/test` — send a test event
+  through it, which is the only way to prove a channel's URL and secret before an
+  incident does.
+
+The same three are `batlehub-cli admin notifications channels|list|delete`; see
+[the CLI reference](/use/cli#notifications). Channels themselves are config, so
+adding one is a config change and a reload, not an API call.
+
+---
+
 ### 3.9 `[subdomain_routing]` (optional)
 
 Every registry is always reachable at `/proxy/{name}/…`. This section adds a
@@ -2773,6 +2850,13 @@ batlehub authz explain vsx-local \
 **Run one now**, whatever the interval says, and import a pre-release by name:
 
 ```bash
+batlehub-cli admin import vsx-local
+batlehub-cli admin import vsx-local --tag v1.1.0-rc.1
+```
+
+The same over HTTP, for a pipeline with no CLI:
+
+```bash
 curl -fX POST -H "Authorization: Bearer $TOKEN" \
   "$HUB/api/v1/admin/registries/vsx-local/import"
 
@@ -2780,6 +2864,17 @@ curl -fX POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/js
   -d '{"tag": "v1.1.0-rc.1"}' \
   "$HUB/api/v1/admin/registries/vsx-local/import"
 ```
+
+**Read what is configured and when it last ran.** `GET /api/v1/admin/imports`
+lists every configured import with its last run; the per-registry form is
+`GET /api/v1/admin/registries/{registry}/imports`. Both are what the console's
+[Release Imports](/guide/administration) page reads.
+
+A `last_run` of `null` means the import has **not run**; a run with
+`imported: 0` means it ran and found nothing new. The two are different states
+and the interval makes both normal, which is why they are distinguishable rather
+than both being an empty cell. A run carries `triggered_by` when an operator
+asked, and omits it when the schedule fired.
 
 Asking needs `cache:warm`; the publish itself runs as the principal and needs
 that principal's own `releases:publish`. The response counts what was

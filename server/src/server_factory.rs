@@ -167,6 +167,10 @@ pub(super) struct ServerParams {
     pub warming_map: WarmingServiceMap,
     /// Target registry → the imports configured into it (RFC 0021).
     pub release_imports: ReleaseImportMap,
+    /// Where a run's history goes (RFC 0021 §6.5). `None` in a deployment with
+    /// no database and in every in-process test.
+    pub import_history:
+        batlehub_web::handlers::back_office::ops::release_import::ImportHistoryHandle,
     pub eviction_map: EvictionServiceMap,
     pub proxy_metrics: Arc<ProxyMetrics>,
     /// `None` when `[stats] metrics_enabled = false`: the recorder is never
@@ -240,6 +244,7 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
         login_states,
         warming_map,
         release_imports,
+        import_history,
         eviction_map,
         proxy_metrics,
         prometheus_handle,
@@ -294,6 +299,7 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
             Arc::clone(&login_states),
             warming_map.clone(),
             release_imports.clone(),
+            import_history.clone(),
             eviction_map.clone(),
             Arc::clone(&proxy_metrics),
             prometheus_handle.clone(),

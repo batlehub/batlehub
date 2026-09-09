@@ -1181,6 +1181,8 @@ Extensions view the same evening — §14.9 — and the `batlehub-vsx`
 extension on 2026-09-06, in the separate repository §11 q6 named (§14.11).
 Nothing of the cut is left.
 
+**`auth logout` was listed as shipped before it existed.** §4.1.3's command block claims it, and it was not in `AuthCommand` — an error in that list rather than a deferral anybody recorded. It is built now: it clears the profile's tokens and this server's contract entry, per profile, and nothing else. Local only, as §4.5.1 already said it would have to be — there is no end-session route and no refresh-token revocation, so the identity provider is not told. It never deletes a file a `from = "file"` entry points at, and it is exempt from the pre-dispatch token resolution, so logging out of a server that is down still works.
+
 **Deferred: `auth source` and `auth doctor`.** Not cut work but
 never-started work — conveniences over a format whose validation now happens
 at write time, which was the failure they were mostly there to explain.

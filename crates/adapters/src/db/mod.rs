@@ -66,6 +66,7 @@ pub mod advisory;
 
 #[cfg(feature = "db-postgres")]
 pub mod air_gap;
+pub mod release_import;
 
 // ── Domain subfolders, mirroring `batlehub_core::ports`'s auth/governance/ops/storage split ──
 // (registry-domain concerns stay flat above, as `packages`/`artifact_meta` already did before

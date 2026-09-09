@@ -69,6 +69,24 @@ pub enum AuthCommand {
         #[arg(long)]
         path: Option<PathBuf>,
     },
+    /// Discard the stored credential: the profile's tokens and this server's
+    /// contract entry
+    ///
+    /// **Local only.** There is no server-side session and no refresh-token
+    /// revocation endpoint, so a discarded OIDC refresh token stays valid at the
+    /// identity provider until it expires. Revoke it there if that matters.
+    Logout {
+        /// Config profile to clear (defaults to 'default')
+        #[arg(long)]
+        profile: Option<String>,
+        /// Clear a contract file other than the default one — the same `--path`
+        /// `write-token-file` writes to.
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Leave the contract file alone and clear only the profile.
+        #[arg(long)]
+        keep_contract: bool,
+    },
     /// Manually refresh a cached OIDC access token using the stored refresh token
     Refresh {
         /// OIDC provider name (defaults to the first configured provider)
@@ -183,6 +201,12 @@ pub async fn run(
             )
             .await?
         }
+
+        AuthCommand::Logout {
+            profile,
+            path,
+            keep_contract,
+        } => handle_auth_logout(client, profile, path, keep_contract, global_profile)?,
 
         AuthCommand::Refresh { provider, profile } => {
             handle_auth_refresh(client, provider, profile, global_profile).await?
@@ -609,6 +633,98 @@ async fn handle_auth_login(
         target_profile.unwrap_or("default")
     );
     println!("  {}", mask_token(&access_token));
+    Ok(())
+}
+
+/// RFC 0011 §4.1.3's `auth logout`.
+///
+/// Two stores hold a credential and this clears both: the profile in
+/// `~/.config/batlehub/config.toml`, and this server's entry in the contract
+/// file the editor reads. Neither is a server round trip — the function is
+/// synchronous on purpose, so logging out of a server that is down still works.
+///
+/// It never deletes a file an entry *points at*. A `from = "file"` entry names a
+/// path the CLI does not own — a projected Kubernetes token — and removing that
+/// would break the workload the credential belongs to rather than this CLI's
+/// view of it (§4.5.1).
+fn handle_auth_logout(
+    client: &BatleHubClient,
+    profile: Option<String>,
+    path: Option<PathBuf>,
+    keep_contract: bool,
+    global_profile: Option<&str>,
+) -> Result<()> {
+    let target_profile = profile.as_deref().or(global_profile);
+
+    // ── the profile store ───────────────────────────────────────────────────
+    let mut cfg = ConfigFile::load()?;
+    let entry = match target_profile {
+        Some(n) => cfg.profiles.get_mut(n),
+        None => Some(&mut cfg.default),
+    };
+    let cleared_profile = match entry {
+        Some(p) => {
+            // Every field a login or a refresh can write. Listing them rather
+            // than assigning `Profile::default()` keeps `server_url` and
+            // `registry`, which are settings and not credentials — a logout
+            // that forgot which server you talk to would be a worse command.
+            let had = p.token.is_some()
+                || p.oidc_refresh_token.is_some()
+                || p.kubernetes_token_path.is_some();
+            p.token = None;
+            p.oidc_refresh_token = None;
+            p.oidc_expires_at = None;
+            p.oidc_provider = None;
+            p.kubernetes_token_path = None;
+            had
+        }
+        // A `--profile` naming one that was never created holds no credential,
+        // which is the state logout is trying to reach.
+        None => false,
+    };
+    cfg.save()?;
+
+    // ── the contract file ───────────────────────────────────────────────────
+    let registry = contract::normalize_origin(&client.base_url);
+    let cleared_contract = if keep_contract {
+        false
+    } else {
+        let path = path.unwrap_or_else(contract::contract_path);
+        // `try_load`, as the writer does: rewriting a file we could not parse
+        // would discard another registry's credential.
+        match ContractFile::try_load(&path) {
+            Ok(mut doc) => {
+                let removed = doc.clear_entry(&registry);
+                if removed {
+                    doc.save(&path)?;
+                }
+                removed
+            }
+            // A contract file that does not parse is not something to silently
+            // rewrite, and not a reason to fail a logout that already cleared
+            // the profile.
+            Err(e) => {
+                eprintln!(
+                    "Warning: left {} alone — it is not a usable contract file: {e}",
+                    path.display()
+                );
+                false
+            }
+        }
+    };
+
+    let name = target_profile.unwrap_or("default");
+    match (cleared_profile, cleared_contract) {
+        (false, false) => println!("Nothing to clear for profile '{name}'."),
+        (true, false) => println!("Cleared the credential in profile '{name}'."),
+        (false, true) => println!("Cleared the contract entry for {registry}."),
+        (true, true) => println!(
+            "Cleared the credential in profile '{name}' and the contract entry for {registry}."
+        ),
+    }
+    if cleared_profile {
+        println!("  The identity provider was not told: revoke the session there if it matters.");
+    }
     Ok(())
 }
 

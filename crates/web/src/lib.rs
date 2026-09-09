@@ -517,7 +517,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
         },
         back_office::{
             access_check::admin_access_check,
-            audit::{audit_log, export_audit_log, purge_audit_log},
+            audit::{audit_log, audit_pulls, export_audit_log, purge_audit_log},
             authz_explain::admin_authz_explain,
             authz_shadow::authz_shadow,
             bulk::{
@@ -561,7 +561,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 quota::{
                     get_quota_for_user, list_quota, list_quota_for_registry, reset_quota_for_user,
                 },
-                release_import::import_registry,
+                release_import::{import_registry, list_all_imports, list_registry_imports},
                 upstream::{get_upstream_status, list_disappeared, recheck_upstream},
                 warming::{get_warming_status, warm_registry},
             },
@@ -1037,7 +1037,9 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(export_audit_log); // specific path before parameterised handlers
     cfg.service(audit_log);
     cfg.service(purge_audit_log);
-    // RFC 0002 (recast): pushed flags and the exposure report.
+    // The identity-scoped half of RFC 0018 §4.2, transposing `verdicts pullers`.
+    cfg.service(audit_pulls); // GET /api/v1/audit/pulls
+                              // RFC 0002 (recast): pushed flags and the exposure report.
     cfg.service(crate::handlers::back_office::exposure::export_exposure); // GET /api/v1/admin/exposure/export
     cfg.service(crate::handlers::back_office::exposure::exposure_report); // GET /api/v1/admin/exposure
     cfg.service(crate::handlers::back_office::flags::list_flags); // GET /api/v1/admin/flags
@@ -1052,6 +1054,8 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(crate::handlers::flags::revoke_flag); // DELETE /api/v1/flags/{source}/{external_id}
     cfg.service(get_warming_status);
     cfg.service(warm_registry);
+    cfg.service(list_all_imports); // GET, what the console reads
+    cfg.service(list_registry_imports); // GET, one registry
     cfg.service(import_registry);
     cfg.service(recheck_upstream); // POST /api/v1/admin/upstream/recheck (RFC 0014 §4.6)
     cfg.service(list_disappeared); // GET  /api/v1/admin/upstream/disappeared
@@ -1476,6 +1480,10 @@ pub fn configure_app(
     // (RFC 0021). Empty in a deployment that configures none, which is every
     // deployment until an operator writes the block.
     release_imports: handlers::back_office::ops::release_import::ReleaseImportMap,
+    // Where a run's history goes. `None` in every in-process test and in a
+    // deployment with no database: a history that is not recorded must not turn
+    // a working import into a failed request.
+    import_history: handlers::back_office::ops::release_import::ImportHistoryHandle,
     eviction_map: EvictionServiceMap,
     proxy_metrics: Arc<ProxyMetrics>,
     prometheus_handle: Option<PrometheusHandle>,
@@ -1529,6 +1537,7 @@ pub fn configure_app(
         cfg.app_data(web::Data::new(Arc::clone(&refresh_limiter)));
         cfg.app_data(web::Data::new(warming_map.clone()));
         cfg.app_data(web::Data::new(release_imports.clone()));
+        cfg.app_data(web::Data::new(import_history.clone()));
         cfg.app_data(web::Data::new(eviction_map.clone()));
         cfg.app_data(web::Data::new(proxy_metrics.clone()));
         if let Some(ref h) = prometheus_handle {

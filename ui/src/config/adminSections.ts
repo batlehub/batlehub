@@ -60,6 +60,10 @@ export const NAMESPACES_TABS = [
 export const OPERATIONS_TABS = [
   { to: "/admin/operations/config-reload", label: "adminNav.configReload" },
   { to: "/admin/operations/warming", label: "adminNav.warming" },
+  // RFC 0021 §6.5: an import is an operation you perform, and the page's other
+  // half — when it last ran — is what the scheduler's log line could not answer
+  // from a browser. Beside warming, which it is the publish-side twin of.
+  { to: "/admin/operations/imports", label: "adminNav.releaseImports" },
   // RFC 0004 Phase 5: the SBOM export observes nothing — it has no server-state
   // read at all, and nothing on it changes when the instance changes. It is an
   // operation you perform, which is this section, not something you watch.

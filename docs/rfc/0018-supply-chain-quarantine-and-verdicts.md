@@ -2,7 +2,7 @@
 
 | Field       | Value                                                                                 |
 | ----------- | ------------------------------------------------------------------------------------- |
-| Status      | **Implemented** — every phase of §12 landed (§13.1–§13.7): the quarantine, the scanners and the sandbox, the rescan and the flip alert, the external scanners and the admin surface, each proven in process and, for the client-facing claims, by `tests/heavy/quarantine.sh`. §11 q1 is answered by the spike table; q2 is measured per tool as its registries opt in |
+| Status      | **Implemented** — every phase of §12 landed (§13.1–§13.7); phase 4's `audit pulls` followed later (§13.10), with the "reports audit themselves" clause of §4.2 declined there: the quarantine, the scanners and the sandbox, the rescan and the flip alert, the external scanners and the admin surface, each proven in process and, for the client-facing claims, by `tests/heavy/quarantine.sh`. §11 q1 is answered by the spike table; q2 is measured per tool as its registries opt in |
 | Short       | Supply-chain quarantine and verdicts                                                  |
 | Settles     | How an artifact is scanned before it is served, who may see why it is held, and how the SOC can intervene |
 | Author      | Maxime <maxleriche.60@gmail.com>                                                       |
@@ -1841,3 +1841,58 @@ directory §10 asked for — where the built binary started with `--roles
 worker` alone drains a queue seeded at `Backfill` priority against a
 Postgres and a fake OSV, and records the verdict. Every phase of §12 has
 now landed.
+
+### 13.9 `audit pulls` was not built, and what answers its question instead
+
+Phase 4 of §12 lists "`pullers`/`audit pulls` endpoints + CSV export" and §6.6
+lists `batlehub audit pulls --identity … --since … --csv` among the CLI
+deliverables. Only the first of each pair shipped.
+
+`batlehub-cli verdicts pullers <registry>:<name>@<version> [--since] [--csv]`
+exists and is §6.6's other command, verbatim, CSV included. It is
+**version-scoped**: it answers *who pulled this version*.
+
+`audit pulls` asked the other direction — *what did this identity pull* — and has
+no home. Two commands each hold half of it: `admin audit-log --user` has the
+identity filter and no CSV, and `admin export-audit-log --format csv` has the
+export and no identity filter. Neither is a substitute, and there is no
+`/api/v1/audit/pulls` route.
+
+Recorded rather than fixed because the version-scoped question is the one the
+flip alert asks, and it is answered. The identity-scoped one is a report an
+auditor wants, which is a different reader with a different deadline; building it
+means a server endpoint, not a client command.
+
+### 13.10 `audit pulls`, and the one clause of §4.2 that was declined
+
+Built after the fact, on the shape §13.9 described. `GET /api/v1/audit/pulls`
+and `batlehub-cli audit pulls --identity … --since … --csv`, transposing
+`verdicts pullers`: the identity is the filter and the coordinate is the group
+key, where its sibling has them the other way round.
+
+What was reused rather than copied: `EventFilter` expresses the whole predicate,
+so no repository method, adapter or migration was needed; the offset pager was
+**hoisted** out of `pullers.rs` into `read_all`, because a second copy of a
+bounded walk is a second place for the bound to drift; and `parse_since` became
+`pub(crate)`, so the two reports accept and refuse the same windows — including
+the overflow guard, which the new endpoint inherited without knowing about it.
+
+Two things §4.2 left open, decided here:
+
+- **`client_user_agent` and `source_ip` are last seen**, not a distinct set.
+  Both are multi-valued across a window and §4.2 names them singular; the last
+  value is the one an incident acts on. An event that recorded neither does not
+  blank what an earlier one knew.
+- **The reports do not audit themselves.** §4.2 says they do. None of the four
+  readers ever has — not `list_pullers`, not `audit_log`, not
+  `export_audit_log` — so honouring it here would have meant either one
+  inconsistent endpoint or retrofitting three others. Declined, and recorded
+  rather than left as a sentence the code contradicts.
+
+One limit worth naming, and it is not in this report: a local or hybrid
+registry's own downloads reach the audit log **without** an address or an agent,
+because `LocalRegistryService::record_download` builds its event from the
+`Identity` alone while the proxy path threads both through `ProxyRequest`. The
+columns are therefore empty on exactly the deployments that publish their own
+packages. Fixing it means changing the local read path's signatures, which is its
+own change.

@@ -197,7 +197,7 @@ because the block is evaluated when the URL is redeemed.
 
 Three consequences worth knowing before you turn it on:
 
-- **`GET /api/v1/audit` names the user** for provider downloads, where it
+- **`GET /api/v1/admin/audit-log` names the user** for provider downloads, where it
   previously recorded no actor at all — with `anonymous` granted, the rule chain
   was evaluating *anonymous*, so group grants never applied and quota was
   charged to nobody.

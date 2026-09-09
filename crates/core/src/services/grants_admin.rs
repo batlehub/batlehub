@@ -363,7 +363,7 @@ impl GrantAdminService {
             .map_err(|e: SubjectParseError| CoreError::InvalidInput(e.to_string()))?;
 
         // Ownership rows are the projection's to remove. Letting this delete one
-        // would make `admin owner rm` the only way to restore it, and the next
+        // would make `owners remove` the only way to restore it, and the next
         // owner change would silently put it back — the same race §4.3 refuses
         // on the write side, arriving through the delete.
         self.refuse_ownership_removal(target, &matcher).await?;
@@ -440,7 +440,7 @@ impl GrantAdminService {
         }
         Err(CoreError::Conflict(format!(
             "'{}' holds {} on '{}' through ownership; this write would drop {}. \
-             Use `admin owner rm` to change ownership.",
+             Use `batlehub-cli owners remove` to change ownership.",
             matcher,
             OWNERSHIP_ACTIONS
                 .iter()
@@ -466,7 +466,7 @@ impl GrantAdminService {
         }
         Err(CoreError::Conflict(format!(
             "'{}' holds this grant through ownership of '{}'; remove the owner with \
-             `admin owner rm` instead",
+             `batlehub-cli owners remove` instead",
             matcher, target.package
         )))
     }
@@ -1095,7 +1095,7 @@ mod tests {
             unreachable!()
         };
         assert!(
-            msg.contains("admin owner rm"),
+            msg.contains("owners remove"),
             "the refusal has to name the way to do it: {msg}"
         );
     }

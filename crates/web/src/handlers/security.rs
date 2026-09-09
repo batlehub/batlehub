@@ -493,7 +493,11 @@ pub struct PullersResponse {
 }
 
 /// `30d` / `12h` / `90m` / `3600s` / `3600` back from `now`, or RFC 3339.
-fn parse_since(
+///
+/// `pub(crate)` because the identity-scoped `audit pulls` reader takes the same
+/// windows and must reject the same strings the same way. Two copies of a
+/// parser whose 400s are part of the API is two places for them to diverge.
+pub(crate) fn parse_since(
     raw: Option<&str>,
     default_window: std::time::Duration,
     now: chrono::DateTime<chrono::Utc>,

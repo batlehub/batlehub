@@ -11,6 +11,7 @@ pub mod artifact_meta;
 pub mod forge;
 pub mod package_repo;
 pub mod readme_repo;
+pub mod release_import;
 pub mod sbom;
 pub mod security;
 pub mod stats_history;

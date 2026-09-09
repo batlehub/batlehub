@@ -65,8 +65,21 @@ async fn main() -> Result<()> {
 
     // If the user supplied --token, use it directly; otherwise auto-resolve
     // (reads K8s token file or refreshes expiring OIDC token).
+    //
+    // `logout` is exempt: `resolve_token` can perform a network refresh, so a
+    // logout against a server that is down would fail before clearing anything
+    // — and refreshing a credential that is about to be discarded is work for
+    // nothing even when the server answers.
+    let logging_out = matches!(
+        cli.command,
+        Command::Auth {
+            cmd: cli::auth::AuthCommand::Logout { .. }
+        }
+    );
     let effective_token = if let Some(ref t) = cli.token {
         Some(t.clone())
+    } else if logging_out {
+        None
     } else {
         api::auth::resolve_token(&base_url_for_refresh, cli.profile.as_deref(), &mut cfg).await?
     };
@@ -92,6 +105,7 @@ async fn main() -> Result<()> {
         Command::Proxy { cmd } => proxy::run(cmd).await?,
         Command::Vsx { cmd } => vsx::run(cmd, cli.token.as_deref()).await?,
         Command::Why(args) => security::run_why(args, &client, cli.json).await?,
+        Command::Audit { cmd } => security::run_audit(cmd, &client, cli.json).await?,
         Command::Verdicts { cmd } => security::run_verdicts(cmd, &client, cli.json).await?,
         Command::Wait(args) => {
             let code = security::run_wait(args, &client, cli.json).await?;

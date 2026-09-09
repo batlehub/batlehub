@@ -2,7 +2,7 @@
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Implemented                                                   |
+| Status      | **Implemented** — phases 1–3 and 5 of §12 landed: the CLI command (§13.5) and the console block with its last run (§13.6). Still outstanding and recorded as such in §12: signature passthrough (phase 4) and the heavy suite (phase 6) |
 | Short       | releases into registries                                      |
 | Settles     | How an artifact published as a forge release asset reaches the protocol registry its clients read |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -481,7 +481,7 @@ makes it a server-side contract.
 | 2 | The config block, its validation including the admin refusal, and the polled interval | **Landed** (§13.2) |
 | 3 | The other ecosystems, on `detect_meta`'s rules moved into `core` | **Landed** (§13.3) |
 | 4 | Signature passthrough when the release carries one (§11 q7's decision) | Not started — the registry's own signature runs today (§13.1) |
-| 5 | The CLI command and the console block | Not started; the docs page landed with phase 2 |
+| 5 | The CLI command and the console block | **Landed** (§13.5, §13.6). The docs page landed with phase 2 |
 | 6 | `tests/heavy/release_import.sh` — a real release into a real editor | Not started |
 
 ---
@@ -563,3 +563,52 @@ about the extension and its `.vsix` downloads through the route a client uses.
 Not proven the way this project means it: no real client has been through it.
 Phase 6 is a real release imported into a real Extensions view, and until that
 runs this is a feature whose tests pass.
+
+### 13.5 The CLI half, and what it did not need
+
+`batlehub-cli admin import <registry> [--tag] [--repo]` (§6.5) is a client
+change and nothing else: `POST /api/v1/admin/registries/{registry}/import`
+already existed from phase 1, already carried `tag` and `repo`, and already
+returned the report. The command is a clap variant in `cli/src/cli/admin.rs`, a
+client method in `cli/src/api/admin.rs`, and a printer beside the one `evict`
+uses — which is what §6.5 meant by "rendered the way `warm` renders its own".
+
+Failures are **listed rather than counted**. The endpoint returns
+`failures: [{tag, asset, error}]` and the table prints every row, because "3
+errors" is not something an operator can act on and a tag with a reason is.
+`skipped` is reported plainly and not as a problem: it is the count that makes a
+re-run free, which is the property the polled interval depends on.
+
+The console block of §6.5 needed more than the command did; see §13.6.
+
+### 13.6 The console block needed two endpoints and a table
+
+§6.5 is one sentence — *"the registry's admin page grows the import block and
+its last run"* — and each half of it was missing something the POST could not
+supply.
+
+**There was no GET.** Warming's page renders because `/api/v1/admin/warming`
+lists what is configured. Imports had only the POST, so a page had no way to
+learn which registries have `[[release_imports]]`, from which repo, with which
+globs; it would have asked the operator to type a name and eaten `404`s.
+`GET /api/v1/admin/imports` is the unscoped listing the console reads, and
+`GET /api/v1/admin/registries/{registry}/imports` the scoped one.
+
+**There was no record of any run.** No table, no audit row, no metric, no field
+on the service — a `tracing::info!` and nothing else. The scheduler's own comment
+had already named what that costs: *"'the import ran and found nothing new' and
+'the import has not run' are the two states an operator needs to tell apart"*,
+and neither is answerable from a browser. Migration `059_release_import_runs`
+records one row per run, **per repo**: a registry with two imports configured
+into it has two histories, and one row covering both would hide the one that has
+been failing behind the one that has not.
+
+Both callers record. Recording only the manual path would have made the page say
+"never run" about a registry whose imports fire on an interval — the exact state
+the log line exists to distinguish, got wrong by the page meant to show it. A
+scheduled run carries `triggered_by: null`, because an interval that fired has no
+operator behind it and naming one would be a lie an audit reads.
+
+The write is fire-and-forget on both paths: an import that published its versions
+and then failed to write its own history row has still done what it was asked,
+and failing the request over the row would be the tail wagging the dog.

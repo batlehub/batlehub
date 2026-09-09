@@ -99,6 +99,7 @@ pub(super) fn spawn_startup_warming(config: &AppConfig, warming_map: &WarmingSer
 pub(super) fn spawn_release_imports(
     config: &AppConfig,
     imports: &batlehub_web::handlers::back_office::ops::release_import::ReleaseImportMap,
+    history: Option<Arc<dyn batlehub_core::ports::ImportHistory>>,
 ) {
     for imp in &config.release_imports {
         let Some(secs) = imp.interval_secs.filter(|s| *s > 0) else {
@@ -112,11 +113,13 @@ pub(super) fn spawn_release_imports(
             continue;
         };
         let (into, repo) = (imp.into.clone(), imp.repo.clone());
+        let history = history.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(secs));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 ticker.tick().await;
+                let started_at = chrono::Utc::now();
                 let report = svc.import().await;
                 // Logged at info even when nothing happened: "the import ran
                 // and found nothing new" and "the import has not run" are the
@@ -135,6 +138,23 @@ pub(super) fn spawn_release_imports(
                         tag = %failure.tag, asset = %failure.asset, error = %failure.error,
                         "release import: asset did not import"
                     );
+                }
+                // The console reads this. Recording only the manual runs would
+                // make the page say "never run" about a registry whose imports
+                // fire on an interval, which is the state the log line above
+                // exists to distinguish and the page would then get wrong.
+                //
+                // `triggered_by: None` is the scheduler: an interval that fired
+                // has no operator behind it.
+                if let Some(history) = history.as_ref() {
+                    let run = batlehub_core::entities::ImportRun::from_report(
+                        &into, &repo, started_at, &report, None,
+                    );
+                    // Fire-and-forget: an import that published and then failed
+                    // to write its own history row has still done its job.
+                    if let Err(e) = history.record(&run).await {
+                        tracing::warn!(error = %e, "release import: history write failed");
+                    }
                 }
             }
         });

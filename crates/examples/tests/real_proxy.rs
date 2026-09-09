@@ -442,6 +442,7 @@ impl RealProxy {
             batlehub_adapters::in_memory::InMemoryLoginStateStore::arc(),
             HashMap::new(),     // warming_map
             Default::default(), // release_imports
+            None,               // import_history
             HashMap::new(),     // eviction_map
             Arc::new(ProxyMetrics::new(&[])),
             None,
@@ -596,6 +597,7 @@ impl RealProxy {
             batlehub_adapters::in_memory::InMemoryLoginStateStore::arc(),
             HashMap::new(),     // warming_map
             Default::default(), // release_imports
+            None,               // import_history
             HashMap::new(),     // eviction_map
             Arc::new(ProxyMetrics::new(&[])),
             None,

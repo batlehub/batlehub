@@ -129,6 +129,7 @@ const ADMIN_ROUTES = [
   "/admin/namespaces/beta-channel",
   "/admin/operations/config-reload",
   "/admin/operations/warming",
+  "/admin/operations/imports",
   "/admin/observability/health",
   "/admin/operations/sbom",
   "/admin/observability/audit-log",

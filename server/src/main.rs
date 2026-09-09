@@ -672,6 +672,15 @@ async fn main() -> Result<()> {
             repo.pool(),
         ))),
     };
+    // RFC 0021 §6.5: the console's "last run". Always constructed, like the
+    // air-gap stores above and for the same reason — the table exists whether
+    // or not any `[[release_imports]]` is configured, and one that is added
+    // later has its history from the first run rather than from the next
+    // restart.
+    let import_history: Arc<dyn batlehub_core::ports::ImportHistory> = Arc::new(
+        batlehub_adapters::db::release_import::PgImportHistory::new(repo.pool()),
+    );
+
     let security_stores = hot_config::SecurityStores {
         advisories: Some(Arc::clone(&advisory_repo)),
         verdicts: Some(Arc::new(batlehub_adapters::db::PgVerdictRepository::new(
@@ -902,7 +911,7 @@ async fn main() -> Result<()> {
         "listening"
     );
     watcher::spawn_startup_warming(&config, &warming_map);
-    watcher::spawn_release_imports(&config, &release_imports);
+    watcher::spawn_release_imports(&config, &release_imports, Some(Arc::clone(&import_history)));
 
     // Hourly cache-statistics rollup, so the dashboard's trend survives a
     // deploy (RFC 0004 §2.3). `history_enabled = false` restores the previous
@@ -1002,6 +1011,7 @@ async fn main() -> Result<()> {
         login_states,
         warming_map,
         release_imports,
+        import_history: Some(Arc::clone(&import_history)),
         eviction_map,
         proxy_metrics,
         prometheus_handle,

@@ -112,6 +112,19 @@ async fn app_with_import() -> impl actix_web::dev::Service<
     Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
     Error = actix_web::Error,
 > {
+    app_with_import_history(None).await
+}
+
+/// The same, with somewhere for a run's history to go — what the console
+/// endpoints read (RFC 0021 §6.5). `None` is the app every other test here
+/// builds: an import that records no history still imports.
+async fn app_with_import_history(
+    history: batlehub_web::handlers::back_office::ops::release_import::ImportHistoryHandle,
+) -> impl actix_web::dev::Service<
+    actix_http::Request,
+    Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
+    Error = actix_web::Error,
+> {
     let parts = local_registry_app_parts(REG, "openvsx", RegistryMode::Local, None);
     let local_svc = Arc::clone(&parts.local_svc);
 
@@ -161,14 +174,139 @@ async fn app_with_import() -> impl actix_web::dev::Service<
 
     let defaults = ConfigureAppDefaults {
         release_imports: HashMap::from([(REG.to_owned(), vec![svc])]),
+        import_history: history,
         ..Default::default()
     };
     build_local_registry_app_with_defaults(parts, batlehub_web::CargoIndexMap::default(), defaults)
         .await
 }
 
+/// An app whose runs are remembered.
+async fn with_history() -> impl actix_web::dev::Service<
+    actix_http::Request,
+    Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
+    Error = actix_web::Error,
+> {
+    app_with_import_history(Some(Arc::new(
+        batlehub_adapters::in_memory::release_import::InMemoryImportHistory::new(),
+    )))
+    .await
+}
+
 fn import_uri() -> String {
     format!("/api/v1/admin/registries/{REG}/import")
+}
+
+/// The distinction the console exists to draw, and the reason there is a table
+/// at all: `server/src/watcher.rs` says "'the import ran and found nothing new'
+/// and 'the import has not run' are the two states an operator needs to tell
+/// apart", and before this both were an absent row.
+#[actix_web::test]
+async fn the_last_run_is_absent_until_one_runs_and_named_after() {
+    let app = with_history().await;
+
+    // Configured, never run.
+    let resp = call_service(
+        &app,
+        TestRequest::get()
+            .uri("/api/v1/admin/imports")
+            .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = read_body_json(resp).await;
+    let import = &body["registries"][0]["imports"][0];
+    assert_eq!(import["repo"], "batleforc/batlehub-vsx", "{body}");
+    assert!(
+        import["last_run"].is_null(),
+        "a registry that has never imported must say so: {body}"
+    );
+
+    // Run it.
+    let resp = call_service(
+        &app,
+        TestRequest::post()
+            .uri(&import_uri())
+            .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+            .set_json(json!({}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+
+    // Now it is named, with who asked.
+    let resp = call_service(
+        &app,
+        TestRequest::get()
+            .uri("/api/v1/admin/imports")
+            .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+            .to_request(),
+    )
+    .await;
+    let body: Value = read_body_json(resp).await;
+    let run = &body["registries"][0]["imports"][0]["last_run"];
+    assert!(!run.is_null(), "the run was not recorded: {body}");
+    assert_eq!(run["imported"], 1, "{body}");
+    assert_eq!(run["repo"], "batleforc/batlehub-vsx", "{body}");
+    assert!(
+        run["triggered_by"].is_string(),
+        "an operator asked, so the row must name them: {body}"
+    );
+}
+
+/// A run that found nothing is still a run. This is the half a page cannot show
+/// if the history only records imports that did something.
+#[actix_web::test]
+async fn a_run_that_imported_nothing_is_still_recorded() {
+    let app = with_history().await;
+
+    for _ in 0..2 {
+        let resp = call_service(
+            &app,
+            TestRequest::post()
+                .uri(&import_uri())
+                .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+                .set_json(json!({}))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(resp.status(), 200);
+    }
+
+    let resp = call_service(
+        &app,
+        TestRequest::get()
+            .uri("/api/v1/admin/imports")
+            .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+            .to_request(),
+    )
+    .await;
+    let body: Value = read_body_json(resp).await;
+    let run = &body["registries"][0]["imports"][0]["last_run"];
+    // The second run is the newest, and it skipped what the first published.
+    assert_eq!(run["imported"], 0, "{body}");
+    assert_eq!(run["skipped"], 1, "{body}");
+}
+
+/// An app with no history configured still imports. A history that is not
+/// recorded must never turn a working import into a failed request.
+#[actix_web::test]
+async fn an_import_works_with_no_history_configured() {
+    let app = app_with_import().await;
+
+    let resp = call_service(
+        &app,
+        TestRequest::post()
+            .uri(&import_uri())
+            .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+            .set_json(json!({}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let report: Value = read_body_json(resp).await;
+    assert_eq!(report["imported"], 1, "{report}");
 }
 
 /// The whole point, end to end: a release asset becomes an entry an editor can

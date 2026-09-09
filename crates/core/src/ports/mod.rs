@@ -9,6 +9,7 @@ pub mod notification;
 pub mod ops;
 pub mod readme;
 pub mod registry;
+pub mod release_import;
 pub mod sbom;
 pub mod scanner;
 pub mod security;
@@ -47,6 +48,7 @@ pub use registry::{
     ForgeRelease, ForgeReleaseSource, LocalRegistryBackend, PackageRepository, RecentErrorRecord,
     RegistryClient, UpstreamPackage, VersionDocument,
 };
+pub use release_import::ImportHistory;
 pub use sbom::{
     ExtractedManifest, ExtractedReadme, SbomDependency, SbomExtractor, SbomRepository,
     UpstreamSbomFetcher, LICENSE_EXTRACTION_TYPES, README_EXTRACTION_TYPES, README_EXTRACT_CEILING,

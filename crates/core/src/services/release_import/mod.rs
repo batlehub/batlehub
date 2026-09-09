@@ -184,3 +184,48 @@ pub struct ReleaseImportService {
     /// signing key, and in the tests that do not care.
     pub after_publish: Option<Arc<dyn PostPublish>>,
 }
+
+impl crate::entities::ImportRun {
+    /// One finished run, from the report it produced.
+    ///
+    /// Here rather than beside the entity so it can take the [`ImportReport`]
+    /// itself: passing the three counts and the failure list separately was
+    /// eight parameters, and four of them were one value that had been taken
+    /// apart at the call site and put back together here.
+    ///
+    /// A constructor rather than each caller building the struct, because the
+    /// two callers — the HTTP handler and the scheduled task — must agree on
+    /// what a run row means. They already disagreed once about whether a run
+    /// happened at all: only one of them recorded anything.
+    pub fn from_report(
+        registry: impl Into<String>,
+        repo: impl Into<String>,
+        started_at: chrono::DateTime<chrono::Utc>,
+        report: &ImportReport,
+        triggered_by: Option<String>,
+    ) -> Self {
+        // One line per failure, `tag asset: error`. Plain text rather than JSON
+        // because the console renders it and an operator reads it; the
+        // structured form already travels on the HTTP response.
+        let failures = (!report.failures.is_empty()).then(|| {
+            report
+                .failures
+                .iter()
+                .map(|f| format!("{} {}: {}", f.tag, f.asset, f.error))
+                .collect::<Vec<_>>()
+                .join("\n")
+        });
+        Self {
+            id: uuid::Uuid::new_v4(),
+            registry: registry.into(),
+            repo: repo.into(),
+            started_at,
+            finished_at: chrono::Utc::now(),
+            imported: report.imported as u64,
+            skipped: report.skipped as u64,
+            errors: report.errors as u64,
+            triggered_by,
+            failures,
+        }
+    }
+}

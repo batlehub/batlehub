@@ -107,16 +107,24 @@ pub fn aggregate(events: &[AccessEvent], pkg: &PackageId, refused: bool) -> Vec<
     out
 }
 
-/// Walk the log for `pkg` since `since` and aggregate. Pages by offset
-/// under one filter, bounded by [`MAX_PAGES`].
-pub async fn collect(
+/// Read every event `filter` selects, walking it by offset.
+///
+/// Shared with [`crate::services::pulls`], which asks the transposed question
+/// under a different filter but needs the identical bound: a second copy of a
+/// bounded pager is a second place for [`PAGE`] and [`MAX_PAGES`] to drift
+/// apart, and the bound is the only thing standing between a wide window and a
+/// table scan into memory.
+///
+/// `filter.limit` is set to [`PAGE`] here rather than trusted from the caller,
+/// because the loop's termination test is "a short page means the end" and a
+/// caller passing a different limit would break it silently.
+pub async fn read_all(
     repo: &dyn PackageRepository,
-    pkg: &PackageId,
-    since: DateTime<Utc>,
-    refused: bool,
-) -> Result<Vec<Puller>, CoreError> {
+    mut filter: EventFilter,
+) -> Result<Vec<AccessEvent>, CoreError> {
+    filter.limit = PAGE;
+    filter.offset = 0;
     let mut events: Vec<AccessEvent> = Vec::new();
-    let mut filter = pullers_filter(pkg, since, refused);
     for _ in 0..MAX_PAGES {
         let page = repo.list_events(filter.clone()).await?;
         let n = page.len() as u64;
@@ -126,6 +134,18 @@ pub async fn collect(
         }
         filter.offset += PAGE;
     }
+    Ok(events)
+}
+
+/// Walk the log for `pkg` since `since` and aggregate. Pages by offset
+/// under one filter, bounded by [`MAX_PAGES`].
+pub async fn collect(
+    repo: &dyn PackageRepository,
+    pkg: &PackageId,
+    since: DateTime<Utc>,
+    refused: bool,
+) -> Result<Vec<Puller>, CoreError> {
+    let events = read_all(repo, pullers_filter(pkg, since, refused)).await?;
     Ok(aggregate(&events, pkg, refused))
 }
 

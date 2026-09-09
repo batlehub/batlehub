@@ -177,6 +177,94 @@ async fn list_pullers(args: &PullersArgs, client: &BatleHubClient, json: bool) -
     Ok(())
 }
 
+/// `batlehub audit …` (RFC 0018 §4.2): the identity-scoped half.
+///
+/// A group of one, deliberately. §4.2 names `audit pulls`, and the audit log's
+/// other readers are admin-shaped (`admin audit-log`, `admin export-audit-log`)
+/// while this one is a report an auditor runs. Folding it under `admin` would
+/// have hidden it among twenty-seven subcommands.
+#[derive(clap::Subcommand)]
+pub enum AuditCommand {
+    /// What one identity pulled inside a window — the transpose of
+    /// `verdicts pullers`
+    Pulls(PullsArgs),
+}
+
+#[derive(Args)]
+pub struct PullsArgs {
+    /// Whose pulls: a user id, or `ip:<addr>` for an anonymous caller
+    #[arg(long)]
+    pub identity: String,
+    /// Narrow to one registry
+    #[arg(long)]
+    pub registry: Option<String>,
+    /// Narrow to one package name
+    #[arg(long)]
+    pub package: Option<String>,
+    /// The window back from now (`30d`, `12h`, `90m`) or an RFC 3339 instant;
+    /// default: 30 days
+    #[arg(long, default_value = "")]
+    pub since: String,
+    /// Print the CSV the export endpoint renders
+    #[arg(long)]
+    pub csv: bool,
+}
+
+pub async fn run_audit(cmd: AuditCommand, client: &BatleHubClient, json: bool) -> Result<()> {
+    match cmd {
+        AuditCommand::Pulls(args) => list_pulls(&args, client, json).await,
+    }
+}
+
+/// `audit pulls`: what one identity received.
+async fn list_pulls(args: &PullsArgs, client: &BatleHubClient, json: bool) -> Result<()> {
+    let body = client
+        .audit_pulls(
+            &args.identity,
+            args.registry.as_deref(),
+            args.package.as_deref(),
+            &args.since,
+            args.csv,
+        )
+        .await?;
+    // The server rendered it; printing it verbatim is what keeps the CSV an
+    // auditor keeps identical to the one the API serves.
+    if args.csv || json {
+        print!("{body}");
+        if !body.ends_with('\n') {
+            println!();
+        }
+        return Ok(());
+    }
+    let report: serde_json::Value = serde_json::from_str(&body)?;
+    let rows = report["pulls"].as_array().cloned().unwrap_or_default();
+    println!(
+        "{} pulled {} coordinate{} since {}",
+        args.identity,
+        rows.len(),
+        if rows.len() == 1 { "" } else { "s" },
+        report["since"].as_str().unwrap_or("?")
+    );
+    if rows.is_empty() {
+        return Ok(());
+    }
+    println!(
+        "{:<14} {:<28} {:<14} {:>6}  {:<25}",
+        "registry", "package", "version", "pulls", "last"
+    );
+    for r in rows {
+        println!(
+            "{:<14} {:<28} {:<14} {:>6}  {:<25}",
+            r["registry"].as_str().unwrap_or(""),
+            r["package_name"].as_str().unwrap_or(""),
+            r["version"].as_str().unwrap_or("-"),
+            r["count"].as_u64().unwrap_or(0),
+            r["last_pull"].as_str().unwrap_or("")
+        );
+    }
+    Ok(())
+}
+
 pub async fn run_verdicts(cmd: VerdictsCommand, client: &BatleHubClient, json: bool) -> Result<()> {
     match cmd {
         VerdictsCommand::List(args) => list_verdicts(&args, client, json).await,

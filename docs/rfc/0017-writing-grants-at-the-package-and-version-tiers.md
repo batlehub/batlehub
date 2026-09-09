@@ -613,3 +613,17 @@ compact index in `Local` mode authorizes *inside* the funnel, through
 second half is reachable — and the one document cached under `DocumentAudience`,
 which is why rule 3 matters exactly there. `crates/web/tests/grants_editor.rs`
 asserts it through those routes rather than through the service.
+
+### The ownership command is `owners`, not `admin owner`
+
+This document says `admin owner add` and `admin owner rm` (§2, §5.2, §6.3). The
+command shipped as a **top-level** `batlehub-cli owners add|remove|list`, because
+ownership is a package-level fact a maintainer manages, not an instance-level one
+an administrator does — the same reading that puts `publish` at the top level and
+not under `admin`.
+
+The body is left as it was proposed. What was not left alone is the refusal
+message: `GrantAdminService`'s ownership conflict told the operator to *"Use
+`admin owner rm`"*, a command that has never existed, which left the one reader
+who hit that `409` with no way forward. It now names `batlehub-cli owners
+remove`.
