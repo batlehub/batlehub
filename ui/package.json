@@ -44,7 +44,7 @@
     "@microsoft/eslint-formatter-sarif": "^3.1.0",
     "@scalar/api-reference": "^1.67.0",
     "@tailwindcss/vite": "^4.3.3",
-    "@types/node": "^26.4.1",
+    "@types/node": "^26.5.0",
     "@typescript-eslint/eslint-plugin": "^8.69.0",
     "@typescript-eslint/parser": "^8.69.0",
     "@vitejs/plugin-vue": "^6.0.8",
