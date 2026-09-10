@@ -45,7 +45,7 @@ form_urlencoded.workspace = true
 # conda and mamba request `repodata.json.zst` before any other encoding, and
 # fall back to `.bz2` (RFC 0009 §7.5). Without them every client pays the full
 # uncompressed transfer of a document fetched on every solve.
-zstd = "0.13"
+zstd = "0.14"
 bzip2 = "0.6"
 
 [dev-dependencies]
