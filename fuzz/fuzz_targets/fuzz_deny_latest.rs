@@ -17,8 +17,12 @@ fuzz_target!(|data: &[u8]| {
     let rt = RT.get_or_init(|| Runtime::new().unwrap());
     let mut u = arbitrary::Unstructured::new(data);
 
-    let Ok(version_str): arbitrary::Result<String> = u.arbitrary() else { return };
-    let Ok(role_idx): arbitrary::Result<u8> = u.arbitrary() else { return };
+    let Ok(version_str): arbitrary::Result<String> = u.arbitrary() else {
+        return;
+    };
+    let Ok(role_idx): arbitrary::Result<u8> = u.arbitrary() else {
+        return;
+    };
 
     let role = match role_idx % 3 {
         0 => Role::Anonymous,
@@ -29,7 +33,12 @@ fuzz_target!(|data: &[u8]| {
     // Bypass list includes Admin to exercise the bypass-role comparison.
     let rule = DenyLatestRule::new(vec![Role::Admin]);
 
-    let identity = Identity { user_id: None, role, auth_provider: None, groups: vec![] };
+    let identity = Identity {
+        user_id: None,
+        role,
+        auth_provider: None,
+        groups: vec![],
+    };
     let meta = PackageMetadata {
         id: PackageId::new("npm", "pkg", &version_str),
         published_at: None,
@@ -58,8 +67,25 @@ fuzz_target!(|data: &[u8]| {
     // Security invariant: only the exact string "latest" triggers a deny.
     // Unicode homoglyphs or whitespace variations must NOT bypass the deny
     // and must NOT accidentally block legitimate version strings.
+    //
+    // The oracle has to model the bypass list the rule was built with, or it
+    // contradicts the rule's own unit tests (`bypass_role_allows_admin`): an
+    // admin asking for "latest" is *allowed*, that is what the list is for.
+    // The first input libFuzzer ever ran through this target in CI decoded to
+    // exactly that case and was reported as a finding.
     if version_str == "latest" {
-        assert!(decision.is_deny(), "\"latest\" must always be blocked");
+        if identity.has_role_at_least(&Role::Admin) {
+            assert!(
+                matches!(decision, RuleDecision::Allow),
+                "an admin is in the bypass list and must be allowed \"latest\""
+            );
+        } else {
+            assert!(
+                decision.is_deny(),
+                "\"latest\" must be blocked for {:?}, who is below the bypass role",
+                identity.role
+            );
+        }
     } else {
         assert!(
             matches!(decision, RuleDecision::Allow),

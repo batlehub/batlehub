@@ -12,10 +12,27 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 batlehub-core = { path = "../crates/core" }
+# The archive readers: what the scan worker extracts before a scanner runs
+# (`scanners::extract`, behind `vuln-scan`) and what the SBOM extractors read
+# a manifest out of (`sbom`). No registry client, no database driver: the
+# fuzz build carries the parsers and nothing that would need a network.
+batlehub-adapters = { path = "../crates/adapters", default-features = false, features = ["sbom", "vuln-scan"] }
+bytes = "1"
+tar = "0.4"
+flate2 = "1"
+zip = { version = "8", default-features = false, features = ["deflate"] }
+tempfile = "3"
 arbitrary = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt"] }
 chrono = "0.4"
 serde_json = "1"
+# Only the re-encoding side of `fuzz_integrity_parse`; the versions are the
+# workspace's, so the lockfile resolves them to the crates core already uses.
+hex = "0.4"
+base64 = "0.23"
+# Only the oracle side of `fuzz_version_order`: an independent strict-semver
+# read of a version list, to hold `best_latest` to what its doc claims.
+semver = "1"
 
 [[bin]]
 name = "fuzz_rbac_evaluate"
@@ -56,5 +73,77 @@ doc = false
 [[bin]]
 name = "fuzz_grant_resolution"
 path = "fuzz_targets/fuzz_grant_resolution.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_path_safe"
+path = "fuzz_targets/fuzz_path_safe.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_integrity_parse"
+path = "fuzz_targets/fuzz_integrity_parse.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_normalize_url"
+path = "fuzz_targets/fuzz_normalize_url.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_signed_url"
+path = "fuzz_targets/fuzz_signed_url.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_listing_filter"
+path = "fuzz_targets/fuzz_listing_filter.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_bundle_read"
+path = "fuzz_targets/fuzz_bundle_read.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_version_order"
+path = "fuzz_targets/fuzz_version_order.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_escaping"
+path = "fuzz_targets/fuzz_escaping.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_release_coordinate"
+path = "fuzz_targets/fuzz_release_coordinate.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_image_host"
+path = "fuzz_targets/fuzz_image_host.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_scanner_extract"
+path = "fuzz_targets/fuzz_scanner_extract.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_sbom_extract"
+path = "fuzz_targets/fuzz_sbom_extract.rs"
 test = false
 doc = false

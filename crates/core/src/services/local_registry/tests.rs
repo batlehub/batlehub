@@ -4055,6 +4055,39 @@ mod encoded_traversal {
         assert!(validate_path_safe("package name", &value).is_err());
     }
 
+    /// Not a traversal — these never leave the tree — but not distinct either:
+    /// the filesystem backend joins the key verbatim, so `a//b`, `a/./b` and
+    /// `a/b` are three coordinates and one file. Found by `fuzz_path_safe`.
+    #[test]
+    fn empty_and_dot_segments_alias_a_neighbour_and_are_rejected() {
+        for value in [
+            "a//b",
+            "a/./b",
+            ".",
+            "./a",
+            "a/.",
+            "a/%2e/b",
+            "a%2f%2fb",
+            "a/%252e/b",
+        ] {
+            assert!(
+                validate_path_safe("package name", value).is_err(),
+                "{value} must be rejected"
+            );
+            assert!(
+                has_traversal_after_decoding(value),
+                "{value} must also be caught at the storage chokepoint"
+            );
+        }
+        // A trailing separator is a coordinate that ends in `/` at the edge —
+        // rejected on the raw value already, and here on the decoded one so
+        // `a%2f` cannot sneak past as `a/`. At the chokepoint it is a prefix
+        // (`delete_by_prefix("{key}/")`) and stays legal; `a//` does not.
+        assert!(validate_path_safe("package name", "a%2f").is_err());
+        assert!(!has_traversal_after_decoding("artifact:npm/a/"));
+        assert!(has_traversal_after_decoding("artifact:npm/a//"));
+    }
+
     /// The check decodes, so it must not start rejecting names that merely
     /// contain a percent escape or a dot.
     #[test]

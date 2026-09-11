@@ -124,7 +124,7 @@ impl ArtifactScanner for SocketScanner {
         let status = resp.status();
         if status.as_u16() == 429 {
             return Err(ScannerError::Upstream(
-                "socket: rate limited (429); the job is retried".into(),
+                "socket: rate limited (429); no answer this scan — the policy's scanner_error mode applies until a rescan".into(),
             ));
         }
         if !status.is_success() {

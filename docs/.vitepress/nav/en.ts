@@ -364,6 +364,10 @@ export const sidebar = {
           link: "/rfc/0018-supply-chain-quarantine-and-verdicts",
         },
         {
+          text: "0018-bis — Worker under load",
+          link: "/rfc/0018-bis-the-worker-under-load-invocations-slots-and-results-by-content",
+        },
+        {
           text: "0019 — Forge registries: refs, releases, raw",
           link: "/rfc/0019-git-forge-registries-refs-releases-raw",
         },

@@ -5,10 +5,10 @@ use comfy_table::Table;
 use crate::api::{
     admin::{
         AccessSimulationResponse, AuditEntry, AuditQuery, BlockedUserEntry, BulkPackageResult,
-        CoherenceReportDto, EvictionReportDto, ExposureQuery, ExposureResponse, FlagsQuery,
-        FlagsResponse, ImportReportDto, MissingQuery, NotificationChannelEntry,
-        NotificationSubscriptionEntry, RegistryHealthEntry, SimulateAccessRequest, StatsResponse,
-        TeamNamespaceEntry,
+        CoherenceReportDto, DeleteGrantResponse, EvictionReportDto, ExposureQuery,
+        ExposureResponse, FlagsQuery, FlagsResponse, GrantListResponse, ImportReportDto,
+        MissingQuery, NotificationChannelEntry, NotificationSubscriptionEntry, PutGrantResponse,
+        RegistryHealthEntry, SimulateAccessRequest, StatsResponse, TeamNamespaceEntry,
     },
     version::RetentionReport,
     BatleHubClient,
@@ -1391,24 +1391,8 @@ async fn handle_grants(cmd: GrantsCommand, client: &BatleHubClient, json: bool) 
             let resp = client.list_grants(&registry, package, version).await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&resp)?);
-            } else if resp.grants.is_empty() {
-                println!("No grants written on {registry}/{target}");
             } else {
-                let mut table = Table::new();
-                table.set_header(["Node", "Subject", "Actions", "Source"]);
-                for g in &resp.grants {
-                    table.add_row([
-                        &format!("{}:{}", g.node_kind, g.node_key),
-                        &g.subject,
-                        &g.actions.join(", "),
-                        &if g.from_ownership {
-                            "ownership".to_owned()
-                        } else {
-                            g.granted_by.clone().unwrap_or_else(|| "-".to_owned())
-                        },
-                    ]);
-                }
-                println!("{table}");
+                print_grants_table(&registry, &target, &resp);
             }
         }
         GrantsCommand::Set {
@@ -1424,16 +1408,7 @@ async fn handle_grants(cmd: GrantsCommand, client: &BatleHubClient, json: bool) 
             if json {
                 println!("{}", serde_json::to_string_pretty(&resp)?);
             } else {
-                // What was *stored*, not what was asked for: `releases:*` names
-                // one verb and stores several, and an operator who cannot see
-                // the difference cannot review it.
-                println!(
-                    "Granted {} on {registry}/{target} to {subject}",
-                    resp.actions.join(", ")
-                );
-                for w in &resp.warnings {
-                    println!("  warning: {w}");
-                }
+                print_grant_set(&registry, &target, &subject, &resp);
             }
         }
         GrantsCommand::Rm {
@@ -1447,14 +1422,56 @@ async fn handle_grants(cmd: GrantsCommand, client: &BatleHubClient, json: bool) 
                 .await?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&resp)?);
-            } else if resp.removed {
-                println!("Removed {subject}'s grant on {registry}/{target}");
             } else {
-                println!("{subject} had no grant on {registry}/{target}");
+                print_grant_removed(&registry, &target, &subject, &resp);
             }
         }
     }
     Ok(())
+}
+
+fn print_grants_table(registry: &str, target: &str, resp: &GrantListResponse) {
+    if resp.grants.is_empty() {
+        println!("No grants written on {registry}/{target}");
+        return;
+    }
+    let mut table = Table::new();
+    table.set_header(["Node", "Subject", "Actions", "Source"]);
+    for g in &resp.grants {
+        let source = if g.from_ownership {
+            "ownership".to_owned()
+        } else {
+            g.granted_by.clone().unwrap_or_else(|| "-".to_owned())
+        };
+        table.add_row([
+            &format!("{}:{}", g.node_kind, g.node_key),
+            &g.subject,
+            &g.actions.join(", "),
+            &source,
+        ]);
+    }
+    println!("{table}");
+}
+
+/// Reports what was *stored*, not what was asked for: `releases:*` names one
+/// verb and stores several, and an operator who cannot see the difference
+/// cannot review it.
+fn print_grant_set(registry: &str, target: &str, subject: &str, resp: &PutGrantResponse) {
+    println!(
+        "Granted {} on {registry}/{target} to {subject}",
+        resp.actions.join(", ")
+    );
+    for w in &resp.warnings {
+        println!("  warning: {w}");
+    }
+}
+
+fn print_grant_removed(registry: &str, target: &str, subject: &str, resp: &DeleteGrantResponse) {
+    if resp.removed {
+        println!("Removed {subject}'s grant on {registry}/{target}");
+    } else {
+        println!("{subject} had no grant on {registry}/{target}");
+    }
 }
 
 async fn handle_namespace(

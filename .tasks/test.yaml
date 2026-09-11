@@ -89,6 +89,11 @@ tasks:
         exit 1
       - cargo test -p batlehub-adapters --test {{.TEST}} -- --nocapture
 
+  test:external:
+    desc: "The Postgres, S3 and Redis integration tests CI's `integration` job runs, on a machine without Podman: a reachable DATABASE_URL (the Che sidecar), MinIO and redis-server started from cached binaries unless S3_TEST_ENDPOINT / REDIS_URL are set — the tests skip silently and report green when those are unset, which is the trap this closes"
+    cmds:
+      - bash tests/external_tests.sh
+
   test:pg-cache:
     desc: Run PgCacheStore integration tests (starts a temporary Postgres container via Podman)
     cmds:
@@ -285,6 +290,28 @@ tasks:
     cmds:
       - bash tests/heavy/vsx_view.sh
 
+  test:vscode-patch-heavy:
+    desc: "Heavy RFC 0011 §4.2 consumer suite on stock VS Code: the che-code credential patch (patches/che-code, the logic of its validated diff) loaded into the server build's own node, product.json pointed straight at a credential-only vscode-marketplace registry through the tap — no credential: the editor's own query refused 403 and nothing sent; VSX_REGISTRY_AUTH_TOKEN scoped by VSX_REGISTRY_URL, the variable alone sending nothing, the contract file at the patch's default path keyed by the request's origin, the file over a wrong variable, a token source entry falling through: installed by id with every registry request carrying a Bearer the editor core attached itself (needs DATABASE_URL + network once for the VS Code download)"
+    cmds:
+      - bash tests/heavy/vscode_patch.sh
+
+  test:che-code-patch-heavy:
+    desc: "The same suite on che-code (quay.io/che-incubator/che-code — the workspace's own build copied once, CHE_CODE_DIR, or docker cp out of the image): the gallery named through OPENVSX_REGISTRY_URL as che-code's launcher names it, the build's node run with its ld_libs (needs DATABASE_URL; docker when no build is at hand)"
+    cmds:
+      - bash tests/heavy/che_code_patch.sh
+
+  test:vsx-extension-heavy:
+    desc: "Heavy RFC 0011 §6.5 suite, cross-repository: the batlehub-vsx extension's own heavy suite (a real VS Code web build in Chrome over CDP, both modes — marketplace with BATLEHUB_TOKEN, broker with the gallery proxy and the contract file the extension writes) run against this checkout's server and CLI (needs DATABASE_URL, a Chrome at CDP_URL, pnpm, and ../batlehub-vsx or a network clone of it)"
+    cmds:
+      - bash tests/heavy/vsx_extension.sh
+
+  test:browser-heavy:
+    desc: "The three heavy suites that drive a real browser, in sequence — vsx_login (the sign-in entry through the gallery proxy), vsx_view (the Extensions view, RFC 0020 signatures, the SVG icon) and console_fetch (the catalogue's Fetch button) — what CI's heavy-browser job runs (needs DATABASE_URL, a Chrome via CDP_URL or CHROME_BIN, ui/node_modules, network)"
+    cmds:
+      - bash tests/heavy/vsx_login.sh
+      - bash tests/heavy/vsx_view.sh
+      - bash tests/heavy/console_fetch.sh
+
   test:console-fetch-heavy:
     desc: "Heavy RFC 0007-bis §11 q3 suite: the catalogue's Fetch button pressed in a real browser — the built console and the API on one origin, an anonymous reader shown the upstream row and no button, a signed-in reader shown a button naming the version, clicked by its accessible name, and the bytes then held, downloadable through npm's own path, and attributed in the audit to the reader who pressed it (needs DATABASE_URL, a Chrome via CDP_URL or CHROME_BIN, ui/node_modules, network for one npm search and tarball)"
     cmds:
@@ -394,6 +421,11 @@ tasks:
       - bash tests/heavy/openvsx.sh
       - bash tests/heavy/vsx_login.sh
       - bash tests/heavy/vsx_view.sh
+      - bash tests/heavy/vscode_patch.sh
+      - bash tests/heavy/che_code_patch.sh
+      - bash tests/heavy/vsx_extension.sh
+      - bash tests/heavy/backends.sh
+      - bash tests/heavy/hybrid.sh
       - bash tests/heavy/conda.sh
       - bash tests/heavy/nuget.sh
       - bash tests/heavy/composer.sh

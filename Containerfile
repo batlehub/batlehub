@@ -1,8 +1,8 @@
 # ── Build stage ───────────────────────────────────────────────────────────────
-FROM rust:1.98-slim-bookworm@sha256:1469a27c125cb5a3aebfa4f4e4665d935b02fb72cc093b2c974b3d740e43f157 AS builder
+FROM rust:1.98-slim-bookworm@sha256:ebd900bae66fd508b466cef82d64a83a5fb34682e4c8b2797a42908bddc95a57 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config libssl-dev curl make \
+    curl libssl-dev make pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -20,13 +20,15 @@ COPY patches/ patches/
 
 # Stub out every lib/main so cargo can resolve and compile deps.
 RUN for crate in crates/core crates/config crates/adapters crates/web; do \
-    mkdir -p $crate/src && echo "pub fn _stub() {}" > $crate/src/lib.rs; \
+    mkdir -p "$crate/src" && echo "pub fn _stub() {}" > "$crate/src/lib.rs"; \
     done && \
     mkdir -p crates/examples/src && echo "pub fn _stub() {}" > crates/examples/src/lib.rs && \
     mkdir -p server/src && echo "fn main() {}" > server/src/main.rs && \
     mkdir -p cli/src    && echo "fn main() {}" > cli/src/main.rs
 
-RUN cargo build --release -p batlehub-server -p batlehub-cli 2>/dev/null; exit 0
+# --locked: build exactly what Cargo.lock resolves and fail if it would need
+# updating — the image must not resolve a dependency the repository never saw.
+RUN cargo build --locked --release -p batlehub-server -p batlehub-cli 2>/dev/null; exit 0
 
 # Now copy real source and rebuild (only changed crates recompile).
 COPY crates/ crates/
@@ -36,19 +38,21 @@ COPY cli/    cli/
 # Touch lib/main files so cargo detects the change.
 RUN touch crates/*/src/lib.rs server/src/main.rs cli/src/main.rs
 
-RUN cargo build --release -p batlehub-server -p batlehub-cli
+RUN cargo build --locked --release -p batlehub-server -p batlehub-cli
 
 # Pre-create runtime directories so they can be copied into the shell-less distroless image.
 RUN mkdir -p /var/cache/batlehub
 
 # ── Frontend build stage ───────────────────────────────────────────────────────
-FROM node:26-slim@sha256:c0753125a3789977aefe869cbebccf70e3cfd7ea84ca48547458f02e4f1d7146 AS ui-builder
+FROM node:26-slim@sha256:14bf3eac4bf209d906d3c41256597d3ab1f926b2e93a79e9bdfe1efd32454239 AS ui-builder
 
 WORKDIR /ui
 # Corepack is no longer distributed with Node (removed in Node 25), so pnpm is
 # installed explicitly. Keep this version in sync with the `packageManager`
-# field in ui/package.json.
-RUN npm install -g pnpm@11.25.0
+# field in ui/package.json. pnpm ships no install-time lifecycle scripts, so
+# --ignore-scripts changes nothing today; it states the policy so a future
+# release that adds one cannot run it here.
+RUN npm install -g --ignore-scripts pnpm@11.26.0
 COPY ui/package.json ui/pnpm-lock.yaml ui/pnpm-workspace.yaml ./
 # --frozen-lockfile is the `npm ci` equivalent: it fails rather than silently
 # resolving something the committed lockfile does not describe.
@@ -64,7 +68,7 @@ RUN batlehub --config /etc/batlehub/config.toml dump-spec > openapi.json && \
     pnpm run build
 
 # ── Runtime image ─────────────────────────────────────────────────────────────
-FROM gcr.io/distroless/cc-debian12:latest@sha256:6e1871c34683dc9ee996d13084497783fd98ac0200213d0826625f4e9d4be1d0 AS runtime
+FROM gcr.io/distroless/cc-debian12:latest@sha256:e5d81ddde149641e2a9ba55be4545bc125c67de07508b03ba4c22e6eb0ded5aa AS runtime
 
 COPY --from=builder  /build/target/release/batlehub     /usr/local/bin/batlehub
 COPY --from=builder  /build/target/release/batlehub-cli /usr/local/bin/batlehub-cli

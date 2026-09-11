@@ -123,7 +123,8 @@ fn check_decoded_rounds(kind: &str, value: &str) -> Result<(), CoreError> {
 }
 
 /// Whether `value` — or anything a percent-decoder could turn it into — carries
-/// a `..` path segment, a backslash, or a NUL.
+/// a `..` path segment, an empty or `.` segment (a trailing `/` excepted, so a
+/// prefix passes), a backslash, or a NUL.
 ///
 /// The predicate form of [`validate_path_safe`]'s traversal rules, for callers
 /// that already have their own error type and their own notion of what the
@@ -153,6 +154,28 @@ fn reject_traversal(kind: &str, value: &str, decoded: &str) -> Result<(), CoreEr
     if decoded.split('/').any(|segment| segment == "..") {
         return Err(CoreError::InvalidInput(format!(
             "{kind} '{value}' contains a path-traversal segment"
+        )));
+    }
+    // An empty or `.` segment stays inside the tree but does not stay *distinct*:
+    // the filesystem backend joins the key verbatim, and the OS resolves
+    // `a//b` and `a/./b` to the same file as `a/b`. Two coordinates, one set of
+    // bytes — whichever is published last is what both serve. Found by
+    // `fuzz_path_safe`, which asserts an accepted key has no empty component.
+    //
+    // The storage chokepoint (`has_traversal_after_decoding`, kind `path`) also
+    // sees *prefixes* — `delete_by_prefix("{key}/")` — so one trailing empty
+    // segment is a prefix there, not an alias. A coordinate never ends in `/`:
+    // `validate_path_safe` rejects that on the raw value, and this rejects it
+    // on every decoded form, so `a%2f` cannot become `a/` past the edge.
+    let segments: Vec<&str> = decoded.split('/').collect();
+    let (last, inner) = segments.split_last().expect("split yields one segment");
+    let trailing_empty = segments.len() > 1 && last.is_empty();
+    if inner.iter().any(|segment| segment.is_empty())
+        || (trailing_empty && kind != "path")
+        || segments.contains(&".")
+    {
+        return Err(CoreError::InvalidInput(format!(
+            "{kind} '{value}' contains an empty or '.' path segment"
         )));
     }
     // The `version` component is a single path segment of the

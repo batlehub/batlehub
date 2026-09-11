@@ -39,6 +39,7 @@
 #   HEAVY_TAP_PORT  what the client is pointed at  (per-suite default)
 #   ADMIN_TOKEN     publish credential, matching the suite's config
 #   COVERAGE=1      run the server under `cargo llvm-cov run --no-report`
+#   HEAVY_SERVER_FEATURES  extra cargo features for the server build (backends.sh: storage-s3)
 #   HEAVY_CACHE     cacheable client downloads (default ~/.cache/batlehub-heavy)
 #   HEAVY_FORGE_TOKEN  a GitHub/GitLab/Forgejo token the forge suites
 #                   authenticate their upstream with; unset, they stay
@@ -323,21 +324,27 @@ heavy_start_server() {
   # not become healthy", which names the wrong thing and is indistinguishable
   # from a server that starts and hangs. `--help` exits 0 without reading the
   # config or binding a port, so this builds and returns.
-  heavy_log "Building BatleHub (coverage=$COVERAGE)"
+  # `HEAVY_SERVER_FEATURES` names cargo features the suite's config needs and
+  # the default build does not carry — `storage-s3` for backends.sh. An
+  # array, so an unset variable expands to no argument under `set -u`.
+  local -a features=()
+  [[ -n "${HEAVY_SERVER_FEATURES:-}" ]] && features=(--features "$HEAVY_SERVER_FEATURES")
+
+  heavy_log "Building BatleHub (coverage=$COVERAGE${HEAVY_SERVER_FEATURES:+, features=$HEAVY_SERVER_FEATURES})"
   if [[ "$COVERAGE" == "1" ]]; then
-    cargo llvm-cov run --no-report -p batlehub-server -- --help >/dev/null 2>&1 \
-      || heavy_fail "the instrumented server did not build — run 'cargo llvm-cov run --no-report -p batlehub-server -- --help' to see why"
+    cargo llvm-cov run --no-report -p batlehub-server "${features[@]}" -- --help >/dev/null 2>&1 \
+      || heavy_fail "the instrumented server did not build — run 'cargo llvm-cov run --no-report -p batlehub-server ${features[*]} -- --help' to see why"
   else
-    cargo build -p batlehub-server >"$HEAVY_WORK/build.log" 2>&1 \
+    cargo build -p batlehub-server "${features[@]}" >"$HEAVY_WORK/build.log" 2>&1 \
       || { cat "$HEAVY_WORK/build.log" >&2; heavy_fail "the server did not build"; }
   fi
 
   heavy_log "Starting BatleHub (coverage=$COVERAGE, config=$config)"
   if [[ "$COVERAGE" == "1" ]]; then
-    setsid cargo llvm-cov run --no-report -p batlehub-server -- \
+    setsid cargo llvm-cov run --no-report -p batlehub-server "${features[@]}" -- \
       --config "$config" >"$HEAVY_WORK/server.log" 2>&1 &
   else
-    setsid cargo run -p batlehub-server -- \
+    setsid cargo run -p batlehub-server "${features[@]}" -- \
       --config "$config" >"$HEAVY_WORK/server.log" 2>&1 &
   fi
   HEAVY_SERVER_PID=$!

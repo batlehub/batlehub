@@ -129,7 +129,7 @@ fuzz_target!(|data: &[u8]| {
         }
         // An even number of quotes since `<` means every value opened has been
         // closed, so this position is where a name would go.
-        before[tag_start..].matches('"').count() % 2 == 0
+        before[tag_start..].matches('"').count().is_multiple_of(2)
     };
 
     for attribute in [

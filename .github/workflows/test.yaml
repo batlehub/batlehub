@@ -64,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
         with:
           components: clippy, rustfmt
           toolchain: "stable"
@@ -120,7 +120,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
         with:
           toolchain: "nightly"
           components: rust-src
@@ -147,7 +147,17 @@ jobs:
       # `detect_leaks=0`: LeakSanitizer cannot start under this runner's
       # `ptrace_scope` and reports the refusal as a 0-byte crash artefact, which
       # is a false positive that looks exactly like a finding.
-      - uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
+      #
+      # `--target` is passed explicitly because cargo-fuzz's default is not the
+      # host but the triple *cargo-fuzz itself* was compiled for
+      # (`current_platform::CURRENT_PLATFORM`, cargo-fuzz 0.13 `utils.rs`), and
+      # the prebuilt binary install-action ships is a static musl build. Left to
+      # that default, every target is built for `x86_64-unknown-linux-musl`,
+      # which has no `rust-src` here and cannot carry AddressSanitizer at all
+      # ("sanitizer is incompatible with statically linked libc"). Read from the
+      # nightly toolchain rather than hard-coded, so a runner on another
+      # architecture gets its own triple.
+      - uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2.87.10
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         with:
           tool: cargo-fuzz
@@ -162,10 +172,12 @@ jobs:
           # is fuzzed by existing here rather than by somebody remembering to
           # add it to a list in a second place.
           targets=$(cargo fuzz list)
+          host=$(rustc +nightly -vV | sed -n 's/^host: //p')
           echo "targets: $targets"
+          echo "target triple: $host"
           for t in $targets; do
             echo "::group::$t"
-            cargo +nightly fuzz run "$t" -- -max_total_time=60
+            cargo +nightly fuzz run --target "$host" "$t" -- -max_total_time=60
             echo "::endgroup::"
           done
       # The input that broke it is the whole value of a fuzz failure, and it is
@@ -183,12 +195,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
         with:
           toolchain: "stable"
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
+      - uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2.87.10
         with:
           tool: cargo-llvm-cov
       - name: Install build dependencies
@@ -242,12 +254,12 @@ jobs:
       REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
         with:
           toolchain: "stable"
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
+      - uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2.87.10
         with:
           tool: cargo-llvm-cov
       - name: Install build dependencies
@@ -299,25 +311,27 @@ jobs:
     env:
       DATABASE_URL: postgresql://postgres:testpass@localhost:5432/postgres
       # Pinned IDE builds — the cache key below must move with these.
-      VSCODE_VERSION: "1.96.4"
+      VSCODE_VERSION: "1.136.2"
       IDEA_VERSION: "2026.1.3"
       WEEBO_VERSION: "0.5.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
         with:
           toolchain: "stable"
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
+      - uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2.87.10
         with:
           tool: cargo-llvm-cov
-      - name: Install build dependencies (incl. headless VS Code runtime)
+      # No xvfb and no GTK: the VS Code half runs the server build
+      # (`server-linux-x64-web`) under the node it bundles, and IntelliJ's
+      # `installPlugins` is a JVM command. The desktop build needed both up to
+      # 1.96.4; see the VS Code section of tests/heavy/marketplace.sh.
+      - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config libssl-dev \
-            xvfb libnss3 libgtk-3-0 libasound2t64 libgbm1 libxkbfile1 libxshmfence1
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
       - name: Cache IDE downloads (VS Code + IntelliJ IDEA)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -327,7 +341,7 @@ jobs:
         run: cargo llvm-cov clean --workspace
       # Publishes weebo-bridge-notify to local-mode vscode-marketplace and
       # jetbrains-marketplace registries, then installs it with real IDE tooling
-      # (headless `code --install-extension`, IntelliJ `installPlugins`). The
+      # (headless `code-server --install-extension`, IntelliJ `installPlugins`). The
       # server runs under cargo-llvm-cov, so its execution is part of coverage.
       - name: Marketplace heavy tests
         run: bash tests/heavy/marketplace.sh
@@ -342,6 +356,265 @@ jobs:
           name: coverage-heavy
           path: coverage-heavy.lcov
           if-no-files-found: error
+
+  # The batlehub-vsx extension (RFC 0011 §6.5, phases 7–8) in a real editor,
+  # against this checkout. The extension and its suite live in their own
+  # repository (§11 q6); tests/heavy/vsx_extension.sh runs that suite with
+  # BATLEHUB_SRC pointed here. Its default branch rather than a pin: this
+  # job is the canary that says when the server's VSX API, the CLI's contract
+  # file or the gallery proxy and their consumer have drifted apart — a pin
+  # would only say it later.
+  heavy-vsx-extension:
+    name: Heavy integration (batlehub-vsx extension, real editor)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: testpass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:testpass@localhost:5432/postgres
+      BATLEHUB_VSX_REF: main
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: batlehub/batlehub-vsx
+          ref: ${{ env.BATLEHUB_VSX_REF }}
+          path: batlehub-vsx
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: "stable"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 11
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+      - name: Cache the editor download
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/batlehub-heavy
+          key: heavy-vsx-extension-${{ hashFiles('tests/heavy/vsx_extension.sh') }}
+      # The workbench runs in the runner's Chrome, driven over CDP by the
+      # extension repository's driver; the same browser the rendered gates use.
+      - name: Start a headless browser
+        uses: ./.github/actions/headless-chrome
+      - name: Extension heavy suite
+        run: bash tests/heavy/vsx_extension.sh
+        env:
+          BATLEHUB_VSX_SRC: ${{ github.workspace }}/batlehub-vsx
+          CDP_URL: http://127.0.0.1:9222
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: vsx-extension-run
+          path: batlehub-vsx/tests/heavy/work/last
+          if-no-files-found: ignore
+
+  # The production backends under real clients (tests/heavy/backends.sh):
+  # S3 for the artifacts, Redis for the cache, dex as the OIDC issuer. Its
+  # own job because it is the one suite that needs three services: the
+  # RustFS and Redis containers the integration job already uses, plus dex
+  # — run as a container from a config rendered off dev/dex/config.tmpl.yaml,
+  # the same template the workspace sidecar runs, with a loopback issuer.
+  # RustFS is mapped to 9100 because dex takes 9000, the port every
+  # rendered config names.
+  heavy-backends:
+    name: Heavy integration (S3 + Redis + OIDC backends)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: testpass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
+      minio:
+        image: rustfs/rustfs:latest
+        env:
+          RUSTFS_ROOT_USER: minioadmin
+          RUSTFS_ROOT_PASSWORD: minioadmin
+        ports:
+          - 9100:9000
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:testpass@localhost:5432/postgres
+      S3_TEST_ENDPOINT: http://localhost:9100
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      REDIS_URL: redis://localhost:6379
+      OIDC_ISSUER: http://127.0.0.1:9000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: "stable"
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2.87.10
+        with:
+          tool: cargo-llvm-cov
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+      - name: Start dex
+        run: |
+          # The workspace's template, rendered the way `task dex:config
+          # LOCAL=1` renders it — a loopback issuer, which the server's
+          # `is_secure_issuer_url` lets through as plain HTTP — and the dev
+          # password hashed here rather than committed, for the same reason
+          # the task hashes it: a bcrypt literal in a tracked file is a
+          # secret-scanner finding it cannot tell from a live credential.
+          python3 -m pip install --quiet --user bcrypt
+          python3 - <<'PY'
+          import bcrypt, pathlib
+          t = pathlib.Path("dev/dex/config.tmpl.yaml").read_text()
+          t = t.replace("__ISSUER__", "http://127.0.0.1:9000")
+          t = t.replace("__CALLBACK__", "http://127.0.0.1:8140/api/v1/auth/oidc/callback")
+          t = t.replace("__PASSWORD_HASH__", bcrypt.hashpw(b"password", bcrypt.gensalt(10, prefix=b"2b")).decode())
+          pathlib.Path("/tmp/dex-config.yaml").write_text(t)
+          PY
+          docker run -d --name dex --network host -v /tmp/dex-config.yaml:/etc/dex/config.yaml \
+            ghcr.io/dexidp/dex:v2.45.0 dex serve /etc/dex/config.yaml
+          for _ in $(seq 1 30); do
+            curl -sf http://127.0.0.1:9000/.well-known/openid-configuration >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:9000/.well-known/openid-configuration >/dev/null \
+            || { docker logs dex; echo "::error::dex never served its discovery document"; exit 1; }
+      - name: Install the MinIO client
+        run: |
+          curl -fsSL --proto '=https' -o /usr/local/bin/mc https://dl.min.io/client/mc/release/linux-amd64/mc
+          chmod +x /usr/local/bin/mc
+          mc --version | head -1
+      - name: Clean previous coverage data
+        run: cargo llvm-cov clean --workspace
+      - name: Backends heavy suite
+        run: bash tests/heavy/backends.sh
+        env:
+          COVERAGE: "1"
+      - name: Generate LCOV
+        run: >-
+          cargo llvm-cov report --lcov --output-path coverage-heavy-backends.lcov
+          --ignore-filename-regex "${{ env.COVERAGE_EXCLUDE }}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-heavy-backends
+          path: coverage-heavy-backends.lcov
+          if-no-files-found: error
+
+  # The three suites that drive a real browser (tests/heavy/vsx_login.sh,
+  # vsx_view.sh, console_fetch.sh) — the Extensions view, the sign-in entry
+  # and the console's Fetch button. They ran only on a developer's machine
+  # until 2026-09-11; the runner's Chrome over CDP, the same one the rendered
+  # gates use, is all they need. Sequential: each binds its own ports but
+  # they share one Postgres and one Chrome. vsx_view.sh reaches
+  # marketplace.visualstudio.com once and vscode-cdn.net for the webview.
+  heavy-browser:
+    name: "Heavy integration (real browser: VS Code views, console Fetch)"
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: testpass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:testpass@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: "stable"
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2.87.10
+        with:
+          tool: cargo-llvm-cov
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 11
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      # puppeteer-core for the two drivers, and the console's own build for
+      # console_fetch.sh (which builds it itself, from these modules).
+      - name: Install the console's dependencies
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+      - name: Cache the editor download
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/batlehub-heavy
+          key: heavy-browser-${{ hashFiles('tests/heavy/vsx_login.sh', 'tests/heavy/vsx_view.sh', 'tests/heavy/console_fetch.sh') }}
+      - name: Start a headless browser
+        uses: ./.github/actions/headless-chrome
+      - name: Clean previous coverage data
+        run: cargo llvm-cov clean --workspace
+      - name: vsx_login heavy suite
+        run: bash tests/heavy/vsx_login.sh
+        env:
+          COVERAGE: "1"
+      - name: vsx_view heavy suite
+        run: bash tests/heavy/vsx_view.sh
+        env:
+          COVERAGE: "1"
+          CDP_URL: http://127.0.0.1:9222
+      - name: console_fetch heavy suite
+        run: bash tests/heavy/console_fetch.sh
+        env:
+          COVERAGE: "1"
+          CDP_URL: http://127.0.0.1:9222
+      - name: Generate LCOV
+        if: ${{ !cancelled() }}
+        run: >-
+          cargo llvm-cov report --lcov --output-path coverage-heavy-browser.lcov
+          --ignore-filename-regex "${{ env.COVERAGE_EXCLUDE }}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !cancelled() }}
+        with:
+          name: coverage-heavy-browser
+          path: coverage-heavy-browser.lcov
+          if-no-files-found: ignore
+      # vsx_view.sh keeps its screenshots, transcripts and the editor's log
+      # under ~/.cache/batlehub-heavy/vsx_view-last when a step past the
+      # editor start fails.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: heavy-browser-evidence
+          path: ~/.cache/batlehub-heavy/vsx_view-last
+          if-no-files-found: ignore
 
   heavy-bundler:
     name: Heavy integration (Bundler)
@@ -368,12 +641,12 @@ jobs:
       GEM_HOME: ${{ github.workspace }}/.gem
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
         with:
           toolchain: "stable"
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
+      - uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2.87.10
         with:
           tool: cargo-llvm-cov
       - name: Install build dependencies
@@ -454,6 +727,16 @@ jobs:
           - suite: go
           - suite: maven
           - suite: pathproxy
+          # vscode_patch / che_code_patch: the che-code credential patch
+          # (patches/che-code) loaded into a built editor's own node and
+          # driven through its CLI — the stock VS Code server build (a cached
+          # ~200 MB download) and the che-code build, copied out of
+          # quay.io/che-incubator/che-code with the runner's docker.
+          - suite: vscode_patch
+          - suite: che_code_patch
+          # hybrid: npm and pip on a `mode = "hybrid"` registry over a served
+          # directory; both clients are on the runner image.
+          - suite: hybrid
           # RFC 0018 from the client side: npm against a `[registries.security]`
           # registry backed by npmjs.org and the real OSV, the worker embedded.
           # Needs Node (installed below) and bubblewrap for the egress row —
@@ -494,16 +777,16 @@ jobs:
       # the copy in this file is the one the cache key below cannot see.
       NODE_VERSION: "24"
       DOTNET_CHANNEL: "10.0"
-      TERRAFORM_VERSION: "1.8.5"
-      MISE_VERSION: "2026.8.6"
+      TERRAFORM_VERSION: "1.16.2"
+      MISE_VERSION: "2026.9.5"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
         with:
           toolchain: "stable"
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
+      - uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2.87.10
         with:
           tool: cargo-llvm-cov
       - name: Install build dependencies
@@ -513,7 +796,7 @@ jobs:
 
       # ── Per-ecosystem client setup ──────────────────────────────────────────
       - name: Set up Node (npm / Open VSX / quarantine / upstream_audit / airgap)
-        if: matrix.suite == 'npm' || matrix.suite == 'openvsx' || matrix.suite == 'quarantine' || matrix.suite == 'upstream_audit' || matrix.suite == 'airgap'
+        if: matrix.suite == 'npm' || matrix.suite == 'openvsx' || matrix.suite == 'quarantine' || matrix.suite == 'upstream_audit' || matrix.suite == 'airgap' || matrix.suite == 'hybrid'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -605,7 +888,7 @@ jobs:
         # `~` is expanded by the action; it is deliberately not passed to the
         # scripts as `HEAVY_CACHE`, where bash would take it literally and put
         # the downloads in a directory named `~`.
-        if: matrix.suite == 'conda' || matrix.suite == 'composer' || matrix.suite == 'nvm' || matrix.suite == 'sdkman'
+        if: matrix.suite == 'conda' || matrix.suite == 'composer' || matrix.suite == 'nvm' || matrix.suite == 'sdkman' || matrix.suite == 'vscode_patch'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/batlehub-heavy
@@ -684,17 +967,17 @@ jobs:
       # another matrix's env.
       NODE_VERSION: "24"
       DOTNET_CHANNEL: "10.0"
-      TERRAFORM_VERSION: "1.8.5"
+      TERRAFORM_VERSION: "1.16.2"
       BUNDLER_VERSION: "4.0.17"
       GEM_HOME: ${{ github.workspace }}/.gem
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
         with:
           toolchain: "stable"
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
+      - uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2.87.10
         with:
           tool: cargo-llvm-cov
       - name: Install build dependencies
@@ -751,7 +1034,7 @@ jobs:
   coverage-report:
     name: Coverage report (merged)
     runs-on: ubuntu-latest
-    needs: [unit, integration, heavy-marketplace, heavy-bundler, heavy-client, heavy-authz]
+    needs: [unit, integration, heavy-marketplace, heavy-bundler, heavy-backends, heavy-browser, heavy-client, heavy-authz]
     # Run even when a coverage job fails: merge_coverage.py renders an "absent"
     # row for any missing LCOV, so a partially-green pipeline still reports
     # (download-artifact with a pattern warns, not fails, on zero matches).
@@ -776,6 +1059,11 @@ jobs:
             heavy-nuget=coverage-heavy-nuget.lcov \
             heavy-composer=coverage-heavy-composer.lcov \
             heavy-terraform=coverage-heavy-terraform.lcov \
+            heavy-vscode_patch=coverage-heavy-vscode_patch.lcov \
+            heavy-che_code_patch=coverage-heavy-che_code_patch.lcov \
+            heavy-hybrid=coverage-heavy-hybrid.lcov \
+            heavy-backends=coverage-heavy-backends.lcov \
+            heavy-browser=coverage-heavy-browser.lcov \
             authz-matrix=coverage-authz-matrix.lcov \
             authz-signing=coverage-authz-signing.lcov \
             authz-npm=coverage-authz-npm.lcov \

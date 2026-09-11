@@ -96,7 +96,12 @@ fuzz_target!(|data: &[u8]| {
     });
 
     // A path of up to four tiers, each independently absent / sealed / granting.
-    let tiers = [Tier::Registry, Tier::Namespace, Tier::Package, Tier::Version];
+    let tiers = [
+        Tier::Registry,
+        Tier::Namespace,
+        Tier::Package,
+        Tier::Version,
+    ];
     let mut path: Vec<Node> = Vec::new();
     for (depth, tier) in tiers.iter().enumerate() {
         let Ok(kind) = u.int_in_range(0..=2u8) else {

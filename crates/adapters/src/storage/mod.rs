@@ -112,6 +112,10 @@ mod ensure_safe_key_tests {
             "a/..",
             "a\\..\\b",
             "with\0nul",
+            // Aliases of a neighbour on the filesystem backend, which joins
+            // the key verbatim: same file as `local:npm/a/b/1.0`.
+            "local:npm/a//b/1.0",
+            "local:npm/a/./b/1.0",
         ] {
             assert!(ensure_safe_key(key).is_err(), "should reject {key:?}");
         }

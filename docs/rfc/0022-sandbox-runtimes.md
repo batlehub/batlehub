@@ -9,7 +9,7 @@
 | Co-author   | —                                                             |
 | Created     | 2026-09-09                                                    |
 | Supersedes  | —                                                             |
-| Depends on  | RFC 0018 (the worker role, the scanner port, `[worker.sandbox]`) |
+| Depends on  | RFC 0018 (the worker role, the scanner port, `[worker.sandbox]`); RFC 0018-bis for how many runs one worker has in flight — its sandbox pool is sized from the per-run cost this RFC defines |
 | Touches     | `crates/core`, `crates/adapters`, `crates/config`, `crates/sandbox` (new), `server`, `helm`, docs |
 
 ---
@@ -89,7 +89,7 @@ INFO security worker: ready (4 slots, runtime kubernetes)
 
 # and on a node where bwrap cannot do what it says
 $ batlehub --roles worker --config config.toml
-ERROR sandbox: probe failed for runtime "bwrap": the sandboxed process could still reach 10.0.0.1:53 with network = false
+ERROR sandbox: probe failed for runtime "bwrap": the sandbox never started — bwrap exited 1 and no result came back: "bwrap: setting up uid map: Permission denied"
 ERROR sandbox: refusing to start — a worker without its sandbox scans nothing, it does not scan unsandboxed
        (kernel.apparmor_restrict_unprivileged_userns=1 on this host; see docs/operations/scan-worker.md#runtimes)
 ```
@@ -158,7 +158,8 @@ ERROR sandbox: refusing to start — a worker without its sandbox scans nothing,
 
 - One port, `SandboxRuntime`, in `crates/core`; the worker and the scanners
   depend on it and on nothing more specific. Adding a runtime is one adapter
-  file and one `match` arm in `server/src/builders.rs`.
+  file and one `match` arm in `build_sandbox_runtime` (`server/src/builders.rs`),
+  which `build_scanners` in `server/src/setup.rs` calls.
 - Four runtimes at the end of §12: `none`, `bwrap`, `oci`, `kubernetes`. The
   first two behave exactly as today for every existing config.
 - The scanner's inputs cross the port as **data** (a bundle), never as a
@@ -184,10 +185,13 @@ ERROR sandbox: refusing to start — a worker without its sandbox scans nothing,
 
 **Non-goals**
 
-- Distributing *jobs* differently. Which worker takes which job is settled
-  by RFC 0018's PostgreSQL queue and the worker Deployment's replica count;
-  this RFC is about where one scanner's process runs once a worker holds the
-  job. §8 records why a pod-per-*job* executor is the wrong tier.
+- Distributing *jobs* differently, or deciding how many runs a worker has
+  in flight. Which worker takes which job is settled by RFC 0018's
+  PostgreSQL queue and the worker Deployment's replica count; how many
+  sandboxes one worker keeps busy is RFC 0018-bis's sandbox pool, sized
+  from the per-run cost this RFC defines. This RFC is about where one
+  scanner's process runs once a worker holds the job and a pool permit.
+  §8 records why a pod-per-*job* executor is the wrong tier.
 - Sandboxing the network scanners (`osv`, `socket`, `mlab`, `sigstore`,
   `trivy` in server mode). They run no artifact-derived code and make HTTP
   calls from the worker; that stays.
@@ -215,21 +219,27 @@ runtime         = "bwrap"          # none | bwrap | oci | kubernetes
 # what it has — the table in §4.2 says how.
 memory_limit_mb = 2048
 cpu_seconds     = 300
-max_extracted_mb = 512             # applied by the agent, inside the sandbox
+max_extracted_mb = 512             # applied by the agent, inside the sandbox; on oci and
+                                   # kubernetes also the size of the /work tmpfs (§4.2)
 max_entries      = 50000
 # How long the runtime may take to get the agent running (image pull, pod
 # scheduling, the bundle fetch) before the run is a ScannerError::Timeout.
 # Added to the scanner's own timeout for the sandbox's deadline.
 start_timeout_secs = 120
+# How often a passed probe is repeated while the worker runs (§4.3).
+probe_interval_secs = 600
 # Where the image runtimes put what a run needs that is not already in the
 # cache — the per-run manifest, an uncached artifact, the result — and for
-# how long a presigned URL is valid past the run's deadline. The proxy never
-# reads this prefix (§7).
+# how long a presigned URL is valid past the run's deadline. The keys live on
+# one leaf backend of `[storage]`, by name; unset means the default backend.
+# They carry none of the proxy's key namespaces and never enter the storage
+# router's bookkeeping (§5.2, §7).
+bundle_backend  = ""
 bundle_prefix   = "sandbox/"
 bundle_ttl_secs = 60
 
 [worker.sandbox.bwrap]
-binary = "bwrap"                   # was `[worker.sandbox] bwrap`; the old key still reads
+binary = "bwrap"                   # today hard-coded to "bwrap" on PATH (server/src/setup.rs); now a key
 
 [worker.sandbox.oci]
 engine  = "podman"                 # podman | docker
@@ -266,6 +276,27 @@ or none at all — loads and behaves as it does today.
 
 ### 4.2 Behaviour rules
 
+One run, from the scanner's ask to the `RunOutput` or the `ScannerError`
+it becomes — the same on every runtime, only the instance differs:
+
+```mermaid
+flowchart TD
+    A["scanner: RunSpec<br/>bundle, argv, network, limits, image, label"] --> B["runtime: write the bundle<br/>file:// in a TempDir, or presigned URLs"]
+    B --> C{"the agent reached its<br/>bundle fetch within start_timeout?"}
+    C -->|no| E1["ScannerError::Timeout<br/>outcome = start_timeout"]
+    C -->|yes| D["agent: fetch, extract, execve, collect, upload"]
+    D --> F{"exited within<br/>start_timeout + timeout?"}
+    F -->|no| E2["kill or delete the instance<br/>ScannerError::Timeout<br/>outcome = run_timeout"]
+    F -->|yes| G{"out.tar present<br/>and well-formed?"}
+    G -->|"no result"| E3["ScannerError::Crashed<br/>outcome = crashed"]
+    G -->|malformed| E4["ScannerError::Output<br/>outcome = result_invalid"]
+    G -->|yes| H["RunOutput: status, stdout, stderr_tail<br/>outcome = ok — a scanner that exited 1 is an answer"]
+    H --> I["delete the instance<br/>and the per-run keys"]
+    E2 --> I
+    E3 --> I
+    E4 --> I
+```
+
 - **A run is one bundle, one argv, one sandbox instance.** A scanner asks
   the runtime to run a command over a bundle (§5.2) with a `network` flag
   and the limits, and gets the output back. The sandbox instance — the
@@ -278,7 +309,8 @@ or none at all — loads and behaves as it does today.
   reads the artifact, so it never shares a filesystem with the process that
   did. This is stricter than today, where both run in the same directory.
   On the image runtimes with the storage transport, "no network" means *no
-  network but the storage endpoint* (§5.2, §7).
+  network but the storage endpoint* — and, on `kubernetes`, the cluster
+  resolver that names it (§5.2, §5.3, §7).
 - **The agent runs on every runtime, and it is not `batlehub`.**
   `batlehub-sandbox` is a separate binary from its own crate (§6.2): static,
   no config file, no environment read, no stdin, argv of exactly
@@ -302,14 +334,23 @@ or none at all — loads and behaves as it does today.
   | scanner `timeout`    | kill the process tree | `podman kill` then `rm`                      | `activeDeadlineSeconds = start_timeout + timeout`, then delete |
   | `start_timeout_secs` | n/a (start is a spawn)| the container must reach the bundle fetch    | the pod must reach `Running` and fetch its bundle       |
   | `max_extracted_mb`, `max_entries` | agent    | agent                                        | agent                                                   |
+  | `/work` (the writable dir) | a host `TempDir`  | `--tmpfs /work` sized `max_extracted_mb`, **charged to `--memory`** | a `Memory` `emptyDir` sized `max_extracted_mb`, **charged to the memory limit** |
 
   A limit the runtime cannot raise is not an error — the agent's rlimits are
   best-effort where the sandbox's own cgroup already bounds the process, as
-  today.
+  today. On the image runtimes `/work` is memory-backed, and a memory-backed
+  mount is charged to the container's memory limit: what the scanner
+  extracts and writes there competes with its own heap under
+  `memory_limit_mb`, which is why §4.3 refuses `max_extracted_mb` at or
+  above it. `trivy` is the scanner this bites: without a `[scanners.trivy]
+  endpoint` it downloads its database into `--cache-dir` under `/work` on
+  every run (today too, into the job's `TempDir`), so a deployment on an
+  image runtime either points it at the server the chart deploys or sizes
+  `/work` for the database.
 - **The default image is the worker's own; the recommended one is per
   scanner.** With no `image`, a run uses the image the worker was started
-  from — read from the `BATLEHUB_IMAGE` env the Containerfiles set at build
-  time — which carries the agent and every scanner. The chart's default
+  from — read from the `BATLEHUB_IMAGE` env that §6.5 adds to the Containerfiles
+  — which carries the agent and every scanner. The chart's default
   values point each scanner at its slim image
   (`batlehub-sandbox-postmortem`, `-trivy`, `-guarddog`): the scanner, its
   runtime, `batlehub-sandbox`, and nothing else — no `batlehub`, no shell.
@@ -328,18 +369,40 @@ or none at all — loads and behaves as it does today.
   every bundle key carries the same in its path. At startup and on every
   idle pass the runtime deletes the ones labelled with *this* worker id, and
   the ones older than `orphan_after_secs` regardless of worker; bundle keys
-  under `bundle_prefix` older than `orphan_after_secs` go the same way.
+  under `bundle_prefix` older than `orphan_after_secs` go the same way,
+  listed on the bundle backend itself — never through the storage router,
+  whose `list_keys` answers from its own tables and has never seen a key a
+  presigned PUT wrote (§5.2).
   `none` and `bwrap` have `--die-with-parent` and a `TempDir`, and nothing
   to sweep.
-- **Concurrency is `max_concurrent` runs**, not jobs: a job that runs three
-  binary scanners runs them one after the other, as it runs them today in
-  three `bwrap` invocations. On `kubernetes` the namespace's `ResourceQuota`
-  is the operator's ceiling; the chart sets one from `max_concurrent ×
-  memory_limit_mb`.
+- **One run costs `memory_limit_mb + max_extracted_mb`, and that number is
+  what sizes the worker's sandbox pool.** RFC 0018-bis derives the pool
+  from the worker's memory budget divided by this cost (`floor(budget /
+  cost)`, at least 1) and runs at most that many sandboxes at once; every
+  run holds one permit for its whole life, `bwrap` process tree, container
+  or pod alike. Until 0018-bis lands the pool is one — the sequential loop
+  the tree has today. On `kubernetes` the namespace's `ResourceQuota` is
+  the operator's ceiling; the chart sets one from `replicas × pool × cost`,
+  which is the most memory the fleet's sandboxes can hold at once, and the
+  worker's own `resources.limits.memory` is what the pool is derived from.
 - **Embedded mode is unchanged.** `roles = ["proxy", "worker"]` with
   `runtime = "kubernetes"` works — the proxy pod's ServiceAccount then holds
   the pod-creating Role, which §7 recommends against; the docs say so and
   the chart only wires the Role to the worker Deployment.
+
+The sweep, at startup and on every idle pass, decides per instance and per
+bundle key with two questions and no third:
+
+```mermaid
+flowchart TD
+    S["startup, and every idle pass"] --> L["list instances by label<br/>and bundle keys under bundle_prefix<br/>on the leaf backend, never the router"]
+    L --> Q1{"label io.batlehub/worker<br/>is this worker id?"}
+    Q1 -->|yes| D["delete — a run this process<br/>cannot be waiting on"]
+    Q1 -->|no| Q2{"older than its deadline<br/>plus orphan_after_secs?"}
+    Q2 -->|yes| D
+    Q2 -->|no| K["keep — another live worker's run"]
+    D --> M["batlehub_sandbox_orphans_swept_total<br/>kind = pod, container or bundle"]
+```
 
 ### 4.3 Validation
 
@@ -349,12 +412,19 @@ At config load:
   list. `none` keeps RFC 0018's rule: refused outside tests unless
   `BATLEHUB_UNSAFE_NO_SANDBOX=1`.
 - `runtime = "kubernetes"`, or `oci` with `transport = "storage"`, while the
-  storage backend cannot presign (`filesystem`, `in_memory`; the router
-  when its route for `bundle_prefix` cannot) is refused: *"the kubernetes
+  bundle backend (`bundle_backend`, else the default backend of `[storage]`)
+  cannot presign (`filesystem`, `in_memory`) is refused: *"the kubernetes
   runtime moves bundles through the storage backend and 'filesystem'
-  cannot presign a URL; configure an S3-compatible backend, or route
-  `sandbox/` to one"*. A sandbox with no way to receive its input is not a
-  sandbox that fails later, it is a config error now.
+  cannot presign a URL; configure an S3-compatible backend, or name one in
+  `bundle_backend`"*. `bundle_backend` naming a backend `[storage]` does not
+  declare is refused with the list. A sandbox with no way to receive its
+  input is not a sandbox that fails later, it is a config error now. The
+  *artifact's* backend is not checked: a cached artifact on a backend that
+  cannot presign is uploaded to the bundle backend as if it were uncached
+  (§5.2).
+- On the image runtimes, `max_extracted_mb >= memory_limit_mb` is refused:
+  `/work` is memory-backed and charged to the same limit (§4.2), so the
+  scanner would have no memory left once the extraction filled it.
 - `[scanners.<name>] image` set while `runtime` is `none` or `bwrap` is
   refused: *"`image` on scanner 'guarddog' has no effect under runtime
   'bwrap'; it is read by the oci and kubernetes runtimes"*. A key that is
@@ -362,37 +432,46 @@ At config load:
   is not.
 - `[worker.sandbox.kubernetes]` set while `runtime != "kubernetes"` (and the
   same for `oci`) is a warning, not a refusal: the block is inert, and a
-  config that is switched between runtimes by a layer (RFC 0018 §4.1's
-  `load_layered`) legitimately carries both.
-- `[worker.sandbox] bwrap = "…"` (the old key) and `[worker.sandbox.bwrap]
-  binary` both set to different values is refused; the same value, or only
-  one, reads as `binary`.
-- A `[[registries]]` whose `name` equals `bundle_prefix` without its trailing
-  `/` (`sandbox` by default) is refused: artifact keys start with the
-  registry's name, and the one thing the sandbox may write must never share
-  a prefix with anything the proxy reads (§7). `bundle_prefix` itself must
-  be one path segment with a trailing `/`.
+  config that is switched between runtimes by a layer (`load_layered`,
+  `docs/guide/configuration.md` § Layered config files) legitimately carries
+  both.
+- `bundle_prefix` must be one path segment with a trailing `/`, and must not
+  be `blob/` nor start with `artifact:`, `local:` or `meta:`. Every key the
+  proxy reads carries one of those three logical namespaces
+  (`proxy_artifact_key`, `artifact_storage_key`, the metadata sibling) or is
+  a physical `blob/<sha256>` the deduplicating router writes; the one thing
+  the sandbox may write must never share a prefix with any of them (§7). A
+  registry's *name* cannot collide with the prefix — it sits behind the
+  namespace, not in front of it.
 - On the image runtimes, `[scanners.<name>] command` is **not** checked
-  against the worker's `PATH` at load (it is today, by `command_exists`):
+  against the worker's `PATH` at worker setup (it is today, by
+  `require_command` in `build_scanners`):
   the binary lives in the scanner's image, and the probe checks it there.
 
-At worker startup, **the probe** — for every distinct image the config
-names (one, on the local runtimes), the runtime does one run with a bundle
-whose manifest says `probe` and `network = false`, and requires every
-assertion the agent makes from inside to pass:
+At worker startup, **the probe** — once per room the config names: every
+distinct `image` on the image runtimes, every `/opt/sandbox/<scanner>` tree
+on `bwrap` (`none` skips it) — the runtime does one run with a bundle whose
+manifest says `probe` and `network = false`, and requires a result to come
+back at all and every assertion the agent makes from inside to pass:
 
 | Assertion                   | How the agent checks                                                                      | Runtime that would fail it |
 | --------------------------- | ----------------------------------------------------------------------------------------- | -------------------------- |
-| no network                  | a `connect()` to the canary addresses the manifest lists (the worker's own, `1.1.1.1:53`) must fail with `ENETUNREACH`/`EACCES` within 1 s, not time out; on the storage transport the bundle fetch itself proves the one allowed destination | `bwrap` without userns (AppArmor), a pod whose NetworkPolicy is not enforced by the CNI |
+| a result at all             | `out.tar` exists once the sandbox has exited — the agent ran, fetched its bundle and could write back | `bwrap` on a host that restricts user namespaces (AppArmor): `bwrap` exits with `setting up uid map: Permission denied` and nothing runs — the failure PR #146 met, named on the first line with `bwrap`'s stderr tail |
+| no network                  | a `connect()` to each canary the manifest lists — the worker's own `/livez` listener, `1.1.1.1:53` — must **not reach anything**: `ENETUNREACH`/`EACCES` at once (no route in the namespace: `bwrap`, `--network none`) or a SYN that gets no answer within 3 s (a CNI that drops: `kubernetes`) both pass; a connection, or an `ECONNREFUSED`, is a packet that arrived, and fails. On the storage transport the bundle fetch itself proves the one allowed destination; a canary is an address, never a name, because DNS to the cluster resolver is allowed there (§5.3) | a pod whose NetworkPolicy is not enforced by the CNI, an `oci` engine whose `--network none` an `extra_args` overrode |
 | read-only root              | `open(O_WRONLY)` on `/usr/bin/.probe` fails with `EROFS`                                  | a misconfigured `oci` `--read-only` |
 | one writable dir            | the work dir is writable, `nosuid` and `nodev` (from `/proc/self/mounts`)                  | `oci` with a plain bind |
-| empty environment           | `environ` is exactly `HOME`, `PATH`                                                        | `oci` with `--env-host` |
+| empty environment           | the `environ` the agent *received* is `HOME`, `PATH` and, on `kubernetes` only, the `KUBERNETES_SERVICE_*`/`KUBERNETES_PORT*` set the kubelet injects for the API service whatever `enableServiceLinks` says — anything else fails; what the scanner receives is always exactly `HOME`, `PATH`, because the agent clears the rest before `execve` | `oci` with `--env-host`, a pod carrying `env` the chart did not render |
 | unprivileged                | `geteuid() != 0`, no capability in `CapEff`                                                 | a pod without `runAsNonRoot` |
 | no credentials in reach     | `/var/run/secrets/kubernetes.io/serviceaccount/token` absent; no `DATABASE_URL`/`AWS_*`/`BATLEHUB_*` in the environment | `kubernetes` with `automountServiceAccountToken` unset |
 | no shell, no worker binary  | no `sh`, `bash`, `busybox` or `batlehub` on `PATH`                                          | a scanner image built `FROM debian` without pruning — a **warning** on the worker's own image (it has both, by construction), a failure on a per-scanner one |
 | the scanner's command exists| every `command` the manifest lists for this image is an executable file                     | an image built for another scanner |
 | the agent's wire version    | the manifest's `wire` equals the agent's                                                    | a per-scanner `image` built from an older release |
 | pid namespace               | `getpid() == 1` or the agent is the child of pid 1                                          | `none` (expected: `none` skips the probe and logs that it did) |
+
+The probe's report also carries the SHA-256 of every `command` it found in
+the room, which is the scanner *fingerprint* RFC 0018-bis keys reusable
+results on: on the image runtimes the binary lives in the image, not on the
+worker's `PATH`, and the probe is the one place that has already opened it.
 
 A failed probe is fatal: the process exits non-zero with the failed
 assertion on the first line and the runtime-specific hint on the second.
@@ -403,6 +482,22 @@ and a worker whose re-probe fails **stops leasing jobs** and says so, rather
 than scanning behind walls that fell. A version on the queue then stays
 `SCAN_PENDING` until a worker with a sandbox takes it, which is RFC 0018's
 degraded mode, not a new one.
+
+The probe's place in the worker's life — one path exits, the other only
+stops leasing:
+
+```mermaid
+flowchart TD
+    S["worker starts"] --> W["sweep orphans"] --> P["probe every room:<br/>each image, or each /opt/sandbox tree"]
+    P --> Q{"a result came back and<br/>every assertion passed?"}
+    Q -->|no| X["exit non-zero<br/>line 1: the assertion<br/>line 2: the runtime's hint"]
+    Q -->|yes| R["batlehub_sandbox_ready = 1<br/>lease jobs"]
+    R --> T["config reload, or<br/>probe_interval_secs elapsed"] --> RP["re-probe"]
+    RP --> Q2{"still holds?"}
+    Q2 -->|yes| R
+    Q2 -->|no| ST["batlehub_sandbox_ready = 0<br/>stop leasing, and say so<br/>versions stay SCAN_PENDING"]
+    ST --> T
+```
 
 ---
 
@@ -417,25 +512,28 @@ graph TB
         Q -->|lease| W2["worker B"]
     end
     subgraph "invocation tier — this RFC"
-        W1 --> SW["ScanWorker (core)"] --> SC["ArtifactScanner impls<br/>(postmortem, guarddog, trivy)"]
+        W1 --> SW["ScanWorker (core)<br/>0018-bis: plan, sandbox pool"] --> SC["ArtifactScanner impls<br/>(postmortem, guarddog, trivy)"]
         SC -->|"run(bundle, argv, network, limits)"| P["dyn SandboxRuntime<br/>(core port)"]
         P --> B["bwrap"]
         P --> N["none"]
         P --> O["oci"]
         P --> K["kubernetes"]
         B & N & O -->|"file:// in a bind-mounted dir"| A["batlehub-sandbox<br/>(static agent, inside the walls)"]
-        K -->|"presigned GETs (the cache key itself when cached) / one PUT"| S[("storage backend<br/>cache keys + sandbox/ prefix")]
+        K -->|"presigned GETs (the dedup blob itself when cached) / one PUT"| S[("storage backend<br/>cache keys + sandbox/ prefix")]
         S --> A
         A --> X["scanner argv"]
     end
 ```
 
 Job distribution was settled by RFC 0018: any number of worker processes
-lease from one PostgreSQL queue, and the Helm chart scales them on queue
-depth. What this RFC adds is one tier down: *a worker that holds a job* asks
-a runtime for a sandbox around each scanner process. The two tiers compose
-freely — three worker replicas on `bwrap`, or one worker opening gVisor pods
-— and neither knows the other's choice.
+lease from one PostgreSQL queue, and the Helm chart scales them on the
+queue. RFC 0018-bis sits one tier down: a worker that holds a job plans its
+scanner invocations and runs the sandboxed ones from a pool whose size is
+derived from memory. What this RFC adds is the tier below that: *an
+invocation that holds a pool permit* asks a runtime for a sandbox around
+its scanner process. The three tiers compose freely — three worker replicas
+on `bwrap` with two permits each, or one worker opening gVisor pods — and
+none knows the others' choice.
 
 The port is in `crates/core` (`ports/sandbox.rs`) rather than beside the
 scanners in `crates/adapters`, for the same reason `ArtifactScanner` is: the
@@ -461,6 +559,21 @@ described instead of written. The **result** is a tar: `result.json` (exit
 status, byte counts, the stderr tail, the probe verdicts when the run was
 one) and `stdout`.
 
+```mermaid
+flowchart LR
+    subgraph IN["what goes in — one GET on the manifest"]
+        M["manifest.json<br/>wire version, argv, network,<br/>limits, timeout, ExtractPolicy,<br/>the canaries when it is a probe"]
+        M --> E1["entry: inline<br/>path + bytes<br/>a lockfile, sbom.cdx.json"]
+        M --> E2["entry: file by URL<br/>path + url + declared size"]
+        M --> E3["entry: archive by URL<br/>path + url + declared size<br/>extracted under the policy"]
+        E3 -.-> ART["the artifact:<br/>its dedup blob when cached,<br/>bundle_prefix/job/artifact when not"]
+    end
+    subgraph OUT["what comes out — one PUT"]
+        T["out.tar"] --> RJ["result.json<br/>exit status, byte counts,<br/>stderr tail, probe verdicts"]
+        T --> SO["stdout<br/>capped at STDOUT_CAP_BYTES"]
+    end
+```
+
 The manifest reaches the agent by URL, the inputs by the URLs it names, and
 the result leaves the same way. Two schemes, one agent:
 
@@ -473,10 +586,17 @@ the result leaves the same way. Two schemes, one agent:
 - **`https://`** — the storage transport. The worker asks the storage
   backend for presigned URLs, each valid for `start_timeout + timeout +
   bundle_ttl`:
-  - a GET on the **artifact's own cache key** when the artifact is cached —
+  - a GET on the **artifact's own blob** when the artifact is cached —
     which is the common case, since a job is queued by a request that just
-    fetched it. No copy: the pod reads exactly the object it is scanning,
-    read-only, and nothing else;
+    fetched it. The logical key (`artifact:<registry>/<name>/<version>`) is
+    resolved the way the deduplicating `StorageRouter` resolves every read:
+    through `artifact_dedup_refs` to the physical `blob/<sha256>` on the
+    backend that recorded it, or to the legacy key on its backend. The
+    presigned GET is on that physical object. No copy: the pod reads exactly
+    the bytes it is scanning, read-only, and nothing else — a blob shared by
+    every logical key with the same content, which a read cannot tell apart
+    and cannot alter. When that backend cannot presign (`filesystem`), the
+    artifact takes the uncached path below;
   - a GET on `<bundle_prefix><job>/artifact` when it is not — the worker
     uploads it there **once per job**, and every run of the job's scanners
     names the same URL (RFC 0018 §6.3 keeps the worker from writing an
@@ -496,21 +616,90 @@ the result leaves the same way. Two schemes, one agent:
   proxy never reads. A 500 MiB artifact that is in the cache costs the
   storage hop nothing but three GETs.
 
+The storage transport in order, for one run whose artifact is cached. The
+`file://` transport is the same sequence with the leaf backend replaced by
+the per-run `TempDir` and no presigning:
+
+```mermaid
+sequenceDiagram
+    participant W as worker (ScanWorker + runtime)
+    participant R as StorageRouter
+    participant B as leaf bundle backend (S3)
+    participant K as sandbox instance (pod or container)
+    participant A as batlehub-sandbox (agent)
+    W->>R: presign_get(artifact logical key)
+    R-->>W: presigned GET on blob/sha256, on the blob's backend
+    W->>B: write manifest.json under bundle_prefix/job/scanner/attempt/
+    W->>B: presign_put(out.tar, ttl, max_bytes)
+    W->>K: create, argv = --in manifest GET --out out.tar PUT
+    K->>A: start
+    A->>B: GET manifest.json
+    A->>B: GET the artifact (blob, or per-job copy)
+    A->>A: extract, rlimits, seccomp, execve the scanner
+    A->>B: PUT out.tar, Content-Length within the ceiling
+    A-->>K: exit 0
+    K-->>W: Succeeded or Failed (watched, bounded by the deadline)
+    W->>B: HEAD out.tar, refuse above the ceiling
+    W->>B: GET out.tar
+    W->>K: delete, grace 0
+    W->>B: delete the per-run keys (the per-job artifact when the job closes)
+    W->>W: parse result.json and stdout as hostile data
+```
+
 `StorageBackend` gains `presign_get(key, ttl)` and `presign_put(key, ttl,
 max_bytes)` for this; the S3 backend implements them (the SDK's presigning
 is local, no round-trip), the filesystem and in-memory backends return
-`Unsupported`, and the router answers for whichever backend the key routes
-to — which means the artifact's cache key and `bundle_prefix` may live on
-different backends, and the router must be able to presign on both. The PUT
-is presigned with a `Content-Length` ceiling of `STDOUT_CAP_BYTES` plus the
-result's own bounds, so the agent cannot upload more than the worker will
-read.
+`Unsupported`. The `StorageRouter` implements `presign_get` only, by
+resolving the logical key to its physical blob and backend as `retrieve`
+does. **Bundle keys never go through the router.** A presigned PUT lands on
+the backend with no bookkeeping row, so the router's `list_keys`,
+`stat_by_prefix` and dedup tables would never know the key existed; the
+bundle module therefore holds the *leaf* backend `bundle_backend` names
+(the default backend when unset, resolved once from `[storage]` at build
+time) and does every bundle operation on it directly — the manifest write,
+the per-job artifact upload, the `out.tar` read, the deletes, the sweep.
+The artifact's blob and the bundle keys may thus sit on different backends,
+each presigning its own.
 
-The `--probe` run is a bundle whose manifest says so: no argv, the canary
+The PUT is presigned with a `Content-Length` ceiling of `STDOUT_CAP_BYTES`
+plus the result's own bounds. SigV4 signs whichever headers the signer
+includes, so the ceiling is a signed `Content-Length` the backend refuses
+to exceed where it honours signed headers (S3, MinIO); because that is a
+property of the backend and not of the design, the worker `HEAD`s the
+result before reading it and refuses one above the ceiling regardless. The
+agent cannot make the worker read more than it will.
+
+`trivy`'s bundle is the extracted tree as an `archive` input — or, when
+the job carries an SBOM, the SBOM inline as `sbom.cdx.json` and no archive
+at all — and its argv keeps `--cache-dir /work/.trivy`, so its database
+lands in the one writable place, as it does today.
+
+The probe run is a bundle whose manifest says so: no argv, the canary
 addresses to try, the commands to `stat`; the result carries the verdicts of
 §4.3.
 
 ### 5.3 The four runtimes
+
+The four rooms side by side — the same agent and the same scanner in each,
+and only the walls around them differ:
+
+```mermaid
+flowchart TB
+    subgraph N["none — inside the worker process"]
+        N1["agent, as a library"] --> N2["scanner, spawned by the worker<br/>rlimits + seccomp, no walls"]
+    end
+    subgraph BW["bwrap — one process tree on the worker host"]
+        B0["--ro-bind /opt/sandbox/scanner as /<br/>--unshare user pid ipc uts, net unless network<br/>/work the one bind, --clearenv"] --> B1["agent, child of bwrap"] --> B2["scanner"]
+    end
+    subgraph OCI["oci — one container per run"]
+        O0["the image, --read-only, --network none,<br/>--cap-drop ALL, --userns auto,<br/>--memory, --tmpfs /work"] --> O1["agent"] --> O2["scanner"]
+        O3["/bundle bind (transport mount)<br/>or presigned URLs (transport storage)"] --- O1
+    end
+    subgraph K8S["kubernetes — one pod per run"]
+        K0["Pod: restartPolicy Never, activeDeadlineSeconds,<br/>runtimeClassName, restricted PSS,<br/>Memory emptyDir as /work, no SA token"] --> K1["agent"] --> K2["scanner"]
+        K3["NetworkPolicy by label:<br/>storage (+ DNS), or egress"] --- K0
+    end
+```
 
 - **`none`** — the agent crate as a library, called in-process on a
   `TempDir` with `file://` URLs; the argv is spawned by the worker process.
@@ -536,7 +725,10 @@ addresses to try, the commands to `stat`; the result carries the verdicts of
                                     # with transport = "storage", a network the
                                     # storage endpoint is reachable from (§7)
       --read-only --tmpfs /work:rw,nosuid,nodev,size=<max_extracted_mb>m
-      -v <run_dir>:/bundle:rw,nosuid,nodev   # transport = "mount": manifest + artifact in, out.tar out
+      -v <run_dir>:/bundle:rw,nosuid,nodev,U # transport = "mount": manifest + artifact in, out.tar out;
+                                    # `U` chowns the bind to the uid `--userns auto` maps (podman);
+                                    # docker has no `U`: the runtime creates the per-run dir
+                                    # writable by the uid the daemon's remap gives 65532
       --cap-drop ALL --security-opt no-new-privileges --security-opt seccomp=default
       --userns auto                 # podman; docker: the daemon's userns-remap or nothing
       --memory <memory_limit_mb>m --pids-limit 256 --cpus 1
@@ -594,15 +786,44 @@ addresses to try, the commands to `stat`; the result carries the verdicts of
   NetworkPolicies the chart installs: on `io.batlehub/network=storage`,
   egress to the storage endpoint only (a CIDR, or an FQDN rule where the CNI
   has them — the chart takes `worker.sandbox.kubernetes.storageEgress` and
-  renders whichever it is given); on `io.batlehub/network=egress`, the
-  storage endpoint plus the allowlist RFC 0018 §7 describes for
-  `postmortem.online`. The pod selector is the label, so the runtime never
-  touches a policy.
+  renders whichever it is given) **plus UDP/TCP 53 to the cluster's DNS
+  pods**, because the presigned URL names the endpoint by host and the SigV4
+  signature covers that host, so the agent must resolve it and the worker
+  cannot substitute an address; on `io.batlehub/network=egress`, the same
+  plus the allowlist RFC 0018 §7 describes for `postmortem.online` — and for
+  `trivy`, which always runs with the network (its server, or the database
+  download). The pod selector is the label, so the runtime never touches a
+  policy. Two consequences for the operator: the S3 endpoint in `[storage]`
+  must be a name the sandbox namespace resolves (`minio.batlehub.svc`, not
+  `minio`, when the namespaces differ), and an `emptyDir` with `medium:
+  Memory` is charged to the container's memory limit (§4.2).
 
   A pod per run costs a schedule and, on a cold node, an image pull. That
   is accepted (§8): the per-scanner images are small, `imagePullPolicy:
   IfNotPresent` with digest-pinned references makes the pull a one-time
   cost per node, and a scan is not on any request's path.
+
+What the chart renders for `runtime = "kubernetes"`, and who may do what
+to whom:
+
+```mermaid
+flowchart LR
+    subgraph WNS["worker namespace"]
+        WD["worker Deployment"] --> WSA["worker ServiceAccount"]
+    end
+    subgraph SNS["sandbox namespace — dedicated, PSS restricted"]
+        RB["RoleBinding"] --> RO["Role: pods<br/>create get list watch delete<br/>no subresource"]
+        SSA["batlehub-sandbox ServiceAccount<br/>automountServiceAccountToken false<br/>no Role at all"]
+        POD["Pod batlehub-sbx-*<br/>labels: worker, job, network"] --> SSA
+        NP1["NetworkPolicy network = storage<br/>egress: storage endpoint + DNS 53"] -. selects .-> POD
+        NP2["NetworkPolicy network = egress<br/>the same + the 0018 §7 allowlist"] -. selects .-> POD
+        RQ["ResourceQuota<br/>replicas × pool × (memory_limit + max_extracted)"]
+    end
+    WSA --> RB
+    WD -->|"create, watch, delete"| POD
+    POD -->|"GET manifest, GET blob, PUT out.tar"| S3["storage endpoint<br/>an FQDN the namespace resolves"]
+    POD -->|"port 53"| DNS["cluster resolver"]
+```
 
 ### 5.4 Proposed, not designed
 
@@ -621,6 +842,25 @@ needs one knows what it would be asking for.
 ---
 
 ## 6. Detailed design
+
+The crates and the direction of every dependency — `core` ← `adapters` ←
+`server` as today, the wire crate under all of them, and the agent that
+depends on the wire crate and nothing else of ours:
+
+```mermaid
+flowchart LR
+    WIRE["batlehub-sandbox-wire<br/>Manifest, Entry, RelPath,<br/>ExtractPolicy, Result, wire version<br/>serde only, no I/O"]
+    AGENT["batlehub-sandbox — the agent<br/>bin, and lib run(in, out)<br/>extractor, ureq + rustls, seccompiler<br/>static musl, its own deny.toml"]
+    CORE["batlehub-core<br/>ports/sandbox.rs: SandboxRuntime, RunSpec, RunOutput<br/>services/scan_worker.rs: probe, sweep, ready"]
+    AD["batlehub-adapters<br/>sandbox/: none, bwrap, oci, kubernetes, bundle, local<br/>scanners/: postmortem, guarddog, trivy<br/>storage/: presign_get, presign_put"]
+    SRV["server<br/>builders.rs: build_sandbox_runtime<br/>setup.rs: build_scanners"]
+    WIRE --> AGENT
+    WIRE --> CORE
+    CORE --> AD
+    AGENT -->|"as a library: the none runtime"| AD
+    AD --> SRV
+    AGENT -.->|"never — the cargo deny fence:<br/>no core, adapters, config, reqwest, tokio, clap"| CORE
+```
 
 ### 6.1 `crates/core`
 
@@ -667,34 +907,47 @@ needs one knows what it would be asking for.
 - `services/scan_worker.rs` — takes `Arc<dyn SandboxRuntime>`; calls
   `probe()` for every image before the first pass and on reload, `sweep()`
   at startup and on idle passes, and refuses to lease while the last probe
-  failed. Exposes `batlehub_sandbox_ready`. Nothing about jobs changes.
+  failed. Exposes `batlehub_sandbox_ready`. Every `run()` is made from a
+  permit of RFC 0018-bis's sandbox pool, so the runtime never sees more
+  runs at once than the memory budget allows. Nothing about jobs changes.
 
 ### 6.2 `crates/sandbox` — the agent, and its wire
 
 Two new workspace members, sized for what runs inside the wall:
 
 - **`batlehub-sandbox-wire`** (`crates/sandbox/wire`) — the bundle and
-  result formats: `Manifest`, `Entry`, `RelPath` (refuses `..`, absolute
-  paths and separators other than `/` at construction), `ExtractPolicy`
-  (moved here from `crates/adapters/src/scanners/extract.rs`, with the
-  extractor that applies it), the result schema and the wire version. Its
-  dependencies are `serde`, `serde_json`, `tar`, `flate2`, `zip`, `bytes`:
-  no async, no network, no config. Depended on by `core`, `adapters` and
-  the agent.
+  result formats, as data and nothing else: `Manifest`, `Entry`, `RelPath`
+  (refuses `..`, absolute paths and separators other than `/` at
+  construction), `ExtractPolicy` as the *policy* (the limits, moved from
+  `crates/adapters/src/scanners/extract.rs`), the result schema and the
+  wire version. Its dependencies are `serde`, `serde_json`, `bytes`: no
+  I/O, no async, no network, no config. Depended on by `core`, `adapters`
+  and the agent — and `core` stays what it is, a crate with no I/O, which
+  it would not if the extractor and its `tar`/`flate2`/`zip` came in with
+  the types.
+- The **extractor** that applies the policy — the rest of `extract.rs`,
+  with its tests — moves to the agent crate, the only place that extracts
+  once §4.2 holds. `adapters` reaches it through the agent's library entry
+  (the `none` runtime), never through `core`.
 - **`batlehub-sandbox`** (`crates/sandbox/agent`) — the binary, and a
   library entry `run(in_url, out_url) -> ExitCode` the `none` runtime calls
   in-process. Built statically (`x86_64-unknown-linux-musl` and
   `aarch64-unknown-linux-musl`, `panic = "abort"`, LTO, stripped) so a
   scanner image needs no libc, no loader, no `/lib`. Beyond the wire crate
-  it carries a minimal HTTP client (`ureq` with `rustls` and
+  it carries the extractor's `tar`, `flate2` and `zip`, a minimal HTTP client (`ureq` with `rustls` and
   `webpki-roots`, for the two presigned calls and nothing else) and
   `seccompiler` (a pure-Rust BPF compiler; no `libseccomp`). What it does
   not have: `clap` (two flags, parsed by hand), `tokio`, `tracing` (its
   diagnostics go into `result.json`, nothing is logged), any `batlehub_*`
   crate but the wire, any read of the environment, any file it did not
-  fetch. `cargo deny` gets a `[bans]` entry that refuses `batlehub-core`,
-  `batlehub-adapters`, `batlehub-config`, `reqwest`, `tokio` and `clap` in
-  the agent's dependency tree, so the surface cannot grow back by accident.
+  fetch. The fence is a second `cargo deny check bans` in `task security`, rooted
+  at the agent's manifest (`--manifest-path crates/sandbox/agent/Cargo.toml`,
+  without `--workspace`) and reading its own `crates/sandbox/agent/deny.toml`,
+  whose `[bans].deny` refuses `batlehub-core`, `batlehub-adapters`,
+  `batlehub-config`, `reqwest`, `tokio` and `clap`. A `[bans]` entry in the
+  workspace's `deny.toml` is graph-wide and cannot say "not in *this*
+  crate's tree", which is why the fence has its own file. The surface
+  cannot grow back by accident.
 - The agent's own sequence: parse argv → GET `in` (or read the file) →
   parse `manifest.json` with size caps checked before allocation → GET each
   input the manifest names (or read it beside the manifest), bounded by the
@@ -702,9 +955,26 @@ Two new workspace members, sized for what runs inside the wall:
   → drop exec bits → set rlimits → install the seccomp filter (§7) →
   `execve` the argv with `HOME`, `PATH` only → collect
   capped stdout and the stderr tail → write `result.json` and `stdout` into
-  `out.tar` → PUT `out` (or write the file) → exit. On `--probe` (a
-  manifest field, not a flag — the agent has two flags), the middle is the
+  `out.tar` → PUT `out` (or write the file) → exit. On a probe manifest (a
+  field, not a flag — the agent has two flags), the middle is the
   assertions of §4.3 instead of an `execve`.
+
+```mermaid
+flowchart TD
+    A0["argv: --in url --out url<br/>nothing else is read: no env, no stdin, no config file"] --> A1["GET or read the manifest<br/>size cap checked before allocation"]
+    A1 --> P{"a probe manifest?"}
+    P -->|yes| PR["run the §4.3 assertions from inside<br/>verdicts into result.json"] --> A8
+    P -->|no| A2["GET or read each input<br/>bounded by its declared size"]
+    A2 --> A3["extract archives under ExtractPolicy into /work<br/>drop exec bits"]
+    A3 --> A4["fork: setrlimit RLIMIT_AS and RLIMIT_CPU<br/>PR_SET_NO_NEW_PRIVS, then the seccomp filter (ERRNO)<br/>env = HOME, PATH only"]
+    A4 --> A5["execve the argv — no shell"]
+    A5 --> A6["collect stdout (capped) and the stderr tail<br/>wait for the exit status"]
+    A6 --> A8["write result.json + stdout into out.tar"]
+    A8 --> A9["PUT or write out.tar"]
+    A9 --> E{"uploaded?"}
+    E -->|yes| X0["exit 0 — even when the scanner exited 1"]
+    E -->|no| X1["exit non-zero"]
+```
 
 ### 6.3 `crates/adapters`
 
@@ -712,14 +982,15 @@ Two new workspace members, sized for what runs inside the wall:
   `none.rs`, `bwrap.rs`, `oci.rs`, `kubernetes.rs` (feature
   `sandbox-kubernetes`, on in the default set like `registry-*`), plus
   `bundle.rs` (writing the manifest and, when needed, the artifact to a
-  `TempDir` or to the storage backend; presigning the artifact's cache key
-  when it is cached; reading `out.tar` back; the sweep of keys) and `local.rs` (what
-  `subprocess.rs` has today for the process the *runtime* spawns — `bwrap`
-  or the engine CLI: the kill on timeout, the stderr drain). The agent's
-  stdout is never read; a local runtime's success is the sandbox's exit
-  plus the presence of `out.tar`. `scanners/subprocess.rs` shrinks to
-  `command_exists` and `parse_json`, which are about scanners, not
-  sandboxes.
+  `TempDir` or to the **leaf** bundle backend of §5.2; asking the router to
+  presign the artifact's blob when it is cached; reading `out.tar` back;
+  the sweep of keys — all of it on the leaf backend, never the router) and
+  `local.rs` (what `subprocess.rs` has today for the process the *runtime*
+  spawns — `bwrap` or the engine CLI: the kill on timeout, the stderr
+  drain, `work_dir`). The agent's stdout is never read; a local runtime's
+  success is the sandbox's exit plus the presence of `out.tar`.
+  `scanners/subprocess.rs` shrinks to `command_exists` and `parse_json`,
+  which are about scanners, not sandboxes.
 - `bwrap.rs` keeps `bwrap_argv` and its test
   (`the_bwrap_argv_is_the_sandbox_the_rfc_describes`), with the two
   assertions that change: the `--ro-bind` source is `/opt/sandbox/<scanner>`,
@@ -732,6 +1003,10 @@ Two new workspace members, sized for what runs inside the wall:
 - `storage/s3/backend.rs` — `presign_get`/`presign_put` over the SDK's
   `presigned()` request builders; the PUT carries the `Content-Length`
   ceiling.
+- `storage/router/mod.rs` — `presign_get` only: the logical-to-physical
+  resolution `retrieve` does, then the leaf backend's. `presign_put` stays
+  `Unsupported` on the router, on purpose (§5.2). The router also exposes
+  the leaf backend for a name, which is how `bundle.rs` gets its.
 - `scanners/postmortem.rs`, `guarddog.rs`, `trivy.rs` — hold
   `Arc<dyn SandboxRuntime>` instead of `Sandbox`; `materialise` becomes
   `bundle()` and returns the entries it used to write. `postmortem`'s
@@ -740,10 +1015,13 @@ Two new workspace members, sized for what runs inside the wall:
 
 ### 6.4 `server`
 
-- `builders.rs` — `build_sandbox_runtime(&SandboxConfig, &dyn StorageBackend)`,
+- `builders.rs` — `build_sandbox_runtime(&SandboxConfig, &StorageRouter)`,
   returning `anyhow::Result<Arc<dyn SandboxRuntime>>`: the one `match` on
-  `SandboxRuntimeKind`; the scanners are built with the result.
-  The default image resolution of §4.2 lives here.
+  `SandboxRuntimeKind`, and the resolution of the leaf bundle backend. The
+  default image resolution of §4.2 lives here.
+- `setup.rs` — `build_scanners` builds the three binary scanners with that
+  result instead of the `Sandbox` struct it assembles today, and skips
+  `require_command` for them on the image runtimes (§4.3).
 - The worker startup sequence gains the probes before the first pass, with
   the exit semantics of §4.3. No new subcommand: `batlehub` never runs
   inside a sandbox.
@@ -756,8 +1034,10 @@ Two new workspace members, sized for what runs inside the wall:
   delete — in the sandbox namespace only, no subresource), its
   `RoleBinding` to the worker's ServiceAccount, the `batlehub-sandbox`
   ServiceAccount (`automountServiceAccountToken: false`), the two
-  NetworkPolicies of §5.3, and a `ResourceQuota` sized from
-  `max_concurrent`. Per-scanner `image` values default to the slim images
+  NetworkPolicies of §5.3, and a `ResourceQuota` sized from `replicas ×
+  pool × (memory_limit_mb + max_extracted_mb)`, the pool being RFC
+  0018-bis's derived number (one until it lands). Per-scanner `image`
+  values default to the slim images
   at the chart's `appVersion`. The `worker.securityContext` comment that
   recommends `CAP_SYS_ADMIN` or `runtime = "none"` is replaced by a pointer
   to this runtime. `helm-docs` regenerates the README (`task helm:docs`).
@@ -798,6 +1078,26 @@ this RFC changes is who opens the archive (the agent, inside the walls, on
 every runtime), what is inside the walls with it, and how many kinds of
 walls there are.
 
+Who holds what, and what crosses the wall — there is no arrow from the
+scanner to the worker because there is no channel: no socket, no pipe, no
+attach, no stdin.
+
+```mermaid
+flowchart LR
+    subgraph OUT["outside the wall — holds credentials"]
+        W["worker<br/>DATABASE_URL, storage credentials,<br/>the in-cluster token on kubernetes"]
+    end
+    subgraph WALL["inside the wall — holds none"]
+        AG["agent<br/>two presigned URLs on argv:<br/>GETs already consumed, one PUT"]
+        SC["scanner<br/>HOME, PATH, /work,<br/>the artifact's bytes"]
+        AG --> SC
+    end
+    W -->|"create the instance<br/>never attach, exec or stdin"| AG
+    W -->|"presign, write the manifest"| S["storage endpoint<br/>blob read, bundle_prefix write"]
+    AG -->|"GET manifest, GET artifact, PUT out.tar<br/>every other request is a 403"| S
+    S -->|"HEAD + GET out.tar<br/>after the instance is gone"| W
+```
+
 **What an escaped scanner finds.** The design question the agent answers is
 "a scanner broke out of its process — what is in the room?" Per runtime:
 
@@ -819,18 +1119,20 @@ scanner in the worker image and makes the room the same on every runtime.
 Nothing `batlehub` links is reachable from inside anywhere.
 
 **The presigned URLs are the sandbox's only reach, and they are bounded.**
-The GETs are on the manifest and on the artifact — the artifact's own cache
-key when it is cached, a per-job copy under `bundle_prefix` when not — and
-are consumed before the scanner starts; a GET on a cache key is a read of
+The GETs are on the manifest and on the artifact — the artifact's own dedup
+blob when it is cached, a per-job copy under `bundle_prefix` when not — and
+are consumed before the scanner starts; a GET on a dedup blob is a read of
 the one object the sandbox was handed to scan, and a presigned GET cannot
 be turned into a write or a list. The PUT is on one key under
 `bundle_prefix`, valid for the run's deadline plus `bundle_ttl`, with a
 `Content-Length` ceiling. The proxy
-never reads under `bundle_prefix` — every artifact key is
-`artifact_storage_key(registry, name, version)`, so it starts with a
-registry's name, and §4.3 refuses a registry named like the prefix — so a
-hostile PUT cannot poison the cache; it can only replace *this run's* result,
-which the worker parses as hostile data regardless. Both keys are deleted
+never reads under `bundle_prefix` — every key it reads carries `artifact:`,
+`local:` or `meta:`, or is a `blob/<sha256>` the router wrote, and §4.3
+refuses a prefix that touches any of them — so a hostile PUT cannot poison
+the cache; it can only replace *this run's* result, which the worker parses
+as hostile data regardless. Nor can it reach the router's bookkeeping: a
+presigned PUT writes an object, never a dedup row, so nothing the sandbox
+writes is ever resolved as an artifact. Both keys are deleted
 when the run is collected, and swept if it never is. The URLs are visible
 in the pod spec to anyone with `pods` read in the sandbox namespace, which
 is one more reason that namespace is dedicated and the Role is scoped to it.
@@ -879,7 +1181,9 @@ engine's default profile, which is the same list applied twice.
 - **The storage endpoint is inside the wall.** A pod that can reach S3 can
   try any request against it; without credentials every one but the two
   presigned ones is a `403`. The NetworkPolicy limits egress to that
-  endpoint's address, so the storage hop does not open the cluster. Where
+  endpoint's address and to the cluster resolver on port 53 (§5.3), so the
+  storage hop does not open the cluster; the resolver is the one shared
+  service inside the wall, and what it answers is names, not bytes. Where
   the storage endpoint is a public cloud service, the policy is a CIDR or an
   FQDN rule per the CNI; the docs give both forms.
 - **`oci` with Docker means a socket, and the socket is root.** The runtime
@@ -984,8 +1288,8 @@ engine's default profile, which is the same list applied twice.
   §5.2: one `in.tar` per run carrying the artifact. Rejected once the cost
   was written down — three scanners on a 500 MiB artifact is 1.5 GiB up and
   1.5 GiB down per job — in favour of a manifest that names the artifact by
-  URL, which is the cache key itself whenever the artifact is cached, and a
-  per-job copy under `bundle_prefix` only when it is not.
+  URL, which is the artifact's own blob whenever it is cached, and a per-job
+  copy under `bundle_prefix` only when it is not.
 - **Keep `--ro-bind / /` for `bwrap`.** The existing behaviour, and the
   first draft of this RFC left it. Rejected: the per-scanner images of
   §6.5 exist anyway, and copying their trees into the worker image is one
@@ -996,11 +1300,27 @@ engine's default profile, which is the same list applied twice.
 
 ## 9. Rollout and compatibility
 
+Which runtime a deployment ends up on, from where the worker runs:
+
+```mermaid
+flowchart TD
+    Q0{"where does the worker run?"} -->|Kubernetes| Q1{"may the worker's ServiceAccount<br/>create pods in a namespace?"}
+    Q1 -->|yes| K["kubernetes<br/>plus runtime_class for kernel isolation per scan"]
+    Q1 -->|no| Q2{"does the host allow unprivileged<br/>user namespaces?"}
+    Q2 -->|yes| BW["bwrap — today's default"]
+    Q2 -->|no| STOP["no sandbox this RFC can give:<br/>grant the Role or fix the host —<br/>the probe refuses to start otherwise"]
+    Q0 -->|"a VM, Compose, a laptop"| Q3{"a container engine<br/>on the host?"}
+    Q3 -->|"rootless podman with a subuid range,<br/>or rootful docker"| OCI["oci"]
+    Q3 -->|no| Q2
+    Q0 -->|"tests only"| NONE["none + BATLEHUB_UNSAFE_NO_SANDBOX=1"]
+```
+
 - **No config change is needed.** `runtime` defaults to `bwrap`; every
-  existing `[worker.sandbox]` key keeps its name and meaning; the deprecated
-  `bwrap` key reads as `bwrap.binary`. `BATLEHUB_UNSAFE_NO_SANDBOX` keeps its
-  semantics.
-- **Three behavioural changes on `bwrap`, one on `none`:** extraction
+  existing `[worker.sandbox]` key keeps its name and meaning; the `bwrap`
+  binary, hard-coded to `bwrap` on `PATH` today, becomes
+  `[worker.sandbox.bwrap] binary` with that default.
+  `BATLEHUB_UNSAFE_NO_SANDBOX` keeps its semantics.
+- **Three behavioural changes on `bwrap`, two on `none`:** extraction
   happens inside the agent, and the agent installs the seccomp filter (both
   runtimes); the read-only root a scanner sees under `bwrap` is its own
   tree, not the host's. The limits are the same, the refusals are the same,
@@ -1018,6 +1338,21 @@ engine's default profile, which is the same list applied twice.
   notes say so with the hint per runtime. There is no flag to skip the
   probe: `BATLEHUB_UNSAFE_NO_SANDBOX=1` with `runtime = "none"` is the
   documented way to run without walls, and it already says "unsafe".
+- **Operator prerequisites, per runtime.** `oci`: the engine CLI on the
+  worker host, and for rootless Podman a `/etc/subuid`/`/etc/subgid` range
+  for the worker's user (`--userns auto` needs one). Rootless Podman creates
+  a user namespace too, so on a host that restricts them it lives or dies
+  by the distribution's AppArmor profile for `podman`, exactly as `bwrap`
+  does by its own; the honest answer on such a host is the rootful engine
+  or Kubernetes, and the docs say so. `kubernetes`: a presignable bundle
+  backend, an S3 endpoint the sandbox namespace resolves, a CNI that
+  enforces NetworkPolicy (the probe finds one that does not), and the Role
+  the chart renders.
+- **Rollback** is `runtime = "bwrap"` (or the previous release) and a
+  restart; nothing about a job is persisted differently. What a downgrade
+  leaves behind is at most a few keys under `bundle_prefix` from runs in
+  flight, which the older release does not sweep; they are small, inert,
+  and safe to delete by hand.
 - **Helm** — the chart's `worker.sandbox.runtime` defaults to `bwrap`; the
   RBAC, NetworkPolicy and quota objects only render for `kubernetes`. A
   chart upgrade with unchanged values renders the same manifests it did.
@@ -1049,14 +1384,19 @@ engine's default profile, which is the same list applied twice.
   `emptyDir`, the network label, no `stdin`, and the `restricted` PSS
   conformance — with a cluster nowhere near. The bundle writer against the
   in-memory storage backend, with presigning stubbed: a cached artifact
-  presigns its cache key and uploads nothing; an uncached one is uploaded
-  once for a job of three scanners.
+  presigns its blob and uploads nothing; an uncached one is uploaded
+  once for a job of three scanners; the sweep lists on the leaf backend and
+  finds a key the router's `list_keys` does not.
 - **Integration (`none`)**: today's `subprocess.rs` tests move to the `none`
   runtime and pass unchanged (`a_scanner_that_hangs_times_out`,
   `stdout_above_the_cap_is_an_output_error_not_an_answer`, …).
-- **Integration (`oci`)**: `task test:sandbox-oci` — the coverage job already
-  provisions Podman for Postgres and MinIO; the same job opens a real run
-  against a locally built scanner image on both transports (`mount`, and
+- **Integration (`oci`)**: `task test:sandbox-oci` — locally under Podman,
+  the engine `task coverage` already needs for Postgres and MinIO; in CI
+  under the runner's Docker daemon, which is what the `services:` of
+  `test.yaml` run on and is rootful, so it does not depend on the user
+  namespaces §2 says the runner restricts (`engine = "docker"` in the job's
+  config, and the job says so). The job opens a real run against a locally
+  built scanner image on both transports (`mount`, and
   `storage` against MinIO with real presigned URLs), runs the probe, then a
   `postmortem` scan of a fixture, and asserts the findings equal the `none`
   runtime's on the same fixture. Also the failure modes: an image without
@@ -1075,8 +1415,10 @@ engine's default profile, which is the same list applied twice.
   the client-facing claims of RFC 0018 §13.4 are re-proven under `oci`.
 - **Probe on the GitHub runner**: a unit of the CI job asserts that with
   `kernel.apparmor_restrict_unprivileged_userns=1` the worker *exits*
-  non-zero naming the `no network` assertion — the failure that cost PR #146
-  an afternoon becomes a test that the failure is loud.
+  non-zero naming the `a result at all` assertion with `bwrap`'s stderr
+  tail (`setting up uid map: Permission denied`) — the failure that cost PR
+  #146 an afternoon becomes a test that the failure is loud. It is the start
+  that fails there, not a wall: `bwrap` never runs the agent.
 - **`task fuzz:check`**: `fuzz_sandbox_manifest` and `fuzz_sandbox_result`
   over the wire crate's parsers.
 
@@ -1120,7 +1462,7 @@ engine's default profile, which is the same list applied twice.
     deny list, not an allow list: the runtimes behind the scanners vary
     their syscalls by version, and this list already runs them daily.
 14. **The manifest names the artifact by URL; a cached artifact is read
-    from its own cache key, an uncached one is uploaded once per job.**
+    from its own dedup blob, an uncached one is uploaded once per job.**
     §5.2, §8. The storage hop costs a cached 500 MiB artifact nothing but
     GETs, so no measurement gates the design.
 15. **`bwrap` binds the scanner's own tree as its root, not the host's.**
@@ -1128,6 +1470,20 @@ engine's default profile, which is the same list applied twice.
     the same on every runtime.
 16. **`remote` and `systemd-run` are rejected**, not deferred. §5.4, §8.
     `nsjail` stays the one candidate sibling of `bwrap`.
+17. **Bundle keys live on one leaf backend, outside the router's
+    bookkeeping.** §4.1, §5.2, §7. A presigned PUT writes no dedup row, so
+    the router could neither list nor sweep them; `bundle_backend` names
+    the leaf, and `presign_get` on the router resolves a blob the way
+    `retrieve` does.
+18. **This RFC defines the cost of one run; RFC 0018-bis decides how many
+    run at once.** §4.2, §6.1, §6.5. The cost is `memory_limit_mb +
+    max_extracted_mb`; the pool is derived from it and the worker's memory
+    budget, and every `run()` holds a permit. The quota is `replicas × pool
+    × cost`. Until 0018-bis lands, the pool is one, which is the sequential
+    loop the tree has today.
+19. **The probe's first assertion is that a result came back.** §4.3, §10.
+    The AppArmor failure is a start that never happens, not a wall that
+    leaks; the probe names it with `bwrap`'s stderr.
 
 ### Still open
 
@@ -1141,6 +1497,15 @@ engine's default profile, which is the same list applied twice.
 
 ## 12. Implementation phases
 
+```mermaid
+flowchart LR
+    P1["phase 1<br/>wire crate, agent + seccomp, the port,<br/>none + bwrap behind it, the probe,<br/>/opt/sandbox trees, the deny fence"] --> P2["phase 2<br/>oci on both transports, presigning,<br/>bundle_backend, per-scanner images,<br/>test:sandbox-oci — q1 answered"] --> P3["phase 3<br/>kubernetes, the chart objects,<br/>test:sandbox-k8s on kind,<br/>the CAP_SYS_ADMIN comment gone"]
+```
+
+Phase 1 is useful on its own even if nothing after it lands: the probe and
+the smaller `bwrap` room are its deliverables, and every existing
+deployment gets both.
+
 1. **The wire crate, the agent with its seccomp filter, the port, `none`
    and `bwrap` behind it, the probe.** Same findings, same config, same
    `bwrap` flags but the root and the command. `ExtractPolicy` and the
@@ -1152,8 +1517,9 @@ engine's default profile, which is the same list applied twice.
    of §10 with it. One PR.
 2. **`oci`, the published per-scanner images, presigning.** The runtime
    with both transports, `oci_argv` and its tests, `presign_get`/
-   `presign_put` on the storage port, the S3 backend and the router, the
-   cache-key-or-upload rule of §5.2, the three `Containerfile.sandbox-*` in
+   `presign_put` on the storage port, the S3 backend, the router's
+   `presign_get` and leaf-backend accessor, `bundle_backend`, the
+   blob-or-upload rule of §5.2, the three `Containerfile.sandbox-*` in
    the build and scan workflows, `task test:sandbox-oci` in the coverage job
    with each scanner run under the filter (q1 answered here), the docs
    section. The Compose deployment gets a sandbox that works where `bwrap`

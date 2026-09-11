@@ -32,13 +32,19 @@ tasks:
       - 'du -sh target || true'
 
   fuzz:
-    desc: "Run a fuzz target for up to MAX_TIME seconds (default: 30). Set TARGET to pick one: fuzz_rbac_evaluate | fuzz_package_id_cache_key | fuzz_deny_latest | fuzz_release_age | fuzz_readme_render | fuzz_svg_sanitize"
+    desc: "Run a fuzz target for up to MAX_TIME seconds (default: 30). TARGET is one of `cargo fuzz list` (fuzz_bundle_read, fuzz_deny_latest, fuzz_escaping, fuzz_grant_resolution, fuzz_image_host, fuzz_integrity_parse, fuzz_listing_filter, fuzz_normalize_url, fuzz_package_id_cache_key, fuzz_path_safe, fuzz_rbac_evaluate, fuzz_readme_render, fuzz_release_age, fuzz_release_coordinate, fuzz_sbom_extract, fuzz_scanner_extract, fuzz_signed_url, fuzz_svg_sanitize, fuzz_version_order)"
     dir: fuzz
     vars:
       TARGET: '{{.TARGET | default "fuzz_deny_latest"}}'
       MAX_TIME: '{{.MAX_TIME | default "30"}}'
     cmds:
-      - cargo +nightly fuzz run {{.TARGET}} -- -max_total_time={{.MAX_TIME}}
+      # `--target` is the toolchain's host, not cargo-fuzz's default: a prebuilt
+      # cargo-fuzz defaults to the triple *it* was built for, and the one CI
+      # installs is static musl, which cannot carry the sanitiser. Same fix as
+      # the `Fuzz targets` job in test.yaml.
+      - >-
+        cargo +nightly fuzz run --target "$(rustc +nightly -vV | sed -n 's/^host: //p')"
+        {{.TARGET}} -- -max_total_time={{.MAX_TIME}}
 
   fuzz:check:
     desc: "Every fuzz target still compiles — what CI gates on each PR"

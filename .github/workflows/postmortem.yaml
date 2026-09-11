@@ -96,10 +96,10 @@ jobs:
       # need a real baseline, not a guess. The scores still reach SARIF.
       - name: postmortem supply-chain scan (Rust)
         id: scan
-        uses: mlab-sh/postmortem@cae860ffa3998c278dd5cf47aea7aa1882397dfc # v2.3.1
+        uses: mlab-sh/postmortem@34f8f42b27cf80dba9e38c52c17f1cc82259fe61 # v2.4.0
         with:
           path: "."
-          version: v2.3.1
+          version: v2.4.0
           online: "true" # source-repo reputation (uses github-token below)
           vulns: "true" # known advisories via vuln.mlab.sh
           fail-on-vuln: high
@@ -135,10 +135,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: postmortem supply-chain scan (UI)
         id: scan
-        uses: mlab-sh/postmortem@cae860ffa3998c278dd5cf47aea7aa1882397dfc # v2.3.1
+        uses: mlab-sh/postmortem@34f8f42b27cf80dba9e38c52c17f1cc82259fe61 # v2.4.0
         with:
           path: ui
-          version: v2.3.1
+          version: v2.4.0
           online: "true"
           vulns: "true"
           fail-on-vuln: high
@@ -163,10 +163,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: postmortem supply-chain scan (Website)
         id: scan
-        uses: mlab-sh/postmortem@cae860ffa3998c278dd5cf47aea7aa1882397dfc # v2.3.1
+        uses: mlab-sh/postmortem@34f8f42b27cf80dba9e38c52c17f1cc82259fe61 # v2.4.0
         with:
           path: docs
-          version: v2.3.1
+          version: v2.4.0
           online: "true"
           vulns: "true"
           fail-on-vuln: high

@@ -1,0 +1,50 @@
+# tests/heavy/hybrid.sh: `mode = "hybrid"` under real clients.
+#
+# Local-first: a name published here is served from here and shadows the
+# upstream entirely; a name absent here falls through to the upstream. The
+# upstream is a directory the suite serves, so the fall-through is countable
+# and "never asked" is an assertion rather than a belief. Reads are
+# anonymous; publishing takes the admin token.
+
+[server]
+host = "127.0.0.1"
+port = 8150
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-hybrid-storage"
+
+[[registries]]
+type = "npm"
+name = "npm-${HEAVY_RUN}"
+mode = "hybrid"
+upstreams = ["${HEAVY_UPSTREAM_URL}"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "pypi"
+name = "pypi-${HEAVY_RUN}"
+mode = "hybrid"
+upstreams = ["${HEAVY_UPSTREAM_URL}"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

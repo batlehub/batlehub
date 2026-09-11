@@ -233,6 +233,12 @@ tasks:
     cmds:
       - node --test patches/che-code/vsxRegistryAuth.test.ts
 
+  patch:validate:
+    desc: "Validate the editor credential patch against a real che-code tree: the carried diff applies to the commit it names, the two touched files type-check under che-code's own config with no new error, and the module's tests pass in place (needs network for the clone and a scratch TypeScript; CHE_CODE_REF=main to try a newer tree)"
+    dir: .
+    cmds:
+      - bash patches/che-code/validate.sh
+
   ui:coverage:
     desc: Run the frontend test suite with coverage (enforces threshold)
     dir: ui

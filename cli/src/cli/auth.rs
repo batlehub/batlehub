@@ -6,7 +6,7 @@ use clap::{Args, Subcommand};
 use comfy_table::Table;
 
 use crate::api::{
-    auth::{parse_oidc_paste, CreateTokenRequest},
+    auth::{parse_oidc_paste, CreateTokenRequest, CreateTokenResponse, TokenListItem},
     BatleHubClient,
 };
 use crate::config::ConfigFile;
@@ -465,26 +465,7 @@ async fn handle_token_command(
             if json {
                 println!("{}", serde_json::to_string_pretty(&tokens)?);
             } else {
-                let mut table = Table::new();
-                table.set_header(["ID", "Name", "Role", "Expires", "Groups"]);
-                for t in &tokens {
-                    table.add_row([
-                        &t.id.to_string(),
-                        &t.name,
-                        &t.role,
-                        &t.expires_at.format("%Y-%m-%d").to_string(),
-                        // A snapshot goes stale silently, so the listing shows
-                        // it: this is where an owner sees that a token still
-                        // carries a team they left.
-                        &if t.groups.is_empty() {
-                            "-".to_owned()
-                        } else {
-                            t.groups.join(", ")
-                        },
-                    ]);
-                }
-                println!("{table}");
-                println!("{} token(s)", tokens.len());
+                print_tokens_table(&tokens);
             }
         }
         TokenCommand::Create {
@@ -510,21 +491,7 @@ async fn handle_token_command(
             if json {
                 println!("{}", serde_json::to_string_pretty(&resp)?);
             } else {
-                println!(
-                    "Created token '{name}' (role: {role}, expires: {})",
-                    resp.expires_at.format("%Y-%m-%d")
-                );
-                // Printed even when empty: "carries no groups" is the answer
-                // that surprises someone whose pipeline then cannot see a team
-                // package, and it is cheaper to read here than to diagnose.
-                if resp.groups.is_empty() {
-                    println!("Groups: none — this token sees only public and internal packages");
-                } else {
-                    println!("Groups: {}", resp.groups.join(", "));
-                }
-                println!();
-                println!("Token (store this — it will not be shown again):");
-                println!("  {}", resp.token);
+                print_created_token(&name, &role, &resp);
             }
         }
         TokenCommand::Revoke { id } => {
@@ -533,6 +500,47 @@ async fn handle_token_command(
         }
     }
     Ok(())
+}
+
+fn print_tokens_table(tokens: &[TokenListItem]) {
+    let mut table = Table::new();
+    table.set_header(["ID", "Name", "Role", "Expires", "Groups"]);
+    for t in tokens {
+        // A snapshot goes stale silently, so the listing shows it: this is
+        // where an owner sees that a token still carries a team they left.
+        let groups = if t.groups.is_empty() {
+            "-".to_owned()
+        } else {
+            t.groups.join(", ")
+        };
+        table.add_row([
+            &t.id.to_string(),
+            &t.name,
+            &t.role,
+            &t.expires_at.format("%Y-%m-%d").to_string(),
+            &groups,
+        ]);
+    }
+    println!("{table}");
+    println!("{} token(s)", tokens.len());
+}
+
+fn print_created_token(name: &str, role: &str, resp: &CreateTokenResponse) {
+    println!(
+        "Created token '{name}' (role: {role}, expires: {})",
+        resp.expires_at.format("%Y-%m-%d")
+    );
+    // Printed even when empty: "carries no groups" is the answer that surprises
+    // someone whose pipeline then cannot see a team package, and it is cheaper
+    // to read here than to diagnose.
+    if resp.groups.is_empty() {
+        println!("Groups: none — this token sees only public and internal packages");
+    } else {
+        println!("Groups: {}", resp.groups.join(", "));
+    }
+    println!();
+    println!("Token (store this — it will not be shown again):");
+    println!("  {}", resp.token);
 }
 
 async fn handle_auth_login(

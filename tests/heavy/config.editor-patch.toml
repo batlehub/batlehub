@@ -1,0 +1,43 @@
+# The VS Code gallery of the editor-patch suites (RFC 0011 §4.2, the
+# consumer side): a local `vscode-marketplace` registry that **requires a
+# credential to read**. `anonymous` holds no verb, so an editor that sends
+# nothing sees a refusal — and this suite's editor sends the credential
+# itself, from the contract file or the environment variable, through the
+# che-code patch loaded into its process. No gallery proxy in between: the
+# editor's own requests are what the tap records.
+
+[server]
+host = "127.0.0.1"
+port = 8126   # overridden per suite through PROXY_CACHE__SERVER__PORT
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[[auth.tokens]]
+value = "heavy-user-token"
+role = "user"
+user_id = "ci-user"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-editor-patch-storage"
+
+[[registries]]
+type = "vscode-marketplace"
+name = "vsx-${HEAVY_RUN}"
+mode = "local"
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

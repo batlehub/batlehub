@@ -38,7 +38,7 @@
 # extension are downloaded into HEAVY_CACHE and reused.
 #
 # Environment knobs: DATABASE_URL (required), HEAVY_PORT, HEAVY_TAP_PORT,
-# VSCODE_VERSION (1.136.1), WEEBO_VERSION (0.5.0), COVERAGE.
+# VSCODE_VERSION (1.136.2), WEEBO_VERSION (0.5.0), COVERAGE.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 heavy_init vsx_login 8122 8129
@@ -55,7 +55,7 @@ HDR_JSON="Content-Type: application/json"
 EXT_ID="batleforc.weebo-bridge-notify"
 WEEBO_VERSION="${WEEBO_VERSION:-0.5.0}"
 WEEBO_BASE_URL="${WEEBO_BASE_URL:-https://github.com/batleforc/weebo-che-notify/releases/download}"
-VSCODE_VERSION="${VSCODE_VERSION:-1.136.1}"
+VSCODE_VERSION="${VSCODE_VERSION:-1.136.2}"
 USER_TOKEN="heavy-user-token"
 
 # Every download here goes straight into `tar` or is published back through

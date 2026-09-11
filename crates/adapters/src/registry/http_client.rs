@@ -296,6 +296,17 @@ async fn fetch_document_body(
     req: reqwest::RequestBuilder,
     what: &str,
 ) -> Result<bytes::Bytes, CoreError> {
+    fetch_document_bytes(req, what).await.map(|(body, _)| body)
+}
+
+/// [`fetch_document_body`] with the upstream's `Content-Type`, for the one
+/// caller that has to look at it before deciding how to read the body: a PyPI
+/// simple page asked for as PEP 691 JSON may come back as PEP 503 HTML from an
+/// index that only speaks HTML, and the type is the only thing that says so.
+pub async fn fetch_document_bytes(
+    req: reqwest::RequestBuilder,
+    what: &str,
+) -> Result<(bytes::Bytes, Option<String>), CoreError> {
     let resp = req
         .send()
         .await
@@ -311,9 +322,16 @@ async fn fetch_document_body(
         )));
     }
 
-    resp.bytes()
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let body = resp
+        .bytes()
         .await
-        .map_err(|e| CoreError::Registry(format!("reading {what}: {e}")))
+        .map_err(|e| CoreError::Registry(format!("reading {what}: {e}")))?;
+    Ok((body, content_type))
 }
 
 /// Read a linked README, same-origin checked and bounded.

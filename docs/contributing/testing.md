@@ -319,6 +319,11 @@ found by running the client, by nothing else, twice over.
 | `openvsx.sh` | ovsx | `ovsx publish` with its token in a query parameter, and `ovsx get` following the rewritten download URL |
 | `vsx_login.sh` | VS Code 1.136.1 (the server build's CLI, headless) | RFC 0011 §4.4: `batlehub-cli proxy serve` in front of a registry whose `anonymous` holds no verb, with `product.json` repointed at the proxy. Unauthenticated, a search through the proxy is the one `batlehub.sign-in` entry with `Code.Engine`, an install by id fails as *not found* with no request reaching the registry, and the sign-in package is refused as `NotSigned` until `extensions.verifySignature` is off, then installs; after `auth write-token-file`, without restarting anything, the same editor installs the fixture by id and every registry request on the tap carries `Authorization: Bearer` |
 | `vsx_view.sh` | VS Code 1.136.1 (the server build's workbench, in Chrome over the DevTools protocol — a workspace's sidecar via `CDP_URL`, or a headless `CHROME_BIN`) | RFC 0011 §4.4.2 and RFC 0020 in a **real Extensions view**: unauthenticated, browse and search list the one sign-in entry and opening it renders the sign-in page, with nothing reaching the registry; the entry's Install button is disabled and the editor says *not signed* (pinned — the entry is a page, deliberately unsigned). After `auth write-token-file`, the same page's Refresh lists the fixture with Install **enabled** (the registry signed it); the click passes the publisher-trust dialog, fetches package and signature through the proxy, and the editor's verifier refuses (`UnhandledException`, pinned by running the editor's own `vsce-sign` on the served archive, which `batlehub-cli vsx verify` accepts); the server's CLI refuses the same way and installs once `extensions.verifySignature` is off, and on a second look so does the view. A marketplace extension republished with its own archive attached (`PUT …/vsix/signature`) gets `Success` from `vsce-sign` and installs with the verifier on. Last, RFC 0007-bis §11 q1: an extension whose manifest names an `icon.svg` carrying a `<script>`, an `onload` and a `javascript:` link is served as `image/svg+xml` under the sandbox policy with all three gone and the drawing kept, and the gallery advertises that asset on its entry — which an `application/octet-stream` icon never is, since an entry with no usable icon gets the editor's `defaultIcon`. The real Extensions view lists the extension and shows that asset as its icon, which is why the step runs before anything is installed — a view with an installed extension opens on Installed and filters a typed query against it. Whether the browser *paints* the icon is logged and not asserted: it asks, and the fetch is aborted client-side for a reason not yet established. `tests/heavy/vsx_view.mjs` is the driver |
+| `backends.sh` | npm, pip, on **S3** (MinIO, or CI's RustFS), **Redis** and an **OIDC issuer** (dex) | the backends every deployment has and every other suite lacks — all 26 heavy configs are `filesystem` + `token` + no `[cache]`. Against an upstream the suite serves (so a cache hit is a *count of zero* upstream requests): anonymous and a tampered id_token are refused with nothing reaching the upstream; dex's id_token for `dev@example.com` installs with the upstream asked once for each of packument and tarball, the tarball an object in the bucket (`mc ls`) and the packument a Redis key naming the registry; a second install from a clean npm cache asks the upstream for nothing; the server is **stopped and started again** and a third install still asks for nothing — what the backends hold outlived the process, which the in-memory cache and a local directory never have to prove; pip the same way, a wheel through S3 and a simple page through Redis. Starts MinIO and Redis itself from cached binaries when `S3_TEST_ENDPOINT`/`REDIS_URL` are unset, and discovers dex on 9000 (the workspace sidecar; a container in CI) |
+| `hybrid.sh` | npm, pip, on `mode = "hybrid"` | local-first, measured — sixteen in-process tests know the rule and no client had met it. One `npm install` of a private, an upstream-only and a shadowed name (held here at 2.0.0, upstream at 1.0.0) resolves all three: ours from here, the upstream's from the upstream once, the shadowed one ours — and `npm view … versions` lists our version alone, the upstream never asked. A blocked proxied version vanishes from the listing (npm: no matching version, the tarball never fetched again); a local package whose only version is blocked is refused `403` and the upstream's same-named 1.0.0 is **never asked for** — the one rule that turns a block into a fall-through if broken. pip: the same three shapes, published with the legacy upload |
+| `vscode_patch.sh` | VS Code 1.136.2 (the server build's CLI, headless, with `patches/che-code/vsxRegistryAuth.ts` loaded into its process by `tests/heavy/editor_patch_preload.mjs`, which carries the glue of the validated diff) | RFC 0011 §4.2 on the consumer side, case A of §5.5: **the editor core sends the credential itself**, no proxy and no extension. `product.json` points straight at a registry whose `anonymous` holds no verb, through the tap, so what the tap records is the editor's own request. The patch's unit tests run first under the editor's own node; then, with nothing to send, an install by id fails and the registry saw the query refused `403` with no `Authorization` on any request; with `VSX_REGISTRY_AUTH_TOKEN` scoped by `VSX_REGISTRY_URL` — and the variable *alone* sending nothing — with the contract file `auth write-token-file` writes at the patch's default path (keyed by the origin, looked up by the request's own origin), and with that file beside a *wrong* variable, the install goes through and every registry request carries `Authorization: Bearer`; a `--from-file` token *source* entry is refused without the variable and installs with it; the credential is in none of the editor's output. Scenarios in `tests/heavy/editor_patch_scenarios.sh` |
+| `che_code_patch.sh` | che-code (`quay.io/che-incubator/che-code` — the workspace's own build copied once, `CHE_CODE_DIR`, or `docker cp` out of the image), its CLI under its own node and `ld_libs` | the same scenarios on the editor Eclipse Che runs, with the gallery named through `OPENVSX_REGISTRY_URL` the way che-code's launcher names it — the variable the diff reads on that build |
+| `vsx_extension.sh` | the `batlehub-vsx` extension (its own repository, §11 q6) in VS Code 1.136.2's workbench, in Chrome over CDP, both modes | RFC 0011 §6.5 and §14.11 as a gate on *this* side: the extension repository's `tests/heavy/view.sh`, run with `BATLEHUB_SRC` pointed here — marketplace mode (a stock build, `BATLEHUB_TOKEN` in the editor's environment: the BatleHub view lists what the registry shows this credential, its inline Install verifies RFC 0020's signature with the registry's key and installs through the editor's own command, the Extensions view lists it) and broker mode (`batlehub-cli proxy serve` as the gallery: sign-in offered, the sign-in entry alone, then the extension writes the §4.1 contract file `0600` keyed by the origin and the same workbench lists the registry's extension with no reload). The checkout is `../batlehub-vsx` when there is one, else a shallow clone; CI checks out its default branch, so this job is the canary for the two repositories drifting |
 | `console_fetch.sh` | Chrome over the DevTools protocol (a workspace's sidecar via `CDP_URL`, or a headless `CHROME_BIN`), against the **built** console | RFC 0007-bis §11 q3: the catalogue's **Fetch** button pressed by a person. The SPA and the API are one origin (`static_dir`), which is the deployed shape and keeps the run from proving anything through a CORS arrangement nobody deploys. An anonymous reader — who *can* browse this registry, so the assertion is about the offer and not about visibility — sees the upstream row and no button. A signed-in reader sees a button whose label carries the version the upstream search returned, clicked by its **accessible** name so the control pressed is the one a keyboard user reaches. Afterwards the row has left the upstream half, the version is held according to the package API, its tarball comes back through npm's own path, the tap saw the console's `POST …/fetch`, and the audit attributes it to the reader who pressed it rather than to an administrator. `tests/heavy/console_fetch.mjs` is the driver |
 | `conda.sh` | micromamba | the `HEAD` probe for `repodata.json.zst` reaches a handler, and a publish is visible in the *compressed* channel |
 | `nuget.sh` | dotnet | the client can *select* the search resource, `skip` advances the page, and `push` hits the path it appends a slash to |
@@ -499,13 +504,44 @@ detection with depth / monorepo / hidden-dir handling), `setup ide`, and
 `fuzz/fuzz_targets/` (libfuzzer, `task fuzz`) — all fuzz `batlehub-core` domain
 logic:
 
-- `fuzz_rbac_evaluate.rs` — RBAC rule evaluation.
+- `fuzz_rbac_evaluate.rs` — `RbacRule` against a reference model built from
+  `expand_patterns`: the decision matches the model for all three roles at
+  once, a higher role never loses a verb a lower one holds, and joining a group
+  never revokes one.
 - `fuzz_deny_latest.rs` — `DenyLatestRule`; asserts only the exact string
   `"latest"` denies (unicode homoglyphs / whitespace must neither bypass nor
-  over-block).
-- `fuzz_release_age.rs` — `ReleaseAgeGateRule` (durations capped at one year).
+  over-block), and that a role in the bypass list is let through.
+- `fuzz_release_age.rs` — `ReleaseAgeGateRule` (durations capped at one year),
+  with and without a publish date and under both `deny_missing_timestamp`
+  settings. The rule reads the clock itself, so the oracle brackets the call
+  with two readings and only decides when both agree.
 - `fuzz_package_id_cache_key.rs` — `PackageId` cache-key generation is
   deterministic and always contains the registry component.
+- `fuzz_path_safe.rs` — the traversal guard every storage key goes through
+  (`validate_coordinate`, `validate_package_name`): whatever it accepts builds a
+  key with no `..` segment at any percent-decoding depth, no NUL, no backslash,
+  no empty component; whatever an independently written decoder can turn into
+  a traversal, it rejects. Differential, so a change to the guard's decoder is
+  what this target notices.
+- `fuzz_integrity_parse.rs` — the advertised-checksum parser and both
+  verifiers: a parse never yields a digest of the wrong length, SRI and hex
+  spellings round-trip, and the buffered and streaming verifiers agree under
+  arbitrary chunking.
+- `fuzz_normalize_url.rs` — the repository-URL normaliser the package page
+  links to: whatever comes out is `http(s)://` with a host, or nothing.
+- `fuzz_scanner_extract.rs` — `scanners::extract::extract_to`, the archive
+  reader that unpacks a published package before a scanner runs on it:
+  raw bytes, or tar / tar.gz / zip archives assembled from fuzzed entries
+  (`..`, absolute paths, symlinks and hard links pointing out, forty-deep
+  names, a NUL) under a fuzzed budget — nothing lands outside the root or in
+  a canary directory beside it, the bytes and entries on disk never exceed
+  the policy, the report matches the disk, and a refusal leaves the tree
+  within budget too.
+- `fuzz_sbom_extract.rs` — the ten SBOM extractors (RFC 0007 §5.2) over
+  archives whose members carry the manifest names and bodies each parser
+  looks for, cut and corrupted, plus a gem's tar-in-tar: for every registry
+  kind the call returns a manifest, never panics, answers the same input the
+  same way twice, and reports nothing longer than an archive could carry.
 - `fuzz_readme_render.rs` — the README pipeline: for arbitrary input, in any
   format and under either image policy, the output carries no `<script`, no
   `on*=` handler and no scheme outside the allow-list, and rendering is stable.
@@ -513,6 +549,54 @@ logic:
   reaches outside its own document nowhere.
 - `fuzz_grant_resolution.rs` — grant resolution over arbitrary hierarchies:
   the tier order holds, a seal stops inheritance, and widening never narrows.
+- `fuzz_signed_url.rs` — the signed download URL (RFC 0012): a minted token
+  round-trips to the same identity, is refused at any other coordinate
+  (including a `/` moved between `package` and `version`, which the display
+  string cannot see), under any other secret, and — once edited — either fails
+  or still means exactly what was minted. The netstring encoding's injectivity,
+  stated as a property rather than as the one attack its unit test pins.
+- `fuzz_listing_filter.rs` — every `(kind, document)` pair of the blocked-version
+  listing filters, over token-soup text and vocabulary-driven JSON: an empty
+  block set changes nothing, only blocked versions are reported removed, the
+  body keeps its representation, and filtering is idempotent — a second pass
+  removes nothing more and changes no byte. `dispatch_multi` (conda, RubyGems
+  `/versions`) is held to the same.
+- `fuzz_bundle_read.rs` — the air-gap bundle container: whatever `read_bundle`
+  accepts, `manifest_bytes_of` accepts too and yields the *same* manifest (the
+  duplicate-`manifest.json` bypass, as an invariant); every kept blob hashes to
+  its name; a written bundle reads back equal; a bundle with bytes flipped or
+  truncated never panics.
+- `fuzz_version_order.rs` — `newest_first` is a total preorder over any three
+  strings (a comparator that is not one makes `sort_by` panic since Rust 1.81),
+  `is_prerelease` ignores a `v` prefix, and `best_latest` answers from its
+  input with the highest stable strict-semver entry, cross-checked against an
+  independent `semver` read and against `newest_first`.
+- `fuzz_escaping.rs` — the four small encoders, each checked with an
+  independent decoder written in the target: `escape_html` decodes back to its
+  input and leaves no markup character; `percent_encode_path_segment` decodes
+  to the input bytes and cannot leave its segment; `csv::field` reads back
+  under RFC 4180 as the input, apostrophe-guarded exactly when it led a
+  formula; `parse_cache_control` reports only what the header said.
+- `fuzz_release_coordinate.rs` — `coordinate_from_filename`, constructively:
+  a name and a version drawn from each ecosystem's legal alphabet, formatted
+  the way its tooling names a file, must parse back to exactly that
+  coordinate, for every convention (`.nupkg`, `.whl`, `.gem`, `.tgz`,
+  `.crate`, `.vsix`, pacman, conda, `.deb`/`.rpm`).
+- `fuzz_image_host.rs` — `image_host_allowed`, the README image allow-list that
+  gates an outbound fetch: the URL is built *from* a chosen host (user-info,
+  port, path, query, fragment, case-shuffled scheme, embedded tabs) and the
+  answer must match the rule restated over that host.
+
+**A target is only as good as its oracle.** The nightly job that runs these had
+never got past cargo-fuzz's default build target until 2026-09-10 (see the
+comment on the job), and the first five seconds of `fuzz_deny_latest` under it
+reported a finding that was the target's own assertion contradicting the rule's
+unit tests. Two other targets asserted nothing and could only catch a panic.
+When you write one, state what the code *claims* — from its unit tests or its
+doc comment — and prefer an oracle that computes the expected answer from an
+independent source (a model, a second decoder, a second verifier) over one
+that spells out a handful of cases. Then run it for a couple of minutes
+locally before trusting a green nightly.
 
 **The targets are a separate workspace, and that is a trap.** `cargo check
 --workspace`, `cargo clippy --workspace` and `cargo test --workspace` do not see
@@ -561,15 +645,24 @@ to start under a restricted `ptrace_scope`, not a finding — re-run with
     (`-p batlehub-cli --test integration`), examples
     (`-p batlehub-examples --test '*'`), adapters default + Postgres, S3
     (`--features storage-s3 --test s3_storage`), Redis (`--features cache-redis`).
-  - `heavy-marketplace`: `bash tests/heavy/marketplace.sh` (headless VS Code +
-    IntelliJ).
+  - `heavy-marketplace`: `bash tests/heavy/marketplace.sh` (headless VS Code —
+    the `server-linux-x64-web` build, no Electron — + IntelliJ).
+  - `heavy-browser`: `vsx_login.sh`, `vsx_view.sh` and `console_fetch.sh` in
+    sequence against the runner's Chrome over CDP (the `headless-chrome`
+    action); the editor download is cached, and `vsx_view.sh`'s evidence
+    directory is uploaded on failure.
+  - `heavy-backends`: `bash tests/heavy/backends.sh` (S3 via RustFS, Redis,
+    and dex as a container, under npm and pip).
+  - `heavy-vsx-extension`: `bash tests/heavy/vsx_extension.sh` (the
+    `batlehub-vsx` repository's own heavy suite — both modes of the extension
+    in the VS Code web build, in the runner's Chrome — against this checkout).
   - `heavy-bundler`: `bash tests/heavy/bundler.sh` (a real `bundle install`
     against a local rubygems registry).
   - `heavy-client` (matrix): one job per ecosystem — `npm`, `pypi`, `openvsx`,
     `conda`, `nuget`, `composer`, `terraform`, `nvm`, `sdkman`, `mise`,
-    `cargo`, `go`, `maven`, `pathproxy`, `quarantine`, `upstream_audit`,
+    `cargo`, `go`, `maven`, `pathproxy`, `vscode_patch`, `che_code_patch`, `hybrid`, `quarantine`, `upstream_audit`,
     `airgap` — each
-    running `tests/heavy/<suite>.sh`. A matrix rather than seventeen jobs because only
+    running `tests/heavy/<suite>.sh`. A matrix rather than twenty jobs because only
     the toolchain setup differs; `fail-fast: false`, because one unhappy
     client says nothing about the others.
   - `heavy-authz` (matrix): one job per target of `tests/heavy/authz.sh` —

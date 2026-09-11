@@ -33,6 +33,8 @@ default = true
 
 All three clients (pip, uv, Poetry) read the same `simple/` index. BatleHub rewrites the file download links inside the index so wheels and sdists are fetched — and cached — through the proxy rather than directly from `files.pythonhosted.org`.
 
+The upstream does not have to be pypi.org. An index that only speaks [PEP 503](https://peps.python.org/pep-0503/) HTML — a static mirror, devpi, Nexus — works as an `upstreams` entry: a page a client asked for as [PEP 691](https://peps.python.org/pep-0691/) JSON is served as the HTML the upstream answered with (pip lists HTML in its own `Accept` for that case), and a file is located on the simple page when the upstream has no `/pypi/{name}/{version}/json` API, with relative links resolved against the page. Both paths are exercised by `tests/heavy/backends.sh` against a served directory.
+
 ## Publishing (local / hybrid)
 
 The registry must be in `local` or `hybrid` mode. Build, then upload with `twine` against the `legacy/` (upload) endpoint — the filename, name, and version are derived from the wheel or sdist metadata automatically:

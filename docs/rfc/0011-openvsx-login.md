@@ -1415,3 +1415,62 @@ Building it also found the defect §14.10 records: the contract file is keyed
 by origin, and this repository's `normalize_origin` was not computing one.
 Two halves of one suite can be wrong the same way and agree; a second
 implementation is what made them disagree.
+
+### 14.12 The patch in a real editor core, and the extension as a gate here (2026-09-11)
+
+§14.5 said the patch is carried, not applied, because this repository builds
+no editor. It can still be *run* in one: the `server-linux-x64-web` build's
+node request service does `await import("https")` and calls
+`module.request`, so a Node preload that wraps `http.request`/`https.request`
+and passes every header set through `withGalleryCredential` is the
+integration step of `patches/che-code/README.md`, done at the process
+boundary instead of at the call sites. `tests/heavy/vscode_patch.sh` does that to
+VS Code 1.136.2 and `tests/heavy/che_code_patch.sh` to the che-code build, points `product.json` straight at a registry whose
+`anonymous` holds no verb, and records the editor core's own requests on the
+tap — case A of §5.5, no proxy and no extension. Measured: nothing to send
+means the editor's query is refused `403` with no `Authorization` on any
+request; `VSX_REGISTRY_AUTH_TOKEN`, the contract file
+`auth write-token-file` writes at the patch's default path, and that file
+beside a wrong variable each install the fixture by id with every registry
+request carrying a Bearer; a `--from-file` source entry is no credential to
+the patch and falls through to the variable. What the preload does not carry
+is the single 401 retry, which needs the request body replayed and stays
+with the module's unit tests (run first, under the editor's own node).
+
+The extension's proof (§14.11) lives with the extension, in its repository.
+`tests/heavy/vsx_extension.sh` runs that suite here, with `BATLEHUB_SRC`
+pointed at this checkout, so the server's VSX API, the CLI's contract file
+and the gallery proxy are measured against their consumer in the editor that
+runs it. CI checks out the extension's default branch for it: the job is the
+canary for the two repositories drifting, and a pin would only say so later.
+
+### 14.13 The patch against the real che-code (2026-09-11)
+
+§6.4 said the patch touches `extensionGalleryService.ts` in
+`extensionManagement/common/`. Read against che-code `main` at `e2e91b70`
+(VS Code 1.128.1), it cannot: the module reads a file, `common/` may not
+import node (`import/no-restricted-paths`), and that service also runs in
+the browser. The validated integration — `patches/che-code/
+che-code-main-e2e91b70.diff`, applied to a pristine checkout, type-checked
+under che-code's own strict config with no new error, re-run by
+`patches/che-code/validate.sh` — attaches the credential in
+`vs/platform/request/node/requestService.ts`, the one place every request the
+*server* makes passes through, keyed by the request's own origin so no
+gallery URL has to be plumbed in; re-scopes it on redirects, which node
+otherwise follows with the original headers; and sets
+`vsxRegistryAuthSupport` from the launcher that already rewrites
+`extensionsGallery`. The module itself is unchanged.
+
+One finding is about §5.5, not about the tree. Case A — patched editor,
+contract file, no proxy — holds for what the server requests: the CLI, an
+install, a signature or a manifest. In a **web** workbench the Extensions
+view queries the gallery from the browser, and hands a request to the remote
+only when its own fetch throws or answers `405`; a gallery that requires a
+credential answers `403`, cleanly, and the view shows nothing while the
+install would succeed. The loopback proxy of §4.4 never met this because a
+loopback address is unreachable from the user's browser: the fetch fails and
+the request goes to the remote, which is where the proxy is. For case A the
+diff adds the browser-side rule that makes it true — requests to the
+gallery's origin go through the remote connection first when there is one.
+That hunk is the difference between "the server authenticates" and "the
+editor authenticates", and it is the one to argue for upstream.

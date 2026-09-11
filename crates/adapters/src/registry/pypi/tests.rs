@@ -1,8 +1,9 @@
 use super::*;
 use batlehub_core::entities::PackageId;
 use batlehub_core::error::CoreError;
-use batlehub_core::ports::RegistryClient;
+use batlehub_core::ports::{DocumentKind, RegistryClient};
 use client::{rewrite_simple_html, rewrite_simple_json};
+use futures::TryStreamExt;
 
 #[test]
 fn name_normalization() {
@@ -85,6 +86,14 @@ async fn resolve_metadata_404_returns_not_found() {
     let mut server = mockito::Server::new_async().await;
     let _mock = server
         .mock("GET", "/pypi/nonexistent/1.0.0/json")
+        .with_status(404)
+        .create_async()
+        .await;
+
+    // A 404 from the JSON API sends the lookup to the simple page, which is
+    // not there either.
+    let _page = server
+        .mock("GET", "/simple/nonexistent/")
         .with_status(404)
         .create_async()
         .await;
@@ -415,4 +424,206 @@ async fn an_empty_or_absent_description_captures_nothing() {
             None
         );
     }
+}
+
+// ── fetch_version_document: PEP 691 asked, PEP 503 answered ─────────────────
+
+/// An index that only speaks PEP 503 answers `text/html` to a JSON `Accept`.
+/// pip lists HTML in its own `Accept` for exactly that case, so the page is
+/// served as HTML — not a `502` for a body that is not JSON, which is what
+/// `tests/heavy/backends.sh` measured against a served directory.
+#[tokio::test]
+async fn simple_json_kind_falls_back_to_html_when_the_upstream_only_speaks_html() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/simple/only-html/")
+        .match_header(
+            "accept",
+            mockito::Matcher::Regex("application/vnd\\.pypi\\.simple\\.v1\\+json.*text/html".into()),
+        )
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body("<html><body><a href=\"only_html-1.0.0.tar.gz\">only_html-1.0.0.tar.gz</a></body></html>")
+        .create_async()
+        .await;
+
+    let opts = UpstreamHttpOptions::default();
+    let client = PypiRegistryClient::new(server.url(), &opts).unwrap();
+    let doc = client
+        .fetch_version_document("only-html", DocumentKind::SIMPLE_JSON)
+        .await
+        .unwrap();
+
+    assert!(
+        doc.content_type.starts_with("text/html"),
+        "{}",
+        doc.content_type
+    );
+    assert!(
+        doc.body
+            .as_text()
+            .is_some_and(|t| t.contains("only_html-1.0.0.tar.gz")),
+        "the HTML page is served as text: {:?}",
+        doc.body
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn simple_json_kind_is_json_when_the_upstream_answers_json() {
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/simple/speaks-json/")
+        .with_status(200)
+        .with_header("content-type", "application/vnd.pypi.simple.v1+json")
+        .with_body(r#"{"name":"speaks-json","files":[]}"#)
+        .create_async()
+        .await;
+
+    let opts = UpstreamHttpOptions::default();
+    let client = PypiRegistryClient::new(server.url(), &opts).unwrap();
+    let doc = client
+        .fetch_version_document("speaks-json", DocumentKind::SIMPLE_JSON)
+        .await
+        .unwrap();
+
+    assert_eq!(doc.content_type, SIMPLE_JSON_ACCEPT);
+    assert!(doc.body.as_json().is_some());
+}
+
+// ── fetch_artifact: a PEP 503-only upstream ─────────────────────────────────
+
+#[test]
+fn files_in_simple_page_resolves_relative_html_hrefs_by_filename() {
+    let html = b"<html><body>\n<a href=\"../../packages/x_y-1.0.0-py3-none-any.whl#sha256=abc\">x_y-1.0.0-py3-none-any.whl</a><br/>\n<a href=\"http://cdn.example/other-2.0.tar.gz\">other-2.0.tar.gz</a></body></html>";
+    let files =
+        client::files_in_simple_page("http://idx.example/simple/x-y/", html, Some("text/html"));
+    assert_eq!(
+        files,
+        vec![
+            (
+                "x_y-1.0.0-py3-none-any.whl".to_owned(),
+                "http://idx.example/packages/x_y-1.0.0-py3-none-any.whl#sha256=abc".to_owned()
+            ),
+            (
+                "other-2.0.tar.gz".to_owned(),
+                "http://cdn.example/other-2.0.tar.gz".to_owned()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn files_in_simple_page_reads_a_pep691_document() {
+    let json = br#"{"name":"x-y","files":[{"filename":"x_y-1.0.0-py3-none-any.whl","url":"/files/x_y-1.0.0-py3-none-any.whl"}]}"#;
+    assert_eq!(
+        client::files_in_simple_page(
+            "http://idx.example/simple/x-y/",
+            json,
+            Some("application/vnd.pypi.simple.v1+json")
+        ),
+        vec![(
+            "x_y-1.0.0-py3-none-any.whl".to_owned(),
+            "http://idx.example/files/x_y-1.0.0-py3-none-any.whl".to_owned()
+        )]
+    );
+}
+
+/// No `/pypi/{name}/{version}/json` upstream — a static mirror, devpi, a
+/// Nexus — so the file is found on the simple page, which is what pip would
+/// have read. Measured by tests/heavy/backends.sh: the page came through and
+/// the wheel was a `404`.
+#[tokio::test]
+async fn fetch_artifact_falls_back_to_the_simple_page_when_there_is_no_json_api() {
+    let mut server = mockito::Server::new_async().await;
+    let _api = server
+        .mock("GET", "/pypi/only-html/1.0.0/json")
+        .with_status(404)
+        .create_async()
+        .await;
+    let page = server
+        .mock("GET", "/simple/only-html/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body("<html><body><a href=\"../../files/only_html-1.0.0-py3-none-any.whl#sha256=ab\">only_html-1.0.0-py3-none-any.whl</a></body></html>")
+        .create_async()
+        .await;
+    let file = server
+        .mock("GET", "/files/only_html-1.0.0-py3-none-any.whl")
+        .with_status(200)
+        .with_body("WHEEL-BYTES")
+        .create_async()
+        .await;
+
+    let opts = UpstreamHttpOptions::default();
+    let client = PypiRegistryClient::new(server.url(), &opts).unwrap();
+    let pkg = PackageId::new("pypi", "only-html", "1.0.0")
+        .with_artifact("only_html-1.0.0-py3-none-any.whl");
+    let fetched = client.fetch_artifact(&pkg).await.unwrap();
+    let bytes: Vec<u8> = fetched
+        .stream
+        .try_fold(Vec::new(), |mut acc, chunk| async move {
+            acc.extend_from_slice(&chunk);
+            Ok(acc)
+        })
+        .await
+        .unwrap();
+    assert_eq!(bytes, b"WHEEL-BYTES");
+    page.assert_async().await;
+    file.assert_async().await;
+}
+
+/// The same upstream, asked for metadata: what the page says — the URL and
+/// the sha256 in the link — and no more.
+#[tokio::test]
+async fn resolve_metadata_falls_back_to_the_simple_page_when_there_is_no_json_api() {
+    let mut server = mockito::Server::new_async().await;
+    let _api = server
+        .mock("GET", "/pypi/only-html/1.0.0/json")
+        .with_status(404)
+        .create_async()
+        .await;
+    let _page = server
+        .mock("GET", "/simple/only-html/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(format!(
+            "<html><body><a href=\"../../files/only_html-1.0.0-py3-none-any.whl#sha256={}\">only_html-1.0.0-py3-none-any.whl</a></body></html>",
+            "a".repeat(64)
+        ))
+        .create_async()
+        .await;
+
+    let client = PypiRegistryClient::new(server.url(), &UpstreamHttpOptions::default()).unwrap();
+    let by_file = PackageId::new("pypi", "only-html", "1.0.0")
+        .with_artifact("only_html-1.0.0-py3-none-any.whl");
+    let meta = client.resolve_metadata(&by_file).await.unwrap();
+    assert_eq!(
+        meta.download_url.as_deref(),
+        Some(
+            format!(
+                "{}/files/only_html-1.0.0-py3-none-any.whl#sha256={}",
+                server.url(),
+                "a".repeat(64)
+            )
+            .as_str()
+        )
+    );
+    assert_eq!(meta.checksum.as_deref(), Some("a".repeat(64).as_str()));
+    assert!(meta.published_at.is_none());
+
+    // No file named: any file of this version will do.
+    let by_version = PackageId::new("pypi", "only-html", "1.0.0");
+    assert!(client.resolve_metadata(&by_version).await.is_ok());
+    // A version the page does not carry is not found.
+    let _api_absent = server
+        .mock("GET", "/pypi/only-html/9.9.9/json")
+        .with_status(404)
+        .create_async()
+        .await;
+    let absent = PackageId::new("pypi", "only-html", "9.9.9");
+    assert!(matches!(
+        client.resolve_metadata(&absent).await,
+        Err(CoreError::NotFound(_))
+    ));
 }

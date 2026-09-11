@@ -40,13 +40,13 @@ url = "https://github.com/cocogitto/cocogitto/releases/download/7.0.0/cocogitto-
 url_api = "https://api.github.com/repos/cocogitto/cocogitto/releases/assets/366659350"
 
 [[tools."github:mlab-sh/postmortem"]]
-version = "2.3.1"
+version = "2.4.0"
 backend = "github:mlab-sh/postmortem"
 
 [tools."github:mlab-sh/postmortem"."platforms.linux-x64"]
-checksum = "sha256:c6c9673538412dfdd07a3ebbef1ef6f622e565fec0a3038610e5b2a1c7a5fc21"
-url = "https://github.com/mlab-sh/postmortem/releases/download/v2.3.1/postmortem-2.3.1-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/mlab-sh/postmortem/releases/assets/532427188"
+checksum = "sha256:63f16a0368eb40ed751b6d0a9e93b02b93ef124bdc3b81957dcf5bae27e61672"
+url = "https://github.com/mlab-sh/postmortem/releases/download/v2.4.0/postmortem-2.4.0-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/mlab-sh/postmortem/releases/assets/552826290"
 
 [[tools.gitleaks]]
 version = "8.30.1"
@@ -72,6 +72,15 @@ backend = "aqua:helm/helm"
 [tools.helm."platforms.linux-x64"]
 checksum = "sha256:c306b46f719b0a4da32d0f78ee21bf90ce8d602f15b22ab753f0674d1670a7f3"
 url = "https://get.helm.sh/helm-v4.2.4-linux-amd64.tar.gz"
+
+[[tools.helm-docs]]
+version = "1.14.2"
+backend = "aqua:norwoodj/helm-docs"
+
+[tools.helm-docs."platforms.linux-x64"]
+checksum = "sha256:a8cf72ada34fad93285ba2a452b38bdc5bd52cc9a571236244ec31022928d6cc"
+url = "https://github.com/norwoodj/helm-docs/releases/download/v1.14.2/helm-docs_1.14.2_Linux_x86_64.tar.gz"
+url_api = "https://api.github.com/repos/norwoodj/helm-docs/releases/assets/178327210"
 
 [[tools.k6]]
 version = "2.2.0"

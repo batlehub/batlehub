@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use futures::TryStreamExt;
 
 use super::super::http_client::{
-    cache_control, fetch_json_document, fetch_text_document, to_registry_error,
+    cache_control, fetch_document_bytes, fetch_text_document, to_registry_error,
 };
 use super::models::{PypiPackageJson, PypiSearchInfo, PypiVersionJson};
 use super::PypiRegistryClient;
@@ -197,6 +197,192 @@ fn rewrite_file_url(url: &str, proxy_packages: &str) -> String {
     }
 }
 
+/// What pypi.org's JSON API said about a file, kept apart from "the API is
+/// not there": only the latter sends the lookup to the simple page.
+enum JsonApiAnswer {
+    /// No `/pypi/{name}/{version}/json` upstream (`404`) — a PEP 503-only index.
+    NoApi,
+    /// The API knows the release and lists the file.
+    File(String),
+    /// The API knows the release; the file is not in it.
+    NoSuchFile,
+}
+
+impl PypiRegistryClient {
+    /// The file's URL from pypi.org's JSON API — see [`JsonApiAnswer`].
+    async fn file_url_from_json_api(
+        &self,
+        base: &str,
+        name: &str,
+        version: &str,
+        filename: &str,
+    ) -> Result<JsonApiAnswer, CoreError> {
+        let api_url = format!("{base}/pypi/{name}/{version}/json");
+        let api_resp = self
+            .get(&api_url)
+            .send()
+            .await
+            .map_err(|e| CoreError::Registry(format!("pypi: API request failed: {e}")))?;
+        if api_resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(JsonApiAnswer::NoApi);
+        }
+        if !api_resp.status().is_success() {
+            return Err(CoreError::Registry(format!(
+                "pypi upstream returned {} for {name} {version}",
+                api_resp.status()
+            )));
+        }
+        let body = api_resp.bytes().await.map_err(to_registry_error)?;
+        let version_json: PypiVersionJson = serde_json::from_slice(&body)
+            .map_err(|e| CoreError::Registry(format!("pypi: parse version JSON: {e}")))?;
+        Ok(version_json
+            .urls
+            .into_iter()
+            .find(|f| f.filename == filename)
+            .map_or(JsonApiAnswer::NoSuchFile, |f| JsonApiAnswer::File(f.url)))
+    }
+
+    /// Every file the simple page names — PEP 691 JSON or PEP 503 HTML,
+    /// whichever the upstream speaks — with URLs resolved against the page.
+    async fn files_from_simple_page(
+        &self,
+        base: &str,
+        name: &str,
+    ) -> Result<Vec<(String, String)>, CoreError> {
+        let page_url = format!("{base}/simple/{name}/");
+        let (body, content_type) = fetch_simple_page(
+            &self.http,
+            base,
+            name,
+            self.basic_auth.as_ref(),
+            Some(&format!("{SIMPLE_JSON_ACCEPT}, text/html;q=0.1")),
+        )
+        .await?;
+        Ok(files_in_simple_page(
+            &page_url,
+            &body,
+            content_type.as_deref(),
+        ))
+    }
+
+    async fn file_url_from_simple_page(
+        &self,
+        base: &str,
+        name: &str,
+        filename: &str,
+    ) -> Result<Option<String>, CoreError> {
+        Ok(self
+            .files_from_simple_page(base, name)
+            .await?
+            .into_iter()
+            .find(|(n, _)| n == filename)
+            .map(|(_, url)| url))
+    }
+
+    /// [`RegistryClient::resolve_metadata`] for an upstream with no JSON API:
+    /// what a PEP 503 page can say about one file — its URL and the sha256 in
+    /// the link's fragment — and nothing it cannot (no upload time, no
+    /// description, no links). The file is `pkg.artifact` when the request
+    /// names one, else any file of this version, recognised by the
+    /// `{name}-{version}` prefix both wheel and sdist names carry.
+    async fn metadata_from_simple_page(
+        &self,
+        base: &str,
+        name: &str,
+        pkg: &PackageId,
+    ) -> Result<PackageMetadata, CoreError> {
+        let files = self.files_from_simple_page(base, name).await?;
+        let underscored = name.replace('-', "_");
+        let file = match pkg.artifact.as_deref() {
+            Some(filename) => files.into_iter().find(|(n, _)| n == filename),
+            None => files.into_iter().find(|(n, _)| {
+                let lower = n.to_ascii_lowercase();
+                [&underscored, name].iter().any(|stem| {
+                    lower.starts_with(&format!("{stem}-{}", pkg.version.to_ascii_lowercase()))
+                })
+            }),
+        };
+        let Some((_, url)) = file else {
+            return Err(CoreError::NotFound(format!(
+                "pypi package not found: {} (no JSON API upstream, and the simple page names no such file)",
+                pkg.cache_key()
+            )));
+        };
+        Ok(PackageMetadata {
+            id: pkg.clone(),
+            published_at: None,
+            checksum: sha256_fragment(&url),
+            download_url: Some(url),
+            is_signed: None,
+            extra: serde_json::json!({ "readme": null, "links": null }),
+            cache_control: None,
+        })
+    }
+}
+
+/// Every file a simple page names, as `(filename, absolute url)`. A JSON
+/// page names files outright; an HTML page is scanned for `href="…"` and the
+/// filename is the last path segment before any `#fragment` — the only part
+/// of a PEP 503 link that is specified. Relative hrefs (a static mirror's
+/// `../../packages/x.whl`) are resolved against the page's URL, which is what
+/// pip does with them; the fragment (`#sha256=…`) is kept on the URL.
+pub fn files_in_simple_page(
+    page_url: &str,
+    body: &[u8],
+    content_type: Option<&str>,
+) -> Vec<(String, String)> {
+    let Ok(page) = reqwest::Url::parse(page_url) else {
+        return Vec::new();
+    };
+    let absolute = |href: &str| page.join(href).ok().map(|u| u.to_string());
+    if content_type.is_some_and(|ct| ct.contains("application/vnd.pypi.simple")) {
+        let Ok(doc) = serde_json::from_slice::<serde_json::Value>(body) else {
+            return Vec::new();
+        };
+        return doc
+            .get("files")
+            .and_then(|f| f.as_array())
+            .map(|files| {
+                files
+                    .iter()
+                    .filter_map(|f| {
+                        let name = f.get("filename")?.as_str()?;
+                        let url = absolute(f.get("url")?.as_str()?)?;
+                        Some((name.to_owned(), url))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+    }
+    let Ok(text) = std::str::from_utf8(body) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(pos) = rest.find("href=\"") {
+        let after = &rest[pos + 6..];
+        let Some(end) = after.find('"') else { break };
+        let href = &after[..end];
+        rest = &after[end..];
+        let path = href.split(['#', '?']).next().unwrap_or(href);
+        if let (Some(name), Some(url)) = (path.rsplit('/').next(), absolute(href)) {
+            if !name.is_empty() {
+                out.push((name.to_owned(), url));
+            }
+        }
+    }
+    out
+}
+
+/// The `sha256=` a PEP 503 link carries in its fragment, if any.
+fn sha256_fragment(url: &str) -> Option<String> {
+    url.rsplit_once('#')
+        .map(|(_, fragment)| fragment)
+        .and_then(|fragment| fragment.strip_prefix("sha256="))
+        .filter(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+        .map(str::to_owned)
+}
+
 // ── RegistryClient impl ───────────────────────────────────────────────────────
 
 #[async_trait]
@@ -224,13 +410,35 @@ impl RegistryClient for PypiRegistryClient {
         let what = format!("pypi simple page for '{package}'");
 
         match kind {
+            // JSON asked for, HTML accepted: PEP 691 is a content negotiation,
+            // and an index that only speaks PEP 503 — a static directory, an
+            // older Nexus, devpi — answers `text/html` to this `Accept`. pip
+            // lists HTML in its own `Accept` (at a lower q) for exactly that
+            // case, so the honest answer is the HTML page as HTML, not a `502`
+            // for "expected value at line 1" (measured by tests/heavy/backends.sh
+            // against a served directory). The upstream's `Content-Type`, not
+            // the kind, decides how the body is read.
             DocumentKind::SIMPLE_JSON => {
-                let req = self
-                    .get(&url)
-                    .header(reqwest::header::ACCEPT, SIMPLE_JSON_ACCEPT);
-                let mut doc = fetch_json_document(req, &what).await?;
-                doc.content_type = SIMPLE_JSON_ACCEPT.to_owned();
-                Ok(doc)
+                let req = self.get(&url).header(
+                    reqwest::header::ACCEPT,
+                    format!("{SIMPLE_JSON_ACCEPT}, text/html;q=0.1"),
+                );
+                let (body, content_type) = fetch_document_bytes(req, &what).await?;
+                let is_json = content_type
+                    .as_deref()
+                    .is_some_and(|ct| ct.contains("application/vnd.pypi.simple"));
+                if is_json {
+                    let value: serde_json::Value = serde_json::from_slice(&body)
+                        .map_err(|e| CoreError::Registry(format!("parsing {what}: {e}")))?;
+                    let mut doc = VersionDocument::json(value);
+                    doc.content_type = SIMPLE_JSON_ACCEPT.to_owned();
+                    Ok(doc)
+                } else {
+                    let text = String::from_utf8(body.to_vec()).map_err(|e| {
+                        CoreError::Registry(format!("{what} is not valid UTF-8: {e}"))
+                    })?;
+                    Ok(VersionDocument::text("text/html; charset=utf-8", text))
+                }
             }
             DocumentKind::Versions => {
                 let req = self.get(&url).header(reqwest::header::ACCEPT, "text/html");
@@ -254,10 +462,9 @@ impl RegistryClient for PypiRegistryClient {
             .map_err(|e| CoreError::Registry(format!("pypi metadata request failed: {e}")))?;
 
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Err(CoreError::NotFound(format!(
-                "pypi package not found: {}",
-                pkg.cache_key()
-            )));
+            // No JSON API, or no such release: the simple page is the
+            // document that decides, the way it does for `fetch_artifact`.
+            return self.metadata_from_simple_page(base, &name, pkg).await;
         }
         if !resp.status().is_success() {
             return Err(CoreError::Registry(format!(
@@ -332,34 +539,7 @@ impl RegistryClient for PypiRegistryClient {
         let name = normalize_name(&pkg.name);
         let version = &pkg.version;
 
-        // Resolve the download URL from the JSON API, then stream from the CDN.
-        let api_url = format!("{base}/pypi/{name}/{version}/json");
         let artifact_filename = pkg.artifact.as_deref().unwrap_or("");
-
-        let api_resp = self
-            .get(&api_url)
-            .send()
-            .await
-            .map_err(|e| CoreError::Registry(format!("pypi: API request failed: {e}")))?;
-
-        if api_resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Err(CoreError::NotFound(format!(
-                "pypi artifact not found: {}",
-                pkg.cache_key()
-            )));
-        }
-        if !api_resp.status().is_success() {
-            return Err(CoreError::Registry(format!(
-                "pypi upstream returned {} for {}",
-                api_resp.status(),
-                pkg.cache_key()
-            )));
-        }
-
-        let body = api_resp.bytes().await.map_err(to_registry_error)?;
-
-        let version_json: PypiVersionJson = serde_json::from_slice(&body)
-            .map_err(|e| CoreError::Registry(format!("pypi: parse version JSON: {e}")))?;
 
         // PEP 658: pip and uv resolve from `{file}.metadata` rather than
         // downloading the wheel, and the simple page we serve advertises it
@@ -372,21 +552,40 @@ impl RegistryClient for PypiRegistryClient {
             None => (artifact_filename, false),
         };
 
-        let file = version_json
-            .urls
-            .into_iter()
-            .find(|f| f.filename == match_name)
-            .ok_or_else(|| {
-                CoreError::NotFound(format!(
-                    "pypi: file '{}' not found in version {}",
-                    match_name, version
-                ))
-            })?;
+        // Resolve the download URL: the JSON API first, then the simple page.
+        // The JSON API (`/pypi/{name}/{version}/json`) is pypi.org's own and
+        // nothing in PEP 503 or PEP 691 requires it; a static mirror, devpi
+        // or a Nexus answer `404` there and carry every file link on the
+        // simple page instead — which is also the document this proxy already
+        // served the client to get here (measured by tests/heavy/backends.sh
+        // against a served directory: the page came through, the wheel was a
+        // `404`). The page's own URL resolves a relative href.
+        let file_url = match self
+            .file_url_from_json_api(base, &name, version, match_name)
+            .await?
+        {
+            JsonApiAnswer::File(url) => url,
+            // The API knows the release and does not list the file: it does
+            // not exist, and the simple page would only say so again.
+            JsonApiAnswer::NoSuchFile => {
+                return Err(CoreError::NotFound(format!(
+                    "pypi: file '{match_name}' not found in version {version}"
+                )));
+            }
+            JsonApiAnswer::NoApi => self
+                .file_url_from_simple_page(base, &name, match_name)
+                .await?
+                .ok_or_else(|| {
+                    CoreError::NotFound(format!(
+                        "pypi: file '{match_name}' not found in version {version} (no JSON API upstream, and the simple page does not name it)"
+                    ))
+                })?,
+        };
 
         let download_url = if metadata_sibling {
-            format!("{}.metadata", file.url)
+            format!("{file_url}.metadata")
         } else {
-            file.url.clone()
+            file_url
         };
 
         tracing::debug!(url = %download_url, "fetching PyPI artifact");

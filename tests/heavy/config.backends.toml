@@ -1,0 +1,81 @@
+# tests/heavy/backends.sh: the production backends under real clients.
+#
+# Every other heavy config is `storage = filesystem`, `auth = token`, no
+# `[cache]`. This one is S3 for the artifacts, Redis for the metadata cache,
+# and an OIDC issuer (dex) for the credential — the three things a deployment
+# has and the in-process tests can only mock. The npm registry requires a
+# credential to read, so the JWT is what npm has to present; the PyPI one
+# reads anonymously and is here for the second artifact path (a wheel through
+# S3, a simple page through Redis).
+#
+# The upstream of both is a directory the suite serves, so every upstream
+# request is countable — a cache hit is the *absence* of one.
+
+[server]
+host = "127.0.0.1"
+port = 8140
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[cache]
+type = "redis"
+url = "${REDIS_URL}"
+
+[storage]
+type = "s3"
+bucket = "${HEAVY_S3_BUCKET}"
+region = "us-east-1"
+endpoint_url = "${S3_TEST_ENDPOINT}"
+force_path_style = true
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+# The generated block of `task dex:config`, with the issuer read from the
+# environment: the suite discovers it from the sidecar (or CI's container)
+# rather than committing a URL that carries a workspace name. `role_claim`
+# is the email because dex's password DB carries no groups claim.
+[[auth]]
+type = "oidc"
+issuer_url = "${OIDC_ISSUER}"
+client_id = "${OIDC_CLIENT_ID}"
+client_secret = "${OIDC_CLIENT_SECRET}"
+redirect_uri = "http://127.0.0.1:8140/api/v1/auth/oidc/callback"
+scopes = ["openid", "profile", "email"]
+frontend_url = "http://127.0.0.1:8140"
+user_id_claim = "email"
+role_claim = "email"
+
+[auth.role_mappings]
+"admin@example.com" = "admin"
+"dev@example.com" = "user"
+
+[[registries]]
+type = "npm"
+name = "npm-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["${HEAVY_UPSTREAM_URL}"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "pypi"
+name = "pypi-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["${HEAVY_UPSTREAM_URL}"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

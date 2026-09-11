@@ -9,9 +9,9 @@
 #      (jetbrains-marketplace) — see config.heavy.toml.
 #   2. Publishes the weebo-bridge-notify release artifacts
 #      (https://github.com/batleforc/weebo-che-notify) to both registries.
-#   3. VS Code: two scenarios.
+#   3. VS Code: two scenarios, on the server build (`server-linux-x64-web`).
 #      a. downloads the VSIX back through the proxy and installs it from the
-#         file with a headless `code --install-extension`;
+#         file with a headless `code-server --install-extension`;
 #      b. points the editor's `product.json` at this instance's VS Code
 #         gallery and installs the same extension **by id**, with no file —
 #         the only test that proves BatleHub can be an editor's marketplace
@@ -30,7 +30,7 @@
 #   DATABASE_URL     (required)  Postgres for the server
 #   BASE             (default http://127.0.0.1:8080)
 #   WEEBO_VERSION    (default 0.5.0)   release of weebo-che-notify to install
-#   VSCODE_VERSION   (default 1.96.4)  VS Code build to download when `code` is absent
+#   VSCODE_VERSION   (default 1.136.2) VS Code server build to download
 #   IDEA_VERSION     (default 2026.1.3) IntelliJ IDEA build (unified installer;
 #                    since 2025.3 there is no separate Community edition — the
 #                    tarball is idea-<version>.tar.gz, not ideaIC-<version>.tar.gz)
@@ -48,7 +48,7 @@ WEEBO_VERSION="${WEEBO_VERSION:-0.5.0}"
 WEEBO_BASE_URL="${WEEBO_BASE_URL:-https://github.com/batleforc/weebo-che-notify/releases/download}"
 VSCODE_EXT_ID="batleforc.weebo-bridge-notify"
 JB_PLUGIN_ID="fr.batleforc.weebo-bridge-notify"
-VSCODE_VERSION="${VSCODE_VERSION:-1.96.4}"
+VSCODE_VERSION="${VSCODE_VERSION:-1.136.2}"
 IDEA_VERSION="${IDEA_VERSION:-2026.1.3}"
 IDE_CACHE="${IDE_CACHE:-$HOME/.cache/batlehub-heavy}"
 COVERAGE="${COVERAGE:-0}"
@@ -168,22 +168,23 @@ grep -q "\"pluginId\":\"$JB_PLUGIN_ID\"" "$WORK/upload-response.json" \
 # ── 3. VS Code: headless install from this instance only ─────────────────────
 
 if [[ "${SKIP_VSCODE:-0}" != "1" ]]; then
-  CODE_BIN="${CODE_BIN:-}"
-  if [[ -z "$CODE_BIN" ]]; then
-    if command -v code >/dev/null 2>&1; then
-      CODE_BIN="$(command -v code)"
-    else
-      VSCODE_DIR="$IDE_CACHE/vscode-$VSCODE_VERSION"
-      if [[ ! -x "$VSCODE_DIR/bin/code" ]]; then
-        log "Downloading VS Code $VSCODE_VERSION"
-        mkdir -p "$VSCODE_DIR"
-        fetch_https \
-          "https://update.code.visualstudio.com/$VSCODE_VERSION/linux-x64/stable" \
-          | tar -xz -C "$VSCODE_DIR" --strip-components=1
-      fi
-      CODE_BIN="$VSCODE_DIR/bin/code"
-    fi
+  # The server build (`server-linux-x64-web`): the same `extensionGalleryService`
+  # and `ExtensionManagementCLI` as the desktop, under the node it bundles, with
+  # `product.json` at its root — and no Electron, so no xvfb and no GTK on the
+  # runner. The desktop build was driven here up to 1.96.4; from 1.136 its
+  # `cli.js` imports its dependencies as ES modules out of `node_modules.asar`,
+  # which plain node cannot open (vsx_login.sh). vsx_login.sh and vsx_view.sh
+  # share this download.
+  VSCODE_DIR="$IDE_CACHE/vscode-server-web-$VSCODE_VERSION"
+  CODE_SERVER="${CODE_SERVER:-$VSCODE_DIR/bin/code-server}"
+  if [[ ! -x "$CODE_SERVER" ]]; then
+    log "Downloading VS Code $VSCODE_VERSION (server-linux-x64-web)"
+    mkdir -p "$VSCODE_DIR"
+    fetch_https \
+      "https://update.code.visualstudio.com/$VSCODE_VERSION/server-linux-x64-web/stable" \
+      | tar -xz -C "$VSCODE_DIR" --strip-components=1
   fi
+  [[ -x "$CODE_SERVER" ]] || { echo "ERROR: no bin/code-server in $VSCODE_DIR" >&2; exit 1; }
 
   log "Downloading the extension back through the proxy (public stores don't have it)"
   curl -fsS "$BASE/proxy/vscode/$VSCODE_EXT_ID/$WEEBO_VERSION/vsix" -o "$WORK/from-proxy.vsix"
@@ -195,14 +196,24 @@ if [[ "${SKIP_VSCODE:-0}" != "1" ]]; then
   # instead of running locally. The install would then happen in the developer's
   # own editor, against the developer's own gallery, and `--list-extensions`
   # would report that editor's extensions — a pass that proves nothing about
-  # BatleHub. Unset, so `code` is always this build, talking to this server.
-  CODE=(env -u VSCODE_IPC_HOOK_CLI "$CODE_BIN"
-        --user-data-dir "$WORK/vscode-data" --extensions-dir "$WORK/vscode-ext")
-  if [[ -z "${DISPLAY:-}" ]] && command -v xvfb-run >/dev/null 2>&1; then
-    CODE=(xvfb-run -a "${CODE[@]}")
-  fi
+  # BatleHub. Unset, so the editor is always this build, talking to this server.
+  #
+  # Each scenario gets its own `--server-data-dir`: that is where the server's
+  # CLI reads `extensions.verifySignature` from (`data/User/settings.json`,
+  # measured against the five candidate files in vsx_view.sh). Since 1.136 the
+  # CLI verifies on install and refuses a package the Microsoft marketplace did
+  # not sign with `NotSigned` — RFC 0020 §4.5: the setting is the one lever a
+  # stock build has, and the one VSCodium and code-server ship off by default.
+  vscode_profile() {  # <dir> → sets CODE to the CLI over a fresh profile under <dir>
+    local dir="$1"
+    mkdir -p "$dir/server/data/User"
+    echo '{ "extensions.verifySignature": false }' >"$dir/server/data/User/settings.json"
+    CODE=(env -u VSCODE_IPC_HOOK_CLI "$CODE_SERVER" --server-data-dir "$dir/server"
+          --user-data-dir "$dir/user" --extensions-dir "$dir/extensions")
+  }
 
   log "Installing into headless VS Code (from the proxied file)"
+  vscode_profile "$WORK/vscode-file"
   "${CODE[@]}" --install-extension "$WORK/from-proxy.vsix" --force
   "${CODE[@]}" --list-extensions | grep -qix "$VSCODE_EXT_ID" \
     || { echo "ERROR: $VSCODE_EXT_ID not listed after install" >&2; exit 1; }
@@ -216,45 +227,28 @@ if [[ "${SKIP_VSCODE:-0}" != "1" ]]; then
   # fetch — which is exactly what a developer configuring BatleHub as their
   # marketplace does. It also validates the `product.json` snippet the console
   # publishes, rather than a hand-written variant of it.
-  #
-  # `product.json` lives inside the extracted build, so this needs the
-  # downloaded VS Code; when CODE_BIN came from the system we cannot safely
-  # rewrite it and the scenario is skipped rather than faked.
-  PRODUCT_JSON=""
-  if [[ -n "${VSCODE_DIR:-}" && -f "$VSCODE_DIR/resources/app/product.json" ]]; then
-    PRODUCT_JSON="$VSCODE_DIR/resources/app/product.json"
-  fi
+  PRODUCT_JSON="$VSCODE_DIR/product.json"
+  [[ -f "$PRODUCT_JSON" ]] || { echo "ERROR: no product.json at $PRODUCT_JSON" >&2; exit 1; }
 
-  if [[ -z "$PRODUCT_JSON" ]]; then
-    log "SKIP gallery scenario — product.json not found (system 'code' in use)"
-  elif ! command -v python3 >/dev/null 2>&1; then
-    log "SKIP gallery scenario — python3 needed to patch product.json"
+  log "Pointing product.json at this instance's VS Code gallery"
+  cp "$PRODUCT_JSON" "$WORK/product.json.orig"
+  BASE="$BASE" python3 tests/heavy/patch_product_json.py "$PRODUCT_JSON"
+
+  # A fresh profile, so the file install above cannot be what makes this pass.
+  vscode_profile "$WORK/vscode-gallery"
+  log "Installing $VSCODE_EXT_ID by id through the gallery"
+  if "${CODE[@]}" --install-extension "$VSCODE_EXT_ID" --force; then
+    "${CODE[@]}" --list-extensions | grep -qix "$VSCODE_EXT_ID" \
+      || { echo "ERROR: $VSCODE_EXT_ID not listed after gallery install" >&2; exit 1; }
+    log "VSCODE-GALLERY-HEAVY-OK ($VSCODE_EXT_ID installed by id from this instance)"
   else
-    log "Pointing product.json at this instance's VS Code gallery"
-    cp "$PRODUCT_JSON" "$WORK/product.json.orig"
-    BASE="$BASE" python3 tests/heavy/patch_product_json.py "$PRODUCT_JSON"
-
-    # A fresh profile, so the file install above cannot be what makes this pass.
-    GALLERY_CODE=(env -u VSCODE_IPC_HOOK_CLI "$CODE_BIN"
-                  --user-data-dir "$WORK/vscode-gallery-data" --extensions-dir "$WORK/vscode-gallery-ext")
-    if [[ -z "${DISPLAY:-}" ]] && command -v xvfb-run >/dev/null 2>&1; then
-      GALLERY_CODE=(xvfb-run -a "${GALLERY_CODE[@]}")
-    fi
-
-    log "Installing $VSCODE_EXT_ID by id through the gallery"
-    if "${GALLERY_CODE[@]}" --install-extension "$VSCODE_EXT_ID" --force; then
-      "${GALLERY_CODE[@]}" --list-extensions | grep -qix "$VSCODE_EXT_ID" \
-        || { echo "ERROR: $VSCODE_EXT_ID not listed after gallery install" >&2; exit 1; }
-      log "VSCODE-GALLERY-HEAVY-OK ($VSCODE_EXT_ID installed by id from this instance)"
-    else
-      echo "ERROR: gallery install failed; server log tail follows" >&2
-      tail -50 "$WORK/server.log" >&2
-      cp "$WORK/product.json.orig" "$PRODUCT_JSON"
-      exit 1
-    fi
-
+    echo "ERROR: gallery install failed; server log tail follows" >&2
+    tail -50 "$WORK/server.log" >&2
     cp "$WORK/product.json.orig" "$PRODUCT_JSON"
+    exit 1
   fi
+
+  cp "$WORK/product.json.orig" "$PRODUCT_JSON"
 else
   log "SKIP_VSCODE=1 — VS Code scenario skipped"
 fi

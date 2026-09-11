@@ -426,14 +426,22 @@ fn strip_goproxy(
 }
 
 /// PyPI's simple index, in either of its two encodings.
+///
+/// Chosen by the **body**, not by `ctx.document`: a page asked for as PEP 691
+/// JSON is served as PEP 503 HTML when the upstream only speaks HTML (the
+/// adapter reads the upstream's `Content-Type`), and it is still a listing
+/// the block has to reach. Keyed on the kind, that page would have gone
+/// through `with_json`, been passed through as "not JSON", and listed the
+/// blocked version — over-listing on the one path a client actually takes.
 fn strip_pypi(
-    ctx: &ListingContext<'_>,
+    _ctx: &ListingContext<'_>,
     doc: &mut VersionDocument,
     blocked: &BlockedVersions,
 ) -> Vec<String> {
-    match ctx.document {
-        DocumentKind::SIMPLE_JSON => with_json(doc, |json| pypi::strip_simple_json(json, blocked)),
-        _ => with_text(doc, |html| pypi::strip_simple_html(html, blocked)),
+    if doc.body.as_json_mut().is_some() {
+        with_json(doc, |json| pypi::strip_simple_json(json, blocked))
+    } else {
+        with_text(doc, |html| pypi::strip_simple_html(html, blocked))
     }
 }
 
@@ -1042,6 +1050,40 @@ mod tests {
     }
 
     // --- dispatch -------------------------------------------------------------
+
+    /// The PyPI stripper follows the body, not the kind: a page asked for as
+    /// PEP 691 JSON and answered as PEP 503 HTML by an HTML-only upstream is
+    /// filed under `SIMPLE_JSON` and must still lose its blocked anchor.
+    #[test]
+    fn pypi_simple_json_kind_over_an_html_body_strips_the_html() {
+        let ctx = ListingContext {
+            registry: "r1",
+            kind: RegistryKind::Pypi,
+            document: DocumentKind::SIMPLE_JSON,
+            package: "requests",
+            public_base: "http://proxy.example",
+        };
+        let mut doc = VersionDocument::text(
+            "text/html; charset=utf-8",
+            concat!(
+                "<html><body>\n",
+                "<a href=\"/proxy/p/packages/requests-2.27.0.tar.gz\">requests-2.27.0.tar.gz</a><br/>\n",
+                "<a href=\"/proxy/p/packages/requests-2.28.0.tar.gz\">requests-2.28.0.tar.gz</a><br/>\n",
+                "</body></html>\n"
+            ),
+        );
+        let blocked = BlockedVersions::new(RegistryKind::Pypi, vec!["2.28.0".to_owned()]);
+
+        let removed = dispatch(&ctx, &mut doc, &blocked);
+
+        assert_eq!(removed, vec!["2.28.0".to_owned()]);
+        let html = doc.body.as_text().expect("still text");
+        assert!(
+            !html.contains("2.28.0"),
+            "the blocked anchor survived: {html}"
+        );
+        assert!(html.contains("requests-2.27.0.tar.gz"));
+    }
 
     fn ctx(kind: RegistryKind) -> ListingContext<'static> {
         ListingContext {

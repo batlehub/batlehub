@@ -64,7 +64,7 @@
 # — from there.
 #
 # Environment knobs: DATABASE_URL (required), HEAVY_PORT, HEAVY_TAP_PORT,
-# HEAVY_EDITOR_PORT, VSCODE_VERSION (1.136.1), WEEBO_VERSION (0.5.0),
+# HEAVY_EDITOR_PORT, VSCODE_VERSION (1.136.2), WEEBO_VERSION (0.5.0),
 # CDP_URL (default: http://127.0.0.1:9222 if it answers), CHROME_BIN,
 # COVERAGE.
 
@@ -78,7 +78,7 @@ REG="vsx-$HEAVY_RUN"
 EXT_ID="batleforc.weebo-bridge-notify"
 WEEBO_VERSION="${WEEBO_VERSION:-0.5.0}"
 WEEBO_BASE_URL="${WEEBO_BASE_URL:-https://github.com/batleforc/weebo-che-notify/releases/download}"
-VSCODE_VERSION="${VSCODE_VERSION:-1.136.1}"
+VSCODE_VERSION="${VSCODE_VERSION:-1.136.2}"
 EDITOR_PORT="${HEAVY_EDITOR_PORT:-8131}"
 USER_TOKEN="heavy-user-token"
 SVG_ID="batlehub.heavy-svg-icon"

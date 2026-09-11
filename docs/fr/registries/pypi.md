@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/pypi.md
-sourceHash: e2c99641ece5d45f
+sourceHash: e8325e5fb7087441
 ---
 
 # PyPI
@@ -44,6 +44,16 @@ Les trois clients (pip, uv, Poetry) lisent le même index `simple/`. BatleHub
 réécrit les liens de téléchargement à l'intérieur de l'index, de sorte que les
 wheels et les sdists sont récupérés — et mis en cache — par le proxy plutôt que
 directement depuis `files.pythonhosted.org`.
+
+L'amont n'a pas à être pypi.org. Un index qui ne parle que le HTML de la
+[PEP 503](https://peps.python.org/pep-0503/) — un miroir statique, devpi,
+Nexus — convient comme entrée `upstreams` : une page demandée par le client en
+JSON [PEP 691](https://peps.python.org/pep-0691/) est servie telle que l'amont
+l'a répondue, en HTML (pip liste le HTML dans son propre `Accept` pour ce cas),
+et un fichier est localisé sur la page simple quand l'amont n'a pas d'API
+`/pypi/{name}/{version}/json`, les liens relatifs étant résolus par rapport à
+la page. Les deux chemins sont exercés par `tests/heavy/backends.sh` contre un
+répertoire servi.
 
 ## Publication (local / hybrid) {#publishing-local-hybrid}
 

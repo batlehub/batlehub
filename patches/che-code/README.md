@@ -18,44 +18,79 @@ The module is written against the contract in
 `batlehub-cli auth write-token-file` writes and
 [`cli/schema/vsx-token.schema.json`](../../cli/schema/vsx-token.schema.json)
 defines, and it is carried here so the two halves live in one repository and
-change together. Integrating it is the step below, and it is a rebase against
-whatever the upstream file looks like on the day.
+change together.
 
-**No fabricated diff.** A patch with invented context lines fails to apply and
-wastes the time of whoever tries. What follows is the change to make, not a
-`git apply` target.
+**No fabricated diff.** The one diff here, `che-code-main-e2e91b70.diff`, was
+generated on a checkout of that commit and is checked against it by
+`validate.sh` — apply, type-check, tests. It names the commit in its file
+name because that is the only tree it is known to fit; on a newer tree the
+script says what moved, and the steps below say what to do about it.
 
 ## Integrating it
 
-1. Copy `vsxRegistryAuth.ts` into
-   `src/vs/platform/extensionManagement/common/`.
+**Validated against che-code `main` at `e2e91b70` (VS Code 1.128.1) on
+2026-09-11** — `che-code-main-e2e91b70.diff` is that integration, applied to a
+pristine checkout with `git apply --check`, both touched TypeScript files
+type-checked under che-code's own `tsconfig.base.json` with no error the tree
+did not already have, and the module's tests green in place.
+`validate.sh` repeats all three; run it after a rebase, or with
+`CHE_CODE_REF=main` to learn what moved.
 
-2. In `extensionGalleryService.ts`, at each place that builds headers for a
-   gallery request — the `extensionquery` POST and the asset/download GETs
-   are the ones that matter — pass them through `withGalleryCredential`, or
-   wrap the send in `sendWithCredential` to get the 401 retry as well:
+Reading the tree changed three things about the steps first written here,
+which named `extensionGalleryService.ts` in `common/`:
+
+1. **The module lives in a `node/` folder, not `common/`.** It reads a file,
+   so it imports `node:fs`; VS Code's layering (`import/no-restricted-paths`
+   in `eslint.config.js`) forbids that from `**/common/**`, and the gallery
+   service in `common/` also runs in the browser, where there is no file to
+   read. The place every gallery request made by the *server* passes through
+   is `vs/platform/request/node/requestService.ts` — its `request()` — and
+   that is where the credential is attached:
 
    ```ts
-   import { sendWithCredential, withGalleryCredential } from './vsxRegistryAuth.js';
-
-   // headers-only:
-   const headers = withGalleryCredential(baseHeaders, url, this.api(''));
-
-   // with the single 401 retry, which is what makes a short-lived token work:
-   const res = await sendWithCredential(url, this.api(''), baseHeaders,
-       h => this.requestService.request({ type: 'GET', url, headers: h }, token));
+   import { mayAttachCredential, originOf, resolveGalleryToken } from './vsxRegistryAuth.js';
+   // in request(), after the proxy headers:
+   const credential = registryCredentialFor(options.url, env);   // see the diff
+   if (credential) { options.headers = { ...options.headers, 'Authorization': `Bearer ${credential}` }; }
+   const context = await this.logAndRequest(options, () => nodeRequest(options, token));
+   // 401 → re-resolve once, retry once if the credential changed
    ```
 
-   `this.api('')` stands for whatever the build calls the configured gallery
-   URL; it is the origin the credential is scoped to.
+   `registryCredentialFor` is a dozen lines in the diff: the contract file's
+   entry for the request's **own** origin first — so only an origin the user
+   wrote a credential for ever receives one, and no gallery URL has to be
+   plumbed in — then `VSX_REGISTRY_AUTH_TOKEN`, only when the origin is the
+   configured gallery's (`VSX_REGISTRY_URL`, or the `OPENVSX_REGISTRY_URL`
+   che-code's launcher already sets). The 401 retry is there too. What is not
+   in the diff is any change to the module: it is the file beside this README,
+   byte for byte.
 
-3. Set `vsxRegistryAuthSupport: true` in the patched build's `product.json`.
-   Nothing here reads it — it is how a Batlehub extension, when one exists,
-   can tell a patched build from a stock one without probing.
+2. **Redirects are re-scoped.** `nodeRequestAttempt` follows a `Location`
+   with the original headers; the diff drops `Authorization` when the
+   redirect leaves the origin (`mayAttachCredential` per hop). Without it the
+   header would follow a CDN redirect off the registry — the leak §4.2 scopes
+   against.
 
-4. Keep it as a rebase-friendly commit series. It touches one file and adds
-   one, on purpose: the smaller the surface, the longer it survives an
-   upstream refactor, and the likelier it is to be upstreamable.
+3. **The web workbench's own requests go through the server.** In a web
+   build the Extensions view queries the gallery from the *browser*
+   (`vs/workbench/services/request/browser/requestService.ts`), and only hands
+   a request to the remote when the fetch throws or answers `405`. A gallery
+   that requires a credential answers the browser's bare fetch with a clean
+   `403`, so the view would show an empty gallery while installs — made by
+   the server — succeed. The diff routes requests whose origin is the
+   configured gallery's through the remote connection first, where the
+   credential is. This is the hunk that makes the *view* work on a web build;
+   a desktop build does not need it.
+
+4. **`vsxRegistryAuthSupport: true`** is set by the launcher
+   (`launcher/src/openvsix-registry.ts`, which already rewrites
+   `extensionsGallery` at start-up) through a `ProductJSON` setter, rather
+   than at build time.
+
+5. Keep it as a rebase-friendly commit series: one file added, two edited in
+   `code/`, two in `launcher/`. The diff is against a subtree of upstream
+   `microsoft/vscode`, which is how che-code carries its own changes
+   (`git subtree pull --prefix code`).
 
 ## What it does, exactly
 

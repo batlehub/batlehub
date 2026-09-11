@@ -33,7 +33,7 @@ semgrep = "latest"                  # static analysis (Rust / TS / secrets rules
 # Dependency supply chain: source-repo reputation + vulns, from the lockfiles.
 # Pinned, not "latest": the same version is pinned in the CI action's `version`
 # input (.github/workflows/postmortem.yaml), so both run the identical gate.
-"github:mlab-sh/postmortem" = "2.3.1"
+"github:mlab-sh/postmortem" = "2.4.0"
 uv = "latest"
 python = "latest"
 pnpm = "11" # package manager for ui/ and docs/ (settings in pnpm-workspace.yaml + packageManager field)
