@@ -329,12 +329,13 @@ impl BatleHubClient {
         })
     }
 
-    pub async fn download_to<W: std::io::Write>(
+    pub async fn download_to<W: tokio::io::AsyncWrite + Unpin>(
         &self,
         path_or_url: &str,
         dest: &mut W,
     ) -> Result<u64> {
         use futures::StreamExt;
+        use tokio::io::AsyncWriteExt;
 
         let (url, is_own_origin) =
             if path_or_url.starts_with("http://") || path_or_url.starts_with("https://") {
@@ -364,9 +365,10 @@ impl BatleHubClient {
         let mut stream = resp.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
-            dest.write_all(&chunk)?;
+            dest.write_all(&chunk).await?;
             total += chunk.len() as u64;
         }
+        dest.flush().await?;
         Ok(total)
     }
 

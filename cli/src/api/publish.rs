@@ -28,7 +28,7 @@ pub fn detect_meta(path: &Path) -> Option<ArtifactMeta> {
 impl BatleHubClient {
     /// Upload a `.nupkg` artifact to a NuGet local/hybrid registry.
     pub async fn publish_nuget(&self, registry: &str, file_path: &Path) -> Result<()> {
-        let bytes = std::fs::read(file_path)?;
+        let bytes = tokio::fs::read(file_path).await?;
         let file_name = file_path
             .file_name()
             .and_then(std::ffi::OsStr::to_str)
@@ -48,7 +48,7 @@ impl BatleHubClient {
     /// The server reads name/version/arch from the archive's `.PKGINFO`, so the
     /// raw bytes are PUT directly to the upload endpoint.
     pub async fn publish_pacman(&self, registry: &str, file_path: &Path) -> Result<()> {
-        let bytes = std::fs::read(file_path)?;
+        let bytes = tokio::fs::read(file_path).await?;
         self.put_bytes(&format!("/proxy/{registry}/pacman/upload"), bytes)
             .await
     }
@@ -64,7 +64,7 @@ impl BatleHubClient {
         version: &str,
         file_path: &Path,
     ) -> Result<()> {
-        let bytes = std::fs::read(file_path)?;
+        let bytes = tokio::fs::read(file_path).await?;
         let file_name = file_path
             .file_name()
             .and_then(std::ffi::OsStr::to_str)
@@ -90,7 +90,7 @@ impl BatleHubClient {
     /// The server reads name/version/platform from the gem's own metadata, so
     /// the raw bytes are POSTed directly to the upload endpoint.
     pub async fn publish_rubygems(&self, registry: &str, file_path: &Path) -> Result<()> {
-        let bytes = std::fs::read(file_path)?;
+        let bytes = tokio::fs::read(file_path).await?;
         self.post_bytes(&format!("/proxy/{registry}/api/v1/gems"), bytes)
             .await
     }
@@ -105,7 +105,7 @@ impl BatleHubClient {
         version: &str,
         file_path: &Path,
     ) -> Result<()> {
-        let bytes = std::fs::read(file_path)?;
+        let bytes = tokio::fs::read(file_path).await?;
         let file_name = file_path
             .file_name()
             .and_then(std::ffi::OsStr::to_str)
@@ -141,7 +141,7 @@ impl BatleHubClient {
         version: &str,
         file_path: &Path,
     ) -> Result<()> {
-        let crate_bytes = std::fs::read(file_path)?;
+        let crate_bytes = tokio::fs::read(file_path).await?;
         let metadata = serde_json::json!({ "name": name, "vers": version });
         let metadata_bytes = serde_json::to_vec(&metadata)?;
 
@@ -164,7 +164,7 @@ impl BatleHubClient {
         file_path: &Path,
         version_override: Option<&str>,
     ) -> Result<()> {
-        let bytes = std::fs::read(file_path)?;
+        let bytes = tokio::fs::read(file_path).await?;
         let path = match version_override {
             Some(v) => format!("/proxy/{registry}/api/upload?version={v}"),
             None => format!("/proxy/{registry}/api/upload"),
@@ -181,7 +181,7 @@ impl BatleHubClient {
         platform: &str,
         file_path: &Path,
     ) -> Result<()> {
-        let bytes = std::fs::read(file_path)?;
+        let bytes = tokio::fs::read(file_path).await?;
         self.post_bytes(&format!("/proxy/{registry}/{platform}/"), bytes)
             .await
     }
@@ -194,7 +194,7 @@ impl BatleHubClient {
         version: &str,
         file_path: &Path,
     ) -> Result<()> {
-        let bytes = std::fs::read(file_path)?;
+        let bytes = tokio::fs::read(file_path).await?;
         self.put_bytes(
             &format!("/proxy/{registry}/{extension_id}/{version}/vsix"),
             bytes,
@@ -211,7 +211,7 @@ impl BatleHubClient {
         component: &str,
         file_path: &Path,
     ) -> Result<()> {
-        let bytes = std::fs::read(file_path)?;
+        let bytes = tokio::fs::read(file_path).await?;
         self.put_bytes(
             &format!("/proxy/{registry}/deb/pool/{distribution}/{component}/upload"),
             bytes,
@@ -222,7 +222,7 @@ impl BatleHubClient {
     /// Upload a `.rpm` package. The server reads name/version/architecture
     /// from the package's own header.
     pub async fn publish_rpm(&self, registry: &str, file_path: &Path) -> Result<()> {
-        let bytes = std::fs::read(file_path)?;
+        let bytes = tokio::fs::read(file_path).await?;
         self.put_bytes(&format!("/proxy/{registry}/rpm/upload"), bytes)
             .await
     }

@@ -486,7 +486,7 @@ jobs:
           # password hashed here rather than committed, for the same reason
           # the task hashes it: a bcrypt literal in a tracked file is a
           # secret-scanner finding it cannot tell from a live credential.
-          python3 -m pip install --quiet --user bcrypt
+          python3 -m pip install --quiet --user bcrypt==5.0.0
           python3 - <<'PY'
           import bcrypt, pathlib
           t = pathlib.Path("dev/dex/config.tmpl.yaml").read_text()

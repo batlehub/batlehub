@@ -78,6 +78,14 @@ fi
 # the built console at whatever front the last dev session was using — which
 # answers, so the failure would look like a bug in this suite's assertions
 # rather than a misdirected console.
+# The TypeScript client (`ui/src/client/`) is generated, gitignored, and
+# what every page imports: on a fresh checkout it does not exist and the
+# build fails on thirty `Cannot find module '@/client/…'` errors. It is a
+# pure function of the committed `ui/openapi.json`, so regenerate it here,
+# as the front-end CI jobs and the Containerfile do after `pnpm install`.
+heavy_log "Generating the console's TypeScript client from ui/openapi.json"
+( cd "$REPO/ui" && pnpm run generate ) >"$HEAVY_WORK/ui-generate.log" 2>&1 \
+  || { tail -30 "$HEAVY_WORK/ui-generate.log" >&2; heavy_fail "the console's client did not generate"; }
 heavy_log "Building the console with an empty API base (same origin as the API)"
 ( cd "$REPO/ui" && VITE_API_BASE_URL="" pnpm run build ) >"$HEAVY_WORK/ui-build.log" 2>&1 \
   || { tail -30 "$HEAVY_WORK/ui-build.log" >&2; heavy_fail "the console did not build"; }

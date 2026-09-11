@@ -112,8 +112,12 @@ PY
 editor() {
   local profile="$1"; shift
   local -a vars=()
-  while [[ $# -gt 0 && "$1" != "--" ]]; do vars+=("$1"); shift; done
-  [[ "${1:-}" == "--" ]] && shift
+  local arg
+  while [[ $# -gt 0 ]]; do
+    arg="$1"; shift
+    [[ "$arg" == "--" ]] && break
+    vars+=("$arg")
+  done
   mkdir -p "$profile/server/data/User" "$profile/home/state"
   echo '{ "extensions.verifySignature": false }' >"$profile/server/data/User/settings.json"
   (
@@ -127,11 +131,15 @@ editor() {
   return $?
 }
 
-bare_requests_after() {
-  awk -v mark="### $1" 'index($0, mark) == 1 { seen = 1; next } seen && /\/proxy\// && !/Authorization: Bearer/ { n++ } END { print n + 0 }' "$HEAVY_LOG"
+bare_requests_after() {  # <mark>
+  local mark="$1"
+  awk -v mark="### $mark" 'index($0, mark) == 1 { seen = 1; next } seen && /\/proxy\// && !/Authorization: Bearer/ { n++ } END { print n + 0 }' "$HEAVY_LOG"
+  return $?
 }
-credentialed_after() {
-  awk -v mark="### $1" 'index($0, mark) == 1 { seen = 1; next } seen && /\/proxy\// && /Authorization: Bearer/ { n++ } END { print n + 0 }' "$HEAVY_LOG"
+credentialed_after() {  # <mark>
+  local mark="$1"
+  awk -v mark="### $mark" 'index($0, mark) == 1 { seen = 1; next } seen && /\/proxy\// && /Authorization: Bearer/ { n++ } END { print n + 0 }' "$HEAVY_LOG"
+  return $?
 }
 
 # ── 2. No credential: the patch is armed, and sends nothing ─────────────────

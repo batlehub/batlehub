@@ -65,12 +65,12 @@ pub async fn run(
         .unwrap_or_else(|| default_output_name(&resolved));
 
     if out_name == "-" {
-        let stdout = std::io::stdout();
-        let mut lock = stdout.lock();
-        let n = client.download_to(&resolved, &mut lock).await?;
+        let mut stdout = tokio::io::stdout();
+        let n = client.download_to(&resolved, &mut stdout).await?;
         eprintln!("Downloaded {n} bytes");
     } else {
-        let mut file = std::fs::File::create(&out_name)
+        let mut file = tokio::fs::File::create(&out_name)
+            .await
             .with_context(|| format!("creating output file '{out_name}'"))?;
         let n = client.download_to(&resolved, &mut file).await?;
         println!("Downloaded {n} bytes → {out_name}");

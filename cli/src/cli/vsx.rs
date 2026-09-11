@@ -79,13 +79,15 @@ fn keygen() -> Result<()> {
 }
 
 async fn verify(args: VerifyArgs, token: Option<&str>) -> Result<()> {
-    let vsix =
-        std::fs::read(&args.vsix).with_context(|| format!("reading {}", args.vsix.display()))?;
+    let vsix = tokio::fs::read(&args.vsix)
+        .await
+        .with_context(|| format!("reading {}", args.vsix.display()))?;
 
     let (archive_bytes, key_text) = match (&args.signature, &args.registry) {
         (Some(path), _) => {
-            let archive =
-                std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+            let archive = tokio::fs::read(path)
+                .await
+                .with_context(|| format!("reading {}", path.display()))?;
             let key = args
                 .public_key
                 .clone()

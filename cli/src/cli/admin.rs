@@ -1032,7 +1032,8 @@ async fn handle_config_admin(
             }
         }
         ConfigAdminCommand::Validate { file } => {
-            let content = std::fs::read_to_string(&file)
+            let content = tokio::fs::read_to_string(&file)
+                .await
                 .map_err(|e| anyhow::anyhow!("could not read {file}: {e}"))?;
             let resp = client.config_validate(&content).await?;
             if json {
@@ -1042,7 +1043,8 @@ async fn handle_config_admin(
             }
         }
         ConfigAdminCommand::FromFile { file } => {
-            let content = std::fs::read_to_string(&file)
+            let content = tokio::fs::read_to_string(&file)
+                .await
                 .map_err(|e| anyhow::anyhow!("could not read {file}: {e}"))?;
             let resp = client.config_from_content(&content).await?;
             if json {
@@ -1551,7 +1553,7 @@ async fn handle_sbom(cmd: SbomCommand, client: &BatleHubClient, _json: bool) -> 
                 .await?;
             let content = serde_json::to_string_pretty(&resp)?;
             if let Some(path) = output {
-                std::fs::write(&path, &content)?;
+                tokio::fs::write(&path, &content).await?;
                 println!("SBOM exported to {path}");
             } else {
                 println!("{content}");

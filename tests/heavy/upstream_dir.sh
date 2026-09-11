@@ -48,6 +48,7 @@ JSON
   "time": { "created": "2024-01-01T00:00:00.000Z", "modified": "2024-01-01T00:00:00.000Z", "$version": "2024-01-01T00:00:00.000Z" }
 }
 JSON
+  return 0
 }
 
 upstream_wheel() {  # <dist> <module> <version> <out.whl> — a minimal, valid wheel
@@ -71,6 +72,7 @@ with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
     record.append(f"{info}/RECORD,,")
     z.writestr(f"{info}/RECORD", "\n".join(record) + "\n")
 PY
+  return $?
 }
 
 upstream_pypi_dist() {  # <dist> <module> <version>
@@ -86,6 +88,7 @@ upstream_pypi_dist() {  # <dist> <module> <version>
 <a href="$HEAVY_UPSTREAM_URL/files/$wheel#sha256=$sha">$wheel</a><br/>
 </body></html>
 HTML
+  return 0
 }
 
 upstream_serve() {
@@ -98,6 +101,7 @@ upstream_serve() {
   done
   curl -sf -o /dev/null "$HEAVY_UPSTREAM_URL/" || heavy_fail "the served upstream never came up on $UPSTREAM_PORT"
   heavy_log "Upstream directory served at $HEAVY_UPSTREAM_URL"
+  return 0
 }
 
 upstream_requests() {  # [regex] → count of GET lines so far
@@ -105,4 +109,5 @@ upstream_requests() {  # [regex] → count of GET lines so far
   # `upstream_serve` probed for readiness, and it is not a client's request.
   local re="${1:-[^ ]}"
   grep -c "\"GET /${re}" "$UPSTREAM_LOG" 2>/dev/null || true
+  return 0
 }

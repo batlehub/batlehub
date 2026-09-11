@@ -46,28 +46,29 @@ log "2. type-check before and after, under code/src/tsconfig.base.json"
 mkdir -p "$SCRATCH"
 if [[ ! -x "$SCRATCH/node_modules/.bin/tsc" ]]; then
   (cd "$SCRATCH" && printf '{ "name": "che-code-validate", "private": true }\n' > package.json \
-    && npm install --no-audit --no-fund --silent typescript@5 @types/node@24)
+    && npm install --ignore-scripts --no-audit --no-fund --silent typescript@5 @types/node@24)
 fi
-tsconfig() {  # <file> → a tsconfig checking that one file
-  cat > "$SCRATCH/tsconfig.$2.json" <<JSON
+tsconfig() {  # <file> <name> → a tsconfig checking that one file
+  local file="$1" name="$2"
+  cat > "$SCRATCH/tsconfig.$name.json" <<JSON
 {
   "extends": "$TREE/code/src/tsconfig.base.json",
   "compilerOptions": { "noEmit": true, "skipLibCheck": true, "esModuleInterop": true, "resolveJsonModule": true, "allowJs": true, "isolatedModules": false, "types": ["node"], "typeRoots": ["$SCRATCH/node_modules/@types"] },
-  "files": ["$TREE/$1"],
+  "files": ["$TREE/$file"],
   "include": ["$TREE/code/src/typings/*.d.ts"]
 }
 JSON
 }
 tsconfig "$NODE_FILE" node; tsconfig "$BROWSER_FILE" browser
-errors() { "$SCRATCH/node_modules/.bin/tsc" -p "$SCRATCH/tsconfig.$1.json" 2>&1 | /bin/grep "error TS" | sed 's/([0-9]*,[0-9]*)//' | sort || true; }
+errors() { local name="$1"; "$SCRATCH/node_modules/.bin/tsc" -p "$SCRATCH/tsconfig.$name.json" 2>&1 | /bin/grep "error TS" | sed 's/([0-9]*,[0-9]*)//' | sort || true; }
 errors node > "$SCRATCH/node.before"; errors browser > "$SCRATCH/browser.before"
 git -C "$TREE" apply "$DIFF"
 errors node > "$SCRATCH/node.after"; errors browser > "$SCRATCH/browser.after"
 for f in node browser; do
   if diff -q "$SCRATCH/$f.before" "$SCRATCH/$f.after" >/dev/null; then
-    echo "$f: $(wc -l < "$SCRATCH/$f.after") pre-existing error(s), none added"
+    echo "$f: $(wc -l < "$SCRATCH/$f.after") pre-existing diagnostic(s), none added"
   else
-    echo "$f: the patch changed the error set:"; diff "$SCRATCH/$f.before" "$SCRATCH/$f.after" | /bin/grep '^[<>]' || true; exit 1
+    echo "$f: the patch changed the error set:" >&2; diff "$SCRATCH/$f.before" "$SCRATCH/$f.after" | /bin/grep '^[<>]' >&2 || true; exit 1
   fi
 done
 

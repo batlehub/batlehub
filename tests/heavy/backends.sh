@@ -134,6 +134,7 @@ def read():
 r = read()
 for v in (r if isinstance(r, list) else [r]): print(v)
 PY
+  return $?
 }
 for _ in $(seq 1 30); do [[ "$(redis_cmd PING 2>/dev/null)" == "PONG" ]] && break; sleep 0.5; done
 [[ "$(redis_cmd PING)" == "PONG" ]] || heavy_fail "Redis at $REDIS_URL does not answer PING"
@@ -151,10 +152,12 @@ TOKEN_ENDPOINT="$(curl -fsS "$OIDC_ISSUER/.well-known/openid-configuration" \
 heavy_log "OIDC issuer $OIDC_ISSUER (token endpoint $TOKEN_ENDPOINT)"
 
 mint_id_token() {  # <user> <password> → id_token on stdout (dex's password grant)
+  local user="$1" password="$2"
   curl -fsS "$TOKEN_ENDPOINT" -d grant_type=password -d scope="openid email profile" \
     -d "client_id=$OIDC_CLIENT_ID" -d "client_secret=$OIDC_CLIENT_SECRET" \
-    -d "username=$1" -d "password=$2" \
+    -d "username=$user" -d "password=$password" \
     | python3 -c 'import sys,json;print(json.load(sys.stdin)["id_token"])'
+  return $?
 }
 JWT="$(mint_id_token "$OIDC_USER" "$OIDC_PASSWORD")" || heavy_fail "dex refused the password grant for $OIDC_USER"
 [[ "$JWT" == *.*.* ]] || heavy_fail "the issuer did not answer with a JWT"
@@ -190,15 +193,16 @@ export HEAVY_S3_BUCKET="heavy-$HEAVY_RUN"
 "$MC" --config-dir "$MC_CONFIG_DIR" alias set heavy "$S3_TEST_ENDPOINT" "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" >/dev/null \
   || heavy_fail "mc could not reach $S3_TEST_ENDPOINT"
 "$MC" --config-dir "$MC_CONFIG_DIR" mb "heavy/$HEAVY_S3_BUCKET" >/dev/null || heavy_fail "mc could not create the bucket"
-s3_objects() { "$MC" --config-dir "$MC_CONFIG_DIR" ls --recursive "heavy/$HEAVY_S3_BUCKET" 2>/dev/null | awk '{print $NF}'; }
+s3_objects() { "$MC" --config-dir "$MC_CONFIG_DIR" ls --recursive "heavy/$HEAVY_S3_BUCKET" 2>/dev/null | awk '{print $NF}'; return $?; }
 # The store is content-addressed (`blob/<sha256>`), so the proof that a
 # client's bytes landed in S3 is the object named by their own hash — and
 # `mc cat` reads it back to say it holds those bytes, not merely that name.
 s3_holds_file() {  # <file> — the bucket has blob/<sha256 of file> with the same bytes
-  local sha
-  sha="$(sha256sum "$1" | cut -d' ' -f1)"
+  local file="$1" sha
+  sha="$(sha256sum "$file" | cut -d' ' -f1)"
   s3_objects | grep -qx "blob/$sha" || return 1
   [[ "$("$MC" --config-dir "$MC_CONFIG_DIR" cat "heavy/$HEAVY_S3_BUCKET/blob/$sha" | sha256sum | cut -d' ' -f1)" == "$sha" ]]
+  return $?  # the status is the assertion: callers hang `||` off this
 }
 heavy_log "Bucket heavy/$HEAVY_S3_BUCKET created, empty"
 
@@ -210,6 +214,8 @@ PYPI_SIMPLE="$HEAVY_TAP_BASE/proxy/$REG_PYPI/simple/"
 
 # npm_install <label> <npmrc-auth-line or ""> — a fresh project and a fresh
 # npm cache every time, so a second install proves the *server's* cache.
+# `--ignore-scripts`: what is measured is the fetch through the proxy, and a
+# fixture's lifecycle script is not part of it (the fixture has none).
 export NPM_CONFIG_FUND=false NPM_CONFIG_AUDIT=false NPM_CONFIG_UPDATE_NOTIFIER=false
 npm_install() {
   local label="$1" auth="$2"
@@ -218,7 +224,7 @@ npm_install() {
   printf '{ "name": "consumer-%s", "version": "1.0.0", "private": true }\n' "$label" >"$proj/package.json"
   { echo "registry=$NPM_URL"; [[ -n "$auth" ]] && echo "//127.0.0.1:$HEAVY_TAP_PORT/proxy/$REG_NPM/:_authToken=$auth"; } >"$proj/.npmrc"
   (cd "$proj" && NPM_CONFIG_USERCONFIG="$proj/.npmrc" NPM_CONFIG_CACHE="$HEAVY_WORK/npm-cache-$label" \
-    npm install "$PKG@$PKG_VERSION" >"$HEAVY_WORK/npm-$label.txt" 2>&1)
+    npm install --ignore-scripts "$PKG@$PKG_VERSION" >"$HEAVY_WORK/npm-$label.txt" 2>&1)
   return $?
 }
 installed_ok() {  # <label>
@@ -289,10 +295,11 @@ heavy_log "RESTART-OK (a new process, the same Redis and S3: still zero upstream
 # ── 6. pip: the other artifact path through the same backends ───────────────
 
 pip_install() {  # <label>
-  local venv="$HEAVY_WORK/venv-$1"
+  local label="$1"
+  local venv="$HEAVY_WORK/venv-$label"
   python3 -m venv "$venv" >/dev/null || heavy_fail "python3 -m venv failed"
   "$venv/bin/python" -m pip install --quiet --no-cache-dir --index-url "$PYPI_SIMPLE" "$DIST==$DIST_VERSION" \
-    >"$HEAVY_WORK/pip-$1.txt" 2>&1 || { cat "$HEAVY_WORK/pip-$1.txt" >&2; return 1; }
+    >"$HEAVY_WORK/pip-$label.txt" 2>&1 || { cat "$HEAVY_WORK/pip-$label.txt" >&2; return 1; }
   "$venv/bin/python" -c "import $MODULE; assert $MODULE.VALUE == '$DIST'" || heavy_fail "the installed distribution is not the upstream's"
 }
 heavy_mark "pip-first"

@@ -193,7 +193,7 @@ fn check_tree(root: &Path, canary: &Path) -> (u64, u64) {
             }
         }
     }
-    let leaked = std::fs::read_dir(canary).map(|rd| rd.count()).unwrap_or(0);
+    let leaked = std::fs::read_dir(canary).map(Iterator::count).unwrap_or(0);
     assert_eq!(leaked, 0, "an entry was written beside the root");
     (files, bytes)
 }

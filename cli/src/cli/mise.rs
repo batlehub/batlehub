@@ -111,7 +111,8 @@ pub async fn run(cmd: MiseCommand, client: &BatleHubClient, json: bool) -> Resul
 }
 
 async fn run_import(args: ImportArgs, client: &BatleHubClient, json: bool) -> Result<()> {
-    let bytes = std::fs::read(&args.bundle)
+    let bytes = tokio::fs::read(&args.bundle)
+        .await
         .with_context(|| format!("reading {}", args.bundle.display()))?;
     let resp = client.import_bundle(bytes).await?;
     if json {
@@ -350,7 +351,8 @@ async fn run_export(args: ExportArgs, client: &BatleHubClient, json: bool) -> Re
     use batlehub_core::services::bundle::{BundleEntry, BundleManifest, BUNDLE_VERSION};
     use ed25519_dalek::Signer;
 
-    let text = std::fs::read_to_string(&args.plan)
+    let text = tokio::fs::read_to_string(&args.plan)
+        .await
         .with_context(|| format!("reading {}", args.plan.display()))?;
     let plan: MisePlan = serde_json::from_str(&text)
         .with_context(|| format!("{} is not a plan", args.plan.display()))?;
@@ -399,8 +401,15 @@ async fn run_export(args: ExportArgs, client: &BatleHubClient, json: bool) -> Re
     // command line is an operator who will paste the private one.
     let public_key = hex::encode(signing.verifying_key().to_bytes());
 
-    let file = std::fs::File::create(&args.out)
-        .with_context(|| format!("creating {}", args.out.display()))?;
+    // Opened on the runtime, then handed to the bundle writer as a
+    // `std::fs::File`: `write_bundle` is the core crate's synchronous
+    // `std::io::Write` sink, shared with the server, and this command is the
+    // only task on this runtime, so the blocking write starves nothing.
+    let file = tokio::fs::File::create(&args.out)
+        .await
+        .with_context(|| format!("creating {}", args.out.display()))?
+        .into_std()
+        .await;
     let written = batlehub_core::services::bundle::write_bundle(
         std::io::BufWriter::new(file),
         &manifest,
@@ -554,7 +563,8 @@ fn print_seed_report(json: bool, verify: bool, outcomes: &[SeedOutcome], ok: usi
 }
 
 async fn run_seed(args: SeedArgs, client: &BatleHubClient, json: bool) -> Result<()> {
-    let text = std::fs::read_to_string(&args.plan)
+    let text = tokio::fs::read_to_string(&args.plan)
+        .await
         .with_context(|| format!("reading {}", args.plan.display()))?;
     let plan: MisePlan = serde_json::from_str(&text)
         .with_context(|| format!("{} is not a plan", args.plan.display()))?;
@@ -633,7 +643,8 @@ async fn run_plan(args: PlanArgs, client: &BatleHubClient, json: bool) -> Result
     let rendered = serde_json::to_string_pretty(&plan)?;
 
     if let Some(path) = &args.out {
-        std::fs::write(path, format!("{rendered}\n"))
+        tokio::fs::write(path, format!("{rendered}\n"))
+            .await
             .with_context(|| format!("writing {}", path.display()))?;
     }
     if json {

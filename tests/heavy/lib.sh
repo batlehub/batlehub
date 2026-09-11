@@ -208,6 +208,9 @@ heavy_init() {
   ADMIN_TOKEN="${ADMIN_TOKEN:-heavy-admin-token}"
   COVERAGE="${COVERAGE:-0}"
   HEAVY_CACHE="${HEAVY_CACHE:-$HOME/.cache/batlehub-heavy}"
+  # Create it here, once: on a CI cache miss the directory does not exist,
+  # and `docker cp` and `cp -r` refuse to create a missing parent.
+  mkdir -p "$HEAVY_CACHE"
 
   : "${DATABASE_URL:?DATABASE_URL must point at a reachable Postgres}"
 

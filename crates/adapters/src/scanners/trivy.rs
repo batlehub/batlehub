@@ -145,7 +145,8 @@ impl ArtifactScanner for TrivyScanner {
         args.push(work.path().join(".trivy").to_string_lossy().into_owned());
         if let Some(sbom) = &input.sbom {
             let path = work.path().join("sbom.cdx.json");
-            std::fs::write(&path, serde_json::to_vec(sbom).unwrap_or_default())
+            tokio::fs::write(&path, serde_json::to_vec(sbom).unwrap_or_default())
+                .await
                 .map_err(|e| ScannerError::Other(format!("io: {e}")))?;
             args.insert(0, "sbom".into());
             args.push(path.to_string_lossy().into_owned());

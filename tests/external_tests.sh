@@ -74,7 +74,8 @@ fi
 
 status=0
 run() {  # <label> <cargo args…>
-  log "$1"; shift
+  local label="$1"; shift
+  log "$label"
   if cargo test "$@"; then echo "OK: $*"; else echo "FAILED: $*" >&2; status=1; fi
 }
 run "adapters integration tests (Postgres + default features)" -p batlehub-adapters --test '*'

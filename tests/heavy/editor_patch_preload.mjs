@@ -74,7 +74,7 @@ function wrap(mod, defaultProtocol) {
       cb = typeof options === "function" ? options : callback;
       url = urlOf(defaultProtocol, opts);
     }
-    const headers = { ...(opts.headers || {}) };
+    const headers = { ...opts.headers };
     const credential = registryCredentialFor(url, process.env);
     if (credential) {
       headers.Authorization = `Bearer ${credential}`;

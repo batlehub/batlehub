@@ -70,12 +70,14 @@ export NPM_CONFIG_USERCONFIG="$NPMRC"
 # ── 1. Publish what is ours ─────────────────────────────────────────────────
 
 npm_publish() {  # <name> <version>
-  local dir="$HEAVY_WORK/publish-$1-$2"
+  local name="$1" version="$2"
+  local dir="$HEAVY_WORK/publish-$name-$version"
   mkdir -p "$dir"
-  printf '{ "name": "%s", "version": "%s", "description": "heavy hybrid local", "license": "MIT", "main": "index.js" }\n' "$1" "$2" >"$dir/package.json"
-  echo "module.exports = { name: '$1', version: '$2', origin: 'local' };" >"$dir/index.js"
-  (cd "$dir" && NPM_CONFIG_CACHE="$HEAVY_WORK/npm-cache-publish" npm publish --registry "$NPM_URL" >"$HEAVY_WORK/publish-$1.txt" 2>&1) \
-    || { cat "$HEAVY_WORK/publish-$1.txt" >&2; heavy_fail "npm publish $1@$2 failed"; }
+  printf '{ "name": "%s", "version": "%s", "description": "heavy hybrid local", "license": "MIT", "main": "index.js" }\n' "$name" "$version" >"$dir/package.json"
+  echo "module.exports = { name: '$name', version: '$version', origin: 'local' };" >"$dir/index.js"
+  (cd "$dir" && NPM_CONFIG_CACHE="$HEAVY_WORK/npm-cache-publish" npm publish --registry "$NPM_URL" >"$HEAVY_WORK/publish-$name.txt" 2>&1) \
+    || { cat "$HEAVY_WORK/publish-$name.txt" >&2; heavy_fail "npm publish $name@$version failed"; }
+  return 0
 }
 npm_publish "$PRIVATE" "1.0.0"
 npm_publish "$SHADOWED" "2.0.0"
@@ -89,11 +91,13 @@ npm_project() {  # <label> <dep>… → installs deps into a fresh project with 
   local proj="$HEAVY_WORK/proj-$label"
   mkdir -p "$proj"
   printf '{ "name": "consumer-%s", "version": "1.0.0", "private": true }\n' "$label" >"$proj/package.json"
-  (cd "$proj" && NPM_CONFIG_CACHE="$HEAVY_WORK/npm-cache-$label" npm install "$@" >"$HEAVY_WORK/npm-$label.txt" 2>&1)
+  (cd "$proj" && NPM_CONFIG_CACHE="$HEAVY_WORK/npm-cache-$label" npm install --ignore-scripts "$@" >"$HEAVY_WORK/npm-$label.txt" 2>&1)
   return $?
 }
 origin_of() {  # <label> <name> → the installed module's origin and version
-  node -e "const m=require('$HEAVY_WORK/proj-$1/node_modules/$2'); console.log(m.origin + ' ' + m.version)"
+  local label="$1" name="$2"
+  node -e "const m=require('$HEAVY_WORK/proj-$label/node_modules/$name'); console.log(m.origin + ' ' + m.version)"
+  return $?
 }
 
 # Counts are taken per phase, as deltas: `npm publish` reads the packument
@@ -104,8 +108,12 @@ origin_of() {  # <label> <name> → the installed module's origin and version
 # the document route and the artifact route each ask), which is an
 # inefficiency for another day; what is pinned is *whether* the upstream was
 # asked, and that a name held here is never asked for.
-snap() { S_UP="$(upstream_requests "$UPSTREAM_ONLY ")"; S_UP_TGZ="$(upstream_requests "tarballs/$UPSTREAM_ONLY-")"; S_PRIV="$(upstream_requests "$PRIVATE")"; S_SHA="$(upstream_requests "$SHADOWED")"; }
-delta() { echo $(( $(upstream_requests "$1") - $2 )); }
+snap() { S_UP="$(upstream_requests "$UPSTREAM_ONLY ")"; S_UP_TGZ="$(upstream_requests "tarballs/$UPSTREAM_ONLY-")"; S_PRIV="$(upstream_requests "$PRIVATE")"; S_SHA="$(upstream_requests "$SHADOWED")"; return 0; }
+delta() {  # <regex> <count at snap> → requests since
+  local re="$1" before="$2"
+  echo $(( $(upstream_requests "$re") - before ))
+  return 0
+}
 
 snap
 heavy_mark "install-three"
@@ -152,8 +160,9 @@ heavy_log "BLOCK-LOCAL-OK (our only version blocked: 403, and the upstream's sam
 # ── 4. pip, the same three shapes ───────────────────────────────────────────
 
 pypi_publish() {  # <dist> <version> — the legacy upload, as twine sends it
-  local wheel="$HEAVY_WORK/$1-$2-py3-none-any.whl"
-  python3 - "$1" "$1" "$2" "$wheel" <<'PY'
+  local dist="$1" version="$2"
+  local wheel="$HEAVY_WORK/$dist-$version-py3-none-any.whl"
+  python3 - "$dist" "$dist" "$version" "$wheel" <<'PY'
 import base64, hashlib, sys, zipfile
 dist, module, version, out = sys.argv[1:]
 info = f"{dist}-{version}.dist-info"
@@ -172,10 +181,11 @@ with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
     z.writestr(f"{info}/RECORD", "\n".join(record) + "\n")
 PY
   curl -fsS -u "__token__:$ADMIN_TOKEN" -F ":action=file_upload" -F "protocol_version=1" \
-    -F "name=$1" -F "version=$2" -F "filetype=bdist_wheel" -F "pyversion=py3" -F "metadata_version=2.1" \
+    -F "name=$dist" -F "version=$version" -F "filetype=bdist_wheel" -F "pyversion=py3" -F "metadata_version=2.1" \
     -F "sha256_digest=$(sha256sum "$wheel" | cut -d' ' -f1)" -F "content=@$wheel" \
-    "$PYPI_UPLOAD" >"$HEAVY_WORK/pypi-publish-$1.txt" 2>&1 \
-    || { cat "$HEAVY_WORK/pypi-publish-$1.txt" >&2; heavy_fail "the legacy upload of $1 $2 failed"; }
+    "$PYPI_UPLOAD" >"$HEAVY_WORK/pypi-publish-$dist.txt" 2>&1 \
+    || { cat "$HEAVY_WORK/pypi-publish-$dist.txt" >&2; heavy_fail "the legacy upload of $dist $version failed"; }
+  return 0
 }
 pypi_publish "$DIST_PRIVATE" "1.0.0"
 pypi_publish "$DIST_SHADOWED" "2.0.0"
@@ -189,7 +199,9 @@ pip_project() {  # <label> <requirement>… → a fresh venv
   return $?
 }
 pip_origin_of() {  # <label> <module>
-  "$HEAVY_WORK/venv-$1/bin/python" -c "import $2, importlib.metadata as m; print($2.ORIGIN, m.version('$2'))"
+  local label="$1" module="$2"
+  "$HEAVY_WORK/venv-$label/bin/python" -c "import $module, importlib.metadata as m; print($module.ORIGIN, m.version('$module'))"
+  return $?
 }
 P_UP="$(upstream_requests "simple/$DIST_UPSTREAM/")"; P_PRIV="$(upstream_requests "simple/$DIST_PRIVATE/")"; P_SHA="$(upstream_requests "simple/$DIST_SHADOWED/")"
 heavy_mark "pip-three"

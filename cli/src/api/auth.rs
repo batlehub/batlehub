@@ -202,7 +202,7 @@ pub async fn resolve_token(
     };
 
     if let Some(path) = k8s_path {
-        return Ok(match std::fs::read_to_string(&path) {
+        return Ok(match tokio::fs::read_to_string(&path).await {
             Ok(s) => Some(s.trim().to_string()),
             Err(e) => {
                 eprintln!("Warning: failed to read kubernetes token file: {e}");
