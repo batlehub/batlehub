@@ -383,6 +383,10 @@ export const sidebar = {
           text: "0022 — Sandbox runtimes",
           link: "/rfc/0022-sandbox-runtimes",
         },
+        {
+          text: "0023 — che-code fork",
+          link: "/rfc/0023-che-code-fork",
+        },
         // END rfc-sidebar
       ],
     },

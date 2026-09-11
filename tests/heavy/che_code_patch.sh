@@ -56,7 +56,7 @@ else
     rm -rf "$CHE_DIR.partial"
     # `a && b` is exempt from `set -e`: a failed copy used to fall through to
     # the "not a che-code build" check below, hiding docker's own error.
-    docker cp "batlehub-che-code-src:/checode/checode-linux-libc/ubi9" "$CHE_DIR.partial" \
+    docker cp "batlehub-che-code-src:/checode-linux-libc/ubi9" "$CHE_DIR.partial" \
       || { docker rm -f "batlehub-che-code-src" >/dev/null 2>&1
            heavy_fail "docker cp out of quay.io/che-incubator/che-code:$CHE_CODE_TAG failed"; }
     docker rm -f "batlehub-che-code-src" >/dev/null
