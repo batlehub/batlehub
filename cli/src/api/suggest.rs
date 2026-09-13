@@ -101,6 +101,9 @@ const TYPED_HOSTS: &[(&str, &str, &str)] = &[
     ("github.com", "github", "github"),
     ("codeload.github.com", "github", "github"),
     ("raw.githubusercontent.com", "github", "github"),
+    // The public Forgejo. A self-hosted one is not recognisable from a URL, so
+    // its registry is written by hand — the rules below are codeberg's.
+    ("codeberg.org", "forgejo", "forgejo"),
     ("objects.githubusercontent.com", "github", "github"),
     ("registry.npmjs.org", "npm", "npm"),
     ("crates.io", "cargo", "cargo"),
@@ -873,6 +876,24 @@ fn typed_url_replacements(registry_type: &str) -> &'static [(&'static str, &'sta
             (
                 r"^https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/(.+)",
                 "{proxy}/$1/$2/raw/$3/$4",
+            ),
+        ],
+        "forgejo" => &[
+            // API: release listings and tag metadata.
+            (r"^https://codeberg\.org/api/v1/repos/(.+)", "{proxy}/$1"),
+            // The asset itself, by attachment uuid. mise's `forgejo:` backend
+            // builds this URL from its own configured api_url and never reads
+            // the `browser_download_url` the rule below covers, so without this
+            // one the checksum sibling comes here and the binary does not.
+            (
+                r"^https://codeberg\.org/attachments/(.+)",
+                "{proxy}/attachments/$1",
+            ),
+            // Release asset binaries, for the clients that do follow the
+            // document they were served.
+            (
+                r"^https://codeberg\.org/([^/]+)/([^/]+)/releases/download/([^/]+)/(.+)",
+                "{proxy}/$1/$2/releases/download/$3/$4",
             ),
         ],
         "npm" => &[(r"^https://registry\.npmjs\.org/(.+)", "{proxy}/$1")],
@@ -1820,6 +1841,31 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
             "{rules:?}"
         );
         assert_eq!(rules.len(), 6);
+    }
+
+    /// mise's `forgejo:` backend downloads from `{forge}/attachments/{uuid}`,
+    /// which it builds itself — the release document's own URLs route only the
+    /// checksum sibling. The closed-world suite found this with the binary
+    /// going to codeberg while the `.sha256` beside it came through the proxy.
+    #[test]
+    fn forgejo_mise_rules_cover_the_attachment_path_mise_actually_downloads_from() {
+        let reg = registry_for_url(
+            "https://codeberg.org/api/v1/repos/forgejo/forgejo/releases/tags/v16.0.4",
+            "mise.lock: forgejo",
+        )
+        .unwrap();
+        assert_eq!(reg.registry_type, "forgejo");
+
+        let rules = reg.mise_url_replacements("https://hub.example.com");
+        let attachments = rules
+            .iter()
+            .find(|(p, _)| p.contains("/attachments/"))
+            .unwrap_or_else(|| panic!("no attachment rule in {rules:?}"));
+        assert_eq!(
+            attachments.1,
+            "https://hub.example.com/proxy/forgejo/attachments/$1"
+        );
+        assert_eq!(rules.len(), 3);
     }
 
     #[test]

@@ -8704,7 +8704,7 @@
         "tags": [
           "proxy/jetbrains-marketplace"
         ],
-        "summary": "`GET /api/search/updates/compatible?build=…&pluginXmlId=…` — the same\nquestion as the POST above, in the spelling the IDE actually speaks.",
+        "summary": "`GET /api/search/updates/compatible` — the compatible-updates question in\nthe spelling the IDE actually speaks: `?build=…&pluginXmlId=…`, repeated.",
         "description": "`installPlugins` on IntelliJ 2026.1 asks this way and no other: the POST\nform is the marketplace's own API, the GET form is what ships in the IDE.\nWithout this route the request fell past every jetbrains service to\nopenvsx's `api/{namespace}/{extension}` catch-all, which answered \"registry\n… is not an openvsx or vscode-marketplace registry\" — a 404 that reads like\na misconfigured registry and is a missing route. `closed_world.sh`'s\njbplugin phase is the regression test at the client end.\n\n`pluginXmlId` repeats, and `web::Query` cannot express that — serde_urlencoded\nkeeps one value per key — so the query is read with `form_urlencoded`.",
         "operationId": "jbm_compatible_updates_get",
         "parameters": [
@@ -10048,6 +10048,59 @@
           },
           "404": {
             "description": "No such file"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/attachments/{uuid}": {
+      "get": {
+        "tags": [
+          "proxy/forgejo"
+        ],
+        "summary": "Download a release asset by its Forgejo attachment uuid.",
+        "description": "`{forge}/attachments/{uuid}` is how Forgejo addresses a release asset\nwithout naming its repository, and clients build that URL themselves rather\nthan follow the release document — `mise`'s `forgejo:` backend uses it for\nevery asset it installs, and never the `browser_download_url` this proxy\nrewrites. Without this route there is no URL such a client could be pointed\nat, so its download goes to the forge: past the rule chain, the cache and\nthe audit trail, and in a closed world nowhere at all.\n\nThe uuid names no repository, so the coordinate is the one remembered when\nthis instance served the release document the uuid came from (see\n[`batlehub_core::services::forge_attachments`]). A uuid nothing was\nremembered for is a `404`: this is a route onto what this instance has\nserved, not an opaque relay for the forge's attachment space.",
+        "operationId": "fj_attachment",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "uuid",
+            "in": "path",
+            "description": "Forgejo attachment uuid, as the release document gave it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Asset binary stream",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry, or an attachment this instance has not served a release document for"
           }
         },
         "security": [

@@ -189,7 +189,10 @@ registry-sdkman = []
 registry-rustup = ["dep:toml"]
 registry-rubygems = ["dep:flate2", "dep:tar"]
 registry-terraform = []
-registry-vscode-marketplace = []
+# `flate2`: the gallery's `vspackage` endpoint answers `Content-Encoding: gzip`
+# unsolicited, and a proxy that relays a transport encoding as if it were the
+# artifact serves every editor a gzip file named `.vsix` (see `gunzip_stream`).
+registry-vscode-marketplace = ["dep:flate2"]
 storage-fs = []
 storage-s3 = ["dep:aws-config", "dep:aws-sdk-s3"]
 # `bzip2`/`zstd` are for conda's two container formats, which the README

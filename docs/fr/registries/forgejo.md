@@ -183,6 +183,41 @@ d'API propres à la forge sont retirés. Un client qui lit le document de releas
 plutôt que de construire un chemin — `mise`, `gh` — reste donc derrière le proxy,
 avec sa politique, son cache et sa piste d'audit.
 
+## Assets par uuid de pièce jointe
+
+Forgejo sert aussi un asset de release depuis un chemin qui ne nomme aucun
+dépôt :
+
+```
+GET /proxy/<registre>/attachments/<uuid>
+```
+
+Cette route existe parce que réécrire le document ne suffit pas pour tous les
+clients. Un asset Forgejo porte un `uuid`, et certains clients construisent
+eux-mêmes `<forge>/attachments/<uuid>` à partir de la racine de forge qu'ils ont
+en configuration, au lieu de suivre le `browser_download_url` qu'on leur a
+donné — **le backend `forgejo:` de `mise` télécharge ainsi chaque asset, et
+jamais autrement**. Laissé à lui-même, un tel client lit son document de release
+ici puis va chercher le binaire directement sur la forge, hors des règles, du
+cache et de la piste d'audit.
+
+L'uuid ne nomme aucun dépôt : BatleHub le résout depuis le document de release
+qu'il a servi, et répond avec le *même* artefact que
+`…/releases/download/<tag>/<fichier>`, sous la même clé de stockage et la même
+chaîne de règles. Un uuid issu d'un document de release que ce registre n'a pas
+servi répond `404` — la route lit ce que cette instance connaît, pas ce que la
+forge détient.
+
+Avec `mise`, c'est la seconde règle de la paire :
+
+```toml
+[settings.url_replacements]
+"regex:^https://codeberg\\.org/api/v1/repos/(.+)" = "https://batlehub.example/proxy/<registre>/$1"
+"regex:^https://codeberg\\.org/attachments/(.+)" = "https://batlehub.example/proxy/<registre>/attachments/$1"
+```
+
+`batlehub registry suggest --mise` écrit les deux — voir [mise](/fr/use/mise).
+
 ## Authentification
 
 Passez un token BatleHub dans un en-tête Bearer

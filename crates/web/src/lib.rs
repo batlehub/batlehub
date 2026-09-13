@@ -618,6 +618,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 conda_channeldata, conda_current_repodata, conda_file_download, conda_publish,
                 conda_repodata, conda_repodata_bz2, conda_repodata_zst,
             },
+            forgejo::fj_attachment,
             forgejo::fj_packages,
             generic::generic_get,
             github::{
@@ -726,6 +727,11 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     // Forgejo/GitLab package registries: literal `api/…` prefix — register before
     // the GitHub `{owner}/{repo}` routes so it isn't captured as owner="api".
     cfg.service(fj_packages); // GET …/api/packages/{path}  (Forgejo/Gitea)
+                              // Forgejo addresses a release asset by uuid on a repository-less path, and
+                              // `mise` builds that URL for every asset it installs. Literal `attachments`
+                              // prefix, so it is registered here for the same reason as the line above:
+                              // the GitHub `{owner}/{repo}/…` routes below would claim owner="attachments".
+    cfg.service(fj_attachment); // GET …/attachments/{uuid}  (Forgejo/Gitea)
     cfg.service(gl_packages); // GET …/api/v4/{path}         (GitLab)
 
     // GitLab (distinct `/-/` delimiter; most-specific first) — **before** the

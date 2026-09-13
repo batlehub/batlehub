@@ -1501,6 +1501,13 @@ github_attestations = false
 
 [settings.url_replacements]
 "regex:^https://codeberg\\\\.org/api/v1/repos/(.+)" = "$proxy/\$1"
+# The asset download is not the browser_download_url in the release document:
+# mise's forgejo backend builds {forge}/attachments/{uuid} from its *own*
+# configured api_url and downloads from that, so the rewritten document routes
+# only the checksum sibling and the binary goes straight to codeberg - which,
+# inside the closed world, is nowhere. The second rule is the asset itself.
+# (No backticks: this heredoc is unquoted, so they would run as commands.)
+"regex:^https://codeberg\\\\.org/attachments/(.+)" = "$proxy/attachments/\$1"
 EOF
   local miseenv=(MISE_DATA_DIR="$root/data" MISE_CACHE_DIR="$root/cache"
                  MISE_CONFIG_DIR="$root/config" MISE_STATE_DIR="$root/state" MISE_YES=1)
@@ -1513,9 +1520,15 @@ EOF
 
   heavy_wire_re_after forgejo "GET /proxy/$FORGEJO_REG/$FORGEJO_TOOL/releases[^ ]* -> 200" \
     "mise did not resolve the release listing through the proxy"
+  # The checksum sibling, which mise does fetch by the document's own URL: what
+  # this asserts is the rewrite.
   heavy_wire_re_after forgejo \
-    "GET /proxy/$FORGEJO_REG/$FORGEJO_TOOL/releases/download/[^ ]* -> 200" \
-    "the release asset did not come through the proxy — the document's download URLs were not repointed at this instance"
+    "GET /proxy/$FORGEJO_REG/$FORGEJO_TOOL/releases/download/[^ ]*\\.sha256 -> 200" \
+    "the release document's download URLs were not repointed at this instance"
+  # The asset itself, by the uuid the document named it with (RFC 0019 §4.2).
+  heavy_wire_re_after forgejo \
+    "GET /proxy/$FORGEJO_REG/attachments/[^ ]* -> 200" \
+    "the release asset did not come through the proxy — the attachment route did not serve it"
 
   cw_step "$out" "$HEAVY_WORK" "${DENY[@]}" "${miseenv[@]}" \
     "${mise[@]}" exec "forgejo:$FORGEJO_TOOL@$FORGEJO_TOOL_VERSION" -- "$FORGEJO_TOOL_BIN" --version \

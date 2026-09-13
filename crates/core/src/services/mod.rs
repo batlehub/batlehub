@@ -9,6 +9,7 @@ pub mod escaping;
 pub mod eviction;
 pub mod explore_cache;
 pub mod flags;
+pub mod forge_attachments;
 pub mod forge_refs;
 pub mod grants_admin;
 pub mod hot_config;
