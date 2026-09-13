@@ -2552,7 +2552,15 @@ EOF
 
 phase_maven() {
   heavy_runner_for mvn maven@3.9.16 java@temurin-21.0.11+10.0.LTS
-  local mvn=("${HEAVY_RUNNER[@]}" mvn)
+  # Preemptive authentication, or this phase measures nothing it means to.
+  # Maven sends a credential only after a `401` challenge, and this server
+  # answers an ungranted read with `403` — no challenge, so the token in
+  # `settings.xml` is never sent and *every* arm is anonymous: the warm step
+  # fails outright (the plugins are ungranted to nobody), and the denied arm
+  # would be refused for carrying no identity rather than for holding no verb,
+  # which is the failure mode `authz-heavy-client-credentials` exists to catch.
+  # Resolver 1.9's spelling, which is Maven 3.9's resolver.
+  local mvn=("${HEAVY_RUNNER[@]}" mvn -Daether.connector.http.preemptiveAuth=true)
   local work="$HEAVY_WORK/mvn"
   mkdir -p "$work"
 

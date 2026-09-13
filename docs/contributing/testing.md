@@ -290,9 +290,12 @@ machinery is in `tests/heavy/lib.sh`.
 
 Two of them are **closed-world** suites, and they are the ones that answer "can
 this instance be the only way out?". BatleHub keeps its egress; every client
-process gets none — `HTTP(S)_PROXY` points at a closed port with only the
-loopback exempted — so anything a phase obtains, it obtained through the
-instance. `tests/heavy/rustup.sh` is Rust's, and proves the most, because there
+process gets none — `HTTP(S)_PROXY` points at a denial with only the loopback
+exempted — so anything a phase obtains, it obtained through the instance.
+`rustup.sh` points it at a closed port; `closed_world.sh` points it at
+`closed_proxy.py`, which relays the loopback and refuses every other host,
+because a closed port only denies a client that reads `NO_PROXY` and VS Code's
+CLI does not. `tests/heavy/rustup.sh` is Rust's, and proves the most, because there
 the compiler itself crosses the proxy. `tests/heavy/closed_world.sh` is every
 other kind, one phase each, selected by name:
 

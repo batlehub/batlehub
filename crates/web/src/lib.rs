@@ -635,10 +635,10 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
             jetbrains::jetbrains_get,
             jetbrains_marketplace::{
                 jbm_aggregation, jbm_broken_plugins, jbm_comments, jbm_compatible_updates,
-                jbm_feature_implementations, jbm_file_download, jbm_ide_extensions,
-                jbm_jb_plugins_xml_ids, jbm_plugin_download, jbm_plugin_info, jbm_plugin_manager,
-                jbm_plugin_meta, jbm_plugin_updates, jbm_plugins_list, jbm_plugins_xml_ids,
-                jbm_search_plugins, jbm_search_plugins_ide, jbm_update_meta,
+                jbm_compatible_updates_get, jbm_feature_implementations, jbm_file_download,
+                jbm_ide_extensions, jbm_jb_plugins_xml_ids, jbm_plugin_download, jbm_plugin_info,
+                jbm_plugin_manager, jbm_plugin_meta, jbm_plugin_updates, jbm_plugins_list,
+                jbm_plugins_xml_ids, jbm_search_plugins, jbm_search_plugins_ide, jbm_update_meta,
                 jbm_update_plugins_xml, jbm_upload,
             },
             maven::{maven_get, maven_put},
@@ -727,7 +727,28 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     // the GitHub `{owner}/{repo}` routes so it isn't captured as owner="api".
     cfg.service(fj_packages); // GET …/api/packages/{path}  (Forgejo/Gitea)
     cfg.service(gl_packages); // GET …/api/v4/{path}         (GitLab)
-                              // GitHub (owner/repo structure, multi-segment) — also serves Forgejo releases.
+
+    // GitLab (distinct `/-/` delimiter; most-specific first) — **before** the
+    // GitHub routes below, not after them. A GitLab project may be a *single*
+    // path segment, and mise percent-encodes it, so `…/gitlab-org%2Fcli/-/releases`
+    // is three segments and `{owner}/{repo}/releases` claimed it first with
+    // `repo = "-"`; the GitHub guard then answered "not a github or forgejo
+    // registry" and mise's `gitlab:` backend could resolve nothing. `…/-/raw/…`
+    // collided with `{owner}/{repo}/raw/…` the same way. The reverse shadowing
+    // cannot happen: every route here carries the literal `/-/` segment.
+    cfg.service(gl_download_link); // …/-/releases/{tag}/downloads/{name}
+    cfg.service(gl_get_release); // …/-/releases/{tag}
+    cfg.service(gl_list_releases); // …/-/releases
+    cfg.service(gl_download_archive); // …/-/archive/{tag}/{filename}
+    cfg.service(gl_download_raw); // …/-/raw/{ref}/{path}
+
+    // RFC 0019 §4.1 `[api_reads]` — typed, read-only, opt-in. Before the
+    // archive and raw routes so `/tags` is not read as a ref.
+    cfg.service(crate::handlers::proxy::forge_api::forge_tags); // …/{o}/{r}/tags
+    cfg.service(crate::handlers::proxy::forge_api::forge_commit); // …/{o}/{r}/commits/{sha}
+    cfg.service(crate::handlers::proxy::forge_api::forge_branch); // …/{o}/{r}/branches/{name}
+
+    // GitHub (owner/repo structure, multi-segment) — also serves Forgejo releases.
     cfg.service(list_releases);
     cfg.service(get_release);
     cfg.service(download_asset_by_name);
@@ -735,18 +756,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(download_tarball);
     cfg.service(download_zipball);
     cfg.service(download_raw);
-    // GitLab (distinct `/-/` delimiter; most-specific first)
-    // RFC 0019 §4.1 `[api_reads]` — typed, read-only, opt-in. Before the
-    // archive and raw routes so `/tags` is not read as a ref.
-    cfg.service(crate::handlers::proxy::forge_api::forge_tags); // …/{o}/{r}/tags
-    cfg.service(crate::handlers::proxy::forge_api::forge_commit); // …/{o}/{r}/commits/{sha}
-    cfg.service(crate::handlers::proxy::forge_api::forge_branch); // …/{o}/{r}/branches/{name}
-    cfg.service(gl_download_link); // …/-/releases/{tag}/downloads/{name}
-    cfg.service(gl_get_release); // …/-/releases/{tag}
-    cfg.service(gl_list_releases); // …/-/releases
-    cfg.service(gl_download_archive); // …/-/archive/{tag}/{filename}
-    cfg.service(gl_download_raw); // …/-/raw/{ref}/{path}
-                                  // Deb / RPM repositories: publish (PUT) before the catch-all read (GET).
+    // Deb / RPM repositories: publish (PUT) before the catch-all read (GET).
     cfg.service(deb_publish); // PUT …/deb/pool/{dist}/{component}/upload
     cfg.service(rpm_publish); // PUT …/rpm/upload
     cfg.service(deb_get); // GET …/deb/{path}
@@ -930,6 +940,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     // otherwise swallow e.g. "plugins/list" as {name}/{version}.
     cfg.service(jbm_upload); // POST …/api/updates/upload
     cfg.service(jbm_compatible_updates); // POST …/api/search/updates/compatible
+    cfg.service(jbm_compatible_updates_get); // GET  …/api/search/updates/compatible
     cfg.service(jbm_aggregation); // GET …/api/search/aggregation/{field}
     cfg.service(jbm_search_plugins); // GET …/api/search/plugins
     cfg.service(jbm_search_plugins_ide); // GET …/api/searchPlugins

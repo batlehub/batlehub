@@ -349,11 +349,167 @@ pub async fn jbm_compatible_updates(
         .map(ForwardedBody::into_response);
     }
 
+    // Best-effort upstream merge for the ids without a local answer.
+    let upstream = match mode {
+        RegistryMode::Hybrid => cached_forward_post_json(
+            &svc,
+            &upstream_map,
+            &client,
+            &registry,
+            "api/search/updates/compatible",
+            &forward_body,
+            &cache_key,
+        )
+        .await
+        .ok()
+        .and_then(|fwd| serde_json::from_slice::<serde_json::Value>(&fwd.body).ok()),
+        _ => None,
+    };
+
+    let updates = compatible_updates_answer(
+        &local_svc,
+        &registry,
+        &body.build,
+        &body.plugin_xml_ids,
+        identity,
+        upstream,
+    )
+    .await?;
+    Ok(HttpResponse::Ok().json(updates))
+}
+
+/// `GET /api/search/updates/compatible` — the compatible-updates question in
+/// the spelling the IDE actually speaks: `?build=…&pluginXmlId=…`, repeated.
+///
+/// `installPlugins` on IntelliJ 2026.1 asks this way and no other: the POST
+/// form is the marketplace's own API, the GET form is what ships in the IDE.
+/// Without this route the request fell past every jetbrains service to
+/// openvsx's `api/{namespace}/{extension}` catch-all, which answered "registry
+/// … is not an openvsx or vscode-marketplace registry" — a 404 that reads like
+/// a misconfigured registry and is a missing route. `closed_world.sh`'s
+/// jbplugin phase is the regression test at the client end.
+///
+/// `pluginXmlId` repeats, and `web::Query` cannot express that — serde_urlencoded
+/// keeps one value per key — so the query is read with `form_urlencoded`.
+#[utoipa::path(
+    get,
+    path = "/proxy/{registry}/api/search/updates/compatible",
+    tag = "proxy/jetbrains-marketplace",
+    params(
+        ("registry" = String, Path, description = "Registry name"),
+        ("build" = String, Query, description = "IDE build, e.g. IU-261.25134.95"),
+        ("pluginXmlId" = Vec<String>, Query, description = "Plugin xml id; repeatable"),
+    ),
+    responses(
+        (status = 200, description = "Array of compatible updates", body = Vec<UpstreamDocument>),
+        (status = 400, description = "No build in the query"),
+        (status = 404, description = "Unknown or non-marketplace registry"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[allow(clippy::too_many_arguments)]
+#[get("/proxy/{registry}/api/search/updates/compatible")]
+pub async fn jbm_compatible_updates_get(
+    req: HttpRequest,
+    path: web::Path<String>,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
+    map: web::Data<RegistryMap>,
+    mode_map: web::Data<RegistryModeMap>,
+    upstream_map: web::Data<UpstreamMap>,
+    client: web::Data<reqwest::Client>,
+) -> Result<impl Responder, AppError> {
+    let registry = path.into_inner();
+    require_jbm(&registry, &map)?;
+    let mode = mode_map.get(&registry);
+    let (build, plugin_xml_ids) = compatible_updates_query(req.query_string())?;
+
+    // Forwarded as the GET it arrived as, query and all — including the `os` and
+    // `arch` the IDE appends, which stay in the cache key: the marketplace may
+    // answer them differently, and a key that dropped them would hand one
+    // platform's answer to another. The cost is a cache entry per IDE build and
+    // kernel string, which is what an `installPlugins` run asks for once.
+    if mode == RegistryMode::Proxy {
+        return forward_search(
+            &svc,
+            &upstream_map,
+            &client,
+            &registry,
+            &req,
+            "api/search/updates/compatible",
+        )
+        .await
+        .map(ForwardedBody::into_response);
+    }
+
+    let upstream = match mode {
+        RegistryMode::Hybrid => forward_search(
+            &svc,
+            &upstream_map,
+            &client,
+            &registry,
+            &req,
+            "api/search/updates/compatible",
+        )
+        .await
+        .ok()
+        .and_then(|fwd| serde_json::from_slice::<serde_json::Value>(&fwd.body).ok()),
+        _ => None,
+    };
+
+    let updates = compatible_updates_answer(
+        &local_svc,
+        &registry,
+        &build,
+        &plugin_xml_ids,
+        identity,
+        upstream,
+    )
+    .await?;
+    Ok(HttpResponse::Ok().json(updates))
+}
+
+/// `build` and every `pluginXmlId` in a compatible-updates query string.
+///
+/// The id parameter is spelled four ways across IDE builds and the marketplace's
+/// own documentation; all four are accepted, because which one arrives is a
+/// property of the client's version and none of them means anything else.
+fn compatible_updates_query(query: &str) -> Result<(String, Vec<String>), AppError> {
+    let mut build = None;
+    let mut ids = Vec::new();
+    for (key, value) in form_urlencoded::parse(query.as_bytes()) {
+        match key.as_ref() {
+            "build" => build = Some(value.into_owned()),
+            "pluginXmlId" | "pluginXMLId" | "pluginXmlIds" | "pluginXMLIds" => {
+                ids.push(value.into_owned())
+            }
+            _ => {}
+        }
+    }
+    let build = build.filter(|b| !b.is_empty()).ok_or_else(|| {
+        AppError::bad_request("compatible updates: the query carries no 'build'".to_owned())
+    })?;
+    Ok((build, ids))
+}
+
+/// The local answer to a compatible-updates question, merged with `upstream`
+/// when the caller has one (hybrid). The forward differs between the two
+/// spellings — a POST body, a GET query — so the caller does it and passes the
+/// document in; everything after that is the same answer to the same question.
+async fn compatible_updates_answer(
+    local_svc: &Arc<LocalRegistryService>,
+    registry: &str,
+    build: &str,
+    plugin_xml_ids: &[String],
+    identity: AuthIdentity,
+    upstream: Option<serde_json::Value>,
+) -> Result<Vec<serde_json::Value>, AppError> {
     let local = local_svc
         .get_jetbrains_compatible_updates(
-            &registry,
-            &body.plugin_xml_ids,
-            &body.build,
+            registry,
+            plugin_xml_ids,
+            build,
             STABLE_CHANNEL,
             &identity,
         )
@@ -365,31 +521,15 @@ pub async fn jbm_compatible_updates(
         .map(|v| update_json(&RenderEntry::from_local(v)))
         .collect();
 
-    if mode == RegistryMode::Hybrid {
-        // Best-effort upstream merge for the ids without a local answer.
-        let upstream = cached_forward_post_json(
-            &svc,
-            &upstream_map,
-            &client,
-            &registry,
-            "api/search/updates/compatible",
-            &forward_body,
-            &cache_key,
-        )
-        .await
-        .ok()
-        .and_then(|fwd| serde_json::from_slice::<serde_json::Value>(&fwd.body).ok());
-        if let Some(upstream) = upstream {
-            merge_upstream_hits(
-                &mut updates,
-                &local_ids,
-                upstream.as_array().into_iter().flatten(),
-                update_hit_id,
-            );
-        }
+    if let Some(upstream) = upstream {
+        merge_upstream_hits(
+            &mut updates,
+            &local_ids,
+            upstream.as_array().into_iter().flatten(),
+            update_hit_id,
+        );
     }
-
-    Ok(HttpResponse::Ok().json(updates))
+    Ok(updates)
 }
 
 /// Load all versions of one plugin as render entries (local-first, cached

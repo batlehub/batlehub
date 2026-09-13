@@ -21,12 +21,17 @@
 # that the artifact the instance served is the one that was asked for, opened —
 # and, for the two that go through an editor, listed back by it.
 #
-# The world is closed the way `mise.sh` §4 and `airgap.sh` close it: every
-# client process runs with HTTP(S)_PROXY pointed at a closed port and only the
-# loopback exempted. §0 asserts that denial against two real hosts before any
-# phase depends on it — a phase that passes with egress open is green for the
-# wrong reason, and that is the failure mode this suite exists to avoid. The
-# *server* keeps its egress: it is the one process allowed upstream.
+# The world is closed as `mise.sh` §4 and `airgap.sh` close it — every client
+# process runs with HTTP(S)_PROXY set and only the loopback exempted — with one
+# difference: the proxy here is a *running* one that relays the loopback and
+# refuses every other host (`closed_proxy.py`), not a port nothing listens on.
+# A dead port closes the world only for a client that honours `NO_PROXY`, and
+# VS Code's server CLI does not read it, so it sent its request for this
+# instance to the dead port and the closed world was closed to the instance
+# too. §0 asserts the denial against two real hosts before any phase depends on
+# it — a phase that passes with egress open is green for the wrong reason, and
+# that is the failure mode this suite exists to avoid. The *server* keeps its
+# egress: it is the one process allowed upstream.
 #
 # One file rather than twenty-two, following `authz.sh`: the machinery (the
 # denial, the control probe, the build-and-run assertion, the transcript
@@ -84,6 +89,9 @@ done
 # transcript rather than in a variable.
 NODE_DEPS_TYPESCRIPT="${HEAVY_CW_TYPESCRIPT:-5.9.3}"
 RUBY_VERSION="${HEAVY_CW_RUBY:-3.3.12}"
+# Bundler is pinned separately from the interpreter because §5 may have to
+# install one: a distribution ruby is packaged without the binstub.
+BUNDLER_VERSION="${HEAVY_CW_BUNDLER:-4.0.17}"
 JAVA_VERSION="${HEAVY_CW_JAVA:-temurin-21.0.12+101.0.LTS}"
 MAVEN_VERSION="${HEAVY_CW_MAVEN:-3.9.16}"
 DOTNET_VERSION="${HEAVY_CW_DOTNET:-10.0}"
@@ -112,7 +120,7 @@ IDEA_VERSION="${HEAVY_CW_IDEA:-2026.1.3}"
 JB_PLUGIN="${HEAVY_CW_JB_PLUGIN:-IdeaVIM}"
 # What the installed plugin's directory is called on disk, which is not the id.
 JB_PLUGIN_DIR_MATCH="${HEAVY_CW_JB_PLUGIN_DIR:-ideavim}"
-JBR_PATH="${HEAVY_CW_JBR_PATH:-idea/jbr/jbr_jcef-21.0.5-linux-x64-b631.30.tar.gz}"
+JBR_PATH="${HEAVY_CW_JBR_PATH:-intellij-jbr/jbr_jcef-21.0.5-linux-x64-b631.30.tar.gz}"
 FORGEJO_TOOL="${HEAVY_CW_FORGEJO_TOOL:-forgejo/forgejo}"
 FORGEJO_TOOL_VERSION="${HEAVY_CW_FORGEJO_TOOL_VERSION:-16.0.4}"
 FORGEJO_TOOL_BIN="${HEAVY_CW_FORGEJO_TOOL_BIN:-forgejo}"
@@ -129,9 +137,15 @@ APT_PACKAGE="${HEAVY_CW_APT_PACKAGE:-hello}"
 APT_PACKAGE_BIN="${HEAVY_CW_APT_PACKAGE_BIN:-usr/bin/hello}"
 APT_PACKAGE_RAN="${HEAVY_CW_APT_PACKAGE_RAN:-Hello, world!}"
 APT_KEYRING="${HEAVY_CW_APT_KEYRING:-/usr/share/keyrings/ubuntu-archive-keyring.gpg}"
-DNF_PACKAGE="${HEAVY_CW_DNF_PACKAGE:-htop}"
-DNF_PACKAGE_CMD="${HEAVY_CW_DNF_PACKAGE_CMD:-htop}"
-DNF_PACKAGE_RAN="${HEAVY_CW_DNF_PACKAGE_RAN:-htop}"
+# `pv`, not `htop`: only the mirrored repository is enabled, so the package has
+# to resolve inside it. EPEL's htop needs `libnl`, `libnl-genl` and `libhwloc`,
+# which live in AlmaLinux's own BaseOS/AppStream and are not in the base image —
+# `nothing provides libnl-3.so.200()(64bit)`, a dependency solver saying the
+# repository set is short, not that the proxy failed. `pv` requires `libc` and
+# `rtld` and nothing else, so what the phase measures is the mirror.
+DNF_PACKAGE="${HEAVY_CW_DNF_PACKAGE:-pv}"
+DNF_PACKAGE_CMD="${HEAVY_CW_DNF_PACKAGE_CMD:-pv}"
+DNF_PACKAGE_RAN="${HEAVY_CW_DNF_PACKAGE_RAN:-pv}"
 PACMAN_PACKAGE="${HEAVY_CW_PACMAN_PACKAGE:-jq}"
 PACMAN_PACKAGE_CMD="${HEAVY_CW_PACMAN_PACKAGE_CMD:-jq}"
 PACMAN_PACKAGE_RAN="${HEAVY_CW_PACMAN_PACKAGE_RAN:-jq-}"
@@ -174,19 +188,53 @@ heavy_start_tap
 # because all six variables have to name the *same* closed port — a typo in one
 # of them leaves that scheme reaching the real internet, and the phase still
 # passes.
-CLOSED_PROXY="http://127.0.0.1:1"
+# A *running* proxy that relays the loopback and refuses everything else, not
+# the closed port the other suites use. `NO_PROXY` is still set and still does
+# the work for every client that honours it; this exists for the one that does
+# not. VS Code's server CLI reads `HTTP_PROXY` and nothing else — no `no_proxy`
+# in that code path at any version — so `--install-extension` sent its gallery
+# request for the tap to the closed port and failed with `ECONNREFUSED
+# 127.0.0.1:1`, a closed world that was closed to this instance too. See the
+# module docs on `closed_proxy.py`; §0 proves the denial on every run.
+CLOSED_PROXY_PORT="${HEAVY_CW_DENY_PORT:-8158}"
+CLOSED_PROXY="http://127.0.0.1:$CLOSED_PROXY_PORT"
 LOOPBACK_DIRECT="127.0.0.1,localhost"
 DENY=(env HTTP_PROXY="$CLOSED_PROXY" HTTPS_PROXY="$CLOSED_PROXY"
       http_proxy="$CLOSED_PROXY" https_proxy="$CLOSED_PROXY"
       NO_PROXY="$LOOPBACK_DIRECT" no_proxy="$LOOPBACK_DIRECT")
 
+python3 tests/heavy/closed_proxy.py "$CLOSED_PROXY_PORT" \
+  >"$HEAVY_WORK/closed-proxy.err" 2>&1 &
+HEAVY_EXTRA_PIDS+=("$!")
+for _ in $(seq 1 50); do
+  (exec 3<>"/dev/tcp/127.0.0.1/$CLOSED_PROXY_PORT") 2>/dev/null && break
+  sleep 0.1
+done
+(exec 3<>"/dev/tcp/127.0.0.1/$CLOSED_PROXY_PORT") 2>/dev/null \
+  || heavy_fail "the closed-world proxy never came up on $CLOSED_PROXY_PORT"
+
 # ── §0. The world is closed ──────────────────────────────────────────────────
 
+# What counts as closed is narrow on purpose. The denial is a proxy that
+# answers `403 closed world: …` now, not a port that refuses a connection, and
+# `curl` exits 0 on a 403 — a probe that only looked at the exit status would
+# read every refusal as a success and fail the run, and a probe that took any
+# non-2xx as closed would read a real registry's own 4xx as closed. So the
+# refusal has to be *this* proxy's, or no connection at all.
 heavy_log "Egress control: a client process reaching two real registries"
 for host in "https://registry.npmjs.org/left-pad" "https://proxy.golang.org/rsc.io/quote/@v/list"; do
-  if "${DENY[@]}" curl -sS --max-time 20 -o /dev/null "$host" 2>"$HEAVY_WORK/egress.txt"; then
-    heavy_fail "a client process reached $host — the world is not closed, and every phase below would pass for the wrong reason"
-  fi
+  status="$("${DENY[@]}" curl -sS --max-time 20 -w '%{http_code}' \
+    -o "$HEAVY_WORK/egress.body" "$host" 2>"$HEAVY_WORK/egress.txt")" || status="unreachable"
+  case "$status" in
+    403)
+      grep -q "closed world" "$HEAVY_WORK/egress.body" \
+        || heavy_fail "$host answered 403 from something other than the closed-world proxy — the denial is not the one this suite thinks it is"
+      ;;
+    unreachable) ;;
+    *)
+      heavy_fail "a client process reached $host ($status) — the world is not closed, and every phase below would pass for the wrong reason"
+      ;;
+  esac
 done
 heavy_log "CLOSED-WORLD-EGRESS-OK (the public registries are unreachable from the client side)"
 
@@ -288,8 +336,16 @@ EOF
   # `-modcacherw` is not a nicety: without it the module cache is written
   # read-only and the suite's own `rm -rf` of its work directory fails, which
   # turns a passing phase into a non-zero exit at cleanup.
+  #
+  # `LANG`/`LC_ALL` are pinned because the *dependency* reads them: `rsc.io/quote`
+  # calls `rsc.io/sampler`, which greets in the caller's locale — "Hello, world"
+  # unset, "Bonjour le monde" under `fr_FR.UTF-8`, and "Ahoy, world!" under the
+  # `C.UTF-8` that GitHub runners set. The assertion is what the dependency
+  # computed, so the locale it computes in belongs beside it rather than in the
+  # runner's environment. No locale has to be *installed*: sampler matches the
+  # tag with `golang.org/x/text`, not with the system's locale database.
   local goenv=(GOPROXY="$HEAVY_TAP_BASE/proxy/$GO_REG" GOFLAGS="-mod=mod -modcacherw"
-               GOTOOLCHAIN=local GOSUMDB=off
+               GOTOOLCHAIN=local GOSUMDB=off LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
                GOMODCACHE="$cache/mod" GOCACHE="$cache/build" GOPATH="$cache/gopath")
   cw_step "$out" "$dir" "${DENY[@]}" "${goenv[@]}" go mod tidy \
     || { cat "$out" >&2; heavy_fail "go: the resolve failed inside the closed world"; }
@@ -539,10 +595,59 @@ EOF
 # read once. `BUNDLE_PATH` is inside the run, so a gem already in the runner's
 # store cannot answer for one that should have come through the proxy.
 
+# cw_bundler — set CW_BUNDLE to the command that runs Bundler under the ruby
+# `heavy_runner_for` resolved. A global array for the same reason HEAVY_RUNNER
+# is one: `heavy_fail` inside a `$(…)` ends the subshell only, and the phase
+# would carry on with an empty command.
+#
+# The probe is `ruby`, and the client this phase actually runs is `bundle`.
+# They are not the same tool: a distribution ruby — which is what a CI runner
+# resolves to — is packaged without the binstub, so the probe passes and the
+# first step dies as `env: 'bundle': No such file or directory`, naming a
+# missing client as if the closed world had broken the build. When the runner's
+# ruby brings its own bundler (a mise toolchain does), that one is used; when it
+# does not, one is installed here, the way airgap.sh does it and for the same
+# reasons:
+#
+#   - into a work-local GEM_HOME, because a distribution ruby keeps its gems in
+#     a root-owned directory (/var/lib/gems/<abi> on Ubuntu) where `gem install`
+#     is a `Gem::FilePermissionError`, and because this run has no business
+#     writing into a developer's own prefix;
+#   - run *by* the interpreter rather than executed, because RubyGems writes its
+#     binstubs as an sh/ruby polyglot whose sh half is `exec "${0%/*}/ruby"` —
+#     true in a ruby's own GEM_HOME, false in a private prefix, where executing
+#     it directly is `exec: …/gems/bin/ruby: not found` before bundler starts.
+#
+# That install is the only thing in this phase allowed the open internet, and it
+# happens before `heavy_mark`: it provisions the client, exactly as mise
+# provisions the interpreter, and nothing it fetches is what the phase asserts.
+cw_bundler() {
+  CW_BUNDLE=()
+  if "${HEAVY_RUNNER[@]}" bundle --version >/dev/null 2>&1; then
+    CW_BUNDLE=("${HEAVY_RUNNER[@]}" bundle)
+    return 0
+  fi
+  local rubybin rubydir
+  rubybin="$("${HEAVY_RUNNER[@]}" bash -c 'command -v ruby')" \
+    || heavy_fail "ruby: the interpreter the runner resolved has no path"
+  rubydir="$(dirname "$rubybin")"
+  [[ -x "$rubydir/gem" ]] \
+    || heavy_fail "ruby: no bundler beside $rubybin and no \`gem\` to install one with"
+  export GEM_HOME="$HEAVY_WORK/gems"
+  export GEM_PATH="$GEM_HOME"
+  mkdir -p "$GEM_HOME"
+  if ! "$rubydir/gem" list -i bundler -v "$BUNDLER_VERSION" >/dev/null 2>&1; then
+    heavy_log "no bundler beside $rubybin — installing bundler $BUNDLER_VERSION into $GEM_HOME"
+    "$rubydir/gem" install bundler -v "$BUNDLER_VERSION" --no-document >/dev/null \
+      || heavy_fail "ruby: could not install bundler $BUNDLER_VERSION into $GEM_HOME"
+  fi
+  CW_BUNDLE=("$rubybin" "$GEM_HOME/bin/bundle" "_${BUNDLER_VERSION}_")
+}
+
 phase_ruby() {
   heavy_runner_for ruby "ruby@$RUBY_VERSION"
-  local ruby=("${HEAVY_RUNNER[@]}" ruby)
-  local bundle=("${HEAVY_RUNNER[@]}" bundle)
+  cw_bundler
+  local bundle=("${CW_BUNDLE[@]}")
   local dir="$HEAVY_WORK/ruby" out
   out="$(cw_out ruby)"
   mkdir -p "$dir"
@@ -1656,10 +1761,14 @@ command -v curl >/dev/null 2>&1 || { echo "no curl in the image: the egress cont
 # §0 proves the denial for a host process; this proves it for *this* process,
 # in this image. Without it a container that ignored the variables would make
 # every assertion below pass for the wrong reason.
-if curl -sS --max-time 20 -o /dev/null "$probe"; then
-  echo "the container reached $probe — the world is not closed in here" >&2
-  exit 98
-fi
+# As §0 on the host: the denial answers `403 closed world: …`, which `curl`
+# exits 0 on, so the body is what says whether this container is closed.
+probe_status="$(curl -sS --max-time 20 -w '%{http_code}' -o /tmp/egress.body "$probe")" || probe_status=unreachable
+case "$probe_status" in
+  403) grep -q "closed world" /tmp/egress.body || { echo "the container got a 403 from something other than the closed-world proxy" >&2; exit 98; } ;;
+  unreachable) ;;
+  *) echo "the container reached $probe ($probe_status) — the world is not closed in here" >&2; exit 98 ;;
+esac
 rm -f /etc/yum.repos.d/*.repo
 cat >/etc/yum.repos.d/closed-world.repo <<EOF
 [closed-world]
@@ -1726,10 +1835,14 @@ phase_pacman() {
 set -eu
 base="$1"; arch="$2"; pkg="$3"; cmd="$4"; probe="$5"
 command -v curl >/dev/null 2>&1 || { echo "no curl in the image: the egress control cannot be run" >&2; exit 96; }
-if curl -sS --max-time 20 -o /dev/null "$probe"; then
-  echo "the container reached $probe — the world is not closed in here" >&2
-  exit 98
-fi
+# As §0 on the host: the denial answers `403 closed world: …`, which `curl`
+# exits 0 on, so the body is what says whether this container is closed.
+probe_status="$(curl -sS --max-time 20 -w '%{http_code}' -o /tmp/egress.body "$probe")" || probe_status=unreachable
+case "$probe_status" in
+  403) grep -q "closed world" /tmp/egress.body || { echo "the container got a 403 from something other than the closed-world proxy" >&2; exit 98; } ;;
+  unreachable) ;;
+  *) echo "the container reached $probe ($probe_status) — the world is not closed in here" >&2; exit 98 ;;
+esac
 # The architecture is substituted here rather than left as pacman's own `$arch`
 # so the file carries no variable at all: one less thing that can expand to
 # something other than what this run measured.

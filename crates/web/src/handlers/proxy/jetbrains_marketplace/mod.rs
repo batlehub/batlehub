@@ -23,8 +23,9 @@ pub use files::{
     jbm_plugin_download, jbm_plugin_manager, jbm_plugin_meta, jbm_plugins_xml_ids, jbm_update_meta,
 };
 pub use ide::{
-    jbm_aggregation, jbm_comments, jbm_compatible_updates, jbm_feature_implementations,
-    jbm_plugin_info, jbm_plugin_updates, jbm_search_plugins, jbm_search_plugins_ide,
+    jbm_aggregation, jbm_comments, jbm_compatible_updates, jbm_compatible_updates_get,
+    jbm_feature_implementations, jbm_plugin_info, jbm_plugin_updates, jbm_search_plugins,
+    jbm_search_plugins_ide,
 };
 pub use publish::jbm_upload;
 pub use xml::{jbm_plugins_list, jbm_update_plugins_xml};

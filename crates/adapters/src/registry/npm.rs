@@ -65,23 +65,22 @@ struct NpmPackument {
     readme: Option<String>,
     /// The package's repository, at the document root — the fallback when the
     /// version's own entry omits it, which is common for older publishes.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_repository")]
     repository: Option<NpmRepository>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_homepage")]
     homepage: Option<String>,
 }
 
 /// npm spells this two ways and both are in the wild: a bare string (often the
 /// `github:user/repo` shorthand) or `{ "type": "git", "url": "git+https://…" }`.
 /// `MetadataLinks` untangles the spelling; this only has to accept both shapes.
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+///
+/// Built by [`lenient_repository`] rather than derived, for the reason given
+/// there: a third spelling exists in the wild and it must not fail a document.
+#[derive(Debug)]
 enum NpmRepository {
     Url(String),
-    Object {
-        #[serde(default)]
-        url: Option<String>,
-    },
+    Object { url: Option<String> },
 }
 
 impl NpmRepository {
@@ -90,6 +89,62 @@ impl NpmRepository {
             Self::Url(url) => Some(url),
             Self::Object { url } => url.as_deref(),
         }
+    }
+}
+
+/// `repository`, read for whatever it turns out to be.
+///
+/// A packument is not a schema: every version entry is the `package.json` that
+/// was published with it, including shapes npm itself stopped accepting years
+/// ago. `tmp@0.0.4` (2012) spells `repository` as a one-element *array* of the
+/// object form, and `fs-extra@0.0.1`, `jsonfile@0.0.1` and their siblings spell
+/// `homepage` as a one-element array of the string.
+///
+/// serde reads the whole document, so one such entry refused the *package* —
+/// `data did not match any variant of untagged enum NpmRepository`, surfaced to
+/// the client as `502 malformed npm packument`. Every version of `tmp`,
+/// `fs-extra` and `jsonfile` was un-installable through this proxy, which is
+/// how `closed_world.sh`'s ovsx phase found it.
+///
+/// Both fields feed the links on a metadata page and nothing else, so a shape
+/// neither reader understands is dropped — `None`, the same as absent. A
+/// document a client asked for is never failed for a field no client reads.
+fn lenient_repository<'de, D>(de: D) -> Result<Option<NpmRepository>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<serde_json::Value>::deserialize(de)?.and_then(repository_of))
+}
+
+fn repository_of(value: serde_json::Value) -> Option<NpmRepository> {
+    match value {
+        serde_json::Value::String(url) => Some(NpmRepository::Url(url)),
+        serde_json::Value::Object(mut fields) => Some(NpmRepository::Object {
+            url: match fields.remove("url") {
+                Some(serde_json::Value::String(url)) => Some(url),
+                _ => None,
+            },
+        }),
+        // The array spelling: the first entry that yields one, as npm's own
+        // readers do — a later entry is a mirror of the same repository.
+        serde_json::Value::Array(entries) => entries.into_iter().find_map(repository_of),
+        _ => None,
+    }
+}
+
+/// `homepage`, read the same way and for the same reason as [`lenient_repository`].
+fn lenient_homepage<'de, D>(de: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<serde_json::Value>::deserialize(de)?.and_then(homepage_of))
+}
+
+fn homepage_of(value: serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(url) => Some(url).filter(|url| !url.is_empty()),
+        serde_json::Value::Array(entries) => entries.into_iter().find_map(homepage_of),
+        _ => None,
     }
 }
 
@@ -110,9 +165,9 @@ struct NpmVersionMeta {
     /// This version's own repository. Preferred over the document root's: a
     /// package that moved forge between releases named the old one in the old
     /// version, and that is the honest answer for *that* version.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_repository")]
     repository: Option<NpmRepository>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_homepage")]
     homepage: Option<String>,
 }
 
@@ -409,6 +464,98 @@ impl NpmRegistryClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The three historic spellings that used to refuse the whole package, as
+    /// `registry.npmjs.org` still serves them: `tmp@0.0.4`'s array repository,
+    /// `fs-extra@0.0.1`'s array homepage, and the modern object/string forms
+    /// beside them so the lenient reader is not a looser reader.
+    #[test]
+    fn packument_survives_the_historic_field_spellings() {
+        let doc = serde_json::json!({
+            "dist-tags": { "latest": "1.0.0" },
+            "repository": [{ "type": "git", "url": "git://github.com/raszi/tmp.git" }],
+            "homepage": ["https://github.com/jprichardson/node-fs-extra"],
+            "versions": {
+                "0.0.4": {
+                    "version": "0.0.4",
+                    "dist": { "tarball": "https://example.com/t-0.0.4.tgz" },
+                    "repository": [{ "type": "git", "url": "git://github.com/raszi/tmp.git" }],
+                    "homepage": [""]
+                },
+                "1.0.0": {
+                    "version": "1.0.0",
+                    "dist": { "tarball": "https://example.com/t-1.0.0.tgz" },
+                    "repository": { "type": "git", "url": "git+https://github.com/raszi/node-tmp.git" },
+                    "homepage": "http://github.com/raszi/node-tmp"
+                }
+            }
+        });
+
+        let packument: NpmPackument = serde_json::from_value(doc)
+            .expect("the historic spellings must not refuse the package");
+
+        assert_eq!(
+            packument.repository.as_ref().and_then(NpmRepository::url),
+            Some("git://github.com/raszi/tmp.git"),
+            "the array spelling is read, not dropped"
+        );
+        assert_eq!(
+            packument.homepage.as_deref(),
+            Some("https://github.com/jprichardson/node-fs-extra")
+        );
+
+        let old = &packument.versions["0.0.4"];
+        assert_eq!(
+            old.repository.as_ref().and_then(NpmRepository::url),
+            Some("git://github.com/raszi/tmp.git")
+        );
+        // `[""]` carries no link: absent rather than an empty one.
+        assert_eq!(old.homepage, None);
+
+        let new = &packument.versions["1.0.0"];
+        assert_eq!(
+            new.repository.as_ref().and_then(NpmRepository::url),
+            Some("git+https://github.com/raszi/node-tmp.git")
+        );
+        assert_eq!(
+            new.homepage.as_deref(),
+            Some("http://github.com/raszi/node-tmp")
+        );
+    }
+
+    /// A shape no reader understands is dropped, not fatal: the document is
+    /// what the client asked for, and neither field is in it.
+    #[test]
+    fn packument_drops_unreadable_field_shapes() {
+        let doc = serde_json::json!({
+            "dist-tags": {},
+            "repository": 42,
+            "homepage": { "url": "https://example.com" },
+            "versions": {}
+        });
+
+        let packument: NpmPackument = serde_json::from_value(doc).expect("still a packument");
+        assert!(packument.repository.is_none());
+        assert!(packument.homepage.is_none());
+    }
+
+    /// The string spelling of `repository`, and an object that has no `url`.
+    #[test]
+    fn repository_string_and_urlless_object() {
+        assert_eq!(
+            repository_of(serde_json::json!("github:user/repo"))
+                .as_ref()
+                .and_then(NpmRepository::url),
+            Some("github:user/repo")
+        );
+        assert_eq!(
+            repository_of(serde_json::json!({ "type": "git" }))
+                .as_ref()
+                .and_then(NpmRepository::url),
+            None
+        );
+        assert!(repository_of(serde_json::json!([])).is_none());
+    }
 
     #[test]
     fn encode_scoped_package() {

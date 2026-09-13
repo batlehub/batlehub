@@ -231,7 +231,7 @@ anonymous = ["releases:read", "releases:list", "source:read"]
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
 
-# ── JetBrains downloads: download.jetbrains.com, a path proxy ───────────────
+# ── JetBrains downloads: cache-redirector.jetbrains.com, a path proxy ───────
 #
 # The JetBrains Runtime, not an IDE archive: a JBR is ~100 MB against an IDE's
 # ~1.5 GB, and it is a JDK — so the phase ends in `java -version`, which is the
@@ -243,12 +243,17 @@ admin = ["*"]
 # `path_allow` is not required for this kind — the upstream is one vendor's own
 # CDN — but it is written anyway, because a registry that will relay any path
 # on that host is a worse default than a registry that relays two.
+#
+# `cache-redirector.jetbrains.com/intellij-jbr/`, which is where JetBrains keeps
+# the runtimes and where every build script fetches them. `download.jetbrains.com/idea/jbr/`
+# is *also* a JetBrains host and answers `302` to a CDN that then 404s every JBR
+# build — the proxy's honest "not found upstream" was the first run's failure.
 [[registries]]
 type = "jetbrains"
 name = "jb-${HEAVY_RUN}"
 mode = "proxy"
-upstreams = ["https://download.jetbrains.com"]
-path_allow = ["idea/jbr/jbr_jcef-*-linux-x64-*.tar.gz", "idea/jbr/jbr-*-linux-x64-*.tar.gz"]
+upstreams = ["https://cache-redirector.jetbrains.com"]
+path_allow = ["intellij-jbr/jbr_jcef-*-linux-x64-*.tar.gz", "intellij-jbr/jbr-*-linux-x64-*.tar.gz"]
 
 [registries.rbac]
 anonymous = ["releases:read", "releases:list", "source:read"]

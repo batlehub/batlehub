@@ -446,6 +446,49 @@ async fn jbm_compatible_updates_respects_build_range() {
     assert_eq!(body.as_array().unwrap().len(), 0);
 }
 
+/// The GET spelling of the same endpoint — the one IntelliJ's `installPlugins`
+/// uses, with a repeated `pluginXmlId` and the `os`/`arch` it appends. It had no
+/// route at all: the request fell through to openvsx's `api/{ns}/{ext}`
+/// catch-all and came back 404, and the IDE reported "unknown plugins".
+#[actix_web::test]
+async fn jbm_compatible_updates_get_answers_the_ide_spelling() {
+    let app = make_local_jbm_app(RegistryMode::Local).await;
+    let jar = make_plugin_jar(&plugin_xml("org.demo.a", "1.0.0", "233.0", "241.*"));
+    assert_eq!(publish_plugin(&app, &jar, None, false).await.status(), 201);
+
+    let get = |query: &str| {
+        TestRequest::get()
+            .uri(&format!(
+                "/proxy/local-jbm/api/search/updates/compatible?{query}"
+            ))
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .to_request()
+    };
+
+    // In range, exactly as the IDE asks: repeated id, volatile os/arch beside it.
+    let resp = call_service(
+        &app,
+        get("build=IU-240.5&os=Linux+6.17.0&arch=X86_64&pluginXmlId=org.demo.a&pluginXmlId=org.unknown"),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = read_body_json(resp).await;
+    let updates = body.as_array().unwrap();
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0]["pluginXmlId"], "org.demo.a");
+    assert_eq!(updates[0]["version"], "1.0.0");
+
+    // Out of range: the same empty answer the POST gives.
+    let body: Value =
+        read_body_json(call_service(&app, get("build=IU-243.1&pluginXmlId=org.demo.a")).await)
+            .await;
+    assert_eq!(body.as_array().unwrap().len(), 0);
+
+    // No build is a bad request, not a silent empty list.
+    let resp = call_service(&app, get("pluginXmlId=org.demo.a")).await;
+    assert_eq!(resp.status(), 400);
+}
+
 #[actix_web::test]
 async fn jbm_plugin_manager_resolves_latest_compatible() {
     let app = make_local_jbm_app(RegistryMode::Local).await;

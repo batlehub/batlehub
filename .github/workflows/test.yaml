@@ -503,9 +503,22 @@ jobs:
           done
           curl -sf http://127.0.0.1:9000/.well-known/openid-configuration >/dev/null \
             || { docker logs dex; echo "::error::dex never served its discovery document"; exit 1; }
+      # The S3 server this job runs is RustFS (the service above); the client is
+      # still MinIO's `mc`, because RustFS ships no CLI and the four things the
+      # suite asks of it — alias, mb, ls, cat — are plain S3 calls, verified
+      # against RustFS.
+      #
+      # From the project's own GitHub release, pinned. `dl.min.io/client/mc/release/…`
+      # answers **410 Gone** — MinIO withdrew the community download host, and
+      # every path under it, so the unpinned URL that used to work now fails the
+      # job before the suite starts. A pinned asset is also one less thing that
+      # moves under a heavy suite.
       - name: Install the MinIO client
+        env:
+          MC_RELEASE: RELEASE.2025-08-13T08-35-41Z
         run: |
-          curl -fsSL --proto '=https' -o /usr/local/bin/mc https://dl.min.io/client/mc/release/linux-amd64/mc
+          curl -fsSL --proto '=https' -o /usr/local/bin/mc \
+            "https://github.com/minio/mc/releases/download/$MC_RELEASE/mc.linux-amd64.$MC_RELEASE"
           chmod +x /usr/local/bin/mc
           mc --version | head -1
       - name: Clean previous coverage data

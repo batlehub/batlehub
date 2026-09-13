@@ -142,9 +142,11 @@ function sidebarBlock(rfcs, pad) {
       [
         `${pad}{`,
         `${pad}  text: "${shelf.text}",`,
-        // Settled is the long shelf, and history rather than what a reader
-        // arriving at /rfc/ is most often after; it starts folded.
-        `${pad}  collapsed: ${shelf.key === "settled"},`,
+        // No `collapsed`: it is what makes VitePress render the group title as
+        // a `role="button"` around a focusable caret (axe `nested-interactive`)
+        // and as an `h3` at the sidebar's 14px, off the type ramp. Both are
+        // rendered-gate failures on every RFC page, and the fold buys a sidebar
+        // that is already one screen.
         `${pad}  items: [`,
         ...rows.map((r) =>
           [
