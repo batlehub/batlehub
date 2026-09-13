@@ -172,6 +172,8 @@ The series is the commits `main..batlehub` — more precisely
 | **The first commit is `[bh:meta]`.** It adds `BATLEHUB.md`, `.github/workflows/bh-*.yml` and nothing under `code/` or `launcher/`. | Tooling and the manifest are themselves carried, so they rebase like everything else and `main` stays clean. |
 | **Prefer an added file to an edited one.** A feature adds its logic in a new file and touches upstream files only for the call site — the shape 0011 §14.5 chose for the credential patch (one file added, two edited in `code/`, two in `launcher/`). | Hunks in upstream files are what conflict. The rebase report prints, per feature, how many upstream files it edits; a number that grows is the signal to refactor or upstream. |
 | **Every feature has an exit.** Its manifest row names an upstream pull request, or a reason it cannot be one. | A fork that only grows is the merge-based fork in slow motion. |
+| **Every feature has a document, and the document is an RFC of this repository.** Its manifest row names the number; a feature whose reason does not already live in one gets its own, written before the commit, and that document carries three things: what upstream does that forced the change, why this shape and not the alternatives, and what would let the commit be dropped. | The commit message says what changed; it does not survive as the answer to *why*, and a fork's cost is paid by whoever asks that question a year later without the room in their head. `[bh:vsx-auth]` has RFC 0011, `[bh:node-icu]` RFC 0034; the number in the manifest is what the invariants check can verify exists. |
+| **Every feature ships a test, in the suite that can see it.** The three suites are §5.6; the feature's RFC names which one proves it, and `bh-smoke.sh` carries at least one assertion tagged with the label — the invariants check greps for it (§5.5). | A carried change nobody tests is a change we discover is broken from a user, on a rebase, months later. The suites are cheap because each is the smallest thing that can observe its feature: a unit test where the logic is a module, one line in the image where it is a build flag, a workbench where it is a workbench. |
 | **A feature that will not replay is parked, not patched around.** If a rebase conflicts in a feature and the maintainer does not resolve it in that sync, the feature's commits move to `parked/<label>` and leave the series; the manifest row says so. | The series must always be at the current upstream. One stale feature must not hold every other one back. |
 
 `BATLEHUB.md`, the manifest, is a table the invariants check parses:
@@ -181,6 +183,7 @@ The series is the commits `main..batlehub` — more precisely
 | ---------- | ---------------------------------------------------- | ---- | ------------ | ------------------------------------------------ |
 | meta       | this file, the bh-* workflows                        | 0023 | 7.122.0      | never — it is the fork                           |
 | vsx-auth   | gallery credential from the contract file, 401 retry | 0011 | 7.122.0      | upstream PR che-incubator/che-code#NNNN (open)   |
+| node-icu   | node built with full ICU, so `Intl.Segmenter` does not segfault | 0034 | 7.122.0      | upstream issue che-incubator/che-code#NNNN — drop when their assembly ships full ICU |
 ```
 
 Base is a line above the table: `Base: 7.122.0`. The sync job rewrites it.
@@ -314,10 +317,42 @@ the only supply-chain addition over upstream, which signs nothing.
 | the first commit is `[bh:meta]` and touches nothing under `code/` or `launcher/` | tooling leaked into editor code |
 | `Base:` equals `git merge-base main batlehub`'s tag | the manifest lies about the base |
 | `git diff --stat <base>..batlehub -- code/ launcher/` per feature, printed | never — it is the report the parking rule reads |
+| every label in `BATLEHUB.md` appears in `.github/scripts/bh-smoke.sh` — as an assertion tagged `# [bh:<label>]`, or as an explicit `# [bh:<label>] no-smoke: <reason>` | a feature entered the series with nothing that would notice it breaking |
 | che-code's `code/` hygiene (`node build/eslint`, `npm run valid-layers-check`) on the files the series touches | a feature broke a layering rule (0011's module had to move from `common/` to `node/` for exactly this) |
 
 The same script runs at the end of `bh-sync.yml` on the rebased branch before
 it is pushed.
+
+
+### 5.6 The three suites
+
+A fork's tests are not one suite, because the three things it carries are not
+observable in one place: a module is provable in a unit test, a build flag only
+in the built artifact, and a workbench behaviour only in a workbench. So there
+are three, each the smallest thing that can see its subject, and each with one
+command:
+
+| Suite | Home | Runs on | Command | Gate |
+| --- | --- | --- | --- | --- |
+| `bh-unit` | the fork, `[bh:meta]` + each feature | the tree, under the assembly's own node | `node --test code/**/*.bh.test.ts` | `bh-invariants.yml`, every pull request and every sync |
+| `bh-smoke` | the fork, `.github/scripts/bh-smoke.sh` | **inside a built assembly** | `bh-smoke.sh /checode/checode-linux-libc/ubi9` | `bh-image.yml`, every image, every distribution |
+| `bh-editor` | here, `tests/heavy/` | the image, driven in a browser | `CHE_CODE_IMAGE=… task test:che-code-patch-heavy` — the task that exists, reading the image instead of `CHE_CODE_DIR` | this repository's `test.yaml` matrix |
+
+Three properties make them worth their keep:
+
+- **`bh-smoke` takes a directory, not an image.** It asserts against an
+  unpacked assembly, so the same script runs in CI against what was just built
+  *and* in any Che workspace against the `/checode` it is already running —
+  which is how the `Intl.Segmenter` defect of RFC 0034 was found, before any
+  image of ours existed. A suite that needs a registry to run is a suite nobody
+  runs while debugging.
+- **One assertion names one feature.** Every check in `bh-smoke.sh` carries the
+  `# [bh:<label>]` tag its feature owns; dropping a feature from the series
+  drops its assertions in the same `rebase -i`, and the invariants check makes
+  the reverse — a feature with no assertion — a red pull request.
+- **`bh-editor` is the only one that costs minutes.** It needs the image, a
+  BatleHub, a database and a browser, so it stays here, beside the suites that
+  already have them (RFC 0023 §6.2), and never in the fork's pull-request path.
 
 ---
 
@@ -368,11 +403,11 @@ it is pushed.
   `CHE_CODE_IMAGE` to the fork's `:latest`. The suite is then a consumer of
   the fork's release, and a red run names the image tag.
 - `tests/heavy/vscode_patch.sh` and `editor_patch_preload.mjs` are retired in
-  phase 5: the stock family is the loopback proxy's, and the module they
+  phase 6: the stock family is the loopback proxy's, and the module they
   tested no longer lives here.
 - `patches/che-code/` shrinks to a `README.md` that points at the fork and
   says the module, its tests and the series live there, and keeps
-  `validate.sh` only until phase 5. The contract itself —
+  `validate.sh` only until phase 6. The contract itself —
   `cli/schema/vsx-token.schema.json` — never moves; it is the CLI's.
 
 ### 6.3 `cde.batleforc.fr` — the editor definition
@@ -398,7 +433,7 @@ it is pushed.
   mirrored, never run by us.
 - `docs/registries/openvsx.md`'s che-code row — it says *nothing to
   configure* for a signed entry (0020 §11 decision 9) and that stays true; a
-  row for the fork's credential support is a doc change in phase 5.
+  row for the fork's credential support is a doc change in phase 6.
 
 ---
 
@@ -471,13 +506,18 @@ it is pushed.
 
 ## 10. Test plan
 
-- **Fork, on every pull request and sync** (`bh-invariants.yml`): the seven
+- **`bh-unit` and the invariants, on every pull request and sync**
+  (`bh-invariants.yml`): the eight
   checks of §5.5; `node --test` of `vsxRegistryAuth.test.ts` in place under
   the tree's own node (the five properties of RFC 0011 §10, already written);
   upstream's libc-ubi9 build as the smoke.
+- **`bh-smoke`, on every image build** (`bh-image.yml`, §5.6): `node -e "new Intl.Segmenter().segment('ab')"`
+  inside each built assembly, exit 0 required. One line, and it is the whole
+  of what `[bh:node-icu]` promises; the day upstream ships full ICU it keeps
+  passing with the commit dropped, which is how we learn the feature can go.
 - **Fork, daily** (`bh-canary.yml`): the series replayed onto upstream `main`,
   reported and never pushed.
-- **Here, heavy** (`tests/heavy/che_code_patch.sh` with `CHE_CODE_IMAGE`):
+- **`bh-editor`, here** (`tests/heavy/che_code_patch.sh` with `CHE_CODE_IMAGE`):
   scenarios 1–6 of `editor_patch_scenarios.sh` unchanged — they are about
   behaviour, not about how the code got into the build — plus scenario 7,
   the `401` retry, which only the built editor can show. `PATCH-UNIT-OK` in
@@ -489,6 +529,31 @@ it is pushed.
   fork's image driven in the browser sidecar the way `vsx_view.mjs` drives VS
   Code, asserting that a credentialed gallery lists entries in the view
   rather than an empty result.
+- **Here, the authorization pair** (the same che-code view driver, phase 3):
+  the one claim about an editor that no other suite in this estate makes.
+  `openvsx` is covered at client level by `ovsx` — a CLI, not the editor — and
+  the editor is precisely where a credential has nowhere to live; this fork is
+  what gives it one. So the pair is asked of the built image, against a
+  registry whose `anonymous` and `user` tiers hold nothing and one named grant
+  gives a reader the three read verbs:
+
+  1. The workbench driven with the reader's credential lists the registry's
+     extension in the Extensions view. This is the positive control, and
+     without it the refusal below cannot be told from a refusal for an
+     unrelated reason (RFC 0015 §13.17).
+  2. The identical query, with a credential holding **no read verb**, does not
+     list it.
+  3. **What the editor shows instead is recorded, not predicted.** A `403` an
+     editor turns into a silently empty view is not a boundary a user can act
+     on — the distinction RFC 0009 §5.2 exists for — and the credential-less
+     case already has a designed answer in the sign-in entry of RFC 0011
+     §4.4.2. Whether a *credentialed but unauthorized* search should render
+     that same entry, an error, or an empty result is not decided here; the
+     test observes it, and the answer belongs to whichever RFC changes the
+     behaviour it finds.
+
+  Deferred with the driver if the time box of decision 9 expires: the pair
+  needs the workbench, and there is no cheaper place to ask it.
 - **Existing suites that must pass unchanged:** `vsx_login.sh`,
   `marketplace.sh`, `openvsx.sh`; the server side is untouched, and they say so.
 
@@ -511,12 +576,39 @@ it is pushed.
 | 8 | Architectures | **amd64 first, the door open for arm64.** Upstream's arm64 runner entry stays in the workflow's matrix, not enabled; turning it on is one line and no rebase. Decided 2026-09-11. |
 | 9 | A che-code variant of `vsx_view.sh` | **Phase 3, time-boxed.** The browser hunk is only observable in a workbench; the fork's image is driven in the browser sidecar the way `vsx_view.mjs` drives VS Code. If the driver does not transfer within the box, it is deferred and the phase still closes. Decided 2026-09-11. |
 | 10 | When the fork becomes the instance default | **Never on `cde.batleforc.fr`; the default of future instances.** This instance keeps upstream's image as its default and the fork as a per-repository opt-in; an instance created later may start with the fork as its default. Decided 2026-09-11. |
-| 11 | Candidate second features | **Three, none committed by this RFC**, each a manifest row and, if it needs a design, an RFC of its own: (a) `batlehub-vsx` bundled as a built-in extension (0011 §6.5), so the broker needs no install; (b) `product.json` defaults for the workspace editor, set in the build rather than by the launcher; (c) a **configurable set of fonts loaded by the editor at runtime**, not baked into the image — FiraCode Nerd Font is the example — so the set is an instance's choice and a font change is not an image rebuild. A cherry-pick of an upstream fix ahead of its tag is not on the list. Decided 2026-09-11. |
+| 11 | Candidate second features | **Three, none committed by this RFC**, each a manifest row and, if it needs a design, an RFC of its own: (a) `batlehub-vsx` bundled as a built-in extension (0011 §6.5), so the broker needs no install; (b) `product.json` defaults for the workspace editor, set in the build rather than by the launcher; (c) a **configurable set of fonts loaded by the editor at runtime**, not baked into the image — FiraCode Nerd Font is the example — so the set is an instance's choice and a font change is not an image rebuild. A cherry-pick of an upstream fix ahead of its tag is not on the list. Decided 2026-09-11. Row 13 added the one feature this RFC does commit to beyond `vsx-auth`. |
+| 12 | What crashes the extension host when a markdown file is opened | **The editor's own node, built with small ICU.** `new Intl.Segmenter(…).segment(s)` segfaults the node that ships in che-code's `checode-linux-libc/ubi9` assembly — v24.18.0, `icu_small: true`, ICU 78.3: the constructor returns, the first `segment()` call dies. The same call on this workspace's own node (24.20.0, full ICU) returns normally, and the other `Intl` constructors — `Collator`, `NumberFormat`, `DateTimeFormat`, `ListFormat` — all work on both. `DavidAnson.vscode-markdownlint` 0.61 added a `new Intl.Segmenter` (through `string-width`, for MD013's wide characters) where 0.60 had none, so every markdown file opened since takes the extension host down with it: `0.60.0` is clean, `0.61.1`, `0.61.2`, `0.62.0` and `0.62.1` each kill it three times over. The core says the same thing the one-liner does — a null internal field dereferenced through a V8 API callback. So: pin `0.60.0` on the instance today, and `[bh:node-icu]` — the series' second feature, designed in RFC 0034 — builds the assembly's node with full ICU. Two reports, both true: an editor that segfaults where it should throw, and a linter that trips it. Decided 2026-09-13. |
+| 13 | Whether the fork carries the ICU fix, or waits for upstream | **It carries it, as `[bh:node-icu]`, and asks upstream in the same week.** The wait is unbounded and the failure is silent — a segfault with no message, in any extension that segments a string — while the change is a build flag on a node the assembly already builds. It is the first feature to arrive under the rule above: RFC 0034 is written before the commit, says what would let us drop it, and the image build gains the one-line smoke test that proves it (§10). Decided 2026-09-13. |
 
 ### Still open
 
-Nothing. The five questions this draft opened were closed on 2026-09-11 and
-are rows 7–11 above.
+The five questions this draft opened were closed on 2026-09-11 and are rows
+7–11 above. Two were added on 2026-09-13, both measured in the che-browser
+sidecar against the *unpatched* editor this instance runs today, so both are
+about che-code, not about the fork's machinery:
+
+- **Framing: the workbench refuses every origin but its own.** The editor
+  serves its own page with `frame-src 'self' https://*.vscode-cdn.net data:`,
+  read directly from `127.0.0.1:3100` with the gateway out of the path, so it
+  is the editor's header and not oauth2-proxy's. Anything framed from the
+  workbench document towards another origin dies as `net::ERR_BLOCKED_BY_CSP`
+  — which on this instance means every endpoint Che publishes on its own
+  subdomain (`max-proxy-cache-g4tc-dex.cde.batleforc.fr`), because a
+  path-routed endpoint is `'self'` and frames fine. Webviews themselves are
+  healthy: the service worker registers, `…/webview/browser/pre/index.html`
+  answers `200`, and the Simple Browser renders a subdomain endpoint from
+  inside its own CSP. The question is whether the fork widens `frame-src` to
+  the instance's endpoint origins, or whether the instance stops putting
+  endpoints on subdomains.
+- **Markdown and MDX: two mermaid renderers.** che-code's VS Code base ships
+  `vscode.mermaid-markdown-features` built in, and this instance also installs
+  `bierner.markdown-mermaid`; the workbench console carries `Failed to register
+  tool 'renderMermaidDiagram': Tool "renderMermaidDiagram" is already
+  registered`. That is the rendering half of the symptom, and the question is
+  only whether the fork should have an opinion on the pair — decision 11's
+  `product.json` candidate — or whether the instance simply drops the
+  extension. The crash half is answered in row 12: it was the linter, not the
+  editor.
 
 ---
 
@@ -524,9 +616,10 @@ are rows 7–11 above.
 
 | Phase | Content |
 | --- | --- |
-| 1 | The fork, both forges, branch protection, `batlehub` at 7.122.0 with `[bh:meta]` (manifest, the four workflows, the invariants script) and `[bh:vsx-auth]` (the diff, the module and its tests moved in). `bh-invariants.yml` green. **Useful alone**: the patch is a commit with history instead of a diff with a SHA in its name. |
+| 1 | The fork, both forges, branch protection, `batlehub` at 7.122.0 with `[bh:meta]` (manifest, the four workflows, the invariants script) and `[bh:vsx-auth]` (the diff, the module and its tests moved in). `bh-invariants.yml` green — the eight checks of §5.5 and `bh-unit`, which is 0011's five properties running where the module now lives. **Useful alone**: the patch is a commit with history instead of a diff with a SHA in its name, and something fails when it breaks. |
 | 2 | `bh-sync.yml` and `bh-canary.yml` live; the first automated fast-forward of `main` and the first replay onto a new tag observed, with the pure-replay check and the failure issue exercised once on purpose (a conflict planted on a throwaway branch). |
-| 3 | `bh-image.yml`: the amd64 image on ghcr, scanned, SBOM attached, signed. `che_code_patch.sh` under `CHE_CODE_IMAGE` with scenario 7; the `test.yaml` matrix entry switched to the image. The che-code view variant attempted here, time-boxed (decision 9). |
+| 3 | `bh-image.yml`: the amd64 image on ghcr, scanned, SBOM attached, signed. `[bh:node-icu]` (RFC 0034) lands here, where the assembly is built, and `bh-smoke.sh` (§5.6) stands up with it — its first two assertions are that feature's, and every later feature adds its own. `che_code_patch.sh` under `CHE_CODE_IMAGE` with scenario 7; the `test.yaml` matrix entry switched to the image. The che-code view variant attempted here, time-boxed (decision 9), and with it the authorization pair of §10 — the same driver, two credentials. |
 | 4 | The editor definition on `cde.batleforc.fr` as an opt-in; `.che/che-editor.yaml` in `proxy-cache` and `batlehub-vsx`. The instance default is not touched (decision 10). |
-| 5 | This repository: `patches/che-code/` reduced to a pointer, `vscode_patch.sh` and the preload retired, `docs/contributing/testing.md` and the OpenVSX registry page updated; RFC 0011 §6.4 annotated as landed here. |
-| 6 | The upstream pull request for `vsx-auth` (RFC 0011 §12 phase 9), recorded in the manifest's exit column; when it merges, the commit leaves the series at the next sync. |
+| 5 | **What the editor gets wrong on this instance**, now that the fork's image runs there — driven in the che-browser sidecar (`task browser:start`, the workspace over CDP on `localhost:9222`, watched through noVNC), which is also how §11's two answers were found. The framing question is the one still open: widen the workbench's `frame-src` in the series, or take the endpoints off their subdomains on the instance. Beside it, what §11 rows 12–13 leave to do here: pin `markdownlint` 0.60.0 on the instance until phase 3's image exists, open the two reports, and settle the mermaid pair. **Useful alone**: an editor whose previews render and whose extension host stays up. |
+| 6 | This repository: `patches/che-code/` reduced to a pointer, `vscode_patch.sh` and the preload retired, `docs/contributing/testing.md` and the OpenVSX registry page updated; RFC 0011 §6.4 annotated as landed here. |
+| 7 | The upstream pull request for `vsx-auth` (RFC 0011 §12 phase 9), recorded in the manifest's exit column; when it merges, the commit leaves the series at the next sync. |

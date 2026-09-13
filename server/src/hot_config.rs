@@ -627,6 +627,14 @@ pub(super) fn build_hot_bundle(
         )),
         grants: reg_grants,
         policy_tiers: reg_policy,
+        // rustup only, and read on every manifest request so a reload takes
+        // effect before the cached upstream document expires (RFC 0024 §6.5).
+        deny_components: cfg
+            .registries
+            .iter()
+            .filter(|r| !r.deny_components.is_empty())
+            .map(|r| (r.name.clone(), r.deny_components.clone()))
+            .collect(),
         grant_repo: grant_repo.clone(),
         policy_repo: policy_repo.clone(),
         signing_keys: signing_keys.clone(),
@@ -684,6 +692,11 @@ pub(super) fn build_hot_bundle(
             .registries
             .iter()
             .map(|r| (r.name.clone(), r.signed_downloads))
+            .collect(),
+        cargo_auth_required: cfg
+            .registries
+            .iter()
+            .filter_map(|r| r.cargo_auth_required.map(|v| (r.name.clone(), v)))
             .collect(),
         signed_url: build_signed_url_service(cfg),
         max_artifact_size_bytes: cfg.limits.max_artifact_size_bytes,

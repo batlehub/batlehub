@@ -480,6 +480,7 @@ pub use spa::{configure_spa, narrow_csp, SpaDir};
         (name = "proxy/jetbrains-marketplace", description = "JetBrains Marketplace — IDE-facing plugin API (search, compatible updates, meta.json, downloads), updatePlugins.xml custom repository, and marketplace-compatible plugin publishing"),
         (name = "proxy/generic",    description = "Generic file mirror — path-addressed proxy cache for upstreams with no package protocol (toolchain tarballs, vendor CDNs), restricted by a path_allow allowlist"),
         (name = "proxy/nodedist",   description = "Node distributions (nvm, fnm, n, mise) — the nodejs.org/dist tree as a typed registry: filtered index.tab/index.json listings, per-release tarballs and SHASUMS256.txt byte-exact"),
+        (name = "proxy/rustup",     description = "Rust toolchains (rustup, mise) — the static.rust-lang.org tree as a typed registry: channel manifests filtered and their .sha256 recomputed, blocked releases refused or repaired, component archives cached per release"),
         (name = "proxy/sdkman",     description = "SDKMAN — the candidates API and the download broker as one registry: filtered versions/all, candidates/default and the rendered sdk list table, a blocked version answered `invalid` at candidates/validate, hook scripts relayed byte-exact, the broker's 302 followed server-side and cached"),
         (name = "front-office",     description = "User-facing package information"),
         (name = "user",             description = "Caller-scoped reads — quota, downloads and advisories for whoever holds the token, never for anyone else"),
@@ -667,6 +668,10 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 gem_gemspec, gem_info, gem_publish, gem_specs_full, gem_specs_latest,
                 gem_specs_prerelease, gem_unyank, gem_versions, gem_yank,
             },
+            rustup::{
+                rustup_archive, rustup_bootstrap, rustup_dist_dated, rustup_dist_root,
+                rustup_manifests_txt, rustup_release_stable,
+            },
             sdkman::{
                 sdkman_candidate_default, sdkman_candidates_all, sdkman_candidates_list,
                 sdkman_download, sdkman_healthcheck, sdkman_hook, sdkman_selfupdate,
@@ -756,12 +761,22 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(nodedist_index_tab); // GET …/nodedist/index.tab   (filtered document)
     cfg.service(nodedist_index_json); // GET …/nodedist/index.json  (filtered document)
     cfg.service(nodedist_file); // GET …/nodedist/{version}/{file}
-                                // SDKMAN (RFC 0010 phase 6). The literal `candidates/all`,
-                                // `candidates/list`, `candidates/default/{c}` and
-                                // `candidates/validate/…` routes before the
-                                // `candidates/{c}/{plat}/…` ones, so a candidate named
-                                // `default` or `validate` cannot shadow them; every one
-                                // before the npm catch-alls below.
+
+    // rustup: the literal paths first, then the two `dist/` patterns. The
+    // installer's tree is `…/rustup/rustup/…`, which is upstream's own layout
+    // under the protocol prefix, so its routes cannot collide with `dist/`.
+    cfg.service(rustup_manifests_txt); // GET …/rustup/manifests.txt        (filtered document)
+    cfg.service(rustup_release_stable); // GET …/rustup/rustup/release-stable.toml
+    cfg.service(rustup_archive); // GET …/rustup/rustup/archive/{version}/{triple}/{file}
+    cfg.service(rustup_bootstrap); // GET …/rustup/rustup/dist/{triple}/{file}
+    cfg.service(rustup_dist_root); // GET …/rustup/dist/{file}              (channel documents)
+    cfg.service(rustup_dist_dated); // GET …/rustup/dist/{date}/{file}
+                                    // SDKMAN (RFC 0010 phase 6). The literal `candidates/all`,
+                                    // `candidates/list`, `candidates/default/{c}` and
+                                    // `candidates/validate/…` routes before the
+                                    // `candidates/{c}/{plat}/…` ones, so a candidate named
+                                    // `default` or `validate` cannot shadow them; every one
+                                    // before the npm catch-alls below.
     cfg.service(sdkman_candidates_all); // GET …/sdkman/candidates/all      (relayed)
     cfg.service(sdkman_candidates_list); // GET …/sdkman/candidates/list     (relayed)
     cfg.service(sdkman_candidate_default); // GET …/sdkman/candidates/default/{c}  (filtered, composed)

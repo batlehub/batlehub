@@ -117,6 +117,7 @@ default = [
   "registry-generic",
   "registry-nodedist",
   "registry-sdkman",
+  "registry-rustup",
   "sbom",
   "storage-fs",
   "vuln-scan"
@@ -183,6 +184,9 @@ registry-nodedist = []
 # SDKMAN: the candidates API and the download broker as one registry, the
 # broker's 302 followed server-side through the SSRF guard (RFC 0010).
 registry-sdkman = []
+# rustup: `release-stable.toml` is the one document in the tree with a DTO;
+# the channel manifest is indexed by section and never parsed (RFC 0024 §6.4).
+registry-rustup = ["dep:toml"]
 registry-rubygems = ["dep:flate2", "dep:tar"]
 registry-terraform = []
 registry-vscode-marketplace = []

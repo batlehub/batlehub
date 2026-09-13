@@ -92,6 +92,12 @@ ANSWERED = (
     "X-BatleHub-Reason",
     "X-BatleHub-Listing",
     "X-BatleHub-Listing-Held",
+    # RFC 0024: what a rustup channel manifest is — upstream, filtered or
+    # repaired — and, when it was repaired, the release that was served in
+    # place of the one the alias named. The rustup suite asserts on both, and
+    # neither is visible in the status: a repair is a `200` like any other.
+    "X-BatleHub-Manifest",
+    "X-BatleHub-Version",
 )
 
 

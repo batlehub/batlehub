@@ -22,13 +22,13 @@ version = "0.8.0"
 backend = "cargo:cargo-sweep"
 
 [[tools.claude]]
-version = "2.1.258"
+version = "2.1.268"
 backend = "aqua:anthropics/claude-code"
 
 [tools.claude."platforms.linux-x64"]
-checksum = "sha256:4dcbd239217dd01a5cf73002eea8f85e945170830d66891948426a09c99f3292"
-url = "https://github.com/anthropics/claude-code/releases/download/v2.1.258/claude-linux-x64.tar.gz"
-url_api = "https://api.github.com/repos/anthropics/claude-code/releases/assets/540224577"
+checksum = "sha256:dfd082062904f36e695cafa16835e3214e93b7ed272c858069d2367d68dc3b02"
+url = "https://github.com/anthropics/claude-code/releases/download/v2.1.268/claude-linux-x64.tar.gz"
+url_api = "https://api.github.com/repos/anthropics/claude-code/releases/assets/555585369"
 
 [[tools.cocogitto]]
 version = "7.0.0"
@@ -66,12 +66,12 @@ checksum = "sha256:63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168
 url = "https://dl.google.com/go/go1.27.1.linux-amd64.tar.gz"
 
 [[tools.helm]]
-version = "4.2.4"
+version = "4.3.0"
 backend = "aqua:helm/helm"
 
 [tools.helm."platforms.linux-x64"]
-checksum = "sha256:c306b46f719b0a4da32d0f78ee21bf90ce8d602f15b22ab753f0674d1670a7f3"
-url = "https://get.helm.sh/helm-v4.2.4-linux-amd64.tar.gz"
+checksum = "sha256:86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb"
+url = "https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz"
 
 [[tools.helm-docs]]
 version = "1.14.2"
@@ -110,21 +110,21 @@ url = "https://dl.min.io/client/mc/release/linux-amd64/archive/mc.RELEASE.2025-0
 provenance = "minisign"
 
 [[tools.node]]
-version = "24.20.0"
+version = "24.21.0"
 backend = "core:node"
 
 [tools.node."platforms.linux-x64"]
-checksum = "sha256:855d581f8a4eb1a8117e3426de25fe02770592febcfb31369aee1ffbfee9e8ec"
-url = "https://nodejs.org/dist/v24.20.0/node-v24.20.0-linux-x64.tar.gz"
+checksum = "sha256:6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff"
+url = "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.gz"
 
 [[tools.pnpm]]
-version = "11.25.0"
+version = "11.26.0"
 backend = "aqua:pnpm/pnpm"
 
 [tools.pnpm."platforms.linux-x64"]
-checksum = "sha256:11caeed8b581d460638f836f10f6ead19cbf08d774a5b8e502628b20ebf3ac43"
-url = "https://github.com/pnpm/pnpm/releases/download/v11.25.0/pnpm-linux-x64.tar.gz"
-url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/535298945"
+checksum = "sha256:9d877d4804bd586dc51f51167fffb0c20e45d97540bffa9b0179701cb51a94c0"
+url = "https://github.com/pnpm/pnpm/releases/download/v11.26.0/pnpm-linux-x64.tar.gz"
+url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/547832322"
 provenance = "github-attestations"
 
 [[tools.python]]
@@ -137,11 +137,11 @@ url = "https://github.com/astral-sh/python-build-standalone/releases/download/20
 provenance = "github-attestations"
 
 [[tools.rust]]
-version = "1.98.0"
+version = "1.98.1"
 backend = "core:rust"
 
 [[tools.semgrep]]
-version = "1.176.0"
+version = "1.177.0"
 backend = "pipx:semgrep"
 
 [[tools.sonar-scanner-cli]]
@@ -180,11 +180,11 @@ url_api = "https://api.github.com/repos/aquasecurity/trivy/releases/assets/51433
 provenance = "cosign"
 
 [[tools.uv]]
-version = "0.12.9"
+version = "0.12.13"
 backend = "aqua:astral-sh/uv"
 
 [tools.uv."platforms.linux-x64"]
-checksum = "sha256:aa4b1f8770910f7c7c543c7acc980e4270e52e70750c996acef813ea1c7c2912"
-url = "https://github.com/astral-sh/uv/releases/download/0.12.9/uv-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/540201044"
+checksum = "sha256:745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
+url = "https://github.com/astral-sh/uv/releases/download/0.12.13/uv-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/555670375"
 provenance = "github-attestations"

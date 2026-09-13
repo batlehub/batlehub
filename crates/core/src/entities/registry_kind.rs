@@ -210,6 +210,13 @@ pub enum RegistryKind {
     /// `{candidate}/{version}/{platform}`, the broker's `302` to a third-party
     /// CDN followed server-side through the SSRF guard (RFC 0010).
     Sdkman,
+    /// The Rust toolchain tree (`static.rust-lang.org`) as a *typed* registry:
+    /// one package `rust`, whose versions are rustup's own toolchain names
+    /// (`1.98.1`, `nightly-2026-09-05`), plus `rustup` for the installer's
+    /// self-update tree. The channel manifests are the enforcement chokepoint
+    /// — rustup resolves every install through one — so a release can be
+    /// blocked rather than merely cached (RFC 0024).
+    Rustup,
 }
 
 impl RegistryKind {
@@ -239,6 +246,7 @@ impl RegistryKind {
         Self::Generic,
         Self::Nodedist,
         Self::Sdkman,
+        Self::Rustup,
     ];
 
     /// The kebab-case wire string for this kind (matches TOML `type = "..."`).
@@ -267,6 +275,7 @@ impl RegistryKind {
             Self::Generic => "generic",
             Self::Nodedist => "nodedist",
             Self::Sdkman => "sdkman",
+            Self::Rustup => "rustup",
         }
     }
 
@@ -282,6 +291,12 @@ impl RegistryKind {
     pub fn blocking_package_name<'a>(&self, package: &'a str) -> &'a str {
         match self {
             Self::Sdkman => crate::services::sdkman::candidate_of(package),
+            // `rust/stable` and `rust/2026-09-05/nightly` are one manifest
+            // each, so the channel travels in the listing package string to
+            // keep them separate cache entries — and a block is still a
+            // statement about the *release*, held on `rust` (RFC 0024 §6.2).
+            // `rustup`, the installer's own tree, blocks independently.
+            Self::Rustup => crate::services::rustup::package_of(package),
             _ => package,
         }
     }
@@ -290,9 +305,10 @@ impl RegistryKind {
     /// package versions for itself — the read-only source-hosting types
     /// (github/forgejo/gitlab/jetbrains) have no local publish model. `generic`
     /// is proxy-only for now; hosting arbitrary files is a separate roadmap item.
-    /// `nodedist` and `sdkman` have no publish protocol either: Node releases
-    /// are built by the Node project and SDKMAN's candidates by their vendors,
-    /// and hosting a private toolchain is a separate feature (RFC 0010 §3).
+    /// `nodedist`, `sdkman` and `rustup` have no publish protocol either: Node
+    /// releases are built by the Node project, SDKMAN's candidates by their
+    /// vendors and Rust's by the release team, and hosting a private toolchain
+    /// is a separate feature (RFC 0010 §3, RFC 0024 §3).
     pub fn supports_local_mode(&self) -> bool {
         !matches!(
             self,
@@ -303,6 +319,7 @@ impl RegistryKind {
                 | Self::Generic
                 | Self::Nodedist
                 | Self::Sdkman
+                | Self::Rustup
         )
     }
 
@@ -470,6 +487,22 @@ impl RegistryKind {
             ),
         ];
 
+        // Two rows, and the second one is why the slice is empty: a channel
+        // manifest describes *one* release, so the question is not "which
+        // versions does this document list" but "is this document's own
+        // release blocked" — a `404` for an exact name, a repaired manifest
+        // for an alias — and `deny_components` is configuration the strip
+        // dispatch does not carry. Both are decided at the handler, which is
+        // also where `.sha256` is computed from the rendered body and where
+        // `channel-rust-stable-date.txt` is read off it (RFC 0024 §6.2, §6.5).
+        const RUSTUP: &[ListingDocument] = &[
+            ListingDocument::filtered("`manifests.txt`", &["versions"]),
+            ListingDocument::filtered(
+                "channel manifests, their `.sha256` and `channel-rust-stable-date.txt`",
+                &[],
+            ),
+        ];
+
         match self {
             Self::Npm => NPM,
             Self::Nuget => NUGET,
@@ -487,6 +520,7 @@ impl RegistryKind {
             Self::Openvsx | Self::VscodeMarketplace => EXTENSION_GALLERY,
             Self::Nodedist => NODEDIST,
             Self::Sdkman => SDKMAN,
+            Self::Rustup => RUSTUP,
             // `generic` and `jetbrains` mirror an arbitrary file tree by path —
             // there is no listing document in the protocol at all, so there is
             // nothing to say beyond that. (JetBrains *plugins* are the separate
@@ -564,6 +598,10 @@ impl RegistryKind {
                 "SDKMAN describes a distribution, not a package: no document in the protocol \
                  carries prose about a candidate",
             ),
+            Self::Rustup => ReadmeSupport::None(
+                "a toolchain release is a manifest and a set of tarballs; the dist tree carries \
+                 no prose",
+            ),
         }
     }
 
@@ -619,6 +657,10 @@ impl RegistryKind {
             // `versions/all` for the candidate on the default platform — the
             // identifiers and nothing else; SDKMAN publishes no dates.
             Self::Sdkman => UpstreamDetailSupport::Document("versions"),
+            // `manifests.txt`: every manifest the release tooling ever
+            // published, one path per line, with the release date in the
+            // dated ones and the version in the rest (RFC 0024 §6.1).
+            Self::Rustup => UpstreamDetailSupport::Document("versions"),
         }
     }
 
@@ -717,6 +759,13 @@ impl RegistryKind {
             Self::Sdkman => FetchSupport::None(
                 "an SDKMAN artifact is addressed by platform as well as version — one archive \
                  per platform — so \"fetch this version\" has no single meaning",
+            ),
+            // Maven's reasoning, one ecosystem over, with a second axis: the
+            // profile. Warming names the files anyway, because it reads them
+            // out of the release's own manifest (RFC 0024 §6.9).
+            Self::Rustup => FetchSupport::None(
+                "a Rust release is a manifest plus one tarball per component per target, so \
+                 \"fetch this version\" needs a target and a profile",
             ),
         }
     }
@@ -1165,6 +1214,9 @@ mod tests {
                 "nodedist",
                 // A distribution, not a package: no document carries prose.
                 "sdkman",
+                // A manifest and a set of tarballs; the dist tree carries no
+                // prose either.
+                "rustup",
             ]
         );
     }
@@ -1405,9 +1457,26 @@ mod tests {
             "java"
         );
         assert_eq!(RegistryKind::Sdkman.blocking_package_name("java"), "java");
+        // rustup's listing package string carries the channel for the same
+        // reason — one manifest per cache entry — and a block is still held on
+        // the release (RFC 0024 §6.2). `rustup`, the installer's own tree, is
+        // its own package and is unaffected.
+        assert_eq!(
+            RegistryKind::Rustup.blocking_package_name("rust/stable"),
+            "rust"
+        );
+        assert_eq!(
+            RegistryKind::Rustup.blocking_package_name("rust/2026-09-05/nightly"),
+            "rust"
+        );
+        assert_eq!(RegistryKind::Rustup.blocking_package_name("rust"), "rust");
+        assert_eq!(
+            RegistryKind::Rustup.blocking_package_name("rustup"),
+            "rustup"
+        );
         for kind in RegistryKind::ALL
             .iter()
-            .filter(|k| **k != RegistryKind::Sdkman)
+            .filter(|k| !matches!(k, RegistryKind::Sdkman | RegistryKind::Rustup))
         {
             assert_eq!(kind.blocking_package_name("a/b?c"), "a/b?c", "{kind}");
         }

@@ -41,9 +41,14 @@
 #   COVERAGE=1      run the server under `cargo llvm-cov run --no-report`
 #   HEAVY_SERVER_FEATURES  extra cargo features for the server build (backends.sh: storage-s3)
 #   HEAVY_CACHE     cacheable client downloads (default ~/.cache/batlehub-heavy)
-#   HEAVY_FORGE_TOKEN  a GitHub/GitLab/Forgejo token the forge suites
-#                   authenticate their upstream with; unset, they stay
-#                   anonymous (see `heavy_forge_auth_config`)
+#   HEAVY_FORGE_TOKEN    a GitHub token the forge suites authenticate
+#                   api.github.com with; unset, they stay anonymous
+#   HEAVY_FORGEJO_TOKEN  the same, for forgejo registries
+#   HEAVY_GITLAB_TOKEN   the same, for gitlab registries
+#                   One variable per forge: `upstream_auth` is sent to that
+#                   registry's upstream, so one token spread across kinds would
+#                   hand a GitHub token to codeberg.org (see
+#                   `heavy_forge_auth_config`)
 
 set -euo pipefail
 
@@ -260,9 +265,23 @@ heavy_init() {
 #
 # So: `HEAVY_FORGE_TOKEN` set (`${{ github.token }}` in CI — 1 000 requests an
 # hour, per repository rather than per IP) writes a copy of the config with
-# `[registries.upstream_auth]` on every forge registry it declares. Unset,
+# `[registries.upstream_auth]` on the **github** registries it declares. Unset,
 # `HEAVY_CONFIG` is the path given and nothing changes, so an anonymous run
 # behaves exactly as before.
+#
+# **One token per forge, and never one forge's token on another's registry.**
+# `upstream_auth` is sent to that registry's upstream, so a single variable
+# spread across every forge kind would hand a GitHub Actions token to
+# codeberg.org and gitlab.com the moment a config declared registries for them
+# — a credential sent to a third party, for no benefit, because it would not
+# authenticate there anyway. The map below is therefore by kind:
+#
+#   github   → HEAVY_FORGE_TOKEN     (the historical name; unchanged)
+#   forgejo  → HEAVY_FORGEJO_TOKEN
+#   gitlab   → HEAVY_GITLAB_TOKEN
+#
+# A kind whose variable is unset stays anonymous, which is the state every
+# suite ran in before its registry existed.
 #
 # A variable rather than a printed path, as `heavy_runner_for` sets
 # `HEAVY_RUNNER`: `heavy_fail` inside a `$(…)` ends the subshell only, and the
@@ -273,33 +292,54 @@ heavy_init() {
 heavy_forge_auth_config() {
   local src="$1"
   HEAVY_CONFIG="$src"
-  [[ -n "${HEAVY_FORGE_TOKEN:-}" ]] || return 0
-  export HEAVY_FORGE_TOKEN
+  # Nothing set for any forge: the config is used as it is, exactly as before.
+  [[ -n "${HEAVY_FORGE_TOKEN:-}" || -n "${HEAVY_FORGEJO_TOKEN:-}" || -n "${HEAVY_GITLAB_TOKEN:-}" ]] \
+    || return 0
+  # Exported so the *server* expands each placeholder from its own environment;
+  # no token is ever written into the file.
+  [[ -z "${HEAVY_FORGE_TOKEN:-}" ]] || export HEAVY_FORGE_TOKEN
+  [[ -z "${HEAVY_FORGEJO_TOKEN:-}" ]] || export HEAVY_FORGEJO_TOKEN
+  [[ -z "${HEAVY_GITLAB_TOKEN:-}" ]] || export HEAVY_GITLAB_TOKEN
   local dst="$HEAVY_WORK/$(basename "$src")"
   python3 - "$src" "$dst" <<'PY' || heavy_fail "could not authenticate the forge registries in $src"
+import os
 import sys
 
 src, dst = sys.argv[1], sys.argv[2]
 lines = open(src).read().splitlines(True)
-FORGES = ('"github"', '"gitlab"', '"forgejo"')
+
+# kind -> the variable whose token authenticates *that* forge and no other.
+TOKEN_VAR = {
+    '"github"': "HEAVY_FORGE_TOKEN",
+    '"forgejo"': "HEAVY_FORGEJO_TOKEN",
+    '"gitlab"': "HEAVY_GITLAB_TOKEN",
+}
 starts = [i for i, l in enumerate(lines) if l.strip() == "[[registries]]"]
 bounds = [(s, starts[k + 1] if k + 1 < len(starts) else len(lines)) for k, s in enumerate(starts)]
 
 
-def is_forge(start, end):
+def kind_of(start, end):
+    """The `type = "..."` of one registry block, quoted, or None."""
     for l in lines[start:end]:
         t = l.strip()
-        if t.startswith("type") and "=" in t and t.split("=", 1)[1].strip() in FORGES:
-            return True
-    return False
+        if t.startswith("type") and "=" in t:
+            return t.split("=", 1)[1].strip()
+    return None
 
 
-forges = [(s, e) for s, e in bounds if is_forge(s, e)]
+forges = [(s, e, kind_of(s, e)) for s, e in bounds]
+forges = [(s, e, k) for s, e, k in forges if k in TOKEN_VAR]
 if not forges:
     sys.exit(f"{src} declares no github/gitlab/forgejo registry to authenticate")
 
+# Only the kinds this run actually holds a token for; the rest stay anonymous.
+authenticated = [(s, e, k) for s, e, k in forges if os.environ.get(TOKEN_VAR[k])]
+if not authenticated:
+    kinds = ", ".join(sorted({k.strip('"') for _, _, k in forges}))
+    sys.exit(f"{src} declares only {kinds} registries and none of their tokens is set")
+
 out, prev = [], 0
-for start, end in forges:
+for start, end, kind in authenticated:
     # Before the trailing blanks and the comment block that introduces the
     # *next* registry: a subtable after those is still this registry's, but it
     # reads as if it belonged to the one the comment describes.
@@ -307,13 +347,17 @@ for start, end in forges:
     while at > start and (lines[at - 1].strip() == "" or lines[at - 1].lstrip().startswith("#")):
         at -= 1
     out.extend(lines[prev:at])
-    out.append('\n[registries.upstream_auth]\ntype = "bearer"\ntoken = "${HEAVY_FORGE_TOKEN}"\n')
+    out.append(
+        '\n[registries.upstream_auth]\ntype = "bearer"\n'
+        'token = "${%s}"\n' % TOKEN_VAR[kind]
+    )
     prev = at
 out.extend(lines[prev:])
 open(dst, "w").write("".join(out))
+print(" ".join(sorted({k.strip('"') for _, _, k in authenticated})))
 PY
   HEAVY_CONFIG="$dst"
-  heavy_log "forge registries in $src: authenticated from \$HEAVY_FORGE_TOKEN"
+  heavy_log "forge registries in $src: authenticated, one token per forge kind"
 }
 
 # heavy_start_server <config-path>
@@ -533,6 +577,33 @@ heavy_done() {
   heavy_log "Wire transcript"
   cat "$HEAVY_LOG"
   heavy_log "$banner"
+}
+
+# heavy_container_engine — set CW_ENGINE to the container engine's argv prefix.
+#
+# podman first, because that is what this repository's other container-using
+# tasks call (`task coverage`, `task test:pg-*`); docker second, because that is
+# what a GitHub runner is certain to have. Either works: the callers use only
+# `pull` and `run --rm --network host -e`, which both spell identically.
+#
+# Here rather than in one suite because two now need it: `closed_world.sh` runs
+# dnf and pacman in their own distribution's image, and `authz.sh`'s `live:rpm`
+# target runs dnf in the same one.
+#
+# `info` rather than `--version`: a docker CLI with no reachable daemon is on
+# PATH and answers a version, and the failure would then land three lines later
+# as an unreadable pull error.
+heavy_container_engine() {
+  local candidate
+  CW_ENGINE=()
+  for candidate in podman docker; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" info >/dev/null 2>&1; then
+      CW_ENGINE=("$candidate")
+      heavy_log "container engine: $candidate"
+      return 0
+    fi
+  done
+  heavy_fail "no working podman or docker — this phase's client only exists inside its own distribution's image"
 }
 
 # heavy_need <binary> <what-provides-it> — a missing client is a failed run, not

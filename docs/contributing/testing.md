@@ -90,6 +90,11 @@ task test:mise-heavy          # `mise install github:…` through a forge regist
                               # then the whole air gap: plan, seed, export, import into a
                               # second `[air_gap]` instance, install through it (RFC 0008)
 task test:cargo-heavy         # RFC 0018 §4.4: yanked mark, 403/404 refusal, recovery, `cargo publish`
+task test:rustup-heavy        # RFC 0024 §6.10: a closed world — the compiler, the crates, the
+                              # build and the run through one instance with egress denied
+task test:closed-world-heavy  # egress denied to the client, kept for the server: 22 registry
+                              # kinds each resolve, build and run against this instance
+                              # alone (`-- go` for one phase)
 task test:go-heavy            # …same axes for `go`, plus the GOPROXY `direct` fallback and the sumdb
 task test:maven-heavy         # …same for `mvn`, incl. its cached failure and `deploy:deploy-file`
 task test:pathproxy-heavy     # …same for `apt` and `dnf`, whose signed indexes cannot hide anything
@@ -283,6 +288,65 @@ puts a transparent logging proxy (`http_tap.py`) in front of it, drives that
 ecosystem's **real client**, and asserts on the wire transcript. Shared
 machinery is in `tests/heavy/lib.sh`.
 
+Two of them are **closed-world** suites, and they are the ones that answer "can
+this instance be the only way out?". BatleHub keeps its egress; every client
+process gets none — `HTTP(S)_PROXY` points at a closed port with only the
+loopback exempted — so anything a phase obtains, it obtained through the
+instance. `tests/heavy/rustup.sh` is Rust's, and proves the most, because there
+the compiler itself crosses the proxy. `tests/heavy/closed_world.sh` is every
+other kind, one phase each, selected by name:
+
+| Phase | Kind | Client | What ends the phase |
+| --- | --- | --- | --- |
+| `go` | `goproxy` | the Go tool | the built binary runs |
+| `node` | `npm` | npm + tsc | the compiled program runs |
+| `python` | `pypi` | pip | the built wheel's code runs |
+| `java` | `maven` | Maven (plugins included) | the packaged jar runs |
+| `ruby` | `rubygems` | Bundler | `bundle exec` runs |
+| `dotnet` | `nuget` | the .NET SDK | the built program runs |
+| `php` | `composer` | Composer | the program runs |
+| `conda` | `conda` | micromamba | the env's own python runs |
+| `terraform` | `terraform` | Terraform | `apply` executes the provider |
+| `mise` | `github` | mise | the installed tool runs |
+| `nvm` | `nodedist` | nvm | the **runtime** it installed runs |
+| `sdkman` | `sdkman` | `sdk` | the **JDK** it installed compiles and runs |
+| `ovsx` | `openvsx` | `ovsx` (itself installed through the npm registry) | the VSIX opens as the extension asked for |
+| `helm` | `generic` | curl | the helm binary renders a chart |
+| `apt` | `deb` | unprivileged `apt` | the packaged binary runs |
+| `forgejo` | `forgejo` | mise's `forgejo:` backend | the installed tool runs |
+| `gitlab` | `gitlab` | mise's `gitlab:` backend | the installed tool runs |
+| `jbr` | `jetbrains` | curl | the JetBrains Runtime compiles and runs |
+| `vscode` | `vscode-marketplace` | the editor, `product.json` pointed here | the editor lists the extension back |
+| `jbplugin` | `jetbrains-marketplace` | IntelliJ headless | the plugin lands in the plugins directory |
+| `dnf` | `rpm` | `dnf install`, inside an AlmaLinux 9 image | the installed program runs |
+| `pacman` | `pacman` | `pacman -Sy`, inside an Arch image | the installed program runs |
+
+The last two run their client inside that client's own distribution image, on
+podman or docker (whichever answers `info` first). That is not convenience: a
+distribution package is dynamically linked against *its own* libraries, so a
+phase that downloaded an Arch package on Ubuntu and executed what was inside it
+could only ever pass on a host that already was Arch — which is no hosted
+runner. Running the client where the package was built is the only correct form
+of the claim, and it also means the runner no longer has to be persuaded to
+host a foreign package manager. `deb` stays on the host because the runner *is*
+Ubuntu.
+
+The container is not the isolation. `--network host` is what keeps
+`127.0.0.1:<tap>` meaning the same thing inside as out, so the container shares
+the host's network namespace and egress is denied by the same six proxy
+variables, passed in with `-e`. Each containerised phase re-proves that denial
+from inside against a real host before trusting anything else — §0 establishes
+it for a *host* process and cannot speak for a different process in a different
+filesystem. A phase whose image has no `curl` refuses rather than concluding
+the world is closed because the probe could not run.
+
+Three rows can be left unmeasured: `HEAVY_CW_SKIP_RPM=1` and
+`HEAVY_CW_SKIP_PACMAN=1` for a machine with no container engine, and
+`HEAVY_CW_SKIP_JB=1` for one that cannot spare the ~1.5 GB IntelliJ. Each
+prints a `SKIPPED` banner naming the row. Absent the variable a missing client
+is a **failed** run, not a skipped one — a heavy test that skips itself reports
+success for having done nothing.
+
 ### The config generator's harness
 
 The docs site's config generator (`docs/.vitepress/components/ConfigGenerator.vue`)
@@ -358,8 +422,12 @@ grants rather than at one ecosystem's protocol. It takes a target:
 ```bash
 tests/heavy/authz.sh matrix        # every verb, both directions, over curl
 tests/heavy/authz.sh signing       # RFC 0012 capabilities: binding, expiry, rotation
+tests/heavy/authz.sh reads         # the read boundary on the kinds no client drives
 tests/heavy/authz.sh npm           # …and the boundary as npm meets it
 tests/heavy/authz.sh <ecosystem>   # pypi nuget composer conda openvsx rubygems terraform
+tests/heavy/authz.sh maven         # …hermetically: the run deploys its own fixture
+tests/heavy/authz.sh cargo         # …and the regression test for `auth-required`
+tests/heavy/authz.sh live:goproxy  # the same, for a kind with no local mode (nightly)
 ```
 
 One target per invocation, because each starts its own server and tap and the
@@ -384,6 +452,133 @@ Four rules it is built on, each of which has a scar behind it:
   diagnostic that can disagree with reality is worse than none, because it is
   trusted"* — and it has disagreed twice, under a shadow and at the instance
   tier.
+
+#### Which kinds are covered, and which are not
+
+Eight ecosystems have a client phase. Everything else had **no authenticated
+coverage of any kind** until the `reads` target: `closed_world.sh` proves an
+*anonymous* client can reach a registry, and that says nothing about whether a
+caller who may not read is refused.
+
+| Coverage | Kinds |
+| --- | --- |
+| Client-level, hermetic — the real package manager carries a credential and is stopped, with no upstream | npm, pypi, nuget, composer, conda, openvsx, rubygems, terraform, maven, cargo |
+| Client-level, live — the same, for a kind with no local mode (nightly) | goproxy, nodedist, sdkman, github, forgejo, gitlab, generic, deb, rpm, pacman, rustup |
+| Route-level — `reads`, paired over curl | goproxy, maven, cargo, vscode-marketplace, deb, rpm, pacman, github, forgejo, gitlab, nodedist, sdkman, jetbrains, generic, rustup |
+
+`reads` publishes nothing and reaches no upstream. Both halves of that rest on
+one property — **authorization is decided before any fetch**:
+
+- **Local kinds.** `read_gates` fetches the version's row and, finding none,
+  still calls `authorize_unheld_read`: a caller holding no read verb meets `403`
+  *before* the `404`. The deb/rpm/pacman handler does the same one layer up,
+  calling `authorize_read` before it touches storage.
+- **Proxy-only kinds.** `handle_resolved` evaluates grants in step 1 and
+  resolves upstream metadata in step 2, so a registry pointed at
+  `example.invalid` still answers `403` to the denied caller, while the reader
+  gets the upstream's failure — not a refusal, therefore a pass.
+
+The positive arm asserting "not a refusal" rather than `200` is what lets both
+work against a registry that can serve nothing.
+
+::: tip Two server changes made this coverage possible
+**The authorization ordering.** `handle_resolved` used to resolve upstream
+metadata before evaluating grants, so a proxy registry pointed at an
+unreachable host answered the denied caller and the reader identically. Grants
+now run first; the proxy rows in `reads` are that fix's regression test.
+
+**Cargo's `auth-required`.** Cargo sends a credential on a read only when the
+sparse index's `config.json` declares it, and this server emitted `dl` and `api`
+and nothing else — so a cargo read could not be authenticated at all, in either
+direction. `cargo_registry_config` now derives the field from whether an
+anonymous caller can read the registry, and the bare-token normalisation in
+`extractors.rs` is scoped by registry *type* rather than by the `/api/v1/crates`
+path, which covered neither the index nor the download. The `cargo` target is
+the regression test for both halves.
+:::
+
+::: tip That ordering is recent, and these rows are its regression test
+Grants used to be evaluated *after* the resolve. Both callers then got the same
+upstream error, there was no boundary to observe, and the eight proxy-only kinds
+had no authenticated coverage anywhere as a direct result — besides which every
+refused request first fetched metadata from upstream and cached it, so an
+unauthenticated caller naming coordinates nobody had asked for could spend the
+upstream's rate limit one refusal at a time. The forge ref path already refused
+to do that; `handle_resolved` and `resolve_metadata_for_inner` now do too. Swap
+the two steps back and every proxy row in `reads` goes red.
+
+The rule chain stays *below* the resolve, because it genuinely needs what the
+resolve produces: `RuleContext.package` is the metadata and the release-age gate
+reads `published_at` off it. A `latest` request is only known to be blocked once
+it has resolved to a version, which is why the block list cannot move up with
+the grants.
+:::
+
+#### The live targets — a client boundary needs a real upstream
+
+`reads` measures the **route** boundary everywhere, hermetically. The **client**
+boundary is a different claim and needs both arms: the denied caller stopped,
+*and* the identical request working for the reader — without that positive
+control a client refused for an unrelated reason reads as a correct denial. The
+positive arm can only succeed if the artifact exists, and nine kinds have no
+local mode to publish one into: a forge, a Node distribution, a JDK broker, a
+file tree and two OS archives have nothing to publish *into*.
+
+So `authz.sh live:<kind>` exists, with its own config
+(`tests/heavy/config.authz-live.toml`) pointed at real upstreams. It is the one
+family in this suite that reaches the internet, which is why CI runs it nightly
+(`heavy-authz-live`) rather than per-PR, and why it is a separate file rather
+than more rows in the hermetic one. `task test:authz-live-heavy` runs all eleven.
+
+| Kind | Client | How the credential reaches the server |
+| --- | --- | --- |
+| `goproxy` | the Go tool | userinfo in `GOPROXY` — **not** `~/.netrc`, which the Go tool reads for HTTPS only, and this tap is plain HTTP |
+| `nodedist` | nvm | `NVM_AUTH_HEADER` |
+| `sdkman` | `sdk` | userinfo in `SDKMAN_CANDIDATES_API` / `SDKMAN_BROKER_API` |
+| `github`, `forgejo`, `gitlab` | mise | `~/.netrc` — mise's `netrc` setting defaults to `true` |
+| `generic` | curl | `-u`, or a header |
+| `deb` | apt | `/etc/apt/auth.conf.d/`, redirected into the run with `Dir::Etc::netrcparts` |
+| `rpm` | dnf, in AlmaLinux 9 | `username=` / `password=` in the `.repo` |
+| `pacman` | pacman, in Arch | `XferCommand` — `pacman.conf(5)` documents **no** credential directive, so the documented custom downloader is the mechanism |
+| `rustup` | rustup | userinfo in `RUSTUP_DIST_SERVER` — no token flag, no credential file, no `~/.netrc` |
+
+The token always travels in the **password** field: `auth/token.rs` accepts a
+`Basic` header and reads the token out of it, which is what the console's own
+`withCredentials` snippet writes.
+
+::: warning Two of these were documented wrongly, and the phases are what found it
+The console's `nodedist` and `sdkman` snippets both said "libcurl reads
+`~/.netrc` without being asked". It does not: curl has never read `~/.netrc`
+without `-n`. Worse for nvm, which downloads with `curl -q` — that also disables
+`~/.curlrc`, so *neither* file can reach it, and the documented setup would have
+authenticated nothing while looking configured. nvm has a first-class
+`NVM_AUTH_HEADER` instead; `sdk` passes no `-q`, so a `~/.curlrc` containing
+`netrc` does work for it, and userinfo in its two API URLs is simpler again.
+Both notes in `ui/src/config/registryTypes.ts` are corrected. The `~/.netrc` tab
+still shown for `nodedist` should follow.
+:::
+
+#### Where the client, not the harness, is the obstacle
+
+| Kind | The obstacle | Where the claim is made instead |
+| --- | --- | --- |
+| `vscode-marketplace` | Stock VS Code has **nowhere in `product.json`** to put a token: the editor sends no credential to the gallery it is pointed at | **Proven, in the other repository.** `batlehub-vsx`'s `tests/heavy/view.sh` drives a real VS Code web build with the project's extension installed, and asserts `PROXY-OK` — the credential *the extension* writes authenticates the gallery — alongside `CONTRACT-OK` (written `0600`, refresh owned by the CLI, token never logged) and `BROKER-OK`. That is the answer to the obstacle, and it is the reason the fork and the extension exist (RFC 0023) |
+| `openvsx` | Same, when the client is the editor. `ovsx` itself takes a `--pat`, but that is the publish credential | The `openvsx` target covers `ovsx`; the editor path goes through the same fork |
+| `jetbrains-marketplace` | The IDE's `idea.plugins.host` has no documented credential field; the repo's own snippet authenticates with curl, not with IntelliJ | Route level only. An IDE-level test needs the mechanism to exist first |
+
+#### Where the coverage stands
+
+Twenty-one of the twenty-four registry kinds are covered at **both** levels —
+the route, over curl and hermetically, and the client, with the real package
+manager carrying a real credential. `jetbrains` gets both from one row, because
+a path proxy has no protocol for a package manager to speak and its client *is*
+curl.
+
+The three in the table above are the remainder, and none of them is blocked by
+this harness: stock VS Code has nowhere to put a token, and IntelliJ's plugin
+host has no documented credential field. `vscode-marketplace` is nonetheless
+proven at client level — in `batlehub-vsx`, by the extension that exists for
+exactly this.
 
 Its config (`tests/heavy/config.authz.toml`) is deliberately inert in every
 respect but grants: every registry is `local` except Terraform, no rule gate is

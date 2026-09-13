@@ -121,6 +121,11 @@ pub mod sdkman;
 #[cfg(feature = "registry-sdkman")]
 pub use sdkman::SdkmanRegistryClient;
 
+#[cfg(feature = "registry-rustup")]
+pub mod rustup;
+#[cfg(feature = "registry-rustup")]
+pub use rustup::RustupRegistryClient;
+
 #[cfg(all(test, feature = "registry-github", feature = "registry-forgejo"))]
 mod provenance_tests {
     //! RFC 0019 decision 8 and §10: `PROVENANCE_UNVERIFIABLE` is GitLab's

@@ -18,6 +18,7 @@ pub mod openvsx;
 pub mod pypi;
 pub mod repo;
 pub mod rubygems;
+pub mod rustup;
 pub mod sdkman;
 pub mod search;
 pub mod terraform;

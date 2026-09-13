@@ -27,6 +27,22 @@ nvm ls-remote        # reads index.tab through the proxy
 nvm install 22.11.0  # SHASUMS256.txt and the tarball, cached under node/v22.11.0/
 ```
 
+## Authentication
+
+nvm downloads with `curl -q`, which disables `~/.curlrc`, and curl never reads `~/.netrc` unless asked with `-n` — so **neither file reaches this client**, whatever a mirror's documentation says. nvm has its own header variable instead; fnm, `n` and mise take the credential in the mirror URL:
+
+```sh
+# nvm: its own header variable. Measured, because the obvious answers do not
+# work — nvm downloads with `curl -q`, which disables ~/.curlrc, and curl
+# never reads ~/.netrc unless asked with -n.
+export NVM_AUTH_HEADER="Bearer <token>"
+
+# fnm, n and mise take the credential in the mirror URL instead.
+export FNM_NODE_DIST_MIRROR="https://<user>:<token>@batlehub.example.com/proxy/<registry>/nodedist"
+```
+
+The token travels in the **password** field of HTTP Basic, which is what the server reads it out of.
+
 Your administrator's registry block:
 
 ```toml

@@ -357,6 +357,16 @@ tasks:
     cmds:
       - bash tests/heavy/cargo.sh
 
+  test:rustup-heavy:
+    desc: "Heavy rustup integration (RFC 0024 §6.10), a closed world: with egress denied to every client process, `rustup toolchain install` takes the compiler from a rustup registry, cargo resolves a dependency through a cargo registry, and the binary is compiled and run; a blocked release refused on rustup's own missing-release path with nothing requested under its dated directory, `stable` repaired to the previous release and served from cache, a filtered manifest whose recomputed sidecar rustup accepts with `rust-docs` denied, and rustup-init through RUSTUP_UPDATE_ROOT (needs DATABASE_URL + network + rustup)"
+    cmds:
+      - bash tests/heavy/rustup.sh
+
+  test:closed-world-heavy:
+    desc: "Heavy closed-world suite: BatleHub keeps its egress, every client process is denied all of it, and each registry kind then resolves from this instance, builds, and runs what it built — go, node, python, java, ruby, dotnet, php, conda, terraform, mise, nvm, sdkman, ovsx, helm, apt, forgejo, gitlab, jbr, vscode, jbplugin, dnf, pacman. One phase per kind: `task test:closed-world-heavy -- go`, or no argument for all of them (needs DATABASE_URL + network; Rust's closed world is `task test:rustup-heavy`, which proves the toolchain too). The dnf and pacman phases run their client inside an AlmaLinux 9 / Arch image (podman or docker), because a distribution package only runs in its own userland. HEAVY_CW_SKIP_RPM / HEAVY_CW_SKIP_PACMAN / HEAVY_CW_SKIP_JB=1 leave a row unmeasured on a runner without an engine or the disk, and say so in the banner"
+    cmds:
+      - bash tests/heavy/closed_world.sh {{.CLI_ARGS}}
+
   test:go-heavy:
     desc: "Heavy Go integration (RFC 0018 §4.4): a blocked module version hidden from @v/list and @latest, a pinned go.mod refused with 403 and 404, GOPROXY=proxy,direct measured on both, the checksum database routed through the proxy, the same module cache recovering after the unblock (needs DATABASE_URL + network)"
     cmds:
@@ -396,13 +406,14 @@ tasks:
       - bash tests/heavy/authz.sh matrix
 
   test:authz-heavy:
-    desc: "The whole authorization suite: the matrix, then the pull boundary as each ecosystem's real client meets it (needs DATABASE_URL + the clients; see docs/contributing/testing.md)"
+    desc: "The whole authorization suite: the matrix, the read boundary on the kinds no client drives (`reads`), then the pull boundary as each ecosystem's real client meets it (needs DATABASE_URL + the clients; see docs/contributing/testing.md)"
     # One invocation per target rather than one script doing all of them: each
     # starts its own server and tap, and Terraform's tap has to terminate TLS
     # while the others must not. CI runs the same list as a matrix.
     cmds:
       - bash tests/heavy/authz.sh matrix
       - bash tests/heavy/authz.sh signing
+      - bash tests/heavy/authz.sh reads
       - bash tests/heavy/authz.sh npm
       - bash tests/heavy/authz.sh pypi
       - bash tests/heavy/authz.sh openvsx
@@ -411,6 +422,23 @@ tasks:
       - bash tests/heavy/authz.sh composer
       - bash tests/heavy/authz.sh rubygems
       - bash tests/heavy/authz.sh terraform
+      - bash tests/heavy/authz.sh maven
+      - bash tests/heavy/authz.sh cargo
+
+  test:authz-live-heavy:
+    desc: "The authorization suite's live targets: the pull boundary as a real client meets it, for the eleven kinds with no local mode (goproxy, nodedist, sdkman, github, forgejo, gitlab, generic, deb, rpm, pacman, rustup). The one family in that suite that reaches the public internet — CI runs it nightly, not per-PR (needs DATABASE_URL, network, and podman/docker for the rpm target)"
+    cmds:
+      - bash tests/heavy/authz.sh live:goproxy
+      - bash tests/heavy/authz.sh live:nodedist
+      - bash tests/heavy/authz.sh live:sdkman
+      - bash tests/heavy/authz.sh live:github
+      - bash tests/heavy/authz.sh live:forgejo
+      - bash tests/heavy/authz.sh live:gitlab
+      - bash tests/heavy/authz.sh live:generic
+      - bash tests/heavy/authz.sh live:deb
+      - bash tests/heavy/authz.sh live:rpm
+      - bash tests/heavy/authz.sh live:pacman
+      - bash tests/heavy/authz.sh live:rustup
 
   test:heavy:
     desc: "Every heavy client suite except the marketplaces (which download two IDEs). Sequential: each one binds its own ports but they all share one Postgres."
@@ -434,6 +462,8 @@ tasks:
       - bash tests/heavy/sdkman.sh
       - bash tests/heavy/mise.sh
       - bash tests/heavy/cargo.sh
+      - bash tests/heavy/rustup.sh
+      - bash tests/heavy/closed_world.sh all
       - bash tests/heavy/go.sh
       - bash tests/heavy/maven.sh
       - bash tests/heavy/pathproxy.sh

@@ -211,6 +211,33 @@ impl DocumentKind {
     /// string and is therefore part of the cache key: two clients with
     /// different installed sets must not share an entry (RFC 0010 §6.4).
     pub const SDKMAN_VERSIONS_LIST: Self = Self::Secondary("versions-list");
+    /// A rustup channel manifest — `channel-rust-{name}.toml`, or its dated
+    /// twin — keyed by the channel the listing package string carries
+    /// (`rust/stable`, `rust/2026-09-05/nightly`).
+    ///
+    /// RFC 0024 §6.1. One document per channel rather than one per registry:
+    /// a manifest describes a single release, and two channels sharing a cache
+    /// entry would serve whichever was fetched first to both.
+    pub const MANIFEST: Self = Self::Secondary("manifest");
+    /// The detached PGP signature beside a channel manifest, keyed by the same
+    /// channel.
+    ///
+    /// Its own kind rather than an artifact, because it is text addressed by
+    /// channel and not by release: the coordinate a signature belongs to is
+    /// only known after the manifest it signs has been read, and fetching a
+    /// 900 KB document to serve 801 bytes beside it would be the wrong trade.
+    /// No rustup since 1.26.0 reads it (RFC 0024 §4.4).
+    pub const MANIFEST_ASC: Self = Self::Secondary("manifest-asc");
+    /// `dist/channel-rust-stable-date.txt` — the date of whatever `stable`
+    /// currently resolves to, as a bare line. Read by people and scripts,
+    /// never by rustup, and served as the date of the manifest this instance
+    /// actually serves for `stable` (RFC 0024 §4.4).
+    pub const STABLE_DATE: Self = Self::Secondary("stable-date");
+    /// `rustup/release-stable.toml` — the installer's own current version.
+    /// Relayed byte-exact: it names one version and there is no list to repair
+    /// it from (RFC 0024 §4.4).
+    pub const RUSTUP_RELEASE: Self = Self::Secondary("rustup-release");
+
     /// A protocol document relayed byte-exact, addressed by the upstream path
     /// carried in `package`.
     ///

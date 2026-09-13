@@ -551,6 +551,50 @@ fn matrix() -> Vec<Row> {
             .coord("node", "v9.8.7")
             .token("v1.1.0")
             .vis(WHOLE_REGISTRY),
+        // ── rustup (RFC 0024) ────────────────────────────────────────────────
+        // Proxy-only like `nodedist`, with two packages rather than one: `rust`
+        // for the toolchains and `rustup` for the installer's own tree, so a
+        // block on a release and a block on the installer are separate rows in
+        // the same registry. The channel manifest is a per-release document and
+        // `manifests.txt` a whole-registry one.
+        Row::new("rustup", "/proxy/reg/rustup/dist/channel-rust-stable.toml")
+            .coord("rust", "1.98.1")
+            .vis(Expect::NotChecked(
+                "proxy-only document: the manifest is upstream's and no local package is read",
+            )),
+        Row::new(
+            "rustup",
+            "/proxy/reg/rustup/dist/2026-09-03/rust-std-1.98.1-x86_64-unknown-linux-gnu.tar.xz",
+        )
+        .coord("rust", "1.98.1")
+        .vis(Expect::NotChecked(
+            "proxy-only: the archive is streamed from upstream and no local package is read",
+        )),
+        Row::new("rustup", "/proxy/reg/rustup/manifests.txt")
+            .coord("rust", "1.98.1")
+            .token("channel-rust-1.98.1.toml")
+            .vis(WHOLE_REGISTRY),
+        Row::new("rustup", "/proxy/reg/rustup/rustup/release-stable.toml")
+            .coord("rustup", "1.29.1")
+            .vis(Expect::NotChecked(
+                "proxy-only document: the installer's own version, relayed byte-exact",
+            )),
+        Row::new(
+            "rustup",
+            "/proxy/reg/rustup/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init",
+        )
+        .coord("rustup", "1.29.1")
+        .vis(Expect::NotChecked(
+            "proxy-only: the installer binary is streamed from upstream",
+        )),
+        Row::new(
+            "rustup",
+            "/proxy/reg/rustup/rustup/dist/x86_64-unknown-linux-gnu/rustup-init",
+        )
+        .coord("rustup", "1.29.1")
+        .vis(Expect::NotChecked(
+            "proxy-only: the bootstrap path resolves a version, then streams as above",
+        )),
         // ── sdkman (RFC 0010 phase 6) ────────────────────────────────────────
         // Proxy-only like `nodedist`, with a real coordinate: the candidate is
         // the package and the platform the artifact. The per-candidate listings
@@ -953,6 +997,18 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/list.json", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/maven2/{path}", Coverage::Row),
     ("/proxy/{registry}/names", Coverage::Row),
+    ("/proxy/{registry}/rustup/dist/{date}/{file}", Coverage::Row),
+    ("/proxy/{registry}/rustup/dist/{file}", Coverage::Row),
+    ("/proxy/{registry}/rustup/manifests.txt", Coverage::Row),
+    (
+        "/proxy/{registry}/rustup/rustup/archive/{version}/{triple}/{file}",
+        Coverage::Row,
+    ),
+    ("/proxy/{registry}/rustup/rustup/dist/{triple}/{file}", Coverage::Row),
+    (
+        "/proxy/{registry}/rustup/rustup/release-stable.toml",
+        Coverage::Row,
+    ),
     ("/proxy/{registry}/nodedist/index.json", Coverage::Row),
     ("/proxy/{registry}/nodedist/index.tab", Coverage::Row),
     ("/proxy/{registry}/nodedist/{version}/{file}", Coverage::Row),

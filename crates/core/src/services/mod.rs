@@ -26,6 +26,7 @@ pub mod readme;
 pub mod release_import;
 pub mod rescan;
 pub mod retention;
+pub mod rustup;
 pub mod sbom;
 pub mod scan_worker;
 pub mod scanners;

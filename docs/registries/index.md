@@ -66,6 +66,7 @@ Typed, so a release can be *blocked* rather than merely cached — the identity 
 |----------|--------|-----------------|-------|:-------:|------------------|
 | [Node distributions](./nodedist) | `nodedist` | `index.tab`/`index.json` + release tarballs, `SHASUMS256.txt` byte-exact (nvm, fnm, n, mise) | proxy-only | ❌ | `nodejs.org/dist` |
 | [SDKMAN](./sdkman) | `sdkman` | Candidates API + download broker (the JDK, Gradle, Maven, Kotlin, …); the broker's 302 followed server-side | proxy-only | ❌ | `api.sdkman.io/2` + `broker.sdkman.io` |
+| [Rust toolchain](./rustup) | `rustup` | Channel manifests (the filtered listing) + per-target component tarballs and their `.sha256`; the `.asc` relayed byte-exact | proxy-only | ❌ | `static.rust-lang.org` |
 
 ## Feature matrix
 
@@ -166,6 +167,7 @@ any of them. The page says which rather than showing a disabled button — see
 | generic | path-addressed: there is no package identity to hang a README on | — | neither | no |
 | nodedist | a Node release is a set of tarballs and a checksum file; the dist tree carries no prose | — | versions only | no |
 | sdkman | SDKMAN describes a distribution, not a package: no document in the protocol carries prose about a candidate | — | versions only | no |
+| rustup | a toolchain release is a manifest and a set of tarballs; the dist tree carries no prose | — | versions only | no |
 <!-- END readme-coverage -->
 
 Configured per registry with

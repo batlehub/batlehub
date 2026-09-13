@@ -367,6 +367,15 @@ pub struct HotConfig {
     pub registries: HashMap<String, Arc<dyn RegistryClient>>,
     /// Per-registry access policies. `Arc` allows cheap cloning (rules are not Clone).
     pub policies: HashMap<String, Arc<RegistryPolicy>>,
+    /// rustup only: per-registry channel-manifest components never served
+    /// (RFC 0024 §4.1).
+    ///
+    /// Read on every manifest request rather than baked into the registry
+    /// client, because the render runs on *read*: the metadata cache holds
+    /// upstream's manifest bytes, so a reload takes effect on the next request
+    /// instead of when the cached document expires. Empty for every other kind,
+    /// and config validation refuses a non-empty value there.
+    pub deny_components: HashMap<String, Vec<String>>,
     /// Per-namespace rule chains, for the namespaces that override a gate
     /// (RFC 0015 §4.1).
     ///
@@ -554,6 +563,9 @@ pub struct HotConfig {
     /// entry means **off**, which is the safe direction — a registry that never
     /// wrote the setting down keeps authenticating by header only.
     pub signed_downloads: HashMap<String, bool>,
+    /// Per cargo registry, the operator's explicit `auth-required` answer.
+    /// Absent means "derive it"; see `RegistryConfig::cargo_auth_required`.
+    pub cargo_auth_required: HashMap<String, bool>,
     /// The instance signer for those URLs, or `None` when
     /// `[server.signed_urls]` is absent.
     ///
@@ -603,6 +615,7 @@ impl Default for HotConfig {
         Self {
             registries: HashMap::new(),
             policies: HashMap::new(),
+            deny_components: HashMap::new(),
             namespace_policies: HashMap::new(),
             grants: HashMap::new(),
             instance: None,
@@ -636,6 +649,7 @@ impl Default for HotConfig {
             retention: HashMap::new(),
             resolution: HashMap::new(),
             signed_downloads: HashMap::new(),
+            cargo_auth_required: HashMap::new(),
             signed_url: None,
             max_artifact_size_bytes: None,
             versions_per_page: DEFAULT_VERSIONS_PER_PAGE,

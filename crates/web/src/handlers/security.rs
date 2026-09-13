@@ -127,7 +127,10 @@ pub fn native_body(kind: RegistryKind, message: &str) -> (&'static str, String) 
         | RegistryKind::Jetbrains
         | RegistryKind::Generic
         | RegistryKind::Nodedist
-        | RegistryKind::Sdkman => (TEXT, format!("{message}\n")),
+        | RegistryKind::Sdkman
+        // rustup prints the status and its reason phrase; text is what a
+        // person sees when they curl the same URL.
+        | RegistryKind::Rustup => (TEXT, format!("{message}\n")),
     }
 }
 

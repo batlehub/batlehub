@@ -5,7 +5,7 @@
 # plafond, une déclaration que quelqu'un a dû écrire (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/admin-policies.md
-sourceHash: 851ce5fe2cda21b9
+sourceHash: 7d758df256c07768
 ---
 
 # Politiques et paquets
@@ -334,6 +334,8 @@ sans danger :
 | sdkman | `versions/all` | yes |
 | sdkman | `candidates/default` | yes |
 | sdkman | the rendered `versions/list` table (`sdk list`) | yes |
+| rustup | `manifests.txt` | yes |
+| rustup | channel manifests, their `.sha256` and `channel-rust-stable-date.txt` | yes |
 <!-- END listing-coverage -->
 
 La table ci-dessus est générée depuis le code Rust et reste en anglais : ses

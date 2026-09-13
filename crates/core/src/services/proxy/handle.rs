@@ -250,6 +250,27 @@ impl ProxyService {
         capture_readme: bool,
     ) -> Result<crate::entities::PackageMetadata, CoreError> {
         let prelude = self.request_prelude(req).await?;
+
+        // Grants first, then the fetch, then the gates — RFC 0015 §5.1 and
+        // §5.2. The proxy path has to resolve them itself: `RbacRule` is no
+        // longer in the chain, so the rules below judge only the artifact, and
+        // a route that reaches this without going through a `chain::*` funnel
+        // would otherwise be ungated. Two were, until the authorization matrix
+        // said so — the RubyGems gemspec route and the `generic` path mirror,
+        // both of which have no local branch at all.
+        //
+        // Before the resolve rather than after it, for the reason spelled out
+        // in `handle_resolved`: this check reads only the coordinate, the
+        // identity and the action, so running it second bought nothing and cost
+        // an upstream metadata fetch on every refusal.
+        crate::services::authz::authorize_grants_public(
+            &self.hot,
+            &req.package_id,
+            &req.identity,
+            req.action,
+        )
+        .await?;
+
         let metadata = if capture_readme {
             self.resolve_metadata_cached(
                 &prelude.client,
@@ -271,21 +292,6 @@ impl ProxyService {
             )
             .await?
         };
-
-        // Grants first, then the gates — RFC 0015 §5.1 and §5.2. The proxy path
-        // has to resolve them itself: `RbacRule` is no longer in the chain, so
-        // the rules below judge only the artifact, and a route that reaches this
-        // without going through a `chain::*` funnel would otherwise be
-        // ungated. Two were, until the authorization matrix said so — the
-        // RubyGems gemspec route and the `generic` path mirror, both of which
-        // have no local branch at all.
-        crate::services::authz::authorize_grants_public(
-            &self.hot,
-            &req.package_id,
-            &req.identity,
-            req.action,
-        )
-        .await?;
 
         let empty: Vec<Box<dyn crate::rules::Rule>> = vec![];
         let rules = prelude
@@ -648,21 +654,32 @@ impl ProxyService {
             registry_label,
         } = self.request_prelude(&req).await?;
 
-        // ── 1. Resolve metadata (cache-first) ─────────────────────────────────
-        let metadata = self
-            .resolve_metadata_cached(&client, &policy, &req, &cache_key, ttl, &registry_label)
-            .await?;
-        // RFC 0019 §4.2 *Metadata contract*: what the ref resolved to rides in
-        // `extra.forge`, and a coordinate the client could not date takes the
-        // object's date from the resolution. Per request rather than cached:
-        // the same commit reached through a tag and through a branch is one
-        // cached entry and two ref kinds.
-        let metadata = match resolved {
-            Some(r) => overlay_forge_metadata(metadata, r),
-            None => metadata,
-        };
-
-        // ── 2. Evaluate grants, then rules ─────────────────────────────────────
+        // ── 1. Evaluate grants, before anything is fetched ────────────────────
+        //
+        // **Grants need no metadata, and must not wait for it.**
+        // `authorize_grants_public` takes the request coordinate, the identity
+        // and the action; it reads `hot.grants` and nothing else, and says so
+        // itself — "the answer is the same whether or not any package or
+        // version row exists". Evaluating it *after* the resolve meant every
+        // refused request first fetched the artifact's metadata from upstream
+        // and filled the cache with it: an unauthenticated caller naming
+        // coordinates nobody has asked for could spend the upstream's rate
+        // limit and this instance's bandwidth, one refusal at a time. The forge
+        // ref path already refused to do that (see `authorize_grants_public`
+        // before `resolve_ref` in `handle`); this is the same rule applied to
+        // the rest of the funnel.
+        //
+        // Nothing about *what* is evaluated changes: `req.package_id` is not
+        // touched between `request_prelude` and here — `resolve_metadata_cached`
+        // takes `&req`, and the forge overlay works on the metadata — so the
+        // check sees the same coordinate at either position. What changes is
+        // that a denial now costs no upstream request.
+        //
+        // The rule chain stays below the resolve, because it genuinely needs
+        // what the resolve produces: `RuleContext.package` is the metadata, and
+        // the release-age gate reads `published_at` off it. A `latest` request
+        // is only known to be blocked once it has resolved to a version, which
+        // is why the block list cannot move up here with the grants.
         //
         // A grant denial is a denial, so it takes the same exit as a rule
         // denial: the audit record, the `denied` metric, and `ProxyResponse::Denied`
@@ -698,6 +715,22 @@ impl ProxyService {
                 verdict: None,
             });
         }
+        // ── 2. Resolve metadata (cache-first) ─────────────────────────────────
+        //
+        // After the grants, which is the whole point of the ordering above:
+        // this is the first line in the funnel that can dial upstream.
+        let metadata = self
+            .resolve_metadata_cached(&client, &policy, &req, &cache_key, ttl, &registry_label)
+            .await?;
+        // RFC 0019 §4.2 *Metadata contract*: what the ref resolved to rides in
+        // `extra.forge`, and a coordinate the client could not date takes the
+        // object's date from the resolution. Per request rather than cached:
+        // the same commit reached through a tag and through a branch is one
+        // cached entry and two ref kinds.
+        let metadata = match resolved {
+            Some(r) => overlay_forge_metadata(metadata, r),
+            None => metadata,
+        };
 
         let empty: Vec<Box<dyn crate::rules::Rule>> = vec![];
         let rules = policy
@@ -1206,6 +1239,21 @@ impl ProxyService {
     /// from one intermediate version list rather than from a fetched document,
     /// so its handler filters at that chokepoint instead of going through
     /// [`Self::version_document`].
+    /// The channel-manifest components a registry never serves (RFC 0024 §4.1).
+    ///
+    /// Read on every manifest request rather than baked into the registry
+    /// client, so a reload takes effect on the next request instead of when the
+    /// cached upstream document expires. Empty for every kind but `rustup`.
+    pub async fn deny_components(&self, registry: &str) -> Vec<String> {
+        self.hot
+            .read()
+            .await
+            .deny_components
+            .get(registry)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     pub async fn blocked_versions_for(
         &self,
         registry: &str,

@@ -2255,6 +2255,7 @@ impl AppConfig {
             Self::validate_registry_path_allow(registry, kind)?;
             Self::validate_registry_release_age(registry, kind)?;
             Self::validate_registry_broker_url(registry, kind)?;
+            Self::validate_registry_deny_components(registry, kind)?;
             Self::validate_registry_warm_platforms(registry, kind)?;
             Self::validate_registry_refs(registry, kind)?;
             // Beside `refs`, not inside it: `[registries.raw]` and
@@ -2344,6 +2345,25 @@ impl AppConfig {
                 registry.name,
                 kind
             );
+        }
+        // A `rustup` upstream is the *root* of the tree, because the registry
+        // serves two subtrees of it (`dist/` and `rustup/`) plus
+        // `manifests.txt` at the root. `…/dist` is the most likely mistake for
+        // an operator migrating from the `generic` example, and it fails as a
+        // `404` per request rather than at boot (RFC 0024 §4.5).
+        if kind == batlehub_core::entities::RegistryKind::Rustup {
+            for upstream in &registry.upstreams {
+                let path = upstream.trim_end_matches('/');
+                if path.ends_with("/dist") {
+                    bail!(
+                        "registry '{}': a rustup upstream is the root of the tree, not its \
+                         'dist' directory — use '{}' instead of '{upstream}', because the \
+                         registry also serves 'rustup/' and 'manifests.txt' from the root",
+                        registry.name,
+                        path.trim_end_matches("/dist")
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -2505,6 +2525,62 @@ impl AppConfig {
                  is joined with '/download/{{candidate}}/{{version}}/{{platform}}' and fetched",
                 registry.name
             );
+        }
+        Ok(())
+    }
+
+    /// RFC 0024 §4.5: `deny_components` is rustup's and nobody else's, its
+    /// entries are matched against `[pkg.{name}…]` headers, and three names
+    /// would leave a registry nothing can install from.
+    ///
+    /// The last rule is the one worth the code: `minimal` is
+    /// `rustc`, `cargo`, `rust-std`, so denying any of them serves manifests
+    /// every profile fails against — a registry that looks configured and
+    /// installs nothing.
+    fn validate_registry_deny_components(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+    ) -> Result<()> {
+        use batlehub_core::entities::RegistryKind;
+        if registry.deny_components.is_empty() {
+            return Ok(());
+        }
+        if kind != RegistryKind::Rustup {
+            bail!(
+                "registry '{}': 'deny_components' is only meaningful on a rustup registry (it \
+                 names channel-manifest components), not {}",
+                registry.name,
+                kind
+            );
+        }
+        const MINIMAL: &[&str] = &["rustc", "cargo", "rust-std"];
+        for name in &registry.deny_components {
+            // No dot, deliberately narrower than RFC 0024 §4.5's
+            // `[A-Za-z0-9_.-]+`: every one of the 22 components today's stable
+            // manifest carries is `[a-z0-9-]+`, and a dot is exactly what a
+            // `pkg.rust-docs` dot-path would bring — the value the §4.5
+            // rationale names as the one that matches nothing while the
+            // operator believes it enforces.
+            if name.is_empty()
+                || !name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+            {
+                bail!(
+                    "registry '{}': 'deny_components' entry '{name}' is not a manifest package \
+                     name ([A-Za-z0-9_-]+) — it is matched against '[pkg.{{name}}…]' headers, so \
+                     a dot-path, a separator or a space would match nothing and enforce nothing",
+                    registry.name
+                );
+            }
+            if MINIMAL.contains(&name.as_str()) {
+                bail!(
+                    "registry '{}': 'deny_components' names '{name}', which every profile needs \
+                     — the registry would serve manifests nothing can install from. The floor is \
+                     the 'minimal' profile: rustc, cargo, rust-std",
+                    registry.name
+                );
+            }
         }
         Ok(())
     }

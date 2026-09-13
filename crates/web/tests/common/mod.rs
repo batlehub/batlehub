@@ -58,6 +58,67 @@ use batlehub_web::{
     configure_app, new_access_lock, AuthMiddlewareFactory, RegistryModeMap, RepoSignerMap,
 };
 
+/// `(date, [pkg.rust] version)` for a channel string the rustup fixture knows.
+///
+/// The channel travels in the listing package string (`rust/stable`,
+/// `rust/2026-09-05/nightly`), so this is where the fixture decides which
+/// release a channel currently denotes — the thing the repair walk moves.
+fn rustup_channel_release(package: &str) -> Option<(String, String)> {
+    let channel = package.strip_prefix("rust/")?;
+    let (date, name) = match channel.split_once('/') {
+        Some((date, name)) => (Some(date.to_owned()), name),
+        None => (None, channel),
+    };
+    let (default_date, version) = match name {
+        "stable" => ("2026-09-03", "1.98.1"),
+        "nightly" => ("2026-09-05", "1.99.0-nightly"),
+        "1.98.1" => ("2026-09-03", "1.98.1"),
+        "1.98.0" => ("2026-08-20", "1.98.0"),
+        _ => return None,
+    };
+    let date = date.unwrap_or_else(|| default_date.to_owned());
+    // A dated nightly directory names that day's nightly.
+    Some((date, version.to_owned()))
+}
+
+/// A channel manifest, trimmed to what the filter and the coordinate reader
+/// need: the preamble, one component with a target table, and the `rust`
+/// package with a components list that names it.
+fn rustup_manifest(date: &str, version: &str) -> String {
+    format!(
+        "manifest-version = \"2\"\n\
+         date = \"{date}\"\n\
+         \n\
+         [pkg.rust-docs]\n\
+         version = \"{version} (fixture)\"\n\
+         \n\
+         [pkg.rust-docs.target.x86_64-unknown-linux-gnu]\n\
+         available = true\n\
+         url = \"https://static.rust-lang.org/dist/{date}/rust-docs-{version}-x86_64-unknown-linux-gnu.tar.gz\"\n\
+         hash = \"cccc\"\n\
+         \n\
+         [pkg.rust]\n\
+         version = \"{version} (fixture)\"\n\
+         \n\
+         [pkg.rust.target.x86_64-unknown-linux-gnu]\n\
+         available = true\n\
+         url = \"https://static.rust-lang.org/dist/{date}/rust-{version}-x86_64-unknown-linux-gnu.tar.gz\"\n\
+         hash = \"dddd\"\n\
+         \n\
+         [[pkg.rust.target.x86_64-unknown-linux-gnu.components]]\n\
+         pkg = \"rustc\"\n\
+         target = \"x86_64-unknown-linux-gnu\"\n\
+         \n\
+         [[pkg.rust.target.x86_64-unknown-linux-gnu.components]]\n\
+         pkg = \"rust-docs\"\n\
+         target = \"x86_64-unknown-linux-gnu\"\n\
+         \n\
+         [profiles]\n\
+         minimal = [\"rustc\", \"cargo\", \"rust-std\"]\n\
+         default = [\"rustc\", \"cargo\", \"rust-std\", \"rust-docs\"]\n"
+    )
+}
+
 pub struct FixedRegistry {
     registry_type: String,
 }
@@ -427,6 +488,47 @@ impl RegistryClient for FixedRegistry {
                 { "version": "v1.0.0", "date": "2020-01-02", "files": ["headers", "linux-x64", "src"],
                   "npm": "6.13.0", "lts": "Argon", "security": true }
             ]))),
+
+            // The Rust dist tree (RFC 0024). `manifests.txt` is the list; a
+            // channel manifest is one release, addressed by the channel in the
+            // package string (`rust/stable`, `rust/2026-09-05/nightly`). The
+            // five rows below are consistent with each other so the repair walk
+            // has somewhere to walk: `stable` is 1.98.1 of 2026-09-03, the
+            // release before it is 1.98.0 of 2026-08-20, and there are two
+            // nightlies a day apart.
+            ("rustup", DocumentKind::Versions) => Ok(VersionDocument::text(
+                "text/plain; charset=utf-8",
+                "static.rust-lang.org/dist/2026-08-20/channel-rust-1.98.0.toml\n\
+                 static.rust-lang.org/dist/2026-09-03/channel-rust-1.98.1.toml\n\
+                 static.rust-lang.org/dist/2026-09-03/channel-rust-stable.toml\n\
+                 static.rust-lang.org/dist/2026-09-04/channel-rust-nightly.toml\n\
+                 static.rust-lang.org/dist/2026-09-05/channel-rust-nightly.toml\n",
+            )),
+            ("rustup", DocumentKind::MANIFEST) => {
+                let Some((date, version)) = rustup_channel_release(package) else {
+                    return Err(CoreError::NotFound(format!(
+                        "no manifest for '{package}' in the fixture tree"
+                    )));
+                };
+                Ok(VersionDocument::text(
+                    "text/plain; charset=utf-8",
+                    rustup_manifest(&date, &version),
+                ))
+            }
+            ("rustup", DocumentKind::MANIFEST_ASC) => Ok(VersionDocument::text(
+                "application/pgp-signature",
+                "-----BEGIN PGP SIGNATURE-----\nfixture\n-----END PGP SIGNATURE-----\n",
+            )),
+            ("rustup", DocumentKind::STABLE_DATE) => {
+                Ok(VersionDocument::text("text/plain; charset=utf-8", "2026-09-03"))
+            }
+            // Single-quoted, as upstream writes it: a double-quoted fixture
+            // is what let the bootstrap route pass here and 404 against the
+            // real tree (tests/heavy/rustup.sh §7).
+            ("rustup", DocumentKind::RUSTUP_RELEASE) => Ok(VersionDocument::text(
+                "text/plain; charset=utf-8",
+                "schema-version = '1'\nversion = '1.29.1'\n",
+            )),
 
             // SDKMAN's text documents (RFC 0010 phase 6). The same three
             // versions as everywhere else. `java` renders the vendor-table
@@ -1539,6 +1641,12 @@ pub async fn make_app_with_defaults_and_access(
             "sdkman".to_owned(),
             FixedRegistry::new("sdkman") as Arc<dyn RegistryClient>,
         ),
+        // RFC 0024: same reason — the conformance fixture asserts rustup's
+        // request lines reach the rustup routes.
+        (
+            "rustup".to_owned(),
+            FixedRegistry::new("rustup") as Arc<dyn RegistryClient>,
+        ),
     ]
     .into();
 
@@ -1579,6 +1687,10 @@ pub async fn make_app_with_defaults_and_access(
         ),
         (
             "sdkman".to_owned(),
+            Arc::new(rbac_policy(repo_dyn.clone()).0),
+        ),
+        (
+            "rustup".to_owned(),
             Arc::new(rbac_policy(repo_dyn.clone()).0),
         ),
     ]
@@ -1654,6 +1766,7 @@ pub async fn make_app_with_defaults_and_access(
         ("composer", "composer"),
         ("nodedist", "nodedist"),
         ("sdkman", "sdkman"),
+        ("rustup", "rustup"),
     ]);
     let cargo_indexes = batlehub_web::CargoIndexMap::default();
     finish_test_app(

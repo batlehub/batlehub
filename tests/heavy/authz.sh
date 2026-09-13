@@ -48,10 +48,21 @@
 #     tests/heavy/authz.sh [target]
 #
 #   matrix      every verb, every grant shape, over curl        (no client)
+#   reads       the read boundary on the sixteen kinds no client phase drives,
+#               and the check that every `RegistryKind` is claimed by some
+#               target at all                                     (no client)
 #   signing     RFC 0012 capabilities: artifact binding, expiry, and secret
 #               rotation in both directions                      (no client)
-#   npm | pypi | nuget | composer | conda | openvsx | rubygems | terraform
-#               the pull boundary, driven by that ecosystem's real client
+#   npm | pypi | nuget | composer | conda | openvsx | rubygems | terraform |
+#   maven | cargo
+#               the pull boundary, driven by that ecosystem's real client.
+#               Both are hermetic like the rest — they have a local mode, so the
+#               run publishes its own fixture and reads it back
+#   live:<kind> the same pull boundary for a kind with **no local mode**, which
+#               therefore needs a real upstream for its positive arm: goproxy,
+#               nodedist, sdkman, github, forgejo, gitlab, generic, deb, rpm,
+#               pacman, rustup. The one family here that reaches the internet;
+#               CI runs it nightly rather than per-PR
 #
 # One target per invocation, like every other heavy suite: each starts its own
 # server and its own tap, and Terraform's tap has to terminate TLS while the
@@ -103,6 +114,30 @@ VSX="authz-vsx-$HEAVY_RUN"
 GEMS="authz-gems-$HEAVY_RUN"
 TFREG="authz-tf-$HEAVY_RUN"
 JB="authz-jb-$HEAVY_RUN"
+# The `reads` sweep's registries — one per kind no client phase drives.
+GO_R="authz-go-$HEAVY_RUN"
+MVN_R="authz-maven-$HEAVY_RUN"
+CARGO_R="authz-cargo-$HEAVY_RUN"
+VSCODE_R="authz-vscode-$HEAVY_RUN"
+DEB_R="authz-deb-$HEAVY_RUN"
+RPM_R="authz-rpm-$HEAVY_RUN"
+PACMAN_R="authz-pacman-$HEAVY_RUN"
+GH_R="authz-github-$HEAVY_RUN"
+FJ_R="authz-forgejo-$HEAVY_RUN"
+GL_R="authz-gitlab-$HEAVY_RUN"
+NODEDIST_R="authz-nodedist-$HEAVY_RUN"
+SDKMAN_R="authz-sdkman-$HEAVY_RUN"
+JETBRAINS_R="authz-jetbrains-$HEAVY_RUN"
+GENERIC_R="authz-generic-$HEAVY_RUN"
+RUSTUP_R="authz-rustup-$HEAVY_RUN"
+
+# The kinds a *client* target drives. Declared here rather than inferred,
+# because `authz_check_kinds_covered` has to see them from a target that drives
+# none of them — every target runs in its own process against its own server,
+# so no single run can observe the whole matrix. Add a client phase, add its
+# kind here.
+AUTHZ_CLIENT_KINDS=(npm pypi nuget composer conda openvsx rubygems terraform maven cargo)
+declare -A AUTHZ_KIND_SEEN=()
 
 T_ADMIN="$ADMIN_TOKEN"
 T_READER="authz-reader-token"
@@ -2324,6 +2359,754 @@ the reason."
   return 0
 }
 
+# ── cargo — the pull boundary, hermetically ──────────────────────────────────
+#
+# What makes this phase possible at all is a server change, and it is worth
+# recording why. Cargo sends a credential on a **read** only when the sparse
+# index's `config.json` says `"auth-required": true` — the registry index
+# reference defines the field as marking "a private registry that requires all
+# operations to be authenticated including API requests, crate downloads and
+# sparse index updates". This server emitted `dl` and `api` and nothing else, so
+# the token went out on `cargo publish` and on nothing else: a reader and a
+# denied caller were equally anonymous on a fetch, and a pair asserted against
+# that would have been green on both arms for the same wrong reason.
+#
+# `cargo_registry_config` now derives the field from whether an anonymous caller
+# can read the registry, and this suite's cargo registry grants `anonymous`
+# nothing — so it is advertised as private and cargo authenticates. The second
+# half of the same change is in `extractors.rs`: cargo's header is the bare
+# token with no scheme, and the normalisation that turns it into a `Bearer` was
+# scoped to `/api/v1/crates`, which is neither the index nor the download.
+#
+# So this phase is also the regression test for both halves. Drop either and the
+# reader's arm fails exactly like the denied one.
+
+AUTHZ_CARGO_CRATE="authz-probe"
+AUTHZ_CARGO_VERSION="1.0.0"
+
+# authz_cargo_home <dir> <token> — a CARGO_HOME whose credential for the
+# `authz` registry is <token>. Its own home per identity: the index cache and
+# the registry cache live there, so a fresh one is a client that has never seen
+# this registry.
+authz_cargo_home() {
+  local home="$1" token="$2"
+  mkdir -p "$home"
+  cat >"$home/config.toml" <<EOF
+[registries.authz]
+index = "sparse+$HEAVY_TAP_BASE/proxy/$CARGO_R/registry/"
+credential-provider = ["cargo:token"]
+EOF
+  cat >"$home/credentials.toml" <<EOF
+[registries.authz]
+token = "$token"
+EOF
+  chmod 600 "$home/credentials.toml"
+}
+
+phase_cargo() {
+  heavy_need cargo "the Rust toolchain"
+  local work="$HEAVY_WORK/cargo"
+  mkdir -p "$work"
+
+  # ── The `config.json` this registry serves ────────────────────────────────
+  #
+  # Asserted before anything else, because every claim below rests on it and a
+  # missing field would otherwise surface as an unexplained refusal three steps
+  # later.
+  heavy_mark "cargo-config"
+  local cfg
+  cfg="$(authz_body GET "$T_ADMIN" "/proxy/$CARGO_R/registry/config.json")"
+  grep -q '"auth-required":true' <<<"${cfg// /}" || {
+    echo "$cfg" >&2
+    heavy_fail "cargo: the sparse index config.json does not declare auth-required, so cargo \
+will send no credential on a read and both arms below would be anonymous"
+  }
+  heavy_log "config.json declares auth-required: cargo will authenticate its reads"
+
+  # ── Seed one version, as the administrator ────────────────────────────────
+  heavy_mark "cargo-seed"
+  local seed="$work/seed"
+  mkdir -p "$seed/src"
+  cat >"$seed/Cargo.toml" <<EOF
+[package]
+name = "$AUTHZ_CARGO_CRATE"
+version = "$AUTHZ_CARGO_VERSION"
+edition = "2021"
+description = "authz heavy fixture"
+license = "MIT"
+publish = ["authz"]
+EOF
+  echo 'pub fn probe() {}' >"$seed/src/lib.rs"
+  authz_cargo_home "$work/home-admin" "$T_ADMIN"
+  cp "$work/home-admin/config.toml" "$seed/.cargo-config.toml"
+  mkdir -p "$seed/.cargo" && cp "$work/home-admin/config.toml" "$seed/.cargo/config.toml"
+  (cd "$seed" && CARGO_HOME="$work/home-admin" CARGO_TERM_COLOR=never \
+    cargo publish --registry authz --allow-dirty --no-verify) >"$work/seed.log" 2>&1 \
+    || { tail -30 "$work/seed.log" >&2; heavy_fail "cargo: seeding the fixture failed — \
+the administrator cannot publish, so nothing below means anything"; }
+
+  # ── The pair ──────────────────────────────────────────────────────────────
+  cargo_arm() {  # <suffix> <token>
+    local dir="$work/consumer-$1" home="$work/home-$1"
+    rm -rf "$dir" "$home"
+    mkdir -p "$dir/src" "$dir/.cargo"
+    authz_cargo_home "$home" "$2"
+    cp "$home/config.toml" "$dir/.cargo/config.toml"
+    cat >"$dir/Cargo.toml" <<EOF
+[package]
+name = "authz-consumer"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+$AUTHZ_CARGO_CRATE = { version = "$AUTHZ_CARGO_VERSION", registry = "authz" }
+EOF
+    echo 'fn main() {}' >"$dir/src/main.rs"
+    (cd "$dir" && CARGO_HOME="$home" CARGO_TERM_COLOR=never CARGO_NET_RETRY=1 \
+      cargo fetch)
+    return $?
+  }
+
+  heavy_mark "cargo-deny"
+  heavy_log "cargo fetch as the caller holding no read verb — must fail"
+  set +e
+  cargo_arm deny "$T_DENIED" >"$work/deny.log" 2>&1
+  local rc=$?
+  set -e
+  [[ $rc -ne 0 ]] || { tail -40 "$work/deny.log" >&2; heavy_fail \
+    "cargo: fetch SUCCEEDED for a caller holding no read verb"; }
+  heavy_log "cargo said:"
+  heavy_client_said "$work/deny.log" '403|forbidden|denied|unauthor|failed to' 3
+  # The refusal must be cargo's *own* request being refused, not a missing
+  # index: if the token never reached the server the index read would 403 too,
+  # and the two look alike in the client's output but not on the wire.
+  heavy_wire_re_after "cargo-deny" \
+    "GET /proxy/$CARGO_R/registry/[^ ]* -> 40[13]" \
+    "cargo never met a refusal on the sparse index — the denied arm failed before it asked"
+
+  heavy_mark "cargo-allow"
+  heavy_log "cargo fetch as the reader — must succeed"
+  cargo_arm allow "$T_READER" >"$work/allow.log" 2>&1 \
+    || { tail -40 "$work/allow.log" >&2; heavy_fail \
+      "cargo: fetch failed for the reader — the positive control (§13.17). If the index \
+answered but the download did not, the bare-token normalisation is not reaching \
+/proxy/<reg>/<crate>/<version>/download"; }
+  heavy_wire_re_after "cargo-allow" \
+    "GET /proxy/$CARGO_R/$AUTHZ_CARGO_CRATE/$AUTHZ_CARGO_VERSION/download -> 200" \
+    "the reader's fetch never pulled the crate itself"
+
+  AUTHZ_KIND_SEEN["cargo"]=1
+  AUTHZ_CHECKS=$((AUTHZ_CHECKS + 2))
+  heavy_log "AUTHZ-CARGO-OK (auth-required advertised, one refusal and one fetch)"
+}
+
+# ── Maven — the pull boundary, hermetically ──────────────────────────────────
+#
+# The first client phase for a kind that `reads` also covers, and it is worth
+# saying why both exist: `reads` asks whether the *route* refuses, over curl;
+# this asks whether **Maven** is stopped, which is a different claim (RFC 0009
+# §5.2) and the one an operator cares about. It needs no upstream — `maven` has
+# a local mode, so the fixture is deployed by the run and read back by it.
+#
+# ── The trap this phase is built around ─────────────────────────────────────
+#
+# Maven fetches its own **plugins** through the same mirror as the dependency.
+# A denied caller therefore fails at `dependency:get` — but on resolving the
+# plugin, not the artifact, and the run would record a refusal that proves
+# nothing about the boundary under test. `maven.sh` solved this once already:
+# warm a local repository with the plugins as a caller who may read them, then
+# give each arm a copy of it with the artifact under test removed. Both arms
+# then differ in exactly one thing, which is the point of a pair.
+#
+# `<mirrorOf>*</mirrorOf>` and a `<server>` whose `<id>` matches the mirror's:
+# that is how Maven decides to send credentials at all, and unlike cargo it
+# sends them unconditionally rather than waiting to be told the registry wants
+# them.
+
+AUTHZ_MVN_GROUP="com.authzheavy"
+AUTHZ_MVN_ARTIFACT="probe"
+AUTHZ_MVN_VERSION="1.0.0"
+
+# authz_mvn_settings <file> <login> <token> — a settings.xml for one identity.
+authz_mvn_settings() {
+  local file="$1" login="$2" token="$3"
+  cat >"$file" <<EOF
+<settings>
+  <mirrors>
+    <mirror>
+      <id>authz</id>
+      <mirrorOf>*</mirrorOf>
+      <url>$HEAVY_TAP_BASE/proxy/$MVN_R/maven2</url>
+    </mirror>
+  </mirrors>
+  <servers>
+    <server>
+      <id>authz</id>
+      <username>$login</username>
+      <password>$token</password>
+    </server>
+  </servers>
+</settings>
+EOF
+}
+
+phase_maven() {
+  heavy_runner_for mvn maven@3.9.16 java@temurin-21.0.11+10.0.LTS
+  local mvn=("${HEAVY_RUNNER[@]}" mvn)
+  local work="$HEAVY_WORK/mvn"
+  mkdir -p "$work"
+
+  local s_admin="$work/settings-admin.xml"
+  local s_reader="$work/settings-reader.xml"
+  local s_denied="$work/settings-denied.xml"
+  authz_mvn_settings "$s_admin" ci-admin "$T_ADMIN"
+  authz_mvn_settings "$s_reader" authz-reader "$T_READER"
+  authz_mvn_settings "$s_denied" authz-denied "$T_DENIED"
+
+  # ── Warm the plugins, as a caller who may read them ───────────────────────
+  heavy_mark "mvn-warm"
+  heavy_log "Warming the deploy and dependency plugins through the mirror"
+  (cd "$work" && "${mvn[@]}" -B -s "$s_admin" -Dmaven.repo.local="$work/warm" \
+    dependency:resolve-plugins -Dplugin=org.apache.maven.plugins:maven-deploy-plugin) \
+    >"$work/warm.log" 2>&1 \
+    || { tail -30 "$work/warm.log" >&2; heavy_fail "maven: could not warm the plugins through the mirror"; }
+
+  # ── Seed one version, as the administrator ────────────────────────────────
+  heavy_mark "mvn-seed"
+  echo "authz heavy fixture" >"$work/payload.txt"
+  (cd "$work" && "${HEAVY_RUNNER[@]}" jar cf probe.jar payload.txt 2>/dev/null) \
+    || (cd "$work" && zip -q probe.jar payload.txt) \
+    || heavy_fail "maven: neither jar nor zip could build a fixture jar"
+  (cd "$work" && "${mvn[@]}" -B -s "$s_admin" -Dmaven.repo.local="$work/warm" \
+    deploy:deploy-file -DrepositoryId=authz \
+    -Durl="$HEAVY_TAP_BASE/proxy/$MVN_R/maven2" \
+    -Dfile="$work/probe.jar" -DgroupId="$AUTHZ_MVN_GROUP" -DartifactId="$AUTHZ_MVN_ARTIFACT" \
+    -Dversion="$AUTHZ_MVN_VERSION" -Dpackaging=jar -DgeneratePom=true) \
+    >"$work/seed.log" 2>&1 \
+    || { tail -30 "$work/seed.log" >&2; heavy_fail "maven: seeding the fixture failed — \
+the administrator cannot publish, so nothing below means anything"; }
+
+  # ── The pair ──────────────────────────────────────────────────────────────
+  #
+  # A fresh local repository per arm, copied from the warmed one with the
+  # fixture removed: the plugins are present for both callers and the artifact
+  # for neither, so the only thing that differs is the credential.
+  local group_path="${AUTHZ_MVN_GROUP//.//}"
+  mvn_arm() {  # <suffix> <settings>
+    local repo="$work/repo-$1"
+    rm -rf "$repo"
+    cp -r "$work/warm" "$repo"
+    rm -rf "${repo:?}/$group_path"
+    (cd "$work" && "${mvn[@]}" -B -s "$2" -Dmaven.repo.local="$repo" \
+      dependency:get \
+      -Dartifact="$AUTHZ_MVN_GROUP:$AUTHZ_MVN_ARTIFACT:$AUTHZ_MVN_VERSION")
+    return $?
+  }
+
+  heavy_mark "mvn-deny"
+  heavy_log "dependency:get as the caller holding no read verb — must fail"
+  set +e
+  mvn_arm deny "$s_denied" >"$work/deny.log" 2>&1
+  local rc=$?
+  set -e
+  [[ $rc -ne 0 ]] || { tail -40 "$work/deny.log" >&2; heavy_fail \
+    "maven: dependency:get SUCCEEDED for a caller holding no read verb"; }
+  heavy_log "maven said:"
+  heavy_client_said "$work/deny.log" '403|forbidden|denied|failed to (read|resolve|transfer)' 3
+  # The refusal must be about the artifact. If Maven never asked for the jar,
+  # the arm failed on something else — a plugin, a network hiccup — and the
+  # warming above is what is supposed to have ruled that out.
+  heavy_wire_re_after "mvn-deny" \
+    "GET /proxy/$MVN_R/maven2/$group_path/$AUTHZ_MVN_ARTIFACT/[^ ]* -> 40[13]" \
+    "maven never met a refusal on the fixture's own path — the denied arm failed for \
+some other reason, which is exactly what the warmed repository exists to prevent"
+
+  heavy_mark "mvn-allow"
+  heavy_log "dependency:get as the reader — must succeed"
+  mvn_arm allow "$s_reader" >"$work/allow.log" 2>&1 \
+    || { tail -40 "$work/allow.log" >&2; heavy_fail \
+      "maven: dependency:get failed for the reader — the positive control (§13.17)"; }
+  [[ -f "$work/repo-allow/$group_path/$AUTHZ_MVN_ARTIFACT/$AUTHZ_MVN_VERSION/$AUTHZ_MVN_ARTIFACT-$AUTHZ_MVN_VERSION.jar" ]] \
+    || heavy_fail "maven: the reader's build reported success but the jar is not in its repository"
+
+  AUTHZ_KIND_SEEN["maven"]=1
+  AUTHZ_CHECKS=$((AUTHZ_CHECKS + 2))
+  heavy_log "AUTHZ-MAVEN-OK (the fixture was deployed, refused once and fetched once)"
+}
+
+# ── The live targets: the client boundary on the kinds with no local mode ────
+#
+# Everything above this line is hermetic: local registries, nothing published
+# but what the run publishes, no upstream reached. These targets are the
+# exception, and the exception is named rather than hidden, because it is the
+# property that decides where they run — **nightly, not per-PR**, alongside the
+# heavy client matrix, for the same reason: what they drive is not all in this
+# repository.
+#
+# ── Why they cannot be hermetic ─────────────────────────────────────────────
+#
+# `reads` measures the **route** boundary on every kind, and it can do that
+# against a registry that holds nothing, because a refusal is decided before
+# anything is fetched. The **client** boundary is a different claim and it needs
+# both arms: the denied caller must be stopped, and the identical request must
+# *work* for the reader — §13.17's positive control, without which a client
+# refused for an unrelated reason reads as a correct denial. The positive arm
+# can only succeed if the artifact exists, and a forge, a Node distribution, a
+# JDK broker and a file tree have nothing to publish *into*. So: a real upstream.
+#
+# ── What each phase asserts ─────────────────────────────────────────────────
+#
+# The same pair, nine times over: the real client, carrying a real credential,
+# refused when that credential holds no read verb and working when it does.
+# What differs is only how each client is *told* the credential, and that is
+# the part worth reading — three of these four mechanisms are not what this
+# project's setup snippets said they were before the phases were written.
+
+AUTHZ_LIVE_KINDS=(goproxy nodedist sdkman github forgejo gitlab generic deb rpm pacman rustup)
+
+LIVE_GO="live-go-$HEAVY_RUN"
+LIVE_NODEDIST="live-nodedist-$HEAVY_RUN"
+LIVE_SDKMAN="live-sdkman-$HEAVY_RUN"
+LIVE_GH="live-github-$HEAVY_RUN"
+LIVE_FJ="live-forgejo-$HEAVY_RUN"
+LIVE_GL="live-gitlab-$HEAVY_RUN"
+LIVE_GENERIC="live-generic-$HEAVY_RUN"
+LIVE_DEB="live-deb-$HEAVY_RUN"
+LIVE_RPM="live-rpm-$HEAVY_RUN"
+LIVE_PACMAN="live-pacman-$HEAVY_RUN"
+LIVE_RUSTUP="live-rustup-$HEAVY_RUN"
+
+# Pins, one per client the live targets resolve for themselves.
+LIVE_GO_MODULE="${HEAVY_AUTHZ_GO_MODULE:-rsc.io/quote}"
+LIVE_GO_VERSION="${HEAVY_AUTHZ_GO_VERSION:-v1.5.2}"
+LIVE_NVM_VERSION="${HEAVY_AUTHZ_NVM:-0.40.3}"
+LIVE_NODE_VERSION="${HEAVY_AUTHZ_NODE:-22.11.0}"
+LIVE_SDKMAN_CLI="${HEAVY_AUTHZ_SDKMAN_CLI:-5.23.0}"
+LIVE_HELM_VERSION="${HEAVY_AUTHZ_HELM:-3.16.4}"
+LIVE_APT_SUITE="${HEAVY_AUTHZ_APT_SUITE:-noble}"
+LIVE_APT_PACKAGE="${HEAVY_AUTHZ_APT_PACKAGE:-hello}"
+LIVE_APT_KEYRING="${HEAVY_AUTHZ_APT_KEYRING:-/usr/share/keyrings/ubuntu-archive-keyring.gpg}"
+LIVE_RPM_IMAGE="${HEAVY_AUTHZ_RPM_IMAGE:-quay.io/almalinuxorg/almalinux:9}"
+LIVE_RPM_PACKAGE="${HEAVY_AUTHZ_RPM_PACKAGE:-htop}"
+LIVE_MISE_TOOL="${HEAVY_AUTHZ_MISE_TOOL:-cli/cli}"
+LIVE_MISE_VERSION="${HEAVY_AUTHZ_MISE_VERSION:-2.60.0}"
+LIVE_FORGEJO_TOOL="${HEAVY_AUTHZ_FORGEJO_TOOL:-forgejo/forgejo}"
+LIVE_FORGEJO_VERSION="${HEAVY_AUTHZ_FORGEJO_VERSION:-16.0.4}"
+LIVE_GITLAB_TOOL="${HEAVY_AUTHZ_GITLAB_TOOL:-gitlab-org/cli}"
+LIVE_GITLAB_VERSION="${HEAVY_AUTHZ_GITLAB_VERSION:-1.117.0}"
+LIVE_PACMAN_IMAGE="${HEAVY_AUTHZ_PACMAN_IMAGE:-ghcr.io/archlinux/archlinux:base}"
+LIVE_PACMAN_PACKAGE="${HEAVY_AUTHZ_PACMAN_PACKAGE:-jq}"
+LIVE_RUSTUP_TOOLCHAIN="${HEAVY_AUTHZ_RUSTUP_TOOLCHAIN:-stable}"
+
+# authz_live_cred <login> <token> — the `login:token@` a URL carries.
+#
+# **The token goes in the password field**, which is what
+# `adapters/src/auth/token.rs` reads out of a `Basic` header; the login is
+# ignored by the server and is there because a URL with a password and no user
+# is not a URL. This is the same thing `withCredentials` writes into the console's
+# setup snippets, so a phase using it is exercising the documented shape.
+authz_live_cred() { printf '%s:%s' "$1" "$2"; }
+
+# authz_live_netrc <home> <token> — a `~/.netrc` under <home> for the tap host.
+#
+# `.netrc` matches by **hostname only** — it has no notion of a port — so one
+# stanza for `127.0.0.1` covers the tap whatever port it is on. Mode 0600
+# because several clients refuse to read a world-readable one.
+authz_live_netrc() {
+  local home="$1" login="$2" token="$3"
+  mkdir -p "$home"
+  printf 'machine 127.0.0.1\nlogin %s\npassword %s\n' "$login" "$token" > "$home/.netrc"
+  chmod 600 "$home/.netrc"
+}
+
+# authz_live_pair <kind> <label> <runner> — the pair, for one kind.
+#
+# `<runner> <suffix> <login> <token>` is called twice: once with the identity
+# that holds no read verb, which must fail, and once with the reader, which must
+# not. The negative arm quotes what the client said, because "it exited 1" and
+# "it was refused" are not the same sentence and only one of them is evidence.
+authz_live_pair() {
+  local kind="$1" label="$2" runner="$3" rc=0
+  AUTHZ_KIND_SEEN["$kind"]=1
+
+  heavy_mark "live-$kind-deny"
+  heavy_log "$label — as the caller holding no read verb; must fail"
+  set +e
+  "$runner" deny "authz-denied" "$T_DENIED" >"$HEAVY_WORK/live-$kind-deny.log" 2>&1
+  rc=$?
+  set -e
+  if [[ $rc -eq 0 ]]; then
+    tail -40 "$HEAVY_WORK/live-$kind-deny.log" >&2
+    heavy_fail "$kind: the client SUCCEEDED for a caller holding no read verb — \
+the pull boundary is not enforced for this kind, or the credential never reached the server"
+  fi
+  heavy_log "$kind said:"
+  heavy_client_said "$HEAVY_WORK/live-$kind-deny.log" '403|denied|forbidden|unauthor|not found' 3
+
+  heavy_mark "live-$kind-allow"
+  heavy_log "$label — as the reader; must succeed"
+  "$runner" allow "authz-reader" "$T_READER" >"$HEAVY_WORK/live-$kind-allow.log" 2>&1 \
+    || { tail -40 "$HEAVY_WORK/live-$kind-allow.log" >&2; heavy_fail \
+      "$kind: the client failed for the reader — this is the positive control, and without it \
+the refusal above proves nothing (§13.17)"; }
+
+  AUTHZ_CHECKS=$((AUTHZ_CHECKS + 2))
+  heavy_log "LIVE-$(echo "$kind" | tr '[:lower:]' '[:upper:]')-OK"
+}
+
+# ── goproxy — credentials in the GOPROXY URL ────────────────────────────────
+#
+# Not `~/.netrc`: the Go tool reads that only for HTTPS, and this tap is plain
+# HTTP. Userinfo in `GOPROXY` works over either, and is what the console's own
+# snippet writes (`withCredentials(registryUrl)`).
+live_run_goproxy() {
+  local suffix="$1" login="$2" token="$3"
+  local dir="$HEAVY_WORK/live-go-$suffix" cache="$HEAVY_WORK/live-go-cache-$suffix"
+  mkdir -p "$dir" "$cache"
+  cat >"$dir/go.mod" <<EOF
+module authzlive
+
+go 1.21
+
+require $LIVE_GO_MODULE $LIVE_GO_VERSION
+EOF
+  (cd "$dir" && env \
+    GOPROXY="http://$(authz_live_cred "$login" "$token")@127.0.0.1:$HEAVY_TAP_PORT/proxy/$LIVE_GO" \
+    GOFLAGS="-mod=mod -modcacherw" GOTOOLCHAIN=local GOSUMDB=off GONOSUMCHECK=1 \
+    GOMODCACHE="$cache/mod" GOCACHE="$cache/build" GOPATH="$cache/gopath" \
+    go mod download "$LIVE_GO_MODULE")
+  return $?
+}
+
+# ── nodedist — NVM_AUTH_HEADER, and why not `.netrc` ────────────────────────
+#
+# nvm downloads with `curl -q --fail`. `-q` disables `~/.curlrc`, and curl has
+# never read `~/.netrc` unless asked with `-n`, so **neither file reaches this
+# client** — measured, against a local server that demands Basic. What nvm does
+# have is `NVM_AUTH_HEADER`, which it turns into `--header "Authorization: …"`,
+# and that is the mechanism this phase uses. The console's `nodedist` snippet
+# said `.netrc`; it is wrong, and `docs/registries/` now says so.
+live_run_nodedist() {
+  local suffix="$1" login="$2" token="$3"
+  local dir="$HEAVY_WORK/live-nvm-$suffix" src sh
+  src="$(heavy_cached_dir "nvm-$LIVE_NVM_VERSION" \
+    "https://github.com/nvm-sh/nvm/archive/refs/tags/v$LIVE_NVM_VERSION.tar.gz")"
+  sh="$src/nvm-$LIVE_NVM_VERSION/nvm.sh"
+  [[ -f "$sh" ]] || heavy_fail "nodedist: nvm.sh not found under $src"
+  mkdir -p "$dir"
+  NVM_DIR="$dir" \
+  NVM_NODEJS_ORG_MIRROR="$HEAVY_TAP_BASE/proxy/$LIVE_NODEDIST/nodedist" \
+  NVM_AUTH_HEADER="Basic $(printf '%s' "$(authz_live_cred "$login" "$token")" | base64 -w0)" \
+    bash -c '
+      set -o pipefail
+      export NVM_DIR NVM_NODEJS_ORG_MIRROR NVM_AUTH_HEADER
+      # shellcheck disable=SC1090
+      source "$1"
+      nvm install "$2"
+    ' _ "$sh" "$LIVE_NODE_VERSION"
+  return $?
+}
+
+# ── sdkman — credentials in the two API URLs ────────────────────────────────
+#
+# SDKMAN calls `curl --silent --location "$url"` and offers no credential of its
+# own. It does *not* pass `-q`, so a `~/.curlrc` containing `netrc` would make
+# curl read `~/.netrc` — measured, and it works — but userinfo in the two API
+# URLs is the direct path and needs no file at all. The console's `sdkman`
+# snippet said "libcurl reads ~/.netrc without being asked"; it does not.
+live_run_sdkman() {
+  local suffix="$1" login="$2" token="$3"
+  local dir="$HEAVY_WORK/live-sdkman-$suffix" src root cred api
+  src="$(heavy_cached_dir "sdkman-cli-$LIVE_SDKMAN_CLI" \
+    "https://github.com/sdkman/sdkman-cli/releases/download/$LIVE_SDKMAN_CLI/sdkman-cli-$LIVE_SDKMAN_CLI.zip" zip)"
+  root="$src/sdkman-$LIVE_SDKMAN_CLI"
+  [[ -f "$root/bin/sdkman-init.sh" ]] || heavy_fail "sdkman: no sdkman-init.sh under $src"
+  cred="$(authz_live_cred "$login" "$token")"
+  api="http://$cred@127.0.0.1:$HEAVY_TAP_PORT/proxy/$LIVE_SDKMAN/sdkman"
+
+  mkdir -p "$dir"/{bin,src,contrib,var,tmp,etc,ext,candidates}
+  cp -R "$root/bin/." "$dir/bin/"
+  cp -R "$root/src/." "$dir/src/"
+  cp -R "$root/contrib/." "$dir/contrib/"
+  echo "linuxx64" > "$dir/var/platform"
+  touch "$dir/var/delay_upgrade"
+  # The candidate cache, through the proxy and with the same credential: on the
+  # denied arm this is where the refusal lands, which is the point — `sdk` needs
+  # this file to exist before it will run at all.
+  curl -fsS "$api/candidates/all" > "$dir/var/candidates" || return 1
+  [[ -s "$dir/var/candidates" ]] || return 1
+  cat > "$dir/etc/config" <<'EOF'
+sdkman_auto_answer=true
+sdkman_auto_selfupdate=false
+sdkman_selfupdate_feature=false
+sdkman_insecure_ssl=false
+sdkman_curl_connect_timeout=7
+sdkman_curl_max_time=120
+sdkman_beta_channel=false
+sdkman_debug_mode=false
+sdkman_colour_enable=false
+sdkman_auto_env=false
+sdkman_auto_complete=false
+sdkman_checksum_enable=true
+sdkman_healthcheck_enable=true
+sdkman_native_enable=false
+EOF
+  local probe
+  probe="$(curl -fsS "$api/candidates/default/java" || true)"
+  [[ -n "$probe" ]] || return 1
+  SDKMAN_DIR="$dir" SDKMAN_CANDIDATES_API="$api" SDKMAN_BROKER_API="$api/broker" \
+    bash -c '
+      set -o pipefail
+      export SDKMAN_DIR SDKMAN_CANDIDATES_API SDKMAN_BROKER_API
+      # shellcheck disable=SC1090
+      source "$SDKMAN_DIR/bin/sdkman-init.sh"
+      sdk install java "$1"
+    ' _ "$probe"
+  return $?
+}
+
+# ── The three forges — mise, and `~/.netrc` ─────────────────────────────────
+#
+# mise carries a `netrc` setting and it defaults to `true` (`mise settings
+# --all`), so a stanza under a redirected `$HOME` is read without any further
+# configuration. One runner for all three backends, because only the spec and
+# the rewrite differ.
+live_run_mise_forge() {
+  local suffix="$1" login="$2" token="$3" backend="$4" spec="$5" version="$6" reg="$7" rewrite="$8"
+  local root="$HEAVY_WORK/live-$backend-$suffix"
+  mkdir -p "$root"/{data,cache,config,state,home}
+  authz_live_netrc "$root/home" "$login" "$token"
+  cat >"$root/config/config.toml" <<EOF
+[settings]
+github_attestations = false
+
+[settings.url_replacements]
+$rewrite
+EOF
+  HOME="$root/home" \
+  MISE_DATA_DIR="$root/data" MISE_CACHE_DIR="$root/cache" \
+  MISE_CONFIG_DIR="$root/config" MISE_STATE_DIR="$root/state" MISE_YES=1 \
+    mise install "$backend:$spec@$version"
+  return $?
+}
+
+live_run_github() {
+  local p="$HEAVY_TAP_BASE/proxy/$LIVE_GH"
+  live_run_mise_forge "$1" "$2" "$3" github "$LIVE_MISE_TOOL" "$LIVE_MISE_VERSION" "$LIVE_GH" \
+    "\"regex:^https://api\\\\.github\\\\.com/repos/(.+)\" = \"$p/\$1\""
+  return $?
+}
+
+live_run_forgejo() {
+  local p="$HEAVY_TAP_BASE/proxy/$LIVE_FJ"
+  live_run_mise_forge "$1" "$2" "$3" forgejo "$LIVE_FORGEJO_TOOL" "$LIVE_FORGEJO_VERSION" "$LIVE_FJ" \
+    "\"regex:^https://codeberg\\\\.org/api/v1/repos/(.+)\" = \"$p/\$1\""
+  return $?
+}
+
+live_run_gitlab() {
+  local p="$HEAVY_TAP_BASE/proxy/$LIVE_GL"
+  live_run_mise_forge "$1" "$2" "$3" gitlab "$LIVE_GITLAB_TOOL" "$LIVE_GITLAB_VERSION" "$LIVE_GL" \
+    "\"regex:^https://gitlab\\\\.com/api/v4/projects/([^/]+)/releases(.*)\" = \"$p/\$1/-/releases\$2\""
+  return $?
+}
+
+# ── generic — curl, which is this kind's whole client ───────────────────────
+#
+# A path proxy has no protocol for a package manager to speak, so the client is
+# whatever fetches by path. `--fail` is what turns the `403` into a non-zero
+# exit; without it curl writes the refusal body to the output file and reports
+# success, which would make the denied arm pass for the wrong reason.
+live_run_generic() {
+  local suffix="$1" login="$2" token="$3"
+  local out="$HEAVY_WORK/live-generic-$suffix.tar.gz"
+  curl -fsS --max-time 300 -u "$(authz_live_cred "$login" "$token")" \
+    "$HEAVY_TAP_BASE/proxy/$LIVE_GENERIC/generic/helm-v$LIVE_HELM_VERSION-linux-amd64.tar.gz" \
+    -o "$out"
+  return $?
+}
+
+# ── deb — /etc/apt/auth.conf.d, redirected into the run ─────────────────────
+#
+# apt reads a netrc-shaped file from `Dir::Etc::netrcparts`, which is the one
+# `Dir::` this suite has to set that `pathproxy.sh` does not: everything else is
+# state, this is the credential. The `sources.list` line is unchanged, which is
+# the property the documentation claims and this asserts.
+live_run_deb() {
+  local suffix="$1" login="$2" token="$3"
+  local root="$HEAVY_WORK/live-deb-$suffix" arch
+  arch="$(dpkg --print-architecture)"
+  mkdir -p "$root/state/lists/partial" "$root/cache/archives/partial" "$root/out" "$root/auth.conf.d"
+  echo "deb [arch=$arch signed-by=$LIVE_APT_KEYRING] $HEAVY_TAP_BASE/proxy/$LIVE_DEB/deb $LIVE_APT_SUITE main" \
+    >"$root/sources.list"
+  printf 'machine 127.0.0.1\nlogin %s\npassword %s\n' "$login" "$token" \
+    >"$root/auth.conf.d/batlehub.conf"
+  chmod 600 "$root/auth.conf.d/batlehub.conf"
+  (cd "$root/out" && apt-get -q \
+    -o "Dir::State=$root/state" -o "Dir::Cache=$root/cache" \
+    -o "Dir::Etc::SourceList=$root/sources.list" -o "Dir::Etc::SourceParts=/dev/null" \
+    -o "Dir::Etc::netrcparts=$root/auth.conf.d" \
+    -o "Dir::Etc::Preferences=/dev/null" -o "Dir::Etc::PreferencesParts=/dev/null" \
+    -o "Dir::Etc::Main=/dev/null" -o "Dir::Etc::Parts=/dev/null" \
+    -o "Acquire::Languages=none" -o "Debug::NoLocking=true" \
+    update) || return 1
+  (cd "$root/out" && apt-get -q \
+    -o "Dir::State=$root/state" -o "Dir::Cache=$root/cache" \
+    -o "Dir::Etc::SourceList=$root/sources.list" -o "Dir::Etc::SourceParts=/dev/null" \
+    -o "Dir::Etc::netrcparts=$root/auth.conf.d" \
+    -o "Dir::Etc::Preferences=/dev/null" -o "Dir::Etc::PreferencesParts=/dev/null" \
+    -o "Dir::Etc::Main=/dev/null" -o "Dir::Etc::Parts=/dev/null" \
+    -o "Acquire::Languages=none" -o "Debug::NoLocking=true" \
+    download "$LIVE_APT_PACKAGE")
+  return $?
+}
+
+# ── rpm — username=/password= in the .repo, inside AlmaLinux 9 ──────────────
+#
+# The client runs in its own distribution's image for the reason
+# `closed_world.sh` spells out: an EPEL build is linked against that userland.
+# `--network host` keeps `127.0.0.1:<tap>` meaning the same thing inside.
+live_run_rpm() {
+  local suffix="$1" login="$2" token="$3"
+  local script
+  script="$(cat <<'SH'
+set -eu
+base="$1"; user="$2"; pass="$3"; pkg="$4"
+rm -f /etc/yum.repos.d/*.repo
+cat >/etc/yum.repos.d/authz-live.repo <<EOF
+[authz-live]
+name=authz-live
+baseurl=$base
+enabled=1
+gpgcheck=0
+username=$user
+password=$pass
+EOF
+dnf -y --disablerepo='*' --enablerepo=authz-live \
+    --setopt=install_weak_deps=False install "$pkg"
+SH
+)"
+  "${CW_ENGINE[@]}" run --rm --network host "$LIVE_RPM_IMAGE" \
+    bash -c "$script" _ "$HEAVY_TAP_BASE/proxy/$LIVE_RPM/rpm" "$login" "$token" "$LIVE_RPM_PACKAGE"
+  return $?
+}
+
+# ── pacman — XferCommand, because pacman has no credential of its own ───────
+#
+# `pacman.conf(5)` documents **no directive for HTTP credentials**: there is no
+# username, no password, no token, and userinfo in a `Server =` URL is not
+# mentioned at all — so building on it would be building on an assumption. What
+# the manual does document is `XferCommand`: "If set, an external program will
+# be used to download all remote files. All instances of %u will be replaced
+# with the download URL... instances of %o will be replaced with the local
+# filename, plus a `.part` extension".
+#
+# That is the mechanism an operator with an authenticated mirror actually uses,
+# so it is the one this phase asserts. pacman still resolves the databases and
+# decides what to fetch; only the transfer is delegated. `-f` is what makes the
+# denied arm fail: without it curl writes the refusal body into the package file
+# and exits zero, and pacman would fail later on a corrupt archive — a red for
+# the wrong reason.
+#
+# The client runs in Arch's own image, for the reason `closed_world.sh` spells
+# out: a distribution package is linked against its own libraries.
+live_run_pacman() {
+  local suffix="$1" login="$2" token="$3" script
+  script="$(cat <<'SH'
+set -eu
+base="$1"; arch="$2"; user="$3"; pass="$4"; pkg="$5"
+command -v curl >/dev/null 2>&1 || { echo "no curl in the image" >&2; exit 96; }
+# Replaced, not edited: the stock file carries an `Include` of the mirrorlist,
+# and a registry that is merely first in a list still containing the internet
+# is not what this phase is measuring.
+cat >/etc/pacman.conf <<EOF
+[options]
+Architecture = $arch
+SigLevel = Never
+XferCommand = /usr/bin/curl -fsS -u $user:$pass -o %o %u
+
+[core]
+Server = $base/core/os/$arch
+
+[extra]
+Server = $base/extra/os/$arch
+EOF
+pacman -Sy --noconfirm "$pkg"
+SH
+)"
+  "${CW_ENGINE[@]}" run --rm --network host "$LIVE_PACMAN_IMAGE" \
+    bash -c "$script" _ "$HEAVY_TAP_BASE/proxy/$LIVE_PACMAN/pacman" "$(uname -m)" \
+    "$login" "$token" "$LIVE_PACMAN_PACKAGE"
+  return $?
+}
+
+# ── rustup — userinfo in RUSTUP_DIST_SERVER ─────────────────────────────────
+#
+# rustup has no token flag, reads no `~/.netrc` and has no credential file. What
+# it does do — measured on the wire against a server that logs its headers — is
+# send `Authorization: Basic` from the URL's userinfo, so the credential rides
+# in the one variable rustup already takes.
+#
+# `--no-self-update` keeps this to that one variable: rustup updating *itself*
+# would go to `RUSTUP_UPDATE_ROOT`, which is a second thing to point here and
+# not what the pull boundary is about.
+live_run_rustup() {
+  local suffix="$1" login="$2" token="$3"
+  local home="$HEAVY_WORK/live-rustup-$suffix"
+  rm -rf "$home"
+  mkdir -p "$home/rustup" "$home/cargo"
+  RUSTUP_HOME="$home/rustup" CARGO_HOME="$home/cargo" \
+  RUSTUP_DIST_SERVER="http://$(authz_live_cred "$login" "$token")@127.0.0.1:$HEAVY_TAP_PORT/proxy/$LIVE_RUSTUP/rustup" \
+    rustup toolchain install "$LIVE_RUSTUP_TOOLCHAIN" --profile minimal --no-self-update
+  return $?
+}
+
+phase_live() {
+  local kind="$1"
+  case "$kind" in
+    goproxy)
+      heavy_need go "the Go toolchain"
+      authz_live_pair goproxy "go mod download through the proxy" live_run_goproxy ;;
+    nodedist)
+      authz_live_pair nodedist "nvm install, credential in NVM_AUTH_HEADER" live_run_nodedist ;;
+    sdkman)
+      authz_live_pair sdkman "sdk install java, credential in the API URLs" live_run_sdkman ;;
+    github)
+      heavy_runner_for mise "mise@latest"
+      authz_live_pair github "mise install github:…, credential in ~/.netrc" live_run_github ;;
+    forgejo)
+      heavy_runner_for mise "mise@latest"
+      authz_live_pair forgejo "mise install forgejo:…, credential in ~/.netrc" live_run_forgejo ;;
+    gitlab)
+      heavy_runner_for mise "mise@latest"
+      authz_live_pair gitlab "mise install gitlab:…, credential in ~/.netrc" live_run_gitlab ;;
+    generic)
+      heavy_need curl "curl"
+      authz_live_pair generic "curl -u, a file by path" live_run_generic ;;
+    deb)
+      heavy_need apt-get "apt"
+      heavy_need dpkg "dpkg"
+      [[ -r "$LIVE_APT_KEYRING" ]] || heavy_fail "deb: no archive keyring at $LIVE_APT_KEYRING"
+      authz_live_pair deb "apt-get download, credential in auth.conf.d" live_run_deb ;;
+    rpm)
+      heavy_container_engine
+      "${CW_ENGINE[@]}" pull "$LIVE_RPM_IMAGE" >/dev/null 2>&1 \
+        || heavy_fail "rpm: could not pull $LIVE_RPM_IMAGE"
+      authz_live_pair rpm "dnf install, credential in the .repo" live_run_rpm ;;
+    pacman)
+      heavy_container_engine
+      "${CW_ENGINE[@]}" pull "$LIVE_PACMAN_IMAGE" >/dev/null 2>&1 \
+        || heavy_fail "pacman: could not pull $LIVE_PACMAN_IMAGE"
+      authz_live_pair pacman "pacman -Sy, credential in XferCommand" live_run_pacman ;;
+    rustup)
+      heavy_need rustup "the Rust toolchain installer"
+      authz_live_pair rustup "rustup toolchain install, credential in RUSTUP_DIST_SERVER" \
+        live_run_rustup ;;
+    *)
+      heavy_fail "unknown live kind '$kind' — one of: ${AUTHZ_LIVE_KINDS[*]}" ;;
+  esac
+}
+
 # ── Run ──────────────────────────────────────────────────────────────────────
 
 # The `signing` target rewrites its server's signing block mid-run, so it gets a
@@ -2341,6 +3124,13 @@ if [[ "$TARGET" == "signing" ]]; then
   cp tests/heavy/config.authz.toml "$HEAVY_AUTHZ_SIGNING_STAGE"
   signing_config "$HEAVY_AUTHZ_SIGNING_CONFIG" 300 "$SECRET_A"
   heavy_start_server "$HEAVY_AUTHZ_SIGNING_CONFIG"
+elif [[ "$TARGET" == live:* ]]; then
+  # The one config in this suite that reaches the public internet, and the one
+  # target family that needs to. `heavy_forge_auth_config` authenticates the
+  # forge registries' *upstreams* when a token is set — an unrelated credential
+  # to the ones the phases carry, which are this instance's.
+  heavy_forge_auth_config tests/heavy/config.authz-live.toml
+  heavy_start_server "$HEAVY_CONFIG"
 else
   heavy_start_server tests/heavy/config.authz.toml
 fi
@@ -2352,6 +3142,162 @@ else
   heavy_start_tap
 fi
 
+# ── The read boundary, on every kind no client drives ────────────────────────
+#
+# Eight ecosystems have a client phase above. Sixteen registry kinds had no
+# authenticated coverage of any sort — `closed_world.sh` proved an *anonymous*
+# client can reach them, and nothing anywhere asked whether a caller who may not
+# read is refused. This target closes that for the kinds it can, with the same
+# paired assertion the rest of this file is built on.
+#
+# ── Why nothing is published, and no upstream is reached ─────────────────────
+#
+# Both halves rest on one property: **authorization is decided before any
+# fetch.**
+#
+#   - Local kinds. `read_gates` fetches the version's row and, finding none,
+#     still calls `authorize_unheld_read` — so a caller holding no read verb
+#     meets `403` *before* the `404`. The deb/rpm/pacman handler does the same
+#     one layer up, calling `authorize_read` before it touches storage. The
+#     boundary is observable with nothing published.
+#   - Proxy-only kinds. `handle_resolved` evaluates grants in step 1 and
+#     resolves upstream metadata in step 2, so a registry pointed at
+#     `example.invalid` still answers `403` to the denied caller — the refusal
+#     happens before anything is dialled — while the reader gets the upstream's
+#     failure, which is not a refusal and therefore a pass.
+#
+# `authz_allowed` asserting "not a refusal" rather than `200` is what lets both
+# arms work against a registry that can serve nothing.
+#
+# **The proxy rows are also the regression test for that ordering.** Grants used
+# to be evaluated *after* the resolve: both callers then got the same upstream
+# error, there was no boundary to observe, and these eight kinds had no
+# authenticated coverage anywhere as a direct result — besides which every
+# refused request first fetched metadata from upstream and cached it. Swap the
+# two steps back and all eight rows below go red.
+#
+# ── What this target is not ──────────────────────────────────────────────────
+#
+# It is route-level. RFC 0009 §5.2's distinction holds: "the route answers
+# correctly" and "the client is stopped" are different claims, and only the
+# client phases above make the second. Two kinds are the exception, and get
+# both from one row: `jetbrains` and `generic` have no protocol for a package
+# manager to speak, so their client *is* curl — which is what this sweep drives.
+
+# authz_read_row <verb> <label> <method> <path> [curl args…]
+#
+# The three identities that matter for a read, in one call: nobody, somebody
+# who holds no read verb, and somebody who holds one. The third is the positive
+# control §13.17 exists for — without it, a handler whose guard names a verb no
+# principal can hold passes the first two and is refused to everybody.
+authz_read_row() {
+  local verb="$1" label="$2" method="$3" path="$4"
+  shift 4
+  authz_refused_anonymous "$verb" "$label — anonymous" "$method" "$path" "$@"
+  authz_denied "$verb" "$label — holding no read verb" "$method" "$T_DENIED" "$path" "$@"
+  authz_allowed "$verb" "$label — the reader" "$method" "$T_READER" "$path" "$@"
+}
+
+# authz_read_rows — the sweep's rows, `kind|verb|method|path|label` per line.
+#
+# **A table, and not a list of calls, so the coverage check cannot drift from
+# what actually ran.** `authz_check_kinds_covered` reads the kind column of the
+# very rows this phase executes; a row added here is covered, and a kind with no
+# row is reported. A second hand-maintained list of "kinds we cover" would be
+# exactly the thing that let `jetbrains-marketplace` sit in this suite's config
+# with no assertion against it at all.
+#
+# Artifact routes throughout, never listings: these all reach the funnel through
+# `proxy_stream` or `get_artifact`, which is where the grants check sits. A
+# listing takes `authorize_listing`, a different question, and mixing the two
+# would make a failure ambiguous.
+authz_read_rows() {
+  cat <<EOF
+goproxy|source:read|GET|/proxy/$GO_R/example.com/probe/@v/v1.0.0.zip|the module zip
+goproxy|releases:read|GET|/proxy/$GO_R/example.com/probe/@v/v1.0.0.mod|the module's go.mod
+maven|releases:read|GET|/proxy/$MVN_R/maven2/com/example/probe/1.0.0/probe-1.0.0.jar|the jar
+cargo|source:read|GET|/proxy/$CARGO_R/probe/1.0.0/download|the crate download
+vscode-marketplace|source:read|GET|/proxy/$VSCODE_R/vscode/asset/probe-publisher/probe/1.0.0/Microsoft.VisualStudio.Services.VSIXPackage|the VSIX asset
+jetbrains-marketplace|releases:read|GET|/proxy/$JB/plugin/download?pluginId=com.example.probe&version=1.0.0|the plugin download
+deb|releases:read|GET|/proxy/$DEB_R/deb/dists/stable/InRelease|the signed release index
+rpm|releases:read|GET|/proxy/$RPM_R/rpm/repodata/repomd.xml|the repository metadata
+pacman|releases:read|GET|/proxy/$PACMAN_R/pacman/core/os/x86_64/core.db|the core database
+github|releases:read|GET|/proxy/$GH_R/probe-owner/probe-repo/releases/download/v1.0.0/probe.bin|a release asset
+forgejo|releases:read|GET|/proxy/$FJ_R/probe-owner/probe-repo/releases/download/v1.0.0/probe.bin|a release asset
+gitlab|releases:read|GET|/proxy/$GL_R/probe-group/probe-project/-/releases/v1.0.0/downloads/probe.bin|a release download link
+nodedist|releases:read|GET|/proxy/$NODEDIST_R/nodedist/v1.0.0/node-v1.0.0-linux-x64.tar.gz|a Node tarball
+sdkman|releases:read|GET|/proxy/$SDKMAN_R/sdkman/broker/download/java/1.0.0/linuxx64|a candidate through the broker
+rustup|releases:read|GET|/proxy/$RUSTUP_R/rustup/dist/2026-01-01/rust-std-1.0.0-x86_64-unknown-linux-gnu.tar.gz|a dated dist component
+jetbrains|releases:read|GET|/proxy/$JETBRAINS_R/jetbrains/idea/probe.tar.gz|an archive by path
+generic|releases:read|GET|/proxy/$GENERIC_R/generic/probe.tar.gz|a file by path
+EOF
+}
+
+# authz_check_kinds_covered — every `RegistryKind` is claimed by some target.
+#
+# The sibling of `authz_check_vocabulary_covered`, and deliberately a *static*
+# check where that one is dynamic. No single run can exercise every kind: each
+# target starts its own server and drives one client, so "did this run touch
+# every kind" is a question no target can answer. What one run *can* assert is
+# that every kind in `RegistryKind::ALL` is claimed either by a `reads` row or
+# by a client target — and a kind added tomorrow is in neither list.
+#
+# This is the check that was missing. `jetbrains-marketplace` had a registry in
+# `config.authz.toml`, looked covered, and had no assertion against it at all;
+# the config block is what made it invisible. Nothing structural would have said
+# so, which is the same failure RFC 0015 §13.16 records for the verb vocabulary
+# and which the check above exists to prevent.
+authz_check_kinds_covered() {
+  local -a all missing=()
+  mapfile -t all < <(sed -n '/pub fn as_str(&self)/,/^    }/p' \
+    crates/core/src/entities/registry_kind.rs \
+    | grep -oE '=> "[a-z][a-z-]*"' | sed 's/.*"\(.*\)"/\1/' | sort -u)
+  # The same guard the verb scan carries: a `sed` range that stops matching the
+  # file reads as "nothing to check" and passes, which is worse than red.
+  [[ ${#all[@]} -ge 24 ]] || heavy_fail \
+    "read ${#all[@]} kinds out of registry_kind.rs, which cannot be right — the scan has \
+drifted from the file and this check is no longer checking anything"
+
+  local kind claimed
+  for kind in "${all[@]}"; do
+    if [[ -n "${AUTHZ_KIND_SEEN[$kind]:-}" ]]; then
+      continue
+    fi
+    claimed=0
+    local client
+    for client in "${AUTHZ_CLIENT_KINDS[@]}"; do
+      if [[ "$client" == "$kind" ]]; then
+        claimed=1
+        break
+      fi
+    done
+    [[ "$claimed" == 1 ]] || missing+=("$kind")
+  done
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    heavy_fail "these registry kinds are claimed by no target: ${missing[*]} — add a row to \
+\`authz_read_rows\` (route level) or a client phase and its name to \`AUTHZ_CLIENT_KINDS\`. \
+A kind with a registry in config.authz.toml and no assertion against it is not covered, it \
+only looks covered."
+  fi
+  heavy_log "Kind coverage: ${#all[@]} kinds, every one claimed by a target"
+}
+
+phase_reads() {
+  heavy_log "The read boundary, on the kinds no client phase drives"
+  heavy_mark "reads"
+
+  local kind verb method path label
+  while IFS='|' read -r kind verb method path label; do
+    [[ -n "$kind" ]] || continue
+    AUTHZ_KIND_SEEN["$kind"]=1
+    authz_read_row "$verb" "$kind, $label" "$method" "$path"
+  done < <(authz_read_rows)
+
+  authz_check_kinds_covered
+  heavy_log "READ-BOUNDARY-OK — $AUTHZ_CHECKS checks, ${#AUTHZ_KIND_SEEN[@]} kinds at route level"
+}
+
 case "$TARGET" in
   matrix)
     phase_matrix
@@ -2359,6 +3305,13 @@ case "$TARGET" in
     heavy_done "AUTHZ-HEAVY-MATRIX-OK"
     ;;
   signing)   phase_signing;   heavy_done "AUTHZ-HEAVY-SIGNING-OK" ;;
+  reads)     phase_reads;     heavy_done "AUTHZ-HEAVY-READS-OK" ;;
+  maven)     phase_maven;     heavy_done "AUTHZ-HEAVY-MAVEN-OK" ;;
+  cargo)     phase_cargo;     heavy_done "AUTHZ-HEAVY-CARGO-OK" ;;
+  live:*)
+    phase_live "${TARGET#live:}"
+    heavy_done "AUTHZ-HEAVY-LIVE-${TARGET#live:}-OK"
+    ;;
   npm)       phase_npm;       heavy_done "AUTHZ-HEAVY-NPM-OK" ;;
   pypi)      phase_pypi;      heavy_done "AUTHZ-HEAVY-PYPI-OK" ;;
   nuget)     phase_nuget;     heavy_done "AUTHZ-HEAVY-NUGET-OK" ;;
@@ -2368,6 +3321,7 @@ case "$TARGET" in
   terraform) phase_terraform; heavy_done "AUTHZ-HEAVY-TERRAFORM-OK" ;;
   composer)  phase_composer;  heavy_done "AUTHZ-HEAVY-COMPOSER-OK" ;;
   *)
-    heavy_fail "unknown target '$TARGET' — one of: matrix signing npm pypi nuget composer conda openvsx rubygems terraform"
+    heavy_fail "unknown target '$TARGET' — one of: matrix signing reads npm pypi nuget \
+composer conda openvsx rubygems terraform maven cargo, or live:<kind> for one of: ${AUTHZ_LIVE_KINDS[*]}"
     ;;
 esac

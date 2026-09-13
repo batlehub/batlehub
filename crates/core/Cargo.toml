@@ -51,5 +51,11 @@ ed25519-dalek = "3"
 # definition of the layout rather than two that must agree.
 tar = "0.4"
 
+[dev-dependencies]
+# Only in tests, and only to assert that a *filtered* channel manifest still
+# parses: the read path indexes the manifest by section and never builds a
+# value tree from it (RFC 0024 §6.2).
+toml.workspace = true
+
 [lints]
 workspace = true

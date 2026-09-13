@@ -1,0 +1,87 @@
+# Server configuration for the heavy rustup integration test
+# (tests/heavy/rustup.sh). See tests/heavy/config.npm.toml for the env-var
+# conventions; `${HEAVY_RUN}` keeps each run's registries out of the last
+# one's, because the database persists and a block recorded by a previous run
+# would make this one green for the wrong reason.
+#
+# Three registries, because the suite's claim is a *closed world*: a client
+# that can reach nothing but this instance has to get the compiler and the
+# crates from it, and both have to be refusable. The lean registry exists so
+# `deny_components` can be observed without a hot reload — a second registry is
+# a second policy, and the two answers are then in the same transcript.
+
+[server]
+host = "127.0.0.1"
+port = 8152
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+# The suite blocks a release through the admin API with this.
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-rustup-storage"
+
+# ── The static.rust-lang.org tree, typed (RFC 0024) ──────────────────────────
+#
+# Proxy-only: `supports_local_mode()` is false, there is no publish protocol.
+# The upstream is the *root* of the tree — the registry serves `dist/`,
+# `rustup/` and `manifests.txt` under it — and is the default, stated here so
+# the transcript's reader does not have to know that.
+#
+# rustup reads anonymously: `releases:list` is the document verb (the channel
+# manifests, their checksums, manifests.txt) and `releases:read` the file verb
+# (the component tarballs, rustup-init). An install needs both.
+[[registries]]
+type = "rustup"
+name = "rust-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://static.rust-lang.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list"]
+admin = ["*"]
+
+# ── The same tree with one component denied ──────────────────────────────────
+#
+# `rust-docs` is edited out of every manifest this registry serves, so the
+# sidecar beside it is the hash of an edited document. That is the sentence
+# RFC 0024 exists for: rustup verifies the checksum, and it passes.
+[[registries]]
+type = "rustup"
+name = "rustlean-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://static.rust-lang.org"]
+deny_components = ["rust-docs"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list"]
+admin = ["*"]
+
+# ── crates.io, so the closed world can resolve a dependency ──────────────────
+#
+# The compiler comes from the two registries above; what it compiles comes from
+# this one. Without it the build phase would prove only that a toolchain
+# installed — the client would still need crates.io to get a dependency, and
+# the world would not be closed.
+[[registries]]
+type = "cargo"
+name = "crates-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

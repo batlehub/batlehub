@@ -36,6 +36,41 @@ export const RFC_STATUSES = [
 /** A status the product can be described by: the page is history, not a proposal. */
 const SETTLED = /^(Implemented|Rejected|Superseded)/;
 
+/**
+ * The three shelves `/rfc/` and its sidebar are split into, each a subset of
+ * the vocabulary above. A document's shelf is a function of its status and
+ * never of where the file sits: the files stay in one directory, because
+ * some two hundred links and a handful of source comments name them by path,
+ * and a folder per status would be a second copy of the status that nothing
+ * keeps true. Moving an RFC between shelves is editing its `Status` row.
+ *
+ * `what` completes "<count> …" on the index page — "four proposals still
+ * being written or reviewed" — so it is a noun phrase, not a label.
+ */
+export const RFC_SHELVES = [
+  {
+    key: "working",
+    text: "In the works",
+    what: "proposals still being written or reviewed",
+    test: /^(Draft|In review)/,
+  },
+  {
+    key: "ready",
+    text: "Ready to build",
+    what: "accepted and waiting to be built",
+    test: /^Accepted/,
+  },
+  {
+    key: "settled",
+    text: "Settled",
+    what: "implemented, rejected or superseded: history rather than proposals",
+    test: SETTLED,
+  },
+];
+
+/** The shelf an RFC's status puts it on. Every status in the vocabulary has one. */
+export const shelfOf = (state) => RFC_SHELVES.find((shelf) => shelf.test.test(state));
+
 /** The header table stops at the first `##`; `| Status |` also occurs in bodies. */
 const headerOf = (raw) => raw.split(/^## /m)[0];
 
