@@ -360,6 +360,27 @@ impl GalleryUrls {
     pub fn asset(&self, publisher: &str, name: &str, version: &str, asset_type: &str) -> String {
         format!("{}/{asset_type}", self.asset_base(publisher, name, version))
     }
+
+    /// Open VSX's own file route — `…/api/{ns}/{ext}/{version}/file/{name}`.
+    ///
+    /// The gallery's `assetUri` shape above is what the *editor* follows; an
+    /// Open VSX client follows what the REST document says, and that document
+    /// names files by their own names. `ovsx get` takes the output filename
+    /// from the last segment of `files.download`, so an asset-route URL there
+    /// writes `Microsoft.VisualStudio.Services.VSIXPackage` to disk instead of
+    /// `{ns}.{ext}-{version}.vsix`.
+    pub fn openvsx_file(
+        &self,
+        publisher: &str,
+        name: &str,
+        version: &str,
+        filename: &str,
+    ) -> String {
+        format!(
+            "{}/api/{publisher}/{name}/{version}/file/{filename}",
+            self.base
+        )
+    }
 }
 
 /// One extension object for an `extensionquery` response.
@@ -592,7 +613,27 @@ pub fn openvsx_extension_json(
 ) -> Value {
     let file = |t: &str| urls.asset(&entry.publisher, &entry.extension_name, &version.version, t);
     let mut files = serde_json::Map::new();
-    files.insert("download".to_owned(), json!(file(asset_type::VSIX_PACKAGE)));
+    // The package itself goes out under Open VSX's own route and Open VSX's own
+    // name — `ovsx` follows this URL and names the file it writes after its last
+    // segment, and `crates/web/tests/protocol_conformance.rs` records that route
+    // as request 2 of 2 for `ovsx get`. The rest stay on the gallery's asset
+    // route, which is the only one that can serve them: the prose files are
+    // spelled however the publisher spelled them and have to be *matched* inside
+    // the archive, the icon is sanitised there and only there (see
+    // `assets::SvgHandling`), and the signature archive and its key are not
+    // inside the archive at all.
+    files.insert(
+        "download".to_owned(),
+        json!(urls.openvsx_file(
+            &entry.publisher,
+            &entry.extension_name,
+            &version.version,
+            &format!(
+                "{}.{}-{}.vsix",
+                entry.publisher, entry.extension_name, version.version
+            ),
+        )),
+    );
     files.insert("manifest".to_owned(), json!(file(asset_type::MANIFEST)));
     files.insert("readme".to_owned(), json!(file(asset_type::DETAILS)));
     files.insert("changelog".to_owned(), json!(file(asset_type::CHANGELOG)));

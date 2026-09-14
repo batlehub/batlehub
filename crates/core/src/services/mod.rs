@@ -74,7 +74,7 @@ pub use local_registry::{
     PublishPolicyRequest, PublishRequest, TerraformPlatform, COMPOSER_DIST_SHA1,
 };
 pub use metrics::ProxyMetrics;
-pub use proxy::{ProxyRequest, ProxyResponse, ProxyService};
+pub use proxy::{ProxyRequest, ProxyResponse, ProxyService, StreamedIndex};
 pub use pullers::{pullers_for, refused_for, Puller};
 pub use pulls::{pulls_for, Pull};
 pub use quota::{

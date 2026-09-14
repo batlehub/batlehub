@@ -873,14 +873,40 @@ EOF
 
   heavy_mark conda
   heavy_log "micromamba create (python and one package from the channel), with egress denied"
+  # The status is named in the failure, because `--quiet` means micromamba can
+  # fail having printed **nothing at all** — and then the difference between "it
+  # refused" and "it was killed" (137, which is what an OOM looks like on a
+  # runner) is the whole diagnosis and is otherwise unrecoverable.
+  set +e
   cw_step "$out" "$dir" "${DENY[@]}" \
     MAMBA_ROOT_PREFIX="$HEAVY_WORK/mamba" CONDA_PKGS_DIRS="$HEAVY_WORK/mamba-pkgs" \
     "$mm" create --yes --quiet --prefix "$HEAVY_WORK/conda-env" \
     --override-channels --channel "$HEAVY_TAP_BASE/proxy/$CONDA_REG" \
-    python=3.12 six \
-    || { cat "$out" >&2; heavy_fail "conda: the environment could not be built inside the closed world"; }
-  heavy_wire_re_after conda "GET /proxy/$CONDA_REG/linux-64/repodata.json -> 200" \
-    "micromamba did not read the channel's repodata through the proxy"
+    python=3.12 six
+  local rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then
+    cat "$out" >&2
+    heavy_client_said "$out" 'error|critical|failed|refus' 5
+    heavy_fail "conda: the environment could not be built inside the closed world \
+(micromamba exited $rc)"
+  fi
+  # Any encoding, because which one is the *client's* choice and it picks the
+  # cheapest one this instance can actually serve. Pinned to the uncompressed
+  # URL, this assertion passed only while the compressed route was too slow to
+  # use: micromamba asked for `repodata.json.zst` first, gave up on it, and fell
+  # back to the 424 MiB document — so the line that was supposed to prove the
+  # index came through the proxy was in fact proving that the fast path did not
+  # work.
+  # Either index, because a client that can read the **sharded** one (CEP-16)
+  # never asks for `repodata.json` at all — it takes
+  # `repodata_shards.msgpack.zst` and a shard per package, which is the whole
+  # point of serving it. Pinning one form asserted a slow path once already (see
+  # the note this replaced), so what is asserted is the sentence that matters:
+  # the channel's index came through this instance.
+  heavy_wire_re_after conda \
+    "GET /proxy/$CONDA_REG/linux-64/(repodata[.]json([.](zst|bz2))?|repodata_shards[.]msgpack[.]zst) -> 200" \
+    "micromamba did not read the channel's index through the proxy"
   local pkgs
   pkgs="$(heavy_wire_count_after conda "GET /proxy/$CONDA_REG/.*(conda|tar[.]bz2) -> 200")"
   [[ "$pkgs" -ge 2 ]] \

@@ -616,7 +616,8 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
             //   files/{p}/{u}/{file} — all before the shared npm version/packument wildcards
             conda::{
                 conda_channeldata, conda_current_repodata, conda_file_download, conda_publish,
-                conda_repodata, conda_repodata_bz2, conda_repodata_zst,
+                conda_repodata, conda_repodata_bz2, conda_repodata_shards, conda_repodata_zst,
+                conda_shard,
             },
             forgejo::fj_attachment,
             forgejo::fj_packages,
@@ -922,6 +923,13 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                                 // (RFC 0009 §7.5). `channeldata.json` is channel-root, so it must precede
                                 // the two-segment npm catch-all as well.
     cfg.service(conda_channeldata); // GET …/channeldata.json
+                                    // CEP-16, before the two index routes and well before the filename
+                                    // catch-all: `repodata_shards.msgpack.zst` is a literal name, and a
+                                    // shard is hex-named with its own suffix, so neither can be confused
+                                    // with a package (`.conda`/`.tar.bz2`) — but both would be swallowed
+                                    // by the npm three-segment wildcard further down.
+    cfg.service(conda_repodata_shards); // GET …/{platform}/repodata_shards.msgpack.zst
+    cfg.service(conda_shard); // GET …/{platform}/{sha256}.msgpack.zst
     cfg.service(conda_repodata_zst); // GET …/{platform}/repodata.json.zst
     cfg.service(conda_repodata_bz2); // GET …/{platform}/repodata.json.bz2
     cfg.service(conda_repodata); // GET …/{platform}/repodata.json

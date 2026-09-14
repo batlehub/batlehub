@@ -240,9 +240,37 @@ pub async fn fetch_json_document(
     what: &str,
 ) -> Result<batlehub_core::ports::VersionDocument, CoreError> {
     let body = fetch_document_body(req, what).await?;
+    warn_if_large(what, body.len());
     let value: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|e| CoreError::Registry(format!("parsing {what}: {e}")))?;
     Ok(batlehub_core::ports::VersionDocument::json(value))
+}
+
+/// The size past which turning a listing document into a `serde_json::Value` is
+/// a memory event rather than a parse.
+///
+/// A `Value` tree is several times the text it came from — conda-forge's
+/// `linux-64/repodata.json` is 424 MiB and measured ~11.5 GB resident — and
+/// **no limit covers this**: `[limits] max_artifact_size_bytes` applies to
+/// artifacts, not to documents, so the first symptom was a client timing out
+/// with nothing in the log to say why. 64 MiB is comfortably above every other
+/// listing this proxy serves and comfortably below the one that hurts.
+const LARGE_DOCUMENT_BYTES: usize = 64 * 1024 * 1024;
+
+/// Say so when a document is about to be parsed at a size that costs real
+/// memory, naming it, so the log reads as an explanation rather than a mystery.
+fn warn_if_large(what: &str, bytes: usize) {
+    if bytes >= LARGE_DOCUMENT_BYTES {
+        tracing::warn!(
+            document = %what,
+            bytes,
+            mib = bytes / (1024 * 1024),
+            "parsing a large listing document: a serde_json::Value of it costs several times \
+             this in memory. If this is a conda channel index, the byte path \
+             (`fetch_version_document_stream`) should have taken it — it is used when nothing \
+             is blocked in the registry and the mode is proxy"
+        );
+    }
 }
 
 /// The releases listing of a forge repository, as the client asked for it.

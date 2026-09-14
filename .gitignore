@@ -92,3 +92,10 @@ ui/eslint-results.sarif
 !/.impeccable/surfaces/
 # Sub-charts fetched by `helm dependency build` (Chart.lock is committed).
 helm/batlehub/charts/
+
+choco_*.xml
+# A soak run's output (`task perf:soak`) — per-run and per-machine, where the
+# `authz-*.json` beside it are committed measurements from a documented run.
+perf/results/soak.md
+perf/results/soak-samples.csv
+perf/results/soak-marks.txt

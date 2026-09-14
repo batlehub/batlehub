@@ -406,11 +406,22 @@ impl RegistryClient for VsCodeMarketplaceRegistryClient {
             )
             .await?
         } else {
-            self.http
-                .get(&url)
-                .send()
-                .await
-                .map_err(to_registry_error)?
+            // The package URL is built from the configured base, but the gallery
+            // answers it with a `302` to its own CDN, and `self.http` would
+            // follow that — and any further hop — unchecked and still
+            // credentialed. Same walk as the branch above, with only the base
+            // trusted: the first hop *is* the base here, so nothing else needs
+            // to be.
+            let parsed = reqwest::Url::parse(&url)
+                .map_err(|e| CoreError::Registry(format!("invalid upstream URL '{url}': {e}")))?;
+            crate::registry::ssrf::fetch_following_redirects(
+                &self.readme_credentialed,
+                &self.readme_plain,
+                &None,
+                &self.base_url,
+                parsed,
+            )
+            .await?
         };
 
         if response.status() == reqwest::StatusCode::NOT_FOUND {

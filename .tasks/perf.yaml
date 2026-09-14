@@ -75,6 +75,23 @@ tasks:
       - bash perf/scripts/run_with_metrics.sh --no-thresholds perf/k6/scenarios/06_sbom.js
       - bash perf/scripts/run_with_metrics.sh --no-thresholds perf/k6/scenarios/07_eviction.js
 
+  # ── Soak / leak detection (RFC-less: this is a gate, not a measurement) ──────
+  #
+  # Unlike every scenario above, this one starts its own server and mock
+  # upstream and returns a verdict: it fails when the process is holding more
+  # memory, descriptors, threads or database connections *at idle* after the
+  # load than it was before. Manual — nothing schedules it.
+
+  perf:soak:
+    desc: "Soak the server under constant load and fail if it did not give back what it took (leak gate; needs DATABASE_URL and k6). DURATION, RATE, WARMUP, SETTLE, PROFILE"
+    cmds:
+      - bash perf/scripts/soak.sh
+        --duration {{.DURATION | default "10m"}}
+        --rate {{.RATE | default "100"}}
+        --warmup {{.WARMUP | default "60"}}
+        --settle {{.SETTLE | default "60"}}
+        --profile {{.PROFILE | default "release"}}
+
   # ── Performance testing — S3 + Redis backends ─────────────────────────────────
   # Same k6 scenarios as the filesystem/memory suite; only the server config
   # differs.  Run both suites back-to-back to compare backends head-to-head.

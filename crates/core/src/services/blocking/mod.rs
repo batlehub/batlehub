@@ -48,6 +48,7 @@ use crate::ports::{DocumentKind, VersionDocument};
 pub mod cargo;
 pub mod composer;
 pub mod conda;
+pub mod conda_stream;
 pub mod forge;
 pub mod goproxy;
 pub mod maven;

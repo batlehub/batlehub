@@ -200,7 +200,16 @@ heavy_cleanup() {
   done
   heavy_stop_second_server
   heavy_stop_server
-  [[ -n "$HEAVY_WORK" ]] && rm -rf "$HEAVY_WORK"
+  # `HEAVY_KEEP_WORK=1` leaves the work directory behind. A phase captures its
+  # client's output into a file under it and prints that file on failure — but
+  # a client run with `--quiet` can fail having printed nothing at all, and then
+  # the only record of what happened is the transcript, the logs, and whatever
+  # the client left in its own state directory. Which this deletes.
+  if [[ "${HEAVY_KEEP_WORK:-0}" == "1" ]]; then
+    heavy_log "keeping the work directory: $HEAVY_WORK"
+  else
+    [[ -n "$HEAVY_WORK" ]] && rm -rf "$HEAVY_WORK"
+  fi
   return 0
 }
 

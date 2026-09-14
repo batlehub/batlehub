@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/forgejo.md
-sourceHash: 8f0cb0fd0a0db3ef
+sourceHash: b4d776b1e1891259
 ---
 
 # Forgejo / Gitea

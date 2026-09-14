@@ -28,4 +28,10 @@ actix-web = { version = "4", default-features = false, features = [
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
-rand = "0.8"
+# The packument advertises `dist.shasum`, and the proxy verifies it against the
+# bytes it receives (`crates/core/src/services/integrity.rs`). A mock that
+# advertises a made-up digest therefore has every artifact read refused with a
+# 502 — which is what happened, silently, from the day that check landed until
+# the soak harness tried to seed a warm cache. Same version line as the
+# workspace root, so the two agree if this is ever folded in.
+sha1 = "0.11"

@@ -634,10 +634,40 @@ impl RegistryClient for GitlabRegistryClient {
                     )));
                 }
             }
+            // `GET …/-/releases/{tag}` — the release's own JSON, as GitLab sent
+            // it. The typed route hands this client a `PackageId` with no
+            // selector on purpose: `proxy_release_document` wants the upstream
+            // document so it can repoint the asset URLs inside it (RFC 0019
+            // §4.2), and it gets there through `fetch_artifact` like every
+            // other read. Refusing that shape answered `502
+            // "fetch_artifact requires PackageId::artifact to be set"` for
+            // every single-release read, which is what `mise`'s `gitlab:`
+            // backend asks for first and the closed-world gitlab phase caught.
+            // The Forgejo and GitHub clients have carried this arm all along.
+            //
+            // The listing (`…/-/releases`) never arrives here — its handler
+            // goes through `proxy_document` and the listing pipeline.
             None => {
-                return Err(CoreError::Registry(
-                    "fetch_artifact requires PackageId::artifact to be set".to_owned(),
-                ));
+                let url = format!(
+                    "{}/projects/{}/releases/{}",
+                    self.api_base_url,
+                    Self::project_selector(project),
+                    percent_encode(tag),
+                );
+                let resp = self.get(&url).send().await.map_err(to_registry_error)?;
+                if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                    return Err(CoreError::NotFound(format!("{project}@{tag} not found")));
+                }
+                let resp = resp.error_for_status().map_err(to_registry_error)?;
+                let cache_control = resp
+                    .headers()
+                    .get("cache-control")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned);
+                return Ok(FetchedArtifact {
+                    stream: Box::pin(resp.bytes_stream().map_err(to_registry_error)),
+                    cache_control,
+                });
             }
         };
 
@@ -905,6 +935,56 @@ mod tests {
             ),
             "{p:?}"
         );
+    }
+
+    /// The typed single-release route asks for the document, not an asset, so
+    /// it arrives with no selector — the shape this client used to refuse with
+    /// `502 "fetch_artifact requires PackageId::artifact to be set"`, which is
+    /// every `mise install gitlab:…` there is.
+    #[tokio::test]
+    async fn fetch_artifact_without_a_selector_streams_the_release_document() {
+        let mut server = mockito::Server::new_async().await;
+        let body = r#"{"tag_name":"v1.117.0","assets":{"links":[],"sources":[]}}"#;
+        let _rel = server
+            .mock("GET", "/api/v4/projects/gitlab-org%2Fcli/releases/v1.117.0")
+            .with_status(200)
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let client = forge_client(&server).await;
+        let pkg = PackageId::new("gl", "gitlab-org/cli", "v1.117.0");
+        let fetched = client.fetch_artifact(&pkg).await.unwrap();
+        let bytes: Vec<u8> = fetched
+            .stream
+            .try_fold(Vec::new(), |mut acc, chunk| async move {
+                acc.extend_from_slice(&chunk);
+                Ok(acc)
+            })
+            .await
+            .unwrap();
+        assert_eq!(String::from_utf8(bytes).unwrap(), body);
+    }
+
+    /// A tag that is not there is a `404`, not a bad gateway.
+    #[tokio::test]
+    async fn fetch_artifact_without_a_selector_404s_an_absent_tag() {
+        let mut server = mockito::Server::new_async().await;
+        let _rel = server
+            .mock("GET", "/api/v4/projects/grp%2Fproj/releases/v9.9.9")
+            .with_status(404)
+            .create_async()
+            .await;
+
+        let client = forge_client(&server).await;
+        let pkg = PackageId::new("gl", "grp/proj", "v9.9.9");
+        // `FetchedArtifact` holds a boxed stream and is not `Debug`, so the
+        // error comes out of a match rather than `unwrap_err`.
+        match client.fetch_artifact(&pkg).await {
+            Err(CoreError::NotFound(_)) => {}
+            Err(other) => panic!("expected NotFound, got {other:?}"),
+            Ok(_) => panic!("expected NotFound, got an artifact"),
+        }
     }
 
     #[tokio::test]

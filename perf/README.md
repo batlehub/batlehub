@@ -9,7 +9,7 @@ This directory contains everything needed to measure throughput, latency, and re
 3. [Quick start — filesystem + memory (default)](#quick-start-—-filesystem-memory-default)
 4. [Quick start — S3 + Redis](#quick-start-—-s3-redis)
 5. [Comparing backends head-to-head](#comparing-backends-head-to-head)
-6. [Scenarios](#scenarios)
+6. [Scenarios](#scenarios) — including [10 — soak / leak detection](#_10-—-soak-leak-detection-perf-soak)
 7. [Tuning the mock upstream](#tuning-the-mock-upstream)
 8. [Reading the results](#reading-the-results)
 9. [Known bottlenecks and what to watch](#known-bottlenecks-and-what-to-watch)
@@ -293,6 +293,45 @@ If `/evict` returns 404, check that `[registries.cache]` for `perf-npm` sets at 
 
 ---
 
+### 10 — Soak / leak detection (`perf:soak`)
+
+**Goal:** find out whether the server gives back what it took. Not a
+measurement — a **verdict**, with an exit code.
+
+**Profile:** a constant *arrival rate* (default 100 req/s), held for as long as
+you ask, between two idle measurement windows:
+
+```
+warm-up load ──▶ quiesce ──▶ BASELINE ──▶ steady load ──▶ quiesce ──▶ FINAL
+```
+
+Unlike every scenario above, this one starts its own server and mock upstream:
+
+```bash
+task perf:soak                        # 10 minutes at 100 req/s
+task perf:soak DURATION=1h RATE=200   # overnight
+```
+
+It compares idle RSS, open file descriptors, OS threads and held database
+connections between the two windows, fits the RSS trend across the sustained
+load, plots all four curves (a text chart in the report, an SVG beside it), and
+**ranks the registries by what they cost** — from the server's own `/metrics`,
+scraped at both ends of the load and subtracted. That last one is why
+`config.soak.toml` declares three registries with different shapes rather than
+one: a single-registry run cannot answer "which is the worst consumer", and
+registries that all cost the same thing rank by traffic rather than by cost. Scenarios 02–07 are `constant-vus`, which is right for
+throughput and wrong here: a server that slows down is then offered *less*
+work, so the degradation hides itself. A constant arrival rate keeps the
+offered load flat and lets the queue grow, which is what a real client
+population does.
+
+The full rationale — why both windows are idle, why the baseline comes after a
+warm-up, and what each of the five signals means — is in
+[`docs/contributing/testing.md` § 7-quater](../docs/contributing/testing.md),
+and the thresholds are environment variables listed there.
+
+---
+
 ## Tuning the mock upstream
 
 `task perf:upstream` accepts two variables:
@@ -311,6 +350,24 @@ DELAY_MS=100 task perf:upstream
 # Simulate a slow upstream + large artifacts
 DELAY_MS=500 ARTIFACT_KB=4096 task perf:upstream
 ```
+
+### Its artifacts are deterministic, and that is load-bearing
+
+An artifact's bytes are derived from its coordinate, and the packument
+advertises the **real** sha1 of the bytes the mock will serve.
+
+It used to serve random bytes under a made-up `dist.shasum`, which was fine
+until the proxy started verifying the digest it is given
+(`crates/core/src/services/integrity.rs`). From that day every artifact read in
+every scenario was refused with a `502`, and the scenarios that check for a
+`200` had been failing ever since — quietly, because nobody reruns a perf suite
+to see whether it still passes. The soak harness found it while seeding a warm
+cache.
+
+The determinism matters beyond the digest: a cache is supposed to return the
+bytes it stored, and an upstream whose answer changes per request makes "the
+same artifact" meaningless — a hit and a miss would be distinguishable by
+content, which is not a property any real registry has.
 
 ---
 

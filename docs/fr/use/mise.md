@@ -1,7 +1,7 @@
 ---
 title: mise
 sourcePath: use/mise.md
-sourceHash: b17491d0e1e62915
+sourceHash: da940cf35f94219e
 ---
 
 # Faire pointer mise vers BatleHub

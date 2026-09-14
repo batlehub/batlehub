@@ -270,6 +270,11 @@ tasks:
     cmds:
       - bash tests/heavy/npm.sh
 
+  test:soak-heavy:
+    desc: "Heavy soak: npm in a loop against a served upstream, asserting the server gave back the memory, descriptors and threads it took (needs DATABASE_URL; no network). SOAK_ROUNDS/SOAK_PACKAGES/SOAK_SETTLE tune it"
+    cmds:
+      - bash tests/heavy/soak.sh
+
   test:pypi-heavy:
     desc: "Heavy PyPI integration: `twine upload` then `pip install`, and the PEP 658 `.metadata` sibling pip refuses to do without (needs DATABASE_URL + network)"
     cmds:

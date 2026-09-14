@@ -702,6 +702,20 @@ fn matrix() -> Vec<Row> {
         )
         .pkg("org.acme.plugin")
         .meta(plugin_meta),
+        // The GET spelling of compatible-updates — `installPlugins` on
+        // IntelliJ 2026.1 asks this way and no other, and it reaches the same
+        // answer as the POST row further down. Two verbs on one path is two
+        // routes to the rule chain, and only one of them was classified.
+        Row::new(
+            "jetbrains-marketplace",
+            "/proxy/reg/api/search/updates/compatible?build=IU-261.25134.95&pluginXmlId=org.acme.plugin",
+        )
+        .pkg("org.acme.plugin")
+        .meta(plugin_meta)
+        .vis(WHOLE_REGISTRY)
+        // Same reason as its POST twin: the fixture publishes no plugin
+        // *update* rows, which is what this route answers from.
+        .no_control(),
         // ── routes the inventory claimed and no row reached ──────────────────
         //
         // Five entries were marked `Coverage::Row` with nothing behind them,
@@ -966,6 +980,7 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/api/products/intellij/plugins/{id}/comments", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/api/search/aggregation/{field}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/api/search/plugins", Coverage::NoRow("package read, not yet exercised")),
+    ("/proxy/{registry}/api/search/updates/compatible", Coverage::Row),
     ("/proxy/{registry}/api/searchPlugins", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/api/security-advisories/", Coverage::NoPackage("Composer advisory feed; CVE data, not package contents")),
     ("/proxy/{registry}/api/v1/crates", Coverage::NoRow("package read, not yet exercised")),
@@ -978,6 +993,7 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/api/{namespace}/{extension}", Coverage::Row),
     ("/proxy/{registry}/api/{namespace}/{extension}/{version}", Coverage::Row),
     ("/proxy/{registry}/api/{namespace}/{extension}/{version}/file/{filename}", Coverage::NoRow("package read, not yet exercised")),
+    ("/proxy/{registry}/attachments/{uuid}", Coverage::NoRow("package read, not yet exercised: the uuid resolves only against a release document this registry has already served, which this fixture never seeds, so a row here would assert a 404 rather than a refusal — the closed-world forgejo phase is the client-end regression test")),
     ("/proxy/{registry}/channeldata.json", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/deb/{path}", Coverage::Row),
     ("/proxy/{registry}/dist/{vendor}/{package}/{version}", Coverage::Row),
@@ -1088,9 +1104,11 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/{package}/{version}/tarball", Coverage::Row),
     ("/proxy/{registry}/{platform}/current_repodata.json", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{platform}/repodata.json", Coverage::NoRow("package read, not yet exercised")),
+    ("/proxy/{registry}/{platform}/repodata_shards.msgpack.zst", Coverage::NoRow("package read, not yet exercised: CEP-16's shard index, the same whole-channel document as repodata.json and served through the same gate")),
     ("/proxy/{registry}/{platform}/repodata.json.bz2", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{platform}/repodata.json.zst", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{platform}/{filename}", Coverage::Row),
+    ("/proxy/{registry}/{platform}/{shard}.msgpack.zst", Coverage::NoRow("package read, not yet exercised: one package's records, content-addressed, and served only while the registry blocks nothing")),
     ("/proxy/{registry}/{project}/-/archive/{tag}/{filename}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{project}/-/raw/{git_ref}/{path}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{project}/-/releases", Coverage::NoRow("package read, not yet exercised")),

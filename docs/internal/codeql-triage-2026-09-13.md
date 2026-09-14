@@ -6,8 +6,9 @@
 **Verdict:** false positive, and not a new one: it is the same alert at the same
 line as `codeql-triage-2026-09-06.md`, which is itself the 2026-08-30 alert
 after the line moved.
-**Method:** `git log -- crates/web/src/middleware/proxy_trust.rs` against this
-branch's two commits, plus a re-read of the taint path.
+**Method:** `git log main..HEAD -- crates/web/src/middleware/proxy_trust.rs`
+(empty) against this branch's commits, plus a re-read of the taint path.
+Re-verified on 2026-09-13 after the branch grew to four commits.
 
 ---
 
@@ -16,10 +17,11 @@ branch's two commits, plus a re-read of the taint path.
 **Location:** `crates/web/src/middleware/proxy_trust.rs:208`, in `trusted_origin`
 
 The file is not touched by this pull request. Its most recent commit is
-`7bb7ce48`, which is on `main`; neither `2531b49f` nor `7ab6ce66` — the two
-commits this branch adds — goes near it. The line number is the same 208 the
-2026-09-06 note recorded, so nothing about the code, the taint path or the bound
-has changed since that note was written.
+`7bb7ce48`, which is on `main`; none of the four commits this branch adds —
+`2531b49f`, `7ab6ce66`, `a9a7ecf3`, `4b0f4b4f` — goes near it, and
+`git log main..HEAD -- crates/web/src/middleware/proxy_trust.rs` is empty. The
+line number is the same 208 the 2026-09-06 note recorded, so nothing about the
+code, the taint path or the bound has changed since that note was written.
 
 The reasoning is unchanged and is not restated here: the "allocation" is actix
 copying request headers into `String`s, bounded by `MAX_BUFFER_SIZE = 131_072`

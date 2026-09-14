@@ -825,11 +825,23 @@ async fn the_openvsx_api_describes_the_extension() {
     assert_eq!(doc["version"], VERSION);
     assert_eq!(doc["displayName"], "Acme Tool");
 
+    // Open VSX's own route, under Open VSX's own name for the package: `ovsx`
+    // follows this URL and names the file it writes after its last segment, so
+    // the gallery's `assetUri` shape here wrote
+    // `Microsoft.VisualStudio.Services.VSIXPackage` to disk. The route is
+    // recorded as request 2 of 2 for `ovsx get` in `protocol_conformance.rs`.
     let download = doc["files"]["download"].as_str().unwrap_or_default();
-    assert!(
-        download.contains("/proxy/local-vsx/vscode/asset/acme/tool/"),
-        "download URL was {download}"
-    );
+    let path = format!("/proxy/local-vsx/api/acme/tool/{VERSION}/file/acme.tool-{VERSION}.vsix");
+    assert!(download.ends_with(&path), "download URL was {download}");
+
+    // And following it yields the package, rather than a route that 404s.
+    let req = TestRequest::get()
+        .uri(&path)
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(&read_body(resp).await[..2], b"PK");
 }
 
 #[actix_web::test]

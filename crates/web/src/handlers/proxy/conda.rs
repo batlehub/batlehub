@@ -50,6 +50,7 @@ use batlehub_core::entities::Action;
     method = "HEAD"
 )]
 pub async fn conda_repodata(
+    req: HttpRequest,
     path: web::Path<(String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
@@ -59,6 +60,60 @@ pub async fn conda_repodata(
 ) -> Result<impl Responder, AppError> {
     let (registry, platform) = path.into_inner();
     require_registry_type(&registry, "conda", &map)?;
+    let mode = mode_map.get(&registry);
+
+    // A probe is answered with a probe. Without this, micromamba's `HEAD` of
+    // every subdir pulled the whole index upstream and discarded it.
+    if req.method() == actix_web::http::Method::HEAD {
+        if let Some(answer) = probe_index(
+            &svc,
+            &registry,
+            &platform,
+            &identity,
+            mode.clone(),
+            batlehub_core::ports::DocumentKind::Versions,
+            &[batlehub_core::ports::DocumentEncoding::Identity],
+            "application/json",
+        )
+        .await?
+        {
+            return Ok(answer);
+        }
+    }
+
+    // The whole channel, unparsed, when there is nothing to take out of it —
+    // see `ProxyService::multi_package_document_stream`. Only `Identity` is
+    // accepted here: this route's client asked for the uncompressed document
+    // and gets it, rather than a `.zst` it never said it could read.
+    match streamed_index(
+        &svc,
+        &registry,
+        &platform,
+        &identity,
+        mode.clone(),
+        batlehub_core::ports::DocumentKind::Versions,
+        &[batlehub_core::ports::DocumentEncoding::Identity],
+    )
+    .await?
+    {
+        // Nothing to take out: socket to socket, one chunk at a time.
+        Some(batlehub_core::services::StreamedIndex::AsIs(doc)) => {
+            return Ok(stream_to_client("application/json", doc))
+        }
+        // Something to take out: buffered, but the *compressed* form, and
+        // filtered as it decodes rather than parsed into a `Value` first.
+        Some(batlehub_core::services::StreamedIndex::Filter { doc, blocked }) => {
+            return filtered_index_response(
+                doc,
+                blocked,
+                None,
+                "application/json",
+                "the channel index",
+            )
+            .await
+        }
+        None => {}
+    }
 
     let (body, synthesised) = repodata_bytes(
         svc,
@@ -66,7 +121,7 @@ pub async fn conda_repodata(
         &registry,
         &platform,
         identity,
-        mode_map.get(&registry),
+        mode,
         batlehub_core::ports::DocumentKind::Versions,
     )
     .await?;
@@ -75,6 +130,442 @@ pub async fn conda_repodata(
     builder.content_type("application/json");
     mark_synthesised(&mut builder, synthesised);
     Ok(builder.body(body))
+}
+
+/// Try the byte path: the upstream index, streamed, when nothing has to be taken
+/// out of it.
+///
+/// `None` means the request needs the parsed path — something is blocked, the
+/// registry is local or hybrid (the local half has to be merged in), or the
+/// channel does not publish the encoding asked for.
+///
+/// Proxy mode only. A local channel is built from the database on every request
+/// and there is no upstream to stream; a hybrid one has to merge, and a merge
+/// needs both documents in hand.
+async fn streamed_index(
+    svc: &web::Data<Arc<ProxyService>>,
+    registry: &str,
+    platform: &str,
+    identity: &AuthIdentity,
+    mode: RegistryMode,
+    kind: batlehub_core::ports::DocumentKind,
+    accept: &[batlehub_core::ports::DocumentEncoding],
+) -> Result<Option<batlehub_core::services::StreamedIndex>, AppError> {
+    if mode != RegistryMode::Proxy {
+        return Ok(None);
+    }
+    let req = batlehub_core::services::ProxyRequest {
+        package_id: PackageId::new(registry, platform, "__repodata__"),
+        identity: identity.0.clone(),
+        action: Action::ReleasesRead.to_owned(),
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
+    };
+    svc.multi_package_document_stream(&req, kind, accept)
+        .await
+        .map_err(AppError::from)
+}
+
+/// Answer a `HEAD` by asking the upstream the same question.
+///
+/// `Ok(None)` means "no cheap answer" and the caller carries on to the body
+/// path, which is what every non-conda kind gets. conda clients probe before
+/// they fetch, so this is the difference between a `HEAD` costing a round trip
+/// and a `HEAD` costing 57 MiB.
+///
+/// The length and validators are whatever the service could promise — it drops
+/// them for a registry that filters, since the filtered index is not the
+/// document upstream described.
+#[allow(clippy::too_many_arguments)]
+async fn probe_index(
+    svc: &web::Data<Arc<ProxyService>>,
+    registry: &str,
+    platform: &str,
+    identity: &AuthIdentity,
+    mode: RegistryMode,
+    kind: batlehub_core::ports::DocumentKind,
+    accept: &[batlehub_core::ports::DocumentEncoding],
+    content_type: &str,
+) -> Result<Option<HttpResponse>, AppError> {
+    if mode != RegistryMode::Proxy {
+        return Ok(None);
+    }
+    let req = batlehub_core::services::ProxyRequest {
+        package_id: PackageId::new(registry, platform, "__repodata__"),
+        identity: identity.0.clone(),
+        action: Action::ReleasesRead.to_owned(),
+        ip_address: identity.1.ip.clone(),
+        user_agent: identity.1.user_agent.clone(),
+    };
+    let Some(probe) = svc
+        .multi_package_document_probe(&req, kind, accept)
+        .await
+        .map_err(AppError::from)?
+    else {
+        return Ok(None);
+    };
+
+    // Whatever the probe carries is relayed; the service has already dropped the
+    // fields it cannot promise for a registry that filters.
+    let mut builder = HttpResponse::Ok();
+    builder.content_type(content_type);
+    if let Some(len) = probe.content_length {
+        builder.insert_header((actix_web::http::header::CONTENT_LENGTH, len.to_string()));
+    }
+    if let Some(etag) = probe.etag {
+        builder.insert_header((actix_web::http::header::ETAG, etag));
+    }
+    if let Some(modified) = probe.last_modified {
+        builder.insert_header((actix_web::http::header::LAST_MODIFIED, modified));
+    }
+    Ok(Some(builder.finish()))
+}
+
+// ── CEP-16: the sharded index ────────────────────────────────────────────────
+//
+// A conda channel publishes its index twice. `repodata.json` is every package
+// record in the subdir — 424 MiB for `conda-forge/linux-64` — and
+// `repodata_shards.msgpack.zst` is a **568 KB** map of package name to the
+// sha256 of that package's own shard, each shard a few tens of kilobytes at
+// `{subdir}/{sha256}.msgpack.zst`. A client that speaks CEP-16 fetches the map
+// and then only the shards it needs, which for a typical install is under a
+// megabyte against 55 MiB compressed.
+//
+// micromamba asks for the sharded index **first**, before anything else. Until
+// these two routes existed it got a `404` and fell back to the monolith, which
+// is how one `conda install` came to cost this proxy several gigabytes.
+//
+// Two things make shards unusually good here rather than merely smaller:
+// they are **content-addressed**, so a shard is immutable and cacheable
+// forever with no TTL and no revalidation; and a shard is one package's
+// records, so what a client reads is scoped to what it asked about.
+
+/// The shard index's content type, as the channel serves it.
+const SHARDS_CONTENT_TYPE: &str = "application/octet-stream";
+
+/// The most this proxy will decompress of a shard index to inspect it.
+///
+/// The index is ~2–5 MiB decompressed; the bound is what stops a channel from
+/// answering with a zstd bomb on a route that has to look inside.
+const MAX_SHARD_INDEX_BYTES: usize = 64 * 1024 * 1024;
+
+/// Whether a shard index is safe to relay: it must route the client back here.
+///
+/// `info.base_url` and `info.shards_base_url` are resolved **relative to the
+/// index's own URL** when empty, which is what conda-forge publishes and what
+/// makes a pass-through correct — the client resolves them against *our* URL
+/// and comes back to us for every shard and every package.
+///
+/// A channel that sets either to an absolute URL sends the client somewhere
+/// else, past the rules, the cache and the audit trail. That is the same hole
+/// RFC 0009 §12 records against Terraform and the one the Open VSX
+/// `files.download` bug re-opened, so it is checked rather than assumed.
+///
+/// The check is deliberately blunt: **any** absolute URL anywhere in the
+/// decompressed index disqualifies it. Reading msgpack properly would mean
+/// parsing an untrusted document to decide whether to trust it, for a
+/// conservative answer this already gives — and being wrong costs a fallback to
+/// `repodata.json`, never a leak.
+fn shard_index_routes_here(compressed: &[u8]) -> bool {
+    use std::io::Read;
+    let mut decoded = Vec::new();
+    let Ok(decoder) = zstd::Decoder::new(compressed) else {
+        return false;
+    };
+    if decoder
+        .take(MAX_SHARD_INDEX_BYTES as u64)
+        .read_to_end(&mut decoded)
+        .is_err()
+    {
+        return false;
+    }
+    !decoded
+        .windows(7)
+        .any(|w| w.eq_ignore_ascii_case(b"http://") || w.starts_with(b"https:/"))
+}
+
+/// `repodata_shards.msgpack.zst` — CEP-16's index of shards.
+#[utoipa::path(
+    get,
+    path = "/proxy/{registry}/{platform}/repodata_shards.msgpack.zst",
+    tag = "proxy/conda",
+    params(
+        ("registry" = String, Path, description = "Registry name"),
+        ("platform" = String, Path, description = "Platform string, e.g. linux-64 or noarch"),
+    ),
+    responses(
+        (status = 200, description = "The shard index, as the channel published it", body = ArtifactBytes, content_type = "application/octet-stream"),
+        (status = 403, description = "Access denied"),
+        (status = 404, description = "The channel publishes no shard index, or this registry cannot serve one"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[route(
+    "/proxy/{registry}/{platform}/repodata_shards.msgpack.zst",
+    method = "GET",
+    method = "HEAD"
+)]
+pub async fn conda_repodata_shards(
+    req: HttpRequest,
+    path: web::Path<(String, String)>,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+    map: web::Data<RegistryMap>,
+    mode_map: web::Data<RegistryModeMap>,
+) -> Result<impl Responder, AppError> {
+    let (registry, platform) = path.into_inner();
+    require_registry_type(&registry, "conda", &map)?;
+    let mode = mode_map.get(&registry);
+    let kind = batlehub_core::ports::DocumentKind::REPODATA_SHARDS;
+    let accept = [batlehub_core::ports::DocumentEncoding::Zstd];
+
+    let absent = || AppError::not_found("this channel serves no sharded index here");
+
+    if req.method() == actix_web::http::Method::HEAD {
+        if let Some(answer) = probe_index(
+            &svc,
+            &registry,
+            &platform,
+            &identity,
+            mode.clone(),
+            kind,
+            &accept,
+            SHARDS_CONTENT_TYPE,
+        )
+        .await?
+        {
+            return Ok(answer);
+        }
+        return Err(absent());
+    }
+
+    match streamed_index(&svc, &registry, &platform, &identity, mode, kind, &accept).await? {
+        Some(batlehub_core::services::StreamedIndex::AsIs(doc)) => {
+            // Buffered rather than streamed, because it has to be looked at
+            // before it is relayed — 568 KB, once per TTL.
+            let bytes = collect_index(doc.stream, "the shard index").await?;
+            if !shard_index_routes_here(&bytes) {
+                tracing::warn!(
+                    registry = %registry,
+                    platform = %platform,
+                    "this channel's shard index carries absolute URLs, which would send clients \
+                     past this proxy — serving repodata.json instead"
+                );
+                return Err(absent());
+            }
+            Ok(HttpResponse::Ok()
+                .content_type(SHARDS_CONTENT_TYPE)
+                .insert_header(("X-BatleHub-Cache", "stream"))
+                .body(bytes))
+        }
+        // Nothing here can take a package out of a msgpack index, and serving
+        // an unfiltered one would hand a client the records of a package this
+        // registry blocks. So: no shards, and the client falls back to
+        // `repodata.json`, which *is* filtered.
+        Some(batlehub_core::services::StreamedIndex::Filter { .. }) => {
+            tracing::info!(
+                registry = %registry,
+                "not serving a sharded index for a registry with blocked packages; \
+                 clients will use repodata.json, which is filtered"
+            );
+            Err(absent())
+        }
+        None => Err(absent()),
+    }
+}
+
+/// One shard — `{sha256}.msgpack.zst`, one package's records.
+#[utoipa::path(
+    get,
+    path = "/proxy/{registry}/{platform}/{shard}.msgpack.zst",
+    tag = "proxy/conda",
+    params(
+        ("registry" = String, Path, description = "Registry name"),
+        ("platform" = String, Path, description = "Platform string"),
+        ("shard" = String, Path, description = "The shard's sha256, as the index named it"),
+    ),
+    responses(
+        (status = 200, description = "Shard bytes", body = ArtifactBytes, content_type = "application/octet-stream"),
+        (status = 403, description = "Access denied"),
+        (status = 404, description = "No such shard, or this registry serves no shards"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[get("/proxy/{registry}/{platform}/{shard:[0-9a-fA-F]+}.msgpack.zst")]
+pub async fn conda_shard(
+    path: web::Path<(String, String, String)>,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+    map: web::Data<RegistryMap>,
+    mode_map: web::Data<RegistryModeMap>,
+) -> Result<impl Responder, AppError> {
+    let (registry, platform, shard) = path.into_inner();
+    require_registry_type(&registry, "conda", &map)?;
+
+    // The route's pattern already excludes anything but hex; the length is what
+    // says this is a sha256 rather than a file that happens to be hex-named.
+    if shard.len() != 64 {
+        return Err(AppError::not_found("not a shard"));
+    }
+    if mode_map.get(&registry) != RegistryMode::Proxy {
+        return Err(AppError::not_found("this registry serves no shards"));
+    }
+    // A shard is only coherent with an index this proxy served, and a registry
+    // with blocks serves none — so a shard asked for here came from an index
+    // this proxy did not give out.
+    if svc
+        .registry_blocks_anything(&registry, batlehub_core::entities::RegistryKind::Conda)
+        .await
+    {
+        return Err(AppError::not_found("this registry serves no shards"));
+    }
+
+    // Content-addressed, so the coordinate *is* the hash and the bytes under it
+    // never change: cached once, correct forever. `__shards__` is a synthetic
+    // package name in the same spirit as `__repodata__` — a shard belongs to the
+    // subdir, not to a package this registry could block.
+    let pkg = PackageId::new(&registry, "__shards__", &shard)
+        .with_artifact(format!("{platform}/{shard}.msgpack.zst"));
+    proxy_stream(
+        svc,
+        pkg,
+        identity,
+        Action::ReleasesRead,
+        Some(SHARDS_CONTENT_TYPE),
+    )
+    .await
+}
+
+/// Where one encoding of one subdir's index is stored, for one blocked set.
+///
+/// The fingerprint is part of the key because the filtered document changes with
+/// the blocked set, exactly as it is part of the cache key beside it.
+fn index_storage_key(
+    registry: &str,
+    platform: &str,
+    encoding: Encoding,
+    fingerprint: &str,
+) -> String {
+    format!(
+        "index/{registry}/{platform}/{fingerprint}/repodata.json.{}",
+        encoding.suffix()
+    )
+}
+
+/// Everything stored for one subdir, whatever the fingerprint or encoding.
+fn index_storage_prefix(registry: &str, platform: &str) -> String {
+    format!("index/{registry}/{platform}/")
+}
+
+/// The largest channel index this proxy will hold in memory to filter.
+///
+/// Only the *filtering* path buffers at all — the pass-through streams — and it
+/// buffers the compressed form, which is 55 MiB for conda-forge's biggest
+/// subdir. 512 MiB is far above that and still a bound, so a channel that grows
+/// past anything reasonable fails with a sentence rather than with the OOM
+/// killer.
+const MAX_FILTERABLE_INDEX_BYTES: usize = 512 * 1024 * 1024;
+
+/// Collect a streamed document, refusing one past the bound.
+async fn collect_index(
+    stream: batlehub_core::ports::ArtifactStream,
+    what: &str,
+) -> Result<Vec<u8>, AppError> {
+    use futures::StreamExt;
+    let mut stream = stream;
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(AppError::from)?;
+        if buf.len() + chunk.len() > MAX_FILTERABLE_INDEX_BYTES {
+            return Err(AppError::bad_gateway(format!(
+                "{what} is larger than {} MiB, which is the most this proxy will hold in memory \
+                 to filter blocked packages out of it",
+                MAX_FILTERABLE_INDEX_BYTES / (1024 * 1024)
+            )));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
+
+/// Decode, filter, re-encode — the blocked case, off the async runtime.
+///
+/// One package entry is in memory at a time
+/// (`blocking::conda_stream::filter_repodata`), so what this costs is the input
+/// buffer plus the output buffer rather than a `serde_json::Value` of the whole
+/// channel. CPU work on hundreds of megabytes, hence `web::block`.
+fn filter_index(
+    input: Vec<u8>,
+    from: batlehub_core::ports::DocumentEncoding,
+    to: Option<Encoding>,
+    blocked: &batlehub_core::services::blocking::MultiPackageBlocks,
+) -> Result<Vec<u8>, AppError> {
+    use batlehub_core::ports::DocumentEncoding as In;
+    use batlehub_core::services::blocking::conda_stream::filter_repodata;
+    use std::io::Cursor;
+
+    let bad = |e: std::io::Error| AppError::internal(format!("filtering the channel index: {e}"));
+    let reader: Box<dyn std::io::Read> = match from {
+        In::Identity => Box::new(Cursor::new(input)),
+        In::Zstd => Box::new(zstd::Decoder::new(Cursor::new(input)).map_err(bad)?),
+        In::Bzip2 => Box::new(bzip2::read::BzDecoder::new(Cursor::new(input))),
+    };
+    let oops = |e: serde_json::Error| {
+        AppError::bad_gateway(format!("the channel index could not be filtered: {e}"))
+    };
+
+    match to {
+        None => {
+            let mut out = Vec::new();
+            filter_repodata(reader, &mut out, blocked).map_err(oops)?;
+            Ok(out)
+        }
+        Some(Encoding::Zstd) => {
+            let mut enc = zstd::Encoder::new(Vec::new(), 3).map_err(bad)?;
+            filter_repodata(reader, &mut enc, blocked).map_err(oops)?;
+            enc.finish().map_err(bad)
+        }
+        Some(Encoding::Bzip2) => {
+            let enc = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
+            let mut enc = enc;
+            filter_repodata(reader, &mut enc, blocked).map_err(oops)?;
+            enc.finish().map_err(bad)
+        }
+    }
+}
+
+/// The blocked half of the byte path: buffer, filter as it decodes, answer.
+async fn filtered_index_response(
+    doc: batlehub_core::ports::StreamedDocument,
+    blocked: batlehub_core::services::blocking::MultiPackageBlocks,
+    to: Option<Encoding>,
+    content_type: &str,
+    what: &str,
+) -> Result<HttpResponse, AppError> {
+    let from = doc.encoding;
+    let input = collect_index(doc.stream, what).await?;
+    let out = web::block(move || filter_index(input, from, to, &blocked))
+        .await
+        .map_err(|e| AppError::internal(format!("filtering the channel index: {e}")))??;
+    Ok(HttpResponse::Ok()
+        .content_type(content_type)
+        .insert_header(("X-BatleHub-Cache", "filtered"))
+        .body(out))
+}
+
+/// Stream a document straight to the client, chunk by chunk.
+fn stream_to_client(
+    content_type: &str,
+    doc: batlehub_core::ports::StreamedDocument,
+) -> HttpResponse {
+    use futures::StreamExt;
+    let body = doc
+        .stream
+        .filter_map(|chunk| async move { chunk.ok().map(Ok::<bytes::Bytes, actix_web::Error>) });
+    HttpResponse::Ok()
+        .content_type(content_type)
+        .insert_header(("X-BatleHub-Cache", "stream"))
+        .streaming(body)
 }
 
 /// The bytes of one repodata document, mode-aware and filtered.
@@ -190,6 +681,7 @@ async fn fetch_conda_index(
     method = "HEAD"
 )]
 pub async fn conda_repodata_zst(
+    req: HttpRequest,
     path: web::Path<(String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
@@ -199,6 +691,7 @@ pub async fn conda_repodata_zst(
 ) -> Result<impl Responder, AppError> {
     let (registry, platform) = path.into_inner();
     serve_compressed_repodata(
+        req,
         Encoding::Zstd,
         registry,
         platform,
@@ -234,6 +727,7 @@ pub async fn conda_repodata_zst(
     method = "HEAD"
 )]
 pub async fn conda_repodata_bz2(
+    req: HttpRequest,
     path: web::Path<(String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
@@ -243,6 +737,7 @@ pub async fn conda_repodata_bz2(
 ) -> Result<impl Responder, AppError> {
     let (registry, platform) = path.into_inner();
     serve_compressed_repodata(
+        req,
         Encoding::Bzip2,
         registry,
         platform,
@@ -388,6 +883,7 @@ const COMPRESSED_REPODATA_TTL: std::time::Duration = std::time::Duration::from_s
 /// what it was derived from.
 #[allow(clippy::too_many_arguments)]
 async fn serve_compressed_repodata(
+    req: HttpRequest,
     encoding: Encoding,
     registry: String,
     platform: String,
@@ -404,6 +900,10 @@ async fn serve_compressed_repodata(
     // request; a cache keyed only on the blocked set cannot see a publish.
     let cacheable = mode == RegistryMode::Proxy;
 
+    // A probe is answered with a probe — but only past the cache, so a warm
+    // entry still answers a `HEAD` without leaving the process at all.
+    let probing = req.method() == actix_web::http::Method::HEAD;
+
     let fingerprint = svc
         .blocked_snapshot_fingerprint(&registry, batlehub_core::entities::RegistryKind::Conda)
         .await;
@@ -412,72 +912,159 @@ async fn serve_compressed_repodata(
         encoding.suffix()
     );
 
-    let cached = if cacheable {
-        svc.cache.get(&cache_key).await.ok().flatten()
-    } else {
-        None
-    };
-    if let Some(entry) = cached {
-        if let Some(bytes) = entry
-            .metadata
-            .extra
-            .get("compressed_b64")
-            .and_then(|v| v.as_str())
-            .and_then(|s| {
-                use base64::{engine::general_purpose::STANDARD, Engine as _};
-                STANDARD.decode(s).ok()
-            })
-        {
+    // The bytes live in the **storage backend**; the cache entry is a pointer to
+    // them plus the freshness the TTL enforces.
+    //
+    // They used to live in the cache entry itself, base64-encoded inside a
+    // `serde_json::Value`. For `conda-forge/linux-64` that is a 57 MiB payload
+    // turned into a 77 MiB string, a JSON document built around it and a
+    // serialisation of the whole thing — per write, and again per read to decode
+    // it. Bytes belong where bytes go, and a hit now *streams* out of storage
+    // instead of being decoded into memory first.
+    let storage_key = index_storage_key(&registry, &platform, encoding, &fingerprint);
+    if cacheable {
+        if let Ok(Some(entry)) = svc.cache.get(&cache_key).await {
             // A composed repodata cached in its encoding is still composed:
-            // the flag was stored beside the bytes.
+            // the flag is stored beside the pointer.
             let synthesised = entry
                 .metadata
                 .extra
                 .get("synthesised")
                 .and_then(|v| v.as_u64())
                 .map(|n| n as u32);
-            let mut builder = HttpResponse::Ok();
-            builder.content_type(encoding.content_type());
-            builder.insert_header(("X-BatleHub-Cache", "hit"));
-            mark_synthesised(&mut builder, synthesised);
-            return Ok(builder.body(bytes));
+            // The entry says the bytes were stored; storage says whether they
+            // still are. A key that has been swept is a miss, not an error.
+            if let Ok(Some(stored)) = svc.storage.retrieve(&storage_key).await {
+                use futures::StreamExt;
+                let mut builder = HttpResponse::Ok();
+                builder.content_type(encoding.content_type());
+                builder.insert_header(("X-BatleHub-Cache", "hit"));
+                mark_synthesised(&mut builder, synthesised);
+                let body = stored.stream.filter_map(|chunk| async move {
+                    chunk.ok().map(Ok::<bytes::Bytes, actix_web::Error>)
+                });
+                return Ok(builder.streaming(body));
+            }
         }
     }
 
-    // The uncompressed path, filter and hybrid merge included — so the two
-    // encodings cannot describe a different channel from the plain one.
-    let (raw, synthesised) = repodata_bytes(
-        svc.clone(),
-        local_svc,
+    // The channel's own compressed file, when there is nothing to take out of
+    // it. This is the case that matters: `conda-forge/linux-64` publishes
+    // `repodata.json.zst` at 55 MiB against the 424 MiB it decompresses to, and
+    // building the uncompressed document in order to compress it again is how
+    // this request came to cost ~11 GB and time out. Accepting *only* this
+    // route's own encoding keeps the answer honest — a `.bz2` request is not
+    // served zstd bytes.
+    let accepted = match encoding {
+        Encoding::Zstd => batlehub_core::ports::DocumentEncoding::Zstd,
+        Encoding::Bzip2 => batlehub_core::ports::DocumentEncoding::Bzip2,
+    };
+    if probing {
+        if let Some(answer) = probe_index(
+            &svc,
+            &registry,
+            &platform,
+            &identity,
+            mode.clone(),
+            batlehub_core::ports::DocumentKind::Versions,
+            &[accepted],
+            encoding.content_type(),
+        )
+        .await?
+        {
+            return Ok(answer);
+        }
+    }
+
+    let streamed = streamed_index(
+        &svc,
         &registry,
         &platform,
-        identity,
-        mode,
+        &identity,
+        mode.clone(),
         batlehub_core::ports::DocumentKind::Versions,
+        &[accepted],
     )
     .await?;
 
-    let compressed = encoding.compress(&raw)?;
+    // Buffered rather than streamed on this route, deliberately: the compressed
+    // form is 55 MiB where the document is 424 MiB, and holding it is what lets
+    // the cache below keep working — a streamed answer would be a cache that
+    // never fills and an upstream fetch on every request.
+    let (compressed, synthesised) = match streamed {
+        Some(batlehub_core::services::StreamedIndex::AsIs(doc)) => {
+            (collect_index(doc.stream, "the channel index").await?, None)
+        }
+        Some(batlehub_core::services::StreamedIndex::Filter { doc, blocked }) => {
+            let from = doc.encoding;
+            let input = collect_index(doc.stream, "the channel index").await?;
+            let out = web::block(move || filter_index(input, from, Some(encoding), &blocked))
+                .await
+                .map_err(|e| AppError::internal(format!("filtering the channel index: {e}")))??;
+            (out, None)
+        }
+        // The parsed path: local, hybrid, or a channel that publishes no
+        // compressed index of its own. Filter and hybrid merge included — so
+        // the two encodings cannot describe a different channel from the plain
+        // one.
+        None => {
+            let (raw, synthesised) = repodata_bytes(
+                svc.clone(),
+                local_svc,
+                &registry,
+                &platform,
+                identity,
+                mode,
+                batlehub_core::ports::DocumentKind::Versions,
+            )
+            .await?;
+            (encoding.compress(&raw)?, synthesised)
+        }
+    };
 
-    let encoded = {
-        use base64::{engine::general_purpose::STANDARD, Engine as _};
-        STANDARD.encode(&compressed)
-    };
-    let entry = batlehub_core::ports::CacheEntry {
-        metadata: batlehub_core::entities::PackageMetadata::minimal(
-            PackageId::new(&registry, &platform, "__repodata__"),
-            serde_json::json!({ "compressed_b64": encoded, "synthesised": synthesised }),
-        ),
-        cached_at: chrono::Utc::now(),
-        expires_at: None,
-    };
+    // `Bytes` so handing the same buffer to storage and to the client is a
+    // refcount rather than a second 57 MiB copy.
+    let body = bytes::Bytes::from(compressed);
+
     if cacheable {
-        if let Err(e) = svc
-            .cache
-            .set(&cache_key, entry, Some(COMPRESSED_REPODATA_TTL))
-            .await
-        {
-            tracing::warn!(key = %cache_key, error = %e, "caching compressed repodata failed");
+        // Every other fingerprint of this subdir is stale by construction — the
+        // fingerprint *is* the blocked set — so the old ones go. Worst case for
+        // a concurrent reader is a cache miss and a re-fetch.
+        let prefix = index_storage_prefix(&registry, &platform);
+        if let Err(e) = svc.storage.delete_by_prefix(&prefix).await {
+            tracing::debug!(prefix = %prefix, error = %e, "sweeping stale channel indexes failed");
+        }
+        let meta = batlehub_core::ports::StorageMeta {
+            content_type: Some(encoding.content_type().to_owned()),
+            size: Some(body.len() as u64),
+            checksum: None,
+        };
+        match svc.storage.store(&storage_key, body.clone(), meta).await {
+            Ok(()) => {
+                let entry = batlehub_core::ports::CacheEntry {
+                    metadata: batlehub_core::entities::PackageMetadata::minimal(
+                        PackageId::new(&registry, &platform, "__repodata__"),
+                        serde_json::json!({
+                            "storage_key": storage_key,
+                            "synthesised": synthesised,
+                        }),
+                    ),
+                    cached_at: chrono::Utc::now(),
+                    expires_at: None,
+                };
+                if let Err(e) = svc
+                    .cache
+                    .set(&cache_key, entry, Some(COMPRESSED_REPODATA_TTL))
+                    .await
+                {
+                    tracing::warn!(key = %cache_key, error = %e, "caching the channel index failed");
+                }
+            }
+            // Storing is an optimisation; failing to store is not a failed
+            // request. The bytes are already in hand.
+            Err(e) => {
+                tracing::warn!(key = %storage_key, error = %e, "storing the channel index failed")
+            }
         }
     }
 
@@ -485,7 +1072,7 @@ async fn serve_compressed_repodata(
     builder.content_type(encoding.content_type());
     builder.insert_header(("X-BatleHub-Cache", "miss"));
     mark_synthesised(&mut builder, synthesised);
-    Ok(builder.body(compressed))
+    Ok(builder.body(body))
 }
 
 /// Merge a locally-built repodata JSON overlay into upstream `repodata.json` bytes.
@@ -829,6 +1416,47 @@ pub async fn conda_publish(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn zstd(payload: &[u8]) -> Vec<u8> {
+        zstd::encode_all(payload, 3).unwrap()
+    }
+
+    /// The shape conda-forge publishes: every URL in the index is relative, so
+    /// the client resolves every shard and every package against the URL it
+    /// asked *us* for, and comes back here.
+    #[test]
+    fn a_relative_shard_index_may_be_relayed() {
+        // Not real msgpack — the guard reads bytes, not structure, which is the
+        // point of it.
+        let index = b"\x83\xa4infoshards_base_url\xa0base_url\xa0linux-64";
+        assert!(shard_index_routes_here(&zstd(index)));
+    }
+
+    /// A channel that names an absolute host sends clients past this proxy —
+    /// past the rules, the cache and the audit trail. It is refused, and the
+    /// client falls back to `repodata.json`, which this proxy does filter.
+    #[test]
+    fn an_absolute_shard_base_url_is_refused() {
+        for hostile in [
+            &b"shards_base_url https://fast.prefix.dev/conda-forge/linux-64/"[..],
+            &b"base_url HTTP://cdn.example/pkgs/"[..],
+            &b"http://plain-http.example/"[..],
+        ] {
+            assert!(
+                !shard_index_routes_here(&zstd(hostile)),
+                "should have been refused: {}",
+                String::from_utf8_lossy(hostile)
+            );
+        }
+    }
+
+    /// Bytes that are not zstd at all, and a document that decompresses past the
+    /// bound, are both "cannot vouch for this" rather than "fine".
+    #[test]
+    fn an_unreadable_shard_index_is_refused() {
+        assert!(!shard_index_routes_here(b"not zstd at all"));
+        assert!(!shard_index_routes_here(&[]));
+    }
 
     #[test]
     fn package_name_from_filename() {

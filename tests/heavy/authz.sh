@@ -2527,7 +2527,61 @@ AUTHZ_MVN_GROUP="com.authzheavy"
 AUTHZ_MVN_ARTIFACT="probe"
 AUTHZ_MVN_VERSION="1.0.0"
 
+# The two Maven plugins this phase drives, fully qualified and pinned.
+#
+# Spelled out rather than as the `deploy:` / `dependency:` prefixes Maven
+# accepts, because a prefix is resolved through `org/apache/maven/plugins/
+# maven-metadata.xml` — a lookup that goes to whatever the settings mirror at,
+# i.e. the registry under test, which holds nothing and answers `404`. The
+# prefix form also picks whatever version that metadata calls latest, so the
+# warmed repository and the arms could disagree about which plugin to use from
+# one week to the next. Qualified and pinned, no metadata is consulted and both
+# arms run the same code as the warm.
+AUTHZ_MVN_DEPLOY_PLUGIN="org.apache.maven.plugins:maven-deploy-plugin:3.1.4"
+AUTHZ_MVN_DEPENDENCY_PLUGIN="org.apache.maven.plugins:maven-dependency-plugin:3.7.0"
+
 # authz_mvn_settings <file> <login> <token> — a settings.xml for one identity.
+# The warm-only settings: the same mirror *id* as the measured arms, pointing at
+# Maven Central instead of the proxy, and **no `<servers>` entry**.
+#
+# Maven downloads its own plugins before it can run a goal, and the registry
+# under test is `mode = "local"` and holds one fixture — by design, see the
+# block above `[[registries]] type = "maven"` in `config.authz.toml`: an empty
+# local registry is what makes the boundary observable, and pointing it at an
+# upstream would turn the denied arm's refusal into an upstream error that reads
+# as a pass. So the plugins cannot come through the mirror, and asking for them
+# there resolves nothing at all: `mirrorOf = *` sent every plugin request to a
+# registry that holds none, and the phase died on `No plugin found for prefix
+# 'dependency'` before it had measured anything.
+#
+# Two details are load-bearing:
+#
+#   - **the same `<id>`**, because Maven records the repository an artifact came
+#     from in `_remote.repositories` and re-resolves it when a later build sees
+#     it under a different id. Warmed as `central` and read back as `authz`,
+#     every plugin would be fetched again — from the proxy, which has none.
+#   - **no `<servers>` entry**, because this phase sets
+#     `aether.connector.http.preemptiveAuth=true`; with a credential attached to
+#     the id `authz`, Maven would send the BatleHub token to Maven Central on the
+#     first request.
+#
+# What is measured is unchanged: both arms still read the *fixture* through the
+# proxy, with their own token, and Maven's own plugins are Maven's business.
+authz_mvn_settings_warm() {
+  local file="$1"
+  cat >"$file" <<EOF
+<settings>
+  <mirrors>
+    <mirror>
+      <id>authz</id>
+      <mirrorOf>*</mirrorOf>
+      <url>https://repo1.maven.org/maven2</url>
+    </mirror>
+  </mirrors>
+</settings>
+EOF
+}
+
 authz_mvn_settings() {
   local file="$1" login="$2" token="$3"
   cat >"$file" <<EOF
@@ -2567,17 +2621,27 @@ phase_maven() {
   local s_admin="$work/settings-admin.xml"
   local s_reader="$work/settings-reader.xml"
   local s_denied="$work/settings-denied.xml"
+  local s_warm="$work/settings-warm.xml"
   authz_mvn_settings "$s_admin" ci-admin "$T_ADMIN"
   authz_mvn_settings "$s_reader" authz-reader "$T_READER"
   authz_mvn_settings "$s_denied" authz-denied "$T_DENIED"
+  authz_mvn_settings_warm "$s_warm"
 
-  # ── Warm the plugins, as a caller who may read them ───────────────────────
+  # ── Warm Maven's own plugins, off the boundary ────────────────────────────
+  #
+  # From Central under the mirror id the arms use — see
+  # `authz_mvn_settings_warm` for why both halves of that matter.
   heavy_mark "mvn-warm"
-  heavy_log "Warming the deploy and dependency plugins through the mirror"
-  (cd "$work" && "${mvn[@]}" -B -s "$s_admin" -Dmaven.repo.local="$work/warm" \
-    dependency:resolve-plugins -Dplugin=org.apache.maven.plugins:maven-deploy-plugin) \
+  heavy_log "Warming the deploy and dependency plugins (from Central, under the arms' repository id)"
+  # One command warms both: running the dependency plugin fetches *it*, and what
+  # it is asked to get is the deploy plugin. `get` rather than
+  # `resolve-plugins`, which is a project goal and dies with "Goal requires a
+  # project to execute but there is no POM in this directory" — there is no
+  # project here and there should not be one.
+  (cd "$work" && "${mvn[@]}" -B -s "$s_warm" -Dmaven.repo.local="$work/warm" \
+    "$AUTHZ_MVN_DEPENDENCY_PLUGIN:get" -Dartifact="$AUTHZ_MVN_DEPLOY_PLUGIN:jar") \
     >"$work/warm.log" 2>&1 \
-    || { tail -30 "$work/warm.log" >&2; heavy_fail "maven: could not warm the plugins through the mirror"; }
+    || { tail -30 "$work/warm.log" >&2; heavy_fail "maven: could not warm Maven's own plugins from Central"; }
 
   # ── Seed one version, as the administrator ────────────────────────────────
   heavy_mark "mvn-seed"
@@ -2586,7 +2650,7 @@ phase_maven() {
     || (cd "$work" && zip -q probe.jar payload.txt) \
     || heavy_fail "maven: neither jar nor zip could build a fixture jar"
   (cd "$work" && "${mvn[@]}" -B -s "$s_admin" -Dmaven.repo.local="$work/warm" \
-    deploy:deploy-file -DrepositoryId=authz \
+    "$AUTHZ_MVN_DEPLOY_PLUGIN:deploy-file" -DrepositoryId=authz \
     -Durl="$HEAVY_TAP_BASE/proxy/$MVN_R/maven2" \
     -Dfile="$work/probe.jar" -DgroupId="$AUTHZ_MVN_GROUP" -DartifactId="$AUTHZ_MVN_ARTIFACT" \
     -Dversion="$AUTHZ_MVN_VERSION" -Dpackaging=jar -DgeneratePom=true) \
@@ -2606,7 +2670,7 @@ the administrator cannot publish, so nothing below means anything"; }
     cp -r "$work/warm" "$repo"
     rm -rf "${repo:?}/$group_path"
     (cd "$work" && "${mvn[@]}" -B -s "$2" -Dmaven.repo.local="$repo" \
-      dependency:get \
+      "$AUTHZ_MVN_DEPENDENCY_PLUGIN:get" \
       -Dartifact="$AUTHZ_MVN_GROUP:$AUTHZ_MVN_ARTIFACT:$AUTHZ_MVN_VERSION")
     return $?
   }

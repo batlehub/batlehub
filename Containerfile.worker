@@ -87,7 +87,16 @@ RUN releases="https://github.com/aquasecurity/trivy/releases/download" \
 # passes argv directly — and the process runs as the same non-root uid as the
 # proxy.
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# `upgrade` before `install`, and it is not belt-and-braces: the base is pinned
+# by digest, and Debian publishes security fixes into `bookworm-security` for
+# weeks before a rebuilt `bookworm-slim` carries them. Without this the daily
+# rebuild-and-rescan in `image-scan.yaml` rebuilds the *same* userland every
+# day and the gate blocks on a CVE the archive has already fixed — which is
+# exactly what happened with libpcre2 (CVE-2026-86145, CVE-2026-89161: fixed in
+# 10.42-1+deb12u1 while the current `bookworm-slim` still ships 10.42-1, and
+# there is no newer digest to move the pin to).
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
     bubblewrap ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 65532 nonroot && useradd -u 65532 -g 65532 -M -s /usr/sbin/nologin nonroot \

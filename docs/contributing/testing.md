@@ -27,6 +27,7 @@ BatleHub's tests fall into six layers, in increasing order of infrastructure cos
 | **External integration** | `crates/adapters/tests/*.rs` | real Postgres / MinIO(S3) / Redis via Podman | `task test:pg-*`, `task test:s3` |
 | **Heavy client** | `tests/heavy/*.sh` | real Postgres **and a real client** — VS Code, IntelliJ, Bundler, npm, pip, ovsx, micromamba, dotnet, composer, terraform, nvm, mise, cargo, go, mvn, apt/dnf | `task test:heavy`, or one `task test:<ecosystem>-heavy` |
 | **Heavy authorization** | `tests/heavy/authz.sh` | real Postgres, grants from a **real config file**, and the same clients | `task test:authz-heavy`, or `task test:authz-matrix-heavy` for the fast half |
+| **Soak / leak** | `perf/k6/scenarios/10_soak.js`, `tests/heavy/soak.sh` | real Postgres, a mock or served upstream, and constant load for as long as you ask | `task perf:soak`, `task test:soak-heavy` — **manual only** |
 | **Fuzz** | `fuzz/fuzz_targets/*.rs` | nightly toolchain to *run*, none to check | `task fuzz:check`, `task fuzz` |
 | **Editor patch** | `patches/che-code/*.test.ts` | none — Node strips the types itself | `task test:patch` |
 | **API contract** | `crates/web/tests/openapi_contract.rs` | none — walks the generated spec *and* the handler sources | `cargo test -p batlehub-web --test openapi_contract` |
@@ -651,6 +652,230 @@ NuGet phase pins the missing challenge, so if the `403` ever grows a
 
 ---
 
+## 7-quater. Soak tests (leak detection)
+
+Every layer above asks whether the server gives the **right answer**. This one
+asks whether it gives the **memory back** — and nothing else here can, because
+a leak is not a wrong answer. It is the same right answer, a few kilobytes more
+expensive each time, until a pod that served correctly for nine days is
+OOM-killed on the tenth with no failing test to point at.
+
+Neither suite runs on a push or a pull request. A soak measures a *slope*, so
+running it per commit would cost every pull request an hour to answer a
+question no single commit changes the answer to. Run one when something
+suggests it: a report of memory that does not come back, a change to a
+streaming, caching or pooling path, or before a release.
+
+### The shape both suites use
+
+```
+warm-up load ──▶ quiesce ──▶ BASELINE ──▶ steady load ──▶ quiesce ──▶ FINAL
+```
+
+Both measurement windows are **idle**, and the baseline is taken *after* a
+warm-up rather than at startup. That ordering is the whole design:
+
+- measuring at startup reports every lazily-filled cache, connection pool and
+  allocator arena as a leak — so the first run fails, and the threshold then
+  gets raised until nothing can fail;
+- measuring under load compares a number that includes in-flight request
+  buffers against one that does not, which is a different quantity in each
+  window and cannot be subtracted;
+- quiescing before each window lets the server drain, and lets jemalloc (on by
+  default, `server/Cargo.toml`) decay its dirty pages, which takes seconds and
+  would otherwise read as growth.
+
+What is left is what was still held with nothing in flight, which is what
+"leak" means.
+
+Four resources are compared, because they fail differently and a leak in one is
+invisible in the others:
+
+| Signal | Where it comes from | What it means when it grows |
+| --- | --- | --- |
+| RSS at idle | `/proc/<pid>/status` | memory still held with nothing in flight |
+| Open descriptors | `/proc/<pid>/fd` | a socket or file not closed — ends in `EMFILE` on *accept*, which looks like a network fault |
+| Threads | `/proc/<pid>/status` | a spawned worker that never joins |
+| Connections held | `batlehub_db_pool_size` − `..._available_connections` from `/metrics` | a handler that took a pool connection and did not return it |
+
+A fifth signal is not a growth comparison at all: the **slope** of RSS during
+the sustained load, by least squares. A leak slower than the run is long shows
+up as a line that never flattens, hours before the idle windows differ enough
+to fail. (Least squares rather than last-minus-first: RSS sawtooths with every
+cache sweep, and two endpoints landing on different teeth is a number with no
+relationship to the trend.)
+
+Two bounds keep that signal honest. The fit skips the **first third** of the
+load, because the start is caches and pools filling rather than a trend; and
+under five minutes of sustained load the slope is *reported but not judged* —
+measured at 10.5 MiB/min on a 30-second window whose idle comparison was
++4.2 %, which was the fill and nothing else. A window that short cannot tell a
+leak from a cache warming up, and a gate that cannot tell should say so rather
+than guess.
+
+### `task perf:soak` — synthetic, fast, precise
+
+`perf/scripts/soak.sh` starts its own mock upstream and server, seeds, and runs
+`perf/k6/scenarios/10_soak.js` twice — once to warm up, once to hold the load —
+sampling the process once a second throughout. `perf/scripts/soak_verdict.py`
+turns the samples into a table, an RSS sparkline and an exit code.
+
+```bash
+task perf:soak                                  # 10 minutes at 100 req/s
+task perf:soak DURATION=1h RATE=200             # overnight
+task perf:soak PROFILE=debug DURATION=30s RATE=20   # smoke-test the harness itself
+```
+
+The scenario uses a **constant arrival rate**, not constant VUs: under
+`constant-vus` a server that slows down is offered less work, so the very
+degradation a soak looks for hides itself by reducing the load that causes it.
+The mix is rotated deterministically rather than sampled at random, so two runs
+of the same duration issue the same requests and their curves are comparable —
+60 % artifact reads, 16 % listing documents, 10 % upstream misses, 6 % pooled
+API reads, 5 % per-request SBOM builds, 3 % publishes. Those are six different
+allocation paths, which is the point: a leak is a property of a code path, not
+of a request count.
+
+Thresholds are environment variables, so a run can be made stricter without
+editing anything:
+
+| Variable | Default | Fails when |
+| --- | --- | --- |
+| `SOAK_MAX_RSS_GROWTH_PCT` | `10` | idle RSS grew more than this, as a percentage |
+| `SOAK_MAX_RSS_SLOPE_MIB_PER_MIN` | `2.0` | RSS trended upwards faster than this under load |
+| `SOAK_MAX_FD_GROWTH` | `16` | this many more descriptors are open at idle |
+| `SOAK_MAX_THREAD_GROWTH` | `4` | this many more threads are running |
+| `SOAK_MAX_POOL_GROWTH` | `2` | this many more pool connections are held at idle |
+
+Two further choices in `perf/config.soak.toml` are measurement decisions rather
+than deployment ones, and both were made after a run failed for the wrong
+reason:
+
+- **`max_connections = 10`**, against the perf config's 50. A large pool hides a
+  connection leak for the length of any run anyone would sit through; a small
+  one exhausts it while the run is still going, and the verdict names it.
+- **`[cache] type = "postgres"`**, against the default in-memory cache. An
+  in-memory metadata cache lives in the process's own RSS, so every cached
+  document is memory the idle comparison sees — not wrong, since it *is*
+  resident, but not a leak either, and it grows with the length of the run.
+  Measured: +11.2 % idle RSS on a 40-second run whose only fault was having
+  cached more than its 25-second warm-up did. A gate that fails on a correct
+  cache teaches people to raise the threshold. With the cache in a table, what
+  is left in RSS is what the process is holding — and it is also what a real
+  deployment runs.
+
+The workload is **stationary** for the same reason. The cache-miss arm draws
+from a bounded set of coordinates (`BATLEHUB_SOAK_MISS_SPACE`, 500 by default)
+rather than inventing a new version per iteration: an unbounded miss space adds
+a cache entry, a row and a stored object *per request, forever*, so memory
+climbs for as long as the run lasts and every long soak "fails". That growth is
+the workload's, not the server's, and no threshold can tell the two apart. A
+leak test needs a workload whose steady state exists, so that anything still
+climbing after the caches have filled is the process's doing.
+
+For the same reason the idle-RSS comparison carries the slope's bound: under
+five minutes of load it is *reported and not judged*, because the caches are
+still filling and "idle RSS grew" is then "the cache got bigger". Descriptors,
+threads and pool connections have no warm-up and are judged at any length.
+
+### What it reports
+
+Three things, in the report and in the pull request comment:
+
+**The verdict table** — the four idle-window comparisons and the slope, above.
+
+**A chart of the run.** A text chart of RSS and open descriptors in the comment
+itself, because that renders in a terminal, a job summary and a comment alike;
+and an SVG (`soak-chart.svg`, beside the report in the run's artifacts) with all
+four curves and the phases shaded, so the two idle windows the verdict compares
+are visible as windows. Each curve is scaled to its own range and says so —
+RSS in hundreds of MiB and a descriptor count in tens share no axis, and
+drawing them on one flattens the smaller into the straight line a leak in it
+would live on.
+
+**Which registry cost the most.** Ranked by seconds spent inside the handler,
+read from the server's own `/metrics` scraped at both ends of the load and
+subtracted. The server is the only party that knows what a request *cost* it: a
+load generator can say how many requests a registry took and how many bytes came
+back, and neither is how long the server spent nor how much it had to pull from
+upstream to answer them. Beside the ranking, per registry: requests, ms/req,
+bytes pulled from upstream, artifact and document misses, and the coordinates
+resolved from a listing already held — the upstream round trips it did *not*
+make.
+
+That ranking is why `perf/config.soak.toml` declares **three** registries and
+not one. "Which registry is the worst consumer" is not a question a
+single-registry run can answer, and the shapes have to differ or it ranks them
+by traffic rather than by cost: an npm read is a small document and a small
+artifact, a RubyGems compact index is the whole registry in one document, which
+is the expensive shape this project has measured before (RFC 0015 §11.7).
+
+Two things the ranking does not count, and says so in its own footnote:
+
+- **local-mode traffic.** A local registry's publishes and reads go through
+  `LocalRegistryService`, which emits neither metric, so a local registry is
+  absent from the table rather than cheap.
+- **nothing else.** Listing reads *are* counted — they were not, until this
+  work: `batlehub_requests_total` and `batlehub_request_duration_seconds` were
+  emitted from the artifact path alone, so a registry serving nothing but
+  documents recorded no requests at all and anything ranking registries by cost
+  ranked it last for free. They are now recorded for the listing routes too,
+  under `outcome = listing | listing_denied | listing_error`, and a path that
+  declines (conda's byte route answering "not this path" before the parsed one
+  runs) records nothing rather than counting the request twice.
+
+### The result lands on the pull request
+
+The CI workflow's third job collects both suites' reports, joins them under one
+heading and posts them as a single comment, edited in place on every re-run. A
+dispatch carries no pull request of its own, so it resolves the open one whose
+head is the branch — or takes the `pr` input, for a run dispatched from
+somewhere else. With no pull request to find, the report is in the job summary
+and the run stays green: the verdict is the soak's to deliver, and a comment
+that could not be posted is not a leak.
+
+### `task test:soak-heavy` — a real client, in a loop
+
+`tests/heavy/soak.sh` is the same shape driven by **npm**: a round is
+`npm install` from a proxied registry, `npm publish` to a local one, and
+`npm view` of what it just published, with npm's own cache removed each round
+so it asks the server rather than itself. It exists beside the k6 suite because
+k6 offers the requests this project *thinks* a client makes, and npm offers the
+ones it actually makes — every registry defect this project has shipped was
+found by a client and not by a test double (RFC 0009 §5.1), and there is no
+reason a leak would be different.
+
+```bash
+task test:soak-heavy                            # 25 rounds
+SOAK_ROUNDS=500 task test:soak-heavy            # a long one
+```
+
+The upstream is a directory the suite serves (`upstream_dir.sh`), never a real
+registry: a soak offers the same request thousands of times, and the served
+directory's access log also makes "the proxy answered from its cache" a
+**count**. After a warm-up that touches every package, the loop must reach the
+upstream exactly **zero** times; anything else is a cache that is not holding,
+and would also make the growth numbers meaningless, since the loop would then
+be measuring the upstream path rather than the served one.
+
+The suite also pins what a first install *costs* upstream. The warm-up's own
+count is printed, and it is the number that caught a real defect: a first read
+of one npm package used to cost **three** packument fetches — the client's own,
+plus two more from the artifact route resolving the coordinate twice over. It
+is one now. See `RegistryClient::fetch_artifact_resolved` and
+`::resolve_metadata_from_document`, which are the two halves of that fix, and
+note that both are default-`None` hooks: a kind that does not implement them is
+unchanged.
+
+One trap is worth naming, because it cost a green run that measured nothing.
+`heavy_start_server` launches `setsid cargo run`, so `$HEAVY_SERVER_PID` is not
+the server — and `/proc/<cargo>/status` answers every question with a plausible
+number rather than an error. Both suites therefore *resolve* the process to
+measure, by executable name and config path, and refuse to run if they cannot
+find it.
+
+---
+
 ## 8. CLI integration tests
 
 `cli/tests/integration.rs` — a single file with **~83 test functions**. It:
@@ -887,6 +1112,21 @@ to start under a restricted `ptrace_scope`, not a finding — re-run with
   their own registries, pinned VS Code, IntelliJ, Terraform, .NET and
   micromamba builds — so a new client release can break a tree that no commit
   touched, and only a scheduled run finds it.
+- **`soak.yaml`** — the two soak suites, **`workflow_dispatch` only**: no push,
+  no pull request, no cron. Inputs for the duration, the arrival rate, the
+  heavy suite's round count and all four growth thresholds, so a run can be
+  made stricter from the dispatch form. Two jobs (`k6-soak`, `heavy-soak`),
+  selectable, with a `concurrency` group so two soaks never share a runner's
+  CPU — a resource curve measured beside another soak is a measurement of the
+  runner. The samples and the report are uploaded on failure as well as on
+  success, because that is when they are worth reading.
+- **`pr-checklist.yaml`** — derives, from the paths a pull request changes, the
+  obligations those paths carry (`.github/scripts/pr_checklist.py`), and posts
+  them as one comment it edits in place. Items the diff suggests are *missing*
+  — a migration with no `mig!` entry, a generated file that did not move with
+  its source, a new `RegistryKind` with no entry in the UI's type table — are
+  marked. It is advisory and **never fails a build**: a required check that
+  turns green when somebody ticks a box measures nothing but the ticking.
 - **`front-test.yaml`** — frontend (`ui/`): install, regenerate the OpenAPI spec
   + TS client, `pnpm run coverage`.
 - **`repo-interop.yaml`** — `bash tests/interop/verify.sh` (apt + dnf + pacman

@@ -7,7 +7,7 @@ use crate::error::CoreError;
 use crate::ports::{DocumentKind, VersionDocument};
 use crate::rules::{evaluate_rules, RuleContext, RuleDecision};
 
-use super::{ProxyRequest, ProxyResponse, ProxyService, RequestTiming};
+use super::{ProxyRequest, ProxyResponse, ProxyService, RequestTiming, StreamedIndex};
 use crate::entities::Action;
 
 /// Largest artifact that re-serve verification (`verify_on_serve`) will retain in
@@ -821,7 +821,13 @@ impl ProxyService {
             tracing::debug!(registry = %registry_name, "firewall-only mode, streaming from upstream");
             let upstream_start = Instant::now();
             let mut upstream = self
-                .fetch_artifact_or_record_error(&client, &req, &registry_label, upstream_start)
+                .fetch_artifact_or_record_error(
+                    &client,
+                    &req,
+                    &metadata,
+                    &registry_label,
+                    upstream_start,
+                )
                 .await?;
             // Times the whole body transfer, not just time-to-headers — this is the
             // only latency signal firewall-only registries get, since they never hit
@@ -994,7 +1000,77 @@ impl ProxyService {
     /// it to the listing would deny the entire document because one version in
     /// it is gated, which is the opposite of letting a client resolve past that
     /// version to one it may have.
+    /// Count and time a **listing** request, the way `handle` counts an artifact
+    /// one.
+    ///
+    /// `batlehub_requests_total` and `batlehub_request_duration_seconds` were
+    /// emitted only from the artifact path, so every per-registry answer they
+    /// gave was about downloads alone. That is the wrong half: a listing is the
+    /// request a resolver makes most, and for a registry whose listing is the
+    /// *whole registry* — a RubyGems compact index, a conda `repodata.json` —
+    /// it is also the expensive one (RFC 0015 §11.7). A registry serving
+    /// nothing but documents recorded **no requests at all**, so anything
+    /// ranking registries by cost ranked it last for free.
+    ///
+    /// The same two metrics rather than new ones, because they answer the same
+    /// question and splitting them would make every existing dashboard wrong by
+    /// omission. The `outcome` label is what tells the two apart in a query.
+    async fn timed_listing<T>(
+        &self,
+        registry: &str,
+        fut: impl std::future::Future<Output = Result<T, CoreError>>,
+    ) -> Result<T, CoreError> {
+        let label: Arc<str> = Arc::from(registry);
+        let start = Instant::now();
+        let out = fut.await;
+        let outcome = match &out {
+            Ok(_) => "listing",
+            Err(CoreError::AccessDenied(_)) => "listing_denied",
+            Err(_) => "listing_error",
+        };
+        super::finish_request(&label, outcome, start);
+        out
+    }
+
+    /// [`Self::timed_listing`] for the entry points that answer `Ok(None)` to
+    /// mean **"not this path"**.
+    ///
+    /// `Ok(None)` records nothing, because nothing was done: the caller goes on
+    /// to take another path, which records itself. Counting both would report
+    /// two listing requests for one — and conda does exactly that, trying the
+    /// byte path first and falling back to the parsed one, so every conda index
+    /// read would have been two rows with the time split across them.
+    async fn timed_listing_opt<T>(
+        &self,
+        registry: &str,
+        fut: impl std::future::Future<Output = Result<Option<T>, CoreError>>,
+    ) -> Result<Option<T>, CoreError> {
+        let start = Instant::now();
+        let out = fut.await;
+        let outcome = match &out {
+            Ok(None) => return out,
+            Ok(Some(_)) => "listing",
+            Err(CoreError::AccessDenied(_)) => "listing_denied",
+            Err(_) => "listing_error",
+        };
+        super::finish_request(&Arc::from(registry), outcome, start);
+        out
+    }
+
     pub async fn version_document(
+        &self,
+        req: &ProxyRequest,
+        doc_kind: DocumentKind,
+        public_base: &str,
+    ) -> Result<VersionDocument, CoreError> {
+        self.timed_listing(
+            &req.package_id.registry,
+            self.version_document_inner(req, doc_kind, public_base),
+        )
+        .await
+    }
+
+    async fn version_document_inner(
         &self,
         req: &ProxyRequest,
         doc_kind: DocumentKind,
@@ -1367,6 +1443,72 @@ impl ProxyService {
             .fingerprint()
     }
 
+    /// Resolve a coordinate that names a release by an alias onto the canonical
+    /// one, or leave it alone.
+    ///
+    /// The web layer calls this *before* it renders or proxies anything, so a
+    /// request that arrived under a second spelling is answered under the
+    /// coordinate this instance publishes, blocks and caches by — see
+    /// [`crate::ports::RegistryClient::canonical_coordinate`] for why the
+    /// alternative (passing the alias through) is a block-list bypass rather
+    /// than a convenience.
+    ///
+    /// Cached, because an alias is a fact about an upstream release that does
+    /// not change: an `installPlugins` run asks for the same pair twice, once
+    /// for the blob and once for the archive, and the mapping costs an upstream
+    /// call to learn.
+    pub async fn canonical_coordinate(
+        &self,
+        pkg: &crate::entities::PackageId,
+    ) -> Result<Option<crate::entities::PackageId>, CoreError> {
+        const ALIAS_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
+        let key = format!("alias:{}", pkg.cache_key());
+
+        if let Ok(Some(entry)) = self.cache.get(&key).await {
+            if let Ok(id) = serde_json::from_value(entry.metadata.extra) {
+                return Ok(Some(id));
+            }
+        }
+
+        let client = {
+            let hot = self.hot.read().await;
+            match hot.registries.get(&pkg.registry) {
+                // Unknown registry: the caller's own guard answers that with the
+                // right error, so nothing is said here.
+                None => return Ok(None),
+                Some(client) => Arc::clone(client),
+            }
+        };
+        let resolved = client.canonical_coordinate(pkg).await?;
+
+        // Only a resolved alias is worth a cache entry. "Already canonical" is
+        // the answer for every coordinate of every other kind, and a client
+        // reaches it without any I/O at all — caching that would turn one cache
+        // write per request into the cost of the feature.
+        let Some(id) = resolved else {
+            return Ok(None);
+        };
+
+        let entry = crate::ports::CacheEntry {
+            metadata: crate::entities::PackageMetadata {
+                id: pkg.clone(),
+                published_at: None,
+                download_url: None,
+                checksum: None,
+                is_signed: None,
+                extra: serde_json::to_value(&id).unwrap_or(serde_json::Value::Null),
+                cache_control: None,
+            },
+            cached_at: chrono::Utc::now(),
+            expires_at: None,
+        };
+        if let Err(e) = self.cache.set(&key, entry, Some(ALIAS_TTL)).await {
+            tracing::warn!(key = %key, error = %e, "caching the coordinate alias failed");
+        }
+
+        Ok(Some(id))
+    }
+
     async fn blocked_in_registry_snapshot(
         &self,
         registry: &str,
@@ -1415,6 +1557,174 @@ impl ProxyService {
         crate::services::blocking::MultiPackageBlocks::new(kind, pairs)
     }
 
+    /// Does this registry block anything at all?
+    ///
+    /// The 30-second snapshot the listing filter uses, asked as a yes/no. For
+    /// callers that must refuse to serve a document they cannot filter — conda's
+    /// sharded index is msgpack, and nothing here can take a package out of it,
+    /// so a registry with blocks serves no shards and the client falls back to
+    /// the `repodata.json` this proxy *can* filter.
+    pub async fn registry_blocks_anything(
+        &self,
+        registry: &str,
+        kind: crate::entities::RegistryKind,
+    ) -> bool {
+        !self
+            .blocked_in_registry_snapshot(registry, kind)
+            .await
+            .is_empty()
+    }
+
+    /// The upstream channel index, **unparsed**, when there is nothing to take
+    /// out of it.
+    ///
+    /// Same gate as [`Self::multi_package_document`] — the prelude and the
+    /// audited listing authorisation run first and identically, because this
+    /// answers the same request with the same bytes and must not be a way round
+    /// either. What differs is everything after: no parse, no
+    /// `serde_json::Value`, no re-serialisation, so peak memory is one chunk
+    /// rather than several GB (`conda-forge/linux-64/repodata.json` is 424 MiB,
+    /// and a `Value` of it is the reason that request used to take 11 GB and
+    /// time out).
+    ///
+    /// `Ok(None)` means "not this path": something is blocked in this registry,
+    /// the kind has no byte path, or the caller wants a document rewritten. The
+    /// caller then takes [`Self::multi_package_document`], which is unchanged —
+    /// including its stale-serving and its air-gapped composition, both of which
+    /// need the parsed document.
+    ///
+    /// The blocked set is the same 30-second snapshot the filter uses
+    /// ([`Self::blocked_in_registry_snapshot`]), so the window in which a
+    /// just-blocked package can still be served is the one that already existed
+    /// and is documented; this adds none of its own.
+    pub async fn multi_package_document_stream(
+        &self,
+        req: &ProxyRequest,
+        doc_kind: DocumentKind,
+        accept: &[crate::ports::DocumentEncoding],
+    ) -> Result<Option<StreamedIndex>, CoreError> {
+        self.timed_listing_opt(
+            &req.package_id.registry,
+            self.multi_package_document_stream_inner(req, doc_kind, accept),
+        )
+        .await
+    }
+
+    async fn multi_package_document_stream_inner(
+        &self,
+        req: &ProxyRequest,
+        doc_kind: DocumentKind,
+        accept: &[crate::ports::DocumentEncoding],
+    ) -> Result<Option<StreamedIndex>, CoreError> {
+        let prelude = self.request_prelude(req).await?;
+        self.authorize_listing_audited(req, "denied multi-package index")
+            .await?;
+
+        let kind = prelude
+            .client
+            .registry_type()
+            .parse()
+            .unwrap_or(crate::entities::RegistryKind::Generic);
+        let blocked = self
+            .blocked_in_registry_snapshot(&req.package_id.registry, kind)
+            .await;
+
+        // When something has to come out, the transfer encoding is this
+        // service's choice rather than the caller's: the bytes are going to be
+        // decoded and re-encoded anyway, so they may as well cross the network
+        // small. 55 MiB against 424 MiB on conda-forge's biggest subdir.
+        let filtering = !blocked.is_empty();
+        let accept: &[crate::ports::DocumentEncoding] = if filtering {
+            &[
+                crate::ports::DocumentEncoding::Zstd,
+                crate::ports::DocumentEncoding::Identity,
+            ]
+        } else {
+            accept
+        };
+
+        let name = req.package_id.name.as_str();
+        let Some(doc) = prelude
+            .client
+            .fetch_version_document_stream(name, doc_kind, accept)
+            .await?
+        else {
+            return Ok(None);
+        };
+        self.metrics.record_listing_read(&req.package_id.registry);
+
+        Ok(Some(if filtering {
+            StreamedIndex::Filter { doc, blocked }
+        } else {
+            StreamedIndex::AsIs(doc)
+        }))
+    }
+
+    /// Answer "does this index exist, and how big is it" without fetching it.
+    ///
+    /// Same gate as the two paths that serve the document, because a `HEAD` that
+    /// tells an unauthorised caller a channel exists has told them something.
+    ///
+    /// `Ok(None)` means the kind cannot answer cheaply and the caller should
+    /// fall back to fetching — which is what every kind but conda does, and what
+    /// conda itself did for every probe until this existed: micromamba sends a
+    /// `HEAD` per subdir per encoding before it fetches anything, and each one
+    /// used to pull 57 MiB upstream and throw it away.
+    ///
+    /// Not answered from the blocked set: a filtered index still *exists*, and
+    /// its length is the only thing a probe can no longer promise — so the
+    /// caller drops the length when it must filter.
+    pub async fn multi_package_document_probe(
+        &self,
+        req: &ProxyRequest,
+        doc_kind: DocumentKind,
+        accept: &[crate::ports::DocumentEncoding],
+    ) -> Result<Option<crate::ports::DocumentProbe>, CoreError> {
+        self.timed_listing_opt(
+            &req.package_id.registry,
+            self.multi_package_document_probe_inner(req, doc_kind, accept),
+        )
+        .await
+    }
+
+    async fn multi_package_document_probe_inner(
+        &self,
+        req: &ProxyRequest,
+        doc_kind: DocumentKind,
+        accept: &[crate::ports::DocumentEncoding],
+    ) -> Result<Option<crate::ports::DocumentProbe>, CoreError> {
+        let prelude = self.request_prelude(req).await?;
+        self.authorize_listing_audited(req, "denied multi-package index")
+            .await?;
+        let Some(mut probe) = prelude
+            .client
+            .probe_version_document(req.package_id.name.as_str(), doc_kind, accept)
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        // A filtered index still exists, so the probe stands — but it is not the
+        // document upstream just described, so the length, the etag and the
+        // modification date are dropped rather than relayed. A probe that
+        // promises the wrong length is worse than one that promises none.
+        let kind = prelude
+            .client
+            .registry_type()
+            .parse()
+            .unwrap_or(crate::entities::RegistryKind::Generic);
+        if !self
+            .blocked_in_registry_snapshot(&req.package_id.registry, kind)
+            .await
+            .is_empty()
+        {
+            probe.content_length = None;
+            probe.etag = None;
+            probe.last_modified = None;
+        }
+        Ok(Some(probe))
+    }
+
     /// Serve a **multi-package** index — conda's `repodata.json` — with blocked
     /// packages removed.
     ///
@@ -1423,6 +1733,19 @@ impl ProxyService {
     /// treatment, same fail-open; what differs is the shape of the blocked set
     /// (see [`Self::blocked_in_registry_snapshot`]) and therefore its freshness.
     pub async fn multi_package_document(
+        &self,
+        req: &ProxyRequest,
+        doc_kind: DocumentKind,
+        public_base: &str,
+    ) -> Result<VersionDocument, CoreError> {
+        self.timed_listing(
+            &req.package_id.registry,
+            self.multi_package_document_inner(req, doc_kind, public_base),
+        )
+        .await
+    }
+
+    async fn multi_package_document_inner(
         &self,
         req: &ProxyRequest,
         doc_kind: DocumentKind,
@@ -1513,12 +1836,7 @@ impl ProxyService {
         // one listing for the same name — NuGet's flat index and its
         // registration page, RubyGems' versions list and its gem document. Keyed
         // by name alone they collide, and one is served under the other's URL.
-        let key = format!(
-            "doc:{}:{}:{}",
-            req.package_id.registry,
-            doc_kind.as_str(),
-            name
-        );
+        let key = super::version_document_key(&req.package_id.registry, doc_kind, name);
 
         // `get` returns only entries the store still considers fresh, so freshness
         // is the store's job here exactly as it is in `resolve_metadata_cached` —

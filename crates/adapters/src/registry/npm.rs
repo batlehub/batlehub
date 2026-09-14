@@ -7,7 +7,10 @@ use std::collections::HashMap;
 use batlehub_core::{
     entities::{MetadataLinks, MetadataReadme, PackageId, PackageMetadata, ReadmeFormat},
     error::CoreError,
-    ports::{DocumentKind, FetchedArtifact, RegistryClient, UpstreamPackage, VersionDocument},
+    ports::{
+        DocumentBody, DocumentKind, FetchedArtifact, RegistryClient, UpstreamPackage,
+        VersionDocument,
+    },
 };
 
 use super::http_client::{
@@ -28,6 +31,32 @@ pub struct NpmRegistryClient {
 }
 
 impl NpmRegistryClient {
+    /// GET one tarball URL, after checking it belongs to this registry.
+    ///
+    /// Shared by the two fetch paths so the origin check cannot be present on
+    /// one and missing on the other — which is the shape the Open VSX
+    /// `files.download` bug had.
+    async fn stream_tarball(&self, tarball_url: &str) -> Result<FetchedArtifact, CoreError> {
+        ensure_same_origin(tarball_url, &self.base_url)?;
+        tracing::debug!(url = %tarball_url, "fetching npm tarball");
+
+        let response = self
+            .get(tarball_url)
+            .send()
+            .await
+            .map_err(to_registry_error)?
+            .error_for_status()
+            .map_err(to_registry_error)?;
+
+        let cache_control = cache_control(&response);
+        let stream = response.bytes_stream().map_err(to_registry_error);
+
+        Ok(FetchedArtifact {
+            stream: Box::pin(stream),
+            cache_control,
+        })
+    }
+
     pub fn new(base_url: impl Into<String>, opts: &UpstreamHttpOptions) -> Result<Self, CoreError> {
         let http = new_http_client(None, opts)?;
         Ok(Self {
@@ -195,62 +224,38 @@ impl RegistryClient for NpmRegistryClient {
 
     async fn resolve_metadata(&self, pkg: &PackageId) -> Result<PackageMetadata, CoreError> {
         let packument = self.fetch_packument(&pkg.name).await?;
+        metadata_from_packument(pkg, &packument)
+    }
 
-        // Resolve dist-tag (e.g. "latest") → concrete version string.
-        let resolved_version = resolve_dist_tag(&packument.dist_tags, &pkg.version).to_owned();
-
-        let version_meta = packument.versions.get(&resolved_version).ok_or_else(|| {
-            CoreError::NotFound(format!(
-                "npm package {}@{} not found",
-                pkg.name, resolved_version
-            ))
-        })?;
-
-        let download_url = if pkg.artifact.as_deref() == Some("tarball") {
-            Some(version_meta.dist.tarball.clone())
-        } else {
-            None
+    /// The packument this proxy already holds is the same document
+    /// `resolve_metadata` would fetch, so read it instead of asking again.
+    ///
+    /// npm asks for a package's document and then for its tarball, which is why
+    /// this is worth having at all: on the tarball request the packument is
+    /// already cached under `doc:`, and resolving the coordinate used to fetch
+    /// it a second time. `None` for anything that is not a JSON packument — a
+    /// synthesised document, or a shape this parser does not recognise — and
+    /// the caller then resolves the usual way.
+    fn resolve_metadata_from_document(
+        &self,
+        pkg: &PackageId,
+        document: &VersionDocument,
+    ) -> Option<PackageMetadata> {
+        // A **synthesised** listing is composed from what this instance holds and
+        // its URLs point back here, not upstream (RFC 0008-bis §4.2). Resolving
+        // from one would hand the fetch path a download URL on this proxy's own
+        // host, which the origin check would then refuse — a refusal caused by
+        // reading the wrong document rather than by anything being wrong.
+        // Today one never reaches the `doc:` cache, because composition happens
+        // on that read's *error* path; this keeps that true from the other side.
+        if document.synthesised.is_some() {
+            return None;
+        }
+        let DocumentBody::Json(ref value) = document.body else {
+            return None;
         };
-
-        let checksum = pick_checksum(&version_meta.dist);
-
-        let extra = serde_json::json!({
-            "resolved_version": resolved_version,
-            "tarball": version_meta.dist.tarball,
-            "publisher": version_meta.npm_user.as_ref().and_then(|u| u.name.as_deref()),
-            "readme": packument_readme(&packument, version_meta, &resolved_version),
-            // The version's own, falling back to the document root's.
-            "links": MetadataLinks::new(
-                version_meta
-                    .repository
-                    .as_ref()
-                    .or(packument.repository.as_ref())
-                    .and_then(NpmRepository::url),
-                version_meta
-                    .homepage
-                    .as_deref()
-                    .or(packument.homepage.as_deref()),
-            ),
-        });
-
-        let published_at = packument
-            .time
-            .get(&resolved_version)
-            .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
-            .map(|dt| dt.with_timezone(&chrono::Utc));
-
-        Ok(PackageMetadata {
-            id: PackageId {
-                version: resolved_version,
-                ..pkg.clone()
-            },
-            published_at,
-            download_url,
-            checksum,
-            is_signed: None,
-            extra,
-            cache_control: None,
-        })
+        let packument: NpmPackument = serde_json::from_value(value.clone()).ok()?;
+        metadata_from_packument(pkg, &packument).ok()
     }
 
     async fn list_versions(&self, package: &str) -> Result<Vec<String>, CoreError> {
@@ -296,26 +301,36 @@ impl RegistryClient for NpmRegistryClient {
             ))
         })?;
 
-        let tarball_url = &version_meta.dist.tarball;
-        ensure_same_origin(tarball_url, &self.base_url)?;
-        tracing::debug!(url = %tarball_url, "fetching npm tarball");
+        self.stream_tarball(&version_meta.dist.tarball).await
+    }
 
-        let response = self
-            .get(tarball_url)
-            .send()
-            .await
-            .map_err(to_registry_error)?
-            .error_for_status()
-            .map_err(to_registry_error)?;
-
-        let cache_control = cache_control(&response);
-
-        let stream = response.bytes_stream().map_err(to_registry_error);
-
-        Ok(FetchedArtifact {
-            stream: Box::pin(stream),
-            cache_control,
-        })
+    /// The tarball, from the URL the caller's own `resolve_metadata` already
+    /// found, without fetching the packument a second time.
+    ///
+    /// `resolve_metadata` puts that URL in `download_url` when the coordinate
+    /// names the tarball, so on the artifact route the document has already been
+    /// read — and re-reading it cost two more upstream fetches per first read of
+    /// a package (see `RegistryClient::fetch_artifact_resolved`).
+    ///
+    /// **The same-origin check is re-applied here, not inherited.** The URL is
+    /// upstream's text however it reached us, and `resolve_metadata` does not
+    /// check it — the check has always lived on the fetch path, which is the
+    /// only place that acts on the URL. Skipping it because "our own metadata
+    /// said so" would reopen exactly the hole `ensure_same_origin` closes.
+    async fn fetch_artifact_resolved(
+        &self,
+        pkg: &PackageId,
+        resolved: &PackageMetadata,
+    ) -> Result<Option<FetchedArtifact>, CoreError> {
+        // Only the tarball coordinate has a download URL; anything else falls
+        // through to the full path rather than guessing.
+        let Some(url) = resolved.download_url.as_deref() else {
+            return Ok(None);
+        };
+        if pkg.artifact.as_deref() != Some("tarball") {
+            return Ok(None);
+        }
+        self.stream_tarball(url).await.map(Some)
     }
 
     async fn search_packages(
@@ -459,6 +474,72 @@ impl NpmRegistryClient {
             .await
             .map_err(to_registry_error)
     }
+}
+
+/// One coordinate's metadata, read out of a packument.
+///
+/// A free function rather than a method: it is pure, and it is the single
+/// definition both resolve paths share — the one that fetches the document and
+/// the one handed a cached copy. Two copies would be two answers for the same
+/// coordinate depending on which path a request happened to take.
+fn metadata_from_packument(
+    pkg: &PackageId,
+    packument: &NpmPackument,
+) -> Result<PackageMetadata, CoreError> {
+    let resolved_version = resolve_dist_tag(&packument.dist_tags, &pkg.version).to_owned();
+
+    let version_meta = packument.versions.get(&resolved_version).ok_or_else(|| {
+        CoreError::NotFound(format!(
+            "npm package {}@{} not found",
+            pkg.name, resolved_version
+        ))
+    })?;
+
+    let download_url = if pkg.artifact.as_deref() == Some("tarball") {
+        Some(version_meta.dist.tarball.clone())
+    } else {
+        None
+    };
+
+    let checksum = pick_checksum(&version_meta.dist);
+
+    let extra = serde_json::json!({
+        "resolved_version": resolved_version,
+        "tarball": version_meta.dist.tarball,
+        "publisher": version_meta.npm_user.as_ref().and_then(|u| u.name.as_deref()),
+        "readme": packument_readme(packument, version_meta, &resolved_version),
+        // The version's own, falling back to the document root's.
+        "links": MetadataLinks::new(
+            version_meta
+                .repository
+                .as_ref()
+                .or(packument.repository.as_ref())
+                .and_then(NpmRepository::url),
+            version_meta
+                .homepage
+                .as_deref()
+                .or(packument.homepage.as_deref()),
+        ),
+    });
+
+    let published_at = packument
+        .time
+        .get(&resolved_version)
+        .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+
+    Ok(PackageMetadata {
+        id: PackageId {
+            version: resolved_version,
+            ..pkg.clone()
+        },
+        published_at,
+        download_url,
+        checksum,
+        is_signed: None,
+        extra,
+        cache_control: None,
+    })
 }
 
 #[cfg(test)]
@@ -633,6 +714,123 @@ mod tests {
 
         assert!(matches!(result, Err(CoreError::Registry(_))));
     }
+    // ── The resolved-metadata fetch path (`fetch_artifact_resolved`) ─────────
+    //
+    // What it saves, and what it must not skip while saving it.
+
+    /// The tarball is fetched **without asking for the packument again**.
+    ///
+    /// The measurement that prompted this: against a served upstream, the first
+    /// read of one npm package cost three packument fetches — the client's own,
+    /// plus two more from the artifact route resolving the coordinate twice.
+    /// `mockito`'s `expect(0)` is the assertion: the packument mock is present,
+    /// so a request for it would succeed, and the test fails on the *count*
+    /// rather than on a downstream symptom.
+    #[tokio::test]
+    async fn fetch_artifact_resolved_does_not_refetch_the_packument() {
+        let mut server = mockito::Server::new_async().await;
+        let packument = server
+            .mock("GET", "/lodash")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"dist-tags":{"latest":"1.0.0"},"versions":{"1.0.0":{"version":"1.0.0","dist":{"tarball":"TARBALL"}}}}"#)
+            .expect(0)
+            .create_async()
+            .await;
+        let tarball = server
+            .mock("GET", "/lodash/-/lodash-1.0.0.tgz")
+            .with_status(200)
+            .with_body("tgz-bytes")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let client = NpmRegistryClient::new(server.url(), &Default::default()).unwrap();
+        let pkg = PackageId::new("npm", "lodash", "1.0.0").with_artifact("tarball");
+        let resolved = PackageMetadata {
+            id: pkg.clone(),
+            published_at: None,
+            download_url: Some(format!("{}/lodash/-/lodash-1.0.0.tgz", server.url())),
+            checksum: None,
+            is_signed: None,
+            extra: serde_json::Value::Null,
+            cache_control: None,
+        };
+
+        let fetched = client
+            .fetch_artifact_resolved(&pkg, &resolved)
+            .await
+            .expect("the shortcut path answers");
+        assert!(fetched.is_some(), "a tarball coordinate takes the shortcut");
+
+        packument.assert_async().await;
+        tarball.assert_async().await;
+    }
+
+    /// **The origin check is on this path too.**
+    ///
+    /// The resolved metadata is this registry's own — and that is exactly the
+    /// position the Open VSX `files.download` bug started from. The document is
+    /// upstream's text, so a URL inside it can name any host, and a shortcut
+    /// that trusted it because the shape was familiar would hand the client
+    /// bytes from somewhere this proxy never checked.
+    #[tokio::test]
+    async fn fetch_artifact_resolved_rejects_cross_origin_tarball_url() {
+        let server = mockito::Server::new_async().await;
+        let client = NpmRegistryClient::new(server.url(), &Default::default()).unwrap();
+        let pkg = PackageId::new("npm", "lodash", "1.0.0").with_artifact("tarball");
+        let resolved = PackageMetadata {
+            id: pkg.clone(),
+            published_at: None,
+            download_url: Some("https://evil.example.com/lodash-1.0.0.tgz".to_owned()),
+            checksum: None,
+            is_signed: None,
+            extra: serde_json::Value::Null,
+            cache_control: None,
+        };
+
+        let result = client.fetch_artifact_resolved(&pkg, &resolved).await;
+        assert!(
+            matches!(result, Err(CoreError::Registry(_))),
+            "a cross-origin download URL is refused, not followed"
+        );
+    }
+
+    /// No download URL, or a coordinate that is not the tarball: `None`, and the
+    /// caller takes the full path. Declining is not failing.
+    #[tokio::test]
+    async fn fetch_artifact_resolved_declines_what_it_cannot_shortcut() {
+        let server = mockito::Server::new_async().await;
+        let client = NpmRegistryClient::new(server.url(), &Default::default()).unwrap();
+        let bare = PackageId::new("npm", "lodash", "1.0.0");
+        let no_url = PackageMetadata {
+            id: bare.clone(),
+            published_at: None,
+            download_url: None,
+            checksum: None,
+            is_signed: None,
+            extra: serde_json::Value::Null,
+            cache_control: None,
+        };
+        assert!(client
+            .fetch_artifact_resolved(&bare, &no_url)
+            .await
+            .expect("declining is not an error")
+            .is_none());
+
+        // A URL, but the coordinate is not the tarball — the URL describes
+        // something else, so it is not this path's to follow.
+        let with_url = PackageMetadata {
+            download_url: Some(format!("{}/lodash/-/lodash-1.0.0.tgz", server.url())),
+            ..no_url
+        };
+        assert!(client
+            .fetch_artifact_resolved(&bare, &with_url)
+            .await
+            .expect("declining is not an error")
+            .is_none());
+    }
+
     // ── README capture (RFC 0007 §2.1) ────────────────────────────────────────
 
     /// A packument that carries the text per version answers with that
