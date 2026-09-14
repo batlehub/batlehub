@@ -199,7 +199,7 @@ pub fn peer_trust_of_service(req: &ServiceRequest) -> PeerTrust {
 /// The host keeps whatever case and port the client sent — this is the origin to
 /// render into URLs, not the routing key. Use [`normalise_host`] for lookups.
 pub fn trusted_origin(req: &HttpRequest) -> (String, String) {
-    if peer_trust(req).honours_forwarded_origin() {
+    let (scheme, host) = if peer_trust(req).honours_forwarded_origin() {
         // The one sanctioned use of `ConnectionInfo`'s forwarded-header readers
         // in the workspace — `clippy.toml` disallows them everywhere else so the
         // trust decision cannot be bypassed by reaching for them directly. Here
@@ -211,6 +211,67 @@ pub fn trusted_origin(req: &HttpRequest) -> (String, String) {
         origin
     } else {
         (connection_scheme(req).to_owned(), connection_host(req))
+    };
+
+    // Both halves are client-supplied on the branch above, and both are *echoed*
+    // — see `MAX_HOST_LEN` for why that makes their length the security-relevant
+    // property rather than a matter of taste.
+    (bounded_scheme(req, scheme), bounded_host(req, host))
+}
+
+/// The longest string this server will render into a generated URL as the host.
+///
+/// A presentation-form domain name is at most 253 bytes (RFC 1035 §2.3.4), a
+/// bracketed IPv6 literal at most 47, and `:65535` adds 6 — so 259 bytes is well
+/// past anything a real ingress can put in `Host` or `X-Forwarded-Host` while
+/// still being a hostname.
+///
+/// The bound matters because this host is *repeated*. `registry_public_base`
+/// puts it in front of every self-referencing URL in a generated document, and
+/// those documents carry one URL per version: a packument, a NuGet registration
+/// index, a PyPI simple page. So a client's whole HTTP/1 head budget — 128 KiB,
+/// `actix_http::h1::decoder::MAX_BUFFER_SIZE` — comes back multiplied by the
+/// version count, after being built in full as a `serde_json::Value` first. A
+/// 100 KiB `X-Forwarded-Host` against a 20-version package already returns 2 MB,
+/// and real packuments run to thousands of versions.
+///
+/// This is the same amplification [`MAX_FORWARDED_HOPS`] exists to stop on
+/// `X-Forwarded-For`, on the header that is actually echoed back. It applies to
+/// the fallback path too, not just the forwarded one: `Host` is no less
+/// client-supplied than `X-Forwarded-Host`, so the bound is applied to the
+/// resolved origin rather than to one branch of it.
+const MAX_HOST_LEN: usize = 259;
+
+/// `host` when it is short enough to be a hostname, otherwise the server's own
+/// configured host.
+///
+/// Length is the only thing rejected here. The host deliberately keeps whatever
+/// case, port and syntax the client sent — that is [`trusted_origin`]'s contract,
+/// and [`normalise_host`] is what turns it into a routing key — so this is a
+/// bound, not a validator. Falling back to the configured host is what
+/// [`connection_host`] and actix's own `ConnectionInfo` already do for a request
+/// that carries no host at all, so it introduces no new state.
+fn bounded_host(req: &HttpRequest, host: String) -> String {
+    if host.len() <= MAX_HOST_LEN {
+        host
+    } else {
+        req.app_config().host().to_owned()
+    }
+}
+
+/// `scheme` when it is one this server can actually be reached over, otherwise
+/// the scheme of the underlying connection.
+///
+/// `X-Forwarded-Proto` lands in every generated URL exactly as the host does and
+/// needs the same bound. `http` and `https` are the only two values that mean
+/// anything here, so accepting just those is both tighter than a length cap and
+/// simpler to state. Case is preserved rather than normalised: a proxy that
+/// sends `HTTPS` keeps producing the URLs it produces today.
+fn bounded_scheme(req: &HttpRequest, scheme: String) -> String {
+    if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") {
+        scheme
+    } else {
+        connection_scheme(req).to_owned()
     }
 }
 
@@ -543,6 +604,90 @@ mod tests {
             "internal.svc",
             "the registered policy must apply even without the middleware"
         );
+    }
+
+    // ── origin bounds ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn an_over_long_forwarded_host_falls_back_to_the_configured_host() {
+        let huge = "a".repeat(100 * 1024);
+        let (_, host) = origin_with(
+            PeerTrust::Trusted,
+            TestRequest::default()
+                .insert_header(("host", "internal.svc:8080"))
+                .insert_header(("x-forwarded-host", huge.as_str())),
+        );
+        assert!(
+            host.len() <= MAX_HOST_LEN,
+            "an echoed host must stay bounded, got {} bytes",
+            host.len()
+        );
+        assert!(
+            !host.contains("aaaa"),
+            "the client's bytes must not survive"
+        );
+    }
+
+    #[test]
+    fn an_over_long_plain_host_header_is_bounded_too() {
+        // The untrusted branch reads `Host`, which the client also writes.
+        let huge = "a".repeat(100 * 1024);
+        let (_, host) = origin_with(
+            PeerTrust::Untrusted,
+            TestRequest::default().insert_header(("host", huge.as_str())),
+        );
+        assert!(host.len() <= MAX_HOST_LEN, "got {} bytes", host.len());
+    }
+
+    #[test]
+    fn a_host_at_the_limit_is_kept_verbatim() {
+        let long_but_legal = format!("{}.acme.io:8443", "a".repeat(MAX_HOST_LEN - 13));
+        assert_eq!(long_but_legal.len(), MAX_HOST_LEN);
+        let (_, host) = origin_with(
+            PeerTrust::Trusted,
+            TestRequest::default().insert_header(("x-forwarded-host", long_but_legal.as_str())),
+        );
+        assert_eq!(host, long_but_legal, "a real hostname must pass untouched");
+    }
+
+    #[test]
+    fn an_over_long_forwarded_proto_falls_back_to_the_connection_scheme() {
+        let huge = "h".repeat(100 * 1024);
+        let (scheme, _) = origin_with(
+            PeerTrust::Trusted,
+            TestRequest::default()
+                .insert_header(("host", "npm.acme.io"))
+                .insert_header(("x-forwarded-proto", huge.as_str())),
+        );
+        assert_eq!(scheme, "http");
+    }
+
+    #[test]
+    fn a_forwarded_proto_keeps_its_case() {
+        let (scheme, _) = origin_with(
+            PeerTrust::Trusted,
+            TestRequest::default()
+                .insert_header(("host", "npm.acme.io"))
+                .insert_header(("x-forwarded-proto", "HTTPS")),
+        );
+        assert_eq!(
+            scheme, "HTTPS",
+            "bounding the scheme must not rewrite what a proxy sends"
+        );
+    }
+
+    #[test]
+    fn the_forwarded_header_is_bounded_on_both_halves() {
+        // RFC 7239's `Forwarded` feeds the same two fields as the `X-` headers.
+        let huge = "a".repeat(100 * 1024);
+        let (scheme, host) = origin_with(
+            PeerTrust::Trusted,
+            TestRequest::default()
+                .insert_header(("host", "internal.svc"))
+                .insert_header(("forwarded", format!("host={huge};proto=gopher").as_str())),
+        );
+        assert!(host.len() <= MAX_HOST_LEN, "got {} bytes", host.len());
+        assert_eq!(scheme, "http", "an implausible scheme must not be echoed");
     }
 
     // ── routing_host ──────────────────────────────────────────────────────────
