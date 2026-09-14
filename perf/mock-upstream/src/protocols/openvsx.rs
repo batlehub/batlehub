@@ -8,7 +8,7 @@
 
 use actix_web::{route, web, HttpRequest, HttpResponse};
 
-use crate::support::*;
+use crate::support::{artifact_bytes, delay, host};
 use crate::Args;
 
 const VERSIONS: [&str; 3] = ["1.0.0", "1.1.0", "1.2.0"];

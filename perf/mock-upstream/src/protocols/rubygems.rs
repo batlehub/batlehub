@@ -12,7 +12,7 @@
 
 use actix_web::{route, web, HttpResponse};
 
-use crate::support::*;
+use crate::support::{delay, sha256_hex};
 use crate::Args;
 
 /// `GET /gems/versions` — every gem in the registry, with its live versions.

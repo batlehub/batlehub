@@ -17,7 +17,7 @@
 
 use actix_web::{route, web, HttpResponse};
 
-use crate::support::*;
+use crate::support::{artifact_bytes, delay};
 use crate::Args;
 
 const CANDIDATES: [&str; 3] = ["java", "maven", "gradle"];

@@ -69,7 +69,7 @@ pub fn artifact_bytes(name: &str, version: &str, size: usize) -> Vec<u8> {
 
 /// The hex sha1 of `bytes` — the algorithm npm's `dist.shasum` names.
 pub fn sha1_hex(bytes: &[u8]) -> String {
-    let digest = Sha1::digest(bytes);
+    let digest = Sha1::digest(bytes); // NOSONAR -- required by legacy `dist.shasum` wire formats
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 

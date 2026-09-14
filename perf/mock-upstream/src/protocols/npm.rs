@@ -6,7 +6,7 @@
 
 use actix_web::{route, web, HttpRequest, HttpResponse};
 
-use crate::support::*;
+use crate::support::{artifact_bytes, delay, host, sha1_hex};
 use crate::Args;
 
 /// npm packument: GET /{name}

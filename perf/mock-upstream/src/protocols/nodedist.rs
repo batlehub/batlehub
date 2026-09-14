@@ -7,7 +7,7 @@
 
 use actix_web::{route, web, HttpResponse};
 
-use crate::support::*;
+use crate::support::{artifact_bytes, delay};
 use crate::Args;
 
 const RELEASES: [(&str, &str, &str); 3] = [

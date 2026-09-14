@@ -12,7 +12,7 @@
 
 use actix_web::{route, web, HttpResponse};
 
-use crate::support::*;
+use crate::support::{artifact_bytes, delay};
 use crate::Args;
 
 /// The one dated directory this mock publishes, and the release in it.

@@ -104,7 +104,7 @@ export function mixed() {
   const req = arm.request(n);
 
   const res = http.request(req.method || "GET", req.url, req.body || null, {
-    headers: { ...AUTH, ...(req.headers || {}) },
+    headers: { ...AUTH, ...req.headers },
     // Every request carries the registry it is against, because the report
     // ranks registries and a request with no registry cannot be attributed.
     // The server's own `/metrics` is what the ranking is computed from; these

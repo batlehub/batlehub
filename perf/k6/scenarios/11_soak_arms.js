@@ -42,7 +42,7 @@ export function everyArm() {
   for (const arm of ARMS) {
     const req = arm.request(0);
     const method = req.method || "GET";
-    const headers = { ...AUTH, ...(req.headers || {}) };
+    const headers = { ...AUTH, ...req.headers };
     const res = http.request(method, req.url, req.body || null, { headers });
 
     const ok = arm.expect.includes(res.status);

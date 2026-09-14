@@ -12,7 +12,7 @@
 
 use actix_web::{route, web, HttpResponse};
 
-use crate::support::*;
+use crate::support::{artifact_bytes, delay, sha256_hex};
 use crate::Args;
 
 /// How many packages the generated `repodata.json` names. Enough that the

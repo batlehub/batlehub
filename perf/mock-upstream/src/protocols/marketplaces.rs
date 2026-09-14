@@ -18,7 +18,7 @@
 
 use actix_web::{route, web, HttpRequest, HttpResponse};
 
-use crate::support::*;
+use crate::support::{artifact_bytes, delay, host};
 use crate::Args;
 
 // ── Visual Studio Marketplace ───────────────────────────────────────────────

@@ -15,7 +15,7 @@
 
 use actix_web::{route, web, HttpResponse};
 
-use crate::support::*;
+use crate::support::{artifact_bytes, delay};
 use crate::Args;
 
 /// `GET /generic/{path}` — the kind whose protocol is "a URL is a file".

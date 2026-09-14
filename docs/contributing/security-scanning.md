@@ -12,6 +12,7 @@ you have already deployed.
 | Rust advisories + bans + licenses + sources | `cargo deny` (`deny.toml`) | `back-dep-audit.yaml` | block |
 | JS dependencies | `pnpm audit --audit-level high` | `dep-audit-frontend.yaml` (PR + daily) | block on high/critical |
 | Dependency supply chain (reputation + vulns) | [postmortem](https://github.com/mlab-sh/postmortem) | `postmortem.yaml` (PR + daily) — one job per dependency root: Rust, UI, Website | block on high/critical vulns (Rust, UI); report-only (Website) |
+| Lockfile CVEs, second opinion | [vuln-scan-action](https://github.com/mlab-sh/vuln-scan-action) (vuln.mlab.sh) | `vuln-scan.yaml` (PR) — all four roots: `Cargo.lock`, `mise.lock`, and `ui/` + `docs/` via a syft CycloneDX SBOM | **report-only**, comments on the PR — see below |
 | Container / OS layers | Trivy | `image-scan.yaml` (PR + daily, GitHub) runs Trivy directly on the proxy image (`Containerfile`), the worker image (`Containerfile.worker`, RFC 0018 — the one that carries bubblewrap, postmortem and the Trivy client) and the GuardDog variant of the worker image (`Containerfile.worker-guarddog`, which adds the optional Python scanner and is gated separately, so its toolchain answers for its own CVEs); `.forgejo/workflows/build.yaml` (the proxy and hardened images, the two it builds) polls Harbor's own scan-on-push report instead | block on fixable HIGH/CRITICAL |
 | Static analysis | CodeQL + Semgrep | `codeql.yaml`, `semgrep.yaml` | CodeQL report / Semgrep block on ERROR |
 | Secrets | gitleaks | `secret-scan.yaml` (PR + push) | block |
@@ -55,12 +56,58 @@ Check `withdrawn` on the OSV record (`https://api.osv.dev/v1/vulns/<id>`) before
 allowlist them — the suppression stance below applies, and the count is harmless as long as the gate
 keys on severity.
 
-Two rate limits apply, both optional to raise. Repository reputation is read from the GitHub API —
-CI passes `github.token` automatically; locally, export `GITHUB_TOKEN` or every dependency comes back
-`stats-failed`. Vulnerability lookups go to `vuln.mlab.sh`, capped at **8 scans/hour anonymously**
-while this workflow spends 3 per run, so set the optional `VULN_MLAB_TOKEN` repository secret (and
-`VULN_MLAB_TOKEN` in your shell, or `vuln_token` in `~/.postmortem/config.yml`) if runs start getting
-throttled.
+Two rate limits apply. Repository reputation is read from the GitHub API — CI passes `github.token`
+automatically; locally, export `GITHUB_TOKEN` or every dependency comes back `stats-failed`.
+
+Vulnerability lookups go to `vuln.mlab.sh`, capped at **8 scans/hour anonymously**, and **that budget
+is shared with `vuln-scan.yaml`** — one `VULN_MLAB_TOKEN`, one quota, two workflows. postmortem
+spends 3 per run and vuln-scan 5, so a single pull-request push costs the whole anonymous hour and
+anything after it is throttled. `VULN_MLAB_TOKEN` is therefore no longer optional in practice: set it
+once as a repository secret and both workflows pick it up, with no per-workflow configuration.
+Locally, export `VULN_MLAB_TOKEN` in your shell or put `vuln_token` in `~/.postmortem/config.yml`.
+
+### vuln-scan-action (lockfile CVEs, advisory)
+
+`vuln-scan.yaml` scans all four dependency roots against `vuln.mlab.sh` on every pull request and
+posts the result as a single comment, edited in place on each push. **It never fails the build.**
+
+`Cargo.lock` and `mise.lock` are sent as-is. `ui/` and `docs/` go through a **CycloneDX SBOM**: the
+scanner has no pnpm parser and `pnpm-lock.yaml` is the only frontend lockfile this repository keeps,
+so each root is catalogued with syft — the same tool `build.yaml` already uses for the image SBOM —
+and reduced by `.github/scripts/slim_sbom.py`. That script exists for two reasons, both found by
+running the thing rather than reading its README:
+
+- **Size.** A faithful syft SBOM of `ui/` is 896 KB and the endpoint refuses it with HTTP 413.
+  Keeping only `type`/`name`/`version`/`purl` — all a scanner reads — brings it to 73 KB.
+- **The 512-package cap.** The endpoint reads at most 512 components per request, warns once, and
+  then reports the remainder as though it were the whole tree, so a truncated scan comes back
+  looking clean. `ui/` holds 691 packages. The script splits the document into pieces of at most
+  512, so `ui/` costs two requests and `docs/` one, and nothing is silently dropped.
+
+`Cargo.lock` (675 crates) is still read only to that 512 limit, deliberately: it is the one root with
+a complete gate of its own in `cargo audit`, so this is a second opinion on it rather than its
+coverage, and converting it to CycloneDX to chunk it would mean building crate metadata on every pull
+request to buy nothing.
+
+**Why it is advisory and not a gate.** A run on 2026-09-14 returned two Rust findings, `dirs@7.0.0`
+(RUSTSEC-2020-0053) and `ring@0.17.14` (RUSTSEC-2025-0007). Both are `informational = "unmaintained"`
+— not vulnerabilities — and both were **withdrawn** upstream, in 2021 and 2025. `cargo audit` reads
+the same RUSTSEC database and reports this lockfile clean, so a blocking gate would have failed every
+pull request on two retracted advisories.
+
+Severity is the other half. RUSTSEC-sourced findings all come back `severity: unknown`, which ranks
+below `low`: `fail-on: high` can never trip and `fail-on: any` trips on exactly those two withdrawn
+advisories. npm findings *do* carry a real severity — the one standing frontend finding is
+`@ai-sdk/provider-utils@4.0.5`, CVE-2026-8769, `low`, which `pnpm audit --audit-level high` does not
+report. So the data is not uniformly poor, just not yet uniform enough to gate on, and `fail-on` is
+`none`. Re-check those two numbers before promoting it.
+
+**Quota — this is the expensive workflow.** It spends 5 scans per run (Cargo.lock, mise.lock, two
+`ui/` pieces, one `docs/` piece) and postmortem spends 3 more against the same budget. Anonymous
+`vuln.mlab.sh` allows 8 per hour, so one pull-request push very nearly exhausts it. **Set
+`VULN_MLAB_TOKEN`** (25/hour) — the same secret already backs `postmortem.yaml`. A 429 is thrown
+rather than reported, so it fails the step whatever `soft-fail` says; the comment then says that half
+of the scan did not complete rather than showing an empty report as "clean".
 
 ### Harbor scan-on-push (Forgejo build)
 

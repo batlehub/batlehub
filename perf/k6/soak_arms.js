@@ -72,6 +72,13 @@ import { npmPublishPayload } from "./helpers.js";
 
 const p = (path) => `${BASE_URL}${path}`;
 
+const goModule = (n) => {
+  const majorVersionPath = n === 0 ? "" : `/v${n + 1}`;
+  return `example.com/mod${majorVersionPath}`;
+};
+
+const cargoCrateName = (n) => `perf-crate-${n}`;
+
 /**
  * The cache-miss arm's coordinate space.
  *
@@ -222,7 +229,7 @@ export const ARMS = [
     space: 8,
     doc: "the module version list: a small document, parsed and filtered",
     request: (n) => ({
-      url: p(`/proxy/${GO_REGISTRY}/example.com/mod${n === 0 ? "" : `/v${n + 1}`}/@v/list`),
+      url: p(`/proxy/${GO_REGISTRY}/${goModule(n)}/@v/list`),
     }),
   },
   {
@@ -235,7 +242,7 @@ export const ARMS = [
     doc: "a module zip: the streaming path for a kind that is not npm",
     request: (n) => ({
       url: p(
-        `/proxy/${GO_REGISTRY}/example.com/mod${n === 0 ? "" : `/v${n + 1}`}/@v/v1.2.0.zip`,
+        `/proxy/${GO_REGISTRY}/${goModule(n)}/@v/v1.2.0.zip`,
       ),
     }),
   },
@@ -334,7 +341,7 @@ export const ARMS = [
     space: 12,
     doc: "the sparse index entry: newline-delimited JSON, filtered for blocked versions",
     request: (n) => ({
-      url: p(`/proxy/${CARGO_REGISTRY}/registry/${sparseIndexPath(`perf-crate-${n}`)}`),
+      url: p(`/proxy/${CARGO_REGISTRY}/registry/${sparseIndexPath(cargoCrateName(n))}`),
     }),
   },
   {
@@ -708,7 +715,9 @@ export const ARMS = [
 ];
 
 /** Every registry kind an arm drives, deduplicated. */
-export const SOAKED_KINDS = [...new Set(ARMS.map((a) => a.kind))].sort();
+export const SOAKED_KINDS = [...new Set(ARMS.map((a) => a.kind))].sort((a, b) =>
+  a.localeCompare(b),
+);
 
 /** The total of every weight — the mix divides by this rather than by 100. */
 export const TOTAL_WEIGHT = ARMS.reduce((sum, a) => sum + a.weight, 0);
@@ -726,5 +735,5 @@ export function armForSlot(slot) {
     acc += arm.weight;
     if (slot < acc) return arm;
   }
-  return ARMS[ARMS.length - 1];
+  return ARMS.at(-1);
 }

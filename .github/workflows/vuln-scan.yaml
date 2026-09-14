@@ -1,0 +1,271 @@
+name: Dependency CVEs (vuln.mlab.sh)
+# Scans the committed dependency trees against vuln.mlab.sh on every pull request
+# and posts the result as a single comment, edited in place on each push — the
+# same shape as `pr-checklist.yaml` and the SonarCloud gate comment beside it.
+#
+# Covers all four dependency roots: `Cargo.lock` and `mise.lock` are sent as-is,
+# and `ui/` and `docs/` go through a CycloneDX SBOM because the scanner has no
+# pnpm parser and `pnpm-lock.yaml` is the only frontend lockfile this repository
+# keeps. See "The SBOM detour" below.
+#
+# **Advisory, not a gate, and that is a measured decision rather than caution.**
+# A scan of this tree on 2026-09-14 returned two Rust findings, `dirs@7.0.0`
+# (RUSTSEC-2020-0053) and `ring@0.17.14` (RUSTSEC-2025-0007). Both are
+# `informational = "unmaintained"` — not vulnerabilities — and both were
+# **withdrawn** upstream, in 2021 and 2025 respectively. `cargo audit` reads the
+# same RUSTSEC database and correctly reports this lockfile clean, so a blocking
+# gate would have failed every pull request on two retracted advisories.
+#
+# Severity is the other half of why there is no threshold to gate on. The
+# RUSTSEC-sourced findings all come back `severity: unknown`, which ranks below
+# `low`: `fail-on: high` could never trip and `fail-on: any` would trip on those
+# two withdrawn advisories. npm findings *do* carry a real severity — the one
+# standing finding here is `@ai-sdk/provider-utils@4.0.5`, CVE-2026-8769, `low` —
+# so the data is not uniformly poor, just not yet uniform enough to gate on.
+# `fail-on` is therefore `none`, and the blocking coverage stays where it already
+# is: `back-dep-audit.yaml` (cargo audit), `dep-audit-frontend.yaml` (pnpm
+# audit), `postmortem.yaml` (supply chain) and `image-scan.yaml` (Trivy).
+#
+# ## The SBOM detour
+#
+# The scanner parses Cargo.lock, package-lock.json, npm-shrinkwrap.json,
+# composer.lock, Gemfile.lock, go.sum, requirements.txt and mise.lock — no pnpm.
+# It does accept CycloneDX, so `ui/` and `docs/` are catalogued with syft (the
+# same tool `build.yaml` already uses for the image SBOM) and sent as CycloneDX.
+#
+# Two things had to be dealt with on the way, both handled by
+# `.github/scripts/slim_sbom.py` and both found by trying it:
+#
+#   * **Size.** A faithful syft SBOM of `ui/` is 896 KB, which the endpoint
+#     refuses with HTTP 413. Stripping every component to `type`/`name`/
+#     `version`/`purl` — all a scanner reads — brings it to 73 KB.
+#   * **The 512-package cap.** The endpoint reads at most 512 components per
+#     request, warns once, then reports the rest as though it were the whole
+#     tree, so a truncated scan comes back looking clean. `ui/` holds 691
+#     packages. The script splits the document into pieces of at most 512 so the
+#     answer covers the tree it claims to; `ui/` becomes two requests, `docs/`
+#     one.
+#
+# `Cargo.lock` (675 crates) is still read in part, and deliberately so: it is the
+# one root with a complete gate of its own in `cargo audit`, so this is a second
+# opinion on it rather than its coverage, and converting it to CycloneDX to chunk
+# it would mean building crate metadata on every pull request to buy nothing.
+on:
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+permissions:
+  contents: read
+# Deliberately unfiltered by `paths:`, for the reason written out at length in
+# `postmortem.yaml`: the verdict depends on a vulnerability database fetched
+# live, so an unchanged lockfile can go from clean to vulnerable with no commit.
+# "The dependencies did not change" is not a reason the answer did not change.
+#
+# Quota is the constraint that argues the other way, and this workflow is the
+# expensive one. It spends **5 scans per run** — Cargo.lock, mise.lock, two
+# `ui/` pieces and one `docs/` piece — and `postmortem.yaml` spends 3 more
+# against the same hourly budget. Anonymous vuln.mlab.sh allows 8 per hour, so
+# one pull-request push very nearly exhausts it and a second is throttled.
+# **Set `VULN_MLAB_TOKEN`** (25/hour); it is the intended fix and the same
+# secret already backs `postmortem.yaml`. A 429 is *thrown* rather than
+# reported, so it fails the step whatever `soft-fail` says — the comment then
+# says the scan did not complete rather than showing an empty report as clean.
+# The concurrency group absorbs repeated pushes to one branch in the meantime.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+jobs:
+  scan:
+    name: Dependency CVEs
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # `write`, for the comment. A fork's `GITHUB_TOKEN` stays read-only
+      # whatever this says, which is why the post step tolerates its own failure
+      # rather than turning a fork's pull request red over a comment.
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Same action and same pin as the image SBOM in `build.yaml`; this variant
+      # only installs the binary, because two roots have to be catalogued and
+      # the output has to be piped through the slimmer rather than written out.
+      - uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+
+      - name: Catalogue the pnpm roots as CycloneDX
+        id: sbom
+        run: |
+          set -euo pipefail
+          : > sbom-pieces.txt
+          for root in ui docs; do
+            # `file:` and not `dir:`, so the catalogue is the lockfile's answer.
+            # `ui/node_modules` exists on a machine that has run an install, and
+            # a directory scan would add every package a second time from disk.
+            syft scan "file:${root}/pnpm-lock.yaml" -o cyclonedx-json -q \
+              | python3 .github/scripts/slim_sbom.py --out-prefix "sbom-${root}" \
+              >> sbom-pieces.txt
+          done
+          echo "Pieces to scan:"; cat sbom-pieces.txt
+          {
+            echo "files<<SBOM_PIECES_EOF"
+            cat sbom-pieces.txt
+            echo "SBOM_PIECES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # The scanner renders its own report — a heading, a per-file table and a
+      # findings table — through `@actions/core`'s summary writer, and that is
+      # the report we want in the comment. `GITHUB_STEP_SUMMARY` is a *different
+      # file for every step*, so a later step cannot read what an earlier one
+      # wrote; pointing the variable at files of our own is what makes the
+      # reports readable afterwards. The summary writer calls
+      # `access(R_OK | W_OK)` and throws on a missing path, so both files have to
+      # exist before the steps that write them run.
+      #
+      # Nothing is lost from the Actions UI: both reports are appended to the
+      # real job summary below, and the inline `::error::` / `::warning::`
+      # annotations the scanner emits are unaffected by this.
+      - name: Stage the files the scanner writes its reports to
+        run: touch "${GITHUB_WORKSPACE}/report-lockfiles.html" "${GITHUB_WORKSPACE}/report-sboms.html"
+
+      # Two scan steps, because `format` is one input applied to every file in
+      # the step: `cyclonedx` would be forced onto Cargo.lock and mise.lock, and
+      # `auto` would be forced onto the SBOM pieces, whose names it cannot map to
+      # a parser. Splitting costs nothing — the request count is per file either
+      # way.
+      - name: Scan the lockfiles
+        id: scan-lockfiles
+        uses: mlab-sh/vuln-scan-action@f0ce1a13b82ff83273678db36af3a2d459f74a34 # v1.0.0
+        env:
+          GITHUB_STEP_SUMMARY: ${{ github.workspace }}/report-lockfiles.html
+        with:
+          # Explicit rather than auto-detected. Auto-detection walks the tree and
+          # would pick up any lockfile a fixture or a vendored sample happens to
+          # carry, and each extra file it finds is another request.
+          path: |
+            Cargo.lock
+            mise.lock
+          fail-on: none
+          soft-fail: "true"
+          token: ${{ secrets.VULN_MLAB_TOKEN }}
+
+      - name: Scan the SBOM pieces
+        id: scan-sboms
+        # Never run this with an empty `path`: the action falls back to walking
+        # the tree, which would re-scan the two lockfiles above and charge the
+        # quota for the privilege. An empty output means the step before failed,
+        # and the comment says so.
+        if: steps.sbom.outputs.files != ''
+        uses: mlab-sh/vuln-scan-action@f0ce1a13b82ff83273678db36af3a2d459f74a34 # v1.0.0
+        env:
+          GITHUB_STEP_SUMMARY: ${{ github.workspace }}/report-sboms.html
+        with:
+          path: ${{ steps.sbom.outputs.files }}
+          format: cyclonedx
+          fail-on: none
+          soft-fail: "true"
+          token: ${{ secrets.VULN_MLAB_TOKEN }}
+
+      # `always()` throughout from here: a 429, a network fault or an
+      # unparseable input makes a step above throw, and the report is more
+      # useful on the runs that went wrong than on the ones that went right.
+      - name: Put the reports in the job summary
+        if: always()
+        run: |
+          cat "${GITHUB_WORKSPACE}/report-lockfiles.html" >> "$GITHUB_STEP_SUMMARY"
+          cat "${GITHUB_WORKSPACE}/report-sboms.html" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build the comment
+        if: always()
+        env:
+          LOCKFILES_OUTCOME: ${{ steps.scan-lockfiles.outcome }}
+          LOCKFILES_TOTAL: ${{ steps.scan-lockfiles.outputs.total }}
+          SBOMS_OUTCOME: ${{ steps.scan-sboms.outcome }}
+          SBOMS_TOTAL: ${{ steps.scan-sboms.outputs.total }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          # One section per scan step. Three outcomes are distinguishable and all
+          # three are said out loud, because "empty report" alone cannot tell a
+          # scan that never ran from one whose report went elsewhere — and
+          # calling the second one "not scanned" would be a lie in the
+          # safe-sounding direction.
+          section() {
+            title="$1"; file="$2"; outcome="$3"; total="$4"
+            {
+              echo "#### ${title}"
+              echo
+              if [ -s "${file}" ]; then
+                # Drop the scanner's own <h2>, which would sit under the heading
+                # and say the same thing twice. A no-op if it stops emitting one.
+                sed '1{/^<h2>.*<\/h2>$/d}' "${file}"
+              elif [ "${outcome}" = "success" ]; then
+                # The scan ran, but its report did not land in our file — the
+                # runner did not honour the `GITHUB_STEP_SUMMARY` override.
+                # Everything is still reported, just not here.
+                echo "Found **${total:-?}** vulnerabilities."
+                echo
+                echo "The per-finding table is in the job summary — it did not reach this comment."
+              elif [ "${outcome}" = "skipped" ]; then
+                echo "⚠️ **Skipped** — the SBOMs could not be built, so \`ui/\` and \`docs/\` were **not** scanned."
+              else
+                echo "⚠️ **Did not complete** (step outcome: \`${outcome}\`) — **not** scanned."
+                echo "The usual cause is the hourly quota on \`vuln.mlab.sh\` (HTTP 429)."
+              fi
+              echo
+            } >> comment.md
+          }
+
+          # The marker is what the upsert step matches on; it must be the first
+          # line and must never change, or every push starts a new thread.
+          echo '<!-- vuln-scan -->' > comment.md
+          echo '### 🛡️ Dependency CVE scan — vuln.mlab.sh' >> comment.md
+          echo >> comment.md
+          section "Rust and toolchain — \`Cargo.lock\`, \`mise.lock\`" \
+                  "${GITHUB_WORKSPACE}/report-lockfiles.html" \
+                  "${LOCKFILES_OUTCOME}" "${LOCKFILES_TOTAL}"
+          section "Frontend — \`ui/\`, \`docs/\` (via CycloneDX)" \
+                  "${GITHUB_WORKSPACE}/report-sboms.html" \
+                  "${SBOMS_OUTCOME}" "${SBOMS_TOTAL}"
+
+          # Plain markdown, not a wrapped <sub>: a block-level HTML element on
+          # its own line stops GitHub processing the markdown inside it, and the
+          # backticks and the link would then render literally.
+          {
+            echo "---"
+            echo
+            echo "*Advisory only — this check never fails the build. The blocking dependency"
+            echo "gates are cargo audit, pnpm audit, postmortem and Trivy.*"
+            echo
+            echo "*\`ui/\` and \`docs/\` are catalogued with syft and split into pieces of 512"
+            echo "so nothing is dropped. \`Cargo.lock\` (675 crates) is read to the scanner's"
+            echo "512-package limit — cargo audit is what covers it in full.*"
+            echo
+            echo "[Full run](${RUN_URL})"
+          } >> comment.md
+          cat comment.md
+
+      - name: Post it on the pull request
+        # Never fails the job, for the same reason `pr-checklist.yaml` does not:
+        # this is a comment, and a repository configuration that refuses it (a
+        # fork, a read-only token) is not a fault in the branch being reviewed.
+        # The reports are in the step summary either way.
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- vuln-scan -->")) | .id' \
+            | head -n1)
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" \
+              -F body=@comment.md >/dev/null
+            echo "Updated comment $existing"
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+              -F body=@comment.md >/dev/null
+            echo "Posted a new comment"
+          fi

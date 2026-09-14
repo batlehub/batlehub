@@ -2,7 +2,7 @@
 
 use actix_web::{route, web, HttpResponse};
 
-use crate::support::*;
+use crate::support::{artifact_bytes, delay};
 use crate::Args;
 
 /// `GET /maven/{group/path}/{artifact}/maven-metadata.xml`

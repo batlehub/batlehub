@@ -8,7 +8,7 @@
 
 use actix_web::{route, web, HttpRequest, HttpResponse};
 
-use crate::support::*;
+use crate::support::{artifact_bytes, delay, host, sha256_hex};
 use crate::Args;
 
 /// Sparse cargo index config: GET /cargo/config.json
