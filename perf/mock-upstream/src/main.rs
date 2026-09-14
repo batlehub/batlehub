@@ -54,6 +54,11 @@ async fn main() -> std::io::Result<()> {
             .service(gem_versions_doc)
             .service(gem_names_doc)
             .service(gem_info_doc)
+            .service(go_list)
+            .service(go_meta)
+            .service(maven_metadata)
+            .service(maven_file)
+            .service(generic_file)
     })
     .bind(("0.0.0.0", port))?
     .run()
@@ -240,6 +245,101 @@ async fn gem_info_doc(name: web::Path<String>, args: web::Data<Args>) -> HttpRes
         out.push_str(&format!("{version} |checksum:{checksum}\n"));
     }
     HttpResponse::Ok().content_type("text/plain").body(out)
+}
+
+// ── goproxy ───────────────────────────────────────────────────────────────────
+//
+// Four routes and no cleverness: `@v/list` is newline-separated versions, the
+// `.info` is two fields, the `.mod` is a module line, and the `.zip` is bytes.
+// The Go *tool* is never here — `tests/heavy/closed_world.sh` owns that — so
+// what this has to be is parseable by the proxy's client, which is all the
+// soak's load needs.
+
+/// `GET /go/{module}/@v/list`
+#[get("/go/{module:.*}/@v/list")]
+async fn go_list(path: web::Path<String>, args: web::Data<Args>) -> HttpResponse {
+    delay(args.delay_ms).await;
+    let _ = path;
+    HttpResponse::Ok()
+        .content_type("text/plain")
+        .body("v1.0.0\nv1.1.0\nv1.2.0\n")
+}
+
+/// `GET /go/{module}/@v/{file}` — `.info`, `.mod` or `.zip`.
+#[get("/go/{module:.*}/@v/{file}")]
+async fn go_meta(path: web::Path<(String, String)>, args: web::Data<Args>) -> HttpResponse {
+    delay(args.delay_ms).await;
+    let (module, file) = path.into_inner();
+    let version = file
+        .rsplit_once('.')
+        .map(|(v, _)| v.to_owned())
+        .unwrap_or_else(|| "v1.2.0".to_owned());
+    if file.ends_with(".info") {
+        return HttpResponse::Ok().content_type("application/json").body(
+            serde_json::json!({ "Version": version, "Time": "2024-01-01T00:00:00Z" }).to_string(),
+        );
+    }
+    if file.ends_with(".mod") {
+        return HttpResponse::Ok()
+            .content_type("text/plain")
+            .body(format!("module {module}\n\ngo 1.21\n"));
+    }
+    HttpResponse::Ok()
+        .content_type("application/zip")
+        .body(artifact_bytes(&module, &version, args.artifact_size_kb * 1024))
+}
+
+// ── maven ─────────────────────────────────────────────────────────────────────
+
+/// `GET /maven/{group/path}/{artifact}/maven-metadata.xml`
+#[get("/maven/{path:.*}/maven-metadata.xml")]
+async fn maven_metadata(path: web::Path<String>, args: web::Data<Args>) -> HttpResponse {
+    delay(args.delay_ms).await;
+    let path = path.into_inner();
+    let (group, artifact) = path.rsplit_once('/').unwrap_or(("com.example", &path));
+    let body = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+  <groupId>{}</groupId>
+  <artifactId>{artifact}</artifactId>
+  <versioning>
+    <latest>1.2.0</latest>
+    <release>1.2.0</release>
+    <versions><version>1.0.0</version><version>1.1.0</version><version>1.2.0</version></versions>
+    <lastUpdated>20240101000000</lastUpdated>
+  </versioning>
+</metadata>
+"#,
+        group.replace('/', ".")
+    );
+    HttpResponse::Ok().content_type("text/xml").body(body)
+}
+
+/// `GET /maven/{path}` — any other file under the repository: the jar, the pom.
+#[get("/maven/{path:.*}")]
+async fn maven_file(path: web::Path<String>, args: web::Data<Args>) -> HttpResponse {
+    delay(args.delay_ms).await;
+    let path = path.into_inner();
+    if path.ends_with(".pom") {
+        return HttpResponse::Ok()
+            .content_type("text/xml")
+            .body("<project><modelVersion>4.0.0</modelVersion></project>\n".to_owned());
+    }
+    HttpResponse::Ok()
+        .content_type("application/java-archive")
+        .body(artifact_bytes(&path, "", args.artifact_size_kb * 1024))
+}
+
+// ── generic ───────────────────────────────────────────────────────────────────
+
+/// `GET /generic/{path}` — the kind whose protocol is "a URL is a file".
+#[get("/generic/{path:.*}")]
+async fn generic_file(path: web::Path<String>, args: web::Data<Args>) -> HttpResponse {
+    delay(args.delay_ms).await;
+    let path = path.into_inner();
+    HttpResponse::Ok()
+        .content_type("application/octet-stream")
+        .body(artifact_bytes(&path, "", args.artifact_size_kb * 1024))
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

@@ -310,9 +310,17 @@ jobs:
           # head is this branch. `--jq` over the list rather than a search:
           # search is eventually consistent and a soak is often dispatched
           # seconds after a push.
-          owner="${GITHUB_REPOSITORY%%/*}"
-          number=$(gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&head=$owner:$GITHUB_REF_NAME" \
-            --jq '.[0].number // empty' 2>/dev/null || true)
+          #
+          # Filtered on `head.ref` here rather than with the API's own
+          # `head=<owner>:<ref>` parameter, which was the first spelling and
+          # matched nothing: that parameter wants the owner of the *head
+          # repository*, and this repository answers its canonical name on a
+          # redirect, so `${GITHUB_REPOSITORY%%/*}` is not reliably it.
+          # Measured against #167 — `head=batleforc:feat/new-reg` returned
+          # empty while the same query without the prefix returned the PR.
+          number=$(gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
+            --jq 'map(select(.head.ref == env.GITHUB_REF_NAME)) | .[0].number // empty' \
+            2>/dev/null || true)
           echo "number=$number" >> "$GITHUB_OUTPUT"
           if [ -z "$number" ]; then
             echo "No open pull request for $GITHUB_REF_NAME — the report is in the job summary." \

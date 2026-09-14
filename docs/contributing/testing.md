@@ -764,9 +764,18 @@ reason:
   is left in RSS is what the process is holding — and it is also what a real
   deployment runs.
 
-The workload is **stationary** for the same reason. The cache-miss arm draws
-from a bounded set of coordinates (`BATLEHUB_SOAK_MISS_SPACE`, 500 by default)
-rather than inventing a new version per iteration: an unbounded miss space adds
+The workload is **stationary** for the same reason — and that has to hold for
+*every* arm, which is the part that is easy to get half-right. The cache-miss
+arm draws from a bounded set (`BATLEHUB_SOAK_MISS_SPACE`, 500 by default) and
+so does the publish arm (`BATLEHUB_SOAK_PUBLISH_SPACE`, 100); the publish arm
+was unbounded at first, and the first real ten-minute run failed on an RSS
+trend of 2.21 MiB/min against a 2.00 limit after some 1 800 brand-new package
+versions — a margin at which a workload-driven drift and a slow leak look
+exactly alike. Past its first pass that arm publishes duplicate coordinates and
+is answered `409`, which is a weaker exercise than a fresh write but still runs
+auth, the parse, the quota check and the existence check.
+
+The reasoning, for either arm: an unbounded miss space adds
 a cache entry, a row and a stored object *per request, forever*, so memory
 climbs for as long as the run lasts and every long soak "fails". That growth is
 the workload's, not the server's, and no threshold can tell the two apart. A

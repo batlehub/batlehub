@@ -111,6 +111,51 @@ anonymous = []
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
 
+# ── Three more kinds, three more code paths ─────────────────────────────────
+#
+# A leak lives in a *code path*, not in a request count, and every kind brings
+# its own client, its own document parser and its own rewriter. Soaking npm
+# alone exercises one of each. These three cost the mock a few routes because
+# their protocols are files and a small document — see `perf/mock-upstream`.
+#
+# The kinds that are *not* here are listed in `soak_kind_coverage` in
+# `perf/scripts/soak.sh`, with the reason each one needs more than a route.
+
+[[registries]]
+type = "goproxy"
+name = "perf-go"
+upstreams = ["${SOAK_UPSTREAM_URL}/go"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "maven"
+name = "perf-maven"
+upstreams = ["${SOAK_UPSTREAM_URL}/maven"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "generic"
+name = "perf-generic"
+upstreams = ["${SOAK_UPSTREAM_URL}/generic"]
+# A generic registry refuses to start without an allowlist — the config loader
+# says so by name, which is the check doing its job: "mirror any path from this
+# upstream" has to be something an operator wrote down, not a default. Here the
+# upstream is a mock on loopback, so the whole of it is the deliberate answer.
+path_allow = ["**"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
 # ── The local registry: the write path ───────────────────────────────────────
 
 [[registries]]

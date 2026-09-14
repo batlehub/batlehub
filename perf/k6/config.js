@@ -14,6 +14,11 @@ export const CARGO_REGISTRY = "perf-cargo";
 // The RubyGems registry the soak config declares (`perf/config.soak.toml`), for
 // the scenario that wants a whole-registry document rather than a packument.
 export const GEMS_REGISTRY = "perf-gems";
+// The three kinds added so the soak exercises more than one client, one parser
+// and one rewriter — a leak lives in a code path, not in a request count.
+export const GO_REGISTRY = "perf-go";
+export const MAVEN_REGISTRY = "perf-maven";
+export const GENERIC_REGISTRY = "perf-generic";
 
 // Package baked into the seed data.
 export const SEED_PKG = "perf-pkg";

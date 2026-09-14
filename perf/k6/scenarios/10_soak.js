@@ -37,6 +37,9 @@ import {
   ADMIN_TOKEN,
   BASE_URL,
   GEMS_REGISTRY,
+  GENERIC_REGISTRY,
+  GO_REGISTRY,
+  MAVEN_REGISTRY,
   NPM_REGISTRY,
   SEED_PKG,
   SEED_VER,
@@ -100,6 +103,14 @@ const GEMS_INFO_URL = (gem) => `${BASE_URL}/proxy/${GEMS_REGISTRY}/info/${gem}`;
 // the client-side check on it.
 const npmTags = (op) => ({ op, registry: NPM_REGISTRY });
 
+// The same deterministic rotation the mix uses, and the same reason every arm
+// draws from a **bounded** set: a coordinate space that grows with the run adds
+// a row and a stored object per request forever, and the verdict then measures
+// the workload rather than the server (see `MISS_SPACE`).
+const SLOT = () => (__VU * 7919 + __ITER) % 64;
+const MODULE_SUFFIX = () => (SLOT() % 8 === 0 ? "" : `/v${(SLOT() % 8) + 1}`);
+const ARTIFACT = () => `lib-${SLOT() % 12}`;
+
 /**
  * The mix, as percentages of the offered rate. Deterministic rotation on the
  * iteration counter rather than `Math.random()`: two runs then issue the same
@@ -107,14 +118,19 @@ const npmTags = (op) => ({ op, registry: NPM_REGISTRY });
  */
 export function mixed() {
   const slot = (__VU * 7919 + __ITER) % 100;
-  if (slot < 50) warmRead();
-  else if (slot < 64) packument();
-  else if (slot < 72) cacheMiss();
-  else if (slot < 76) adminRead();
-  else if (slot < 80) sbomRead();
-  else if (slot < 83) publish();
-  else if (slot < 87) gemsIndex();
-  else gemsInfo();
+  if (slot < 34) warmRead();
+  else if (slot < 44) packument();
+  else if (slot < 50) cacheMiss();
+  else if (slot < 53) adminRead();
+  else if (slot < 56) sbomRead();
+  else if (slot < 59) publish();
+  else if (slot < 62) gemsIndex();
+  else if (slot < 72) gemsInfo();
+  else if (slot < 78) goList();
+  else if (slot < 86) goArtifact();
+  else if (slot < 90) mavenMetadata();
+  else if (slot < 95) mavenArtifact();
+  else genericFile();
 }
 
 /** 50% — an artifact served from storage. The streaming path. */
@@ -206,10 +222,83 @@ function gemsInfo() {
   check(res, { "gems info not 5xx": (r) => r.status < 500 });
 }
 
-/** 3% — the write path: a body held in memory, a row, an object in storage. */
+// ── The kinds beyond npm ────────────────────────────────────────────────────
+//
+// Each of these is a different client, a different document parser and a
+// different rewriter inside the proxy. They are here to put those paths under
+// load, not for their share of traffic: the percentages only decide how often
+// each arm runs.
+
+/** 6% — the Go module version list: a small document, parsed and filtered. */
+function goList() {
+  const res = http.get(
+    `${BASE_URL}/proxy/${GO_REGISTRY}/example.com/mod${MODULE_SUFFIX()}/@v/list`,
+    { headers: AUTH, tags: { op: "go_list", registry: GO_REGISTRY } }
+  );
+  check(res, { "go list not 5xx": (r) => r.status < 500 });
+}
+
+/** 8% — a module zip: the streaming path for a kind that is not npm. */
+function goArtifact() {
+  const res = http.get(
+    `${BASE_URL}/proxy/${GO_REGISTRY}/example.com/mod${MODULE_SUFFIX()}/@v/v1.2.0.zip`,
+    { headers: AUTH, tags: { op: "go_zip", registry: GO_REGISTRY } }
+  );
+  check(res, { "go zip not 5xx": (r) => r.status < 500 });
+}
+
+/** 4% — `maven-metadata.xml`: an XML listing, which no other arm exercises. */
+function mavenMetadata() {
+  const res = http.get(
+    `${BASE_URL}/proxy/${MAVEN_REGISTRY}/maven2/com/example/${ARTIFACT()}/maven-metadata.xml`,
+    { headers: AUTH, tags: { op: "maven_metadata", registry: MAVEN_REGISTRY } }
+  );
+  check(res, { "maven metadata not 5xx": (r) => r.status < 500 });
+}
+
+/** 5% — a jar, which is the multi-file storage-key path. */
+function mavenArtifact() {
+  const a = ARTIFACT();
+  const res = http.get(
+    `${BASE_URL}/proxy/${MAVEN_REGISTRY}/maven2/com/example/${a}/1.2.0/${a}-1.2.0.jar`,
+    { headers: AUTH, tags: { op: "maven_jar", registry: MAVEN_REGISTRY } }
+  );
+  check(res, { "maven jar not 5xx": (r) => r.status < 500 });
+}
+
+/** 5% — the kind whose protocol is "a URL is a file", allowlist and all. */
+function genericFile() {
+  const res = http.get(
+    `${BASE_URL}/proxy/${GENERIC_REGISTRY}/generic/dist/tool-${SLOT() % 20}.tar.gz`,
+    { headers: AUTH, tags: { op: "generic_file", registry: GENERIC_REGISTRY } }
+  );
+  check(res, { "generic not 5xx": (r) => r.status < 500 });
+}
+
+/**
+ * 3% — the write path: a body held in memory, a row, an object in storage.
+ *
+ * **Bounded, for the reason the cache-miss arm is bounded**, and this one was
+ * missed the first time: `1.0.${__ITER}` is a brand-new package version on
+ * every publish, so the workload adds a row, a stored object and a dedup entry
+ * *per request, forever*. Measured on the first real 10-minute run — about
+ * 1 800 new versions — and the verdict failed on an RSS trend of 2.21 MiB/min
+ * against a 2.00 limit, which is what a slow workload-driven drift looks like
+ * and is indistinguishable from a slow leak at that margin.
+ *
+ * After the first pass over this space the publishes are duplicate-coordinate
+ * refusals (`409`, `immutable`), which is a weaker exercise than a fresh write
+ * — but it still runs auth, the body parse, the quota check and the existence
+ * check on every request, and it is the only version of this arm whose steady
+ * state exists. A gate cannot tell a leak from a workload that never stops
+ * growing, so the workload is the thing that has to stop growing.
+ */
+const PUBLISH_SPACE = Number(__ENV.BATLEHUB_SOAK_PUBLISH_SPACE || 100);
+
 function publish() {
-  const name = `soak-pub-${__VU}`;
-  const version = `1.0.${__ITER}`;
+  const n = (__VU * 7919 + __ITER) % PUBLISH_SPACE;
+  const name = `soak-pub-${n % 10}`;
+  const version = `1.0.${Math.floor(n / 10)}`;
   const res = http.put(
     `${BASE_URL}/proxy/perf-local-npm/${name}`,
     npmPublishPayload(name, version, 32),
