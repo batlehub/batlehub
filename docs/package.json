@@ -14,7 +14,7 @@
     "axe-core": "4.13.0",
     "jsdom": "^30.0.1",
     "mermaid": "^11.17.2",
-    "puppeteer-core": "25.9.0",
+    "puppeteer-core": "25.10.0",
     "vitepress": "^1.6.4",
     "vitepress-plugin-mermaid": "^2.0.17"
   },
