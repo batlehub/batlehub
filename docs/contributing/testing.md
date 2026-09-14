@@ -812,12 +812,74 @@ bytes pulled from upstream, artifact and document misses, and the coordinates
 resolved from a listing already held — the upstream round trips it did *not*
 make.
 
-That ranking is why `perf/config.soak.toml` declares **three** registries and
-not one. "Which registry is the worst consumer" is not a question a
-single-registry run can answer, and the shapes have to differ or it ranks them
-by traffic rather than by cost: an npm read is a small document and a small
-artifact, a RubyGems compact index is the whole registry in one document, which
-is the expensive shape this project has measured before (RFC 0015 §11.7).
+That ranking is why `perf/config.soak.toml` declares more than one registry.
+"Which registry is the worst consumer" is not a question a single-registry run
+can answer, and the shapes have to differ or it ranks them by traffic rather
+than by cost: an npm read is a small document and a small artifact, a RubyGems
+compact index is the whole registry in one document, which is the expensive
+shape this project has measured before (RFC 0015 §11.7).
+
+#### Every registry kind, and what that does and does not prove
+
+The soak declares a registry for **every kind in `RegistryKind::ALL`** and
+drives each of them, because a leak lives in a *code path* and not in a request
+count: each kind brings its own client, its own document parser and its own
+rewriter, so a soak that drove npm alone would be as green against a kind that
+leaked a megabyte per listing.
+
+Four files have to agree for that claim to hold, and three tests in
+`crates/web/tests/soak_kind_coverage.rs` make them:
+
+| File | What it holds |
+| --- | --- |
+| `perf/mock-upstream/src/protocols/` | one module per protocol — the documents the proxy's client parses |
+| `perf/config.soak.toml` | a registry per kind, pointed at the mock |
+| `perf/k6/soak_arms.js` | the arms: `{op, kind, registry, weight, expect, request(n)}` |
+| `soak_kind_coverage.rs` | `NOT_SOAKED`, the kinds deliberately left out — **currently empty** |
+
+The tests refuse a kind that is neither driven nor excused, a registry no arm
+asks for (it would report as a registry that costs nothing), and — the one that
+makes the count mean anything — an arm whose `kind` is not the type of the
+registry it addresses. Without that last check an arm can claim `conda` while
+pointing at the npm registry and every file still reads correctly on its own.
+
+**The pre-flight is the gate that matters.** `perf/k6/scenarios/11_soak_arms.js`
+asks for each arm once and requires the status the arm declares; `soak.sh` runs
+it before the warm-up and stops the run on a failure. It exists because the
+load's own check is "not 5xx", so an arm whose URL is wrong or whose upstream
+route was never written answers `404` and **passes** — and the report then shows
+that registry costing nothing, which reads exactly like a cheap registry. When
+the nineteen kinds beyond the original five were added, the pre-flight caught
+eight arms that looked right and were not: a `dl_path` that resolved to
+`…/cargo/cargo/…`, a wheel filename whose hyphen was parsed as the version
+boundary, three forge asset downloads that resolve the tag before the release,
+and a `HEAD` the mock answered with `404` because actix does not derive one from
+`#[get]`.
+
+**What soaking a kind proves.** That its client, parser, rewriter, cache and
+storage path hold up under constant load without the process growing. That is
+the question a soak asks, and it is the whole of it.
+
+**What it does not prove**, and none of these are gaps in the soak — each has
+its own instrument:
+
+- **That a real client would accept what is served.** The mock answers what the
+  *proxy* parses, not what `apt`, `terraform` or an editor would. That is
+  `tests/heavy/closed_world.sh`, one phase per kind, driving the actual client.
+- **The cost at real scale.** Conda is the sharpest case: the mock's
+  `repodata.json` is a few hundred entries, where conda-forge's is ~424 MiB and
+  costs ~11.5 GB parsed as a `Value` — the measurement that drove the streaming
+  filter and the sharded index. The arm exercises the code path; it says nothing
+  about the memory profile at channel scale.
+- **Two routes that cannot be driven through `/proxy/{registry}/`.** Terraform's
+  `.well-known/terraform.json` is served only on a host bound to a single
+  registry (RFC 0001), and VS Code's `/vscode/item` is a `302` to the console's
+  own package page rather than an upstream read. Both are *routes* left out, not
+  kinds: the Terraform provider versions, its mirror index and the VS Code
+  gallery query are all in the mix.
+- **The write path, beyond npm.** One local registry publishes; every other
+  registry in the soak is a proxy. A publish arm per kind would be a different
+  suite.
 
 Two things the ranking does not count, and says so in its own footnote:
 

@@ -38,6 +38,8 @@ survive it.
 | ~~5~~ | ~~`adapters/repo/deb.rs`~~ | ~~MD5, SHA-1~~ | **Removed** — optional in Debian |
 | ~~6~~ | ~~`adapters/repo/pacman.rs`~~ | ~~MD5~~ | **Removed** — gone from the format |
 | 7 | `adapters/repo/openpgp.rs` — fingerprint | SHA-1 | Immutable by definition |
+| 8 | `core/services/listing_synthesis.rs` — composed listings | SHA-1 | Mandated by the format being imitated |
+| 9 | `web/…/proxy/maven/proxy.rs` — `.md5`/`.sha1` sidecars | MD5, SHA-1 | The algorithm *is* the file extension |
 
 Entries 5 and 6 are struck through because the code no longer computes them.
 Entry 4 is bolded because it is a compatibility choice rather than a
@@ -193,16 +195,39 @@ was doing the work is still doing it.
 and `pacman` in containers, and it triggers on any change under
 `crates/adapters/src/repo/`.
 
+## Beside the product code: the tests and the fixtures
+
+Five more files are pinned, and none of them is a decision — each computes a
+weak digest to *check* or to *imitate* one of the entries above, so the
+algorithm is chosen by the thing under test:
+
+| Where | Algo | What it is for |
+| --- | --- | --- |
+| `web/tests/local_rubygems_compact_index.rs` | MD5 | Recomputes entry 3's digest to assert the server emits what Bundler expects. |
+| `web/tests/air_gap.rs` | MD5, SHA-1 | Asserts entry 9's sidecars are emitted, with the values a Maven client computes. |
+| `tests/heavy/upstream_audit.sh` | SHA-1 | Recomputes npm's `dist.shasum` to check what the server served. |
+| `tests/heavy/upstream_dir.sh` | SHA-1 | *Produces* that `dist.shasum`: it is the npm upstream the hybrid suite installs from. |
+| `perf/mock-upstream/src/main.rs` | SHA-1 | The same, for the soak load's upstream — a wrong `shasum` there is a 502 on every artifact read. |
+
+The mock is the newest of these and is the reason to repeat the recheck
+discipline rather than the last comment: it had *two* weak digests, and only one
+of them was required. Its RubyGems compact-index `|checksum:` was a synthetic
+SHA-1 where [the format names a
+SHA-256](https://github.com/rubygems/guides/blob/main/rubygems-org-compact-index-api.md)
+of the gem — wrong about the protocol as well as weak — and it emits SHA-256
+there now. Only the npm `dist.shasum` is pinned.
+
 ## How these are handled in the scanner
 
-Each has a `rust:S4790` entry in `sonar-project.properties`, pinned to the single
-file that speaks the protocol, with its reasoning inline. They are configured
-ignores rather than per-issue dashboard resolutions so that the justification is
-version-controlled and reviewable.
+Each has a `rust:S4790` (or `shell:S4790`) entry in `sonar-project.properties`,
+pinned to the single file that speaks the protocol, with its reasoning inline.
+They are configured ignores rather than per-issue dashboard resolutions so that
+the justification is version-controlled and reviewable.
 
-The scoping is deliberate: a weak hash *outside* those seven files is a real
-finding. Do not widen a `resourceKey` to a directory, and do not add an eighth
-entry without an argument of the same kind — which, as this page shows, means
+Eleven files are pinned: the six of the register that are product code, and the
+five above. The scoping is deliberate — a weak hash *outside* them is a real
+finding. Do not widen a `resourceKey` to a directory, and do not add a twelfth
+entry without an argument of the same kind, which, as this page shows, means
 checking the specification rather than repeating what the last comment said.
 
 Related: [Security scanning](/contributing/security-scanning) for the full

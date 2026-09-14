@@ -199,26 +199,40 @@ def parse_prometheus(text: str) -> dict[tuple[str, tuple[tuple[str, str], ...]],
     alternative is a dependency for twenty lines.
     """
     out: dict[tuple[str, tuple[tuple[str, str], ...]], float] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        try:
-            head, raw_value = line.rsplit(" ", 1)
-            value = float(raw_value)
-        except ValueError:
-            continue
-        if "{" in head:
-            name, _, rest = head.partition("{")
-            labels: list[tuple[str, str]] = []
-            for pair in rest.rstrip("}").split(","):
-                key, _, val = pair.partition("=")
-                if key:
-                    labels.append((key.strip(), val.strip().strip('"')))
-            out[(name, tuple(sorted(labels)))] = value
-        else:
-            out[(head, ())] = value
+    for raw_line in text.splitlines():
+        parsed = parse_prometheus_line(raw_line)
+        if parsed is not None:
+            key, value = parsed
+            out[key] = value
     return out
+
+
+def parse_labels(rest: str) -> tuple[tuple[str, str], ...]:
+    """The `{a="1",b="2"}` half of a sample line, sorted so two are comparable."""
+    labels: list[tuple[str, str]] = []
+    for pair in rest.rstrip("}").split(","):
+        key, _, val = pair.partition("=")
+        if key:
+            labels.append((key.strip(), val.strip().strip('"')))
+    return tuple(sorted(labels))
+
+
+def parse_prometheus_line(
+    raw_line: str,
+) -> tuple[tuple[str, tuple[tuple[str, str], ...]], float] | None:
+    """One exposition line as `((name, labels), value)`, or `None` to skip it."""
+    line = raw_line.strip()
+    if not line or line.startswith("#"):
+        return None
+    try:
+        head, raw_value = line.rsplit(" ", 1)
+        value = float(raw_value)
+    except ValueError:
+        return None
+    if "{" not in head:
+        return (head, ()), value
+    name, _, rest = head.partition("{")
+    return (name, parse_labels(rest)), value
 
 
 def by_registry(samples: dict, metric: str) -> dict[str, float]:
@@ -334,31 +348,68 @@ def plot(
     """
     lines: list[str] = []
     for label, values, unit in series:
-        if len(values) < 2:
-            continue
-        step = max(1, len(values) // width)
-        buckets = [values[i : i + step] for i in range(0, len(values), step)][:width]
-        points = [statistics.median(b) for b in buckets if b]
-        lo, hi = min(points), max(points)
-        span = hi - lo or 1.0
-        # Rows top to bottom; a point lands in a row when it reaches that band.
-        grid = [[" "] * len(points) for _ in range(height)]
-        for x, v in enumerate(points):
-            row = height - 1 - int((v - lo) / span * (height - 1))
-            grid[row][x] = "●"
-            # Join to the previous point so the eye follows a line rather than
-            # a scatter — the shape is the finding.
-            if x:
-                prev = height - 1 - int((points[x - 1] - lo) / span * (height - 1))
-                for r in range(min(row, prev) + 1, max(row, prev)):
-                    grid[r][x] = "│"
-        lines.append(f"{label} ({lo:.0f}–{hi:.0f} {unit})")
-        for r, row in enumerate(grid):
-            axis = hi if r == 0 else (lo if r == height - 1 else None)
-            gutter = f"{axis:7.0f} │" if axis is not None else " " * 7 + " │"
-            lines.append(gutter + "".join(row))
-        lines.append(" " * 8 + "└" + "─" * len(points))
-        lines.append("")
+        lines.extend(plot_one(label, values, unit, height, width))
+    return lines
+
+
+def bucket(values: list[float], width: int) -> list[float]:
+    """`values` reduced to at most `width` points, each the median of its bucket."""
+    step = max(1, len(values) // width)
+    buckets = [values[i : i + step] for i in range(0, len(values), step)][:width]
+    return [statistics.median(b) for b in buckets if b]
+
+
+def plot_grid(points: list[float], lo: float, hi: float, height: int) -> list[list[str]]:
+    """The character grid for one series, rows top to bottom."""
+    span = hi - lo or 1.0
+
+    def row_of(value: float) -> int:
+        # A point lands in a row when it reaches that band.
+        return height - 1 - int((value - lo) / span * (height - 1))
+
+    grid = [[" "] * len(points) for _ in range(height)]
+    for x, v in enumerate(points):
+        row = row_of(v)
+        grid[row][x] = "●"
+        # Join to the previous point so the eye follows a line rather than a
+        # scatter — the shape is the finding.
+        if x:
+            prev = row_of(points[x - 1])
+            for r in range(min(row, prev) + 1, max(row, prev)):
+                grid[r][x] = "│"
+    return grid
+
+
+def axis_gutter(row_index: int, height: int, lo: float, hi: float) -> str:
+    """The value printed beside a row: the top and bottom bands carry one."""
+    if row_index == 0:
+        axis = hi
+    elif row_index == height - 1:
+        axis = lo
+    else:
+        return " " * 7 + " │"
+    return f"{axis:7.0f} │"
+
+
+def plot_one(
+    label: str,
+    values: list[float],
+    unit: str,
+    height: int,
+    width: int,
+) -> list[str]:
+    """One labelled series, axis gutter and baseline included."""
+    if len(values) < 2:
+        return []
+    points = bucket(values, width)
+    lo, hi = min(points), max(points)
+    grid = plot_grid(points, lo, hi, height)
+
+    lines = [f"{label} ({lo:.0f}–{hi:.0f} {unit})"]
+    for r, row in enumerate(grid):
+        lines.append(axis_gutter(r, height, lo, hi) + "".join(row))
+    lines.append(" " * 8 + "└" + "─" * len(points))
+    lines.append("")
     return lines
 
 
@@ -478,41 +529,10 @@ def fmt(value: float | None, digits: int = 1) -> str:
     return "—" if value is None else f"{value:.{digits}f}"
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--samples", required=True, type=Path)
-    ap.add_argument("--marks", required=True, type=Path)
-    ap.add_argument("--server-log", type=Path)
-    ap.add_argument("--k6-summary", type=Path)
-    ap.add_argument("--k6-exit", type=int, default=0)
-    ap.add_argument("--metrics-before", type=Path, help="/metrics at the start of the load")
-    ap.add_argument("--metrics-after", type=Path, help="/metrics at the end of the load")
-    ap.add_argument("--chart", type=Path, help="where to write the SVG chart")
-    ap.add_argument("--duration", default="?")
-    ap.add_argument("--rate", default="?")
-    ap.add_argument("--report", required=True, type=Path)
-    args = ap.parse_args()
-
-    samples = read_samples(args.samples)
-    marks = read_marks(args.marks)
-
-    if len(samples) < 2 * MIN_WINDOW_SAMPLES:
-        args.report.write_text(
-            "<!-- soak-report -->\n## Soak — inconclusive\n\n"
-            f"Only {len(samples)} samples were collected; the server process was "
-            "not observable for long enough to say anything.\n"
-        )
-        return 1
-
-    baseline_w = window(samples, marks.get("warmup_end"), marks.get("baseline_end"))
-    final_w = window(samples, marks.get("steady_end"), marks.get("final_end"))
-    steady_w = [
-        s
-        for s in samples
-        if marks.get("steady_start", 0) <= s.epoch_s <= marks.get("steady_end", 0)
-    ]
-
-    checks = [
+def resource_checks(baseline_w: list[Sample], final_w: list[Sample]) -> list[Check]:
+    """The four idle-window comparisons, in report order. RSS is first: the
+    warm-up exemption below reaches for `checks[0]`."""
+    return [
         check_growth(
             "RSS (idle)",
             median_of(baseline_w, "rss_mib"),
@@ -544,184 +564,248 @@ def main() -> int:
         ),
     ]
 
-    steady_seconds_total = (
-        steady_w[-1].epoch_s - steady_w[0].epoch_s if len(steady_w) > 1 else 0
-    )
-    slope = slope_mib_per_min(steady_w)
-    slope_limit = env_float("SOAK_MAX_RSS_SLOPE_MIB_PER_MIN", 2.0)
-    steady_seconds = steady_seconds_total
-    slope_judged = steady_seconds >= MIN_SLOPE_WINDOW_SECONDS
-    slope_ok = slope is None or not slope_judged or slope <= slope_limit
 
-    panics: list[str] = []
-    if args.server_log and args.server_log.exists():
-        for line in args.server_log.read_text(errors="replace").splitlines():
-            if "panicked at" in line:
-                panics.append(line.strip())
+def read_panics(path: Path | None) -> list[str]:
+    """Every `panicked at` line in the server log, whole."""
+    if not path or not path.exists():
+        return []
+    return [
+        line.strip()
+        for line in path.read_text(errors="replace").splitlines()
+        if "panicked at" in line
+    ]
 
-    failed_rate = None
-    reqs = None
-    if args.k6_summary and args.k6_summary.exists():
-        try:
-            metrics = json.loads(args.k6_summary.read_text()).get("metrics", {})
-            failed = metrics.get("http_req_failed", {})
-            failed_rate = failed.get("value", failed.get("rate"))
-            reqs = metrics.get("http_reqs", {}).get("count")
-        except (json.JSONDecodeError, AttributeError):
-            pass
 
-    # The RSS comparison gets the same bound as the slope, for the same reason:
-    # under five minutes of load the caches are still filling, and "idle RSS
-    # grew" is then "the cache got bigger" — which is the server working. The
-    # descriptor, thread and connection counts have no such warm-up, so they are
-    # judged at any length.
-    rss_check = checks[0]
-    if not slope_judged and not rss_check.ok:
-        rss_check.ok = True
-        rss_check.note = (
-            f"not judged — {steady_seconds}s of load, under the "
-            f"{MIN_SLOPE_WINDOW_SECONDS}s the caches need to fill"
-        )
+def read_k6(path: Path | None) -> tuple[float | None, float | None]:
+    """`(failure rate, request count)` from a k6 summary, `(None, None)` without one."""
+    if not path or not path.exists():
+        return None, None
+    try:
+        metrics = json.loads(path.read_text()).get("metrics", {})
+    except (json.JSONDecodeError, AttributeError):
+        return None, None
+    failed = metrics.get("http_req_failed", {})
+    return failed.get("value", failed.get("rate")), metrics.get("http_reqs", {}).get("count")
 
-    ok = all(c.ok for c in checks) and slope_ok and not panics and args.k6_exit == 0
 
-    lines = ["<!-- soak-report -->"]
-    lines.append(f"## Soak — {'no leak detected' if ok else 'FAILED'}")
-    lines.append("")
-    lines.append(
-        f"`{args.duration}` of load at `{args.rate}` req/s"
-        + (f", {int(reqs):,} requests" if reqs else "")
-        + f". Both windows below are **idle**: warm-up, quiesce, *baseline*, "
-        f"load, quiesce, *final*."
-    )
-    lines.append("")
-    lines.append("| | baseline | final | growth | limit | |")
-    lines.append("| --- | ---: | ---: | ---: | ---: | :-- |")
+def read_costs(before_path: Path | None, after_path: Path | None) -> list[RegistryCost]:
+    """The per-registry ranking, or an empty list when either exposition is missing."""
+    if not before_path or not after_path:
+        return []
+    try:
+        before = parse_prometheus(before_path.read_text())
+        after = parse_prometheus(after_path.read_text())
+    except OSError:
+        return []
+    return registry_costs(before, after)
+
+
+def check_verdict(c: Check) -> str:
+    """The right-hand cell: a note when the check was not judged, else the verdict."""
+    if c.note:
+        return c.note
+    return "ok" if c.ok else "**over**"
+
+
+def check_growth_cell(c: Check, digits: int) -> str:
+    """The growth cell, signed, or an em dash when there was nothing to compare."""
+    if c.growth is None:
+        return "—"
+    return f"{c.growth:+.{digits}f} {c.unit}"
+
+
+def checks_table(checks: list[Check]) -> list[str]:
+    """The four idle-window rows. The RSS-trend row is appended by the caller,
+    which is the only one that knows whether the load ran long enough to judge it."""
+    lines = [
+        "| | baseline | final | growth | limit | |",
+        "| --- | ---: | ---: | ---: | ---: | :-- |",
+    ]
     for c in checks:
         digits = 1 if c.unit == "%" else 0
-        growth = (
-            "—"
-            if c.growth is None
-            else f"{c.growth:+.{1 if c.unit == '%' else 0}f} {c.unit}"
-        )
         lines.append(
             f"| {c.name} | {fmt(c.baseline, digits)} | {fmt(c.final, digits)} | "
-            f"{growth} | {fmt(c.threshold, digits)} {c.unit} | "
-            f"{c.note if c.note else ('ok' if c.ok else '**over**')} |"
+            f"{check_growth_cell(c, digits)} | {fmt(c.threshold, digits)} {c.unit} | "
+            f"{check_verdict(c)} |"
         )
-    if slope_judged:
-        slope_verdict = "ok" if slope_ok else "**over**"
-    else:
-        slope_verdict = (
-            f"not judged — {steady_seconds}s of load, under the "
-            f"{MIN_SLOPE_WINDOW_SECONDS}s a trend needs"
-        )
-    lines.append(
-        f"| RSS trend under load | — | — | {fmt(slope, 2)} MiB/min | "
-        f"{slope_limit:.2f} MiB/min | {slope_verdict} |"
-    )
-    lines.append("")
+    return lines
 
-    # ── What consumed what, over time ────────────────────────────────────────
+
+def chart_section(samples: list[Sample]) -> list[str]:
+    """The text chart, in a collapsible block. Empty when there is nothing to draw."""
     chart = plot(
         [
             ("RSS", [s.rss_mib for s in samples], "MiB"),
             ("Open descriptors", [float(s.fds) for s in samples if s.fds is not None], "fds"),
         ]
     )
-    if chart:
-        lines.append("<details open><summary>Resource use over the run</summary>")
-        lines.append("")
-        lines.append("```")
+    if not chart:
+        return []
+    return [
+        "<details open><summary>Resource use over the run</summary>",
+        "",
+        "```",
+        "phases: warm-up | quiesce | BASELINE | load | quiesce | FINAL (left to right)",
+        "",
+        *chart,
+        "```",
+        "</details>",
+        "",
+    ]
+
+
+def svg_section(
+    samples: list[Sample],
+    marks: dict[str, int],
+    path: Path | None,
+) -> list[str]:
+    """The note pointing at the SVG, having written it. Empty when none was asked for."""
+    if not path:
+        return []
+    try:
+        svg_chart(samples, marks, path)
+    except OSError as e:
+        return [f"(the SVG chart could not be written: {e})", ""]
+    return [
+        f"A plotted version of the same run is in `{path.name}`, "
+        "beside this report in the run's artifacts.",
+        "",
+    ]
+
+
+def costs_section(costs: list[RegistryCost]) -> list[str]:
+    """Which registry cost the most, ranked by handling time. Empty without metrics."""
+    if not costs:
+        return []
+    lines: list[str] = []
+    peak = costs[0].seconds or 1.0
+    total = sum(c.seconds for c in costs) or 1.0
+    lines.append(f"### Worst consumer: `{costs[0].name}`")
+    lines.append("")
+    lines.append(
+        f"{costs[0].seconds / total * 100:.0f}% of all request-handling time "
+        "during the load. Ranked by seconds spent inside the handler, which "
+        "counts the upstream wait, the parse and the filter alike — the "
+        "closest thing the server knows to what a registry cost it."
+    )
+    lines.append("")
+    lines.append("```")
+    for c in costs:
         lines.append(
-            "phases: warm-up | quiesce | BASELINE | load | quiesce | FINAL "
-            "(left to right)"
+            f"{c.name:<18} {bar(c.seconds, peak):<25} {c.seconds:7.1f}s"
+            f"  {c.requests:6.0f} req"
+            + (f"  {c.ms_per_request:6.1f} ms/req" if c.ms_per_request else "")
         )
-        lines.append("")
-        lines.extend(chart)
-        lines.append("```")
-        lines.append("</details>")
-        lines.append("")
-
-    if args.chart:
-        try:
-            svg_chart(samples, marks, args.chart)
-            lines.append(
-                f"A plotted version of the same run is in `{args.chart.name}`, "
-                "beside this report in the run's artifacts."
-            )
-            lines.append("")
-        except OSError as e:
-            lines.append(f"(the SVG chart could not be written: {e})")
-            lines.append("")
-
-    # ── Which registry cost the most ─────────────────────────────────────────
-    costs: list[RegistryCost] = []
-    if args.metrics_before and args.metrics_after:
-        try:
-            before = parse_prometheus(args.metrics_before.read_text())
-            after = parse_prometheus(args.metrics_after.read_text())
-            costs = registry_costs(before, after)
-        except OSError:
-            costs = []
-
-    if costs:
-        peak = costs[0].seconds or 1.0
-        total = sum(c.seconds for c in costs) or 1.0
-        lines.append(f"### Worst consumer: `{costs[0].name}`")
-        lines.append("")
+    lines.append("```")
+    lines.append("")
+    lines.append("| registry | handling time | requests | ms/req | pulled from upstream | artifact misses | document misses | resolved from cache |")
+    lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    for c in costs:
         lines.append(
-            f"{costs[0].seconds / total * 100:.0f}% of all request-handling time "
-            "during the load. Ranked by seconds spent inside the handler, which "
-            "counts the upstream wait, the parse and the filter alike — the "
-            "closest thing the server knows to what a registry cost it."
+            f"| `{c.name}` | {c.seconds:.1f} s | {c.requests:.0f} | "
+            f"{fmt(c.ms_per_request)} | {human_bytes(c.upstream_bytes)} | "
+            f"{c.artifact_misses:.0f} | {c.metadata_misses:.0f} | {c.from_document:.0f} |"
         )
-        lines.append("")
-        lines.append("```")
-        for c in costs:
-            lines.append(
-                f"{c.name:<18} {bar(c.seconds, peak):<25} {c.seconds:7.1f}s"
-                f"  {c.requests:6.0f} req"
-                + (f"  {c.ms_per_request:6.1f} ms/req" if c.ms_per_request else "")
-            )
-        lines.append("```")
-        lines.append("")
-        lines.append("| registry | handling time | requests | ms/req | pulled from upstream | artifact misses | document misses | resolved from cache |")
-        lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
-        for c in costs:
-            lines.append(
-                f"| `{c.name}` | {c.seconds:.1f} s | {c.requests:.0f} | "
-                f"{fmt(c.ms_per_request)} | {human_bytes(c.upstream_bytes)} | "
-                f"{c.artifact_misses:.0f} | {c.metadata_misses:.0f} | {c.from_document:.0f} |"
-            )
-        lines.append("")
-        lines.append(
-            "<sub>*ms/req* is where the cost is, not the traffic: a registry "
-            "that is dear because it misses is a caching problem, one that is "
-            "dear per request is a document problem. *resolved from cache* "
-            "counts the coordinates answered from a listing this proxy already "
-            "held, which are the upstream round trips it did **not** make.<br>"
-            "**What this counts:** proxied reads — artifacts and listings — "
-            "attributed by `batlehub_requests_total` and "
-            "`batlehub_request_duration_seconds`. A **local** registry's own "
-            "publishes and reads go through `LocalRegistryService`, which emits "
-            "neither, so a local-mode registry is absent from this table rather "
-            "than cheap.</sub>"
-        )
-        lines.append("")
+    lines.append("")
+    lines.append(
+        "<sub>*ms/req* is where the cost is, not the traffic: a registry "
+        "that is dear because it misses is a caching problem, one that is "
+        "dear per request is a document problem. *resolved from cache* "
+        "counts the coordinates answered from a listing this proxy already "
+        "held, which are the upstream round trips it did **not** make.<br>"
+        "**What this counts:** proxied reads — artifacts and listings — "
+        "attributed by `batlehub_requests_total` and "
+        "`batlehub_request_duration_seconds`. A **local** registry's own "
+        "publishes and reads go through `LocalRegistryService`, which emits "
+        "neither, so a local-mode registry is absent from this table rather "
+        "than cheap.</sub>"
+    )
+    lines.append("")
+    return lines
 
+
+def parse_args() -> argparse.Namespace:
+    """Every path in here is supplied by `perf/scripts/soak.sh`, the one caller."""
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--samples", required=True, type=Path)
+    ap.add_argument("--marks", required=True, type=Path)
+    ap.add_argument("--server-log", type=Path)
+    ap.add_argument("--k6-summary", type=Path)
+    ap.add_argument("--k6-exit", type=int, default=0)
+    ap.add_argument("--metrics-before", type=Path, help="/metrics at the start of the load")
+    ap.add_argument("--metrics-after", type=Path, help="/metrics at the end of the load")
+    ap.add_argument("--chart", type=Path, help="where to write the SVG chart")
+    ap.add_argument("--duration", default="?")
+    ap.add_argument("--rate", default="?")
+    ap.add_argument("--report", required=True, type=Path)
+    return ap.parse_args()
+
+
+def exempt_rss_during_warmup(rss_check: Check, slope_judged: bool, steady_seconds: int) -> None:
+    """Un-fail the idle-RSS comparison when the load was too short to judge it.
+
+    It gets the same bound as the slope, for the same reason: under five minutes
+    of load the caches are still filling, and "idle RSS grew" is then "the cache
+    got bigger" — which is the server working. The descriptor, thread and
+    connection counts have no such warm-up, so they are judged at any length.
+    """
+    if slope_judged or rss_check.ok:
+        return
+    rss_check.ok = True
+    rss_check.note = (
+        f"not judged — {steady_seconds}s of load, under the "
+        f"{MIN_SLOPE_WINDOW_SECONDS}s the caches need to fill"
+    )
+
+
+def slope_row(
+    slope: float | None,
+    slope_limit: float,
+    slope_ok: bool,
+    slope_judged: bool,
+    steady_seconds: int,
+) -> str:
+    """The RSS-trend row, which only the caller knows whether to judge."""
+    if slope_judged:
+        verdict = "ok" if slope_ok else "**over**"
+    else:
+        verdict = (
+            f"not judged — {steady_seconds}s of load, under the "
+            f"{MIN_SLOPE_WINDOW_SECONDS}s a trend needs"
+        )
+    return (
+        f"| RSS trend under load | — | — | {fmt(slope, 2)} MiB/min | "
+        f"{slope_limit:.2f} MiB/min | {verdict} |"
+    )
+
+
+def header_lines(duration: str, rate: str, reqs: float | None, ok: bool) -> list[str]:
+    """The verdict heading and the one sentence that says what was offered."""
+    offered = f", {int(reqs):,} requests" if reqs else ""
+    return [
+        "<!-- soak-report -->",
+        f"## Soak — {'no leak detected' if ok else 'FAILED'}",
+        "",
+        f"`{duration}` of load at `{rate}` req/s{offered}. Both windows below "
+        "are **idle**: warm-up, quiesce, *baseline*, load, quiesce, *final*.",
+        "",
+    ]
+
+
+def tail_lines(failed_rate: float | None, k6_exit: int, panics: list[str], ok: bool) -> list[str]:
+    """What k6 and the server log had to say, and how to reproduce a failure."""
+    lines: list[str] = []
     if failed_rate is not None:
         lines.append(f"k6 request failure rate: {failed_rate * 100:.2f}%")
-    if args.k6_exit != 0:
+    if k6_exit != 0:
         lines.append(
-            f"**k6 exited {args.k6_exit}** — a threshold in the scenario was "
+            f"**k6 exited {k6_exit}** — a threshold in the scenario was "
             "breached, or the load could not be offered."
         )
     if panics:
         lines.append("")
         lines.append(f"**{len(panics)} panic(s) in the server log:**")
         lines.extend(f"- `{p}`" for p in panics[:5])
-
     if not ok:
         lines.append("")
         lines.append(
@@ -730,6 +814,63 @@ def main() -> int:
             "`task perf:soak DURATION=… RATE=…`; the per-second samples are in "
             "`soak-samples.csv` beside this report."
         )
+    return lines
+
+
+def main() -> int:
+    args = parse_args()
+
+    samples = read_samples(args.samples)
+    marks = read_marks(args.marks)
+
+    if len(samples) < 2 * MIN_WINDOW_SAMPLES:
+        args.report.write_text(
+            "<!-- soak-report -->\n## Soak — inconclusive\n\n"
+            f"Only {len(samples)} samples were collected; the server process was "
+            "not observable for long enough to say anything.\n"
+        )
+        return 1
+
+    baseline_w = window(samples, marks.get("warmup_end"), marks.get("baseline_end"))
+    final_w = window(samples, marks.get("steady_end"), marks.get("final_end"))
+    steady_w = [
+        s
+        for s in samples
+        if marks.get("steady_start", 0) <= s.epoch_s <= marks.get("steady_end", 0)
+    ]
+
+    checks = resource_checks(baseline_w, final_w)
+
+    steady_seconds = (
+        steady_w[-1].epoch_s - steady_w[0].epoch_s if len(steady_w) > 1 else 0
+    )
+    slope = slope_mib_per_min(steady_w)
+    slope_limit = env_float("SOAK_MAX_RSS_SLOPE_MIB_PER_MIN", 2.0)
+    slope_judged = steady_seconds >= MIN_SLOPE_WINDOW_SECONDS
+    slope_ok = slope is None or not slope_judged or slope <= slope_limit
+
+    panics = read_panics(args.server_log)
+    failed_rate, reqs = read_k6(args.k6_summary)
+
+    exempt_rss_during_warmup(checks[0], slope_judged, steady_seconds)
+
+    ok = all(c.ok for c in checks) and slope_ok and not panics and args.k6_exit == 0
+
+    lines = header_lines(args.duration, args.rate, reqs, ok)
+    lines.extend(checks_table(checks))
+    lines.append(slope_row(slope, slope_limit, slope_ok, slope_judged, steady_seconds))
+    lines.append("")
+
+    # ── What consumed what, over time ────────────────────────────────────────
+    lines.extend(chart_section(samples))
+    lines.extend(svg_section(samples, marks, args.chart))
+
+    # ── Which registry cost the most ─────────────────────────────────────────
+    costs = read_costs(args.metrics_before, args.metrics_after)
+
+    lines.extend(costs_section(costs))
+
+    lines.extend(tail_lines(failed_rate, args.k6_exit, panics, ok))
 
     args.report.write_text("\n".join(lines) + "\n")
     return 0 if ok else 1

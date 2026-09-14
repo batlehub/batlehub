@@ -77,6 +77,10 @@ done
 SOAK_PORT="${SOAK_PORT:-8180}"
 SOAK_UPSTREAM_PORT="${SOAK_UPSTREAM_PORT:-8181}"
 export SOAK_UPSTREAM_URL="http://127.0.0.1:$SOAK_UPSTREAM_PORT"
+# Terraform's network-mirror routes carry the mirrored hostname in the path and
+# the handler checks it against the registry's upstream, so the arm needs the
+# mock's authority. Derived from the URL above rather than written twice.
+export BATLEHUB_SOAK_UPSTREAM_HOST="127.0.0.1"  # the host alone: the check excludes the port
 BASE="http://127.0.0.1:$SOAK_PORT"
 
 WORK="$(mktemp -d)"
@@ -118,8 +122,9 @@ cleanup() {
 trap cleanup EXIT
 
 need() {
-  command -v "$1" >/dev/null 2>&1 \
-    || { echo "ERROR: $1 not found on PATH — install it ($2)" >&2; exit 1; }
+  local tool="$1" how="$2"
+  command -v "$tool" >/dev/null 2>&1 \
+    || { echo "ERROR: $tool not found on PATH — install it ($how)" >&2; exit 1; }
 }
 need k6 "mise install k6"
 need cargo "rustup"
@@ -203,22 +208,25 @@ log "Healthy at $BASE (measuring pid $SERVER_PROC)"
 curl -sf "$BASE/metrics" | grep -q batlehub_db_pool_size \
   || { echo "ERROR: /metrics does not expose batlehub_db_pool_size — the pool leak check cannot run" >&2; exit 1; }
 
-# ── Seed ──────────────────────────────────────────────────────────────────────
-# One read of each document the mix asks for, so the warm-up measures steady
-# behaviour rather than first-touch. Failures here are configuration errors —
-# a wrong token, a registry that is not declared — and are worth naming now
-# rather than as a wall of k6 check failures.
-log "Seeding"
-AUTH=(-H "Authorization: Bearer perf-admin-token")
-for url in \
-  "$BASE/proxy/perf-npm/perf-pkg" \
-  "$BASE/proxy/perf-npm/perf-pkg/1.0.0/tarball" \
-  "$BASE/api/v1/packages?registry=perf-npm&limit=50" \
-  "$BASE/proxy/perf-gems/versions" \
-  "$BASE/proxy/perf-gems/info/perf-gem-0000001" ; do
-  code="$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" "$url")"
-  [[ "$code" == "200" ]] || { echo "ERROR: seed request $url answered $code" >&2; exit 1; }
-done
+# ── Pre-flight, which is also the seed ────────────────────────────────────────
+#
+# Every arm of the mix, once, asserted against the statuses the arm itself
+# declares. This is a gate and not a warm-up nicety: the load's own check is
+# "not 5xx", so an arm whose URL is wrong or whose upstream route was never
+# written answers `404` and **passes**, and the report then shows that registry
+# costing nothing — which reads exactly like a cheap registry.
+#
+# It seeds at the same time: one read of each document the mix will ask for, so
+# the warm-up measures steady behaviour rather than first-touch.
+log "Pre-flight: every arm of the mix, once"
+if ! BATLEHUB_URL="$BASE" k6 run --quiet perf/k6/scenarios/11_soak_arms.js \
+       >"$WORK/arms.log" 2>&1; then
+  sed -n '/soak arms did not answer as declared/,$p' "$WORK/arms.log" >&2 \
+    || tail -40 "$WORK/arms.log" >&2
+  echo "ERROR: the mix does not work against this configuration — see $WORK/arms.log" >&2
+  exit 1
+fi
+grep -m1 "soak arms:" "$WORK/arms.log" >&2 || true
 
 # ── The sampler ───────────────────────────────────────────────────────────────
 # /proc for the process facts and /metrics for the pool. One line a second:
@@ -266,8 +274,9 @@ run_k6() {  # <phase> <duration>
 }
 
 quiesce() {  # <seconds> — no load, so the next window measures what is *held*
-  log "Quiescing for ${1}s"
-  sleep "$1"
+  local seconds="$1"
+  log "Quiescing for ${seconds}s"
+  sleep "$seconds"
 }
 
 # ── The run ───────────────────────────────────────────────────────────────────

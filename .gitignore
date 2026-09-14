@@ -99,3 +99,4 @@ choco_*.xml
 perf/results/soak.md
 perf/results/soak-samples.csv
 perf/results/soak-marks.txt
+perf/results/soak-chart.svg

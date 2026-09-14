@@ -185,7 +185,7 @@ run_rustup() {
 }
 
 # The toolchain directory `rustup` installs <version> into, under <home>.
-toolchain_dir() { echo "$1/toolchains/$2-$TRIPLE"; }
+toolchain_dir() { echo "$1/toolchains/$2-$TRIPLE"; return $?; }
 
 HOME_MAIN="$HEAVY_WORK/rustup-main"
 
@@ -358,8 +358,9 @@ heavy_log "RUSTUP-REFUSAL-OK (rustup's own missing-release path, nothing request
 # counter, while the transcript proves the client did ask.
 
 hits_for() {
+  local reg="$1"
   curl -fsS "$HEAVY_BASE/metrics" \
-    | awk -v reg="$1" '$1 ~ /^batlehub_artifact_cache_hits_total\{/ && index($1, "registry=\"" reg "\"") { print $2 }'
+    | awk -v reg="$reg" '$1 ~ /^batlehub_artifact_cache_hits_total\{/ && index($1, "registry=\"" reg "\"") { print $2 }'
   return $?
 }
 HITS_BEFORE="$(hits_for "$REG")"; HITS_BEFORE="${HITS_BEFORE:-0}"

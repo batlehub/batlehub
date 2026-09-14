@@ -51,6 +51,10 @@ Every request goes through `ProxyService::handle()`, which:
       `tests/heavy/airgap.sh` if a real client can drive it *(see §11)*
 - [ ] `tests/heavy/authz.sh` — a client phase, hermetic if the kind has a local
       mode and `live:<kind>` if it does not *(see §11)*
+- [ ] The soak — a protocol module in `perf/mock-upstream/src/protocols/`, a
+      registry in `perf/config.soak.toml` and at least one arm in
+      `perf/k6/soak_arms.js` *(see §11; `crates/web/tests/soak_kind_coverage.rs`
+      fails until this is done or the kind is written into `NOT_SOAKED`)*
 
 ---
 
@@ -514,6 +518,36 @@ answer off the wire the way the npm, pip and mise phases do.
 
 Both suites need `DATABASE_URL`, and the live one needs network *for the server*
 — the client is the half that gets none.
+
+### The soak owes a kind an arm too
+
+A kind that nothing drives under constant load is a kind whose client, parser
+and rewriter have never been asked to run for an hour, and
+`crates/web/tests/soak_kind_coverage.rs` fails on the next `cargo test` until
+that is fixed or written down. Three small pieces:
+
+1. **`perf/mock-upstream/src/protocols/<name>.rs`** — the upstream. What it owes
+   is narrow: the documents the *proxy's* client parses, every digest the format
+   names computed from the bytes that will be served (the proxy verifies them),
+   and the same answer for the same coordinate every time. It is not a registry
+   a real client could install from — that is `closed_world.sh`. Declare the
+   routes `#[route(..., method = "GET", method = "HEAD")]`: actix does not
+   derive `HEAD` from `#[get]`, and some clients ask before they stream.
+2. **`perf/config.soak.toml`** — a `[[registries]]` block pointed at the mock.
+3. **`perf/k6/soak_arms.js`** — one arm per request shape worth loading,
+   typically a listing and an artifact. Give the arm a bounded `space`: a
+   coordinate space that grows with the run adds a row and a stored object per
+   request forever, and a verdict cannot tell that from a leak.
+
+Then run the pre-flight, which is the part that tells you the truth:
+
+```bash
+task perf:soak PROFILE=debug DURATION=30s RATE=20
+```
+
+It asks for every arm once before the load and stops on any that does not answer
+the status it declares. Do not skip it and read the load's own result instead:
+that check is "not 5xx", which a `404` passes.
 
 ### Manual verification
 

@@ -2030,12 +2030,14 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
         showWhen: (ctx) => ctx.isAuthenticated,
         template: (ctx) => {
           const reg = `${ctx.registryUrl}/rustup`;
+          const updateRoot = `${reg}/rustup`;
+          const token = authTokenOrPlaceholder(ctx);
           return [
             `# rustup exposes no token flag, reads no ~/.netrc and has no credential file.`,
             `# What it does do — measured on the wire — is send HTTP Basic from the URL's`,
             `# userinfo, so the credential goes in the variable itself.`,
-            `export RUSTUP_DIST_SERVER="${embedCredentials(reg, ctx.netrcLogin, authTokenOrPlaceholder(ctx))}"`,
-            `export RUSTUP_UPDATE_ROOT="${embedCredentials(`${reg}/rustup`, ctx.netrcLogin, authTokenOrPlaceholder(ctx))}"`,
+            `export RUSTUP_DIST_SERVER="${embedCredentials(reg, ctx.netrcLogin, token)}"`,
+            `export RUSTUP_UPDATE_ROOT="${embedCredentials(updateRoot, ctx.netrcLogin, token)}"`,
           ].join("\n");
         },
         note: `The token travels in the password field, which is what the server reads it out of. A URL carrying a secret lands in shell history and in <code>ps</code>: prefer a CI secret or a profile file mode 0600.`,

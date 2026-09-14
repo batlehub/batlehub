@@ -61,7 +61,10 @@ const TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", 
 /** A count in words, the way the surrounding prose writes numbers; digits past 99. */
 const count = (n) => {
   if (n < WORDS.length) return WORDS[n];
-  if (n < 100) return `${TENS[Math.floor(n / 10)]}${n % 10 ? `-${WORDS[n % 10]}` : ""}`;
+  if (n < 100) {
+    const unit = n % 10 ? `-${WORDS[n % 10]}` : "";
+    return `${TENS[Math.floor(n / 10)]}${unit}`;
+  }
   return String(n);
 };
 

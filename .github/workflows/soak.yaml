@@ -79,12 +79,11 @@ on:
   pull_request:
     branches: ["main"]
     types: [labeled]
+# Read-only at the workflow level, so the two soak jobs — which check out the
+# tree and run a release build against it — hold nothing they could write with.
+# The `comment` job grants itself the one scope it needs.
 permissions:
   contents: read
-  # `write`, for the result comment. A dispatch has no pull request of its own,
-  # so the comment job resolves one from the branch (or takes the `pr` input)
-  # and says so in the job summary when there is none.
-  pull-requests: write
 # One soak at a time on this repository. Two would share the Postgres service
 # only by accident, but they would share the runner's CPU — and a resource
 # curve measured next to another soak is a measurement of the runner.
@@ -233,6 +232,13 @@ jobs:
   comment:
     name: Comment the result
     needs: [k6-soak, heavy-soak]
+    # The only job that writes anything. `write`, for the result comment: a
+    # dispatch has no pull request of its own, so this job resolves one from the
+    # branch (or takes the `pr` input) and says so in the job summary when there
+    # is none.
+    permissions:
+      contents: read
+      pull-requests: write
     # `always()`, so a failed soak still reports — but only for a run that was
     # actually asked for: `always()` alone would post "no report" on every
     # unrelated label somebody adds to any pull request.

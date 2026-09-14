@@ -2401,6 +2401,7 @@ EOF
 token = "$token"
 EOF
   chmod 600 "$home/credentials.toml"
+  return $?
 }
 
 phase_cargo() {
@@ -2447,10 +2448,11 @@ the administrator cannot publish, so nothing below means anything"; }
 
   # ── The pair ──────────────────────────────────────────────────────────────
   cargo_arm() {  # <suffix> <token>
-    local dir="$work/consumer-$1" home="$work/home-$1"
+    local suffix="$1" token="$2"
+    local dir="$work/consumer-$suffix" home="$work/home-$suffix"
     rm -rf "$dir" "$home"
     mkdir -p "$dir/src" "$dir/.cargo"
-    authz_cargo_home "$home" "$2"
+    authz_cargo_home "$home" "$token"
     cp "$home/config.toml" "$dir/.cargo/config.toml"
     cat >"$dir/Cargo.toml" <<EOF
 [package]
@@ -2580,6 +2582,7 @@ authz_mvn_settings_warm() {
   </mirrors>
 </settings>
 EOF
+  return $?
 }
 
 authz_mvn_settings() {
@@ -2602,6 +2605,7 @@ authz_mvn_settings() {
   </servers>
 </settings>
 EOF
+  return $?
 }
 
 phase_maven() {
@@ -2665,11 +2669,12 @@ the administrator cannot publish, so nothing below means anything"; }
   # for neither, so the only thing that differs is the credential.
   local group_path="${AUTHZ_MVN_GROUP//.//}"
   mvn_arm() {  # <suffix> <settings>
-    local repo="$work/repo-$1"
+    local suffix="$1" settings="$2"
+    local repo="$work/repo-$suffix"
     rm -rf "$repo"
     cp -r "$work/warm" "$repo"
     rm -rf "${repo:?}/$group_path"
-    (cd "$work" && "${mvn[@]}" -B -s "$2" -Dmaven.repo.local="$repo" \
+    (cd "$work" && "${mvn[@]}" -B -s "$settings" -Dmaven.repo.local="$repo" \
       "$AUTHZ_MVN_DEPENDENCY_PLUGIN:get" \
       -Dartifact="$AUTHZ_MVN_GROUP:$AUTHZ_MVN_ARTIFACT:$AUTHZ_MVN_VERSION")
     return $?
@@ -2777,7 +2782,7 @@ LIVE_RUSTUP_TOOLCHAIN="${HEAVY_AUTHZ_RUSTUP_TOOLCHAIN:-stable}"
 # ignored by the server and is there because a URL with a password and no user
 # is not a URL. This is the same thing `withCredentials` writes into the console's
 # setup snippets, so a phase using it is exercising the documented shape.
-authz_live_cred() { printf '%s:%s' "$1" "$2"; }
+authz_live_cred() { printf '%s:%s' "$1" "$2"; return $?; }
 
 # authz_live_netrc <home> <token> — a `~/.netrc` under <home> for the tap host.
 #
@@ -2789,6 +2794,7 @@ authz_live_netrc() {
   mkdir -p "$home"
   printf 'machine 127.0.0.1\nlogin %s\npassword %s\n' "$login" "$token" > "$home/.netrc"
   chmod 600 "$home/.netrc"
+  return $?
 }
 
 # authz_live_pair <kind> <label> <runner> — the pair, for one kind.
@@ -2824,6 +2830,7 @@ the refusal above proves nothing (§13.17)"; }
 
   AUTHZ_CHECKS=$((AUTHZ_CHECKS + 2))
   heavy_log "LIVE-$(echo "$kind" | tr '[:lower:]' '[:upper:]')-OK"
+  return 0
 }
 
 # ── goproxy — credentials in the GOPROXY URL ────────────────────────────────
@@ -2944,7 +2951,7 @@ EOF
 # configuration. One runner for all three backends, because only the spec and
 # the rewrite differ.
 live_run_mise_forge() {
-  local suffix="$1" login="$2" token="$3" backend="$4" spec="$5" version="$6" reg="$7" rewrite="$8"
+  local suffix="$1" login="$2" token="$3" backend="$4" spec="$5" version="$6" rewrite="$7"
   local root="$HEAVY_WORK/live-$backend-$suffix"
   mkdir -p "$root"/{data,cache,config,state,home}
   authz_live_netrc "$root/home" "$login" "$token"
@@ -2963,22 +2970,25 @@ EOF
 }
 
 live_run_github() {
+  local suffix="$1" login="$2" token="$3"
   local p="$HEAVY_TAP_BASE/proxy/$LIVE_GH"
-  live_run_mise_forge "$1" "$2" "$3" github "$LIVE_MISE_TOOL" "$LIVE_MISE_VERSION" "$LIVE_GH" \
+  live_run_mise_forge "$suffix" "$login" "$token" github "$LIVE_MISE_TOOL" "$LIVE_MISE_VERSION" \
     "\"regex:^https://api\\\\.github\\\\.com/repos/(.+)\" = \"$p/\$1\""
   return $?
 }
 
 live_run_forgejo() {
+  local suffix="$1" login="$2" token="$3"
   local p="$HEAVY_TAP_BASE/proxy/$LIVE_FJ"
-  live_run_mise_forge "$1" "$2" "$3" forgejo "$LIVE_FORGEJO_TOOL" "$LIVE_FORGEJO_VERSION" "$LIVE_FJ" \
+  live_run_mise_forge "$suffix" "$login" "$token" forgejo "$LIVE_FORGEJO_TOOL" "$LIVE_FORGEJO_VERSION" \
     "\"regex:^https://codeberg\\\\.org/api/v1/repos/(.+)\" = \"$p/\$1\""
   return $?
 }
 
 live_run_gitlab() {
+  local suffix="$1" login="$2" token="$3"
   local p="$HEAVY_TAP_BASE/proxy/$LIVE_GL"
-  live_run_mise_forge "$1" "$2" "$3" gitlab "$LIVE_GITLAB_TOOL" "$LIVE_GITLAB_VERSION" "$LIVE_GL" \
+  live_run_mise_forge "$suffix" "$login" "$token" gitlab "$LIVE_GITLAB_TOOL" "$LIVE_GITLAB_VERSION" \
     "\"regex:^https://gitlab\\\\.com/api/v4/projects/([^/]+)/releases(.*)\" = \"$p/\$1/-/releases\$2\""
   return $?
 }
@@ -3038,8 +3048,9 @@ live_run_deb() {
 # The client runs in its own distribution's image for the reason
 # `closed_world.sh` spells out: an EPEL build is linked against that userland.
 # `--network host` keeps `127.0.0.1:<tap>` meaning the same thing inside.
-live_run_rpm() {
-  local suffix="$1" login="$2" token="$3"
+live_run_rpm() {  # <suffix> <login> <token> — the suffix is unused: the
+  # container is the isolation here, so the arm needs no distinct work directory.
+  local login="$2" token="$3"
   local script
   script="$(cat <<'SH'
 set -eu
@@ -3082,8 +3093,8 @@ SH
 #
 # The client runs in Arch's own image, for the reason `closed_world.sh` spells
 # out: a distribution package is linked against its own libraries.
-live_run_pacman() {
-  local suffix="$1" login="$2" token="$3" script
+live_run_pacman() {  # <suffix> <login> <token> — <suffix> unused, as for rpm
+  local login="$2" token="$3" script
   script="$(cat <<'SH'
 set -eu
 base="$1"; arch="$2"; user="$3"; pass="$4"; pkg="$5"
@@ -3177,6 +3188,7 @@ phase_live() {
     *)
       heavy_fail "unknown live kind '$kind' — one of: ${AUTHZ_LIVE_KINDS[*]}" ;;
   esac
+  return 0
 }
 
 # ── Run ──────────────────────────────────────────────────────────────────────
@@ -3268,6 +3280,7 @@ authz_read_row() {
   authz_refused_anonymous "$verb" "$label — anonymous" "$method" "$path" "$@"
   authz_denied "$verb" "$label — holding no read verb" "$method" "$T_DENIED" "$path" "$@"
   authz_allowed "$verb" "$label — the reader" "$method" "$T_READER" "$path" "$@"
+  return $?
 }
 
 # authz_read_rows — the sweep's rows, `kind|verb|method|path|label` per line.
@@ -3303,6 +3316,7 @@ rustup|releases:read|GET|/proxy/$RUSTUP_R/rustup/dist/2026-01-01/rust-std-1.0.0-
 jetbrains|releases:read|GET|/proxy/$JETBRAINS_R/jetbrains/idea/probe.tar.gz|an archive by path
 generic|releases:read|GET|/proxy/$GENERIC_R/generic/probe.tar.gz|a file by path
 EOF
+  return $?
 }
 
 # authz_check_kinds_covered — every `RegistryKind` is claimed by some target.
@@ -3353,6 +3367,7 @@ A kind with a registry in config.authz.toml and no assertion against it is not c
 only looks covered."
   fi
   heavy_log "Kind coverage: ${#all[@]} kinds, every one claimed by a target"
+  return 0
 }
 
 phase_reads() {
@@ -3368,6 +3383,7 @@ phase_reads() {
 
   authz_check_kinds_covered
   heavy_log "READ-BOUNDARY-OK — $AUTHZ_CHECKS checks, ${#AUTHZ_KIND_SEEN[@]} kinds at route level"
+  return 0
 }
 
 case "$TARGET" in

@@ -116,6 +116,7 @@ soak_sample() {
   threads="$(awk '/^Threads:/{print $2; exit}' "/proc/$SERVER_PROC/status" 2>/dev/null || echo 0)"
   fds="$(ls "/proc/$SERVER_PROC/fd" 2>/dev/null | wc -l || echo 0)"
   echo "$rss $fds $threads"
+  return $?
 }
 
 # soak_window <label> — quiesce, then the median of five samples a second apart.
@@ -147,6 +148,7 @@ soak_window() {
     || heavy_fail "the $label window did not measure three numbers (got '$m_rss' '$m_fds' '$m_threads') — is /proc/$SERVER_PROC still there?"
   heavy_log "$label: RSS $((m_rss / 1024)) MiB, $m_fds fds, $m_threads threads" >&2
   echo "$m_rss $m_fds $m_threads"
+  return $?
 }
 
 # ── One round: what a developer's machine does, once ─────────────────────────
@@ -190,6 +192,7 @@ JSON
   # local read path too.
   npm view "$PUBLISHED" version --registry "$LOCAL_URL" >/dev/null 2>&1 \
     || heavy_fail "round $n: npm view failed on the package it had just published"
+  return $?
 }
 
 # ── Warm-up: one round per package, so every document is cached ──────────────

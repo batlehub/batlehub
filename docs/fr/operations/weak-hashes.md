@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/weak-hashes.md
-sourceHash: 8c2acb6cbeeb997c
+sourceHash: 203b1b5fc13767dc
 ---
 
 # MD5 et SHA-1
@@ -46,6 +46,8 @@ ont pas survécu.
 | ~~5~~ | ~~`adapters/repo/deb.rs`~~ | ~~MD5, SHA-1~~ | **Supprimé** — facultatif chez Debian |
 | ~~6~~ | ~~`adapters/repo/pacman.rs`~~ | ~~MD5~~ | **Supprimé** — retiré du format |
 | 7 | `adapters/repo/openpgp.rs` — empreinte | SHA-1 | Immuable par définition |
+| 8 | `core/services/listing_synthesis.rs` — listings composés | SHA-1 | Imposé par le format imité |
+| 9 | `web/…/proxy/maven/proxy.rs` — fichiers `.md5`/`.sha1` | MD5, SHA-1 | L'algorithme *est* l'extension du fichier |
 
 Les entrées 5 et 6 sont barrées parce que le code ne les calcule plus. L'entrée 4
 est en gras parce que c'est un choix de compatibilité plutôt qu'une exigence, et
@@ -208,16 +210,40 @@ faisait le travail le fait toujours.
 `apt`, `dnf` et `pacman` en conteneurs, et se déclenche à tout changement sous
 `crates/adapters/src/repo/`.
 
+## À côté du code produit : les tests et les fixtures
+
+Cinq fichiers de plus sont épinglés, et aucun n'est une décision : chacun calcule
+une empreinte faible pour *vérifier* ou pour *imiter* l'une des entrées
+ci-dessus, si bien que l'algorithme est choisi par la chose mise à l'épreuve.
+
+| Où | Algorithme | À quoi cela sert |
+| --- | --- | --- |
+| `web/tests/local_rubygems_compact_index.rs` | MD5 | Recalcule l'empreinte de l'entrée 3 pour vérifier que le serveur émet ce que Bundler attend. |
+| `web/tests/air_gap.rs` | MD5, SHA-1 | Vérifie que les fichiers annexes de l'entrée 9 sont émis, avec les valeurs qu'un client Maven calcule. |
+| `tests/heavy/upstream_audit.sh` | SHA-1 | Recalcule le `dist.shasum` de npm pour vérifier ce que le serveur a servi. |
+| `tests/heavy/upstream_dir.sh` | SHA-1 | *Produit* ce `dist.shasum` : c'est l'amont npm depuis lequel la suite hybride installe. |
+| `perf/mock-upstream/src/main.rs` | SHA-1 | Idem, pour l'amont de la charge de soak — un `shasum` faux y donne un 502 sur chaque lecture d'artefact. |
+
+Le mock est le plus récent des cinq, et il est la raison de refaire la
+vérification plutôt que de reprendre le commentaire précédent : il portait *deux*
+empreintes faibles, dont une seule était imposée. Son `|checksum:` d'index
+compact RubyGems était un SHA-1 synthétique là où [le format nomme un
+SHA-256](https://github.com/rubygems/guides/blob/main/rubygems-org-compact-index-api.md)
+du gem — faux sur le protocole autant que faible — et il émet désormais un
+SHA-256. Seul le `dist.shasum` de npm y est épinglé.
+
 ## Comment le scanner les traite
 
-Chacun a une entrée `rust:S4790` dans `sonar-project.properties`, rapportée au
-seul fichier qui parle le protocole, avec son raisonnement en ligne. Ce sont des
-exclusions configurées plutôt que des résolutions par constat dans le tableau de
-bord, pour que la justification soit versionnée et relisible.
+Chacun a une entrée `rust:S4790` (ou `shell:S4790`) dans
+`sonar-project.properties`, rapportée au seul fichier qui parle le protocole,
+avec son raisonnement en ligne. Ce sont des exclusions configurées plutôt que des
+résolutions par constat dans le tableau de bord, pour que la justification soit
+versionnée et relisible.
 
-La portée est délibérée : une empreinte faible *en dehors* de ces sept fichiers
-est un vrai constat. N'élargissez pas une `resourceKey` à un répertoire, et
-n'ajoutez pas une huitième entrée sans un argument de même nature — ce qui, comme
+Onze fichiers sont épinglés : les six du registre qui relèvent du code produit,
+et les cinq ci-dessus. La portée est délibérée — une empreinte faible *en dehors*
+d'eux est un vrai constat. N'élargissez pas une `resourceKey` à un répertoire, et
+n'ajoutez pas une douzième entrée sans un argument de même nature, ce qui, comme
 cette page le montre, veut dire vérifier la spécification plutôt que répéter ce
 que disait le commentaire précédent.
 

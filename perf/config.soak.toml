@@ -111,15 +111,22 @@ anonymous = []
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
 
-# ── Three more kinds, three more code paths ─────────────────────────────────
+# ── Every other kind, because a leak lives in a code path ───────────────────
 #
 # A leak lives in a *code path*, not in a request count, and every kind brings
 # its own client, its own document parser and its own rewriter. Soaking npm
-# alone exercises one of each. These three cost the mock a few routes because
-# their protocols are files and a small document — see `perf/mock-upstream`.
+# alone exercises one of each, and would be as green against a kind that leaked
+# a megabyte per listing.
 #
-# The kinds that are *not* here are listed in `soak_kind_coverage` in
-# `perf/scripts/soak.sh`, with the reason each one needs more than a route.
+# So every registry kind this proxy supports is declared here and driven by
+# `perf/soak-arms.json`, except the ones `crates/web/tests/soak_kind_coverage.rs`
+# names with a written reason. Each costs the mock a handful of routes — see
+# `perf/mock-upstream/src/protocols/`, one module per protocol.
+#
+# The two tests in `soak_kind_coverage.rs` are what keep this list honest: one
+# refuses a kind that is neither soaked nor excused, the other refuses a
+# registry declared here that no arm asks for, because a registry nothing asks
+# for is a row of zeroes in the report and reads as a kind that costs nothing.
 
 [[registries]]
 type = "goproxy"
@@ -150,6 +157,234 @@ upstreams = ["${SOAK_UPSTREAM_URL}/generic"]
 # upstream" has to be something an operator wrote down, not a default. Here the
 # upstream is a mock on loopback, so the whole of it is the deliberate answer.
 path_allow = ["**"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── Path-shaped kinds: one client, five registry types ──────────────────────
+#
+# `deb`, `rpm`, `pacman` and `jetbrains` go through the same
+# `PathProxyRegistryClient` as `generic` above — the whole contract is "stream
+# `{upstream}/{path}`", because for these formats the index files *are* the
+# metadata and are fetched as ordinary artifacts. So they cost the mock one
+# route each, and what soaking them exercises is the proxy's path validation,
+# cache and streaming for four more types. Whether a real `apt` accepts the
+# index is a different question with a different instrument
+# (`tests/heavy/closed_world.sh`).
+
+[[registries]]
+type = "deb"
+name = "perf-deb"
+upstreams = ["${SOAK_UPSTREAM_URL}/deb"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "rpm"
+name = "perf-rpm"
+upstreams = ["${SOAK_UPSTREAM_URL}/rpm"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "pacman"
+name = "perf-pacman"
+upstreams = ["${SOAK_UPSTREAM_URL}/pacman"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "jetbrains"
+name = "perf-jetbrains"
+upstreams = ["${SOAK_UPSTREAM_URL}/jetbrains"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── Document kinds ──────────────────────────────────────────────────────────
+
+# Two upstreams, because a cargo registry has two: `upstreams` is the API and
+# `index_url` is the sparse index. Without the second the proxy can serve a
+# download and nothing a client could have discovered.
+[[registries]]
+type = "cargo"
+name = "perf-cargo"
+upstreams = ["${SOAK_UPSTREAM_URL}/cargo"]
+index_url = "${SOAK_UPSTREAM_URL}/cargo-index"
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "pypi"
+name = "perf-pypi"
+upstreams = ["${SOAK_UPSTREAM_URL}/pypi"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "nuget"
+name = "perf-nuget"
+upstreams = ["${SOAK_UPSTREAM_URL}/nuget"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "composer"
+name = "perf-composer"
+upstreams = ["${SOAK_UPSTREAM_URL}/composer"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# The mock's repodata is a few hundred entries. A real channel's is hundreds of
+# megabytes, which is the whole reason the conda path has a streaming filter and
+# a sharded index — so this arm exercises fetch/parse/filter/rewrite/cache under
+# load and says nothing about the memory profile at channel scale. That has its
+# own instrument; see the module comment in `perf/mock-upstream/src/protocols/conda.rs`.
+[[registries]]
+type = "conda"
+name = "perf-conda"
+upstreams = ["${SOAK_UPSTREAM_URL}/conda"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "nodedist"
+name = "perf-node"
+upstreams = ["${SOAK_UPSTREAM_URL}/nodedist"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "rustup"
+name = "perf-rustup"
+upstreams = ["${SOAK_UPSTREAM_URL}/rustup"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "terraform"
+name = "perf-terraform"
+upstreams = ["${SOAK_UPSTREAM_URL}/terraform"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# `broker_url` is the second host of SDKMAN's one protocol: `upstreams` answers
+# questions about candidates, the broker serves the archives.
+[[registries]]
+type = "sdkman"
+name = "perf-sdkman"
+upstreams = ["${SOAK_UPSTREAM_URL}/sdkman/api/2"]
+broker_url = "${SOAK_UPSTREAM_URL}/sdkman/broker"
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "openvsx"
+name = "perf-openvsx"
+upstreams = ["${SOAK_UPSTREAM_URL}/openvsx"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── The three forges ────────────────────────────────────────────────────────
+#
+# Three registries for what is nearly one protocol, because the differences are
+# exactly where the proxy's code differs: the API path, the asset container,
+# and — for Forgejo — that an asset is served from `{forge}/attachments/{uuid}`
+# and not from the API host at all.
+
+[[registries]]
+type = "github"
+name = "perf-github"
+upstreams = ["${SOAK_UPSTREAM_URL}/github"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "forgejo"
+name = "perf-forgejo"
+upstreams = ["${SOAK_UPSTREAM_URL}/forgejo"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "gitlab"
+name = "perf-gitlab"
+upstreams = ["${SOAK_UPSTREAM_URL}/gitlab"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── The two editor marketplaces ─────────────────────────────────────────────
+#
+# Neither is addressed like a package registry — VS Code has one POST endpoint
+# that takes a query document, JetBrains keys everything on a numeric plugin id
+# — so each brings a parser and a rewriter nothing else here exercises.
+
+[[registries]]
+type = "vscode-marketplace"
+name = "perf-vscode"
+upstreams = ["${SOAK_UPSTREAM_URL}/vscode"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "jetbrains-marketplace"
+name = "perf-jbmarket"
+upstreams = ["${SOAK_UPSTREAM_URL}/jbmarket"]
 
 [registries.rbac]
 anonymous = []
