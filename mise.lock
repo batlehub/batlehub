@@ -22,13 +22,13 @@ version = "0.8.0"
 backend = "cargo:cargo-sweep"
 
 [[tools.claude]]
-version = "2.1.268"
+version = "2.1.270"
 backend = "aqua:anthropics/claude-code"
 
 [tools.claude."platforms.linux-x64"]
-checksum = "sha256:dfd082062904f36e695cafa16835e3214e93b7ed272c858069d2367d68dc3b02"
-url = "https://github.com/anthropics/claude-code/releases/download/v2.1.268/claude-linux-x64.tar.gz"
-url_api = "https://api.github.com/repos/anthropics/claude-code/releases/assets/555585369"
+checksum = "sha256:b069b327de3ad6c8cda70886675da46fb213797ac99a367df384e2202b37e0b7"
+url = "https://github.com/anthropics/claude-code/releases/download/v2.1.270/claude-linux-x64.tar.gz"
+url_api = "https://api.github.com/repos/anthropics/claude-code/releases/assets/559771973"
 
 [[tools.cocogitto]]
 version = "7.0.0"
@@ -38,6 +38,15 @@ backend = "aqua:cocogitto/cocogitto"
 checksum = "sha256:e03938ff2c4c86d71c00c0f3284dbbe95c5ca76fe34a51f33e945c23010d59bb"
 url = "https://github.com/cocogitto/cocogitto/releases/download/7.0.0/cocogitto-7.0.0-x86_64-unknown-linux-musl.tar.gz"
 url_api = "https://api.github.com/repos/cocogitto/cocogitto/releases/assets/366659350"
+
+[[tools."github:mlab-sh/mlab-cli"]]
+version = "1.0.4"
+backend = "github:mlab-sh/mlab-cli"
+
+[tools."github:mlab-sh/mlab-cli"."platforms.linux-x64"]
+checksum = "sha256:097a0c6d735076eb7f0dcd1cc949fb3fb8c25f68446e83fc6cdf2ef056af766f"
+url = "https://github.com/mlab-sh/mlab-cli/releases/download/v1.0.4/mlab-1.0.4-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/mlab-sh/mlab-cli/releases/assets/547198585"
 
 [[tools."github:mlab-sh/postmortem"]]
 version = "2.4.0"
@@ -118,13 +127,13 @@ checksum = "sha256:6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc
 url = "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.gz"
 
 [[tools.pnpm]]
-version = "11.26.0"
+version = "11.27.0"
 backend = "aqua:pnpm/pnpm"
 
 [tools.pnpm."platforms.linux-x64"]
-checksum = "sha256:9d877d4804bd586dc51f51167fffb0c20e45d97540bffa9b0179701cb51a94c0"
-url = "https://github.com/pnpm/pnpm/releases/download/v11.26.0/pnpm-linux-x64.tar.gz"
-url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/547832322"
+checksum = "sha256:14ed04e631e4563abf3570dda1a365316683149a482b741a2db37e495f6b9cdb"
+url = "https://github.com/pnpm/pnpm/releases/download/v11.27.0/pnpm-linux-x64.tar.gz"
+url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/559064655"
 provenance = "github-attestations"
 
 [[tools.python]]

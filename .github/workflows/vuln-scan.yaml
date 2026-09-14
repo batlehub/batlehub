@@ -148,6 +148,8 @@ jobs:
           fail-on: none
           soft-fail: "true"
           token: ${{ secrets.VULN_MLAB_TOKEN }}
+      - name: wait a sec
+        run: sleep 1s
 
       - name: Scan the SBOM pieces
         id: scan-sboms
