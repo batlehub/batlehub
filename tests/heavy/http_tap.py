@@ -200,9 +200,24 @@ class Tap(BaseHTTPRequestHandler):
             )
             conn.close()
 
-    # 64 KiB: large enough that a 444 MB document is not a million syscalls,
-    # small enough that a thread per connection costs nothing to hold.
-    RELAY_CHUNK = 64 * 1024
+    # 1 MiB, raised from 64 KiB. This is a thread-per-connection Python server,
+    # so every chunk is a GIL round trip, and a thread that is copying a body
+    # holds the interpreter between its own reads and writes. That starves the
+    # thread of a *newly accepted* connection, whose request head then reaches
+    # actix late — and actix's `client_request_timeout` (5 s, the default; the
+    # server does not set it) answers `408` before the request has been read.
+    #
+    # It is the small requests that fail, which is what makes the symptom
+    # confusing. Measured on the closed-world `conda` phase, where micromamba
+    # fetches a whole Python environment in parallel: the 23 MB and 14 MB
+    # packages came back `200` while `openssl` (3 MB) and `ca-certificates`
+    # (a few hundred KB) got `408`s and the install died. Nothing was wrong with
+    # the server — the requests that timed out had barely been made.
+    #
+    # 16× fewer iterations per body, and a socket read or write releases the
+    # GIL, so the interpreter is available for longer stretches. 1 MiB per
+    # in-flight relay is nothing beside the bodies it is relaying.
+    RELAY_CHUNK = 1024 * 1024
 
     def _relay(self, resp, chunked):
         """Copy the backend's body to the client as it arrives, and return its size.

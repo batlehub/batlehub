@@ -16,6 +16,15 @@
 [server]
 host = "127.0.0.1"
 port = 8155
+# **Proxy only.** No registry here configures `[registries.security]`, so the
+# embedded worker has nothing to scan — but it still polls `scan_jobs` and
+# upserts `worker_heartbeats` on a timer, against the same five-connection pool
+# the client's downloads are queueing for. Measured on the `conda` phase in CI:
+# `UPDATE scan_jobs` at 4.5 s and a `worker_heartbeats` upsert at **9.3 s**, on
+# tables with nothing in them, while micromamba's downloads waited up to 7.9 s
+# for a connection. Work that cannot produce a result does not get to compete
+# for the pool.
+roles = ["proxy"]
 # The Terraform phase reaches this instance through a second tap that
 # terminates TLS, and the server has to believe that tap's `X-Forwarded-Proto`
 # or it advertises `http://` URLs inside documents Terraform fetched over TLS.
@@ -24,7 +33,17 @@ trusted_proxies = ["127.0.0.1/32"]
 [database]
 type = "postgresql"
 url = "${DATABASE_URL}"
-max_connections = 5
+# 20, where every other heavy config uses 5, because this is the only suite
+# that drives a *parallel* client: micromamba fetches a whole Python
+# environment at once — some fifteen packages, 65 MB — and each download makes
+# several short queries (the audit row, the artifact-meta reserve and commit).
+# Five connections turn that into a queue, and the queue is what the logging
+# tap's 120-second cap eventually fires on: in CI the phase died with `408`s on
+# `openssl` (3 MB) and `ca-certificates` (a few hundred KB), which are far too
+# small to have spent two minutes in transfer. Nothing holds a connection
+# across a stream — every query is `execute(&self.pool)` — so this is pool
+# *size* against burst concurrency, not a leak.
+max_connections = 20
 
 [[auth]]
 type = "token"

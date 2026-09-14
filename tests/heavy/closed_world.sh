@@ -339,13 +339,24 @@ EOF
   #
   # `LANG`/`LC_ALL` are pinned because the *dependency* reads them: `rsc.io/quote`
   # calls `rsc.io/sampler`, which greets in the caller's locale — "Hello, world"
-  # unset, "Bonjour le monde" under `fr_FR.UTF-8`, and "Ahoy, world!" under the
-  # `C.UTF-8` that GitHub runners set. The assertion is what the dependency
-  # computed, so the locale it computes in belongs beside it rather than in the
-  # runner's environment. No locale has to be *installed*: sampler matches the
-  # tag with `golang.org/x/text`, not with the system's locale database.
+  # under `en_US.UTF-8`, "Bonjour le monde" under `fr_FR.UTF-8`, and "Ahoy,
+  # world!" under the `C.UTF-8` that GitHub runners set. The assertion is what
+  # the dependency computed, so the locale it computes in belongs beside it
+  # rather than in the runner's environment. No locale has to be *installed*:
+  # sampler matches the tag with `golang.org/x/text`, not with the system's
+  # locale database.
+  #
+  # **It is read at run time, not at build time.** The pin used to be part of
+  # `goenv` below, which is passed to `go mod tidy` and `go build` — neither of
+  # which reads it — and *not* to `./app`, which is the only step that does. So
+  # the program greeted in the runner's own locale and the phase failed on CI
+  # with `CLOSED-WORLD-RAN Ahoy, world!` against an expectation of "Hello,
+  # world", having proved every other thing it set out to prove: all nine
+  # module requests came through the proxy with egress denied. Kept as its own
+  # array so the two steps that need it cannot drift apart again.
+  local locale=(LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8)
   local goenv=(GOPROXY="$HEAVY_TAP_BASE/proxy/$GO_REG" GOFLAGS="-mod=mod -modcacherw"
-               GOTOOLCHAIN=local GOSUMDB=off LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+               GOTOOLCHAIN=local GOSUMDB=off "${locale[@]}"
                GOMODCACHE="$cache/mod" GOCACHE="$cache/build" GOPATH="$cache/gopath")
   cw_step "$out" "$dir" "${DENY[@]}" "${goenv[@]}" go mod tidy \
     || { cat "$out" >&2; heavy_fail "go: the resolve failed inside the closed world"; }
@@ -361,7 +372,7 @@ EOF
   [[ "$modules" -ge 2 ]] \
     || heavy_fail "go: only $modules module zip(s) came through the proxy — the transitive modules did not, so the resolve was not a walk"
 
-  cw_step "$out" "$dir" "${DENY[@]}" ./app \
+  cw_step "$out" "$dir" "${DENY[@]}" "${locale[@]}" ./app \
     || { cat "$out" >&2; heavy_fail "go: the built binary did not run"; }
   cw_ran go "$out" "Hello, world"
   heavy_log "CLOSED-WORLD-GO-OK ($(head -1 "$out"), $modules modules through the proxy)"
@@ -873,14 +884,48 @@ EOF
 
   heavy_mark conda
   heavy_log "micromamba create (python and one package from the channel), with egress denied"
-  # The status is named in the failure, because `--quiet` means micromamba can
-  # fail having printed **nothing at all** — and then the difference between "it
-  # refused" and "it was killed" (137, which is what an OOM looks like on a
-  # runner) is the whole diagnosis and is otherwise unrecoverable.
+  # **Not `--quiet`.** It was, and the warning above turned out to be the
+  # understatement: a real failure in CI printed nothing whatsoever, and the
+  # transcript showed every request answering `200`, so the log said only
+  # "micromamba exited 1" about a server that had done nothing wrong. Without
+  # `--quiet` the same failure names itself in one line — `Download error (28)
+  # … Operation too slow. Less than 30 bytes/sec transferred the last 60
+  # seconds` — which is the difference between a diagnosis and an afternoon.
+  # The cost is 29 progress lines in a log nobody reads unless it is red.
+  #
+  # The status is still named in the failure, because a client can also be
+  # *killed* (137, which is what an OOM looks like on a runner) and then there
+  # is nothing to print.
   set +e
+  # `MAMBA_DOWNLOAD_THREADS=1` (the default is 5), and this one is worth
+  # understanding before anyone raises it again.
+  #
+  # micromamba aborts a transfer that moves **less than 30 bytes/sec for 60
+  # seconds** — libcurl's low-speed limit — and that timer measures *one*
+  # transfer. On a cache miss this proxy is silent for the whole
+  # fetch → stage → hash → promote pipeline, because it does not hand over
+  # bytes it has not verified. So the client's silent window is not this
+  # artifact's pipeline, it is the pipeline of everything queued in front of
+  # it: with five in flight, the two largest packages (python at 23 MB, icu at
+  # 14 MB) crossed 60 s of silence and the install died with every request in
+  # the transcript answering `200`.
+  #
+  # It is not the network and it is not the runner. Measured from the machine
+  # that reproduced it: the upstream serves that 23 MB package in **0.52 s**
+  # (44 MB/s), while the proxy's own upstream-latency gauge read 8.7 s and
+  # 10.3 s for the same bytes — the time is inside the pipeline, which walks
+  # the artifact about four times with two or three SHA-256 passes, in a debug
+  # build locally and an llvm-cov-instrumented one in CI.
+  #
+  # One at a time, therefore: each transfer's silence is its own pipeline and
+  # nothing else's. This is the harness accommodating a real product
+  # behaviour, not a fix for it — a client on a genuinely slow upstream can
+  # still meet the same limit, and the way out of that is a cheaper pipeline or
+  # an opt-in stream-while-verifying, neither of which belongs in a test.
   cw_step "$out" "$dir" "${DENY[@]}" \
     MAMBA_ROOT_PREFIX="$HEAVY_WORK/mamba" CONDA_PKGS_DIRS="$HEAVY_WORK/mamba-pkgs" \
-    "$mm" create --yes --quiet --prefix "$HEAVY_WORK/conda-env" \
+    MAMBA_DOWNLOAD_THREADS=1 \
+    "$mm" create --yes --prefix "$HEAVY_WORK/conda-env" \
     --override-channels --channel "$HEAVY_TAP_BASE/proxy/$CONDA_REG" \
     python=3.12 six
   local rc=$?

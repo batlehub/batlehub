@@ -824,15 +824,35 @@ Two things the ranking does not count, and says so in its own footnote:
   declines (conda's byte route answering "not this path" before the parsed one
   runs) records nothing rather than counting the request twice.
 
-### The result lands on the pull request
+### Starting one, and where the result lands
 
-The CI workflow's third job collects both suites' reports, joins them under one
-heading and posts them as a single comment, edited in place on every re-run. A
-dispatch carries no pull request of its own, so it resolves the open one whose
-head is the branch — or takes the `pr` input, for a run dispatched from
-somewhere else. With no pull request to find, the report is in the job summary
-and the run stays green: the verdict is the soak's to deliver, and a comment
-that could not be posted is not a leak.
+`.github/workflows/soak.yaml` has **two ways in, and neither runs by itself**:
+
+| | how | when to use it |
+| --- | --- | --- |
+| **Label** | add `soak` to a pull request | any branch, including one whose workflow file has not landed on `main` |
+| **Dispatch** | Actions → Soak → Run workflow, or `gh workflow run soak.yaml --ref <branch>` | once the file is on the default branch; gives the full input form |
+
+The label exists because of a GitHub rule worth knowing: a workflow whose only
+trigger is `workflow_dispatch` **is not registered at all** — and cannot be
+dispatched on any branch — until the file has landed on the default branch.
+Measured on this repository while adding it: `pr-checklist.yaml` ran from its
+own branch, because a pull request is an event GitHub associates with that
+branch, while this workflow was absent from `/actions/workflows` entirely and
+`gh workflow run` had nothing to call. A label is a `pull_request` event, so it
+runs the branch's own copy of the file, on the branch's own code.
+
+On the label path `inputs.*` is empty, so every input carries the same default
+the dispatch form offers — a threshold read as `""` would parse as zero and
+fail on the first byte of noise. The label is removed when the run finishes, so
+adding it again re-runs the soak.
+
+The third job collects both suites' reports, joins them under one heading and
+posts them as a single comment, edited in place on every re-run. A labelled run
+carries its own pull request; a dispatch resolves the open one whose head is the
+branch, or takes the `pr` input. With no pull request to find, the report is in
+the job summary and the run stays green: the verdict is the soak's to deliver,
+and a comment that could not be posted is not a leak.
 
 ### `task test:soak-heavy` — a real client, in a loop
 
@@ -1112,8 +1132,9 @@ to start under a restricted `ptrace_scope`, not a finding — re-run with
   their own registries, pinned VS Code, IntelliJ, Terraform, .NET and
   micromamba builds — so a new client release can break a tree that no commit
   touched, and only a scheduled run finds it.
-- **`soak.yaml`** — the two soak suites, **`workflow_dispatch` only**: no push,
-  no pull request, no cron. Inputs for the duration, the arrival rate, the
+- **`soak.yaml`** — the two soak suites, **started by hand only**: a
+  `workflow_dispatch`, or the `soak` label on a pull request. No push, no cron,
+  and no pull request without that label. Inputs for the duration, the arrival rate, the
   heavy suite's round count and all four growth thresholds, so a run can be
   made stricter from the dispatch form. Two jobs (`k6-soak`, `heavy-soak`),
   selectable, with a `concurrency` group so two soaks never share a runner's
