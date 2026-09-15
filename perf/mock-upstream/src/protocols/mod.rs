@@ -15,7 +15,7 @@
 
 mod cargo;
 mod composer;
-mod conda;
+pub mod conda;
 mod files;
 mod forge;
 mod goproxy;

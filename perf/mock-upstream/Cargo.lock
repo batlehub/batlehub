@@ -874,6 +874,7 @@ dependencies = [
  "sha1",
  "sha2",
  "tokio",
+ "zstd",
 ]
 
 [[package]]

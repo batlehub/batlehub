@@ -54,6 +54,24 @@ struct Args {
 
     #[arg(long, default_value = "5")]
     gem_versions: usize,
+
+    /// Entries in the generated conda `repodata.json`.
+    ///
+    /// The soak wants this small — its conda arm is one of twenty-odd and the
+    /// document is not what it is measuring. `perf:conda:upstream` wants it
+    /// channel-shaped (conda-forge's `linux-64` names ~1.4 million), because
+    /// what scenario 12 measures is what *size* costs the filtering path.
+    #[arg(long, default_value = "200")]
+    conda_packages: usize,
+
+    /// Size of the package bytes a conda index entry's sha256 is computed over.
+    ///
+    /// Defaults to `--artifact-size-kb`. Lower it when raising
+    /// `--conda-packages`: the digest in the index is the real digest of the
+    /// bytes the package route serves — the proxy verifies it — so every entry
+    /// costs one hash of this size when the index is built.
+    #[arg(long)]
+    conda_artifact_kb: Option<usize>,
 }
 
 #[actix_web::main]
@@ -66,10 +84,15 @@ async fn main() -> std::io::Result<()> {
 
     let args = web::Data::new(args);
     let port = args.port;
+    // Built on first request, per platform, and shared by every worker thread:
+    // a channel-sized index is seconds of CPU to generate and the whole point
+    // is that generating it is not what gets measured.
+    let repodata = web::Data::new(protocols::conda::RepodataCache::default());
 
     HttpServer::new(move || {
         App::new()
             .app_data(args.clone())
+            .app_data(repodata.clone())
             .service(health)
             .configure(protocols::configure)
     })

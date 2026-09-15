@@ -65,7 +65,7 @@ tasks:
       - bash perf/scripts/run_with_metrics.sh perf/k6/scenarios/07_eviction.js
 
   perf:run:all:
-    desc: Run the full perf suite in sequence (scenarios 01-07); threshold violations are reported but do not stop the suite
+    desc: Run the full perf suite in sequence (scenarios 01-07) and write the report; threshold violations are reported but do not stop the suite
     cmds:
       - bash perf/scripts/run_with_metrics.sh --no-thresholds perf/k6/scenarios/01_at_rest.js
       - bash perf/scripts/run_with_metrics.sh --no-thresholds perf/k6/scenarios/02_warm_read.js
@@ -74,6 +74,78 @@ tasks:
       - bash perf/scripts/run_with_metrics.sh --no-thresholds perf/k6/scenarios/05_mixed.js
       - bash perf/scripts/run_with_metrics.sh --no-thresholds perf/k6/scenarios/06_sbom.js
       - bash perf/scripts/run_with_metrics.sh --no-thresholds perf/k6/scenarios/07_eviction.js
+      - task: perf:report
+
+  # ── The results table ───────────────────────────────────────────────────────
+  #
+  # Every scenario above records one row — peak and median RSS, peak and median
+  # CPU, throughput and latency — into `perf/results/runs.jsonl`. These two turn
+  # those rows into the table, and the table into something a release can carry.
+
+  perf:report:
+    desc: "Build the results table from the recorded runs (perf/results/perf-report.md + .json)"
+    cmds:
+      - python3 perf/scripts/perf_report.py {{.CLI_ARGS}}
+
+  perf:report:compare:
+    desc: "Diff the recorded runs against a previous release's perf-report.json — BASE=path (FAIL=1 to exit non-zero on a regression past MARGIN%)"
+    requires:
+      vars: [BASE]
+    cmds:
+      - python3 perf/scripts/perf_report.py
+        --baseline {{.BASE}}
+        --margin-pct {{.MARGIN | default "25"}}
+        {{if eq (.FAIL | default "0") "1"}}--fail-on-regression{{end}}
+
+  # ── Scenario 12 — what filtering a channel index costs ──────────────────────
+  #
+  # Four steps, in order, and the size is the independent variable:
+  #
+  #   task perf:conda:upstream PACKAGES=200000   # (separate shell)
+  #   task perf:conda:server                     # (separate shell)
+  #   task perf:conda:seed
+  #   task perf:run:conda
+  #
+  # PACKAGES is how many entries the generated `repodata.json` names.
+  # conda-forge's `linux-64` names ~1.4 million; 200 000 is ~53 MiB of JSON and
+  # takes a few seconds to generate, which is enough for the difference between
+  # the parsed path and the streaming one to be unmistakable.
+
+  perf:conda:upstream:
+    desc: "Mock upstream serving a channel-sized conda index (PACKAGES, ARTIFACT_KB)"
+    cmds:
+      - cargo build --release --manifest-path perf/mock-upstream/Cargo.toml
+      - ./perf/mock-upstream/target/release/mock-upstream --port 9999
+        --conda-packages {{.PACKAGES | default "200000"}}
+        --conda-artifact-kb {{.ARTIFACT_KB | default "1"}}
+        --delay-ms {{.DELAY_MS | default "0"}}
+
+  perf:conda:server:
+    desc: "Run BatleHub with the two conda registries scenario 12 compares (needs postgres and perf:conda:upstream)"
+    env:
+      BATLEHUB_CONFIG: perf/config.perf-conda.toml
+    cmds:
+      - cargo run -p batlehub-server --release
+
+  perf:conda:seed:
+    desc: "Block one version in perf-conda-filtered and prove the two arms differ"
+    cmds:
+      - bash perf/scripts/seed_conda.sh {{.BASE_URL | default "http://localhost:8080"}}
+
+  perf:run:conda:
+    desc: "k6 scenario 12 — the RAM cost of filtering a channel index, one row per path (parsed vs streaming, filtered vs not)"
+    cmds:
+      # One k6 run per arm, and one table row each: peak RSS is the result, and
+      # a run that mixed two paths could not say which one the peak belongs to.
+      - BATLEHUB_CONDA_ARM=plain_unfiltered bash perf/scripts/run_with_metrics.sh
+        --label 12_conda_plain_unfiltered perf/k6/scenarios/12_conda_filter.js
+      - BATLEHUB_CONDA_ARM=plain_filtered bash perf/scripts/run_with_metrics.sh
+        --label 12_conda_plain_filtered perf/k6/scenarios/12_conda_filter.js
+      - BATLEHUB_CONDA_ARM=zst_unfiltered bash perf/scripts/run_with_metrics.sh
+        --label 12_conda_zst_unfiltered perf/k6/scenarios/12_conda_filter.js
+      - BATLEHUB_CONDA_ARM=zst_filtered bash perf/scripts/run_with_metrics.sh
+        --label 12_conda_zst_filtered perf/k6/scenarios/12_conda_filter.js
+      - task: perf:report
 
   # ── Soak / leak detection (RFC-less: this is a gate, not a measurement) ──────
   #

@@ -14,6 +14,7 @@ you have already deployed.
 | Dependency supply chain (reputation + vulns) | [postmortem](https://github.com/mlab-sh/postmortem) | `postmortem.yaml` (PR + daily) — one job per dependency root: Rust, UI, Website | block on high/critical vulns (Rust, UI); report-only (Website) |
 | Lockfile CVEs, second opinion | [vuln-scan-action](https://github.com/mlab-sh/vuln-scan-action) (vuln.mlab.sh) | `vuln-scan.yaml` (PR) — all four roots: `Cargo.lock`, `mise.lock`, and `ui/` + `docs/` via a syft CycloneDX SBOM | **report-only**, comments on the PR — see below |
 | Container / OS layers | Trivy | `image-scan.yaml` (PR + daily, GitHub) runs Trivy directly on the proxy image (`Containerfile`), the worker image (`Containerfile.worker`, RFC 0018 — the one that carries bubblewrap, postmortem and the Trivy client) and the GuardDog variant of the worker image (`Containerfile.worker-guarddog`, which adds the optional Python scanner and is gated separately, so its toolchain answers for its own CVEs); `.forgejo/workflows/build.yaml` (the proxy and hardened images, the two it builds) polls Harbor's own scan-on-push report instead | block on fixable HIGH/CRITICAL |
+| Development toolchain | Trivy (`rootfs` over the installed tools) | `mise-scan.yaml` (PR touching `mise.toml`/`mise.lock`, weekly) | budget on fixable HIGH/CRITICAL — see below |
 | Static analysis | CodeQL + Semgrep | `codeql.yaml`, `semgrep.yaml` | CodeQL report / Semgrep block on ERROR |
 | Secrets | gitleaks | `secret-scan.yaml` (PR + push) | block |
 | Lint / unsafe hygiene | clippy `-D warnings` | `test.yaml` `lint` job | block |
@@ -146,12 +147,25 @@ semgrep scan --config p/rust --config p/typescript
 
 ## SBOMs — matching a *future* CVE against a shipped build
 
-Every release publishes two CycloneDX SBOMs:
+Every release publishes four CycloneDX SBOMs, one per artefact it ships:
 
 - `sbom-rust.cdx.json` — the shipped server's Rust dependency closure (crate-level), attached to the
-  GitHub release.
-- `sbom-image.cdx.json` — the full container image (OS packages + binaries), attached to the
-  release **and** pushed to the registry as an attestation (`actions/attest-sbom`).
+  GitHub release **and** attested against the binary's own digest, so the SBOM that describes a
+  given `batlehub` cannot be swapped for another.
+- `sbom-image.cdx.json` — the proxy container image (OS packages + binaries).
+- `sbom-image-worker.cdx.json` — the worker image (RFC 0018).
+- `sbom-image-worker-guarddog.cdx.json` — the GuardDog variant of the worker image.
+
+All three image SBOMs are attached to the release **and** pushed to the registry as attestations
+(`actions/attest-sbom`, `push-to-registry: true`), which is what *bound to the image* means here:
+the attestation is an OCI referrer of the image digest, so it travels with the image through any
+registry that understands referrers — no release page, no GitHub API, and nothing to keep in step
+by hand.
+
+The worker images matter most here and used to have no SBOM at all. They are the ones carrying a
+*second* toolchain — bubblewrap, the Trivy client, postmortem, and GuardDog's whole Python tree —
+so they are precisely the images whose contents a consumer cannot derive from this repository's
+lockfiles.
 
 When a new CVE is disclosed months later, you don't need to rebuild to know whether a deployed
 version is affected — scan its SBOM:
@@ -170,6 +184,100 @@ Verify the image SBOM/provenance attestation before trusting it:
 ```bash
 gh attestation verify oci://ghcr.io/<owner>/batlehub:<version> --owner <owner>
 ```
+
+## Signatures — who published this
+
+Everything a release publishes is signed, **keylessly**: the signing identity is the release
+workflow's OIDC token, recorded in Sigstore's transparency log, so there is no private key in a
+secret to leak and no public key for a consumer to fetch. Verification checks an *identity* — this
+workflow, on this repository — rather than a fingerprint someone has to be told to trust.
+
+| Artefact | Mechanism | Verify with |
+| --- | --- | --- |
+| The three container images | `cosign sign` **by digest** | `cosign verify --certificate-identity-regexp … --certificate-oidc-issuer https://token.actions.githubusercontent.com <image>` |
+| The Helm chart (OCI) | `cosign sign` by digest | the same command — an OCI chart is an image as far as cosign is concerned |
+| Server binary, every CLI archive | `actions/attest-build-provenance` | `gh attestation verify <file> --repo <owner>/<repo>` |
+| Every asset on the release page | `checksums.txt` + a detached Sigstore bundle | `cosign verify-blob --bundle checksums.txt.sigstore.json … checksums.txt` then `sha256sum -c checksums.txt` |
+
+The last row is the one that works **offline-ish**: a mirror, a distro packager or an air-gapped
+importer has the files and not the GitHub API, and `checksums.txt` plus its bundle is enough to
+establish that this workflow produced exactly these bytes.
+
+Signing is by digest and never by tag, everywhere. A tag is a mutable pointer, so a signature over
+`:1.2.3` would attest to whatever that name resolves to at verification time — which is the property
+an attacker with push access needs.
+
+**What is not signed, and why.** The Forgejo mirror build (`.forgejo/workflows/build.yaml`, which
+pushes the proxy and hardened images to Harbor on every push to a branch) is unsigned. Keyless
+signing needs an OIDC issuer Sigstore's public-good instance already trusts, and a self-hosted
+Forgejo is not one; signing there would mean a long-lived key in a secret, which is the thing
+keyless exists to avoid. Those images are continuous builds gated on Harbor's own scan-on-push,
+not releases — **the signed artefacts are the ones a release publishes**, and that is the set the
+table above covers.
+
+## VEX — what the standing findings *mean* {#vex}
+
+A consumer who scans a published image sees the same findings the release gate accepted, and has no
+way to know they were ever assessed: `.trivyignore.yaml` is read by Trivy and by nothing else, and
+it never leaves this repository.
+
+`vex/batlehub.openvex.json` is the other half. It states the same decisions in
+[OpenVEX](https://openvex.dev/) — a format every mainstream scanner reads — with, for each
+vulnerability, a machine-readable `justification` and the prose (`impact_statement`) that says why
+the vulnerable code is unreachable in these images.
+
+The release binds it to what it published (`.github/scripts/vex.py render`): each product is
+rewritten from a repository name to the **digest** this release actually pushed, the document is
+attached to the release page, and `cosign attest --type openvex` publishes it as a referrer of each
+image. A consumer can then either apply it from the release page or read it off the image:
+
+```bash
+# Scan with our assessment applied
+trivy image --vex batlehub.openvex.json ghcr.io/<owner>/batlehub-worker:<version>
+
+# Or read the attestation that travels with the image
+cosign download attestation --predicate-type https://openvex.dev/ns \
+  ghcr.io/<owner>/batlehub-worker@sha256:… | jq -r .payload | base64 -d | jq .predicate
+```
+
+**The two files cannot drift.** `task vex` (part of `task security`, and its own job in
+`image-scan.yaml`) fails when `.trivyignore.yaml` suppresses a CVE the VEX document does not state,
+*and* when the VEX document states a `not_affected` that the gate is not suppressing — the first
+means a consumer is told a finding is unassessed when it was, the second means a statement has
+outlived the reason it was made. It also enforces that every `not_affected` carries one of
+OpenVEX's five justifications *and* prose: the justification is for the scanner, the prose is for
+the person who has to believe it.
+
+The expiry stays in `.trivyignore.yaml` and is deliberately not duplicated here — that file is the
+gate, and a date with two homes has one that is wrong.
+
+## The development toolchain
+
+`mise.toml` installs some forty tools, and until recently nothing looked at them. The one thing
+that appeared to — `mise.lock` in `vuln-scan.yaml` — reads **four** of them: that endpoint's
+lockfile parser understands the `cargo:` and PyPI backends and nothing else, so every tool that
+arrives as a GitHub release asset (trivy, syft, helm, k6, gitleaks, node, go, task, mc, …) came back
+with no findings, which is indistinguishable from a clean scan.
+
+`mise-scan.yaml` runs `trivy rootfs` over the **installed** toolchain instead. That reads what a
+lockfile scan cannot: the Go module list is embedded in every Go binary, and the Node and Python
+trees are on disk as themselves. Measured on 2026-09-15 against a toolchain the lockfile scan
+reported clean: 854 findings, 461 of them fixable HIGH or CRITICAL.
+
+```bash
+task mise:cve            # the same scan and report, locally
+task mise:cve:budget     # record the current number as the budget CI checks against
+```
+
+It is a **budget**, not a zero, and that is a deliberate choice rather than leniency: none of this
+ships, a CVE in `k9s` reaches nothing this project publishes, and a gate that fails a pull request
+every time somebody else's tool has a bad week is a gate that gets switched off within the month.
+`.github/mise-cve-budget.json` records what the toolchain currently carries; the job goes red when
+the number *grows* — a tool that has gone stale, or a new tool that arrived carrying a pile of
+findings. Raising it is a commit, in the open, with a reason.
+
+Until a budget has been recorded the job reports and cannot fail, and the report says so in those
+words rather than showing a green tick for a check that has nothing to check against.
 
 ## Scanning *proxied* artifacts at runtime
 
@@ -224,6 +332,11 @@ than rediscover — the reasoning lives next to the declaration in `Cargo.toml`,
 advisory. Check whether a feature can be dropped before concluding an advisory is unfixable.
 
 ### An advisory inside a third party's binary
+
+> Every entry here has a matching statement in `vex/batlehub.openvex.json` — see
+> [VEX](#vex) above — and `task vex` fails when one of them does
+> not. The ignore file is what quiets the gate; the VEX document is what tells a consumer *why*.
+
 
 `.trivyignore.yaml` is the third case: a CVE in a dependency of a **prebuilt binary the image
 copies in**, where the fix is neither an upgrade of ours nor a feature we can drop. The worked

@@ -10,3 +10,30 @@ tasks:
     desc: "Update lock file"
     cmds:
       - mise upgrade
+  cve:
+    desc: "Scan the installed dev toolchain for CVEs and report per tool (what `mise.lock` scanning cannot see)"
+    cmds:
+      # `rootfs` and not `fs`: most of this toolchain is statically linked Go
+      # binaries, where `fs` finds no lockfile and therefore nothing at all,
+      # while `rootfs` reads the module list Go embeds in the binary. The same
+      # difference is why this exists beside the `mise.lock` scan in
+      # `vuln-scan.yaml`, which can parse 4 of the ~40 tools.
+      - trivy rootfs --scanners vuln --format json --output /tmp/mise-trivy.json --quiet "$(mise where trivy | sed 's#/trivy/.*##')"
+      - python3 .github/scripts/mise_cve_report.py
+        --trivy-json /tmp/mise-trivy.json
+        --root "$(mise where trivy | sed 's#/trivy/.*##')"
+        --out /tmp/mise-cve-report.md
+        {{.CLI_ARGS}}
+
+  cve:budget:
+    desc: "Record the toolchain's current fixable HIGH/CRITICAL count as the budget CI checks against"
+    cmds:
+      # Deliberate, and in a commit: the number only ever moves because someone
+      # decided it should. Run `task mise:cve` first and look at what is in the
+      # table before raising it.
+      - trivy rootfs --scanners vuln --format json --output /tmp/mise-trivy.json --quiet "$(mise where trivy | sed 's#/trivy/.*##')"
+      - python3 .github/scripts/mise_cve_report.py
+        --trivy-json /tmp/mise-trivy.json
+        --root "$(mise where trivy | sed 's#/trivy/.*##')"
+        --out /tmp/mise-cve-report.md
+        --write-budget

@@ -39,3 +39,9 @@ sha1 = "0.11"
 # of the gem, so the mock emits one in that algorithm — the SHA-1 above is for
 # npm's `dist.shasum` and nothing else.
 sha2 = "0.11"
+# conda 23.x and mamba ask for `repodata.json.zst` before the plain document, and
+# the proxy's *streaming* filter only engages when the upstream has a compressed
+# index to stream (`StreamedIndex::Filter`). Without this the mock could only
+# exercise the parsed path — the one scenario 12 exists to compare against.
+# Already in this lockfile, via actix-web's `compress-zstd`.
+zstd = "0.13"

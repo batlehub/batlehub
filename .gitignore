@@ -100,3 +100,9 @@ perf/results/soak.md
 perf/results/soak-samples.csv
 perf/results/soak-marks.txt
 perf/results/soak-chart.svg
+# The results table (`task perf:report`) is the same kind of thing: one machine,
+# one day. A release's copy lives on the release, not in the tree.
+perf/results/runs.jsonl
+perf/results/*.k6.json
+perf/results/perf-report.md
+perf/results/perf-report.json

@@ -1212,6 +1212,15 @@ to start under a restricted `ptrace_scope`, not a finding — re-run with
   CPU — a resource curve measured beside another soak is a measurement of the
   runner. The samples and the report are uploaded on failure as well as on
   success, because that is when they are worth reading.
+- **`perf-report.yaml`** — on every release tag, runs scenarios 01–07 against a
+  freshly built server, diffs the result against the previous published
+  release's `perf-report.json`, and attaches the table and its machine-readable
+  twin to the release. A **record, not a gate**, for the reason the soak is the
+  other way round: a shared runner's noise is larger than most real regressions,
+  so a threshold would fail honest releases — but peak RSS doubling between two
+  releases is visible through any amount of noise, and nothing else was
+  recording it. `perf/README.md` § The results table has the local equivalent
+  (`task perf:report`).
 - **`pr-checklist.yaml`** — derives, from the paths a pull request changes, the
   obligations those paths carry (`.github/scripts/pr_checklist.py`), and posts
   them as one comment it edits in place. Items the diff suggests are *missing*

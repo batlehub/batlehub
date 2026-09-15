@@ -50,6 +50,20 @@ name: Dependency CVEs (vuln.mlab.sh)
 # one root with a complete gate of its own in `cargo audit`, so this is a second
 # opinion on it rather than its coverage, and converting it to CycloneDX to chunk
 # it would mean building crate metadata on every pull request to buy nothing.
+#
+# ## What the `mise.lock` scan here does and does not cover
+#
+# It reads **4 of the ~40 tools** in that file — the `cargo:` and PyPI ones. The
+# parser has no backend for a tool that arrives as a GitHub release asset, which
+# is what trivy, syft, helm, k6, gitleaks, node, go, task and most of the rest
+# are, so those come back with no findings: indistinguishable, in this report,
+# from being clean. Measured 2026-09-15.
+#
+# The rest of the toolchain is covered by `mise-scan.yaml`, which installs it and
+# runs `trivy rootfs` over the binaries — that reads the Go module list embedded
+# in each one. The two are complementary and neither subsumes the other: this
+# scan sees the four packages that are *not* installed as binaries, that one sees
+# the thirty-odd that are. Keep the line here rather than dropping it.
 on:
   pull_request:
     branches: ["main"]
