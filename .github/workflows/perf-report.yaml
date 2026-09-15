@@ -158,8 +158,13 @@ jobs:
             exit 0
           fi
           echo "comparing against ${tag}"
+          # Into perf/results/: `perf_report.py` takes file *names* and reads
+          # them from that one directory, so a baseline anywhere else is not
+          # addressable — by design (pythonsecurity:S2083/S8707).
+          mkdir -p perf/results
           if gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
-               --pattern 'perf-report.json' --output baseline-perf-report.json --clobber; then
+               --pattern 'perf-report.json' \
+               --output perf/results/baseline-perf-report.json --clobber; then
             echo "baseline=baseline-perf-report.json" >> "$GITHUB_OUTPUT"
           else
             echo "${tag} has no perf-report.json attached — reporting without a comparison"
@@ -170,10 +175,11 @@ jobs:
           BASELINE: ${{ steps.baseline.outputs.baseline }}
         run: |
           set -euo pipefail
+          # File names, not paths: both land in perf/results/.
           args=(--out perf-report.md --json perf-report.json)
-          # An if rather than `${BASELINE:+…}`: the alternate-value form puts a
-          # path through word splitting, and a report is not the place to find
-          # out that a runner's workspace has a space in it.
+          # An if rather than `${BASELINE:+…}`: the alternate-value form puts the
+          # value through word splitting, and a report is not the place to find
+          # out that a name has a space in it.
           if [ -n "${BASELINE:-}" ]; then
             args+=(--baseline "$BASELINE")
           fi
@@ -181,7 +187,7 @@ jobs:
 
       - name: Put the table in the job summary
         if: always()
-        run: cat perf-report.md >> "$GITHUB_STEP_SUMMARY" || true
+        run: cat perf/results/perf-report.md >> "$GITHUB_STEP_SUMMARY" || true
 
       - name: Attach the report to the release
         if: github.event_name == 'push'
@@ -190,8 +196,8 @@ jobs:
           tag_name: ${{ github.ref_name }}
           draft: true
           files: |
-            perf-report.json
-            perf-report.md
+            perf/results/perf-report.json
+            perf/results/perf-report.md
 
       # `always()`: the rows are most worth keeping when something went wrong
       # with the report built from them.
@@ -201,8 +207,6 @@ jobs:
           name: perf-report-${{ github.ref_name }}
           path: |
             perf/results/
-            perf-report.md
-            perf-report.json
             server.log
             mock-upstream.log
           if-no-files-found: warn

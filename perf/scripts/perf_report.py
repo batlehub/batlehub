@@ -2,7 +2,10 @@
 """The performance report: one table per suite run, and the diff against a release.
 
 Reads the rows `record_run.py` appended to `perf/results/runs.jsonl` and writes
-two things that say the same thing for two readers:
+two things that say the same thing for two readers. Every argument here is a
+*file name* and every file lives in `perf/results/`: the directory comes from
+this script's own location, so nothing a caller passes can address a path
+outside it.
 
 * `perf-report.md` — the table a person reads, peak RSS and peak CPU beside the
   throughput numbers, because "how fast" and "at what cost" are one question.
@@ -32,25 +35,36 @@ from pathlib import Path
 SCHEMA = "batlehub.perf-report/1"
 
 
-def workspace_path(value: str) -> Path:
-    """Resolve a path given on the command line, or refuse it.
+# Every file this script reads or writes lives here, and the directory is
+# derived from the script's own location rather than from anything a caller
+# says: `perf/scripts/perf_report.py` → `perf/results/`.
+RESULTS_DIR = Path(__file__).resolve().parents[1] / "results"
 
-    Every path this script touches is a file of the working tree it is
-    reporting on — the recorded runs, the two report files, a baseline
-    downloaded beside them — so a path that resolves outside the working
-    directory is a mistake or an injection, never a use. Resolving first is
-    what makes one check cover `../../etc/x`, a symlink and an absolute path
-    alike, and returning the resolved path is what stops the caller from
-    re-deriving a different one.
+
+def results_file(value: str) -> Path:
+    """A *name* in `perf/results/`, never a path.
+
+    The arguments of this script used to be paths, guarded by a resolve-and-
+    confine check. The check held — `--out /etc/cron.d/pwn` was refused — but
+    it left a tainted value flowing into `read_text`/`write_text`, which is
+    both what a scanner reports and a shape that survives only as long as the
+    next person keeps the guard. There is nothing to guard here instead: every
+    one of these files belongs in one directory, so the argument is the file's
+    name and the directory is a constant.
+
+    A separator is refused rather than stripped. `--baseline ../x.json` from a
+    caller that means it is a caller to correct, and silently reading
+    `results/x.json` instead would be the wrong kind of helpful.
     """
-    root = Path.cwd().resolve()
-    candidate = Path(value).expanduser()
-    resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()
-    if resolved != root and root not in resolved.parents:
+    name = value.strip()
+    if not name or name in {".", ".."}:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a file name")
+    if name != Path(name).name:
         raise argparse.ArgumentTypeError(
-            f"{value!r} resolves outside the working directory ({root})"
+            f"{value!r} is a path; this argument takes a file name, and the file "
+            f"lives in {RESULTS_DIR}"
         )
-    return resolved
+    return RESULTS_DIR / name
 
 
 # Ordering for the table: the suite's own order, then anything unknown, sorted.
@@ -290,13 +304,29 @@ def render(report: dict, baseline: dict | None) -> tuple[str, list[tuple[str, st
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--runs", type=workspace_path, default="perf/results/runs.jsonl")
-    ap.add_argument("--out", type=workspace_path, default="perf/results/perf-report.md")
-    ap.add_argument("--json", type=workspace_path, default="perf/results/perf-report.json")
+    ap.add_argument(
+        "--runs",
+        type=results_file,
+        default="runs.jsonl",
+        help="the recorded runs, a file name in perf/results/",
+    )
+    ap.add_argument(
+        "--out",
+        type=results_file,
+        default="perf-report.md",
+        help="the markdown report to write, a file name in perf/results/",
+    )
+    ap.add_argument(
+        "--json",
+        type=results_file,
+        default="perf-report.json",
+        help="the JSON report to write, a file name in perf/results/",
+    )
     ap.add_argument(
         "--baseline",
-        type=workspace_path,
-        help="a previous perf-report.json to diff against (e.g. the last release's)",
+        type=results_file,
+        help="a previous perf-report.json to diff against (e.g. the last release's) — "
+        "a file name, placed in perf/results/ first",
     )
     ap.add_argument("--all", action="store_true", help="keep every row, not the latest per scenario")
     ap.add_argument(

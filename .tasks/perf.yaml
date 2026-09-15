@@ -88,7 +88,11 @@ tasks:
       - python3 perf/scripts/perf_report.py {{.CLI_ARGS}}
 
   perf:report:compare:
-    desc: "Diff the recorded runs against a previous release's perf-report.json — BASE=path (FAIL=1 to exit non-zero on a regression past MARGIN%)"
+    desc: "Diff the recorded runs against a previous release's perf-report.json — BASE=<file name in perf/results/> (FAIL=1 to exit non-zero on a regression past MARGIN%)"
+    # BASE is a *name*, not a path: `perf_report.py` reads and writes only
+    # perf/results/, so copy the release's perf-report.json in there first.
+    # `cp ~/Downloads/perf-report.json perf/results/v1.2.3.json` then
+    # `task perf:report:compare BASE=v1.2.3.json`.
     requires:
       vars: [BASE]
     cmds:

@@ -34,17 +34,18 @@ survive it.
 | 1 | `core/services/integrity.rs` — `sha1_hex` | SHA-1 | Mandated by Composer |
 | 2 | `core/services/integrity.rs` — `verify`, `StreamingVerifier` | SHA-1 | Verification, not emission |
 | 3 | `core/…/local_registry/eco_rubygems.rs` — `/versions` | MD5 | Mandated by the compact index |
-| 4 | `web/…/proxy/rubygems/range.rs` — ETag | MD5 | **Legacy clients only** |
+| ~~4~~ | ~~`web/…/proxy/rubygems/range.rs` — ETag~~ | ~~MD5~~ | **Removed** — the ETag is a SHA-256; see [§4](#etag-md5-removed) |
 | ~~5~~ | ~~`adapters/repo/deb.rs`~~ | ~~MD5, SHA-1~~ | **Removed** — optional in Debian |
 | ~~6~~ | ~~`adapters/repo/pacman.rs`~~ | ~~MD5~~ | **Removed** — gone from the format |
 | 7 | `adapters/repo/openpgp.rs` — fingerprint | SHA-1 | Immutable by definition |
 | 8 | `core/services/listing_synthesis.rs` — composed listings | SHA-1 | Mandated by the format being imitated |
 | 9 | `web/…/proxy/maven/proxy.rs` — `.md5`/`.sha1` sidecars | MD5, SHA-1 | The algorithm *is* the file extension |
 
-Entries 5 and 6 are struck through because the code no longer computes them.
-Entry 4 is bolded because it is a compatibility choice rather than a
-requirement, and is the one left worth revisiting. See
-[Rechecked](#rechecked-2026-08-31).
+Entries 4, 5 and 6 are struck through because the code no longer computes them.
+Entry 4 was the one the 2026-08-31 recheck left standing as "a compatibility
+choice rather than a requirement, and the one left worth revisiting"; it was
+revisited and removed on 2026-09-15. See [Rechecked](#rechecked-2026-08-31) and
+[§4](#etag-md5-removed).
 
 ## 1. Composer `dist.shasum`
 
@@ -90,23 +91,37 @@ Note that the `Repr-Digest` header BatleHub sends on the same documents is
 already SHA-256 — that is the modern, RFC 9530 digest, and it is the one the
 specification actually requires.
 
-## 4. The compact index ETag
+## 4. The compact index ETag — removed {#etag-md5-removed}
 
-`compact_response` sets the ETag to an MD5 of the document body, and
-`holds_our_prefix` re-derives the MD5 of a *prefix* to answer Bundler's
-resumable range requests.
+`compact_response` sets the `ETag` over the document body and `holds_our_prefix`
+re-derives it over a *prefix*, which is what makes Bundler's resumable range
+requests answerable: if the client's validator equals the digest of our first
+*N* bytes, its copy **is** our prefix and appending the tail is provably
+correct (RFC 0009 §13.24).
 
-The value has to be MD5 because Bundler computed it that way: older versions run
-`SharedHelpers.digest(:MD5).hexdigest(File.read(path))` over the local cached
-file and send it as `If-None-Match` alongside `bytes=<size - 1>-`. A server ETag
-in any other algorithm never matches, and the client refetches the whole file.
+That mechanism never needed MD5. **The etag is opaque to the client**, which
+reads it back out of its own etag file and quotes it — `bundler 4.0.17`,
+`compact_index_client/updater.rb`:
 
-**But [Bundler 2.7.0 removed MD5 digesting of compact index
-responses](https://bundler.io/changelog.html) (2025-07-16, a breaking change).**
-Current Bundler uses the SHA-256 `Repr-Digest`. So this MD5 now serves only
-Bundler older than 2.7, and the cost of changing it is a full refetch for those
-clients — degraded, not broken. It is a deliberate compatibility retention,
-which is a weaker claim than "the format requires it".
+```ruby
+etag = etag_path.read.tap(&:chomp!) if etag_path.file?
+headers["If-None-Match"] = %("#{etag}") if etag
+```
+
+The only reason it had been an MD5 is that Bundler **before 2.7** synthesised a
+validator itself when it had no stored etag — `SharedHelpers.digest(:MD5)
+.hexdigest(IO.read(path))` over its local file — so a server etag in any other
+algorithm never matched it. [Bundler 2.7.0 removed that digesting on
+2025-07-16](https://bundler.io/changelog.html) as a breaking change, and there
+is no trace of MD5 anywhere in 4.0.17's updater.
+
+So the etag is now a **SHA-256** of the document, and MD5 is gone from
+`range.rs` entirely. What a pre-2.7 client gets: its synthesised validator
+matches nothing, `holds_our_prefix` says no, and the answer is `200` with the
+whole document — exactly the behaviour it had before any of this existed.
+Degraded by one full transfer, never wrong: no client is handed a spliced
+document. That is the cost of dropping support for Bundler < 2.7, and it is
+paid by clients three major versions behind.
 
 ## 5. Debian `Packages` and `Release` — removed
 
@@ -194,6 +209,36 @@ was doing the work is still doing it.
 `.github/workflows/repo-interop.yaml` runs that end to end for real `apt`, `dnf`
 and `pacman` in containers, and it triggers on any change under
 `crates/adapters/src/repo/`.
+
+## Rechecked 2026-09-15 — is anything stronger available yet?
+
+The question this register exists to keep answerable: for each entry, has the
+upstream that mandates the weak algorithm published a stronger option since the
+last look? Checked against the upstreams themselves rather than from memory.
+**Nothing moved upstream.** No entry changes for that reason — and one of them
+was never waiting on an upstream, so it is gone (entry 4, below).
+
+| # | Entry | Upstream state on 2026-09-15 |
+| --- | --- | --- |
+| 1 | Composer `dist.shasum` | Still SHA-1 only. [composer#5940](https://github.com/composer/composer/issues/5940) is **open** (last activity 2025-01-22), and `src/Composer/Downloader/FileDownloader.php` on `main` still reads `getDistSha1Checksum()` and compares `hash_file('sha1', …)`. A `sha256` field would be ignored on the way in and fatal on the way out. |
+| 3 | RubyGems `/versions` info checksum | Still MD5. The reference implementation, `rubygems/compact_index` on `master`, computes `Digest::MD5.hexdigest(CompactIndex.info(...))`. The format names the algorithm; there is no second field. |
+| ~~4~~ | Compact index ETag | **Deleted the same day.** It was never an upstream question — Bundler ≥ 2.7 stopped digesting these responses in July 2025 — so the support floor moved past 2.6 and the etag is a SHA-256. See [§4](#etag-md5-removed). |
+| 7 | OpenPGP v4 fingerprint | Unchanged, and not a hash choice. The SHA-256 path exists — RFC 9580 defines **v6** keys whose fingerprint is a SHA-256 — but that is a different key version, so adopting it renames every key we publish and depends on `apt`, `rpm` and `pacman` verifiers accepting v6. It is a key-format migration with an interop gate, tracked separately from this register if it is ever taken. |
+| 9 | Maven `.md5`/`.sha1` sidecars | **Already additive.** `maven/proxy.rs` computes and serves `.sha256` and `.sha512` beside them; the weak pair survives only because a default-configured Maven resolver asks for those two file names. Nothing is gained by removing them except broken default clients. |
+
+The npm side deserves its own line, because it is the one place where the strong
+option won outright. `pacote` — the fetcher npm, and everything built on it,
+uses — reads `dist.integrity` first and falls back to `dist.shasum` only when it
+is absent (`lib/registry.js`: `dist.integrity ? ssri.parse(…) : dist.shasum ?
+ssri.fromHex(dist.shasum, 'sha1')`). This server never relies on the fallback:
+the synthesised packument in `listing_synthesis.rs` emits **`integrity` only**,
+a SHA-256 SRI, and the proxy path prefers whatever `integrity` the upstream
+advertised. The SHA-1 that remains anywhere near npm is in the fixtures — the
+mock upstream and the two heavy-suite upstream builders — and it is there on
+purpose: their job is to look like the registry npm actually talks to, and a
+real packument carries `dist.shasum`. A fixture that is stronger than the thing
+it imitates stops testing the fallback path a real upstream can still put us
+on.
 
 ## Beside the product code: the tests and the fixtures
 

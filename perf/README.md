@@ -498,8 +498,14 @@ hides it completely. The median is recorded beside it so a spike can be told fro
 
 ### Comparing two releases
 
+Copy the release's report into `perf/results/` first, and pass its **name**:
+every argument of `perf_report.py` is a file name in that one directory, so
+there is no path for a caller — or for whatever is driving the caller — to
+point somewhere else.
+
 ```bash
 # Against a previous release's report (downloaded from its GitHub release page)
+cp ~/Downloads/perf-report.json perf/results/perf-report-1.2.0.json
 task perf:report:compare BASE=perf-report-1.2.0.json
 
 # As a verdict rather than a diff — exits non-zero past the margin

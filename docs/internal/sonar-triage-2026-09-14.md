@@ -131,6 +131,13 @@ which is exactly why `stubServerPath` is pinned — then it is re-pinned on *tha
 claim, with the guard named in the comment. That is a different statement from
 this one, and it is the only form the pin should come back in.
 
+**It did, and it is.** The same analysis re-raised all five at their new line
+numbers, and raised the two rules on the other two scripts as well.
+[`sonar-triage-2026-09-15.md`](./sonar-triage-2026-09-15.md) records the
+re-pin: four criteria naming the guard, the probes that show it refuses an
+escape, and the reason the code fix stays even though the findings are
+suppressed.
+
 ---
 
 ## `new_coverage` 79.3% — three Python files in the heavy tree
