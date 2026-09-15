@@ -133,9 +133,31 @@ wrong direction:
 --out .                       → error: '.' is not a file name
 ```
 
-There is no tainted value left to reach `read_text` or `write_text`, so both
-rules are satisfied by the code rather than by a suppression — S2083's Blocker
-included. Output is byte-identical to the previous version on the same
+**That was not enough on its own, and the correction is worth recording.** The
+first version of this validator *compared* the argument against its own
+basename and then joined the **argument**:
+
+```python
+if name != Path(name).name: raise ...
+return RESULTS_DIR / name          # the tainted string, proven equal
+```
+
+The next analysis reported the same two rules at the same two sinks, moved down
+by the patch's own line count (L81→L95, L325→L355). A taint engine follows the
+value, not the proof: `name` still arrives from `argparse`, and a comparison
+against a sanitiser's output is not the sanitiser. It now returns what
+`os.path.basename` produced, and keeps the comparison for the behaviour it was
+always there for — refusing a path rather than silently rewriting it:
+
+```python
+base = os.path.basename(name)
+if base != name: raise ...
+return RESULTS_DIR / base
+```
+
+Whether that is the shape *this* analyser models is the next analysis's answer,
+not a claim to make here. If it still reports them, these two join the eight
+below: resolved per issue in the UI, with the rule left armed on the file. Output is byte-identical to the previous version on the same
 fixtures, the CI argument form (`--out perf-report.md --json perf-report.json`)
 was already name-shaped and is unchanged, and what moved is where the files
 land: `perf-report.md`/`.json` are written to `perf/results/` instead of the
@@ -144,17 +166,38 @@ reads the summary from there, and attaches those paths to the release;
 `task perf:report:compare BASE=` now takes a name, which is what
 `perf/README.md` already documented.
 
-**The other two keep the resolve-and-confine guard**, because the same
-treatment is not available to them: `record_run.py` and `soak_verdict.py` read
-the sampler's RSS, CPU, marks and metrics files out of a `mktemp -d` directory
-whose name is random by design, so the path has to be an argument and
-`measurement_path` (repository ∪ working directory ∪ temporary directory) is
-the strongest form the interface allows. Their eight S8707 findings stay
-**open**, to be resolved per issue in the SonarCloud UI — the only mechanism
-narrow enough to leave the rule armed for a future sink that skips the
-validator. Until then `new_security_rating` stays above A on this branch, and
-that is the honest reading: the guard is tested, the analyser cannot see it,
-and nothing in the repository claims otherwise.
+**The other two were going to keep the resolve-and-confine guard, and that was
+wrong too.** The argument written here first was that `record_run.py` and
+`soak_verdict.py` read the sampler's files out of a `mktemp -d` directory whose
+name is random by design, so the path *has* to be an argument. That is a
+property of the harness, not a law — and the harness is ours:
+
+* `soak.sh` now writes the six files the verdict reads into `perf/results/`
+  under fixed names (`soak-samples.csv`, `soak-marks.txt`, `soak-server.log`,
+  `soak-k6-steady.json`, `soak-metrics-steady-{start,end}.txt`), which is where
+  two of them were being *copied* at the end anyway for the artifact upload.
+  `soak_verdict.py` derives all eight paths — those six plus the report and the
+  chart — from its own location, and its `parse_args` is now three numbers:
+  `--k6-exit`, `--duration`, `--rate`. `$WORK` keeps what only the shell reads.
+* `run_with_metrics.sh` writes the RSS and CPU samples to
+  `perf/results/.<label>.rss` / `.cpu` instead of `mktemp /tmp/…`, and
+  `record_run.py` takes `--label` — validated as a plain name
+  (`[A-Za-z0-9._-]+`, so `a/b` and `../escape` are refused) — from which it
+  derives the two sample files, `<label>.k6.json` and `runs.jsonl`.
+  `PERF_RESULTS_DIR` is gone: a knob that moved the shell's directory and not
+  the recorder's would move only one of them.
+
+So the six findings on those two files are **fixed in code**, not resolved in
+the UI: there is no path argument left for either rule to follow. Verified by
+parity, on the real fixtures rather than synthetic ones — `soak_verdict.py`
+produces a byte-identical `soak.md` and `soak-chart.svg` against the
+2026-09-14 soak's samples, and `record_run.py` writes a byte-identical row
+apart from its timestamp.
+
+Two things fell out of it that are worth having on their own: the soak's server
+log and metrics dumps now land in `perf/results/`, so `soak.yaml`'s artifact
+upload carries them without a copy step, and a crashed run no longer leaves its
+evidence in a temp directory nobody looks in.
 
 A path built from a **request** remains a real finding under S2083 everywhere
 in this repository, and nothing here changes that.

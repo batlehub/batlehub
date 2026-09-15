@@ -15,11 +15,12 @@
 #   PERF_PROFILE   "release" (default)
 #   PERF_VERSION   overrides `git describe` in the row
 #   PERF_NOTE      free text carried into the report
-#   PERF_RESULTS_DIR  where runs.jsonl lands (default: perf/results)
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-RESULTS_DIR="${PERF_RESULTS_DIR:-$REPO_ROOT/perf/results}"
+# Fixed: `record_run.py` resolves the same directory from its own location, and
+# a knob that moved one of them would move only one.
+RESULTS_DIR="$REPO_ROOT/perf/results"
 RUNS_FILE="$RESULTS_DIR/runs.jsonl"
 
 # ── Arguments ─────────────────────────────────────────────────────────────────
@@ -59,22 +60,20 @@ K6_ARGS=(
 )
 
 record() {
-  local pid="$1" rss_file="$2" cpu_file="$3" exit_code="$4"
+  local pid="$1" exit_code="$2"
   if ! command -v python3 >/dev/null 2>&1; then
     echo "  [resource-monitor] python3 not found — not recording this run in $RUNS_FILE"
     return 0
   fi
+  # No paths: the label names the row *and* the four files, all of them in the
+  # one results directory the recorder resolves for itself.
   local args=(
     --label "$LABEL"
     --scenario "$SCENARIO"
-    --summary "$SUMMARY_JSON"
     --pid "$pid"
     --k6-exit "$exit_code"
     --started-at "$STARTED_AT"
-    --out "$RUNS_FILE"
   )
-  [[ -n "$rss_file" ]] && args+=(--rss-file "$rss_file")
-  [[ -n "$cpu_file" ]] && args+=(--cpu-file "$cpu_file")
   python3 "$REPO_ROOT/perf/scripts/record_run.py" "${args[@]}" || true
 }
 
@@ -106,8 +105,14 @@ if [[ -z "$PID" ]]; then
 fi
 
 CLK_TCK=$(getconf CLK_TCK 2>/dev/null || echo 100)
-RSS_FILE=$(mktemp /tmp/batlehub-rss.XXXXXX)
-CPU_FILE=$(mktemp /tmp/batlehub-cpu.XXXXXX)
+# Beside the run's other files rather than in /tmp, and named after the label:
+# `record_run.py` derives these two names from its own location and the label,
+# so nothing hands it a path (see its header). Still removed on exit — they are
+# the sampler's scratch, not a result.
+RSS_FILE="$RESULTS_DIR/.$LABEL.rss"
+CPU_FILE="$RESULTS_DIR/.$LABEL.cpu"
+: > "$RSS_FILE"
+: > "$CPU_FILE"
 trap 'rm -f "$RSS_FILE" "$CPU_FILE"' EXIT
 
 echo "  [resource-monitor] tracking PID $PID  CLK_TCK=$CLK_TCK"
@@ -202,6 +207,6 @@ awk_stats "$CPU_FILE" "CPU"        1     "%"
 
 echo "└────────────────────────────────────────────────────────────────────────────"
 
-record "$PID" "$RSS_FILE" "$CPU_FILE" "$K6_EXIT"
+record "$PID" "$K6_EXIT"
 
 exit $K6_EXIT

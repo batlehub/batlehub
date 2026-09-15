@@ -358,11 +358,29 @@ user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
 
 # ── pacman: the Arch mirror, driven by an unprivileged `pacman --root` ──────
+#
+# **Two mirrors, and the second one is not decoration.** An Arch mirror replaces
+# `<repo>.db` in place on every sync, and a client that asks during the swap
+# gets a `404` from the mirror itself. That is what took this phase down on
+# 2026-09-15: `extra.db` carried `last-modified: 19:14:58` and the request
+# failed at 19:15:37, while `core.db` — untouched since 11:43 that day — came
+# back `200` from the same host seconds earlier. BatleHub reported it faithfully
+# (`path_proxy` maps an upstream 404 to `NotFound`, and the phase saw a 404),
+# which is correct and indistinguishable from a bug in this server at a glance.
+#
+# With more than one upstream, `build_registry_client` wraps the clients in a
+# `FanoutRegistryClient`, whose `fetch_artifact` moves to the next upstream on
+# `NotFound` — so the second mirror answers the ten-second window in which the
+# first one is mid-sync. It is the one upstream flake this suite can remove
+# without pretending the world is closed when it is not.
 [[registries]]
 type = "pacman"
 name = "pacman-${HEAVY_RUN}"
 mode = "proxy"
-upstreams = ["https://geo.mirror.pkgbuild.com"]
+upstreams = [
+  "https://geo.mirror.pkgbuild.com",
+  "https://mirror.rackspace.com/archlinux",
+]
 
 [registries.rbac]
 anonymous = ["releases:read", "releases:list", "source:read"]

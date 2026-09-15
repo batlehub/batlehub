@@ -100,6 +100,14 @@ perf/results/soak.md
 perf/results/soak-samples.csv
 perf/results/soak-marks.txt
 perf/results/soak-chart.svg
+# Written by soak.sh where soak_verdict.py reads them (no path is passed between
+# the two), and by run_with_metrics.sh for record_run.py — results, not sources.
+perf/results/soak-server.log
+perf/results/soak-k6-*.json
+perf/results/soak-metrics-*.txt
+perf/results/*.k6.json
+perf/results/.*.rss
+perf/results/.*.cpu
 # The results table (`task perf:report`) is the same kind of thing: one machine,
 # one day. A release's copy lives on the release, not in the tree.
 perf/results/runs.jsonl

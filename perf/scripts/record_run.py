@@ -23,36 +23,37 @@ import argparse
 import json
 import os
 import platform
+import re
 import statistics
 import subprocess
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 
-def measurement_path(value: str) -> Path:
-    """Resolve a path given on the command line, or refuse it.
+# Where a run's files live, and the only place this script looks.
+#
+# `run_with_metrics.sh` writes them here under names derived from the run's
+# label, and this script derives the same names from its own location —
+# `perf/scripts/record_run.py` → `perf/results/`. No path is passed in: the
+# arguments are a label and a few numbers, none of which can name a file
+# outside this directory.
+RESULTS_DIR = Path(__file__).resolve().parents[1] / "results"
 
-    Everything this script reads or appends to belongs to one of three places:
-    the repository being measured (`perf/results/…`), whatever directory the
-    run was launched from, and the temporary directory the sampler writes its
-    RSS and CPU files into. A path that resolves outside all three is a mistake
-    or an injection, never a use — and resolving before comparing is what makes
-    one check cover `../../etc/x`, a symlink and an absolute path alike.
-    """
-    roots = [
-        Path(__file__).resolve().parents[2],  # the repository this script lives in
-        Path.cwd().resolve(),
-        Path(tempfile.gettempdir()).resolve(),
-    ]
-    candidate = Path(value).expanduser()
-    resolved = (candidate if candidate.is_absolute() else Path.cwd() / candidate).resolve()
-    if not any(resolved == root or root in resolved.parents for root in roots):
+# A label is a row name in the results table *and* half of four file names, so
+# it is checked as a name rather than trusted as one: letters, digits, dot,
+# dash, underscore. `02_warm_read`, `12_conda_zst_filtered` — the labels the
+# suite actually uses — pass; anything with a separator in it does not.
+LABEL_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def run_label(value: str) -> str:
+    """The run's label, refused unless it is a plain name."""
+    label = value.strip()
+    if not label or label in {".", ".."} or not LABEL_RE.match(label):
         raise argparse.ArgumentTypeError(
-            f"{value!r} resolves outside the repository, the working directory "
-            f"and {roots[2]}"
+            f"{value!r} is not a label: letters, digits, '.', '-' and '_' only"
         )
-    return resolved
+    return label
 
 
 def read_samples(path: Path) -> list[float]:
@@ -167,19 +168,24 @@ def host() -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--label", required=True, help="scenario label, e.g. 02_warm_read")
-    ap.add_argument("--scenario", default="", help="path of the k6 script that ran")
-    ap.add_argument("--rss-file", type=measurement_path, help="one RSS sample (kB) per line")
-    ap.add_argument("--cpu-file", type=measurement_path, help="one CPU sample (percent) per line")
-    ap.add_argument("--summary", type=measurement_path, help="k6 --summary-export JSON")
+    ap.add_argument(
+        "--label", required=True, type=run_label, help="scenario label, e.g. 02_warm_read"
+    )
+    ap.add_argument("--scenario", default="", help="the k6 script that ran, recorded in the row")
     ap.add_argument("--pid", type=int, default=0, help="the server PID that was sampled")
     ap.add_argument("--k6-exit", type=int, default=0)
     ap.add_argument("--started-at", default="", help="RFC 3339, from the caller")
-    ap.add_argument("--out", type=measurement_path, required=True, help="runs.jsonl to append to")
     args = ap.parse_args()
 
-    rss = read_samples(args.rss_file)
-    cpu = read_samples(args.cpu_file)
+    # Derived, not given: the sampler's two files, k6's summary and the table
+    # itself, all named after the label in the one results directory.
+    rss_file = RESULTS_DIR / f".{args.label}.rss"
+    cpu_file = RESULTS_DIR / f".{args.label}.cpu"
+    summary_file = RESULTS_DIR / f"{args.label}.k6.json"
+    out_file = RESULTS_DIR / "runs.jsonl"
+
+    rss = read_samples(rss_file)
+    cpu = read_samples(cpu_file)
 
     record = {
         "label": args.label,
@@ -201,14 +207,14 @@ def main() -> int:
         # kB in /proc/{pid}/status → MiB, the unit the box on the terminal uses.
         "rss_mib": stats(rss, 1024.0),
         "cpu_pct": stats(cpu),
-        "k6": k6_metrics(args.summary),
+        "k6": k6_metrics(summary_file),
     }
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    with args.out.open("a", encoding="utf-8") as fh:
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    with out_file.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(record, separators=(",", ":")) + "\n")
     peak = record["rss_mib"]["max"] if record["rss_mib"] else "?"
-    print(f"  [resource-monitor] recorded {args.label} (peak RSS {peak} MiB) → {args.out}")
+    print(f"  [resource-monitor] recorded {args.label} (peak RSS {peak} MiB) → {out_file}")
     return 0
 
 

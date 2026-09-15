@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os.path
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -59,12 +60,20 @@ def results_file(value: str) -> Path:
     name = value.strip()
     if not name or name in {".", ".."}:
         raise argparse.ArgumentTypeError(f"{value!r} is not a file name")
-    if name != Path(name).name:
+    # `basename` produces the value, and the comparison decides whether to use
+    # it. Both halves matter: taking the basename is what strips a directory,
+    # and refusing when it differs is what stops `../x.json` from quietly
+    # becoming `results/x.json` — a caller that passes a path is a caller to
+    # correct. The returned component is the basename's own output rather than
+    # the argument that equals it, which is the difference between a proof and
+    # a value for anything reading this after us, scanners included.
+    base = os.path.basename(name)
+    if base != name:
         raise argparse.ArgumentTypeError(
             f"{value!r} is a path; this argument takes a file name, and the file "
             f"lives in {RESULTS_DIR}"
         )
-    return RESULTS_DIR / name
+    return RESULTS_DIR / base
 
 
 # Ordering for the table: the suite's own order, then anything unknown, sorted.

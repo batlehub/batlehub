@@ -26,8 +26,11 @@
 #
 # Usage:
 #   bash perf/scripts/soak.sh [--duration 10m] [--rate 100] [--warmup 60]
-#                             [--settle 60] [--report perf/results/soak.md]
-#                             [--profile release|debug]
+#                             [--settle 60] [--profile release|debug]
+#
+# The report is always `perf/results/soak.md`, beside the samples, the chart and
+# the metrics dumps the verdict reads. There is no flag to move it: the verdict
+# script takes no path at all, by design.
 #
 # `--profile debug` exists to smoke-test *this script* — it skips a release
 # build that takes tens of minutes. The verdict it prints is about a binary
@@ -50,6 +53,8 @@ DURATION="10m"
 RATE="100"
 WARMUP="60"
 SETTLE="60"
+# Fixed, and known to `soak_verdict.py` by the same construction: the
+# directory comes from the script's own location, not from an argument.
 REPORT="perf/results/soak.md"
 PROFILE="release"
 UPSTREAM_DELAY_MS="${SOAK_UPSTREAM_DELAY_MS:-0}"
@@ -65,7 +70,6 @@ while [[ $# -gt 0 ]]; do
     --rate)     RATE="$2";     shift 2 ;;
     --warmup)   WARMUP="$2";   shift 2 ;;
     --settle)   SETTLE="$2";   shift 2 ;;
-    --report)   REPORT="$2";   shift 2 ;;
     --profile)  PROFILE="$2";  shift 2 ;;
     -h|--help)  sed -n '2,40p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -84,9 +88,22 @@ export BATLEHUB_SOAK_UPSTREAM_HOST="127.0.0.1"  # the host alone: the check excl
 BASE="http://127.0.0.1:$SOAK_PORT"
 
 WORK="$(mktemp -d)"
-SAMPLES="$WORK/samples.csv"
-MARKS="$WORK/marks.txt"
-SERVER_LOG="$WORK/server.log"
+# The files the verdict script reads live in `perf/results/`, not in `$WORK`,
+# and are named rather than passed: `soak_verdict.py` derives every one of them
+# from its own location, so no path crosses the process boundary (see its
+# header). `$WORK` keeps what only this script reads — build logs, the arms
+# transcript, the server's storage directory.
+#
+# They are also where they were always going to end up: this script used to copy
+# samples.csv and marks.txt into `perf/results/` at the end for the artifact
+# upload, which is `perf/results/` in `soak.yaml`. Writing them there from the
+# start deletes the copy and the window where a crashed run left them only in a
+# temp directory.
+RESULTS="perf/results"
+mkdir -p "$RESULTS"
+SAMPLES="$RESULTS/soak-samples.csv"
+MARKS="$RESULTS/soak-marks.txt"
+SERVER_LOG="$RESULTS/soak-server.log"
 UPSTREAM_LOG="$WORK/upstream.log"
 SERVER_PID=""
 SERVER_PROC=""
@@ -260,7 +277,7 @@ SAMPLER_PID=$!
 # the warm-up's traffic is not counted against the steady phase.
 scrape_metrics() {
   local name="$1"
-  curl -s --max-time 10 "$BASE/metrics" > "$WORK/metrics-$name.txt" || true
+  curl -s --max-time 10 "$BASE/metrics" > "$RESULTS/soak-metrics-$name.txt" || true
 }
 
 run_k6() {  # <phase> <duration>
@@ -270,7 +287,7 @@ run_k6() {  # <phase> <duration>
   BATLEHUB_SOAK_DURATION="$duration" \
   BATLEHUB_SOAK_RATE="$RATE" \
   BATLEHUB_SOAK_PHASE="$phase" \
-    k6 run --summary-export "$WORK/k6-$phase.json" perf/k6/scenarios/10_soak.js
+    k6 run --summary-export "$RESULTS/soak-k6-$phase.json" perf/k6/scenarios/10_soak.js
 }
 
 quiesce() {  # <seconds> — no load, so the next window measures what is *held*
@@ -304,23 +321,17 @@ wait "$SAMPLER_PID" 2>/dev/null || true
 SAMPLER_PID=""
 
 # ── The verdict ───────────────────────────────────────────────────────────────
-mkdir -p "$(dirname "$REPORT")"
-cp "$SAMPLES" "$(dirname "$REPORT")/soak-samples.csv"
-cp "$MARKS" "$(dirname "$REPORT")/soak-marks.txt"
-
+# No path is passed. Every file above was written into `perf/results/` under a
+# name `soak_verdict.py` knows, and it resolves that directory from its own
+# location — so the only arguments crossing are the three numbers that describe
+# the run. What that buys, beyond a shorter command: a path-shaped argument is
+# a path-shaped *injection*, and the way to be sure there is none is not to
+# take one.
 set +e
 python3 perf/scripts/soak_verdict.py \
-  --samples "$SAMPLES" \
-  --marks "$MARKS" \
-  --server-log "$SERVER_LOG" \
-  --k6-summary "$WORK/k6-steady.json" \
   --k6-exit "$K6_EXIT" \
-  --metrics-before "$WORK/metrics-steady-start.txt" \
-  --metrics-after "$WORK/metrics-steady-end.txt" \
   --duration "$DURATION" \
-  --rate "$RATE" \
-  --chart "$(dirname "$REPORT")/soak-chart.svg" \
-  --report "$REPORT"
+  --rate "$RATE"
 VERDICT=$?
 set -e
 

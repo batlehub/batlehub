@@ -39,34 +39,29 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-def measurement_path(value: str) -> Path:
-    """Resolve a path given on the command line, or refuse it.
+# Every file this script reads or writes, and the one place they live.
+#
+# `soak.sh` writes them here under these names, and this script resolves the
+# directory from its **own location** — `perf/scripts/soak_verdict.py` →
+# `perf/results/`. Nothing is passed in, which is the point: a path-shaped
+# argument is a path-shaped injection, and the way to be sure there is none is
+# not to take one. What crosses the process boundary is three numbers (the k6
+# exit code, the duration, the rate) and nothing that can name a file.
+#
+# It replaced a resolve-and-confine validator on seven path arguments. That
+# guard held — `--report /root/.ssh/authorized_keys` was refused — but it kept
+# a tainted value flowing into `open()`, which is a shape that survives only as
+# long as the next person keeps the guard (docs/internal/sonar-triage-2026-09-15.md).
+RESULTS_DIR = Path(__file__).resolve().parents[1] / "results"
 
-    Everything this script reads or writes belongs to one of three places: the
-    temporary directory `soak.sh` samples into (`mktemp -d` — the CSV, the
-    marks, the server log, the two metrics expositions), the repository the
-    report and the chart land in (`perf/results/soak.md`), and whatever
-    directory the run was launched from. A path that resolves outside all three
-    is a mistake or an injection, never a use — and resolving before comparing
-    is what makes one check cover `../../etc/x`, a symlink and an absolute path
-    alike.
-
-    The same validator guards `record_run.py`, for the same reason and with the
-    same roots.
-    """
-    roots = [
-        Path(__file__).resolve().parents[2],  # the repository this script lives in
-        Path.cwd().resolve(),
-        Path(tempfile.gettempdir()).resolve(),
-    ]
-    candidate = Path(value).expanduser()
-    resolved = (candidate if candidate.is_absolute() else Path.cwd() / candidate).resolve()
-    if not any(resolved == root or root in resolved.parents for root in roots):
-        raise argparse.ArgumentTypeError(
-            f"{value!r} resolves outside the repository, the working directory "
-            f"and {roots[2]}"
-        )
-    return resolved
+SAMPLES_FILE = RESULTS_DIR / "soak-samples.csv"
+MARKS_FILE = RESULTS_DIR / "soak-marks.txt"
+SERVER_LOG_FILE = RESULTS_DIR / "soak-server.log"
+K6_SUMMARY_FILE = RESULTS_DIR / "soak-k6-steady.json"
+METRICS_BEFORE_FILE = RESULTS_DIR / "soak-metrics-steady-start.txt"
+METRICS_AFTER_FILE = RESULTS_DIR / "soak-metrics-steady-end.txt"
+CHART_FILE = RESULTS_DIR / "soak-chart.svg"
+REPORT_FILE = RESULTS_DIR / "soak.md"
 
 
 # A window is measured over its last third rather than its whole span: the
@@ -757,27 +752,11 @@ def costs_section(costs: list[RegistryCost]) -> list[str]:
 
 
 def parse_args() -> argparse.Namespace:
-    """Every path in here is supplied by `perf/scripts/soak.sh`, the one caller.
-
-    They go through `measurement_path` all the same: one caller today is not a
-    boundary, and the check costs a resolve per argument.
-    """
+    """Three numbers describing the run. No file is named here — see `RESULTS_DIR`."""
     ap = argparse.ArgumentParser()
-    ap.add_argument("--samples", required=True, type=measurement_path)
-    ap.add_argument("--marks", required=True, type=measurement_path)
-    ap.add_argument("--server-log", type=measurement_path)
-    ap.add_argument("--k6-summary", type=measurement_path)
     ap.add_argument("--k6-exit", type=int, default=0)
-    ap.add_argument(
-        "--metrics-before", type=measurement_path, help="/metrics at the start of the load"
-    )
-    ap.add_argument(
-        "--metrics-after", type=measurement_path, help="/metrics at the end of the load"
-    )
-    ap.add_argument("--chart", type=measurement_path, help="where to write the SVG chart")
     ap.add_argument("--duration", default="?")
     ap.add_argument("--rate", default="?")
-    ap.add_argument("--report", required=True, type=measurement_path)
     return ap.parse_args()
 
 
@@ -860,11 +839,11 @@ def tail_lines(failed_rate: float | None, k6_exit: int, panics: list[str], ok: b
 def main() -> int:
     args = parse_args()
 
-    samples = read_samples(args.samples)
-    marks = read_marks(args.marks)
+    samples = read_samples(SAMPLES_FILE)
+    marks = read_marks(MARKS_FILE)
 
     if len(samples) < 2 * MIN_WINDOW_SAMPLES:
-        args.report.write_text(
+        REPORT_FILE.write_text(
             "<!-- soak-report -->\n## Soak — inconclusive\n\n"
             f"Only {len(samples)} samples were collected; the server process was "
             "not observable for long enough to say anything.\n"
@@ -889,8 +868,8 @@ def main() -> int:
     slope_judged = steady_seconds >= MIN_SLOPE_WINDOW_SECONDS
     slope_ok = slope is None or not slope_judged or slope <= slope_limit
 
-    panics = read_panics(args.server_log)
-    failed_rate, reqs = read_k6(args.k6_summary)
+    panics = read_panics(SERVER_LOG_FILE)
+    failed_rate, reqs = read_k6(K6_SUMMARY_FILE)
 
     exempt_rss_during_warmup(checks[0], slope_judged, steady_seconds)
 
@@ -903,16 +882,17 @@ def main() -> int:
 
     # ── What consumed what, over time ────────────────────────────────────────
     lines.extend(chart_section(samples))
-    lines.extend(svg_section(samples, marks, args.chart))
+    lines.extend(svg_section(samples, marks, CHART_FILE))
 
     # ── Which registry cost the most ─────────────────────────────────────────
-    costs = read_costs(args.metrics_before, args.metrics_after)
+    costs = read_costs(METRICS_BEFORE_FILE, METRICS_AFTER_FILE)
 
     lines.extend(costs_section(costs))
 
     lines.extend(tail_lines(failed_rate, args.k6_exit, panics, ok))
 
-    args.report.write_text("\n".join(lines) + "\n")
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    REPORT_FILE.write_text("\n".join(lines) + "\n")
     return 0 if ok else 1
 
 
