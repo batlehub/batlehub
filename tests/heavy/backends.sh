@@ -80,11 +80,19 @@ fetch() { curl -fsSL --proto '=https' --proto-redir '=https' "$@"; return $?; }
 # path under `dl.min.io/{server,client}/…`, so the local half of this suite
 # could not be started at all.
 #
-# The *client* is still MinIO's `mc` — RustFS ships no CLI of its own, and `mc`
-# is a plain S3 client: the four things this suite asks of it (alias, mb,
-# ls --recursive, cat) are S3 calls, verified against RustFS. From the project's
-# GitHub release for the same reason, pinned so an upstream release cannot
-# re-point a heavy suite.
+# The *client* is still MinIO's `mc`, and now deliberately rather than for want
+# of an alternative: RustFS does ship a CLI (`rustfs/cli`, the `rc` binary,
+# which `mise.toml` installs for the compose and perf bucket tasks), but `rc`
+# has no `--config-dir`. Its alias file is fixed at `~/.config/rc/config.toml`,
+# so a heavy run would write its throwaway credentials into the caller's own
+# config instead of into `$HEAVY_WORK`, and two runs at once would fight over
+# it. `mc` is a plain S3 client and the four things this suite asks of it
+# (alias, mb, ls --recursive, cat) are S3 calls, verified against RustFS. From
+# the project's GitHub release for the same reason `rustfs` is, pinned so an
+# upstream release cannot re-point a heavy suite.
+#
+# If that isolation arrives, `rc object list -r --json` is the migration: it
+# replaces the `awk '{print $NF}'` below with a parsed key list.
 RUSTFS_RELEASE="${HEAVY_RUSTFS_RELEASE:-1.0.0-rc.6}"
 MC_RELEASE="${HEAVY_MC_RELEASE:-RELEASE.2025-08-13T08-35-41Z}"
 

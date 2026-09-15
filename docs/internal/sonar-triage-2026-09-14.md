@@ -14,9 +14,13 @@ under two new criteria — one an instance of a case already in the register
 (npm's `dist.shasum`, which the format defines as SHA-1), one new
 (`pythonsecurity:S8707`, a rule whose premise does not hold for this script).
 
+> **Five of those six pins lasted one day.** The `pythonsecurity:S8707` pin was
+> lifted on 2026-09-15 and `soak_verdict.py` validates its paths in code
+> instead — see [the note at the end of that section](#s8707-superseded).
+
 | Rule | Count | Type | What changed |
 | --- | --- | --- | --- |
-| `pythonsecurity:S8707` | 5 | vulnerability | **pinned** — `soak_verdict.py`'s argparse paths are not an agent's input; it has one caller. |
+| `pythonsecurity:S8707` | 5 | vulnerability | **pinned** — `soak_verdict.py`'s argparse paths are not an agent's input; it has one caller. *(Lifted 2026-09-15: fixed in code instead — [see below](#s8707-superseded).)* |
 | `githubactions:S8233` | 1 | vulnerability | `pull-requests: write` moved from `soak.yaml`'s workflow level to the one job that comments. |
 | `rust:S4790` | 1 | vulnerability (critical) | **pinned** — `perf/mock-upstream` computes npm's `dist.shasum`. The *other* weak digest in that file was wrong for its format and is now SHA-256. |
 | `python:S3776` | 3 | code smell (critical) | `parse_prometheus`, `plot` and `main` split into named helpers; output byte-identical. |
@@ -95,6 +99,37 @@ are named by the harness; rooting them under a fixed directory would not
 sanitise an input, it would delete the interface. Pinned to the one file. A path
 built from a *request* is a real finding and a different rule
 (`pythonsecurity:S2083`), which stays on everywhere.
+
+#### Superseded, 2026-09-15 — the pin is gone and the paths are validated {#s8707-superseded}
+
+The next round of the same analysis raised S8707 again, on the two scripts
+added since: `perf/scripts/perf_report.py` (one at Blocker, two at High) and
+`perf/scripts/record_run.py` (one at High). Fixing those two made the second
+half of the argument above wrong, so it is retracted rather than re-applied.
+
+**There is a boundary, and it does not delete the interface.** Every path any
+of the three scripts is given resolves inside one of three known directories:
+the repository the run is measuring, the working directory it was launched
+from, and the temporary directory the samplers write into (`mktemp -d` for
+`soak.sh`, `mktemp` for `run_with_metrics.sh`). A `measurement_path` validator
+on the `type=` of each argument resolves the value — which collapses `..`,
+follows a symlink and normalises an absolute path in one step — and refuses
+anything outside those three roots. The contract survives intact: every real
+call site still passes, checked against `soak.sh`'s work directory plus a
+report under `perf/results/`, and `--report ~/.ssh/authorized_keys` is now a
+usage error. `perf_report.py` gets the same validator with the tighter root set
+its own arguments justify (the working directory alone).
+
+The first half of the argument still stands — the script is nobody's tool and
+has one caller — which is why this is a cheap check rather than an urgent fix.
+One caller today is not a boundary, and the check costs a resolve per argument.
+
+`soakVerdictPaths` is removed from `sonar-project.properties`. If the next
+analysis still reports the five — the Python analyzer may no more model
+`resolve()` + a containment test as a sanitiser than the JavaScript one does,
+which is exactly why `stubServerPath` is pinned — then it is re-pinned on *that*
+claim, with the guard named in the comment. That is a different statement from
+this one, and it is the only form the pin should come back in.
 
 ---
 

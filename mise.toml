@@ -6,7 +6,18 @@ helm = "latest"
 helm-docs = "1.14.2" # generates helm/batlehub/README.md; pinned so CI and local agree
 k6 = "latest"
 lazydocker = "latest"
-mc = "latest"
+# The S3 client, for `task compose:s3:bucket:create` and `task perf:s3:infra:up`.
+# RustFS's `rc` rather than MinIO's `mc`, because `mc` can no longer be
+# installed at all: `aqua:minio/mc` resolves to
+# `dl.min.io/client/mc/release/linux-amd64/…`, and that host answers **410
+# Gone** for every path under it — the same disappearance that moved the heavy
+# S3 suite off MinIO's *server* (tests/heavy/backends.sh). `rc` is a plain
+# S3 client (alias set, bucket create, object list, object show), so it drives
+# MinIO and RustFS alike.
+#
+# `exe` is required: the repository is `rustfs/cli` and the binary inside the
+# release tarball is `rc`, which is not a name mise can guess.
+"github:rustfs/cli" = { version = "latest", exe = "rc" }
 node = "24"
 rust = "latest"
 sonar-scanner-cli = "latest"
@@ -81,9 +92,6 @@ pnpm = "11" # package manager for ui/ and docs/ (settings in pnpm-workspace.yaml
 
 # # helm-bin (generic)
 # "regex:^https://get\\.helm\\.sh/(.+)" = "https://batlehub.example.com/proxy/helm-bin/generic/$1"
-
-# # minio-dl (generic)
-# "regex:^https://dl\\.min\\.io/(.+)" = "https://batlehub.example.com/proxy/minio-dl/generic/$1"
 
 # # node-dist (generic)
 # "regex:^https://nodejs\\.org/dist/(.+)" = "https://batlehub.example.com/proxy/node-dist/generic/$1"

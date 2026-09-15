@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/admin-storage-health.md
-sourceHash: 1e73922d0122b4bb
+sourceHash: b1436d339d039a6c
 ---
 
 # Stockage et santé
@@ -60,8 +60,8 @@ Démarrez RustFS par le fichier Compose fourni, puis créez le bucket :
 
 ```sh
 task compose:s3:db            # démarre RustFS + Postgres + Authentik
-mc alias set local http://localhost:9900 rustfsadmin rustfsadmin
-mc mb local/artifacts         # ou : task compose:s3:bucket:create
+rc alias set local http://localhost:9900 rustfsadmin rustfsadmin
+rc bucket create local/artifacts   # ou : task compose:s3:bucket:create
 task run:s3                   # lance le serveur avec la configuration S3
 ```
 

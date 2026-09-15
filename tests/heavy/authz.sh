@@ -1835,7 +1835,7 @@ EOF
 }
 
 phase_terraform() {
-  local terraform_version="${TERRAFORM_VERSION:-1.8.5}"
+  local terraform_version="${TERRAFORM_VERSION:-1.16.2}"
   heavy_runner_for terraform "terraform@$terraform_version"
   local tf=("${HEAVY_RUNNER[@]}" terraform)
 

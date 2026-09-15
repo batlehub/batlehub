@@ -34,8 +34,40 @@ import csv
 import json
 import os
 import statistics
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def measurement_path(value: str) -> Path:
+    """Resolve a path given on the command line, or refuse it.
+
+    Everything this script reads or writes belongs to one of three places: the
+    temporary directory `soak.sh` samples into (`mktemp -d` — the CSV, the
+    marks, the server log, the two metrics expositions), the repository the
+    report and the chart land in (`perf/results/soak.md`), and whatever
+    directory the run was launched from. A path that resolves outside all three
+    is a mistake or an injection, never a use — and resolving before comparing
+    is what makes one check cover `../../etc/x`, a symlink and an absolute path
+    alike.
+
+    The same validator guards `record_run.py`, for the same reason and with the
+    same roots.
+    """
+    roots = [
+        Path(__file__).resolve().parents[2],  # the repository this script lives in
+        Path.cwd().resolve(),
+        Path(tempfile.gettempdir()).resolve(),
+    ]
+    candidate = Path(value).expanduser()
+    resolved = (candidate if candidate.is_absolute() else Path.cwd() / candidate).resolve()
+    if not any(resolved == root or root in resolved.parents for root in roots):
+        raise argparse.ArgumentTypeError(
+            f"{value!r} resolves outside the repository, the working directory "
+            f"and {roots[2]}"
+        )
+    return resolved
+
 
 # A window is measured over its last third rather than its whole span: the
 # first part of a quiesce is the server still draining, which is the transient
@@ -725,19 +757,27 @@ def costs_section(costs: list[RegistryCost]) -> list[str]:
 
 
 def parse_args() -> argparse.Namespace:
-    """Every path in here is supplied by `perf/scripts/soak.sh`, the one caller."""
+    """Every path in here is supplied by `perf/scripts/soak.sh`, the one caller.
+
+    They go through `measurement_path` all the same: one caller today is not a
+    boundary, and the check costs a resolve per argument.
+    """
     ap = argparse.ArgumentParser()
-    ap.add_argument("--samples", required=True, type=Path)
-    ap.add_argument("--marks", required=True, type=Path)
-    ap.add_argument("--server-log", type=Path)
-    ap.add_argument("--k6-summary", type=Path)
+    ap.add_argument("--samples", required=True, type=measurement_path)
+    ap.add_argument("--marks", required=True, type=measurement_path)
+    ap.add_argument("--server-log", type=measurement_path)
+    ap.add_argument("--k6-summary", type=measurement_path)
     ap.add_argument("--k6-exit", type=int, default=0)
-    ap.add_argument("--metrics-before", type=Path, help="/metrics at the start of the load")
-    ap.add_argument("--metrics-after", type=Path, help="/metrics at the end of the load")
-    ap.add_argument("--chart", type=Path, help="where to write the SVG chart")
+    ap.add_argument(
+        "--metrics-before", type=measurement_path, help="/metrics at the start of the load"
+    )
+    ap.add_argument(
+        "--metrics-after", type=measurement_path, help="/metrics at the end of the load"
+    )
+    ap.add_argument("--chart", type=measurement_path, help="where to write the SVG chart")
     ap.add_argument("--duration", default="?")
     ap.add_argument("--rate", default="?")
-    ap.add_argument("--report", required=True, type=Path)
+    ap.add_argument("--report", required=True, type=measurement_path)
     return ap.parse_args()
 
 

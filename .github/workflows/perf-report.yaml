@@ -90,7 +90,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo build --release --locked -p batlehub-server
-          cargo build --release --manifest-path perf/mock-upstream/Cargo.toml
+          cargo build --release --locked --manifest-path perf/mock-upstream/Cargo.toml
 
       - name: Start the mock upstream and the server
         run: |

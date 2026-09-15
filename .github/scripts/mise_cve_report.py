@@ -64,15 +64,43 @@ def tool_of(target: str, root: str) -> str:
     return rest.split("/", 1)[0] or target
 
 
-def collect(report: dict, root: str, *, only_fixable: bool) -> tuple[dict, Counter]:
+def collect(
+    report: dict, root: str, *, only_fixable: bool, keep: set[str] | None = None
+) -> tuple[dict, Counter, Counter]:
+    """Per-tool findings, the severity totals, and what `keep` excluded.
+
+    `keep` is the set of install directories this repository asks for. A
+    finding is dropped only when it is attributable to an install directory
+    that is *not* in that set: a bare `Python` row that Trivy could not place
+    stays, because dropping what cannot be attributed would quietly shrink the
+    number. See `--only-tools`.
+    """
     per_tool: dict[str, list[dict]] = defaultdict(list)
     totals: Counter = Counter()
+    skipped: Counter = Counter()
+    root_path = Path(root) if root else None
     for result in report.get("Results") or []:
-        tool = tool_of(result.get("Target", "?"), root)
         for vuln in result.get("Vulnerabilities") or []:
             if only_fixable and not vuln.get("FixedVersion"):
                 continue
+            # `PkgPath` first: the language analysers name their target by
+            # ecosystem (`Node.js`, `Ruby`) and put the install it came from in
+            # the package path, so three node versions arrive as one row and
+            # the stale ones hide inside it.
+            tool = tool_of(vuln.get("PkgPath") or result.get("Target", "?"), root)
             severity = vuln.get("Severity", "UNKNOWN")
+            if (
+                keep is not None
+                and tool not in keep
+                and root_path is not None
+                and (root_path / tool).is_dir()
+            ):
+                # Counted in the same unit as the verdict — fixable HIGH and
+                # CRITICAL — so "excluded" plus "counted" adds up to what a
+                # machine-wide scan reports, and the narrowing is checkable.
+                if severity in BLOCKING:
+                    skipped[tool] += 1
+                continue
             totals[severity] += 1
             per_tool[tool].append(
                 {
@@ -84,7 +112,7 @@ def collect(report: dict, root: str, *, only_fixable: bool) -> tuple[dict, Count
                     "title": (vuln.get("Title") or "").strip(),
                 }
             )
-    return per_tool, totals
+    return per_tool, totals, skipped
 
 
 def worst(findings: list[dict]) -> str:
@@ -102,6 +130,7 @@ def render(
     only_fixable: bool,
     *,
     budget_recorded: bool,
+    skipped: Counter | None = None,
 ) -> str:
     blocking = sum(totals[s] for s in BLOCKING)
     lines: list[str] = []
@@ -129,6 +158,19 @@ def render(
         lines.append("")
         lines.append("*Only findings with a fixed version upstream are counted: the fix for every")
         lines.append("one of them is a version bump in `mise.toml`.*")
+    if skipped:
+        # Printed, not assumed: a narrowed scope that goes unmentioned is a
+        # number that looks like an improvement.
+        biggest = ", ".join(f"`{t}` ({n})" for t, n in skipped.most_common(4))
+        lines.append("")
+        lines.append(
+            f"*{sum(skipped.values())} fixable HIGH/CRITICAL in {len(skipped)} install "
+            f"director(ies) this "
+            f"repository does not ask for are **not** counted — {biggest}"
+            f"{', …' if len(skipped) > 4 else ''}. They belong to another project's "
+            "`mise.toml` or to the global config, and a clean CI runner never installs "
+            "them, which is what makes this number comparable with CI's.*"
+        )
     lines.append("")
 
     if per_tool:
@@ -193,10 +235,25 @@ def main() -> int:
         help="count findings with no fixed version (default: only fixable ones)",
     )
     ap.add_argument("--write-budget", action="store_true", help="record the current count as the budget")
+    ap.add_argument(
+        "--only-tools",
+        default="",
+        help="comma-separated install directories to count (e.g. from `mise ls --current --json` "
+        "with the global config excluded); anything else attributable to an install directory is "
+        "reported as excluded and left out of the number",
+    )
     args = ap.parse_args()
 
+    keep = {t.strip() for t in args.only_tools.split(",") if t.strip()} or None
     report = json.loads(args.trivy_json.read_text(encoding="utf-8"))
-    per_tool, totals = collect(report, args.root, only_fixable=not args.include_unfixed)
+    per_tool, totals, skipped = collect(
+        report, args.root, only_fixable=not args.include_unfixed, keep=keep
+    )
+    if skipped:
+        print(
+            f"scope: {sum(skipped.values())} fixable HIGH/CRITICAL in {len(skipped)} install "
+            "director(ies) outside this repository's mise.toml, not counted"
+        )
     blocking = sum(totals[s] for s in BLOCKING)
 
     budget = args.budget
@@ -236,6 +293,7 @@ def main() -> int:
         over,
         not args.include_unfixed,
         budget_recorded=budget_recorded,
+        skipped=skipped,
     )
     args.out.write_text(markdown, encoding="utf-8")
     print(markdown)

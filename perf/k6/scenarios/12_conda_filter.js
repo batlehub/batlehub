@@ -106,7 +106,7 @@ export default function conda_filter(data) {
   // not doing what its name says; every iteration would put k6's scan time
   // inside the server's measurement.
   if (ok && __ITER === 0 && ARM.doc === "repodata.json") {
-    const present = res.body.indexOf(BLOCKED_FILE) !== -1;
+    const present = res.body.includes(BLOCKED_FILE);
     check(res, {
       "arm filters what it claims to": () => present !== ARM.filtered,
     });

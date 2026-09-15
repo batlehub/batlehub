@@ -53,8 +53,8 @@ Start RustFS via the bundled Compose file, then create the bucket:
 
 ```sh
 task compose:s3:db            # start RustFS + Postgres + Authentik
-mc alias set local http://localhost:9900 rustfsadmin rustfsadmin
-mc mb local/artifacts         # or: task compose:s3:bucket:create
+rc alias set local http://localhost:9900 rustfsadmin rustfsadmin
+rc bucket create local/artifacts   # or: task compose:s3:bucket:create
 task run:s3                   # run the server with the S3 config
 ```
 

@@ -25,8 +25,34 @@ import os
 import platform
 import statistics
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def measurement_path(value: str) -> Path:
+    """Resolve a path given on the command line, or refuse it.
+
+    Everything this script reads or appends to belongs to one of three places:
+    the repository being measured (`perf/results/…`), whatever directory the
+    run was launched from, and the temporary directory the sampler writes its
+    RSS and CPU files into. A path that resolves outside all three is a mistake
+    or an injection, never a use — and resolving before comparing is what makes
+    one check cover `../../etc/x`, a symlink and an absolute path alike.
+    """
+    roots = [
+        Path(__file__).resolve().parents[2],  # the repository this script lives in
+        Path.cwd().resolve(),
+        Path(tempfile.gettempdir()).resolve(),
+    ]
+    candidate = Path(value).expanduser()
+    resolved = (candidate if candidate.is_absolute() else Path.cwd() / candidate).resolve()
+    if not any(resolved == root or root in resolved.parents for root in roots):
+        raise argparse.ArgumentTypeError(
+            f"{value!r} resolves outside the repository, the working directory "
+            f"and {roots[2]}"
+        )
+    return resolved
 
 
 def read_samples(path: Path) -> list[float]:
@@ -143,13 +169,13 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--label", required=True, help="scenario label, e.g. 02_warm_read")
     ap.add_argument("--scenario", default="", help="path of the k6 script that ran")
-    ap.add_argument("--rss-file", type=Path, help="one RSS sample (kB) per line")
-    ap.add_argument("--cpu-file", type=Path, help="one CPU sample (percent) per line")
-    ap.add_argument("--summary", type=Path, help="k6 --summary-export JSON")
+    ap.add_argument("--rss-file", type=measurement_path, help="one RSS sample (kB) per line")
+    ap.add_argument("--cpu-file", type=measurement_path, help="one CPU sample (percent) per line")
+    ap.add_argument("--summary", type=measurement_path, help="k6 --summary-export JSON")
     ap.add_argument("--pid", type=int, default=0, help="the server PID that was sampled")
     ap.add_argument("--k6-exit", type=int, default=0)
     ap.add_argument("--started-at", default="", help="RFC 3339, from the caller")
-    ap.add_argument("--out", type=Path, required=True, help="runs.jsonl to append to")
+    ap.add_argument("--out", type=measurement_path, required=True, help="runs.jsonl to append to")
     args = ap.parse_args()
 
     rss = read_samples(args.rss_file)

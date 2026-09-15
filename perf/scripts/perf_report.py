@@ -31,6 +31,28 @@ from pathlib import Path
 
 SCHEMA = "batlehub.perf-report/1"
 
+
+def workspace_path(value: str) -> Path:
+    """Resolve a path given on the command line, or refuse it.
+
+    Every path this script touches is a file of the working tree it is
+    reporting on — the recorded runs, the two report files, a baseline
+    downloaded beside them — so a path that resolves outside the working
+    directory is a mistake or an injection, never a use. Resolving first is
+    what makes one check cover `../../etc/x`, a symlink and an absolute path
+    alike, and returning the resolved path is what stops the caller from
+    re-deriving a different one.
+    """
+    root = Path.cwd().resolve()
+    candidate = Path(value).expanduser()
+    resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()
+    if resolved != root and root not in resolved.parents:
+        raise argparse.ArgumentTypeError(
+            f"{value!r} resolves outside the working directory ({root})"
+        )
+    return resolved
+
+
 # Ordering for the table: the suite's own order, then anything unknown, sorted.
 # A row is named by its `--label`, which defaults to the scenario's file name
 # without `.js` — so most of these are file names, and the conda ones are the
@@ -141,82 +163,105 @@ def comparable(a: dict, b: dict) -> str | None:
     return None
 
 
-def render(report: dict, baseline: dict | None) -> tuple[str, list[tuple[str, str, float]]]:
-    """Markdown, plus the list of regressions worth failing on."""
-    host = report.get("host") or {}
-    out: list[str] = []
-    regressions: list[tuple[str, str, float]] = []
+COLUMNS = [
+    "Scenario",
+    "req/s",
+    "p95 (ms)",
+    "p99 (ms)",
+    "errors",
+    "RSS max (MiB)",
+    "RSS med (MiB)",
+    "CPU max (%)",
+    "CPU med (%)",
+]
 
-    out.append(f"# Performance report — {report.get('version') or 'unreleased'}")
-    out.append("")
+
+def preamble(report: dict, baseline: dict | None) -> list[str]:
+    """The title, the line saying what was measured, and the baseline caveat."""
+    host = report.get("host") or {}
     dirty = " (working tree dirty)" if report.get("git_dirty") else ""
-    out.append(
+    out = [
+        f"# Performance report — {report.get('version') or 'unreleased'}",
+        "",
         f"`{(report.get('git_sha') or '?')[:12]}`{dirty} · {report.get('backend')} · "
         f"{report.get('profile')} profile · {host.get('cpus')} CPU · "
         f"{fmt(host.get('mem_total_mib'), 0)} MiB RAM · {host.get('machine')} · "
-        f"{report.get('generated_at')}"
-    )
-    out.append("")
-    if baseline:
-        why = comparable(report, baseline)
-        out.append(
-            f"Compared against **{baseline.get('version') or 'baseline'}** "
-            f"(`{(baseline.get('git_sha') or '?')[:12]}`)."
-        )
-        if why:
-            out.append("")
-            out.append(
-                f"> ⚠️ **Not a like-for-like comparison** — {why}. The deltas below are "
-                "printed because they are still the best available signal, but a number "
-                "that moved may be the machine and not the code."
-            )
-        out.append("")
-
-    header = [
-        "Scenario",
-        "req/s",
-        "p95 (ms)",
-        "p99 (ms)",
-        "errors",
-        "RSS max (MiB)",
-        "RSS med (MiB)",
-        "CPU max (%)",
-        "CPU med (%)",
+        f"{report.get('generated_at')}",
+        "",
     ]
-    if baseline:
-        header += ["Δ p95", "Δ RSS max"]
-    out.append("| " + " | ".join(header) + " |")
-    out.append("|" + "|".join(["---"] * len(header)) + "|")
+    if not baseline:
+        return out
+    out.append(
+        f"Compared against **{baseline.get('version') or 'baseline'}** "
+        f"(`{(baseline.get('git_sha') or '?')[:12]}`)."
+    )
+    why = comparable(report, baseline)
+    if why:
+        out.append("")
+        out.append(
+            f"> ⚠️ **Not a like-for-like comparison** — {why}. The deltas below are "
+            "printed because they are still the best available signal, but a number "
+            "that moved may be the machine and not the code."
+        )
+    out.append("")
+    return out
 
-    for label, s in report["scenarios"].items():
-        k6 = s.get("k6") or {}
-        rss = s.get("rss_mib") or {}
-        cpu = s.get("cpu_pct") or {}
-        row = [
-            f"`{label}`",
-            fmt(k6.get("rps")),
-            fmt(k6.get("p95_ms")),
-            fmt(k6.get("p99_ms")),
-            pct(k6.get("error_rate")),
-            fmt(rss.get("max")),
-            fmt(rss.get("median")),
-            fmt(cpu.get("max")),
-            fmt(cpu.get("median")),
-        ]
+
+def measured_cells(scenario: dict) -> list[str]:
+    """The nine columns every row has, baseline or not."""
+    k6 = scenario.get("k6") or {}
+    rss = scenario.get("rss_mib") or {}
+    cpu = scenario.get("cpu_pct") or {}
+    return [
+        fmt(k6.get("rps")),
+        fmt(k6.get("p95_ms")),
+        fmt(k6.get("p99_ms")),
+        pct(k6.get("error_rate")),
+        fmt(rss.get("max")),
+        fmt(rss.get("median")),
+        fmt(cpu.get("max")),
+        fmt(cpu.get("median")),
+    ]
+
+
+def delta_cells(
+    label: str, scenario: dict, old: dict
+) -> tuple[list[str], list[tuple[str, str, float]]]:
+    """The two Δ columns, and whichever of them moved the wrong way."""
+    k6, old_k6 = scenario.get("k6") or {}, old.get("k6") or {}
+    rss, old_rss = scenario.get("rss_mib") or {}, old.get("rss_mib") or {}
+    dp95, dp95_s = delta(k6.get("p95_ms"), old_k6.get("p95_ms"), lower_is_better=True)
+    drss, drss_s = delta(rss.get("max"), old_rss.get("max"), lower_is_better=True)
+    regressions = [
+        (label, what, d)
+        for what, d in (("p95", dp95), ("peak RSS", drss))
+        if d is not None and d > 0
+    ]
+    return [dp95_s, drss_s], regressions
+
+
+def table(report: dict, baseline: dict | None) -> tuple[list[str], list[tuple[str, str, float]]]:
+    """The table itself, and the regressions its Δ columns found."""
+    header = COLUMNS + (["Δ p95", "Δ RSS max"] if baseline else [])
+    out = [
+        "| " + " | ".join(header) + " |",
+        "|" + "|".join(["---"] * len(header)) + "|",
+    ]
+    regressions: list[tuple[str, str, float]] = []
+    for label, scenario in report["scenarios"].items():
+        row = [f"`{label}`", *measured_cells(scenario)]
         if baseline:
             old = (baseline.get("scenarios") or {}).get(label) or {}
-            old_k6 = old.get("k6") or {}
-            old_rss = old.get("rss_mib") or {}
-            dp95, dp95_s = delta(k6.get("p95_ms"), old_k6.get("p95_ms"), lower_is_better=True)
-            drss, drss_s = delta(rss.get("max"), old_rss.get("max"), lower_is_better=True)
-            row += [dp95_s, drss_s]
-            if dp95 is not None and dp95 > 0:
-                regressions.append((label, "p95", dp95))
-            if drss is not None and drss > 0:
-                regressions.append((label, "peak RSS", drss))
+            cells, found = delta_cells(label, scenario, old)
+            row += cells
+            regressions += found
         out.append("| " + " | ".join(row) + " |")
+    return out, regressions
 
-    out.append("")
+
+def footnotes(report: dict) -> list[str]:
+    """What the numbers above do and do not say."""
+    out = [""]
     failed = [l for l, s in report["scenarios"].items() if s.get("k6_exit") not in (0, None)]
     if failed:
         out.append(
@@ -233,17 +278,24 @@ def render(report: dict, baseline: dict | None) -> tuple[str, list[tuple[str, st
         "two k6 scenarios at once reports their combined cost.*"
     )
     out.append("")
+    return out
+
+
+def render(report: dict, baseline: dict | None) -> tuple[str, list[tuple[str, str, float]]]:
+    """Markdown, plus the list of regressions worth failing on."""
+    rows, regressions = table(report, baseline)
+    out = preamble(report, baseline) + rows + footnotes(report)
     return "\n".join(out), regressions
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--runs", type=Path, default=Path("perf/results/runs.jsonl"))
-    ap.add_argument("--out", type=Path, default=Path("perf/results/perf-report.md"))
-    ap.add_argument("--json", type=Path, default=Path("perf/results/perf-report.json"))
+    ap.add_argument("--runs", type=workspace_path, default="perf/results/runs.jsonl")
+    ap.add_argument("--out", type=workspace_path, default="perf/results/perf-report.md")
+    ap.add_argument("--json", type=workspace_path, default="perf/results/perf-report.json")
     ap.add_argument(
         "--baseline",
-        type=Path,
+        type=workspace_path,
         help="a previous perf-report.json to diff against (e.g. the last release's)",
     )
     ap.add_argument("--all", action="store_true", help="keep every row, not the latest per scenario")

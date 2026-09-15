@@ -256,18 +256,37 @@ gate, and a date with two homes has one that is wrong.
 `mise.toml` installs some forty tools, and until recently nothing looked at them. The one thing
 that appeared to — `mise.lock` in `vuln-scan.yaml` — reads **four** of them: that endpoint's
 lockfile parser understands the `cargo:` and PyPI backends and nothing else, so every tool that
-arrives as a GitHub release asset (trivy, syft, helm, k6, gitleaks, node, go, task, mc, …) came back
+arrives as a GitHub release asset (trivy, syft, helm, k6, gitleaks, node, go, task, rc, …) came back
 with no findings, which is indistinguishable from a clean scan.
 
 `mise-scan.yaml` runs `trivy rootfs` over the **installed** toolchain instead. That reads what a
 lockfile scan cannot: the Go module list is embedded in every Go binary, and the Node and Python
 trees are on disk as themselves. Measured on 2026-09-15 against a toolchain the lockfile scan
-reported clean: 854 findings, 461 of them fixable HIGH or CRITICAL.
+reported clean: 249 findings, **136** of them fixable HIGH or CRITICAL.
 
 ```bash
 task mise:cve            # the same scan and report, locally
 task mise:cve:budget     # record the current number as the budget CI checks against
 ```
+
+**The scan root is the machine's, the count is this repository's.** Trivy takes one directory and
+mise installs every tool into the same one, so a workstation's tree holds its owner's global tools
+and every other project's as well — the first measurement here was 461, of which 255 belonged to
+`~/.config/mise/config.toml` (`helm-ls`, `k9s`), to a sibling checkout (`etcd`,
+`kube-apiserver`) and to this repo's own `examples/terraform`. A CI runner installs `mise.toml` and
+nothing else, so the two numbers described different machines. `--only-tools` now narrows the
+*count* to the install directories this repository asks for
+(`.github/scripts/mise_repo_tools.sh` derives them, with the global config excluded), and the
+report prints what it left out rather than quietly shrinking. The workflow passes the same flag,
+where it is a no-op, so the local command and the gate are one command.
+
+Two things are worth knowing before reading the table as a to-do list. **Over half of the count is
+Go `stdlib`** — the Go release each binary was compiled with, which no pin in `mise.toml` changes;
+it moves when the upstream project rebuilds. And a `latest` tool that carries findings has **no fix
+to apply**: on 2026-09-15 every one of `helm-docs`, `gitleaks`, `lazydocker`, `syft`, `k6`, `task`,
+`trivy` and `node` was already the newest release upstream had published. What the number is good
+for is noticing a tool that stopped being maintained, or a new one that arrived carrying a pile —
+not a weekly bump ritual.
 
 It is a **budget**, not a zero, and that is a deliberate choice rather than leniency: none of this
 ships, a CVE in `k9s` reaches nothing this project publishes, and a gate that fails a pull request

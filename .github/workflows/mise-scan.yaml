@@ -107,9 +107,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # `--only-tools` is a no-op on a clean runner — mise-action installed
+          # this repo's lockfile and nothing else — and it is passed anyway so
+          # this step and `task mise:cve` are the same command. A runner image
+          # that starts shipping its own mise tools would otherwise move the
+          # number here and nowhere else.
           python3 .github/scripts/mise_cve_report.py \
             --trivy-json mise-trivy.json \
             --root "${MISE_INSTALLS}" \
+            --only-tools "$(bash .github/scripts/mise_repo_tools.sh)" \
             --out mise-cve-report.md \
             --json-out mise-cve-report.json
 

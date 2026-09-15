@@ -173,8 +173,8 @@ tasks:
     cmds:
       - podman compose -f perf/docker-compose.perf-s3.yml up -d perf-minio
       - until curl -sf http://localhost:9200/minio/health/live; do sleep 1; done
-      - mc alias set perf-minio http://localhost:9200 minioadmin minioadmin
-      - mc mb --ignore-existing perf-minio/perf-artifacts
+      - rc alias set perf-minio http://localhost:9200 minioadmin minioadmin
+      - rc bucket create --ignore-existing perf-minio/perf-artifacts
       - podman compose -f perf/docker-compose.perf-s3.yml up -d perf-redis
 
   perf:s3:infra:down:
