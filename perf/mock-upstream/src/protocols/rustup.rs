@@ -15,19 +15,44 @@ use actix_web::{route, web, HttpResponse};
 use crate::support::{artifact_bytes, delay};
 use crate::Args;
 
-/// The one dated directory this mock publishes, and the release in it.
+/// The dated directory this mock publishes, and how many releases live in it.
+///
+/// **Eight, because the soak's `rustup_component` arm walks eight.** That arm
+/// asks for `rust-std-1.9{0..7}.0-…` under this date, and a version that
+/// `manifests.txt` does not list has no dated directory to resolve to: the
+/// proxy answers `404`, and the load's own check — `status < 500` — passes it.
+/// Measured 2026-09-16 with `--out json`: **34 of that arm's 38 requests were
+/// 404s**, 1.13 % of the whole mix, and `perf-rustup` came out of the soak
+/// looking like the cheapest registry in the ranking because most of its
+/// requests were failing rather than because it was cheap.
+///
+/// So the two numbers have to agree: this one and `space` on the arm in
+/// `perf/k6/soak_arms.js`. The pre-flight cannot catch a disagreement — it asks
+/// each arm once, at the first point of its space, which is the one that works.
 const DATE: &str = "2024-01-01";
-const VERSION: &str = "1.90.0";
+const VERSION_COUNT: usize = 8;
 const RUSTUP_VERSION: &str = "1.28.0";
+
+/// `1.90.0` … `1.97.0` — the releases this mock publishes, in the order the
+/// dated directory lists them.
+fn versions() -> impl Iterator<Item = String> {
+    (0..VERSION_COUNT).map(|n| format!("1.9{n}.0"))
+}
 
 /// `GET /rustup/manifests.txt` — `{date}/channel-rust-{version}.toml` per line.
 #[route("/rustup/manifests.txt", method = "GET", method = "HEAD")]
 async fn manifests(args: web::Data<Args>) -> HttpResponse {
     delay(args.delay_ms).await;
-    HttpResponse::Ok().content_type("text/plain").body(format!(
-        "static.rust-lang.org/dist/{DATE}/channel-rust-{VERSION}.toml\n\
-         static.rust-lang.org/dist/{DATE}/channel-rust-stable.toml\n"
-    ))
+    let mut body = String::new();
+    for version in versions() {
+        body.push_str(&format!(
+            "static.rust-lang.org/dist/{DATE}/channel-rust-{version}.toml\n"
+        ));
+    }
+    body.push_str(&format!(
+        "static.rust-lang.org/dist/{DATE}/channel-rust-stable.toml\n"
+    ));
+    HttpResponse::Ok().content_type("text/plain").body(body)
 }
 
 /// `GET /rustup/dist/channel-rust-{channel}.toml` — the undated manifest.
@@ -91,11 +116,18 @@ async fn rustup_archive(
 }
 
 fn manifest_toml(channel: &str) -> String {
+    // A version channel names itself; a named one (`stable`) resolves to the
+    // newest release this mock has, which is what the real tree does.
+    let version = if versions().any(|v| v == channel) {
+        channel.to_owned()
+    } else {
+        versions().last().unwrap_or_else(|| "1.90.0".to_owned())
+    };
     format!(
         "manifest-version = '2'\n\
          date = '{DATE}'\n\n\
          [pkg.rust]\n\
-         version = '{VERSION} ({channel} {DATE})'\n"
+         version = '{version} ({channel} {DATE})'\n"
     )
 }
 

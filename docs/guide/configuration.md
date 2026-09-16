@@ -354,6 +354,38 @@ max_connections = 10    # default
 
 The `url` field can be overridden at runtime via `PROXY_CACHE__DATABASE__URL` without touching the config file.
 
+#### Sizing `max_connections`
+
+The default of **10 is small**, and what it costs is latency rather than throughput. Measured on the
+breaking-point matrix (scenario 14, S3 + Redis, the same build and the same load, only the pool size
+changed):
+
+| offered | pool 10 | pool 50 |
+| ---: | ---: | ---: |
+| 100 req/s — p95 | 144 ms | **19 ms** |
+| 200 req/s — p95 | 362 ms | **32 ms** |
+| 200 req/s — p98 | 528 ms | **43 ms** |
+
+**The rate at which the server gave out did not move** — both sizes broke at the same offered rate,
+on a harness whose own ceiling was lower. So a bigger pool does not buy throughput here; it stops
+requests queueing for a connection, which is most of the tail latency at any rate a real instance
+would see.
+
+It is not free, and the cost lands on the database host rather than on this one: PostgreSQL forks a
+backend process per connection, and the same run measured its resident memory at **~490 MiB with a
+pool of 10 and ~2 GiB with a pool of 50**. Budget for it where Postgres runs.
+
+Three things to hold when you pick a number:
+
+- **The pool is per instance.** `replicas × max_connections` is what reaches PostgreSQL, and its own
+  `max_connections` defaults to 100 — three replicas at 50 exhaust it, and the failure is a refused
+  connection at startup, not a slow query.
+- **Idle connections are recycled.** sqlx retires a connection 30 minutes after it was opened
+  (`max_lifetime`), which is also why a pool that has been busy releases memory on its own.
+- **Size it against concurrency, not traffic.** The pool caps requests *in flight* that need the
+  database, not requests per second; a workload that misses cache more often needs more of it at the
+  same rate.
+
 ---
 
 ### 3.2a `[cache]`

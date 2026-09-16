@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: ae819798f666af5e
+sourceHash: bf872feec00c218d
 ---
 
 # Référence de configuration
@@ -403,6 +403,42 @@ max_connections = 10    # défaut
 
 Le champ `url` se remplace à l'exécution par
 `PROXY_CACHE__DATABASE__URL`, sans toucher au fichier de configuration.
+
+#### Dimensionner `max_connections`
+
+La valeur par défaut, **10, est petite**, et ce qu'elle coûte est de la latence
+plutôt que du débit. Mesuré sur la matrice du test de rupture (scénario 14,
+S3 + Redis, même build et même charge, seule la taille du pool change) :
+
+| débit offert | pool 10 | pool 50 |
+| ---: | ---: | ---: |
+| 100 req/s — p95 | 144 ms | **19 ms** |
+| 200 req/s — p95 | 362 ms | **32 ms** |
+| 200 req/s — p98 | 528 ms | **43 ms** |
+
+**Le débit auquel le serveur cède n'a pas bougé** : les deux tailles cassent au
+même endroit, sur un harnais dont le plafond propre était plus bas. Un pool plus
+grand n'achète donc pas du débit ici ; il évite aux requêtes de faire la queue
+pour une connexion, ce qui représente l'essentiel de la latence de queue à tout
+débit qu'une instance réelle rencontrera.
+
+Ce n'est pas gratuit, et la facture arrive sur l'hôte de la base et non sur
+celui-ci : PostgreSQL forke un processus par connexion, et la même exécution a
+mesuré sa mémoire résidente à **~490 MiB avec un pool de 10 et ~2 GiB avec un
+pool de 50**. Prévoyez-la là où tourne Postgres.
+
+Trois points à garder en tête pour choisir :
+
+- **Le pool est par instance.** Ce qui atteint PostgreSQL vaut
+  `réplicas × max_connections`, et son propre `max_connections` vaut 100 par
+  défaut — trois réplicas à 50 l'épuisent, et l'échec est un refus de connexion
+  au démarrage, pas une requête lente.
+- **Les connexions inactives sont recyclées.** sqlx retire une connexion trente
+  minutes après son ouverture (`max_lifetime`), ce qui explique aussi qu'un pool
+  qui a travaillé rende sa mémoire de lui-même.
+- **Dimensionnez sur la concurrence, pas sur le trafic.** Le pool plafonne les
+  requêtes *en vol* qui ont besoin de la base, pas les requêtes par seconde ;
+  une charge qui manque plus souvent le cache en demande davantage au même débit.
 
 ---
 

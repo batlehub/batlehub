@@ -113,13 +113,17 @@ def main() -> None:
             out.append("")
             if starved and not saturated:
                 out.append(
-                    "> **The knee is the database pool, not this server's compute.** At the breaking "
-                    "rate " + " and ".join(bits) + ". A pool with a tenth or less of it free is a queue in "
-                    "front of every request that needs the database, and the rate it caps is "
-                    "`connections / mean query time` — raise `max_connections` and the knee moves. "
-                    "`config.soak.toml` sizes the pool at 10 **on purpose**, small enough that a "
-                    "leaked connection shows up inside one run, so a throughput number measured "
-                    "against it is a number about that pool."
+                    "> **The database pool was saturated at the knee, and this server's compute was "
+                    "not.** At the breaking rate " + " and ".join(bits) + ". A pool with a tenth or "
+                    "less of it free is a queue in front of every request that needs the database — "
+                    "but *a* queue is not necessarily *the* ceiling, and one run cannot tell the two "
+                    "apart: a pool runs out both when it caps the rate and when everything behind it "
+                    "has become slow. **Raise `max_connections` and re-run.** If the knee moves, the "
+                    "pool was the ceiling; if it does not, the pool was costing latency rather than "
+                    "throughput — which is worth knowing on its own, and is what the matrix's "
+                    "50-connection arm exists to measure. `config.soak.toml` sizes the pool at 10 "
+                    "**on purpose**, small enough that a leaked connection shows up inside one soak, "
+                    "so neither number here is a recommendation for a deployment."
                 )
             elif saturated:
                 out.append(

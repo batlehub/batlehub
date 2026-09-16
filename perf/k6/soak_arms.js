@@ -523,6 +523,10 @@ export const ARMS = [
     registry: RUSTUP_REGISTRY,
     weight: 2,
     expect: [200],
+    // Eight, and `perf/mock-upstream/src/protocols/rustup.rs` publishes eight —
+    // a version the mock does not list in `manifests.txt` resolves to no dated
+    // directory and answers 404, which `status < 500` passes. Change one and
+    // change the other.
     space: 8,
     doc: "a dated dist component",
     request: (n) => ({
