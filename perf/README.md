@@ -501,8 +501,8 @@ task perf:break BUDGET=600 STEP=30 START_RATE=200            # a shorter escalat
 The report is `perf/results/breaking-point-<label>.md`, with the per-second `/proc` samples beside
 it and the same numbers as JSON for diffing two backends.
 
-**The matrix belongs to CI.** `.github/workflows/breaking-point.yaml` runs four backends in parallel
-— filesystem or S3, in-memory or Redis — each with its own 20-minute budget, and comments one table
+**The matrix belongs to CI.** `.github/workflows/breaking-point.yaml` runs five arms in parallel
+— filesystem or S3, in-memory or Redis, plus one repeat of `s3-redis` with a 50-connection pool — each with its own 20-minute budget, and comments one table
 per backend on the pull request. Nothing schedules it: add the `breaking-point` label to a pull
 request, or dispatch it once the workflow is on the default branch. Locally the S3 and Redis arms
 need RustFS and Redis (`task perf:s3:infra:up`, which wants Podman); the filesystem arms need nothing
@@ -515,7 +515,44 @@ the same convention `record_run.py` uses for the results table.
 machine here, so the load generator competes with the thing it is measuring and the absolute number
 moves with the runner: a knee at 400 req/s on an eight-core box says nothing about what a deployed
 instance serves on its own hardware. What it *does* say is which backend gives out first, and by how
-much — which is why the four arms run the same escalation with the same budget on the same runner size.
+much — which is why the arms run the same escalation with the same budget on the same runner size.
+
+**The report says where the queue was**, because the first CI run of this test did not and the number
+was read as a capacity. All four backends broke at 400 req/s with the server at **58–67 % of one
+core** on a four-core runner — four different storage and cache combinations giving the same answer
+is the shape of a limit none of them own. So every step now records the database pool alongside RSS
+and CPU (`pool free` is the fewest connections available at any sample of that step), and the verdict
+names the ceiling it can see:
+
+| what the breaking step shows | what the report says |
+| --- | --- |
+| pool reached 0 free, CPU below saturation | the knee is the **database pool** — the rate it caps is `connections / mean query time` |
+| CPU at 80 % of the runner's cores or more | the knee is **this server's compute**, which is what the test is for |
+| neither exhausted | the knee is **somewhere else**, and the first suspect is this harness sharing a machine |
+
+The same capture records **what the backends cost beside it** — Postgres, Redis and RustFS resident
+memory, summed per process name once a second and reported **per rate**, beside the server's own RSS.
+Per rate and not once at the knee, because they move with what the server absorbs: Postgres grows
+with the connections in flight and the work they carry, the object store with the bytes it serves,
+Redis with what it is asked to hold. The shape across rates is the point — a backend whose memory
+climbs faster than the server's is where the next ceiling will be, and a server that looks cheap
+because the object store or the database is doing the work has moved the cost, not saved it. Two limits,
+and the report says *empty* rather than zero for both: a backend in its own **PID namespace** is
+invisible to `ps` (a Kubernetes sidecar, which is how a Che workspace supplies Postgres — so these
+columns stay blank there and are filled in CI and under a local Podman compose), and a second
+`postgres` on the same host would be summed in with the one under test.
+
+That middle case is the only one that measures the server. `config.soak.toml` sizes the pool at **10
+on purpose** — small enough that a leaked connection shows up inside a single soak — so a throughput
+number measured against it is a number about that pool. The `s3-redis-pool50` arm exists to settle
+it: the same backend as `s3-redis` with `PROXY_CACHE__DATABASE__MAX_CONNECTIONS=50` and nothing else
+changed. If its knee moves, the other four measured the pool.
+
+Locally, pass the same override:
+
+```bash
+PROXY_CACHE__DATABASE__MAX_CONNECTIONS=50 task perf:break LABEL=fs-memory-pool50
+```
 
 ---
 

@@ -34,12 +34,21 @@ def field(metrics: dict, metric: str, key: str):
     return values.get(key) if isinstance(values, dict) else None
 
 
-def window(path: Path, lo: int, hi: int) -> tuple[float | None, float | None, float | None, float | None]:
-    """Peak and median RSS (MiB) and CPU (%) between two epochs."""
+def window(path: Path, lo: int, hi: int) -> dict:
+    """What the sampler saw between two epochs.
+
+    The pool is here for the same reason as RSS and CPU: a step that fails on
+    "never placed" has a queue somewhere, and the three of them together say
+    where. A server at half a core with no free connection is a pool ceiling; a
+    server at four cores with the pool idle is a compute ceiling.
+    """
     rss: list[float] = []
     cpu: list[float] = []
+    avail: list[float] = []
+    size: list[float] = []
+    side: dict[str, list[float]] = {"pg": [], "redis": [], "s3": []}
     if not path.exists():
-        return (None, None, None, None)
+        return {}
     for row in csv.DictReader(path.open()):
         try:
             t = int(row["epoch_s"])
@@ -51,12 +60,28 @@ def window(path: Path, lo: int, hi: int) -> tuple[float | None, float | None, fl
             rss.append(float(row["rss_kb"]) / 1024)
         if row.get("cpu_pct"):
             cpu.append(float(row["cpu_pct"]))
-    return (
-        max(rss) if rss else None,
-        statistics.median(rss) if rss else None,
-        max(cpu) if cpu else None,
-        statistics.median(cpu) if cpu else None,
-    )
+        if row.get("pool_avail"):
+            avail.append(float(row["pool_avail"]))
+        if row.get("pool_size"):
+            size.append(float(row["pool_size"]))
+        for key, col in (("pg", "pg_rss_kb"), ("redis", "redis_rss_kb"), ("s3", "s3_rss_kb")):
+            if row.get(col):
+                side[key].append(float(row[col]) / 1024)
+    return {
+        "rss_peak": max(rss) if rss else None,
+        "rss_med": statistics.median(rss) if rss else None,
+        "cpu_peak": max(cpu) if cpu else None,
+        "cpu_med": statistics.median(cpu) if cpu else None,
+        # The *minimum* free, not the median: a pool that touched zero was a
+        # queue, even for a second, and the median would hide it.
+        "pool_free_min": min(avail) if avail else None,
+        "pool_size": max(size) if size else None,
+        # Peak, like the server's own RSS, and `None` when the backend was not
+        # visible from this machine rather than 0.
+        "pg_rss_peak": max(side["pg"]) if side["pg"] else None,
+        "redis_rss_peak": max(side["redis"]) if side["redis"] else None,
+        "s3_rss_peak": max(side["s3"]) if side["s3"] else None,
+    }
 
 
 def main() -> None:
@@ -100,7 +125,9 @@ def main() -> None:
         v = field(metrics, "http_req_duration", key)
         return round(v, 2) if isinstance(v, (int, float)) else None
 
-    rss_peak, rss_med, cpu_peak, cpu_med = window(args.samples, args.lo, args.hi)
+    w = window(args.samples, args.lo, args.hi)
+    rss_peak, rss_med = w.get("rss_peak"), w.get("rss_med")
+    cpu_peak, cpu_med = w.get("cpu_peak"), w.get("cpu_med")
     row = {
         "rate": args.rate,
         "achieved_rps": round(achieved, 1) if isinstance(achieved, (int, float)) else None,
@@ -116,6 +143,11 @@ def main() -> None:
         "rss_med_mib": round(rss_med, 1) if rss_med else None,
         "cpu_peak_pct": round(cpu_peak, 1) if cpu_peak else None,
         "cpu_med_pct": round(cpu_med, 1) if cpu_med else None,
+        "pool_free_min": w.get("pool_free_min"),
+        "pool_size": w.get("pool_size"),
+        "pg_rss_peak_mib": round(w["pg_rss_peak"], 1) if w.get("pg_rss_peak") else None,
+        "redis_rss_peak_mib": round(w["redis_rss_peak"], 1) if w.get("redis_rss_peak") else None,
+        "s3_rss_peak_mib": round(w["s3_rss_peak"], 1) if w.get("s3_rss_peak") else None,
         "died": bool(args.died),
     }
 
@@ -141,7 +173,8 @@ def main() -> None:
         print(
             f"OK — offered {args.rate}, served {row['achieved_rps']}/s, "
             f"p95 {row['p95_ms']} ms, p98 {row['p98_ms']} ms, {row['error_pct']}% errors, "
-            f"RSS {row['rss_peak_mib']} MiB, CPU {row['cpu_peak_pct']}%"
+            f"RSS {row['rss_peak_mib']} MiB, CPU {row['cpu_peak_pct']}%, "
+            f"pool {row['pool_free_min']}/{row['pool_size']} free at its tightest"
         )
 
 

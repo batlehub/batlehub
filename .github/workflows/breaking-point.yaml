@@ -68,6 +68,20 @@ jobs:
             s3: true
             cache_type: redis
             cache_url: redis://localhost:6380
+          # The same backend as the arm above with one thing changed: the
+          # database pool. `config.soak.toml` sizes it at 10 on purpose — small
+          # enough that a leaked connection shows up inside a single soak — and
+          # the first run of this test broke at 400 req/s on all four arms with
+          # the server at 58-67% of one core, which is the signature of a pool
+          # ceiling rather than a server one. Ten connections at 400 req/s is 40
+          # queries a second each, or 25 ms apiece: the arithmetic fits. This arm
+          # is the control that settles it — if the knee moves, the other four
+          # measured the pool.
+          - label: s3-redis-pool50
+            s3: true
+            cache_type: redis
+            cache_url: redis://localhost:6380
+            db_pool: "50"
     services:
       postgres:
         image: postgres:17-alpine
@@ -145,6 +159,9 @@ jobs:
           fi
           if [ -n "${{ matrix.cache_url }}" ]; then
             echo "PROXY_CACHE__CACHE__URL=${{ matrix.cache_url }}" >> "$GITHUB_ENV"
+          fi
+          if [ -n "${{ matrix.db_pool }}" ]; then
+            echo "PROXY_CACHE__DATABASE__MAX_CONNECTIONS=${{ matrix.db_pool }}" >> "$GITHUB_ENV"
           fi
           if [ "${{ matrix.s3 }}" = "true" ]; then
             {

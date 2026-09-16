@@ -124,7 +124,7 @@ log "Healthy at $BASE (measuring pid $SERVER_PROC)"
 # CPU% from /proc deltas against /proc/uptime, not from `date +%s%3N`: that is a
 # GNU extension this image does not honour — it prints nanoseconds, and every
 # interval came out a million times too long (the bug `record_run.py` fixed).
-echo "epoch_s,rss_kb,cpu_pct,threads,fds" > "$SAMPLES"
+echo "epoch_s,rss_kb,cpu_pct,threads,fds,pool_size,pool_avail,pg_rss_kb,redis_rss_kb,s3_rss_kb" > "$SAMPLES"
 (
   TICKS=$(getconf CLK_TCK)
   prev_cpu=""; prev_up=""
@@ -140,7 +140,32 @@ echo "epoch_s,rss_kb,cpu_pct,threads,fds" > "$SAMPLES"
     rss="$(awk '/^VmRSS:/{print $2; exit}' "/proc/$SERVER_PROC/status" 2>/dev/null)"
     threads="$(awk '/^Threads:/{print $2; exit}' "/proc/$SERVER_PROC/status" 2>/dev/null)"
     fds="$(ls "/proc/$SERVER_PROC/fd" 2>/dev/null | wc -l)"
-    [[ -n "$rss" ]] && echo "$(date +%s),$rss,$pct,$threads,$fds" >> "$SAMPLES"
+    # The pool, because the first run of this test could not say whether the
+    # knee was the server's: four backends broke at the same rate with the
+    # server at 58-67% of one core, and the one number that would have settled
+    # it — how many connections were free — was not being recorded. One scrape
+    # a second, the same cadence and the same argument as `soak.sh`'s sampler.
+    pool="$(curl -s --max-time 2 "$BASE/metrics" 2>/dev/null \
+      | awk '/^batlehub_db_pool_size/{s=$2}
+             /^batlehub_db_pool_available_connections/{a=$2}
+             END{printf "%s,%s", (s==""?"":s), (a==""?"":a)}')"
+    # What the backends themselves cost, which is half of any comparison between
+    # them: a server that looks cheap because Postgres or the object store is
+    # doing the work has not saved anything, it has moved it. Summed by process
+    # name over the whole host, which is what makes this portable — CI's service
+    # containers and a local Podman compose both put their processes in the same
+    # `/proc`, and one `ps` is cheaper than resolving container ids.
+    #
+    # Two things it cannot do, and an empty column says so rather than zero: a
+    # backend in a *separate PID namespace* is invisible (a Kubernetes sidecar,
+    # which is how a Che workspace supplies Postgres), and a second `postgres`
+    # on the same host would be summed in with the one under test.
+    sidecars="$(ps -eo comm=,rss= 2>/dev/null | awk '
+      $1 == "postgres"     { pg += $2 }
+      $1 == "redis-server" { rd += $2 }
+      $1 == "rustfs"       { s3 += $2 }
+      END { printf "%s,%s,%s", (pg?pg:""), (rd?rd:""), (s3?s3:"") }')"
+    [[ -n "$rss" ]] && echo "$(date +%s),$rss,$pct,$threads,$fds,${pool:-,},${sidecars:-,,}" >> "$SAMPLES"
     prev_cpu="$cpu"; prev_up="$up"
     sleep 1
   done
@@ -211,7 +236,8 @@ alive=1; kill -0 "$SERVER_PROC" 2>/dev/null || alive=0
 python3 perf/scripts/breaking_point_report.py \
   --label "$LABEL" --config "$CONFIG" --rows "$ROWS" --report "$REPORT" \
   --broke-at "${broke_at:-}" --reason "${break_reason:-}" \
-  --panics "$panics" --alive "$alive" --budget "$BUDGET" --step "$STEP" --factor "$FACTOR"
+  --panics "$panics" --alive "$alive" --budget "$BUDGET" --step "$STEP" --factor "$FACTOR" \
+  --cpus "$(nproc)" --pool-max "${PROXY_CACHE__DATABASE__MAX_CONNECTIONS:-}"
 
 log "Report: $REPORT   Samples: $SAMPLES"
 if (( panics > 0 )) || (( alive == 0 )); then

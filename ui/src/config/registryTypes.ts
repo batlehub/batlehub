@@ -1925,13 +1925,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
         label: "mise url_replacements",
         lang: "toml",
         template: (ctx) => {
-          const mirrors = [
-            "node-dist",
-            "rust-dist",
-            "go-dl",
-            "helm-bin",
-            "sonar-binaries",
-          ];
+          const mirrors = ["node-dist", "rust-dist", "go-dl", "helm-bin", "sonar-binaries"];
           const p = (name: string) => `${ctx.urlFor(name)}/generic`;
           const lines: string[] = [];
           if (ctx.isAuthenticated) {
