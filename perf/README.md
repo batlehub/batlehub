@@ -9,9 +9,10 @@ This directory contains everything needed to measure throughput, latency, and re
 3. [Quick start — filesystem + memory (default)](#quick-start-—-filesystem-memory-default)
 4. [Quick start — S3 + Redis](#quick-start-—-s3-redis)
 5. [Comparing backends head-to-head](#comparing-backends-head-to-head)
-6. [Scenarios](#scenarios)
+6. [Scenarios](#scenarios) — including [10 — soak / leak detection](#_10-—-soak-leak-detection-perf-soak) and [11 — startup and shutdown](#_11-—-startup-and-shutdown-perf-lifecycle)
 7. [Tuning the mock upstream](#tuning-the-mock-upstream)
-8. [Reading the results](#reading-the-results)
+8. [The results table, and the report a release carries](#the-results-table)
+9. [Reading the results](#reading-the-results)
 9. [Known bottlenecks and what to watch](#known-bottlenecks-and-what-to-watch)
 10. [Running against a remote server](#running-against-a-remote-server)
 
@@ -293,6 +294,179 @@ If `/evict` returns 404, check that `[registries.cache]` for `perf-npm` sets at 
 
 ---
 
+### 10 — Soak / leak detection (`perf:soak`)
+
+**Goal:** find out whether the server gives back what it took. Not a
+measurement — a **verdict**, with an exit code.
+
+**Profile:** a constant *arrival rate* (default 100 req/s), held for as long as
+you ask, between two idle measurement windows:
+
+```
+warm-up load ──▶ quiesce ──▶ BASELINE ──▶ steady load ──▶ quiesce ──▶ FINAL
+```
+
+Unlike every scenario above, this one starts its own server and mock upstream:
+
+```bash
+task perf:soak                        # 10 minutes at 100 req/s
+task perf:soak DURATION=1h RATE=200   # overnight
+```
+
+It compares idle RSS, the idle **live heap** (jemalloc's `stats.allocated`, via
+`batlehub_memory_allocated_bytes`), open file descriptors, OS threads and held
+database connections between the two windows, fits the RSS trend across the
+sustained load, plots the curves (a text chart in the report, an SVG beside it),
+and **ranks the registries by what they cost** — from the server's own
+`/metrics`, scraped at both ends of the load and subtracted. That last one is
+why `config.soak.toml` declares 25 registries with different shapes rather than
+one: a single-registry run cannot answer "which is the worst consumer", and
+registries that all cost the same thing rank by traffic rather than by cost.
+
+RSS and live heap are two rows because they answer different questions. RSS is
+pages the process holds; the live heap is bytes the *program* holds. When RSS
+grows and the heap does not, the allocator is keeping pages — which is a real
+thing to know about and is not a leak. Scenarios 02–07 are `constant-vus`, which is right for
+throughput and wrong here: a server that slows down is then offered *less*
+work, so the degradation hides itself. A constant arrival rate keeps the
+offered load flat and lets the queue grow, which is what a real client
+population does.
+
+The full rationale — why both windows are idle, why the baseline comes after a
+warm-up, and what each of the six signals means — is in
+[`docs/contributing/testing.md` § 7-quater](../docs/contributing/testing.md),
+and the thresholds are environment variables listed there.
+
+---
+
+### 11 — Startup and shutdown (`perf:lifecycle`)
+
+**Goal:** how long the process takes to become useful, and how long it takes to
+stop. **Profile:** not load at all — a handful of start/stop cycles, timed.
+
+Every other scenario here starts a server, waits for `/healthz` and measures
+what happens *after* that, so the two ends of a process's life were the two
+parts nothing measured. They are what a rolling deployment is made of.
+
+```bash
+task perf:lifecycle                              # 1 cold start, 5 warm, 1 draining stop
+task perf:lifecycle ITERATIONS=20 IN_FLIGHT=50   # tighter medians, heavier drain
+```
+
+Four numbers, in `perf/results/lifecycle.md`:
+
+| | what it decides |
+| --- | --- |
+| cold start → healthy | whether a fresh replica beats its readiness probe; includes every migration |
+| warm start → healthy | what a restart costs once the schema is there — the difference from the row above *is* the migration cost, measured rather than parsed from a log |
+| port accepts → healthy | how long anything routing on the port rather than the probe sends traffic into a server that is not ready |
+| stop, idle and draining | what `terminationGracePeriodSeconds` has to cover — actix stops accepting on `SIGTERM` and then waits for what is in flight, so this scales with the slowest upstream, not with this process's teardown |
+
+The draining arm points a registry at the mock upstream running with
+`--delay-ms 3000` and puts `IN_FLIGHT` uncached reads in flight before the
+signal, because a stop with nothing in flight measures the floor and not the
+number anyone needs.
+
+There is no verdict and no threshold: a startup budget belongs to a deployment —
+a probe's `failureThreshold`, a rollout's `maxUnavailable` — and this repository
+does not own those numbers. It owns the measurement, and a number that moves is
+visible in the diff of the report.
+
+---
+
+### 12 — What filtering a channel index costs (`perf:run:conda`)
+
+**Goal:** put a number on the RAM cost of rewriting the largest document this proxy handles.
+**Profile:** four runs, 4 VU × 60 s each, one arm per run.
+
+conda's `repodata.json` is the outlier among every document here:
+`conda-forge/linux-64` is ~424 MiB of JSON across ~1.4 million entries, and building a
+`serde_json::Value` of it was measured at ~11.5 GB — past what a client will wait for and past what
+a 16 GB runner has. That measurement is why `blocking::conda_stream` exists (it filters as it
+copies, holding one package entry at a time) and why the compressed routes buffer the 55 MiB
+`.zst` rather than what it decompresses to.
+
+This scenario turns that claim back into a measurement. Two registries with **one difference**
+between them — `perf-conda` has nothing blocked, `perf-conda-filtered` has one version blocked —
+and two routes, whose four combinations are four different paths through the code:
+
+| Arm | Route | What the server does |
+| --- | --- | --- |
+| `plain_unfiltered` | `repodata.json` | `StreamedIndex::AsIs` — socket to socket, nothing buffered |
+| `plain_filtered` | `repodata.json` | buffers the **uncompressed** document, filters it as it copies, **caches nothing** |
+| `zst_unfiltered` | `repodata.json.zst` | the upstream's own `.zst`, buffered once and cached |
+| `zst_filtered` | `repodata.json.zst` | buffers the **compressed** document, filters, re-compresses, caches the result per blocked-set fingerprint |
+
+Each arm is its own k6 run and its own row in the results table, because **peak RSS is the result**
+and a run that mixed two paths could not say which one the peak belongs to.
+
+```bash
+# Terminal 1 — database
+task compose:db
+# Terminal 2 — a channel-sized index (200 000 entries ≈ 53 MiB of JSON)
+task perf:conda:upstream PACKAGES=200000
+# Terminal 3
+task perf:conda:server
+# Terminal 4
+task perf:conda:seed          # blocks one version, and proves the two arms differ
+task perf:run:conda           # four runs, four rows, then the report
+```
+
+`PACKAGES` is the independent variable — that is the whole point of the scenario. Raise it until
+the document is the size of the channel you care about (`PACKAGES=1400000` is conda-forge's
+`linux-64`) and read the RSS column. `ARTIFACT_KB` is the size of the package bytes each index
+entry's sha256 is computed over, and it defaults to 1 KB here rather than the suite's 512 KB: the
+digest in the index is the *real* digest of the bytes the mock will serve — the proxy verifies it —
+so each entry costs one hash of that size when the index is generated, and 512 KB × 1.4 million
+entries is 700 GB of hashing before the first request is answered.
+
+#### What it measured, the first time it ran
+
+200 000 entries — 51.1 MiB of JSON, 8.2 MiB as `.zst` — 2 VU, 30 s an arm, on an 8-core
+workstation. Server peak RSS over the run, and CPU as a percentage of one core:
+
+| Arm | req/s | p95 | p99 | RSS max | RSS median | CPU max | CPU median |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `plain_unfiltered` | 16.0 | 146 ms | 172 ms | 177 MiB | 158 MiB | 72 % | 58 % |
+| `plain_filtered` | **0.7** | **2 944 ms** | 3 030 ms | **435 MiB** | 383 MiB | 200 % | 193 % |
+| `zst_unfiltered` | 10.7 | 38 ms | 51 ms | 211 MiB | 197 MiB | 15 % | 13 % |
+| `zst_filtered` | 8.8 | 42 ms | 1 178 ms | 254 MiB | 180 MiB | 200 % | 13 % |
+
+Three things fall out of that, and only the first was expected:
+
+1. **Filtering the compressed document is nearly free in the steady state.** `zst_filtered` is
+   within noise of `zst_unfiltered` on latency (42 ms against 38 ms) and on median CPU (13 % both).
+   The cost is real but paid *once*: the p99 of 1 178 ms and the 200 % CPU peak are the first
+   request, which filtered the whole channel and cached the result; every request after it is a
+   read from storage.
+2. **Filtering the plain document is not free at all — and the reason is the cache, not the
+   filter.** `plain_filtered` serves **0.7 requests a second** against 16, at 2.9 seconds a request
+   and 435 MiB peak against 177. The compressed routes cache the filtered document per blocked-set
+   fingerprint; the plain route caches nothing, so it buffers 51 MiB, filters 200 000 entries and
+   re-serialises them *on every single request*, pinning two cores to do it.
+3. **The memory ceiling is the uncompressed document, times the requests in flight.** 435 MiB at
+   2 VUs is the 51 MiB input plus its output, twice over, on top of a 177 MiB baseline. At
+   conda-forge's real size (424 MiB, 1.4 M entries) the same arithmetic is why
+   `MAX_FILTERABLE_INDEX_BYTES` bounds the buffered form and why the compressed route buffers the
+   55 MiB `.zst` rather than what it decompresses to.
+
+The operational reading: a channel with blocks should be reached over `repodata.json.zst` — which
+is what conda 23.x and mamba ask for first — and a client pinned to the plain document on a
+filtered registry is paying three seconds and a quarter of a gigabyte per request for it.
+
+**What to watch:** peak RSS on `plain_filtered` against `zst_filtered` at the same `PACKAGES`. The
+two arms rewrite the same channel and answer the same question; the difference between them is the
+streaming filter, which is the thing being measured. `zst_*` after the first request is a cache hit
+(`X-BatleHub-Cache: hit`) served out of storage — the filtered document is cached per blocked-set
+fingerprint — so what this scenario measures on that route is the **first** request and the
+steady-state serving cost, which is exactly the pair worth knowing.
+
+> The seed script waits for `blocked_snapshot_fingerprint` to turn over before it declares the arms
+> ready — the blocked set is read from a 30-second snapshot, so a scenario started immediately after
+> the block would measure the unfiltered path under a filtered name.
+
+---
+
 ## Tuning the mock upstream
 
 `task perf:upstream` accepts two variables:
@@ -311,6 +485,85 @@ DELAY_MS=100 task perf:upstream
 # Simulate a slow upstream + large artifacts
 DELAY_MS=500 ARTIFACT_KB=4096 task perf:upstream
 ```
+
+### Its artifacts are deterministic, and that is load-bearing
+
+An artifact's bytes are derived from its coordinate, and the packument
+advertises the **real** sha1 of the bytes the mock will serve.
+
+It used to serve random bytes under a made-up `dist.shasum`, which was fine
+until the proxy started verifying the digest it is given
+(`crates/core/src/services/integrity.rs`). From that day every artifact read in
+every scenario was refused with a `502`, and the scenarios that check for a
+`200` had been failing ever since — quietly, because nobody reruns a perf suite
+to see whether it still passes. The soak harness found it while seeding a warm
+cache.
+
+The determinism matters beyond the digest: a cache is supposed to return the
+bytes it stored, and an upstream whose answer changes per request makes "the
+same artifact" meaningless — a hit and a miss would be distinguishable by
+content, which is not a property any real registry has.
+
+---
+
+## The results table {#the-results-table}
+
+Every scenario run through `run_with_metrics.sh` — which is every `task perf:run:*` — appends one
+row to `perf/results/runs.jsonl`: **peak and median RSS**, **peak and median CPU**, and k6's own
+throughput, latency and error numbers, with the git sha, the backend and the machine it was
+measured on. The box printed on the terminal used to be the only record, and the next run scrolled
+it away.
+
+```bash
+task perf:run:all      # runs every scenario, then writes the report
+task perf:report       # rebuild the table from whatever has been recorded so far
+```
+
+The report lands in two files that say the same thing to two readers:
+
+Both land in `perf/results/`:
+
+| File | For |
+| --- | --- |
+| `perf-report.md` | a person — one row per scenario, peak RSS beside the latency |
+| `perf-report.json` | the *next* release, which diffs against it |
+
+The latest row per scenario wins, so re-running one scenario replaces its line without invalidating
+the rest of the suite. Neither file is committed: they describe one machine on one day. The
+`authz-*.json` measurements beside them are committed because they are a *documented* run quoted by
+an RFC — a different kind of artefact.
+
+**Peak, not average.** A server that sits at 90 MiB and spikes to 1.4 GiB while filtering a channel
+index needs the 1.4 GiB written down: that is the figure a memory limit has to clear, and an average
+hides it completely. The median is recorded beside it so a spike can be told from a level shift.
+
+### Comparing two releases
+
+Copy the release's report into `perf/results/` first, and pass its **name**:
+every argument of `perf_report.py` is a file name in that one directory, so
+there is no path for a caller — or for whatever is driving the caller — to
+point somewhere else.
+
+```bash
+# Against a previous release's report (downloaded from its GitHub release page)
+cp ~/Downloads/perf-report.json perf/results/perf-report-1.2.0.json
+task perf:report:compare BASE=perf-report-1.2.0.json
+
+# As a verdict rather than a diff — exits non-zero past the margin
+task perf:report:compare BASE=perf-report-1.2.0.json FAIL=1 MARGIN=25
+```
+
+The diff adds Δ columns for p95 and peak RSS and marks the direction. It also **refuses to pretend**
+two incomparable runs are comparable: a different CPU count, architecture or storage backend
+produces a warning above the table, because a number that moved may be the machine rather than the
+code.
+
+`.github/workflows/perf-report.yaml` does this on every release tag — runs scenarios 01–07 against a
+freshly built server, diffs the result against the previous published release's `perf-report.json`,
+and attaches `perf-report.md` and `perf-report.json` to the release. It is a **record, not a gate**:
+a shared runner is noisy enough that two runs of the same commit differ by more than most real
+regressions, so what it is for is the shape — peak RSS doubling, throughput halving, a scenario that
+started erroring — and a person reads it.
 
 ---
 

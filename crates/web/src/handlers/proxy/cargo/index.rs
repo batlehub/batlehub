@@ -7,7 +7,7 @@ use super::{
     RegistryModeMap, Responder,
 };
 use crate::handlers::schemas::{ArtifactBytes, ProtocolDocument, UpstreamDocument};
-use batlehub_core::entities::Action;
+use batlehub_core::entities::{Action, Identity, PackageId};
 
 /// Cargo sparse registry `config.json`.
 #[utoipa::path(
@@ -27,6 +27,7 @@ pub async fn cargo_registry_config(
     indexes: web::Data<CargoIndexMap>,
     map: web::Data<RegistryMap>,
     mode_map: web::Data<RegistryModeMap>,
+    svc: web::Data<Arc<ProxyService>>,
     req: HttpRequest,
 ) -> Result<impl Responder, AppError> {
     let registry = path.into_inner();
@@ -52,6 +53,52 @@ pub async fn cargo_registry_config(
     // Expose the publish API URL for local and hybrid registries.
     if matches!(mode, RegistryMode::Local | RegistryMode::Hybrid) {
         resp["api"] = serde_json::Value::String(base);
+    }
+
+    // ── `auth-required` ──────────────────────────────────────────────────────
+    //
+    // The registry index reference defines it as marking "a private registry
+    // that requires all operations to be authenticated including API requests,
+    // crate downloads and sparse index updates", and that is the only switch
+    // there is: **without it cargo sends no credential on a read at all.** A
+    // registry that refuses anonymous callers was therefore not "authenticated"
+    // to cargo, it was unusable — the token went out on `cargo publish` and on
+    // nothing else.
+    //
+    // Derived rather than always-on, because the field is a claim about the
+    // whole registry and setting it on an open one would break anonymous cargo
+    // for no reason: an anonymous caller would be made to present a credential
+    // it does not have. So the question asked here is the one the field
+    // answers — *can an anonymous caller read this registry?* — and the answer
+    // comes from the same authorization chain a download will consult.
+    //
+    // The coordinate is synthetic (`_@_`) because the question is about the
+    // registry tier, which is what cargo is asking about: it reads this file
+    // once, before it knows which crate it wants. A grant that re-opens one
+    // package to `*` under a closed tier is therefore invisible here and the
+    // registry is advertised as closed — `cargo_auth_required` in the registry
+    // config is the operator's override for exactly that case.
+    let explicit = {
+        svc.hot
+            .read()
+            .await
+            .cargo_auth_required
+            .get(&registry)
+            .copied()
+    };
+    let auth_required = match explicit {
+        Some(required) => required,
+        None => svc
+            .authorize_read(
+                &PackageId::new(&registry, "_", "_"),
+                &Identity::anonymous(),
+                Action::SourceRead,
+            )
+            .await
+            .is_err(),
+    };
+    if auth_required {
+        resp["auth-required"] = serde_json::Value::Bool(true);
     }
 
     Ok(HttpResponse::Ok()

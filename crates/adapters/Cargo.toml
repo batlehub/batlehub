@@ -117,6 +117,7 @@ default = [
   "registry-generic",
   "registry-nodedist",
   "registry-sdkman",
+  "registry-rustup",
   "sbom",
   "storage-fs",
   "vuln-scan"
@@ -183,9 +184,15 @@ registry-nodedist = []
 # SDKMAN: the candidates API and the download broker as one registry, the
 # broker's 302 followed server-side through the SSRF guard (RFC 0010).
 registry-sdkman = []
+# rustup: `release-stable.toml` is the one document in the tree with a DTO;
+# the channel manifest is indexed by section and never parsed (RFC 0024 §6.4).
+registry-rustup = ["dep:toml"]
 registry-rubygems = ["dep:flate2", "dep:tar"]
 registry-terraform = []
-registry-vscode-marketplace = []
+# `flate2`: the gallery's `vspackage` endpoint answers `Content-Encoding: gzip`
+# unsolicited, and a proxy that relays a transport encoding as if it were the
+# artifact serves every editor a gzip file named `.vsix` (see `gunzip_stream`).
+registry-vscode-marketplace = ["dep:flate2"]
 storage-fs = []
 storage-s3 = ["dep:aws-config", "dep:aws-sdk-s3"]
 # `bzip2`/`zstd` are for conda's two container formats, which the README

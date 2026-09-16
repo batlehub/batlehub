@@ -12,7 +12,7 @@
 #
 #   - Postgres: `DATABASE_URL` (required; the sidecar's
 #     postgresql://batlehub:changeme@127.0.0.1:5432/batlehub here);
-#   - S3: `S3_TEST_ENDPOINT` as given, else a MinIO started from the cached
+#   - S3: `S3_TEST_ENDPOINT` as given, else a RustFS started from the cached
 #     binary tests/heavy/backends.sh also uses (downloaded once);
 #   - Redis: `REDIS_URL` as given, else a `redis-server` from the cached PyPI
 #     wheel, likewise.
@@ -24,7 +24,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 : "${DATABASE_URL:?DATABASE_URL must point at a reachable Postgres}"
 CACHE="${HEAVY_CACHE:-$HOME/.cache/batlehub-heavy}"
-MINIO_PORT="${EXTERNAL_MINIO_PORT:-8143}"
+S3_PORT="${EXTERNAL_S3_PORT:-${EXTERNAL_MINIO_PORT:-8143}}"
 REDIS_PORT="${EXTERNAL_REDIS_PORT:-8144}"
 WORK="$(mktemp -d)"
 PIDS=()
@@ -37,21 +37,30 @@ export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-minioadmin}"
 export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-minioadmin}"
 export AWS_EC2_METADATA_DISABLED=true
 
+# RustFS, as `tests/heavy/backends.sh` starts and as CI runs as a service.
+# It replaced MinIO here because `dl.min.io` answers **410 Gone** for every
+# community binary now, and because one S3 implementation across local runs and
+# CI is worth more than two. The liveness path is MinIO's, which RustFS answers.
 if [[ -z "${S3_TEST_ENDPOINT:-}" ]]; then
-  MINIO="$CACHE/minio"
-  if [[ ! -x "$MINIO" ]]; then
-    log "Downloading the MinIO server into $MINIO"
-    mkdir -p "$CACHE"
-    fetch -o "$MINIO.download" https://dl.min.io/server/minio/release/linux-amd64/minio && mv "$MINIO.download" "$MINIO" && chmod +x "$MINIO"
+  RUSTFS_RELEASE="${RUSTFS_RELEASE:-1.0.0-rc.6}"
+  RUSTFS="$CACHE/rustfs-$RUSTFS_RELEASE/rustfs"
+  if [[ ! -x "$RUSTFS" ]]; then
+    log "Downloading RustFS $RUSTFS_RELEASE into $(dirname "$RUSTFS")"
+    mkdir -p "$(dirname "$RUSTFS")"
+    fetch -o "$RUSTFS.zip" \
+      "https://github.com/rustfs/rustfs/releases/download/$RUSTFS_RELEASE/rustfs-linux-x86_64-musl-v$RUSTFS_RELEASE.zip" \
+      && unzip -q -o -d "$(dirname "$RUSTFS")" "$RUSTFS.zip" \
+      && rm -f "$RUSTFS.zip" && chmod +x "$RUSTFS"
   fi
-  mkdir -p "$WORK/minio"
-  MINIO_ROOT_USER="$AWS_ACCESS_KEY_ID" MINIO_ROOT_PASSWORD="$AWS_SECRET_ACCESS_KEY" MINIO_BROWSER=off \
-    "$MINIO" server "$WORK/minio" --address "127.0.0.1:$MINIO_PORT" >"$WORK/minio.log" 2>&1 &
+  mkdir -p "$WORK/s3"
+  "$RUSTFS" server "$WORK/s3" --address "127.0.0.1:$S3_PORT" \
+    --access-key "$AWS_ACCESS_KEY_ID" --secret-key "$AWS_SECRET_ACCESS_KEY" \
+    >"$WORK/s3.log" 2>&1 &
   PIDS+=($!)
-  export S3_TEST_ENDPOINT="http://127.0.0.1:$MINIO_PORT"
+  export S3_TEST_ENDPOINT="http://127.0.0.1:$S3_PORT"
   for _ in $(seq 1 60); do curl -sf -o /dev/null "$S3_TEST_ENDPOINT/minio/health/live" && break; sleep 0.5; done
-  curl -sf -o /dev/null "$S3_TEST_ENDPOINT/minio/health/live" || { tail -20 "$WORK/minio.log" >&2; echo "MinIO never came up" >&2; exit 1; }
-  log "MinIO at $S3_TEST_ENDPOINT"
+  curl -sf -o /dev/null "$S3_TEST_ENDPOINT/minio/health/live" || { tail -20 "$WORK/s3.log" >&2; echo "RustFS never came up" >&2; exit 1; }
+  log "RustFS at $S3_TEST_ENDPOINT"
 fi
 
 if [[ -z "${REDIS_URL:-}" ]]; then

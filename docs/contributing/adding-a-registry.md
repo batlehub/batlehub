@@ -44,6 +44,17 @@ Every request goes through `ProxyService::handle()`, which:
 - [ ] `crates/web/src/handlers/proxy/mod.rs` — `pub mod`
 - [ ] `crates/web/src/lib.rs` — import handler, register route(s), update `ApiDoc` tags
 - [ ] `ui/src/config/registryTypes.ts` — add a `RegistryTypeDef` entry
+- [ ] `tests/heavy/closed_world.sh` — a phase, its `PHASES` entry, a registry in
+      `tests/heavy/config.closed-world.toml`, and a matrix row in
+      `.github/workflows/test.yaml` *(the live proof — see §11)*
+- [ ] An air-gap proof — a case in `crates/web/tests/air_gap.rs`, or a phase in
+      `tests/heavy/airgap.sh` if a real client can drive it *(see §11)*
+- [ ] `tests/heavy/authz.sh` — a client phase, hermetic if the kind has a local
+      mode and `live:<kind>` if it does not *(see §11)*
+- [ ] The soak — a protocol module in `perf/mock-upstream/src/protocols/`, a
+      registry in `perf/config.soak.toml` and at least one arm in
+      `perf/k6/soak_arms.js` *(see §11; `crates/web/tests/soak_kind_coverage.rs`
+      fails until this is done or the kind is written into `NOT_SOAKED`)*
 
 ---
 
@@ -461,6 +472,82 @@ Add a case to the relevant file under `crates/web/tests/` (one file per feature/
 1. Build a `RegistryMap` with `"myregistry"` as the type.
 2. Send a `TestRequest::get()` to the new URL.
 3. Assert the status code and response body.
+
+### The two heavy proofs every kind owes: air-gapped, and live
+
+A unit test says the adapter parses what the upstream sends, and an integration
+test says the route is wired. Neither says the thing an operator actually needs
+to know, and both have been green while a kind was unusable: the ovsx download
+URL pointed at a route no Open VSX client asks for, the GitLab client refused
+the document its own typed route requests, and the marketplace's numeric-id
+spelling — the only one an IDE ever learns — resolved nothing. Every one of
+those was found by a client, not by a test double.
+
+So a new kind is not finished until it has been driven **both ways**.
+
+**Live.** A real client, against the real upstream, with the client unable to
+reach anything but this instance — `tests/heavy/closed_world.sh`. One phase per
+kind, each proving the same sentence: egress is denied, the dependency comes
+from the instance, it builds, and what it built runs. Four pieces:
+
+```bash
+# 1. tests/heavy/closed_world.sh — phase_<kind>, and the name in PHASES
+# 2. tests/heavy/config.closed-world.toml — an [[registries]] block for it
+# 3. .github/workflows/test.yaml — a `- phase: <kind>` row under heavy-closed-world
+#    (plus a setup step there if the client is not on the runner image)
+bash tests/heavy/closed_world.sh <kind>      # run just yours
+```
+
+Assert on the **wire transcript**, not only on the client's exit code: a phase
+that passes because the client quietly reached the upstream proves nothing, and
+`heavy_wire_re_after` is what makes the difference visible. Where the kind has
+no local mode, it also needs `live:<kind>` in `tests/heavy/authz.sh`
+(`AUTHZ_LIVE_KINDS` + a registry in `config.authz-live.toml`): a credential
+boundary's *positive* arm cannot be observed against an empty registry, because
+the allowed caller has to actually succeed. Where it does have a local mode, the
+hermetic client phase in `authz.sh` covers it instead.
+
+**Air-gapped.** The same kind on an instance that can reach nothing, holding
+only what was bundled into it (RFC 0008 / 0008-bis). This is where a kind
+discovers that its client resolves through a *listing* it was never given, which
+is a different failure from "the artifact is missing" and has a different fix —
+`synthesise_listings`, and the recorded miss that tells the next bundle what to
+carry. Add a case to `crates/web/tests/air_gap.rs`; if a real client can drive
+the kind end to end, add a phase to `tests/heavy/airgap.sh` too and read the
+answer off the wire the way the npm, pip and mise phases do.
+
+Both suites need `DATABASE_URL`, and the live one needs network *for the server*
+— the client is the half that gets none.
+
+### The soak owes a kind an arm too
+
+A kind that nothing drives under constant load is a kind whose client, parser
+and rewriter have never been asked to run for an hour, and
+`crates/web/tests/soak_kind_coverage.rs` fails on the next `cargo test` until
+that is fixed or written down. Three small pieces:
+
+1. **`perf/mock-upstream/src/protocols/<name>.rs`** — the upstream. What it owes
+   is narrow: the documents the *proxy's* client parses, every digest the format
+   names computed from the bytes that will be served (the proxy verifies them),
+   and the same answer for the same coordinate every time. It is not a registry
+   a real client could install from — that is `closed_world.sh`. Declare the
+   routes `#[route(..., method = "GET", method = "HEAD")]`: actix does not
+   derive `HEAD` from `#[get]`, and some clients ask before they stream.
+2. **`perf/config.soak.toml`** — a `[[registries]]` block pointed at the mock.
+3. **`perf/k6/soak_arms.js`** — one arm per request shape worth loading,
+   typically a listing and an artifact. Give the arm a bounded `space`: a
+   coordinate space that grows with the run adds a row and a stored object per
+   request forever, and a verdict cannot tell that from a leak.
+
+Then run the pre-flight, which is the part that tells you the truth:
+
+```bash
+task perf:soak PROFILE=debug DURATION=30s RATE=20
+```
+
+It asks for every arm once before the load and stops on any that does not answer
+the status it declares. Do not skip it and read the load's own result instead:
+that check is "not 5xx", which a `404` passes.
 
 ### Manual verification
 

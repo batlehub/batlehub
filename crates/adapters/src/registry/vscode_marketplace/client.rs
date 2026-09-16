@@ -14,9 +14,9 @@ use super::super::http_client::{
 };
 use super::models::{
     ExtensionQueryCriteria, ExtensionQueryFilter, ExtensionQueryRequest, ExtensionQueryResponse,
-    ResolvedExtension, FILTER_EXTENSION_NAME, FILTER_VERSION, FLAG_INCLUDE_ASSET_URI,
-    FLAG_INCLUDE_FILES, FLAG_INCLUDE_LATEST_ONLY, FLAG_INCLUDE_VERSIONS, GALLERY_API_ACCEPT,
-    README_ASSET_TYPE, SIGNATURE_ASSET_TYPE, VSIX_ASSET_TYPE,
+    ResolvedExtension, FILTER_EXTENSION_NAME, FLAG_INCLUDE_ASSET_URI, FLAG_INCLUDE_FILES,
+    FLAG_INCLUDE_LATEST_ONLY, FLAG_INCLUDE_VERSIONS, GALLERY_API_ACCEPT, README_ASSET_TYPE,
+    SIGNATURE_ASSET_TYPE, VSIX_ASSET_TYPE,
 };
 
 /// VS Code Marketplace registry client (marketplace.visualstudio.com or compatible).
@@ -96,35 +96,25 @@ impl VsCodeMarketplaceRegistryClient {
         name: &str,
         version: &str,
     ) -> Result<ResolvedExtension, CoreError> {
-        let (flags, criteria) = if version == "latest" {
-            (
-                FLAG_INCLUDE_VERSIONS
-                    | FLAG_INCLUDE_FILES
-                    | FLAG_INCLUDE_ASSET_URI
-                    | FLAG_INCLUDE_LATEST_ONLY,
-                vec![ExtensionQueryCriteria {
+        // There is no version criterion in `extensionquery`: the filter types
+        // are a closed set naming *extensions* (name, id, tag, target, search
+        // text), and a body carrying one the API does not know is refused with
+        // `400 Value does not fall within the expected range` — not an empty
+        // result. So a pinned version is asked for the same way the editor asks
+        // for it: the extension's whole version list, picked from here.
+        let latest_only = version == "latest";
+        let mut flags = FLAG_INCLUDE_VERSIONS | FLAG_INCLUDE_FILES | FLAG_INCLUDE_ASSET_URI;
+        if latest_only {
+            flags |= FLAG_INCLUDE_LATEST_ONLY;
+        }
+
+        let body = ExtensionQueryRequest {
+            filters: vec![ExtensionQueryFilter {
+                criteria: vec![ExtensionQueryCriteria {
                     filter_type: FILTER_EXTENSION_NAME,
                     value: format!("{publisher}.{name}"),
                 }],
-            )
-        } else {
-            (
-                FLAG_INCLUDE_VERSIONS | FLAG_INCLUDE_FILES | FLAG_INCLUDE_ASSET_URI,
-                vec![
-                    ExtensionQueryCriteria {
-                        filter_type: FILTER_EXTENSION_NAME,
-                        value: format!("{publisher}.{name}"),
-                    },
-                    ExtensionQueryCriteria {
-                        filter_type: FILTER_VERSION,
-                        value: version.to_owned(),
-                    },
-                ],
-            )
-        };
-
-        let body = ExtensionQueryRequest {
-            filters: vec![ExtensionQueryFilter { criteria }],
+            }],
             flags,
         };
 
@@ -164,11 +154,22 @@ impl VsCodeMarketplaceRegistryClient {
                 ))
             })?;
 
-        let version_info = ext.versions.into_iter().next().ok_or_else(|| {
-            CoreError::NotFound(format!(
-                "no versions available for {publisher}.{name}@{version}"
-            ))
-        })?;
+        let version_info = if latest_only {
+            ext.versions.into_iter().next().ok_or_else(|| {
+                CoreError::NotFound(format!(
+                    "no versions available for {publisher}.{name}@{version}"
+                ))
+            })?
+        } else {
+            ext.versions
+                .into_iter()
+                .find(|v| v.version == version)
+                .ok_or_else(|| {
+                    CoreError::NotFound(format!(
+                        "VS Code Marketplace extension {publisher}.{name}@{version} not found"
+                    ))
+                })?
+        };
 
         Ok(ResolvedExtension {
             version_info,
@@ -176,6 +177,75 @@ impl VsCodeMarketplaceRegistryClient {
             description: ext.description,
         })
     }
+}
+
+/// Decode a `Content-Encoding: gzip` body into the bytes it encodes.
+///
+/// The gallery's `vspackage` endpoint answers `Content-Encoding: gzip`
+/// *unsolicited* — this client asks for no encoding and is sent one anyway —
+/// so what arrives on the wire is a gzip stream wrapping the VSIX, not the
+/// VSIX. A content encoding is a property of the transfer, not of the
+/// artifact: relaying it as it came served every editor a gzip file under a
+/// `.vsix` name (`Could not find EOCD`, because a zip's directory lives at the
+/// end and there is no zip here), stored those bytes under the artifact's key,
+/// and failed every asset route with it — each of those reads a file *inside*
+/// the archive.
+///
+/// Streaming rather than buffering: `ProxyService` bounds the artifact size,
+/// and a decoder that holds one chunk keeps that bound meaningful.
+fn gunzip_stream<S>(
+    stream: S,
+) -> impl futures::Stream<Item = Result<bytes::Bytes, CoreError>> + Send
+where
+    S: futures::Stream<Item = Result<bytes::Bytes, CoreError>> + Send + Unpin + 'static,
+{
+    use futures::StreamExt;
+    use std::io::Write;
+
+    let decoder = flate2::write::GzDecoder::new(Vec::new());
+    futures::stream::unfold(
+        (stream, Some(decoder)),
+        |(mut stream, mut decoder)| async move {
+            loop {
+                match stream.next().await {
+                    Some(Ok(chunk)) => {
+                        // `None` only once the body has ended or failed, and both
+                        // of those arms return rather than come back here.
+                        let dec = decoder.as_mut()?;
+                        if let Err(e) = dec.write_all(&chunk) {
+                            let err = CoreError::Registry(format!(
+                                "upstream sent a malformed gzip body: {e}"
+                            ));
+                            return Some((Err(err), (stream, None)));
+                        }
+                        let decoded = std::mem::take(dec.get_mut());
+                        if decoded.is_empty() {
+                            // A chunk that completed no window yet: ask for the
+                            // next one rather than yield an empty frame.
+                            continue;
+                        }
+                        return Some((Ok(bytes::Bytes::from(decoded)), (stream, decoder)));
+                    }
+                    Some(Err(e)) => return Some((Err(e), (stream, None))),
+                    None => {
+                        let dec = decoder.take()?;
+                        return match dec.finish() {
+                            Ok(tail) if !tail.is_empty() => {
+                                Some((Ok(bytes::Bytes::from(tail)), (stream, None)))
+                            }
+                            Ok(_) => None,
+                            Err(e) => {
+                                let err = CoreError::Registry(format!(
+                                    "upstream gzip body ended mid-stream: {e}"
+                                ));
+                                Some((Err(err), (stream, None)))
+                            }
+                        };
+                    }
+                }
+            }
+        },
+    )
 }
 
 // ── RegistryClient impl ───────────────────────────────────────────────────────
@@ -336,11 +406,22 @@ impl RegistryClient for VsCodeMarketplaceRegistryClient {
             )
             .await?
         } else {
-            self.http
-                .get(&url)
-                .send()
-                .await
-                .map_err(to_registry_error)?
+            // The package URL is built from the configured base, but the gallery
+            // answers it with a `302` to its own CDN, and `self.http` would
+            // follow that — and any further hop — unchecked and still
+            // credentialed. Same walk as the branch above, with only the base
+            // trusted: the first hop *is* the base here, so nothing else needs
+            // to be.
+            let parsed = reqwest::Url::parse(&url)
+                .map_err(|e| CoreError::Registry(format!("invalid upstream URL '{url}': {e}")))?;
+            crate::registry::ssrf::fetch_following_redirects(
+                &self.readme_credentialed,
+                &self.readme_plain,
+                &None,
+                &self.base_url,
+                parsed,
+            )
+            .await?
         };
 
         if response.status() == reqwest::StatusCode::NOT_FOUND {
@@ -358,10 +439,27 @@ impl RegistryClient for VsCodeMarketplaceRegistryClient {
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
 
-        let stream = response.bytes_stream().map_err(to_registry_error);
+        // Unsolicited, so it is checked for rather than assumed absent: see
+        // [`gunzip_stream`].
+        let gzipped = response
+            .headers()
+            .get(reqwest::header::CONTENT_ENCODING)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|enc| {
+                enc.split(',')
+                    .any(|e| matches!(e.trim().to_ascii_lowercase().as_str(), "gzip" | "x-gzip"))
+            });
+
+        let stream: batlehub_core::ports::ArtifactStream =
+            Box::pin(response.bytes_stream().map_err(to_registry_error));
+        let stream: batlehub_core::ports::ArtifactStream = if gzipped {
+            Box::pin(gunzip_stream(stream))
+        } else {
+            stream
+        };
 
         Ok(FetchedArtifact {
-            stream: Box::pin(stream),
+            stream,
             cache_control,
         })
     }
@@ -433,6 +531,97 @@ mod tests {
     }
 
     const EMPTY_RESULTS: &str = r#"{"results":[{"extensions":[]}]}"#;
+
+    /// Several versions, newest first, as the gallery returns them.
+    fn ext_body_versions(versions: &[&str]) -> String {
+        let versions: Vec<String> = versions
+            .iter()
+            .map(|v| {
+                format!(
+                    r#"{{"version":"{v}","lastUpdated":"2024-01-01T00:00:00Z","files":[{{"assetType":"Microsoft.VisualStudio.Services.VSIXPackage","source":"http://example.com/python-{v}.vsix"}}]}}"#
+                )
+            })
+            .collect();
+        format!(
+            r#"{{"results":[{{"extensions":[{{"displayName":"Python","shortDescription":"Python language support","publisher":{{"publisherName":"ms-python"}},"versions":[{}]}}]}}]}}"#,
+            versions.join(",")
+        )
+    }
+
+    /// The gallery's answer to a criterion it does not know — which is what a
+    /// version filter is. It is a `400`, not an empty result, so every pinned
+    /// resolve failed: `code --install-extension` asks for the version the
+    /// gallery query named, and got `502 Bad Gateway` from this proxy.
+    const UNKNOWN_CRITERION: &str = r#"{"message":"Value does not fall within the expected range.","typeKey":"ArgumentException"}"#;
+
+    /// A pinned version is asked for by extension name alone.
+    ///
+    /// `extensionquery` has no version criterion: the filter types name
+    /// extensions, and a body carrying an unknown one is refused outright. The
+    /// mock is the gallery on that point — one criterion, `filterType` 7, or a
+    /// `400` — so the query shape is what this asserts, not just the answer.
+    #[tokio::test]
+    async fn a_pinned_version_is_picked_from_the_version_list() {
+        let mut server = Server::new_async().await;
+        let _refusal = server
+            .mock("POST", "/_apis/public/gallery/extensionquery")
+            .with_status(400)
+            .with_header("content-type", "application/json")
+            .with_body(UNKNOWN_CRITERION)
+            .expect_at_most(0)
+            .create_async()
+            .await;
+        let _mock = server
+            .mock("POST", "/_apis/public/gallery/extensionquery")
+            .match_request(|req| {
+                let body: serde_json::Value =
+                    serde_json::from_slice(req.body().unwrap()).expect("a JSON query body");
+                let criteria = body["filters"][0]["criteria"].as_array().unwrap();
+                criteria.len() == 1 && criteria[0]["filterType"] == 7
+            })
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(ext_body_versions(&["2024.3.0", "2024.2.1", "2024.1.0"]))
+            .create_async()
+            .await;
+
+        let client =
+            VsCodeMarketplaceRegistryClient::new(server.url(), &Default::default()).unwrap();
+        let meta = client
+            .resolve_metadata(&pkg("ms-python.python", "2024.2.1").with_artifact("vsix"))
+            .await
+            .unwrap();
+
+        assert_eq!(meta.id.version, "2024.2.1");
+        // The asset of the version asked for, not the newest one's.
+        assert_eq!(
+            meta.download_url.as_deref(),
+            Some("http://example.com/python-2024.2.1.vsix")
+        );
+    }
+
+    /// A version the extension does not have is `NotFound`, not the newest one:
+    /// the list is filtered here now, so nothing may fall through to `[0]`.
+    #[tokio::test]
+    async fn a_version_absent_from_the_list_is_not_found() {
+        let mut server = Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/_apis/public/gallery/extensionquery")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(ext_body_versions(&["2024.3.0", "2024.2.1"]))
+            .create_async()
+            .await;
+
+        let client =
+            VsCodeMarketplaceRegistryClient::new(server.url(), &Default::default()).unwrap();
+        let err = client
+            .resolve_metadata(&pkg("ms-python.python", "1.0.0"))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, CoreError::NotFound(_)), "got {err:?}");
+    }
 
     /// The gallery names its README on a CDN the API host does not share, so a
     /// strict same-origin check refused every one of them — no VS Code
@@ -678,6 +867,44 @@ mod tests {
         let chunks: Vec<bytes::Bytes> = fetched.stream.try_collect().await.unwrap();
         let content: Vec<u8> = chunks.into_iter().flat_map(|b| b.to_vec()).collect();
         assert_eq!(content, b"fake vsix content");
+    }
+
+    /// The gallery answers `vspackage` with `Content-Encoding: gzip` whether or
+    /// not it was asked to, so what the wire carries is a gzip stream around the
+    /// VSIX. Relayed undecoded, every editor got a gzip file called `.vsix` and
+    /// refused it ("Could not find EOCD"), and the cache kept those bytes.
+    #[tokio::test]
+    async fn a_gzip_encoded_artifact_is_decoded() {
+        use std::io::Write;
+
+        let vsix = b"PK\x03\x04 pretend this is a zip, and a long enough one to compress";
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(vsix).unwrap();
+        let gzipped = encoder.finish().unwrap();
+        assert_ne!(gzipped.as_slice(), vsix.as_slice());
+
+        let mut server = Server::new_async().await;
+        let _mock = server
+            .mock(
+                "GET",
+                "/_apis/public/gallery/publishers/ms-python/vsextensions/python/2024.2.1/vspackage",
+            )
+            .with_status(200)
+            .with_header("content-encoding", "gzip")
+            .with_body(gzipped)
+            .create_async()
+            .await;
+
+        let client =
+            VsCodeMarketplaceRegistryClient::new(server.url(), &Default::default()).unwrap();
+        let fetched = client
+            .fetch_artifact(&pkg("ms-python.python", "2024.2.1"))
+            .await
+            .unwrap();
+        let chunks: Vec<bytes::Bytes> = fetched.stream.try_collect().await.unwrap();
+        let content: Vec<u8> = chunks.into_iter().flat_map(|b| b.to_vec()).collect();
+
+        assert_eq!(content, vsix.as_slice());
     }
 
     #[tokio::test]

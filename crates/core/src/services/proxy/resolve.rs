@@ -67,6 +67,29 @@ impl ProxyService {
         }
         tracing::debug!(key = %cache_key, "metadata cache miss, fetching from upstream");
         metrics::counter!("batlehub_metadata_cache_misses_total", "registry" => Arc::clone(registry_label)).increment(1);
+
+        // Before going upstream: this coordinate's own listing document may
+        // already be cached, and for most kinds resolving a version *is*
+        // reading that document. npm asks for a package's document and then for
+        // its tarball, so on the artifact request the packument is already
+        // held — and fetching it again to answer a question its bytes already
+        // answer is one upstream round trip per package per TTL, paid against
+        // somebody else's rate limit.
+        //
+        // Kind-specific and opt-in: `resolve_metadata_from_document` defaults to
+        // `None`, so a kind whose listing does not carry what a resolution needs
+        // is untouched. The document obeys the same `metadata_ttl` as the entry
+        // being written here, so this cannot serve anything the metadata cache
+        // would not have served a moment earlier.
+        if let Some(meta) = self
+            .resolve_from_cached_document(client, req, registry_label)
+            .await
+        {
+            self.finish_resolve(req, cache_key, ttl, &meta, capture_readme, client)
+                .await?;
+            return Ok(meta);
+        }
+
         let meta = match super::time_upstream_call(
             registry_label,
             "resolve_metadata",
@@ -109,6 +132,28 @@ impl ProxyService {
                 return Err(e);
             }
         };
+        self.finish_resolve(req, cache_key, ttl, &meta, capture_readme, client)
+            .await?;
+        Ok(meta)
+    }
+
+    /// Cache a freshly produced resolution and record the README it carried.
+    ///
+    /// Shared by the two ways one is produced — from upstream, and from a
+    /// listing document already in the cache — because they owe the caller the
+    /// same things afterwards. Split out when the second appeared: the parts
+    /// that are easy to forget are the `no-store` check and that a README is
+    /// recorded on a *fresh* resolution only, and duplicating them is how the
+    /// two paths would come to disagree about which.
+    async fn finish_resolve(
+        &self,
+        req: &ProxyRequest,
+        cache_key: &str,
+        ttl: Option<std::time::Duration>,
+        meta: &crate::entities::PackageMetadata,
+        capture_readme: bool,
+        client: &Arc<dyn crate::ports::RegistryClient>,
+    ) -> Result<(), CoreError> {
         let skip = meta
             .cache_control
             .as_deref()
@@ -127,16 +172,47 @@ impl ProxyService {
                 )
                 .await?;
         }
-        // The document has just been parsed and the README is a field of it, so
-        // this is where it is read (RFC 0007 §5.1). Only on the upstream branch:
-        // a cache hit returns above, so a re-resolve within the TTL does not
-        // re-record. And only when the caller is a *request path* — a page view
-        // reads the same document and stores nothing.
+        // The document has just been read and the README is a field of it, so
+        // this is where it is captured (RFC 0007 §5.1). Not on a cache hit — one
+        // returns before this — so a re-resolve within the TTL does not
+        // re-record; and only when the caller is a *request path*, since a page
+        // view reads the same document and stores nothing.
         if capture_readme {
-            self.maybe_record_readme(&req.package_id.registry, &meta, client)
+            self.maybe_record_readme(&req.package_id.registry, meta, client)
                 .await;
         }
-        Ok(meta)
+        Ok(())
+    }
+
+    /// This coordinate, resolved from its registry's listing document if that
+    /// document is already cached and the kind can read one.
+    ///
+    /// `None` for every reason there is: no cached document, a document that no
+    /// longer deserializes, or a kind that has not implemented
+    /// `resolve_metadata_from_document`. All three mean "resolve the usual
+    /// way", and none of them is an error — the cache is an optimisation and a
+    /// miss here costs exactly what the code did before it existed.
+    async fn resolve_from_cached_document(
+        &self,
+        client: &Arc<dyn crate::ports::RegistryClient>,
+        req: &ProxyRequest,
+        registry_label: &Arc<str>,
+    ) -> Option<crate::entities::PackageMetadata> {
+        let key = super::version_document_key(
+            &req.package_id.registry,
+            crate::ports::DocumentKind::Versions,
+            req.package_id.name.as_str(),
+        );
+        let entry = self.cache.get(&key).await.ok().flatten()?;
+        let document: crate::ports::VersionDocument =
+            serde_json::from_value(entry.metadata.extra).ok()?;
+        let meta = client.resolve_metadata_from_document(&req.package_id, &document)?;
+        tracing::debug!(
+            key = %key,
+            "resolved from the cached listing document; no upstream call"
+        );
+        metrics::counter!("batlehub_metadata_from_document_total", "registry" => Arc::clone(registry_label)).increment(1);
+        Some(meta)
     }
 
     /// Record the README a just-resolved metadata document carried, in a

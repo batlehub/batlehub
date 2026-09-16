@@ -117,6 +117,7 @@ curl -s -H "Authorization: Bearer <your-token>" \
 | `GET` | `/proxy/{registry}/api/products/intellij/plugins/{id}/comments` | `/api/products/intellij/plugins/{id}/comments` — plugin comments. |
 | `GET` | `/proxy/{registry}/api/search/aggregation/{field}` | `/api/search/aggregation/{field}` — facet values for the marketplace UI. |
 | `GET` | `/proxy/{registry}/api/search/plugins` | `/api/search/plugins?search=&build=` — array shape used by the IDE's |
+| `GET` | `/proxy/{registry}/api/search/updates/compatible` | `GET /api/search/updates/compatible` — the compatible-updates question in |
 | `POST` | `/proxy/{registry}/api/search/updates/compatible` | `POST /api/search/updates/compatible` — newest compatible update per |
 | `GET` | `/proxy/{registry}/api/searchPlugins` | `/api/searchPlugins?search=&max=` — `{plugins, total}` shape. |
 | `POST` | `/proxy/{registry}/api/updates/upload` |  |

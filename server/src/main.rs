@@ -1,3 +1,4 @@
+mod allocator;
 mod builders;
 mod explain;
 mod grants;
@@ -37,9 +38,51 @@ use crate::explain::explain_config;
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
+/// The optional cargo features this binary was compiled with.
+///
+/// Every one of them is a *backend that either exists in this build or does
+/// not*: `[storage] type = "s3"` without `storage-s3` is a startup error, and
+/// so is `[cache] type = "redis"` without `cache-redis`. All of them are
+/// default features, so a published image carries the lot — but a build from
+/// source need not, and "which backends does this binary have?" had no answer
+/// short of provoking the error. `--version` answers it.
+fn compiled_features() -> String {
+    let features: Vec<&str> = [
+        ("storage-s3", cfg!(feature = "storage-s3")),
+        ("cache-redis", cfg!(feature = "cache-redis")),
+        ("sbom", cfg!(feature = "sbom")),
+        ("jemalloc", cfg!(feature = "jemalloc")),
+    ]
+    .iter()
+    .filter_map(|(name, on)| on.then_some(*name))
+    .collect();
+    if features.is_empty() {
+        "none".to_string()
+    } else {
+        features.join(", ")
+    }
+}
+
+/// `<version> (features: …)`, which is what `batlehub --version` prints.
+///
+/// Through a `OnceLock` because clap's `version` wants a `&'static str` and the
+/// list is only known at runtime — `cfg!` is a value, not a literal, so there
+/// is no `concat!` that could build this at compile time.
+fn version_line() -> &'static str {
+    static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    VERSION.get_or_init(|| {
+        format!(
+            "{} (features: {})",
+            env!("CARGO_PKG_VERSION"),
+            compiled_features()
+        )
+    })
+}
+
 #[derive(Parser)]
 #[command(
     name = "batlehub",
+    version = version_line(),
     about = "BatleHub — smart artifact hub for package registries"
 )]
 struct Cli {
@@ -560,6 +603,7 @@ async fn main() -> Result<()> {
     );
     repo.run_migrations().await.context("running migrations")?;
     stores::spawn_db_pool_gauge_sampler(repo.pool());
+    allocator::spawn_allocator_gauge_sampler();
 
     let storage = setup::initialize_storage(&config, repo.pool()).await?;
     let setup::AuthSetup {

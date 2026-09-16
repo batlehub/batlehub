@@ -770,6 +770,8 @@ force_path_style = true         # optional: required for MinIO and RustFS
 
 S3 credentials are sourced from the standard AWS SDK credential chain: `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` environment variables, `~/.aws/credentials`, EC2/ECS instance metadata, and so on.
 
+> **S3 feature flag:** The `s3` backend is only compiled when the `storage-s3` feature is enabled. It is a default feature, so the official Docker image and the worker image both include it. When building from source with `--no-default-features`, pass `--features storage-s3` to `cargo build`; configuring `type = "s3"` on a build without it is a startup error, not a silent fallback. `batlehub --version` prints the features of a running build.
+
 #### Multi-backend
 
 Use this when different registries should store artifacts in different backends.

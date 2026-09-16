@@ -24,14 +24,32 @@ use super::http_client::{
 /// - `artifact = Some("vsix")` → stream the `.vsix` extension package
 pub struct OpenVsxRegistryClient {
     http: reqwest::Client,
-    /// The linked-README pair: redirects disabled so the SSRF guard validates
-    /// every hop, credentials attached only while the chain stays on `base_url`
-    /// (see [`fetch_linked_text`]).
+    /// The no-redirect pair, used by **both** reads that leave this origin: the
+    /// linked README (see [`fetch_linked_text`]) and the artifact fetch.
+    /// Redirects are disabled so the SSRF guard validates every hop, and
+    /// credentials are attached only while the chain stays on `base_url`.
     readme_credentialed: reqwest::Client,
     readme_plain: reqwest::Client,
     base_url: String,
     basic_auth: Option<(String, String)>,
 }
+
+/// The host the public Open VSX API answers on.
+///
+/// The asset exception below is granted only when this *is* the configured
+/// base: a self-hosted Open VSX serves its own files from its own origin, and
+/// has no business being pointed at Eclipse's CDN by a response it proxies.
+const PUBLIC_OPEN_VSX_HOST: &str = "open-vsx.org";
+
+/// Open VSX's asset CDN.
+///
+/// Every `files.*` URL in an extension document is on the API host and answers
+/// `302` to `https://openvsx.eclipsecontent.org/{ns}/{ext}/{version}/{file}`.
+/// The linked-README read follows redirects hop by hop and re-checks the origin
+/// that actually answered, so without this the last hop is refused and *no*
+/// Open VSX README is ever stored — the same failure the VS Code Marketplace
+/// kind had against `gallerycdn.vsassets.io`, for the same reason.
+const ASSET_CDN_HOST_SUFFIX: &str = "openvsx.eclipsecontent.org";
 
 impl OpenVsxRegistryClient {
     pub fn new(base_url: impl Into<String>, opts: &UpstreamHttpOptions) -> Result<Self, CoreError> {
@@ -48,6 +66,21 @@ impl OpenVsxRegistryClient {
 
     fn get(&self, url: &str) -> reqwest::RequestBuilder {
         basic_auth_get(&self.http, &self.basic_auth, url)
+    }
+
+    /// Hosts a linked asset may be read from besides the base URL's own origin.
+    ///
+    /// Empty for anything but the public registry — see [`PUBLIC_OPEN_VSX_HOST`].
+    fn asset_host_suffixes(&self) -> &'static [&'static str] {
+        let is_public = reqwest::Url::parse(&self.base_url)
+            .ok()
+            .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
+            .is_some_and(|host| host == PUBLIC_OPEN_VSX_HOST);
+        if is_public {
+            &[ASSET_CDN_HOST_SUFFIX]
+        } else {
+            &[]
+        }
     }
 
     fn parse_id(name: &str) -> Result<(&str, &str), CoreError> {
@@ -180,19 +213,20 @@ impl RegistryClient for OpenVsxRegistryClient {
         url: &str,
         max_bytes: usize,
     ) -> Result<Option<String>, CoreError> {
-        // No widening: Open VSX serves its `files.readme` from the same origin
-        // as the API, unlike the VS Code Marketplace's asset CDN — so a
-        // configured credential does travel with this read (it is a request to
-        // the registry it was configured for, and the anonymous read is the one
-        // that gets rate-limited), and stops at the first redirect that leaves
-        // that origin.
+        // The link itself is on the API's own origin, so a configured credential
+        // travels with the first hop (it is a request to the registry it was
+        // configured for, and the anonymous read is the one that gets
+        // rate-limited) and is dropped the moment a `Location` leaves it. The
+        // widening is for where that `Location` goes: on the public registry the
+        // file routes redirect to Eclipse's CDN, and only there —
+        // [`asset_host_suffixes`] is empty for a self-hosted base.
         fetch_linked_text(
             &self.readme_credentialed,
             &self.readme_plain,
             &self.basic_auth,
             url,
             &self.base_url,
-            &[],
+            self.asset_host_suffixes(),
             max_bytes,
         )
         .await
@@ -248,13 +282,35 @@ impl RegistryClient for OpenVsxRegistryClient {
         ensure_same_origin(&download_url, &self.base_url)?;
         tracing::debug!(url = %download_url, what, "fetching OpenVSX artifact");
 
-        let response = self
-            .get(&download_url)
-            .send()
-            .await
-            .map_err(to_registry_error)?
-            .error_for_status()
-            .map_err(to_registry_error)?;
+        // The URL above is same-origin with the configured base. What *answers*
+        // it is not: open-vsx.org `302`s every `files.*` URL to
+        // `openvsx.eclipsecontent.org`. `self.http` follows that itself, up to
+        // ten hops, with the operator's credential attached and no check on any
+        // hop — so the chain is walked here instead. Every hop that leaves the
+        // base is checked against the private, reserved and link-local ranges
+        // and re-issued without the credential, which is the treatment the VS
+        // Code Marketplace client already gives its signature archive and the
+        // GitLab client gives every artifact.
+        //
+        // No host allow-list on the final hop, deliberately. That check belongs
+        // to `fetch_linked_readme`, where the bytes become a *stored document*
+        // and the hosts one may be read from are part of the contract. An
+        // artifact is bytes a client asked for by coordinate; pinning the CDN's
+        // hostname here would turn a CDN rename into a total download outage
+        // instead of a missing README.
+        let parsed = reqwest::Url::parse(&download_url).map_err(|e| {
+            CoreError::Registry(format!("invalid download URL '{download_url}': {e}"))
+        })?;
+        let response = super::ssrf::fetch_following_redirects(
+            &self.readme_credentialed,
+            &self.readme_plain,
+            &self.basic_auth,
+            &self.base_url,
+            parsed,
+        )
+        .await?
+        .error_for_status()
+        .map_err(to_registry_error)?;
 
         let cache_control = cache_control(&response);
 
@@ -862,6 +918,47 @@ mod tests {
             client.fetch_linked_readme(&url, 8).await.unwrap(),
             Some("01234567".to_owned())
         );
+    }
+
+    /// The public registry answers every `files.*` URL with a `302` to Eclipse's
+    /// CDN, so the hop that actually serves the README is off the API's origin:
+    /// checking it strictly refused every Open VSX README while
+    /// `readme_support()` advertised `MetadataLinked`. The exception is granted
+    /// only to open-vsx.org — a self-hosted Open VSX serves its own files.
+    #[test]
+    fn the_asset_cdn_is_trusted_only_when_the_base_is_the_public_registry() {
+        let public =
+            OpenVsxRegistryClient::new("https://open-vsx.org", &UpstreamHttpOptions::default())
+                .unwrap();
+        assert_eq!(public.asset_host_suffixes(), &[ASSET_CDN_HOST_SUFFIX]);
+
+        let readme_url = "https://openvsx.eclipsecontent.org/redhat/vscode-yaml/1.0.0/readme.md";
+        assert!(crate::registry::http_client::ensure_linked_origin(
+            readme_url,
+            "https://open-vsx.org",
+            public.asset_host_suffixes(),
+        )
+        .is_ok());
+
+        // Not a substring match: a host that merely ends in the CDN's name
+        // with another label glued on is a different host.
+        assert!(crate::registry::http_client::ensure_linked_origin(
+            "https://openvsx.eclipsecontent.org.evil.example/readme.md",
+            "https://open-vsx.org",
+            public.asset_host_suffixes(),
+        )
+        .is_err());
+
+        let mirror =
+            OpenVsxRegistryClient::new("https://vsx.corp.example", &UpstreamHttpOptions::default())
+                .unwrap();
+        assert!(mirror.asset_host_suffixes().is_empty());
+        assert!(crate::registry::http_client::ensure_linked_origin(
+            readme_url,
+            "https://vsx.corp.example",
+            mirror.asset_host_suffixes(),
+        )
+        .is_err());
     }
 
     /// An upstream that has been compromised or misconfigured must not be able

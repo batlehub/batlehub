@@ -301,12 +301,19 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
           }
           return lines.join("\n");
         },
-        note:
+        note: (ctx) =>
           `The proxy implements the ` +
           `<a href="https://doc.rust-lang.org/cargo/reference/registry-protocols.html#sparse-protocol">` +
           `sparse registry protocol</a>. ` +
           `Checksums from the index match the cached <code>.crate</code> files, ` +
-          `so <code>cargo verify-project</code> continues to work.`,
+          `so <code>cargo verify-project</code> continues to work.` +
+          (ctx.isAuthenticated
+            ? ` <strong>When this registry refuses anonymous callers</strong> the proxy ` +
+              `advertises <code>auth-required</code> in the sparse index's ` +
+              `<code>config.json</code>, and cargo then sends this token on index reads and ` +
+              `<code>.crate</code> downloads as well as on publish. Without that field cargo ` +
+              `sends it on publish only, and every read arrives anonymous.`
+            : ``),
       },
     ],
   },
@@ -1918,23 +1925,32 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
         },
         note: (ctx) =>
           ctx.isAuthenticated
-            ? `nvm builds its own <code>curl</code> command and has nowhere to put a header; ` +
-              `libcurl reads <code>~/.netrc</code> without being asked, so add an entry for ` +
-              `this host (see the <em>~/.netrc</em> tab).`
+            ? `nvm downloads with <code>curl -q</code>, which disables <code>~/.curlrc</code>, ` +
+              `and curl never reads <code>~/.netrc</code> unless asked with <code>-n</code> — ` +
+              `so neither file reaches this client. Use nvm's own ` +
+              `<code>NVM_AUTH_HEADER</code>, or embed the credential in the mirror URL.`
             : `A blocked release disappears from <code>nvm ls-remote</code> and ` +
               `<code>nvm install &lt;that version&gt;</code> stops on nvm's own ` +
               `<em>"Version … not found"</em> — no download is attempted.`,
       },
       {
-        key: "nodedist-netrc",
-        label: "~/.netrc",
-        lang: "text",
+        key: "nodedist-auth",
+        label: "Authentication",
+        lang: "bash",
         showWhen: (ctx) => ctx.isAuthenticated,
-        template: (ctx) =>
-          [`machine ${ctx.netrcHost}`, `login ${ctx.netrcLogin}`, `password ${ctx.token}`].join(
-            "\n",
-          ),
-        note: `Neither nvm nor fnm can send an <code>Authorization</code> header; both use libcurl, which reads this file.`,
+        template: (ctx) => {
+          const reg = `${ctx.registryUrl}/nodedist`;
+          return [
+            `# nvm: its own header variable. Measured, because the obvious answers do not`,
+            `# work — nvm downloads with \`curl -q\`, which disables ~/.curlrc, and curl`,
+            `# never reads ~/.netrc unless asked with -n.`,
+            `export NVM_AUTH_HEADER="Bearer ${authTokenOrPlaceholder(ctx)}"`,
+            ``,
+            `# fnm, n and mise take the credential in the mirror URL instead.`,
+            `export FNM_NODE_DIST_MIRROR="${embedCredentials(reg, ctx.netrcLogin, authTokenOrPlaceholder(ctx))}"`,
+          ].join("\n");
+        },
+        note: `The token travels in the password field of HTTP Basic, which is what the server reads it out of.`,
       },
       {
         key: "nodedist-config",
@@ -1963,6 +1979,87 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
           `Run <code>batlehub-cli registry suggest</code> in a project with an ` +
           `<code>.nvmrc</code> to generate this block with the pinned release under ` +
           `<code>warm_packages</code>.`,
+      },
+    ],
+  },
+  {
+    id: "rustup",
+    label: "Rust toolchain (rustup)",
+    fileHint: "rust-toolchain.toml",
+    description:
+      `The <code>static.rust-lang.org</code> distribution as a typed registry (RFC 0024), so a ` +
+      `toolchain can be <em>blocked</em> rather than merely cached: the channel manifests ` +
+      `(<code>channel-rust-stable.toml</code> and the dated ones) are the filtered listing and the ` +
+      `enforcement point — a denied component disappears from the manifest, so ` +
+      `<code>rustup toolchain install</code> fails the way it fails upstream — and the per-target ` +
+      `component tarballs with their <code>.sha256</code> siblings are artifacts. The manifest's ` +
+      `<code>.asc</code> is relayed byte-exact and never re-signed, so a filtered manifest no ` +
+      `longer matches it; rustup's signature check is off by default and warns rather than fails. ` +
+      `Proxy-only: there is no publish protocol.`,
+    snippets: [
+      {
+        key: "rustup-env",
+        label: "Client setup",
+        lang: "bash",
+        template: (ctx) => {
+          const reg = `${ctx.registryUrl}/rustup`;
+          return [
+            `# The one client switch. Export it before rustup runs — in /etc/profile.d,`,
+            `# a Containerfile, or a CI job's env: block.`,
+            `export RUSTUP_DIST_SERVER="${reg}"`,
+            `# Only needed if rustup should also update *itself* through the proxy.`,
+            `export RUSTUP_UPDATE_ROOT="${reg}/rustup"`,
+            ``,
+            `rustup toolchain install stable --profile minimal`,
+            `cargo --version`,
+          ].join("\n");
+        },
+        note: (ctx) =>
+          ctx.isAuthenticated
+            ? `rustup has no token flag and no configuration file for credentials, but it does ` +
+              `send HTTP Basic from userinfo in <code>RUSTUP_DIST_SERVER</code> — see the ` +
+              `<em>Authentication</em> tab.`
+            : `A blocked toolchain or component is absent from the channel manifest, so rustup ` +
+              `stops with its own error before any download. <code>cargo</code> itself needs a ` +
+              `separate <code>cargo</code> registry — this one serves the toolchain.`,
+      },
+      {
+        key: "rustup-auth",
+        label: "Authentication",
+        lang: "bash",
+        showWhen: (ctx) => ctx.isAuthenticated,
+        template: (ctx) => {
+          const reg = `${ctx.registryUrl}/rustup`;
+          const updateRoot = `${reg}/rustup`;
+          const token = authTokenOrPlaceholder(ctx);
+          return [
+            `# rustup exposes no token flag, reads no ~/.netrc and has no credential file.`,
+            `# What it does do — measured on the wire — is send HTTP Basic from the URL's`,
+            `# userinfo, so the credential goes in the variable itself.`,
+            `export RUSTUP_DIST_SERVER="${embedCredentials(reg, ctx.netrcLogin, token)}"`,
+            `export RUSTUP_UPDATE_ROOT="${embedCredentials(updateRoot, ctx.netrcLogin, token)}"`,
+          ].join("\n");
+        },
+        note: `The token travels in the password field, which is what the server reads it out of. A URL carrying a secret lands in shell history and in <code>ps</code>: prefer a CI secret or a profile file mode 0600.`,
+      },
+      {
+        key: "rustup-config",
+        label: "Server config",
+        lang: "toml",
+        template: (ctx) =>
+          [
+            `[[registries]]`,
+            `name      = "${ctx.registryName}"`,
+            `type      = "rustup"`,
+            `mode      = "proxy"                              # the only mode: no publish protocol`,
+            `upstreams = ["https://static.rust-lang.org"]     # the default`,
+            ``,
+            `[registries.rbac]`,
+            `# The manifests are listings; the component tarballs are reads. An install needs both.`,
+            `anonymous = ["releases:read", "releases:list"]`,
+            `user      = ["releases:read", "releases:list"]`,
+            `admin     = ["*"]`,
+          ].join("\n"),
       },
     ],
   },
@@ -1996,8 +2093,10 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
         note: (ctx) =>
           ctx.isAuthenticated
             ? `<code>sdk</code> builds its own <code>curl</code> command and has nowhere to put ` +
-              `a header; libcurl reads <code>~/.netrc</code> without being asked, so add an ` +
-              `entry for this host (see the <em>~/.netrc</em> tab).`
+              `a header. It does not pass <code>-q</code>, so a <code>~/.curlrc</code> ` +
+              `containing <code>netrc</code> makes curl read the <em>~/.netrc</em> tab's file; ` +
+              `simpler still, embed the credential in <code>SDKMAN_CANDIDATES_API</code> and ` +
+              `<code>SDKMAN_BROKER_API</code>.`
             : `A blocked version answers <code>invalid</code> at ` +
               `<code>candidates/validate</code>, so <code>sdk install</code> stops on ` +
               `SDKMAN's own refusal before any download.`,

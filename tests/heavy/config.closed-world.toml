@@ -1,0 +1,388 @@
+# Server configuration for the heavy closed-world suite
+# (tests/heavy/closed_world.sh). See tests/heavy/config.npm.toml for the env-var
+# conventions; `${HEAVY_RUN}` keeps each run's registries out of the last one's.
+#
+# One instance carrying one proxy registry per ecosystem, because the suite's
+# claim is the same sentence ten times: with the client able to reach nothing
+# else, the dependencies come from here, the build runs, and the program runs.
+# Every registry is `mode = "proxy"` and anonymous-readable — a closed world is
+# about reachability, not about credentials, and the authorization suites
+# already own that question.
+#
+# Rust is deliberately absent: `tests/heavy/rustup.sh` is the closed world for
+# rustup and cargo, and it proves more (the toolchain comes from the instance
+# too, because there rustup *is* the package manager).
+
+[server]
+host = "127.0.0.1"
+port = 8155
+# **Proxy only.** No registry here configures `[registries.security]`, so the
+# embedded worker has nothing to scan — but it still polls `scan_jobs` and
+# upserts `worker_heartbeats` on a timer, against the same five-connection pool
+# the client's downloads are queueing for. Measured on the `conda` phase in CI:
+# `UPDATE scan_jobs` at 4.5 s and a `worker_heartbeats` upsert at **9.3 s**, on
+# tables with nothing in them, while micromamba's downloads waited up to 7.9 s
+# for a connection. Work that cannot produce a result does not get to compete
+# for the pool.
+roles = ["proxy"]
+# The Terraform phase reaches this instance through a second tap that
+# terminates TLS, and the server has to believe that tap's `X-Forwarded-Proto`
+# or it advertises `http://` URLs inside documents Terraform fetched over TLS.
+trusted_proxies = ["127.0.0.1/32"]
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+# 20, where every other heavy config uses 5, because this is the only suite
+# that drives a *parallel* client: micromamba fetches a whole Python
+# environment at once — some fifteen packages, 65 MB — and each download makes
+# several short queries (the audit row, the artifact-meta reserve and commit).
+# Five connections turn that into a queue, and the queue is what the logging
+# tap's 120-second cap eventually fires on: in CI the phase died with `408`s on
+# `openssl` (3 MB) and `ca-certificates` (a few hundred KB), which are far too
+# small to have spent two minutes in transfer. Nothing holds a connection
+# across a stream — every query is `execute(&self.pool)` — so this is pool
+# *size* against burst concurrency, not a leak.
+max_connections = 20
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-closed-world-storage"
+
+# ── Go: proxy.golang.org, sumdb included ─────────────────────────────────────
+[[registries]]
+type = "goproxy"
+name = "go-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── Node: registry.npmjs.org ─────────────────────────────────────────────────
+[[registries]]
+type = "npm"
+name = "npm-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── Python: pypi.org ─────────────────────────────────────────────────────────
+[[registries]]
+type = "pypi"
+name = "pypi-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── Java: repo1.maven.org, plugins as well as dependencies ───────────────────
+[[registries]]
+type = "maven"
+name = "maven-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── Ruby: rubygems.org ───────────────────────────────────────────────────────
+[[registries]]
+type = "rubygems"
+name = "gems-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── .NET: api.nuget.org ──────────────────────────────────────────────────────
+[[registries]]
+type = "nuget"
+name = "nuget-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── PHP: repo.packagist.org ──────────────────────────────────────────────────
+[[registries]]
+type = "composer"
+name = "composer-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── Conda: one channel, conda-forge ──────────────────────────────────────────
+#
+# The upstream is the channel root, not the host: a conda registry addresses
+# `{subdir}/{file}` under it, so the channel name belongs here.
+[[registries]]
+type = "conda"
+name = "conda-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://conda.anaconda.org/conda-forge"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── Terraform: registry.terraform.io ─────────────────────────────────────────
+[[registries]]
+type = "terraform"
+name = "tf-${HEAVY_RUN}"
+mode = "proxy"
+# Terraform addresses a provider by hostname, so this registry answers for
+# `localhost` — the one name that resolves, is in the suite's certificate, and
+# can be bound here. Every other phase reaches the instance as 127.0.0.1 and is
+# unaffected.
+hosts = ["localhost"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── mise: a GitHub release, through the forge registry (RFC 0019) ────────────
+[[registries]]
+type = "github"
+name = "github-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The second half: the kinds whose client is a *tool installer* or a *gallery*
+# rather than a language's package manager.
+#
+# The claim is the same one the ecosystems above make, and the shape of the
+# proof changes only where the artifact is not a program: an editor extension
+# and an IDE plugin are *installed*, and what runs is the editor that lists
+# them back. Everything else here ends in a binary this instance served,
+# executed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── nvm: nodejs.org/dist — the runtime itself ────────────────────────────────
+[[registries]]
+type = "nodedist"
+name = "nodedist-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── SDKMAN: api.sdkman.io, and the broker that 302s to the vendor's CDN ──────
+#
+# Two upstreams are not configured here: the broker base is the adapter's own
+# second URL (`SdkmanRegistryClient::new(url, broker_url, …)`), defaulted in
+# `server/src/builders.rs`. The client is pointed at `…/sdkman/broker`.
+[[registries]]
+type = "sdkman"
+name = "sdkman-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── Open VSX: open-vsx.org, driven by `ovsx` ─────────────────────────────────
+[[registries]]
+type = "openvsx"
+name = "ovsx-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── VS Code gallery: marketplace.visualstudio.com, driven by the editor ──────
+#
+# The editor reaches this through its own `product.json`, so this registry is
+# the instance's *marketplace* rather than a byte cache — the distinction
+# `tests/heavy/marketplace.sh` draws, made here with egress denied.
+[[registries]]
+type = "vscode-marketplace"
+name = "vscode-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── JetBrains Marketplace: plugins.jetbrains.com, driven by IntelliJ ─────────
+[[registries]]
+type = "jetbrains-marketplace"
+name = "jbm-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── JetBrains downloads: cache-redirector.jetbrains.com, a path proxy ───────
+#
+# The JetBrains Runtime, not an IDE archive: a JBR is ~100 MB against an IDE's
+# ~1.5 GB, and it is a JDK — so the phase ends in `java -version`, which is the
+# same proof at a fifteenth of the bytes. `[limits]` would otherwise have to be
+# raised (`max_artifact_size_bytes` defaults to 500 MiB and `ProxyService`
+# buffers the whole artifact), which is a second thing to keep in step for
+# nothing.
+#
+# `path_allow` is not required for this kind — the upstream is one vendor's own
+# CDN — but it is written anyway, because a registry that will relay any path
+# on that host is a worse default than a registry that relays two.
+#
+# `cache-redirector.jetbrains.com/intellij-jbr/`, which is where JetBrains keeps
+# the runtimes and where every build script fetches them. `download.jetbrains.com/idea/jbr/`
+# is *also* a JetBrains host and answers `302` to a CDN that then 404s every JBR
+# build — the proxy's honest "not found upstream" was the first run's failure.
+[[registries]]
+type = "jetbrains"
+name = "jb-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://cache-redirector.jetbrains.com"]
+path_allow = ["intellij-jbr/jbr_jcef-*-linux-x64-*.tar.gz", "intellij-jbr/jbr-*-linux-x64-*.tar.gz"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── Forgejo: codeberg.org, driven by mise's `forgejo:` backend ──────────────
+#
+# The release routes are shared with GitHub (`require_github` accepts both), so
+# what this registry adds over the `github-` one above is the *upstream API
+# shape*: `/api/v1/repos/{owner}/{repo}/releases`, which is Forgejo's, not
+# GitHub's.
+[[registries]]
+type = "forgejo"
+name = "forgejo-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://codeberg.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── GitLab: gitlab.com, driven by mise's `gitlab:` backend ──────────────────
+[[registries]]
+type = "gitlab"
+name = "gitlab-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://gitlab.com"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── generic: get.helm.sh, a single-binary vendor CDN ────────────────────────
+#
+# `upstreams` and `path_allow` are both mandatory for this kind (see the module
+# docs on `crates/web/src/handlers/proxy/generic.rs`): the path is passed
+# straight through, so a registry with no allowlist relays every path on the
+# host. Two entries, which is exactly what the phase fetches.
+[[registries]]
+type = "generic"
+name = "helm-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://get.helm.sh"]
+path_allow = ["helm-v*-linux-amd64.tar.gz", "helm-v*-linux-amd64.tar.gz.sha256sum"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── deb: the Ubuntu archive, driven by a real unprivileged `apt` ────────────
+#
+# archive.ubuntu.com rather than the kind's `deb.debian.org` default: the
+# runner is Ubuntu, and `dpkg --print-architecture` has to name an architecture
+# the suite it points at actually publishes.
+[[registries]]
+type = "deb"
+name = "deb-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["http://archive.ubuntu.com/ubuntu"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── rpm: EPEL 9, driven by `dnf download` ───────────────────────────────────
+#
+# The kind's default upstream is `example.invalid/rpm` — there is no sensible
+# default repository for rpm — so this one is not optional.
+[[registries]]
+type = "rpm"
+name = "rpm-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://dl.fedoraproject.org/pub/epel/9/Everything/x86_64"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── pacman: the Arch mirror, driven by an unprivileged `pacman --root` ──────
+#
+# **Two mirrors, and the second one is not decoration.** An Arch mirror replaces
+# `<repo>.db` in place on every sync, and a client that asks during the swap
+# gets a `404` from the mirror itself. That is what took this phase down on
+# 2026-09-15: `extra.db` carried `last-modified: 19:14:58` and the request
+# failed at 19:15:37, while `core.db` — untouched since 11:43 that day — came
+# back `200` from the same host seconds earlier. BatleHub reported it faithfully
+# (`path_proxy` maps an upstream 404 to `NotFound`, and the phase saw a 404),
+# which is correct and indistinguishable from a bug in this server at a glance.
+#
+# With more than one upstream, `build_registry_client` wraps the clients in a
+# `FanoutRegistryClient`, whose `fetch_artifact` moves to the next upstream on
+# `NotFound` — so the second mirror answers the ten-second window in which the
+# first one is mid-sync. It is the one upstream flake this suite can remove
+# without pretending the world is closed when it is not.
+[[registries]]
+type = "pacman"
+name = "pacman-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = [
+  "https://geo.mirror.pkgbuild.com",
+  "https://mirror.rackspace.com/archlinux",
+]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

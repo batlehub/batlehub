@@ -10,9 +10,30 @@ reader searching for "CLI" found two pages and could not tell them apart.
 
 ```
 batlehub --config config.toml          # start the server (default: config.toml)
+batlehub --version                     # version, and the backends this build carries
 batlehub dump-spec                     # print the OpenAPI JSON spec to stdout
 batlehub hash-token <token>            # generate an Argon2id PHC hash for a static token
 batlehub explain-config                # print the permissions each subject holds, expanded
+```
+
+## `--version`
+
+Prints the version and the cargo features the binary was compiled with:
+
+```sh
+batlehub --version
+# batlehub 1.2.0 (features: storage-s3, cache-redis, sbom, jemalloc)
+```
+
+The features in that list are backends that either exist in the binary or do
+not — `storage-s3` for `[storage] type = "s3"`, `cache-redis` for
+`[cache] type = "redis"` — and a config naming one the build lacks is refused at
+startup rather than degraded. All of them are default features, so a published
+image carries the lot and this is mostly a question to ask of a build from
+source, or of an image whose provenance is unclear:
+
+```sh
+docker run --rm ghcr.io/batleforc/batlehub:<version> --version
 ```
 
 ## `--config`

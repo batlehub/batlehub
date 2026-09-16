@@ -11,7 +11,9 @@ use super::super::http_client::{
     basic_auth_get, cache_control, new_http_client, percent_encode, to_registry_error,
     UpstreamHttpOptions,
 };
-use super::models::{parse_plugin_list, PluginListEntry, SearchPluginsResponse};
+use super::models::{
+    parse_plugin_list, PluginIdentity, PluginListEntry, PluginUpdate, SearchPluginsResponse,
+};
 
 /// JetBrains Marketplace client (plugins.jetbrains.com or compatible).
 ///
@@ -73,6 +75,64 @@ impl JetbrainsMarketplaceRegistryClient {
             )));
         }
         Ok(entries)
+    }
+
+    /// Whether a path segment is one of the marketplace's numeric ids.
+    ///
+    /// A plugin xmlId is a reverse-DNS-ish string (`org.rust.lang`, `IdeaVIM`)
+    /// and a version is dotted; neither is all digits, so "all digits" is an
+    /// unambiguous signal that this is the `/files/{pluginId}/{updateId}/…`
+    /// spelling rather than the published one.
+    fn is_numeric_id(segment: &str) -> bool {
+        !segment.is_empty() && segment.bytes().all(|b| b.is_ascii_digit())
+    }
+
+    /// `GET /api/plugins/{pluginId}/updates` — every update of one plugin, with
+    /// the numeric id the IDE addresses it by beside the version string this
+    /// server publishes.
+    async fn fetch_updates(&self, plugin_id: &str) -> Result<Vec<PluginUpdate>, CoreError> {
+        let url = format!(
+            "{}/api/plugins/{}/updates",
+            self.base_url,
+            percent_encode(plugin_id)
+        );
+        let resp = self.get(&url).send().await.map_err(to_registry_error)?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(CoreError::NotFound(format!(
+                "JetBrains plugin '{plugin_id}' not found"
+            )));
+        }
+        resp.error_for_status()
+            .map_err(to_registry_error)?
+            .json::<Vec<PluginUpdate>>()
+            .await
+            .map_err(to_registry_error)
+    }
+
+    /// `GET /api/plugins/{pluginId}` — the plugin's `xmlId`, which is the only
+    /// part of the canonical coordinate the updates listing does not carry (its
+    /// `link` holds a URL slug, `164-ideavim`, which is not the id).
+    async fn fetch_xml_id(&self, plugin_id: &str) -> Result<String, CoreError> {
+        let url = format!(
+            "{}/api/plugins/{}",
+            self.base_url,
+            percent_encode(plugin_id)
+        );
+        let resp = self.get(&url).send().await.map_err(to_registry_error)?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(CoreError::NotFound(format!(
+                "JetBrains plugin '{plugin_id}' not found"
+            )));
+        }
+        let plugin = resp
+            .error_for_status()
+            .map_err(to_registry_error)?
+            .json::<PluginIdentity>()
+            .await
+            .map_err(to_registry_error)?;
+        plugin.xml_id.ok_or_else(|| {
+            CoreError::Registry(format!("JetBrains plugin '{plugin_id}' carries no xmlId"))
+        })
     }
 
     /// Newest entry by publish date; falls back to the first listed entry when
@@ -247,6 +307,38 @@ impl RegistryClient for JetbrainsMarketplaceRegistryClient {
             stream: Box::pin(stream),
             cache_control,
         })
+    }
+
+    /// `files/{pluginId}/{updateId}/…` → `xmlId@version`.
+    ///
+    /// The IDE reads the numeric pair out of `api/search/updates/compatible`
+    /// (`{"id":1149038,"pluginId":164,…}`) and addresses the update by it. Two
+    /// upstream calls, both cached by `ProxyService::canonical_coordinate`, and
+    /// the artifact selector rides along unchanged — once the coordinate is
+    /// canonical the archive is fetched by `plugin/download` like any other.
+    async fn canonical_coordinate(&self, pkg: &PackageId) -> Result<Option<PackageId>, CoreError> {
+        if !(Self::is_numeric_id(&pkg.name) && Self::is_numeric_id(&pkg.version)) {
+            return Ok(None);
+        }
+
+        let updates = self.fetch_updates(&pkg.name).await?;
+        let version = updates
+            .iter()
+            .find(|u| u.id.to_string() == pkg.version)
+            .and_then(|u| u.version.clone())
+            .ok_or_else(|| {
+                CoreError::NotFound(format!(
+                    "JetBrains update {} of plugin {} not found",
+                    pkg.version, pkg.name
+                ))
+            })?;
+        let xml_id = self.fetch_xml_id(&pkg.name).await?;
+
+        Ok(Some(PackageId {
+            name: xml_id,
+            version,
+            ..pkg.clone()
+        }))
     }
 
     async fn search_packages(

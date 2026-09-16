@@ -1,0 +1,62 @@
+# tests/heavy/soak.sh — a real npm client, in a loop, against a served upstream.
+#
+# The upstream is a directory this suite serves, not registry.npmjs.org: a soak
+# offers the same request thousands of times, and pointing that at somebody
+# else's registry is rude at best and rate-limited at worst. It also makes the
+# upstream's access log a count, so "the proxy answered from its cache" is an
+# assertion rather than a belief.
+#
+# `max_connections = 5` is deliberate, as in config.hybrid.toml: a small pool
+# turns a connection that is never returned into a hang inside the run instead
+# of a number nobody looks at.
+
+[server]
+host = "127.0.0.1"
+port = 8170
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-soak-storage"
+
+# The proxied registry: every install in the loop resolves a packument and a
+# tarball through here.
+[[registries]]
+type = "npm"
+name = "npm-proxy-${HEAVY_RUN}"
+upstreams = ["${HEAVY_UPSTREAM_URL}"]
+
+# An hour, against the 300 s default: the suite asserts that the upstream was
+# asked *once per package* across the whole loop, and at the default TTL a run
+# slow enough to cross five minutes would re-fetch and fail an assertion about
+# caching with a fact about the clock.
+[registries.cache]
+metadata_ttl_secs = 3600
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# The write path, exercised once per round.
+[[registries]]
+type = "npm"
+name = "npm-local-${HEAVY_RUN}"
+mode = "local"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

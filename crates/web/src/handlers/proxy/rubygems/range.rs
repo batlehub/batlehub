@@ -11,19 +11,31 @@
 //!
 //! Bundler's updater stores an etag per document and sends it back as
 //! `If-None-Match` alongside the `Range` (`compact_index_client/updater.rb`,
-//! `request_headers`). The etag is opaque to it: it is whatever the server sent
-//! with the bytes now in its cache. Bundler 2.5 additionally synthesised one as
-//! the **MD5 of its local file** when it had no stored etag — a transition aid
-//! its own comment says to remove, and 4.0.17 has. Either way the validator it
-//! presents describes bytes it already holds.
+//! `request_headers`). The etag is **opaque** to it — read from the etag file
+//! and quoted, nothing more:
 //!
-//! This server issues `ETag: "<md5 of the whole document>"`, so both paths land
-//! on the same value. That makes one check possible that a generic file server
-//! cannot do:
+//! ```text
+//! etag = etag_path.read.tap(&:chomp!) if etag_path.file?
+//! headers["If-None-Match"] = %("#{etag}") if etag
+//! ```
 //!
-//! > if the client's validator equals the MD5 of **our document's first N
+//! so the algorithm behind it is this server's choice. It issues
+//! `ETag: "<sha-256 of the whole document>"`, which makes one check possible
+//! that a generic file server cannot do:
+//!
+//! > if the client's validator equals the SHA-256 of **our document's first N
 //! > bytes**, then what the client holds *is* our prefix, and appending the tail
 //! > is provably correct.
+//!
+//! **Bundler older than 2.7 is not served by this and is not meant to be.**
+//! Those versions synthesised a validator themselves when they had no stored
+//! etag — `SharedHelpers.digest(:MD5).hexdigest(IO.read(path))` over the local
+//! file — which is the only reason this server's etag used to be an MD5.
+//! Bundler 2.7.0 removed that (2025-07-16, a breaking change) and 4.0.17 has no
+//! trace of it. A pre-2.7 client now presents a validator that matches nothing
+//! here, `holds_our_prefix` says no, and it gets `200` with the whole document:
+//! the behaviour it had before any of this existed. Degraded by one full
+//! transfer, never wrong — no client is handed a spliced document.
 //!
 //! With one wrinkle, which measurement found and reasoning would not have:
 //! Bundler asks from one byte *before* the end of its copy — `bytes=(size-1)-` —
@@ -134,9 +146,13 @@ fn resolve(range: &str, len: usize) -> Resolved {
     Resolved::Partial { start, end }
 }
 
-fn md5_hex(bytes: &[u8]) -> String {
-    use md5::{Digest as _, Md5};
-    hex::encode(Md5::digest(bytes))
+/// The etag over `bytes`, and the same function `holds_our_prefix` re-derives
+/// over a prefix. SHA-256: the value is opaque to every client that reads it
+/// back (see the module header), so there is no reason for it to be anything
+/// weaker.
+fn etag_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest as _, Sha256};
+    hex::encode(Sha256::digest(bytes))
 }
 
 /// `Repr-Digest` over the whole representation, in the one algorithm Bundler
@@ -174,7 +190,7 @@ fn none_match_hits(header_value: &str, etag_hex: &str) -> bool {
 pub(super) fn compact_response(req: &HttpRequest, body: String) -> HttpResponse {
     let bytes = body.into_bytes();
     let len = bytes.len();
-    let etag_hex = md5_hex(&bytes);
+    let etag_hex = etag_hex(&bytes);
     let etag = format!("\"{etag_hex}\"");
 
     let none_match = req
@@ -238,7 +254,7 @@ fn holds_our_prefix(bytes: &[u8], start: usize, client_tag: &str) -> bool {
     [start, start + 1]
         .into_iter()
         .filter(|&n| n <= bytes.len())
-        .any(|n| md5_hex(&bytes[..n]) == client_tag)
+        .any(|n| etag_hex(&bytes[..n]) == client_tag)
 }
 
 fn full(bytes: Vec<u8>, etag: String) -> HttpResponse {
@@ -309,7 +325,7 @@ mod tests {
 
     #[test]
     fn a_matching_validator_is_not_modified() {
-        let etag = md5_hex(body().as_bytes());
+        let etag = etag_hex(body().as_bytes());
         let req = TestRequest::default()
             .insert_header((header::IF_NONE_MATCH, format!("\"{etag}\"")))
             .to_http_request();
@@ -322,7 +338,7 @@ mod tests {
     fn a_client_holding_our_prefix_gets_the_tail() {
         let full_body = body();
         let prefix_len = 16;
-        let prefix_tag = md5_hex(&full_body.as_bytes()[..prefix_len]);
+        let prefix_tag = etag_hex(&full_body.as_bytes()[..prefix_len]);
         let req = TestRequest::default()
             .insert_header((header::IF_NONE_MATCH, format!("\"{prefix_tag}\"")))
             .insert_header((header::RANGE, format!("bytes={prefix_len}-")))
@@ -348,7 +364,7 @@ mod tests {
     fn bundlers_one_byte_overlap_still_counts_as_holding_our_prefix() {
         let full_body = body();
         let held = 16; // what the client has
-        let held_tag = md5_hex(&full_body.as_bytes()[..held]);
+        let held_tag = etag_hex(&full_body.as_bytes()[..held]);
         let req = TestRequest::default()
             .insert_header((header::IF_NONE_MATCH, format!("\"{held_tag}\"")))
             .insert_header((header::RANGE, format!("bytes={}-", held - 1)))

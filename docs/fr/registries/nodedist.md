@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/nodedist.md
-sourceHash: d16b13a332915f3f
+sourceHash: f91bed3572acdaa5
 ---
 
 # Distributions Node (nvm, fnm, n, mise)
@@ -88,15 +88,24 @@ et [quels listings sont filtrés](/fr/guide/admin-policies#which-listings-are-fi
 
 ## Authentification
 
-nvm et fnm construisent leur propre commande `curl` et n'ont nulle part où
-placer un en-tête. libcurl lit `~/.netrc` sans qu'on le lui demande : une
-instance authentifiée a donc besoin d'une entrée pour l'hôte du proxy.
+nvm télécharge avec `curl -q`, ce qui désactive `~/.curlrc`, et curl n'a jamais
+lu `~/.netrc` sans qu'on le lui demande par `-n` : **aucun de ces deux fichiers
+n'atteint ce client**, quoi qu'en dise la documentation d'un miroir. nvm dispose
+en revanche de sa propre variable d'en-tête ; fnm, `n` et mise prennent
+l'identifiant dans l'URL du miroir.
 
-```text
-machine batlehub.example.com
-login <your-user-id>
-password <your-token>
+```sh
+# nvm : sa propre variable d'en-tête. Mesuré, parce que les réponses évidentes
+# ne fonctionnent pas — nvm télécharge avec `curl -q`, ce qui désactive
+# ~/.curlrc, et curl ne lit jamais ~/.netrc sans -n.
+export NVM_AUTH_HEADER="Bearer <token>"
+
+# fnm, n et mise prennent l'identifiant dans l'URL du miroir à la place.
+export FNM_NODE_DIST_MIRROR="https://<user>:<token>@batlehub.example.com/proxy/<registry>/nodedist"
 ```
+
+Le jeton voyage dans le champ **mot de passe** de l'authentification HTTP Basic,
+d'où le serveur le lit.
 
 ## Notes
 

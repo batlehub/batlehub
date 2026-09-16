@@ -8,8 +8,8 @@ use batlehub_adapters::registry::{
     ForgejoRegistryClient, GithubRegistryClient, GitlabRegistryClient, GoProxyRegistryClient,
     JetbrainsMarketplaceRegistryClient, MavenRegistryClient, NodeDistRegistryClient,
     NpmRegistryClient, NugetRegistryClient, OpenVsxRegistryClient, PathProxyRegistryClient,
-    PypiRegistryClient, RubyGemsRegistryClient, SdkmanRegistryClient, TerraformRegistryClient,
-    UpstreamHttpOptions, VsCodeMarketplaceRegistryClient,
+    PypiRegistryClient, RubyGemsRegistryClient, RustupRegistryClient, SdkmanRegistryClient,
+    TerraformRegistryClient, UpstreamHttpOptions, VsCodeMarketplaceRegistryClient,
 };
 use batlehub_config::schema::{
     QuotaEnforcement as ConfigQuotaEnforcement, RegistryConfig, RuleConfig, UpstreamAuthConfig,
@@ -198,6 +198,11 @@ fn default_upstreams(kind: RegistryKind, reg: &RegistryConfig) -> Vec<String> {
             &reg.upstreams,
             batlehub_adapters::registry::sdkman::DEFAULT_API_BASE,
         ),
+        // The tree `RUSTUP_DIST_SERVER` defaults to, and its *root*: the
+        // registry serves `dist/`, `rustup/` and `manifests.txt` from it, which
+        // is why config validation refuses an upstream ending in `/dist`
+        // (RFC 0024 §4.1).
+        RegistryKind::Rustup => resolve_urls(&reg.upstreams, "https://static.rust-lang.org"),
     }
 }
 
@@ -275,6 +280,7 @@ fn make_one(
         RegistryKind::Generic => path_proxy("generic")?,
         RegistryKind::Nodedist => Arc::new(NodeDistRegistryClient::new(url, opts)?),
         RegistryKind::Sdkman => Arc::new(SdkmanRegistryClient::new(url, broker_url, opts)?),
+        RegistryKind::Rustup => Arc::new(RustupRegistryClient::new(url, opts)?),
     };
     Ok(client)
 }

@@ -1,0 +1,63 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://batleforc.git.batleforc.fr/batlehub/vex/batlehub",
+  "author": "BatleHub maintainers",
+  "role": "Project maintainers",
+  "timestamp": "2026-09-15T00:00:00Z",
+  "version": 1,
+  "tooling": "hand-maintained; validated and rendered by .github/scripts/vex.py",
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "CVE-2026-84304",
+        "description": "gRPC-go: heap memory exhaustion via HTTP/2 DATA frame fragmentation"
+      },
+      "timestamp": "2026-09-15T00:00:00Z",
+      "products": [
+        {
+          "@id": "pkg:oci/batlehub-worker",
+          "subcomponents": [
+            { "@id": "pkg:golang/google.golang.org/grpc@v1.82.1" }
+          ]
+        },
+        {
+          "@id": "pkg:oci/batlehub-worker-guarddog",
+          "subcomponents": [
+            { "@id": "pkg:golang/google.golang.org/grpc@v1.82.1" }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "The vulnerable grpc-go is vendored inside the upstream Trivy release binary the worker image carries (/usr/local/bin/trivy, pinned by TRIVY_VERSION in Containerfile.worker), not in any BatleHub code. The worker only ever runs it as a client against the Trivy server the chart deploys (crates/adapters/src/scanners/trivy.rs runs `trivy ... --server <endpoint>`); nothing in the image terminates an HTTP/2 connection of its own, so no attacker-controlled peer can send it the fragmented DATA frames the advisory describes.",
+      "action_statement": "Bump TRIVY_VERSION to the first Trivy release whose go.mod carries grpc-go >= 1.83.1, and delete this statement together with its .trivyignore.yaml entry.",
+      "action_statement_timestamp": "2026-09-15T00:00:00Z"
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-84445",
+        "description": "gRPC-go: xDS routing interceptor panics on a request with neither :authority nor Host"
+      },
+      "timestamp": "2026-09-15T00:00:00Z",
+      "products": [
+        {
+          "@id": "pkg:oci/batlehub-worker",
+          "subcomponents": [
+            { "@id": "pkg:golang/google.golang.org/grpc@v1.82.1" }
+          ]
+        },
+        {
+          "@id": "pkg:oci/batlehub-worker-guarddog",
+          "subcomponents": [
+            { "@id": "pkg:golang/google.golang.org/grpc@v1.82.1" }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "The vulnerable path is a server built with xds.NewGRPCServer(), and the Trivy binary in the worker image never builds one — it is invoked as a client, and Trivy's own server mode is plain gRPC rather than xDS, so the xDS routing interceptor the advisory describes is never installed. Nothing in the worker image listens on a port.",
+      "action_statement": "Bump TRIVY_VERSION to the first Trivy release whose go.mod carries grpc-go >= 1.82.2, and delete this statement together with its .trivyignore.yaml entry.",
+      "action_statement_timestamp": "2026-09-15T00:00:00Z"
+    }
+  ]
+}

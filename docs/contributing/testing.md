@@ -27,6 +27,7 @@ BatleHub's tests fall into six layers, in increasing order of infrastructure cos
 | **External integration** | `crates/adapters/tests/*.rs` | real Postgres / MinIO(S3) / Redis via Podman | `task test:pg-*`, `task test:s3` |
 | **Heavy client** | `tests/heavy/*.sh` | real Postgres **and a real client** — VS Code, IntelliJ, Bundler, npm, pip, ovsx, micromamba, dotnet, composer, terraform, nvm, mise, cargo, go, mvn, apt/dnf | `task test:heavy`, or one `task test:<ecosystem>-heavy` |
 | **Heavy authorization** | `tests/heavy/authz.sh` | real Postgres, grants from a **real config file**, and the same clients | `task test:authz-heavy`, or `task test:authz-matrix-heavy` for the fast half |
+| **Soak / leak** | `perf/k6/scenarios/10_soak.js`, `tests/heavy/soak.sh` | real Postgres, a mock or served upstream, and constant load for as long as you ask | `task perf:soak`, `task test:soak-heavy` — **manual only** |
 | **Fuzz** | `fuzz/fuzz_targets/*.rs` | nightly toolchain to *run*, none to check | `task fuzz:check`, `task fuzz` |
 | **Editor patch** | `patches/che-code/*.test.ts` | none — Node strips the types itself | `task test:patch` |
 | **API contract** | `crates/web/tests/openapi_contract.rs` | none — walks the generated spec *and* the handler sources | `cargo test -p batlehub-web --test openapi_contract` |
@@ -90,6 +91,11 @@ task test:mise-heavy          # `mise install github:…` through a forge regist
                               # then the whole air gap: plan, seed, export, import into a
                               # second `[air_gap]` instance, install through it (RFC 0008)
 task test:cargo-heavy         # RFC 0018 §4.4: yanked mark, 403/404 refusal, recovery, `cargo publish`
+task test:rustup-heavy        # RFC 0024 §6.10: a closed world — the compiler, the crates, the
+                              # build and the run through one instance with egress denied
+task test:closed-world-heavy  # egress denied to the client, kept for the server: 22 registry
+                              # kinds each resolve, build and run against this instance
+                              # alone (`-- go` for one phase)
 task test:go-heavy            # …same axes for `go`, plus the GOPROXY `direct` fallback and the sumdb
 task test:maven-heavy         # …same for `mvn`, incl. its cached failure and `deploy:deploy-file`
 task test:pathproxy-heavy     # …same for `apt` and `dnf`, whose signed indexes cannot hide anything
@@ -283,6 +289,68 @@ puts a transparent logging proxy (`http_tap.py`) in front of it, drives that
 ecosystem's **real client**, and asserts on the wire transcript. Shared
 machinery is in `tests/heavy/lib.sh`.
 
+Two of them are **closed-world** suites, and they are the ones that answer "can
+this instance be the only way out?". BatleHub keeps its egress; every client
+process gets none — `HTTP(S)_PROXY` points at a denial with only the loopback
+exempted — so anything a phase obtains, it obtained through the instance.
+`rustup.sh` points it at a closed port; `closed_world.sh` points it at
+`closed_proxy.py`, which relays the loopback and refuses every other host,
+because a closed port only denies a client that reads `NO_PROXY` and VS Code's
+CLI does not. `tests/heavy/rustup.sh` is Rust's, and proves the most, because there
+the compiler itself crosses the proxy. `tests/heavy/closed_world.sh` is every
+other kind, one phase each, selected by name:
+
+| Phase | Kind | Client | What ends the phase |
+| --- | --- | --- | --- |
+| `go` | `goproxy` | the Go tool | the built binary runs |
+| `node` | `npm` | npm + tsc | the compiled program runs |
+| `python` | `pypi` | pip | the built wheel's code runs |
+| `java` | `maven` | Maven (plugins included) | the packaged jar runs |
+| `ruby` | `rubygems` | Bundler | `bundle exec` runs |
+| `dotnet` | `nuget` | the .NET SDK | the built program runs |
+| `php` | `composer` | Composer | the program runs |
+| `conda` | `conda` | micromamba | the env's own python runs |
+| `terraform` | `terraform` | Terraform | `apply` executes the provider |
+| `mise` | `github` | mise | the installed tool runs |
+| `nvm` | `nodedist` | nvm | the **runtime** it installed runs |
+| `sdkman` | `sdkman` | `sdk` | the **JDK** it installed compiles and runs |
+| `ovsx` | `openvsx` | `ovsx` (itself installed through the npm registry) | the VSIX opens as the extension asked for |
+| `helm` | `generic` | curl | the helm binary renders a chart |
+| `apt` | `deb` | unprivileged `apt` | the packaged binary runs |
+| `forgejo` | `forgejo` | mise's `forgejo:` backend | the installed tool runs |
+| `gitlab` | `gitlab` | mise's `gitlab:` backend | the installed tool runs |
+| `jbr` | `jetbrains` | curl | the JetBrains Runtime compiles and runs |
+| `vscode` | `vscode-marketplace` | the editor, `product.json` pointed here | the editor lists the extension back |
+| `jbplugin` | `jetbrains-marketplace` | IntelliJ headless | the plugin lands in the plugins directory |
+| `dnf` | `rpm` | `dnf install`, inside an AlmaLinux 9 image | the installed program runs |
+| `pacman` | `pacman` | `pacman -Sy`, inside an Arch image | the installed program runs |
+
+The last two run their client inside that client's own distribution image, on
+podman or docker (whichever answers `info` first). That is not convenience: a
+distribution package is dynamically linked against *its own* libraries, so a
+phase that downloaded an Arch package on Ubuntu and executed what was inside it
+could only ever pass on a host that already was Arch — which is no hosted
+runner. Running the client where the package was built is the only correct form
+of the claim, and it also means the runner no longer has to be persuaded to
+host a foreign package manager. `deb` stays on the host because the runner *is*
+Ubuntu.
+
+The container is not the isolation. `--network host` is what keeps
+`127.0.0.1:<tap>` meaning the same thing inside as out, so the container shares
+the host's network namespace and egress is denied by the same six proxy
+variables, passed in with `-e`. Each containerised phase re-proves that denial
+from inside against a real host before trusting anything else — §0 establishes
+it for a *host* process and cannot speak for a different process in a different
+filesystem. A phase whose image has no `curl` refuses rather than concluding
+the world is closed because the probe could not run.
+
+Three rows can be left unmeasured: `HEAVY_CW_SKIP_RPM=1` and
+`HEAVY_CW_SKIP_PACMAN=1` for a machine with no container engine, and
+`HEAVY_CW_SKIP_JB=1` for one that cannot spare the ~1.5 GB IntelliJ. Each
+prints a `SKIPPED` banner naming the row. Absent the variable a missing client
+is a **failed** run, not a skipped one — a heavy test that skips itself reports
+success for having done nothing.
+
 ### The config generator's harness
 
 The docs site's config generator (`docs/.vitepress/components/ConfigGenerator.vue`)
@@ -358,8 +426,12 @@ grants rather than at one ecosystem's protocol. It takes a target:
 ```bash
 tests/heavy/authz.sh matrix        # every verb, both directions, over curl
 tests/heavy/authz.sh signing       # RFC 0012 capabilities: binding, expiry, rotation
+tests/heavy/authz.sh reads         # the read boundary on the kinds no client drives
 tests/heavy/authz.sh npm           # …and the boundary as npm meets it
 tests/heavy/authz.sh <ecosystem>   # pypi nuget composer conda openvsx rubygems terraform
+tests/heavy/authz.sh maven         # …hermetically: the run deploys its own fixture
+tests/heavy/authz.sh cargo         # …and the regression test for `auth-required`
+tests/heavy/authz.sh live:goproxy  # the same, for a kind with no local mode (nightly)
 ```
 
 One target per invocation, because each starts its own server and tap and the
@@ -384,6 +456,133 @@ Four rules it is built on, each of which has a scar behind it:
   diagnostic that can disagree with reality is worse than none, because it is
   trusted"* — and it has disagreed twice, under a shadow and at the instance
   tier.
+
+#### Which kinds are covered, and which are not
+
+Eight ecosystems have a client phase. Everything else had **no authenticated
+coverage of any kind** until the `reads` target: `closed_world.sh` proves an
+*anonymous* client can reach a registry, and that says nothing about whether a
+caller who may not read is refused.
+
+| Coverage | Kinds |
+| --- | --- |
+| Client-level, hermetic — the real package manager carries a credential and is stopped, with no upstream | npm, pypi, nuget, composer, conda, openvsx, rubygems, terraform, maven, cargo |
+| Client-level, live — the same, for a kind with no local mode (nightly) | goproxy, nodedist, sdkman, github, forgejo, gitlab, generic, deb, rpm, pacman, rustup |
+| Route-level — `reads`, paired over curl | goproxy, maven, cargo, vscode-marketplace, deb, rpm, pacman, github, forgejo, gitlab, nodedist, sdkman, jetbrains, generic, rustup |
+
+`reads` publishes nothing and reaches no upstream. Both halves of that rest on
+one property — **authorization is decided before any fetch**:
+
+- **Local kinds.** `read_gates` fetches the version's row and, finding none,
+  still calls `authorize_unheld_read`: a caller holding no read verb meets `403`
+  *before* the `404`. The deb/rpm/pacman handler does the same one layer up,
+  calling `authorize_read` before it touches storage.
+- **Proxy-only kinds.** `handle_resolved` evaluates grants in step 1 and
+  resolves upstream metadata in step 2, so a registry pointed at
+  `example.invalid` still answers `403` to the denied caller, while the reader
+  gets the upstream's failure — not a refusal, therefore a pass.
+
+The positive arm asserting "not a refusal" rather than `200` is what lets both
+work against a registry that can serve nothing.
+
+::: tip Two server changes made this coverage possible
+**The authorization ordering.** `handle_resolved` used to resolve upstream
+metadata before evaluating grants, so a proxy registry pointed at an
+unreachable host answered the denied caller and the reader identically. Grants
+now run first; the proxy rows in `reads` are that fix's regression test.
+
+**Cargo's `auth-required`.** Cargo sends a credential on a read only when the
+sparse index's `config.json` declares it, and this server emitted `dl` and `api`
+and nothing else — so a cargo read could not be authenticated at all, in either
+direction. `cargo_registry_config` now derives the field from whether an
+anonymous caller can read the registry, and the bare-token normalisation in
+`extractors.rs` is scoped by registry *type* rather than by the `/api/v1/crates`
+path, which covered neither the index nor the download. The `cargo` target is
+the regression test for both halves.
+:::
+
+::: tip That ordering is recent, and these rows are its regression test
+Grants used to be evaluated *after* the resolve. Both callers then got the same
+upstream error, there was no boundary to observe, and the eight proxy-only kinds
+had no authenticated coverage anywhere as a direct result — besides which every
+refused request first fetched metadata from upstream and cached it, so an
+unauthenticated caller naming coordinates nobody had asked for could spend the
+upstream's rate limit one refusal at a time. The forge ref path already refused
+to do that; `handle_resolved` and `resolve_metadata_for_inner` now do too. Swap
+the two steps back and every proxy row in `reads` goes red.
+
+The rule chain stays *below* the resolve, because it genuinely needs what the
+resolve produces: `RuleContext.package` is the metadata and the release-age gate
+reads `published_at` off it. A `latest` request is only known to be blocked once
+it has resolved to a version, which is why the block list cannot move up with
+the grants.
+:::
+
+#### The live targets — a client boundary needs a real upstream
+
+`reads` measures the **route** boundary everywhere, hermetically. The **client**
+boundary is a different claim and needs both arms: the denied caller stopped,
+*and* the identical request working for the reader — without that positive
+control a client refused for an unrelated reason reads as a correct denial. The
+positive arm can only succeed if the artifact exists, and nine kinds have no
+local mode to publish one into: a forge, a Node distribution, a JDK broker, a
+file tree and two OS archives have nothing to publish *into*.
+
+So `authz.sh live:<kind>` exists, with its own config
+(`tests/heavy/config.authz-live.toml`) pointed at real upstreams. It is the one
+family in this suite that reaches the internet, which is why CI runs it nightly
+(`heavy-authz-live`) rather than per-PR, and why it is a separate file rather
+than more rows in the hermetic one. `task test:authz-live-heavy` runs all eleven.
+
+| Kind | Client | How the credential reaches the server |
+| --- | --- | --- |
+| `goproxy` | the Go tool | userinfo in `GOPROXY` — **not** `~/.netrc`, which the Go tool reads for HTTPS only, and this tap is plain HTTP |
+| `nodedist` | nvm | `NVM_AUTH_HEADER` |
+| `sdkman` | `sdk` | userinfo in `SDKMAN_CANDIDATES_API` / `SDKMAN_BROKER_API` |
+| `github`, `forgejo`, `gitlab` | mise | `~/.netrc` — mise's `netrc` setting defaults to `true` |
+| `generic` | curl | `-u`, or a header |
+| `deb` | apt | `/etc/apt/auth.conf.d/`, redirected into the run with `Dir::Etc::netrcparts` |
+| `rpm` | dnf, in AlmaLinux 9 | `username=` / `password=` in the `.repo` |
+| `pacman` | pacman, in Arch | `XferCommand` — `pacman.conf(5)` documents **no** credential directive, so the documented custom downloader is the mechanism |
+| `rustup` | rustup | userinfo in `RUSTUP_DIST_SERVER` — no token flag, no credential file, no `~/.netrc` |
+
+The token always travels in the **password** field: `auth/token.rs` accepts a
+`Basic` header and reads the token out of it, which is what the console's own
+`withCredentials` snippet writes.
+
+::: warning Two of these were documented wrongly, and the phases are what found it
+The console's `nodedist` and `sdkman` snippets both said "libcurl reads
+`~/.netrc` without being asked". It does not: curl has never read `~/.netrc`
+without `-n`. Worse for nvm, which downloads with `curl -q` — that also disables
+`~/.curlrc`, so *neither* file can reach it, and the documented setup would have
+authenticated nothing while looking configured. nvm has a first-class
+`NVM_AUTH_HEADER` instead; `sdk` passes no `-q`, so a `~/.curlrc` containing
+`netrc` does work for it, and userinfo in its two API URLs is simpler again.
+Both notes in `ui/src/config/registryTypes.ts` are corrected. The `~/.netrc` tab
+still shown for `nodedist` should follow.
+:::
+
+#### Where the client, not the harness, is the obstacle
+
+| Kind | The obstacle | Where the claim is made instead |
+| --- | --- | --- |
+| `vscode-marketplace` | Stock VS Code has **nowhere in `product.json`** to put a token: the editor sends no credential to the gallery it is pointed at | **Proven, in the other repository.** `batlehub-vsx`'s `tests/heavy/view.sh` drives a real VS Code web build with the project's extension installed, and asserts `PROXY-OK` — the credential *the extension* writes authenticates the gallery — alongside `CONTRACT-OK` (written `0600`, refresh owned by the CLI, token never logged) and `BROKER-OK`. That is the answer to the obstacle, and it is the reason the fork and the extension exist (RFC 0023) |
+| `openvsx` | Same, when the client is the editor. `ovsx` itself takes a `--pat`, but that is the publish credential | The `openvsx` target covers `ovsx`; the editor path goes through the same fork |
+| `jetbrains-marketplace` | The IDE's `idea.plugins.host` has no documented credential field; the repo's own snippet authenticates with curl, not with IntelliJ | Route level only. An IDE-level test needs the mechanism to exist first |
+
+#### Where the coverage stands
+
+Twenty-one of the twenty-four registry kinds are covered at **both** levels —
+the route, over curl and hermetically, and the client, with the real package
+manager carrying a real credential. `jetbrains` gets both from one row, because
+a path proxy has no protocol for a package manager to speak and its client *is*
+curl.
+
+The three in the table above are the remainder, and none of them is blocked by
+this harness: stock VS Code has nowhere to put a token, and IntelliJ's plugin
+host has no documented credential field. `vscode-marketplace` is nonetheless
+proven at client level — in `batlehub-vsx`, by the extension that exists for
+exactly this.
 
 Its config (`tests/heavy/config.authz.toml`) is deliberately inert in every
 respect but grants: every registry is `local` except Terraform, no rule gate is
@@ -450,6 +649,371 @@ both, the phase drives the client through a **publish** into a sealed namespace
 the administrator — and asserts the read boundary over `curl` beside it. The
 NuGet phase pins the missing challenge, so if the `403` ever grows a
 `WWW-Authenticate` the run says which arms to restore.
+
+---
+
+## 7-quater. Soak tests (leak detection)
+
+Every layer above asks whether the server gives the **right answer**. This one
+asks whether it gives the **memory back** — and nothing else here can, because
+a leak is not a wrong answer. It is the same right answer, a few kilobytes more
+expensive each time, until a pod that served correctly for nine days is
+OOM-killed on the tenth with no failing test to point at.
+
+Neither suite runs on a push or a pull request. A soak measures a *slope*, so
+running it per commit would cost every pull request an hour to answer a
+question no single commit changes the answer to. Run one when something
+suggests it: a report of memory that does not come back, a change to a
+streaming, caching or pooling path, or before a release.
+
+### The shape both suites use
+
+```
+warm-up load ──▶ quiesce ──▶ BASELINE ──▶ steady load ──▶ quiesce ──▶ FINAL
+```
+
+Both measurement windows are **idle**, and the baseline is taken *after* a
+warm-up rather than at startup. That ordering is the whole design:
+
+- measuring at startup reports every lazily-filled cache, connection pool and
+  allocator arena as a leak — so the first run fails, and the threshold then
+  gets raised until nothing can fail;
+- measuring under load compares a number that includes in-flight request
+  buffers against one that does not, which is a different quantity in each
+  window and cannot be subtracted;
+- quiescing before each window lets the server drain, and lets jemalloc (on by
+  default, `server/Cargo.toml`) decay its dirty pages, which takes seconds and
+  would otherwise read as growth.
+
+What is left is what was still held with nothing in flight, which is what
+"leak" means.
+
+The third bullet is a property of the **build**, not of the wait. jemalloc's
+decay runs on allocator activity: a page goes dirty, its deadline passes, and
+the purge happens on the next allocation that ticks that arena — so a process
+with nothing in flight purges nothing, however long you quiesce it. That is why
+`server/Cargo.toml` enables `tikv-jemallocator`'s `background_threads` feature,
+which is *not* implied by the default `background_threads_runtime_support`:
+without it the crate compiles jemalloc with `background_thread:false`.
+
+Measured on the same binary and the same 60-second quiesce, 10m at 100 req/s
+across 24 registry kinds:
+
+| | idle RSS | trend | verdict |
+| --- | --- | --- | --- |
+| purging off | 272.5 → 300.5 MiB (+10.3 %) | 1.27 MiB/min | **FAILED** |
+| purging on | 258.4 → 262.9 MiB (+1.7 %) | 0.28 MiB/min | passed |
+
+Nothing about the server differed between those two runs. A build that drops it
+— `--no-default-features`, or `_RJEM_MALLOC_CONF=background_thread:false` —
+makes this gate measure retained arenas instead, and it fails by comparing a
+window that follows ten minutes of load against one that follows sixty seconds
+of it.
+
+Five resources are compared, because they fail differently and a leak in one is
+invisible in the others:
+
+| Signal | Where it comes from | What it means when it grows |
+| --- | --- | --- |
+| RSS at idle | `/proc/<pid>/status` | memory still held with nothing in flight |
+| Live heap at idle | `batlehub_memory_allocated_bytes` from `/metrics` | the *program* is holding more objects — the row that separates a leak from an allocator keeping pages |
+| Open descriptors | `/proc/<pid>/fd` | a socket or file not closed — ends in `EMFILE` on *accept*, which looks like a network fault |
+| Threads | `/proc/<pid>/status` | a spawned worker that never joins |
+| Connections held | `batlehub_db_pool_size` − `..._available_connections` from `/metrics` | a handler that took a pool connection and did not return it |
+
+The second row is the one to read first when the first row is red. RSS counts
+pages and an allocator may hold pages the program has already freed, so the two
+rows disagree exactly when the allocator is the answer: **RSS up, live heap
+flat** is fragmentation or decay, **both up** is a leak. That distinction cost
+four ten-minute runs and two seventeen-minute builds to establish once by A/B,
+which is why the process now reports it. It is limited at 5 % rather than RSS's
+10 %, because it carries no bookkeeping — and on a build without the `jemalloc`
+feature it reads *not measured*, never zero.
+
+Those series come from `server/src/allocator.rs`, which publishes jemalloc's
+`allocated`, `active`, `resident`, `mapped` and `retained` every five seconds.
+They are worth a dashboard panel beyond this gate: `resident − allocated` is
+what the allocator is holding on the program's behalf, and it is the difference
+between a memory limit that needs raising and a bug that needs fixing.
+
+A sixth signal is not a growth comparison at all: the **slope** of RSS during
+the sustained load, by least squares. A leak slower than the run is long shows
+up as a line that never flattens, hours before the idle windows differ enough
+to fail. (Least squares rather than last-minus-first: RSS sawtooths with every
+cache sweep, and two endpoints landing on different teeth is a number with no
+relationship to the trend.)
+
+Three bounds keep that signal honest. The fit skips the **first third** of the
+load, because the start is caches and pools filling rather than a trend; under
+five minutes of sustained load the slope is *reported but not judged* —
+measured at 10.5 MiB/min on a 30-second window whose idle comparison was
++4.2 %, which was the fill and nothing else. A window that short cannot tell a
+leak from a cache warming up, and a gate that cannot tell should say so rather
+than guess.
+
+The third is that the limit is compared against the **lower bound of the fit's
+95 % interval**, and the row prints the interval (`2.08 ±0.55 MiB/min`). What
+the fit crosses is not a line with noise on it but a sawtooth: on the 24-kind
+mix the residual scatter is 9–14 MiB and the peak-to-peak swing 48–73 MiB,
+where the 2.00 MiB/min limit describes 13 MiB across the same window. Three
+runs of the same plateau fitted 0.28, 1.27 and 2.08 MiB/min purely by which
+tooth the window opened and closed on — and the last of those failed a gate the
+other two passed. Planting a synthetic leak on those same three runs measures
+what the interval costs: **+2.5 MiB/min is caught in all three, +2.0 in two of
+three**. A number the run cannot resolve is not a verdict.
+
+### `task perf:soak` — synthetic, fast, precise
+
+`perf/scripts/soak.sh` starts its own mock upstream and server, seeds, and runs
+`perf/k6/scenarios/10_soak.js` twice — once to warm up, once to hold the load —
+sampling the process once a second throughout. `perf/scripts/soak_verdict.py`
+turns the samples into a table, an RSS sparkline and an exit code.
+
+```bash
+task perf:soak                                  # 10 minutes at 100 req/s
+task perf:soak DURATION=1h RATE=200             # overnight
+task perf:soak PROFILE=debug DURATION=30s RATE=20   # smoke-test the harness itself
+```
+
+The scenario uses a **constant arrival rate**, not constant VUs: under
+`constant-vus` a server that slows down is offered less work, so the very
+degradation a soak looks for hides itself by reducing the load that causes it.
+The mix is rotated deterministically rather than sampled at random, so two runs
+of the same duration issue the same requests and their curves are comparable —
+60 % artifact reads, 16 % listing documents, 10 % upstream misses, 6 % pooled
+API reads, 5 % per-request SBOM builds, 3 % publishes. Those are six different
+allocation paths, which is the point: a leak is a property of a code path, not
+of a request count.
+
+Thresholds are environment variables, so a run can be made stricter without
+editing anything:
+
+| Variable | Default | Fails when |
+| --- | --- | --- |
+| `SOAK_MAX_RSS_GROWTH_PCT` | `10` | idle RSS grew more than this, as a percentage |
+| `SOAK_MAX_HEAP_GROWTH_PCT` | `5` | idle live heap grew more than this — jemalloc builds only |
+| `SOAK_MAX_RSS_SLOPE_MIB_PER_MIN` | `2.0` | RSS trended upwards faster than this under load — compared against the fit's 95 % lower bound, not the fit |
+| `SOAK_MAX_FD_GROWTH` | `16` | this many more descriptors are open at idle |
+| `SOAK_MAX_THREAD_GROWTH` | `4` | this many more threads are running |
+| `SOAK_MAX_POOL_GROWTH` | `2` | this many more pool connections are held at idle |
+
+Two further choices in `perf/config.soak.toml` are measurement decisions rather
+than deployment ones, and both were made after a run failed for the wrong
+reason:
+
+- **`max_connections = 10`**, against the perf config's 50. A large pool hides a
+  connection leak for the length of any run anyone would sit through; a small
+  one exhausts it while the run is still going, and the verdict names it.
+- **`[cache] type = "postgres"`**, against the default in-memory cache. An
+  in-memory metadata cache lives in the process's own RSS, so every cached
+  document is memory the idle comparison sees — not wrong, since it *is*
+  resident, but not a leak either, and it grows with the length of the run.
+  Measured: +11.2 % idle RSS on a 40-second run whose only fault was having
+  cached more than its 25-second warm-up did. A gate that fails on a correct
+  cache teaches people to raise the threshold. With the cache in a table, what
+  is left in RSS is what the process is holding — and it is also what a real
+  deployment runs.
+
+The workload is **stationary** for the same reason — and that has to hold for
+*every* arm, which is the part that is easy to get half-right. The cache-miss
+arm draws from a bounded set (`BATLEHUB_SOAK_MISS_SPACE`, 500 by default) and
+so does the publish arm (`BATLEHUB_SOAK_PUBLISH_SPACE`, 100); the publish arm
+was unbounded at first, and the first real ten-minute run failed on an RSS
+trend of 2.21 MiB/min against a 2.00 limit after some 1 800 brand-new package
+versions — a margin at which a workload-driven drift and a slow leak look
+exactly alike. Past its first pass that arm publishes duplicate coordinates and
+is answered `409`, which is a weaker exercise than a fresh write but still runs
+auth, the parse, the quota check and the existence check.
+
+The reasoning, for either arm: an unbounded miss space adds
+a cache entry, a row and a stored object *per request, forever*, so memory
+climbs for as long as the run lasts and every long soak "fails". That growth is
+the workload's, not the server's, and no threshold can tell the two apart. A
+leak test needs a workload whose steady state exists, so that anything still
+climbing after the caches have filled is the process's doing.
+
+For the same reason the idle-RSS comparison carries the slope's bound: under
+five minutes of load it is *reported and not judged*, because the caches are
+still filling and "idle RSS grew" is then "the cache got bigger". Descriptors,
+threads and pool connections have no warm-up and are judged at any length.
+
+### What it reports
+
+Three things, in the report and in the pull request comment:
+
+**The verdict table** — the four idle-window comparisons and the slope, above.
+
+**A chart of the run.** A text chart of RSS and open descriptors in the comment
+itself, because that renders in a terminal, a job summary and a comment alike;
+and an SVG (`soak-chart.svg`, beside the report in the run's artifacts) with all
+four curves and the phases shaded, so the two idle windows the verdict compares
+are visible as windows. Each curve is scaled to its own range and says so —
+RSS in hundreds of MiB and a descriptor count in tens share no axis, and
+drawing them on one flattens the smaller into the straight line a leak in it
+would live on.
+
+**Which registry cost the most.** Ranked by seconds spent inside the handler,
+read from the server's own `/metrics` scraped at both ends of the load and
+subtracted. The server is the only party that knows what a request *cost* it: a
+load generator can say how many requests a registry took and how many bytes came
+back, and neither is how long the server spent nor how much it had to pull from
+upstream to answer them. Beside the ranking, per registry: requests, ms/req,
+bytes pulled from upstream, artifact and document misses, and the coordinates
+resolved from a listing already held — the upstream round trips it did *not*
+make.
+
+That ranking is why `perf/config.soak.toml` declares more than one registry.
+"Which registry is the worst consumer" is not a question a single-registry run
+can answer, and the shapes have to differ or it ranks them by traffic rather
+than by cost: an npm read is a small document and a small artifact, a RubyGems
+compact index is the whole registry in one document, which is the expensive
+shape this project has measured before (RFC 0015 §11.7).
+
+#### Every registry kind, and what that does and does not prove
+
+The soak declares a registry for **every kind in `RegistryKind::ALL`** and
+drives each of them, because a leak lives in a *code path* and not in a request
+count: each kind brings its own client, its own document parser and its own
+rewriter, so a soak that drove npm alone would be as green against a kind that
+leaked a megabyte per listing.
+
+Four files have to agree for that claim to hold, and three tests in
+`crates/web/tests/soak_kind_coverage.rs` make them:
+
+| File | What it holds |
+| --- | --- |
+| `perf/mock-upstream/src/protocols/` | one module per protocol — the documents the proxy's client parses |
+| `perf/config.soak.toml` | a registry per kind, pointed at the mock |
+| `perf/k6/soak_arms.js` | the arms: `{op, kind, registry, weight, expect, request(n)}` |
+| `soak_kind_coverage.rs` | `NOT_SOAKED`, the kinds deliberately left out — **currently empty** |
+
+The tests refuse a kind that is neither driven nor excused, a registry no arm
+asks for (it would report as a registry that costs nothing), and — the one that
+makes the count mean anything — an arm whose `kind` is not the type of the
+registry it addresses. Without that last check an arm can claim `conda` while
+pointing at the npm registry and every file still reads correctly on its own.
+
+**The pre-flight is the gate that matters.** `perf/k6/scenarios/11_soak_arms.js`
+asks for each arm once and requires the status the arm declares; `soak.sh` runs
+it before the warm-up and stops the run on a failure. It exists because the
+load's own check is "not 5xx", so an arm whose URL is wrong or whose upstream
+route was never written answers `404` and **passes** — and the report then shows
+that registry costing nothing, which reads exactly like a cheap registry. When
+the nineteen kinds beyond the original five were added, the pre-flight caught
+eight arms that looked right and were not: a `dl_path` that resolved to
+`…/cargo/cargo/…`, a wheel filename whose hyphen was parsed as the version
+boundary, three forge asset downloads that resolve the tag before the release,
+and a `HEAD` the mock answered with `404` because actix does not derive one from
+`#[get]`.
+
+**What soaking a kind proves.** That its client, parser, rewriter, cache and
+storage path hold up under constant load without the process growing. That is
+the question a soak asks, and it is the whole of it.
+
+**What it does not prove**, and none of these are gaps in the soak — each has
+its own instrument:
+
+- **That a real client would accept what is served.** The mock answers what the
+  *proxy* parses, not what `apt`, `terraform` or an editor would. That is
+  `tests/heavy/closed_world.sh`, one phase per kind, driving the actual client.
+- **The cost at real scale.** Conda is the sharpest case: the mock's
+  `repodata.json` is a few hundred entries, where conda-forge's is ~424 MiB and
+  costs ~11.5 GB parsed as a `Value` — the measurement that drove the streaming
+  filter and the sharded index. The arm exercises the code path; it says nothing
+  about the memory profile at channel scale.
+- **Two routes that cannot be driven through `/proxy/{registry}/`.** Terraform's
+  `.well-known/terraform.json` is served only on a host bound to a single
+  registry (RFC 0001), and VS Code's `/vscode/item` is a `302` to the console's
+  own package page rather than an upstream read. Both are *routes* left out, not
+  kinds: the Terraform provider versions, its mirror index and the VS Code
+  gallery query are all in the mix.
+- **The write path, beyond npm.** One local registry publishes; every other
+  registry in the soak is a proxy. A publish arm per kind would be a different
+  suite.
+
+Two things the ranking does not count, and says so in its own footnote:
+
+- **local-mode traffic.** A local registry's publishes and reads go through
+  `LocalRegistryService`, which emits neither metric, so a local registry is
+  absent from the table rather than cheap.
+- **nothing else.** Listing reads *are* counted — they were not, until this
+  work: `batlehub_requests_total` and `batlehub_request_duration_seconds` were
+  emitted from the artifact path alone, so a registry serving nothing but
+  documents recorded no requests at all and anything ranking registries by cost
+  ranked it last for free. They are now recorded for the listing routes too,
+  under `outcome = listing | listing_denied | listing_error`, and a path that
+  declines (conda's byte route answering "not this path" before the parsed one
+  runs) records nothing rather than counting the request twice.
+
+### Starting one, and where the result lands
+
+`.github/workflows/soak.yaml` has **two ways in, and neither runs by itself**:
+
+| | how | when to use it |
+| --- | --- | --- |
+| **Label** | add `soak` to a pull request | any branch, including one whose workflow file has not landed on `main` |
+| **Dispatch** | Actions → Soak → Run workflow, or `gh workflow run soak.yaml --ref <branch>` | once the file is on the default branch; gives the full input form |
+
+The label exists because of a GitHub rule worth knowing: a workflow whose only
+trigger is `workflow_dispatch` **is not registered at all** — and cannot be
+dispatched on any branch — until the file has landed on the default branch.
+Measured on this repository while adding it: `pr-checklist.yaml` ran from its
+own branch, because a pull request is an event GitHub associates with that
+branch, while this workflow was absent from `/actions/workflows` entirely and
+`gh workflow run` had nothing to call. A label is a `pull_request` event, so it
+runs the branch's own copy of the file, on the branch's own code.
+
+On the label path `inputs.*` is empty, so every input carries the same default
+the dispatch form offers — a threshold read as `""` would parse as zero and
+fail on the first byte of noise. The label is removed when the run finishes, so
+adding it again re-runs the soak.
+
+The third job collects both suites' reports, joins them under one heading and
+posts them as a single comment, edited in place on every re-run. A labelled run
+carries its own pull request; a dispatch resolves the open one whose head is the
+branch, or takes the `pr` input. With no pull request to find, the report is in
+the job summary and the run stays green: the verdict is the soak's to deliver,
+and a comment that could not be posted is not a leak.
+
+### `task test:soak-heavy` — a real client, in a loop
+
+`tests/heavy/soak.sh` is the same shape driven by **npm**: a round is
+`npm install` from a proxied registry, `npm publish` to a local one, and
+`npm view` of what it just published, with npm's own cache removed each round
+so it asks the server rather than itself. It exists beside the k6 suite because
+k6 offers the requests this project *thinks* a client makes, and npm offers the
+ones it actually makes — every registry defect this project has shipped was
+found by a client and not by a test double (RFC 0009 §5.1), and there is no
+reason a leak would be different.
+
+```bash
+task test:soak-heavy                            # 25 rounds
+SOAK_ROUNDS=500 task test:soak-heavy            # a long one
+```
+
+The upstream is a directory the suite serves (`upstream_dir.sh`), never a real
+registry: a soak offers the same request thousands of times, and the served
+directory's access log also makes "the proxy answered from its cache" a
+**count**. After a warm-up that touches every package, the loop must reach the
+upstream exactly **zero** times; anything else is a cache that is not holding,
+and would also make the growth numbers meaningless, since the loop would then
+be measuring the upstream path rather than the served one.
+
+The suite also pins what a first install *costs* upstream. The warm-up's own
+count is printed, and it is the number that caught a real defect: a first read
+of one npm package used to cost **three** packument fetches — the client's own,
+plus two more from the artifact route resolving the coordinate twice over. It
+is one now. See `RegistryClient::fetch_artifact_resolved` and
+`::resolve_metadata_from_document`, which are the two halves of that fix, and
+note that both are default-`None` hooks: a kind that does not implement them is
+unchanged.
+
+One trap is worth naming, because it cost a green run that measured nothing.
+`heavy_start_server` launches `setsid cargo run`, so `$HEAVY_SERVER_PID` is not
+the server — and `/proc/<cargo>/status` answers every question with a plausible
+number rather than an error. Both suites therefore *resolve* the process to
+measure, by executable name and config path, and refuse to run if they cannot
+find it.
 
 ---
 
@@ -689,6 +1253,31 @@ to start under a restricted `ptrace_scope`, not a finding — re-run with
   their own registries, pinned VS Code, IntelliJ, Terraform, .NET and
   micromamba builds — so a new client release can break a tree that no commit
   touched, and only a scheduled run finds it.
+- **`soak.yaml`** — the two soak suites, **started by hand only**: a
+  `workflow_dispatch`, or the `soak` label on a pull request. No push, no cron,
+  and no pull request without that label. Inputs for the duration, the arrival rate, the
+  heavy suite's round count and all four growth thresholds, so a run can be
+  made stricter from the dispatch form. Two jobs (`k6-soak`, `heavy-soak`),
+  selectable, with a `concurrency` group so two soaks never share a runner's
+  CPU — a resource curve measured beside another soak is a measurement of the
+  runner. The samples and the report are uploaded on failure as well as on
+  success, because that is when they are worth reading.
+- **`perf-report.yaml`** — on every release tag, runs scenarios 01–07 against a
+  freshly built server, diffs the result against the previous published
+  release's `perf-report.json`, and attaches the table and its machine-readable
+  twin to the release. A **record, not a gate**, for the reason the soak is the
+  other way round: a shared runner's noise is larger than most real regressions,
+  so a threshold would fail honest releases — but peak RSS doubling between two
+  releases is visible through any amount of noise, and nothing else was
+  recording it. `perf/README.md` § The results table has the local equivalent
+  (`task perf:report`).
+- **`pr-checklist.yaml`** — derives, from the paths a pull request changes, the
+  obligations those paths carry (`.github/scripts/pr_checklist.py`), and posts
+  them as one comment it edits in place. Items the diff suggests are *missing*
+  — a migration with no `mig!` entry, a generated file that did not move with
+  its source, a new `RegistryKind` with no entry in the UI's type table — are
+  marked. It is advisory and **never fails a build**: a required check that
+  turns green when somebody ticks a box measures nothing but the ticking.
 - **`front-test.yaml`** — frontend (`ui/`): install, regenerate the OpenAPI spec
   + TS client, `pnpm run coverage`.
 - **`repo-interop.yaml`** — `bash tests/interop/verify.sh` (apt + dnf + pacman

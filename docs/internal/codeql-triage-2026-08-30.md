@@ -4,7 +4,8 @@
 pull request, one `rust/uncontrolled-allocation-size` and three
 `rust/path-injection`; plus the relocation of one of them on `feat/rework-role`
 (see the addendum at the end).
-**Verdict:** all four are false positives. None is dismissible by editing the
+**Verdict:** all four are false positives. **(Alert 1: withdrawn on
+2026-09-14 — it was a real finding. See `codeql-triage-2026-09-14.md`.)** None is dismissible by editing the
 code without making the code worse; all four are resolved in the scanner, with
 the reasoning recorded here.
 **Method:** manual read of each taint path from source to sink, plus a check of
@@ -31,6 +32,14 @@ the default branch**. Dismissing it on a PR does not carry; the alert lives on
 ---
 
 ## Alert 1 — `rust/uncontrolled-allocation-size`
+
+> **Superseded — this section's verdict is wrong.** See
+> `codeql-triage-2026-09-14.md`. The allocation is bounded at 128 KiB as stated
+> below, but the bounded value is echoed once per version into every generated
+> document, which made it a 20x-and-up amplification DoS reachable from an
+> unauthenticated request. Fixed by `MAX_HOST_LEN` in `trusted_origin`. The
+> reasoning below is kept as written because the mistake in it is the useful
+> part.
 
 **Location:** `crates/web/src/middleware/proxy_trust.rs:196` (in `trusted_origin`)
 **Paths reported:** 21

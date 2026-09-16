@@ -238,6 +238,19 @@ pub struct RegistryConfig {
     /// bug (RFC 0010 §4.1, §4.5).
     #[serde(default)]
     pub broker_url: Option<String>,
+    /// rustup only: components this registry never serves, whatever the
+    /// channel manifest says.
+    ///
+    /// Names are manifest package names (`rust-docs`, `clippy-preview`),
+    /// before `[renames]` are applied, because that is the table the filter
+    /// edits; `[A-Za-z0-9_-]+`, which is every component the tree publishes.
+    /// A profile install proceeds without them, and an explicit `rustup
+    /// component add` stops before any request on rustup's own "toolchain '…'
+    /// does not contain component '…' for target '…'".
+    /// Empty — the default — denies nothing. Rejected on any other type, for
+    /// the reason `broker_url` is (RFC 0024 §4.1, §4.5).
+    #[serde(default)]
+    pub deny_components: Vec<String>,
     #[serde(default)]
     pub cache: CachePolicy,
     #[serde(default)]
@@ -270,6 +283,23 @@ pub struct RegistryConfig {
     /// is the failure this feature exists to prevent.
     #[serde(default)]
     pub signed_downloads: bool,
+    /// `cargo` only: force `"auth-required"` in the sparse index's
+    /// `config.json` on or off, instead of deriving it.
+    ///
+    /// The field tells cargo that "this is a private registry that requires all
+    /// operations to be authenticated including API requests, crate downloads
+    /// and sparse index updates" — and without it cargo sends **no credential
+    /// at all** on a read, so a registry that refuses anonymous callers is
+    /// simply unusable rather than authenticated.
+    ///
+    /// Left unset it is derived: `true` when an anonymous caller cannot read
+    /// this registry. The derivation reads the *registry* tier, so it is wrong
+    /// in one direction — a registry that closes the tier and then re-opens one
+    /// package to `*` through a grant would be advertised as fully closed, and
+    /// cargo would demand a token for the open package too. That is the case
+    /// this knob exists for.
+    #[serde(default)]
+    pub cargo_auth_required: Option<bool>,
     /// Credentials to send on every upstream request for this registry.
     #[serde(default)]
     pub upstream_auth: Option<UpstreamAuthConfig>,

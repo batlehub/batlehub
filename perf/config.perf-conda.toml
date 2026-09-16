@@ -1,0 +1,73 @@
+# BatleHub performance configuration for the conda channel-index measurement
+# (scenario 12). Start the server with:
+#   BATLEHUB_CONFIG=perf/config.perf-conda.toml cargo run -p batlehub-server --release
+# or via: task perf:conda:server
+#
+# **Two conda registries, one upstream, and the only difference is whether
+# anything is blocked.** That is the whole experiment: `perf-conda` has nothing
+# blocked, so the proxy passes the channel's index through; `perf-conda-filtered`
+# has one version blocked by `task perf:conda:seed`, so every index request is
+# filtered. Running the same document through both is what turns "filtering costs
+# something" into a number.
+#
+# The two registries must be identical in every other respect, which is why the
+# blocks are seeded over the API rather than declared here: a config difference
+# between the arms would be a second variable.
+
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[database]
+type = "postgresql"
+url = "postgresql://batlehub:changeme@localhost:5432/batlehub"
+max_connections = 50
+
+[storage]
+type = "filesystem"
+path = "./tmp/perf-conda-storage"
+
+# ── Token auth (no OIDC needed for perf tests) ────────────────────────────────
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "perf-admin-token"
+role = "admin"
+user_id = "perf-admin"
+
+[[auth.tokens]]
+value = "perf-user-token"
+role = "user"
+user_id = "perf-user"
+
+# ── The unfiltered arm ────────────────────────────────────────────────────────
+# Nothing blocked, so `blocked_snapshot_fingerprint` is empty and the index is
+# served as it arrives: streamed on the compressed route, parsed on the plain
+# one. This is the baseline every filtered number is read against.
+
+[[registries]]
+type = "conda"
+name = "perf-conda"
+upstreams = ["http://localhost:9999/conda"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── The filtered arm ──────────────────────────────────────────────────────────
+# Identical, up to the name. `task perf:conda:seed` blocks one version here and
+# nothing there, which is what makes the proxy filter this channel's index and
+# not that one.
+
+[[registries]]
+type = "conda"
+name = "perf-conda-filtered"
+upstreams = ["http://localhost:9999/conda"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

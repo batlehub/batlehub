@@ -210,3 +210,27 @@ pub struct SearchPluginHit {
     /// Short description shown in search results.
     pub preview: Option<String>,
 }
+
+// ── /api/plugins/{id} and /api/plugins/{id}/updates JSON ─────────────────────
+//
+// The two documents that turn the marketplace's numeric ids into the coordinate
+// this server publishes under. Both are deserialised with only the fields that
+// mapping needs: these endpoints carry release notes and compatibility tables
+// that would otherwise be parsed on every alias lookup for nothing.
+
+/// One entry of `/api/plugins/{pluginId}/updates`.
+#[derive(Debug, Deserialize)]
+pub struct PluginUpdate {
+    /// The update id — what the IDE reads out of `search/updates/compatible`
+    /// and then addresses the update by.
+    pub id: u64,
+    /// The version string this server publishes and an operator blocks.
+    pub version: Option<String>,
+}
+
+/// The identifying half of `/api/plugins/{pluginId}`.
+#[derive(Debug, Deserialize)]
+pub struct PluginIdentity {
+    #[serde(rename = "xmlId")]
+    pub xml_id: Option<String>,
+}

@@ -9,6 +9,7 @@ pub mod escaping;
 pub mod eviction;
 pub mod explore_cache;
 pub mod flags;
+pub mod forge_attachments;
 pub mod forge_refs;
 pub mod grants_admin;
 pub mod hot_config;
@@ -26,6 +27,7 @@ pub mod readme;
 pub mod release_import;
 pub mod rescan;
 pub mod retention;
+pub mod rustup;
 pub mod sbom;
 pub mod scan_worker;
 pub mod scanners;
@@ -72,7 +74,7 @@ pub use local_registry::{
     PublishPolicyRequest, PublishRequest, TerraformPlatform, COMPOSER_DIST_SHA1,
 };
 pub use metrics::ProxyMetrics;
-pub use proxy::{ProxyRequest, ProxyResponse, ProxyService};
+pub use proxy::{ProxyRequest, ProxyResponse, ProxyService, StreamedIndex};
 pub use pullers::{pullers_for, refused_for, Puller};
 pub use pulls::{pulls_for, Pull};
 pub use quota::{

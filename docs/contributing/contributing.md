@@ -798,8 +798,12 @@ overrides the sidebar label and `SLUG=` the filename.
 
 So the index table and the sidebar are **generated** — the blocks between the
 `rfc-index` markers in `docs/rfc/index.md` and the `rfc-sidebar` markers in
-`docs/.vitepress/config.ts`. Change the RFC and run `task rfc:index`; never edit
-those two blocks by hand. `task rfc:index:check` fails `task docs:design` when
+`docs/.vitepress/nav/en.ts` (the English sidebar; RFCs are not translated, so
+there is one generated block, not one per locale). Both are split into three
+shelves read off the status — *In the works*, *Ready to build*, *Settled* — and
+a document changes shelf by having its `Status` row edited, never by being
+moved. Change the RFC and run `task rfc:index`; never edit those two blocks by
+hand. `task rfc:index:check` fails `task docs:design` when
 they have drifted, for the same reason every other generated table here has a
 drift check: a page that mislabels the project's own design history is the
 defect RFC 0005 exists to remove, one directory over.
@@ -818,3 +822,8 @@ RFC      Status              Open  Name
 
 17 RFCs — 8 settled, 9 still proposals; 23 open question(s) across 5 document(s)
 ```
+
+The procedure around the form — what to verify before writing, the diagram
+rules, the readability rules no gate checks, and every other file an RFC
+changes — is the `rfc` skill in `.claude/skills/rfc/SKILL.md`, which a coding
+agent loads on `/rfc` and a person can read as a checklist.

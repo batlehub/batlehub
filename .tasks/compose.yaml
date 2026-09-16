@@ -91,6 +91,6 @@ tasks:
     desc: Create the "artifacts" bucket in RustFS (requires compose:s3:db)
     cmds:
       - until curl -sf http://localhost:9900/health; do sleep 1; done
-      - mc alias set local http://localhost:9900 rustfsadmin rustfsadmin
-      - mc mb --ignore-existing local/artifacts
+      - rc alias set local http://localhost:9900 rustfsadmin rustfsadmin
+      - rc bucket create --ignore-existing local/artifacts
 

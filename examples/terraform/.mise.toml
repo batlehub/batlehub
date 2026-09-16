@@ -1,5 +1,5 @@
 [tools]
-terraform = "1.8"
+terraform = "1.16"
 
 [env]
 TF_CLI_CONFIG_FILE = "{{cwd}}/.terraformrc"

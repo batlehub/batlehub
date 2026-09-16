@@ -1,0 +1,248 @@
+# Server configuration for the authorization suite's **live** targets
+# (`tests/heavy/authz.sh live:<kind>`).
+#
+# ── Why this file exists, and why it is not `config.authz.toml` ──────────────
+#
+# `config.authz.toml` is hermetic: every registry is `local`, holds only what
+# the run publishes, and reaches nothing. That is what lets the whole suite run
+# on a fork, on a developer's machine, and per-PR without a network budget.
+#
+# Eleven registry kinds cannot be tested that way at *client* level, and the
+# reason is not the harness. They have no local mode — a forge, a Node
+# distribution, a JDK broker, a Rust toolchain server, a file tree and two OS
+# archives have nothing to publish *into* — so proving that a real client
+# carries a credential and is refused without one needs a real upstream on the
+# far side. A `403` can be observed against a dead
+# host (`config.authz.toml` does exactly that for the route level, since grants
+# are evaluated before anything is dialled), but the **positive** arm cannot:
+# the client has to actually succeed, and it can only succeed if the artifact
+# exists.
+#
+# So: one extra config, kept beside the hermetic one rather than merged into
+# it, and named `live` because that is the property that makes it different.
+# CI runs these targets nightly rather than per-PR, for the same reason the
+# heavy client matrix does — what they drive is not all in this repository.
+#
+# ── What is the same as the hermetic config ─────────────────────────────────
+#
+# The identities and the grants, deliberately to the letter: `anonymous` and
+# `user` hold nothing, `admin = ["*"]`, and one named grant gives
+# `user:authz-reader` the three read verbs. A refusal under this file is the
+# grant hierarchy's, exactly as it is under the other one, and the two suites
+# stay comparable.
+#
+# See `tests/heavy/config.npm.toml` for the env-var conventions; `${HEAVY_RUN}`
+# keeps each run's registries out of the last one's.
+
+[server]
+host = "127.0.0.1"
+port = 8160
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+# The two identities every assertion is a pair across: one that holds a read
+# grant and one that holds nothing. Spelled the same way as in
+# `config.authz.toml`, because the phases assert the same boundary.
+[[auth.tokens]]
+value = "authz-reader-token"
+role = "user"
+user_id = "authz-reader"
+
+[[auth.tokens]]
+value = "authz-denied-token"
+role = "user"
+user_id = "authz-denied"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-authz-live-storage"
+
+# ── Go: proxy.golang.org ─────────────────────────────────────────────────────
+#
+# `goproxy` *does* have a local mode, and a hermetic client phase seeding a
+# module into `config.authz.toml` would be the better test. It is here as well
+# because the credential path differs between the two: the Go tool reads
+# `~/.netrc`, and that is the thing this half measures.
+[[registries]]
+type = "goproxy"
+name = "live-go-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+# ── Node distributions: nodejs.org/dist ─────────────────────────────────────
+[[registries]]
+type = "nodedist"
+name = "live-nodedist-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+# ── SDKMAN: api.sdkman.io plus the broker ───────────────────────────────────
+[[registries]]
+type = "sdkman"
+name = "live-sdkman-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+# ── The three forges ─────────────────────────────────────────────────────────
+#
+# One client for all three — mise, whose `github:`, `forgejo:` and `gitlab:`
+# backends differ only in the upstream API shape. mise reads `~/.netrc`, so the
+# credential path is the same as Go's and nvm's.
+[[registries]]
+type = "github"
+name = "live-github-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+[[registries]]
+type = "forgejo"
+name = "live-forgejo-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://codeberg.org"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+[[registries]]
+type = "gitlab"
+name = "live-gitlab-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://gitlab.com"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+# ── generic: a single-binary vendor CDN ─────────────────────────────────────
+#
+# `path_allow` is mandatory for this kind, and the two entries are exactly what
+# the phase fetches.
+[[registries]]
+type = "generic"
+name = "live-generic-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://get.helm.sh"]
+path_allow = ["helm-v*-linux-amd64.tar.gz", "helm-v*-linux-amd64.tar.gz.sha256sum"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+# ── deb: the Ubuntu archive, through a real unprivileged apt ────────────────
+[[registries]]
+type = "deb"
+name = "live-deb-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["http://archive.ubuntu.com/ubuntu"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+# ── rpm: EPEL 9, through a real dnf ─────────────────────────────────────────
+[[registries]]
+type = "rpm"
+name = "live-rpm-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://dl.fedoraproject.org/pub/epel/9/Everything/x86_64"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+# ── pacman: the Arch mirror, through a real pacman ──────────────────────────
+#
+# The client runs in Arch's own image and carries its credential through
+# `XferCommand`, which is the only mechanism `pacman.conf(5)` documents — there
+# is no credential directive, and userinfo in a `Server =` URL is not mentioned.
+[[registries]]
+type = "pacman"
+name = "live-pacman-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://geo.mirror.pkgbuild.com"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+# ── rustup: static.rust-lang.org, through a real rustup ─────────────────────
+#
+# rustup has no token flag and no credential file; it sends HTTP Basic from
+# userinfo in `RUSTUP_DIST_SERVER`, which is where the phase puts it.
+[[registries]]
+type = "rustup"
+name = "live-rustup-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://static.rust-lang.org"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]

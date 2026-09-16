@@ -34,7 +34,7 @@
 #
 # Environment knobs: DATABASE_URL (required), HEAVY_PORT (8087),
 # HEAVY_TAP_PORT (8443 — the TLS port Terraform is pointed at), COVERAGE,
-# TERRAFORM_VERSION (1.8.5) for the mise fallback, TF_PROVIDER
+# TERRAFORM_VERSION (1.16.2) for the mise fallback, TF_PROVIDER
 # (hashicorp/null), TF_PROVIDER_VERSION (3.2.2).
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -45,7 +45,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 heavy_init terraform 8087 8443
 heavy_need python3 "python3"
 
-TERRAFORM_VERSION="${TERRAFORM_VERSION:-1.8.5}"
+TERRAFORM_VERSION="${TERRAFORM_VERSION:-1.16.2}"
 heavy_runner_for terraform "terraform@$TERRAFORM_VERSION"
 TF=("${HEAVY_RUNNER[@]}" terraform)
 

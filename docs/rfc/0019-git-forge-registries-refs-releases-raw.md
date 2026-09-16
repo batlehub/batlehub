@@ -208,7 +208,7 @@ shapes shown; GitLab's `/-/` equivalents are in the parity table):
 | Kind      | Routed path today                                            | Ref kind   | Immutable? |
 | --------- | ------------------------------------------------------------ | ---------- | ---------- |
 | `Release` | `/{o}/{r}/releases/tags/{tag}` (JSON)                        | tag        | yes*       |
-| `Asset`   | `/{o}/{r}/releases/download/{tag}/{file}`, `/releases/assets/{id}` | tag  | yes*       |
+| `Asset`   | `/{o}/{r}/releases/download/{tag}/{file}`, `/releases/assets/{id}`, `/attachments/{uuid}` (Forgejo, §13.4) | tag  | yes*       |
 | `Archive` | `/{o}/{r}/tarball/{ref}`, `/{o}/{r}/zipball/{ref}`           | any        | by ref     |
 | `Raw`     | `/{o}/{r}/raw/{ref}/{path}`                                  | any        | by ref     |
 | `ApiRead` | `/{o}/{r}/releases` today; `tags`, `commits/{sha}`, `branches/{name}` with `[api_reads]` | — | —   |
@@ -951,3 +951,36 @@ api.github.com. One thing the run settled: the release's own top-level
 `url` is left as the forge wrote it — it is the release's identity, not a
 link a client follows — and the suite asserts on the links that are.
 
+### 13.4 The attachment route (2026-09-13)
+
+`tests/heavy/closed_world.sh forgejo` — the phase's first execution —
+failed with the release listing, the release by tag and the asset's
+`.sha256` all arriving through the proxy and the 122 MB binary beside them
+going straight to codeberg.org, where the closed world could not follow it.
+
+Rewriting the document is not enough for every client. Forgejo gives each
+release asset a `uuid` and serves it from `{forge}/attachments/{uuid}`, a
+path that names no repository, and `mise`'s `forgejo:` backend builds that
+URL from its *own* configured `api_url` rather than reading the
+`browser_download_url` it was served — for every asset, with no fallback:
+`asset_url_api` strips `/api/v1`, so the result never matches the default
+API base its `pick_reachable_asset_url` probe is gated on, and the browser
+URL is dead code there. The checksum sibling came here only because a
+different code path (`try_fetch_checksum_from_assets`) does read the
+document.
+
+So §4.2 *API reads* gains the same shape: `GET
+/proxy/{registry}/attachments/{uuid}`, Forgejo registries only. The uuid
+names no repository, so the coordinate is not parsed out of the request —
+it is **remembered** from the release document this instance rewrote, where
+the uuid and its `(owner/repo, tag, filename)` sit in the same object
+(`services::forge_attachments`, in the metadata cache, 30 days). It
+resolves to the coordinate `…/releases/download/{tag}/{file}` builds, so by
+uuid and by name are one artifact under one storage key, one rule chain and
+one audit row. A uuid this registry has served no release document for is a
+`404`: the route reads what the instance knows, and is deliberately not an
+opaque relay for the forge's whole attachment space, which would have let a
+request name no repository at all.
+
+`batlehub registry suggest --mise` emits both rules for a codeberg
+registry, which is also now recognised by host (`TYPED_HOSTS`).

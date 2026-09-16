@@ -136,6 +136,13 @@ build artefact beside a `config.toml`.
 7. **`ui/src/config/registryTypes.ts`** — add a `RegistryTypeDef` entry with setup snippets.
 8. **Add a regression test** in the relevant `crates/web/tests/*.rs` file (e.g. `local_npm_registry.rs`, `local_composer_registry.rs`; see "Integration tests" below for how the suite is split) — at minimum a `<name>_publish_traversal_version_returns_400` test that publishes with `version = "../../etc/x"` and asserts `400`. Follow the `nuget_publish_traversal_version_returns_400` / `npm_publish_traversal_version_returns_400` pattern.
 
+9. **Prove it with a real client, both ways** — a kind is not finished until it has been driven *live* and *air-gapped*, because every registry defect this project has shipped was found by a client and not by a test double (the ovsx download URL, the GitLab release document, the JetBrains numeric-id spelling):
+   - **live** — `tests/heavy/closed_world.sh`: add `phase_<name>`, its entry in `PHASES`, an `[[registries]]` block in `tests/heavy/config.closed-world.toml` and a `- phase: <name>` row under `heavy-closed-world` in `.github/workflows/test.yaml`. Assert on the wire transcript (`heavy_wire_re_after`), not only on the client's exit code — a phase that passes because the client reached the upstream proves nothing. Run one phase with `bash tests/heavy/closed_world.sh <name>`.
+   - **the credential boundary** — `tests/heavy/authz.sh`: a hermetic client phase when the kind has a local mode, `live:<kind>` (`AUTHZ_LIVE_KINDS` + `config.authz-live.toml`) when it does not, because the *allowed* arm has to actually succeed.
+   - **air-gapped** — a case in `crates/web/tests/air_gap.rs`, plus a phase in `tests/heavy/airgap.sh` when a real client can drive it: an air-gapped client resolves through a *listing* the bundle does not carry, which is a different failure from a missing artifact (RFC 0008-bis).
+
+   See `docs/contributing/adding-a-registry.md` §11.
+
 For **local/hybrid mode**, additionally implement `get_<name>_versions` (and related helpers) in `crates/core/src/services/local_registry.rs`, following the existing `get_nuget_versions` / `get_maven_versions` patterns.
 
 ### Test patterns
@@ -185,6 +192,7 @@ CVE detection runs continuously across every layer; see `docs/contributing/secur
 - **Rust deps**: `cargo audit` (RUSTSEC) + `cargo deny` (advisories/bans/licenses/sources) — `.github/workflows/back-dep-audit.yaml`.
 - **JS deps**: `pnpm audit --audit-level high` — `.github/workflows/dep-audit-frontend.yaml`.
 - **Dependency supply chain**: [postmortem](https://github.com/mlab-sh/postmortem) (source-repo reputation + vulns from lockfiles) — `.github/workflows/postmortem.yaml`, one job per dependency root (Rust `.`, `ui/`, `docs/`), SARIF to Code Scanning.
+- **Lockfile CVEs (advisory)**: [vuln-scan-action](https://github.com/mlab-sh/vuln-scan-action) against vuln.mlab.sh — `.github/workflows/vuln-scan.yaml`, all four roots on every PR, posting one comment edited in place. `ui/`/`docs/` have no pnpm parser upstream, so they go via a syft CycloneDX SBOM reduced and split by `.github/scripts/slim_sbom.py` (896 KB is a 413; the endpoint reads 512 components per request and `ui/` has 691). **Report-only on findings** (the job still goes red if a scan could not run — 401/429 — so a scan that never happened is not mistaken for a clean one): RUSTSEC findings all come back `severity: unknown` and the only two here are withdrawn `unmaintained` advisories, so no `fail-on` threshold is meaningful. Costs 5 of the 8 anonymous scans/hour — set `VULN_MLAB_TOKEN`.
 - **Container/OS**: Trivy on the built images — the proxy image (`Containerfile`), the scan-worker image (`Containerfile.worker`, RFC 0018) and its GuardDog variant (`Containerfile.worker-guarddog`) — blocking on fixable HIGH/CRITICAL — `.github/workflows/image-scan.yaml` (GitHub, daily rebuild+rescan) and `.forgejo/workflows/build.yaml` (the proxy and hardened images, which is all it builds).
 - **SBOM**: CycloneDX for the Rust workspace and the image, attached/attested on release (`.github/workflows/build.yaml`).
 - **SAST / secrets / lint**: CodeQL, Semgrep (`semgrep.yaml`), gitleaks (`secret-scan.yaml`, config `gitleaks.toml`), and the clippy/fmt `lint` job in `test.yaml`.

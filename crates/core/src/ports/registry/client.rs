@@ -17,6 +17,55 @@ pub struct FetchedArtifact {
     pub cache_control: Option<String>,
 }
 
+/// The encoding a listing document's bytes are in.
+///
+/// conda publishes `repodata.json`, `repodata.json.zst` and `repodata.json.bz2`
+/// — the same document, three files, three URLs. Modelled here rather than as a
+/// [`DocumentKind`] because a kind is a *different document* (see
+/// [`DocumentKind::P2_DEV`]); this is one document that arrived compressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentEncoding {
+    /// Not compressed.
+    Identity,
+    Zstd,
+    Bzip2,
+}
+
+impl DocumentEncoding {
+    /// The filename suffix upstream publishes this encoding under.
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Self::Identity => "",
+            Self::Zstd => ".zst",
+            Self::Bzip2 => ".bz2",
+        }
+    }
+}
+
+/// A listing document as the upstream serves it: bytes, unparsed.
+pub struct StreamedDocument {
+    pub stream: ArtifactStream,
+    /// Which encoding the upstream actually answered with — not necessarily the
+    /// caller's first choice, which is why it is reported rather than assumed.
+    pub encoding: DocumentEncoding,
+    pub cache_control: Option<String>,
+}
+
+/// What a `HEAD` of a listing document can learn without fetching it.
+///
+/// conda clients probe every index with `HEAD` before deciding to fetch it —
+/// micromamba sends four of them for a two-subdir install — and answering those
+/// by pulling the whole body upstream and throwing it away is most of what a
+/// channel index costs a proxy.
+pub struct DocumentProbe {
+    /// The encoding that answered.
+    pub encoding: DocumentEncoding,
+    pub content_length: Option<u64>,
+    /// Relayed so a client can decide for itself whether to fetch.
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+}
+
 /// A lightweight package hit returned by upstream search.
 #[derive(Debug, Clone)]
 pub struct UpstreamPackage {
@@ -139,6 +188,15 @@ impl DocumentKind {
     pub const GEM: Self = Self::Secondary("gem");
     /// Go's `@latest`, as against `@v/list`.
     pub const LATEST: Self = Self::Secondary("latest");
+    /// conda's **sharded** index (CEP-16) — `repodata_shards.msgpack.zst`, a
+    /// map of package name to the sha256 of that package's own shard.
+    ///
+    /// A different document from `repodata.json`, not a different encoding of
+    /// it: 568 KB against 54.9 MiB for `conda-forge/linux-64`, because the
+    /// per-package records are not in it. A client that can read this fetches
+    /// the index plus a shard for each package it actually needs — tens of
+    /// kilobytes — instead of the whole channel. micromamba asks for it first.
+    pub const REPODATA_SHARDS: Self = Self::Secondary("repodata-shards");
     /// conda's `current_repodata.json` — the newest-versions-only subset —
     /// as against the full `repodata.json`.
     pub const CURRENT_REPODATA: Self = Self::Secondary("current-repodata");
@@ -211,6 +269,33 @@ impl DocumentKind {
     /// string and is therefore part of the cache key: two clients with
     /// different installed sets must not share an entry (RFC 0010 §6.4).
     pub const SDKMAN_VERSIONS_LIST: Self = Self::Secondary("versions-list");
+    /// A rustup channel manifest — `channel-rust-{name}.toml`, or its dated
+    /// twin — keyed by the channel the listing package string carries
+    /// (`rust/stable`, `rust/2026-09-05/nightly`).
+    ///
+    /// RFC 0024 §6.1. One document per channel rather than one per registry:
+    /// a manifest describes a single release, and two channels sharing a cache
+    /// entry would serve whichever was fetched first to both.
+    pub const MANIFEST: Self = Self::Secondary("manifest");
+    /// The detached PGP signature beside a channel manifest, keyed by the same
+    /// channel.
+    ///
+    /// Its own kind rather than an artifact, because it is text addressed by
+    /// channel and not by release: the coordinate a signature belongs to is
+    /// only known after the manifest it signs has been read, and fetching a
+    /// 900 KB document to serve 801 bytes beside it would be the wrong trade.
+    /// No rustup since 1.26.0 reads it (RFC 0024 §4.4).
+    pub const MANIFEST_ASC: Self = Self::Secondary("manifest-asc");
+    /// `dist/channel-rust-stable-date.txt` — the date of whatever `stable`
+    /// currently resolves to, as a bare line. Read by people and scripts,
+    /// never by rustup, and served as the date of the manifest this instance
+    /// actually serves for `stable` (RFC 0024 §4.4).
+    pub const STABLE_DATE: Self = Self::Secondary("stable-date");
+    /// `rustup/release-stable.toml` — the installer's own current version.
+    /// Relayed byte-exact: it names one version and there is no list to repair
+    /// it from (RFC 0024 §4.4).
+    pub const RUSTUP_RELEASE: Self = Self::Secondary("rustup-release");
+
     /// A protocol document relayed byte-exact, addressed by the upstream path
     /// carried in `package`.
     ///
@@ -256,6 +341,71 @@ pub trait RegistryClient: Send + Sync {
     /// Stream the raw artifact bytes from the upstream registry, along with any
     /// upstream `Cache-Control` header.
     async fn fetch_artifact(&self, pkg: &PackageId) -> Result<FetchedArtifact, CoreError>;
+
+    /// Resolve a coordinate from a **listing document the caller already has**,
+    /// without going upstream.
+    ///
+    /// `None` — the default — means "not from this document", and the caller
+    /// resolves the usual way. Synchronous on purpose: this is parsing, not
+    /// I/O, and an implementation that needs the network belongs in
+    /// [`Self::resolve_metadata`].
+    ///
+    /// The pair to [`Self::fetch_artifact_resolved`], for the other half of the
+    /// same waste. npm asks for a package's document and then for its tarball;
+    /// the document read caches the packument under `doc:`, and the tarball read
+    /// then fetched *the same packument again* because the metadata lives under
+    /// a different key. The two keys are both right — one holds a document, the
+    /// other holds one coordinate's resolution — and this is what lets the
+    /// second be computed from the first instead of re-fetched.
+    ///
+    /// The document handed in is whatever
+    /// [`Self::fetch_version_document`] returned for
+    /// [`DocumentKind::Versions`], so an implementation reads it with the same
+    /// expectations and must answer `None` rather than guess when it does not
+    /// recognise it.
+    fn resolve_metadata_from_document(
+        &self,
+        pkg: &PackageId,
+        document: &VersionDocument,
+    ) -> Option<PackageMetadata> {
+        let _ = (pkg, document);
+        None
+    }
+
+    /// The same fetch, for a caller that has **already resolved the metadata**.
+    ///
+    /// `Ok(None)` — the default — means "no shortcut here", and the caller falls
+    /// back to [`Self::fetch_artifact`]. Nothing changes for a kind that does
+    /// not implement it.
+    ///
+    /// It exists because for most kinds the coordinate is not the address:
+    /// `fetch_artifact` takes a `PackageId`, so it has to fetch the listing
+    /// document *again* to find the URL — a document `resolve_metadata` fetched
+    /// moments earlier on the same request and left in `download_url`. Measured
+    /// on npm against a served upstream: the first read of a tarball cost
+    /// **three** packument fetches where one would do, one for the client's own
+    /// packument request and two more when the artifact route re-resolved the
+    /// coordinate twice over. Every subsequent read is a cache hit and costs
+    /// none, which is why it stayed unnoticed: it is a first-touch cost, paid
+    /// once per package per cache lifetime, against an upstream that is usually
+    /// somebody else's rate limit.
+    ///
+    /// **An implementation must re-apply every check `fetch_artifact` applies to
+    /// the URL it derives.** `resolved` came from this registry's own
+    /// `resolve_metadata`, but "our own document said so" is exactly the
+    /// position the Open VSX and Terraform cross-host bugs started from: the
+    /// document is upstream's, and a URL in it can point anywhere. The
+    /// same-origin check belongs on this path too, and
+    /// `npm_fetch_artifact_resolved_rejects_cross_origin_tarball_url` holds it
+    /// there.
+    async fn fetch_artifact_resolved(
+        &self,
+        pkg: &PackageId,
+        resolved: &PackageMetadata,
+    ) -> Result<Option<FetchedArtifact>, CoreError> {
+        let _ = (pkg, resolved);
+        Ok(None)
+    }
 
     /// Ask upstream whether one artifact is still there, without fetching it
     /// (RFC 0014 §13.5) — a `HEAD` on the file, for the kinds addressed purely
@@ -360,6 +510,74 @@ pub trait RegistryClient: Send + Sync {
     /// which forge it is talking to.
     fn forge(&self) -> Option<&dyn super::super::forge::ForgeRegistry> {
         None
+    }
+
+    /// The same listing document as [`Self::fetch_version_document`], **unparsed**.
+    ///
+    /// `None` — the default, and the answer for every kind but conda — means
+    /// "no byte path, use the parsed one".
+    ///
+    /// It exists because one document in this proxy is three orders of magnitude
+    /// bigger than the rest: conda-forge's `linux-64/repodata.json` is 424 MiB,
+    /// and parsing it into a `serde_json::Value` to hand back costs several GB
+    /// and longer than a client will wait. Nothing about the *parsed* path is
+    /// wrong — a blocked package left in a channel index is chosen by the solver
+    /// and refused at download, which is why the filter is there — but the
+    /// filter is a no-op when nothing is blocked, and then the document that
+    /// comes out is the document that went in. This is the path for that case.
+    ///
+    /// `accept` is in the caller's order of preference, and the implementation
+    /// answers with the first encoding it can serve, reporting which. A client
+    /// asking for `repodata.json.zst` should get the upstream's own `.zst` —
+    /// 55 MiB against 424 MiB — rather than the proxy decompressing and
+    /// recompressing a document it never needed to read.
+    async fn fetch_version_document_stream(
+        &self,
+        _package: &str,
+        _kind: DocumentKind,
+        _accept: &[DocumentEncoding],
+    ) -> Result<Option<StreamedDocument>, CoreError> {
+        Ok(None)
+    }
+
+    /// Whether a listing document exists upstream, and in which encoding —
+    /// without fetching it.
+    ///
+    /// `None` (the default) means the kind has no probe, and the caller must
+    /// answer a `HEAD` the expensive way: fetch, then discard.
+    async fn probe_version_document(
+        &self,
+        _package: &str,
+        _kind: DocumentKind,
+        _accept: &[DocumentEncoding],
+    ) -> Result<Option<DocumentProbe>, CoreError> {
+        Ok(None)
+    }
+
+    /// The canonical coordinate for a request that names an existing release by
+    /// a **second spelling**, or `None` when the coordinate is already the only
+    /// one this kind has — which is every kind but one.
+    ///
+    /// The JetBrains Marketplace addresses an update two ways: by `xmlId` and
+    /// version (`IdeaVIM`, `2.46.2`), which is what this server publishes and
+    /// what an operator blocks, and by the **numeric plugin and update ids**
+    /// (`164`, `1149038`) that its own documents carry. The IDE only ever learns
+    /// the numeric pair — it reads it out of `api/search/updates/compatible` and
+    /// then asks for `files/164/1149038/meta.json` — so the second spelling is
+    /// not optional, and it cannot be answered by passing the pair through:
+    /// cached under `164/1149038`, an artifact is stored beside the same bytes
+    /// under their real coordinate and, worse, a block on `IdeaVIM@2.46.2` does
+    /// not match the request the IDE actually makes.
+    ///
+    /// So the alias is resolved to the canonical coordinate *before* the funnel
+    /// runs, the same shape and for the same reason as a forge ref resolving to
+    /// a commit (see [`Self::forge`]): the cache, the rules and the block list
+    /// all see one coordinate per release.
+    ///
+    /// Returning `Ok(None)` means "already canonical" and costs nothing;
+    /// `Err(NotFound)` means the alias names nothing.
+    async fn canonical_coordinate(&self, _pkg: &PackageId) -> Result<Option<PackageId>, CoreError> {
+        Ok(None)
     }
 
     /// This client's releases, normalised across forges (RFC 0021 §5.2).

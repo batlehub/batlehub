@@ -139,6 +139,29 @@ See [blocking a package version](/guide/admin-policies#block-a-package-version) 
 
 Cargo sends the `token` from the `[registries.<name>]` block. In CI, set it via the environment instead: `export CARGO_REGISTRIES_INTERNAL_TOKEN=$BATLEHUB_TOKEN` (uppercase the registry name).
 
+The header cargo sends is the **bare token with no scheme** — the [registry web API reference](https://doc.rust-lang.org/cargo/reference/registry-web-api.html) says "the header value is the API token" — which BatleHub normalises for every route on a `cargo` registry.
+
+### When the token is sent
+
+By default cargo sends it on the [web API](https://doc.rust-lang.org/cargo/reference/registry-web-api.html) only: publish, yank, unyank and owners. Index reads and `.crate` downloads go out **anonymous**, which makes a registry that refuses anonymous callers unusable rather than authenticated.
+
+The switch is `auth-required` in the sparse index's `config.json`, which the [registry index reference](https://doc.rust-lang.org/cargo/reference/registry-index.html) defines as marking "a private registry that requires all operations to be authenticated including API requests, crate downloads and sparse index updates".
+
+BatleHub **derives** it: the field is advertised when an anonymous caller cannot read the registry, and omitted when one can — so an open registry keeps working for callers with no token, and a closed one authenticates end to end.
+
+::: tip Overriding the derivation
+The derivation asks about the *registry* tier, because that is what cargo asks about: it reads `config.json` once, before it knows which crate it wants. A registry that closes the tier and then re-opens one package to `*` through a grant is therefore advertised as fully closed, and cargo will demand a token for the open package too.
+
+Set `cargo_auth_required` on the registry to force the answer either way:
+
+```toml
+[[registries]]
+name = "internal"
+type = "cargo"
+cargo_auth_required = false   # advertise as open despite a closed registry tier
+```
+:::
+
 ## Notes
 
 If `cargo publish` fails with "invalid token", verify the `index` URL ends with `/registry/`. Checksums returned by the sparse index match the cached `.crate` files, so `cargo verify-project` continues to work.

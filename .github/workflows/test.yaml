@@ -3,8 +3,8 @@ name: Test
 # client integrations: the marketplaces (headless VS Code + IntelliJ installing
 # an extension that exists only on this instance), Bundler, and one job per
 # remaining ecosystem in the `heavy-client` matrix (npm, pypi, openvsx, conda,
-# nuget, composer, terraform, nvm, sdkman, mise, cargo, go, maven, pathproxy,
-# quarantine, upstream_audit), each driving that ecosystem's real client
+# nuget, composer, terraform, nvm, sdkman, mise, cargo, rustup, go, maven,
+# pathproxy, quarantine, upstream_audit), each driving that ecosystem's real client
 # against a real server. Each job produces an LCOV file; the final job merges them and
 # publishes a coverage table in the run summary.
 #
@@ -503,9 +503,22 @@ jobs:
           done
           curl -sf http://127.0.0.1:9000/.well-known/openid-configuration >/dev/null \
             || { docker logs dex; echo "::error::dex never served its discovery document"; exit 1; }
+      # The S3 server this job runs is RustFS (the service above); the client is
+      # still MinIO's `mc`, because RustFS ships no CLI and the four things the
+      # suite asks of it — alias, mb, ls, cat — are plain S3 calls, verified
+      # against RustFS.
+      #
+      # From the project's own GitHub release, pinned. `dl.min.io/client/mc/release/…`
+      # answers **410 Gone** — MinIO withdrew the community download host, and
+      # every path under it, so the unpinned URL that used to work now fails the
+      # job before the suite starts. A pinned asset is also one less thing that
+      # moves under a heavy suite.
       - name: Install the MinIO client
+        env:
+          MC_RELEASE: RELEASE.2025-08-13T08-35-41Z
         run: |
-          curl -fsSL --proto '=https' -o /usr/local/bin/mc https://dl.min.io/client/mc/release/linux-amd64/mc
+          curl -fsSL --proto '=https' -o /usr/local/bin/mc \
+            "https://github.com/minio/mc/releases/download/$MC_RELEASE/mc.linux-amd64.$MC_RELEASE"
           chmod +x /usr/local/bin/mc
           mc --version | head -1
       - name: Clean previous coverage data
@@ -724,6 +737,14 @@ jobs:
           # are on the runner image; the path-proxy suite drives apt (on the
           # image) and dnf (installed by the job below).
           - suite: cargo
+          # rustup: the closed world of RFC 0024 §6.10 — the compiler, the
+          # crates, the build and the run all through one instance, with
+          # egress denied to every client process. rustup itself is on the
+          # runner image (the toolchain step above uses it) and the suite
+          # redirects RUSTUP_HOME and CARGO_HOME into its own temp directory,
+          # so the job's cached toolchain is untouched. It installs two
+          # minimal toolchains (~120 MB each) from static.rust-lang.org.
+          - suite: rustup
           - suite: go
           - suite: maven
           - suite: pathproxy
@@ -942,6 +963,10 @@ jobs:
         include:
           - target: matrix
           - target: signing
+          # The read boundary on the eight kinds no client phase drives. No
+          # client and no upstream: every registry it touches is local and
+          # empty, which is exactly what makes the boundary observable.
+          - target: reads
           - target: npm
           - target: pypi
           - target: openvsx
@@ -950,6 +975,13 @@ jobs:
           - target: composer
           - target: rubygems
           - target: terraform
+          # Hermetic like the rest: both have a local mode, so the run
+          # publishes its own fixture and reads it back — no upstream, no
+          # network. `cargo` is also the regression test for `auth-required`
+          # in the sparse index's config.json, without which cargo sends no
+          # credential on a read at all.
+          - target: maven
+          - target: cargo
     services:
       postgres:
         image: postgres:17-alpine
@@ -1031,10 +1063,284 @@ jobs:
           path: coverage-authz-${{ matrix.target }}.lcov
           if-no-files-found: error
 
+  # The authorization suite's **live** targets (`authz.sh live:<kind>`).
+  #
+  # A job of its own, and nightly rather than per-PR, because these are the one
+  # family in that suite that reaches the public internet. Nine registry kinds
+  # have no local mode — a forge, a Node distribution, a JDK broker, a file tree
+  # and two OS archives have nothing to publish *into* — so proving that a real
+  # client is refused without a credential and works with one needs a real
+  # upstream for the positive arm. The `reads` target in `heavy-authz` measures
+  # the same boundary at route level, hermetically, on every PR; this measures
+  # it where only a client can.
+  heavy-authz-live:
+    name: Heavy authorization, live (${{ matrix.kind }})
+    runs-on: ubuntu-latest
+    # Nightly and on demand, like the rest of the network-dependent heavy work.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kind: goproxy
+          - kind: nodedist
+          - kind: sdkman
+          - kind: github
+          - kind: forgejo
+          - kind: gitlab
+          - kind: generic
+          - kind: deb
+          - kind: rpm
+          - kind: pacman
+          - kind: rustup
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: testpass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:testpass@localhost:5432/postgres
+      MISE_VERSION: "2026.9.5"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: "stable"
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2.87.10
+        with:
+          tool: cargo-llvm-cov
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+
+      # mise is the client for all three forge kinds — one binary, three
+      # backends — and it is the client whose `netrc` setting the phases rely on.
+      - name: Install mise
+        if: matrix.kind == 'github' || matrix.kind == 'forgejo' || matrix.kind == 'gitlab'
+        run: |
+          curl -fsSL --proto '=https' --proto-redir '=https' -o /tmp/mise.tar.gz \
+            "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/mise-v${MISE_VERSION}-linux-x64.tar.gz"
+          tar -xzf /tmp/mise.tar.gz -C /tmp
+          sudo install -m 0755 /tmp/mise/bin/mise /usr/local/bin/mise
+          mise --version
+      # The rpm client runs in AlmaLinux 9, for the reason `closed_world.sh`
+      # spells out: an EPEL build is linked against that userland. All the
+      # runner provides is an engine.
+      - name: Report the container engine
+        if: matrix.kind == 'rpm' || matrix.kind == 'pacman'
+        run: |
+          podman info >/dev/null 2>&1 && podman --version && exit 0
+          docker info >/dev/null 2>&1 && docker --version && exit 0
+          echo "neither podman nor docker answered 'info' on this runner" >&2
+          exit 1
+      # `rustup` is installed by the toolchain action above, so the `rustup`
+      # row needs no client step of its own.
+      - name: Cache heavy client downloads
+        if: matrix.kind == 'nodedist' || matrix.kind == 'sdkman'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/batlehub-heavy
+          key: heavy-authz-live-${{ matrix.kind }}-${{ hashFiles('tests/heavy/authz.sh') }}
+
+      - name: Clean previous coverage data
+        run: cargo llvm-cov clean --workspace
+      - name: Run the live authorization target (${{ matrix.kind }})
+        run: bash tests/heavy/authz.sh live:${{ matrix.kind }}
+        env:
+          COVERAGE: "1"
+          # A **GitHub** token, and it authenticates github registries only —
+          # `heavy_forge_auth_config` maps one variable per forge kind, so the
+          # forgejo and gitlab rows stay anonymous against codeberg.org and
+          # gitlab.com rather than being handed a credential for another host.
+          # This is the *upstream's* credential; what the phases carry is this
+          # instance's, and the two are unrelated.
+          HEAVY_FORGE_TOKEN: ${{ github.token }}
+      - name: Generate LCOV
+        run: >-
+          cargo llvm-cov report --lcov --output-path coverage-authz-live-${{ matrix.kind }}.lcov
+          --ignore-filename-regex "${{ env.COVERAGE_EXCLUDE }}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-authz-live-${{ matrix.kind }}
+          path: coverage-authz-live-${{ matrix.kind }}.lcov
+          if-no-files-found: error
+
+  # The closed-world suite (tests/heavy/closed_world.sh), one job per registry
+  # kind.
+  #
+  # A job of its own rather than more rows in `heavy-client`, for the reason
+  # `heavy-authz` is one: every row runs the *same* script with a phase
+  # argument. What each row adds is the half no protocol test can check — that
+  # a client which can reach nothing but this instance can still resolve, build
+  # and run. Rust's closed world is `rustup` in `heavy-client`, and proves more
+  # (the toolchain comes from the instance too).
+  #
+  # The `dnf` and `pacman` rows run their client inside AlmaLinux 9 and Arch
+  # images respectively, on the runner's own container engine — a distribution
+  # package is linked against its own libraries, so executing what is inside it
+  # anywhere else cannot work. That is also why neither row installs a package
+  # manager onto the runner any more, and why `pacman` is a row at all: no
+  # hosted runner ships it and it cannot be apt-installed.
+  heavy-closed-world:
+    name: Heavy closed world (${{ matrix.phase }})
+    runs-on: ubuntu-latest
+    strategy:
+      # One ecosystem failing says nothing about the others, and which ones can
+      # survive the closed world is the thing being learned.
+      fail-fast: false
+      matrix:
+        include:
+          - phase: go
+          - phase: node
+          - phase: python
+          - phase: java
+          - phase: ruby
+          - phase: dotnet
+          - phase: php
+          - phase: conda
+          - phase: terraform
+          - phase: mise
+          # The tool installers and the galleries. `jbplugin` downloads a
+          # ~1.5 GB IDE and `vscode` a ~300 MB editor, both cached below.
+          - phase: nvm
+          - phase: sdkman
+          - phase: ovsx
+          - phase: helm
+          - phase: apt
+          - phase: forgejo
+          - phase: gitlab
+          - phase: jbr
+          - phase: vscode
+          - phase: jbplugin
+          - phase: dnf
+          - phase: pacman
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: testpass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:testpass@localhost:5432/postgres
+      # The same pins, and the same reason, as the two matrices above: what
+      # these assert is one client generation's behaviour. Spelled again rather
+      # than shared, because a matrix cannot inherit another matrix's env.
+      NODE_VERSION: "24"
+      DOTNET_CHANNEL: "10.0"
+      TERRAFORM_VERSION: "1.16.2"
+      MISE_VERSION: "2026.9.5"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: "stable"
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2.87.10
+        with:
+          tool: cargo-llvm-cov
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+
+      # Go, Python, Java, Maven, Ruby, Bundler and PHP are on the runner image;
+      # the four below are not, and conda's micromamba the suite fetches itself.
+      # `ovsx` needs npm for the same reason `node` does: its client is an npm
+      # package, and the phase installs it *through the instance's own npm
+      # registry* — so what the runner has to provide is npm itself, not ovsx.
+      - name: Set up Node
+        if: matrix.phase == 'node' || matrix.phase == 'ovsx'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install the .NET SDK
+        if: matrix.phase == 'dotnet'
+        run: |
+          curl -fsSL --proto '=https' --proto-redir '=https' \
+            https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
+          bash /tmp/dotnet-install.sh --channel "$DOTNET_CHANNEL" --install-dir "$HOME/.dotnet"
+          echo "$HOME/.dotnet" >> "$GITHUB_PATH"
+          echo "DOTNET_ROOT=$HOME/.dotnet" >> "$GITHUB_ENV"
+      - name: Install Terraform
+        if: matrix.phase == 'terraform'
+        run: |
+          curl -fsSL --proto '=https' --proto-redir '=https' -o /tmp/terraform.zip \
+            "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+          sudo unzip -o -q /tmp/terraform.zip -d /usr/local/bin
+          terraform version
+      # mise is the client for three kinds: a GitHub release (`mise`), a Codeberg
+      # one (`forgejo`) and a GitLab one (`gitlab`). Same binary, three backends.
+      - name: Install mise
+        if: matrix.phase == 'mise' || matrix.phase == 'forgejo' || matrix.phase == 'gitlab'
+        run: |
+          curl -fsSL --proto '=https' --proto-redir '=https' -o /tmp/mise.tar.gz \
+            "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/mise-v${MISE_VERSION}-linux-x64.tar.gz"
+          tar -xzf /tmp/mise.tar.gz -C /tmp
+          sudo install -m 0755 /tmp/mise/bin/mise /usr/local/bin/mise
+          mise --version
+      # `dnf` and `pacman` bring their own client, in their own image; all the
+      # runner has to provide is an engine. `ubuntu-latest` ships both podman
+      # and docker, and the suite takes whichever answers `info` first — so this
+      # step reports what it found rather than installing anything, and turns a
+      # missing engine into a legible failure here instead of a pull error two
+      # steps later.
+      - name: Report the container engine
+        if: matrix.phase == 'dnf' || matrix.phase == 'pacman'
+        run: |
+          podman info >/dev/null 2>&1 && podman --version && exit 0
+          docker info >/dev/null 2>&1 && docker --version && exit 0
+          echo "neither podman nor docker answered 'info' on this runner" >&2
+          exit 1
+      - name: Cache heavy client downloads
+        if: matrix.phase == 'conda' || matrix.phase == 'php' || matrix.phase == 'nvm' || matrix.phase == 'sdkman' || matrix.phase == 'vscode' || matrix.phase == 'jbplugin'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/batlehub-heavy
+          key: heavy-closed-world-${{ matrix.phase }}-${{ hashFiles('tests/heavy/closed_world.sh') }}
+
+      - name: Clean previous coverage data
+        run: cargo llvm-cov clean --workspace
+      - name: Run the closed-world suite (${{ matrix.phase }})
+        run: bash tests/heavy/closed_world.sh ${{ matrix.phase }}
+        env:
+          COVERAGE: "1"
+          # Only the mise phase drives a `github` registry; see the note on the
+          # same variable in `heavy-client` for why the workflow token is what
+          # it should be given.
+          #
+          # It is a **GitHub** token and it authenticates github registries
+          # only — `heavy_forge_auth_config` maps one variable per forge kind
+          # for exactly this reason. The `forgejo` and `gitlab` phases run
+          # anonymous against codeberg.org and gitlab.com unless
+          # HEAVY_FORGEJO_TOKEN / HEAVY_GITLAB_TOKEN are set, which is right:
+          # this token would not authenticate there, and sending it would hand
+          # a repository credential to a third party.
+          HEAVY_FORGE_TOKEN: ${{ github.token }}
+      - name: Generate LCOV
+        run: >-
+          cargo llvm-cov report --lcov --output-path coverage-closed-world-${{ matrix.phase }}.lcov
+          --ignore-filename-regex "${{ env.COVERAGE_EXCLUDE }}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-closed-world-${{ matrix.phase }}
+          path: coverage-closed-world-${{ matrix.phase }}.lcov
+          if-no-files-found: error
+
   coverage-report:
     name: Coverage report (merged)
     runs-on: ubuntu-latest
-    needs: [unit, integration, heavy-marketplace, heavy-bundler, heavy-backends, heavy-browser, heavy-client, heavy-authz]
+    needs: [unit, integration, heavy-marketplace, heavy-bundler, heavy-backends, heavy-browser, heavy-client, heavy-authz, heavy-closed-world]
     # Run even when a coverage job fails: merge_coverage.py renders an "absent"
     # row for any missing LCOV, so a partially-green pipeline still reports
     # (download-artifact with a pattern warns, not fails, on zero matches).

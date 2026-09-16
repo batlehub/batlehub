@@ -432,3 +432,111 @@ async fn search_packages_upstream_error_is_empty() {
     let hits = client.search_packages("rust", 20).await.unwrap();
     assert!(hits.is_empty());
 }
+
+// ── The numeric-id alias (`files/{pluginId}/{updateId}/…`) ───────────────────
+
+/// The IDE reads `{"id":1149038,"pluginId":164}` out of
+/// `api/search/updates/compatible` and addresses the update by that pair. It has
+/// to resolve to the coordinate this server publishes under, or the archive is
+/// cached beside itself and a block on `IdeaVIM@2.46.2` never matches.
+#[tokio::test]
+async fn a_numeric_pair_resolves_to_the_published_coordinate() {
+    let mut server = Server::new_async().await;
+    let _updates = server
+        .mock("GET", "/api/plugins/164/updates")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"[{"id":1149038,"version":"2.46.2"},{"id":1100000,"version":"2.45.0"}]"#)
+        .create_async()
+        .await;
+    let _plugin = server
+        .mock("GET", "/api/plugins/164")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"id":164,"xmlId":"IdeaVIM","name":"IdeaVim"}"#)
+        .create_async()
+        .await;
+
+    let client =
+        JetbrainsMarketplaceRegistryClient::new(server.url(), &Default::default()).unwrap();
+    let resolved = client
+        .canonical_coordinate(&pkg("164", "1149038"))
+        .await
+        .unwrap()
+        .expect("the numeric pair is an alias");
+    assert_eq!(resolved.name, "IdeaVIM");
+    assert_eq!(resolved.version, "2.46.2");
+    assert_eq!(resolved.registry, "jbm");
+}
+
+/// The artifact selector is part of the request, not of the spelling, so it
+/// survives the translation.
+#[tokio::test]
+async fn resolving_an_alias_keeps_the_artifact_selector() {
+    let mut server = Server::new_async().await;
+    let _updates = server
+        .mock("GET", "/api/plugins/164/updates")
+        .with_status(200)
+        .with_body(r#"[{"id":1149038,"version":"2.46.2"}]"#)
+        .create_async()
+        .await;
+    let _plugin = server
+        .mock("GET", "/api/plugins/164")
+        .with_status(200)
+        .with_body(r#"{"xmlId":"IdeaVIM"}"#)
+        .create_async()
+        .await;
+
+    let client =
+        JetbrainsMarketplaceRegistryClient::new(server.url(), &Default::default()).unwrap();
+    let mut requested = pkg("164", "1149038");
+    requested.artifact = Some("plugin".to_owned());
+    let resolved = client
+        .canonical_coordinate(&requested)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(resolved.artifact.as_deref(), Some("plugin"));
+}
+
+/// A published coordinate is already canonical, and answering so must cost no
+/// upstream call at all — `mockito` fails the test if one is made.
+#[tokio::test]
+async fn a_published_coordinate_is_already_canonical() {
+    let server = Server::new_async().await;
+    let client =
+        JetbrainsMarketplaceRegistryClient::new(server.url(), &Default::default()).unwrap();
+    assert!(client
+        .canonical_coordinate(&pkg("org.rust.lang", "1.2.0"))
+        .await
+        .unwrap()
+        .is_none());
+    // Half a pair is not a pair: a plugin whose xmlId happens to be digits is
+    // still addressed by version, and a numeric version is not an update id.
+    assert!(client
+        .canonical_coordinate(&pkg("164", "2.46.2"))
+        .await
+        .unwrap()
+        .is_none());
+}
+
+/// An update id the plugin does not have is a `404`, not a bad gateway and not
+/// a silent fall-through to a coordinate that means something else.
+#[tokio::test]
+async fn an_unknown_update_id_is_not_found() {
+    let mut server = Server::new_async().await;
+    let _updates = server
+        .mock("GET", "/api/plugins/164/updates")
+        .with_status(200)
+        .with_body(r#"[{"id":1149038,"version":"2.46.2"}]"#)
+        .create_async()
+        .await;
+
+    let client =
+        JetbrainsMarketplaceRegistryClient::new(server.url(), &Default::default()).unwrap();
+    let err = client
+        .canonical_coordinate(&pkg("164", "9999999"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CoreError::NotFound(_)), "got {err:?}");
+}

@@ -8,6 +8,9 @@ on:
       - "Containerfile.worker-guarddog"
       - "Cargo.lock"
       - "ui/pnpm-lock.yaml"
+      - ".trivyignore.yaml"
+      - "vex/**"
+      - ".github/scripts/vex.py"
       - ".github/workflows/image-scan.yaml"
   pull_request:
     branches: ["main"]
@@ -17,6 +20,9 @@ on:
       - "Containerfile.worker-guarddog"
       - "Cargo.lock"
       - "ui/pnpm-lock.yaml"
+      - ".trivyignore.yaml"
+      - "vex/**"
+      - ".github/scripts/vex.py"
       - ".github/workflows/image-scan.yaml"
   # Daily rebuild + rescan so a CVE disclosed against a base/OS layer AFTER the
   # last build still trips CI — this is the "future CVE" detection, not just a
@@ -27,6 +33,23 @@ on:
 permissions:
   contents: read
 jobs:
+  # The two suppression mechanisms have to keep saying the same thing.
+  # `.trivyignore.yaml` is what the gates below read; `vex/batlehub.openvex.json`
+  # is what the release publishes, signs and attests for everyone else to read.
+  # An entry that exists in one and not the other means either a consumer is
+  # being told a finding is unassessed when it was, or a statement has outlived
+  # the reason it was made. Seconds to run, and it needs no image, so it is its
+  # own job rather than a step inside a ten-minute build.
+  vex:
+    name: VEX document
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the VEX document
+        run: python3 .github/scripts/vex.py check
+
   scan:
     name: Build & Trivy scan (Containerfile)
     runs-on: ubuntu-latest

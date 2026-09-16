@@ -1,0 +1,8 @@
+phase,iteration,accept_ms,healthy_ms,stop_ms,in_flight
+cold,1,1053,1490,347,0
+warm,1,578,1056,341,0
+warm,2,492,975,350,0
+warm,3,512,898,348,0
+warm,4,630,1154,352,0
+warm,5,547,975,352,0
+draining,1,523,884,6379,20

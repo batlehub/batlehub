@@ -480,6 +480,7 @@ pub use spa::{configure_spa, narrow_csp, SpaDir};
         (name = "proxy/jetbrains-marketplace", description = "JetBrains Marketplace — IDE-facing plugin API (search, compatible updates, meta.json, downloads), updatePlugins.xml custom repository, and marketplace-compatible plugin publishing"),
         (name = "proxy/generic",    description = "Generic file mirror — path-addressed proxy cache for upstreams with no package protocol (toolchain tarballs, vendor CDNs), restricted by a path_allow allowlist"),
         (name = "proxy/nodedist",   description = "Node distributions (nvm, fnm, n, mise) — the nodejs.org/dist tree as a typed registry: filtered index.tab/index.json listings, per-release tarballs and SHASUMS256.txt byte-exact"),
+        (name = "proxy/rustup",     description = "Rust toolchains (rustup, mise) — the static.rust-lang.org tree as a typed registry: channel manifests filtered and their .sha256 recomputed, blocked releases refused or repaired, component archives cached per release"),
         (name = "proxy/sdkman",     description = "SDKMAN — the candidates API and the download broker as one registry: filtered versions/all, candidates/default and the rendered sdk list table, a blocked version answered `invalid` at candidates/validate, hook scripts relayed byte-exact, the broker's 302 followed server-side and cached"),
         (name = "front-office",     description = "User-facing package information"),
         (name = "user",             description = "Caller-scoped reads — quota, downloads and advisories for whoever holds the token, never for anyone else"),
@@ -615,8 +616,10 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
             //   files/{p}/{u}/{file} — all before the shared npm version/packument wildcards
             conda::{
                 conda_channeldata, conda_current_repodata, conda_file_download, conda_publish,
-                conda_repodata, conda_repodata_bz2, conda_repodata_zst,
+                conda_repodata, conda_repodata_bz2, conda_repodata_shards, conda_repodata_zst,
+                conda_shard,
             },
+            forgejo::fj_attachment,
             forgejo::fj_packages,
             generic::generic_get,
             github::{
@@ -634,10 +637,10 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
             jetbrains::jetbrains_get,
             jetbrains_marketplace::{
                 jbm_aggregation, jbm_broken_plugins, jbm_comments, jbm_compatible_updates,
-                jbm_feature_implementations, jbm_file_download, jbm_ide_extensions,
-                jbm_jb_plugins_xml_ids, jbm_plugin_download, jbm_plugin_info, jbm_plugin_manager,
-                jbm_plugin_meta, jbm_plugin_updates, jbm_plugins_list, jbm_plugins_xml_ids,
-                jbm_search_plugins, jbm_search_plugins_ide, jbm_update_meta,
+                jbm_compatible_updates_get, jbm_feature_implementations, jbm_file_download,
+                jbm_ide_extensions, jbm_jb_plugins_xml_ids, jbm_plugin_download, jbm_plugin_info,
+                jbm_plugin_manager, jbm_plugin_meta, jbm_plugin_updates, jbm_plugins_list,
+                jbm_plugins_xml_ids, jbm_search_plugins, jbm_search_plugins_ide, jbm_update_meta,
                 jbm_update_plugins_xml, jbm_upload,
             },
             maven::{maven_get, maven_put},
@@ -666,6 +669,10 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 gem_compact_info, gem_compact_names, gem_compact_versions, gem_download,
                 gem_gemspec, gem_info, gem_publish, gem_specs_full, gem_specs_latest,
                 gem_specs_prerelease, gem_unyank, gem_versions, gem_yank,
+            },
+            rustup::{
+                rustup_archive, rustup_bootstrap, rustup_dist_dated, rustup_dist_root,
+                rustup_manifests_txt, rustup_release_stable,
             },
             sdkman::{
                 sdkman_candidate_default, sdkman_candidates_all, sdkman_candidates_list,
@@ -721,8 +728,34 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     // Forgejo/GitLab package registries: literal `api/…` prefix — register before
     // the GitHub `{owner}/{repo}` routes so it isn't captured as owner="api".
     cfg.service(fj_packages); // GET …/api/packages/{path}  (Forgejo/Gitea)
+                              // Forgejo addresses a release asset by uuid on a repository-less path, and
+                              // `mise` builds that URL for every asset it installs. Literal `attachments`
+                              // prefix, so it is registered here for the same reason as the line above:
+                              // the GitHub `{owner}/{repo}/…` routes below would claim owner="attachments".
+    cfg.service(fj_attachment); // GET …/attachments/{uuid}  (Forgejo/Gitea)
     cfg.service(gl_packages); // GET …/api/v4/{path}         (GitLab)
-                              // GitHub (owner/repo structure, multi-segment) — also serves Forgejo releases.
+
+    // GitLab (distinct `/-/` delimiter; most-specific first) — **before** the
+    // GitHub routes below, not after them. A GitLab project may be a *single*
+    // path segment, and mise percent-encodes it, so `…/gitlab-org%2Fcli/-/releases`
+    // is three segments and `{owner}/{repo}/releases` claimed it first with
+    // `repo = "-"`; the GitHub guard then answered "not a github or forgejo
+    // registry" and mise's `gitlab:` backend could resolve nothing. `…/-/raw/…`
+    // collided with `{owner}/{repo}/raw/…` the same way. The reverse shadowing
+    // cannot happen: every route here carries the literal `/-/` segment.
+    cfg.service(gl_download_link); // …/-/releases/{tag}/downloads/{name}
+    cfg.service(gl_get_release); // …/-/releases/{tag}
+    cfg.service(gl_list_releases); // …/-/releases
+    cfg.service(gl_download_archive); // …/-/archive/{tag}/{filename}
+    cfg.service(gl_download_raw); // …/-/raw/{ref}/{path}
+
+    // RFC 0019 §4.1 `[api_reads]` — typed, read-only, opt-in. Before the
+    // archive and raw routes so `/tags` is not read as a ref.
+    cfg.service(crate::handlers::proxy::forge_api::forge_tags); // …/{o}/{r}/tags
+    cfg.service(crate::handlers::proxy::forge_api::forge_commit); // …/{o}/{r}/commits/{sha}
+    cfg.service(crate::handlers::proxy::forge_api::forge_branch); // …/{o}/{r}/branches/{name}
+
+    // GitHub (owner/repo structure, multi-segment) — also serves Forgejo releases.
     cfg.service(list_releases);
     cfg.service(get_release);
     cfg.service(download_asset_by_name);
@@ -730,18 +763,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(download_tarball);
     cfg.service(download_zipball);
     cfg.service(download_raw);
-    // GitLab (distinct `/-/` delimiter; most-specific first)
-    // RFC 0019 §4.1 `[api_reads]` — typed, read-only, opt-in. Before the
-    // archive and raw routes so `/tags` is not read as a ref.
-    cfg.service(crate::handlers::proxy::forge_api::forge_tags); // …/{o}/{r}/tags
-    cfg.service(crate::handlers::proxy::forge_api::forge_commit); // …/{o}/{r}/commits/{sha}
-    cfg.service(crate::handlers::proxy::forge_api::forge_branch); // …/{o}/{r}/branches/{name}
-    cfg.service(gl_download_link); // …/-/releases/{tag}/downloads/{name}
-    cfg.service(gl_get_release); // …/-/releases/{tag}
-    cfg.service(gl_list_releases); // …/-/releases
-    cfg.service(gl_download_archive); // …/-/archive/{tag}/{filename}
-    cfg.service(gl_download_raw); // …/-/raw/{ref}/{path}
-                                  // Deb / RPM repositories: publish (PUT) before the catch-all read (GET).
+    // Deb / RPM repositories: publish (PUT) before the catch-all read (GET).
     cfg.service(deb_publish); // PUT …/deb/pool/{dist}/{component}/upload
     cfg.service(rpm_publish); // PUT …/rpm/upload
     cfg.service(deb_get); // GET …/deb/{path}
@@ -756,12 +778,22 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(nodedist_index_tab); // GET …/nodedist/index.tab   (filtered document)
     cfg.service(nodedist_index_json); // GET …/nodedist/index.json  (filtered document)
     cfg.service(nodedist_file); // GET …/nodedist/{version}/{file}
-                                // SDKMAN (RFC 0010 phase 6). The literal `candidates/all`,
-                                // `candidates/list`, `candidates/default/{c}` and
-                                // `candidates/validate/…` routes before the
-                                // `candidates/{c}/{plat}/…` ones, so a candidate named
-                                // `default` or `validate` cannot shadow them; every one
-                                // before the npm catch-alls below.
+
+    // rustup: the literal paths first, then the two `dist/` patterns. The
+    // installer's tree is `…/rustup/rustup/…`, which is upstream's own layout
+    // under the protocol prefix, so its routes cannot collide with `dist/`.
+    cfg.service(rustup_manifests_txt); // GET …/rustup/manifests.txt        (filtered document)
+    cfg.service(rustup_release_stable); // GET …/rustup/rustup/release-stable.toml
+    cfg.service(rustup_archive); // GET …/rustup/rustup/archive/{version}/{triple}/{file}
+    cfg.service(rustup_bootstrap); // GET …/rustup/rustup/dist/{triple}/{file}
+    cfg.service(rustup_dist_root); // GET …/rustup/dist/{file}              (channel documents)
+    cfg.service(rustup_dist_dated); // GET …/rustup/dist/{date}/{file}
+                                    // SDKMAN (RFC 0010 phase 6). The literal `candidates/all`,
+                                    // `candidates/list`, `candidates/default/{c}` and
+                                    // `candidates/validate/…` routes before the
+                                    // `candidates/{c}/{plat}/…` ones, so a candidate named
+                                    // `default` or `validate` cannot shadow them; every one
+                                    // before the npm catch-alls below.
     cfg.service(sdkman_candidates_all); // GET …/sdkman/candidates/all      (relayed)
     cfg.service(sdkman_candidates_list); // GET …/sdkman/candidates/list     (relayed)
     cfg.service(sdkman_candidate_default); // GET …/sdkman/candidates/default/{c}  (filtered, composed)
@@ -891,6 +923,13 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                                 // (RFC 0009 §7.5). `channeldata.json` is channel-root, so it must precede
                                 // the two-segment npm catch-all as well.
     cfg.service(conda_channeldata); // GET …/channeldata.json
+                                    // CEP-16, before the two index routes and well before the filename
+                                    // catch-all: `repodata_shards.msgpack.zst` is a literal name, and a
+                                    // shard is hex-named with its own suffix, so neither can be confused
+                                    // with a package (`.conda`/`.tar.bz2`) — but both would be swallowed
+                                    // by the npm three-segment wildcard further down.
+    cfg.service(conda_repodata_shards); // GET …/{platform}/repodata_shards.msgpack.zst
+    cfg.service(conda_shard); // GET …/{platform}/{sha256}.msgpack.zst
     cfg.service(conda_repodata_zst); // GET …/{platform}/repodata.json.zst
     cfg.service(conda_repodata_bz2); // GET …/{platform}/repodata.json.bz2
     cfg.service(conda_repodata); // GET …/{platform}/repodata.json
@@ -915,6 +954,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     // otherwise swallow e.g. "plugins/list" as {name}/{version}.
     cfg.service(jbm_upload); // POST …/api/updates/upload
     cfg.service(jbm_compatible_updates); // POST …/api/search/updates/compatible
+    cfg.service(jbm_compatible_updates_get); // GET  …/api/search/updates/compatible
     cfg.service(jbm_aggregation); // GET …/api/search/aggregation/{field}
     cfg.service(jbm_search_plugins); // GET …/api/search/plugins
     cfg.service(jbm_search_plugins_ide); // GET …/api/searchPlugins

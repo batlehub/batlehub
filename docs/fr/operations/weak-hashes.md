@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/weak-hashes.md
-sourceHash: 8c2acb6cbeeb997c
+sourceHash: e57dc8984f8f0ca9
 ---
 
 # MD5 et SHA-1
@@ -42,12 +42,14 @@ ont pas survécu.
 | 1 | `core/services/integrity.rs` — `sha1_hex` | SHA-1 | Imposé par Composer |
 | 2 | `core/services/integrity.rs` — `verify`, `StreamingVerifier` | SHA-1 | Vérification, pas émission |
 | 3 | `core/…/local_registry/eco_rubygems.rs` — `/versions` | MD5 | Imposé par l'index compact |
-| 4 | `web/…/proxy/rubygems/range.rs` — ETag | MD5 | **Clients anciens uniquement** |
+| ~~4~~ | ~~`web/…/proxy/rubygems/range.rs` — ETag~~ | ~~MD5~~ | **Supprimé** — l'ETag est un SHA-256 ; voir [§4](#etag-md5-removed) |
 | ~~5~~ | ~~`adapters/repo/deb.rs`~~ | ~~MD5, SHA-1~~ | **Supprimé** — facultatif chez Debian |
 | ~~6~~ | ~~`adapters/repo/pacman.rs`~~ | ~~MD5~~ | **Supprimé** — retiré du format |
 | 7 | `adapters/repo/openpgp.rs` — empreinte | SHA-1 | Immuable par définition |
+| 8 | `core/services/listing_synthesis.rs` — listings composés | SHA-1 | Imposé par le format imité |
+| 9 | `web/…/proxy/maven/proxy.rs` — fichiers `.md5`/`.sha1` | MD5, SHA-1 | L'algorithme *est* l'extension du fichier |
 
-Les entrées 5 et 6 sont barrées parce que le code ne les calcule plus. L'entrée 4
+Les entrées 4, 5 et 6 sont barrées parce que le code ne les calcule plus. L'entrée 4
 est en gras parce que c'est un choix de compatibilité plutôt qu'une exigence, et
 la seule qu'il reste à revisiter. Voir
 [Revérifié](#rechecked-2026-08-31).
@@ -99,26 +101,38 @@ Notez que l'en-tête `Repr-Digest` que BatleHub envoie sur ces mêmes documents 
 déjà en SHA-256 — c'est l'empreinte moderne, celle de la RFC 9530, et celle que
 la spécification exige réellement.
 
-## 4. L'ETag de l'index compact
+## 4. L'ETag de l'index compact — supprimé {#etag-md5-removed}
 
-`compact_response` fixe l'ETag à un MD5 du corps du document, et
-`holds_our_prefix` redérive le MD5 d'un *préfixe* pour répondre aux requêtes de
-plage reprises de Bundler.
+`compact_response` pose l'`ETag` sur le corps du document et `holds_our_prefix`
+le recalcule sur un *préfixe* : c'est ce qui rend les requêtes de plage
+reprenables de Bundler vérifiables. Si le validateur du client égale l'empreinte
+de nos *N* premiers octets, sa copie **est** notre préfixe et ajouter la queue
+est prouvablement correct (RFC 0009 §13.24).
 
-La valeur doit être en MD5 parce que c'est ainsi que Bundler l'a calculée : les
-versions plus anciennes exécutent
-`SharedHelpers.digest(:MD5).hexdigest(File.read(path))` sur le fichier local en
-cache et l'envoient en `If-None-Match`, à côté d'un `bytes=<size - 1>-`. Un ETag
-serveur dans un autre algorithme ne correspond jamais, et le client retélécharge
-le fichier entier.
+Ce mécanisme n'a jamais eu besoin de MD5. **L'etag est opaque pour le client**,
+qui le relit dans son propre fichier d'etag et le met entre guillemets —
+`bundler 4.0.17`, `compact_index_client/updater.rb` :
 
-**Mais [Bundler 2.7.0 a retiré le hachage MD5 des réponses de l'index
-compact](https://bundler.io/changelog.html) (16 juillet 2025, changement de
-rupture).** Le Bundler courant emploie le `Repr-Digest` SHA-256. Ce MD5 ne sert
-donc plus qu'à Bundler antérieur à 2.7, et le coût de le changer est un
-retéléchargement complet pour ces clients — dégradé, pas cassé. C'est une
-rétention de compatibilité délibérée, ce qui est une affirmation plus faible que
-« le format l'exige ».
+```ruby
+etag = etag_path.read.tap(&:chomp!) if etag_path.file?
+headers["If-None-Match"] = %("#{etag}") if etag
+```
+
+La seule raison pour laquelle c'était un MD5 : Bundler **avant 2.7** fabriquait
+lui-même un validateur quand il n'avait pas d'etag stocké —
+`SharedHelpers.digest(:MD5).hexdigest(IO.read(path))` sur son fichier local —
+donc un etag serveur dans un autre algorithme ne correspondait jamais.
+[Bundler 2.7.0 a retiré ce hachage le 16/07/2025](https://bundler.io/changelog.html),
+en changement cassant, et il ne reste aucune trace de MD5 dans l'updater de
+4.0.17.
+
+L'etag est donc désormais un **SHA-256** du document, et MD5 a disparu de
+`range.rs`. Ce qu'obtient un client antérieur à 2.7 : son validateur fabriqué ne
+correspond à rien, `holds_our_prefix` répond non, et la réponse est un `200`
+avec le document entier — exactement le comportement qu'il avait avant que tout
+ceci existe. Dégradé d'un transfert complet, jamais faux : aucun client ne reçoit
+un document recollé. C'est le prix de l'abandon de Bundler < 2.7, et il est payé
+par des clients en retard de trois versions majeures.
 
 ## 5. Les `Packages` et `Release` de Debian — supprimé
 
@@ -208,16 +222,70 @@ faisait le travail le fait toujours.
 `apt`, `dnf` et `pacman` en conteneurs, et se déclenche à tout changement sous
 `crates/adapters/src/repo/`.
 
+## Revérifié le 15 septembre 2026 — existe-t-il enfin mieux ? {#rechecked-2026-09-15}
+
+C'est la question que ce registre sert à garder répondable : pour chaque entrée,
+l'amont qui impose l'algorithme faible a-t-il publié une option plus solide
+depuis le dernier passage ? La vérification porte sur les amonts eux-mêmes, pas
+sur un souvenir. **Rien n'a bougé côté amont.** Aucune entrée ne change pour cette raison — et
+l'une d'elles n'attendait aucun amont, donc elle a disparu (entrée 4, ci-dessous).
+
+| # | Entrée | État de l'amont au 15/09/2026 |
+| --- | --- | --- |
+| 1 | `dist.shasum` de Composer | Toujours SHA-1 uniquement. [composer#5940](https://github.com/composer/composer/issues/5940) est **ouverte** (dernière activité le 22/01/2025), et `src/Composer/Downloader/FileDownloader.php` sur `main` lit encore `getDistSha1Checksum()` puis compare `hash_file('sha1', …)`. Un champ `sha256` serait ignoré à l'entrée et fatal à la sortie. |
+| 3 | Somme de contrôle `info` de `/versions` (RubyGems) | Toujours MD5. L'implémentation de référence, `rubygems/compact_index` sur `master`, calcule `Digest::MD5.hexdigest(CompactIndex.info(...))`. Le format nomme l'algorithme ; il n'y a pas de second champ. |
+| ~~4~~ | ETag de l'index compact | **Supprimé le jour même.** Ce n'était pas une question d'amont — Bundler ≥ 2.7 a cessé de hacher ces réponses en juillet 2025 — donc le plancher de compatibilité a dépassé 2.6 et l'etag est un SHA-256. Voir [§4](#etag-md5-removed). |
+| 7 | Empreinte OpenPGP v4 | Inchangée, et ce n'est pas un choix d'algorithme. La voie SHA-256 existe — la RFC 9580 définit des clés **v6** dont l'empreinte est un SHA-256 — mais il s'agit d'une autre version de clé : l'adopter renomme toutes les clés publiées et dépend de l'acceptation de v6 par les vérificateurs `apt`, `rpm` et `pacman`. C'est une migration de format de clé avec une barrière d'interopérabilité, à suivre ailleurs que dans ce registre si elle est un jour engagée. |
+| 9 | Sidecars `.md5`/`.sha1` de Maven | **Déjà additif.** `maven/proxy.rs` calcule et sert `.sha256` et `.sha512` à côté ; la paire faible ne survit que parce qu'un resolver Maven configuré par défaut demande ces deux noms de fichiers. Les retirer ne gagne rien, sinon des clients par défaut cassés. |
+
+Le côté npm mérite sa propre ligne, parce que c'est le seul endroit où l'option
+forte a gagné franchement. `pacote` — le récupérateur qu'utilisent npm et tout
+ce qui est bâti dessus — lit d'abord `dist.integrity` et ne retombe sur
+`dist.shasum` que s'il est absent (`lib/registry.js` : `dist.integrity ?
+ssri.parse(…) : dist.shasum ? ssri.fromHex(dist.shasum, 'sha1')`). Ce serveur ne
+dépend jamais de ce repli : le packument composé par `listing_synthesis.rs`
+n'émet **que `integrity`**, un SRI SHA-256, et le chemin proxy préfère
+l'`integrity` annoncé par l'amont. Le SHA-1 qui subsiste autour de npm est dans
+les fixtures — l'amont simulé et les deux constructeurs d'amont des suites
+lourdes — et il y est exprès : leur rôle est de ressembler au registre auquel
+npm parle vraiment, et un vrai packument porte `dist.shasum`. Une fixture plus
+solide que ce qu'elle imite cesse de tester le chemin de repli sur lequel un
+amont réel peut encore nous placer.
+
+## À côté du code produit : les tests et les fixtures
+
+Cinq fichiers de plus sont épinglés, et aucun n'est une décision : chacun calcule
+une empreinte faible pour *vérifier* ou pour *imiter* l'une des entrées
+ci-dessus, si bien que l'algorithme est choisi par la chose mise à l'épreuve.
+
+| Où | Algorithme | À quoi cela sert |
+| --- | --- | --- |
+| `web/tests/local_rubygems_compact_index.rs` | MD5 | Recalcule l'empreinte de l'entrée 3 pour vérifier que le serveur émet ce que Bundler attend. |
+| `web/tests/air_gap.rs` | MD5, SHA-1 | Vérifie que les fichiers annexes de l'entrée 9 sont émis, avec les valeurs qu'un client Maven calcule. |
+| `tests/heavy/upstream_audit.sh` | SHA-1 | Recalcule le `dist.shasum` de npm pour vérifier ce que le serveur a servi. |
+| `tests/heavy/upstream_dir.sh` | SHA-1 | *Produit* ce `dist.shasum` : c'est l'amont npm depuis lequel la suite hybride installe. |
+| `perf/mock-upstream/src/main.rs` | SHA-1 | Idem, pour l'amont de la charge de soak — un `shasum` faux y donne un 502 sur chaque lecture d'artefact. |
+
+Le mock est le plus récent des cinq, et il est la raison de refaire la
+vérification plutôt que de reprendre le commentaire précédent : il portait *deux*
+empreintes faibles, dont une seule était imposée. Son `|checksum:` d'index
+compact RubyGems était un SHA-1 synthétique là où [le format nomme un
+SHA-256](https://github.com/rubygems/guides/blob/main/rubygems-org-compact-index-api.md)
+du gem — faux sur le protocole autant que faible — et il émet désormais un
+SHA-256. Seul le `dist.shasum` de npm y est épinglé.
+
 ## Comment le scanner les traite
 
-Chacun a une entrée `rust:S4790` dans `sonar-project.properties`, rapportée au
-seul fichier qui parle le protocole, avec son raisonnement en ligne. Ce sont des
-exclusions configurées plutôt que des résolutions par constat dans le tableau de
-bord, pour que la justification soit versionnée et relisible.
+Chacun a une entrée `rust:S4790` (ou `shell:S4790`) dans
+`sonar-project.properties`, rapportée au seul fichier qui parle le protocole,
+avec son raisonnement en ligne. Ce sont des exclusions configurées plutôt que des
+résolutions par constat dans le tableau de bord, pour que la justification soit
+versionnée et relisible.
 
-La portée est délibérée : une empreinte faible *en dehors* de ces sept fichiers
-est un vrai constat. N'élargissez pas une `resourceKey` à un répertoire, et
-n'ajoutez pas une huitième entrée sans un argument de même nature — ce qui, comme
+Onze fichiers sont épinglés : les six du registre qui relèvent du code produit,
+et les cinq ci-dessus. La portée est délibérée — une empreinte faible *en dehors*
+d'eux est un vrai constat. N'élargissez pas une `resourceKey` à un répertoire, et
+n'ajoutez pas une douzième entrée sans un argument de même nature, ce qui, comme
 cette page le montre, veut dire vérifier la spécification plutôt que répéter ce
 que disait le commentaire précédent.
 

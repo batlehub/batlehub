@@ -295,6 +295,9 @@ fn rewrite_github_asset(
             a.remove("url");
         }
     }
+    // `uuid` is deliberately left in place: it is the handle a client builds
+    // its own download URL from (`{forge}/attachments/{uuid}`), and that URL is
+    // a route here now — see `services::forge_attachments`.
     a.remove("uploader");
 }
 

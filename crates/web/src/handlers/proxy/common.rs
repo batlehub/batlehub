@@ -370,6 +370,8 @@ pub async fn proxy_release_document(
     public_base: String,
 ) -> Result<HttpResponse, AppError> {
     let owner_repo = pkg.name.clone();
+    let registry = pkg.registry.clone();
+    let cache = Arc::clone(&svc.cache);
     let response = proxy_stream(svc, pkg, identity, action, Some("application/json")).await?;
     if !response.status().is_success() || public_base.is_empty() {
         return Ok(response);
@@ -389,6 +391,12 @@ pub async fn proxy_release_document(
     let Ok(mut doc) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
         return Ok(parts.set_body(actix_web::body::BoxBody::new(bytes)));
     };
+    // Before the rewrite, though the rewrite leaves the fields it reads: a
+    // Forgejo asset's uuid is the handle a client builds its own download URL
+    // from, and such a client never reads the URLs rewritten below. This is one
+    // of the two places the uuid and the repository it belongs to are in hand
+    // together — see `services::forge_attachments`.
+    remember_forge_attachments(cache.as_ref(), &registry, &owner_repo, &doc).await;
     batlehub_core::services::blocking::forge::rewrite_release_urls(
         &mut doc,
         &public_base,
@@ -396,6 +404,32 @@ pub async fn proxy_release_document(
     );
     let rewritten = serde_json::to_vec(&doc).unwrap_or_else(|_| bytes.to_vec());
     Ok(parts.set_body(actix_web::body::BoxBody::new(rewritten)))
+}
+
+/// Remember the Forgejo attachment uuids a release document names.
+///
+/// Called from both document paths — the release routes, which serve one
+/// release or a list of them, and the listing pipeline's answer for the same
+/// routes — because a client may download from either and only one of them
+/// passes through `proxy_release_document`. Shape-gated inside
+/// [`batlehub_core::services::forge_attachments::from_document`], so a
+/// document of any other kind costs two field lookups and yields nothing.
+async fn remember_forge_attachments(
+    cache: &dyn batlehub_core::ports::CacheStore,
+    registry: &str,
+    owner_repo: &str,
+    doc: &serde_json::Value,
+) {
+    let attachments = batlehub_core::services::forge_attachments::from_document(doc);
+    if !attachments.is_empty() {
+        batlehub_core::services::forge_attachments::remember(
+            cache,
+            registry,
+            owner_repo,
+            &attachments,
+        )
+        .await;
+    }
 }
 
 /// Send a proxy request and stream the result back to the HTTP client.
@@ -582,9 +616,16 @@ pub async fn proxy_document(
     doc_kind: DocumentKind,
     public_base: String,
 ) -> Result<HttpResponse, AppError> {
-    Ok(document_response(
-        fetch_proxy_document(svc, pkg, identity, action, doc_kind, public_base).await?,
-    ))
+    let registry = pkg.registry.clone();
+    let owner_repo = pkg.name.clone();
+    let cache = Arc::clone(&svc.cache);
+    let doc = fetch_proxy_document(svc, pkg, identity, action, doc_kind, public_base).await?;
+    // A forge release listing reaches a client through here rather than through
+    // `proxy_release_document`, and it names the same attachment uuids.
+    if let Some(json) = doc.body.as_json() {
+        remember_forge_attachments(cache.as_ref(), &registry, &owner_repo, json).await;
+    }
+    Ok(document_response(doc))
 }
 
 /// [`proxy_document`] without the HTTP response, for the handlers that have to

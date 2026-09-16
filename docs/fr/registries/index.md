@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/index.md
-sourceHash: 4f5aaf2aa313c487
+sourceHash: 0e6a0376fdf30dc2
 ---
 
 # Registres
@@ -83,6 +83,7 @@ cache — l'identité que le miroir générique ne sait pas donner aux mêmes oc
 |----------|--------|-----------------|-------|:-------:|------------------|
 | [Distributions Node](./nodedist) | `nodedist` | `index.tab`/`index.json`, archives de publication, `SHASUMS256.txt` octet pour octet (nvm, fnm, n, mise) | proxy seul | ❌ | `nodejs.org/dist` |
 | [SDKMAN](./sdkman) | `sdkman` | API des candidats et courtier de téléchargement (le JDK, Gradle, Maven, Kotlin, …) ; le 302 du courtier est suivi côté serveur | proxy seul | ❌ | `api.sdkman.io/2` et `broker.sdkman.io` |
+| [Chaîne d'outils Rust](./rustup) | `rustup` | Manifestes de canal (la liste filtrée), archives de composants par cible et leur `.sha256` ; le `.asc` est relayé octet pour octet | proxy seul | ❌ | `static.rust-lang.org` |
 
 ## Matrice des fonctionnalités
 
@@ -218,6 +219,7 @@ bouton désactivé — voir
 | generic | path-addressed: there is no package identity to hang a README on | — | neither | no |
 | nodedist | a Node release is a set of tarballs and a checksum file; the dist tree carries no prose | — | versions only | no |
 | sdkman | SDKMAN describes a distribution, not a package: no document in the protocol carries prose about a candidate | — | versions only | no |
+| rustup | a toolchain release is a manifest and a set of tarballs; the dist tree carries no prose | — | versions only | no |
 <!-- END readme-coverage -->
 
 La table ci-dessus est générée depuis le code Rust et reste en anglais : ses

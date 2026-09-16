@@ -2911,6 +2911,110 @@ fn an_age_gate_on_sdkman_must_state_deny_missing_timestamp() {
     }
 }
 
+/// Proxy-only, a default upstream that is the tree *root*, and a deny list
+/// whose entries have to be manifest package names (RFC 0024 §4.5).
+#[test]
+fn rustup_is_proxy_only_and_takes_the_tree_root_as_its_upstream() {
+    parse_config(
+        r#"
+        [[registries]]
+        type = "rustup"
+        name = "rust"
+        "#,
+    )
+    .validate()
+    .expect("a bare rustup registry loads");
+
+    parse_config(
+        r#"
+        [[registries]]
+        type = "rustup"
+        name = "rust"
+        upstreams = ["https://mirror.internal/rust"]
+        deny_components = ["rust-docs", "rust-mingw"]
+        "#,
+    )
+    .validate()
+    .expect("a mirror and a deny list load");
+
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "rustup"
+        name = "rust"
+        mode = "hybrid"
+        "#,
+        "rustup has no publish protocol, so hybrid mode must be refused",
+    );
+    assert!(err.contains("not supported for rustup"), "{err}");
+
+    // The most likely mistake for an operator migrating from the `generic`
+    // example, and it would otherwise fail as a 404 per request.
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "rustup"
+        name = "rust"
+        upstreams = ["https://static.rust-lang.org/dist"]
+        "#,
+        "an upstream ending in /dist must not load",
+    );
+    assert!(err.contains("root of the tree"), "{err}");
+    assert!(
+        err.contains("https://static.rust-lang.org"),
+        "the message names the fix: {err}"
+    );
+}
+
+/// `deny_components` is rustup's, its entries are matched against
+/// `[pkg.{name}…]` headers, and three names would leave a registry nothing can
+/// install from.
+#[test]
+fn deny_components_is_refused_off_rustup_and_never_names_the_minimal_profile() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        deny_components = ["rust-docs"]
+        "#,
+        "deny_components on npm must not load",
+    );
+    assert!(err.contains("deny_components"), "{err}");
+    assert!(err.contains("rustup"), "{err}");
+
+    for name in ["rustc", "cargo", "rust-std"] {
+        let err = validation_error(
+            &format!(
+                r#"
+                [[registries]]
+                type = "rustup"
+                name = "rust"
+                deny_components = ["{name}"]
+                "#
+            ),
+            "denying a component every profile needs must not load",
+        );
+        assert!(err.contains("every profile needs"), "{name}: {err}");
+        assert!(err.contains("minimal"), "{name}: {err}");
+    }
+
+    for bad in ["pkg.rust-docs", "rust docs", ""] {
+        let err = validation_error(
+            &format!(
+                r#"
+                [[registries]]
+                type = "rustup"
+                name = "rust"
+                deny_components = ["{bad}"]
+                "#
+            ),
+            "a value that is not a manifest package name must not load",
+        );
+        assert!(err.contains("manifest package name"), "'{bad}': {err}");
+    }
+}
+
 /// Proxy-only, default upstream, and `broker_url` optional.
 #[test]
 fn sdkman_is_proxy_only_and_needs_no_explicit_upstream() {

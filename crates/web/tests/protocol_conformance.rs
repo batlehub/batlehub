@@ -686,6 +686,73 @@ const SDKMAN: &[Conformance] = &[
     ),
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// rustup — the Rust toolchain tree (RFC 0024)
+//
+// Every line is read from rustup 1.29's `src/dist` and from `rustup-init.sh`;
+// `tests/heavy/rustup.sh` is what turns "read" into "observed". The pair that
+// proves the parse rather than the router is `channel-rust-stable.toml` against
+// `channel-rust-stable.toml.sha256`: they differ only by a suffix inside one
+// path segment, so both must reach the same route and come back as different
+// documents. `dist/{date}/{file}` carries both a dated manifest and a component
+// archive, which is the other ordering hazard.
+// ─────────────────────────────────────────────────────────────────────────────
+const RUSTUP: &[Conformance] = &[
+    Conformance::get(
+        "/proxy/rustup/rustup/dist/channel-rust-stable.toml",
+        "/proxy/{registry}/rustup/dist/{file}",
+        "rustup 1.29 src/dist/mod.rs, `dl_v2_manifest` — every `rustup toolchain install`",
+    )
+    .must_find("[pkg.rust]"),
+    Conformance::get(
+        "/proxy/rustup/rustup/dist/channel-rust-stable.toml.sha256",
+        "/proxy/{registry}/rustup/dist/{file}",
+        "rustup 1.29 src/dist/mod.rs, `dl_v2_manifest` — read before the manifest, and \
+         refused on mismatch (ChecksumFailed)",
+    )
+    .must_find("channel-rust-stable.toml"),
+    Conformance::get(
+        "/proxy/rustup/rustup/dist/2026-09-05/channel-rust-nightly.toml",
+        "/proxy/{registry}/rustup/dist/{date}/{file}",
+        "rustup 1.29 — `rustup toolchain install nightly-2026-09-05`, the dated channel",
+    )
+    .must_find("[pkg.rust]"),
+    Conformance::get(
+        "/proxy/rustup/rustup/dist/2026-09-03/rust-std-1.98.1-x86_64-unknown-linux-gnu.tar.xz",
+        "/proxy/{registry}/rustup/dist/{date}/{file}",
+        "rustup 1.29 — the component URL out of the manifest, with the canonical host \
+         rewritten to RUSTUP_DIST_SERVER by the client",
+    ),
+    Conformance::get(
+        "/proxy/rustup/rustup/dist/channel-rust-stable-date.txt",
+        "/proxy/{registry}/rustup/dist/{file}",
+        "static.rust-lang.org/dist — read by people and by release tooling, never by rustup",
+    )
+    .must_find("2026-09-03"),
+    Conformance::get(
+        "/proxy/rustup/rustup/manifests.txt",
+        "/proxy/{registry}/rustup/manifests.txt",
+        "static.rust-lang.org/manifests.txt — the release tooling's list of every manifest",
+    )
+    .must_find("channel-rust-1.98.1.toml"),
+    Conformance::get(
+        "/proxy/rustup/rustup/rustup/release-stable.toml",
+        "/proxy/{registry}/rustup/rustup/release-stable.toml",
+        "rustup-init.sh and `rustup self update` — the installer's own current version",
+    )
+    .must_find("1.29.1"),
+    Conformance::get(
+        "/proxy/rustup/rustup/rustup/dist/x86_64-unknown-linux-gnu/rustup-init",
+        "/proxy/{registry}/rustup/rustup/dist/{triple}/{file}",
+        "rustup-init.sh — `${RUSTUP_UPDATE_ROOT}/dist/${ARCH}/rustup-init`, the bootstrap",
+    ),
+    Conformance::get(
+        "/proxy/rustup/rustup/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init",
+        "/proxy/{registry}/rustup/rustup/archive/{version}/{triple}/{file}",
+        "rustup 1.29 self-update — the versioned archive the bootstrap path resolves to",
+    ),
+];
+
 const SUITES: &[(&str, &[Conformance])] = &[
     ("npm", NPM),
     ("rubygems", RUBYGEMS),
@@ -695,6 +762,7 @@ const SUITES: &[(&str, &[Conformance])] = &[
     ("nuget", NUGET),
     ("nodedist", NODEDIST),
     ("sdkman", SDKMAN),
+    ("rustup", RUSTUP),
     ("others", OTHERS),
     ("long-tail", LONG_TAIL),
 ];

@@ -310,9 +310,11 @@ where
     call_service(app, req.to_request()).await
 }
 
-fn md5_hex(bytes: &[u8]) -> String {
-    use md5::{Digest as _, Md5};
-    hex::encode(Md5::digest(bytes))
+/// The algorithm of the compact-index `ETag` — SHA-256, and opaque to the
+/// client, which reads back whatever the server sent (RFC 0009 §13.24).
+fn etag_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest as _, Sha256};
+    hex::encode(Sha256::digest(bytes))
 }
 
 /// A client that already holds the document is told so, rather than being sent
@@ -354,7 +356,7 @@ async fn a_client_holding_our_prefix_is_sent_only_the_tail() {
 
     let document = text(&app, "/proxy/local-gems/versions").await;
     let held = document.len() / 2;
-    let prefix_tag = format!("\"{}\"", md5_hex(&document.as_bytes()[..held]));
+    let prefix_tag = format!("\"{}\"", etag_hex(&document.as_bytes()[..held]));
 
     let resp = conditional(
         &app,

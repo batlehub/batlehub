@@ -136,7 +136,7 @@ MM_DIR="$(heavy_cached_dir "micromamba-$MICROMAMBA_VERSION" \
 MM="$MM_DIR/bin/micromamba"
 [[ -x "$MM" ]] || heavy_fail "micromamba was not where the archive was expected to put it ($MM)"
 # Terraform, as terraform.sh gets it.
-TERRAFORM_VERSION="${TERRAFORM_VERSION:-1.8.5}"
+TERRAFORM_VERSION="${TERRAFORM_VERSION:-1.16.2}"
 heavy_runner_for terraform "terraform@$TERRAFORM_VERSION"
 TF=("${HEAVY_RUNNER[@]}" terraform)
 TF_TAP_PORT="${HEAVY_TF_TAP_PORT:-8121}"

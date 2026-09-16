@@ -394,3 +394,47 @@ async fn a_locally_published_version_is_never_recorded_as_cached_from_upstream()
         meta.recorded.lock().unwrap()
     );
 }
+
+/// A generated document repeats the client-facing host once per version, so an
+/// over-long `X-Forwarded-Host` used to come back multiplied by the version
+/// count: 100 KiB of header against a 20-version package returned 2 MB, and real
+/// packuments run to thousands of versions. `trusted_origin` bounds the host, so
+/// the response no longer tracks the header at all.
+#[actix_web::test]
+async fn npm_packument_does_not_amplify_an_over_long_forwarded_host() {
+    let app = make_local_npm_app(RegistryMode::Local).await;
+
+    for n in 0..20 {
+        let req = TestRequest::put()
+            .uri("/proxy/local-npm/amp-pkg")
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .set_json(make_npm_publish_payload("amp-pkg", &format!("1.0.{n}")))
+            .to_request();
+        assert_eq!(call_service(&app, req).await.status(), 200);
+    }
+
+    // 100 KiB, just under actix's 128 KiB cap on a whole HTTP/1 head.
+    let huge_host = "a".repeat(100 * 1024);
+    let req = TestRequest::get()
+        .uri("/proxy/local-npm/amp-pkg")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .insert_header(("x-forwarded-host", huge_host.as_str()))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body = read_body(resp).await;
+
+    assert!(
+        body.len() < huge_host.len(),
+        "response ({} bytes) must not be amplified by the {} byte header",
+        body.len(),
+        huge_host.len()
+    );
+    let doc: Value = serde_json::from_slice(&body).expect("packument is still valid JSON");
+    assert!(
+        doc["versions"]["1.0.0"]["dist"]["tarball"]
+            .as_str()
+            .is_some_and(|url| !url.contains("aaaa")),
+        "the over-long host must not reach the generated URL"
+    );
+}

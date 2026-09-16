@@ -1,0 +1,217 @@
+name: Performance report
+# Runs the perf suite on a release tag, attaches the report to the release, and
+# diffs it against the previous release's copy.
+#
+# ## What this is for, and what it is not
+#
+# It is a **record**, not a gate. A shared GitHub runner is a noisy machine —
+# two runs of the same commit differ by more than most real regressions — so a
+# threshold that held would either fail honest releases or pass real ones. What
+# survives that noise is the *shape*: peak RSS doubling, throughput halving, a
+# scenario that started erroring. Those show up in the diff, and a person reads
+# it.
+#
+# It is also the answer to a question releases could not previously answer at
+# all: *did this release get heavier?* Every scenario's peak RSS and peak CPU
+# are in the table, and `perf-report.json` from the previous release is what the
+# next one compares against — so the series accumulates, one release at a time,
+# on the same runner class.
+#
+# The verdict exists and is off by default (`--fail-on-regression` in
+# `perf_report.py`). Turn it on for a self-hosted runner, where the noise floor
+# is known.
+#
+# ## Why it is not part of `build.yaml`
+#
+# `build.yaml` publishes, and this takes twenty-odd minutes of load generation.
+# It must never be the reason a release does not ship: it runs on the same tag,
+# separately, and attaches its report when it is done. A release whose perf run
+# failed is a release with no report attached — not a release that did not
+# happen.
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+    inputs:
+      baseline_tag:
+        description: "Release tag to compare against (default: the previous published release)"
+        required: false
+        type: string
+permissions:
+  contents: read
+jobs:
+  perf:
+    name: Run the suite and report
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: write # attach the report to the release
+    services:
+      # The credentials `perf/config.perf.toml` expects, so that config needs no
+      # CI-specific variant — the suite runs here exactly as it runs locally.
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: batlehub
+          POSTGRES_PASSWORD: changeme
+          POSTGRES_DB: batlehub
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U batlehub" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      # Pinned, for the reason `soak.yaml` gives: what a measurement reports is
+      # partly a property of the load generator, and an unannounced k6 upgrade
+      # moving a number should name itself here.
+      K6_VERSION: "2.2.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: "stable"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+      # The release tarball rather than an action, the same decision soak.yaml
+      # makes: one URL, one pinned version, no third-party SHA to keep current
+      # for a binary download.
+      - name: Install k6
+        run: |
+          curl -fsSL --proto '=https' --proto-redir '=https' \
+            "https://github.com/grafana/k6/releases/download/v${K6_VERSION}/k6-v${K6_VERSION}-linux-amd64.tar.gz" \
+            | tar -xz -C /tmp
+          sudo install "/tmp/k6-v${K6_VERSION}-linux-amd64/k6" /usr/local/bin/k6
+          k6 version
+
+      - name: Build the server and the mock upstream
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p batlehub-server
+          cargo build --release --locked --manifest-path perf/mock-upstream/Cargo.toml
+
+      - name: Start the mock upstream and the server
+        run: |
+          set -euo pipefail
+          ./perf/mock-upstream/target/release/mock-upstream --port 9999 \
+            > mock-upstream.log 2>&1 &
+          echo "MOCK_PID=$!" >> "$GITHUB_ENV"
+          ./target/release/batlehub --config perf/config.perf.toml > server.log 2>&1 &
+          server_pid=$!
+          # Pinned rather than discovered: `run_with_metrics.sh` falls back to
+          # `pgrep`, and the RSS column has to belong to this process and not to
+          # whatever else on a shared runner answers to the same name.
+          echo "BATLEHUB_PID=${server_pid}" >> "$GITHUB_ENV"
+          for _ in $(seq 1 90); do
+            curl -sf http://localhost:8080/healthz >/dev/null 2>&1 && break
+            sleep 1
+          done
+          if ! curl -sf http://localhost:8080/healthz; then
+            echo "the server never came up:" >&2
+            tail -50 server.log >&2
+            exit 1
+          fi
+
+      - name: Warm the cache
+        run: bash perf/scripts/seed.sh
+
+      - name: Run the suite
+        env:
+          # Carried into every row, so a report says what it was measured
+          # against without anyone having to remember.
+          PERF_BACKEND: filesystem+memory
+          PERF_VERSION: ${{ github.ref_name }}
+          PERF_NOTE: "GitHub-hosted runner — noisy by nature; read the shape, not the digits"
+        run: |
+          set -euo pipefail
+          for scenario in 01_at_rest 02_warm_read 03_cache_miss 04_upload 05_mixed 06_sbom 07_eviction; do
+            echo "::group::${scenario}"
+            # `--no-thresholds`, as `task perf:run:all` does: a latency
+            # threshold crossed on a shared runner is not a release problem,
+            # and the run after it still has to happen.
+            bash perf/scripts/run_with_metrics.sh --no-thresholds \
+              "perf/k6/scenarios/${scenario}.js"
+            echo "::endgroup::"
+          done
+
+      - name: Fetch the previous release's report
+        id: baseline
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPLICIT: ${{ inputs.baseline_tag }}
+        run: |
+          set -euo pipefail
+          tag="${EXPLICIT:-}"
+          if [ -z "$tag" ]; then
+            # The most recent *published* release that is not this one. Drafts
+            # are skipped: the release this tag is building is still a draft
+            # while `build.yaml` runs beside this job.
+            tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 20 \
+                    --json tagName,isDraft \
+                    --jq "[.[] | select(.isDraft == false) | .tagName]
+                          | map(select(. != \"${GITHUB_REF_NAME}\")) | .[0] // empty")
+          fi
+          if [ -z "$tag" ]; then
+            echo "no previous release to compare against — this report is the first"
+            exit 0
+          fi
+          echo "comparing against ${tag}"
+          # Into perf/results/: `perf_report.py` takes file *names* and reads
+          # them from that one directory, so a baseline anywhere else is not
+          # addressable — by design (pythonsecurity:S2083/S8707).
+          mkdir -p perf/results
+          if gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+               --pattern 'perf-report.json' \
+               --output perf/results/baseline-perf-report.json --clobber; then
+            echo "baseline=baseline-perf-report.json" >> "$GITHUB_OUTPUT"
+          else
+            echo "${tag} has no perf-report.json attached — reporting without a comparison"
+          fi
+
+      - name: Build the report
+        env:
+          BASELINE: ${{ steps.baseline.outputs.baseline }}
+        run: |
+          set -euo pipefail
+          # File names, not paths: both land in perf/results/.
+          args=(--out perf-report.md --json perf-report.json)
+          # An if rather than `${BASELINE:+…}`: the alternate-value form puts the
+          # value through word splitting, and a report is not the place to find
+          # out that a name has a space in it.
+          if [ -n "${BASELINE:-}" ]; then
+            args+=(--baseline "$BASELINE")
+          fi
+          python3 perf/scripts/perf_report.py "${args[@]}"
+
+      - name: Put the table in the job summary
+        if: always()
+        run: cat perf/results/perf-report.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Attach the report to the release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          files: |
+            perf/results/perf-report.json
+            perf/results/perf-report.md
+
+      # `always()`: the rows are most worth keeping when something went wrong
+      # with the report built from them.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: perf-report-${{ github.ref_name }}
+          path: |
+            perf/results/
+            server.log
+            mock-upstream.log
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Stop the server
+        if: always()
+        run: kill "${BATLEHUB_PID}" "${MOCK_PID}" 2>/dev/null || true

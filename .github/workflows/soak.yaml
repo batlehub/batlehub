@@ -1,0 +1,374 @@
+name: Soak
+# Leak detection, on demand. **Nothing schedules this** — no push, no pull
+# request, no cron.
+#
+# That is the point rather than an omission. A soak is an hour of constant load
+# and the thing it measures is a slope, so running it per commit would cost
+# every pull request an hour to answer a question no single commit changes the
+# answer to. It is run when something suggests it: a report of memory that does
+# not come back, a change to a streaming, caching or pooling path, or before a
+# release.
+#
+# Two jobs, because they fail on different things:
+#
+#   k6-soak     — a fixed arrival rate across the paths that allocate
+#                 differently (artifact read, listing document, upstream miss,
+#                 publish, pooled API read, per-request SBOM). It offers the
+#                 requests this project *thinks* a client makes, and it can
+#                 offer them faster than any real client would.
+#   heavy-soak  — npm, in a loop, against a served upstream. It offers the ones
+#                 a client actually makes. Every registry defect this project
+#                 has shipped was found by a client and not by a test double
+#                 (RFC 0009 §5.1), and a leak is no different.
+#
+# Both arrange the same shape — warm-up, quiesce, baseline, load, quiesce,
+# final — and both compare two **idle** windows, so what they report is what
+# the process was still holding with nothing in flight. The reasoning behind
+# that ordering is in `perf/scripts/soak.sh`.
+on:
+  # **Two ways in, and neither runs by itself.**
+  #
+  # `workflow_dispatch` is the one to use once this file is on the default
+  # branch. Until then it does not exist as far as GitHub is concerned: a
+  # workflow whose only trigger is `workflow_dispatch` is not registered — and
+  # cannot be dispatched on any branch — until the file has landed on the
+  # default branch. Verified on this repository: `pr-checklist.yaml` ran from
+  # its own branch because a pull request is an event GitHub associates with
+  # the branch, while this workflow was absent from
+  # `/actions/workflows` entirely.
+  #
+  # So: **a label.** Add `soak` to a pull request and this runs against that
+  # branch, using this file as the branch has it. It is still manual — a person
+  # types the label — and it is still off for every pull request that does not
+  # ask. The label is removed again when the run finishes, so adding it a second
+  # time re-runs the soak.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Pull request to comment the result on (blank: the open PR for this branch, if there is one)"
+        default: ""
+      suite:
+        description: "Which soak to run"
+        type: choice
+        default: "both"
+        options: ["both", "k6", "heavy"]
+      duration:
+        description: "k6: how long to hold the load (k6 duration, e.g. 10m, 1h)"
+        default: "10m"
+      rate:
+        description: "k6: requests per second offered"
+        default: "100"
+      rounds:
+        description: "heavy: rounds of install + publish + view"
+        default: "25"
+      rss_growth_pct:
+        description: "k6: fail above this % of idle RSS growth"
+        default: "10"
+      heavy_rss_growth_pct:
+        description: "heavy: fail above this % of idle RSS growth (looser — five samples a window, not sixty)"
+        default: "15"
+      rss_slope:
+        description: "Fail above this RSS trend under load, MiB/min"
+        default: "2.0"
+      fd_growth:
+        description: "Fail above this many extra open descriptors"
+        default: "16"
+      thread_growth:
+        description: "Fail above this many extra threads"
+        default: "4"
+  pull_request:
+    branches: ["main"]
+    types: [labeled]
+# Read-only at the workflow level, so the two soak jobs — which check out the
+# tree and run a release build against it — hold nothing they could write with.
+# The `comment` job grants itself the one scope it needs.
+permissions:
+  contents: read
+# One soak at a time on this repository. Two would share the Postgres service
+# only by accident, but they would share the runner's CPU — and a resource
+# curve measured next to another soak is a measurement of the runner.
+concurrency:
+  # Keyed on the pull request (or the branch, for a dispatch that has none)
+  # rather than on `github.ref`: the two ways in produce different refs —
+  # `refs/heads/<branch>` and `refs/pull/<n>/merge` — so keying on the ref would
+  # let a dispatch and a labelled run of the same branch soak at the same time,
+  # which is two measurements of one machine's spare capacity.
+  group: soak-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: false
+env:
+  CARGO_TERM_COLOR: always
+  DATABASE_URL: postgresql://postgres:testpass@localhost:5432/postgres
+  # Descriptors and threads are counted the same way by both suites, so one
+  # limit each. RSS is not — see each job's own `env` below.
+  # `inputs.*` is empty on the label path, so every one of them carries the
+  # same default the dispatch form offers. Without this a labelled run would
+  # compare against a threshold of "", which parses as zero and fails on the
+  # first byte of noise.
+  SOAK_MAX_FD_GROWTH: ${{ inputs.fd_growth || '16' }}
+  SOAK_MAX_THREAD_GROWTH: ${{ inputs.thread_growth || '4' }}
+  # The label that starts a soak from a pull request.
+  SOAK_LABEL: soak
+jobs:
+  k6-soak:
+    name: Soak (k6, ${{ inputs.duration || '10m' }} at ${{ inputs.rate || '100' }}/s)
+    if: >-
+      (github.event_name == 'workflow_dispatch' && (inputs.suite == 'both' || inputs.suite == 'k6'))
+      || (github.event_name == 'pull_request' && github.event.label.name == 'soak')
+    runs-on: ubuntu-latest
+    # The load is held for the requested duration on top of a release build of
+    # the workspace, so the default 360 minutes is not the bound that matters —
+    # this one is, and it says what a runaway looks like.
+    timeout-minutes: 180
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: testpass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      SOAK_MAX_RSS_GROWTH_PCT: ${{ inputs.rss_growth_pct || '10' }}
+      SOAK_MAX_RSS_SLOPE_MIB_PER_MIN: ${{ inputs.rss_slope || '2.0' }}
+      # Pinned, like every client the heavy suites drive: what a soak reports is
+      # partly a property of the load generator, and an unannounced k6 upgrade
+      # changing a number should name itself here.
+      K6_VERSION: "2.2.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: "stable"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+      # The release tarball rather than an action: one URL and one pinned
+      # version, and no third-party action SHA to keep current for a binary
+      # download. Same decision as the heavy suites make for their clients.
+      - name: Install k6
+        run: |
+          curl -fsSL --proto '=https' --proto-redir '=https' \
+            "https://github.com/grafana/k6/releases/download/v${K6_VERSION}/k6-v${K6_VERSION}-linux-amd64.tar.gz" \
+            | tar -xz -C /tmp
+          sudo install "/tmp/k6-v${K6_VERSION}-linux-amd64/k6" /usr/local/bin/k6
+          k6 version
+      - name: Soak
+        run: |
+          # No --warmup: the script's default is what fills the mix, and a
+          # literal here is a second place to forget when a registry kind is
+          # added. See the comment on `WARMUP` in perf/scripts/soak.sh.
+          bash perf/scripts/soak.sh \
+            --duration "${{ inputs.duration || '10m' }}" \
+            --rate "${{ inputs.rate || '100' }}" \
+            --settle 60
+      # `always()`: the samples are most worth keeping when the verdict is red,
+      # and a failing step would otherwise take the evidence with it.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: soak-k6
+          path: perf/results/
+          if-no-files-found: warn
+
+  heavy-soak:
+    name: Soak (npm client, ${{ inputs.rounds || '25' }} rounds)
+    if: >-
+      (github.event_name == 'workflow_dispatch' && (inputs.suite == 'both' || inputs.suite == 'heavy'))
+      || (github.event_name == 'pull_request' && github.event.label.name == 'soak')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: testpass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      NODE_VERSION: "24"
+      SOAK_ROUNDS: ${{ inputs.rounds || '25' }}
+      # Its own input, with its own default. This suite's windows are five
+      # samples rather than sixty, so its RSS reading is noisier than the k6
+      # suite's and a limit tight enough for that one would make this one
+      # flaky — which is worse than not having it, because a gate that cries
+      # wolf gets re-run until it agrees.
+      SOAK_MAX_RSS_GROWTH_PCT: ${{ inputs.heavy_rss_growth_pct || '15' }}
+      # No slope row here: this suite samples two five-sample windows, not a
+      # continuous curve, so there is nothing to fit.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: "stable"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+      - name: Soak with a real npm client
+        env:
+          SOAK_REPORT: soak-results/soak-heavy.md
+        run: bash tests/heavy/soak.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: soak-heavy
+          path: soak-results/
+          if-no-files-found: warn
+
+  # ── The result, where the change is being discussed ─────────────────────────
+  #
+  # A separate job rather than a step in each: two jobs producing two comments
+  # would bury the conversation, and the interesting comparison — a synthetic
+  # mix and a real client on the same build — is one table above the other.
+  # `always()`, because a soak that failed is the one whose numbers are worth
+  # reading, and `needs` on both so it waits for whichever ran.
+  comment:
+    name: Comment the result
+    needs: [k6-soak, heavy-soak]
+    # The only job that writes anything. `write`, for the result comment: a
+    # dispatch has no pull request of its own, so this job resolves one from the
+    # branch (or takes the `pr` input) and says so in the job summary when there
+    # is none.
+    permissions:
+      contents: read
+      pull-requests: write
+    # `always()`, so a failed soak still reports — but only for a run that was
+    # actually asked for: `always()` alone would post "no report" on every
+    # unrelated label somebody adds to any pull request.
+    if: >-
+      always()
+      && (github.event_name == 'workflow_dispatch'
+          || (github.event_name == 'pull_request' && github.event.label.name == 'soak'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        continue-on-error: true
+        with:
+          pattern: soak-*
+          path: artifacts
+          merge-multiple: true
+      - name: Assemble the report
+        id: report
+        env:
+          SUITE: ${{ inputs.suite || 'both' }}
+          DURATION: ${{ inputs.duration || '10m' }}
+          RATE: ${{ inputs.rate || '100' }}
+          ROUNDS: ${{ inputs.rounds || '25' }}
+          K6_RESULT: ${{ needs.k6-soak.result }}
+          HEAVY_RESULT: ${{ needs.heavy-soak.result }}
+        run: |
+          {
+            echo "<!-- soak-report -->"
+            echo "# Soak — \`$SUITE\`"
+            echo
+            echo "Run from \`${GITHUB_REF_NAME}\` at \`${GITHUB_SHA:0:7}\` —"
+            echo "[full logs and artifacts](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})."
+            echo
+            echo "| suite | outcome |"
+            echo "| --- | --- |"
+            echo "| k6 (\`$DURATION\` at \`$RATE\`/s) | \`$K6_RESULT\` |"
+            echo "| npm client ($ROUNDS rounds) | \`$HEAVY_RESULT\` |"
+            echo
+            # The per-suite reports, each already a complete section. Their own
+            # markers are stripped: one comment carries one marker, and a second
+            # `<!-- soak-report -->` inside the body would make the next run's
+            # upsert match its own text.
+            for f in artifacts/soak.md artifacts/soak-heavy.md; do
+              if [ -f "$f" ]; then
+                echo "---"
+                echo
+                grep -v '^<!-- soak-report' "$f"
+                echo
+              fi
+            done
+            if [ ! -f artifacts/soak.md ] && [ ! -f artifacts/soak-heavy.md ]; then
+              echo "No report was produced — the run failed before either suite"
+              echo "reached its verdict. The logs linked above say where."
+            fi
+          } > comment.md
+          cat comment.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Find the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPLICIT: ${{ inputs.pr }}
+          FROM_EVENT: ${{ github.event.pull_request.number }}
+        run: |
+          if [ -n "$EXPLICIT" ]; then
+            echo "number=$EXPLICIT" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A labelled run carries its own pull request; only a dispatch has to
+          # go looking.
+          if [ -n "$FROM_EVENT" ]; then
+            echo "number=$FROM_EVENT" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A dispatch carries no pull request, so ask for the open one whose
+          # head is this branch. `--jq` over the list rather than a search:
+          # search is eventually consistent and a soak is often dispatched
+          # seconds after a push.
+          #
+          # Filtered on `head.ref` here rather than with the API's own
+          # `head=<owner>:<ref>` parameter, which was the first spelling and
+          # matched nothing: that parameter wants the owner of the *head
+          # repository*, and this repository answers its canonical name on a
+          # redirect, so `${GITHUB_REPOSITORY%%/*}` is not reliably it.
+          # Measured against #167 — `head=batleforc:feat/new-reg` returned
+          # empty while the same query without the prefix returned the PR.
+          number=$(gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
+            --jq 'map(select(.head.ref == env.GITHUB_REF_NAME)) | .[0].number // empty' \
+            2>/dev/null || true)
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+          if [ -z "$number" ]; then
+            echo "No open pull request for $GITHUB_REF_NAME — the report is in the job summary." \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Post it
+        if: steps.pr.outputs.number != ''
+        # Never fails the job: the verdict is the soak jobs' to report, and a
+        # comment that could not be posted is not a leak.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          # One comment per pull request, edited in place: a soak is re-run as
+          # thresholds are tuned, and a comment per run buries the discussion.
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- soak-report -->")) | .id' \
+            | head -n1)
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" \
+              -F body=@comment.md >/dev/null
+            echo "Updated comment $existing on #$PR"
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+              -F body=@comment.md >/dev/null
+            echo "Commented on #$PR"
+          fi
+
+      - name: Clear the label
+        # So adding it again re-runs the soak. Without this the label stays on
+        # and a second run needs a remove-then-add anyway — this just does the
+        # removing, at the point where the result has been delivered.
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          LABEL: ${{ github.event.label.name }}
+        run: |
+          gh api -X DELETE \
+            "repos/$GITHUB_REPOSITORY/issues/$PR/labels/$LABEL" >/dev/null \
+            && echo "Removed '$LABEL' from #$PR — add it again to re-run"

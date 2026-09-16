@@ -92,3 +92,25 @@ ui/eslint-results.sarif
 !/.impeccable/surfaces/
 # Sub-charts fetched by `helm dependency build` (Chart.lock is committed).
 helm/batlehub/charts/
+
+choco_*.xml
+# A soak run's output (`task perf:soak`) — per-run and per-machine, where the
+# `authz-*.json` beside it are committed measurements from a documented run.
+perf/results/soak.md
+perf/results/soak-samples.csv
+perf/results/soak-marks.txt
+perf/results/soak-chart.svg
+# Written by soak.sh where soak_verdict.py reads them (no path is passed between
+# the two), and by run_with_metrics.sh for record_run.py — results, not sources.
+perf/results/soak-server.log
+perf/results/soak-k6-*.json
+perf/results/soak-metrics-*.txt
+perf/results/*.k6.json
+perf/results/.*.rss
+perf/results/.*.cpu
+# The results table (`task perf:report`) is the same kind of thing: one machine,
+# one day. A release's copy lives on the release, not in the tree.
+perf/results/runs.jsonl
+perf/results/*.k6.json
+perf/results/perf-report.md
+perf/results/perf-report.json

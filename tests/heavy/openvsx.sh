@@ -141,11 +141,13 @@ heavy_wire_after "get" "GET /proxy/$REGISTRY/api/$NAMESPACE/$EXT_NAME -> 200" \
 # than here, which is the failure that looks like someone else's outage.
 #
 # The assertion is "a second request, to this proxy, that returned the bytes",
-# not a fixed path: BatleHub points `files.download` at its VS Code gallery
-# asset route (`/vscode/asset/{ns}/{ext}/{ver}/…VSIXPackage`) rather than at
-# the OpenVSX `…/file/{name}` route RFC 0009 §12.6 recorded against open-vsx.org.
-# ovsx follows whatever the document says, so both are correct; pinning one
-# would make a legal change to the renderer fail this test for no reason.
+# not a fixed path. It is `…/api/{ns}/{ext}/{ver}/file/{ns}.{ext}-{ver}.vsix`
+# today — the shape RFC 0009 §12.6 recorded against open-vsx.org, and the one
+# `ovsx` takes its output filename from — but it was the VS Code gallery asset
+# route (`/vscode/asset/{ns}/{ext}/{ver}/…VSIXPackage`) until the renderer was
+# corrected. ovsx follows whatever the document says, so pinning one shape here
+# would make a legal change to the renderer fail this test for no reason; the
+# closed-world suite's ovsx phase is where the exact route is asserted.
 awk -v mark="### get" -v reg="/proxy/$REGISTRY/" '
     index($0, mark) == 1 { seen = 1; next }
     seen && index($0, reg) && /-> 200/ && !/\/api\/[^\/]+\/[^\/]+ ->/ { found = 1 }

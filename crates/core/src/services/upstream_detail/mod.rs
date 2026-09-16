@@ -37,6 +37,7 @@ mod npm;
 mod nuget;
 mod pypi;
 mod rubygems;
+mod rustup;
 mod sdkman;
 mod terraform;
 
@@ -121,6 +122,7 @@ pub fn dispatch(kind: RegistryKind, doc: &VersionDocument) -> UpstreamDetail {
         RegistryKind::Terraform => terraform::read(doc),
         RegistryKind::Nodedist => nodedist::read(doc),
         RegistryKind::Sdkman => sdkman::read(doc),
+        RegistryKind::Rustup => rustup::read(doc),
         other => {
             // Reachable only through a bug: `RegistryKind::upstream_detail()`
             // answers `Document(_)` for exactly the kinds above, and the drift
@@ -171,7 +173,8 @@ pub fn listing_carries_readmes(kind: RegistryKind) -> bool {
         | RegistryKind::Jetbrains
         | RegistryKind::Generic
         | RegistryKind::Nodedist
-        | RegistryKind::Sdkman => false,
+        | RegistryKind::Sdkman
+        | RegistryKind::Rustup => false,
     }
 }
 
@@ -223,7 +226,8 @@ pub fn listing_carries_links(kind: RegistryKind) -> bool {
         | RegistryKind::Jetbrains
         | RegistryKind::Generic
         | RegistryKind::Nodedist
-        | RegistryKind::Sdkman => false,
+        | RegistryKind::Sdkman
+        | RegistryKind::Rustup => false,
     }
 }
 

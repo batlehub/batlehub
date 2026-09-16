@@ -48,6 +48,7 @@ use crate::ports::{DocumentKind, VersionDocument};
 pub mod cargo;
 pub mod composer;
 pub mod conda;
+pub mod conda_stream;
 pub mod forge;
 pub mod goproxy;
 pub mod maven;
@@ -56,6 +57,7 @@ pub mod npm;
 pub mod nuget;
 pub mod pypi;
 pub mod rubygems;
+pub mod rustup;
 pub mod sdkman;
 pub mod terraform;
 
@@ -481,6 +483,27 @@ fn strip_sdkman(
     }
 }
 
+/// One filtered document, and three that are decided elsewhere (RFC 0024 §6.2).
+///
+/// `manifests.txt` is a list of releases and filters here, line by line. A
+/// **channel manifest** is not a list: it describes one release, so the
+/// question is whether *this document's own* coordinate is blocked — a `404`
+/// for an exact name, a repaired manifest for an alias — and the answer needs
+/// a second document the dispatch cannot fetch. Its `.sha256` is computed from
+/// the rendered body and `channel-rust-stable-date.txt` is read off it. All
+/// three are the handler's, the way RubyGems' `GEM` arm and SDKMAN's
+/// `candidates/default` are.
+fn strip_rustup(
+    ctx: &ListingContext<'_>,
+    doc: &mut VersionDocument,
+    blocked: &BlockedVersions,
+) -> Vec<String> {
+    match ctx.document {
+        DocumentKind::Versions => with_text(doc, |text| rustup::strip_manifests_txt(text, blocked)),
+        _ => Vec::new(),
+    }
+}
+
 /// The protocol switch behind [`dispatch`], without the logging.
 ///
 /// `None` means **this kind has no listing filter** — a signed deb index, a
@@ -538,6 +561,8 @@ fn strip(
         RegistryKind::Nodedist => Some(strip_nodedist(ctx, doc, blocked)),
 
         RegistryKind::Sdkman => Some(strip_sdkman(ctx, doc, blocked)),
+
+        RegistryKind::Rustup => Some(strip_rustup(ctx, doc, blocked)),
 
         // No listing document, one that must not be rewritten, or one filtered
         // at a handler chokepoint instead (see `FILTERED_ELSEWHERE`). The

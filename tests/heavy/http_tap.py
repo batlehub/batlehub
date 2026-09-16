@@ -70,8 +70,9 @@ def rewrite_rules():
             rules.append((method, prefix, int(src), int(dst), headers))
     return rules
 
-# Hop-by-hop headers must not be forwarded (RFC 9110 §7.6.1); Content-Length is
-# recomputed because the body is buffered here.
+# Hop-by-hop headers must not be forwarded (RFC 9110 §7.6.1); `Content-Length`
+# is re-sent by `_proxy` rather than copied, because a rewritten status may come
+# with a body this tap did not receive.
 HOP = {"connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade"}
 
 # Request headers worth recording: the ones that make an answer conditional.
@@ -92,6 +93,12 @@ ANSWERED = (
     "X-BatleHub-Reason",
     "X-BatleHub-Listing",
     "X-BatleHub-Listing-Held",
+    # RFC 0024: what a rustup channel manifest is — upstream, filtered or
+    # repaired — and, when it was repaired, the release that was served in
+    # place of the one the alias named. The rustup suite asserts on both, and
+    # neither is visible in the status: a repair is a `200` like any other.
+    "X-BatleHub-Manifest",
+    "X-BatleHub-Version",
 )
 
 
@@ -142,7 +149,6 @@ class Tap(BaseHTTPRequestHandler):
         conn = http.client.HTTPConnection("127.0.0.1", BACKEND_PORT, timeout=120)
         conn.request(self.command, self.path, body=body, headers=headers)
         resp = conn.getresponse()
-        payload = resp.read()
 
         status, extra = resp.status, []
         for method, prefix, src, dst, headers in rewrite_rules():
@@ -159,12 +165,10 @@ class Tap(BaseHTTPRequestHandler):
         if self.headers.get("Authorization"):
             asked.append(f"Authorization: {self.headers['Authorization'].split(' ', 1)[0]}")
         answered = [f"{h}: {resp.getheader(h)}" for h in ANSWERED if resp.getheader(h)]
-        LOG.write(
-            f"{self.command} {self.path} -> {shown} ({len(payload)}B)"
-            + (" | " + " ; ".join(asked) if asked else "")
-            + (" | " + " ; ".join(answered) if answered else "")
-            + "\n"
-        )
+
+        upstream_length = resp.getheader("Content-Length")
+        # A body is relayed as it arrives, never held whole (see `_relay`).
+        has_body = self.command != "HEAD" and status not in (204, 304)
 
         self.send_response(status)
         for k, v in resp.getheaders():
@@ -173,11 +177,74 @@ class Tap(BaseHTTPRequestHandler):
             self.send_header(k, v)
         for k, v in extra:
             self.send_header(k, v)
-        self.send_header("Content-Length", str(len(payload)))
+        if not has_body:
+            # A HEAD keeps the length the GET would have had, which is the only
+            # thing a client asks a HEAD for; anything else is length zero.
+            self.send_header("Content-Length", upstream_length or "0")
+        elif upstream_length is not None:
+            self.send_header("Content-Length", upstream_length)
+        else:
+            self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(payload)
-        conn.close()
+
+        copied = 0
+        try:
+            if has_body:
+                copied = self._relay(resp, chunked=upstream_length is None)
+        finally:
+            LOG.write(
+                f"{self.command} {self.path} -> {shown} ({copied}B)"
+                + (" | " + " ; ".join(asked) if asked else "")
+                + (" | " + " ; ".join(answered) if answered else "")
+                + "\n"
+            )
+            conn.close()
+
+    # 1 MiB, raised from 64 KiB. This is a thread-per-connection Python server,
+    # so every chunk is a GIL round trip, and a thread that is copying a body
+    # holds the interpreter between its own reads and writes. That starves the
+    # thread of a *newly accepted* connection, whose request head then reaches
+    # actix late — and actix's `client_request_timeout` (5 s, the default; the
+    # server does not set it) answers `408` before the request has been read.
+    #
+    # It is the small requests that fail, which is what makes the symptom
+    # confusing. Measured on the closed-world `conda` phase, where micromamba
+    # fetches a whole Python environment in parallel: the 23 MB and 14 MB
+    # packages came back `200` while `openssl` (3 MB) and `ca-certificates`
+    # (a few hundred KB) got `408`s and the install died. Nothing was wrong with
+    # the server — the requests that timed out had barely been made.
+    #
+    # 16× fewer iterations per body, and a socket read or write releases the
+    # GIL, so the interpreter is available for longer stretches. 1 MiB per
+    # in-flight relay is nothing beside the bodies it is relaying.
+    RELAY_CHUNK = 1024 * 1024
+
+    def _relay(self, resp, chunked):
+        """Copy the backend's body to the client as it arrives, and return its size.
+
+        Streamed rather than buffered, which is not a nicety: the tap read the
+        whole body into memory and wrote it back out, so conda's 444 MB
+        `linux-64/repodata.json` put half a gigabyte into one Python process on
+        a runner. The threads that were serving other requests stalled behind
+        it, their request heads reached actix late, and actix answered its own
+        `408 Request Timeout` — a transcript full of timeouts that looked like
+        the server failing under load and was the instrument.
+        """
+        copied = 0
+        while True:
+            chunk = resp.read(self.RELAY_CHUNK)
+            if not chunk:
+                break
+            if chunked:
+                self.wfile.write(f"{len(chunk):x}\r\n".encode())
+                self.wfile.write(chunk)
+                self.wfile.write(b"\r\n")
+            else:
+                self.wfile.write(chunk)
+            copied += len(chunk)
+        if chunked:
+            self.wfile.write(b"0\r\n\r\n")
+        return copied
 
     do_GET = do_POST = do_PUT = do_HEAD = do_DELETE = _proxy
 

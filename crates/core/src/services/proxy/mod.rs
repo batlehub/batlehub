@@ -63,6 +63,45 @@ pub(crate) fn proxy_meta_key(package_id: &crate::entities::PackageId) -> String 
     format!("meta:{}", package_id.cache_key())
 }
 
+/// The cache key a registry's **listing document** for one name is stored under.
+///
+/// A function for the same reason [`proxy_meta_key`] is one: it is now written
+/// by `cached_version_document` and read by the resolve path, and a reader that
+/// formats it one character differently sees an empty cache rather than an
+/// error.
+///
+/// `doc_kind` is part of the key because a registry can have more than one
+/// listing for the same name — NuGet's flat index and its registration page,
+/// RubyGems' versions list and its gem document. Keyed by name alone they
+/// collide, and one is served under the other's URL.
+pub(crate) fn version_document_key(
+    registry: &str,
+    doc_kind: crate::ports::DocumentKind,
+    name: &str,
+) -> String {
+    format!("doc:{}:{}:{}", registry, doc_kind.as_str(), name)
+}
+
+/// What [`ProxyService::multi_package_document_stream`] found: a channel index
+/// that can be handed over untouched, or one that has entries to lose.
+///
+/// The distinction is the caller's to act on because the two cost different
+/// things — one is a copy from socket to socket, the other decodes, filters and
+/// re-encodes — and because only the caller knows which encoding its client
+/// asked for.
+pub enum StreamedIndex {
+    /// Nothing is blocked in this registry: these bytes *are* the answer, in the
+    /// encoding the upstream published them in.
+    AsIs(crate::ports::StreamedDocument),
+    /// Something is blocked, so the document has to be copied through a filter.
+    /// The bytes arrive in whichever encoding was cheapest to transfer, which
+    /// is why [`crate::ports::StreamedDocument::encoding`] comes with them.
+    Filter {
+        doc: crate::ports::StreamedDocument,
+        blocked: crate::services::blocking::MultiPackageBlocks,
+    },
+}
+
 /// Output of `ProxyService::handle`.
 pub enum ProxyResponse {
     /// Artifact stream to forward to the HTTP client.
@@ -182,14 +221,35 @@ impl ProxyService {
     /// `RegistryClient::fetch_artifact`. `start` should be captured immediately
     /// before this call so the caller can reuse it for `time_upstream_stream`
     /// on the success path.
+    ///
+    /// `resolved` is the metadata this request already resolved, offered to the
+    /// client through [`RegistryClient::fetch_artifact_resolved`] so a kind that
+    /// can use it does not re-fetch the listing document to re-derive a URL it
+    /// has already been handed. A kind that does not implement that hook answers
+    /// `None` and takes the plain path, unchanged.
     pub(super) async fn fetch_artifact_or_record_error(
         &self,
         client: &Arc<dyn RegistryClient>,
         req: &ProxyRequest,
+        resolved: &crate::entities::PackageMetadata,
         registry_label: &Arc<str>,
         start: Instant,
     ) -> Result<FetchedArtifact, CoreError> {
-        match client.fetch_artifact(&req.package_id).await {
+        let attempt = match client
+            .fetch_artifact_resolved(&req.package_id, resolved)
+            .await
+        {
+            Ok(Some(artifact)) => Ok(artifact),
+            // `Ok(None)` is "this kind has no shortcut"; an `Err` is a real
+            // failure of the shortcut path and is *not* retried through the
+            // long one. Retrying would turn a refusal — a cross-origin URL in
+            // the resolved metadata, say — into a second chance at the same
+            // bytes by another route, which is the opposite of what that check
+            // is for.
+            Ok(None) => client.fetch_artifact(&req.package_id).await,
+            Err(e) => Err(e),
+        };
+        match attempt {
             Ok(artifact) => {
                 self.metrics.record_upstream_outcome(registry_label, true);
                 Ok(artifact)

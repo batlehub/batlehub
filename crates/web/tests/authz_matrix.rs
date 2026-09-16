@@ -551,6 +551,50 @@ fn matrix() -> Vec<Row> {
             .coord("node", "v9.8.7")
             .token("v1.1.0")
             .vis(WHOLE_REGISTRY),
+        // ── rustup (RFC 0024) ────────────────────────────────────────────────
+        // Proxy-only like `nodedist`, with two packages rather than one: `rust`
+        // for the toolchains and `rustup` for the installer's own tree, so a
+        // block on a release and a block on the installer are separate rows in
+        // the same registry. The channel manifest is a per-release document and
+        // `manifests.txt` a whole-registry one.
+        Row::new("rustup", "/proxy/reg/rustup/dist/channel-rust-stable.toml")
+            .coord("rust", "1.98.1")
+            .vis(Expect::NotChecked(
+                "proxy-only document: the manifest is upstream's and no local package is read",
+            )),
+        Row::new(
+            "rustup",
+            "/proxy/reg/rustup/dist/2026-09-03/rust-std-1.98.1-x86_64-unknown-linux-gnu.tar.xz",
+        )
+        .coord("rust", "1.98.1")
+        .vis(Expect::NotChecked(
+            "proxy-only: the archive is streamed from upstream and no local package is read",
+        )),
+        Row::new("rustup", "/proxy/reg/rustup/manifests.txt")
+            .coord("rust", "1.98.1")
+            .token("channel-rust-1.98.1.toml")
+            .vis(WHOLE_REGISTRY),
+        Row::new("rustup", "/proxy/reg/rustup/rustup/release-stable.toml")
+            .coord("rustup", "1.29.1")
+            .vis(Expect::NotChecked(
+                "proxy-only document: the installer's own version, relayed byte-exact",
+            )),
+        Row::new(
+            "rustup",
+            "/proxy/reg/rustup/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init",
+        )
+        .coord("rustup", "1.29.1")
+        .vis(Expect::NotChecked(
+            "proxy-only: the installer binary is streamed from upstream",
+        )),
+        Row::new(
+            "rustup",
+            "/proxy/reg/rustup/rustup/dist/x86_64-unknown-linux-gnu/rustup-init",
+        )
+        .coord("rustup", "1.29.1")
+        .vis(Expect::NotChecked(
+            "proxy-only: the bootstrap path resolves a version, then streams as above",
+        )),
         // ── sdkman (RFC 0010 phase 6) ────────────────────────────────────────
         // Proxy-only like `nodedist`, with a real coordinate: the candidate is
         // the package and the platform the artifact. The per-candidate listings
@@ -658,6 +702,20 @@ fn matrix() -> Vec<Row> {
         )
         .pkg("org.acme.plugin")
         .meta(plugin_meta),
+        // The GET spelling of compatible-updates — `installPlugins` on
+        // IntelliJ 2026.1 asks this way and no other, and it reaches the same
+        // answer as the POST row further down. Two verbs on one path is two
+        // routes to the rule chain, and only one of them was classified.
+        Row::new(
+            "jetbrains-marketplace",
+            "/proxy/reg/api/search/updates/compatible?build=IU-261.25134.95&pluginXmlId=org.acme.plugin",
+        )
+        .pkg("org.acme.plugin")
+        .meta(plugin_meta)
+        .vis(WHOLE_REGISTRY)
+        // Same reason as its POST twin: the fixture publishes no plugin
+        // *update* rows, which is what this route answers from.
+        .no_control(),
         // ── routes the inventory claimed and no row reached ──────────────────
         //
         // Five entries were marked `Coverage::Row` with nothing behind them,
@@ -922,6 +980,7 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/api/products/intellij/plugins/{id}/comments", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/api/search/aggregation/{field}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/api/search/plugins", Coverage::NoRow("package read, not yet exercised")),
+    ("/proxy/{registry}/api/search/updates/compatible", Coverage::Row),
     ("/proxy/{registry}/api/searchPlugins", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/api/security-advisories/", Coverage::NoPackage("Composer advisory feed; CVE data, not package contents")),
     ("/proxy/{registry}/api/v1/crates", Coverage::NoRow("package read, not yet exercised")),
@@ -934,6 +993,7 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/api/{namespace}/{extension}", Coverage::Row),
     ("/proxy/{registry}/api/{namespace}/{extension}/{version}", Coverage::Row),
     ("/proxy/{registry}/api/{namespace}/{extension}/{version}/file/{filename}", Coverage::NoRow("package read, not yet exercised")),
+    ("/proxy/{registry}/attachments/{uuid}", Coverage::NoRow("package read, not yet exercised: the uuid resolves only against a release document this registry has already served, which this fixture never seeds, so a row here would assert a 404 rather than a refusal — the closed-world forgejo phase is the client-end regression test")),
     ("/proxy/{registry}/channeldata.json", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/deb/{path}", Coverage::Row),
     ("/proxy/{registry}/dist/{vendor}/{package}/{version}", Coverage::Row),
@@ -953,6 +1013,18 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/list.json", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/maven2/{path}", Coverage::Row),
     ("/proxy/{registry}/names", Coverage::Row),
+    ("/proxy/{registry}/rustup/dist/{date}/{file}", Coverage::Row),
+    ("/proxy/{registry}/rustup/dist/{file}", Coverage::Row),
+    ("/proxy/{registry}/rustup/manifests.txt", Coverage::Row),
+    (
+        "/proxy/{registry}/rustup/rustup/archive/{version}/{triple}/{file}",
+        Coverage::Row,
+    ),
+    ("/proxy/{registry}/rustup/rustup/dist/{triple}/{file}", Coverage::Row),
+    (
+        "/proxy/{registry}/rustup/rustup/release-stable.toml",
+        Coverage::Row,
+    ),
     ("/proxy/{registry}/nodedist/index.json", Coverage::Row),
     ("/proxy/{registry}/nodedist/index.tab", Coverage::Row),
     ("/proxy/{registry}/nodedist/{version}/{file}", Coverage::Row),
@@ -1032,9 +1104,11 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/{package}/{version}/tarball", Coverage::Row),
     ("/proxy/{registry}/{platform}/current_repodata.json", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{platform}/repodata.json", Coverage::NoRow("package read, not yet exercised")),
+    ("/proxy/{registry}/{platform}/repodata_shards.msgpack.zst", Coverage::NoRow("package read, not yet exercised: CEP-16's shard index, the same whole-channel document as repodata.json and served through the same gate")),
     ("/proxy/{registry}/{platform}/repodata.json.bz2", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{platform}/repodata.json.zst", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{platform}/{filename}", Coverage::Row),
+    ("/proxy/{registry}/{platform}/{shard}.msgpack.zst", Coverage::NoRow("package read, not yet exercised: one package's records, content-addressed, and served only while the registry blocks nothing")),
     ("/proxy/{registry}/{project}/-/archive/{tag}/{filename}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{project}/-/raw/{git_ref}/{path}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{project}/-/releases", Coverage::NoRow("package read, not yet exercised")),

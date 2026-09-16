@@ -74,9 +74,12 @@ pub(super) const SIGNATURE_ASSET_TYPE: &str = "Microsoft.VisualStudio.Services.V
 pub(super) const README_ASSET_TYPE: &str = "Microsoft.VisualStudio.Services.Content.Details";
 pub(super) const GALLERY_API_ACCEPT: &str = "application/json;api-version=3.0-preview.1";
 
-// filterType values for extensionquery criteria
+// filterType values for extensionquery criteria.
+//
+// The set is closed and every member names an *extension*; 10 is `SearchText`,
+// not a version. There is no way to ask the gallery for one version of one
+// extension — `client.rs` asks for the version list and picks from it.
 pub(super) const FILTER_EXTENSION_NAME: u32 = 7;
-pub(super) const FILTER_VERSION: u32 = 10;
 
 // flags bitmask for extensionquery
 pub(super) const FLAG_INCLUDE_VERSIONS: u32 = 0x001;

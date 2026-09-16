@@ -480,7 +480,11 @@ impl RegistryClient for ForgejoRegistryClient {
         package: &str,
         kind: DocumentKind,
     ) -> Result<VersionDocument, CoreError> {
-        let url = format!("{}/repos/{}/releases?limit=50", self.base_url, package);
+        // `api_base_url`, like every other API call here: `base_url` is the
+        // instance root, and a listing fetched from it is `/repos/…` on the web
+        // host — 404 on every Forgejo there is, which is what mise's `forgejo:`
+        // backend got instead of a release list.
+        let url = format!("{}/repos/{}/releases?limit=50", self.api_base_url, package);
         fetch_release_listing(self.get(&url), kind, "forgejo", "Forgejo", package).await
     }
 
@@ -764,6 +768,41 @@ mod tests {
         let client = ForgejoRegistryClient::new("https://git.example.com/api/v1", &opts).unwrap();
         assert_eq!(client.base_url, "https://git.example.com");
         assert_eq!(client.api_base_url, "https://git.example.com/api/v1");
+    }
+
+    /// The releases *document* — what a client asking for the listing gets —
+    /// is fetched from the API base like every other call. It was fetched from
+    /// the instance root, so mise's `forgejo:` backend asked codeberg.org for
+    /// `/repos/forgejo/forgejo/releases` and was told 404 by the web host.
+    #[tokio::test]
+    async fn release_listing_document_is_fetched_from_the_api_base() {
+        let mut server = mockito::Server::new_async().await;
+        let _web = server
+            .mock("GET", "/repos/owner/repo/releases?limit=50")
+            .with_status(404)
+            .expect(0)
+            .create_async()
+            .await;
+        let _api = server
+            .mock("GET", "/api/v1/repos/owner/repo/releases?limit=50")
+            .with_status(200)
+            .with_body(r#"[{"id":1,"tag_name":"v1.0.0","published_at":"2024-01-01T00:00:00Z","assets":[]}]"#)
+            .create_async()
+            .await;
+
+        let opts = UpstreamHttpOptions::default();
+        let client = ForgejoRegistryClient::new(server.url(), &opts).unwrap();
+        let doc = client
+            .fetch_version_document("owner/repo", DocumentKind::Versions)
+            .await
+            .expect("the listing comes from the API base");
+
+        assert_eq!(
+            doc.body.as_json().and_then(|v| v[0]["tag_name"].as_str()),
+            Some("v1.0.0")
+        );
+        _web.assert_async().await;
+        _api.assert_async().await;
     }
 
     #[tokio::test]
