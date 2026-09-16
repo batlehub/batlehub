@@ -4,12 +4,13 @@ use std::time::Duration;
 
 use batlehub_adapters::db::PgQuotaRepository;
 use batlehub_adapters::registry::{
-    CargoRegistryClient, ComposerRegistryClient, CondaRegistryClient, FanoutRegistryClient,
-    ForgejoRegistryClient, GithubRegistryClient, GitlabRegistryClient, GoProxyRegistryClient,
-    JetbrainsMarketplaceRegistryClient, MavenRegistryClient, NodeDistRegistryClient,
-    NpmRegistryClient, NugetRegistryClient, OpenVsxRegistryClient, PathProxyRegistryClient,
-    PypiRegistryClient, RubyGemsRegistryClient, RustupRegistryClient, SdkmanRegistryClient,
-    TerraformRegistryClient, UpstreamHttpOptions, VsCodeMarketplaceRegistryClient,
+    ApkRegistryClient, CargoRegistryClient, ComposerRegistryClient, CondaRegistryClient,
+    FanoutRegistryClient, ForgejoRegistryClient, GithubRegistryClient, GitlabRegistryClient,
+    GoProxyRegistryClient, JetbrainsMarketplaceRegistryClient, MavenRegistryClient,
+    NodeDistRegistryClient, NpmRegistryClient, NugetRegistryClient, OpenVsxRegistryClient,
+    PathProxyRegistryClient, PypiRegistryClient, RubyGemsRegistryClient, RustupRegistryClient,
+    SdkmanRegistryClient, TerraformRegistryClient, UpstreamHttpOptions,
+    VsCodeMarketplaceRegistryClient,
 };
 use batlehub_config::schema::{
     QuotaEnforcement as ConfigQuotaEnforcement, RegistryConfig, RuleConfig, UpstreamAuthConfig,
@@ -142,6 +143,44 @@ pub(super) fn build_repo_signer_map(
     Ok(batlehub_web::RepoSignerMap::from(map))
 }
 
+/// Build the per-registry RSA index signing keys for `apk` registries that
+/// configured `[registries.apk_signing]`.
+///
+/// A registry without one hosts an **unsigned** index — which config validation
+/// only permits behind an explicit `apk_unsigned = true`, because every shipping
+/// apk refuses an unsigned index unless the client also passes
+/// `--allow-untrusted` (RFC 0026 §4.5).
+pub(super) fn build_apk_signer_map(
+    cfg: &batlehub_config::schema::AppConfig,
+) -> anyhow::Result<batlehub_web::ApkSignerMap> {
+    use batlehub_adapters::repo::ApkSigner;
+    let mut map = HashMap::new();
+    for reg in &cfg.registries {
+        if let Some(sign) = &reg.apk_signing {
+            let signer = ApkSigner::from_pem(&sign.private_key_pem, sign.key_name.clone())
+                .map_err(|e| anyhow::anyhow!("building apk signing key for '{}': {e}", reg.name))?;
+            // The rotation window, in the order the operator wrote it: it is
+            // the order the signatures appear in, and apk takes the first one
+            // it can verify (RFC 0026 §11 decision 9).
+            let previous = sign
+                .previous_keys
+                .iter()
+                .map(|old| {
+                    ApkSigner::from_pem(&old.private_key_pem, old.key_name.clone()).map_err(|e| {
+                        anyhow::anyhow!(
+                            "building retired apk signing key '{}' for '{}': {e}",
+                            old.key_name,
+                            reg.name
+                        )
+                    })
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            map.insert(reg.name.clone(), Arc::new(signer.with_previous(previous)));
+        }
+    }
+    Ok(batlehub_web::ApkSignerMap::from(map))
+}
+
 /// The configured upstreams, or the one default this kind ships with.
 fn resolve_urls(configured: &[String], default: &str) -> Vec<String> {
     if configured.is_empty() {
@@ -179,6 +218,11 @@ fn default_upstreams(kind: RegistryKind, reg: &RegistryConfig) -> Vec<String> {
         // Arch mirrors share a common layout (`$repo/os/$arch/…`); the geo CDN is a
         // sensible default, overridable via `upstreams`.
         RegistryKind::Pacman => resolve_urls(&reg.upstreams, "https://geo.mirror.pkgbuild.com"),
+        // Alpine's CDN is one mirror of many and the tree *root* is what the
+        // client appends a branch to, so there is no default worth picking:
+        // `requires_explicit_upstream_in_proxy_mode()` makes this placeholder
+        // unreachable in proxy/hybrid mode, and local mode never contacts it.
+        RegistryKind::Apk => resolve_urls(&reg.upstreams, "https://example.invalid/apk"),
         // JetBrains IDE archives are served from a stable CDN, so it's a sensible
         // default; the marketplace (plugin ecosystem) is its own kind below.
         RegistryKind::Jetbrains => resolve_urls(&reg.upstreams, "https://download.jetbrains.com"),
@@ -217,6 +261,10 @@ fn make_one(
     broker_url: &str,
     registry_name: &str,
     budget: Option<&Arc<dyn batlehub_core::ports::RateLimitBudget>>,
+    // apk only: how long a parsed APKINDEX is reused before it is re-read, so
+    // the age gate's date source follows the registry's own `metadata_ttl`
+    // rather than a constant of its own (RFC 0026 §6.2).
+    metadata_ttl: Option<Duration>,
 ) -> anyhow::Result<Arc<dyn batlehub_core::ports::RegistryClient>> {
     // The path-addressed kinds all share one client, so the `path_allow`
     // allowlist is applied uniformly to them. Config validation has already
@@ -276,6 +324,14 @@ fn make_one(
         RegistryKind::Deb => path_proxy("deb")?,
         RegistryKind::Rpm => path_proxy("rpm")?,
         RegistryKind::Pacman => path_proxy("pacman")?,
+        // Not `path_proxy("apk")`: `apk` wraps that client to answer
+        // `resolve_metadata` from the repository's own index, which is where
+        // the age gate's `published_at` comes from (RFC 0026 §6.2).
+        RegistryKind::Apk => Arc::new(
+            ApkRegistryClient::new(url, opts)?
+                .with_path_allow(path_allow)?
+                .with_index_ttl(metadata_ttl),
+        ),
         RegistryKind::Jetbrains => path_proxy("jetbrains")?,
         RegistryKind::Generic => path_proxy("generic")?,
         RegistryKind::Nodedist => Arc::new(NodeDistRegistryClient::new(url, opts)?),
@@ -334,6 +390,7 @@ pub(super) fn build_registry_client(
                 &broker_url,
                 &reg.name,
                 budget,
+                Some(Duration::from_secs(reg.cache.metadata_ttl_secs)),
             ),
         )
     } else {
@@ -349,6 +406,7 @@ pub(super) fn build_registry_client(
                     &broker_url,
                     &reg.name,
                     budget,
+                    Some(Duration::from_secs(reg.cache.metadata_ttl_secs)),
                 )
             })
             .collect::<anyhow::Result<Vec<_>>>()?;

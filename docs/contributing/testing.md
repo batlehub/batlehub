@@ -25,7 +25,7 @@ BatleHub's tests fall into six layers, in increasing order of infrastructure cos
 | **In-process integration** | `crates/web/tests/*.rs`, `crates/examples/tests/*.rs` | none — full actix app on in-memory backends | `cargo test -p batlehub-web --test '*'` |
 | **CLI subprocess integration** | `cli/tests/integration.rs` | none — CLI binary vs. in-memory actix server | `task test:cli:integration` |
 | **External integration** | `crates/adapters/tests/*.rs` | real Postgres / MinIO(S3) / Redis via Podman | `task test:pg-*`, `task test:s3` |
-| **Heavy client** | `tests/heavy/*.sh` | real Postgres **and a real client** — VS Code, IntelliJ, Bundler, npm, pip, ovsx, micromamba, dotnet, composer, terraform, nvm, mise, cargo, go, mvn, apt/dnf | `task test:heavy`, or one `task test:<ecosystem>-heavy` |
+| **Heavy client** | `tests/heavy/*.sh` | real Postgres **and a real client** — VS Code, IntelliJ, Bundler, npm, pip, ovsx, micromamba, dotnet, composer, terraform, nvm, mise, cargo, go, mvn, apt/dnf, apk | `task test:heavy`, or one `task test:<ecosystem>-heavy` |
 | **Heavy authorization** | `tests/heavy/authz.sh` | real Postgres, grants from a **real config file**, and the same clients | `task test:authz-heavy`, or `task test:authz-matrix-heavy` for the fast half |
 | **Soak / leak** | `perf/k6/scenarios/10_soak.js`, `tests/heavy/soak.sh` | real Postgres, a mock or served upstream, and constant load for as long as you ask | `task perf:soak`, `task test:soak-heavy` — **manual only** |
 | **Fuzz** | `fuzz/fuzz_targets/*.rs` | nightly toolchain to *run*, none to check | `task fuzz:check`, `task fuzz` |
@@ -90,6 +90,10 @@ task test:sdkman-heavy        # `sdk list` / `sdk install java` against an sdkma
 task test:mise-heavy          # `mise install github:…` through a forge registry (RFC 0019),
                               # then the whole air gap: plan, seed, export, import into a
                               # second `[air_gap]` instance, install through it (RFC 0008)
+task test:apk-heavy           # RFC 0026 §6.8: both apk generations (2.14.10 and 3.0.8, each as
+                              # apk-tools-static so neither needs a rootfs) — the relayed index,
+                              # a blocked .apk refused at the download, and apk's URL-embedded
+                              # Basic credential proven denied *and* allowed
 task test:cargo-heavy         # RFC 0018 §4.4: yanked mark, 403/404 refusal, recovery, `cargo publish`
 task test:rustup-heavy        # RFC 0024 §6.10: a closed world — the compiler, the crates, the
                               # build and the run through one instance with egress denied

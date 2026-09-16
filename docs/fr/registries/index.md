@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/index.md
-sourceHash: 0e6a0376fdf30dc2
+sourceHash: 8205612afcdc0883
 ---
 
 # Registres
@@ -66,6 +66,7 @@ amont), ainsi que les archives d'IDE **JetBrains** et les miroirs de fichiers
 | [Debian / APT](./deb) | `deb` | `Packages`/`Release` et `.deb` | proxy · local · hybrid | ✅ | aucun — déclarez `upstreams` |
 | [RPM / YUM / DNF](./rpm) | `rpm` | `repodata/` et `.rpm` | proxy · local · hybrid | ✅ | aucun — déclarez `upstreams` |
 | [Pacman / Arch](./pacman) | `pacman` | `<repo>.db` et `.pkg.tar.zst` | proxy · local · hybrid | ✅ | aucun — déclarez `upstreams` |
+| [Alpine / apk](./apk) | `apk` | `APKINDEX.tar.gz` et `.apk` | proxy · local · hybrid | ✅ | aucun — déclarez `upstreams` |
 
 ### Binaires et miroirs <Badge type="tip" text="adressé par chemin" />
 
@@ -214,6 +215,7 @@ bouton désactivé — voir
 | deb | path-addressed: there is no package identity to hang a README on | — | neither | no |
 | rpm | path-addressed: there is no package identity to hang a README on | — | neither | no |
 | pacman | path-addressed: there is no package identity to hang a README on | — | neither | no |
+| apk | an `.apk` carries `pkgdesc`, one sentence in `.PKGINFO`; putting a sentence where a reader expects a document makes every package look thinly documented | — | neither | no |
 | jetbrains | path-addressed: there is no package identity to hang a README on | — | neither | no |
 | jetbrains-marketplace | the metadata document, already fetched | yes | versions + README | yes |
 | generic | path-addressed: there is no package identity to hang a README on | — | neither | no |

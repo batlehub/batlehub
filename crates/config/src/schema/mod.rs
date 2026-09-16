@@ -2271,6 +2271,11 @@ impl AppConfig {
             Self::validate_registry_upstream_detail(registry)?;
             Self::validate_registry_versioning(registry)?;
             Self::validate_registry_vsx_signing(registry, kind)?;
+            Self::validate_registry_apk(
+                registry,
+                kind,
+                self.air_gap.as_ref().is_some_and(|a| a.enabled),
+            )?;
         }
         Ok(())
     }
@@ -2418,7 +2423,11 @@ impl AppConfig {
     /// publishes no dates at all. "Quarantine everything undated" and "exempt
     /// it" are opposite security postures; inheriting one silently is how an
     /// operator ends up believing a toolchain is quarantined when it is not.
-    /// So the field is mandatory here, and only here.
+    /// `apk` joins them for a narrower reason: its index dates every package
+    /// it lists, so an undated coordinate means "the cached index has dropped
+    /// this version", and the two answers are still opposite postures
+    /// (RFC 0026 §4.5). So the field is mandatory on these three kinds and
+    /// nowhere else.
     ///
     /// Namespace rule overrides (RFC 0015 §4.1) are checked too: a namespace
     /// that re-tunes the gate re-inherits the same silent default.
@@ -2438,6 +2447,15 @@ impl AppConfig {
                 "SDKMAN publishes no dates at all, so every artifact reaches the gate without \
                  one: 'true' refuses every download on this registry, 'false' makes the gate \
                  inert"
+            }
+            // The index carries `t:` for every package it lists — measured:
+            // 5 647 of 5 647 in v3.22/main/x86_64 — so the undated case is
+            // narrow and specific: a package the *cached* index no longer has
+            // (RFC 0026 §4.5).
+            RegistryKind::Apk => {
+                "every package an APKINDEX lists carries its build time in 't:', so the only \
+                 undated coordinate is one the cached index no longer lists: 'true' refuses \
+                 it, 'false' serves it"
             }
             _ => return Ok(()),
         };
@@ -3656,6 +3674,190 @@ impl AppConfig {
                 );
             }
         }
+        Ok(())
+    }
+
+    /// `[registries.apk_signing]`, `apk_unsigned` and the `apk` upstream shape
+    /// (RFC 0026 §4.5).
+    ///
+    /// Everything here fails at boot rather than at the first `apk update`,
+    /// because every one of these mistakes produces a *client-side* symptom —
+    /// an untrusted index, a doubled path segment, a repository nothing can
+    /// install from — that reads as this instance's bug from the outside and is
+    /// invisible from the inside.
+    fn validate_registry_apk(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+        air_gapped: bool,
+    ) -> Result<()> {
+        use batlehub_core::entities::RegistryKind;
+        let is_apk = matches!(kind, RegistryKind::Apk);
+
+        // A signing key on a registry that will never sign anything is the
+        // class of misconfiguration `broker_url` off `sdkman` is rejected for.
+        if !is_apk {
+            if registry.apk_signing.is_some() {
+                anyhow::bail!(
+                    "registry '{}': [registries.apk_signing] applies to type = \"apk\" only \
+                     (it signs the generated APKINDEX), not to '{}'",
+                    registry.name,
+                    registry.registry_type
+                );
+            }
+            if registry.apk_unsigned {
+                anyhow::bail!(
+                    "registry '{}': apk_unsigned applies to type = \"apk\" only, not to '{}'",
+                    registry.name,
+                    registry.registry_type
+                );
+            }
+            return Ok(());
+        }
+
+        let hosts_locally = matches!(registry.mode, RegistryMode::Local | RegistryMode::Hybrid);
+
+        // In proxy mode the upstream index is relayed byte-exact, so a key
+        // would advertise a trust this instance does not provide — **unless the
+        // instance is air-gapped**, where there is no upstream to relay and the
+        // index served is one this instance composes over the held set and
+        // signs itself (RFC 0026 §6.10). That is the one case where a proxy
+        // registry writes an `APKINDEX`, and without a key it cannot: the
+        // composition is skipped and `apk update` stays the RFC 0008 `503`.
+        if !hosts_locally && registry.apk_signing.is_some() && !air_gapped {
+            anyhow::bail!(
+                "registry '{}': [registries.apk_signing] needs mode = \"local\" or \"hybrid\", or \
+                 [air_gap] enabled = true — in proxy mode with a reachable upstream the APKINDEX \
+                 is relayed byte-exact with Alpine's own signature, and there is nothing for \
+                 this key to sign",
+                registry.name
+            );
+        }
+
+        // The client appends `{branch}/{repo}/{arch}/` itself, so an upstream
+        // that already names one puts the index at `…/v3.22/v3.22/main/…`.
+        // This is the mistake a `generic` migration makes, so it is named.
+        for upstream in &registry.upstreams {
+            let trimmed = upstream.trim_end_matches('/');
+            let last = trimmed.rsplit('/').next().unwrap_or_default();
+            let looks_like_branch = last == "edge"
+                || last == "latest-stable"
+                || last
+                    .strip_prefix('v')
+                    .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
+            let looks_like_repo = matches!(last, "main" | "community" | "testing");
+            if looks_like_branch || looks_like_repo {
+                anyhow::bail!(
+                    "registry '{}': upstreams entry '{}' ends in a branch or repository \
+                     ('{}'), but apk appends '{{branch}}/{{repo}}/{{arch}}/' itself — use the \
+                     tree root instead, e.g. https://dl-cdn.alpinelinux.org/alpine",
+                    registry.name,
+                    upstream,
+                    last
+                );
+            }
+        }
+
+        if let Some(signing) = &registry.apk_signing {
+            let name = signing.key_name.trim();
+            // apk opens the key by this exact name inside the keys directory
+            // (`openat(ctx->keys_fd, name, …)`), so it is one path segment and
+            // nothing else.
+            if !name.ends_with(".rsa.pub") {
+                anyhow::bail!(
+                    "registry '{}': apk_signing.key_name must end in '.rsa.pub' — it is the \
+                     file name the client holds in /etc/apk/keys/, and Alpine's convention is \
+                     <email>-<8 hex>.rsa.pub; got '{}'",
+                    registry.name,
+                    signing.key_name
+                );
+            }
+            if name.contains('/') || name.contains("..") || name.len() == ".rsa.pub".len() {
+                anyhow::bail!(
+                    "registry '{}': apk_signing.key_name must be a single non-empty path \
+                     segment with no '/' or '..'; got '{}'",
+                    registry.name,
+                    signing.key_name
+                );
+            }
+            if signing.private_key_pem.trim().is_empty() {
+                anyhow::bail!(
+                    "registry '{}': apk_signing.private_key_pem is empty — set it from the \
+                     environment with ${{APK_SIGNING_KEY_PEM}} rather than inline",
+                    registry.name
+                );
+            }
+            if registry.apk_unsigned {
+                anyhow::bail!(
+                    "registry '{}': apk_unsigned = true and [registries.apk_signing] are \
+                     contradictory — remove one",
+                    registry.name
+                );
+            }
+            // The rotation window. Every retired key is a `.SIGN.*` entry a
+            // client may install from, so each has to be as well formed as the
+            // current one — and none of them may be the current one, because a
+            // repeated entry name is an index with two signatures under one
+            // file name and apk reads the first.
+            let mut seen = vec![name.to_owned()];
+            for old in &signing.previous_keys {
+                let old_name = old.key_name.trim();
+                if !old_name.ends_with(".rsa.pub")
+                    || old_name.contains('/')
+                    || old_name.contains("..")
+                    || old_name.len() == ".rsa.pub".len()
+                {
+                    anyhow::bail!(
+                        "registry '{}': apk_signing.previous_keys[].key_name must be a single \
+                         path segment ending in '.rsa.pub'; got '{}'",
+                        registry.name,
+                        old.key_name
+                    );
+                }
+                if old.private_key_pem.trim().is_empty() {
+                    anyhow::bail!(
+                        "registry '{}': apk_signing.previous_keys entry '{}' has an empty \
+                         private_key_pem — set it from the environment, or drop the entry if \
+                         the rotation is finished",
+                        registry.name,
+                        old.key_name
+                    );
+                }
+                if seen.iter().any(|n| n == old_name) {
+                    anyhow::bail!(
+                        "registry '{}': apk_signing key name '{}' appears twice — an index with \
+                         two signatures under one file name installs from whichever apk reads \
+                         first, which is not a rotation",
+                        registry.name,
+                        old.key_name
+                    );
+                }
+                if !old.previous_keys.is_empty() {
+                    anyhow::bail!(
+                        "registry '{}': apk_signing.previous_keys entry '{}' has its own \
+                         previous_keys — the rotation window is one flat list",
+                        registry.name,
+                        old.key_name
+                    );
+                }
+                seen.push(old_name.to_owned());
+            }
+        } else if hosts_locally && !registry.apk_unsigned {
+            // Silence here would ship a repository nothing can install from.
+            anyhow::bail!(
+                "registry '{}': an apk registry in mode = \"{}\" needs \
+                 [registries.apk_signing], because every shipping apk refuses an unsigned \
+                 index unless the client passes --allow-untrusted (which also switches off the \
+                 package identity check). Set apk_unsigned = true to ship one anyway and say \
+                 so on the record",
+                registry.name,
+                if matches!(registry.mode, RegistryMode::Local) {
+                    "local"
+                } else {
+                    "hybrid"
+                }
+            );
+        }
+
         Ok(())
     }
 

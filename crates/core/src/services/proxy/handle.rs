@@ -888,6 +888,33 @@ impl ProxyService {
             .await
     }
 
+    /// Whether this instance answers a listing it does not hold from the set
+    /// it does hold (RFC 0008-bis).
+    ///
+    /// Public because one kind's listing is not a *document*: an `apk`
+    /// repository resolves through `APKINDEX.tar.gz`, which is an artifact on a
+    /// path route, so the synthesis hook of [`Self::synthesised_listing`] never
+    /// sees it and the handler has to ask (RFC 0026 §6.10).
+    pub async fn synthesises_listings(&self) -> bool {
+        self.hot.read().await.air_gap.synthesises_listings()
+    }
+
+    /// Every artifact this instance holds in a registry, paired with the
+    /// package name it was filed under — the same projection a registry-wide
+    /// document is composed from ([`crate::services::listing_synthesis`]),
+    /// reachable by a handler for the one kind whose listing is an artifact.
+    pub async fn held_artifacts(
+        &self,
+        registry: &str,
+    ) -> Vec<(String, crate::services::listing_synthesis::HeldVersion)> {
+        crate::services::listing_synthesis::held_registry(
+            self.artifact_meta.as_ref(),
+            self.cache.as_ref(),
+            registry,
+        )
+        .await
+    }
+
     /// Authorize a read against a registry's policy rules **without** resolving
     /// upstream metadata or streaming an artifact.
     ///

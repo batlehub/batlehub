@@ -38,6 +38,7 @@
  * below; the rest are small enough to plateau within the warm-up.
  */
 import {
+  APK_REGISTRY,
   BASE_URL,
   CARGO_REGISTRY,
   COMPOSER_REGISTRY,
@@ -318,6 +319,35 @@ export const ARMS = [
     doc: "a .pkg.tar.zst by path",
     request: (n) => ({
       url: p(`/proxy/${PACMAN_REGISTRY}/pacman/demo-1.${n}-1-x86_64.pkg.tar.zst`),
+    }),
+  },
+  // Two arms, where the other three OS kinds get one each. `apk` is the only
+  // path kind that is not a pure byte path: a `.apk` request carries a real
+  // coordinate, so it pays a split, a `resolve_metadata` that reads the cached
+  // index, and the whole rule chain. Whether that is free in the steady state
+  // is a measurement, and these are where it is taken.
+  {
+    op: "apk_index",
+    kind: "apk",
+    registry: APK_REGISTRY,
+    weight: 2,
+    expect: [200],
+    space: 1,
+    doc: "APKINDEX.tar.gz — relayed byte-exact, on the hot path of every `apk update`",
+    request: () => ({
+      url: p(`/proxy/${APK_REGISTRY}/apk/v3.22/main/x86_64/APKINDEX.tar.gz`),
+    }),
+  },
+  {
+    op: "apk_package",
+    kind: "apk",
+    registry: APK_REGISTRY,
+    weight: 2,
+    expect: [200],
+    space: 16,
+    doc: "a .apk — the coordinate split, the index read for its build date, and the rules",
+    request: (n) => ({
+      url: p(`/proxy/${APK_REGISTRY}/apk/v3.22/main/x86_64/demo-1.${n}-r0.apk`),
     }),
   },
   {

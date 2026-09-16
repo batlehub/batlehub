@@ -265,6 +265,11 @@ tasks:
     cmds:
       - bash tests/heavy/bundler.sh
 
+  test:apk-heavy:
+    desc: "Heavy Alpine apk integration: both apk generations (2.14.10 and 3.0.8, each as apk-tools-static so neither needs a rootfs) against a local apk registry — the relayed index, the coordinate on a .apk, a blocked version refused at the download, and apk's URL-embedded Basic credential proven in both directions (needs DATABASE_URL + network)"
+    cmds:
+      - bash tests/heavy/apk.sh
+
   test:npm-heavy:
     desc: "Heavy npm integration: publish/install/whoami/ping/dist-tags/search against a local registry, and `npm audit` on the path npm really sends (needs DATABASE_URL + network)"
     cmds:
@@ -460,6 +465,7 @@ tasks:
       - bash tests/heavy/backends.sh
       - bash tests/heavy/hybrid.sh
       - bash tests/heavy/conda.sh
+      - bash tests/heavy/apk.sh
       - bash tests/heavy/nuget.sh
       - bash tests/heavy/composer.sh
       - bash tests/heavy/terraform.sh

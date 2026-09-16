@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/weak-hashes.md
-sourceHash: e57dc8984f8f0ca9
+sourceHash: 88cd8d1e8c89a9aa
 ---
 
 # MD5 et SHA-1
@@ -48,6 +48,7 @@ ont pas survécu.
 | 7 | `adapters/repo/openpgp.rs` — empreinte | SHA-1 | Immuable par définition |
 | 8 | `core/services/listing_synthesis.rs` — listings composés | SHA-1 | Imposé par le format imité |
 | 9 | `web/…/proxy/maven/proxy.rs` — fichiers `.md5`/`.sha1` | MD5, SHA-1 | L'algorithme *est* l'extension du fichier |
+| 10 | `adapters/repo/apk.rs` — le champ `C:` de l'index | SHA-1 | Imposé par apk-tools, et vérifié à l'installation |
 
 Les entrées 4, 5 et 6 sont barrées parce que le code ne les calcule plus. L'entrée 4
 est en gras parce que c'est un choix de compatibilité plutôt qu'une exigence, et
@@ -190,6 +191,30 @@ tous deux.
 
 Les clés v6 de la RFC 9580 emploient SHA-256, mais apt et rpm ne consomment pas
 de clés v6 aujourd'hui. **Immuable tant que la clé est en v4.**
+
+## 10. L'identité de paquet d'apk {#apk-identity}
+
+Le champ `C:` d'un `APKINDEX` vaut `Q1` suivi du base64 d'un **SHA-1**, et il
+n'existe pas de seconde écriture : apk le calcule sous
+`APK_SIGN_VERIFY_AND_GENERATE` et le vérifie à l'installation sous
+`APK_SIGN_VERIFY_IDENTITY`. Un index dont le `C:` est dérivé autrement produit
+des paquets que tout client *télécharge puis refuse*, ce qui ressemble à de la
+corruption plutôt qu'à une divergence.
+
+Deux raisons rendent ce choix sûr, les mêmes que pour les sidecars Maven :
+
+- **Ce n'est pas une frontière de sécurité ici.** Ce qu'un client installant
+  fait confiance, c'est la **signature RSA-2048/SHA-256 sur l'index entier**
+  (`.SIGN.RSA256`), et `C:` est un champ *à l'intérieur* de ce document signé.
+  Forger un `C:` suppose de forger la signature.
+- **Ce n'est pas à nous d'en décider.** Le champ appartient au format de
+  transport. apk-tools 3.0.8 lit exactement les mêmes entrées que la 2.14, et
+  aucune branche Alpine ne publie d'index v3 (RFC 0026 §2.2, décision 3) : il
+  n'existe donc aucune version de ce protocole en circulation où l'identité
+  serait autre chose.
+
+Résolvez-le dans le scanner, jamais dans le code : un « correctif » ici produit
+un dépôt qu'aucun apk ne peut installer.
 
 ## Revérifié le 31 août 2026 {#rechecked-2026-08-31}
 

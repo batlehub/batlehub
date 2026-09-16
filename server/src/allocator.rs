@@ -94,7 +94,9 @@ pub(super) fn spawn_allocator_gauge_sampler() {
             ] {
                 match value {
                     Ok(bytes) => metrics::gauge!(name).set(bytes as f64),
-                    Err(e) => tracing::warn!(metric = name, error = %e, "allocator metrics: read failed"),
+                    Err(e) => {
+                        tracing::warn!(metric = name, error = %e, "allocator metrics: read failed")
+                    }
                 }
             }
         }

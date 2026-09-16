@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/egress.md
-sourceHash: e2f435454ac941c6
+sourceHash: c8f6377a4e7a0d44
 ---
 
 # Ce qui sort de cette instance
@@ -39,6 +39,28 @@ prérequis de ce type. La liste est *observée, pas exhaustive* : le courtier pe
 ajouter un hôte sans le dire à personne, ce qui est en soi un argument pour
 préchauffer avant une coupure réseau
 ([RFC 0010](/rfc/0010-toolchain-managers) §9).
+
+## Un paquet `apk` est téléchargé {#an-apk-package-is-downloaded}
+
+Une requête sur un `.apk` peut provoquer **deux** requêtes amont la première
+fois : le paquet, et l'`APKINDEX.tar.gz` du répertoire où il se trouve.
+
+C'est cette lecture d'index qui donne à `apk` un délai de fraîcheur. Un nom de
+fichier `.apk` porte un nom et une version mais aucune date, et la date de
+construction vit dans le champ `t:` de l'index : `ApkRegistryClient::resolve_metadata`
+lit donc l'index à côté du paquet plutôt que de laisser chaque paquet Alpine
+sans date ([RFC 0026](/rfc/0026-alpine-apk) §6.2).
+
+| Limite | Effet |
+| --- | --- |
+| En cache | L'index passe par le cache de métadonnées comme n'importe quel autre document, sous le `metadata_ttl_secs` du registre. C'est une lecture par répertoire et par TTL, pas une par paquet. |
+| Au mieux | Un index illisible laisse le paquet sans date et le téléchargement se poursuit. Un miroir auquel il manque un index ne casse pas les installations. |
+| Jamais pour l'index lui-même | Une requête *sur* `APKINDEX.tar.gz` ne déclenche pas une lecture d'elle-même. |
+
+Pour la désactiver, n'employez pas de règle de délai de fraîcheur : sans règle
+ayant besoin d'une date, la lecture a toujours lieu, donc un parc qui ne veut ni
+l'une ni l'autre doit configurer un `metadata_ttl_secs` assez long pour que la
+récupération d'index d'`apk update` soit la seule.
 
 ## On saisit quelque chose dans un champ de recherche
 

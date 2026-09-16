@@ -508,7 +508,11 @@ the allowed caller has to actually succeed. Where it does have a local mode, the
 hermetic client phase in `authz.sh` covers it instead.
 
 **Air-gapped.** The same kind on an instance that can reach nothing, holding
-only what was bundled into it (RFC 0008 / 0008-bis). This is where a kind
+only what was bundled into it (RFC 0008 / 0008-bis). Writing the case is half
+of it: `registry_kind_coverage.rs` reads `air_gap.rs` and fails if a kind its
+labs drive still declares `AirGap::Gap`, so the row and the case cannot drift
+apart. They did once — eight kinds had a case and declared a gap, and the
+published count said 8 of 25 when the truth was 16. This is where a kind
 discovers that its client resolves through a *listing* it was never given, which
 is a different failure from "the artifact is missing" and has a different fix —
 `synthesise_listings`, and the recorded miss that tells the next bundle what to
@@ -518,6 +522,26 @@ answer off the wire the way the npm, pip and mise phases do.
 
 Both suites need `DATABASE_URL`, and the live one needs network *for the server*
 — the client is the half that gets none.
+
+**Write the suite, then run it, then believe the kind works — in that order.**
+`apk` landed its local mode with 43 green tests and a heavy suite that had never
+been executed. The first run found five defects in under an hour, three of them
+in the server, and together they meant every repository the feature could host
+was uninstallable ([RFC 0026](/rfc/0026-alpine-apk) §13). They were invisible
+from inside because the tests used **fixtures built by the same hand as the
+code**: our reader walks an archive's gzip members independently, so a test
+double written the same way could not show that the real format is one tar
+stream across those members — and a client refused it on the first byte.
+
+Two habits fall out of that, and they cost nothing:
+
+- **Build one fixture with the client's own tooling** and compare. `apk index`
+  produced the reference index that showed our `C:` field was computed by the
+  wrong rule — a defect whose only symptom is the client downloading a package
+  and *then* rejecting it.
+- **Assert on what the client resolved, not on its exit code.** apk 3 reports a
+  repository it could not read as `N unavailable` and exits `0`; a suite
+  checking `$?` was green against a proxy that served nothing.
 
 ### The soak owes a kind an arm too
 

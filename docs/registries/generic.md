@@ -59,6 +59,7 @@ Embedding HTTP Basic credentials in the mirror URL works as a fallback, but the 
 
 ## Notes
 
+- A `generic` mirror of an Alpine CDN has the same problem, one tree over: the `.apk` file name carries a real name and version, and a `generic` registry has nowhere to put them. Use [`apk`](/registries/apk) to block, age-gate or count an Alpine package; `generic` stays right for an Alpine tree you only want cached.
 - A `generic` mirror of `nodejs.org/dist` caches Node correctly and can enforce nothing on it: a path-addressed registry has one synthetic package and no version to block. For policy on a Node release — a block that reaches `nvm ls-remote`, an age gate on a release published yesterday — use [`nodedist`](/registries/nodedist) instead; `generic` stays the right answer for a tree you want cached without policy.
 - A request for a path outside the registry's `path_allow` allowlist returns `403`, not 404 — that is the allowlist rejecting it locally, before any upstream request is made. Widen the globs if `mise install` reports a 403.
 - Mirrored archives are often large; the proxy buffers the whole artifact before caching, so raise `limits.max_artifact_size_bytes` (default 500 MiB) for toolchain tarballs.

@@ -142,3 +142,19 @@ upstreams = ["https://registry.terraform.io"]
 anonymous = ["releases:read", "releases:list", "source:read"]
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
+
+# ── apk: the one OS kind whose listing the estate can compose ────────────────
+#
+# Connected, this is an ordinary path proxy: the bundle export needs the `.apk`
+# in the cache, and the tree root is the upstream because the client appends
+# `{branch}/{repo}/{arch}` itself (RFC 0026 §4.5).
+[[registries]]
+type = "apk"
+name = "apk-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://dl-cdn.alpinelinux.org/alpine"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

@@ -1644,6 +1644,87 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
       },
     ],
   },
+  // ── Alpine (apk) ────────────────────────────────────────────────────────────
+  {
+    id: "apk",
+    label: "Alpine (apk)",
+    fileHint: "/etc/apk/repositories",
+    description:
+      `Proxy and host Alpine repositories. The upstream <code>APKINDEX.tar.gz</code> is ` +
+      `relayed <strong>byte-exact</strong> — it is RSA-signed over its own bytes and every ` +
+      `shipping apk refuses an unverifiable one — so a block is enforced at the ` +
+      `<code>.apk</code>, whose file name carries a real name and version. In local/hybrid ` +
+      `mode BatleHub regenerates and RSA-signs the index itself, and a blocked version is ` +
+      `absent from it.`,
+    snippets: [
+      {
+        key: "apk-repositories",
+        label: "/etc/apk/repositories",
+        lang: "bash",
+        template: (ctx) => {
+          const reg = `${ctx.registryUrl}/apk`;
+          if (isPublishMode(ctx)) {
+            return [
+              `# A repository this instance hosts: one line, no branch`,
+              `echo ${reg} >> /etc/apk/repositories`,
+            ].join("\n");
+          }
+          return [
+            `# apk appends {arch}/APKINDEX.tar.gz and {arch}/{file}.apk itself,`,
+            `# so each line names a branch and a repository.`,
+            `${reg}/v3.22/main`,
+            `${reg}/v3.22/community`,
+          ].join("\n");
+        },
+        note: (ctx) =>
+          isPublishMode(ctx)
+            ? `Install the signing key first (snippet below), or <code>apk update</code> ` +
+              `refuses the repository.`
+            : `Migrate a stock image in one line: ` +
+              `<code>sed -i 's#https://dl-cdn.alpinelinux.org/alpine#${ctx.registryUrl}/apk#' ` +
+              `/etc/apk/repositories</code>. Alpine's own keys are already in the image and ` +
+              `the relayed index verifies against them.`,
+      },
+      {
+        key: "apk-key",
+        label: "Install the signing key (local/hybrid)",
+        lang: "bash",
+        showWhen: isPublishMode,
+        template: (ctx) =>
+          [
+            `# The file name must match apk_signing.key_name exactly: apk opens the`,
+            `# key by the name the signature entry carries.`,
+            `KEY=internal-apk@example.com-5f3a1c2e.rsa.pub`,
+            `curl -fsSL -o /etc/apk/keys/$KEY \\`,
+            `  ${ctx.registryUrl}/apk/keys/$KEY`,
+            `apk update`,
+          ].join("\n"),
+        note:
+          `Served live, before anything has been published, so a client can be set up ` +
+          `first. A name mismatch is not an error message — it is an untrusted index.`,
+      },
+      {
+        key: "apk-publish",
+        label: "Publish a package (local/hybrid)",
+        lang: "bash",
+        showWhen: isPublishMode,
+        template: (ctx) =>
+          [
+            `curl -X PUT \\`,
+            `  -H "Authorization: Bearer ${authTokenOrPlaceholder(ctx)}" \\`,
+            `  --data-binary @hello-1.0-r0.apk \\`,
+            `  ${ctx.registryUrl}/apk/upload`,
+          ].join("\n"),
+        note:
+          `The name, version and architecture are read from the archive's ` +
+          `<code>.PKGINFO</code>, never from the file name you send. The package does not ` +
+          `need to be signed itself: an install checks the index's <code>C:</code> field. ` +
+          `It does need to be a <strong>v2</strong> <code>.apk</code> — build it with ` +
+          `<code>abuild</code>, not with <code>apk mkpkg</code>, which writes the v3 (ADB) ` +
+          `container a v2 index cannot describe.`,
+      },
+    ],
+  },
   // ── JetBrains IDE archives (proxy-only cache) ──────────────────────────────
   {
     id: "jetbrains",

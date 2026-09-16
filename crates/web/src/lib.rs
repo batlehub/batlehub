@@ -197,6 +197,33 @@ impl RepoSignerMap {
     }
 }
 
+/// The RSA signers of `apk` registries, by registry name.
+///
+/// A separate map from [`RepoSignerMap`] rather than a variant inside it: they
+/// hold different key types for different algorithms, and the three OpenPGP
+/// kinds and `apk` never consult each other's. `deb`/`rpm`/`pacman` sign with
+/// Ed25519 OpenPGP; `apk` signs with RSA through `aws-lc-rs`, because no
+/// shipping apk reads anything else (RFC 0026 §2.4).
+#[derive(Clone, Default)]
+pub struct ApkSignerMap(LockedMap<Arc<batlehub_adapters::repo::ApkSigner>>);
+
+impl ApkSignerMap {
+    pub fn get(&self, name: &str) -> Option<Arc<batlehub_adapters::repo::ApkSigner>> {
+        self.0.get(name)
+    }
+
+    /// Replace this map's contents with `other`'s (called by the hot-reload applier).
+    pub fn replace_from(&self, other: &Self) {
+        self.0.replace_from(&other.0);
+    }
+}
+
+impl From<HashMap<String, Arc<batlehub_adapters::repo::ApkSigner>>> for ApkSignerMap {
+    fn from(map: HashMap<String, Arc<batlehub_adapters::repo::ApkSigner>>) -> Self {
+        Self(LockedMap::new(map))
+    }
+}
+
 impl From<HashMap<String, Arc<batlehub_adapters::repo::OpenPgpSigner>>> for RepoSignerMap {
     fn from(map: HashMap<String, Arc<batlehub_adapters::repo::OpenPgpSigner>>) -> Self {
         Self(LockedMap::new(map))
@@ -468,6 +495,7 @@ pub use spa::{configure_spa, narrow_csp, SpaDir};
         (name = "proxy/deb",      description = "Debian APT repository — proxy + local hosting (Packages/Release generation, Ed25519 OpenPGP signing)"),
         (name = "proxy/rpm",      description = "RPM/YUM repository — proxy + local hosting (repodata generation, Ed25519 OpenPGP signing)"),
         (name = "proxy/pacman",   description = "Arch Linux pacman repository — proxy + local hosting (.pkg.tar.zst, repo DB generation, Ed25519 OpenPGP signing)"),
+        (name = "proxy/apk",      description = "Alpine apk repository — proxy with the index relayed byte-exact and a real coordinate on every .apk, plus local hosting with an RSA-signed APKINDEX"),
         (name = "proxy/npm",      description = "npm proxy — packuments, version metadata, tarballs"),
         (name = "proxy/cargo",    description = "Cargo proxy — sparse index, crate metadata, .crate downloads"),
         (name = "proxy/openvsx",  description = "OpenVSX & VS Code Marketplace — extension gallery (extensionquery, assets, item), the OpenVSX REST API, VSIX packages, and private extension publishing"),
@@ -661,8 +689,9 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 pypi_file_download, pypi_json, pypi_publish, pypi_simple_package, pypi_simple_root,
             },
             repo::{
+                apk::apk_get,
                 deb_get, pacman_get,
-                publish::{deb_publish, pacman_publish, rpm_publish},
+                publish::{apk_publish, deb_publish, pacman_publish, rpm_publish},
                 rpm_get,
             },
             rubygems::{
@@ -770,6 +799,8 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(rpm_get); // GET …/rpm/{path}
     cfg.service(pacman_publish); // PUT …/pacman/upload
     cfg.service(pacman_get); // GET …/pacman/{path}
+    cfg.service(apk_publish); // PUT …/apk/upload
+    cfg.service(apk_get); // GET …/apk/{path}      (coordinate on .apk files)
     cfg.service(jetbrains_get); // GET …/jetbrains/{path} (proxy-only cache)
     cfg.service(generic_get); // GET …/generic/{path}   (proxy-only cache)
                               // Node dist tree (RFC 0010): the two listing documents before the

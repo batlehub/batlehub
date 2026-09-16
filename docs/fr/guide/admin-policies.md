@@ -5,7 +5,7 @@
 # plafond, une déclaration que quelqu'un a dû écrire (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/admin-policies.md
-sourceHash: 7d758df256c07768
+sourceHash: 8cb7bafdb99ddd38
 ---
 
 # Politiques et paquets
@@ -326,6 +326,7 @@ sans danger :
 | deb | signed repository indexes | no — editing one invalidates its signature and the client rejects the whole repository, which is a worse failure than the one filtering fixes |
 | rpm | signed repository indexes | no — editing one invalidates its signature and the client rejects the whole repository, which is a worse failure than the one filtering fixes |
 | pacman | signed repository indexes | no — editing one invalidates its signature and the client rejects the whole repository, which is a worse failure than the one filtering fixes |
+| apk | signed repository indexes | no — editing one invalidates its signature and the client rejects the whole repository, which is a worse failure than the one filtering fixes |
 | jetbrains | — | no listing document |
 | jetbrains-marketplace | `updatePlugins.xml`, `/plugins/list` and the plugin-updates API | yes |
 | generic | — | no listing document |

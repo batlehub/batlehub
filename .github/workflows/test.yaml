@@ -716,6 +716,12 @@ jobs:
           - suite: nuget
           - suite: composer
           - suite: terraform
+          # apk: the script downloads apk-tools-static for both generations
+          # (2.14.10 from v3.22, 3.0.8 from v3.24) and the alpine-keys package
+          # from the CDN, and needs only curl, tar and python3 — all on the
+          # runner image. No rootfs and no user namespace, which is why neither
+          # generation is skipped here (RFC 0026 §6.8).
+          - suite: apk
           # nvm: the script downloads nvm's release tarball itself (RFC 0010
           # decision 9 — not the installer) and needs only curl, tar and xz,
           # all on the runner image.

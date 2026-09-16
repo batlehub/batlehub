@@ -151,6 +151,48 @@ tasks:
         --label 12_conda_zst_filtered perf/k6/scenarios/12_conda_filter.js
       - task: perf:report
 
+  # ── Scenario 13 — what regenerating a signed APKINDEX costs ─────────────────
+  #
+  # Three steps, and the independent variable is how many packages the index
+  # already holds when the publish lands:
+  #
+  #   task perf:apk:server                 # (separate shell)
+  #   task perf:apk:seed COUNT=5000
+  #   BATLEHUB_APK_ARM=n5000 task perf:run:apk
+  #
+  # Every publish re-renders the whole index for that architecture and RSA-signs
+  # it, on the upload path, under a lock (RFC 0026 §6.4). `v3.22/main/x86_64` is
+  # 5 647 packages, so `COUNT=5000` is the realistic arm and 20 000 is the one
+  # that says whether the curve is flat. Seeding 20 000 packages takes a while:
+  # it is 20 000 publishes, each of which regenerates the index.
+
+  perf:apk:server:
+    desc: "Run BatleHub with the local apk registry scenario 13 publishes into (needs postgres)"
+    env:
+      BATLEHUB_CONFIG: perf/config.perf-apk.toml
+    cmds:
+      # The signing key is part of what a publish pays for, so the measurement
+      # needs a real one. Generated per invocation: nothing here is a secret
+      # that outlives the run.
+      - APK_SIGNING_KEY_PEM="$(openssl genrsa 2048 2>/dev/null | sed ':a;N;$!ba;s/\n/\\n/g')"
+        cargo run -p batlehub-server --release
+
+  perf:apk:seed:
+    desc: "Fill perf-apk with COUNT packages, so scenario 13 publishes into an index of a known size"
+    cmds:
+      - bash perf/scripts/seed_apk.sh {{.BASE_URL | default "http://localhost:8080"}} {{.COUNT | default "1000"}}
+
+  perf:run:apk:
+    desc: "k6 scenario 13 — what a publish costs as the index it regenerates grows (BATLEHUB_APK_ARM=n100|n1000|n5000|n20000)"
+    cmds:
+      # One arm per run, because the arm *is* the state of the registry: the
+      # seed sets it, and a run that changed size under itself would produce a
+      # number that belongs to no index in particular.
+      - bash perf/scripts/run_with_metrics.sh
+        --label 13_apk_{{.ARM | default "$BATLEHUB_APK_ARM"}}
+        perf/k6/scenarios/13_apk_index_regeneration.js
+      - task: perf:report
+
   # ── Soak / leak detection (RFC-less: this is a gate, not a measurement) ──────
   #
   # Unlike every scenario above, this one starts its own server and mock

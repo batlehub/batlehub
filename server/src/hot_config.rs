@@ -1011,6 +1011,7 @@ pub(super) fn make_hot_builder(
             }
         }
         let repo_signer_map = crate::builders::build_repo_signer_map(cfg)?;
+        let apk_signer_map = crate::builders::build_apk_signer_map(cfg)?;
         Ok(batlehub_web::services::BuiltHotState {
             hot,
             access,
@@ -1020,6 +1021,7 @@ pub(super) fn make_hot_builder(
             upstream_map: um,
             cargo_index_map: CargoIndexMap::new(cargo_map),
             repo_signer_map,
+            apk_signer_map,
             vuln_db_map: vuln_db,
             sumdb_map: sumdb,
             registry_host_map: RegistryHostMap::from_app_config(cfg),

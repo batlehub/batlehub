@@ -217,6 +217,7 @@ impl ConfigReloadService {
             new_upstream_map: built.upstream_map,
             new_cargo_index_map: built.cargo_index_map,
             new_repo_signer_map: built.repo_signer_map,
+            new_apk_signer_map: built.apk_signer_map,
             new_vuln_db_map: built.vuln_db_map,
             new_sumdb_map: built.sumdb_map,
             new_registry_host_map: built.registry_host_map,
@@ -302,6 +303,8 @@ impl ConfigReloadService {
         // `[registries.repo_signing]` takes effect without a process restart.
         self.repo_signer_map
             .replace_from(&pending.new_repo_signer_map);
+        self.apk_signer_map
+            .replace_from(&pending.new_apk_signer_map);
         // Swap the Go vuln DB URL map; reuse the existing HTTP client.
         self.vuln_db_map.replace_from(&pending.new_vuln_db_map);
         self.sumdb_map.replace_from(&pending.new_sumdb_map);

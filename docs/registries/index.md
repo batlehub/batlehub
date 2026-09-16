@@ -50,6 +50,7 @@ Five types are **proxy-only** (no private publish model): **GitHub**, **Forgejo*
 | [Debian / APT](./deb) | `deb` | `Packages`/`Release` + `.deb` | proxy · local · hybrid | ✅ | none — set `upstreams` |
 | [RPM / YUM / DNF](./rpm) | `rpm` | `repodata/` + `.rpm` | proxy · local · hybrid | ✅ | none — set `upstreams` |
 | [Pacman / Arch](./pacman) | `pacman` | `<repo>.db` + `.pkg.tar.zst` | proxy · local · hybrid | ✅ | none — set `upstreams` |
+| [Alpine / apk](./apk) | `apk` | `APKINDEX.tar.gz` + `.apk` | proxy · local · hybrid | ✅ | none — set `upstreams` |
 
 ### Binaries & mirrors <Badge type="tip" text="path-addressed" />
 
@@ -162,6 +163,7 @@ any of them. The page says which rather than showing a disabled button — see
 | deb | path-addressed: there is no package identity to hang a README on | — | neither | no |
 | rpm | path-addressed: there is no package identity to hang a README on | — | neither | no |
 | pacman | path-addressed: there is no package identity to hang a README on | — | neither | no |
+| apk | an `.apk` carries `pkgdesc`, one sentence in `.PKGINFO`; putting a sentence where a reader expects a document makes every package look thinly documented | — | neither | no |
 | jetbrains | path-addressed: there is no package identity to hang a README on | — | neither | no |
 | jetbrains-marketplace | the metadata document, already fetched | yes | versions + README | yes |
 | generic | path-addressed: there is no package identity to hang a README on | — | neither | no |

@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod apk;
 pub mod authz;
 pub mod blocking;
 pub mod bundle;

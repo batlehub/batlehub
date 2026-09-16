@@ -638,6 +638,26 @@ admin = ["*"]
 [registries.grants]
 "user:authz-reader" = ["releases:read", "releases:list", "source:read"]
 
+# apk, the fourth OS kind and the only one whose artifact path carries a real
+# coordinate: this row's probe is a `.apk`, so the grant is checked on
+# `probe`/`1.0.0-r0` and not on the synthetic `repo`/`_` the other three use.
+# `apk_unsigned` because nothing installs from this registry — the suite asks
+# it one question, about authorization, and an index it never generates does
+# not need a signing key (RFC 0026 §4.5).
+[[registries]]
+type = "apk"
+name = "authz-apk-${HEAVY_RUN}"
+mode = "local"
+apk_unsigned = true
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
 # ── Proxy-only kinds ─────────────────────────────────────────────────────────
 #
 # No local mode exists for these, so `proxy` is the only shape available. The

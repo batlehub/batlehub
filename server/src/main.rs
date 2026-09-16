@@ -911,6 +911,7 @@ async fn main() -> Result<()> {
     // Built once here so the same instance is shared with the reload service (for
     // hot-swapping) and registered as actix app_data below.
     let repo_signer_map = builders::build_repo_signer_map(&config)?;
+    let apk_signer_map = builders::build_apk_signer_map(&config)?;
     let config_change_repo: Arc<dyn batlehub_core::ports::ConfigChangeRepository> =
         Arc::new(PgConfigChangeRepository::new(repo.pool()));
     let storage_admin_repo: Arc<dyn batlehub_core::ports::StorageAdminRepository> =
@@ -924,6 +925,7 @@ async fn main() -> Result<()> {
         upstream_map: upstream_map.clone(),
         cargo_index_map: cargo_index_map.clone(),
         repo_signer_map: repo_signer_map.clone(),
+        apk_signer_map: apk_signer_map.clone(),
         vuln_db_map: vuln_db_map.clone(),
         sumdb_map: sumdb_map.clone(),
         registry_host_map: registry_host_map.clone(),
@@ -1071,6 +1073,7 @@ async fn main() -> Result<()> {
         quota_svc,
         registry_mode_map,
         repo_signer_map,
+        apk_signer_map,
         ip_block_store,
         user_block_repo,
         beta_channel_store,

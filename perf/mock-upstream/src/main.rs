@@ -72,6 +72,15 @@ struct Args {
     /// costs one hash of this size when the index is built.
     #[arg(long)]
     conda_artifact_kb: Option<usize>,
+
+    /// Entries in the generated `APKINDEX`.
+    ///
+    /// The soak's apk arm reads one entry's `t:` per `.apk` request, so this
+    /// only has to cover the coordinate space the arm walks. A real Alpine
+    /// repository is ~5 600; the default here is the soak's space, not the
+    /// mirror's, because the index is not what the soak is measuring.
+    #[arg(long, default_value = "64")]
+    apk_packages: usize,
 }
 
 #[actix_web::main]

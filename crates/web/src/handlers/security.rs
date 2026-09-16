@@ -124,6 +124,11 @@ pub fn native_body(kind: RegistryKind, message: &str) -> (&'static str, String) 
         | RegistryKind::Deb
         | RegistryKind::Rpm
         | RegistryKind::Pacman
+        // apk never reads the body: 2.14 maps a 403 through libfetch's
+        // FETCH_AUTH to -EACCES and prints "ERROR: <pkg>: Permission denied",
+        // apk 3 prints "HTTP 403: Forbidden" from the status alone. Text is
+        // what a person sees when they curl the same URL (RFC 0026 §4.4).
+        | RegistryKind::Apk
         | RegistryKind::Jetbrains
         | RegistryKind::Generic
         | RegistryKind::Nodedist

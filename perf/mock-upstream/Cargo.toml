@@ -45,3 +45,8 @@ sha2 = "0.11"
 # exercise the parsed path — the one scenario 12 exists to compare against.
 # Already in this lockfile, via actix-web's `compress-zstd`.
 zstd = "0.13"
+# The apk arm's synthetic APKINDEX: two concatenated gzip members, each its own
+# tar. The proxy *reads* this one — it pulls a `.apk`'s build date out of it for
+# the age gate — so the mock has to produce the real shape, not random bytes.
+flate2 = "1"
+tar = "0.4"

@@ -31,6 +31,28 @@ kind. The list is *observed, not exhaustive*: the broker can add a host without
 telling anyone, which is itself an argument for warming ahead of an air gap
 ([RFC 0010](/rfc/0010-toolchain-managers) §9).
 
+## An `apk` package is downloaded {#an-apk-package-is-downloaded}
+
+One `.apk` request can cause **two** upstream requests the first time: the
+package, and the `APKINDEX.tar.gz` of the directory it sits in.
+
+The index read is what gives `apk` an age gate. A `.apk` file name carries a
+name and a version but no date, and the build date lives in the index's `t:`
+field — so `ApkRegistryClient::resolve_metadata` reads the index beside the
+package rather than leaving every Alpine package undated
+([RFC 0026](/rfc/0026-alpine-apk) §6.2).
+
+| Bound | Effect |
+| --- | --- |
+| Cached | The index goes through the metadata cache like any other document, under the registry's `metadata_ttl_secs`. It is one read per directory per TTL, not one per package. |
+| Best effort | An index that cannot be read leaves the package undated and the download proceeds. A mirror that is missing one does not break installs. |
+| Never for the index itself | A request *for* `APKINDEX.tar.gz` does not trigger a read of itself. |
+
+Turn it off by not setting a release-age gate: with no rule that needs a date,
+the read still happens, so an estate that wants neither should run the registry
+with `metadata_ttl_secs` long enough that `apk update`'s own index fetch is the
+only one.
+
 ## A search box is typed into
 
 `GET /api/v1/explore/upstream` fans a query out across every accessible

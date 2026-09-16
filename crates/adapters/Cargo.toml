@@ -5,6 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# Direct, for the apk index signer. Already in the graph as rustls' provider and
+# the workspace's TLS backend, so this adds a dependency *line* and no crate.
+# It is also the reason `apk` needs no `rsa` crate: RUSTSEC-2023-0071 bans that
+# implementation, `deny.toml` enforces the ban, and AWS-LC's constant-time RSA
+# is what signs the index instead (RFC 0026 §2.4).
+aws-lc-rs = { version = "1.18", optional = true }
 anyhow.workspace = true
 argon2.workspace = true
 async-trait.workspace = true
@@ -104,6 +110,7 @@ default = [
   "registry-goproxy",
   "registry-rpm",
   "registry-pacman",
+  "registry-apk",
   "registry-maven",
   "registry-npm",
   "registry-openvsx",
@@ -161,6 +168,8 @@ registry-rpm = [
   "dep:ed25519-dalek",
   "dep:sha1",
 ]
+# apk reads .PKGINFO out of gzip members and renders/signs APKINDEX.
+registry-apk = ["dep:flate2", "dep:tar", "dep:sha1", "dep:aws-lc-rs"]
 registry-pacman = [
   "dep:zstd",
   "dep:tar",

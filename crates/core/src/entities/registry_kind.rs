@@ -198,6 +198,14 @@ pub enum RegistryKind {
     Deb,
     Rpm,
     Pacman,
+    /// Alpine's package tree as a *path-addressed* registry with a coordinate:
+    /// `{branch}/{repo}/{arch}/APKINDEX.tar.gz` plus the `.apk` files beside
+    /// it. The index is relayed byte-exact — it is RSA-signed over its own
+    /// bytes and every shipping apk refuses an unverifiable one — so the block
+    /// is enforced at the package, whose file name carries a real `name` and
+    /// `version`. That makes `apk` the only member of the OS family with a
+    /// coordinate (RFC 0026).
+    Apk,
     Jetbrains,
     JetbrainsMarketplace,
     Generic,
@@ -241,6 +249,7 @@ impl RegistryKind {
         Self::Deb,
         Self::Rpm,
         Self::Pacman,
+        Self::Apk,
         Self::Jetbrains,
         Self::JetbrainsMarketplace,
         Self::Generic,
@@ -270,6 +279,7 @@ impl RegistryKind {
             Self::Deb => "deb",
             Self::Rpm => "rpm",
             Self::Pacman => "pacman",
+            Self::Apk => "apk",
             Self::Jetbrains => "jetbrains",
             Self::JetbrainsMarketplace => "jetbrains-marketplace",
             Self::Generic => "generic",
@@ -328,7 +338,10 @@ impl RegistryKind {
     /// otherwise every fetch would silently hit an unreachable placeholder.
     /// `generic` mirrors an arbitrary file tree, so it has no default at all.
     pub fn requires_explicit_upstream_in_proxy_mode(&self) -> bool {
-        matches!(self, Self::Deb | Self::Rpm | Self::Generic)
+        // `apk` joins deb and rpm for their reason: Alpine's CDN is one mirror
+        // of many, and a default would put a hostname nobody chose in front of
+        // every `apk update` in the estate (RFC 0026 §4.1).
+        matches!(self, Self::Deb | Self::Rpm | Self::Apk | Self::Generic)
     }
 
     /// Whether this kind is a git forge — GitHub, GitLab, Forgejo — and so
@@ -345,7 +358,7 @@ impl RegistryKind {
     pub fn is_path_addressed(&self) -> bool {
         matches!(
             self,
-            Self::Deb | Self::Rpm | Self::Pacman | Self::Jetbrains | Self::Generic
+            Self::Deb | Self::Rpm | Self::Pacman | Self::Apk | Self::Jetbrains | Self::Generic
         )
     }
 
@@ -516,7 +529,7 @@ impl RegistryKind {
             Self::Conda => CONDA,
             Self::JetbrainsMarketplace => JETBRAINS_MARKETPLACE,
             Self::Github | Self::Gitlab | Self::Forgejo => FORGE,
-            Self::Deb | Self::Rpm | Self::Pacman => SIGNED,
+            Self::Deb | Self::Rpm | Self::Pacman | Self::Apk => SIGNED,
             Self::Openvsx | Self::VscodeMarketplace => EXTENSION_GALLERY,
             Self::Nodedist => NODEDIST,
             Self::Sdkman => SDKMAN,
@@ -585,6 +598,14 @@ impl RegistryKind {
                     "path-addressed: there is no package identity to hang a README on",
                 )
             }
+            // `apk` *has* an identity — it is the one path kind that does —
+            // but the identity comes from a file name, and a file name carries
+            // no prose. `.PKGINFO`'s `pkgdesc` is a sentence, which is the
+            // reason Maven's `<description>` is refused one line up.
+            Self::Apk => ReadmeSupport::None(
+                "an `.apk` carries `pkgdesc`, one sentence in `.PKGINFO`; putting a sentence \
+                 where a reader expects a document makes every package look thinly documented",
+            ),
             Self::Github | Self::Gitlab | Self::Forgejo => ReadmeSupport::None(
                 "the README is one of the repository files this proxy already serves by path, \
                  under `raw/{ref}/`, so a second URL for it would be a second answer to a \
@@ -652,6 +673,15 @@ impl RegistryKind {
                     "path-addressed: there is no package identity to ask about",
                 )
             }
+            // The per-package build date *does* reach the age gate, through
+            // `resolve_metadata` reading the cached `APKINDEX`'s `t:` field —
+            // but that is a metadata lookup, not a document the console can
+            // render, and there is no per-package endpoint to point one at
+            // (RFC 0026 §6.1, §6.2).
+            Self::Apk => UpstreamDetailSupport::None(
+                "the index is the only document in the protocol, and it describes a whole \
+                 repository rather than one package",
+            ),
             // `index.tab`: one row per release, with its date and LTS codename.
             Self::Nodedist => UpstreamDetailSupport::Document("versions"),
             // `versions/all` for the candidate on the default platform — the
@@ -745,6 +775,10 @@ impl RegistryKind {
             Self::Deb | Self::Rpm | Self::Pacman | Self::Jetbrains | Self::Generic => {
                 FetchSupport::None("path-addressed: there is no version to fetch by")
             }
+            Self::Apk => FetchSupport::None(
+                "a version needs a branch, a repo and an architecture as well, so \
+                 \"fetch this version\" has no single meaning",
+            ),
             Self::Github | Self::Gitlab | Self::Forgejo => FetchSupport::None(
                 "a release asset is addressed by its filename, which the page does not know",
             ),
@@ -1168,6 +1202,11 @@ mod tests {
                 // Marshal indexes only; the JSON APIs are filtered.
                 "rubygems", // Signed repository indexes.
                 "deb", "rpm", "pacman",
+                // `apk`'s index is signed over its own bytes too, and every
+                // shipping apk verifies it before reading one — so the block
+                // is enforced at the `.apk`, whose file name carries a real
+                // coordinate (RFC 0026 §4.4).
+                "apk",
             ]
         );
     }
@@ -1208,6 +1247,10 @@ mod tests {
                 "deb",
                 "rpm",
                 "pacman",
+                // `apk` is the one path kind with an identity, and still has no
+                // README: `pkgdesc` is one sentence in `.PKGINFO`, which the
+                // explore row already carries (RFC 0026 §6.1).
+                "apk",
                 "jetbrains",
                 "generic",
                 // Tarballs and a checksum file: no prose anywhere in the tree.

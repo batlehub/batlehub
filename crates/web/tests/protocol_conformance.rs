@@ -753,6 +753,55 @@ const RUSTUP: &[Conformance] = &[
     ),
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// apk (Alpine)
+//
+// Every line here was **observed on the wire**, not read: `tests/heavy/apk.sh`
+// drives `apk.static` 2.14.10 and 3.0.8 through a logging tap, and these are
+// the request lines the two generations sent (RFC 0026 §13). Both send exactly
+// the same ones — the client appends `{arch}/APKINDEX.tar.gz` and
+// `{arch}/{name}-{version}.apk` to whatever the repositories file names, and
+// nothing else.
+//
+// The route is one catch-all, `/proxy/{registry}/apk/{path:.*}`, which is why
+// the pattern assertion is worth little here and the *shape* of the path is
+// worth a lot: the `.apk` file name is parsed into a real coordinate before a
+// storage key is built from it, so a path that reaches the handler and splits
+// wrong is a block that silently does not apply.
+// ─────────────────────────────────────────────────────────────────────────────
+const APK: &[Conformance] = &[
+    Conformance::get(
+        "/proxy/apk/apk/v3.22/main/x86_64/APKINDEX.tar.gz",
+        "/proxy/{registry}/apk/{path:.*}",
+        "apk-tools 2.14.10 and 3.0.8, observed: `apk update` through the tap",
+    ),
+    Conformance::get(
+        "/proxy/apk/apk/v3.22/main/x86_64/busybox-1.37.0-r20.apk",
+        "/proxy/{registry}/apk/{path:.*}",
+        "apk-tools 2.14.10 and 3.0.8, observed: `apk fetch busybox` through the tap",
+    ),
+    // The local half: the client appends `{arch}/…` to a repository line with
+    // no branch, so a hosted repository's index sits one segment in.
+    Conformance::get(
+        "/proxy/apk/apk/x86_64/APKINDEX.tar.gz",
+        "/proxy/{registry}/apk/{path:.*}",
+        "apk-tools 2.14.10 and 3.0.8, observed: `apk update` against a local registry",
+    ),
+    // Not a client path: the operator's, and the one reserved prefix in the
+    // tree. It is here because it shares the catch-all with everything above,
+    // so a future route added under `…/apk/` would swallow it silently.
+    Conformance::get(
+        "/proxy/apk/apk/keys/internal-apk@example.com-5f3a1c2e.rsa.pub",
+        "/proxy/{registry}/apk/{path:.*}",
+        "RFC 0026 §4.1 — the signing key download, observed in tests/heavy/apk.sh",
+    ),
+    Conformance::put(
+        "/proxy/apk/apk/upload",
+        "/proxy/{registry}/apk/upload",
+        "RFC 0026 §4.6 — publish, observed in tests/heavy/apk.sh",
+    ),
+];
+
 const SUITES: &[(&str, &[Conformance])] = &[
     ("npm", NPM),
     ("rubygems", RUBYGEMS),
@@ -763,6 +812,7 @@ const SUITES: &[(&str, &[Conformance])] = &[
     ("nodedist", NODEDIST),
     ("sdkman", SDKMAN),
     ("rustup", RUSTUP),
+    ("apk", APK),
     ("others", OTHERS),
     ("long-tail", LONG_TAIL),
 ];

@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/generic.md
-sourceHash: 55918216a2661f4c
+sourceHash: 2a551602a2a55a4b
 ---
 
 # Miroir générique
@@ -85,6 +85,12 @@ diagnostics du genre `mise doctor` — préférez `~/.netrc`.
 
 ## Notes
 
+- Un miroir `generic` d'un CDN Alpine pose le même problème, un arbre plus loin :
+  le nom de fichier d'un `.apk` porte un nom et une version réels, et un registre
+  `generic` n'a nulle part où les mettre. Utilisez [`apk`](/fr/registries/apk)
+  pour bloquer, appliquer un délai de fraîcheur ou compter un paquet Alpine ;
+  `generic` reste le bon choix pour un arbre Alpine que vous voulez seulement
+  mettre en cache.
 - Un miroir `generic` de `nodejs.org/dist` met Node en cache correctement et ne
   peut rien lui appliquer : un registre adressé par chemin n'a qu'un paquet
   synthétique et aucune version à bloquer. Pour appliquer une politique à une

@@ -522,6 +522,24 @@ fn matrix() -> Vec<Row> {
         Row::new("pacman", "/proxy/reg/pacman/reg.db")
             .vis(WHOLE_REGISTRY)
             .no_control(),
+        // `apk` sits with them in the path family and is the one member that
+        // does **not** take `WHOLE_REGISTRY`: a `.apk` file name is split into
+        // a real `name` and `version` before the `PackageId` is built, so
+        // per-package visibility is the axis this route actually has
+        // (RFC 0026 §4.3). The coordinate is spelled in the file name — apk's
+        // grammar is `{name}-{pkgver}-r{N}`, so the version carries the release
+        // token and `coord` has to agree with the URI.
+        Row::new("apk", "/proxy/reg/apk/v3.22/main/x86_64/pkg-9.8.7-r0.apk")
+            .coord("pkg", "9.8.7-r0")
+            // No positive control, for the reason the three rows above have
+            // none: the read is served from `local:{registry}/{path}`, and the
+            // fixture seeds a *package*, not a file at that path. What this row
+            // still asserts is the half that is apk-specific — the refusal is
+            // keyed on the coordinate the file name yields, which is why the
+            // visibility axis is per-package here and `WHOLE_REGISTRY` there.
+            // The positive half is `tests/heavy/apk.sh`, where a real apk
+            // fetches the file and a blocked version is refused at the gate.
+            .no_control(),
         // Axis B is not a finding, and worth stating so nobody re-raises it:
         // `generic` is a path mirror with no local branch at all. Its coordinate
         // is the synthetic `repo/_` with the whole request path as the artifact,
@@ -995,6 +1013,7 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/api/{namespace}/{extension}/{version}/file/{filename}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/attachments/{uuid}", Coverage::NoRow("package read, not yet exercised: the uuid resolves only against a release document this registry has already served, which this fixture never seeds, so a row here would assert a 404 rather than a refusal — the closed-world forgejo phase is the client-end regression test")),
     ("/proxy/{registry}/channeldata.json", Coverage::NoRow("package read, not yet exercised")),
+    ("/proxy/{registry}/apk/{path}", Coverage::Row),
     ("/proxy/{registry}/deb/{path}", Coverage::Row),
     ("/proxy/{registry}/dist/{vendor}/{package}/{version}", Coverage::Row),
     ("/proxy/{registry}/feature/getImplementations", Coverage::NoPackage("JetBrains feature lookup; no package coordinate in the answer")),
@@ -2206,6 +2225,7 @@ const WRITE_ROUTE_INVENTORY: &[(&str, &str, WriteCoverage)] = &[
     ("PUT", "/proxy/{registry}/deb/pool/{distribution}/{component}/upload", WriteCoverage::NoRow("write, not yet exercised: needs a real .deb, whose control archive supplies the coordinate")),
     ("PUT", "/proxy/{registry}/rpm/upload", WriteCoverage::NoRow("write, not yet exercised: needs a real .rpm header")),
     ("PUT", "/proxy/{registry}/pacman/upload", WriteCoverage::NoRow("write, not yet exercised: needs a real .pkg.tar.zst with a .PKGINFO")),
+    ("PUT", "/proxy/{registry}/apk/upload", WriteCoverage::NoRow("write, not yet exercised here: needs a real v2 .apk — one tar stream across two gzip members, the control member unterminated, `datahash` present — which tests/heavy/apk.sh builds and drives with both apk generations")),
 ];
 
 /// Every non-GET `/proxy/**` route this server registers is classified, exactly.

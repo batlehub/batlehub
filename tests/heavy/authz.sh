@@ -122,6 +122,7 @@ VSCODE_R="authz-vscode-$HEAVY_RUN"
 DEB_R="authz-deb-$HEAVY_RUN"
 RPM_R="authz-rpm-$HEAVY_RUN"
 PACMAN_R="authz-pacman-$HEAVY_RUN"
+APK_R="authz-apk-$HEAVY_RUN"
 GH_R="authz-github-$HEAVY_RUN"
 FJ_R="authz-forgejo-$HEAVY_RUN"
 GL_R="authz-gitlab-$HEAVY_RUN"
@@ -3307,6 +3308,7 @@ jetbrains-marketplace|releases:read|GET|/proxy/$JB/plugin/download?pluginId=com.
 deb|releases:read|GET|/proxy/$DEB_R/deb/dists/stable/InRelease|the signed release index
 rpm|releases:read|GET|/proxy/$RPM_R/rpm/repodata/repomd.xml|the repository metadata
 pacman|releases:read|GET|/proxy/$PACMAN_R/pacman/core/os/x86_64/core.db|the core database
+apk|releases:read|GET|/proxy/$APK_R/apk/v3.22/main/x86_64/probe-1.0.0-r0.apk|a package, checked on its own coordinate and not on the synthetic one
 github|releases:read|GET|/proxy/$GH_R/probe-owner/probe-repo/releases/download/v1.0.0/probe.bin|a release asset
 forgejo|releases:read|GET|/proxy/$FJ_R/probe-owner/probe-repo/releases/download/v1.0.0/probe.bin|a release asset
 gitlab|releases:read|GET|/proxy/$GL_R/probe-group/probe-project/-/releases/v1.0.0/downloads/probe.bin|a release download link

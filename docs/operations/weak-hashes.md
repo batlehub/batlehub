@@ -40,6 +40,7 @@ survive it.
 | 7 | `adapters/repo/openpgp.rs` — fingerprint | SHA-1 | Immutable by definition |
 | 8 | `core/services/listing_synthesis.rs` — composed listings | SHA-1 | Mandated by the format being imitated |
 | 9 | `web/…/proxy/maven/proxy.rs` — `.md5`/`.sha1` sidecars | MD5, SHA-1 | The algorithm *is* the file extension |
+| 10 | `adapters/repo/apk.rs` — the index's `C:` field | SHA-1 | Mandated by apk-tools, and checked at install |
 
 Entries 4, 5 and 6 are struck through because the code no longer computes them.
 Entry 4 was the one the 2026-08-31 recheck left standing as "a compatibility
@@ -178,6 +179,29 @@ computing it any other way produces a fingerprint no client recognises, and apt'
 
 RFC 9580 v6 keys use SHA-256, but apt and rpm do not consume v6 keys today.
 **Immutable while the key is v4.**
+
+## 10. The apk package identity {#apk-identity}
+
+`APKINDEX`'s `C:` field is `Q1` plus base64 of a **SHA-1**, and there is no
+second spelling: apk computes it under `APK_SIGN_VERIFY_AND_GENERATE` and
+checks it at install under `APK_SIGN_VERIFY_IDENTITY`. An index whose `C:` is
+derived any other way produces packages every client *downloads and then
+refuses*, which reads as corruption rather than as a mismatch.
+
+Two things make this safe to leave, and they are the same two that apply to the
+Maven sidecars:
+
+- **It is not a security boundary here.** What an installing client trusts is
+  the **RSA-2048/SHA-256 signature over the whole index** (`.SIGN.RSA256`), and
+  `C:` is a field *inside* that signed document. Forging a `C:` means forging
+  the signature.
+- **It is not ours to choose.** The field is the wire format. apk-tools 3.0.8
+  reads exactly the entries 2.14 does, and no Alpine branch ships a v3 index
+  (RFC 0026 §2.2, decision 3), so there is no version of this protocol in
+  circulation where the identity is anything else.
+
+Resolve it in the scanner, never in the code: a "fix" here is a repository no
+apk can install from.
 
 ## Rechecked 2026-08-31
 

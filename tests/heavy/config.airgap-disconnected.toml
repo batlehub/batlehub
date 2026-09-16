@@ -156,3 +156,27 @@ hosts = ["localhost"]
 anonymous = ["releases:read", "releases:list", "source:read"]
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
+
+# ── apk: the composed, estate-signed index (RFC 0026 §6.10) ──────────────────
+#
+# The same registry name as the connected side, and one thing the connected
+# side does not have: a signing key. With no `APKINDEX.tar.gz` an `apk update`
+# fails before any package is named and the client has no second way to ask —
+# but this listing is *ours* to write, so the disconnected instance composes it
+# over what the bundle carried and signs it with this key. Every other OS kind
+# is stuck here (RFC 0008-bis §4, `pacman`: "cannot be re-signed here"), because
+# their indexes are signed by keys the estate does not hold.
+[[registries]]
+type = "apk"
+name = "apk-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://dl-cdn.alpinelinux.org/alpine"]
+
+[registries.apk_signing]
+key_name = "estate-${HEAVY_RUN}@batlehub.test-5f3a1c2e.rsa.pub"
+private_key_pem = "${APK_SIGNING_KEY_PEM}"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

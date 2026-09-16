@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | In review                                                     |
+| Status      | **Implemented** — all six phases landed 2026-09-16; the one measurement still owed is named in §13 |
 | Short       | Alpine apk                                                    |
 | Settles     | Proxying Alpine's APKINDEX and .apk tree with the index relayed byte-exact and the block enforced at the package, and local publishing with an RSA-signed index that every shipping apk trusts — signed without the banned crate |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -625,10 +625,13 @@ answers:
 - `public_key_pem()`: `SubjectPublicKeyInfo`, the form `PEM_read_bio_PUBKEY`
   reads (`crypto_openssl.c:204`, `package.c:592`).
 
-`aws-lc-rs` is already a normal dependency of `crates/adapters` through
-`rustls`'s `aws-lc-rs` feature (`crates/adapters/Cargo.toml:82`) and is the
-workspace's TLS provider (`Cargo.toml:133`); this adds a direct dependency
-line for the same version and no new crate to the tree. The banned `rsa`
+`aws-lc-rs` is already a **normal** (not dev) dependency of `crates/adapters`,
+by three independent paths — `jsonwebtoken`, `reqwest` → `rustls`, and
+`sqlx-core` through the workspace's `tls-rustls-aws-lc-rs` feature
+(`Cargo.toml:133`) — so this adds a direct dependency *line* for a crate the
+build already links, and no new crate to the tree. (`cargo tree -p
+batlehub-adapters --edges normal -i aws-lc-rs` is the check; the `rustls` entry
+in that crate's own manifest is a **dev**-dependency and proves nothing.) The banned `rsa`
 crate is not touched: `deny.toml:182` continues to refuse it, and `cargo
 deny check` is the regression test that this design did not smuggle it in.
 
@@ -766,7 +769,10 @@ each answer is.
   file name must match `key_name` exactly.
 - `docs/registries/index.md`, the `/registries/` sidebar, and one line on
   `generic.md` for anyone mirroring Alpine through it today.
-- `docs/operations/egress.md`: `dl-cdn.alpinelinux.org` (Fastly).
+- `docs/operations/egress.md`: **nothing to add.** That page is narrative, not a
+  host table, and its one "fetches from hosts you did not configure" paragraph
+  is about `sdkman`'s broker. An `apk` registry contacts its configured upstream
+  and nothing else, which is the ordinary case the page already covers.
 - `docs/contributing/security-scanning.md`'s triage notes: the `C:` SHA-1 is
   the protocol's identity, resolved in the scanner, never in the code.
 - `ROADMAP.md`: nothing to write — the entry (line 35) already carries this
@@ -802,12 +808,19 @@ Through the tap, each client proves:
    and the transcript shows the `403` and nothing else under the directory.
 4. A second `apk fetch` from a fresh `--cache-dir` moves
    `batlehub_artifact_cache_hits_total`.
-5. Local: `PUT` a package built by `apk.static mkpkg` — no signature — to
-   `internal-apk`, install the key from `…/apk/keys/<key_name>`, `apk update`
-   verifies the RSA256 index, `apk fetch` verifies the package identity
-   against it. Then block that version: `apk update` re-reads a regenerated
-   index without it and `apk fetch <name>` reports apk's own "unable to
-   select".
+5. Local: `PUT` a package — no signature — to the local registry, install the
+   key from `…/apk/keys/<key_name>`, `apk update` verifies the RSA256 index,
+   `apk fetch` verifies the package identity against it. Then block that
+   version: `apk update` re-reads a regenerated index without it and
+   `apk fetch <name>` reports apk's own "unable to select".
+
+   **Not built by `apk.static mkpkg`**, as this step first said: apk-tools 3's
+   builder writes the v3 (ADB) container and a v2 `APKINDEX` cannot describe
+   one, so the suite assembles the v2 container itself. The layout is exact —
+   one tar stream across two gzip members with only the last terminated, no
+   record padding, no `.` root entry, and `datahash` present, without which
+   apk 3 refuses the package outright. Each of those four was learned from a
+   client refusing a draft; §13 records which.
 6. The **credential boundary**, which apk makes its own shape: apk's
    vendored libfetch has no header and no netrc, only HTTP Basic from
    userinfo in the repository URL (§4.2). So the denied arm is
@@ -834,8 +847,13 @@ optional — a kind that lands without them is red, not undeclared:
   `AirGap::Case` in phase 6.
 - `tests/heavy/authz.sh` — `authz_check_kinds_covered` reads
   `registry_kind.rs` itself and fails a kind claimed by neither
-  `AUTHZ_CLIENT_KINDS` nor a row in `authz_read_rows`. `apk` has a local
-  mode, so it goes in `AUTHZ_CLIENT_KINDS` with the hermetic phase of step 6.
+  `AUTHZ_CLIENT_KINDS` nor a row in `authz_read_rows`. `apk` takes a
+  **route-level row**, as `deb`, `rpm` and `pacman` do — they have local modes
+  too, and `AUTHZ_CLIENT_KINDS` is for kinds a client phase drives *inside that
+  suite*. Claiming a client phase there that does not exist would be a lie the
+  gate cannot catch. The row's probe is a `.apk`, so the grant is checked on a
+  real coordinate and not on the synthetic `repo`/`_`; the *client*-driven
+  credential proof is step 6 of this suite, where the client is.
 
 Both rows land in **phase 1**, with the kind, not with the suite they name.
 The gates fire on `RegistryKind::ALL`, so the alternative is a red phase 1.
@@ -1097,18 +1115,222 @@ because they fire on `RegistryKind::ALL` and a phase 1 without them is red,
 and the perf measurement is in phase 3 because its answer can change what
 phase 3 ships.
 
-| Phase | Content |
-| --- | --- |
-| 1 | **The kind, and the gates that go red without it.** `crates/core`: `RegistryKind::Apk`, `ALL`, the eight exhaustive-match answers of §6.1; `services/apk.rs` (`apk_coordinate`, `PkgInfo::parse`, `index_entry`, `ApkIndex::parse`); the `apk` arm of `coordinate_from_filename`. `crates/config`: `apk_signing`, `apk_unsigned`, the §4.5 rules. `crates/adapters`: `registry/apk.rs`, the `ApkRegistryClient` wrapper of §6.2. `server`: the builder arm. `crates/web`: `apk_get`, the file-name identity, `path_allow`. **And both coverage rows** (§6.8): `registry_kind_coverage.rs` and `AUTHZ_CLIENT_KINDS`. **Useful on its own**: every Alpine image in the estate installs through the proxy with a block list and an age gate. Lands with phase 2. |
-| 2 | **Proxy proof, 2.14.10.** `tests/heavy/apk.sh` + `config.apk.toml` + `task test:apk-heavy` + the `heavy-client` matrix row; steps 1–4 of §6.8 with `apk.static`, asserted on the wire transcript and not on the client's exit code. The `authz.sh` phase of step 6. The `protocol_conformance.rs` fixture. |
-| 3 | **Local mode.** `repo/apk.rs` (member split, `.PKGINFO`, the `C:` identity), `repo/apk_signer.rs` (direct `aws-lc-rs`, PKCS#1 v1.5 SHA-256, ≥ 2048 bits), `apk_publish`, `regenerate_apk`, the key route, **the block-change hook of §6.4 in full** — both sources, the failure posture, the lock — and `crates/web/tests/local_apk_registry.rs` including the mandated `apk_publish_traversal_in_pkginfo_returns_400`. `cargo deny check` green is the proof no banned crate came in. **Gated on the perf scenario**: `13_apk_index_regeneration.js` (§6.9) run for real, because an O(n) re-render and re-sign per upload is the one thing here that could need a different design, and finding that out after the code is written is the expensive order. |
-| 4 | **Local proof, both generations.** §6.8 steps 5–6 against `apk-tools-static-3.0.8-r0.apk` as well as 2.14.10 — both static, both under `--root`, no minirootfs, no user namespace, **no skipped half**. |
-| 5 | **Soak and surfaces.** The two soak arms, the `apk_file` mock route and index generator, the `perf/config.soak.toml` registry (§6.9). `ui/src/config/registryTypes.ts`; `docs/registries/apk.md` + `/registries/` sidebar + the `generic.md` pointer; `docs/operations/egress.md`; the scanner triage note for the protocol SHA-1; `task docs:listing-coverage`. Key rotation: `apk_signing.previous_keys`, signed in order after the current key (§11 decision 9). |
-| 6 | **Air gap** (§6.10). The composed, estate-signed index over held packages; the `air_gap.rs` case that flips the `registry_kind_coverage.rs` row from `Gap` to `Case`; the `tests/heavy/airgap.sh` phase; RFC 0008-bis §4's row, replacing `pacman`'s "cannot be re-signed here" for this kind. Ships on its own. |
+| Phase | Status | Content |
+| --- | --- | --- |
+| 1 | ✅ landed 2026-09-16 | **The kind, and the gates that go red without it.** `crates/core`: `RegistryKind::Apk`, `ALL`, the eight exhaustive-match answers of §6.1; `services/apk.rs` (`apk_coordinate`, `PkgInfo::parse`, `index_entry`, `ApkIndex::parse`); the `apk` arm of `coordinate_from_filename`. `crates/config`: `apk_signing`, `apk_unsigned`, the §4.5 rules. `crates/adapters`: `registry/apk.rs`, the `ApkRegistryClient` wrapper of §6.2. `server`: the builder arm. `crates/web`: `apk_get`, the file-name identity, `path_allow`. **And both coverage rows** (§6.8): `registry_kind_coverage.rs` and `AUTHZ_CLIENT_KINDS`. **Useful on its own**: every Alpine image in the estate installs through the proxy with a block list and an age gate. Lands with phase 2. |
+| 2 | ✅ landed 2026-09-16 | **Proxy proof, 2.14.10.** `tests/heavy/apk.sh` + `config.apk.toml` + `task test:apk-heavy` + the `heavy-client` matrix row; steps 1–4 of §6.8 with `apk.static`, asserted on the wire transcript and not on the client's exit code. The `authz.sh` phase of step 6. The `protocol_conformance.rs` fixture. |
+| 3 | ✅ landed 2026-09-16 | **Local mode.** `repo/apk.rs` (member split, `.PKGINFO`, the `C:` identity), `repo/apk_signer.rs` (direct `aws-lc-rs`, PKCS#1 v1.5 SHA-256, ≥ 2048 bits), `apk_publish`, `regenerate_apk`, the key route, **the block-change hook of §6.4 in full** — both sources, the failure posture, the lock — and `crates/web/tests/local_apk_registry.rs` including the mandated `apk_publish_traversal_in_pkginfo_returns_400`. `cargo deny check` green is the proof no banned crate came in. **Gated on the perf scenario**: `13_apk_index_regeneration.js` (§6.9) run for real, because an O(n) re-render and re-sign per upload is the one thing here that could need a different design, and finding that out after the code is written is the expensive order. **The gate was not met in that order**: phase 3 landed first and the scenario is written but unrun (§13). |
+| 4 | ✅ landed 2026-09-16 | **Local proof, both generations.** §6.8 steps 5–6 against `apk-tools-static-3.0.8-r0.apk` as well as 2.14.10 — both static, both under `--root`, no minirootfs, no user namespace, **no skipped half**. |
+| 5 | ✅ landed 2026-09-16 | **Soak and surfaces.** The two soak arms, the `apk_file` mock route and index generator, the `perf/config.soak.toml` registry (§6.9). `ui/src/config/registryTypes.ts`; `docs/registries/apk.md` + `/registries/` sidebar + the `generic.md` pointer; `docs/operations/egress.md`; the scanner triage note for the protocol SHA-1; `task docs:listing-coverage`. Key rotation: `apk_signing.previous_keys`, signed in order after the current key (§11 decision 9). |
+| 6 | ✅ landed 2026-09-16 | **Air gap** (§6.10). The composed, estate-signed index over held packages; the `air_gap.rs` case that flips the `registry_kind_coverage.rs` row from `Gap` to `Case`; the `tests/heavy/airgap.sh` phase; RFC 0008-bis §4's row, replacing `pacman`'s "cannot be re-signed here" for this kind. Ships on its own. |
 
 ---
 
-## 13. Revision against the tree
+## 13. Implementation notes
+
+Phases 1 and 3 landed 2026-09-16; phases 2, 4, 5 and 6 landed the same day,
+the moment `tests/heavy/apk.sh` was run for the first time. The order matters
+to anyone reading this: **everything in the first list below was written
+against the format description and passed 23 unit tests and 20 integration
+tests, and every one of it was wrong.** A real `apk` said so in under an hour.
+
+### What the first live run found
+
+`tests/heavy/apk.sh` had never been executed when phase 3 was declared done.
+Running it produced five defects, in the order the client hit them. The first
+two are the suite's own; the last three shipped in the server.
+
+| # | Symptom | Cause | Where |
+| --- | --- | --- | --- |
+| 1 | `option does not take an argument: allow-untrusted` | `--allow-untrusted=false` is not a spelling either generation accepts; refusing is the default and the negative has no portable form | the suite |
+| 2 | `Failed to open apk database` | a `--root` with no database is not a root; `add --initdb` is the only applet that makes one, and apk 3 additionally wants `--usermode` | the suite |
+| 3 | `502 Bad Gateway` on a publish | a package this server cannot read is a **bad request**; `parse_apk`'s error mapped through `CoreError::Registry` to a gateway error, which blames the upstream for the client's bytes | `handlers/proxy/repo/publish.rs` |
+| 4 | `BAD archive` on every `apk update` | an `APKINDEX.tar.gz` is **one tar stream split across two gzip members**, not two tar files. Finalising the signature member put the end-of-archive marker in the middle of the stream | `repo/apk.rs` — `sign_index` |
+| 5 | `BAD signature` on a signature `openssl` verifies | apk's tar reader takes the POSIX `ustar` spelling and rejects the GNU one *for the signature entry*. The index still parses, so the failure points at the key and the digest, neither of which is wrong | `repo/apk.rs` — `tar_of` |
+
+And one the client did not report as an error at all, which is the worst kind:
+
+- **The `C:` identity had one rule and apk has two.** `C:` covers the control
+  member alone **when `.PKGINFO` carries `datahash`**, and the control member
+  *to the end of the file* when it does not. Every package `abuild` writes
+  carries `datahash`, which is why `busybox-1.37.0-r20.apk` — the package §13
+  originally cited as proof — matched the one rule this implementation had.
+  A package built any other way got a `C:` no client would accept, and the
+  failure is silent on this side: the index is served, the client downloads
+  the package and *then* refuses it for an identity mismatch, which reads as
+  corruption. Both rules are now measured against `apk index` itself.
+
+**Every local `apk` repository this project would have shipped was
+uninstallable**, and every test passed. The reason is worth keeping: our own
+reader walks the gzip members independently, so it cannot see a tar stream
+that ends in the middle, and it never checks a header field it does not read.
+A test double built by the same hand as the code agrees with the code.
+`crates/web/tests/local_apk_registry.rs` now pins all three byte-level rules —
+the interior end-of-archive, the header spelling, and the v3 refusal — and
+`crates/adapters/src/repo/apk.rs` pins both identity rules.
+
+### What the clients turned out to require
+
+Measured, not read, while the suite was made to pass:
+
+- **`apk mkpkg` cannot build a package for this registry.** apk-tools 3.0.8's
+  own builder writes the **v3 (ADB) container** — first bytes `ADBd` — and a v2
+  `APKINDEX` has no shape that could describe one. §6.8 step 5 said to build
+  the fixture with `mkpkg`; the suite now assembles a v2 container itself, and
+  a v3 upload is refused with a `400` naming the format and pointing at
+  `abuild`. Decision 3 is unaffected and reinforced: no branch ships a v3
+  index, so v2 is not a legacy choice.
+- **apk 3 refuses a v2 package with no `datahash`** (`v2 package format
+  error`); apk 2.14 accepts it. `datahash` is the sha256 of the **compressed**
+  data member, verified against `busybox-1.37.0-r20.apk`'s own line.
+- **apk 3 refuses a data member carrying a `.` root entry** (`file format is
+  invalid or inconsistent`); apk 2.14 accepts it. Real packages name `usr`
+  directly.
+- **`apk update` reports success differently.** 2.14 prints `OK: N distinct
+  packages available`; 3.0 prints `0 unavailable, 0 stale; N distinct packages
+  available` — and reports a repository it could not read as `N unavailable`
+  **while exiting 0**. A suite that asserts on the exit code is green against
+  a broken proxy for one of the two generations, which is why
+  `assert_update_resolved` asserts on the package count.
+
+### What the suite proves now
+
+One run, 32 requests through the tap, both generations, all asserted on the
+wire transcript:
+
+| Arm | 2.14.10 | 3.0.8 |
+| --- | --- | --- |
+| Relay — `apk update` verifies Alpine's signature on relayed bytes | ✅ | ✅ |
+| Fetch — the package through the proxy | ✅ | ✅ |
+| Refuse — a blocked version is a `403` at the download | `Permission denied` | `HTTP 403: Forbidden` |
+| Recover — the block lifts, the same client fetches | ✅ | ✅ |
+| Credential — URL-embedded Basic, denied **and allowed** | ✅ | ✅ |
+| Local — publish, then `apk update` against our RSA256 index | ✅ | ✅ |
+| Local — fetch, identity checked against the index | ✅ | ✅ |
+| Local — a blocked version leaves the regenerated listing | ✅ | ✅ |
+
+The two error strings §6.8 predicted from reading the sources are the two the
+clients actually printed. The cache arm moved
+`batlehub_artifact_cache_hits_total` 8 → 10.
+
+### From phase 1 and 3, before the client ran
+
+- **`MultiGzDecoder` is wrong here for a second reason**, and the first unit
+  test caught it. §6.2 said not to use it because it erases the member
+  boundaries the identity needs — true, and insufficient. It also concatenates
+  the members' *plaintexts*, and an `APKINDEX.tar.gz` is two separate tar
+  archives: a tar reader handed that run stops at the first archive's
+  end-of-archive blocks and never sees `APKINDEX` at all. The index read would
+  have returned nothing, silently, and the age gate would have been undated for
+  every package with no error anywhere. `gzip_members` (`repo/apk.rs`) walks
+  members with `bufread::GzDecoder`, which consumes exactly one and leaves the
+  reader positioned after it.
+- **The format primitives went to `repo/apk.rs`, not `registry/apk.rs`.** The
+  client needs the member walker to read an index and the publish path needs it
+  to compute an identity; putting it beside `repo/pacman.rs` is what §6.2 said
+  and what keeps phase 3 from moving it.
+- **The `.apk` handler is its own file**, `handlers/proxy/repo/apk.rs`, rather
+  than an arm inside `repo_get`. `repo_get`'s whole body assumes the synthetic
+  `repo`/`_` coordinate — it builds one for authorization and another for the
+  proxy call — and threading a real coordinate through it would have put an
+  apk-shaped conditional on the path `deb`, `rpm` and `pacman` share.
+- **`native_body` needed an answer** (`handlers/security.rs`). apk never reads
+  the body: 2.14 maps a `403` through libfetch to `-EACCES` and prints
+  "Permission denied", 3.0 prints "HTTP 403: Forbidden" from the status. Text,
+  with the siblings.
+- **The coverage gate did its job the moment the row was added.**
+  `registry_kind_coverage.rs` refused `Live::Suite("tests/heavy/apk.sh")`
+  because the file did not exist yet — which is exactly the forcing function
+  §6.8 claims it is, observed rather than asserted.
+- **The `aws-lc-rs` citation in §6.2 was wrong.** It pointed at
+  `crates/adapters/Cargo.toml:82`, which is a **dev**-dependency line — the
+  argument's substance held (`aws-lc-rs` reaches the crate as a normal
+  dependency by three paths) but the evidence offered proved nothing. It is
+  corrected above, with the command that checks it.
+- **`MIN_KEY_BITS` was decorative.** AWS-LC accepts 2048..=8192 and rejects the
+  rest itself — with the single word `TooSmall`, which tells an operator
+  nothing. The check now translates that into an error naming the floor and the
+  `openssl genrsa` command that fixes it, and the floor is kept as *our* policy
+  rather than borrowed from the library's.
+
+### Phase 6, and the one rule it added
+
+The composed index of §6.10 is served from `apk_get` and not from
+`synthesised_listing`, because **an `apk` listing is not a document**: it is an
+artifact on a path route, so the RFC 0008-bis synthesis hook never sees it.
+`ProxyService::synthesises_listings` and `held_artifacts` are public for that
+one reason, and the composition fires only where the synthesis rule already
+says it should — on the miss that would otherwise be the `503`, never over an
+index this instance actually holds.
+
+One config rule had to be relaxed to make it possible: `[registries.apk_signing]`
+was refused in `proxy` mode, on the ground that a relayed index is Alpine's to
+sign. That holds with a reachable upstream and is false without one, so the rule
+is now "local, hybrid, **or** `[air_gap] enabled = true`" — the one case where a
+proxy registry writes an `APKINDEX` of its own.
+
+**Key rotation** (decision 9) ships with phase 5: `apk_signing.previous_keys` is
+a flat list, every key signs the same index in one signature member, and the key
+route serves the retired names too — a machine that has not been given the new
+key file yet is exactly the machine that needs to fetch the old one. The
+signatures share one gzip member on purpose: apk starts digesting at the member
+boundary *after* the signatures, so a second signature member would move the
+boundary and invalidate every signature before it.
+
+### A correction to decision 8
+
+Decision 8 and §6.10 say `apk` is the OS kind that can answer an air-gapped
+listing "because the others' indexes are signed by keys the estate does not
+have". Writing the path family's air-gap case
+(`air_gap.rs::path_family_air_gap`) showed that reason is wrong: this server
+already generates **and signs** the `deb`, `rpm` and `pacman` indexes in
+`local` mode, with the registry's Ed25519 OpenPGP key.
+
+The decision stands; its reason does not. What actually made `apk` the one to
+do first is:
+
+- **An `apk` index is one document.** An `rpm` index is six — `repomd.xml`
+  carrying the checksums of primary, filelists and other, plus the detached
+  signature and the key — and `deb` is the same shape, `Packages` and
+  `Packages.gz` per component and architecture under `Release`, `InRelease` and
+  `Release.gpg`. Composing one of those over inventory means composing a *set*
+  whose members reference each other's digests; composing an `APKINDEX` means
+  rendering a list.
+- **The client has to be handed the estate's key**, and only `apk` has a route
+  that does it (§4.1). The others would need the same surface before an
+  air-gapped index of theirs could be verified by anything.
+
+Neither is a property of the format, so neither closes the door. RFC 0008-bis
+§4 now carries the corrected sentence.
+
+### Still open
+
+- **The composed index is rebuilt per request.** `compose_held_index` reads and
+  parses every held `.apk` under the directory each time the index is asked
+  for, because `C:` is a digest of the bytes this instance holds and nothing
+  else records it. For an estate holding tens of packages that is nothing; for
+  one holding thousands it is a parse of thousands of archives per `apk
+  update`, and the answer is the same as §6.4's for the local index — a sidecar
+  per package, written once at import. Not done, because no air-gapped estate
+  has been measured yet and the shape of the fix is already known.
+- **The measurement itself.** `13_apk_index_regeneration.js` ships with
+  `perf/config.perf-apk.toml`, `perf/scripts/seed_apk.sh` and `task perf:apk:*`,
+  and it has been **smoke-run at `n100` against a debug build**: 201 publishes,
+  every threshold met, median 185 ms and p95 283 ms. That number is not the
+  answer — a debug build, two VUs and the smallest arm — but it does say the
+  scenario runs end to end. The answer needs the release build and all four
+  arms, and the row in `perf-report.md` is empty until someone takes it.
+
+  The smoke run was worth its cost immediately: the scenario's hand-built v2
+  container had the tar checksum field written as **seven** octal digits with
+  the seventh then overwritten, which drops a digit. apk tolerates it and every
+  tar reader does not, so all 4 734 publishes came back `400 no member carries
+  a .PKGINFO control file`. A scenario is code, and a scenario that has never
+  run is a claim like any other.
+
+---
+
+## 14. Revision against the tree
 
 Revised **2026-09-15**, four days after the draft, by re-probing
 `dl-cdn.alpinelinux.org` and the codebase rather than re-reading the draft.

@@ -360,6 +360,21 @@ pub struct RegistryConfig {
     /// Extensions view requires before it enables Install.
     #[serde(default)]
     pub vsx_signing: Option<VsxSigningConfig>,
+    /// Optional RSA key an `apk` registry signs its generated `APKINDEX.tar.gz`
+    /// with (RFC 0026 §4.1). `local`/`hybrid` only: in proxy mode the upstream
+    /// index is relayed byte-exact and there is nothing to sign.
+    #[serde(default)]
+    pub apk_signing: Option<ApkSigningConfig>,
+    /// Explicitly ship an `apk` repository whose index is unsigned.
+    ///
+    /// An unsigned index is uninstallable by every apk that ships unless the
+    /// client passes `--allow-untrusted`, which also switches off the package
+    /// identity check — so this is a choice put on the record rather than a
+    /// default anything inherits. Kind-prefixed like the signing fields beside
+    /// it: a bare `unsigned` on a struct shared by every registry type would
+    /// read as a promise the other kinds do not keep.
+    #[serde(default)]
+    pub apk_unsigned: bool,
     /// Optional beta-channel configuration (local/hybrid mode only).
     /// When enabled, pre-release versions are only visible to registered beta-channel members.
     #[serde(default)]
@@ -800,6 +815,45 @@ pub struct RepoSigningConfig {
     /// stable. Defaults to 0.
     #[serde(default)]
     pub created: Option<u32>,
+}
+
+/// RSA signing key for a locally hosted `apk` repository's index
+/// (RFC 0026 §4.1).
+///
+/// ```toml
+/// [registries.apk_signing]
+/// key_name        = "internal-apk@example.com-5f3a1c2e.rsa.pub"
+/// private_key_pem = "${APK_SIGNING_KEY_PEM}"
+/// ```
+///
+/// `key_name` is the exact file name the client will hold under
+/// `/etc/apk/keys/`, because apk opens the key *by the name the signature entry
+/// carries* (`package.c:589`). A mismatch is not an error the client reports as
+/// one — it is an untrusted index — so the name is validated here and served
+/// back verbatim on the key route.
+///
+/// RSA rather than Ed25519 because no shipping apk accepts Ed25519 for a v2
+/// index, and without the banned `rsa` crate: the signing goes through
+/// `aws-lc-rs`, already this tree's TLS provider (RFC 0026 §2.4, decision 2).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ApkSigningConfig {
+    /// The `.rsa.pub` file name the public half lands under in
+    /// `/etc/apk/keys/`. Alpine's own convention is `<email>-<8 hex>.rsa.pub`.
+    pub key_name: String,
+    /// RSA private key, PEM (PKCS#8 or PKCS#1), 2048 bits or more. A secret of
+    /// the same class as `repo_signing.seed_hex`: keep it out of the file with
+    /// `${VAR}`. Never written back by the config editor.
+    pub private_key_pem: String,
+    /// Keys this one replaced, newest first — the rotation window.
+    ///
+    /// The index is signed with `key_name` **and then** with each of these, in
+    /// order, in one signature member. apk installs from the first `.SIGN.*`
+    /// entry whose key file it holds, so a fleet where some machines have the
+    /// new key and some do not keeps installing from both. Drop an entry once
+    /// every client has the new file; an empty list is a completed rotation
+    /// (RFC 0026 §11 decision 9).
+    #[serde(default)]
+    pub previous_keys: Vec<ApkSigningConfig>,
 }
 
 /// Ed25519 VSIX signing key for `vscode-marketplace`/`openvsx` registries

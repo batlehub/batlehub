@@ -1370,6 +1370,9 @@ pub async fn finish_test_app(
         .app_data(actix_web::web::Data::new(local_svc))
         .app_data(actix_web::web::Data::new(mode_map))
         .app_data(actix_web::web::Data::new(RepoSignerMap::default()))
+        .app_data(actix_web::web::Data::new(
+            batlehub_web::ApkSignerMap::default(),
+        ))
         .app_data(actix_web::web::Data::new(batlehub_web::VulnDbMap::default()))
         // Empty by default: absence means the `/sumdb/{path}` route answers 404,
         // which is the contract a registry with no checksum database wants
@@ -1469,6 +1472,9 @@ pub async fn finish_test_app_with_extra<E: 'static>(
         .app_data(actix_web::web::Data::new(local_svc))
         .app_data(actix_web::web::Data::new(mode_map))
         .app_data(actix_web::web::Data::new(RepoSignerMap::default()))
+        .app_data(actix_web::web::Data::new(
+            batlehub_web::ApkSignerMap::default(),
+        ))
         .app_data(actix_web::web::Data::new(batlehub_web::VulnDbMap::default()))
         // Empty by default: absence means the `/sumdb/{path}` route answers 404,
         // which is the contract a registry with no checksum database wants
@@ -2773,4 +2779,89 @@ pub fn make_composer_zip(name: &str, version: &str) -> Vec<u8> {
         writer.finish().unwrap();
     }
     buf.into_inner()
+}
+
+/// A `.apk` in the **v2** container: gzip(control tar with `.PKGINFO`) followed
+/// by gzip(data tar).
+///
+/// Deliberately unsigned, and deliberately v2. A package with no `.SIGN.*`
+/// member still installs from a signed index, because the install path checks
+/// the index's `C:` and never the package's own signature (RFC 0026 §2.5) —
+/// and v2 because that is what every Alpine branch ships and what an
+/// `APKINDEX` can describe. apk-tools 3's own `mkpkg` writes the v3 (ADB)
+/// container instead, which this registry refuses with a `400` naming the
+/// format.
+pub fn make_apk_v2(pkginfo: &str, data_path: &str, data: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+
+    let tar_of = |name: &str, content: &[u8]| {
+        let mut tb = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_path(name).unwrap();
+        header.set_size(content.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tb.append(&header, content).unwrap();
+        tb.into_inner().unwrap()
+    };
+    let gz = |bytes: &[u8]| {
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        enc.write_all(bytes).unwrap();
+        enc.finish().unwrap()
+    };
+
+    [
+        gz(&tar_of(".PKGINFO", pkginfo.as_bytes())),
+        gz(&tar_of(data_path, data)),
+    ]
+    .concat()
+}
+
+/// The `.PKGINFO` of a minimal package, for [`make_apk_v2`].
+pub fn apk_pkginfo(name: &str, version: &str, arch: &str) -> String {
+    format!(
+        "pkgname = {name}\npkgver = {version}\narch = {arch}\nsize = 1024\n\
+         builddate = 1700000000\npkgdesc = a test package\nlicense = MIT\n"
+    )
+}
+
+/// Read the `APKINDEX` text back out of a served `APKINDEX.tar.gz`.
+///
+/// Walks the concatenated gzip members: the index lives behind the signature,
+/// and a single-member reader finds only the signature.
+pub fn apk_index_text(file: &[u8]) -> String {
+    use std::io::Read;
+
+    let mut offset = 0usize;
+    while offset < file.len() {
+        let mut cursor = std::io::Cursor::new(&file[offset..]);
+        let mut plain = Vec::new();
+        {
+            let mut dec = flate2::bufread::GzDecoder::new(&mut cursor);
+            if dec.read_to_end(&mut plain).is_err() {
+                break;
+            }
+        }
+        let consumed = cursor.position() as usize;
+        if consumed == 0 {
+            break;
+        }
+        let mut archive = tar::Archive::new(std::io::Cursor::new(plain));
+        if let Ok(entries) = archive.entries() {
+            for entry in entries.flatten() {
+                let is_index = entry
+                    .path()
+                    .ok()
+                    .is_some_and(|p| p.to_string_lossy() == "APKINDEX");
+                if is_index {
+                    let mut text = String::new();
+                    let mut entry = entry;
+                    entry.read_to_string(&mut text).unwrap();
+                    return text;
+                }
+            }
+        }
+        offset += consumed;
+    }
+    panic!("no APKINDEX entry in the served file");
 }

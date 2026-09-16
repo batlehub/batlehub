@@ -26,6 +26,7 @@ export const LOCAL_NPM_REGISTRY = "perf-local-npm";
 export const DEB_REGISTRY = "perf-deb";
 export const RPM_REGISTRY = "perf-rpm";
 export const PACMAN_REGISTRY = "perf-pacman";
+export const APK_REGISTRY = "perf-apk";
 export const JETBRAINS_REGISTRY = "perf-jetbrains";
 export const PYPI_REGISTRY = "perf-pypi";
 export const NUGET_REGISTRY = "perf-nuget";

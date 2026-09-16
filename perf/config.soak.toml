@@ -204,6 +204,20 @@ anonymous = []
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
 
+# apk: the fourth OS kind, and the only one whose `.apk` requests carry a
+# coordinate — so its two arms measure the split, the index read that dates the
+# package for the age gate, and the rule chain, on top of the byte path the
+# other three share.
+[[registries]]
+type = "apk"
+name = "perf-apk"
+upstreams = ["${SOAK_UPSTREAM_URL}/apk"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
 [[registries]]
 type = "jetbrains"
 name = "perf-jetbrains"

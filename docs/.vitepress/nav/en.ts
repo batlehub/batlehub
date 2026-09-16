@@ -118,6 +118,7 @@ export const sidebar = {
         { text: "Debian / APT", link: "/registries/deb" },
         { text: "RPM / YUM / DNF", link: "/registries/rpm" },
         { text: "Pacman / Arch", link: "/registries/pacman" },
+        { text: "Alpine / apk", link: "/registries/apk" },
       ],
     },
     {
@@ -304,10 +305,6 @@ export const sidebar = {
           link: "/rfc/0025-generic-local-mode",
         },
         {
-          text: "0026 — Alpine apk",
-          link: "/rfc/0026-alpine-apk",
-        },
-        {
           text: "0027 — Homebrew",
           link: "/rfc/0027-homebrew",
         },
@@ -447,6 +444,10 @@ export const sidebar = {
         {
           text: "0021 — releases into registries",
           link: "/rfc/0021-forge-releases-into-registries",
+        },
+        {
+          text: "0026 — Alpine apk",
+          link: "/rfc/0026-alpine-apk",
         },
       ],
     },

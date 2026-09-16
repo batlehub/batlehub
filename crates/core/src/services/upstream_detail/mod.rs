@@ -170,6 +170,7 @@ pub fn listing_carries_readmes(kind: RegistryKind) -> bool {
         | RegistryKind::Deb
         | RegistryKind::Rpm
         | RegistryKind::Pacman
+        | RegistryKind::Apk
         | RegistryKind::Jetbrains
         | RegistryKind::Generic
         | RegistryKind::Nodedist
@@ -223,6 +224,7 @@ pub fn listing_carries_links(kind: RegistryKind) -> bool {
         | RegistryKind::Deb
         | RegistryKind::Rpm
         | RegistryKind::Pacman
+        | RegistryKind::Apk
         | RegistryKind::Jetbrains
         | RegistryKind::Generic
         | RegistryKind::Nodedist

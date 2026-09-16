@@ -256,12 +256,39 @@ What "the held set, rendered" means for each listing document
 | Terraform | provider and module `versions`; the provider `download` document for a platform whose archive, checksum list and signature are all held, with the publisher's keys and protocols carried on the manifest (§13.7) | inventory + `extra.terraform` (the checksum list read at import; the keys and protocols from the bundle's `facts`) | none |
 | forges (GitHub, GitLab, Forgejo) | release listing and release-by-tag, one release per held `git_ref`, assets from the held keys | manifest's `BundleRef` + inventory | none — mise reads `tag_name` |
 | nodedist, sdkman | `index.tab` / `index.json`; the candidate list | inventory + `meta:` (`published_at`) | none |
+| apk | `APKINDEX.tar.gz` for one `{branch}/{repo}/{arch}`, composed over the held `.apk` files and **signed with the registry's own RSA key** | inventory, and the packages themselves — `C:` is a digest of the bytes held, so it is read from them | none — apk verifies the signature it was given a key for |
 
-The path-proxy family (`deb`, `rpm`, `pacman`, `jetbrains`, `generic`) and
-the extension galleries have no listing this instance can compose — the
-signed `Packages` index cannot be re-signed here, and a gallery answers by
-query. They stay `503` on a listing and serve a held artifact by path as
-today; the table on the registry page says so.
+The rest of the path-proxy family (`deb`, `rpm`, `pacman`, `jetbrains`,
+`generic`) and the extension galleries have no listing this instance can
+compose — the signed `Packages` index cannot be re-signed here, and a gallery
+answers by query. They stay `503` on a listing and serve a held artifact by
+path as today; the table on the registry page says so, and
+`air_gap.rs::path_family_air_gap` pins it for all three — the refusal holds
+*with* `synthesise_listings` on, holding three packages still does not make an
+index, the miss is recorded once however often the client retries, and every
+held file is served by path beside it.
+
+**"Cannot be re-signed here" is the wrong reason, and this document said it.**
+This server already generates *and signs* the `deb`, `rpm` and `pacman` indexes
+in `local` mode, with the registry's Ed25519 OpenPGP key. What actually
+separates them from `apk` is two things: an `apk` index is **one** document
+where an `rpm` index is six — `repomd.xml` carrying the checksums of
+primary/filelists/other, plus the detached signature and the key — so composing
+one means composing a set with internal integrity references; and an air-gapped
+client has to be configured against the estate's key, which `apk` does through
+its key route (RFC 0026 §4.1) and these three do not do anywhere. Both are work
+that has not been done, not properties of the formats.
+
+**`apk` is the exception, and the reason is the key.** Its index is signed too,
+but by a key *this instance owns*: a local `apk` registry already writes and
+signs its own `APKINDEX`, so an air-gapped one composing the same document over
+inventory is the same generator with a different input
+([RFC 0026](/rfc/0026-alpine-apk) §6.10, decision 8). That also makes it the one
+kind here whose listing is an **artifact on a path route** rather than a
+document, so it is composed in the handler and not through
+`synthesised_listing` — the same rule, a different door. An air-gapped `apk`
+registry with no `[registries.apk_signing]` composes nothing and stays a `503`:
+an index no client can verify is the same refusal arriving later.
 
 ### 4.4 The miss log, one column wider
 

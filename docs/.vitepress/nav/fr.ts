@@ -122,6 +122,7 @@ export const sidebar = {
         { text: "Debian / APT", link: "/fr/registries/deb" },
         { text: "RPM / YUM / DNF", link: "/fr/registries/rpm" },
         { text: "Pacman / Arch", link: "/fr/registries/pacman" },
+        { text: "Alpine / apk", link: "/fr/registries/apk" },
       ],
     },
     {

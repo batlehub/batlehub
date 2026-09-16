@@ -572,6 +572,11 @@ fn strip(
         | RegistryKind::Deb
         | RegistryKind::Rpm
         | RegistryKind::Pacman
+        // `apk` is `SIGNED` upstream — an edited `APKINDEX` is an index with a
+        // broken signature and the client refuses the whole repository. Its
+        // *local* index is filtered where it is generated and signed
+        // (`regenerate_apk`), never on the way out (RFC 0026 §4.4).
+        | RegistryKind::Apk
         | RegistryKind::Jetbrains
         | RegistryKind::JetbrainsMarketplace
         | RegistryKind::Generic => None,
