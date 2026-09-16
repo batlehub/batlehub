@@ -34,7 +34,7 @@ cargo fmt --all --check
 # Format
 cargo fmt --all
 
-# Coverage (requires Podman — starts Postgres + MinIO)
+# Coverage (requires Podman — starts Postgres + RustFS)
 task coverage        # HTML report in coverage/html/
 task coverage-check  # fails if line coverage < 80%
 
@@ -42,7 +42,7 @@ task coverage-check  # fails if line coverage < 80%
 task test:pg-cache
 task test:pg-local-registry
 
-# Integration test that needs real S3/MinIO
+# Integration test that needs real S3/RustFS
 task test:s3
 
 # Run server (requires Postgres)
@@ -151,7 +151,7 @@ For **local/hybrid mode**, additionally implement `get_<name>_versions` (and rel
   - **Exception — standalone `<name>/tests.rs`**: use a sibling `tests.rs` (declared as `#[cfg(test)] mod tests;` in `mod.rs`) when the adapter's test suite exercises behavior that spans more than one sibling file — e.g. the `RegistryClient` impl in `client.rs` plus parsing helpers that also live in `client.rs` or `models.rs` (composer, conda, pypi, rubygems, terraform). A single `impl`'s own tests still belong inline next to that `impl` (forgejo, github, gitlab, maven, nuget, vscode_marketplace).
 - **Integration tests** (in-process): `crates/web/tests/*.rs` — one file per feature/registry area (e.g. `local_npm_registry.rs`, `terraform.rs`, `namespaces_and_visibility.rs`, `vuln_proxy_endpoints.rs`), each spinning up a full actix-web app with `InMemoryPackageRepository`, `InMemoryStorageBackend`, `InMemoryCacheStore`, and `FixedRegistry`. Shared app-factory infrastructure (`make_app`, `make_local_svc`, `access_config*`, `LocalRegistryAppParts`/`build_local_registry_app`, etc.) lives in `crates/web/tests/common/mod.rs`; every other file starts with `mod common; use common::*;`. Add a new registry type's tests to a new `local_<type>_registry.rs` file (or an existing one that already covers a closely related area) rather than growing one of the existing files indefinitely. Each registry type has a `make_local_<type>_app(mode: RegistryMode)` factory (in `common/mod.rs` if used by more than one file, otherwise local to its own file) and a helper to build publish payloads.
 - **CLI integration tests**: `cli/tests/integration.rs` — builds the CLI binary then invokes it as a subprocess against an in-memory actix-web server (same pattern as the web tests). Uses `env!("CARGO_BIN_EXE_batlehub-cli")` so cargo builds the binary automatically before running. See architecture note below about in-memory store separation.
-- **External integration tests**: `crates/adapters/tests/pg_*.rs`, `s3_storage.rs` — require real Postgres/MinIO (run via `task test:pg-*` / `task test:s3`).
+- **External integration tests**: `crates/adapters/tests/pg_*.rs`, `s3_storage.rs` — require real Postgres/RustFS (run via `task test:pg-*` / `task test:s3`).
 - **Fuzz targets**: `fuzz/fuzz_targets/` — run with nightly via `task fuzz`.
   `fuzz/` is a **separate workspace**, so `cargo check/clippy/test --workspace`
   never compiles it: after changing a type a fuzz target constructs, run

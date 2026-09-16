@@ -210,7 +210,7 @@ the server requires for that type, so the output is directly usable. Note the
 difference in allowlist precision:
 
 - For hosts with a **curated preset** (`nodejs.org`, `static.rust-lang.org`,
-  `dl.google.com`, `get.helm.sh`, `dl.min.io`, `binaries.sonarsource.com`), the
+  `dl.google.com`, `get.helm.sh`, `binaries.sonarsource.com`), the
   allowlist is a version-agnostic glob and keeps working across version bumps.
 - For any **other host**, the allowlist is the set of exact paths found in the
   lock — narrow and provably sufficient for the pinned versions, but needing a

@@ -9,7 +9,7 @@ This directory contains everything needed to measure throughput, latency, and re
 3. [Quick start — filesystem + memory (default)](#quick-start-—-filesystem-memory-default)
 4. [Quick start — S3 + Redis](#quick-start-—-s3-redis)
 5. [Comparing backends head-to-head](#comparing-backends-head-to-head)
-6. [Scenarios](#scenarios) — including [10 — soak / leak detection](#_10-—-soak-leak-detection-perf-soak) and [11 — startup and shutdown](#_11-—-startup-and-shutdown-perf-lifecycle)
+6. [Scenarios](#scenarios) — including [10 — soak / leak detection](#_10-—-soak-leak-detection-perf-soak), [11 — startup and shutdown](#_11-—-startup-and-shutdown-perf-lifecycle) and [14 — breaking point, per backend](#_14-—-breaking-point-per-backend-perf-break)
 7. [Tuning the mock upstream](#tuning-the-mock-upstream)
 8. [The results table, and the report a release carries](#the-results-table)
 9. [Reading the results](#reading-the-results)
@@ -105,7 +105,7 @@ task perf:run:all
 
 ## Quick start — S3 + Redis
 
-Uses MinIO as the S3-compatible object store and Redis as the shared metadata cache. The k6 scenarios and the mock upstream are identical — only the server config changes.
+Uses RustFS as the S3-compatible object store and Redis as the shared metadata cache. The k6 scenarios and the mock upstream are identical — only the server config changes.
 
 ```bash
 # Terminal 1 — database (same as before; skip if already running)
@@ -114,9 +114,9 @@ task compose:db
 # Terminal 2 — mock upstream (same as before; skip if already running)
 task perf:upstream
 
-# Terminal 3 — start MinIO (:9200) and Redis (:6380)
+# Terminal 3 — start RustFS (:9200) and Redis (:6380)
 task perf:s3:infra:up
-# MinIO console: http://localhost:9201  (minioadmin / minioadmin)
+# S3 endpoint: http://localhost:9200  (rustfsadmin / rustfsadmin)
 
 # Terminal 4 — BatleHub server with S3 + Redis config
 task perf:s3:server
@@ -140,7 +140,7 @@ task perf:s3:run:sbom
 task perf:s3:run:eviction
 ```
 
-The MinIO bucket (`perf-artifacts`) is created automatically by the `perf-minio-init` container on first `perf:s3:infra:up`.
+The bucket (`perf-artifacts`) is created by `task perf:s3:infra:up` itself, with `rc`, once the S3 port answers.
 
 ---
 
@@ -464,6 +464,58 @@ steady-state serving cost, which is exactly the pair worth knowing.
 > The seed script waits for `blocked_snapshot_fingerprint` to turn over before it declares the arms
 > ready — the blocked set is read from a 30-second snapshot, so a scenario started immediately after
 > the block would measure the unfiltered path under a filtered name.
+
+---
+
+### 14 — Breaking point, per backend (`perf:break`)
+
+`perf/k6/scenarios/14_breaking_point.js` + `perf/scripts/breaking_point.sh`. The offered rate doubles
+at each step — 100, 200, 400, … — held for a minute apiece, until one of three things happens, and
+the report records RAM, CPU and the whole latency distribution at every rate on the way up.
+
+The three failure conditions catch different failures, which is why there are three:
+
+| condition | default | what it catches |
+| --- | --- | --- |
+| errors | > 5 % | it answered `5xx`, or the connection never completed |
+| p95 | > 5 000 ms | it answered, slowly enough that no client would wait |
+| iterations never placed | > 5 % | k6 could not even *start* them — the server is refusing the rate while the requests it does answer still look healthy |
+
+That last one is the one a latency-only check misses: a server that accepts 400 req/s and queues the
+rest reports a beautiful p95 on the 400 it took.
+
+The workload is the soak mix, deliberately: every registry kind and every shape of request — an
+artifact read, a generated document, an upstream miss, a publish. A knee measured on warm cached
+reads alone would be a number about the HTTP stack rather than about this server.
+
+**It is a measurement, not a gate.** Only a server that *died* — a panic, an OOM kill, a process
+that is no longer there — exits non-zero. Degrading under a rate no deployment will ever see is the
+expected result and exits 0; a knee is not a defect, it is the number you wanted.
+
+```bash
+task perf:break                                              # filesystem + in-memory cache
+task perf:break CONFIG=perf/config.perf-s3.toml LABEL=s3-redis
+task perf:break BUDGET=600 STEP=30 START_RATE=200            # a shorter escalation
+```
+
+The report is `perf/results/breaking-point-<label>.md`, with the per-second `/proc` samples beside
+it and the same numbers as JSON for diffing two backends.
+
+**The matrix belongs to CI.** `.github/workflows/breaking-point.yaml` runs four backends in parallel
+— filesystem or S3, in-memory or Redis — each with its own 20-minute budget, and comments one table
+per backend on the pull request. Nothing schedules it: add the `breaking-point` label to a pull
+request, or dispatch it once the workflow is on the default branch. Locally the S3 and Redis arms
+need RustFS and Redis (`task perf:s3:infra:up`, which wants Podman); the filesystem arms need nothing
+but the database.
+
+CPU is reported as a percentage of **one** core, so a figure above 100 % means more than one core —
+the same convention `record_run.py` uses for the results table.
+
+**The knee is a comparison, not a capacity.** k6, the server, Postgres and the mock upstream share one
+machine here, so the load generator competes with the thing it is measuring and the absolute number
+moves with the runner: a knee at 400 req/s on an eight-core box says nothing about what a deployed
+instance serves on its own hardware. What it *does* say is which backend gives out first, and by how
+much — which is why the four arms run the same escalation with the same budget on the same runner size.
 
 ---
 

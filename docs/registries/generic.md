@@ -1,6 +1,6 @@
 # Generic mirror
 
-A proxy-only, path-addressed mirror of any plain HTTP file tree — for upstreams that have no package protocol at all: toolchain tarballs (`nodejs.org/dist`, `static.rust-lang.org`, `dl.google.com/go`) and single-binary vendor CDNs (`get.helm.sh`, `dl.min.io`). Every request streams `{upstream}/{path}` and caches it on the first miss. There is no publish, index, or signing model.
+A proxy-only, path-addressed mirror of any plain HTTP file tree — for upstreams that have no package protocol at all: toolchain tarballs (`nodejs.org/dist`, `static.rust-lang.org`, `dl.google.com/go`) and single-binary vendor CDNs (`get.helm.sh`, `binaries.sonarsource.com`). Every request streams `{upstream}/{path}` and caches it on the first miss. There is no publish, index, or signing model.
 
 ## At a glance
 

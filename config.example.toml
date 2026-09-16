@@ -258,7 +258,7 @@ path = "./tmp/storage-cache"
 # region = "us-east-1"
 # prefix = "batlehub/"      # optional: store in a subfolder inside the bucket
 # endpoint_url = "http://localhost:9900"
-# force_path_style = true   # required for RustFS and MinIO
+# force_path_style = true   # required for RustFS
 #
 # Then assign registries to a specific backend:
 # [[registries]]

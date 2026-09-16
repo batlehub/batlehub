@@ -4,10 +4,10 @@
 //!
 //! Requires a running S3-compatible service. Set `S3_TEST_ENDPOINT` to opt in:
 //!
-//!   task test:s3                                  # starts MinIO automatically
+//!   task test:s3                                  # starts RustFS automatically
 //!   S3_TEST_ENDPOINT=http://127.0.0.1:19000 \
-//!     AWS_ACCESS_KEY_ID=minioadmin \
-//!     AWS_SECRET_ACCESS_KEY=minioadmin \
+//!     AWS_ACCESS_KEY_ID=rustfsadmin \
+//!     AWS_SECRET_ACCESS_KEY=rustfsadmin \
 //!     cargo test -p batlehub-adapters --features storage-s3 --test s3_storage
 
 use aws_config::BehaviorVersion;

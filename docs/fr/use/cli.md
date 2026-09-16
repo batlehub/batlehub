@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: 91ca4dbf20513c85
+sourceHash: 8632f0eac132054c
 ---
 
 # batlehub-cli
@@ -222,7 +222,7 @@ serveur exige pour ce type : la sortie est donc directement utilisable. Notez la
 différence de précision des listes d'autorisation :
 
 - Pour les hôtes qui ont un **préréglage curaté** (`nodejs.org`,
-  `static.rust-lang.org`, `dl.google.com`, `get.helm.sh`, `dl.min.io`,
+  `static.rust-lang.org`, `dl.google.com`, `get.helm.sh`,
   `binaries.sonarsource.com`), la liste est un motif indifférent à la version, qui
   continue de fonctionner d'une montée de version à l'autre.
 - Pour **tout autre hôte**, la liste est l'ensemble des chemins exacts trouvés

@@ -112,7 +112,7 @@ upstream file path.
 - **Fanout / failover** — list multiple upstreams per registry; 404 from one falls through to the next.
 - **Self-hosted registry support** — upstream auth (Bearer token, Basic, or custom header) and custom CA certificates per registry, for air-gapped or corporate environments.
 - **Auth providers** — static tokens (plain-text or Argon2id hashed), OIDC (Authentik, Keycloak, Dex, …), Kubernetes service account tokens, and GitHub/Forgejo **Actions OIDC** tokens with rule-based group mapping (map any JWT claim — repo, branch, environment — to named groups and roles).
-- **Storage backends** — filesystem or S3-compatible (AWS S3, MinIO, RustFS). Different registries can use different backends.
+- **Storage backends** — filesystem or S3-compatible (AWS S3, RustFS). Different registries can use different backends.
 - **Audit log** — every allow and deny decision is recorded in PostgreSQL.
 - **OpenTelemetry** — optional distributed tracing via OTLP/gRPC.
 - **Web UI** — a Vue 3 SPA for browsing packages via the Package Explorer, managing firewall blocks, and generating client config snippets.
@@ -439,7 +439,7 @@ task lint           # cargo clippy --workspace
 task fmt            # cargo fmt --all
 task dump-spec      # regenerate ui/openapi.json
 task ui:generate    # regenerate TypeScript client from openapi.json
-task coverage       # generate HTML coverage report (requires PostgreSQL + MinIO)
+task coverage       # generate HTML coverage report (requires PostgreSQL + RustFS)
 task coverage-check # enforce ≥80% line coverage (fails the build if below threshold)
 ```
 

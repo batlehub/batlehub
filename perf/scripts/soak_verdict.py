@@ -850,6 +850,41 @@ def exempt_rss_during_warmup(rss_check: Check, slope_judged: bool, steady_second
     )
 
 
+def exempt_heap_when_warmup_did_not_converge(
+    heap_check: Check, marks: dict[str, int]
+) -> None:
+    """Un-fail the idle live-heap comparison when the warm-up never settled.
+
+    `soak.sh` ends its warm-up when two consecutive idle readings of this very
+    series agree to within a percentage; when it gives up at `WARMUP_MAX`
+    instead, it writes `warmup_converged 0`. The baseline is then a process that
+    was still filling, and what this row measures is the rest of that fill
+    rather than anything the process kept.
+
+    That distinction is the whole reason the mark exists. Measured 2026-09-16:
+    most of the fill is the Postgres pool — a 1.9 MiB listing document grows the
+    buffer of the connection that carried it, for that connection's 30-minute
+    `max_lifetime`, which outlasts the entire soak. So a short warm-up varies
+    how many connections have been grown before the baseline, and reports the
+    difference as growth. Three red runs had no defect behind them.
+
+    A run with no mark at all — a pinned `--warmup`, or a report from before
+    this existed — is judged exactly as it always was. The absence of the mark
+    is not a claim about the warm-up.
+    """
+    if marks.get("warmup_converged", 1) != 0:
+        return
+    # Both directions, and that is the point. A baseline that is not a steady
+    # state makes the comparison meaningless whichever way it came out: measured
+    # 2026-09-16, one run of this mix reported +6.2% and the next -13.6% on the
+    # same code, because the Postgres pool recycles its connections every 30
+    # minutes and the two idle windows landed on different phases of that cycle.
+    # Reporting the -13.6% as `ok` would be a green tick for a comparison that
+    # was never valid — the failure mode this whole mark exists to stop.
+    heap_check.ok = True
+    heap_check.note = "not judged — the warm-up never reached a steady idle level"
+
+
 def slope_row(
     fitted: tuple[float, float] | None,
     slope_limit: float,
@@ -969,6 +1004,9 @@ def main() -> int:
     failed_rate, reqs, p95_ms = read_k6(K6_SUMMARY_FILE)
 
     exempt_rss_during_warmup(checks[0], slope_judged, steady_seconds)
+    heap_check = next((c for c in checks if c.name.startswith("Live heap")), None)
+    if heap_check is not None:
+        exempt_heap_when_warmup_did_not_converge(heap_check, marks)
 
     ok = all(c.ok for c in checks) and slope_ok and not panics and args.k6_exit == 0
 

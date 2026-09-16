@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: b9041b8d5d0ca167
+sourceHash: ae819798f666af5e
 ---
 
 # Référence de configuration
@@ -933,14 +933,14 @@ routage par registre).
 type = "filesystem"
 path = "./cache"
 
-# S3 (ou compatible S3 : MinIO, RustFS, etc.)
+# S3 (ou compatible S3 : RustFS, etc.)
 [storage]
 type = "s3"
 bucket = "my-artifacts"
 region = "us-east-1"
 prefix = "batlehub/"         # facultatif, aucun par défaut
-endpoint_url = "http://minio:9000"  # facultatif : à omettre pour le vrai AWS
-force_path_style = true         # facultatif : nécessaire pour MinIO et RustFS
+endpoint_url = "http://rustfs:9000" # facultatif : à omettre pour le vrai AWS
+force_path_style = true         # facultatif : nécessaire pour RustFS
 ```
 
 **Les champs du système de fichiers :**
@@ -957,7 +957,15 @@ force_path_style = true         # facultatif : nécessaire pour MinIO et RustFS
 | `region` | chaîne | oui | La région AWS (par exemple `"us-east-1"`) |
 | `prefix` | chaîne | non | Le préfixe de clé de tous les objets stockés |
 | `endpoint_url` | chaîne | non | Un endpoint personnalisé, pour un stockage compatible S3 |
-| `force_path_style` | booléen | non | Nécessaire pour MinIO, RustFS et les autres stockages compatibles S3 qui emploient des URL par chemin |
+| `force_path_style` | booléen | non | Nécessaire pour RustFS et les autres stockages compatibles S3 qui emploient des URL par chemin |
+
+> **MinIO n'est plus officiellement pris en charge.** Son éditeur a retiré la distribution
+> communautaire — `dl.min.io` répond `410 Gone` sur tous ses chemins — si bien que plus rien ici ne
+> l'installe, ne le démarre ni ne le teste : les suites S3, la couverture et le banc de performance
+> emploient tous **RustFS**. Un endpoint MinIO continuera probablement de fonctionner, puisque ce
+> backend ne parle que S3 et qu'un stockage par chemin n'a besoin que de `force_path_style` — mais
+> aucune porte ne l'exerce, donc rien ne détecterait qu'il cesse de marcher. Être pris en charge
+> signifie être *mesuré*, et MinIO ne l'est plus.
 
 Les identifiants S3 viennent de la chaîne d'identifiants standard du SDK AWS :
 les variables `AWS_ACCESS_KEY_ID` et `AWS_SECRET_ACCESS_KEY`,
@@ -1695,7 +1703,7 @@ curl -X PUT \
 fichiers en HTTP, pour les amonts sans aucun protocole de paquets : archives de
 chaînes d'outils (`nodejs.org/dist`, `static.rust-lang.org`,
 `dl.google.com/go`) et CDN d'éditeurs à binaire unique (`get.helm.sh`,
-`dl.min.io`, `binaries.sonarsource.com`). Proxy seul — il n'y a ni publication,
+`binaries.sonarsource.com`). Proxy seul — il n'y a ni publication,
 ni index, ni modèle de signature. Une requête vers
 `/proxy/{registry}/generic/{path}` diffuse `{upstream}/{path}` et le met en cache
 au premier défaut.

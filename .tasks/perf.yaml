@@ -193,6 +193,32 @@ tasks:
         perf/k6/scenarios/13_apk_index_regeneration.js
       - task: perf:report
 
+  # ── Scenario 14 — where it breaks, per backend ──────────────────────────────
+  #
+  # Escalates the offered rate (doubling at each step) until the server answers
+  # with errors, answers too slowly, or stops absorbing the rate at all, and
+  # records RAM, CPU and the latency distribution at every rate on the way.
+  #
+  # **The matrix is CI's** (`.github/workflows/breaking-point.yaml`, four
+  # backends: filesystem or S3, memory or Redis). This task runs one backend, and
+  # the S3 and Redis arms need RustFS and Redis on the ports `config.perf-s3.toml`
+  # names — `task perf:s3:infra:up` starts both, and wants Podman.
+  #
+  #   task perf:break                                   # filesystem + in-memory
+  #   task perf:break CONFIG=perf/config.perf-s3.toml LABEL=s3-redis
+  #
+  # It is a measurement, not a gate: only a server that *died* exits non-zero.
+
+  perf:break:
+    desc: "k6 scenario 14 — escalate until it breaks, recording RAM/CPU/p95/p98/min/max per rate (needs DATABASE_URL, k6). CONFIG, LABEL, BUDGET, STEP, START_RATE"
+    cmds:
+      - bash perf/scripts/breaking_point.sh
+        --config {{.CONFIG | default "perf/config.perf.toml"}}
+        --label {{.LABEL | default "fs-memory"}}
+        --budget {{.BUDGET | default "1200"}}
+        --step {{.STEP | default "60"}}
+        --start-rate {{.START_RATE | default "100"}}
+
   # ── Soak / leak detection (RFC-less: this is a gate, not a measurement) ──────
   #
   # Unlike every scenario above, this one starts its own server and mock
@@ -227,16 +253,20 @@ tasks:
   # differs.  Run both suites back-to-back to compare backends head-to-head.
 
   perf:s3:infra:up:
-    desc: Start MinIO (S3, :9200) + Redis (:6380) and create the perf-artifacts bucket
+    desc: Start RustFS (S3, :9200) + Redis (:6380) and create the perf-artifacts bucket
     cmds:
-      - podman compose -f perf/docker-compose.perf-s3.yml up -d perf-minio
-      - until curl -sf http://localhost:9200/minio/health/live; do sleep 1; done
-      - rc alias set perf-minio http://localhost:9200 minioadmin minioadmin
-      - rc bucket create --ignore-existing perf-minio/perf-artifacts
+      - podman compose -f perf/docker-compose.perf-s3.yml up -d perf-rustfs
+      # A request to the root rather than a vendor health path. RustFS does
+      # answer `/minio/health/live` — `tests/heavy/backends.sh` measured that and
+      # relies on it — but probing the root asks nothing of the vendor: any
+      # answer at all, 403 included, means the S3 port is serving.
+      - until curl -s -o /dev/null http://localhost:9200/; do sleep 1; done
+      - rc alias set perf-s3 http://localhost:9200 rustfsadmin rustfsadmin
+      - rc bucket create --ignore-existing perf-s3/perf-artifacts
       - podman compose -f perf/docker-compose.perf-s3.yml up -d perf-redis
 
   perf:s3:infra:down:
-    desc: Stop MinIO and Redis perf containers
+    desc: Stop the RustFS and Redis perf containers
     cmds:
       - podman compose -f perf/docker-compose.perf-s3.yml down
 
@@ -244,8 +274,8 @@ tasks:
     desc: Run BatleHub with the S3 + Redis perf config (requires compose:db and perf:s3:infra:up)
     env:
       BATLEHUB_CONFIG: perf/config.perf-s3.toml
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_ACCESS_KEY_ID: rustfsadmin
+      AWS_SECRET_ACCESS_KEY: rustfsadmin
     cmds:
       - cargo run -p batlehub-server --release --features storage-s3
 

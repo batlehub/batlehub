@@ -10,7 +10,7 @@ type = "filesystem"
 path = "/var/cache/batlehub"
 ```
 
-### S3-compatible (AWS S3, MinIO, RustFS)
+### S3-compatible (AWS S3, RustFS)
 
 ```toml
 [storage]
@@ -18,7 +18,7 @@ type   = "s3"
 bucket = "batlehub-artifacts"
 region = "us-east-1"
 
-# For self-hosted S3 (MinIO, RustFS): set a custom endpoint
+# For self-hosted S3 (RustFS): set a custom endpoint
 # endpoint = "http://rustfs:9900"
 
 # Credentials (omit to use IAM role / instance profile on AWS)

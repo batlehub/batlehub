@@ -48,7 +48,7 @@ The `[cache]` section controls all four in-memory stores with a single setting. 
 Before scaling beyond one replica:
 
 - **PostgreSQL 14+** — already required; no change needed.
-- **S3-compatible object store** — AWS S3, MinIO, or RustFS. Filesystem storage is single-node only.
+- **S3-compatible object store** — AWS S3 or RustFS ([MinIO is no longer officially supported](/guide/configuration#_3-4-storage)). Filesystem storage is single-node only.
 - **Shared cache backend** — either the same PostgreSQL instance (simplest) or a Redis 7+ instance.
 - **Load balancer / ingress** — anything that does round-robin HTTP (nginx, Traefik, Kubernetes Ingress). No session affinity required.
 
@@ -88,8 +88,8 @@ type   = "s3"
 bucket = "batlehub-artifacts"
 region = "us-east-1"
 
-# For self-hosted S3 (MinIO, RustFS):
-# endpoint         = "http://minio:9000"
+# For self-hosted S3 (RustFS):
+# endpoint         = "http://rustfs:9000"
 # force_path_style = true
 
 # Credentials (omit on AWS with an IAM role):

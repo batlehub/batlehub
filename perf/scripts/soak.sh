@@ -69,18 +69,62 @@ RATE="100"
 # The warm-up has to *finish the fill*, or the baseline is a measurement of a
 # half-filled process and every run reports the rest of the fill as growth.
 #
-# It was 60s, from when the mix was three registries. It is now 46 arms over 24
-# registry kinds, and the low-weight ones are offered barely one request a
-# second: measured across three runs, 60s of load reaches ~325 MiB and the
-# plateau of ~470 MiB arrives about 180s into the *load* phase that follows. The
-# gap between those two numbers was the whole of the idle-RSS growth those runs
-# reported — +10.3 %, +6.4 %, against a 10 % limit — on a process whose live
-# heap was flat.
+# **It is no longer a duration, because a duration was wrong three times.** It
+# was 60s when the mix was three registries; 240s when the mix was 46 arms over
+# 24 kinds; and 240s was too short again by the time the mix reached 48 arms
+# over 25. Each correction was made after a red run, by measuring the fill and
+# writing down a number that the next kind added to the mix invalidated.
 #
-# 240s, so the fill is over before the baseline rather than exactly at it. Costs
-# three minutes; adding a registry kind to the mix is what would make it too
-# short again, so it is stated here rather than passed in by each caller.
-WARMUP="240"
+# So the warm-up now ends on the thing it was always a proxy for: **the idle
+# live heap has stopped moving.** Load runs in blocks; after each block the
+# process is quiesced and its idle `stats.allocated` read; when two consecutive
+# readings agree to within `WARMUP_STABLE_PCT`, the fill is over and that
+# quiesce *is* the baseline window. A kind added to the mix lengthens the
+# warm-up by itself instead of silently invalidating a constant.
+#
+# The numbers below are bounds on that loop, not the loop's answer:
+#
+#   WARMUP_MIN   never decide before this much load. 240s, the old fixed value,
+#                so no run is warmed less than runs already trusted were.
+#   WARMUP_MAX   give up after this much and say so. Measured 2026-09-16: the
+#                idle residue of the 48-arm mix saturates at ~164 MiB after
+#                800-900s of traffic (146.6 at 240s, 153.3 at 600s, 163.3 at
+#                840s, 164.4 at 1200s), so 1200s clears it with room to spare.
+#   WARMUP_BLOCK load between two readings.
+#   WARMUP_STABLE_PCT  empty means **derived from the gate**, which is the only
+#                setting that cannot disagree with it: the drift left in one
+#                block, extrapolated across the load window, must be too small
+#                to fail the live-heap row on its own —
+#                `SOAK_MAX_HEAP_GROWTH_PCT * WARMUP_BLOCK / <load seconds>`,
+#                so 5% over 10m with 120s blocks is 1.0% a block.
+#
+#                A hand-picked constant was tried first and was wrong for a
+#                reason worth keeping: 1.5% a block accumulates to 7.5% across
+#                a 600s load, so a process drifting just under the convergence
+#                threshold fails a 5% gate *by construction*. Measured
+#                2026-09-16: warm-up probes at 148, 158, 169, 167 MiB declared
+#                convergence on that last -1.27% — noise between two 6.7% jumps
+#                — and the run then failed at +6.2%.
+#   WARMUP_STABLE_RUNS  how many consecutive stable probes end it. Two, from the
+#                same run: one agreement is reachable by noise alone.
+#
+# What the fill actually *is*, since it is not obvious and cost a day to find:
+# most of it is the Postgres connection pool. A listing document is stored in
+# and read back from the `doc:` cache namespace, and carrying a 1.9 MiB
+# rubygems compact index grows that connection's buffer to the size of the
+# document for the connection's lifetime. Ten connections, ~3.9 MiB apiece,
+# released only when sqlx recycles them at its 30-minute `max_lifetime` — which
+# is *longer than a whole soak*, so both windows sit inside one lifetime and
+# what the old fixed warm-up varied was how many connections had been grown
+# before the baseline. Proven by an idle observation: the residue sat flat to
+# the tenth of a MiB for 24 minutes, straight through the 300s cache TTL, and
+# fell 15.5 MiB at t=1800s exactly, one sample before the pool shrank 10 -> 6.
+WARMUP=""                 # empty: adaptive. A --warmup value pins it, for A/B.
+WARMUP_MIN="${SOAK_WARMUP_MIN:-240}"
+WARMUP_MAX="${SOAK_WARMUP_MAX:-1200}"
+WARMUP_BLOCK="${SOAK_WARMUP_BLOCK:-120}"
+WARMUP_STABLE_PCT="${SOAK_WARMUP_STABLE_PCT:-}"   # empty: derived, see above
+WARMUP_STABLE_RUNS="${SOAK_WARMUP_STABLE_RUNS:-2}"
 SETTLE="60"
 # Fixed, and known to `soak_verdict.py` by the same construction: the
 # directory comes from the script's own location, not from an argument.
@@ -311,6 +355,12 @@ grep -m1 "soak arms:" "$WORK/arms.log" >&2 || true
 # than as zero growth.
 sample_header="epoch_s,rss_kb,fds,threads,pool_size,pool_idle,heap_kb"
 echo "$sample_header" > "$SAMPLES"
+# Truncated for the same reason the samples are: the verdict reads the marks
+# into a dict and takes the last value for each name, so a mark this run does
+# not write would otherwise be inherited from the previous one — and
+# `warmup_converged` is exactly such a mark, written only when the adaptive
+# warm-up has something to say about itself.
+: > "$MARKS"
 (
   while kill -0 "$SERVER_PROC" 2>/dev/null; do
     rss="$(awk '/^VmRSS:/{print $2; exit}' "/proc/$SERVER_PROC/status" 2>/dev/null || echo "")"
@@ -362,12 +412,103 @@ quiesce() {  # <seconds> — no load, so the next window measures what is *held*
   sleep "$seconds"
 }
 
+# The idle live heap in KiB — the quantity the warm-up converges on, and the
+# same series the verdict judges. Empty on a build without jemalloc stats.
+idle_heap_kb() {
+  curl -s --max-time 5 "$BASE/metrics" 2>/dev/null \
+    | awk '/^batlehub_memory_allocated_bytes/{printf "%d", $2/1024}'
+}
+
+# Seconds from a k6 duration (`600`, `600s`, `10m`, `1h`).
+to_seconds() {
+  local d="$1"
+  case "$d" in
+    *h) echo $(( ${d%h} * 3600 )) ;;
+    *m) echo $(( ${d%m} * 60 )) ;;
+    *s) echo "${d%s}" ;;
+    *)  echo "$d" ;;
+  esac
+}
+
+# The per-block drift that cannot, on its own, fail the live-heap row.
+#
+# Derived rather than chosen, so the warm-up and the gate cannot disagree: a
+# drift of `p` per block accumulates to `p * load/block` across the window the
+# gate measures, and that has to stay under the gate's own limit.
+derived_stable_pct() {
+  local load_s
+  load_s="$(to_seconds "$DURATION")"
+  awk -v g="${SOAK_MAX_HEAP_GROWTH_PCT:-5.0}" -v b="$WARMUP_BLOCK" -v l="$load_s" \
+    'BEGIN{ if (l <= 0) l = 600; printf "%.3f", g * b / l }'
+}
+
+# warm_up — offer load until the idle live heap stops moving.
+#
+# Each iteration is a block of load, a quiesce, and one idle reading. Two
+# consecutive readings within `WARMUP_STABLE_PCT` end it.
+#
+# `warmup_end` and `baseline_end` are written on *every* probe, and that is
+# deliberate: `soak_verdict.py` reads the marks into a dict, so the last pair
+# written wins. The probe that decided is therefore the baseline window, the
+# probes before it are warm-up, and no quiesce is spent twice — the convergence
+# check and the baseline are the same 60 seconds of idle.
+warm_up() {
+  local warmed=0 prev="" now="" delta="" stable=0
+  [[ -z "$WARMUP_STABLE_PCT" ]] && WARMUP_STABLE_PCT="$(derived_stable_pct)"
+  log "Warm-up: adaptive — blocks of ${WARMUP_BLOCK}s, ending on ${WARMUP_STABLE_RUNS} consecutive readings within ${WARMUP_STABLE_PCT}% (min ${WARMUP_MIN}s, max ${WARMUP_MAX}s)"
+  while :; do
+    run_k6 warmup "${WARMUP_BLOCK}s" || true
+    warmed=$(( warmed + WARMUP_BLOCK ))
+    (( warmed < WARMUP_MIN )) && continue
+    mark warmup_end
+    quiesce "$SETTLE"
+    now="$(idle_heap_kb)"
+    mark baseline_end
+    if [[ -z "$now" ]]; then
+      log "Warm-up: no live-heap series to converge on (jemalloc stats absent) — stopping at ${warmed}s"
+      return 0
+    fi
+    if [[ -n "$prev" ]]; then
+      delta="$(awk -v a="$prev" -v b="$now" 'BEGIN{d=(b-a)/a*100; printf "%.2f", (d<0?-d:d)}')"
+      log "Warm-up: idle live heap $(( prev / 1024 )) -> $(( now / 1024 )) MiB after ${warmed}s of load (${delta}% apart, stable at or below ${WARMUP_STABLE_PCT}%)"
+      if awk -v d="$delta" -v t="$WARMUP_STABLE_PCT" 'BEGIN{exit !(d<=t)}'; then
+        stable=$(( stable + 1 ))
+        if (( stable >= WARMUP_STABLE_RUNS )); then
+          log "Warm-up: converged after ${warmed}s — ${stable} consecutive stable readings, the baseline is a steady state"
+          echo "warmup_converged 1" >> "$MARKS"
+          return 0
+        fi
+        log "Warm-up: stable reading ${stable} of ${WARMUP_STABLE_RUNS}"
+      else
+        # One agreement inside a climb is noise, so the count starts over
+        # rather than accumulating across a jump.
+        stable=0
+      fi
+    else
+      log "Warm-up: idle live heap $(( now / 1024 )) MiB after ${warmed}s of load (first reading)"
+    fi
+    prev="$now"
+    if (( warmed >= WARMUP_MAX )); then
+      log "WARNING: the idle live heap was still moving after ${warmed}s (${delta}% apart). The baseline is not a steady state, so the live-heap row is reported and not judged."
+      echo "warmup_converged 0" >> "$MARKS"
+      return 0
+    fi
+  done
+}
+
 # ── The run ───────────────────────────────────────────────────────────────────
 mark warmup_start
-run_k6 warmup "${WARMUP}s" || true   # the warm-up's thresholds are not a verdict
-mark warmup_end
-quiesce "$SETTLE"
-mark baseline_end
+if [[ -n "$WARMUP" ]]; then
+  # Pinned by the caller, for an A/B against a run whose warm-up is known. No
+  # `warmup_converged` mark: the caller owns the claim that this is long enough,
+  # and the verdict judges the live-heap row as it always did.
+  run_k6 warmup "${WARMUP}s" || true   # the warm-up's thresholds are not a verdict
+  mark warmup_end
+  quiesce "$SETTLE"
+  mark baseline_end
+else
+  warm_up
+fi
 
 mark steady_start
 scrape_metrics steady-start

@@ -418,7 +418,7 @@ cargo test -p batlehub-examples --test real_proxy
 
 ### Coverage
 
-The project enforces a minimum of **80% line coverage** measured by `cargo-llvm-cov`. Both tasks require PostgreSQL and MinIO (started automatically from the `Taskfile`):
+The project enforces a minimum of **80% line coverage** measured by `cargo-llvm-cov`. Both tasks require PostgreSQL and RustFS (started automatically from the `Taskfile`):
 
 ```bash
 # Generate an HTML report (opens at target/llvm-cov/html/index.html) and an

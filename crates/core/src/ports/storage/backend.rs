@@ -18,7 +18,7 @@ pub struct S3StorageConfig {
     pub region: String,
     pub prefix: Option<String>,
     pub endpoint_url: Option<String>,
-    /// Use path-style URLs (required for RustFS, MinIO, and other S3-compatible stores).
+    /// Use path-style URLs (required for RustFS and other S3-compatible stores).
     pub force_path_style: Option<bool>,
 }
 

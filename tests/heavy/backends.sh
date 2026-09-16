@@ -34,7 +34,7 @@
 #
 # Ports: 8140 (server), 8141 (tap), 8142 (upstream), 8143 (S3), 8144
 # (Redis). Environment: DATABASE_URL (required); S3_TEST_ENDPOINT,
-# AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY (default minioadmin), REDIS_URL,
+# AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY (default rustfsadmin), REDIS_URL,
 # OIDC_ISSUER, OIDC_CLIENT_ID/OIDC_CLIENT_SECRET (proxy-auth), OIDC_USER/
 # OIDC_PASSWORD (dev@example.com / password); HEAVY_PORT, HEAVY_TAP_PORT,
 # HEAVY_UPSTREAM_PORT; COVERAGE.
@@ -61,8 +61,8 @@ DIST_VERSION="1.0.0"
 # because it is what every note and runbook about this suite names.
 S3_PORT="${HEAVY_S3_PORT:-${HEAVY_MINIO_PORT:-8143}}"
 REDIS_PORT="${HEAVY_REDIS_PORT:-8144}"
-export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-minioadmin}"
-export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-minioadmin}"
+export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-rustfsadmin}"
+export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-rustfsadmin}"
 # The SDK would otherwise spend seconds probing EC2's metadata service on a
 # machine that has none, before falling back to the variables above.
 export AWS_EC2_METADATA_DISABLED=true

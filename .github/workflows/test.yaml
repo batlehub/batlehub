@@ -233,11 +233,11 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
-      minio:
+      rustfs:
         image: rustfs/rustfs:latest
         env:
-          RUSTFS_ROOT_USER: minioadmin
-          RUSTFS_ROOT_PASSWORD: minioadmin
+          RUSTFS_ROOT_USER: rustfsadmin
+          RUSTFS_ROOT_PASSWORD: rustfsadmin
         ports:
           - 9000:9000
       redis:
@@ -249,8 +249,8 @@ jobs:
     env:
       DATABASE_URL: postgresql://postgres:testpass@localhost:5432/postgres
       S3_TEST_ENDPOINT: http://localhost:9000
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_ACCESS_KEY_ID: rustfsadmin
+      AWS_SECRET_ACCESS_KEY: rustfsadmin
       REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -441,11 +441,11 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
-      minio:
+      rustfs:
         image: rustfs/rustfs:latest
         env:
-          RUSTFS_ROOT_USER: minioadmin
-          RUSTFS_ROOT_PASSWORD: minioadmin
+          RUSTFS_ROOT_USER: rustfsadmin
+          RUSTFS_ROOT_PASSWORD: rustfsadmin
         ports:
           - 9100:9000
       redis:
@@ -457,8 +457,8 @@ jobs:
     env:
       DATABASE_URL: postgresql://postgres:testpass@localhost:5432/postgres
       S3_TEST_ENDPOINT: http://localhost:9100
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_ACCESS_KEY_ID: rustfsadmin
+      AWS_SECRET_ACCESS_KEY: rustfsadmin
       REDIS_URL: redis://localhost:6379
       OIDC_ISSUER: http://127.0.0.1:9000
     steps:
@@ -504,9 +504,15 @@ jobs:
           curl -sf http://127.0.0.1:9000/.well-known/openid-configuration >/dev/null \
             || { docker logs dex; echo "::error::dex never served its discovery document"; exit 1; }
       # The S3 server this job runs is RustFS (the service above); the client is
-      # still MinIO's `mc`, because RustFS ships no CLI and the four things the
-      # suite asks of it — alias, mb, ls, cat — are plain S3 calls, verified
-      # against RustFS.
+      # still MinIO's `mc`, and deliberately: RustFS *does* ship a CLI
+      # (`rustfs/cli`, the `rc` binary `mise.toml` installs), but `rc` has no
+      # `--config-dir` — its alias file is fixed at `~/.config/rc/config.toml`,
+      # so a suite run would write throwaway credentials into the caller's own
+      # config and two runs would fight over it. Verified against rc 0.1.35,
+      # whose only global options are --format, --json, --no-color and
+      # --no-progress. The four things the suite asks of the client — alias, mb,
+      # ls, cat — are plain S3 calls, verified against RustFS.
+      # `tests/heavy/backends.sh` carries the same note beside the same choice.
       #
       # From the project's own GitHub release, pinned. `dl.min.io/client/mc/release/…`
       # answers **410 Gone** — MinIO withdrew the community download host, and

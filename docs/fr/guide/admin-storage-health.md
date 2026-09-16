@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/admin-storage-health.md
-sourceHash: b1436d339d039a6c
+sourceHash: 08a75e829b265120
 ---
 
 # Stockage et santé
@@ -15,7 +15,7 @@ type = "filesystem"
 path = "/var/cache/batlehub"
 ```
 
-### Compatible S3 (AWS S3, MinIO, RustFS)
+### Compatible S3 (AWS S3, RustFS)
 
 ```toml
 [storage]
@@ -23,7 +23,7 @@ type   = "s3"
 bucket = "batlehub-artifacts"
 region = "us-east-1"
 
-# Pour un S3 auto-hébergé (MinIO, RustFS) : déclarez un endpoint personnalisé
+# Pour un S3 auto-hébergé (RustFS) : déclarez un endpoint personnalisé
 # endpoint = "http://rustfs:9900"
 
 # Identifiants (à omettre pour utiliser le rôle IAM ou le profil d'instance sur AWS)

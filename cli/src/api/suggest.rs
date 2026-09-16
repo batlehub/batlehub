@@ -162,12 +162,6 @@ fn generic_preset(host: &str) -> Option<GenericPreset> {
             path_allow: &["helm-v*"],
             client_env: &[],
         },
-        "dl.min.io" => GenericPreset {
-            name: "minio-dl",
-            upstream: "https://dl.min.io",
-            path_allow: &["client/**", "server/**"],
-            client_env: &[],
-        },
         "binaries.sonarsource.com" => GenericPreset {
             name: "sonar-binaries",
             upstream: "https://binaries.sonarsource.com",

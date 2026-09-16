@@ -108,6 +108,13 @@ perf/results/soak-metrics-*.txt
 perf/results/*.k6.json
 perf/results/.*.rss
 perf/results/.*.cpu
+# A breaking-point run's output (`task perf:break`) — one machine, one moment,
+# and the knee moves with the runner. CI keeps its copies as artifacts and
+# comments the tables; nothing here belongs in the repository.
+perf/results/breaking-point-*.md
+perf/results/breaking-point-*.json
+perf/results/breaking-point-*-samples.csv
+perf/results/breaking-point-*-server.log
 # The results table (`task perf:report`) is the same kind of thing: one machine,
 # one day. A release's copy lives on the release, not in the tree.
 perf/results/runs.jsonl

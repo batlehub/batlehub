@@ -742,14 +742,14 @@ Two formats are supported: single-backend (simpler, supports env-var overrides) 
 type = "filesystem"
 path = "./cache"
 
-# S3 (or S3-compatible: MinIO, RustFS, etc.)
+# S3 (or S3-compatible: RustFS, etc.)
 [storage]
 type = "s3"
 bucket = "my-artifacts"
 region = "us-east-1"
 prefix = "batlehub/"         # optional, default: none
-endpoint_url = "http://minio:9000"  # optional: omit for real AWS
-force_path_style = true         # optional: required for MinIO and RustFS
+endpoint_url = "http://rustfs:9000" # optional: omit for real AWS
+force_path_style = true         # optional: required for RustFS
 ```
 
 **Filesystem fields:**
@@ -766,7 +766,14 @@ force_path_style = true         # optional: required for MinIO and RustFS
 | `region` | string | yes | AWS region (e.g. `"us-east-1"`) |
 | `prefix` | string | no | Key prefix for all stored objects |
 | `endpoint_url` | string | no | Custom endpoint for S3-compatible stores |
-| `force_path_style` | bool | no | Required for MinIO, RustFS, and other S3-compatible stores that use path-style URLs |
+| `force_path_style` | bool | no | Required for RustFS and other S3-compatible stores that use path-style URLs |
+
+> **MinIO is no longer officially supported.** Its publisher withdrew the community distribution —
+> `dl.min.io` answers `410 Gone` for every path under it — so nothing in this project installs, starts
+> or tests against MinIO any more: the S3 suites, the coverage run and the perf harness all use
+> **RustFS**. A MinIO endpoint may well still work, because this backend speaks nothing but S3 and
+> `force_path_style` is all a path-style store needs from it — but no gate here exercises it, so
+> nothing would catch it breaking. Support means *measured*, and MinIO is no longer measured.
 
 S3 credentials are sourced from the standard AWS SDK credential chain: `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` environment variables, `~/.aws/credentials`, EC2/ECS instance metadata, and so on.
 
@@ -1316,7 +1323,7 @@ curl -X PUT \
 
 ---
 
-**`generic`** — a path-addressed mirror of any plain HTTP file tree, for upstreams that have no package protocol at all: toolchain tarballs (`nodejs.org/dist`, `static.rust-lang.org`, `dl.google.com/go`) and single-binary vendor CDNs (`get.helm.sh`, `dl.min.io`, `binaries.sonarsource.com`). Proxy-only — there is no publish, index or signing model. A request to `/proxy/{registry}/generic/{path}` streams `{upstream}/{path}` and caches it on the first miss.
+**`generic`** — a path-addressed mirror of any plain HTTP file tree, for upstreams that have no package protocol at all: toolchain tarballs (`nodejs.org/dist`, `static.rust-lang.org`, `dl.google.com/go`) and single-binary vendor CDNs (`get.helm.sh`, `binaries.sonarsource.com`). Proxy-only — there is no publish, index or signing model. A request to `/proxy/{registry}/generic/{path}` streams `{upstream}/{path}` and caches it on the first miss.
 
 Two fields are **mandatory** for this type:
 

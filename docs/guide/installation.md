@@ -247,7 +247,7 @@ config:
     type: "s3"
     bucket: "batlehub-artifacts"
     region: "us-east-1"
-    # endpoint_url and force_path_style are for MinIO, RustFS and the like;
+    # endpoint_url and force_path_style are for RustFS and the like;
     # omit both for AWS S3.
 
 persistence:

@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/installation.md
-sourceHash: 830a7400051cbeea
+sourceHash: 824b034a52e6e9e8
 ---
 
 # Installation
@@ -268,7 +268,7 @@ config:
     type: "s3"
     bucket: "batlehub-artifacts"
     region: "us-east-1"
-    # endpoint_url et force_path_style servent à MinIO, RustFS et consorts ;
+    # endpoint_url et force_path_style servent à RustFS et consorts ;
     # omettez les deux pour AWS S3.
 
 persistence:

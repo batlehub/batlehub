@@ -18,7 +18,7 @@ Common failure modes, their symptoms, and how to fix them.
 
 **Symptom:** `502 Bad Gateway` when downloading artifacts that should be cached; logs show `InvalidAccessKeyId` or `ExpiredTokenException`.
 
-**Cause:** The AWS/MinIO credentials in `[storage]` have expired (e.g. a temporary STS token, or a rotated key).
+**Cause:** The S3 credentials in `[storage]` have expired (e.g. a temporary STS token, or a rotated key).
 
 **Fix:**
 1. Rotate the credentials in your secrets manager.

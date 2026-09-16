@@ -36,8 +36,8 @@ env:
   CARGO_TERM_COLOR: always
   DATABASE_URL: postgresql://postgres:testpass@localhost:5432/postgres
   S3_TEST_ENDPOINT: http://localhost:9000
-  AWS_ACCESS_KEY_ID: minioadmin
-  AWS_SECRET_ACCESS_KEY: minioadmin
+  AWS_ACCESS_KEY_ID: rustfsadmin
+  AWS_SECRET_ACCESS_KEY: rustfsadmin
   REDIS_URL: redis://localhost:6379
   COVERAGE_EXCLUDE: >-
     server/src/(main|server_factory|setup|stores|watcher)\.rs|crates/web/src/handlers/auth/oidc(\.rs|/)|crates/web/src/handlers/back_office/health/system\.rs|crates/adapters/src/db/|crates/adapters/src/registry/(cargo|npm)\.rs|crates/adapters/src/registry/github/|crates/adapters/src/notification/postgres\.rs|crates/adapters/src/sbom/fetcher\.rs|crates/adapters/src/cache/(postgres|banner_redis)\.rs|crates/adapters/src/local_registry/postgres\.rs|crates/adapters/src/rate_limit/(postgres|ip_block_postgres)\.rs|crates/adapters/src/storage/router/|cli/src/tui/|cli/src/(api|cli)/owner\.rs
@@ -54,11 +54,11 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
-      minio:
+      rustfs:
         image: rustfs/rustfs:latest
         env:
-          RUSTFS_ROOT_USER: minioadmin
-          RUSTFS_ROOT_PASSWORD: minioadmin
+          RUSTFS_ROOT_USER: rustfsadmin
+          RUSTFS_ROOT_PASSWORD: rustfsadmin
         ports:
           - 9000:9000
       redis:

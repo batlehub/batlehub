@@ -3,7 +3,7 @@
 //! Some upstreams have no package protocol at all — they are a plain HTTP file
 //! tree addressed by path: toolchain tarballs (`nodejs.org/dist`,
 //! `static.rust-lang.org`, `dl.google.com/go`) and single-binary vendor CDNs
-//! (`get.helm.sh`, `dl.min.io`, `binaries.sonarsource.com`). A `generic`
+//! (`get.helm.sh`, `binaries.sonarsource.com`). A `generic`
 //! registry mirrors one such tree: every request streams the file from upstream
 //! (caching it on the first miss) via [`ProxyService`], using the shared
 //! [`batlehub_adapters::registry::PathProxyRegistryClient`] — the same client

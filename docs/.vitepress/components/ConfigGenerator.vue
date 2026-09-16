@@ -916,7 +916,7 @@ const composerAuthSnippet = `{
             <label
               >Endpoint URL (optional)<input
                 v-model="singleStorage.endpoint_url"
-                placeholder="http://minio:9000"
+                placeholder="http://rustfs:9000"
             /></label>
             <label
               >Key prefix (optional)<input
@@ -929,7 +929,7 @@ const composerAuthSnippet = `{
             >
             <label class="cg-check cg-mb">
               <input type="checkbox" v-model="singleStorage.force_path_style" />
-              Force path-style URLs (required for MinIO, RustFS)
+              Force path-style URLs (required for RustFS)
             </label>
           </template>
         </template>
@@ -971,7 +971,7 @@ const composerAuthSnippet = `{
               <label
                 >Endpoint URL (optional)<input
                   v-model="b.endpoint_url"
-                  placeholder="http://minio:9000"
+                  placeholder="http://rustfs:9000"
               /></label>
               <label
                 >Key prefix (optional)<input
@@ -983,7 +983,7 @@ const composerAuthSnippet = `{
               >
               <label class="cg-check cg-mb">
                 <input type="checkbox" v-model="b.force_path_style" />
-                Force path-style URLs (required for MinIO, RustFS)
+                Force path-style URLs (required for RustFS)
               </label>
             </template>
             <button class="cg-btn-remove" @click="removeBackend(b.id)">

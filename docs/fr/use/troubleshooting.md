@@ -1,6 +1,6 @@
 ---
 sourcePath: use/troubleshooting.md
-sourceHash: d5bd3db5f78c1e3b
+sourceHash: 86d863a083e7b080
 ---
 
 # Dépannage
@@ -26,7 +26,7 @@ des requêtes, ou une requête lente monopolise des connexions.
 **Symptôme :** `502 Bad Gateway` au téléchargement d'artefacts censés être en
 cache ; les logs montrent `InvalidAccessKeyId` ou `ExpiredTokenException`.
 
-**Cause :** les identifiants AWS / MinIO de `[storage]` ont expiré (un token STS
+**Cause :** les identifiants S3 de `[storage]` ont expiré (un token STS
 temporaire, ou une clé qui a tourné).
 
 **Correction :**

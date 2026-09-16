@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/generic.md
-sourceHash: 2a551602a2a55a4b
+sourceHash: d0ff8e95d70c9dc2
 ---
 
 # Miroir générique
@@ -9,7 +9,7 @@ Un miroir en proxy seul, adressé par chemin, de n'importe quelle arborescence d
 fichiers en HTTP — pour les amonts qui n'ont aucun protocole de paquets :
 archives de chaînes d'outils (`nodejs.org/dist`, `static.rust-lang.org`,
 `dl.google.com/go`) et CDN d'éditeurs à binaire unique (`get.helm.sh`,
-`dl.min.io`). Chaque requête diffuse `{upstream}/{path}` et le met en cache au
+`binaries.sonarsource.com`). Chaque requête diffuse `{upstream}/{path}` et le met en cache au
 premier défaut. Il n'y a ni publication, ni index, ni modèle de signature.
 
 ## En un coup d'œil

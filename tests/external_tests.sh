@@ -33,8 +33,8 @@ trap cleanup EXIT
 log() { printf '\n==> %s\n' "$*"; }
 fetch() { curl -fsSL --proto '=https' --proto-redir '=https' "$@"; }
 
-export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-minioadmin}"
-export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-minioadmin}"
+export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-rustfsadmin}"
+export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-rustfsadmin}"
 export AWS_EC2_METADATA_DISABLED=true
 
 # RustFS, as `tests/heavy/backends.sh` starts and as CI runs as a service.

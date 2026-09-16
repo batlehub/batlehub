@@ -1793,7 +1793,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
     description:
       `Mirror any plain HTTP file tree — for upstreams with no package protocol at all: ` +
       `toolchain tarballs (Node, rustup, the Go toolchain) and single-binary vendor CDNs ` +
-      `(Helm, MinIO, SonarScanner). Proxy-only: there is no publish or index model. ` +
+      `(Helm, SonarScanner). Proxy-only: there is no publish or index model. ` +
       `Both <code>upstreams</code> and ` +
       `<code>path_allow</code> are required — ` +
       `without the allowlist a mirror of a shared host would relay every unrelated path on it.`,
@@ -1881,12 +1881,6 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
             ``,
             `[[registries]]`,
             `type       = "generic"`,
-            `name       = "minio-dl"`,
-            `upstreams  = ["https://dl.min.io"]`,
-            `path_allow = ["client/mc/release/linux-amd64/**"]`,
-            ``,
-            `[[registries]]`,
-            `type       = "generic"`,
             `name       = "sonar-binaries"`,
             `upstreams  = ["https://binaries.sonarsource.com"]`,
             `path_allow = ["Distribution/sonar-scanner-cli/**"]`,
@@ -1936,7 +1930,6 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
             "rust-dist",
             "go-dl",
             "helm-bin",
-            "minio-dl",
             "sonar-binaries",
           ];
           const p = (name: string) => `${ctx.urlFor(name)}/generic`;
@@ -1963,7 +1956,6 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
             String.raw`"regex:^https://static\\.rust-lang\\.org/(.+)" = "${p("rust-dist")}/$1"`,
             String.raw`"regex:^https://dl\\.google\\.com/go/(.+)" = "${p("go-dl")}/$1"`,
             String.raw`"regex:^https://get\\.helm\\.sh/(.+)" = "${p("helm-bin")}/$1"`,
-            String.raw`"regex:^https://dl\\.min\\.io/(.+)" = "${p("minio-dl")}/$1"`,
             String.raw`"regex:^https://binaries\\.sonarsource\\.com/(.+)" = "${p("sonar-binaries")}/$1"`,
           );
           return lines.join("\n");
