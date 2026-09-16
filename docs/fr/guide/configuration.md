@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: a36d5858d4ed2552
+sourceHash: b9041b8d5d0ca167
 ---
 
 # Référence de configuration
@@ -962,6 +962,14 @@ force_path_style = true         # facultatif : nécessaire pour MinIO et RustFS
 Les identifiants S3 viennent de la chaîne d'identifiants standard du SDK AWS :
 les variables `AWS_ACCESS_KEY_ID` et `AWS_SECRET_ACCESS_KEY`,
 `~/.aws/credentials`, les métadonnées d'instance EC2 ou ECS, et ainsi de suite.
+
+> **Fonctionnalité `storage-s3` :** le backend `s3` n'est compilé qu'avec la
+> fonctionnalité `storage-s3`. Elle fait partie des fonctionnalités par défaut :
+> l'image Docker officielle et celle du worker l'embarquent toutes les deux.
+> Depuis les sources avec `--no-default-features`, passez `--features storage-s3`
+> à `cargo build` ; configurer `type = "s3"` sur une compilation qui ne l'a pas
+> est une erreur de démarrage, et non un repli silencieux. `batlehub --version`
+> affiche les fonctionnalités d'une compilation en cours d'exécution.
 
 #### Multi-backend
 

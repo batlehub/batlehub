@@ -1,25 +1,34 @@
 #!/usr/bin/env python3
 """The verdict for `perf/scripts/soak.sh`: did the server give anything back?
 
-Reads the sampler's CSV and the phase marks, measures four things in the two
+Reads the sampler's CSV and the phase marks, measures five things in the two
 *idle* windows the script arranged, and fails the run when any of them grew
 past its threshold.
 
-The four are deliberately different kinds of resource, because they fail
+The five are deliberately different kinds of resource, because they fail
 differently and a leak in one is invisible in the others:
 
 * **RSS** — memory still held with nothing in flight. Reported as a percentage
-  because the absolute number depends on the allocator (`jemalloc` is on by
-  default and keeps arenas) and on how much was cached during warm-up.
+  because the absolute number depends on the allocator and on how much was
+  cached during warm-up. It is a statement about the *process* only as long as
+  jemalloc purges in the background (`server/Cargo.toml`, the
+  `background_threads` feature): without that, an idle process never hands a
+  dirty page back and this row measures how much longer the load phase ran than
+  the warm-up did.
 * **File descriptors** — a socket or file not closed. The one that takes a
   server down hardest, because it ends in `EMFILE` on *accept*, which looks
   like a network fault rather than like a bug.
+* **Live heap** — jemalloc's `stats.allocated`, bytes in live allocations. The
+  row that says *whose* memory the RSS row is measuring: RSS counts pages, and
+  an allocator may hold pages the program has freed, so a clean server can fail
+  the RSS row while this one is flat. Absent (not zero) on a build without the
+  `jemalloc` feature.
 * **Threads** — a spawned worker that never joins.
 * **Database connections held** (`pool_size - available`) — a handler that took
   a connection and did not return it. Bounded by the pool, so it does not grow
   without limit: it stops at "every request now waits forever".
 
-A fifth signal is not a growth measurement at all: the **slope** of RSS during
+A sixth signal is not a growth measurement at all: the **slope** of RSS during
 the sustained load. A leak that is slower than the run is long shows up as a
 line that never flattens, hours before the idle windows differ enough to fail.
 
@@ -32,6 +41,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import statistics
 import tempfile
@@ -93,6 +103,7 @@ class Sample:
     threads: int | None
     pool_size: float | None
     pool_idle: float | None
+    heap_mib: float | None
 
     @property
     def pool_held(self) -> float | None:
@@ -142,6 +153,9 @@ def read_samples(path: Path) -> list[Sample]:
                     threads=int(threads) if threads is not None else None,
                     pool_size=num("pool_size"),
                     pool_idle=num("pool_idle"),
+                    heap_mib=(
+                        heap / 1024.0 if (heap := num("heap_kb")) is not None else None
+                    ),
                 )
             )
     return out
@@ -181,12 +195,29 @@ def median_of(samples: list[Sample], attr: str) -> float | None:
     return float(statistics.median(values))
 
 
-def slope_mib_per_min(samples: list[Sample]) -> float | None:
-    """Least-squares slope of RSS over the trend part of the load, MiB/minute.
+def slope_mib_per_min(samples: list[Sample]) -> tuple[float, float] | None:
+    """Least-squares slope of RSS over the trend part of the load, and its
+    standard error. Both in MiB/minute.
 
     Least squares rather than (last - first) / span: a soak's RSS sawtooths
     with every cache sweep, and two endpoints landing on different teeth is a
     number with no relationship to the trend.
+
+    **The standard error is what makes the slope a verdict rather than a
+    reading.** The plateau this fits across is not a line with noise on it, it
+    is a sawtooth: measured on three 10-minute runs of the 24-kind mix, the
+    residual scatter is 9–14 MiB and the peak-to-peak swing 48–73 MiB, against a
+    2.00 MiB/min limit that describes 13 MiB over the same window. Three runs of
+    the *same* plateau fitted 0.28, 1.27 and 2.08 MiB/min — the differences
+    being which tooth the window opened and closed on, and the third one failing
+    a gate the other two passed.
+
+    So the caller compares the limit against the **lower bound** of the fit's
+    95 % interval (`slope - 2·se`), which is the strongest claim the data
+    supports: *the trend is above the limit even allowing for the scatter*. What
+    that gives up is measurable — planted on those same three runs, a leak of
+    +2.5 MiB/min is caught in all three and +2.0 in two of three — and what it
+    buys is that a clean run cannot fail on the phase of a sawtooth.
 
     The first `SLOPE_SKIP_FRACTION` of the window is dropped — that part is the
     fill, not the trend.
@@ -205,7 +236,12 @@ def slope_mib_per_min(samples: list[Sample]) -> float | None:
     denom = sum((x - mean_x) ** 2 for x in xs)
     if denom == 0:
         return None
-    return sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys)) / denom
+    slope = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys)) / denom
+    intercept = mean_y - slope * mean_x
+    residual_var = sum((y - (intercept + slope * x)) ** 2 for x, y in zip(xs, ys)) / (
+        n - 2
+    )
+    return slope, math.sqrt(residual_var / denom)
 
 
 # ── Per-registry accounting ──────────────────────────────────────────────────
@@ -557,7 +593,7 @@ def fmt(value: float | None, digits: int = 1) -> str:
 
 
 def resource_checks(baseline_w: list[Sample], final_w: list[Sample]) -> list[Check]:
-    """The four idle-window comparisons, in report order. RSS is first: the
+    """The five idle-window comparisons, in report order. RSS is first: the
     warm-up exemption below reaches for `checks[0]`."""
     return [
         check_growth(
@@ -565,6 +601,30 @@ def resource_checks(baseline_w: list[Sample], final_w: list[Sample]) -> list[Che
             median_of(baseline_w, "rss_mib"),
             median_of(final_w, "rss_mib"),
             env_float("SOAK_MAX_RSS_GROWTH_PCT", 10.0),
+            "%",
+            percent=True,
+        ),
+        # The row that says *whose* memory it is. RSS counts pages, and an
+        # allocator is free to hold pages the program has already freed — which
+        # is how a clean server fails a leak gate. `stats.allocated` counts
+        # bytes in live allocations, so it moves only when the program is
+        # holding more than it was.
+        #
+        # Tighter than the RSS limit (5 % against 10 %) because it does not
+        # carry the allocator's bookkeeping: a live heap that is 5 % larger
+        # after ten minutes of the same workload is the process keeping
+        # something, and the caches that legitimately grow — metadata, storage —
+        # do not live in this process's heap (`config.soak.toml` puts the cache
+        # in Postgres and the artifacts on disk).
+        #
+        # Absent on a build without the `jemalloc` feature: the sampler writes
+        # an empty column and `check_growth` reports it as not measured, which
+        # is the honest answer rather than a zero.
+        check_growth(
+            "Live heap (idle)",
+            median_of(baseline_w, "heap_mib"),
+            median_of(final_w, "heap_mib"),
+            env_float("SOAK_MAX_HEAP_GROWTH_PCT", 5.0),
             "%",
             percent=True,
         ),
@@ -603,16 +663,29 @@ def read_panics(path: Path | None) -> list[str]:
     ]
 
 
-def read_k6(path: Path | None) -> tuple[float | None, float | None]:
-    """`(failure rate, request count)` from a k6 summary, `(None, None)` without one."""
+def read_k6(path: Path | None) -> tuple[float | None, float | None, float | None]:
+    """`(failure rate, request count, p95 ms)` from a k6 summary.
+
+    The p95 is context, never a verdict: this is a leak gate and a latency
+    threshold here would fail runs for reasons that have nothing to do with what
+    the process is holding. It is reported because the two questions are asked
+    together often enough — an allocator change, a cache backend, a new registry
+    kind in the mix all move both — and because a report that says "no leak" on
+    a run whose p95 quadrupled has answered the smaller half of the question.
+    """
     if not path or not path.exists():
-        return None, None
+        return None, None, None
     try:
         metrics = json.loads(path.read_text()).get("metrics", {})
     except (json.JSONDecodeError, AttributeError):
-        return None, None
+        return None, None, None
     failed = metrics.get("http_req_failed", {})
-    return failed.get("value", failed.get("rate")), metrics.get("http_reqs", {}).get("count")
+    duration = metrics.get("http_req_duration", {})
+    return (
+        failed.get("value", failed.get("rate")),
+        metrics.get("http_reqs", {}).get("count"),
+        duration.get("p(95)"),
+    )
 
 
 def read_costs(before_path: Path | None, after_path: Path | None) -> list[RegistryCost]:
@@ -778,13 +851,21 @@ def exempt_rss_during_warmup(rss_check: Check, slope_judged: bool, steady_second
 
 
 def slope_row(
-    slope: float | None,
+    fitted: tuple[float, float] | None,
     slope_limit: float,
     slope_ok: bool,
     slope_judged: bool,
     steady_seconds: int,
 ) -> str:
-    """The RSS-trend row, which only the caller knows whether to judge."""
+    """The RSS-trend row, which only the caller knows whether to judge.
+
+    The measured value carries its interval, because the interval is the
+    difference between "this run trended upward" and "this run cannot tell":
+    a `2.08 ±0.56` that reads `ok` is not a threshold being lenient, it is the
+    run saying the fit does not resolve the limit.
+    """
+    slope = fitted[0] if fitted else None
+    interval = f" ±{2 * fitted[1]:.2f}" if fitted else ""
     if slope_judged:
         verdict = "ok" if slope_ok else "**over**"
     else:
@@ -793,7 +874,7 @@ def slope_row(
             f"{MIN_SLOPE_WINDOW_SECONDS}s a trend needs"
         )
     return (
-        f"| RSS trend under load | — | — | {fmt(slope, 2)} MiB/min | "
+        f"| RSS trend under load | — | — | {fmt(slope, 2)}{interval} MiB/min | "
         f"{slope_limit:.2f} MiB/min | {verdict} |"
     )
 
@@ -811,11 +892,20 @@ def header_lines(duration: str, rate: str, reqs: float | None, ok: bool) -> list
     ]
 
 
-def tail_lines(failed_rate: float | None, k6_exit: int, panics: list[str], ok: bool) -> list[str]:
+def tail_lines(
+    failed_rate: float | None,
+    k6_exit: int,
+    panics: list[str],
+    ok: bool,
+    p95_ms: float | None = None,
+) -> list[str]:
     """What k6 and the server log had to say, and how to reproduce a failure."""
     lines: list[str] = []
     if failed_rate is not None:
-        lines.append(f"k6 request failure rate: {failed_rate * 100:.2f}%")
+        served = f"k6 request failure rate: {failed_rate * 100:.2f}%"
+        if p95_ms is not None:
+            served += f" · p95 {p95_ms:.0f} ms (reported, not judged)"
+        lines.append(served)
     if k6_exit != 0:
         lines.append(
             f"**k6 exited {k6_exit}** — a threshold in the scenario was "
@@ -863,13 +953,20 @@ def main() -> int:
     steady_seconds = (
         steady_w[-1].epoch_s - steady_w[0].epoch_s if len(steady_w) > 1 else 0
     )
-    slope = slope_mib_per_min(steady_w)
+    fitted = slope_mib_per_min(steady_w)
     slope_limit = env_float("SOAK_MAX_RSS_SLOPE_MIB_PER_MIN", 2.0)
     slope_judged = steady_seconds >= MIN_SLOPE_WINDOW_SECONDS
-    slope_ok = slope is None or not slope_judged or slope <= slope_limit
+    # The lower bound of the fit's 95 % interval, not the fit: see
+    # `slope_mib_per_min`. A run fails when the *scatter cannot explain* a trend
+    # above the limit.
+    slope_ok = (
+        fitted is None
+        or not slope_judged
+        or (fitted[0] - 2 * fitted[1]) <= slope_limit
+    )
 
     panics = read_panics(SERVER_LOG_FILE)
-    failed_rate, reqs = read_k6(K6_SUMMARY_FILE)
+    failed_rate, reqs, p95_ms = read_k6(K6_SUMMARY_FILE)
 
     exempt_rss_during_warmup(checks[0], slope_judged, steady_seconds)
 
@@ -877,7 +974,7 @@ def main() -> int:
 
     lines = header_lines(args.duration, args.rate, reqs, ok)
     lines.extend(checks_table(checks))
-    lines.append(slope_row(slope, slope_limit, slope_ok, slope_judged, steady_seconds))
+    lines.append(slope_row(fitted, slope_limit, slope_ok, slope_judged, steady_seconds))
     lines.append("")
 
     # ── What consumed what, over time ────────────────────────────────────────
@@ -889,7 +986,7 @@ def main() -> int:
 
     lines.extend(costs_section(costs))
 
-    lines.extend(tail_lines(failed_rate, args.k6_exit, panics, ok))
+    lines.extend(tail_lines(failed_rate, args.k6_exit, panics, ok, p95_ms))
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     REPORT_FILE.write_text("\n".join(lines) + "\n")

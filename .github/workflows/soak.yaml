@@ -157,10 +157,12 @@ jobs:
           k6 version
       - name: Soak
         run: |
+          # No --warmup: the script's default is what fills the mix, and a
+          # literal here is a second place to forget when a registry kind is
+          # added. See the comment on `WARMUP` in perf/scripts/soak.sh.
           bash perf/scripts/soak.sh \
             --duration "${{ inputs.duration || '10m' }}" \
             --rate "${{ inputs.rate || '100' }}" \
-            --warmup 60 \
             --settle 60
       # `always()`: the samples are most worth keeping when the verdict is red,
       # and a failing step would otherwise take the evidence with it.

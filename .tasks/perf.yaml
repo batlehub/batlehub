@@ -161,11 +161,23 @@ tasks:
   perf:soak:
     desc: "Soak the server under constant load and fail if it did not give back what it took (leak gate; needs DATABASE_URL and k6). DURATION, RATE, WARMUP, SETTLE, PROFILE"
     cmds:
+      # WARMUP is forwarded only when set: its default is the script's, because
+      # the warm-up has to be long enough to fill the mix and a second copy of
+      # that number here is one to forget when the mix grows.
       - bash perf/scripts/soak.sh
         --duration {{.DURATION | default "10m"}}
         --rate {{.RATE | default "100"}}
-        --warmup {{.WARMUP | default "60"}}
+        {{if .WARMUP}}--warmup {{.WARMUP}}{{end}}
         --settle {{.SETTLE | default "60"}}
+        --profile {{.PROFILE | default "release"}}
+
+  perf:lifecycle:
+    desc: "Measure how long the process takes to become healthy and how long it takes to stop, idle and draining (needs DATABASE_URL). ITERATIONS, IN_FLIGHT, UPSTREAM_DELAY_MS, PROFILE"
+    cmds:
+      - bash perf/scripts/lifecycle.sh
+        --iterations {{.ITERATIONS | default "5"}}
+        --in-flight {{.IN_FLIGHT | default "20"}}
+        --upstream-delay-ms {{.UPSTREAM_DELAY_MS | default "3000"}}
         --profile {{.PROFILE | default "release"}}
 
   # ── Performance testing — S3 + Redis backends ─────────────────────────────────

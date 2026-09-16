@@ -688,30 +688,79 @@ warm-up rather than at startup. That ordering is the whole design:
 What is left is what was still held with nothing in flight, which is what
 "leak" means.
 
-Four resources are compared, because they fail differently and a leak in one is
+The third bullet is a property of the **build**, not of the wait. jemalloc's
+decay runs on allocator activity: a page goes dirty, its deadline passes, and
+the purge happens on the next allocation that ticks that arena — so a process
+with nothing in flight purges nothing, however long you quiesce it. That is why
+`server/Cargo.toml` enables `tikv-jemallocator`'s `background_threads` feature,
+which is *not* implied by the default `background_threads_runtime_support`:
+without it the crate compiles jemalloc with `background_thread:false`.
+
+Measured on the same binary and the same 60-second quiesce, 10m at 100 req/s
+across 24 registry kinds:
+
+| | idle RSS | trend | verdict |
+| --- | --- | --- | --- |
+| purging off | 272.5 → 300.5 MiB (+10.3 %) | 1.27 MiB/min | **FAILED** |
+| purging on | 258.4 → 262.9 MiB (+1.7 %) | 0.28 MiB/min | passed |
+
+Nothing about the server differed between those two runs. A build that drops it
+— `--no-default-features`, or `_RJEM_MALLOC_CONF=background_thread:false` —
+makes this gate measure retained arenas instead, and it fails by comparing a
+window that follows ten minutes of load against one that follows sixty seconds
+of it.
+
+Five resources are compared, because they fail differently and a leak in one is
 invisible in the others:
 
 | Signal | Where it comes from | What it means when it grows |
 | --- | --- | --- |
 | RSS at idle | `/proc/<pid>/status` | memory still held with nothing in flight |
+| Live heap at idle | `batlehub_memory_allocated_bytes` from `/metrics` | the *program* is holding more objects — the row that separates a leak from an allocator keeping pages |
 | Open descriptors | `/proc/<pid>/fd` | a socket or file not closed — ends in `EMFILE` on *accept*, which looks like a network fault |
 | Threads | `/proc/<pid>/status` | a spawned worker that never joins |
 | Connections held | `batlehub_db_pool_size` − `..._available_connections` from `/metrics` | a handler that took a pool connection and did not return it |
 
-A fifth signal is not a growth comparison at all: the **slope** of RSS during
+The second row is the one to read first when the first row is red. RSS counts
+pages and an allocator may hold pages the program has already freed, so the two
+rows disagree exactly when the allocator is the answer: **RSS up, live heap
+flat** is fragmentation or decay, **both up** is a leak. That distinction cost
+four ten-minute runs and two seventeen-minute builds to establish once by A/B,
+which is why the process now reports it. It is limited at 5 % rather than RSS's
+10 %, because it carries no bookkeeping — and on a build without the `jemalloc`
+feature it reads *not measured*, never zero.
+
+Those series come from `server/src/allocator.rs`, which publishes jemalloc's
+`allocated`, `active`, `resident`, `mapped` and `retained` every five seconds.
+They are worth a dashboard panel beyond this gate: `resident − allocated` is
+what the allocator is holding on the program's behalf, and it is the difference
+between a memory limit that needs raising and a bug that needs fixing.
+
+A sixth signal is not a growth comparison at all: the **slope** of RSS during
 the sustained load, by least squares. A leak slower than the run is long shows
 up as a line that never flattens, hours before the idle windows differ enough
 to fail. (Least squares rather than last-minus-first: RSS sawtooths with every
 cache sweep, and two endpoints landing on different teeth is a number with no
 relationship to the trend.)
 
-Two bounds keep that signal honest. The fit skips the **first third** of the
-load, because the start is caches and pools filling rather than a trend; and
-under five minutes of sustained load the slope is *reported but not judged* —
+Three bounds keep that signal honest. The fit skips the **first third** of the
+load, because the start is caches and pools filling rather than a trend; under
+five minutes of sustained load the slope is *reported but not judged* —
 measured at 10.5 MiB/min on a 30-second window whose idle comparison was
 +4.2 %, which was the fill and nothing else. A window that short cannot tell a
 leak from a cache warming up, and a gate that cannot tell should say so rather
 than guess.
+
+The third is that the limit is compared against the **lower bound of the fit's
+95 % interval**, and the row prints the interval (`2.08 ±0.55 MiB/min`). What
+the fit crosses is not a line with noise on it but a sawtooth: on the 24-kind
+mix the residual scatter is 9–14 MiB and the peak-to-peak swing 48–73 MiB,
+where the 2.00 MiB/min limit describes 13 MiB across the same window. Three
+runs of the same plateau fitted 0.28, 1.27 and 2.08 MiB/min purely by which
+tooth the window opened and closed on — and the last of those failed a gate the
+other two passed. Planting a synthetic leak on those same three runs measures
+what the interval costs: **+2.5 MiB/min is caught in all three, +2.0 in two of
+three**. A number the run cannot resolve is not a verdict.
 
 ### `task perf:soak` — synthetic, fast, precise
 
@@ -742,7 +791,8 @@ editing anything:
 | Variable | Default | Fails when |
 | --- | --- | --- |
 | `SOAK_MAX_RSS_GROWTH_PCT` | `10` | idle RSS grew more than this, as a percentage |
-| `SOAK_MAX_RSS_SLOPE_MIB_PER_MIN` | `2.0` | RSS trended upwards faster than this under load |
+| `SOAK_MAX_HEAP_GROWTH_PCT` | `5` | idle live heap grew more than this — jemalloc builds only |
+| `SOAK_MAX_RSS_SLOPE_MIB_PER_MIN` | `2.0` | RSS trended upwards faster than this under load — compared against the fit's 95 % lower bound, not the fit |
 | `SOAK_MAX_FD_GROWTH` | `16` | this many more descriptors are open at idle |
 | `SOAK_MAX_THREAD_GROWTH` | `4` | this many more threads are running |
 | `SOAK_MAX_POOL_GROWTH` | `2` | this many more pool connections are held at idle |

@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/server-cli.md
-sourceHash: d67738882a47cd4c
+sourceHash: 9136dd8c04cace20
 ---
 
 # Sous-commandes du binaire serveur
@@ -16,9 +16,32 @@ pages sans pouvoir les distinguer.
 
 ```
 batlehub --config config.toml          # démarrer le serveur (défaut : config.toml)
+batlehub --version                     # la version, et les backends de cette compilation
 batlehub dump-spec                     # imprimer la spécification OpenAPI JSON sur stdout
 batlehub hash-token <token>            # produire une empreinte Argon2id PHC pour un token statique
 batlehub explain-config                # imprimer les permissions de chaque sujet, développées
+```
+
+## `--version`
+
+Imprime la version et les fonctionnalités cargo avec lesquelles le binaire a été
+compilé :
+
+```sh
+batlehub --version
+# batlehub 1.2.0 (features: storage-s3, cache-redis, sbom, jemalloc)
+```
+
+Les fonctionnalités de cette liste sont des backends qui existent ou non dans le
+binaire — `storage-s3` pour `[storage] type = "s3"`, `cache-redis` pour
+`[cache] type = "redis"` — et une configuration qui en nomme un que la
+compilation n'a pas est refusée au démarrage plutôt que dégradée. Toutes font
+partie des fonctionnalités par défaut : une image publiée les embarque toutes, et
+la question se pose surtout pour une compilation depuis les sources, ou pour une
+image dont la provenance est incertaine :
+
+```sh
+docker run --rm ghcr.io/batleforc/batlehub:<version> --version
 ```
 
 ## `--config`

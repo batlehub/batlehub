@@ -82,8 +82,18 @@ pub(super) async fn build_single_backend(
                 })?;
                 Ok(Arc::new(backend))
             }
+            // Reachable only in a `--no-default-features` build: `storage-s3`
+            // is on by default and every published image carries it. So the
+            // message names the build, not the config — the operator who sees
+            // this compiled the binary themselves, and nothing they can write
+            // in the TOML will fix it.
             #[cfg(not(feature = "storage-s3"))]
-            anyhow::bail!("S3 storage requires the 'storage-s3' feature flag at compile time");
+            anyhow::bail!(
+                "S3 storage requires the 'storage-s3' feature flag at compile time, and this \
+                 binary was built without it — it is a default feature, so this is a \
+                 `--no-default-features` build. Rebuild with `--features storage-s3`, or use a \
+                 published image. `batlehub --version` lists this build's features."
+            );
         }
     }
 }

@@ -6,14 +6,14 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Draft                                                         |
+| Status      | In review                                                     |
 | Short       | Alpine apk                                                    |
 | Settles     | Proxying Alpine's APKINDEX and .apk tree with the index relayed byte-exact and the block enforced at the package, and local publishing with an RSA-signed index that every shipping apk trusts — signed without the banned crate |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
 | Co-author   | Claude Fable 5.1 <noreply@anthropic.com>                      |
 | Created     | 2026-09-11                                                    |
 | Supersedes  | —                                                             |
-| Touches     | `crates/core`, `crates/config`, `crates/adapters`, `crates/web`, `server`, `ui`, `docs`, `tests/heavy` |
+| Touches     | `crates/core`, `crates/config`, `crates/adapters`, `crates/web`, `server`, `ui`, `docs`, `tests/heavy`, `perf` |
 
 ---
 
@@ -31,8 +31,9 @@ Two things the roadmap entry got wrong decide the shape, and both were found
 by reading apk-tools rather than remembering it:
 
 - **The index cannot be a filtered listing.** `APKINDEX.tar.gz` is signed by
-  Alpine's RSA key and every apk that ships — 2.14.10 on Alpine 3.21/3.22,
-  3.0.8 on 3.23 through 3.25 — verifies that signature before reading a byte
+  Alpine's RSA key and every apk that ships — 2.14.10 on Alpine 3.22,
+  2.14.6 on 3.21, 3.0.8 on 3.23, 3.24, `latest-stable` and `edge` — verifies
+  that signature before reading a byte
   of it, and refuses an unverifiable index unless `--allow-untrusted` is on,
   which also switches off the package identity check. So the upstream index
   is relayed byte-exact, as `deb`, `rpm` and `pacman` already relay theirs,
@@ -197,7 +198,7 @@ name       = "alpine"
 type       = "apk"
 mode       = "proxy"
 upstreams  = ["https://dl-cdn.alpinelinux.org/alpine"]   # the tree root, not a branch
-path_allow = ["v3.22/**", "v3.25/**", "latest-stable/**"]  # optional; absent means the whole tree
+path_allow = ["v3.22/**", "v3.24/**", "latest-stable/**"]  # optional; absent means the whole tree
 
 # Local: a repository this instance hosts and signs
 [[registries]]
@@ -248,7 +249,7 @@ https://batlehub.example.com/proxy/alpine/apk/v3.22/main
 https://batlehub.example.com/proxy/alpine/apk/v3.22/community
 
 # apk 3 (Alpine ≥ 3.23) also accepts the components form — same requests on the wire
-https://batlehub.example.com/proxy/alpine/apk/v3.25 main community
+https://batlehub.example.com/proxy/alpine/apk/v3.24 main community
 
 # A local repository: install the instance's key once, then the line
 curl -fsSL -o /etc/apk/keys/internal-apk@example.com-5f3a1c2e.rsa.pub \
@@ -292,12 +293,15 @@ everything before them, which is how `py3-requests-2.32.4-r0` splits
 unambiguously though both halves contain dashes. A `.apk` whose name has no
 `-r<digits>` token is a `400` at the edge, not a guess.
 
-Three URLs can name one file — `v3.22/main`, `latest-stable/main` and, for a
-while, `v3.25/main` — and they are three cache entries with three paths,
-one dedup reference each (`artifact_dedup_index`), and one row per
-`busybox`/`1.37.0-r20` in statistics. That is the same trade `nodedist` made
-for io.js and it is the right one: the identity is what the admin acts on,
-the path is what the client asks for.
+Several URLs can name one file. Today `v3.24/main/x86_64/busybox-1.37.0-r31.apk`
+and `latest-stable/main/x86_64/busybox-1.37.0-r31.apk` are the same bytes —
+`latest-stable` is a symlink to the newest stable branch — and a third joins
+them for as long as a package survives into the next branch. They are that
+many cache entries with that many paths, one dedup reference each
+(`artifact_dedup_index`), and one row per `busybox`/`1.37.0-r31` in
+statistics. That is the same trade `nodedist` made for io.js and it is the
+right one: the identity is what the admin acts on, the path is what the
+client asks for.
 
 ### 4.4 Behaviour rules
 
@@ -376,6 +380,13 @@ way `rpm`'s `repodata/repomd.xml.key` is (`is_signing_key_path`). Any other
 name under `keys/` is `404`, so a client that typos the file name learns it
 at `curl` rather than at `apk update`.
 
+`keys/` is therefore a **reserved prefix** under `…/apk/`, and the page says
+so. Alpine's own tree has nothing there — `dl-cdn.alpinelinux.org/alpine/keys/`
+is a `404` and the root holds only branches, `MIRRORS.txt` and `last-updated`
+— but a mirror that did would be shadowed in `hybrid` mode. One reserved
+segment at the root of a tree whose real content always begins with a branch
+name is a trade worth stating rather than discovering.
+
 **Uploaded packages are stored byte-exact.** A `.apk` from `abuild` carries
 its builder's `.SIGN.RSA.<builder key>` member; one from `apk mkpkg`,
 `melange` or `nfpm` may carry none. Both are kept as uploaded and both
@@ -396,7 +407,7 @@ does with `.PKGINFO` and the compression magic.
 | `apk_signing` in `proxy` mode | There is nothing to sign: the upstream index is relayed and the key would advertise a trust this instance does not provide. |
 | `apk_signing.key_name` not ending in `.rsa.pub`, or containing `/` or `..` | apk opens it by that name in the keys directory; the suffix is Alpine's convention and the rest is a path segment. |
 | `apk_signing.private_key_pem` that does not parse as an RSA key of ≥ 2048 bits | `RsaKeyPair::from_pkcs8`/`from_der` reject it at boot rather than at the first publish, and a 1024-bit key is a key apk 3 warns about and this instance should not mint an index with. |
-| `local`/`hybrid` with no `apk_signing` **and** no explicit `unsigned = true` | An unsigned index is useless to every apk with `--allow-untrusted` off, which is every apk. The field exists so a test registry can say so out loud, as `pacman`'s page documents `SigLevel = Never`; inheriting silence would ship a repository nothing can install from. |
+| `local`/`hybrid` with no `apk_signing` **and** no explicit `apk_unsigned = true` | An unsigned index is useless to every apk with `--allow-untrusted` off, which is every apk. The field exists so a test registry can say so out loud, as `pacman`'s page documents `SigLevel = Never`; inheriting silence would ship a repository nothing can install from. |
 | A `release_age_gate` rule with no explicit `deny_missing_timestamp` | The index carries `t:` for every package it lists, so the only undated coordinate is one the cached index no longer has; the two answers are opposite postures and the operator states one (RFC 0010 §6.7). |
 
 Warnings (logged and surfaced to the admin):
@@ -459,9 +470,14 @@ file name — the file name is only how it was addressed.
 userinfo in the repository URL, no header configuration, no netrc. §4.2 says
 what that means for an operator.
 
-**The spellings.** A package file is `{name}-{pkgver}-r{N}.apk`, where both
-the name and `pkgver` may contain dashes and the release suffix is always
-`-r` followed by digits — which is what makes the split in §4.3 unambiguous.
+**The spellings.** A package file is `{name}-{pkgver}-r{N}.apk`. The *name*
+may contain dashes; the `pkgver` may not — measured over `v3.22/main/x86_64`,
+all 5 647 versions carry exactly one dash, the one before `-r<digits>` — and
+the release suffix is always `-r` followed by digits. So the split in §4.3 is
+a `rsplit('-', 2)` and it is unambiguous even for the adversarial case the
+branch actually contains: `linux-firmware-r128`, a package whose *name* ends
+in `-r<digits>`, whose file `linux-firmware-r128-20250613-r0.apk` still splits
+correctly because the version's two tokens are taken from the right.
 An architecture is a directory (`x86_64`, `aarch64`, `armv7`, …), a branch is
 `v3.22`, `edge` or `latest-stable`, and a repository is `main`, `community` or
 `testing`.
@@ -580,7 +596,7 @@ answers:
   `(name, version) → t:`. A linear pass over `P:`/`V:`/`t:` lines; no
   allocation per field the gate does not read.
 
-### 6.2 `crates/adapters` — `repo/apk.rs` and the signer
+### 6.2 `crates/adapters` — the client, `repo/apk.rs` and the signer
 
 `repo/apk.rs`, beside `repo/pacman.rs`:
 
@@ -616,22 +632,48 @@ line for the same version and no new crate to the tree. The banned `rsa`
 crate is not touched: `deny.toml:182` continues to refuse it, and `cargo
 deny check` is the regression test that this design did not smuggle it in.
 
-The proxy client is `PathProxyRegistryClient` as for the siblings, with one
-addition: `resolve_metadata` for a `.apk` coordinate reads the cached
-`APKINDEX.tar.gz` of the same `{branch}/{repo}/{arch}` (fetched through the
-metadata cache with the registry's `metadata_ttl`; apk's own default is four
-hours, `database.c:1521`) and populates `published_at` from `t:`, falling
-back to a `HEAD` on the path with `published_at: None` when the version is
-not listed — RFC 0010 §13.1's shape, with a real timestamp instead of a
-date.
+**The proxy client, and where the timestamp comes from.**
+`PathProxyRegistryClient::resolve_metadata` returns `published_at: None`
+unconditionally today (`registry/path_proxy.rs:120–137`) — correctly, because
+a path kind has no metadata API. apk is the first path kind whose tree *does*
+carry a date, and the age gate needs it, so something has to change. The
+choice is a **wrapper, not an arm**:
+
+```rust
+// crates/adapters/src/registry/apk.rs
+pub struct ApkRegistryClient {
+    inner: PathProxyRegistryClient,   // every byte path, unchanged
+    metadata: Arc<dyn CacheStore>,    // where the parsed index lives
+}
+```
+
+`fetch_artifact`, `probe_artifact`, `check_path_allowed` and the streaming
+path delegate to `inner` verbatim. Only `resolve_metadata` is overridden: for
+a `.apk` coordinate it reads the `APKINDEX.tar.gz` of the same
+`{branch}/{repo}/{arch}` through the metadata cache with the registry's
+`metadata_ttl` (apk's own default is four hours, `database.c:1521`), parses it
+with `ApkIndex::parse`, and populates `published_at` from `t:`; for anything
+else — the index itself, the key route — it delegates and the answer is
+`None`. When the version is not listed it falls back to a `HEAD` on the path
+with `published_at: None`, which is the case §4.5's mandatory
+`deny_missing_timestamp` exists to answer. RFC 0010 §13.1's shape, with a
+real timestamp instead of a date.
+
+`path_proxy.rs` is genuinely untouched, which is what §6.8 claims and what a
+new kind should cost an established family: one file, no arm in a shared
+client, and the `deb`/`rpm`/`pacman`/`generic` path unchanged by construction
+rather than by review.
 
 ### 6.3 `crates/config`
 
 - `RegistryConfig::apk_signing: Option<ApkSigningConfig { key_name, private_key_pem }>`,
   documented `apk`-only, beside `repo_signing` and `vsx_signing`.
-- `RegistryConfig::unsigned: bool` (default `false`), the explicit opt-out of
-  §4.5, valid only on `apk` in `local`/`hybrid` — until a second kind wants
-  it, at which point it generalises.
+- `RegistryConfig::apk_unsigned: bool` (default `false`), the explicit opt-out
+  of §4.5, valid only on `apk` in `local`/`hybrid`. Kind-prefixed like every
+  signing field beside it (`repo_signing`, `vsx_signing`, `apk_signing`) —
+  a bare `unsigned` on a struct shared by 25 kinds reads as a promise the
+  other 24 do not keep. It generalises by being renamed, the day a second kind
+  wants it, which is cheaper than a field that lied from the start.
 - The §4.5 rejections beside the existing `repo_signing` checks.
 - `CURRENT_CONFIG_VERSION` does **not** move.
 
@@ -649,12 +691,40 @@ date.
 `regenerate_apk` is `regenerate_pacman` with the index builder and signer
 swapped: list the sidecars under `local:{registry}/_index/apk/{arch}/`,
 drop the ones whose `(name, version)` is blocked, sort by `(name, version)`,
-render, sign, store `{arch}/APKINDEX.tar.gz`. The blocked set is read at
-regeneration *and* the index is regenerated when a block is added or
-removed on an `apk` registry — the hook the pacman path does not have and
-does not need, because its database is not filtered. Without the hook, a
-block would be enforced at the download only until the next upload, which
-is the silent-until-it-is-not failure §4.4 promises does not exist.
+render, sign, store `{arch}/APKINDEX.tar.gz`.
+
+**The block-change hook is the one new cross-cutting mechanism in this RFC,
+so it is specified rather than mentioned.** Nothing calls a `regenerate_*`
+today except its own `*_publish` (`handlers/proxy/repo/publish.rs`), because
+no other generated index is *filtered* — `pacman`'s database is not, so a
+block there needs no rebuild. An `apk` index is filtered, and without a hook a
+block would be enforced at the download only until the next upload: correct
+behaviour, silently resting on a stale document, which is exactly the
+failure §4.4 promises does not exist.
+
+- **Two sources, one entry point.** Blocks arrive from the admin API
+  (`user_blocks`) and from a config `BlockListRule` through hot reload. Both
+  call one `ApkIndexRefresh::on_block_change(registry, name, version)`
+  registered as app data, which resolves the architectures that hold the
+  coordinate and regenerates each. Unblocking takes the same path: the entry
+  reappears, and the index is re-signed with it.
+- **A registry with no `apk` kind is a no-op**, so the admin path pays one
+  `RegistryKind` comparison and nothing else. Hot reload calls it once per
+  `apk` registry whose effective block set changed, not once per rule.
+- **Failure is loud and the block still holds.** Regeneration can fail —
+  storage is down, the signer's key was rotated out from under it. The block
+  itself is already committed and the *download gate still refuses the
+  version*, so the estate is safe; what is stale is the listing. The hook
+  therefore: logs at `error` with the registry, architecture and coordinate;
+  increments `batlehub_apk_index_regeneration_failures_total`; and marks the
+  registry degraded so the condition reaches the admin console rather than a
+  log line nobody reads. It does **not** roll the block back — an enforced
+  block with a stale listing is strictly better than no block.
+- **Concurrency.** A publish and a block change can race for one
+  `{arch}` index. Regeneration takes the per-`(registry, arch)` lock
+  `regenerate_pacman` already takes, so the loser rebuilds from the state the
+  winner left; both readings are consistent because both read the sidecars and
+  the block set fresh.
 
 Edge validation, per the standing rule: `validate_path_safe` on the whole
 path (already in `repo_get`), `apk_coordinate` on a `.apk` name, and
@@ -699,18 +769,27 @@ each answer is.
 - `docs/operations/egress.md`: `dl-cdn.alpinelinux.org` (Fastly).
 - `docs/contributing/security-scanning.md`'s triage notes: the `C:` SHA-1 is
   the protocol's identity, resolved in the scanner, never in the code.
-- `ROADMAP.md`: the entry's signature sentence corrected as this RFC
-  corrects it, on landing.
+- `ROADMAP.md`: nothing to write — the entry (line 35) already carries this
+  RFC's correction of the signing question. Only the checkbox moves.
 
 ### 6.8 `tests/heavy/apk.sh`
 
 One suite, `config.apk.toml` beside it, `task test:apk-heavy`, a row in the
-`heavy-client` matrix. The client is `apk.static` from
-`apk-tools-static-2.14.10-r0.apk` on `v3.22/main` — a static binary that runs
-on the runner without a rootfs — driven with `--root $tmp --arch x86_64
---keys-dir $tmp/keys --repositories-file $tmp/repositories --cache-dir
-$tmp/cache`, so nothing touches the runner's own package database. Through
-the tap, it proves:
+`heavy-client` matrix (`.github/workflows/test.yaml`).
+
+**Both generations run as static binaries, and neither is skipped.** Alpine
+ships `apk-tools-static` for each: `apk-tools-static-2.14.10-r0.apk` on
+`v3.22/main` and `apk-tools-static-3.0.8-r0.apk` on `v3.23`, `v3.24`,
+`latest-stable` and `edge` — verified against the mirror while revising this
+RFC. Both are driven with `--root $tmp --arch x86_64 --keys-dir $tmp/keys
+--repositories-file $tmp/repositories --cache-dir $tmp/cache`, so neither
+needs a rootfs, neither needs a user namespace, and nothing touches the
+runner's own package database. This matters more than convenience: a user
+namespace is blocked by AppArmor on the GitHub image, so a minirootfs plan
+would have meant a reported skip — in the one suite whose whole purpose is to
+make a skip impossible.
+
+Through the tap, each client proves:
 
 1. `apk update` fetches `v3.22/main/x86_64/APKINDEX.tar.gz` through the
    proxy and prints `OK: N distinct packages available` — Alpine's signature
@@ -729,24 +808,47 @@ the tap, it proves:
    against it. Then block that version: `apk update` re-reads a regenerated
    index without it and `apk fetch <name>` reports apk's own "unable to
    select".
-6. apk 3.0.8: the same six steps against the `apk` binary from
-   `v3.25/main/x86_64/apk-tools-3.0.8-r0.apk`, run inside the Alpine
-   minirootfs under a user namespace where the runner allows one; where it
-   does not (the AppArmor-restricted GitHub image), that half is **reported
-   skipped, not green**, and the record of which client verified what is in
-   the transcript.
+6. The **credential boundary**, which apk makes its own shape: apk's
+   vendored libfetch has no header and no netrc, only HTTP Basic from
+   userinfo in the repository URL (§4.2). So the denied arm is
+   `https://denied:token@…` returning `403`, and — the arm that matters —
+   the *allowed* arm is `https://reader:token@…` actually succeeding. A
+   denial proven with an anonymous client would be green for the wrong
+   reason; this is the trap the `ovsx` and `dotnet restore` arms fell into,
+   and the reason `apk` is claimed in `AUTHZ_CLIENT_KINDS` rather than left
+   to a route-level row.
 
-Everything §4.4 says about the two clients is read from their sources; the
-suite is what turns it into an observation.
+Steps 1–5 run twice, once per generation. Everything §4.4 says about the two
+clients is read from their sources; the suite is what turns it into an
+observation.
+
+**The two coverage gates this kind must satisfy**, both enforced and neither
+optional — a kind that lands without them is red, not undeclared:
+
+- `crates/web/tests/registry_kind_coverage.rs` — one `COVERAGE` row per
+  `RegistryKind::ALL`, checked against the suites both ways. `apk` declares
+  `Live::Suite("tests/heavy/apk.sh")`, the escape hatch `cargo` already uses
+  for `tests/heavy/rustup.sh`, because the client here is the *package
+  manager of the distribution the kind serves* and its closed world has to
+  bootstrap one. The air-gap column starts `AirGap::Gap(…)` and flips to
+  `AirGap::Case` in phase 6.
+- `tests/heavy/authz.sh` — `authz_check_kinds_covered` reads
+  `registry_kind.rs` itself and fails a kind claimed by neither
+  `AUTHZ_CLIENT_KINDS` nor a row in `authz_read_rows`. `apk` has a local
+  mode, so it goes in `AUTHZ_CLIENT_KINDS` with the hermetic phase of step 6.
+
+Both rows land in **phase 1**, with the kind, not with the suite they name.
+The gates fire on `RegistryKind::ALL`, so the alternative is a red phase 1.
 
 **Deliberately untouched**, so reviewers do not go looking:
 
 - `crates/adapters/src/repo/openpgp.rs` — the Ed25519 OpenPGP signer stays
   the signer for `deb`/`rpm`/`pacman`; apk speaks no OpenPGP and the file is
   not extended.
-- `crates/adapters/src/registry/path_proxy.rs` — the client is reused as is.
-  The identity parsing is in the handler, where the path is a string, and in
-  `resolve_metadata`'s caller, not in the client.
+- `crates/adapters/src/registry/path_proxy.rs` — not edited. `apk` wraps it
+  (§6.2) rather than adding an arm to it, so the four kinds already served by
+  it are unchanged by construction. The identity parsing is in the handler,
+  where the path is a string; the index read is in the wrapper.
 - `crates/core/src/services/blocking/` — no `strip` arm: the upstream index
   is `SIGNED` and the local index is filtered at generation, not at read.
 - `deny.toml` — unchanged. The design's correctness claim is that it needs
@@ -755,6 +857,69 @@ suite is what turns it into an observation.
   that decision was about OpenPGP and provenance and this RFC signs a
   document this instance authors, which is the case q6 explicitly left
   open.
+
+### 6.9 `perf` — the soak arms and the one scenario worth writing
+
+**The soak.** Every registry kind has an arm in `perf/k6/soak_arms.js`
+(46 arms over 24 kinds today), and the pre-flight
+(`perf/k6/scenarios/11_soak_arms.js`) fails the run if any arm does not
+answer one of the statuses it declares — the check that exists because an arm
+whose route was never written answers `404` and *passes* the load's own
+"not 5xx". `apk` gets **two** arms rather than the one `deb`, `rpm` and
+`pacman` each get, because unlike them it is not a pure byte path:
+
+| Arm | Exercises |
+| --- | --- |
+| `apk_index` | the relayed `APKINDEX.tar.gz` — a half-megabyte document on the hot path of every `apk update`, streamed and cached with no parse |
+| `apk_package` | a `.apk` — the coordinate split, `resolve_metadata` reading the cached index, and the whole rule chain, on every request |
+
+`apk_package` is the arm with something to say. The other three OS kinds cost
+the proxy a path lookup; `apk` costs it a parse of a 2.26 MB index the first
+time and a cache read after, per `metadata_ttl`. Whether that is free in the
+steady state is a measurement, not a claim, and the soak is where it is taken.
+The mock upstream gains an `apk_file` route beside `pacman_file` in
+`perf/mock-upstream/src/protocols/files.rs` plus a synthetic `APKINDEX.tar.gz`
+generator (the same two-member shape, N entries), and `perf/config.soak.toml`
+gains the registry.
+
+**The scenario.** One new k6 scenario, `13_apk_index_regeneration.js`, and it
+is the conda-filter question one format over: **what does `regenerate_apk`
+cost as a local repository grows?** Every publish re-renders the whole index
+for that architecture and RSA-signs it — O(n) in packages, on the upload path,
+holding a lock. `v3.22/main/x86_64` is 5 647 packages and 2.26 MB, so a
+plausible internal repository is not small. Four arms, publishing into indexes
+of 100 / 1 000 / 5 000 / 20 000 entries, measuring publish latency, RSS and
+CPU. The answer decides whether phase 3 ships as written or needs an
+incremental index, and it is far cheaper to learn before the code than after
+— scenario 12 found a route costing 0.7 req/s exactly this way. `task
+perf:apk:*`, `task perf:run:apk`, and a row in `perf-report.md`.
+
+### 6.10 The air gap
+
+RFC 0008-bis's distinction is that an air-gapped client fails differently on a
+missing *listing* than on a missing artifact, and for `apk` the listing is the
+whole protocol: with no `APKINDEX.tar.gz` an `apk update` fails before any
+package is named, and the client has no second way to ask.
+
+What makes `apk` unusual — and what decision 8 records — is that the estate
+**can** answer. The bundle holds packages; composing an index over what is
+held and signing it with the estate's key is the §4.4 generator run over
+inventory instead of over uploads. Every other OS kind is stuck here
+(`pacman`'s row in RFC 0008-bis §4 reads "cannot be re-signed here"), because
+their indexes are signed by a key the estate does not have and apk is the one
+whose local index is ours by construction.
+
+Two surfaces, both in phase 6:
+
+- `crates/web/tests/air_gap.rs` — the case that flips the
+  `registry_kind_coverage.rs` row from `AirGap::Gap` to `AirGap::Case`, and
+  the fourth kind after cargo, npm, pypi and conda to have one. It asserts the
+  composed index lists exactly the held packages and that a name the bundle
+  does not carry is absent from the *listing*, not merely a `404` on fetch.
+- `tests/heavy/airgap.sh` — a phase driving `apk.static` against the
+  disconnected instance: install the estate key, `apk update`, `apk add` a
+  held package, and `apk add` one that is not held, which must fail in the
+  solver with "unable to select" and never open a socket.
 
 ---
 
@@ -789,7 +954,7 @@ suite is what turns it into an observation.
   `--allow-untrusted` accepts only what this instance signed last.
 - **`--allow-untrusted` is documented as what it is.** It bypasses the
   signature *and* the identity check (`package.c:513`, `:523`); the page
-  refuses to suggest it, and the `unsigned = true` opt-out is named so that a
+  refuses to suggest it, and the `apk_unsigned = true` opt-out is named so that a
   registry nobody can install from is a choice on the record.
 - **No new unauthenticated surface.** `releases:list` for the index and the
   key, `releases:read` for packages, `releases:write` (the existing publish
@@ -819,7 +984,7 @@ suite is what turns it into an observation.
 
 - **Default behaviour** when not configured: nothing changes. A `generic`
   registry on the Alpine CDN keeps working.
-- **Config migration**: none; `apk_signing` and `unsigned` are optional and
+- **Config migration**: none; `apk_signing` and `apk_unsigned` are optional and
   the kind is additive. `CURRENT_CONFIG_VERSION` stays.
 - **Operator prerequisites**: egress to the chosen mirror; for local mode an
   RSA key (`openssl genrsa 4096`, its public half exported with
@@ -836,11 +1001,16 @@ suite is what turns it into an observation.
 ## 10. Test plan
 
 - **Unit** (`crates/core/src/services/apk.rs`): `apk_coordinate` on
-  `busybox-1.37.0-r20`, `py3-requests-2.32.4-r0`, `a-b-c-1-r0` (name
-  `a-b-c`), `noversion.apk` (rejected), `x-1.0.apk` (no `-rN`, rejected);
-  `PkgInfo::parse` on the fixture's control file; `index_entry` reproduces
-  the fixture's own `APKINDEX` block for `busybox` byte for byte, `C:`
-  included.
+  `busybox-1.37.0-r20`, `py3-requests-2.32.4-r0`,
+  **`linux-firmware-r128-20250613-r0`** — the real adversarial name in
+  `v3.22/main`, a package whose own name ends in `-r<digits>`, which is worth
+  more than the invented `a-b-c-1-r0` it replaces — `noversion.apk`
+  (rejected), `x-1.0.apk` (no `-rN`, rejected); `PkgInfo::parse` on the
+  fixture's control file; `index_entry` reproduces the fixture's own
+  `APKINDEX` block for `busybox` byte for byte, `C:` included. **Scope that
+  byte-for-byte claim to the fixture**: the branch contains 21 distinct field
+  orders (`k:` precedes `D:` in some entries), so the *writer* follows
+  `apk_pkg_write_index_entry` and the *parser* must not assume any order.
 - **Unit** (`crates/adapters/src/repo/apk.rs`): the three-member split of
   the real `busybox-1.37.0-r20.apk` (720 / 1 719 / 503 677 compressed bytes;
   control 10 240 uncompressed), the identity equal to the index's
@@ -865,7 +1035,26 @@ suite is what turns it into an observation.
 - **Conformance** (`protocol_conformance.rs`): an `APK` fixture quoting
   `database.c:595–612` for the two URL shapes and `repoparser.c:192` for
   apk 3's.
-- **Heavy** (`tests/heavy/apk.sh`): §6.8. Load-bearing.
+- **Coverage gates**, both enforced, both landing in phase 1 (§6.8):
+  the `apk` row in `crates/web/tests/registry_kind_coverage.rs`
+  (`Live::Suite("tests/heavy/apk.sh")`, `AirGap::Gap(…)`), and `apk` in
+  `AUTHZ_CLIENT_KINDS` in `tests/heavy/authz.sh`.
+- **Heavy** (`tests/heavy/apk.sh`): §6.8, both generations as static
+  binaries, no skipped half. Load-bearing.
+- **Heavy — credentials** (`tests/heavy/authz.sh`): the hermetic `apk` phase,
+  denied *and* allowed arms, both through userinfo-in-URL Basic because that
+  is apk's only mechanism.
+- **Air gap** (`crates/web/tests/air_gap.rs` + a phase in
+  `tests/heavy/airgap.sh`): §6.10, phase 6. Declared here rather than left
+  implicit — it is the row that flips `registry_kind_coverage.rs` from `Gap`
+  to `Case`.
+- **Soak** (`perf/k6/soak_arms.js`, `perf/config.soak.toml`, the `apk_file`
+  route and index generator in `perf/mock-upstream`): the two arms of §6.9.
+  The pre-flight (scenario 11) must pass before the soak runs — an arm that
+  404s is the failure mode it exists to catch.
+- **Perf** (`perf/k6/scenarios/13_apk_index_regeneration.js`): the four index
+  sizes of §6.9, run for real before phase 3 is called done, with the numbers
+  in `perf/README.md` and a row in `perf-report.md`.
 - **`cargo deny check`**: unchanged and green — the proof that the signer
   added no banned crate.
 - **Existing suites** that must pass unchanged: `repo_deb_rpm_pacman.rs`
@@ -887,23 +1076,96 @@ suite is what turns it into an observation.
 | 4 | Sign uploaded packages? | **No.** Installs verify the index's `C:`; a package signature is for `apk add ./file` from disk. |
 | 5 | Which signature entry? | **`RSA256`.** Both clients accept it; Alpine's own `RSA` (SHA-1) is compatibility this instance has no client to keep. |
 | 6 | Where does the coordinate live for a path kind? | **In the `PackageId`, from the file name; the cache key stays the path.** Rules and explore get the identity, the path family keeps one storage layout. |
-| 7 | Unsigned local mode? | **Only by explicit `unsigned = true`.** An unsigned index is uninstallable without `--allow-untrusted`, which the page refuses to recommend. |
+| 7 | Unsigned local mode? | **Only by explicit `apk_unsigned = true`.** An unsigned index is uninstallable without `--allow-untrusted`, which the page refuses to recommend. |
 | 8 | Air gap? | **Later, and now possible.** A held-package index composed and signed by the estate's key is exactly the local generator run over inventory; it is phase 6 and a row in RFC 0008-bis §4's table, replacing `pacman`'s "cannot be re-signed here" for this kind. |
 | 9 | Key rotation | **`apk_signing.previous_keys`, phase 5.** apk installs from the first `.SIGN.*` entry whose key it holds, so an index signed with the new key and then each previous one installs on a fleet mid-rotation; the operator drops an old entry once every client has the new key file. Decided 2026-09-12. |
+| 10 | Where does the index read for `t:` live, given `path_proxy.rs` must not change? | **A wrapper, `ApkRegistryClient`** (§6.2), delegating every byte path to `PathProxyRegistryClient` and overriding `resolve_metadata` alone. An arm inside the shared client would put an apk-shaped branch on the path four other kinds take. Decided 2026-09-15. |
+| 11 | What happens when a block lands and the index regeneration fails? | **The block holds, the listing goes stale, and it is loud** (§6.4): error log, a failure counter, the registry marked degraded — and no rollback. The download gate already refuses the version, so an enforced block with a stale listing beats no block. Decided 2026-09-15. |
+| 12 | Is the apk 3 arm allowed to be skipped on a runner without user namespaces? | **No, and it need not be**: `apk-tools-static-3.0.8-r0.apk` exists, so both generations run as static binaries under `--root` (§6.8). A planned skip in the suite that exists to prevent skips is not a trade-off, it is the bug. Decided 2026-09-15. |
 
 ### Still open
 
-Nothing. The one question this draft opened is row 9 above.
+Nothing. Rows 9–12 are the four this document opened and closed; §13 records
+what the revision against the tree changed.
 
 ---
 
 ## 12. Implementation phases
 
+Two things moved after the revision of §13: the coverage gates are in phase 1
+because they fire on `RegistryKind::ALL` and a phase 1 without them is red,
+and the perf measurement is in phase 3 because its answer can change what
+phase 3 ships.
+
 | Phase | Content |
 | --- | --- |
-| 1 | `crates/core`: `RegistryKind::Apk` and its answers; `services/apk.rs`; the `apk` arm of `coordinate_from_filename`. `crates/config`: `apk_signing`, `unsigned`, the §4.5 rules. `server`: the builder arm. `crates/web`: `apk_get` in proxy mode with the file-name identity and the age gate's `resolve_metadata`. **Useful on its own**: every Alpine image in the estate installs through the proxy with a block list and an age gate. Lands with phase 2's proxy half of the heavy suite. |
-| 2 | `tests/heavy/apk.sh` steps 1–4 with `apk.static` 2.14.10; the conformance fixture. |
-| 3 | `repo/apk.rs`, `repo/apk_signer.rs` (the direct `aws-lc-rs` dependency), `apk_publish`, `regenerate_apk`, the key route, the block-change regeneration hook, `local_apk_registry.rs`. |
-| 4 | Heavy suite steps 5–6, including the apk 3.0.8 half and its skip reporting. |
-| 5 | `ui` entry, `docs/registries/apk.md`, sidebar, `generic.md` pointer, egress and scanner notes, `ROADMAP.md`; the §13 revision note. Key rotation: `apk_signing.previous_keys`, signed in order after the current key (§11 decision 9). |
-| 6 | Air gap: the composed, estate-signed index for held packages; RFC 0008-bis §4's row; proven in `tests/heavy/airgap.sh`. Ships on its own. |
+| 1 | **The kind, and the gates that go red without it.** `crates/core`: `RegistryKind::Apk`, `ALL`, the eight exhaustive-match answers of §6.1; `services/apk.rs` (`apk_coordinate`, `PkgInfo::parse`, `index_entry`, `ApkIndex::parse`); the `apk` arm of `coordinate_from_filename`. `crates/config`: `apk_signing`, `apk_unsigned`, the §4.5 rules. `crates/adapters`: `registry/apk.rs`, the `ApkRegistryClient` wrapper of §6.2. `server`: the builder arm. `crates/web`: `apk_get`, the file-name identity, `path_allow`. **And both coverage rows** (§6.8): `registry_kind_coverage.rs` and `AUTHZ_CLIENT_KINDS`. **Useful on its own**: every Alpine image in the estate installs through the proxy with a block list and an age gate. Lands with phase 2. |
+| 2 | **Proxy proof, 2.14.10.** `tests/heavy/apk.sh` + `config.apk.toml` + `task test:apk-heavy` + the `heavy-client` matrix row; steps 1–4 of §6.8 with `apk.static`, asserted on the wire transcript and not on the client's exit code. The `authz.sh` phase of step 6. The `protocol_conformance.rs` fixture. |
+| 3 | **Local mode.** `repo/apk.rs` (member split, `.PKGINFO`, the `C:` identity), `repo/apk_signer.rs` (direct `aws-lc-rs`, PKCS#1 v1.5 SHA-256, ≥ 2048 bits), `apk_publish`, `regenerate_apk`, the key route, **the block-change hook of §6.4 in full** — both sources, the failure posture, the lock — and `crates/web/tests/local_apk_registry.rs` including the mandated `apk_publish_traversal_in_pkginfo_returns_400`. `cargo deny check` green is the proof no banned crate came in. **Gated on the perf scenario**: `13_apk_index_regeneration.js` (§6.9) run for real, because an O(n) re-render and re-sign per upload is the one thing here that could need a different design, and finding that out after the code is written is the expensive order. |
+| 4 | **Local proof, both generations.** §6.8 steps 5–6 against `apk-tools-static-3.0.8-r0.apk` as well as 2.14.10 — both static, both under `--root`, no minirootfs, no user namespace, **no skipped half**. |
+| 5 | **Soak and surfaces.** The two soak arms, the `apk_file` mock route and index generator, the `perf/config.soak.toml` registry (§6.9). `ui/src/config/registryTypes.ts`; `docs/registries/apk.md` + `/registries/` sidebar + the `generic.md` pointer; `docs/operations/egress.md`; the scanner triage note for the protocol SHA-1; `task docs:listing-coverage`. Key rotation: `apk_signing.previous_keys`, signed in order after the current key (§11 decision 9). |
+| 6 | **Air gap** (§6.10). The composed, estate-signed index over held packages; the `air_gap.rs` case that flips the `registry_kind_coverage.rs` row from `Gap` to `Case`; the `tests/heavy/airgap.sh` phase; RFC 0008-bis §4's row, replacing `pacman`'s "cannot be re-signed here" for this kind. Ships on its own. |
+
+---
+
+## 13. Revision against the tree
+
+Revised **2026-09-15**, four days after the draft, by re-probing
+`dl-cdn.alpinelinux.org` and the codebase rather than re-reading the draft.
+What the revision found, in the order it matters:
+
+**Confirmed, by measurement.** The design's load-bearing claim reproduces
+exactly: `C:` = `Q1` + base64(SHA-1 over the *control member's compressed
+bytes*) of `busybox-1.37.0-r20.apk` is `Q1Pp11KIKAs8SS6R8w4SbCQA0XAbM=`, the
+index's own line, with the member split 720 / 1 719 / 503 677 — §10's numbers
+to the byte. `v3.22/main/x86_64` holds 5 647 packages and **all 5 647 carry a
+`t:`**, so the age gate's timestamp is universal, not typical. The two-member
+index shape, the absence of `Cache-Control`, `latest-stable` as a distinct
+document, and the three `aws-lc-rs` / `deny.toml` line references all hold.
+The §4.3 filename split round-trips all 5 647 names.
+
+**Corrected.**
+
+- **`v3.25` does not exist.** The mirror's branch list stops at `v3.24`. The
+  draft named it in five places. The measured distribution is 2.14.6 on
+  `v3.21`, 2.14.10 on `v3.22`, 3.0.8 on `v3.23`, `v3.24`, `latest-stable` and
+  `edge`.
+- **`apk-tools-static-3.0.8-r0.apk` exists**, so §6.8's apk 3 half needs no
+  minirootfs, no user namespace, and — the point — has no reason to be
+  reported skipped on the AppArmor-restricted runner.
+- **A `pkgver` never contains a dash** (0 of 5 647). The draft claimed it
+  might; the parser is safer than its own RFC said. The genuine adversarial
+  case is `linux-firmware-r128`, a package *name* ending in `-r<digits>`, and
+  §10 now tests that instead of an invented string.
+- **`latest-stable` tracks the newest stable branch**, `v3.24`, not `v3.22`;
+  §4.3's shared-file example was impossible as written.
+- Field order in `APKINDEX` is not universal — 21 distinct orders, `k:` before
+  `D:` in some entries — so §10's byte-for-byte claim is scoped to its fixture
+  and the parser is required to be order-independent.
+
+**Added, because the draft's plan would not have passed CI.**
+
+- Two enforced coverage gates the draft never named:
+  `crates/web/tests/registry_kind_coverage.rs` and
+  `authz_check_kinds_covered` in `tests/heavy/authz.sh`. Both fire on
+  `RegistryKind::ALL`, so both go red the moment phase 1 lands the enum
+  variant. They are now phase 1 (§6.8).
+- The credential arm (§6.8 step 6). apk's only mechanism is Basic from
+  userinfo in the URL, and a denial arm driven by a client that sends no
+  identity is green for the wrong reason.
+- `ApkRegistryClient` (§6.2). The draft said both that the client read the
+  cached index for `t:` and that `path_proxy.rs` was untouched;
+  `PathProxyRegistryClient::resolve_metadata` returns `published_at: None`
+  unconditionally (`path_proxy.rs:120–137`), so one of the two had to give.
+  A wrapper keeps both true.
+- The block-change hook (§6.4), specified rather than mentioned: two sources,
+  a stated failure posture, and the lock it shares with publish. It is the
+  only new cross-cutting mechanism in the RFC and nothing else in the tree
+  calls a `regenerate_*` outside its own publish handler.
+- The perf and soak surfaces (§6.9) and the air-gap surfaces (§6.10), neither
+  of which the draft's test plan listed.
+- `unsigned` renamed `apk_unsigned`: it sits on the shared `RegistryConfig`
+  beside `repo_signing`, `vsx_signing` and `apk_signing`, all kind-prefixed.
+- `keys/` declared a reserved prefix (§4.4). No collision on dl-cdn — its root
+  holds only branches, `MIRRORS.txt` and `last-updated` — but `hybrid` mode
+  would shadow a mirror that had one.

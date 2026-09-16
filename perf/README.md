@@ -9,7 +9,7 @@ This directory contains everything needed to measure throughput, latency, and re
 3. [Quick start — filesystem + memory (default)](#quick-start-—-filesystem-memory-default)
 4. [Quick start — S3 + Redis](#quick-start-—-s3-redis)
 5. [Comparing backends head-to-head](#comparing-backends-head-to-head)
-6. [Scenarios](#scenarios) — including [10 — soak / leak detection](#_10-—-soak-leak-detection-perf-soak)
+6. [Scenarios](#scenarios) — including [10 — soak / leak detection](#_10-—-soak-leak-detection-perf-soak) and [11 — startup and shutdown](#_11-—-startup-and-shutdown-perf-lifecycle)
 7. [Tuning the mock upstream](#tuning-the-mock-upstream)
 8. [The results table, and the report a release carries](#the-results-table)
 9. [Reading the results](#reading-the-results)
@@ -313,23 +313,64 @@ task perf:soak                        # 10 minutes at 100 req/s
 task perf:soak DURATION=1h RATE=200   # overnight
 ```
 
-It compares idle RSS, open file descriptors, OS threads and held database
-connections between the two windows, fits the RSS trend across the sustained
-load, plots all four curves (a text chart in the report, an SVG beside it), and
-**ranks the registries by what they cost** — from the server's own `/metrics`,
-scraped at both ends of the load and subtracted. That last one is why
-`config.soak.toml` declares three registries with different shapes rather than
+It compares idle RSS, the idle **live heap** (jemalloc's `stats.allocated`, via
+`batlehub_memory_allocated_bytes`), open file descriptors, OS threads and held
+database connections between the two windows, fits the RSS trend across the
+sustained load, plots the curves (a text chart in the report, an SVG beside it),
+and **ranks the registries by what they cost** — from the server's own
+`/metrics`, scraped at both ends of the load and subtracted. That last one is
+why `config.soak.toml` declares 25 registries with different shapes rather than
 one: a single-registry run cannot answer "which is the worst consumer", and
-registries that all cost the same thing rank by traffic rather than by cost. Scenarios 02–07 are `constant-vus`, which is right for
+registries that all cost the same thing rank by traffic rather than by cost.
+
+RSS and live heap are two rows because they answer different questions. RSS is
+pages the process holds; the live heap is bytes the *program* holds. When RSS
+grows and the heap does not, the allocator is keeping pages — which is a real
+thing to know about and is not a leak. Scenarios 02–07 are `constant-vus`, which is right for
 throughput and wrong here: a server that slows down is then offered *less*
 work, so the degradation hides itself. A constant arrival rate keeps the
 offered load flat and lets the queue grow, which is what a real client
 population does.
 
 The full rationale — why both windows are idle, why the baseline comes after a
-warm-up, and what each of the five signals means — is in
+warm-up, and what each of the six signals means — is in
 [`docs/contributing/testing.md` § 7-quater](../docs/contributing/testing.md),
 and the thresholds are environment variables listed there.
+
+---
+
+### 11 — Startup and shutdown (`perf:lifecycle`)
+
+**Goal:** how long the process takes to become useful, and how long it takes to
+stop. **Profile:** not load at all — a handful of start/stop cycles, timed.
+
+Every other scenario here starts a server, waits for `/healthz` and measures
+what happens *after* that, so the two ends of a process's life were the two
+parts nothing measured. They are what a rolling deployment is made of.
+
+```bash
+task perf:lifecycle                              # 1 cold start, 5 warm, 1 draining stop
+task perf:lifecycle ITERATIONS=20 IN_FLIGHT=50   # tighter medians, heavier drain
+```
+
+Four numbers, in `perf/results/lifecycle.md`:
+
+| | what it decides |
+| --- | --- |
+| cold start → healthy | whether a fresh replica beats its readiness probe; includes every migration |
+| warm start → healthy | what a restart costs once the schema is there — the difference from the row above *is* the migration cost, measured rather than parsed from a log |
+| port accepts → healthy | how long anything routing on the port rather than the probe sends traffic into a server that is not ready |
+| stop, idle and draining | what `terminationGracePeriodSeconds` has to cover — actix stops accepting on `SIGTERM` and then waits for what is in flight, so this scales with the slowest upstream, not with this process's teardown |
+
+The draining arm points a registry at the mock upstream running with
+`--delay-ms 3000` and puts `IN_FLIGHT` uncached reads in flight before the
+signal, because a stop with nothing in flight measures the floor and not the
+number anyone needs.
+
+There is no verdict and no threshold: a startup budget belongs to a deployment —
+a probe's `failureThreshold`, a rollout's `maxUnavailable` — and this repository
+does not own those numbers. It owns the measurement, and a number that moves is
+visible in the diff of the report.
 
 ---
 

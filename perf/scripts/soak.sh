@@ -17,15 +17,25 @@
 #   - measuring under load would compare a number that includes in-flight
 #     request buffers against one that does not, which is a different quantity
 #     in each window and cannot be subtracted;
-#   - quiescing before each window lets the server drain and — with the
-#     `jemalloc` feature that is on by default — lets jemalloc's decay return
-#     dirty pages, which takes seconds and would otherwise read as growth.
+#   - quiescing before each window lets the server drain and lets jemalloc's
+#     decay return dirty pages, which takes seconds and would otherwise read as
+#     growth.
 #
 # What is left after that is what was still held when nothing was in flight,
 # which is what "leak" means.
 #
+# **The quiesce only works on a binary whose jemalloc purges in the background**
+# — `server/Cargo.toml`'s `tikv-jemallocator` `background_threads` feature.
+# jemalloc's decay is driven by allocator activity, so an idle process purges
+# nothing; the same build without that feature reported +10.3 % idle RSS on a
+# run whose live heap was flat, because the final window follows ten minutes of
+# load and the baseline follows one. Something that disables it — building with
+# `--no-default-features`, or `_RJEM_MALLOC_CONF=background_thread:false` —
+# turns this gate back into a measurement of retained arenas. See the comment on
+# that dependency for the numbers.
+#
 # Usage:
-#   bash perf/scripts/soak.sh [--duration 10m] [--rate 100] [--warmup 60]
+#   bash perf/scripts/soak.sh [--duration 10m] [--rate 100] [--warmup 240]
 #                             [--settle 60] [--profile release|debug]
 #
 # The report is always `perf/results/soak.md`, beside the samples, the chart and
@@ -44,6 +54,11 @@
 #   SOAK_MAX_FD_GROWTH             default 16    open descriptors
 #   SOAK_MAX_THREAD_GROWTH         default 4     OS threads
 #   SOAK_MAX_POOL_GROWTH           default 2     database connections held
+#   SOAK_MAX_HEAP_GROWTH_PCT       default 5     idle live heap (jemalloc's
+#                                                stats.allocated), final vs
+#                                                baseline — tighter than RSS
+#                                                because it is not the
+#                                                allocator's bookkeeping
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -51,7 +66,21 @@ cd "$ROOT"
 
 DURATION="10m"
 RATE="100"
-WARMUP="60"
+# The warm-up has to *finish the fill*, or the baseline is a measurement of a
+# half-filled process and every run reports the rest of the fill as growth.
+#
+# It was 60s, from when the mix was three registries. It is now 46 arms over 24
+# registry kinds, and the low-weight ones are offered barely one request a
+# second: measured across three runs, 60s of load reaches ~325 MiB and the
+# plateau of ~470 MiB arrives about 180s into the *load* phase that follows. The
+# gap between those two numbers was the whole of the idle-RSS growth those runs
+# reported — +10.3 %, +6.4 %, against a 10 % limit — on a process whose live
+# heap was flat.
+#
+# 240s, so the fill is over before the baseline rather than exactly at it. Costs
+# three minutes; adding a registry kind to the mix is what would make it too
+# short again, so it is stated here rather than passed in by each caller.
+WARMUP="240"
 SETTLE="60"
 # Fixed, and known to `soak_verdict.py` by the same construction: the
 # directory comes from the script's own location, not from an argument.
@@ -161,9 +190,34 @@ case "$PROFILE" in
   *) echo "unknown profile: $PROFILE (use release or debug)" >&2; exit 2 ;;
 esac
 
+# `SOAK_SERVER_BIN` runs a binary this script did not build, and exists for one
+# question: what does a *build option* cost? An allocator, a feature set, a
+# toolchain — comparing those means two binaries and one workload, and a script
+# that always rebuilds from the current manifest can only ever measure the
+# manifest it is looking at. Build both, stash them, point this at each in turn.
+#
+# It is not a convenience for skipping the build: a stale binary measured
+# against current sources is a result about nothing, so the path is echoed into
+# the report's own log and the caller owns what it points at.
+#
+# **The file has to be called `batlehub`.** The sampler finds the process to
+# measure with `pgrep -x batlehub` — by executable name, because `-f` would also
+# match this script — and `comm` is truncated to 15 characters anyway, so a
+# descriptive filename would both miss and be unfixable. Put each build in its
+# own directory instead: `/tmp/alloc-cmp/jemalloc/batlehub`.
+SERVER_BIN="./target/$TARGET_DIR/batlehub"
+if [[ -n "${SOAK_SERVER_BIN:-}" ]]; then
+  [[ -x "$SOAK_SERVER_BIN" ]] \
+    || { echo "ERROR: SOAK_SERVER_BIN=$SOAK_SERVER_BIN is not an executable" >&2; exit 1; }
+  SERVER_BIN="$SOAK_SERVER_BIN"
+  log "Using a prebuilt server: $SERVER_BIN ($("$SERVER_BIN" --version 2>/dev/null | head -1))"
+fi
+
 log "Building the server and the mock upstream ($PROFILE)"
-cargo build "${BUILD_FLAGS[@]}" -p batlehub-server >"$WORK/build.log" 2>&1 \
-  || { cat "$WORK/build.log" >&2; echo "ERROR: the server did not build" >&2; exit 1; }
+if [[ -z "${SOAK_SERVER_BIN:-}" ]]; then
+  cargo build "${BUILD_FLAGS[@]}" -p batlehub-server >"$WORK/build.log" 2>&1 \
+    || { cat "$WORK/build.log" >&2; echo "ERROR: the server did not build" >&2; exit 1; }
+fi
 cargo build "${BUILD_FLAGS[@]}" --manifest-path perf/mock-upstream/Cargo.toml >>"$WORK/build.log" 2>&1 \
   || { cat "$WORK/build.log" >&2; echo "ERROR: the mock upstream did not build" >&2; exit 1; }
 
@@ -187,7 +241,7 @@ export PROXY_CACHE__SERVER__PORT="$SOAK_PORT"
 export PROXY_CACHE__STORAGE__PATH="$STORAGE"
 
 log "Starting BatleHub on $SOAK_PORT"
-setsid "./target/$TARGET_DIR/batlehub" --config perf/config.soak.toml \
+setsid "$SERVER_BIN" --config perf/config.soak.toml \
   >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 for _ in $(seq 1 120); do
@@ -246,9 +300,16 @@ fi
 grep -m1 "soak arms:" "$WORK/arms.log" >&2 || true
 
 # ── The sampler ───────────────────────────────────────────────────────────────
-# /proc for the process facts and /metrics for the pool. One line a second:
-# a soak is a curve, and the verdict below needs the points, not a summary.
-sample_header="epoch_s,rss_kb,fds,threads,pool_size,pool_idle"
+# /proc for the process facts and /metrics for the pool and the live heap. One
+# line a second: a soak is a curve, and the verdict below needs the points, not
+# a summary.
+#
+# `heap_kb` is jemalloc's `stats.allocated` — bytes in live allocations, which
+# is the only column here that separates "the server is holding objects" from
+# "the allocator is holding pages". It is empty on a build without the
+# `jemalloc` feature, and the verdict reports that row as not measured rather
+# than as zero growth.
+sample_header="epoch_s,rss_kb,fds,threads,pool_size,pool_idle,heap_kb"
 echo "$sample_header" > "$SAMPLES"
 (
   while kill -0 "$SERVER_PROC" 2>/dev/null; do
@@ -257,10 +318,15 @@ echo "$sample_header" > "$SAMPLES"
     # `ls` rather than a glob: the directory changes while it is being read and
     # a failed glob under `set -e` would end the sampler silently.
     fds="$(ls "/proc/$SERVER_PROC/fd" 2>/dev/null | wc -l || echo "")"
+    # One scrape, three numbers: a second curl a second would be a second
+    # render of the whole exposition, which is itself an allocation.
     pool="$(curl -s --max-time 5 "$BASE/metrics" 2>/dev/null \
-      | awk '/^batlehub_db_pool_size/{s=$2} /^batlehub_db_pool_available_connections/{i=$2} END{printf "%s,%s", (s==""?"":s), (i==""?"":i)}')"
+      | awk '/^batlehub_db_pool_size/{s=$2}
+             /^batlehub_db_pool_available_connections/{i=$2}
+             /^batlehub_memory_allocated_bytes/{h=$2/1024}
+             END{printf "%s,%s,%s", (s==""?"":s), (i==""?"":i), (h==""?"":int(h))}')"
     if [[ -n "$rss" ]]; then
-      echo "$(date +%s),$rss,$fds,$threads,${pool:-,}" >> "$SAMPLES"
+      echo "$(date +%s),$rss,$fds,$threads,${pool:-,,}" >> "$SAMPLES"
     fi
     sleep 1
   done
