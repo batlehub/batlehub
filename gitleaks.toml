@@ -33,13 +33,12 @@ paths = [
     '''website/guide/configuration\.md''',
     '''docs/configuration\.md''',
     '''docs/installation\.md''',
-    # The perf harness's warm-up curl. `perf-user-token` is not a credential:
-    # `perf/scripts/seed.sh` mints it against a throwaway local server, and
-    # `perf/k6/config.js` and the scenarios carry the same two literals. Only
-    # this one is written as a `curl -H 'Authorization: Bearer …'`, which is the
-    # shape `curl-auth-header` matches — so the README is the only file of the
-    # set the scan flags.
-    '''perf/README-authz-11-7\.md''',
+    # Throwaway RSA keys for the apk index-signing tests, generated once with
+    # `openssl genrsa` and used nowhere but `cargo test`. They have to be real
+    # keys in real files: `include_str!` needs a file, and aws-lc-rs generates
+    # nothing below 2048 bits, so the "key below the floor" test could not mint
+    # its 1024-bit key at run time even if the rest could.
+    '''crates/adapters/src/repo/testdata/apk_signing_.*\.pem''',
 ]
 # Matched on the value rather than the file, because the scan walks full
 # history: an inline `gitleaks:allow` fixes the working tree and leaves the
@@ -51,4 +50,18 @@ regexes = [
     # shape stays measured off the real signer. `generic-api-key` reads the
     # trailing `==` as a token.
     '''ZXh0ZW5zaW9uLnZzaXhtYW5pZmVzdA==''',
+    # An empty PEM block — header, footer, no body — as the Rust string literal
+    # `apk_signer.rs` feeds `ApkSigner::from_pem` to assert it is refused. There
+    # is no key material in it; `private-key` matches the header alone. Listed
+    # as a value rather than as the file so a real key pasted into that file is
+    # still a finding.
+    '''-----BEGIN PRIVATE KEY-----\\n-----END PRIVATE KEY-----''',
+    # The perf harness's token. Not a credential: `perf/scripts/seed.sh` mints
+    # it against a throwaway local server, and `perf/k6/config.js`, the
+    # scenarios, `perf/scripts/lifecycle.sh` and `perf/README-authz-11-7.md`
+    # all carry the same literal. Only the ones that write it as a
+    # `curl -H 'Authorization: Bearer …'` are flagged, by `curl-auth-header` —
+    # which is two files now and was one when this was a path entry, so it is
+    # matched on the value instead.
+    '''perf-user-token''',
 ]

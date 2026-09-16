@@ -1,3 +1,13 @@
+---
+# The security reference: one page per scanner would scatter the thing a reader
+# actually needs, which is the whole matrix — nine gates, the SBOM and VEX
+# workflows, and the one place each scanner's false positives are resolved. It
+# crossed 4 000 words when the test-key fixtures got their own suppression
+# section. `docs:structure` asks for this declaration above that line
+# (RFC 0005-bis §4.5).
+reference: true
+---
+
 # Vulnerability scanning & SBOMs
 
 batlehub is scanned for CVEs continuously, across every layer it ships. This page describes the
@@ -383,6 +393,30 @@ package protocols BatleHub speaks. That group started at thirteen and is now nin
 against its specification found four that no protocol required, and those were deleted rather than
 ignored. [MD5 and SHA-1](/operations/weak-hashes) is the register, with the specification for each
 — and it is the model for an entry here: check the spec, do not repeat the last comment.
+
+### Test key fixtures
+
+The secret scanners are right about what a committed private key is and wrong about whether it
+matters, and the tree has three of them: the RSA keys `crates/adapters/src/repo/testdata/` holds for
+the apk index-signing tests. They cannot be minted at run time — `include_str!` needs a file, and
+aws-lc-rs generates nothing below 2048 bits, so the "key below the floor" test needs a committed
+1024-bit one either way.
+
+Each scanner has exactly one place that quiets it, and the other places fail closed and quiet:
+
+- **Semgrep** (`generic.secrets.security.detected-private-key`) — a path pattern in `.semgrepignore`.
+  A `// nosemgrep` comment with the short rule id is silently ignored for the generic secrets rules,
+  and a `.pem` has nowhere to put one.
+- **gitleaks** (`private-key`, `curl-auth-header`) — `gitleaks.toml`. The scan walks full history
+  (`fetch-depth: 0`), so an inline `gitleaks:allow` fixes the working tree and leaves the commit that
+  introduced the line flagged forever, and a path entry has to name every path the file has ever had
+  — which is why the two pre-RFC-0005 `website/` paths are still listed. **Prefer a `regexes` entry**:
+  it names the value that is not a secret, so it survives a rename, covers the next file to carry the
+  same literal, and still flags a real credential in the file it exempts.
+
+Keep both tight — one pattern per fixture family, never a directory a real credential could later
+land in — and re-run the scanner after adding an entry (`mise` pins both), because a suppression that
+parses but does not apply looks exactly like one that works.
 
 ### Duplicate versions
 

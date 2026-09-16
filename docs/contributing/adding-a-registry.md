@@ -43,7 +43,8 @@ Every request goes through `ProxyService::handle()`, which:
 - [ ] `crates/web/src/handlers/proxy/myregistry.rs` — HTTP handler(s) *(if needed)*
 - [ ] `crates/web/src/handlers/proxy/mod.rs` — `pub mod`
 - [ ] `crates/web/src/lib.rs` — import handler, register route(s), update `ApiDoc` tags
-- [ ] `ui/src/config/registryTypes.ts` — add a `RegistryTypeDef` entry
+- [ ] `ui/src/config/registryTypes.ts` — add a `RegistryTypeDef` entry, and put
+      every line of its snippets on `docs/registries/<id>.md` *(see §10)*
 - [ ] `tests/heavy/closed_world.sh` — a phase, its `PHASES` entry, a registry in
       `tests/heavy/config.closed-world.toml`, and a matrix row in
       `.github/workflows/test.yaml` *(the live proof — see §11)*
@@ -415,6 +416,8 @@ the bytes on the wire come from one type.
 ```
 
 `id` becomes the tab's value/key and, by default, the API `type` it activates for — set `apiTypes: [...]` instead when the tab should light up for more than one configured registry type (see the `mise` composite entry). `SetupGuide.vue` derives the tab trigger, tab content, registry-name input, and snippet copy button from this array automatically — see the `id: "nuget"` entry in `registryTypes.ts` for a fuller example with multiple snippets and a `note`.
+
+**The snippets are checked against the registry page.** `registryTypes.docs.test.ts` renders every snippet and asserts each line appears somewhere in `docs/registries/<id>.md`, so a console step the documentation never mentions fails the `test` job. The count of already-drifted snippets is pinned and **may only fall** (`docs/internal/rfc-0005-bis-snippet-drift.md` is the register), which means a new kind cannot add to it: write the snippet up on the page, in the same shape the console renders it — a `$KEY` the console assigns has to be a `$KEY` on the page, not the value expanded inline. Then mirror the edit into `docs/fr/registries/<id>.md` and run `task docs:i18n:stamp`, or `docs:i18n:check` fails on the stale translation.
 
 ---
 

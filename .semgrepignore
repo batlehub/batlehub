@@ -7,3 +7,10 @@ crates/adapters/src/scanners/fixtures/
 # The gate step runs after the SARIF step in the same checkout, so without
 # this it scans its own report and rediscovers every finding it just wrote.
 semgrep.sarif
+
+# Throwaway RSA keys for the apk index-signing tests (`openssl genrsa`, used
+# nowhere but `cargo test`). `detected-private-key` is right about what they are
+# and wrong about whether it matters, and they have to be real keys on disk:
+# aws-lc-rs generates nothing below 2048 bits, so the "below the floor" test
+# needs a committed 1024-bit one, and `include_str!` needs a file.
+crates/adapters/src/repo/testdata/apk_signing_*.pem

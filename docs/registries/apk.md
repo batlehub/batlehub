@@ -116,8 +116,9 @@ openssl rsa -in apk-signing.pem -pubout -out internal-apk@example.com-5f3a1c2e.r
 Consumers install it before their first `apk update`:
 
 ```sh
-curl -fsSL -o /etc/apk/keys/internal-apk@example.com-5f3a1c2e.rsa.pub \
-  https://batlehub.example.com/proxy/<registry>/apk/keys/internal-apk@example.com-5f3a1c2e.rsa.pub
+KEY=internal-apk@example.com-5f3a1c2e.rsa.pub
+curl -fsSL -o /etc/apk/keys/$KEY \
+  https://batlehub.example.com/proxy/<registry>/apk/keys/$KEY
 echo https://batlehub.example.com/proxy/<registry>/apk >> /etc/apk/repositories
 apk update
 ```

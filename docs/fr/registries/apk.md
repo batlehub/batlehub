@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/apk.md
-sourceHash: f1ed148eaec796b1
+sourceHash: 4f37773b341e9554
 ---
 
 # Alpine (apk)
@@ -165,8 +165,9 @@ chaque client, alors choisissez-la une bonne fois.
 Les consommateurs l'installent avant leur premier `apk update` :
 
 ```sh
-curl -fsSL -o /etc/apk/keys/internal-apk@example.com-5f3a1c2e.rsa.pub \
-  https://batlehub.example.com/proxy/<registre>/apk/keys/internal-apk@example.com-5f3a1c2e.rsa.pub
+KEY=internal-apk@example.com-5f3a1c2e.rsa.pub
+curl -fsSL -o /etc/apk/keys/$KEY \
+  https://batlehub.example.com/proxy/<registre>/apk/keys/$KEY
 echo https://batlehub.example.com/proxy/<registre>/apk >> /etc/apk/repositories
 apk update
 ```
