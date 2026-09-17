@@ -1319,9 +1319,16 @@ EOF
   [[ -x "$dir/node_modules/.bin/ovsx" ]] || heavy_fail "ovsx: no ovsx binary after the install"
 
   heavy_log "ovsx get $OVSX_EXT through the proxy"
-  cw_step "$out" "$dir" "${DENY[@]}" \
-    "$dir/node_modules/.bin/ovsx" get "$OVSX_EXT" \
-    --registryUrl "$HEAVY_TAP_BASE/proxy/$OVSX_REG" -o "$dir/ext.vsix" \
+  # Retried, because the first hop out of this instance is open-vsx.org and it
+  # is intermittently `503` — two of three consecutive requests on 2026-09-17,
+  # the third a clean `200`. The instance relays that as a `502` carrying the
+  # upstream's own error text, which is why the client's message names
+  # `https://open-vsx.org/…` for a request it only ever made to the proxy.
+  # `ovsx` 1.1.1 does not retry on its own the way `npm` does.
+  heavy_retry 3 "the ovsx download" \
+    cw_step "$out" "$dir" "${DENY[@]}" \
+      "$dir/node_modules/.bin/ovsx" get "$OVSX_EXT" \
+      --registryUrl "$HEAVY_TAP_BASE/proxy/$OVSX_REG" -o "$dir/ext.vsix" \
     || { cat "$out" >&2; heavy_fail "ovsx: the download failed inside the closed world"; }
 
   heavy_wire_re_after ovsx "GET /proxy/$OVSX_REG/api/${ns}/${name}[^ ]* -> 200" \

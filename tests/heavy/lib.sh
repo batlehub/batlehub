@@ -647,6 +647,34 @@ heavy_need() {
     || heavy_fail "$bin not found on PATH — install it ($provided_by) before running this suite"
 }
 
+# heavy_retry <attempts> <what> <command…> — run the command, retrying with a
+# linear backoff, and return its last status.
+#
+# **For a third party's transient failure, and nothing else.** An upstream 5xx
+# or a rate limit is not what any suite in this tree is measuring, and it is not
+# a defect in this server — but it fails a phase in the same red as one, and
+# then somebody reads a wire transcript for an hour. Measured on 2026-09-17,
+# two of three consecutive requests to open-vsx.org answered `503` and the third
+# answered `200`; Central answered `429` to the CI runner's shared IP on the
+# same afternoon.
+#
+# **Never wrap an assertion about this server in it.** A retry there does not
+# remove a flake, it removes the bug the suite exists to find: the second run
+# passes and nobody looks at the first. If a claim about this server is not
+# reproducible, the claim or the server is wrong.
+heavy_retry() {
+  local attempts="$1" what="$2"
+  shift 2
+  local n
+  for (( n = 1; n <= attempts; n++ )); do
+    "$@" && return 0
+    [[ $n -lt $attempts ]] || break
+    heavy_log "$what failed (attempt $n/$attempts) — retrying in $((n * 10))s"
+    sleep $((n * 10))
+  done
+  return 1
+}
+
 # heavy_runner_for <binary> <mise-spec>... — set HEAVY_RUNNER to the prefix
 # that runs <binary>: empty when it works on PATH, `mise x <spec>... --` when
 # only a directory-scoped mise toolchain has it. Several specs when the tool

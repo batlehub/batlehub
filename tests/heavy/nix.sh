@@ -119,6 +119,7 @@ nix_run() {
     nix --extra-experimental-features "nix-command flakes" \
         --option narinfo-cache-positive-ttl 0 \
         --option narinfo-cache-negative-ttl 0 \
+        --option substituters "" \
         "$@"
 }
 
@@ -281,10 +282,21 @@ NAR_AFTER_BLOCK="$(heavy_wire_count_after blocked "(GET|HEAD) /proxy/$REG/nix/na
 [[ "$NAR_AFTER_BLOCK" == 0 ]] \
   || heavy_fail "$NAR_AFTER_BLOCK request(s) reached the NAR route after the block — the narinfo 404 did not stop the download"
 
-# And Nix's own words for it. The failure is "path does not exist" rather than a
-# signature complaint: the narinfo never arrived, so there was nothing to
-# verify.
-heavy_client_must_say "$RUN_OUT" "does not exist|cannot be (built|realis)|not valid" \
+# And Nix's own words for it — *"there is no substituter that can build it"*,
+# measured against 2.35.2 rather than assumed. The alternation carries the older
+# spellings too, because the claim is the class of refusal and not one release's
+# wording.
+#
+# It reads that way only because `nix_run` empties `substituters`. With the
+# image's default list in place a `404` here sent the client on to
+# cache.nixos.org, which then answered and was discarded for an unrelated reason
+# — *"ignoring substitute … as it's not signed by any of the keys in
+# 'trusted-public-keys'"*. The run still went red, but for the runner's key
+# configuration rather than for the block, and on a machine that trusted that
+# key it would have gone green with the path fetched from upstream: a false
+# negative for the one claim this phase exists to make.
+heavy_client_must_say "$RUN_OUT" \
+  "does not exist|cannot be (built|realis)|not valid|no substituter that can build" \
   "nix did not report the missing path in its own terms"
 heavy_log "nix reported the refusal as:"
 tail -5 "$RUN_OUT" >&2

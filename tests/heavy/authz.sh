@@ -2807,6 +2807,9 @@ phase_maven() {
     #
     # Three attempts: a `429` is a burst, not a verdict, and the alternative to
     # waiting is a red run that says nothing about the boundary under test.
+    # Its own loop rather than `heavy_retry`: a rate limit wants a longer wait
+    # than that helper's 10s/20s, and each attempt has to start from a deleted
+    # repository (below) rather than from the last one's leavings.
     local attempt
     for attempt in 1 2 3; do
       (cd "$work" && "${mvn[@]}" -B -s "$s_warm" -Dmaven.repo.local="$work/warm" \
