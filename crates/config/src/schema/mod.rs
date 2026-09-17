@@ -700,6 +700,7 @@ impl AppConfig {
         self.signed_url_warnings(&mut out);
         self.require_signed_release_warnings(&mut out);
         self.vsx_signing_warnings(&mut out);
+        self.nix_signing_warnings(&mut out);
         self.release_import_warnings(&mut out);
         self.forge_warnings(&mut out);
         self.security_warnings(&mut out);
@@ -1103,6 +1104,41 @@ impl AppConfig {
                         "registry '{}' is in proxy mode with a [registries.vsx_signing] key: \
                          nothing is published there, so the key signs nothing. An upstream's \
                          signature is relayed whether or not a key is configured.",
+                        registry.name
+                    ),
+                ));
+            }
+        }
+    }
+
+    /// The two things a `nix` registry's signing configuration can be that are
+    /// legitimate and still worth saying out loud (RFC 0028 §4.5).
+    ///
+    /// Neither is an error. A key in proxy mode signs nothing because a relayed
+    /// narinfo is never re-signed; no key in local mode produces paths every
+    /// stock client refuses, which is the operator's to choose but not to
+    /// discover from a client error message.
+    fn nix_signing_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        for (index, registry) in self.registries.iter().enumerate() {
+            if registry.registry_type != "nix" {
+                continue;
+            }
+            if registry.mode == RegistryMode::Proxy && registry.nix_signing.is_some() {
+                out.push(ConfigWarning::new(
+                    warnings::NIX_SIGNING_PROXY_MODE,
+                    format!("registries[{index}].nix_signing"),
+                    format!(
+                        "registry '{}' is in proxy mode with a [registries.nix_signing] key:                          nothing is published there, so the key signs nothing. A relayed                          narinfo keeps the upstream's Sig: lines byte-exact and is never                          re-signed.",
+                        registry.name
+                    ),
+                ));
+            }
+            if registry.mode != RegistryMode::Proxy && registry.nix_signing.is_none() {
+                out.push(ConfigWarning::new(
+                    warnings::NIX_LOCAL_UNSIGNED,
+                    format!("registries[{index}].nix_signing"),
+                    format!(
+                        "registry '{}' hosts store paths with no [registries.nix_signing] key,                          so the narinfos it serves carry no Sig: line. Every client running                          Nix's default require-sigs = true refuses them — \"cannot add path                          '…' because it lacks a signature by a trusted key\" — unless the path                          is content-addressed. Generate a seed with `openssl rand -hex 32` and                          hand the `GET public-key` line to every client's trusted-public-keys.",
                         registry.name
                     ),
                 ));
@@ -2272,6 +2308,7 @@ impl AppConfig {
             Self::validate_registry_upstream_detail(registry)?;
             Self::validate_registry_versioning(registry)?;
             Self::validate_registry_vsx_signing(registry, kind)?;
+            Self::validate_registry_nix(registry, kind)?;
             Self::validate_registry_apk(
                 registry,
                 kind,
@@ -2467,6 +2504,14 @@ impl AppConfig {
                 "every upstream collection version carries 'created_at', so the undated case is \
                  a locally published collection or an air-gapped listing: 'true' refuses it, \
                  'false' serves it"
+            }
+            // The substituter protocol carries no dates at all — a narinfo has
+            // hashes, a closure and a deriver, and nothing else. So *every*
+            // path reaches the gate undated and the field is not a tie-break,
+            // it is the whole rule: `true` refuses every substitution on this
+            // registry, `false` makes the gate inert (RFC 0028 §4.5).
+            RegistryKind::Nix => {
+                "a narinfo carries no date anywhere in the protocol, so every store path reaches                  the gate without one: 'true' refuses every substitution on this registry,                  'false' makes the gate inert"
             }
             _ => return Ok(()),
         };
@@ -3709,6 +3754,94 @@ impl AppConfig {
                     "registry '{}': vsx_signing.key_id must be non-empty and use only \
                      [A-Za-z0-9._-] — it is a path segment of the public-key URL",
                     registry.name
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// `[registries.nix_signing]`, `require_upstream_sigs` and the `nix`
+    /// upstream shape (RFC 0028 §4.5).
+    ///
+    /// Everything here fails at boot rather than at the first `nix build`,
+    /// because every one of these mistakes is silent from the inside: a seed
+    /// on the wrong kind means an operator believes uploads are signed, a
+    /// `key_name` with a colon in it produces a `Sig:` no client can parse
+    /// into a name and a key, and a query string on the upstream is a client
+    /// setting forwarded on every request to a cache that does not read it.
+    fn validate_registry_nix(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+    ) -> Result<()> {
+        use batlehub_core::entities::RegistryKind;
+        let is_nix = matches!(kind, RegistryKind::Nix);
+
+        // A signing key on a registry that will never sign anything, and a
+        // relay switch on a registry that relays nothing: the same class as
+        // `vsx_signing` off a VSX kind. A silently ignored secret is worse
+        // than an ignored option, because the operator believes it took.
+        if !is_nix {
+            if registry.nix_signing.is_some() {
+                anyhow::bail!(
+                    "registry '{}': [registries.nix_signing] applies to type = \"nix\" only \
+                     (it signs narinfos), not to '{}'",
+                    registry.name,
+                    registry.registry_type
+                );
+            }
+            if registry.require_upstream_sigs {
+                anyhow::bail!(
+                    "registry '{}': 'require_upstream_sigs' applies to type = \"nix\" only \
+                     (it is about relayed narinfo Sig: lines), not to '{}'",
+                    registry.name,
+                    registry.registry_type
+                );
+            }
+            return Ok(());
+        }
+
+        if let Some(signing) = &registry.nix_signing {
+            let seed = signing.seed_hex.trim();
+            if seed.len() != 64 || !seed.bytes().all(|b| b.is_ascii_hexdigit()) {
+                anyhow::bail!(
+                    "registry '{}': nix_signing.seed_hex must be 64 hex characters (a 32-byte \
+                     Ed25519 seed; `openssl rand -hex 32` prints one), got {} characters. A \
+                     wrong-length seed is a typo, and Ed25519 would sign with garbage rather \
+                     than refuse",
+                    registry.name,
+                    seed.len()
+                );
+            }
+            if let Some(name) = &signing.key_name {
+                // The colon separates name from key in `trusted-public-keys`
+                // and in `Sig:`; whitespace separates entries. Either produces
+                // a key no client can list.
+                if name.is_empty()
+                    || name.contains(':')
+                    || name.bytes().any(|b| b.is_ascii_whitespace())
+                {
+                    anyhow::bail!(
+                        "registry '{}': nix_signing.key_name must be non-empty and contain \
+                         neither ':' nor whitespace — the colon separates the name from the key \
+                         in trusted-public-keys and in Sig:, and whitespace separates entries, \
+                         so either produces a key no client can list",
+                        registry.name
+                    );
+                }
+            }
+        }
+
+        // `?priority=` and friends are settings on the *client's* store URL.
+        // On the upstream they would be forwarded on every request and mean
+        // nothing to the cache.
+        for upstream in &registry.upstreams {
+            if upstream.contains('?') {
+                anyhow::bail!(
+                    "registry '{}': upstream '{}' carries a query string. '?priority=' and the \
+                     other store-URL settings belong in the client's own 'substituters' line; \
+                     on the upstream they are forwarded on every request and mean nothing",
+                    registry.name,
+                    upstream
                 );
             }
         }

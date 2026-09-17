@@ -1071,6 +1071,23 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
         "/proxy/{registry}/rustup/rustup/release-stable.toml",
         Coverage::Row,
     ),
+    // ── nix (RFC 0028) ──────────────────────────────────────────────────────
+    // Five package reads with no row, and the reason is one fact rather than
+    // five: this matrix seeds a **locally published** package, and `nix` has no
+    // publish protocol yet (phase 4). Every one of these routes is addressed by
+    // a *store hash*, and the coordinate it belongs to is only knowable by
+    // reading the narinfo — which, with nothing published, only an upstream can
+    // supply. `tests/heavy/authz.sh`'s nix phase drives the boundary with a
+    // real client against a real cache instead; these rows become `Row` the day
+    // `PUT {hash}.narinfo` lands, and that is the actual work, not this note.
+    ("/proxy/{registry}/nix/log/{drv}", Coverage::NoPackage("a build log, read by `nix log`. RFC 0028 §3 makes it a passthrough: there is no coordinate in it for a policy to act on")),
+    ("/proxy/{registry}/nix/nar/{file}", Coverage::NoRow("the upstream-shaped NAR URL, resolved through the reverse index a *served narinfo* writes — so it cannot be reached at all without a narinfo this instance has served, which needs an upstream or a publish. See the note above")),
+    ("/proxy/{registry}/nix/nar/{hash}/{file}", Coverage::NoRow("no local mode yet, so this matrix cannot seed a store path; see the note above")),
+    ("/proxy/{registry}/nix/public-key", Coverage::NoPackage("the registry's own narinfo signing public key, one `name:base64` line. Names no coordinate, and a public key is public — every client that reads this registry has to list it in trusted-public-keys. `local_nix_registry.rs` asserts the 200 and the 404 for a registry that signs nothing")),
+    ("/proxy/{registry}/nix/nix-cache-info", Coverage::NoPackage("the cache's own StoreDir, WantMassQuery and Priority; it describes the registry and names no package")),
+    ("/proxy/{registry}/nix/realisations/{id}.doi", Coverage::NoPackage("a derivation-to-output mapping. The policy lives on the narinfo of the `outPath` it names, not here — refusing the mapping while serving the path would be the wrong half (RFC 0028 §4.4)")),
+    ("/proxy/{registry}/nix/{hash}.ls", Coverage::NoRow("no local mode yet; see the note above")),
+    ("/proxy/{registry}/nix/{hash}.narinfo", Coverage::NoRow("no local mode yet; see the note above. This is the chokepoint every substitution resolves through, so it is the first of these to earn a real row when publish lands")),
     ("/proxy/{registry}/nodedist/index.json", Coverage::Row),
     ("/proxy/{registry}/nodedist/index.tab", Coverage::Row),
     ("/proxy/{registry}/nodedist/{version}/{file}", Coverage::Row),
@@ -2261,6 +2278,22 @@ enum WriteCoverage {
 }
 
 const WRITE_ROUTE_INVENTORY: &[(&str, &str, WriteCoverage)] = &[
+    // ── nix (RFC 0028) ───────────────────────────────────────────────────────
+    // Two PUTs and they are one publish, which is why neither carries a row
+    // here. `write_matrix` sends a single request and asserts it was refused
+    // and wrote nothing; a `nix copy --to` is *two* requests where the first
+    // deliberately writes — the NAR is parked before anything knows what it is
+    // — and the second is what applies the gate to a coordinate. A row on the
+    // first would assert "nothing was written" about the step whose whole job
+    // is to write, and a row on the second in isolation would exercise the
+    // not-claimable path rather than the boundary.
+    //
+    // So the boundary is asserted where both halves exist:
+    // `local_nix_registry.rs` drives the pair and covers the publisher scoping
+    // (`a_narinfo_cannot_claim_another_publishers_upload`), the verification
+    // refusal that leaves nothing behind, and the forged-signature drop.
+    ("PUT", "/proxy/{registry}/nix/nar/{file}", WriteCoverage::NoRow("half of a two-request publish: the NAR is parked with no coordinate yet, so `require_local_mode` and `releases:write` are the whole gate and there is no package to disclose. Covered by `local_nix_registry.rs`, which drives both halves — a single-request row would assert 'nothing written' about the step that exists to write")),
+    ("PUT", "/proxy/{registry}/nix/{hash}.narinfo", WriteCoverage::NoRow("the claiming half: it applies the coordinate gate, but only to a NAR this same publisher already parked, so it cannot be exercised alone. Covered by `local_nix_registry.rs`")),
     // ── npm ──────────────────────────────────────────────────────────────────
     ("PUT", "/proxy/{registry}/{name}", WriteCoverage::Row),
     ("PUT", "/proxy/{registry}/-/package/{package}/dist-tags/{tag}", WriteCoverage::NoWrite("declined unconditionally with 501: dist-tags are derived from the published version set here, so nothing is mutated for any caller. RFC 0015 §4.2 files the action itself under a future `npm:dist-tags:write`")),

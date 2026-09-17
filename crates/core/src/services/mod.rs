@@ -19,6 +19,7 @@ pub mod integrity;
 pub mod listing_synthesis;
 pub mod local_registry;
 pub mod metrics;
+pub mod nix;
 pub mod nodedist;
 pub mod ownership_grants;
 pub mod proxy;
@@ -71,9 +72,10 @@ pub use hot_config::{
 pub use integrity::{sha1_hex, verify as verify_checksum, ChecksumAlgo, IntegrityOutcome};
 pub use local_registry::{
     artifact_storage_key, build_in_range, has_traversal_after_decoding, maven_artifact_storage_key,
-    terraform_provider_binary_storage_key, validate_coordinate, validate_package_name,
-    validate_path_safe, JetbrainsPluginVersion, LocalRegistryService, OpenVsxExtensionVersion,
-    PublishPolicyRequest, PublishRequest, TerraformPlatform, COMPOSER_DIST_SHA1,
+    nix_nar_storage_key, nix_narinfo_storage_key, terraform_provider_binary_storage_key,
+    validate_coordinate, validate_package_name, validate_path_safe, JetbrainsPluginVersion,
+    LocalRegistryService, NixPublishRequest, OpenVsxExtensionVersion, PublishPolicyRequest,
+    PublishRequest, TerraformPlatform, COMPOSER_DIST_SHA1,
 };
 pub use metrics::ProxyMetrics;
 pub use proxy::{ProxyRequest, ProxyResponse, ProxyService, StreamedIndex};

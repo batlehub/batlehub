@@ -4034,6 +4034,258 @@ fn a_local_registry_cannot_say_block() {
     );
 }
 
+// ── nix: [registries.nix_signing] and require_upstream_sigs (RFC 0028 §4.5) ─
+
+#[test]
+fn nix_signing_is_accepted_on_a_nix_registry_and_warns_in_proxy_mode() {
+    let cfg = parse_config(&format!(
+        r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "local"
+
+        [registries.nix_signing]
+        seed_hex = "{}"
+        key_name = "batlehub-nix-1""#,
+        "ab".repeat(32)
+    ));
+    cfg.validate().expect("a key on a nix registry is valid");
+    assert!(
+        !cfg.warnings()
+            .iter()
+            .any(|w| w.code == warnings::NIX_LOCAL_UNSIGNED),
+        "a signed local registry must not be warned about: {:?}",
+        cfg.warnings()
+    );
+
+    // The same key in proxy mode signs nothing: a relayed narinfo keeps the
+    // upstream's Sig: and is never re-signed.
+    let cfg = parse_config(&format!(
+        r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "proxy"
+
+        [registries.nix_signing]
+        seed_hex = "{}""#,
+        "ab".repeat(32)
+    ));
+    cfg.validate().expect("valid, just pointless");
+    assert!(
+        cfg.warnings()
+            .iter()
+            .any(|w| w.code == warnings::NIX_SIGNING_PROXY_MODE),
+        "{:?}",
+        cfg.warnings()
+    );
+}
+
+/// A registry that hosts store paths and cannot sign them produces narinfos
+/// every stock client refuses — Nix's `require-sigs` defaults to on. Warned,
+/// not refused: a fleet that has turned it off is a legitimate lab.
+#[test]
+fn a_nix_registry_that_hosts_without_a_key_is_warned_about() {
+    // `hybrid` names its upstream explicitly: that is a generic rule — every
+    // kind's hybrid mode requires one, default or no default — and not
+    // something about nix. RFC 0028 §1's example writes it out for this reason.
+    for (mode, upstream) in [
+        ("local", ""),
+        ("hybrid", "upstreams = [\"https://cache.nixos.org\"]"),
+    ] {
+        let cfg = parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "{mode}"
+        {upstream}"#
+        ));
+        cfg.validate()
+            .expect("not an error — the operator's choice");
+        let warnings = cfg.warnings();
+        let warning = warnings
+            .iter()
+            .find(|w| w.code == warnings::NIX_LOCAL_UNSIGNED)
+            .unwrap_or_else(|| panic!("{mode}: expected a warning, got {warnings:?}"));
+        assert!(
+            warning.message.contains("require-sigs"),
+            "the warning has to name the client setting that refuses it: {}",
+            warning.message
+        );
+    }
+}
+
+#[test]
+fn nix_signing_on_another_kind_is_rejected() {
+    let cfg = parse_config(&format!(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        mode = "local"
+
+        [registries.nix_signing]
+        seed_hex = "{}""#,
+        "ab".repeat(32)
+    ));
+    let err = cfg.validate().unwrap_err().to_string();
+    assert!(err.contains("nix_signing"), "{err}");
+    assert!(err.contains("npm"), "{err}");
+}
+
+#[test]
+fn require_upstream_sigs_on_another_kind_is_rejected() {
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        mode = "proxy"
+        require_upstream_sigs = true"#,
+    );
+    let err = cfg.validate().unwrap_err().to_string();
+    assert!(err.contains("require_upstream_sigs"), "{err}");
+}
+
+#[test]
+fn nix_signing_seed_must_be_a_32_byte_hex_string() {
+    for seed in ["abcd", &"zz".repeat(32), &"ab".repeat(33)] {
+        let cfg = parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "local"
+
+        [registries.nix_signing]
+        seed_hex = "{seed}""#
+        ));
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("64 hex characters"), "{seed}: {err}");
+    }
+}
+
+/// The colon separates the name from the key in `trusted-public-keys` and in
+/// `Sig:`; whitespace separates entries. Either produces a key no client can
+/// list — and the failure is on the *client*, which is why it is refused here.
+#[test]
+fn a_nix_key_name_with_a_colon_or_whitespace_is_rejected() {
+    for name in ["batlehub:nix", "batlehub nix 1", "batlehub\tnix", ""] {
+        let cfg = parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "local"
+
+        [registries.nix_signing]
+        seed_hex = "{}"
+        key_name = "{name}""#,
+            "ab".repeat(32)
+        ));
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("key_name"), "'{name}': {err}");
+    }
+}
+
+/// `?priority=` and its friends are settings on the *client's* store URL. On
+/// the upstream they would be forwarded on every request and mean nothing.
+#[test]
+fn a_nix_upstream_with_a_query_string_is_rejected() {
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "proxy"
+        upstreams = ["https://cache.nixos.org?priority=30"]"#,
+    );
+    let err = cfg.validate().unwrap_err().to_string();
+    assert!(err.contains("query string"), "{err}");
+    assert!(err.contains("substituters"), "{err}");
+}
+
+/// The protocol carries no dates at all, so the field is not a tie-break — it
+/// is the whole rule, and inheriting a default silently is how an operator
+/// ends up believing a registry is quarantined when it is not.
+#[test]
+fn a_nix_age_gate_must_decide_the_undated_case_explicitly() {
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "proxy"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 86400"#,
+    );
+    let err = cfg.validate().unwrap_err().to_string();
+    assert!(err.contains("deny_missing_timestamp"), "{err}");
+    assert!(
+        err.contains("carries no date"),
+        "the error must say why the field is mandatory here: {err}"
+    );
+
+    // Set explicitly — either way — it loads.
+    for decision in ["true", "false"] {
+        let cfg = parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "proxy"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 86400
+        deny_missing_timestamp = {decision}"#
+        ));
+        cfg.validate()
+            .unwrap_or_else(|e| panic!("deny_missing_timestamp = {decision}: {e}"));
+    }
+}
+
+/// `path_allow` is refused by the generic guard, not by a nix-specific one —
+/// asserted here so a future refactor of `is_path_addressed` cannot quietly
+/// open it.
+#[test]
+fn path_allow_on_a_nix_registry_is_rejected() {
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "proxy"
+        path_allow = ["**"]"#,
+    );
+    let err = cfg.validate().unwrap_err().to_string();
+    assert!(err.contains("path_allow"), "{err}");
+}
+
+/// The default key name carries the registry's own name, so two registries on
+/// one instance cannot sign under the same identity — and a client listing
+/// both in `trusted-public-keys` can tell them apart.
+#[test]
+fn the_default_nix_key_name_is_derived_from_the_registry() {
+    use crate::schema::registry::NixSigningConfig;
+    let signing = NixSigningConfig {
+        seed_hex: "ab".repeat(32),
+        key_name: None,
+    };
+    assert_eq!(signing.resolved_key_name("nixcache"), "batlehub-nixcache-1");
+    assert_eq!(signing.resolved_key_name("other"), "batlehub-other-1");
+
+    let named = NixSigningConfig {
+        seed_hex: "ab".repeat(32),
+        key_name: Some("acme-cache-4".to_owned()),
+    };
+    assert_eq!(named.resolved_key_name("nixcache"), "acme-cache-4");
+}
+
 // ── [registries.vsx_signing] (RFC 0020 §4.3) ───────────────────────────────
 
 #[test]

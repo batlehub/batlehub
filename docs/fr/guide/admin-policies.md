@@ -5,7 +5,7 @@
 # plafond, une déclaration que quelqu'un a dû écrire (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/admin-policies.md
-sourceHash: bf9103c0503488f9
+sourceHash: 1484172c016209be
 ---
 
 # Politiques et paquets
@@ -340,6 +340,7 @@ sans danger :
 | galaxy | collection versions | yes |
 | galaxy | the collection document | yes |
 | galaxy | role versions | yes |
+| nix | narinfo | yes |
 <!-- END listing-coverage -->
 
 La table ci-dessus est générée depuis le code Rust et reste en anglais : ses

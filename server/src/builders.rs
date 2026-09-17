@@ -254,6 +254,11 @@ fn default_upstreams(kind: RegistryKind, reg: &RegistryConfig) -> Vec<String> {
             &reg.upstreams,
             batlehub_adapters::registry::galaxy::DEFAULT_API_BASE,
         ),
+        // The cache root — the URL a client puts in `substituters`. Unlike
+        // deb/rpm/apk, a Nix cache *does* have a universal default that an
+        // operator would otherwise retype, and it is the one every stock
+        // client already trusts the key of (RFC 0028 §4.1).
+        RegistryKind::Nix => resolve_urls(&reg.upstreams, "https://cache.nixos.org"),
     }
 }
 
@@ -351,6 +356,12 @@ fn make_one(
             batlehub_adapters::registry::GalaxyRegistryClient::new(url, opts)?
                 .with_roles(roles.serves_v1(), roles.proxies_bytes()),
         ),
+        // No options to thread through: the signing key belongs to the *local*
+        // service (it signs what was published, never what was relayed), and
+        // `require_upstream_sigs` is read at the handler, on the document.
+        RegistryKind::Nix => Arc::new(batlehub_adapters::registry::NixBinaryCacheClient::new(
+            url, opts,
+        )?),
     };
     Ok(client)
 }

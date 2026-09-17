@@ -604,6 +604,12 @@ fn strip(
         | RegistryKind::Apk
         | RegistryKind::Jetbrains
         | RegistryKind::JetbrainsMarketplace
+        // A narinfo *is* one version, so a block on its coordinate makes the
+        // whole document absent rather than shorter. The handler decides, which
+        // is also the only place that can answer `404` — `strip` returns the
+        // versions it removed and has no way to say "serve nothing"
+        // (RFC 0028 §4.4).
+        | RegistryKind::Nix
         | RegistryKind::Generic => None,
     }
 }
@@ -950,8 +956,16 @@ mod tests {
     ///   it; and the same entries render into two different client protocols
     ///   (`extensionquery` and the OpenVSX REST API), so filtering the entries
     ///   rather than the documents is what keeps them in agreement.
+    /// - **nix** filters at the narinfo handler. A narinfo describes one store
+    ///   path, so a blocked coordinate is the document answering `404` — the
+    ///   substituter protocol's own "not in this cache" — and `strip`, which
+    ///   returns the versions it removed from a document it hands back, has no
+    ///   way to express that. The NAR route re-derives the coordinate from the
+    ///   store hash in its own path and asks again, so a client holding a
+    ///   narinfo from before the block is refused there too (RFC 0028 §5.3).
     const FILTERED_ELSEWHERE: &[RegistryKind] = &[
         RegistryKind::Conda,
+        RegistryKind::Nix,
         RegistryKind::JetbrainsMarketplace,
         RegistryKind::Openvsx,
         RegistryKind::VscodeMarketplace,

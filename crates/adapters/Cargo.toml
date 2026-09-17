@@ -126,6 +126,7 @@ default = [
   "registry-sdkman",
   "registry-rustup",
   "registry-galaxy",
+  "registry-nix",
   "sbom",
   "storage-fs",
   "vuln-scan"
@@ -179,6 +180,9 @@ registry-pacman = [
   "dep:sha1",
   "dep:ed25519-dalek",
 ]
+# nix relays narinfos and streams NARs on the read path, and decompresses an
+# uploaded NAR on the publish path to verify NarHash before signing it.
+registry-nix = ["dep:zstd", "dep:lzma-rs", "dep:ed25519-dalek"]
 # galaxy reads MANIFEST.json/FILES.json out of a collection tarball on publish.
 registry-galaxy = ["dep:flate2", "dep:tar"]
 registry-pypi = []

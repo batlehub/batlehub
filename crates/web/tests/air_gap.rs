@@ -2554,6 +2554,148 @@ mod path_family_air_gap {
     }
 }
 
+// ── Nix binary cache (RFC 0028 §6.11, RFC 0008-bis) ─────────────────────────
+
+/// The four fields of a narinfo that the NAR's own bytes do not carry, as they
+/// arrive in `BundleEntry::facts` and land in the `meta:` entry's `extra`.
+///
+/// `References` is the one that makes the case: a closure is not derivable from
+/// a compressed stream by any means, so an instance that composed a narinfo
+/// without it would hand the client a document describing a path with no
+/// dependencies — which installs, and then fails at run time in a way nothing
+/// here would catch. The `Sig:` is the publisher's, relayed and never re-made.
+fn nix_facts() -> serde_json::Value {
+    serde_json::json!({
+        "store_path": "/nix/store/0001npbf2n4z3pjy6vm2mw8ywkqixxs6-hslua-aeson-2.3.2-doc",
+        "store_hash": "0001npbf2n4z3pjy6vm2mw8ywkqixxs6",
+        "nar_hash": "sha256:075lhsj33mkk02xn3lf59xn9glvh02wkw9xislbcj1jgjlpcn79x",
+        "nar_size": "226848",
+        "compression": "zstd",
+        "references": ["ghpayap4j5fqg9ryyzrfdj9ygdi01iw9-aeson-2.2.4.1-doc"],
+        "deriver": "y1h1bh5gl539r42jydbnbmp3vyh11sva-hslua-aeson-2.3.2.drv",
+        "signatures": ["cache.nixos.org-1:21qiHy652KfJ7Rsnc+dy5KndgujuIQEU/oudrFh7sWkkLlT9r8F3AxKA//dMvr9xWBA3tITPZA6ZFC7KxxRJBA=="],
+    })
+}
+
+const NIX_HASH: &str = "0001npbf2n4z3pjy6vm2mw8ywkqixxs6";
+const NIX_NAR_FILE: &str = "075lhsj33mkk02xn3lf59xn9glvh02wkw9xislbcj1jgjlpcn79x.nar.zst";
+
+async fn nix_lab() -> (impl TestService, Lab) {
+    holding_lab_extra(
+        "nix",
+        true,
+        &[(
+            "hslua-aeson",
+            "2.3.2-doc",
+            Some(&format!("{NIX_HASH}/{NIX_NAR_FILE}")),
+            nix_facts(),
+        )],
+    )
+    .await
+}
+
+/// A held store path is substitutable across the gap, with the **publisher's**
+/// signature intact.
+///
+/// The claim RFC 0008-bis §11 q6 settles and this proves: the disconnected
+/// instance serves the `Sig:` exactly as the connected one did, so a client on
+/// the far side verifies with the same `trusted-public-keys` entry it uses
+/// connected — and this estate signs nothing. `URL:` is the one line that is
+/// this instance's own, which is free because it is not in the fingerprint.
+#[actix_web::test]
+async fn a_held_store_path_composes_a_narinfo_with_its_publishers_signature() {
+    let (app, _lab) = nix_lab().await;
+
+    let resp = get(&app, &format!("/proxy/{REG}/nix/{NIX_HASH}.narinfo")).await;
+    assert_eq!(resp.status(), 200);
+    let body = String::from_utf8(actix_web::test::read_body(resp).await.to_vec()).unwrap();
+
+    let info = batlehub_core::services::nix::NarInfo::parse(&body).expect("composes a narinfo");
+    info.require_fields()
+        .expect("every field Nix itself requires is present");
+
+    assert_eq!(
+        info.get("StorePath"),
+        Some("/nix/store/0001npbf2n4z3pjy6vm2mw8ywkqixxs6-hslua-aeson-2.3.2-doc")
+    );
+    // This instance's layout, not the connected side's.
+    assert_eq!(
+        info.get("URL"),
+        Some(format!("nar/{NIX_HASH}/{NIX_NAR_FILE}").as_str())
+    );
+    // The closure, which nothing in the bytes could have told us.
+    assert_eq!(
+        info.get("References"),
+        Some("ghpayap4j5fqg9ryyzrfdj9ygdi01iw9-aeson-2.2.4.1-doc"),
+        "a narinfo without its closure describes a path with no dependencies"
+    );
+    // The publisher's signature, relayed. Not re-made: this instance holds no
+    // key that could have produced it.
+    assert_eq!(
+        info.get("Sig"),
+        Some("cache.nixos.org-1:21qiHy652KfJ7Rsnc+dy5KndgujuIQEU/oudrFh7sWkkLlT9r8F3AxKA//dMvr9xWBA3tITPZA6ZFC7KxxRJBA=="),
+    );
+    // `FileHash` is the one field composed rather than relayed — it describes
+    // the bytes *this* instance holds — and it is in the spelling a narinfo
+    // uses: `sha256:{nix32}`, not hex and not SRI.
+    let file_hash = info.get("FileHash").expect("the held bytes are digested");
+    let digest = file_hash
+        .strip_prefix("sha256:")
+        .expect("narinfo spelling, not SRI");
+    assert_eq!(
+        batlehub_core::services::nix::nix32_decode(digest, 32).map(|d| d.len()),
+        Some(32),
+        "FileHash must be Nix base32, which is not RFC 4648: {file_hash}"
+    );
+
+    // …and the bytes are there, which is the invariant the whole design rests
+    // on: a path the narinfo describes is served by the next request.
+    let resp = get(
+        &app,
+        &format!("/proxy/{REG}/nix/nar/{NIX_HASH}/{NIX_NAR_FILE}"),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+}
+
+/// `nix-cache-info` is composed, because there is no upstream to relay one
+/// from — the one case §4.4 says composes rather than relays.
+///
+/// `StoreDir` is not a knob: a client whose own store dir differs refuses the
+/// whole cache with *"binary cache '…' is for Nix stores with prefix '…'"*.
+#[actix_web::test]
+async fn cache_info_is_composed_when_there_is_no_upstream_to_relay_one_from() {
+    let (app, _lab) = nix_lab().await;
+    let resp = get(&app, &format!("/proxy/{REG}/nix/nix-cache-info")).await;
+    assert_eq!(resp.status(), 200);
+    let body = String::from_utf8(actix_web::test::read_body(resp).await.to_vec()).unwrap();
+    assert!(body.contains("StoreDir: /nix/store"), "{body}");
+    assert!(body.contains("WantMassQuery: 1"), "{body}");
+}
+
+/// A store path the bundle does not carry is refused the way every other
+/// air-gapped coordinate is: a `503`, because it exists — it is simply not
+/// here — and a `404` is what a hybrid fall-through acts on.
+///
+/// **Worth a second look before this ships wider.** To Nix a `404` means "not
+/// in this cache" and it moves to the next substituter or builds; a `503` is a
+/// transport error it reports rather than routes around. On a disconnected
+/// machine building from source is usually the *right* next step, so the
+/// estate-wide convention and this protocol's own recoverable answer point
+/// different ways here. Recorded rather than decided: the convention is RFC
+/// 0008 §4.4's and changing it for one kind is an RFC question, not a test's.
+#[actix_web::test]
+async fn a_store_path_the_bundle_does_not_carry_is_refused_not_invented() {
+    let (app, _lab) = nix_lab().await;
+    let absent = "zzzznpbf2n4z3pjy6vm2mw8ywkqixxs6";
+    let resp = get(&app, &format!("/proxy/{REG}/nix/{absent}.narinfo")).await;
+    assert_eq!(
+        resp.status(),
+        503,
+        "held elsewhere, not absent — and never a composed narinfo for bytes this instance does not have"
+    );
+}
+
 /// Ansible Galaxy across the gap (RFC 0031 §6.11, RFC 0008-bis).
 ///
 /// A collection install reads three documents before it reads a byte: the

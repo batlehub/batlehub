@@ -1383,6 +1383,37 @@ impl ProxyService {
             .unwrap_or_default()
     }
 
+    /// This `nix` registry's narinfo signing key, if it has one.
+    ///
+    /// Read from `HotConfig` on each use rather than held, so a rotated key
+    /// takes effect on the next publish — `deny_components`' rule. `None` is a
+    /// legitimate configuration: the registry then serves what it hosts
+    /// unsigned, which every client running Nix's default `require-sigs = true`
+    /// refuses, and the reload warning says so.
+    pub async fn nix_signing_key(
+        &self,
+        registry: &str,
+    ) -> Option<Arc<crate::services::nix::NixSigningKey>> {
+        self.hot.read().await.nix_signing.get(registry).cloned()
+    }
+
+    /// Whether this `nix` registry refuses to relay a narinfo with no `Sig:`
+    /// at all (RFC 0028 §4.1).
+    ///
+    /// Read on every narinfo relay rather than baked into the registry client,
+    /// so a reload takes effect on the next request — `deny_components`' and
+    /// `galaxy_roles`' rule. `false` for a registry that set nothing, which is
+    /// the documented default: a content-addressed path legitimately carries no
+    /// signature, and the client's own `require-sigs` is the check that
+    /// protects its store.
+    pub async fn nix_requires_upstream_sigs(&self, registry: &str) -> bool {
+        self.hot
+            .read()
+            .await
+            .nix_require_upstream_sigs
+            .contains(registry)
+    }
+
     pub async fn blocked_changed_at(
         &self,
         registry: &str,

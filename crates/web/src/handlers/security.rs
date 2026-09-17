@@ -146,7 +146,15 @@ pub fn native_body(kind: RegistryKind, message: &str) -> (&'static str, String) 
         | RegistryKind::Sdkman
         // rustup prints the status and its reason phrase; text is what a
         // person sees when they curl the same URL.
-        | RegistryKind::Rustup => (TEXT, format!("{message}\n")),
+        | RegistryKind::Rustup
+        // Nix never reads the body of a failed substituter request:
+        // `HttpBinaryCacheStore::getFile` maps 404/410 to
+        // `FileTransfer::NotFound` and 403 to `Forbidden` from the *status*,
+        // and `queryPathInfoUncached` turns either into "no info" — it moves
+        // to the next substituter or builds, in its own words. So the body is
+        // only ever read by a person with `curl`, and text is the honest
+        // shape (RFC 0028 §2).
+        | RegistryKind::Nix => (TEXT, format!("{message}\n")),
     }
 }
 

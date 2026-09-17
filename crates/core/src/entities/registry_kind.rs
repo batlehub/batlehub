@@ -232,6 +232,18 @@ pub enum RegistryKind {
     /// artifact. Roles — the v1 API — are served read-only behind
     /// `roles = proxy | index | off` (RFC 0031).
     Galaxy,
+    /// A Nix *binary cache* — the substituter protocol. Three kinds of file
+    /// behind one URL: `nix-cache-info`, one `{hash}.narinfo` per store path
+    /// and the NARs under `nar/`. There is no index and no search: a client
+    /// asks for exactly the store path it has already computed, and the cache
+    /// either has it or answers `404`, which is the protocol's own "not here".
+    ///
+    /// The package model is Nix's own — `DrvName` splits a store name at the
+    /// first dash not followed by a letter, so `hello-1.0.0.2-doc` is `hello`
+    /// at `1.0.0.2-doc` — and the 32-character store hash is the *artifact*
+    /// within that version, because two builds of one version differ in the
+    /// hash and in nothing a policy reads (RFC 0028).
+    Nix,
 }
 
 impl RegistryKind {
@@ -264,6 +276,7 @@ impl RegistryKind {
         Self::Sdkman,
         Self::Rustup,
         Self::Galaxy,
+        Self::Nix,
     ];
 
     /// The kebab-case wire string for this kind (matches TOML `type = "..."`).
@@ -295,6 +308,7 @@ impl RegistryKind {
             Self::Sdkman => "sdkman",
             Self::Rustup => "rustup",
             Self::Galaxy => "galaxy",
+            Self::Nix => "nix",
         }
     }
 
@@ -546,6 +560,16 @@ impl RegistryKind {
             ListingDocument::filtered("role versions", &["role-versions"]),
         ];
 
+        // One row, and its `documents` slice is empty for rustup's reason one
+        // const up: a narinfo describes *one* store path, so the question is
+        // not "which versions does this document list" but "is this document's
+        // own coordinate blocked" — and the answer is the whole document
+        // answering `404`, which is the substituter protocol's own "not in this
+        // cache". Nothing is ever stripped from a narinfo body, so it never
+        // travels through `strip`; the handler decides, and `blocking`'s
+        // `FILTERED_ELSEWHERE` records that (RFC 0028 §4.4, §6.2).
+        const NIX: &[ListingDocument] = &[ListingDocument::filtered("narinfo", &[])];
+
         match self {
             Self::Npm => NPM,
             Self::Nuget => NUGET,
@@ -565,6 +589,7 @@ impl RegistryKind {
             Self::Sdkman => SDKMAN,
             Self::Rustup => RUSTUP,
             Self::Galaxy => GALAXY,
+            Self::Nix => NIX,
             // `generic` and `jetbrains` mirror an arbitrary file tree by path —
             // there is no listing document in the protocol at all, so there is
             // nothing to say beyond that. (JetBrains *plugins* are the separate
@@ -659,6 +684,10 @@ impl RegistryKind {
             // carry no prose, so a version this instance holds no bytes for has
             // none — the honest limit every `Archive` kind has (RFC 0031 §6.1).
             Self::Galaxy => ReadmeSupport::Archive,
+            Self::Nix => ReadmeSupport::None(
+                "a store path is a NAR and its narinfo; the protocol carries no prose, and the \
+                 NAR is a filesystem image rather than a package with a manifest",
+            ),
         }
     }
 
@@ -730,6 +759,14 @@ impl RegistryKind {
             // The collection's own versions list: every entry carries
             // `created_at`, `version` and `requires_ansible` (RFC 0031 §6.1).
             Self::Galaxy => UpstreamDetailSupport::Document("versions"),
+            // A binary cache has no index: it answers a store path or it does
+            // not, and the path has to be computed by an evaluation this
+            // instance cannot perform. So explore shows what this instance has
+            // served or holds, and never a remote list (RFC 0028 §6.1).
+            Self::Nix => UpstreamDetailSupport::None(
+                "a binary cache has no index: it answers one store path at a time, and the path \
+                 is computed by the client rather than listed by the cache",
+            ),
         }
     }
 
@@ -842,6 +879,16 @@ impl RegistryKind {
             Self::Rustup => FetchSupport::None(
                 "a Rust release is a manifest plus one tarball per component per target, so \
                  \"fetch this version\" needs a target and a profile",
+            ),
+            // The artifact is the *store hash*, and one version holds as many
+            // of them as it has been built times — each a different NAR of the
+            // same software. Neither the console nor warming can name one, so
+            // both say why instead of writing to a slot nothing reads; an
+            // operator who does know the path uses `cache.warm_paths`
+            // (RFC 0028 §6.1).
+            Self::Nix => FetchSupport::None(
+                "a version is one or more store paths, each a separate build with its own \
+                 32-character hash, and the hash is not derivable from the version",
             ),
         }
     }
@@ -1302,6 +1349,11 @@ mod tests {
                 // A manifest and a set of tarballs; the dist tree carries no
                 // prose either.
                 "rustup",
+                // A store path is a NAR — a filesystem image — and its narinfo,
+                // which carries hashes, a closure and a deriver. There is no
+                // manifest in the protocol at all, so there is nowhere prose
+                // could live (RFC 0028 §6.1).
+                "nix",
             ]
         );
     }

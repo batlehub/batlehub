@@ -275,6 +275,11 @@ tasks:
     cmds:
       - bash tests/heavy/galaxy.sh {{.CLI_ARGS}}
 
+  test:nix-heavy:
+    desc: "Heavy Nix binary-cache integration: the real `nix` substituting from cache.nixos.org through the proxy — the narinfo relayed with only URL: rewritten and cache.nixos.org's own Sig: still verifying, a blocked store path absent as the protocol's own 404 with nothing fetched under its NAR prefix, a second cold store served from the cache, and the upstream-shaped NAR URL resolved through the reverse index (needs DATABASE_URL + network + podman or docker — the client runs in the `nixos/nix` image, so nothing is installed on the host)"
+    cmds:
+      - bash tests/heavy/nix.sh
+
   test:npm-heavy:
     desc: "Heavy npm integration: publish/install/whoami/ping/dist-tags/search against a local registry, and `npm audit` on the path npm really sends (needs DATABASE_URL + network)"
     cmds:
@@ -479,6 +484,11 @@ tasks:
       - bash tests/heavy/mise.sh
       - bash tests/heavy/cargo.sh
       - bash tests/heavy/rustup.sh
+      # `nix` runs its client in the `nixos/nix` image, so this needs podman or
+      # docker and nothing on the host. A machine without either fails this line
+      # rather than skipping it, which is deliberate: a heavy suite that
+      # silently skipped would report green for a kind no client ever drove.
+      - bash tests/heavy/nix.sh
       - bash tests/heavy/closed_world.sh all
       - bash tests/heavy/go.sh
       - bash tests/heavy/maven.sh

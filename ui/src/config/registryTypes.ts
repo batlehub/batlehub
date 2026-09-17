@@ -2244,6 +2244,123 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
     ],
   },
   {
+    id: "nix",
+    label: "Nix binary cache",
+    fileHint: "flake.nix",
+    description:
+      `The Nix <em>substituter</em> protocol as a registry kind (RFC 0028): ` +
+      `<code>nix-cache-info</code>, one <code>{hash}.narinfo</code> per store path, and the ` +
+      `NARs. A narinfo is relayed with <strong>one</strong> line rewritten — ` +
+      `<code>URL:</code>, which the signature does not cover — so every ` +
+      `<code>Sig:</code> still verifies on the client with the upstream's own key, and the ` +
+      `NAR is fetched under a coordinate this instance can block, cache and count. The ` +
+      `package is what Nix says it is: <code>hello-1.0.0.2-doc</code> is ` +
+      `<code>hello</code> at <code>1.0.0.2-doc</code>, and the 32-character hash is the ` +
+      `artifact. A blocked path answers <code>404</code> — the protocol's own ` +
+      `"not in this cache".`,
+    snippets: [
+      {
+        key: "nix-cfg",
+        label: "Client setup",
+        lang: "ini",
+        template: (ctx) => {
+          const sub = `${ctx.registryUrl}/nix`;
+          const lines = [
+            `# /etc/nix/nix.conf, or nixConfig in a flake for a trusted user.`,
+            `# ?priority=30 sorts this cache before cache.nixos.org (priority 40;`,
+            `# lower wins) when a machine lists both.`,
+            `substituters        = ${sub}?priority=30`,
+            `trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=`,
+          ];
+          if (ctx.isAuthenticated) {
+            lines.push(
+              ``,
+              `# Nix sends no credentials unless told where they are: the downloader is`,
+              `# libcurl with CURLOPT_NETRC_FILE, and the default path is a dummy.`,
+              `# There is no header setting for substituters, and the path must be absolute.`,
+              `netrc-file = /etc/nix/netrc`,
+            );
+          }
+          return lines.join("\n");
+        },
+        note: (ctx) =>
+          ctx.isAuthenticated
+            ? `Put the credential in <code>/etc/nix/netrc</code> as ` +
+              `<code>machine ${ctx.netrcHost} login ${ctx.netrcLogin} password ${ctx.token}</code>. ` +
+              `Nix reads no header setting for substituters, so this file is the only place ` +
+              `it can come from — and <code>netrc-file</code> must be an absolute path.`
+            : `Reads with no <code>netrc-file</code> are anonymous. Unprivileged users can only ` +
+              `use substituters listed in <code>trusted-substituters</code> or the daemon's own ` +
+              `list — which is the lever for making this instance the only cache a machine reads.`,
+      },
+      {
+        key: "nix-use",
+        label: "Build",
+        lang: "bash",
+        template: () =>
+          [
+            `nix build nixpkgs#hello`,
+            `nix copy --from <this cache> /nix/store/…-hello-2.12.2`,
+            ``,
+            `# A blocked store path answers 404 on its narinfo, which to Nix means`,
+            `# "not in this cache": it consults the next substituter, or builds from`,
+            `# source. Blocking a binary does not block the software — the lever for`,
+            `# that is max-jobs = 0 on machines that must not build, and it is`,
+            `# Nix configuration, not this proxy's.`,
+          ].join("\n"),
+      },
+      {
+        key: "nix-publish",
+        label: "Publish",
+        lang: "bash",
+        showWhen: isPublishMode,
+        template: (ctx) =>
+          [
+            `nix copy --to "${ctx.registryUrl}/nix" ./result`,
+            ``,
+            `# The NAR is sent before the narinfo — the bytes arrive naming no`,
+            `# package — so they are held until the narinfo claims them. That is`,
+            `# also when FileHash, FileSize, NarHash and NarSize are recomputed`,
+            `# here, from the bytes this server holds, before anything is signed.`,
+            ``,
+            `# The key every client needs in trusted-public-keys:`,
+            `curl -s ${ctx.registryUrl}/nix/public-key`,
+          ].join("\n"),
+        note: `Set <code>[registries.nix_signing]</code> or every stock client refuses what this registry serves — Nix's <code>require-sigs</code> is on by default. A publisher's own signatures are kept; one forging <em>this registry's</em> key name is dropped. <code>nix copy</code> compresses with <strong>xz</strong> by default: <code>xz</code>, <code>zstd</code> and <code>none</code> are verifiable here and Nix's other ten algorithms are refused, because a NAR this server cannot decompress is one whose <code>NarHash</code> it cannot check.`,
+      },
+      {
+        key: "nix-config",
+        label: "Server config",
+        lang: "toml",
+        template: (ctx) =>
+          [
+            `[[registries]]`,
+            `name      = "${ctx.registryName}"`,
+            `type      = "nix"`,
+            `mode      = "${ctx.mode}"`,
+            `upstreams = ["https://cache.nixos.org"]   # the default`,
+            ``,
+            `# Refuse to relay a narinfo carrying no Sig: at all. Off by default —`,
+            `# a content-addressed path legitimately has none, and the client's own`,
+            `# require-sigs is the check that protects its store.`,
+            `require_upstream_sigs = false`,
+            ``,
+            `# The key local publishes are signed with. Without it this registry`,
+            `# serves unsigned paths, which every stock client refuses.`,
+            `[registries.nix_signing]`,
+            `seed_hex = "\${NIX_SIGNING_SEED}"   # openssl rand -hex 32`,
+            ``,
+            `[registries.rbac]`,
+            `# narinfo and nix-cache-info are listings; NARs, .ls and realisations are reads.`,
+            `anonymous = ["releases:read", "releases:list"]`,
+            `user      = ["releases:read", "releases:list"]`,
+            `admin     = ["*"]`,
+          ].join("\n"),
+        note: `An age gate on this kind must choose: the substituter protocol carries no dates anywhere, so every store path reaches the rule undated. <code>deny_missing_timestamp = true</code> refuses every substitution on the registry and <code>false</code> makes the gate inert — there is no default, and the field is the whole rule.`,
+      },
+    ],
+  },
+  {
     id: "sdkman",
     label: "SDKMAN",
     fileHint: ".sdkmanrc",

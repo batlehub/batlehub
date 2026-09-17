@@ -55,6 +55,7 @@ import {
   JETBRAINS_REGISTRY,
   LOCAL_NPM_REGISTRY,
   MAVEN_REGISTRY,
+  NIX_REGISTRY,
   NODE_REGISTRY,
   NPM_REGISTRY,
   NUGET_REGISTRY,
@@ -73,6 +74,23 @@ import {
 import { npmPublishPayload } from "./helpers.js";
 
 const p = (path) => `${BASE_URL}${path}`;
+
+/// A well-formed store hash for arm index `n`.
+///
+/// 32 characters of **Nix's** base32 alphabet, which omits `e`, `o`, `u` and
+/// `t`. The proxy validates this at the edge and answers `400` for anything
+/// else, so a hash built from a plain hex or base64 alphabet would make these
+/// arms measure the validator instead of the document path.
+const NIX32 = "0123456789abcdfghijklmnpqrsvwxyz";
+const nixHash = (n) => {
+  let out = "";
+  let v = n + 1;
+  for (let i = 0; i < 32; i++) {
+    out += NIX32[v % 32];
+    v = Math.floor(v / 32) + i;
+  }
+  return out;
+};
 
 const goModule = (n) => {
   const majorVersionPath = n === 0 ? "" : `/v${n + 1}`;
@@ -393,6 +411,54 @@ export const ARMS = [
       url: p(
         `/proxy/${GALAXY_REGISTRY}/galaxy/api/v3/artifacts/collections/acme-util0-0.${n}.0.tar.gz`,
       ),
+    }),
+  },
+  // A Nix binary cache. The narinfo arm is the one that matters: it is fetched
+  // once per store path in a closure — hundreds per system build, which makes
+  // it the hottest document in this whole file in a real estate — and the proxy
+  // parses it, blocks on it, rewrites one line, re-serialises it and writes a
+  // reverse-index entry, all per request. Every one of those steps allocates.
+  //
+  // `space: 64` and not more: the reverse index writes one cache entry per
+  // *distinct* NAR basename, so an unbounded hash space would grow the cache
+  // for as long as the run lasts and the gate would fail on its own load rather
+  // than on a leak (the stationary-workload rule this file opens with).
+  {
+    op: "nix_narinfo",
+    kind: "nix",
+    registry: NIX_REGISTRY,
+    weight: 3,
+    expect: [200],
+    space: 64,
+    doc: "a narinfo — parsed, blocked on, one line rewritten, re-serialised and indexed",
+    request: (n) => ({
+      url: p(`/proxy/${NIX_REGISTRY}/nix/${nixHash(n)}.narinfo`),
+    }),
+  },
+  {
+    op: "nix_nar",
+    kind: "nix",
+    registry: NIX_REGISTRY,
+    weight: 2,
+    expect: [200],
+    space: 64,
+    doc: "a NAR under the rewritten coordinate — the store hash re-read from the narinfo",
+    request: (n) => ({
+      url: p(
+        `/proxy/${NIX_REGISTRY}/nix/nar/${nixHash(n)}/${nixHash(n)}.nar.zst`,
+      ),
+    }),
+  },
+  {
+    op: "nix_cache_info",
+    kind: "nix",
+    registry: NIX_REGISTRY,
+    weight: 1,
+    expect: [200],
+    space: 1,
+    doc: "nix-cache-info — registry-wide, one cache entry, read once per substituter",
+    request: () => ({
+      url: p(`/proxy/${NIX_REGISTRY}/nix/nix-cache-info`),
     }),
   },
   {

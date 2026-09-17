@@ -130,6 +130,10 @@ export const sidebar = {
       ],
     },
     {
+      text: "Build caches",
+      items: [{ text: "Nix binary cache", link: "/registries/nix" }],
+    },
+    {
       text: "Toolchains",
       items: [
         { text: "Node (nvm, fnm, n, mise)", link: "/registries/nodedist" },

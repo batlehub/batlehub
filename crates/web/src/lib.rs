@@ -508,6 +508,7 @@ pub use spa::{configure_spa, narrow_csp, SpaDir};
         (name = "proxy/jetbrains-marketplace", description = "JetBrains Marketplace — IDE-facing plugin API (search, compatible updates, meta.json, downloads), updatePlugins.xml custom repository, and marketplace-compatible plugin publishing"),
         (name = "proxy/generic",    description = "Generic file mirror — path-addressed proxy cache for upstreams with no package protocol (toolchain tarballs, vendor CDNs), restricted by a path_allow allowlist"),
         (name = "proxy/nodedist",   description = "Node distributions (nvm, fnm, n, mise) — the nodejs.org/dist tree as a typed registry: filtered index.tab/index.json listings, per-release tarballs and SHASUMS256.txt byte-exact"),
+        (name = "proxy/nix",        description = "Nix binary cache (nix, cachix-style substituters) — the substituter protocol as a registry kind: narinfos relayed with only `URL:` rewritten so every `Sig:` still verifies, a blocked store path absent as the protocol's own 404, NARs cached under a coordinate, and stale upstream-shaped NAR URLs resolved through a reverse index"),
         (name = "proxy/galaxy",     description = "Ansible Galaxy — the collections API v3 as a registry kind: the versions list filtered and served as one page, download_url rewritten to this instance, collection publish with its import-task poll, and the v1 role surface behind `roles`"),
         (name = "proxy/rustup",     description = "Rust toolchains (rustup, mise) — the static.rust-lang.org tree as a typed registry: channel manifests filtered and their .sha256 recomputed, blocked releases refused or repaired, component archives cached per release"),
         (name = "proxy/sdkman",     description = "SDKMAN — the candidates API and the download broker as one registry: filtered versions/all, candidates/default and the rendered sdk list table, a blocked version answered `invalid` at candidates/validate, hook scripts relayed byte-exact, the broker's 302 followed server-side and cached"),
@@ -678,6 +679,10 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 jbm_update_plugins_xml, jbm_upload,
             },
             maven::{maven_get, maven_put},
+            nix::{
+                nix_build_log, nix_cache_info, nix_ls, nix_nar, nix_nar_upstream_shape,
+                nix_narinfo, nix_public_key, nix_put_nar, nix_put_narinfo, nix_realisation,
+            },
             nodedist::{nodedist_file, nodedist_index_json, nodedist_index_tab},
             npm::{
                 audit_bulk, audit_bulk_legacy, audit_quick, audit_quick_legacy,
@@ -815,6 +820,27 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(nodedist_index_tab); // GET …/nodedist/index.tab   (filtered document)
     cfg.service(nodedist_index_json); // GET …/nodedist/index.json  (filtered document)
     cfg.service(nodedist_file); // GET …/nodedist/{version}/{file}
+
+    // Nix binary cache (RFC 0028). One ordering rule and it is load-bearing:
+    // `nar/{hash}/{file}` registers **before** `nar/{file}`, or every
+    // coordinate-carrying NAR request would match the upstream-shape route
+    // with `{file}` = the store hash and be refused. The literal
+    // `nix-cache-info` before the `{hash}.narinfo`/`{hash}.ls` patterns for the
+    // same reason, and `realisations/`/`log/` are literal prefixes that cannot
+    // collide with a hash. `protocol_conformance` asserts both NAR patterns.
+    // The publish half (RFC 0028 §4.4). `PUT nar/{file}` shares its path with
+    // the upstream-shape `GET`, and actix matches on method as well as path, so
+    // the two coexist — but both must register before any wildcard below.
+    cfg.service(nix_put_nar); // PUT     …/nix/nar/{file}         (parked, unclaimed)
+    cfg.service(nix_put_narinfo); // PUT …/nix/{hash}.narinfo     (claim · verify · sign)
+    cfg.service(nix_public_key); // GET  …/nix/public-key         (trusted-public-keys)
+    cfg.service(nix_cache_info); // GET     …/nix/nix-cache-info
+    cfg.service(nix_nar); // GET     …/nix/nar/{hash}/{file}  (the rewritten URL)
+    cfg.service(nix_nar_upstream_shape); // GET     …/nix/nar/{file}         (reverse index)
+    cfg.service(nix_realisation); // GET     …/nix/realisations/{id}.doi
+    cfg.service(nix_build_log); // GET     …/nix/log/{drv}
+    cfg.service(nix_narinfo); // GET|HEAD …/nix/{hash}.narinfo   (the chokepoint)
+    cfg.service(nix_ls); // GET     …/nix/{hash}.ls
 
     // Ansible Galaxy (RFC 0031). Every path here is literal down to the
     // coordinate, so the only ordering that matters is inside the collections

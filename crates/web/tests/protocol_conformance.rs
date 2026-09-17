@@ -886,6 +886,43 @@ const GALAXY: &[Conformance] = &[
     .must_find("1.1.0"),
 ];
 
+/// Nix's substituter protocol, read from `libstore` (the 2.35 line).
+///
+/// Four request lines and one route-ordering hazard, which is why this suite
+/// exists at all: `nar/{hash}/{file}` and `nar/{file}` differ only in their
+/// segment count, and a registration in the wrong order would make every
+/// coordinate-carrying NAR request match the upstream-shape route with
+/// `{file}` = the store hash. Both patterns are asserted here, so the ordering
+/// is checked rather than commented.
+const NIX: &[Conformance] = &[
+    Conformance::get(
+        "/proxy/nix/nix/nix-cache-info",
+        "/proxy/{registry}/nix/nix-cache-info",
+        "binary-cache-store.cc, `BinaryCacheStore::init` — read once per substituter; a StoreDir \
+         that differs from the local one makes the cache unusable",
+    )
+    .must_find("StoreDir"),
+    Conformance::get(
+        "/proxy/nix/nix/0001npbf2n4z3pjy6vm2mw8ywkqixxs6.narinfo",
+        "/proxy/{registry}/nix/{hash}.narinfo",
+        "binary-cache-store.cc, `BinaryCacheStore::narInfoFileFor` — `{hashPart}.narinfo`, asked \
+         before anything else and once per store path in the closure",
+    )
+    .must_find("StorePath"),
+    Conformance::get(
+        "/proxy/nix/nix/nar/0001npbf2n4z3pjy6vm2mw8ywkqixxs6/075lhsj33mkk02xn3lf59xn9glvh02wkw9xislbcj1jgjlpcn79x.nar.zst",
+        "/proxy/{registry}/nix/nar/{hash}/{file}",
+        "the `URL:` this instance rewrites a narinfo to carry — a NAR request that names the \
+         store path its coordinate is derived from (RFC 0028 §4.4)",
+    ),
+    Conformance::get(
+        "/proxy/nix/nix/nar/075lhsj33mkk02xn3lf59xn9glvh02wkw9xislbcj1jgjlpcn79x.nar.zst",
+        "/proxy/{registry}/nix/nar/{file}",
+        "the `URL:` cache.nixos.org itself serves — what a client with a narinfo cached before \
+         this registry existed asks for, for up to narinfo-cache-positive-ttl (30 days)",
+    ),
+];
+
 const SUITES: &[(&str, &[Conformance])] = &[
     ("npm", NPM),
     ("rubygems", RUBYGEMS),
@@ -897,6 +934,7 @@ const SUITES: &[(&str, &[Conformance])] = &[
     ("sdkman", SDKMAN),
     ("rustup", RUSTUP),
     ("galaxy", GALAXY),
+    ("nix", NIX),
     ("apk", APK),
     ("others", OTHERS),
     ("long-tail", LONG_TAIL),

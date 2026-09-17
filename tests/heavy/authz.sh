@@ -127,6 +127,7 @@ GH_R="authz-github-$HEAVY_RUN"
 FJ_R="authz-forgejo-$HEAVY_RUN"
 GL_R="authz-gitlab-$HEAVY_RUN"
 NODEDIST_R="authz-nodedist-$HEAVY_RUN"
+NIX_R="authz-nix-$HEAVY_RUN"
 SDKMAN_R="authz-sdkman-$HEAVY_RUN"
 JETBRAINS_R="authz-jetbrains-$HEAVY_RUN"
 GENERIC_R="authz-generic-$HEAVY_RUN"
@@ -3447,6 +3448,7 @@ github|releases:read|GET|/proxy/$GH_R/probe-owner/probe-repo/releases/download/v
 forgejo|releases:read|GET|/proxy/$FJ_R/probe-owner/probe-repo/releases/download/v1.0.0/probe.bin|a release asset
 gitlab|releases:read|GET|/proxy/$GL_R/probe-group/probe-project/-/releases/v1.0.0/downloads/probe.bin|a release download link
 nodedist|releases:read|GET|/proxy/$NODEDIST_R/nodedist/v1.0.0/node-v1.0.0-linux-x64.tar.gz|a Node tarball
+nix|releases:read|GET|/proxy/$NIX_R/nix/nar/0001npbf2n4z3pjy6vm2mw8ywkqixxs6/075lhsj33mkk02xn3lf59xn9glvh02wkw9xislbcj1jgjlpcn79x.nar.zst|a NAR under its coordinate. Two gates, not one: the store hash is resolved to a package through its narinfo (releases:list) before the bytes are read (releases:read), so a caller holding neither is refused at the first
 sdkman|releases:read|GET|/proxy/$SDKMAN_R/sdkman/broker/download/java/1.0.0/linuxx64|a candidate through the broker
 rustup|releases:read|GET|/proxy/$RUSTUP_R/rustup/dist/2026-01-01/rust-std-1.0.0-x86_64-unknown-linux-gnu.tar.gz|a dated dist component
 jetbrains|releases:read|GET|/proxy/$JETBRAINS_R/jetbrains/idea/probe.tar.gz|an archive by path

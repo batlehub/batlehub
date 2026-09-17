@@ -180,7 +180,10 @@ pub fn listing_carries_readmes(kind: RegistryKind) -> bool {
         | RegistryKind::Rustup
         // The versions list carries `created_at` and `requires_ansible`; the
         // README is `MANIFEST.json`'s, inside the tarball (RFC 0031 §6.1).
-        | RegistryKind::Galaxy => false,
+        | RegistryKind::Galaxy
+        // There is no README anywhere in the protocol — `readme_support()` is
+        // `None` — so the listing cannot be where it lives (RFC 0028 §6.1).
+        | RegistryKind::Nix => false,
     }
 }
 
@@ -236,7 +239,10 @@ pub fn listing_carries_links(kind: RegistryKind) -> bool {
         | RegistryKind::Sdkman
         | RegistryKind::Rustup
         // The `repository` link lives in `MANIFEST.json`, inside the tarball.
-        | RegistryKind::Galaxy => false,
+        | RegistryKind::Galaxy
+        // A narinfo names hashes, a closure and a deriver — no URL that points
+        // at where the software came from (RFC 0028 §5.1).
+        | RegistryKind::Nix => false,
     }
 }
 

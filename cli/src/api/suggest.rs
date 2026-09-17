@@ -393,6 +393,7 @@ pub fn suggest_registries(root: &Path, depth: usize) -> Vec<SuggestedRegistry> {
     collect_from_manifests(root, depth, &mut acc);
     collect_from_toolchain_files(root, &mut acc);
     collect_from_ansible_files(root, &mut acc);
+    collect_from_flake(root, &mut acc);
 
     acc.finish()
 }
@@ -584,6 +585,55 @@ fn collect_from_ansible_files(root: &Path, acc: &mut Accumulator) {
         // to github.com it implies is a choice visible in the file the operator
         // commits (RFC 0031 decision 9).
         note,
+    });
+}
+
+// ── flake.nix and flake.lock ─────────────────────────────────────────────────
+//
+// RFC 0028 §6.9. A flake is the sign that this project builds with Nix, and a
+// machine that builds with Nix substitutes from a binary cache — which is the
+// registry to suggest.
+//
+// **Nothing is warmed, and that is a property of the ecosystem rather than a
+// gap here.** A flake names *inputs* (nixpkgs at a revision, other flakes); it
+// names no store paths. What a build will substitute is the output of an
+// evaluation that needs a Nix this CLI does not have and a nixpkgs checkout it
+// does not want. So the note says which setting takes store paths — the
+// registry's own `warm_paths` — rather than emitting an empty `warm_packages`
+// that reads like a resolver failure.
+
+/// `flake.nix` / `flake.lock` → one `nix` registry.
+fn collect_from_flake(root: &Path, acc: &mut Accumulator) {
+    let sources: Vec<String> = ["flake.nix", "flake.lock"]
+        .into_iter()
+        .filter(|f| root.join(f).exists())
+        .map(str::to_owned)
+        .collect();
+    if sources.is_empty() {
+        return;
+    }
+
+    acc.add(SuggestedRegistry {
+        name: "nix".to_owned(),
+        registry_type: "nix".to_owned(),
+        upstreams: Vec::new(),
+        path_allow: Vec::new(),
+        sources,
+        // Nix has no environment override for `substituters`: the setting is
+        // read from `nix.conf`, from a flake's own `nixConfig`, or from
+        // `--option` on the command line. `NIX_CONFIG` carries whole
+        // configuration lines, which is the one variable a CI job can set, so
+        // that is what is suggested.
+        client_env: vec![("NIX_CONFIG".to_owned(), "substituters = {proxy}".to_owned())],
+        warm_packages: Vec::new(),
+        note: Some(
+            "a flake names inputs, not store paths, so nothing can be warmed from it — the \
+             paths a build substitutes are the output of an evaluation. Pre-fetch a closure \
+             with `[registries.cache] warm_paths`, which takes /nix/store entries. Every \
+             machine also needs cache.nixos.org's key in trusted-public-keys: this proxy \
+             relays upstream signatures and signs nothing it proxied"
+                .to_owned(),
+        ),
     });
 }
 

@@ -380,6 +380,25 @@ pub struct RegistryConfig {
     /// Extensions view requires before it enables Install.
     #[serde(default)]
     pub vsx_signing: Option<VsxSigningConfig>,
+    /// Optional Ed25519 key a `nix` registry signs the narinfos it hosts with
+    /// (RFC 0028 §4.1). `local`/`hybrid` only: a proxied narinfo keeps the
+    /// upstream's `Sig:` lines byte-exact and is never re-signed.
+    ///
+    /// Absent in `local`/`hybrid` mode is allowed and warned about — every
+    /// stock client runs with `require-sigs = true` and refuses an unsigned
+    /// path, but a fleet that has turned it off is a legitimate lab.
+    #[serde(default)]
+    pub nix_signing: Option<NixSigningConfig>,
+    /// Refuse to relay a `nix` narinfo that carries no `Sig:` line at all.
+    ///
+    /// Off by default for two reasons: a content-addressed path (`CA:`)
+    /// legitimately has none — Nix's own `isContentAddressed` short-circuits
+    /// `checkSignatures` — and the client's `require-sigs` is the check that
+    /// actually protects the store. On, it closes the one case the client
+    /// cannot see: an upstream mirror that silently dropped signatures
+    /// (RFC 0028 §4.1).
+    #[serde(default)]
+    pub require_upstream_sigs: bool,
     /// Optional RSA key an `apk` registry signs its generated `APKINDEX.tar.gz`
     /// with (RFC 0026 §4.1). `local`/`hybrid` only: in proxy mode the upstream
     /// index is relayed byte-exact and there is nothing to sign.
@@ -894,6 +913,39 @@ pub struct VsxSigningConfig {
     /// key does; the default derives it from the key, so it does.
     #[serde(default)]
     pub key_id: Option<String>,
+}
+
+/// Ed25519 narinfo signing key for a `nix` registry (RFC 0028 §4.1).
+///
+/// ```toml
+/// [registries.nix_signing]
+/// seed_hex = "${NIX_SIGNING_SEED}"   # 32-byte Ed25519 seed, hex-encoded
+/// key_name = "batlehub-nix-1"        # optional; default: batlehub-{registry}-1
+/// ```
+///
+/// `key_name` is the half of a `trusted-public-keys` entry before the colon,
+/// and it is how Nix picks which key verifies a `Sig:`. It has to be stable
+/// across restarts and unique among the caches a client trusts — hence a
+/// default carrying the registry name, and a `-1` suffix an operator bumps on
+/// rotation exactly as `cache.nixos.org-1` does.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct NixSigningConfig {
+    /// Hex-encoded 32-byte Ed25519 seed. A secret of the same class as
+    /// `vsx_signing.seed_hex`: keep it out of the file with `${VAR}`.
+    pub seed_hex: String,
+    /// The name before the colon in `Sig:` and in `trusted-public-keys`.
+    #[serde(default)]
+    pub key_name: Option<String>,
+}
+
+impl NixSigningConfig {
+    /// The key name this registry signs under — the configured one, or the
+    /// default derived from the registry's name.
+    pub fn resolved_key_name(&self, registry: &str) -> String {
+        self.key_name
+            .clone()
+            .unwrap_or_else(|| format!("batlehub-{registry}-1"))
+    }
 }
 
 // ── SBOM generation ───────────────────────────────────────────────────────────

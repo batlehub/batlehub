@@ -142,7 +142,7 @@ A duplicate version answers `409`, which `ansible-galaxy` renders as *"(HTTP Cod
 | `GET` | `/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/` | The collection document, with `highest_version` moved off a blocked version and `updated_at` bumped past the block. |
 | `GET` | `/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/` | Every allowed version of a collection, as one page — the chokepoint the resolver picks from. |
 | `GET` | `/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/{version}/` | One version's document — `download_url` pointed here, `artifact.sha256` relayed untouched, `404` when the version is blocked. |
-| `GET` | `/proxy/{registry}/galaxy/api/v3/imports/tasks/{task}/` | The import task a publish returned — always `completed`, because the work is done before the task exists. |
+| `GET` | `/proxy/{registry}/galaxy/api/v3/imports/collections/{task}/` | The import task a publish returned — always `completed`, because the work is done before the task exists. |
 <!-- END endpoints -->
 
 ## Hybrid mode: local wins whole, not per version

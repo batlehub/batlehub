@@ -22,6 +22,7 @@ mod galaxy;
 mod goproxy;
 mod marketplaces;
 mod maven;
+mod nix;
 mod nodedist;
 mod npm;
 mod nuget;
@@ -44,6 +45,7 @@ pub fn configure(cfg: &mut actix_web::web::ServiceConfig) {
     goproxy::configure(cfg);
     marketplaces::configure(cfg);
     maven::configure(cfg);
+    nix::configure(cfg);
     nodedist::configure(cfg);
     npm::configure(cfg);
     nuget::configure(cfg);

@@ -95,6 +95,28 @@ heavy_client_said() {
   return 0
 }
 
+# heavy_client_must_say <file> <ere> <explanation> — the client's output **must**
+# contain a line matching `ere`, or the suite fails, quoting what it did say.
+#
+# The assertion `heavy_client_said` is not. That one reports and always returns
+# `0`; its third parameter is a line *count*, not an explanation — so
+# `heavy_client_said "$out" "was installed successfully" "the install failed"`
+# reads exactly like an assertion, passes whatever the client printed, and asks
+# for `"the install failed"` lines of context. RFC 0031 §13 found eight of those
+# inside a heavy suite: the "green for the wrong reason" failure these suites
+# exist to prevent, committed in the file meant to prevent it.
+#
+# Two suites (`cargo.sh`, `go.sh`) use `heavy_client_said` correctly, as a
+# reporter, so it stays. This is the one to reach for when the client's own
+# words are the evidence.
+heavy_client_must_say() {
+  local file="$1" ere="$2" explanation="$3"
+  grep -qiE -- "$ere" "$file" 2>/dev/null && return 0
+  echo "--- the client's output ---" >&2
+  tail -n 40 "$file" >&2
+  heavy_fail "$explanation (nothing matching /$ere/ in $(basename "$file"))"
+}
+
 # Every failure dumps the transcript: the sequence is the evidence, and a bare
 # "assertion failed" from a heavy test is unactionable without it.
 heavy_fail() {

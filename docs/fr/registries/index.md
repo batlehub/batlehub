@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/index.md
-sourceHash: c2c8132d44877d7a
+sourceHash: 43d224396747bb6e
 ---
 
 # Registres
@@ -75,6 +75,12 @@ amont), ainsi que les archives d'IDE **JetBrains** et les miroirs de fichiers
 |----------|--------|-----------------|-------|:-------:|------------------|
 | [IDE JetBrains](./jetbrains) | `jetbrains` | Archives d'installation d'IDE | proxy seul | ❌ | `download.jetbrains.com` |
 | [Miroir générique](./generic) | `generic` | N'importe quelle arborescence HTTP | proxy seul | ❌ | aucun — déclarez `upstreams` et `path_allow` |
+
+### Caches de compilation <Badge type="tip" text="RFC 0028" />
+
+| Registre | `type` | Ce qu'il relaie | Modes | Publication | Amont par défaut |
+|----------|--------|-----------------|-------|:-----------:|------------------|
+| [Cache binaire Nix](./nix) | `nix` | `nix-cache-info`, un `{hash}.narinfo` par chemin du store (relayé avec la seule `URL:` réécrite, de sorte que chaque `Sig:` reste vérifiable) et les NAR | proxy · local · hybride | ✅ | `cache.nixos.org` |
 
 ### Chaînes d'outils <Badge type="tip" text="RFC 0010" />
 
@@ -238,6 +244,7 @@ bouton désactivé — voir
 | sdkman | SDKMAN describes a distribution, not a package: no document in the protocol carries prose about a candidate | — | versions only | no |
 | rustup | a toolchain release is a manifest and a set of tarballs; the dist tree carries no prose | — | versions only | no |
 | galaxy | a file inside the artifact | yes | versions only | yes |
+| nix | a store path is a NAR and its narinfo; the protocol carries no prose, and the NAR is a filesystem image rather than a package with a manifest | — | neither | no |
 <!-- END readme-coverage -->
 
 La table ci-dessus est générée depuis le code Rust et reste en anglais : ses

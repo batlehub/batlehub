@@ -60,6 +60,12 @@ Five types are **proxy-only** (no private publish model): **GitHub**, **Forgejo*
 | [JetBrains IDEs](./jetbrains) | `jetbrains` | IDE installer archives | proxy-only | ❌ | `download.jetbrains.com` |
 | [Generic mirror](./generic) | `generic` | Any HTTP file tree | proxy-only | ❌ | none — set `upstreams` + `path_allow` |
 
+### Build caches <Badge type="tip" text="RFC 0028" />
+
+| Registry | `type` | What it proxies | Modes | Publish | Default upstream |
+|----------|--------|-----------------|-------|:-------:|------------------|
+| [Nix binary cache](./nix) | `nix` | `nix-cache-info`, one `{hash}.narinfo` per store path (relayed with only `URL:` rewritten, so every `Sig:` still verifies) and the NARs | proxy · local · hybrid | ✅ | `cache.nixos.org` |
+
 ### Toolchains <Badge type="tip" text="RFC 0010" />
 
 Typed, so a release can be *blocked* rather than merely cached — the identity the generic mirror cannot give the same bytes.
@@ -177,6 +183,7 @@ any of them. The page says which rather than showing a disabled button — see
 | sdkman | SDKMAN describes a distribution, not a package: no document in the protocol carries prose about a candidate | — | versions only | no |
 | rustup | a toolchain release is a manifest and a set of tarballs; the dist tree carries no prose | — | versions only | no |
 | galaxy | a file inside the artifact | yes | versions only | yes |
+| nix | a store path is a NAR and its narinfo; the protocol carries no prose, and the NAR is a filesystem image rather than a package with a manifest | — | neither | no |
 <!-- END readme-coverage -->
 
 Configured per registry with

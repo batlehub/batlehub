@@ -793,6 +793,14 @@ jobs:
           # (~1 MB), publishes one it builds itself, and installs one role
           # from github.com — the egress `roles = "proxy"` implies.
           - suite: galaxy
+          # nix: the real Nix client substituting from cache.nixos.org through
+          # the proxy, and publishing back to it. The client runs in its own
+          # `nixos/nix` image — a `nix` binary is dynamically linked into
+          # `/nix/store` and cannot execute without one, and no static build is
+          # published — so the suite needs a container engine and nothing else,
+          # exactly as `closed_world.sh`'s dnf and pacman phases do. Nothing is
+          # installed on the runner.
+          - suite: nix
     services:
       postgres:
         image: postgres:17-alpine

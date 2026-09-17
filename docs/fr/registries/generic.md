@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/generic.md
-sourceHash: d0ff8e95d70c9dc2
+sourceHash: 695d0dd262c4b728
 ---
 
 # Miroir générique
@@ -98,6 +98,14 @@ diagnostics du genre `mise doctor` — préférez `~/.netrc`.
   d'âge sur une version publiée hier — utilisez plutôt
   [`nodedist`](/fr/registries/nodedist) ; `generic` reste la bonne réponse pour
   une arborescence que vous voulez mettre en cache sans politique.
+- Un miroir `generic` d'un cache binaire Nix reprend la même histoire une
+  troisième fois, en pire : chaque chemin est un paquet synthétique, une CVE
+  dans un chemin du store est donc invisible depuis la console et
+  `nix copy --to` n'a nulle part où aller. C'est tout un parc — le compilateur
+  compris — qui tire sa clôture par ce trou. Utilisez [`nix`](/fr/registries/nix)
+  pour bloquer un chemin du store selon le paquet et la version que Nix lui-même
+  en extrait ; `generic` reste la bonne réponse pour `channels.nixos.org`, qui
+  est un autre hôte et un autre protocole.
 - Une requête vers un chemin en dehors de la liste `path_allow` du registre
   renvoie `403`, pas 404 — c'est la liste d'autorisation qui la rejette
   localement, avant toute requête amont. Élargissez les motifs si

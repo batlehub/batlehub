@@ -134,6 +134,10 @@ export const sidebar = {
       ],
     },
     {
+      text: "Caches de compilation",
+      items: [{ text: "Cache binaire Nix", link: "/fr/registries/nix" }],
+    },
+    {
       text: "Chaînes d'outils",
       items: [
         { text: "Node (nvm, fnm, n, mise)", link: "/fr/registries/nodedist" },

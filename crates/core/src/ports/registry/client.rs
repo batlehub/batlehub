@@ -329,6 +329,30 @@ impl DocumentKind {
     /// obligation: a role with one blocked version still exists.
     pub const ROLE: Self = Self::Secondary("role");
 
+    /// A Nix **narinfo** — `{storeHash}.narinfo`, the document every
+    /// substitution resolves through (RFC 0028 §4.3).
+    ///
+    /// The per-path metadata *and* this kind's only listing: it names exactly
+    /// one `StorePath:`, so a block on that coordinate is the whole document
+    /// answering `404`. Keyed by the store hash, which is what `package`
+    /// carries.
+    pub const NARINFO: Self = Self::Secondary("narinfo");
+    /// Nix's `nix-cache-info` — `StoreDir`, `WantMassQuery` and `Priority`.
+    ///
+    /// Registry-wide rather than per-package: it describes the cache, and a
+    /// `StoreDir` that differs from the client's own makes the whole cache
+    /// unusable to it.
+    pub const CACHE_INFO: Self = Self::Secondary("cache-info");
+    /// Nix's `realisations/sha256:{drvHash}!{output}.doi` — the
+    /// derivation-to-output mapping content-addressed derivations resolve
+    /// through. Keyed by the realisation id; the policy lives on the narinfo
+    /// of the `outPath` it names, not here (RFC 0028 §4.4).
+    pub const REALISATION: Self = Self::Secondary("realisation");
+    /// Nix's `log/{drvPath}` — a build log, read by `nix log` and nothing
+    /// else. A passthrough: there is no coordinate in it for a policy to act
+    /// on (RFC 0028 §3, non-goals).
+    pub const BUILD_LOG: Self = Self::Secondary("log");
+
     /// A protocol document relayed byte-exact, addressed by the upstream path
     /// carried in `package`.
     ///

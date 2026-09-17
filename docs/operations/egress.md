@@ -42,6 +42,14 @@ listings and makes no such request; `roles = "off"` removes the v1 surface
 altogether ([RFC 0031](/rfc/0031-ansible-galaxy) §4.4). Collections are
 unaffected: their tarballs come from the registry's own upstream.
 
+**A `nix` registry reaches exactly one host, and no CDN chain.** `cache.nixos.org`
+is fronted by a CDN, so the name resolves wherever the CDN puts it, but nothing
+in the substituter protocol redirects a request anywhere else: a narinfo's
+`URL:` is a *relative* path under the cache root, and this server refuses one
+that is not under it. So the egress list for a `nix` registry is its
+`upstreams` entry and nothing more — the opposite of `sdkman`'s
+([RFC 0028](/rfc/0028-nix-binary-cache) §6.8).
+
 ## An `apk` package is downloaded {#an-apk-package-is-downloaded}
 
 One `.apk` request can cause **two** upstream requests the first time: the

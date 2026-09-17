@@ -120,6 +120,30 @@ fn build_vsx_signing_map(
     Ok(out)
 }
 
+fn build_nix_signing_map(
+    registries: &[RegistryConfig],
+) -> anyhow::Result<HashMap<String, Arc<batlehub_core::services::nix::NixSigningKey>>> {
+    let mut out = HashMap::new();
+    for reg in registries {
+        if let Some(cfg) = &reg.nix_signing {
+            // The name, not an id: Nix looks a `Sig:` up in
+            // `trusted-public-keys` by the half before the colon, so this
+            // string is what every client has to list. The default carries the
+            // registry's own name so two registries on one instance cannot sign
+            // under the same identity.
+            let key = batlehub_core::services::nix::NixSigningKey::from_seed_hex(
+                &cfg.seed_hex,
+                cfg.resolved_key_name(&reg.name),
+            )
+            .map_err(|e| {
+                anyhow::anyhow!("building the narinfo signing key for '{}': {e}", reg.name)
+            })?;
+            out.insert(reg.name.clone(), Arc::new(key));
+        }
+    }
+    Ok(out)
+}
+
 fn build_signing_map(registries: &[RegistryConfig]) -> HashMap<String, CoreSigningConfig> {
     map_registries(
         registries,
@@ -642,6 +666,14 @@ pub(super) fn build_hot_bundle(
             .iter()
             .filter_map(|r| r.roles.map(|roles| (r.name.clone(), roles)))
             .collect(),
+        // nix only, read on every narinfo relay for the same reason
+        // (RFC 0028 §6.3).
+        nix_require_upstream_sigs: cfg
+            .registries
+            .iter()
+            .filter(|r| r.require_upstream_sigs)
+            .map(|r| r.name.clone())
+            .collect(),
         grant_repo: grant_repo.clone(),
         policy_repo: policy_repo.clone(),
         signing_keys: signing_keys.clone(),
@@ -682,6 +714,7 @@ pub(super) fn build_hot_bundle(
         versioning: build_versioning_map(&cfg.registries),
         signing: build_signing_map(&cfg.registries),
         vsx_signing: build_vsx_signing_map(&cfg.registries)?,
+        nix_signing: build_nix_signing_map(&cfg.registries)?,
         sbom: build_sbom_map(&cfg.registries),
         readme: build_readme_map(&cfg.registries),
         upstream_detail: build_upstream_detail_map(&cfg.registries),

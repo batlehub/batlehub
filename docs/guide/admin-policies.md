@@ -298,6 +298,7 @@ protocol has one and editing it is safe:
 | galaxy | collection versions | yes |
 | galaxy | the collection document | yes |
 | galaxy | role versions | yes |
+| nix | narinfo | yes |
 <!-- END listing-coverage -->
 
 Filtering is invisible when it works, which is exactly when you want evidence

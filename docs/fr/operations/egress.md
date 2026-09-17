@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/egress.md
-sourceHash: 2a08303d510b9fac
+sourceHash: ce659f95f7832962
 ---
 
 # Ce qui sort de cette instance
@@ -51,6 +51,15 @@ valeur par défaut. `roles = "index"` conserve les listings de rôles et n'émet
 aucune requête de ce genre ; `roles = "off"` supprime entièrement la surface v1
 ([RFC 0031](/rfc/0031-ansible-galaxy) §4.4). Les collections ne sont pas
 concernées : leurs tarballs viennent de l'amont du registre.
+
+**Un registre `nix` atteint exactement un hôte, sans chaîne de CDN.**
+`cache.nixos.org` est servi par un CDN, le nom résout donc là où le CDN le
+place, mais rien dans le protocole substituter ne redirige une requête
+ailleurs : l'`URL:` d'un narinfo est un chemin *relatif* sous la racine du
+cache, et ce serveur refuse celle qui n'y est pas contenue. La liste de sortie
+réseau d'un registre `nix` se réduit donc à son entrée `upstreams` et à rien
+d'autre — l'exact opposé de `sdkman`
+([RFC 0028](/rfc/0028-nix-binary-cache) §6.8).
 
 ## Un paquet `apk` est téléchargé {#an-apk-package-is-downloaded}
 

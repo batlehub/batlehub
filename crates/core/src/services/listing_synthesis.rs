@@ -252,6 +252,17 @@ pub fn is_registry_wide(kind: RegistryKind, doc_kind: DocumentKind) -> bool {
             matches!(doc_kind.as_str(), "compact-versions" | "compact-names")
         }
         RegistryKind::Conda => matches!(doc_kind.as_str(), "versions" | "current-repodata"),
+        // A narinfo is *addressed* by store hash and *describes* one version,
+        // so on the proxy path it is per-package — the upstream document is
+        // what turns the hash into a coordinate. Disconnected there is no
+        // upstream document, and a store hash cannot be turned into a package
+        // name by any rule: the mapping exists only in the held set, whose keys
+        // carry the hash as the artifact sub-coordinate. So the synthesis has
+        // to see the whole registry, which is what this says (RFC 0028 §6.11).
+        //
+        // `nix-cache-info` is registry-wide for the ordinary reason: it
+        // describes the cache and names no package at all.
+        RegistryKind::Nix => matches!(doc_kind.as_str(), "narinfo" | "cache-info"),
         _ => false,
     }
 }
@@ -280,12 +291,126 @@ pub fn render_registry(
         (RegistryKind::Conda, "versions" | "current-repodata") => {
             VersionDocument::json(conda_repodata(name, held))
         }
+        (RegistryKind::Nix, "narinfo") => {
+            VersionDocument::text("text/x-nix-narinfo", nix_narinfo(name, held)?)
+        }
+        (RegistryKind::Nix, "cache-info") => VersionDocument::text(
+            "text/x-nix-cache-info",
+            // Composed, because there is no upstream to relay one from — the
+            // one case §4.4 says composes. `StoreDir` is not a knob: a client
+            // whose own store dir differs refuses the cache outright.
+            "StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 30\n".to_owned(),
+        ),
         _ => return None,
     };
     Some(VersionDocument {
         synthesised: Some(count),
         ..doc
     })
+}
+
+/// The narinfo for one store hash, composed from what this instance holds
+/// (RFC 0028 §6.11, RFC 0008-bis).
+///
+/// # Why this cannot be composed from the bytes alone
+///
+/// Four of a narinfo's fields are **not recoverable** from the NAR this
+/// instance stores: `References` (the closure — nothing in the compressed bytes
+/// names it), `Deriver`, `CA`, and every `Sig:`. `NarHash`/`NarSize` would need
+/// the stream decompressed, and the signature could not be recomputed at all —
+/// the registry does not hold the publisher's key and must not mint one
+/// (RFC 0008-bis §11 q6).
+///
+/// So they travel in the bundle as **facts**: `BundleEntry::facts`, the field
+/// RFC 0008-bis §13.7 added for exactly this shape of problem — "what the
+/// connected side's documents said about this artifact that its bytes do not".
+/// Terraform's provider-download document is the precedent, and it is the same
+/// failure if the facts are missing: a document composed without them leads the
+/// client to a refusal.
+///
+/// **The `Sig:` is relayed, never re-made.** The disconnected instance serves
+/// the publisher's signature exactly as the connected one did, so a client on
+/// the far side verifies with the same key it uses connected, and this estate
+/// signs nothing.
+///
+/// `URL:` is the one line rewritten, to this instance's own layout — which is
+/// free, because `URL` is not in the fingerprint the signature covers.
+fn nix_narinfo(store_hash: &str, held: &[(String, HeldVersion)]) -> Option<String> {
+    let prefix = format!("{store_hash}/");
+    // The held row whose artifact sub-coordinate is `{hash}/{file}`. A scan and
+    // not a lookup: the store hash is the artifact, and nothing indexes it —
+    // which is the whole reason this document is registry-wide.
+    let (_, row) = held.iter().find(|(_, h)| {
+        h.artifact
+            .as_deref()
+            .is_some_and(|a| a.starts_with(&prefix))
+    })?;
+    let artifact = row.artifact.as_deref()?;
+    let extra = &row.extra;
+
+    let mut out = String::new();
+    let mut put = |k: &str, v: &str| {
+        out.push_str(k);
+        out.push_str(": ");
+        out.push_str(v);
+        out.push('\n');
+    };
+
+    // `StorePath` is the one field the client checks the signature over and
+    // that this instance must not guess: without it there is no document.
+    put(
+        "StorePath",
+        extra.get("store_path").and_then(Value::as_str)?,
+    );
+    // The rewritten URL — this instance's own layout, and the only changed line.
+    put("URL", &format!("nar/{artifact}"));
+    if let Some(c) = extra.get("compression").and_then(Value::as_str) {
+        put("Compression", c);
+    }
+    // `FileHash` describes the bytes *this* instance holds, so it is the one
+    // field composed rather than relayed: the import wrote the bundle's own
+    // digest to the `meta:` entry, and a narinfo spells a digest
+    // `sha256:{nix32}` — not hex, and not SRI (RFC 0028 §4.3).
+    if let Some(hex_digest) = row.checksum.as_deref() {
+        if let Ok(raw) = hex::decode(hex_digest) {
+            if raw.len() == 32 {
+                put(
+                    "FileHash",
+                    &format!("sha256:{}", crate::services::nix::nix32_encode(&raw)),
+                );
+            }
+        }
+    }
+    if let Some(size) = row.size {
+        put("FileSize", &size.to_string());
+    }
+    put("NarHash", extra.get("nar_hash").and_then(Value::as_str)?);
+    put("NarSize", extra.get("nar_size").and_then(Value::as_str)?);
+    for line in extra
+        .get("references")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        put("References", line);
+    }
+    if let Some(d) = extra.get("deriver").and_then(Value::as_str) {
+        put("Deriver", d);
+    }
+    if let Some(ca) = extra.get("ca").and_then(Value::as_str) {
+        put("CA", ca);
+    }
+    for sig in extra
+        .get("signatures")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        put("Sig", sig);
+    }
+    Some(out)
 }
 
 /// The artifact sub-coordinate of a row, read off its key.

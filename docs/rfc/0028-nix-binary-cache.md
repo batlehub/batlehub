@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Draft                                                         |
+| Status      | **In review** — phases 1, 2, 5 and 6 landed 2026-09-17 (reads, routes, surface, air gap); phase 4 (`nix copy --to`, verification, signing) is outstanding, and `tests/heavy/nix.sh` is written and **has not been run**. §13 records nine corrections to the design |
 | Short       | Nix binary cache                                              |
 | Settles     | The substituter protocol as a registry kind: narinfo listings, NARs as artifacts, Ed25519 narinfo signing in local mode, and blocking by store path |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -947,7 +947,9 @@ answer). Phase 6; ships on its own.
 
 ### Still open
 
-Nothing. The one question this draft opened is row 6 above.
+| # | Question | Why it is open |
+| --- | --- | --- |
+| 7 | Should a store path an air-gapped instance does not hold answer `404` rather than the estate-wide `503`? | RFC 0008 §4.4's convention is `503` — *it exists, it is simply not here* — and a `404` is what a hybrid fall-through acts on. But to Nix a `404` is the protocol's own recoverable answer ("not in this cache" → the next substituter, or build from source) while a `503` is a transport error it reports rather than routes around, and on a disconnected machine building from source is usually the right next step. The tests assert the convention; changing it for one kind is a decision this RFC has to take deliberately (§13). Opened 2026-09-17 while implementing phase 6. |
 
 ---
 
@@ -961,3 +963,160 @@ Nothing. The one question this draft opened is row 6 above.
 | 4 | Local/hybrid: `verify.rs`, the two `LocalRegistryService` helpers, the `PUT` routes, signing, `public-key`; suite items 4–5. |
 | 5 | `ui` entry, `docs/registries/nix.md`, sidebar, `generic.md` pointer, `ROADMAP.md` and the regenerated roadmap page; `registry suggest` on `flake.nix`; the §13 revision note. |
 | 6 | Air gap: the `nar` bundle kind, the reference-walking export, the held-narinfo render; proven in `tests/heavy/airgap.sh`. Ships on its own. |
+
+---
+
+## 13. Implementation notes
+
+Phases 1, 2, 5 and 6 landed 2026-09-17. Phase 3's suite is written and has not
+been run; phase 4 is outstanding. What follows is where the design was wrong,
+where it was under-specified, and what is still owed — because an RFC that
+records only its successes is a worse guide to the next kind than one that
+records its corrections.
+
+### What the design got right, and why it matters
+
+The three load-bearing facts of §4.4 and §5.2 held exactly as written, and each
+was checked against something this implementation does not control:
+
+- **`URL:` is not in the fingerprint.** `fingerprint()` was written from
+  §5.1's quotation of `ValidPathInfo::fingerprint`, and a **real**
+  `cache.nixos.org-1` signature verifies over its output
+  (`fingerprint_matches_the_real_signer`), before *and* after the rewrite
+  (`rewriting_the_url_does_not_change_the_fingerprint`). That is the whole
+  design, proved against a signer this code cannot influence.
+- **`DrvName`'s split is the right coordinate**, and the RFC's insistence on
+  quoting `names.cc` rather than paraphrasing it is why: the rule is *"the first
+  dash not followed by a letter"*, and every plausible paraphrase gets
+  `php-curl-8.4.25` or `gcc-wrapper-14+` wrong.
+- **The `404` is the protocol's own refusal.** §2's reading of
+  `HttpBinaryCacheStore::getFile` — 404, 410 *and* 403 all becoming absence —
+  is what makes a closed upstream fall through to the next substituter instead
+  of failing a build.
+
+### Nine corrections
+
+1. **§6.2 puts the narinfo refusal in `blocking::strip`, which cannot express
+   it.** `strip` returns `Option<Vec<String>>` — the versions it removed from a
+   document it hands back. There is no error channel, so `CoreError::NotFound`
+   cannot live there. A narinfo *is* one version, so the block is the whole
+   document answering `404`, decidable only at the handler. Landed as
+   `listing_filter()` advertising `filtered("narinfo", &[])` — rustup's
+   empty-`documents` precedent for a row `strip` never sees — with `strip`
+   answering `None` and `blocking`'s `FILTERED_ELSEWHERE` carrying the reason.
+   **There is no `blocking/nix.rs`**, which §6.11's own *Deliberately untouched*
+   list already implied: the RFC contradicts itself two sections apart.
+
+2. **§5.1's narinfo "in full, as served" is not in full.** Its `References:`
+   line ends in an ellipsis — one of the **five** references the real document
+   carries. A `fingerprint()` written from that fixture produces a string of
+   exactly the right shape, and the real signature does not verify over it,
+   because four references are missing from the signed tail. It was caught only
+   because the test verifies a signature this code did not produce. **An RFC
+   that prints a document as the fixture an implementer will copy must not
+   elide a byte of it**; an ellipsis inside a signed field is a fixture that
+   cannot be right. Fixed by re-fetching the document (2026-09-17).
+
+3. **The narinfo's digests are unreadable to this server's own verifier, and
+   the RFC never mentions the field.** A narinfo spells every digest
+   `sha256:{nix32}`. `integrity::parse_expected` reads an SRI token or bare hex
+   and **nothing else**: it returns `None`, the NAR is cached *unverified*, and
+   one `WARN` per download is the only symptom. That is RFC 0031 §13's defect 1
+   exactly, and here the default — pass the narinfo's own spelling through —
+   is the broken one. Worse than galaxy's version, because Nix's base32 is its
+   own alphabet and `printHash32`/`parseHash32` walk the string from the *end*,
+   five bits at a time: there is no off-the-shelf decoder. Landed as
+   `nix32_decode`/`nix32_encode`/`nix_hash_to_sri`, with a test asserting
+   **both** halves — that the raw spelling parses as nothing, and that the
+   converted one parses as the same digest.
+
+4. **§4.3's NAR cache key loses the store hash.** The table keys a NAR
+   `nix/{name}/{version}/{file}`. `ProxyRequest` carries a `PackageId` and
+   nothing else, so a client handed only the file basename cannot find the
+   narinfo that names it — and the upstream `URL:` is only in the narinfo. A
+   `/` *is* legal in a sub-coordinate (`validate_path_safe` refuses `..`, `\`,
+   `\0`, and empty or `.` segments, not separators; Maven relies on this), so
+   the artifact is `{hash}/{file}`. Keeping `{file}` is the RFC's own good idea
+   and is kept: the basename *is* the `FileHash`, so an upstream recompression
+   lands on a new key instead of serving stale bytes under a `FileHash` the
+   narinfo no longer advertises.
+
+5. **The air gap needs no new bundle entry kind.** §6.11 says "the bundle gains
+   a `nar` entry kind". `BundleEntry::facts` already does it: RFC 0008-bis
+   §13.7 added that field for precisely this shape — *"what the connected side's
+   documents said about this artifact that its bytes do not"* — and Terraform's
+   provider-download document is the precedent for the identical failure. A
+   narinfo's `References`, `Deriver`, `CA` and every `Sig:` are unrecoverable
+   from a compressed NAR; they are facts, not a format change.
+
+6. **A narinfo is a *registry-wide* document on the disconnected side.** §4.3
+   lists it as per-package, which is right for the proxy — the upstream document
+   is what turns a store hash into a coordinate. With no upstream, that mapping
+   exists *only* in the held set, whose keys carry the hash as the artifact
+   sub-coordinate, so the synthesis has to see the whole registry. Landed as
+   `is_registry_wide(Nix, NARINFO) = true` and a `render_registry` arm. **The
+   function that makes the air-gap claim true is
+   `listing_synthesis::nix_narinfo`** — named here because RFC 0031 §13's
+   lesson was that an air-gap claim must name one.
+
+7. **§6.10's whole test-harness plan describes something that does not exist,
+   and its two halves contradict each other.** It proposes installing *"the
+   static single-user `nix` binary from the release tarball"* with
+   `NIX_STORE_DIR` redirected. Measured:
+   - `nix-2.31.2-x86_64-linux.tar.xz` (26 MB) is a **store closure**, not a
+     static binary. Its `bin/nix` has ELF interpreter
+     `/nix/store/g8zyryr9…-glibc-2.40-66/lib/ld-linux-x86-64.so.2` and 158
+     further `/nix/store` references: it cannot `exec` without a real
+     `/nix/store`. `releases.nixos.org` publishes no `nix-static*` asset, and
+     `NixOS/nix` has no GitHub release to take one from.
+   - Redirecting `NIX_STORE_DIR` makes the client refuse the cache outright,
+     with the `StoreDir` error **this RFC quotes twice** (§4.4, §5.1) as the
+     reason `StoreDir` is not a knob.
+
+   **Two problems, two answers.** The binary needs a real `/nix/store`, so the
+   client comes from `nixos/nix` — its own image — through the shared
+   `heavy_container_engine` that `closed_world.sh` already uses for `dnf` and
+   `pacman`. That needs no root on the host and runs anywhere podman or docker
+   does, rather than only on CI. The *store directory* is still not a knob, so
+   isolation comes from a **chroot store** (`--store 'local?root=<dir>'`),
+   which keeps the logical store dir `/nix/store` while the bytes stay under
+   the run's own directory — and which also lets the store survive between
+   container invocations, as the Recover axis requires.
+
+8. **`nix_signing` needs a base64 public key, and `VsxSigningKey` has none.**
+   §6.2 says "the `VsxSigningKey` shape" as though the accessors transfer.
+   `signature.rs` offers hex and PEM; `trusted-public-keys` takes
+   `name:base64(32 raw bytes)`.
+
+9. **`zstd` and `liblzma` are not "already in the tree" in the form §6.4
+   assumes.** `crates/adapters` carries `zstd` and **`lzma-rs`**, both optional;
+   `liblzma` is only a transitive lockfile entry. `registry-nix` depends on
+   those two features explicitly, and the xz decoder is `lzma-rs`'s
+   `xz_decompress`.
+
+### A new open question
+
+Every air-gapped coordinate the bundle does not carry answers `503` — RFC 0008
+§4.4: it exists, it is simply not here, and a `404` is what a hybrid
+fall-through acts on. But to **Nix** a `404` is the protocol's own recoverable
+answer, and a `503` is a transport error it reports rather than routes around.
+On a disconnected machine, building from source is usually the right next step.
+The estate-wide convention and this protocol's semantics point different ways
+for this one kind. The tests assert the convention; changing it is an RFC
+decision and is recorded in §11 rather than taken here.
+
+### What is still owed
+
+- **Phase 4 in full**: `verify.rs`, the two `LocalRegistryService` helpers, the
+  `PUT` routes, signing, `GET public-key`, and §6.10 items 4–5. Seven
+  `authz_matrix` route rows say `NoRow` for one reason — this matrix seeds a
+  locally published package and there is nothing to publish — and they become
+  real rows the day `PUT {hash}.narinfo` lands.
+- **Running `tests/heavy/nix.sh`.** It is written and wired into CI and has
+  **not been run**: the workspace it was written in has no container engine,
+  and (before the suite was moved into one) no `/nix` either. RFC 0026 §13 and RFC 0031 §13 both end with the same
+  instruction — *write the suite, then run it, then believe the kind works* —
+  and only two of those three have happened here. Every registry defect this
+  project has shipped was found by a client and not by a test double.
+- **The reference-walking closure export**, so a bundle can be built from a
+  root path by following `References:`.

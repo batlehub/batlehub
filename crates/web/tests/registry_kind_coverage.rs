@@ -136,6 +136,18 @@ const COVERAGE: &[(&str, Live, AirGap)] = &[
     // import task, and the two role modes — and it needs the real upstream's
     // version history, which a closed world cannot provide.
     ("galaxy", Live::ClosedWorld("ansible"), AirGap::Case),
+    // A suite of its own rather than a closed-world phase, and not for want of
+    // trying: a `nix` binary is *dynamically linked into `/nix/store`* (its ELF
+    // interpreter is `/nix/store/…-glibc/lib/ld-linux-x86-64.so.2`), there is
+    // no static build published anywhere, and the release tarball is a store
+    // closure rather than a binary. So the client cannot be unpacked into a run
+    // directory the way `apk.static` can — it needs a real `/nix`, which only
+    // root can create. The suite therefore works in a *chroot store*
+    // (`--store 'local?root=…'`), which keeps the logical store dir
+    // `/nix/store` while the bytes stay under its own temp directory; a
+    // closed-world phase would have to duplicate that whole apparatus for no
+    // extra evidence (RFC 0028 §6.10 and the suite's own header).
+    ("nix", Live::Suite("tests/heavy/nix.sh"), AirGap::Case),
 ];
 
 fn repo_root() -> PathBuf {

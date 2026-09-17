@@ -300,6 +300,16 @@ user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
 
 [[registries]]
+type = "nix"
+name = "perf-nix"
+upstreams = ["${SOAK_UPSTREAM_URL}/nix"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
 type = "galaxy"
 name = "perf-galaxy"
 upstreams = ["${SOAK_UPSTREAM_URL}/galaxy/api/"]

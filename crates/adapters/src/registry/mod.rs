@@ -55,6 +55,14 @@ pub mod apk;
 #[cfg(feature = "registry-apk")]
 pub use apk::ApkRegistryClient;
 
+// The substituter protocol (RFC 0028). No compression or archive dependencies
+// on the read path — a NAR is streamed, never opened; `verify.rs` (phase 4)
+// is what pulls zstd and lzma-rs in, to earn the registry's own signature.
+#[cfg(feature = "registry-nix")]
+pub mod nix;
+#[cfg(feature = "registry-nix")]
+pub use nix::NixBinaryCacheClient;
+
 #[cfg(feature = "registry-galaxy")]
 pub mod galaxy;
 #[cfg(feature = "registry-galaxy")]

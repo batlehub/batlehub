@@ -119,6 +119,67 @@ fn rustup_manifest(date: &str, version: &str) -> String {
     )
 }
 
+/// The two store paths the `nix` fixture serves, and the narinfo of each.
+///
+/// `NIX_HASH_A` is the real `cache.nixos.org` path RFC 0028 §5.1 quotes, with
+/// its real signature: a test that rewrites its `URL:` and re-verifies the
+/// signature is checking this proxy's fingerprint against a signer it does not
+/// control, which is the only check that can catch a wrong one.
+///
+/// `NIX_HASH_B` is a second *version* of the same package, so "blocked" can be
+/// told from "gone".
+pub const NIX_HASH_A: &str = "0001npbf2n4z3pjy6vm2mw8ywkqixxs6";
+pub const NIX_HASH_B: &str = "1111npbf2n4z3pjy6vm2mw8ywkqixxs6";
+/// The package both paths belong to, as `DrvName` splits their store names.
+pub const NIX_PACKAGE: &str = "hslua-aeson";
+pub const NIX_VERSION_A: &str = "2.3.2-doc";
+pub const NIX_VERSION_B: &str = "2.4.0";
+/// `cache.nixos.org`'s published key, as `nix.conf` ships it.
+pub const NIX_UPSTREAM_KEY: &str = "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=";
+/// The NAR file name `NIX_HASH_A`'s narinfo advertises — upstream's own shape,
+/// which is what the reverse-index route is asked for.
+pub const NIX_NAR_A: &str = "075lhsj33mkk02xn3lf59xn9glvh02wkw9xislbcj1jgjlpcn79x.nar.zst";
+
+/// The narinfo the `nix` fixture serves for `hash`, or `None`.
+///
+/// Public so a route test can diff what was *served* against what was *sent*
+/// rather than against a second copy of the document that could drift from it.
+pub fn nix_fixture_for(hash: &str) -> Option<String> {
+    if hash == NIX_HASH_A {
+        // Byte-exact from cache.nixos.org, 2026-09-17.
+        Some(format!("\
+StorePath: /nix/store/{NIX_HASH_A}-{NIX_PACKAGE}-{NIX_VERSION_A}
+URL: nar/{NIX_NAR_A}
+Compression: zstd
+FileHash: sha256:10k72lz1iazridh4787xk3mfl6c5akf8x88xz7bnswc03b5gvyqp
+FileSize: 46064
+NarHash: sha256:075lhsj33mkk02xn3lf59xn9glvh02wkw9xislbcj1jgjlpcn79x
+NarSize: 226848
+References: ghpayap4j5fqg9ryyzrfdj9ygdi01iw9-aeson-2.2.4.1-doc ibfrnxf4jrihd9gkax1sjlr707gz36jb-scientific-0.3.8.1-doc p6xzjlrry42f3pdcgk1xn53hps56ai8s-lua-2.3.4-doc q9915zjvbv0pi4hijw3hgx0nb8asyjlr-hslua-marshalling-2.3.2-doc r0fajfsqr1xlvr9177gh0jjq9b0axk7n-hslua-core-2.3.2.1-doc
+Deriver: y1h1bh5gl539r42jydbnbmp3vyh11sva-hslua-aeson-2.3.2.drv
+Sig: cache.nixos.org-1:21qiHy652KfJ7Rsnc+dy5KndgujuIQEU/oudrFh7sWkkLlT9r8F3AxKA//dMvr9xWBA3tITPZA6ZFC7KxxRJBA==
+"))
+    } else if hash == NIX_HASH_B {
+        // A second version. Its `Sig:` is deliberately *not* a real one: no
+        // test asserts over it, and inventing a plausible-looking signature
+        // that verifies against nothing would be the kind of fixture that makes
+        // a broken verifier look green.
+        Some(format!(
+            "\
+StorePath: /nix/store/{NIX_HASH_B}-{NIX_PACKAGE}-{NIX_VERSION_B}
+URL: nar/22k72lz1iazridh4787xk3mfl6c5akf8x88xz7bnswc03b5gvy.nar.zst
+Compression: zstd
+FileHash: sha256:22k72lz1iazridh4787xk3mfl6c5akf8x88xz7bnswc03b5gvyqp
+FileSize: 1024
+NarHash: sha256:175lhsj33mkk02xn3lf59xn9glvh02wkw9xislbcj1jgjlpcn79x
+NarSize: 4096
+"
+        ))
+    } else {
+        None
+    }
+}
+
 pub struct FixedRegistry {
     registry_type: String,
 }
@@ -229,6 +290,22 @@ impl RegistryClient for FixedRegistry {
             )))
         };
         match (self.registry_type.as_str(), kind) {
+            // A Nix binary cache: two store paths of one package, so a block on
+            // one version can be told from a block on the package. The
+            // `Sig:` is real — it is `cache.nixos.org-1`'s over the *first*
+            // path's fingerprint — so a relay test can assert the signature
+            // survived the `URL:` rewrite rather than merely that a line is
+            // still present (RFC 0028 §5.2).
+            ("nix", k) if k == DocumentKind::NARINFO => match nix_fixture_for(package) {
+                Some(body) => Ok(VersionDocument::text("text/x-nix-narinfo", body)),
+                None => Err(CoreError::NotFound(format!(
+                    "{package}.narinfo is not in this cache"
+                ))),
+            },
+            ("nix", k) if k == DocumentKind::CACHE_INFO => Ok(VersionDocument::text(
+                "text/x-nix-cache-info",
+                "StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 40\n",
+            )),
             ("npm", DocumentKind::Versions) => {
                 let tarball = |v: &str| {
                     serde_json::json!({
@@ -1775,6 +1852,13 @@ pub async fn make_app_with_defaults_and_access(
             "galaxy".to_owned(),
             FixedRegistry::new("galaxy") as Arc<dyn RegistryClient>,
         ),
+        // RFC 0028: the conformance fixture asserts both NAR patterns —
+        // `nar/{hash}/{file}` and `nar/{file}` — match their own routes, which
+        // is the one route-ordering hazard this kind has.
+        (
+            "nix".to_owned(),
+            FixedRegistry::new("nix") as Arc<dyn RegistryClient>,
+        ),
     ]
     .into();
 
@@ -1825,6 +1909,7 @@ pub async fn make_app_with_defaults_and_access(
             "galaxy".to_owned(),
             Arc::new(rbac_policy(repo_dyn.clone()).0),
         ),
+        ("nix".to_owned(), Arc::new(rbac_policy(repo_dyn.clone()).0)),
     ]
     .into();
     // Every fixture registry gets a hierarchy, derived from the same
@@ -1900,6 +1985,7 @@ pub async fn make_app_with_defaults_and_access(
         ("sdkman", "sdkman"),
         ("rustup", "rustup"),
         ("galaxy", "galaxy"),
+        ("nix", "nix"),
     ]);
     let cargo_indexes = batlehub_web::CargoIndexMap::default();
     finish_test_app(

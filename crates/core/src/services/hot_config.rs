@@ -385,6 +385,15 @@ pub struct HotConfig {
     /// documented default, and config validation refuses the option on any
     /// other kind.
     pub galaxy_roles: HashMap<String, crate::services::galaxy::GalaxyRoleMode>,
+    /// nix only: the registries that refuse to relay an unsigned narinfo
+    /// (RFC 0028 §4.1).
+    ///
+    /// Here rather than on the registry client for `deny_components`' reason —
+    /// the narinfo route reads it on every substitution, so a reload takes
+    /// effect on the next one. A set rather than a map: absent means `false`,
+    /// the documented default, and config validation refuses the option on any
+    /// other kind.
+    pub nix_require_upstream_sigs: std::collections::HashSet<String>,
     /// Per-namespace rule chains, for the namespaces that override a gate
     /// (RFC 0015 §4.1).
     ///
@@ -518,6 +527,16 @@ pub struct HotConfig {
     /// a `vscode-marketplace`/`openvsx` registry that holds one signs what it
     /// publishes and serves the signature as a gallery asset.
     pub vsx_signing: HashMap<String, Arc<crate::services::signature::VsxSigningKey>>,
+    /// Per-registry narinfo signing keys (`[registries.nix_signing]`,
+    /// RFC 0028 §4.1): a `nix` registry that holds one signs every store path
+    /// it hosts, and a client lists the key in `trusted-public-keys`.
+    ///
+    /// Absent is legitimate and warned about at reload rather than refused: an
+    /// unsigned narinfo is rejected by every client running Nix's default
+    /// `require-sigs = true`, but a fleet that has turned it off is a lab.
+    /// Only ever consulted on the *publish* path — a relayed narinfo keeps the
+    /// upstream's `Sig:` and is never re-signed.
+    pub nix_signing: HashMap<String, Arc<crate::services::nix::NixSigningKey>>,
     /// Per-registry SBOM generation configs (Clone, cheap).
     pub sbom: HashMap<String, SbomConfig>,
     /// Per-registry README capture configs (Clone, cheap).
@@ -626,6 +645,7 @@ impl Default for HotConfig {
             policies: HashMap::new(),
             deny_components: HashMap::new(),
             galaxy_roles: HashMap::new(),
+            nix_require_upstream_sigs: std::collections::HashSet::new(),
             namespace_policies: HashMap::new(),
             grants: HashMap::new(),
             instance: None,
@@ -649,6 +669,7 @@ impl Default for HotConfig {
             versioning: HashMap::new(),
             signing: HashMap::new(),
             vsx_signing: HashMap::new(),
+            nix_signing: HashMap::new(),
             sbom: HashMap::new(),
             readme: HashMap::new(),
             upstream_detail: HashMap::new(),

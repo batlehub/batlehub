@@ -71,6 +71,18 @@ pub const SUBDOMAIN_INVALID_DNS_LABEL: &str = "subdomain.invalid-dns-label";
 /// relayed regardless (RFC 0020 §4.3).
 pub const VSX_SIGNING_PROXY_MODE: &str = "vsx-signing.proxy-mode";
 
+/// `[registries.nix_signing]` on a `nix` registry in `proxy` mode: a relayed
+/// narinfo keeps the upstream's `Sig:` byte-exact and is never re-signed, so
+/// the key signs nothing (RFC 0028 §4.1).
+pub const NIX_SIGNING_PROXY_MODE: &str = "nix-signing.proxy-mode";
+
+/// A `nix` registry in `local`/`hybrid` mode with **no** `[registries.nix_signing]`
+/// key. Uploads are accepted and served unsigned, and every stock client runs
+/// with `require-sigs = true` and refuses them — *"cannot add path '…' because
+/// it lacks a signature by a trusted key"*. Not refused, because a fleet with
+/// `require-sigs = false` is a legitimate lab (RFC 0028 §4.5).
+pub const NIX_LOCAL_UNSIGNED: &str = "nix-signing.local-unsigned";
+
 /// A `[[release_imports]]` target is a gallery registry with no
 /// `[registries.vsx_signing]` key: the extensions it imports install nowhere
 /// with a current editor (RFC 0021 §4.4).

@@ -11360,13 +11360,13 @@
         ]
       }
     },
-    "/proxy/{registry}/galaxy/api/v3/imports/tasks/{task}/": {
+    "/proxy/{registry}/galaxy/api/v3/imports/collections/{task}/": {
       "get": {
         "tags": [
           "proxy/galaxy"
         ],
         "summary": "The import task a publish returned — always `completed`, because the work is done before the task exists.",
-        "description": "`GET …/api/v3/imports/tasks/{task}/`\n\nAlways `completed`: the publish that named this task finished before it\nanswered. A task id nobody published under is still `completed` rather than\na `404`, because a `404` is what the client reads as *\"not started yet\"* and\nit would poll forever.",
+        "description": "`GET …/api/v3/imports/collections/{task}/`\n\nAlways `completed`: the publish that named this task finished before it\nanswered. A task id nobody published under is still `completed` rather than\na `404`, because a `404` is what the client reads as *\"not started yet\"* and\nit would poll forever.",
         "operationId": "galaxy_import_task",
         "parameters": [
           {
@@ -11381,7 +11381,7 @@
           {
             "name": "task",
             "in": "path",
-            "description": "The task id the publish returned",
+            "description": "The bare task id the publish returned",
             "required": true,
             "schema": {
               "type": "string"
@@ -11954,6 +11954,547 @@
           },
           "416": {
             "description": "The requested range starts past the end of the document"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/nix/log/{drv}": {
+      "get": {
+        "tags": [
+          "proxy/nix"
+        ],
+        "summary": "`log/{drv}` — a build log, read by `nix log`.",
+        "description": "A passthrough with no coordinate in it for a policy to act on, which is why\n§3 makes it a non-goal to treat as anything else.",
+        "operationId": "nix_build_log",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "drv",
+            "in": "path",
+            "description": "The derivation file name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The build log",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe derivation name"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Not in this cache"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/nix/nar/{file}": {
+      "get": {
+        "tags": [
+          "proxy/nix"
+        ],
+        "summary": "A NAR asked for in the **upstream's** own shape, resolved through the reverse index.",
+        "description": "Two callers reach this route, and the second is the reason it answers\n`HEAD`:\n\n- a client whose cached narinfo predates this registry and still holds\n  upstream's `nar/{fileHash}.nar.zst` (30-day positive TTL);\n- **`nix copy --to`**, which asks `HEAD nar/{fileHash}.nar.{ext}` before\n  uploading, because that is the path `narInfo->url` names. `fileExists`\n  treats anything but `404`/`403` as a hard error and disables the cache\n  for 60 seconds, so a GET-only route would fail every publish.\n\nNix keeps a positive narinfo entry for 30 days, so for a month after a\nmigration these are real requests. Resolved through the reverse index a\nserved narinfo wrote; a miss is a `404`, which makes Nix drop its cached\nnarinfo, refetch it, get the rewritten `URL:` and succeed. One extra round\ntrip, once per path — and never a NAR served outside a coordinate, which is\nthe property the whole rewrite exists for.",
+        "operationId": "nix_nar_upstream_shape",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "description": "The upstream NAR file name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The NAR, resolved through the reverse index and served under its coordinate",
+            "content": {
+              "application/x-nix-nar": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe file name"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "No narinfo served by this instance names this NAR — refetch the narinfo"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "proxy/nix"
+        ],
+        "summary": "`PUT nar/{file}` — the NAR, arriving before anything knows what it is.",
+        "description": "This is the first byte of a `nix copy --to` and it names **no coordinate**:\nthe client uploads `nar/{fileHash}.nar.{ext}` and only later sends the\nnarinfo that says which store path those bytes are. So the upload is parked\nunder a pending key owned by this publisher, and\n[`nix_put_narinfo`] is what claims it.",
+        "operationId": "nix_put_nar",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "description": "The NAR file name the client chose, `{fileHash}.nar.{ext}`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The NAR is held, unclaimed, until its narinfo arrives",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe file name"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry, or not a local/hybrid registry"
+          },
+          "413": {
+            "description": "Larger than limits.max_artifact_size_bytes"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/nix/nar/{hash}/{file}": {
+      "get": {
+        "tags": [
+          "proxy/nix"
+        ],
+        "summary": "The NAR, under the coordinate the rewritten `URL:` gave it.",
+        "description": "**Answers `HEAD`, and that is not a nicety.** `nix copy --to` guards its\nNAR upload with `if (repair || !fileExists(narInfo->url))`, and\n`HttpBinaryCacheStore::fileExists` maps only `NotFound` and `Forbidden` to\n\"absent\" — every other status calls `disable(e)`, which takes the whole\ncache out of the client's substituter list for 60 seconds and fails the\ncopy. A `405` from a GET-only route is one of those, so a publish would die\non its first NAR (RFC 0028 §13).",
+        "operationId": "nix_nar",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "The 32-character Nix base32 store hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "description": "The NAR file name, as upstream names it (e.g. 075lhsj….nar.zst)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The NAR, streamed and cached under the coordinate",
+            "content": {
+              "application/x-nix-nar": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a Nix base32 store hash, or an unsafe file name"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Not in this cache, or the coordinate is blocked"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/nix/nix-cache-info": {
+      "get": {
+        "tags": [
+          "proxy/nix"
+        ],
+        "summary": "`nix-cache-info` — the three lines a client reads once per substituter.",
+        "description": "Relayed, not composed. `StoreDir` is what decides whether the cache is\nusable at all (a mismatch is a hard client-side error naming both prefixes),\nand `Priority` is the one value an operator would change — which they do on\ntheir own `substituters` line with `?priority=`, not here. A second knob for\nthe same number in a second place is what decision 5 rejected.",
+        "operationId": "nix_cache_info",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The cache's StoreDir, WantMassQuery and Priority",
+            "content": {
+              "text/x-nix-cache-info": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/nix/public-key": {
+      "get": {
+        "tags": [
+          "proxy/nix"
+        ],
+        "summary": "`GET public-key` — the line an operator pastes into `trusted-public-keys`.",
+        "description": "Nix reads no such endpoint; the console snippet and provisioning scripts do,\nwhich is exactly what RFC 0020 serves as an Open VSX asset for the same\nreason. A registry that signs nothing answers `404` rather than an empty\nbody, because \"no key\" and \"a key I could not read\" must not look alike.",
+        "operationId": "nix_public_key",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One `name:base64` line for trusted-public-keys",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown registry, or this registry signs nothing"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/nix/realisations/{id}.doi": {
+      "get": {
+        "tags": [
+          "proxy/nix"
+        ],
+        "summary": "`realisations/{id}.doi` — the derivation-to-output mapping of a content-addressed derivation.",
+        "description": "**The id is a tail, because the protocol has two spellings.** Nix 2.24\nbuilds `realisations/{drvHash}!{output}.doi` — one segment — while master's\n`makeRealisationPath` builds `realisations/{drvPath}/{outputName}.doi` —\ntwo. A single-segment pattern serves one client generation and `404`s the\nother, so this matches either and validates the whole tail\n(RFC 0028 §13).\n\nA passthrough document: the policy lives on the narinfo of the `outPath` it\nnames, not here. Blocking it as well would refuse the *mapping* while the\npath it maps to is still served, which is the wrong half.",
+        "operationId": "nix_realisation",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The realisation id, `sha256:{drvHash}!{output}`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The realisation document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe realisation id"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Not in this cache"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/nix/{hash}.ls": {
+      "get": {
+        "tags": [
+          "proxy/nix"
+        ],
+        "summary": "`{hash}.ls` — a JSON listing of a NAR's contents, for `nix store ls` alone.",
+        "description": "Never read by an install, which is why it is a read rather than a listing:\nnothing resolves through it. Answers `HEAD` for the same reason the NAR\nroutes do — a client that probes before reading must get a status it\nunderstands.",
+        "operationId": "nix_ls",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "The 32-character Nix base32 store hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The NAR listing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a Nix base32 store hash"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Not in this cache, or the coordinate is blocked"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/nix/{hash}.narinfo": {
+      "get": {
+        "tags": [
+          "proxy/nix"
+        ],
+        "summary": "One store path's metadata — the chokepoint every substitution goes through.",
+        "description": "`HEAD` is answered from the same code path with no body, because `nix copy`\nasks before it uploads (`fileExists`) and a `HEAD` that 405'd would make\nevery publish re-upload a NAR the cache already has.",
+        "operationId": "nix_narinfo",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "The 32-character Nix base32 store hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The narinfo, with only `URL:` rewritten and every `Sig:` relayed byte-exact",
+            "content": {
+              "text/x-nix-narinfo": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a Nix base32 store hash"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Not in this cache — because upstream does not have it, or because the coordinate is blocked"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "proxy/nix"
+        ],
+        "summary": "`PUT {hash}.narinfo` — the document that names the coordinate, and where this registry signs.",
+        "description": "Everything happens here because this is the first moment anything is known:\nthe NAR is verified against the claims, the coordinate is parsed out of\n`StorePath:`, `URL:` is rewritten to this instance's layout, any `Sig:`\nforging *our* key name is dropped, the publisher's own signatures are kept,\nand ours is appended over a fingerprint computed from bytes we hold.",
+        "operationId": "nix_put_narinfo",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "The 32-character Nix base32 store hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The store path is published and signed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a store hash, an unverifiable codec, or a field the bytes disagree with"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry, or not a local/hybrid registry"
           }
         },
         "security": [
@@ -22135,7 +22676,7 @@
       },
       "GalaxyImportTask": {
         "type": "object",
-        "description": "The publish response: one absolute path, which the client `urljoin`s against\nwhatever api_server the operator configured.\n\nAbsolute-path rather than relative because a relative value resolves\ncorrectly only when the configured URL ends in a slash — the operator's typo\nto make — while an absolute path is right under both routings and both\nspellings.",
+        "description": "The publish response: a **bare task id**, not a URL and not a path.\n\nRFC 0031 §4.4 specified an absolute path here, reasoning about\n`urljoin(self.api_server, resp['task'])`. That is not what the v3 client\ndoes. `wait_import_task` ignores the value as a URL and interpolates it as a\nsingle **path segment**:\n\n```text\n_urljoin(api_server, v3, 'imports/collections', task_id, '/')\n```\n\nso a path or a URL here lands in the middle of the polled path and the\nclient spends its whole timeout asking for a route that cannot exist — it\ntreats a `404` as \"the import has not started yet\" and retries with backoff,\nso the symptom is a hang, not an error. Measured against ansible-core 2.19.3\n(RFC 0031 §13).",
         "required": [
           "task"
         ],
@@ -26453,6 +26994,10 @@
     {
       "name": "proxy/nodedist",
       "description": "Node distributions (nvm, fnm, n, mise) — the nodejs.org/dist tree as a typed registry: filtered index.tab/index.json listings, per-release tarballs and SHASUMS256.txt byte-exact"
+    },
+    {
+      "name": "proxy/nix",
+      "description": "Nix binary cache (nix, cachix-style substituters) — the substituter protocol as a registry kind: narinfos relayed with only `URL:` rewritten so every `Sig:` still verifies, a blocked store path absent as the protocol's own 404, NARs cached under a coordinate, and stale upstream-shaped NAR URLs resolved through a reverse index"
     },
     {
       "name": "proxy/galaxy",

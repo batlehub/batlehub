@@ -721,6 +721,27 @@ admin = ["*"]
 [registries.grants]
 "user:authz-reader" = ["releases:read", "releases:list", "source:read"]
 
+# nix: a binary cache pointed at a host that does not exist, for the reason
+# every `example.invalid` row above has — the boundary is crossed before
+# anything is dialled. Two gates are crossed on the NAR route rather than one:
+# the coordinate a store hash belongs to is only knowable by reading its
+# narinfo, so `releases:list` is consulted first (the narinfo *is* the listing
+# document for this kind) and `releases:read` second, on the bytes. A caller
+# holding neither is refused at the first, which is the row below.
+[[registries]]
+type = "nix"
+name = "authz-nix-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://example.invalid/nix"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
 [[registries]]
 type = "sdkman"
 name = "authz-sdkman-${HEAVY_RUN}"
