@@ -2775,17 +2775,63 @@ phase_maven() {
   #
   # From Central under the mirror id the arms use — see
   # `authz_mvn_settings_warm` for why both halves of that matter.
+  #
+  # **Kept between runs.** Central rate-limits by source IP and answers `429`
+  # when it has had enough; a hosted runner's IP is shared with every other
+  # project on it, so a warm step that re-downloads the same two plugins on
+  # every run is one burst away from a red build that has nothing to do with
+  # this server (observed 2026-09-17: *"maven-dependency-plugin:pom:3.7.0
+  # (absent) … status code: 429"*). The cached tree is the plugins only — it is
+  # captured before the fixture is seeded into it — and it is keyed by the
+  # plugin coordinates, so bumping either version fetches afresh rather than
+  # reusing a tree that no longer matches.
+  #
+  # It survives the run that made it for the same reason the warm settings use
+  # the arms' repository id: Maven records the id it resolved from in
+  # `_remote.repositories` and re-resolves anything a later build asks for under
+  # a different one. The registry *name* carries the run id and changes every
+  # run; the mirror id is `authz` in every settings file here, so a tree warmed
+  # by one run is accepted by the next.
   heavy_mark "mvn-warm"
-  heavy_log "Warming the deploy and dependency plugins (from Central, under the arms' repository id)"
-  # One command warms both: running the dependency plugin fetches *it*, and what
-  # it is asked to get is the deploy plugin. `get` rather than
-  # `resolve-plugins`, which is a project goal and dies with "Goal requires a
-  # project to execute but there is no POM in this directory" — there is no
-  # project here and there should not be one.
-  (cd "$work" && "${mvn[@]}" -B -s "$s_warm" -Dmaven.repo.local="$work/warm" \
-    "$AUTHZ_MVN_DEPENDENCY_PLUGIN:get" -Dartifact="$AUTHZ_MVN_DEPLOY_PLUGIN:jar") \
-    >"$work/warm.log" 2>&1 \
-    || { tail -30 "$work/warm.log" >&2; heavy_fail "maven: could not warm Maven's own plugins from Central"; }
+  local warm_cache="$HEAVY_CACHE/mvn-warm-${AUTHZ_MVN_DEPENDENCY_PLUGIN##*:}-${AUTHZ_MVN_DEPLOY_PLUGIN##*:}"
+  if [[ -d "$warm_cache" ]]; then
+    heavy_log "Reusing the warmed plugin repository ($warm_cache) — Central is not touched"
+    cp -r "$warm_cache" "$work/warm"
+  else
+    heavy_log "Warming the deploy and dependency plugins (from Central, under the arms' repository id)"
+    # One command warms both: running the dependency plugin fetches *it*, and
+    # what it is asked to get is the deploy plugin. `get` rather than
+    # `resolve-plugins`, which is a project goal and dies with "Goal requires a
+    # project to execute but there is no POM in this directory" — there is no
+    # project here and there should not be one.
+    #
+    # Three attempts: a `429` is a burst, not a verdict, and the alternative to
+    # waiting is a red run that says nothing about the boundary under test.
+    local attempt
+    for attempt in 1 2 3; do
+      (cd "$work" && "${mvn[@]}" -B -s "$s_warm" -Dmaven.repo.local="$work/warm" \
+        "$AUTHZ_MVN_DEPENDENCY_PLUGIN:get" -Dartifact="$AUTHZ_MVN_DEPLOY_PLUGIN:jar") \
+        >"$work/warm.log" 2>&1 && break
+      if [[ $attempt -eq 3 ]]; then
+        tail -30 "$work/warm.log" >&2
+        heavy_fail "maven: could not warm Maven's own plugins from Central after 3 attempts \
+(a 429 in the log above is Central rate-limiting this source IP, not a fault in this server; \
+the warmed repository is cached at $warm_cache, so a run that got through once does not ask again)"
+      fi
+      heavy_log "Central refused the warm (attempt $attempt/3); retrying in $((attempt * 20))s"
+      sleep $((attempt * 20))
+      # A partial download leaves resolution markers that Maven honours for the
+      # rest of the day, so the next attempt starts from nothing.
+      rm -rf "$work/warm"
+    done
+    # Captured before the seed below deploys the fixture into this tree, so the
+    # cache holds plugins and nothing this suite publishes.
+    local warm_tmp="$warm_cache.tmp"
+    rm -rf "$warm_tmp"
+    cp -r "$work/warm" "$warm_tmp"
+    rm -rf "${warm_tmp:?}/${AUTHZ_MVN_GROUP//.//}"
+    mv "$warm_tmp" "$warm_cache"
+  fi
 
   # ── Seed one version, as the administrator ────────────────────────────────
   heavy_mark "mvn-seed"

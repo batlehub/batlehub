@@ -1097,11 +1097,23 @@ jobs:
         if: matrix.target == 'rubygems'
         run: echo "$GEM_HOME/bin" >> "$GITHUB_PATH"
       - name: Cache heavy client downloads
-        if: matrix.target == 'conda' || matrix.target == 'composer'
+        # maven caches the warmed plugin repository, which is not a client
+        # download but has the same reason to be kept: Central rate-limits by
+        # source IP, a hosted runner's IP is shared, and a `429` on Maven's own
+        # plugins fails the run before the boundary under test is reached.
+        #
+        # `restore-keys` because the key hashes the whole script: every edit to
+        # authz.sh would otherwise throw away downloads that are still good. A
+        # stale restore is safe by construction — each cached tree is named
+        # after the versions it holds (`mvn-warm-3.7.0-3.1.4`,
+        # `composer-2.8.12.phar`), so a bump misses the lookup and fetches
+        # afresh rather than reusing the wrong bytes.
+        if: matrix.target == 'conda' || matrix.target == 'composer' || matrix.target == 'maven'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/batlehub-heavy
           key: heavy-authz-${{ matrix.target }}-${{ hashFiles('tests/heavy/authz.sh') }}
+          restore-keys: heavy-authz-${{ matrix.target }}-
 
       - name: Clean previous coverage data
         run: cargo llvm-cov clean --workspace

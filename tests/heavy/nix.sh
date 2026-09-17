@@ -262,14 +262,22 @@ if nix_copy store-c; then
 fi
 
 # The narinfo is a `404`: the protocol's own "not in this cache".
-heavy_wire_after blocked "GET /proxy/$REG/nix/$STORE_HASH.narinfo -> 404" \
+#
+# **`GET` or `HEAD`, because the refusal lands on whichever comes first.** Nix
+# probes a binary cache with `fileExists` — a `HEAD` — before it reads, and a
+# `404` there ends the substitution: the `GET` this assertion used to name never
+# happens, so it asserted a request the run had no reason to make. The method is
+# not the claim; the status on this path is.
+heavy_wire_re_after blocked "(GET|HEAD) /proxy/$REG/nix/$STORE_HASH[.]narinfo -> 404" \
   "the blocked narinfo did not answer 404"
 
 # **The absent request is the assertion.** With no narinfo, the client has no
 # `URL:` to follow, so nothing may be asked for under this path's NAR prefix
 # after the block. A block that only refused the NAR would leave every client
-# holding a cached narinfo fetching bytes for up to 30 days.
-NAR_AFTER_BLOCK="$(heavy_wire_count_after blocked "GET /proxy/$REG/nix/nar/$STORE_HASH/")"
+# holding a cached narinfo fetching bytes for up to 30 days. Counted over both
+# methods for the reason above — a `HEAD` on a NAR is `nix copy`'s own probe,
+# and it would be just as much of a leak as a `GET`.
+NAR_AFTER_BLOCK="$(heavy_wire_count_after blocked "(GET|HEAD) /proxy/$REG/nix/nar/$STORE_HASH/")"
 [[ "$NAR_AFTER_BLOCK" == 0 ]] \
   || heavy_fail "$NAR_AFTER_BLOCK request(s) reached the NAR route after the block — the narinfo 404 did not stop the download"
 
