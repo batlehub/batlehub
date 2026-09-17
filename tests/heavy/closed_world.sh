@@ -76,7 +76,8 @@ heavy_need python3 "python3 (the wire tap)"
 # Ordered so the cheap phases fail first: a broken instance is better found by
 # `go` in a minute than by `jbplugin` after a 1.5 GB download.
 PHASES=(go node python java ruby dotnet php conda terraform mise
-        nvm sdkman ovsx helm apt forgejo gitlab jbr vscode jbplugin dnf pacman)
+        nvm sdkman ovsx helm apt forgejo gitlab jbr vscode jbplugin dnf pacman
+        ansible)
 WANTED=("$@")
 [[ "${#WANTED[@]}" == 0 || "${WANTED[0]}" == "all" ]] && WANTED=("${PHASES[@]}")
 for want in "${WANTED[@]}"; do
@@ -101,6 +102,7 @@ MISE_TOOL_VERSION="${HEAVY_CW_MISE_TOOL_VERSION:-2.60.0}"
 PHP_VERSION="${HEAVY_CW_PHP:-8.3.28}"
 COMPOSER_VERSION="${HEAVY_CW_COMPOSER:-2.10.2}"
 MICROMAMBA_VERSION="${HEAVY_CW_MICROMAMBA:-2.9.0}"
+ANSIBLE_CORE_VERSION="${HEAVY_CW_ANSIBLE:-2.19.3}"
 
 # The second half's pins. A *tool* installer is pinned twice over — the client
 # and the thing it installs — because both are versions this suite asserts
@@ -178,6 +180,7 @@ HELM_REG="helm-$HEAVY_RUN"
 DEB_REG="deb-$HEAVY_RUN"
 RPM_REG="rpm-$HEAVY_RUN"
 PACMAN_REG="pacman-$HEAVY_RUN"
+GALAXY_REG="galaxy-$HEAVY_RUN"
 
 heavy_forge_auth_config tests/heavy/config.closed-world.toml
 heavy_start_server "$HEAVY_CONFIG"
@@ -1959,6 +1962,86 @@ SH
     "the package did not come through the proxy"
   cw_ran pacman "$out" "$PACMAN_PACKAGE_RAN"
   heavy_log "CLOSED-WORLD-PACMAN-OK ($PACMAN_PACKAGE installed from this instance in $PACMAN_IMAGE and executed)"
+}
+
+# ── §23. ansible ─────────────────────────────────────────────────────────────
+#
+# `ansible-galaxy collection install` resolves every collection and every
+# transitive dependency against the versions list, and then a **playbook runs a
+# module out of what was installed** — the banner, as in every other phase.
+# Reaching the collection is not the assertion; executing code that came out of
+# it is (RFC 0031 §6.10).
+#
+# ansible-core is pinned into a run-local virtualenv with `uv`, and
+# ANSIBLE_HOME/ANSIBLE_GALAXY_CACHE_DIR are redirected into the phase's own
+# directory so nothing is shared with the developer's machine.
+
+phase_ansible() {
+  heavy_need uv "uv (https://docs.astral.sh/uv/)"
+  local dir="$HEAVY_WORK/ansible" venv="$HEAVY_WORK/ansible-venv" out
+  out="$(cw_out ansible)"
+  mkdir -p "$dir"
+
+  # Built *before* the world closes: the virtualenv's own wheels come from
+  # PyPI, which is not what this phase proves.
+  uv venv --quiet "$venv" >"$out" 2>&1 \
+    || { cat "$out" >&2; heavy_fail "ansible: creating the virtualenv failed"; }
+  uv pip install --quiet --python "$venv/bin/python" \
+    "ansible-core==$ANSIBLE_CORE_VERSION" >>"$out" 2>&1 \
+    || { cat "$out" >&2; heavy_fail "ansible: installing ansible-core==$ANSIBLE_CORE_VERSION failed"; }
+
+  cat >"$dir/ansible.cfg" <<EOF
+[galaxy]
+server_list = batlehub
+
+[galaxy_server.batlehub]
+url = $HEAVY_TAP_BASE/proxy/$GALAXY_REG/galaxy/api/
+EOF
+
+  # `community.general` for the collection, and one of its own modules for the
+  # banner: `community.general.dict` is pure Python with no external
+  # dependency, so the play runs with egress denied.
+  cat >"$dir/play.yml" <<'EOF'
+- name: closed world
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  collections:
+    - community.general
+  tasks:
+    - name: a filter plugin out of the installed collection
+      ansible.builtin.debug:
+        msg: "CLOSED-WORLD-RAN {{ ['a', 1] | community.general.dict }}"
+EOF
+
+  heavy_mark ansible
+  heavy_log "ansible-galaxy collection install, with egress denied"
+  cw_step "$out" "$dir" "${DENY[@]}" \
+    ANSIBLE_CONFIG="$dir/ansible.cfg" ANSIBLE_HOME="$dir/home" \
+    ANSIBLE_GALAXY_CACHE_DIR="$dir/cache" ANSIBLE_LOCAL_TEMP="$dir/tmp" \
+    "$venv/bin/ansible-galaxy" collection install community.general \
+    || { cat "$out" >&2; heavy_fail "ansible: the collection install failed inside the closed world"; }
+
+  # The four documents of one install, each through the proxy. The listing is
+  # the one that matters: it is the chokepoint, and a phase that only asserted
+  # the tarball would pass against a proxy that relayed the listing unfiltered.
+  heavy_wire_re_after ansible "GET /proxy/$GALAXY_REG/galaxy/api/ -> 200" \
+    "ansible: g_connect's discovery read did not come through the proxy"
+  heavy_wire_re_after ansible \
+    "GET /proxy/$GALAXY_REG/galaxy/api/v3/collections/community/general/versions/ -> 200" \
+    "ansible: the versions list — the enforcement chokepoint — did not come through the proxy"
+  heavy_wire_re_after ansible \
+    "GET /proxy/$GALAXY_REG/galaxy/api/v3/artifacts/collections/community-general-[^ ]*[.]tar[.]gz -> 200" \
+    "ansible: the tarball did not come from this instance — download_url was not rewritten"
+
+  heavy_log "ansible-playbook (a module out of the installed collection), with egress denied"
+  cw_step "$out" "$dir" "${DENY[@]}" \
+    ANSIBLE_CONFIG="$dir/ansible.cfg" ANSIBLE_HOME="$dir/home" \
+    ANSIBLE_LOCAL_TEMP="$dir/tmp" \
+    "$venv/bin/ansible-playbook" -i localhost, play.yml \
+    || { cat "$out" >&2; heavy_fail "ansible: the playbook failed — the collection's code did not run"; }
+  cw_ran ansible "$out" "{'a': 1}"
+  heavy_log "CLOSED-WORLD-ANSIBLE-OK (community.general installed from this instance and its plugin executed)"
 }
 
 # ── Run the phases that were asked for ───────────────────────────────────────

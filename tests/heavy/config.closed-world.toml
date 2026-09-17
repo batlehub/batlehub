@@ -386,3 +386,21 @@ upstreams = [
 anonymous = ["releases:read", "releases:list", "source:read"]
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
+
+# ── Ansible Galaxy (RFC 0031) ────────────────────────────────────────────────
+#
+# `roles = "off"`: the closed world denies egress to every client process, and
+# a role archive comes from `github.com` — a second upstream this phase has no
+# reason to reach. Collections are the thing under test, and their tarballs
+# come from the registry's own upstream.
+[[registries]]
+type = "galaxy"
+name = "galaxy-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://galaxy.ansible.com/api/"]
+roles = "off"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list"]
+admin = ["*"]

@@ -31,6 +31,17 @@ kind. The list is *observed, not exhaustive*: the broker can add a host without
 telling anyone, which is itself an argument for warming ahead of an air gap
 ([RFC 0010](/rfc/0010-toolchain-managers) §9).
 
+**A second kind reaches one host you did not configure.** A `galaxy` registry
+with `roles = "proxy"` — the default — rewrites each role version's
+`download_url` and then fetches that archive itself, and every role
+galaxy.ansible.com publishes serves its bytes from `github.com`. The fetch goes
+through the SSRF guard and only to `github.com` or the registry's own upstream,
+which is a fixed allowlist rather than a configurable one, but egress to that
+host is a prerequisite of the default. `roles = "index"` keeps the role
+listings and makes no such request; `roles = "off"` removes the v1 surface
+altogether ([RFC 0031](/rfc/0031-ansible-galaxy) §4.4). Collections are
+unaffected: their tarballs come from the registry's own upstream.
+
 ## An `apk` package is downloaded {#an-apk-package-is-downloaded}
 
 One `.apk` request can cause **two** upstream requests the first time: the

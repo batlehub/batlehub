@@ -100,6 +100,7 @@ export const sidebar = {
         { text: "RubyGems", link: "/fr/registries/rubygems" },
         { text: "NuGet", link: "/fr/registries/nuget" },
         { text: "Terraform", link: "/fr/registries/terraform" },
+        { text: "Ansible Galaxy", link: "/fr/registries/galaxy" },
       ],
     },
     {

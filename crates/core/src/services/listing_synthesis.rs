@@ -99,6 +99,10 @@ pub fn package_names_for(kind: RegistryKind, name: &str) -> Vec<String> {
         }
         RegistryKind::Sdkman => vec![name.split('/').next().unwrap_or(name).to_owned()],
         RegistryKind::Terraform => vec![terraform_listing_name(name).to_owned()],
+        // A galaxy version document is addressed `{collection}@{version}`,
+        // because the `(package, document)` cache key has nowhere else to put
+        // the version; the rows are the collection's (RFC 0031 §6.2).
+        RegistryKind::Galaxy => vec![crate::services::galaxy::package_of(name).to_owned()],
         _ => vec![name.to_owned()],
     }
 }
@@ -401,6 +405,20 @@ pub fn render(
         (RegistryKind::Terraform, DocumentKind::Versions) => {
             VersionDocument::json(terraform_versions(name, held)?)
         }
+        // Ansible Galaxy (RFC 0031 §6.11). Three documents, because a client
+        // resolving across the gap reads all three: the versions list it picks
+        // from, the collection document whose `updated_at` decides whether it
+        // re-reads that list, and the version document carrying the
+        // `download_url` and the digest it checks the bytes against.
+        (RegistryKind::Galaxy, DocumentKind::Versions) => {
+            VersionDocument::json(galaxy_versions(name, held, base)?)
+        }
+        (RegistryKind::Galaxy, k) if is(k, "collection") => {
+            VersionDocument::json(galaxy_collection(name, held, base)?)
+        }
+        (RegistryKind::Galaxy, k) if is(k, "version-detail") => {
+            VersionDocument::json(galaxy_version_detail(name, held, base)?)
+        }
         (RegistryKind::Terraform, k) if k == DocumentKind::PROVIDER_DOWNLOAD => {
             VersionDocument::json(terraform_provider_download(name, held, base)?)
         }
@@ -504,6 +522,88 @@ pub fn document_by_version_key(kind: RegistryKind, name: &str) -> String {
 
 /// The packument npm parses: `versions`, `dist-tags.latest`, and `time`
 /// only for the versions whose entry is dated.
+/// Galaxy's versions list, composed from the held set: one page, `links` null,
+/// `meta.count` describing what is served — the same invariant the proxy path
+/// holds, because it is the client's URL joining that requires it and not the
+/// source of the document.
+fn galaxy_versions(name: &str, held: &[HeldVersion], base: &str) -> Option<Value> {
+    let (namespace, collection) = crate::services::galaxy::parse_collection(name).ok()?;
+    let entries: Vec<crate::services::galaxy::VersionEntry> = held
+        .iter()
+        .map(|h| crate::services::galaxy::VersionEntry {
+            version: h.version.clone(),
+            // An import leaves `published_at` unset on purpose (RFC 0008
+            // §14.2), and nothing is invented here: an undated version is
+            // exactly the case `deny_missing_timestamp` exists to decide, and
+            // config validation makes an operator state it on this kind.
+            created_at: h.published_at.map(|at| at.to_rfc3339()),
+            requires_ansible: h
+                .extra
+                .get("requires_ansible")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        })
+        .collect();
+    Some(crate::services::galaxy::compose_versions(
+        base, namespace, collection, &entries,
+    ))
+}
+
+/// The collection document across the gap. `updated_at` is the newest thing
+/// this instance actually knows about the collection — a held version's own
+/// date, or the day it was received.
+fn galaxy_collection(name: &str, held: &[HeldVersion], base: &str) -> Option<Value> {
+    let (namespace, collection) = crate::services::galaxy::parse_collection(name).ok()?;
+    let versions: Vec<String> = held.iter().map(|h| h.version.clone()).collect();
+    let updated = held
+        .iter()
+        .map(|h| h.published_at.unwrap_or(h.received_at))
+        .max()
+        .map(|at| at.to_rfc3339());
+    Some(crate::services::galaxy::compose_collection(
+        base,
+        namespace,
+        collection,
+        crate::services::blocking::best_latest(&versions).as_deref(),
+        updated.as_deref(),
+    ))
+}
+
+/// One version's document, for the *one* version the listing package string
+/// names. `artifact.sha256` is the held digest, unpadded and uninvented: the
+/// client hashes the bytes it downloads against it, so a made-up value would
+/// fail every install rather than degrade gracefully.
+fn galaxy_version_detail(listing: &str, held: &[HeldVersion], base: &str) -> Option<Value> {
+    let name = crate::services::galaxy::package_of(listing);
+    let version = crate::services::galaxy::address_of(listing)?;
+    let (namespace, collection) = crate::services::galaxy::parse_collection(name).ok()?;
+    let h = held.iter().find(|h| h.version == version)?;
+    let mut doc = json!({
+        "version": h.version,
+        "href": crate::services::galaxy::version_url(base, namespace, collection, &h.version),
+        "download_url": crate::services::galaxy::artifact_url(base, namespace, collection, &h.version),
+        "artifact": {
+            "filename": crate::services::galaxy::artifact_filename(namespace, collection, &h.version),
+            "sha256": h.checksum,
+            "size": h.size,
+        },
+        "collection": {
+            "name": collection,
+            "href": crate::services::galaxy::collection_url(base, namespace, collection),
+        },
+        "namespace": { "name": namespace },
+        "metadata": { "dependencies": {} },
+        // Nothing is minted across the gap either: an imported collection
+        // carries whatever signatures travelled with it, which is none.
+        "signatures": [],
+    });
+    if let Some(at) = h.published_at {
+        doc["created_at"] = Value::String(at.to_rfc3339());
+        doc["updated_at"] = Value::String(at.to_rfc3339());
+    }
+    Some(doc)
+}
+
 fn npm_packument(name: &str, held: &[HeldVersion], base: &str) -> Value {
     let mut versions = Map::new();
     let mut time = Map::new();

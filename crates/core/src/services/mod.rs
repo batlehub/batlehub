@@ -12,6 +12,7 @@ pub mod explore_cache;
 pub mod flags;
 pub mod forge_attachments;
 pub mod forge_refs;
+pub mod galaxy;
 pub mod grants_admin;
 pub mod hot_config;
 pub mod integrity;

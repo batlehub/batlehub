@@ -296,6 +296,39 @@ impl DocumentKind {
     /// it from (RFC 0024 §4.4).
     pub const RUSTUP_RELEASE: Self = Self::Secondary("rustup-release");
 
+    /// Ansible Galaxy's **collection document** —
+    /// `v3/collections/{ns}/{name}/` — as against the versions list beneath it.
+    ///
+    /// RFC 0031 §4.4. Its own kind because `get_collection_versions` re-reads
+    /// it on every resolve, *uncached*, for its `updated_at`: that field is how
+    /// the client decides whether to drop its day-old copy of the versions
+    /// list. Keyed together with the listing, the two would share one entry and
+    /// the invalidation signal would be served from the thing it invalidates.
+    pub const COLLECTION: Self = Self::Secondary("collection");
+    /// Ansible Galaxy's **per-version document** —
+    /// `v3/collections/{ns}/{name}/versions/{v}/` — carrying `download_url`,
+    /// `artifact.sha256` and the version's dependencies.
+    ///
+    /// A document rather than an artifact, unlike JSR's version manifest
+    /// (RFC 0030 decision 1): it is mutable (its own `updated_at` moves), it
+    /// carries the three URL fields this instance rewrites, and nothing
+    /// checksums it (RFC 0031 decision 3).
+    pub const VERSION_DETAIL: Self = Self::Secondary("version-detail");
+    /// Ansible Galaxy's **v1 role versions list** — `v1/roles/{id}/versions/`.
+    ///
+    /// A second listing for a second namespace: `Role.install` prefers the
+    /// `download_url` on the matching entry of this document over the GitHub
+    /// archive URL it would otherwise build itself, so rewriting that field is
+    /// what routes a role's bytes through this instance (RFC 0031 §4.4).
+    pub const ROLE_VERSIONS: Self = Self::Secondary("role-versions");
+    /// Ansible Galaxy's **v1 role search** — `v1/roles/?owner__username=&name=`
+    /// — which `lookup_role_by_name` reads to turn `user.role` into the numeric
+    /// id every later v1 request uses.
+    ///
+    /// Names no version, so unlike its sibling it carries no filtering
+    /// obligation: a role with one blocked version still exists.
+    pub const ROLE: Self = Self::Secondary("role");
+
     /// A protocol document relayed byte-exact, addressed by the upstream path
     /// carried in `package`.
     ///

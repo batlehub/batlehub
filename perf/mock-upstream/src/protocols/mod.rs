@@ -18,6 +18,7 @@ mod composer;
 pub mod conda;
 mod files;
 mod forge;
+mod galaxy;
 mod goproxy;
 mod marketplaces;
 mod maven;
@@ -39,6 +40,7 @@ pub fn configure(cfg: &mut actix_web::web::ServiceConfig) {
     conda::configure(cfg);
     files::configure(cfg);
     forge::configure(cfg);
+    galaxy::configure(cfg);
     goproxy::configure(cfg);
     marketplaces::configure(cfg);
     maven::configure(cfg);

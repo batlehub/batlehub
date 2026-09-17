@@ -77,6 +77,45 @@ pub trait PackageRepository: Send + Sync {
             .collect())
     }
 
+    /// When this package's newest block was written, or `None` when it has no
+    /// block rows.
+    ///
+    /// One field, for one document: Ansible Galaxy's collection document is
+    /// re-read by `ansible-galaxy` on every resolve, *uncached*, and its
+    /// `updated_at` is how the client decides whether to drop its day-old copy
+    /// of the versions list. Serving `max(upstream updated_at, newest
+    /// blocked_at)` is what turns a day of `404`s on a freshly blocked version
+    /// into a correct resolution (RFC 0031 §4.4).
+    ///
+    /// Asked separately from [`Self::blocked_versions`] rather than folded into
+    /// it, because every other kind's listing path would then pay for a column
+    /// no other document reads.
+    ///
+    /// The default derives the answer from [`Self::list_packages`], mirroring
+    /// its siblings; backends with a cheaper query should override it.
+    async fn blocked_changed_at(
+        &self,
+        registry: &str,
+        name: &str,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, CoreError> {
+        let filter = PackageFilter {
+            registry: Some(registry.to_owned()),
+            name_exact: Some(name.to_owned()),
+            blocked_only: true,
+            limit: MAX_BLOCKED_VERSIONS_PER_PACKAGE,
+            ..Default::default()
+        };
+        Ok(self
+            .list_packages(filter)
+            .await?
+            .into_iter()
+            .filter_map(|p| match p.status {
+                crate::entities::PackageStatus::Blocked { blocked_at, .. } => Some(blocked_at),
+                crate::entities::PackageStatus::Available => None,
+            })
+            .max())
+    }
+
     /// Every blocked `(name, version)` in one registry, in no particular order.
     ///
     /// For the *multi-package* listing documents — conda's `repodata.json`, a

@@ -1357,6 +1357,51 @@ impl ProxyService {
             .unwrap_or_default()
     }
 
+    /// When this package's newest block was written (RFC 0031 §4.4).
+    ///
+    /// Read only by the galaxy collection document, whose `updated_at` is
+    /// served as `max(upstream, newest blocked_at)` — the field
+    /// `get_collection_versions` re-reads uncached on every resolve to decide
+    /// whether its day-old copy of the versions list is still good.
+    ///
+    /// Fails open like everything else on this path: a store error is `None`,
+    /// which serves upstream's own timestamp rather than an invented one.
+    /// How much of the v1 role surface a `galaxy` registry serves
+    /// (RFC 0031 §4.4).
+    ///
+    /// Read on every role request rather than baked into the registry client,
+    /// so a reload takes effect on the next request — `deny_components`' rule,
+    /// one kind over. `proxy` for a registry that set nothing, which is the
+    /// documented default.
+    pub async fn galaxy_roles(&self, registry: &str) -> crate::services::galaxy::GalaxyRoleMode {
+        self.hot
+            .read()
+            .await
+            .galaxy_roles
+            .get(registry)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub async fn blocked_changed_at(
+        &self,
+        registry: &str,
+        package: &str,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        match self.repo.blocked_changed_at(registry, package).await {
+            Ok(at) => at,
+            Err(e) => {
+                tracing::warn!(
+                    registry = %registry,
+                    package = %package,
+                    error = %e,
+                    "failed to read when this package was blocked; serving the upstream timestamp"
+                );
+                None
+            }
+        }
+    }
+
     pub async fn blocked_versions_for(
         &self,
         registry: &str,

@@ -238,9 +238,15 @@ pub(crate) fn proxy_path_for(
 pub(crate) fn proxy_base_path(registry_name: &str, registry_type: &str) -> String {
     let base = format!("/proxy/{registry_name}");
     match registry_type.parse::<RegistryKind>() {
+        // `galaxy` joins them: its whole surface hangs off
+        // `/proxy/{name}/galaxy/api/`, and the URL an operator writes into
+        // `ansible.cfg` is that root (RFC 0031 §4.2).
         Ok(kind)
             if kind.is_path_addressed()
-                || matches!(kind, RegistryKind::Nodedist | RegistryKind::Sdkman) =>
+                || matches!(
+                    kind,
+                    RegistryKind::Nodedist | RegistryKind::Sdkman | RegistryKind::Galaxy
+                ) =>
         {
             format!("{base}/{kind}")
         }
@@ -386,6 +392,7 @@ pub fn suggest_registries(root: &Path, depth: usize) -> Vec<SuggestedRegistry> {
 
     collect_from_manifests(root, depth, &mut acc);
     collect_from_toolchain_files(root, &mut acc);
+    collect_from_ansible_files(root, &mut acc);
 
     acc.finish()
 }
@@ -475,6 +482,215 @@ fn registry_for_sdkmanrc(content: &str) -> SuggestedRegistry {
         warm_packages,
         note: None,
     }
+}
+
+// ── requirements.yml and galaxy.yml ──────────────────────────────────────────
+//
+// RFC 0031 §6.9. Three files name an Ansible dependency: `requirements.yml` and
+// `collections/requirements.yml` list what a play installs, and `galaxy.yml`
+// describes a collection being developed here and what it depends on. All three
+// map onto one `galaxy` registry, and a pinned collection becomes a
+// `warm_packages` entry so the proxy holds the tarball before the first
+// `ansible-galaxy collection install` asks for it.
+//
+// **The reader is deliberately narrow.** This workspace has no YAML parser and
+// is not gaining one for three files, so what is read is the block form every
+// tool that writes these files produces:
+//
+// ```yaml
+// collections:
+//   - name: community.general
+//     version: ">=13.0.0"
+//   - community.docker
+// ```
+//
+// A flow-style document (`collections: [ ... ]`) is not read, and the
+// suggestion says so rather than silently emitting a registry with nothing
+// warmed.
+
+/// `requirements.yml`, `collections/requirements.yml` and `galaxy.yml` → one
+/// `galaxy` registry.
+fn collect_from_ansible_files(root: &Path, acc: &mut Accumulator) {
+    let candidates = [
+        ("requirements.yml", root.join("requirements.yml")),
+        (
+            "collections/requirements.yml",
+            root.join("collections").join("requirements.yml"),
+        ),
+        ("galaxy.yml", root.join("galaxy.yml")),
+    ];
+    let mut sources = Vec::new();
+    let mut warm: Vec<String> = Vec::new();
+    let mut unreadable = false;
+
+    for (label, path) in candidates {
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        sources.push(label.to_owned());
+        let (pins, flow) = if label == "galaxy.yml" {
+            (galaxy_yml_dependencies(&content), false)
+        } else {
+            requirements_collections(&content)
+        };
+        unreadable |= flow;
+        for pin in pins {
+            if !warm.contains(&pin) {
+                warm.push(pin);
+            }
+        }
+    }
+    if sources.is_empty() {
+        return;
+    }
+
+    let note = if unreadable {
+        Some(
+            "a collections list in flow style ('collections: [...]') was not read; add its \
+             pinned versions to warm_packages by hand"
+                .to_owned(),
+        )
+    } else if warm.is_empty() {
+        Some(
+            "no collection is pinned to an exact version, so nothing is warmed ahead of time; \
+             ansible-galaxy resolves the range through the versions list"
+                .to_owned(),
+        )
+    } else {
+        None
+    };
+
+    acc.add(SuggestedRegistry {
+        name: "galaxy".to_owned(),
+        registry_type: "galaxy".to_owned(),
+        upstreams: Vec::new(),
+        path_allow: Vec::new(),
+        sources,
+        // `ansible.cfg` is the documented switch, and these are the environment
+        // overrides for the same two settings — which is what a CI job sets.
+        // The server name in the second variable is the one named in the first.
+        client_env: vec![
+            (
+                "ANSIBLE_GALAXY_SERVER_LIST".to_owned(),
+                "batlehub".to_owned(),
+            ),
+            (
+                "ANSIBLE_GALAXY_SERVER_BATLEHUB_URL".to_owned(),
+                "{proxy}/api/".to_owned(),
+            ),
+        ],
+        warm_packages: warm,
+        // `roles` is written out rather than left to the default, so the egress
+        // to github.com it implies is a choice visible in the file the operator
+        // commits (RFC 0031 decision 9).
+        note,
+    });
+}
+
+/// The exactly-pinned collections a `requirements.yml` names, and whether the
+/// document used a shape this reader does not understand.
+///
+/// A range (`>=13.0.0`, `*`) is not warmed: it names no release, and
+/// `ansible-galaxy` resolves it through the versions list.
+fn requirements_collections(content: &str) -> (Vec<String>, bool) {
+    let mut pins = Vec::new();
+    let mut in_collections = false;
+    let mut flow = false;
+    // The `name:` of the list entry currently being read, waiting for a
+    // `version:` on one of its continuation lines.
+    let mut pending: Option<String> = None;
+
+    for raw in content.lines() {
+        let line = raw.trim_end();
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        // A top-level key ends whatever block we were in.
+        if !line.starts_with(' ') && !line.starts_with('-') {
+            pending = None;
+            in_collections = trimmed.starts_with("collections:");
+            if in_collections && trimmed != "collections:" {
+                // `collections: [ ... ]` — flow style, which this reader does
+                // not understand and says so rather than reporting nothing.
+                flow = true;
+                in_collections = false;
+            }
+            continue;
+        }
+        if !in_collections {
+            continue;
+        }
+        if let Some(entry) = trimmed.strip_prefix("- ") {
+            // A new entry: whatever the previous one was, it named no version.
+            pending = entry
+                .trim()
+                .strip_prefix("name:")
+                .map(|name| unquote(name).to_owned());
+            continue;
+        }
+        if let Some(version) = trimmed.strip_prefix("version:") {
+            let version = unquote(version);
+            if let Some(name) = pending.take() {
+                if is_exact_version(version) {
+                    pins.push(format!("{name}@{version}"));
+                }
+            }
+        }
+    }
+    (pins, flow)
+}
+
+/// The exactly-pinned dependencies a `galaxy.yml` declares, under
+/// `dependencies:` as `name: version` pairs.
+fn galaxy_yml_dependencies(content: &str) -> Vec<String> {
+    let mut pins = Vec::new();
+    let mut in_deps = false;
+    for raw in content.lines() {
+        let line = raw.trim_end();
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if !line.starts_with(' ') && !line.starts_with('-') {
+            in_deps = trimmed.starts_with("dependencies:") && trimmed == "dependencies:";
+            continue;
+        }
+        if !in_deps {
+            continue;
+        }
+        if let Some((name, version)) = trimmed.split_once(':') {
+            let name = unquote(name);
+            let version = unquote(version);
+            if name.contains('.') && is_exact_version(version) {
+                pins.push(format!("{name}@{version}"));
+            }
+        }
+    }
+    pins
+}
+
+/// A version string that names one release rather than a range.
+///
+/// `ansible-galaxy` accepts the full semver range grammar; anything carrying a
+/// comparator, a wildcard or a comma is a range and warming cannot name the
+/// release it will resolve to.
+fn is_exact_version(v: &str) -> bool {
+    !v.is_empty()
+        && v != "*"
+        && v.chars().next().is_some_and(|c| c.is_ascii_digit())
+        && !v.contains([',', '*', '<', '>', '=', '!', '~', '^', ' '])
+}
+
+/// Strip the surrounding quotes a YAML scalar may carry, and any trailing
+/// comment.
+fn unquote(raw: &str) -> &str {
+    let v = raw.trim();
+    let v = match v.split_once(" #") {
+        Some((before, _)) => before.trim(),
+        None => v,
+    };
+    v.trim_matches(|c| c == '"' || c == '\'')
 }
 
 // ── mise.lock ─────────────────────────────────────────────────────────────────
@@ -1403,6 +1619,123 @@ mod tests {
         assert_eq!(reg.name, "rust-dist");
         assert_eq!(reg.registry_type, "generic");
         assert!(registry_for_backend("core:unknown-thing", "x").is_none());
+    }
+
+    // ── requirements.yml and galaxy.yml (RFC 0031 §6.9) ──────────────────────
+
+    #[test]
+    fn a_requirements_yml_maps_to_a_galaxy_registry_and_warms_its_pins() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("requirements.yml"),
+            "---\n\
+             collections:\n\
+             \x20 # the one we pin\n\
+             \x20 - name: community.general\n\
+             \x20   version: \"13.4.0\"\n\
+             \x20 - name: community.docker\n\
+             \x20   version: \">=4.0.0\"\n\
+             \x20 - ansible.posix\n\
+             roles:\n\
+             \x20 - name: geerlingguy.docker\n",
+        )
+        .unwrap();
+        let regs = suggest_registries(dir.path(), 0);
+        let g = find(&regs, "galaxy");
+        assert_eq!(g.registry_type, "galaxy");
+        assert_eq!(g.sources, ["requirements.yml"]);
+        // Only the exact pin is warmed: a range names no release, and a bare
+        // entry names no version at all.
+        assert_eq!(g.warm_packages, ["community.general@13.4.0"]);
+        assert_eq!(
+            g.resolved_env("https://hub.example.com/"),
+            [
+                (
+                    "ANSIBLE_GALAXY_SERVER_LIST".to_owned(),
+                    "batlehub".to_owned()
+                ),
+                (
+                    "ANSIBLE_GALAXY_SERVER_BATLEHUB_URL".to_owned(),
+                    "https://hub.example.com/proxy/galaxy/galaxy/api/".to_owned()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_collections_requirements_yml_is_read_too() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir(dir.path().join("collections")).unwrap();
+        std::fs::write(
+            dir.path().join("collections").join("requirements.yml"),
+            "collections:\n  - name: acme.util\n    version: 1.0.0\n",
+        )
+        .unwrap();
+        let regs = suggest_registries(dir.path(), 0);
+        let g = find(&regs, "galaxy");
+        assert_eq!(g.sources, ["collections/requirements.yml"]);
+        assert_eq!(g.warm_packages, ["acme.util@1.0.0"]);
+    }
+
+    #[test]
+    fn a_galaxy_yml_contributes_its_pinned_dependencies() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("galaxy.yml"),
+            "namespace: acme\n\
+             name: util\n\
+             version: 1.0.0\n\
+             dependencies:\n\
+             \x20 community.general: 13.4.0\n\
+             \x20 community.docker: \">=4.0.0\"\n",
+        )
+        .unwrap();
+        let regs = suggest_registries(dir.path(), 0);
+        let g = find(&regs, "galaxy");
+        // `version: 1.0.0` at the top level is the collection's *own* version,
+        // not a dependency, and must not be warmed.
+        assert_eq!(g.warm_packages, ["community.general@13.4.0"]);
+    }
+
+    #[test]
+    fn a_flow_style_collections_list_says_it_was_not_read() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("requirements.yml"),
+            "collections: [community.general, community.docker]\n",
+        )
+        .unwrap();
+        let regs = suggest_registries(dir.path(), 0);
+        let g = find(&regs, "galaxy");
+        assert!(g.warm_packages.is_empty());
+        let note = g.note.as_deref().unwrap_or_default();
+        assert!(note.contains("flow style"), "{note}");
+    }
+
+    #[test]
+    fn nothing_pinned_warms_nothing_and_says_why() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("requirements.yml"),
+            "collections:\n  - name: community.general\n    version: \"*\"\n",
+        )
+        .unwrap();
+        let regs = suggest_registries(dir.path(), 0);
+        let g = find(&regs, "galaxy");
+        assert!(g.warm_packages.is_empty());
+        assert!(g
+            .note
+            .as_deref()
+            .unwrap_or_default()
+            .contains("no collection is pinned"));
+    }
+
+    #[test]
+    fn a_project_with_no_ansible_files_gets_no_galaxy_registry() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join(".nvmrc"), "22.11.0\n").unwrap();
+        let regs = suggest_registries(dir.path(), 0);
+        assert!(!names(&regs).contains(&"galaxy"), "{:?}", names(&regs));
     }
 
     const SAMPLE_LOCK: &str = r#"

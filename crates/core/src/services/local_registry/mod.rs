@@ -1,5 +1,6 @@
 mod eco_composer;
 mod eco_conda;
+mod eco_galaxy;
 mod eco_go;
 mod eco_jetbrains;
 mod eco_maven;

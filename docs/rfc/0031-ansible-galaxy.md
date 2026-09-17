@@ -6,14 +6,14 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Draft                                                         |
+| Status      | **Implemented** — phases 1–7 landed 2026-09-17, and `tests/heavy/galaxy.sh` passes against the live upstream after the four defects §13 records; the closed-world and authz phases are written and not yet run |
 | Short       | Ansible Galaxy                                                |
 | Settles     | The collections API v3 as a registry kind: the versions list as the chokepoint, download_url rewritten to this instance, and collection publish with its import-task poll in local mode |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
 | Co-author   | Claude Opus 5 <noreply@anthropic.com>                         |
 | Created     | 2026-09-11                                                    |
 | Supersedes  | —                                                             |
-| Touches     | `crates/core`, `crates/config`, `crates/adapters`, `crates/web`, `server`, `cli`, `ui`, docs |
+| Touches     | `crates/core`, `crates/config`, `crates/adapters`, `crates/web`, `server`, `cli`, `ui`, `docs`, `tests/heavy`, `perf` |
 
 ---
 
@@ -924,12 +924,12 @@ composed from held versions, and the tarball is bytes.
 | # | Question | Decision |
 | --- | --- | --- |
 | 1 | How many pages does a listing have? | **One**, always, with a null `next`. No link this instance can emit survives the client's own URL joining under a path prefix, and for roles the client strips the path deliberately. |
-| 2 | `data` or `results` for v3 listings? | **`data`**, in both modes. The client accepts either; one shape is one set of fixtures. v1 keeps `results`. |
-| 3 | Is the per-version document an artifact or a document? | **A document.** It is mutable, it carries the fields this instance rewrites, and nothing checksums it — the opposite of JSR's manifest (RFC 0030 decision 1). |
-| 4 | Does a block touch `updated_at`? | **Yes**, `max(upstream, newest blocked_at)`. Enforcement holds without it; the bump is what turns a day of `404`s into a correct resolution. |
-| 5 | Are roles in scope? | **Read-only, and configurable.** Their `download_url` is rewritten under `roles = "proxy"`; the two cases that cannot be reached are named on the registry page. |
-| 6 | Does `local` mode need a host binding? | **No.** The publish endpoint is inside the configured URL, so path routing works — stated explicitly because the sibling RFC's answer is the opposite. |
-| 7 | Is the publish synchronous? | **Yes**, and the task it returns is already finished. The client tolerates a task that does not exist yet; it does not require one. |
+| 2 | ✅ landed | `data` or `results` for v3 listings? | **`data`**, in both modes. The client accepts either; one shape is one set of fixtures. v1 keeps `results`. |
+| 3 | ✅ landed | Is the per-version document an artifact or a document? | **A document.** It is mutable, it carries the fields this instance rewrites, and nothing checksums it — the opposite of JSR's manifest (RFC 0030 decision 1). |
+| 4 | ✅ landed | Does a block touch `updated_at`? | **Yes**, `max(upstream, newest blocked_at)`. Enforcement holds without it; the bump is what turns a day of `404`s into a correct resolution. |
+| 5 | ✅ landed | Are roles in scope? | **Read-only, and configurable.** Their `download_url` is rewritten under `roles = "proxy"`; the two cases that cannot be reached are named on the registry page. |
+| 6 | ✅ landed | Does `local` mode need a host binding? | **No.** The publish endpoint is inside the configured URL, so path routing works — stated explicitly because the sibling RFC's answer is the opposite. |
+| 7 | ✅ landed | Is the publish synchronous? | **Yes**, and the task it returns is already finished. The client tolerates a task that does not exist yet; it does not require one. |
 | 8 | Is the role-download allowlist configurable? | **No: fixed at `github.com` plus the registry's own upstream.** That covers every role galaxy.ansible.com publishes, and an allowlist nobody has needed yet is a surface to get wrong. `role_download_hosts` is one field to add the day a deployment asks for it. Decided 2026-09-12. |
 | 9 | What does `registry suggest` emit for roles? | **`proxy` stays the config default, and `suggest` writes the line explicitly.** The egress to GitHub is then a choice visible in the operator's own file rather than one inherited from a default nobody read. Decided 2026-09-12. |
 
@@ -941,12 +941,116 @@ Nothing. The two questions this draft opened are rows 8 and 9 above.
 
 ## 12. Implementation phases
 
-| Phase | Content |
-| --- | --- |
-| 1 | `crates/core`: `RegistryKind::Galaxy` and its answers; `services/galaxy.rs`; `blocking/galaxy.rs`; `BlockedVersions::changed_at`. `crates/config`: `roles` and its validation. Lands with phase 2 — a kind with no client fails at startup (RFC 0010 §13.1). |
-| 2 | `crates/adapters/src/registry/galaxy/` read side and `pagination.rs`; `builders.rs`; the five collection routes and the discovery document; the conformance fixture; `local_galaxy_registry.rs` for proxy mode. **Useful on its own**: every collection install through the proxy, blocked versions enforced, tarballs cached. |
-| 3 | `tests/heavy/galaxy.sh` steps 1–3 and 6. Runs before phase 2 is called done. |
-| 4 | `local`/`hybrid`: the multipart and tar readers, the publish and import-task routes, the composed listings, hybrid merge; heavy step 4. **Ships on its own.** |
-| 5 | Roles: the three v1 routes, the `roles` modes, the download allowlist; heavy step 5. **Ships on its own**, and an operator who never sets `roles` sees the default arrive with it. |
-| 6 | The console entry, `docs/registries/galaxy.md`, the index and sidebar, the egress page, the roadmap correction; `registry suggest` and warming. |
-| 7 | Air gap (RFC 0008-bis): the listings composed from held versions, the tarball exported as an artifact. Nothing new is needed in the bundle format. |
+| Phase | Status | Content |
+| --- | --- | --- |
+| 1 | ✅ landed | `crates/core`: `RegistryKind::Galaxy` and its answers; `services/galaxy.rs`; `blocking/galaxy.rs`; `BlockedVersions::changed_at`. `crates/config`: `roles` and its validation. Lands with phase 2 — a kind with no client fails at startup (RFC 0010 §13.1). |
+| 2 | ✅ landed | `crates/adapters/src/registry/galaxy/` read side and `pagination.rs`; `builders.rs`; the five collection routes and the discovery document; the conformance fixture; `local_galaxy_registry.rs` for proxy mode. **Useful on its own**: every collection install through the proxy, blocked versions enforced, tarballs cached. |
+| 3 | ✅ landed | `tests/heavy/galaxy.sh` steps 1–3 and 6. Runs before phase 2 is called done. |
+| 4 | ✅ landed | `local`/`hybrid`: the multipart and tar readers, the publish and import-task routes, the composed listings, hybrid merge; heavy step 4. **Ships on its own.** |
+| 5 | ✅ landed | Roles: the three v1 routes, the `roles` modes, the download allowlist; heavy step 5. **Ships on its own**, and an operator who never sets `roles` sees the default arrive with it. |
+| 6 | ✅ landed | The console entry, `docs/registries/galaxy.md`, the index and sidebar, the egress page, the roadmap correction; `registry suggest` and warming. |
+| 7 | ✅ landed | Air gap (RFC 0008-bis): the listings composed from held versions, the tarball exported as an artifact. Nothing new is needed in the bundle format. |
+
+---
+
+## 13. Implementation notes
+
+All seven phases landed 2026-09-17, against the design above. What follows is
+where the design was wrong, where it was under-specified, and what is still
+owed — because an RFC that records only its successes is a worse guide to the
+next kind than one that records its corrections.
+
+### Five corrections to the design
+
+| # | §  | What the RFC said | What landed, and why |
+| --- | --- | --- | --- |
+| 1 | §6.2 | `BlockedVersions` gains `changed_at`, *"the one piece of per-block metadata a document needs, and it already exists on the row"* | It exists on the row and **not on the query**: `PackageRepository::blocked_versions` returns `Vec<String>`, and `blocked_versions_for` is the one call every kind's listing path makes. Putting a timestamp on it would have added a column to a query 25 kinds run and one reads. Landed as `PackageRepository::blocked_changed_at` — a second, narrower method with a `MAX(blocked_at)` override in Postgres — reached through `ProxyService::blocked_changed_at` and asked for **only** by the galaxy collection handler. |
+| 2 | §6.2 | `COLLECTION` → *"repair `highest_version` to `best_latest` over the surviving versions"*, dispatched from `blocking::strip` | `strip` is handed one document. The collection document names one version and carries no list to pick a replacement from, so the repair needs the versions list as well — the position Go's `@latest` and a RubyGems gem document are already in. `blocking::galaxy::repair_collection` is a pure function called from the handler that holds both, and `strip_galaxy`'s `COLLECTION` arm returns `Vec::new()` exactly as `strip_goproxy`'s `LATEST` arm does. |
+| 3 | §4.4 | *"`updated_at` is bumped when anything was removed"*, served as `max(upstream, newest blocked_at)` | The formula and the condition disagree, and the formula is the better half. Conditioning on "something was removed" needs the *unfiltered* listing as well as the filtered one, and buys nothing: `blocked_at` is a fixed instant, so the served value moves **once** when a block is written and then stays put. What landed applies the formula whenever the collection carries a block row at all. A block on a version the collection never had costs one extra listing read, once, and `the_bump_is_idempotent` pins that it costs no more. |
+| 4 | §4.4 | The import task is *"an absolute path built from the request"*, *"built with `registry_public_base`, the helper the NuGet service index already uses"* | Those are two different things: `registry_public_base` returns an absolute **URL**. The helper is the half that matters — it is what makes the value correct under both routings — so the URL is what landed. `urljoin` resolves an absolute URL to itself, which is strictly safer than a path: it survives an `api_server` with no trailing slash, which an absolute path also does but a relative one does not. |
+| 5 | §6.11 | The air gap *"needs nothing new: the listing documents are composed from held versions"* | `listing_synthesis::render_listing` is an exhaustive per-kind match and answered `None` for `galaxy`, so an air-gapped registry would have refused every listing. Three arms landed — the versions list, the collection document and the per-version document — because a client resolving across the gap reads all three, and one that composed only the first would leave the resolver choosing a version it could not then describe. `package_names_for` needed an arm too, since a version document is addressed `{collection}@{version}`. |
+
+| 6 | §4.4 | *"A local version and an upstream version of the same collection merge in the versions list by version, local winning on collision — the rule the `npm` kind already applies."* | **npm does not do that, and neither does anything else here.** `common::local_first` — the ladder every kind's hybrid reads go through — returns the *local* document whole when the package is published locally, and falls through to upstream only on `NotFound`. There is no per-version merge anywhere in this tree. What landed is the ladder, because one kind merging where twenty-four do not would be a surprise an operator meets as missing versions rather than as a feature. The consequence is real and now documented on the registry page: on a hybrid `galaxy` registry, publishing *any* version of `community.general` hides every upstream version of it. A genuine merge is a change to `local_first` and belongs to every kind at once, not to this one. |
+
+### Two things the RFC did not mention, and the gates found
+
+- **`roles` had to live in `core`, not in `config`.** It is read on every role
+  request, which by this repository's own rule (`deny_components`, RFC 0024
+  §6.5) means it belongs on `HotConfig` — and `HotConfig` is `core`'s, so
+  `GalaxyRoleMode` is too, re-exported from `batlehub_config::schema`. Baked
+  into the registry client instead, a reload would not take effect until the
+  cached upstream document expired.
+- **A role's numeric id is an alias, and the alias machinery already existed.**
+  §4.3 addresses `v1/roles/{id}/versions/` by the role's *name*, and says
+  nothing about how a request carrying only the id gets there. It is the
+  JetBrains Marketplace's numeric-update-id problem exactly, and it landed the
+  same way: `RegistryClient::canonical_coordinate` resolves `roles/#{id}` to
+  `roles/{user}.{role}` before the funnel, cached, so the block list, the cache
+  and the audit trail all see the spelling an operator types.
+
+### One thing the RFC got right that has a gate behind it
+
+§6.1's `readme_support() = Archive` is not a description, it is a promise:
+`readme_support_matches_the_extractors` fails the build for a kind that claims
+the archive is read and has no parser under
+`crates/adapters/src/sbom/extractor/`. `galaxy.rs` is that parser, and this kind
+turns out to be the only one here whose README is **named** rather than matched
+— `MANIFEST.json`'s `collection_info.readme` says which file it is, so a
+collection that declares `docs/overview.rst` gets that document and one that
+declares nothing reports nothing. RubyGems' extractor has to match a filename
+and carries a comment saying so; this one does not.
+
+### What the first live run found
+
+`tests/heavy/galaxy.sh` was written, wired into CI, and had never been executed
+when phases 1–7 were declared done. Running it against the real
+`galaxy.ansible.com` with ansible-core 2.19.3 produced **four defects**, all of
+them in the half this RFC researched least — the publish — and all of them
+invisible to 29 integration tests, 19 adapter tests, 21 unit tests and 9
+conformance request lines.
+
+Phases 1–4 passed on the first run, which is the part worth saying first: the
+versions list *is* the chokepoint, the rewritten `download_url` *does* route
+the bytes here, a blocked version steps a range down and stops a pin with
+ansible's own error, and the `updated_at` bump *does* make a warm client
+re-read. Every claim §4.4 and §5.2 make about reads held. What did not hold:
+
+| # | Symptom | Cause | Where |
+| --- | --- | --- | --- |
+| 1 | *(silent)* `advertised checksum could not be parsed; skipping verification` in the log, on **every** artifact | `resolve_metadata` set `checksum: Some("sha256:<hex>")`. `integrity::parse_expected` accepts an SRI `<algo>-<base64>` token or a **bare hex** digest whose algorithm it infers from the length — and nothing else. So this instance's own cache-write verification never ran. The install still succeeded, because the *client* checksums independently, which is exactly why nothing but that one log line said so | `registry/galaxy/client.rs` |
+| 2 | `ansible-galaxy collection publish` → `400`; `curl -F` → `202` | **The file part is base64.** `prepare_multipart`'s default encoder for a part read from a file is `email.encoders.encode_base64`, and `publish_collection` does not override it, so the tarball arrives under `Content-Transfer-Encoding: base64`. `actix_multipart` does not decode it, and the tar reader met base64 text where it expected gzip. §4.4 says only "multipart (`sha256` + `file`)" | `handlers/proxy/galaxy/publish.rs` |
+| 3 | `403` on a publish carrying a valid admin token | **The scheme is `Token`, not `Bearer`.** `GalaxyToken.token_type` is the literal string `Token` — Django REST Framework's scheme, which galaxy_ng speaks. `Bearer` belongs to `KeycloakToken`, the Automation Hub path §3 makes a **non-goal** — so §4.2 and §5.1 read the scheme off the one class this design excludes, and the claim that "both are shapes the existing auth chain resolves, with no extractor change" was false in the direction that matters: *every* authenticated read and every publish arrived anonymous, and a `galaxy` registry closed to anonymous callers would have refused the client holding its token | `extractors.rs` |
+| 4 | The publish succeeded and the client then **hung** | **The import task is polled at a route the client builds, from a bare id.** §4.4's analysis — "the client does `urljoin(self.api_server, resp['task'])`, so the value must be an absolute path" — is not what the v3 branch does: `wait_import_task` computes `_urljoin(api_server, v3, 'imports/collections', task_id, '/')`, interpolating the value as a single path **segment**. An absolute path landed in the middle of the polled URL, the route did not exist, and the client reads a `404` as *"the import has not started yet"* and retries with backoff until its timeout. So the failure mode is a hang, not an error | `handlers/proxy/galaxy/publish.rs`, and the route itself |
+
+Defect 3 is the one to remember. It is not a slip about a field name: the RFC
+quoted a real class from the client's own source, and quoted the wrong one —
+the *only* one its own §3 rules out. Reading `token.py` far enough to see both
+`token_type` constants would have caught it, and every layer of testing below a
+real client reproduced the mistake faithfully, because every fixture was written
+from the same sentence.
+
+Defect 1 is the one that would have survived longest. Nothing fails: the
+artifact is served, the client's own check passes, and the only symptom is a
+`WARN` per download saying this server verified nothing.
+
+### What is still owed
+
+`tests/heavy/galaxy.sh` has been run end to end. **`closed_world.sh`'s
+`phase_ansible` and `authz.sh`'s `phase_galaxy` have not** — both are written
+and wired into CI, and both drive the same client over the same routes the
+galaxy suite now exercises, so the risk they carry is smaller than it was. It
+is not zero: `phase_ansible` runs with egress denied, which is the only thing
+that proves the client never reached the upstream directly, and `phase_galaxy`
+is the only place the *read* credential boundary is driven by a real client.
+
+Two smaller things:
+
+- **`registry suggest` reads YAML with a line reader.** This workspace has no
+  YAML parser and three files did not justify adding one, so
+  `requirements_collections` understands the block form every tool that writes
+  these files emits and says so when it meets flow style
+  (`a_flow_style_collections_list_says_it_was_not_read`). A real parser is one
+  dependency away the day a fourth file needs one.
+- **Galaxy's search API stays a non-goal (§3)**, so `search_packages` answers
+  empty and the feature matrix says so. The console's Package Explorer finds
+  collections this instance holds and offers nothing it does not.

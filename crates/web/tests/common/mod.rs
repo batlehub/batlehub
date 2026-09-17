@@ -193,6 +193,30 @@ impl RegistryClient for FixedRegistry {
             .collect())
     }
 
+    /// `roles/#{id}` → `roles/{user}.{role}` for the galaxy fixture, and
+    /// "already canonical" for everything else.
+    ///
+    /// The v1 role surface is addressed by a numeric id the client learns from
+    /// the search document, and the proxy resolves it to the name a block is
+    /// written on before anything else runs (RFC 0031 §6.2).
+    async fn canonical_coordinate(&self, pkg: &PackageId) -> Result<Option<PackageId>, CoreError> {
+        if self.registry_type != "galaxy" {
+            return Ok(None);
+        }
+        let Some(id) = batlehub_core::services::galaxy::role_id_of(&pkg.name) else {
+            return Ok(None);
+        };
+        if id != "4567" {
+            return Err(CoreError::NotFound(format!(
+                "role {id} is not in the fixture"
+            )));
+        }
+        Ok(Some(PackageId {
+            name: "roles/geerlingguy.docker".to_owned(),
+            ..pkg.clone()
+        }))
+    }
+
     async fn fetch_version_document(
         &self,
         package: &str,
@@ -496,6 +520,98 @@ impl RegistryClient for FixedRegistry {
             // has somewhere to walk: `stable` is 1.98.1 of 2026-09-03, the
             // release before it is 1.98.0 of 2026-08-20, and there are two
             // nightlies a day apart.
+            // Ansible Galaxy (RFC 0031). The same three versions every other
+            // fixture advertises, in the v3 shape: `data`, a `meta.count`, and
+            // `links` already null — the one-page invariant the adapter
+            // applies after walking upstream's pages.
+            ("galaxy", DocumentKind::Versions) => {
+                let (ns, name) = package.split_once('.').unwrap_or(("acme", "util"));
+                let entry = |v: &str| {
+                    serde_json::json!({
+                        "version": v,
+                        "href": format!("https://upstream.invalid/api/v3/collections/{ns}/{name}/versions/{v}/"),
+                        "created_at": "2020-01-02T00:00:00Z",
+                        "updated_at": "2020-01-02T00:00:00Z",
+                        "requires_ansible": ">=2.15.0",
+                        "marks": [],
+                    })
+                };
+                Ok(VersionDocument::json(serde_json::json!({
+                    "meta": { "count": 3 },
+                    "links": { "first": null, "previous": null, "next": null, "last": null },
+                    "data": [entry("1.0.0"), entry("1.1.0"), entry("2.0.0-beta.1")],
+                })))
+            }
+            ("galaxy", DocumentKind::COLLECTION) => {
+                let (ns, name) = package.split_once('.').unwrap_or(("acme", "util"));
+                Ok(VersionDocument::json(serde_json::json!({
+                    // Upstream's own URLs, so a test can tell whether the
+                    // handler repointed them.
+                    "href": format!("https://upstream.invalid/api/v3/collections/{ns}/{name}/"),
+                    "namespace": ns,
+                    "name": name,
+                    "deprecated": false,
+                    "versions_url": format!("https://upstream.invalid/api/v3/collections/{ns}/{name}/versions/"),
+                    "highest_version": {
+                        "href": format!("https://upstream.invalid/api/v3/collections/{ns}/{name}/versions/1.1.0/"),
+                        "version": "1.1.0",
+                    },
+                    "created_at": "2020-01-01T00:00:00Z",
+                    "updated_at": "2020-02-01T00:00:00Z",
+                })))
+            }
+            ("galaxy", DocumentKind::VERSION_DETAIL) => {
+                let name = batlehub_core::services::galaxy::package_of(package);
+                let version = batlehub_core::services::galaxy::address_of(package)
+                    .unwrap_or("1.0.0");
+                let (ns, coll) = name.split_once('.').unwrap_or(("acme", "util"));
+                Ok(VersionDocument::json(serde_json::json!({
+                    "version": version,
+                    "href": format!("https://upstream.invalid/api/v3/collections/{ns}/{coll}/versions/{version}/"),
+                    "created_at": "2020-01-02T00:00:00Z",
+                    "requires_ansible": ">=2.15.0",
+                    // The two fields the client verifies, and which therefore
+                    // have to survive untouched.
+                    "artifact": {
+                        "filename": format!("{ns}-{coll}-{version}.tar.gz"),
+                        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                        "size": 2866617,
+                    },
+                    "collection": {
+                        "name": coll,
+                        "href": format!("https://upstream.invalid/api/v3/collections/{ns}/{coll}/"),
+                    },
+                    "namespace": { "name": ns },
+                    "download_url": format!("https://upstream.invalid/api/v3/plugin/ansible/content/published/collections/artifacts/{ns}-{coll}-{version}.tar.gz"),
+                    "metadata": { "dependencies": {} },
+                    "signatures": [],
+                })))
+            }
+            ("galaxy", DocumentKind::ROLE) => Ok(VersionDocument::json(serde_json::json!({
+                "count": 1,
+                "results": [{
+                    "id": 4567,
+                    "github_user": "geerlingguy",
+                    "github_repo": "ansible-role-docker",
+                    "name": "docker",
+                }],
+            }))),
+            ("galaxy", DocumentKind::ROLE_VERSIONS) => {
+                let entry = |v: &str| {
+                    serde_json::json!({
+                        "id": 1,
+                        "name": v,
+                        "release_date": "2020-01-02T00:00:00Z",
+                        "download_url": format!("https://github.com/geerlingguy/ansible-role-docker/archive/{v}.tar.gz"),
+                    })
+                };
+                Ok(VersionDocument::json(serde_json::json!({
+                    "count": 3,
+                    "next": null,
+                    "next_link": null,
+                    "results": [entry("1.0.0"), entry("1.1.0"), entry("2.0.0-beta.1")],
+                })))
+            }
             ("rustup", DocumentKind::Versions) => Ok(VersionDocument::text(
                 "text/plain; charset=utf-8",
                 "static.rust-lang.org/dist/2026-08-20/channel-rust-1.98.0.toml\n\
@@ -1653,6 +1769,12 @@ pub async fn make_app_with_defaults_and_access(
             "rustup".to_owned(),
             FixedRegistry::new("rustup") as Arc<dyn RegistryClient>,
         ),
+        // RFC 0031: the conformance fixture asserts `ansible-galaxy`'s request
+        // lines reach the galaxy routes rather than the npm catch-alls.
+        (
+            "galaxy".to_owned(),
+            FixedRegistry::new("galaxy") as Arc<dyn RegistryClient>,
+        ),
     ]
     .into();
 
@@ -1697,6 +1819,10 @@ pub async fn make_app_with_defaults_and_access(
         ),
         (
             "rustup".to_owned(),
+            Arc::new(rbac_policy(repo_dyn.clone()).0),
+        ),
+        (
+            "galaxy".to_owned(),
             Arc::new(rbac_policy(repo_dyn.clone()).0),
         ),
     ]
@@ -1773,6 +1899,7 @@ pub async fn make_app_with_defaults_and_access(
         ("nodedist", "nodedist"),
         ("sdkman", "sdkman"),
         ("rustup", "rustup"),
+        ("galaxy", "galaxy"),
     ]);
     let cargo_indexes = batlehub_web::CargoIndexMap::default();
     finish_test_app(

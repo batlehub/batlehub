@@ -4,6 +4,7 @@ pub mod composer;
 pub mod conda;
 pub mod forge_api;
 pub mod forgejo;
+pub mod galaxy;
 pub mod generic;
 pub mod github;
 pub mod gitlab;

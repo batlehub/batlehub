@@ -2553,3 +2553,103 @@ mod path_family_air_gap {
         }
     }
 }
+
+/// Ansible Galaxy across the gap (RFC 0031 §6.11, RFC 0008-bis).
+///
+/// A collection install reads three documents before it reads a byte: the
+/// versions list it resolves against, the collection document whose
+/// `updated_at` decides whether that list is re-read, and the version document
+/// carrying `download_url` and `artifact.sha256`. An air-gapped instance that
+/// composed only the first would leave the client resolving a version it then
+/// could not describe — the *listing* failure RFC 0008-bis names, which is a
+/// different failure from a missing artifact.
+#[actix_web::test]
+async fn a_held_collection_gets_all_three_documents_it_installs_through() {
+    let (app, _lab) = holding_lab(
+        "galaxy",
+        true,
+        &[
+            ("acme.util", "1.0.0", Some("tarball")),
+            ("acme.util", "1.1.0", Some("tarball")),
+        ],
+    )
+    .await;
+
+    let base = format!("/proxy/{REG}/galaxy/api/v3/collections/acme/util");
+
+    // The resolver's candidate list: one page, and only what is held.
+    let resp = get(&app, &format!("{base}/versions/")).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(header(&resp, "X-BatleHub-Listing"), Some("synthesised"));
+    let body = body_of(resp).await;
+    // Order is the held set's, newest first; the resolver sorts for itself, so
+    // what matters is *which* versions are offered.
+    let mut served: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["version"].as_str().unwrap())
+        .collect();
+    served.sort_unstable();
+    assert_eq!(served, ["1.0.0", "1.1.0"]);
+    assert_eq!(body["meta"]["count"], 2);
+    assert!(
+        body["links"]["next"].is_null(),
+        "the one-page invariant is the client's urljoin, not the source of the document"
+    );
+
+    // The collection document, so `get_collection_versions` has an
+    // `updated_at` to compare against.
+    let resp = get(&app, &format!("{base}/")).await;
+    assert_eq!(resp.status(), 200);
+    let body = body_of(resp).await;
+    assert_eq!(body["highest_version"]["version"], "1.1.0");
+    assert!(body["updated_at"].is_string());
+
+    // The version document, with the digest the client checks the bytes
+    // against and a download_url on this instance.
+    let resp = get(&app, &format!("{base}/versions/1.1.0/")).await;
+    assert_eq!(resp.status(), 200);
+    let body = body_of(resp).await;
+    assert_eq!(
+        body["artifact"]["filename"], "acme-util-1.1.0.tar.gz",
+        "`_download_file` names the file it writes from the last path segment"
+    );
+    assert!(body["artifact"]["sha256"].is_string());
+    let url = body["download_url"].as_str().unwrap();
+    assert!(
+        url.ends_with("/api/v3/artifacts/collections/acme-util-1.1.0.tar.gz"),
+        "{url}"
+    );
+
+    // …and the bytes are there, which is the invariant the whole design rests
+    // on: a listed version is served by the next request.
+    let resp = get(
+        &app,
+        &format!("/proxy/{REG}/galaxy/api/v3/artifacts/collections/acme-util-1.1.0.tar.gz"),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+}
+
+/// A version the bundle does not carry is absent from the listing, and the
+/// document that describes it is a `503` rather than a `404`: it exists, it is
+/// simply not here, and a hybrid registry's `404` means *ask upstream* — the
+/// one thing an air-gapped instance must never do.
+#[actix_web::test]
+async fn a_collection_version_the_bundle_does_not_carry_is_not_listed() {
+    let (app, _lab) = holding_lab("galaxy", true, &[("acme.util", "1.0.0", Some("tarball"))]).await;
+    let base = format!("/proxy/{REG}/galaxy/api/v3/collections/acme/util");
+
+    let body = body_of(get(&app, &format!("{base}/versions/")).await).await;
+    let served: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["version"].as_str().unwrap())
+        .collect();
+    assert_eq!(served, ["1.0.0"]);
+
+    let resp = get(&app, &format!("{base}/versions/9.9.9/")).await;
+    assert_eq!(resp.status(), 503, "held elsewhere, not absent");
+}

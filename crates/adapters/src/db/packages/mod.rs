@@ -362,6 +362,14 @@ impl PackageRepository for PgPackageRepository {
         crud::blocked_versions_impl(&self.pool, registry, name).await
     }
 
+    async fn blocked_changed_at(
+        &self,
+        registry: &str,
+        name: &str,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, CoreError> {
+        crud::blocked_changed_at_impl(&self.pool, registry, name).await
+    }
+
     async fn set_status(&self, pkg: &PackageId, status: PackageStatus) -> Result<(), CoreError> {
         crud::set_status_impl(&self.pool, pkg, status).await
     }

@@ -56,6 +56,15 @@ Every request goes through `ProxyService::handle()`, which:
       registry in `perf/config.soak.toml` and at least one arm in
       `perf/k6/soak_arms.js` *(see §11; `crates/web/tests/soak_kind_coverage.rs`
       fails until this is done or the kind is written into `NOT_SOAKED`)*
+- [ ] `crates/web/tests/registry_kind_coverage.rs` — the row naming the live
+      phase and the air-gap claim *(see §11)*
+- [ ] `crates/web/tests/authz_matrix.rs` — every new route classified in
+      `ROUTE_INVENTORY` **and** `WRITE_ROUTE_INVENTORY` *(see §11)*
+- [ ] `crates/adapters/src/sbom/extractor/` — a README parser, if
+      `readme_support()` answers `Archive` *(see §6)*
+- [ ] `crates/core/src/services/listing_synthesis.rs` — an arm per air-gapped
+      document, **if** the kind has an air-gap case *(see §6 — this is the one
+      per-kind dispatch neither the compiler nor a gate will ask you for)*
 
 ---
 
@@ -131,6 +140,25 @@ impl RegistryClient for MyRegistryClient {
 
 `pkg.cache_key()` produces `"{registry}/{name}/{version}"` (no artifact) or `"{registry}/{name}/{version}/{artifact}"` (with artifact). These are the storage keys. Keep the conventions stable — changing them invalidates cached artifacts.
 
+### The checksum field has a shape, and getting it wrong is silent
+
+`PackageMetadata::checksum` is read by `integrity::parse_expected`, which
+accepts an SRI `<algo>-<base64>` token **or a bare hex digest** whose algorithm
+it infers from the length — and nothing else. A `"sha256:<hex>"` value parses as
+neither, so the cache-write verification skips itself and logs
+`advertised checksum could not be parsed; skipping verification` once per
+download. Nothing fails: the artifact is served, and a client that checksums
+independently still installs it. That one `WARN` is the only symptom, which is
+how it survived a full test suite in RFC 0031 §13.
+
+Filter the upstream's value rather than relaying it — a digest this instance
+cannot verify against is better dropped than passed on as unparseable:
+
+```rust
+checksum: upstream_sha256
+    .filter(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit())),
+```
+
 ### Error handling
 
 Return `CoreError::NotFound` for 404s (enables fanout fallback to the next upstream). Return `CoreError::Registry` for all other upstream errors.
@@ -202,6 +230,34 @@ Four of those matches are **exhaustive on purpose**, with no wildcard arm, becau
 | `fetchable_by_version()` | whether *Fetch this version* has a single meaning | the same table's *Fetchable* column |
 
 Each `None` variant carries the **reason** as a `&'static str`, and the endpoint, the config warning and the generated table all quote it — so there is one sentence about why a kind does not do something, not three that can drift apart. Write the reason for a reader who is looking for a gap, not for a compiler.
+
+### Three tiers of per-kind dispatch, and only the first is free
+
+"The compiler will point you at every match" is true of most of them and not of
+all, which is worth knowing before you trust a green build:
+
+1. **The compiler forces these**, and you cannot ship without answering:
+   `as_str`, the four accessors above, `blocking::strip`,
+   `upstream_detail::listing_carries_readmes` and `listing_carries_links`,
+   `handlers/security.rs`'s `native_body`, and both matches in
+   `server/src/builders.rs`.
+2. **A gate forces these** — green build, red test: the five in §11.
+3. **Nothing forces this one.**
+   `crates/core/src/services/listing_synthesis.rs`'s `render_listing` matches
+   on `(RegistryKind, DocumentKind)` *tuples* and ends `_ => return None`. Miss
+   it and an air-gapped registry of your kind refuses every listing — no
+   compile error, no failing test. `registry_kind_coverage.rs` only catches the
+   omission if you claimed `AirGap::Case`; declare `AirGap::Gap` and you are
+   consistent and wrong. RFC 0031 §6.11 asserted the air gap "needs nothing
+   new" and needed three arms, one per document an install reads.
+   `package_names_for` in the same file has the same shape and a benign
+   default, so it only matters when the kind addresses a document by more than
+   its package name.
+
+If your kind has an air-gap case, open `render_listing` and add an arm per
+document the client resolves through. A listing the bundle can compose and does
+not is the *listing* failure RFC 0008-bis exists to name, and it is a different
+bug from a missing artifact.
 
 ---
 
@@ -328,6 +384,34 @@ pub async fn download_myext(
 }
 ```
 
+### If the client's credential is not `Bearer` or `Basic`
+
+No `AuthProvider` reads anything else, so a credential in any other shape is
+**dropped on the floor** — and the symptom is silent in the worst direction: an
+authenticated read arrives anonymous, and a registry closed to anonymous callers
+refuses the very client that is holding its token. Normalise it in
+`crates/web/src/extractors.rs::raw_auth_from_request`, beside the four that are
+there already:
+
+| Client | What it sends | Normalised to |
+| --- | --- | --- |
+| NuGet | `X-NuGet-ApiKey: <key>` | `Authorization: Bearer <key>` |
+| cargo | `Authorization: <token>` — no scheme at all | `Bearer <token>` |
+| `ovsx publish` | `?token=…` in the query string | `Bearer <token>` |
+| `ansible-galaxy` | `Authorization: Token <token>` | `Bearer <token>` |
+
+Scope the rewrite by the registry's **type**, not by the request path. Path
+scoping is wrong in both directions and has been: too narrow, because a client
+sends its token on more routes than the obvious one; too wide, because a greedy
+route from another kind can claim the path you keyed on.
+
+**Read the client's source for the constant — do not assume `Bearer`.**
+`ansible-galaxy` has two token classes twenty lines apart in `galaxy/token.py`
+with different `token_type` values, and RFC 0031 quoted the wrong one; the
+result was that no authenticated galaxy request worked at all, and every layer
+of testing below a real client reproduced the mistake, because every fixture was
+written from the same sentence (RFC 0031 §13).
+
 ### Route ordering
 
 actix-web resolves routes in registration order for patterns with equal specificity. Literal path segments take priority over parameterized ones, so `/proxy/{r}/{p}/{v}/myext` (literal `myext` suffix) routes correctly without conflicting with `/proxy/{r}/{p}/{v}/tarball` or `/proxy/{r}/{p}/{v}/vsix`. Still, **register more specific routes before less specific ones**.
@@ -422,6 +506,29 @@ the bytes on the wire come from one type.
 ---
 
 ## 11. Testing
+
+### The five gates, at a glance
+
+Five checks fail the build for a kind that is missing one, and you meet them
+**one red run at a time** — four of them long after the code compiles. Walking
+the list deliberately is faster than being told:
+
+| Gate | What it demands |
+| --- | --- |
+| `tests/heavy/authz.sh` → `authz_check_kinds_covered` | a hermetic client phase in `AUTHZ_CLIENT_KINDS`, a `live:<kind>` in `AUTHZ_LIVE_KINDS`, or a route-level row in `authz_read_rows` |
+| `crates/web/tests/registry_kind_coverage.rs` | one row naming the `closed_world.sh` phase that drives the kind **and** its air-gap claim. The air-gap column is *scanned* out of `air_gap.rs`, so a case with no row and a row with no case both fail |
+| `crates/web/tests/soak_kind_coverage.rs` | a registry in `perf/config.soak.toml`, a protocol module in `perf/mock-upstream/src/protocols/`, and arms in `perf/k6/soak_arms.js` — or a written reason in `NOT_SOAKED` |
+| `crates/web/tests/authz_matrix.rs` | every new route classified in **both** `ROUTE_INVENTORY` and `WRITE_ROUTE_INVENTORY`. It catches *renames* as well as additions: a changed path fails twice over, once unclassified and once stale |
+| `crates/adapters/src/sbom/extractor/mod.rs` → `readme_support_matches_the_extractors` | a README parser for any kind whose `readme_support()` answers `Archive`, listed in `README_EXTRACTION_TYPES` |
+
+Two of them offer an escape hatch, and both are worth resisting once.
+`authz_matrix`'s failure message hands you paste-able
+`Coverage::NoRow("package read, not yet exercised")` lines for every route —
+but a kind with a local mode can usually carry real `Coverage::Row`s, and the
+routes that most deserve one are the artifact reads whose coordinate the
+handler parses out of a *filename*. `soak_kind_coverage` accepts a
+`NOT_SOAKED` entry, which is right for a kind with no steady state and wrong
+for one that simply has not been wired yet.
 
 ### Unit tests for the adapter
 

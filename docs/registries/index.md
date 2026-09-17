@@ -34,6 +34,7 @@ Five types are **proxy-only** (no private publish model): **GitHub**, **Forgejo*
 | [RubyGems](./rubygems) | `rubygems` | Gems + versions + info API | proxy · local · hybrid | ✅ | `rubygems.org` |
 | [NuGet (.NET)](./nuget) | `nuget` | v3 index + flat + `.nupkg` | proxy · local · hybrid | ✅ | `api.nuget.org` |
 | [Terraform](./terraform) | `terraform` | Providers + modules (v1 API) | proxy · local · hybrid | ✅ | `registry.terraform.io` |
+| [Ansible Galaxy](./galaxy) | `galaxy` | Collections API v3 (versions list, version document, tarball) + the v1 role reads | proxy · local · hybrid | ✅ | `galaxy.ansible.com/api/` |
 
 ### Editor extensions
 
@@ -95,6 +96,7 @@ Legend: **Ver.** version listing · **Src** source archive · **Bin** binary/ext
 | RubyGems | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | — | ✓ |
 | NuGet | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Terraform | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ |
+| Ansible Galaxy | ✓ ⁶ | ✓ | — | ✓ | ✓ | ✓ ⁷ | ✓ | ✓ | — |
 | OpenVSX | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | VS Code Marketplace | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
 | JetBrains Marketplace | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ |
@@ -115,6 +117,10 @@ Legend: **Ver.** version listing · **Src** source archive · **Bin** binary/ext
 > ⁴ **Toolchain age gates** (RFC 0010 §6.7): `nodedist` reads the release date from `index.tab`, so current releases are gated and a de-listed one reaches the gate undated; `sdkman` publishes no dates at all, so the gate is decided entirely by `deny_missing_timestamp`. On both kinds that field is **mandatory** on a `release_age_gate` rule.
 >
 > ⁵ **Warming by platform**: a Node release and an SDKMAN version are one archive *per platform*, so `warm_packages` warms the platforms in `cache.warm_platforms`, defaulting to the server's own. The console's per-version fetch button is refused for the same reason.
+>
+> ⁶ **One page, always** (RFC 0031 §4.4): `ansible-galaxy` resolves a pagination link against the configured API root, and upstream's links are absolute *paths* that replace the whole path — so no continuation BatleHub could emit would be followed back to it. Every listing it serves therefore carries a null `next`, and the adapter walks upstream's pages itself.
+>
+> ⁷ **Galaxy age gates**: every upstream collection version carries `created_at`, so the gate is fully decided in proxy mode. A locally published collection and an air-gapped listing may carry no date, so `deny_missing_timestamp` is **mandatory** on a `release_age_gate` rule here, as it is on the toolchain kinds.
 >
 > Package Explorer upstream ("Not Yet Proxied") search: Go uses pkg.go.dev; PyPI is exact-name lookup; Terraform combines module search with namespace/exact provider lookup. The release proxies (GitHub/Forgejo/GitLab), VS Code Marketplace, Conda, and the path-addressed types have no upstream search API — see the [Package Explorer guide](/use/package-explorer-search#upstream-search).
 
@@ -170,6 +176,7 @@ any of them. The page says which rather than showing a disabled button — see
 | nodedist | a Node release is a set of tarballs and a checksum file; the dist tree carries no prose | — | versions only | no |
 | sdkman | SDKMAN describes a distribution, not a package: no document in the protocol carries prose about a candidate | — | versions only | no |
 | rustup | a toolchain release is a manifest and a set of tarballs; the dist tree carries no prose | — | versions only | no |
+| galaxy | a file inside the artifact | yes | versions only | yes |
 <!-- END readme-coverage -->
 
 Configured per registry with

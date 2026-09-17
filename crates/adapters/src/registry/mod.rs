@@ -55,6 +55,11 @@ pub mod apk;
 #[cfg(feature = "registry-apk")]
 pub use apk::ApkRegistryClient;
 
+#[cfg(feature = "registry-galaxy")]
+pub mod galaxy;
+#[cfg(feature = "registry-galaxy")]
+pub use galaxy::GalaxyRegistryClient;
+
 #[cfg(feature = "registry-npm")]
 pub mod npm;
 #[cfg(feature = "registry-npm")]

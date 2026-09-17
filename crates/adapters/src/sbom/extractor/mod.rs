@@ -6,6 +6,7 @@ mod anchor;
 mod cargo;
 mod composer;
 mod conda;
+mod galaxy;
 mod goproxy;
 mod maven;
 mod npm;
@@ -39,6 +40,7 @@ impl batlehub_core::ports::SbomExtractor for ArchiveSbomExtractor {
             "terraform" => terraform::extract_terraform_manifest(data),
             "conda" => conda::extract_conda_manifest(data),
             "rubygems" => rubygems::extract_rubygems_manifest(data),
+            "galaxy" => galaxy::extract_galaxy_manifest(data),
             // The remaining registry types have no parser at all, so they report
             // an unknown licence rather than an absent one — which is why
             // `license_gate.allow_unknown` defaults to true — and no README.
@@ -82,6 +84,7 @@ mod tests {
             "terraform",
             "conda",
             "rubygems",
+            "galaxy",
         ];
         dispatched.sort_unstable();
         let mut declared = batlehub_core::ports::README_EXTRACTION_TYPES.to_vec();

@@ -225,6 +225,13 @@ pub enum RegistryKind {
     /// — rustup resolves every install through one — so a release can be
     /// blocked rather than merely cached (RFC 0024).
     Rustup,
+    /// Ansible's collections API v3 (`galaxy.ansible.com`) as a registry kind:
+    /// `{namespace}.{name}` is the package, the per-collection versions list is
+    /// the enforcement chokepoint every `ansible-galaxy collection install`
+    /// resolves through, and the `{ns}-{name}-{v}.tar.gz` tarball is the
+    /// artifact. Roles — the v1 API — are served read-only behind
+    /// `roles = proxy | index | off` (RFC 0031).
+    Galaxy,
 }
 
 impl RegistryKind {
@@ -256,6 +263,7 @@ impl RegistryKind {
         Self::Nodedist,
         Self::Sdkman,
         Self::Rustup,
+        Self::Galaxy,
     ];
 
     /// The kebab-case wire string for this kind (matches TOML `type = "..."`).
@@ -286,6 +294,7 @@ impl RegistryKind {
             Self::Nodedist => "nodedist",
             Self::Sdkman => "sdkman",
             Self::Rustup => "rustup",
+            Self::Galaxy => "galaxy",
         }
     }
 
@@ -307,6 +316,13 @@ impl RegistryKind {
             // statement about the *release*, held on `rust` (RFC 0024 §6.2).
             // `rustup`, the installer's own tree, blocks independently.
             Self::Rustup => crate::services::rustup::package_of(package),
+            // A collection's version document is addressed
+            // `community.general@13.4.0` and a role listing
+            // `roles/geerlingguy.docker@4567`, because both need a coordinate
+            // the `(package, document)` cache key has nowhere else to put. A
+            // block is a statement about the collection or the role, so the
+            // address is stripped before the lookup (RFC 0031 §6.2).
+            Self::Galaxy => crate::services::galaxy::package_of(package),
             _ => package,
         }
     }
@@ -516,6 +532,20 @@ impl RegistryKind {
             ),
         ];
 
+        // Three filtered documents (RFC 0031 §4.4). The versions list is the
+        // chokepoint the resolver reads; the collection document names one
+        // version (`highest_version`) and is repaired from the survivors the
+        // way npm's `dist-tags.latest` is; the v1 role versions document is a
+        // second listing for a second namespace. The per-version document is
+        // not here: it describes one version, so the question is whether *its*
+        // coordinate is blocked — a `404` decided at the handler, the way
+        // rustup's channel manifest is.
+        const GALAXY: &[ListingDocument] = &[
+            ListingDocument::filtered("collection versions", &["versions"]),
+            ListingDocument::filtered("the collection document", &["collection"]),
+            ListingDocument::filtered("role versions", &["role-versions"]),
+        ];
+
         match self {
             Self::Npm => NPM,
             Self::Nuget => NUGET,
@@ -534,6 +564,7 @@ impl RegistryKind {
             Self::Nodedist => NODEDIST,
             Self::Sdkman => SDKMAN,
             Self::Rustup => RUSTUP,
+            Self::Galaxy => GALAXY,
             // `generic` and `jetbrains` mirror an arbitrary file tree by path —
             // there is no listing document in the protocol at all, so there is
             // nothing to say beyond that. (JetBrains *plugins* are the separate
@@ -623,6 +654,11 @@ impl RegistryKind {
                 "a toolchain release is a manifest and a set of tarballs; the dist tree carries \
                  no prose",
             ),
+            // `MANIFEST.json`'s `collection_info.readme` names a file inside
+            // the tarball, conventionally `README.md`. The listing documents
+            // carry no prose, so a version this instance holds no bytes for has
+            // none — the honest limit every `Archive` kind has (RFC 0031 §6.1).
+            Self::Galaxy => ReadmeSupport::Archive,
         }
     }
 
@@ -691,6 +727,9 @@ impl RegistryKind {
             // published, one path per line, with the release date in the
             // dated ones and the version in the rest (RFC 0024 §6.1).
             Self::Rustup => UpstreamDetailSupport::Document("versions"),
+            // The collection's own versions list: every entry carries
+            // `created_at`, `version` and `requires_ansible` (RFC 0031 §6.1).
+            Self::Galaxy => UpstreamDetailSupport::Document("versions"),
         }
     }
 
@@ -725,6 +764,9 @@ impl RegistryKind {
             // (the metadata document, not the gem), so the button downloaded the
             // wrong thing and cached it under the name of the right one.
             Self::Npm => FetchSupport::ByVersion(FetchArtifact::Fixed("tarball")),
+            // A collection version is exactly one file (RFC 0031 §4.3), which
+            // is also what makes the kind scannable with no new machinery.
+            Self::Galaxy => FetchSupport::ByVersion(FetchArtifact::Fixed("tarball")),
             Self::Cargo => FetchSupport::ByVersion(FetchArtifact::Fixed("dl")),
             Self::Composer => FetchSupport::ByVersion(FetchArtifact::Fixed("dist")),
             Self::Rubygems => FetchSupport::ByVersion(FetchArtifact::Fixed("gem")),

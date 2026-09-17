@@ -635,6 +635,13 @@ pub(super) fn build_hot_bundle(
             .filter(|r| !r.deny_components.is_empty())
             .map(|r| (r.name.clone(), r.deny_components.clone()))
             .collect(),
+        // galaxy only, and read on every role request for the same reason
+        // (RFC 0031 §6.3).
+        galaxy_roles: cfg
+            .registries
+            .iter()
+            .filter_map(|r| r.roles.map(|roles| (r.name.clone(), roles)))
+            .collect(),
         grant_repo: grant_repo.clone(),
         policy_repo: policy_repo.clone(),
         signing_keys: signing_keys.clone(),

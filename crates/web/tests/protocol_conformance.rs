@@ -802,6 +802,90 @@ const APK: &[Conformance] = &[
     ),
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Ansible Galaxy (RFC 0031)
+//
+// Read from `ansible-core` devel: `lib/ansible/galaxy/api.py` (`g_connect`,
+// `get_collection_versions`, `get_collection_version_metadata`,
+// `publish_collection`, `wait_import_task`, `fetch_role_related`),
+// `lib/ansible/galaxy/collection/concrete_artifact_manager.py`
+// (`_download_file`) and `lib/ansible/galaxy/role.py` (`install`).
+//
+// Every v3 path ends in a slash, and that is load-bearing: the client builds
+// them by `urljoin`ing against the configured api_server, and a redirect to add
+// a slash would be a second request it does not expect.
+//
+// Three facts here were measured against ansible-core 2.19.3 *after* the RFC
+// recorded them differently, and each one was a defect until it was:
+// the credential arrives as `Authorization: Token …` and not `Bearer`
+// (`GalaxyToken.token_type`); the publish body's file part is base64 under
+// `Content-Transfer-Encoding` (`prepare_multipart`'s default encoder); and the
+// import task is polled at `imports/collections/{bare id}/`, a path the client
+// builds rather than one the server hands it.
+// ─────────────────────────────────────────────────────────────────────────────
+const GALAXY: &[Conformance] = &[
+    Conformance::get(
+        "/proxy/galaxy/galaxy/api/",
+        "/proxy/{registry}/galaxy/api/",
+        "galaxy/api.py, `g_connect` — read once per run before any action, and the action is \
+         refused when its API version is absent",
+    )
+    .must_find("available_versions"),
+    Conformance::get(
+        "/proxy/galaxy/galaxy/api/v3/collections/acme/util/",
+        "/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/",
+        "galaxy/api.py, `get_collection_versions` — re-read uncached on every resolve for its \
+         updated_at, which invalidates the client's cached versions list",
+    )
+    .must_find("highest_version"),
+    Conformance::get(
+        "/proxy/galaxy/galaxy/api/v3/collections/acme/util/versions/",
+        "/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/",
+        "galaxy/api.py, `get_collection_versions` — the resolver's candidate list, asked for \
+         every direct requirement and every dependency",
+    )
+    .must_find("1.1.0"),
+    Conformance::get(
+        "/proxy/galaxy/galaxy/api/v3/collections/acme/util/versions/1.0.0/",
+        "/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/{version}/",
+        "galaxy/api.py, `get_collection_version_metadata` — download_url, artifact.sha256 and \
+         the version's dependencies",
+    )
+    .must_find("download_url"),
+    Conformance::get(
+        "/proxy/galaxy/galaxy/api/v3/artifacts/collections/acme-util-1.0.0.tar.gz",
+        "/proxy/{registry}/galaxy/api/v3/artifacts/collections/{filename}",
+        "collection/concrete_artifact_manager.py, `_download_file` — the served path has to end \
+         in the upstream filename, which is how the client names the file it writes",
+    ),
+    Conformance::post(
+        "/proxy/galaxy/galaxy/api/v3/artifacts/collections/",
+        "/proxy/{registry}/galaxy/api/v3/artifacts/collections/",
+        "galaxy/api.py, `publish_collection` — multipart sha256 + file",
+    ),
+    Conformance::get(
+        "/proxy/galaxy/galaxy/api/v3/imports/collections/acme-util-1.0.0/",
+        "/proxy/{registry}/galaxy/api/v3/imports/collections/{task}/",
+        "galaxy/api.py, `wait_import_task` — `_urljoin(api_server, v3, 'imports/collections', \
+         task_id, '/')`. The client builds this path itself from the *bare id* the publish \
+         returned; it does not follow the value as a URL, which is what RFC 0031 §4.4 assumed \
+         (measured, ansible-core 2.19.3)",
+    ),
+    Conformance::get(
+        "/proxy/galaxy/galaxy/api/v1/roles/?owner__username=geerlingguy&name=docker",
+        "/proxy/{registry}/galaxy/api/v1/roles/",
+        "galaxy/api.py, `lookup_role_by_name` — takes results[0] for its numeric id",
+    )
+    .must_find("4567"),
+    Conformance::get(
+        "/proxy/galaxy/galaxy/api/v1/roles/4567/versions/?page_size=50",
+        "/proxy/{registry}/galaxy/api/v1/roles/{id}/versions/",
+        "galaxy/api.py, `fetch_role_related` — with the page_size the client always sends; \
+         Role.install takes the matching entry's download_url",
+    )
+    .must_find("1.1.0"),
+];
+
 const SUITES: &[(&str, &[Conformance])] = &[
     ("npm", NPM),
     ("rubygems", RUBYGEMS),
@@ -812,6 +896,7 @@ const SUITES: &[(&str, &[Conformance])] = &[
     ("nodedist", NODEDIST),
     ("sdkman", SDKMAN),
     ("rustup", RUSTUP),
+    ("galaxy", GALAXY),
     ("apk", APK),
     ("others", OTHERS),
     ("long-tail", LONG_TAIL),

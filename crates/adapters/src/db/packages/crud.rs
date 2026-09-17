@@ -120,6 +120,31 @@ pub(super) async fn blocked_versions_impl(
     Ok(rows.into_iter().map(|r| r.get("package_version")).collect())
 }
 
+/// The newest `blocked_at` among one package's block rows (RFC 0031 §4.4).
+///
+/// A single indexed aggregate rather than the default's listing query, for the
+/// same reason [`blocked_versions_impl`] overrides its own default.
+pub(super) async fn blocked_changed_at_impl(
+    pool: &PgPool,
+    registry: &str,
+    name: &str,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, CoreError> {
+    let row = sqlx::query(
+        r#"
+        SELECT MAX(blocked_at) AS newest
+        FROM package_statuses
+        WHERE registry = $1 AND package_name = $2 AND status = 'blocked'
+        "#,
+    )
+    .bind(registry)
+    .bind(name)
+    .fetch_one(pool)
+    .await
+    .db_err()?;
+
+    Ok(row.try_get("newest").ok().flatten())
+}
+
 pub(super) async fn get_status_impl(
     pool: &PgPool,
     pkg: &PackageId,

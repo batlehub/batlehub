@@ -779,3 +779,30 @@ admin = ["*"]
 
 [registries.grants]
 "user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+# ── Ansible Galaxy ───────────────────────────────────────────────────────────
+#
+# A local registry, because this is the one boundary a real `ansible-galaxy`
+# can actually be *shown*: it sends `Authorization: Bearer` on **every** call
+# once a `token` is configured, reads included — unlike `dotnet restore`, which
+# only offers a credential in answer to a `401` challenge this server does not
+# send, and unlike `ovsx`, which sends nothing on a read. So all three arms are
+# attributable through the client itself: an anonymous install is refused, a
+# reader's install succeeds, and a caller holding no read verb is refused.
+#
+# `roles = "off"`: there is no publish protocol for roles, so the v1 surface on
+# a local registry could only ever be empty (RFC 0031 §4.5).
+[[registries]]
+type = "galaxy"
+name = "authz-galaxy-${HEAVY_RUN}"
+mode = "local"
+roles = "off"
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+"user:authz-lister" = ["releases:list"]

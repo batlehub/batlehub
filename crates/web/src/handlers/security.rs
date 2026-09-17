@@ -106,6 +106,17 @@ pub fn native_body(kind: RegistryKind, message: &str) -> (&'static str, String) 
             serde_json::json!({ "status": "error", "message": message }).to_string(),
         ),
         RegistryKind::Terraform => (JSON, serde_json::json!({ "errors": [message] }).to_string()),
+        // `GalaxyError` reads `errors[]` and renders each entry as
+        // "(HTTP Code: {status}, Message: {title} Code: {code})", so the text
+        // an operator sees is the `title` — which is why the message goes
+        // there as well as in `detail` (RFC 0031 §4.4).
+        RegistryKind::Galaxy => (
+            JSON,
+            serde_json::json!({
+                "errors": [{ "code": "error", "title": message, "detail": message }]
+            })
+            .to_string(),
+        ),
         RegistryKind::Github
         | RegistryKind::Gitlab
         | RegistryKind::Forgejo

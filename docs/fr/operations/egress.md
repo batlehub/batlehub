@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/egress.md
-sourceHash: c8f6377a4e7a0d44
+sourceHash: 2a08303d510b9fac
 ---
 
 # Ce qui sort de cette instance
@@ -39,6 +39,18 @@ prérequis de ce type. La liste est *observée, pas exhaustive* : le courtier pe
 ajouter un hôte sans le dire à personne, ce qui est en soi un argument pour
 préchauffer avant une coupure réseau
 ([RFC 0010](/rfc/0010-toolchain-managers) §9).
+
+**Un second type atteint un hôte que vous n'avez pas configuré.** Un registre
+`galaxy` avec `roles = "proxy"` — la valeur par défaut — réécrit le
+`download_url` de chaque version de rôle puis récupère lui-même cette archive,
+et chaque rôle publié par galaxy.ansible.com sert ses octets depuis
+`github.com`. La récupération passe par le garde-fou SSRF et ne vise que
+`github.com` ou l'amont du registre lui-même — une liste d'autorisation fixe et
+non configurable — mais la sortie réseau vers cet hôte est un prérequis de la
+valeur par défaut. `roles = "index"` conserve les listings de rôles et n'émet
+aucune requête de ce genre ; `roles = "off"` supprime entièrement la surface v1
+([RFC 0031](/rfc/0031-ansible-galaxy) §4.4). Les collections ne sont pas
+concernées : leurs tarballs viennent de l'amont du registre.
 
 ## Un paquet `apk` est téléchargé {#an-apk-package-is-downloaded}
 

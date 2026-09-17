@@ -50,6 +50,7 @@ pub mod composer;
 pub mod conda;
 pub mod conda_stream;
 pub mod forge;
+pub mod galaxy;
 pub mod goproxy;
 pub mod maven;
 pub mod nodedist;
@@ -504,6 +505,28 @@ fn strip_rustup(
     }
 }
 
+/// Ansible Galaxy's three listing documents (RFC 0031 §6.2).
+///
+/// The versions list and the v1 role versions list filter here. The
+/// **collection document** does not: it names one version
+/// (`highest_version`) and carries no list to pick a replacement from, so the
+/// repair needs the versions list as well — the position Go's `@latest` and a
+/// RubyGems gem document are in, and it is done in the handler that holds
+/// both, by `galaxy::repair_collection`.
+fn strip_galaxy(
+    ctx: &ListingContext<'_>,
+    doc: &mut VersionDocument,
+    blocked: &BlockedVersions,
+) -> Vec<String> {
+    match ctx.document {
+        DocumentKind::COLLECTION => Vec::new(),
+        DocumentKind::ROLE_VERSIONS => {
+            with_json(doc, |json| galaxy::strip_role_versions(json, blocked))
+        }
+        _ => with_json(doc, |json| galaxy::strip_versions(json, blocked)),
+    }
+}
+
 /// The protocol switch behind [`dispatch`], without the logging.
 ///
 /// `None` means **this kind has no listing filter** — a signed deb index, a
@@ -563,6 +586,8 @@ fn strip(
         RegistryKind::Sdkman => Some(strip_sdkman(ctx, doc, blocked)),
 
         RegistryKind::Rustup => Some(strip_rustup(ctx, doc, blocked)),
+
+        RegistryKind::Galaxy => Some(strip_galaxy(ctx, doc, blocked)),
 
         // No listing document, one that must not be rewritten, or one filtered
         // at a handler chokepoint instead (see `FILTERED_ELSEWHERE`). The
@@ -1295,6 +1320,10 @@ mod tests {
             DocumentKind::SDKMAN_DEFAULT,
             DocumentKind::SDKMAN_VERSIONS_LIST,
             DocumentKind::RELAYED,
+            DocumentKind::COLLECTION,
+            DocumentKind::VERSION_DETAIL,
+            DocumentKind::ROLE_VERSIONS,
+            DocumentKind::ROLE,
         ];
         KNOWN.iter().find(|k| k.as_str() == name).copied()
     }

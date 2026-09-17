@@ -251,6 +251,26 @@ pub struct RegistryConfig {
     /// the reason `broker_url` is (RFC 0024 §4.1, §4.5).
     #[serde(default)]
     pub deny_components: Vec<String>,
+    /// galaxy only: how much of Ansible Galaxy's **v1 role** surface this
+    /// registry serves (RFC 0031 §4.4).
+    ///
+    /// - `proxy` (the default when absent) — the v1 read endpoints are served,
+    ///   each role version's `download_url` is rewritten to this instance, and
+    ///   the archive is fetched server-side from the host it names, through the
+    ///   SSRF guard and only from the fixed role-download allowlist.
+    /// - `index` — the same endpoints with `download_url` relayed. Role
+    ///   metadata is proxied; role bytes are not, so the server makes no egress
+    ///   to `github.com`.
+    /// - `off` — the v1 endpoints answer `404` **and** `v1` is absent from the
+    ///   discovery document, so `ansible-galaxy role install` fails on the
+    ///   client's own *"requires API versions 'v1'"* rather than on a `404` an
+    ///   operator reads as a proxy fault.
+    ///
+    /// Rejected on any other type, for the reason `broker_url` and
+    /// `deny_components` are: a silently ignored option is a misconfiguration
+    /// nobody sees.
+    #[serde(default)]
+    pub roles: Option<GalaxyRoleMode>,
     #[serde(default)]
     pub cache: CachePolicy,
     #[serde(default)]
@@ -1205,3 +1225,7 @@ impl Default for CachePolicy {
         }
     }
 }
+
+/// Re-exported from `batlehub_core`: the value lives on `HotConfig`, which is
+/// core's, so the type has to be too (RFC 0031 §6.3).
+pub use batlehub_core::services::galaxy::GalaxyRoleMode;

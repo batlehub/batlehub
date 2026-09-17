@@ -10057,6 +10057,107 @@
         ]
       }
     },
+    "/proxy/{registry}/apk/upload": {
+      "put": {
+        "tags": [
+          "proxy/apk"
+        ],
+        "summary": "`PUT /proxy/{registry}/apk/upload`",
+        "operationId": "apk_publish",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Package published; APKINDEX regenerated and signed",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid package"
+          },
+          "403": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Unknown or non-local registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/apk/{path}": {
+      "get": {
+        "tags": [
+          "proxy/apk"
+        ],
+        "summary": "Serve a file from an Alpine repository (`/proxy/{registry}/apk/{path}`).",
+        "operationId": "apk_get",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "description": "Repository file path (e.g. v3.22/main/x86_64/APKINDEX.tar.gz, v3.22/main/x86_64/busybox-1.37.0-r20.apk)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Repository file, or the signing key under keys/{name}",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed .apk file name"
+          },
+          "403": {
+            "description": "Access denied, or the version is blocked"
+          },
+          "404": {
+            "description": "Not found or unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/proxy/{registry}/attachments/{uuid}": {
       "get": {
         "tags": [
@@ -10708,6 +10809,598 @@
           },
           "404": {
             "description": "Unknown registry or artifact"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/galaxy/api/": {
+      "get": {
+        "tags": [
+          "proxy/galaxy"
+        ],
+        "summary": "The API versions this registry serves — read by `g_connect` before any action, and `v1` is absent when `roles = \"off\"`.",
+        "description": "`GET /proxy/{registry}/galaxy/api/`",
+        "operationId": "galaxy_discovery",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The API versions this registry serves",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GalaxyDiscovery"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/galaxy/api/v1/roles/": {
+      "get": {
+        "tags": [
+          "proxy/galaxy"
+        ],
+        "summary": "Look a role up by owner and name — what `lookup_role_by_name` reads for the numeric id every later v1 request uses.",
+        "description": "`GET …/api/v1/roles/?owner__username={user}&name={role}`\n\nRelayed. It names no version, so it carries no filtering obligation — a role\nwith one blocked version still exists.",
+        "operationId": "galaxy_role_search",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "owner__username",
+            "in": "query",
+            "description": "The role's GitHub user",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "The role's name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The role, if it exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a role name"
+          },
+          "404": {
+            "description": "Unknown registry, or roles = \"off\""
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/galaxy/api/v1/roles/{id}/download/{filename}": {
+      "get": {
+        "tags": [
+          "proxy/galaxy"
+        ],
+        "summary": "A role archive, fetched server-side from the host its listing named — served only under `roles = \"proxy\"`.",
+        "description": "`GET …/api/v1/roles/{id}/download/{filename}`\n\nOnly under `roles = \"proxy\"`. The archive is fetched server-side, through\nthe SSRF guard and only from the fixed role-download allowlist — the\nregistry's own upstream plus `github.com`.",
+        "operationId": "galaxy_role_artifact",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The numeric role id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "path",
+            "description": "{version}.tar.gz",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The role archive",
+            "content": {
+              "application/gzip": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a role id or archive name"
+          },
+          "403": {
+            "description": "Blocked version or access denied"
+          },
+          "404": {
+            "description": "Unknown role or registry, or roles is not \"proxy\""
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/galaxy/api/v1/roles/{id}/versions/": {
+      "get": {
+        "tags": [
+          "proxy/galaxy"
+        ],
+        "summary": "Every allowed version of a role, as one page, each `download_url` pointed here under `roles = \"proxy\"`.",
+        "description": "`GET …/api/v1/roles/{id}/versions/`\n\nFiltered, one page, and each surviving entry's `download_url` rewritten to\nthis instance under `roles = \"proxy\"`.",
+        "operationId": "galaxy_role_versions",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The numeric role id from the search above",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every allowed version of the role, as one page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a role id"
+          },
+          "404": {
+            "description": "Unknown role or registry, or roles = \"off\""
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/galaxy/api/v3/artifacts/collections/": {
+      "post": {
+        "tags": [
+          "proxy/galaxy"
+        ],
+        "summary": "Publish a collection — synchronous, so the import task it answers with is already finished.",
+        "description": "`POST …/api/v3/artifacts/collections/`",
+        "operationId": "galaxy_publish",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "multipart/form-data with `sha256` and `file`",
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Stored; the task named is already finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GalaxyImportTask"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a collection tarball, or the sha256 field disagrees with the bytes"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry, or mode = proxy"
+          },
+          "409": {
+            "description": "That version is already published"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/galaxy/api/v3/artifacts/collections/{filename}": {
+      "get": {
+        "tags": [
+          "proxy/galaxy"
+        ],
+        "summary": "The collection tarball, byte-exact — the client hashes it against `artifact.sha256` from the version document.",
+        "description": "`GET …/api/v3/artifacts/collections/{filename}`\n\nThe served path ends in the upstream filename because `_download_file`\nderives the name it writes by slicing `.tar.gz` off the last path segment.",
+        "operationId": "galaxy_artifact",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "path",
+            "description": "{namespace}-{name}-{version}.tar.gz",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The collection tarball, byte-exact",
+            "content": {
+              "application/gzip": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a collection artifact name"
+          },
+          "403": {
+            "description": "Blocked version or access denied"
+          },
+          "404": {
+            "description": "Unknown version or registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/": {
+      "get": {
+        "tags": [
+          "proxy/galaxy"
+        ],
+        "summary": "The collection document, with `highest_version` moved off a blocked version and `updated_at` bumped past the block.",
+        "description": "`GET …/api/v3/collections/{namespace}/{name}/`",
+        "operationId": "galaxy_collection",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "namespace",
+            "in": "path",
+            "description": "Collection namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The collection document, with highest_version repaired and updated_at bumped past any block",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a collection name"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown collection or registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/": {
+      "get": {
+        "tags": [
+          "proxy/galaxy"
+        ],
+        "summary": "Every allowed version of a collection, as one page — the chokepoint the resolver picks from.",
+        "description": "`GET …/api/v3/collections/{namespace}/{name}/versions/`\n\nThe chokepoint. One page, always: `links` is entirely null and `meta.count`\ndescribes what is served, because no continuation this instance could emit\nsurvives the client's own `urljoin` under a path prefix.",
+        "operationId": "galaxy_versions",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "namespace",
+            "in": "path",
+            "description": "Collection namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every allowed version of the collection, as one page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a collection name"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown collection or registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/{version}/": {
+      "get": {
+        "tags": [
+          "proxy/galaxy"
+        ],
+        "summary": "One version's document — `download_url` pointed here, `artifact.sha256` relayed untouched, `404` when the version is blocked.",
+        "description": "`GET …/api/v3/collections/{namespace}/{name}/versions/{version}/`",
+        "operationId": "galaxy_version_detail",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "namespace",
+            "in": "path",
+            "description": "Collection namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "Collection version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The version document, with download_url pointed at this instance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a collection coordinate"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Blocked, unknown version, or unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/galaxy/api/v3/imports/tasks/{task}/": {
+      "get": {
+        "tags": [
+          "proxy/galaxy"
+        ],
+        "summary": "The import task a publish returned — always `completed`, because the work is done before the task exists.",
+        "description": "`GET …/api/v3/imports/tasks/{task}/`\n\nAlways `completed`: the publish that named this task finished before it\nanswered. A task id nobody published under is still `completed` rather than\na `404`, because a `404` is what the client reads as *\"not started yet\"* and\nit would poll forever.",
+        "operationId": "galaxy_import_task",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "task",
+            "in": "path",
+            "description": "The task id the publish returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The import task, already finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GalaxyTaskStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown registry, or mode = proxy"
           }
         },
         "security": [
@@ -12368,8 +13061,8 @@
           {
             "name": "action",
             "in": "query",
-            "description": "Only 'download' is supported",
-            "required": true,
+            "description": "Only 'download' is supported; absent means download, which is what the IDE sends",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -17757,6 +18450,58 @@
         ]
       }
     },
+    "/proxy/{registry}/{platform}/repodata_shards.msgpack.zst": {
+      "get": {
+        "tags": [
+          "proxy/conda"
+        ],
+        "summary": "`repodata_shards.msgpack.zst` — CEP-16's index of shards.",
+        "operationId": "conda_repodata_shards",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "path",
+            "description": "Platform string, e.g. linux-64 or noarch",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The shard index, as the channel published it",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "The channel publishes no shard index, or this registry cannot serve one"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/proxy/{registry}/{platform}/{filename}": {
       "get": {
         "tags": [
@@ -17806,6 +18551,67 @@
           },
           "404": {
             "description": "Package not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/{platform}/{shard}.msgpack.zst": {
+      "get": {
+        "tags": [
+          "proxy/conda"
+        ],
+        "summary": "One shard — `{sha256}.msgpack.zst`, one package's records.",
+        "operationId": "conda_shard",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "path",
+            "description": "Platform string",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "shard",
+            "in": "path",
+            "description": "The shard's sha256, as the index named it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Shard bytes",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "No such shard, or this registry serves no shards"
           }
         },
         "security": [
@@ -21307,6 +22113,65 @@
             "items": {
               "$ref": "#/components/schemas/ForgeTagDto"
             }
+          }
+        }
+      },
+      "GalaxyDiscovery": {
+        "type": "object",
+        "description": "`GET api/` — the discovery document `g_connect` reads before any action.",
+        "required": [
+          "available_versions",
+          "description"
+        ],
+        "properties": {
+          "available_versions": {
+            "type": "object",
+            "description": "API version → the path segment it is served under, relative to this\nURL. `v1` is absent when `roles = \"off\"`."
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      },
+      "GalaxyImportTask": {
+        "type": "object",
+        "description": "The publish response: one absolute path, which the client `urljoin`s against\nwhatever api_server the operator configured.\n\nAbsolute-path rather than relative because a relative value resolves\ncorrectly only when the configured URL ends in a slash — the operator's typo\nto make — while an absolute path is right under both routings and both\nspellings.",
+        "required": [
+          "task"
+        ],
+        "properties": {
+          "task": {
+            "type": "string"
+          }
+        }
+      },
+      "GalaxyTaskStatus": {
+        "type": "object",
+        "description": "The import-task poll. `finished_at` set is what `wait_import_task` waits\nfor.",
+        "required": [
+          "state",
+          "messages"
+        ],
+        "properties": {
+          "error": {},
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "messages": {
+            "type": "array",
+            "items": {}
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
           }
         }
       },
@@ -25538,6 +26403,10 @@
       "description": "Arch Linux pacman repository — proxy + local hosting (.pkg.tar.zst, repo DB generation, Ed25519 OpenPGP signing)"
     },
     {
+      "name": "proxy/apk",
+      "description": "Alpine apk repository — proxy with the index relayed byte-exact and a real coordinate on every .apk, plus local hosting with an RSA-signed APKINDEX"
+    },
+    {
       "name": "proxy/npm",
       "description": "npm proxy — packuments, version metadata, tarballs"
     },
@@ -25584,6 +26453,10 @@
     {
       "name": "proxy/nodedist",
       "description": "Node distributions (nvm, fnm, n, mise) — the nodejs.org/dist tree as a typed registry: filtered index.tab/index.json listings, per-release tarballs and SHASUMS256.txt byte-exact"
+    },
+    {
+      "name": "proxy/galaxy",
+      "description": "Ansible Galaxy — the collections API v3 as a registry kind: the versions list filtered and served as one page, download_url rewritten to this instance, collection publish with its import-task poll, and the v1 role surface behind `roles`"
     },
     {
       "name": "proxy/rustup",

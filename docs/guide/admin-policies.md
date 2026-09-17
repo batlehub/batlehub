@@ -295,6 +295,9 @@ protocol has one and editing it is safe:
 | sdkman | the rendered `versions/list` table (`sdk list`) | yes |
 | rustup | `manifests.txt` | yes |
 | rustup | channel manifests, their `.sha256` and `channel-rust-stable-date.txt` | yes |
+| galaxy | collection versions | yes |
+| galaxy | the collection document | yes |
+| galaxy | role versions | yes |
 <!-- END listing-coverage -->
 
 Filtering is invisible when it works, which is exactly when you want evidence

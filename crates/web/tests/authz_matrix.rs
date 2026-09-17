@@ -401,6 +401,24 @@ fn go_list_meta() -> serde_json::Value {
 
 fn matrix() -> Vec<Row> {
     vec![
+        // ── galaxy (RFC 0031) ────────────────────────────────────────────────
+        // The package is `{namespace}.{name}` and the URL spells it
+        // `{namespace}/{name}`, so every row carries the coordinate explicitly.
+        // Four routes, and the fourth is the one worth the others: the tarball
+        // is addressed by *filename*, and the handler parses the coordinate back
+        // out of it — a read that reached storage on the filename alone would be
+        // the NuGet-download shape of survey finding 6.
+        Row::new("galaxy", "/proxy/reg/galaxy/api/v3/collections/acme/util/versions/")
+            .coord("acme.util", "9.8.7"),
+        Row::new("galaxy", "/proxy/reg/galaxy/api/v3/collections/acme/util/")
+            .coord("acme.util", "9.8.7"),
+        Row::new("galaxy", "/proxy/reg/galaxy/api/v3/collections/acme/util/versions/9.8.7/")
+            .coord("acme.util", "9.8.7"),
+        Row::new(
+            "galaxy",
+            "/proxy/reg/galaxy/api/v3/artifacts/collections/acme-util-9.8.7.tar.gz",
+        )
+        .coord("acme.util", "9.8.7"),
         // ── cargo ────────────────────────────────────────────────────────────
         Row::new("cargo", "/proxy/reg/pkg/9.8.7/download").meta(cargo_index_meta),
         // ── npm ──────────────────────────────────────────────────────────────
@@ -990,6 +1008,15 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/-/v1/search", Coverage::Row),
     ("/proxy/{registry}/-/whoami", Coverage::NoPackage("echoes the caller's own identity, never a package")),
     ("/proxy/{registry}/.well-known/terraform.json", Coverage::NoPackage("Terraform service discovery; static endpoint map")),
+    ("/proxy/{registry}/galaxy/api/", Coverage::NoPackage("the discovery document: the API versions this registry serves, composed here and naming no package")),
+    ("/proxy/{registry}/galaxy/api/v1/roles/", Coverage::NoRow("the v1 role surface has no local mode — there is no publish protocol for roles — so this local-registry matrix cannot seed one. `tests/heavy/authz.sh`'s galaxy phase drives the collections boundary with a real client, and `closed_world.sh`'s ansible phase drives the role reads")),
+    ("/proxy/{registry}/galaxy/api/v1/roles/{id}/download/{filename}", Coverage::NoRow("no local mode for roles; see the note on `v1/roles/` above")),
+    ("/proxy/{registry}/galaxy/api/v1/roles/{id}/versions/", Coverage::NoRow("no local mode for roles; see the note on `v1/roles/` above")),
+    ("/proxy/{registry}/galaxy/api/v3/artifacts/collections/{filename}", Coverage::Row),
+    ("/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/", Coverage::Row),
+    ("/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/", Coverage::Row),
+    ("/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/{version}/", Coverage::Row),
+    ("/proxy/{registry}/galaxy/api/v3/imports/collections/{task}/", Coverage::NoPackage("the import-task poll: a state document for a publish that has already finished, naming no package and carrying no content. The route the *client* builds — `_urljoin(api_server, v3, \"imports/collections\", task_id, \"/\")` — not the one RFC 0031 §4.4 specified")),
     ("/proxy/{registry}/api/-/search", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/api/-/public-key/{key_id}", Coverage::NoRow("anonymous by design (RFC 0020 §4.2): serves the registry's own VSIX signing public key, which names a key id and no coordinate — no package is read, and a public key is public. `vsx_signing.rs` asserts the anonymous `200` and the `404` for any other id")),
     ("/proxy/{registry}/api/packages/{path}", Coverage::NoRow("package read, not yet exercised")),
@@ -1680,6 +1707,59 @@ fn nuget_publish_body() -> (Vec<u8>, &'static str) {
     (body, "multipart/form-data; boundary=matrixboundary")
 }
 
+/// The `ansible-galaxy collection publish` envelope: `sha256` and `file`.
+///
+/// A real collection tarball, because the publish handler reads `MANIFEST.json`
+/// out of it *before* it reaches the gate — a body the reader refuses would be
+/// a `400`, and this row would then assert that a malformed upload is refused
+/// rather than that an unauthorised caller is.
+fn galaxy_publish_body() -> (Vec<u8>, &'static str) {
+    use std::io::Write as _;
+
+    let manifest = json!({
+        "collection_info": {
+            "namespace": "acme", "name": "util", "version": "9.8.7",
+            "readme": "README.md",
+        },
+        "format": 1,
+    })
+    .to_string();
+    let mut tar = tar::Builder::new(Vec::new());
+    for (path, bytes) in [
+        ("MANIFEST.json", manifest.as_bytes()),
+        ("FILES.json", b"{\"files\":[]}".as_slice()),
+    ] {
+        let mut header = tar::Header::new_gnu();
+        header.set_path(path).expect("tar path");
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append(&header, bytes).expect("tar entry");
+    }
+    let raw = tar.into_inner().expect("tar");
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gz.write_all(&raw).expect("gzip");
+    let tarball = gz.finish().expect("gzip finish");
+
+    let digest = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(&tarball);
+        hex::encode(h.finalize())
+    };
+
+    let boundary = "matrixboundary";
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"sha256\"\r\n\r\n{digest}\r\n\
+         --{boundary}\r\nContent-Disposition: form-data; name=\"file\"; \
+         filename=\"acme-util-9.8.7.tar.gz\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(&tarball);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    (body, "multipart/form-data; boundary=matrixboundary")
+}
+
 /// A minimal `.gem`: a tar holding a gzipped `metadata.gz`.
 fn gem_publish_body() -> (Vec<u8>, &'static str) {
     (make_gem("pkg", "9.8.7"), "application/octet-stream")
@@ -1793,6 +1873,17 @@ fn write_matrix() -> Vec<WriteRow> {
     vec![
         // ── npm ──────────────────────────────────────────────────────────────
         WriteRow::new("npm", Verb::Put, "/proxy/reg/pkg", npm_publish_body),
+        // ── galaxy ───────────────────────────────────────────────────────────
+        WriteRow::new(
+            "galaxy",
+            Verb::Post,
+            "/proxy/reg/galaxy/api/v3/artifacts/collections/",
+            galaxy_publish_body,
+        )
+        // The coordinate is inside `MANIFEST.json`, not in the URL — the state
+        // probe has to look under the name the tarball actually declares, or
+        // the positive control sees no change and reports the route broken.
+        .coord("acme.util", "9.8.7"),
         // ── cargo ────────────────────────────────────────────────────────────
         WriteRow::new(
             "cargo",
@@ -2178,6 +2269,8 @@ const WRITE_ROUTE_INVENTORY: &[(&str, &str, WriteCoverage)] = &[
     ("POST", "/proxy/{registry}/-/npm/v1/audit/bulk", WriteCoverage::NoWrite("npm audit, bulk form; same shape")),
     ("POST", "/proxy/{registry}/-/npm/v1/security/audits/quick", WriteCoverage::NoWrite("npm audit under its current path; same shape")),
     ("POST", "/proxy/{registry}/-/npm/v1/security/advisories/bulk", WriteCoverage::NoWrite("npm advisories, bulk form; same shape")),
+    // ── galaxy ───────────────────────────────────────────────────────────────
+    ("POST", "/proxy/{registry}/galaxy/api/v3/artifacts/collections/", WriteCoverage::Row),
     // ── cargo ────────────────────────────────────────────────────────────────
     ("PUT", "/proxy/{registry}/api/v1/crates/new", WriteCoverage::Row),
     ("DELETE", "/proxy/{registry}/api/v1/crates/{name}/{version}/yank", WriteCoverage::Row),

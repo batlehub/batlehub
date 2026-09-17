@@ -247,6 +247,13 @@ fn default_upstreams(kind: RegistryKind, reg: &RegistryConfig) -> Vec<String> {
         // is why config validation refuses an upstream ending in `/dist`
         // (RFC 0024 §4.1).
         RegistryKind::Rustup => resolve_urls(&reg.upstreams, "https://static.rust-lang.org"),
+        // The API *root*, the thing that answers `available_versions`. An
+        // operator who writes the host without `/api/` gets the same registry:
+        // the client probes for it the way `g_connect` does (RFC 0031 §4.1).
+        RegistryKind::Galaxy => resolve_urls(
+            &reg.upstreams,
+            batlehub_adapters::registry::galaxy::DEFAULT_API_BASE,
+        ),
     }
 }
 
@@ -265,6 +272,9 @@ fn make_one(
     // the age gate's date source follows the registry's own `metadata_ttl`
     // rather than a constant of its own (RFC 0026 §6.2).
     metadata_ttl: Option<Duration>,
+    // galaxy only: how much of the v1 role surface this registry serves, and
+    // whether it fetches role bytes itself (RFC 0031 §4.4).
+    roles: batlehub_config::schema::GalaxyRoleMode,
 ) -> anyhow::Result<Arc<dyn batlehub_core::ports::RegistryClient>> {
     // The path-addressed kinds all share one client, so the `path_allow`
     // allowlist is applied uniformly to them. Config validation has already
@@ -337,6 +347,10 @@ fn make_one(
         RegistryKind::Nodedist => Arc::new(NodeDistRegistryClient::new(url, opts)?),
         RegistryKind::Sdkman => Arc::new(SdkmanRegistryClient::new(url, broker_url, opts)?),
         RegistryKind::Rustup => Arc::new(RustupRegistryClient::new(url, opts)?),
+        RegistryKind::Galaxy => Arc::new(
+            batlehub_adapters::registry::GalaxyRegistryClient::new(url, opts)?
+                .with_roles(roles.serves_v1(), roles.proxies_bytes()),
+        ),
     };
     Ok(client)
 }
@@ -391,6 +405,7 @@ pub(super) fn build_registry_client(
                 &reg.name,
                 budget,
                 Some(Duration::from_secs(reg.cache.metadata_ttl_secs)),
+                reg.roles.unwrap_or_default(),
             ),
         )
     } else {
@@ -407,6 +422,7 @@ pub(super) fn build_registry_client(
                     &reg.name,
                     budget,
                     Some(Duration::from_secs(reg.cache.metadata_ttl_secs)),
+                    reg.roles.unwrap_or_default(),
                 )
             })
             .collect::<anyhow::Result<Vec<_>>>()?;

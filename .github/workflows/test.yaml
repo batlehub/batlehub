@@ -787,7 +787,12 @@ jobs:
           # the seed — on the workflow token (HEAVY_FORGE_TOKEN below),
           # because the seed *fails* on a spent anonymous budget rather than
           # tolerating it.
-          - suite: airgap
+          # galaxy: ansible-core in a run-local virtualenv built with uv
+          # (installed below), driving the real collections API v3 and the v1
+          # role surface through the proxy. It downloads one collection
+          # (~1 MB), publishes one it builds itself, and installs one role
+          # from github.com — the egress `roles = "proxy"` implies.
+          - suite: galaxy
     services:
       postgres:
         image: postgres:17-alpine
@@ -812,6 +817,8 @@ jobs:
       DOTNET_CHANNEL: "10.0"
       TERRAFORM_VERSION: "1.16.2"
       MISE_VERSION: "2026.9.5"
+      ANSIBLE_CORE_VERSION: "2.19.3"
+      UV_VERSION: "0.9.7"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
@@ -862,6 +869,18 @@ jobs:
           tar -xzf /tmp/mise.tar.gz -C /tmp
           sudo install -m 0755 /tmp/mise/bin/mise /usr/local/bin/mise
           mise --version
+      - name: Install uv
+        if: matrix.suite == 'galaxy'
+        run: |
+          # From the release archive rather than the `curl | sh` installer:
+          # one URL, one version, and nothing else enters the runner. The
+          # suite builds its own virtualenv with it and pins ansible-core
+          # there, so the runner's system Python is untouched.
+          curl -fsSL --proto '=https' --proto-redir '=https' -o /tmp/uv.tar.gz \
+            "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz"
+          tar -xzf /tmp/uv.tar.gz -C /tmp
+          sudo install -m 0755 /tmp/uv-x86_64-unknown-linux-gnu/uv /usr/local/bin/uv
+          uv --version
       - name: Install dnf
         if: matrix.suite == 'pathproxy'
         run: |
@@ -994,6 +1013,13 @@ jobs:
           # credential on a read at all.
           - target: maven
           - target: cargo
+          # The one client that carries a credential on a *read*:
+          # `ansible-galaxy` sends `Authorization: Bearer` on every call once a
+          # token is configured, so all three arms — anonymous, a caller
+          # holding no read verb, and the reader — are attributable to the
+          # identity the client presented. Hermetic: the run publishes its own
+          # collection and installs it back.
+          - target: galaxy
     services:
       postgres:
         image: postgres:17-alpine
@@ -1012,6 +1038,8 @@ jobs:
       NODE_VERSION: "24"
       DOTNET_CHANNEL: "10.0"
       TERRAFORM_VERSION: "1.16.2"
+      ANSIBLE_CORE_VERSION: "2.19.3"
+      UV_VERSION: "0.9.7"
       BUNDLER_VERSION: "4.0.17"
       GEM_HOME: ${{ github.workspace }}/.gem
     steps:
@@ -1049,6 +1077,14 @@ jobs:
             "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
           sudo unzip -o -q /tmp/terraform.zip -d /usr/local/bin
           terraform version
+      - name: Install uv
+        if: matrix.target == 'galaxy'
+        run: |
+          curl -fsSL --proto '=https' --proto-redir '=https' -o /tmp/uv.tar.gz \
+            "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz"
+          tar -xzf /tmp/uv.tar.gz -C /tmp
+          sudo install -m 0755 /tmp/uv-x86_64-unknown-linux-gnu/uv /usr/local/bin/uv
+          uv --version
       - name: Put the workspace gem bindir on PATH
         if: matrix.target == 'rubygems'
         run: echo "$GEM_HOME/bin" >> "$GITHUB_PATH"

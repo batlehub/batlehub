@@ -927,6 +927,68 @@ where
     })
 }
 
+/// [`local_or_proxy_document_value`], keeping the **synthesised count** beside
+/// the value.
+///
+/// A listing composed from the held set carries `X-BatleHub-Listing:
+/// synthesised` with the count beside it (RFC 0008-bis §4.2), and
+/// [`document_response`] sets those headers for a handler that returns the
+/// document as-is. A handler that reads the value, edits it and builds its own
+/// response — the galaxy collection document is repaired against its own
+/// listing, so it must — would otherwise drop the marker and report a composed
+/// document as a proxied one.
+#[allow(clippy::too_many_arguments)]
+pub async fn local_or_proxy_document_parts<T, F, Fut>(
+    svc: &web::Data<Arc<ProxyService>>,
+    mode_map: &RegistryModeMap,
+    registry: &str,
+    identity: AuthIdentity,
+    local_fetch: F,
+    not_found_msg: String,
+    pkg: PackageId,
+    action: Action,
+    doc_kind: DocumentKind,
+    public_base: String,
+) -> Result<(serde_json::Value, Option<u32>), AppError>
+where
+    T: serde::Serialize,
+    F: FnOnce(batlehub_core::entities::Identity) -> Fut,
+    Fut: std::future::Future<Output = Result<T, CoreError>>,
+{
+    let local = local_first(
+        svc,
+        mode_map.get(registry),
+        &identity,
+        local_fetch,
+        not_found_msg,
+        &pkg,
+        action,
+    )
+    .await?;
+    if let Some(x) = local {
+        let value = serde_json::to_value(x)
+            .map_err(|e| AppError::internal(format!("could not render the local document: {e}")))?;
+        return Ok((value, None));
+    }
+
+    let doc =
+        fetch_proxy_document(svc.clone(), pkg, identity, action, doc_kind, public_base).await?;
+    let synthesised = doc.synthesised;
+    let value = doc.body.as_json().cloned().ok_or_else(|| {
+        AppError::internal("upstream document is not JSON and cannot be read as one".to_owned())
+    })?;
+    Ok((value, synthesised))
+}
+
+/// Set the air-gap listing headers from a count [`local_or_proxy_document_parts`]
+/// carried out.
+pub fn synthesised_headers(builder: &mut actix_web::HttpResponseBuilder, synthesised: Option<u32>) {
+    if let Some(held) = synthesised {
+        builder.insert_header((LISTING_HEADER, "synthesised"));
+        builder.insert_header((LISTING_HELD_HEADER, held.to_string()));
+    }
+}
+
 /// Turn a filtered [`VersionDocument`] into an HTTP response in its own
 /// encoding.
 ///

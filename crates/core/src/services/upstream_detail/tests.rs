@@ -84,6 +84,7 @@ fn every_advertised_document_reaches_a_reader() {
                     | RegistryKind::Nodedist
                     | RegistryKind::Sdkman
                     | RegistryKind::Rustup
+                    | RegistryKind::Galaxy
             ),
             "{kind} advertises a document but `dispatch` has no arm for it"
         );

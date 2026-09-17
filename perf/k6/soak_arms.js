@@ -45,6 +45,7 @@ import {
   CONDA_REGISTRY,
   DEB_REGISTRY,
   FORGEJO_REGISTRY,
+  GALAXY_REGISTRY,
   GEMS_REGISTRY,
   GENERIC_REGISTRY,
   GITHUB_REGISTRY,
@@ -348,6 +349,50 @@ export const ARMS = [
     doc: "a .apk — the coordinate split, the index read for its build date, and the rules",
     request: (n) => ({
       url: p(`/proxy/${APK_REGISTRY}/apk/v3.22/main/x86_64/demo-1.${n}-r0.apk`),
+    }),
+  },
+  // Ansible Galaxy: four documents on the way to one artifact, and the listing
+  // is the expensive one — the proxy walks upstream's 100-entry pages and
+  // assembles them into the single page it serves, so the cost of that walk is
+  // on this arm and nowhere else. The collection document is its own arm
+  // because `ansible-galaxy` re-reads it *uncached* on every resolve, which
+  // makes it the hottest of the four in a real estate.
+  {
+    op: "galaxy_versions",
+    kind: "galaxy",
+    registry: GALAXY_REGISTRY,
+    weight: 2,
+    expect: [200],
+    space: 4,
+    doc: "the versions list — three upstream pages assembled into one served document",
+    request: (n) => ({
+      url: p(`/proxy/${GALAXY_REGISTRY}/galaxy/api/v3/collections/acme/util${n}/versions/`),
+    }),
+  },
+  {
+    op: "galaxy_collection",
+    kind: "galaxy",
+    registry: GALAXY_REGISTRY,
+    weight: 2,
+    expect: [200],
+    space: 4,
+    doc: "the collection document — re-read on every resolve, and repaired against the listing",
+    request: (n) => ({
+      url: p(`/proxy/${GALAXY_REGISTRY}/galaxy/api/v3/collections/acme/util${n}/`),
+    }),
+  },
+  {
+    op: "galaxy_artifact",
+    kind: "galaxy",
+    registry: GALAXY_REGISTRY,
+    weight: 2,
+    expect: [200],
+    space: 16,
+    doc: "a collection tarball — the coordinate parsed back out of the filename",
+    request: (n) => ({
+      url: p(
+        `/proxy/${GALAXY_REGISTRY}/galaxy/api/v3/artifacts/collections/acme-util0-0.${n}.0.tar.gz`,
+      ),
     }),
   },
   {

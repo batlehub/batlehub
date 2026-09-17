@@ -102,6 +102,7 @@ export const sidebar = {
         { text: "RubyGems", link: "/registries/rubygems" },
         { text: "NuGet", link: "/registries/nuget" },
         { text: "Terraform", link: "/registries/terraform" },
+        { text: "Ansible Galaxy", link: "/registries/galaxy" },
       ],
     },
     {
@@ -321,10 +322,6 @@ export const sidebar = {
           link: "/rfc/0030-jsr",
         },
         {
-          text: "0031 — Ansible Galaxy",
-          link: "/rfc/0031-ansible-galaxy",
-        },
-        {
           text: "0032 — NuGet v2",
           link: "/rfc/0032-nuget-v2",
         },
@@ -448,6 +445,10 @@ export const sidebar = {
         {
           text: "0026 — Alpine apk",
           link: "/rfc/0026-alpine-apk",
+        },
+        {
+          text: "0031 — Ansible Galaxy",
+          link: "/rfc/0031-ansible-galaxy",
         },
       ],
     },

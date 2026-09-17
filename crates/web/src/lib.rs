@@ -508,6 +508,7 @@ pub use spa::{configure_spa, narrow_csp, SpaDir};
         (name = "proxy/jetbrains-marketplace", description = "JetBrains Marketplace — IDE-facing plugin API (search, compatible updates, meta.json, downloads), updatePlugins.xml custom repository, and marketplace-compatible plugin publishing"),
         (name = "proxy/generic",    description = "Generic file mirror — path-addressed proxy cache for upstreams with no package protocol (toolchain tarballs, vendor CDNs), restricted by a path_allow allowlist"),
         (name = "proxy/nodedist",   description = "Node distributions (nvm, fnm, n, mise) — the nodejs.org/dist tree as a typed registry: filtered index.tab/index.json listings, per-release tarballs and SHASUMS256.txt byte-exact"),
+        (name = "proxy/galaxy",     description = "Ansible Galaxy — the collections API v3 as a registry kind: the versions list filtered and served as one page, download_url rewritten to this instance, collection publish with its import-task poll, and the v1 role surface behind `roles`"),
         (name = "proxy/rustup",     description = "Rust toolchains (rustup, mise) — the static.rust-lang.org tree as a typed registry: channel manifests filtered and their .sha256 recomputed, blocked releases refused or repaired, component archives cached per release"),
         (name = "proxy/sdkman",     description = "SDKMAN — the candidates API and the download broker as one registry: filtered versions/all, candidates/default and the rendered sdk list table, a blocked version answered `invalid` at candidates/validate, hook scripts relayed byte-exact, the broker's 302 followed server-side and cached"),
         (name = "front-office",     description = "User-facing package information"),
@@ -649,6 +650,11 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
             },
             forgejo::fj_attachment,
             forgejo::fj_packages,
+            galaxy::{
+                galaxy_artifact, galaxy_collection, galaxy_discovery, galaxy_import_task,
+                galaxy_publish, galaxy_role_artifact, galaxy_role_search, galaxy_role_versions,
+                galaxy_version_detail, galaxy_versions,
+            },
             generic::generic_get,
             github::{
                 download_asset, download_asset_by_name, download_raw, download_tarball,
@@ -809,6 +815,26 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(nodedist_index_tab); // GET …/nodedist/index.tab   (filtered document)
     cfg.service(nodedist_index_json); // GET …/nodedist/index.json  (filtered document)
     cfg.service(nodedist_file); // GET …/nodedist/{version}/{file}
+
+    // Ansible Galaxy (RFC 0031). Every path here is literal down to the
+    // coordinate, so the only ordering that matters is inside the collections
+    // tree: the publish `POST` and the import-task route carry literal
+    // `artifacts`/`imports` segments that could otherwise be read as a
+    // namespace, the `versions/` listing has to register before
+    // `versions/{version}/`, and the collection document before both. The
+    // trailing slash is part of every v3 path: a redirect to add one would be a
+    // second request the client's `urljoin` does not expect. All of them before
+    // the shared npm version/packument wildcards below.
+    cfg.service(galaxy_discovery); // GET  …/galaxy/api/                      (composed)
+    cfg.service(galaxy_publish); // POST …/galaxy/api/v3/artifacts/collections/
+    cfg.service(galaxy_artifact); // GET  …/galaxy/api/v3/artifacts/collections/{file}
+    cfg.service(galaxy_import_task); // GET  …/galaxy/api/v3/imports/collections/{task}/
+    cfg.service(galaxy_versions); // GET  …/galaxy/api/v3/collections/{ns}/{n}/versions/  (filtered)
+    cfg.service(galaxy_version_detail); // GET  …/…/versions/{version}/        (404 when blocked)
+    cfg.service(galaxy_collection); // GET  …/galaxy/api/v3/collections/{ns}/{n}/  (repaired)
+    cfg.service(galaxy_role_search); // GET  …/galaxy/api/v1/roles/
+    cfg.service(galaxy_role_versions); // GET  …/galaxy/api/v1/roles/{id}/versions/  (filtered)
+    cfg.service(galaxy_role_artifact); // GET  …/galaxy/api/v1/roles/{id}/download/{file}
 
     // rustup: the literal paths first, then the two `dist/` patterns. The
     // installer's tree is `…/rustup/rustup/…`, which is upstream's own layout

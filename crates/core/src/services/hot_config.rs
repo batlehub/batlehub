@@ -376,6 +376,15 @@ pub struct HotConfig {
     /// instead of when the cached document expires. Empty for every other kind,
     /// and config validation refuses a non-empty value there.
     pub deny_components: HashMap<String, Vec<String>>,
+    /// galaxy only: how much of the v1 role surface each registry serves
+    /// (RFC 0031 §4.4).
+    ///
+    /// Here rather than on the registry client for `deny_components`' reason:
+    /// the discovery document and the three v1 routes read it on every request,
+    /// so a reload takes effect on the next one. Absent means `proxy`, the
+    /// documented default, and config validation refuses the option on any
+    /// other kind.
+    pub galaxy_roles: HashMap<String, crate::services::galaxy::GalaxyRoleMode>,
     /// Per-namespace rule chains, for the namespaces that override a gate
     /// (RFC 0015 §4.1).
     ///
@@ -616,6 +625,7 @@ impl Default for HotConfig {
             registries: HashMap::new(),
             policies: HashMap::new(),
             deny_components: HashMap::new(),
+            galaxy_roles: HashMap::new(),
             namespace_policies: HashMap::new(),
             grants: HashMap::new(),
             instance: None,

@@ -270,6 +270,11 @@ tasks:
     cmds:
       - bash tests/heavy/apk.sh
 
+  test:galaxy-heavy:
+    desc: "Heavy Ansible Galaxy integration: the real ansible-galaxy against galaxy.ansible.com through the proxy — the versions list as the chokepoint, a blocked version stepped down from and a pinned one refused, download_url rewritten, collection publish with its one-poll import task, and roles proxied vs relayed (needs DATABASE_URL + network + uv). Pass a phase name to run one"
+    cmds:
+      - bash tests/heavy/galaxy.sh {{.CLI_ARGS}}
+
   test:npm-heavy:
     desc: "Heavy npm integration: publish/install/whoami/ping/dist-tags/search against a local registry, and `npm audit` on the path npm really sends (needs DATABASE_URL + network)"
     cmds:

@@ -30,6 +30,7 @@ pub use coordinator::UpstreamDetailCoordinator;
 mod cargo;
 mod composer;
 pub mod coordinator;
+mod galaxy;
 mod goproxy;
 mod maven;
 mod nodedist;
@@ -123,6 +124,7 @@ pub fn dispatch(kind: RegistryKind, doc: &VersionDocument) -> UpstreamDetail {
         RegistryKind::Nodedist => nodedist::read(doc),
         RegistryKind::Sdkman => sdkman::read(doc),
         RegistryKind::Rustup => rustup::read(doc),
+        RegistryKind::Galaxy => galaxy::read(doc),
         other => {
             // Reachable only through a bug: `RegistryKind::upstream_detail()`
             // answers `Document(_)` for exactly the kinds above, and the drift
@@ -175,7 +177,10 @@ pub fn listing_carries_readmes(kind: RegistryKind) -> bool {
         | RegistryKind::Generic
         | RegistryKind::Nodedist
         | RegistryKind::Sdkman
-        | RegistryKind::Rustup => false,
+        | RegistryKind::Rustup
+        // The versions list carries `created_at` and `requires_ansible`; the
+        // README is `MANIFEST.json`'s, inside the tarball (RFC 0031 §6.1).
+        | RegistryKind::Galaxy => false,
     }
 }
 
@@ -229,7 +234,9 @@ pub fn listing_carries_links(kind: RegistryKind) -> bool {
         | RegistryKind::Generic
         | RegistryKind::Nodedist
         | RegistryKind::Sdkman
-        | RegistryKind::Rustup => false,
+        | RegistryKind::Rustup
+        // The `repository` link lives in `MANIFEST.json`, inside the tarball.
+        | RegistryKind::Galaxy => false,
     }
 }
 

@@ -1,0 +1,79 @@
+# Server configuration for the heavy Ansible Galaxy test
+# (tests/heavy/galaxy.sh). See tests/heavy/config.npm.toml for the env-var
+# conventions.
+#
+# Two registries, because the suite proves two different things and one
+# registry cannot be both: `galaxy-${HEAVY_RUN}` proxies the real
+# galaxy.ansible.com (blocking, the versions-list chokepoint, the rewritten
+# download_url, roles), and `galaxy-local-${HEAVY_RUN}` hosts a collection this
+# suite builds and publishes (the multipart publish and its import-task poll).
+
+[server]
+host = "127.0.0.1"
+port = 8160
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-galaxy-storage"
+
+# ── Proxy: the real upstream ─────────────────────────────────────────────────
+[[registries]]
+type = "galaxy"
+name = "galaxy-${HEAVY_RUN}"
+mode = "proxy"
+# The default, written out so the file says what it talks to.
+upstreams = ["https://galaxy.ansible.com/api/"]
+# Written out rather than left to the default, so the egress to github.com it
+# implies is visible in the file (RFC 0031 decision 9).
+roles = "proxy"
+
+[registries.rbac]
+# `ansible-galaxy` sends its token on every call once configured, but the suite
+# drives it without one for the read arms: anonymous reads are what an
+# unconfigured client gets.
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list"]
+admin = ["*"]
+
+# ── The same upstream with the v1 surface relayed rather than proxied ────────
+#
+# `roles = "index"` is the arm that proves the difference the table promises:
+# the listings are served, `download_url` is not rewritten, and the client
+# fetches the archive from github.com itself.
+[[registries]]
+type = "galaxy"
+name = "galaxy-index-${HEAVY_RUN}"
+mode = "proxy"
+roles = "index"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list"]
+admin = ["*"]
+
+# ── Local: the publish half ──────────────────────────────────────────────────
+[[registries]]
+type = "galaxy"
+name = "galaxy-local-${HEAVY_RUN}"
+mode = "local"
+# Nothing to proxy, and nothing to serve on v1: there is no publish protocol
+# for roles, so the surface could only ever be empty (RFC 0031 §4.5).
+roles = "off"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list", "releases:publish"]
+admin = ["*"]

@@ -41,10 +41,10 @@ pub use notifications::{
     SlackChannelConfig, TeamsChannelConfig, WebhookChannelConfig,
 };
 pub use registry::{
-    default_true, BetaChannelConfig, CachePolicy, FeatureFlagsConfig, GrantsShadowConfig,
-    Immutable, IntegrityConfig, NamespaceConfig, QuotaConfig, QuotaEnforcement, ReadmeConfig,
-    RegistryConfig, RegistryMode, RepoSigningConfig, RetentionConfig, SbomConfig, SigningConfig,
-    UpstreamDetailConfig, VersioningPolicy,
+    default_true, BetaChannelConfig, CachePolicy, FeatureFlagsConfig, GalaxyRoleMode,
+    GrantsShadowConfig, Immutable, IntegrityConfig, NamespaceConfig, QuotaConfig, QuotaEnforcement,
+    ReadmeConfig, RegistryConfig, RegistryMode, RepoSigningConfig, RetentionConfig, SbomConfig,
+    SigningConfig, UpstreamDetailConfig, VersioningPolicy,
 };
 pub use release_imports::{ImportPrincipalConfig, ReleaseImportConfig, MIN_IMPORT_INTERVAL_SECS};
 pub use routing::{
@@ -2256,6 +2256,7 @@ impl AppConfig {
             Self::validate_registry_release_age(registry, kind)?;
             Self::validate_registry_broker_url(registry, kind)?;
             Self::validate_registry_deny_components(registry, kind)?;
+            Self::validate_registry_roles(registry, kind)?;
             Self::validate_registry_warm_platforms(registry, kind)?;
             Self::validate_registry_refs(registry, kind)?;
             // Beside `refs`, not inside it: `[registries.raw]` and
@@ -2457,6 +2458,16 @@ impl AppConfig {
                  undated coordinate is one the cached index no longer lists: 'true' refuses \
                  it, 'false' serves it"
             }
+            // Every *upstream* collection version carries `created_at`, so the
+            // field is inert in proxy mode — and a locally published
+            // collection and an air-gapped listing (RFC 0008-bis) may carry
+            // none, which is exactly where the two postures diverge
+            // (RFC 0031 §4.5).
+            RegistryKind::Galaxy => {
+                "every upstream collection version carries 'created_at', so the undated case is \
+                 a locally published collection or an air-gapped listing: 'true' refuses it, \
+                 'false' serves it"
+            }
             _ => return Ok(()),
         };
         let namespace_rules = registry
@@ -2600,6 +2611,33 @@ impl AppConfig {
                 );
             }
         }
+        Ok(())
+    }
+
+    /// RFC 0031 §4.5: `roles` is galaxy's and nobody else's.
+    ///
+    /// The `broker_url` rule, one kind over. The spelling is checked by the
+    /// enum at deserialisation — a value that is not `proxy`, `index` or `off`
+    /// never reaches here — so the only thing left to refuse is the option on a
+    /// registry whose protocol has no role surface at all, where it would be
+    /// read, stored and never consulted.
+    fn validate_registry_roles(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+    ) -> Result<()> {
+        use batlehub_core::entities::RegistryKind;
+        let Some(roles) = registry.roles else {
+            return Ok(());
+        };
+        if kind != RegistryKind::Galaxy {
+            bail!(
+                "registry '{}': 'roles' is only meaningful on a galaxy registry (it selects how \
+                 much of Ansible Galaxy's v1 role API is served), not {}",
+                registry.name,
+                kind
+            );
+        }
+        let _ = roles;
         Ok(())
     }
 

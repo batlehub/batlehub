@@ -125,6 +125,7 @@ default = [
   "registry-nodedist",
   "registry-sdkman",
   "registry-rustup",
+  "registry-galaxy",
   "sbom",
   "storage-fs",
   "vuln-scan"
@@ -178,6 +179,8 @@ registry-pacman = [
   "dep:sha1",
   "dep:ed25519-dalek",
 ]
+# galaxy reads MANIFEST.json/FILES.json out of a collection tarball on publish.
+registry-galaxy = ["dep:flate2", "dep:tar"]
 registry-pypi = []
 # JetBrains IDE-archive proxy cache. Reuses the generic `PathProxyRegistryClient`
 # (shared with deb/rpm), so it needs no extra dependencies.

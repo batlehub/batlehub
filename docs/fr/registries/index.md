@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/index.md
-sourceHash: 8205612afcdc0883
+sourceHash: c2c8132d44877d7a
 ---
 
 # Registres
@@ -50,6 +50,7 @@ amont), ainsi que les archives d'IDE **JetBrains** et les miroirs de fichiers
 | [RubyGems](./rubygems) | `rubygems` | Gems, versions et API d'information | proxy · local · hybrid | ✅ | `rubygems.org` |
 | [NuGet (.NET)](./nuget) | `nuget` | Index v3, index plat et `.nupkg` | proxy · local · hybrid | ✅ | `api.nuget.org` |
 | [Terraform](./terraform) | `terraform` | Providers et modules (API v1) | proxy · local · hybrid | ✅ | `registry.terraform.io` |
+| [Ansible Galaxy](./galaxy) | `galaxy` | API collections v3 (liste des versions, document de version, tarball) et les lectures v1 des rôles | proxy · local · hybrid | ✅ | `galaxy.ansible.com/api/` |
 
 ### Extensions d'éditeur
 
@@ -118,6 +119,7 @@ l'explorateur de paquets. ✓ pris en charge · `—` sans objet · ⚠ partiel.
 | RubyGems | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | — | ✓ |
 | NuGet | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Terraform | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ |
+| Ansible Galaxy | ✓ ⁶ | ✓ | — | ✓ | ✓ | ✓ ⁷ | ✓ | ✓ | — |
 | OpenVSX | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Place de marché VS Code | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
 | Place de marché JetBrains | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ |
@@ -159,6 +161,19 @@ l'explorateur de paquets. ✓ pris en charge · `—` sans objet · ⚠ partiel.
 > plateformes de `cache.warm_platforms`, avec pour défaut celle du serveur. Le
 > bouton de récupération par version de la console est refusé pour la même
 > raison.
+>
+> ⁶ **Une seule page, toujours** (RFC 0031 §4.4) : `ansible-galaxy` résout un
+> lien de pagination par rapport à la racine d'API configurée, et les liens de
+> l'amont sont des *chemins* absolus qui remplacent tout le chemin — aucune
+> continuation émise par BatleHub ne pourrait donc être suivie jusqu'à lui.
+> Chaque listing qu'il sert porte donc un `next` nul, et l'adaptateur parcourt
+> lui-même les pages de l'amont.
+>
+> ⁷ **Garde-fous d'âge Galaxy** : chaque version amont d'une collection porte
+> `created_at`, donc le garde-fou est entièrement décidé en mode proxy. Une
+> collection publiée localement et un listing hors ligne peuvent n'en porter
+> aucune : `deny_missing_timestamp` est donc **obligatoire** sur une règle
+> `release_age_gate` ici, comme sur les types de chaînes d'outils.
 >
 > Recherche amont de l'explorateur de paquets (« Pas encore passé par le
 > proxy ») : Go passe par pkg.go.dev ; PyPI est une recherche par nom exact ;
@@ -222,6 +237,7 @@ bouton désactivé — voir
 | nodedist | a Node release is a set of tarballs and a checksum file; the dist tree carries no prose | — | versions only | no |
 | sdkman | SDKMAN describes a distribution, not a package: no document in the protocol carries prose about a candidate | — | versions only | no |
 | rustup | a toolchain release is a manifest and a set of tarballs; the dist tree carries no prose | — | versions only | no |
+| galaxy | a file inside the artifact | yes | versions only | yes |
 <!-- END readme-coverage -->
 
 La table ci-dessus est générée depuis le code Rust et reste en anglais : ses

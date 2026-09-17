@@ -130,6 +130,7 @@ NODEDIST_R="authz-nodedist-$HEAVY_RUN"
 SDKMAN_R="authz-sdkman-$HEAVY_RUN"
 JETBRAINS_R="authz-jetbrains-$HEAVY_RUN"
 GENERIC_R="authz-generic-$HEAVY_RUN"
+GALAXY_R="authz-galaxy-$HEAVY_RUN"
 RUSTUP_R="authz-rustup-$HEAVY_RUN"
 
 # The kinds a *client* target drives. Declared here rather than inferred,
@@ -137,7 +138,8 @@ RUSTUP_R="authz-rustup-$HEAVY_RUN"
 # none of them — every target runs in its own process against its own server,
 # so no single run can observe the whole matrix. Add a client phase, add its
 # kind here.
-AUTHZ_CLIENT_KINDS=(npm pypi nuget composer conda openvsx rubygems terraform maven cargo)
+AUTHZ_CLIENT_KINDS=(npm pypi nuget composer conda openvsx rubygems terraform maven cargo
+                    galaxy)
 declare -A AUTHZ_KIND_SEEN=()
 
 T_ADMIN="$ADMIN_TOKEN"
@@ -1835,6 +1837,138 @@ EOF
   return 0
 }
 
+# ── Ansible Galaxy ───────────────────────────────────────────────────────────
+#
+# **The one kind whose client carries a credential on a read.** `GalaxyToken`
+# puts `Authorization: Bearer` on *every* request once a `token` is configured,
+# reads included — so unlike `dotnet restore` (which only offers a credential in
+# answer to a `401` challenge this server does not send) and unlike `ovsx`
+# (which sends nothing on a read), all three arms below are attributable to the
+# identity the client actually presented.
+#
+# The registry is `local`, so the allowed arm genuinely succeeds: the collection
+# is published here first, by the admin, and then installed by three different
+# callers.
+
+phase_galaxy() {
+  heavy_need uv "uv (https://docs.astral.sh/uv/)"
+  local ansible_core="${ANSIBLE_CORE_VERSION:-2.19.3}"
+  local venv="$HEAVY_WORK/galaxy-venv"
+  uv venv --quiet "$venv" >"$HEAVY_WORK/galaxy-venv.log" 2>&1 \
+    || { cat "$HEAVY_WORK/galaxy-venv.log" >&2; heavy_fail "galaxy: creating the virtualenv failed"; }
+  uv pip install --quiet --python "$venv/bin/python" "ansible-core==$ansible_core" \
+    >>"$HEAVY_WORK/galaxy-venv.log" 2>&1 \
+    || { cat "$HEAVY_WORK/galaxy-venv.log" >&2; heavy_fail "galaxy: installing ansible-core failed"; }
+  local galaxy_bin="$venv/bin/ansible-galaxy"
+  heavy_log "$("$galaxy_bin" --version | head -1)"
+
+  local api="$HEAVY_TAP_BASE/proxy/$GALAXY_R/galaxy/api/"
+  local ns="authz$HEAVY_RUN" name="probe" version="1.0.0"
+
+  # One config per caller: the token is a line in the file, so "who asked" is a
+  # property of the file rather than of an environment variable a later step
+  # could forget to change.
+  galaxy_cfg() {  # <label> <token|-> → echoes the path
+    local label="$1" token="$2" cfg="$HEAVY_WORK/galaxy-$label.cfg"
+    {
+      printf '[galaxy]\nserver_list = batlehub\n\n'
+      printf '[galaxy_server.batlehub]\nurl = %s\n' "$api"
+      [[ "$token" == "$T_ANON" ]] || printf 'token = %s\n' "$token"
+    } > "$cfg"
+    echo "$cfg"
+    return 0
+  }
+
+  galaxy_install() {  # <label> <token> → exit status of the install
+    local label="$1" token="$2" cfg home
+    cfg="$(galaxy_cfg "$label" "$token")"
+    home="$HEAVY_WORK/galaxy-home-$label"
+    rm -rf "$home"; mkdir -p "$home"
+    ANSIBLE_CONFIG="$cfg" ANSIBLE_HOME="$home" \
+    ANSIBLE_GALAXY_CACHE_DIR="$home/cache" ANSIBLE_LOCAL_TEMP="$home/tmp" \
+      "$galaxy_bin" collection install "$ns.$name" \
+      > "$HEAVY_WORK/galaxy-$label.out" 2>&1
+    return $?
+  }
+
+  # ── the admin publishes, which is also the positive control for the route ──
+  local src="$HEAVY_WORK/galaxy-src/$ns/$name"
+  mkdir -p "$src"
+  cat > "$src/galaxy.yml" <<YML
+namespace: $ns
+name: $name
+version: $version
+readme: README.md
+authors:
+  - authz heavy suite
+description: RFC 0015 heavy authz probe
+license:
+  - MIT
+YML
+  echo "# $ns.$name" > "$src/README.md"
+
+  heavy_mark "galaxy-publish"
+  local admin_cfg
+  admin_cfg="$(galaxy_cfg admin "$T_ADMIN")"
+  ( cd "$src" && ANSIBLE_CONFIG="$admin_cfg" "$galaxy_bin" collection build \
+      --output-path "$HEAVY_WORK" ) >"$HEAVY_WORK/galaxy-build.out" 2>&1 \
+    || { cat "$HEAVY_WORK/galaxy-build.out" >&2; heavy_fail "galaxy: collection build failed"; }
+  # No `--api-key`: it attaches nothing when the server comes from
+  # `server_list` (captured against ansible-core 2.19.3 — the request carried no
+  # `Authorization` header). The credential is the `token =` line `galaxy_cfg`
+  # writes, which the client sends as `Authorization: Token <token>`.
+  ANSIBLE_CONFIG="$admin_cfg" ANSIBLE_HOME="$HEAVY_WORK/galaxy-home-admin" \
+    "$galaxy_bin" collection publish "$HEAVY_WORK/$ns-$name-$version.tar.gz" \
+    --server batlehub >"$HEAVY_WORK/galaxy-publish.out" 2>&1 \
+    || { cat "$HEAVY_WORK/galaxy-publish.out" >&2; heavy_fail "galaxy: the admin could not publish"; }
+  AUTHZ_KIND_SEEN["galaxy"]=1
+
+  # ── the reader, who holds every read verb ──
+  heavy_mark "galaxy-reader"
+  galaxy_install reader "$T_READER" \
+    || { cat "$HEAVY_WORK/galaxy-reader.out" >&2;
+         heavy_fail "releases:read — galaxy, the reader: the install was refused"; }
+  # `heavy_client_said` only *reports* — it always returns 0 and its third
+  # argument is a line count — so the assertion is a grep of its own.
+  grep -qiF "was installed successfully" "$HEAVY_WORK/galaxy-reader.out" \
+    || { tail -n 40 "$HEAVY_WORK/galaxy-reader.out" >&2;
+         heavy_fail "releases:read — galaxy, the reader: the install did not report success"; }
+  authz_note_verb "releases:read"
+  AUTHZ_CHECKS=$((AUTHZ_CHECKS + 1))
+
+  # ── the caller holding no read verb ──
+  heavy_mark "galaxy-denied"
+  if galaxy_install denied "$T_DENIED"; then
+    cat "$HEAVY_WORK/galaxy-denied.out" >&2
+    heavy_fail "releases:read — galaxy, holding no read verb: the install succeeded"
+  fi
+  heavy_wire_re_after "galaxy-denied" \
+    "/proxy/$GALAXY_R/galaxy/api/v3/collections/$ns/$name/ $WIRE_403" \
+    "galaxy: the denied caller's read was not refused at the collection document"
+  AUTHZ_CHECKS=$((AUTHZ_CHECKS + 1))
+
+  # ── and the one the other clients cannot show: an anonymous read ──
+  heavy_mark "galaxy-anon"
+  if galaxy_install anon "$T_ANON"; then
+    cat "$HEAVY_WORK/galaxy-anon.out" >&2
+    heavy_fail "releases:read — galaxy, anonymous: the install succeeded without a credential"
+  fi
+  heavy_wire_re_after "galaxy-anon" \
+    "/proxy/$GALAXY_R/galaxy/api/v3/collections/$ns/$name/ -> 40[13]" \
+    "galaxy: the anonymous read was not refused"
+  AUTHZ_CHECKS=$((AUTHZ_CHECKS + 1))
+
+  # The oracle agrees with the answers above (§11.6).
+  local verdict
+  verdict="$(authz_explain "$GALAXY_R" "user:authz-reader" "releases:read" "$ns.$name" "$version")"
+  [[ "$verdict" == "allow" ]] \
+    || heavy_fail "galaxy: explain says '$verdict' for the reader the server just served"
+  verdict="$(authz_explain "$GALAXY_R" "user:authz-denied" "releases:read" "$ns.$name" "$version")"
+  [[ "$verdict" == "deny" ]] \
+    || heavy_fail "galaxy: explain says '$verdict' for the caller the server just refused"
+  return 0
+}
+
 phase_terraform() {
   local terraform_version="${TERRAFORM_VERSION:-1.16.2}"
   heavy_runner_for terraform "terraform@$terraform_version"
@@ -3410,8 +3544,9 @@ case "$TARGET" in
   rubygems)  phase_rubygems;  heavy_done "AUTHZ-HEAVY-RUBYGEMS-OK" ;;
   terraform) phase_terraform; heavy_done "AUTHZ-HEAVY-TERRAFORM-OK" ;;
   composer)  phase_composer;  heavy_done "AUTHZ-HEAVY-COMPOSER-OK" ;;
+  galaxy)    phase_galaxy;    heavy_done "AUTHZ-HEAVY-GALAXY-OK" ;;
   *)
     heavy_fail "unknown target '$TARGET' — one of: matrix signing reads npm pypi nuget \
-composer conda openvsx rubygems terraform maven cargo, or live:<kind> for one of: ${AUTHZ_LIVE_KINDS[*]}"
+composer conda openvsx rubygems terraform maven cargo galaxy, or live:<kind> for one of: ${AUTHZ_LIVE_KINDS[*]}"
     ;;
 esac

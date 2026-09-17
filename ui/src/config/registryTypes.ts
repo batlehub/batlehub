@@ -2131,6 +2131,119 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
     ],
   },
   {
+    id: "galaxy",
+    label: "Ansible Galaxy",
+    fileHint: "requirements.yml",
+    description:
+      `Ansible's collections API v3 as a registry kind (RFC 0031): the per-collection ` +
+      `<em>versions list</em> is the enforcement chokepoint every ` +
+      `<code>ansible-galaxy collection install</code> resolves through, so a blocked version is ` +
+      `neither resolvable from a range nor installable by an exact pin. The version document's ` +
+      `<code>download_url</code> is rewritten to this instance, and the tarball is relayed ` +
+      `byte-exact — the client hashes it against <code>artifact.sha256</code>. Every listing is ` +
+      `served as <strong>one page</strong>, because the client's own URL joining loses a path ` +
+      `prefix on any continuation link. <code>local</code> and <code>hybrid</code> accept ` +
+      `<code>collection publish</code> and answer its import-task poll; roles (the v1 API) are ` +
+      `read-only and configurable.`,
+    snippets: [
+      {
+        key: "galaxy-cfg",
+        label: "Client setup",
+        lang: "ini",
+        template: (ctx) => {
+          const api = `${ctx.registryUrl}/galaxy/api/`;
+          const lines = [
+            `# ansible.cfg — the one switch. server_list names which servers are used,`,
+            `# in order; listing only this one keeps every resolve on the proxy.`,
+            `[galaxy]`,
+            `server_list = batlehub`,
+            ``,
+            `[galaxy_server.batlehub]`,
+            `url = ${api}`,
+          ];
+          if (ctx.isAuthenticated) {
+            lines.push(`token = ${ctx.token}`);
+          }
+          return lines.join("\n");
+        },
+        note: (ctx) =>
+          ctx.isAuthenticated
+            ? `The token is sent as <code>Authorization: Token</code> — Django REST ` +
+              `Framework's scheme, which is what <code>GalaxyToken</code> uses — on ` +
+              `<em>every</em> call, reads included, so this registry can be closed to ` +
+              `anonymous reads without breaking the client.`
+            : `Reads with no <code>token</code> line are anonymous. Add one from the Tokens page ` +
+              `if this registry does not grant <code>releases:read</code> to anonymous callers.`,
+      },
+      {
+        key: "galaxy-install",
+        label: "Install",
+        lang: "bash",
+        template: () =>
+          [
+            `ansible-galaxy collection install community.general`,
+            `ansible-galaxy collection install -r requirements.yml`,
+            ``,
+            `# A blocked version is absent from the versions list, so a range resolves to the`,
+            `# newest allowed release. An exact pin on a blocked version stops with ansible's`,
+            `# own "Failed to resolve the requested dependencies map", downloading nothing.`,
+          ].join("\n"),
+      },
+      {
+        key: "galaxy-publish",
+        label: "Publish",
+        lang: "bash",
+        showWhen: isPublishMode,
+        template: () =>
+          [
+            `ansible-galaxy collection build`,
+            `ansible-galaxy collection publish ./acme-util-1.0.0.tar.gz --server batlehub`,
+            ``,
+            `# The publish is synchronous: the task it returns is already "completed",`,
+            `# so an install straight afterwards cannot race it.`,
+          ].join("\n"),
+        note: `The credential is the <code>token</code> line in <code>ansible.cfg</code>, not <code>--api-key</code>: with a server from <code>server_list</code>, <code>--api-key</code> attaches no credential at all. A duplicate version answers <code>409</code>. The <code>sha256</code> form field must equal the digest of the uploaded bytes, and <code>MANIFEST.json</code> must agree with the file name — otherwise the publish is a <code>400</code> before anything is stored.`,
+      },
+      {
+        key: "galaxy-roles",
+        label: "Roles",
+        lang: "bash",
+        template: () =>
+          [
+            `ansible-galaxy role install geerlingguy.docker`,
+            ``,
+            `# roles = "proxy" (the default) rewrites each version's download_url, so the`,
+            `#   archive is fetched by this instance from github.com and cached here.`,
+            `# roles = "index" serves the same listings with download_url relayed: role`,
+            `#   metadata is proxied, role bytes are not.`,
+            `# roles = "off"   removes v1 from the discovery document, so the client stops`,
+            `#   on its own "requires API versions 'v1'".`,
+          ].join("\n"),
+        note: `Two cases the proxy cannot reach whatever <code>roles</code> says: a role with <strong>no</strong> published versions installs from its default branch straight from GitHub, and a <code>requirements.yml</code> entry with an explicit <code>src:</code> URL was never a registry request at all.`,
+      },
+      {
+        key: "galaxy-config",
+        label: "Server config",
+        lang: "toml",
+        template: (ctx) =>
+          [
+            `[[registries]]`,
+            `name      = "${ctx.registryName}"`,
+            `type      = "galaxy"`,
+            `mode      = "${ctx.mode}"`,
+            `upstreams = ["https://galaxy.ansible.com/api/"]   # the default`,
+            `roles     = "proxy"                              # proxy | index | off`,
+            ``,
+            `[registries.rbac]`,
+            `# The versions list is a listing; the version document and the tarball are reads.`,
+            `anonymous = ["releases:read", "releases:list"]`,
+            `user      = ["releases:read", "releases:list", "releases:publish"]`,
+            `admin     = ["*"]`,
+          ].join("\n"),
+      },
+    ],
+  },
+  {
     id: "sdkman",
     label: "SDKMAN",
     fileHint: ".sdkmanrc",

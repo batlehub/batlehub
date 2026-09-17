@@ -300,6 +300,19 @@ user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
 
 [[registries]]
+type = "galaxy"
+name = "perf-galaxy"
+upstreams = ["${SOAK_UPSTREAM_URL}/galaxy/api/"]
+# The role surface is not soaked: it is a second upstream (github.com) and a
+# second protocol, and the arms below measure the collections half.
+roles = "off"
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+[[registries]]
 type = "rustup"
 name = "perf-rustup"
 upstreams = ["${SOAK_UPSTREAM_URL}/rustup"]

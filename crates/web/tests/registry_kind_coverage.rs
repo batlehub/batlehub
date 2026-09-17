@@ -129,6 +129,13 @@ const COVERAGE: &[(&str, Live, AirGap)] = &[
     ("nodedist", Live::ClosedWorld("nvm"), AirGap::Case),
     ("sdkman", Live::ClosedWorld("sdkman"), AirGap::Case),
     ("rustup", Live::Suite("tests/heavy/rustup.sh"), AirGap::Case),
+    // Two suites drive this kind and the closed world is the one that counts
+    // here: `ansible` installs `community.general` through the instance with
+    // egress denied and then *runs* a plugin out of it. `tests/heavy/galaxy.sh`
+    // is the wider one — blocking, the pinned refusal, the publish and its
+    // import task, and the two role modes — and it needs the real upstream's
+    // version history, which a closed world cannot provide.
+    ("galaxy", Live::ClosedWorld("ansible"), AirGap::Case),
 ];
 
 fn repo_root() -> PathBuf {
