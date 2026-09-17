@@ -54,6 +54,17 @@ user      = ["releases:read", "releases:list"]
 admin     = ["*"]
 ```
 
+Then build as you always did — substitution goes through this instance, and a
+store path can be pulled from it by hand:
+
+```sh
+nix build nixpkgs#hello
+nix copy --from "https://batlehub.example.com/proxy/<registry>/nix" /nix/store/…-hello-2.12.2
+```
+
+A blocked store path answers `404` on its narinfo, which to Nix means *"not in
+this cache"*: it consults the next substituter, or builds from source.
+
 ## Authentication
 
 **Nix sends no credentials unless you tell it where they are.** The downloader is libcurl with `CURLOPT_NETRC_FILE` set from the `netrc-file` setting and `CURL_NETRC_OPTIONAL`; the default path is a dummy. There is no header setting for substituters, so an authenticated registry needs that one line, and the path must be absolute:

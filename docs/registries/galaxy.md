@@ -25,7 +25,7 @@ server_list = batlehub
 
 [galaxy_server.batlehub]
 url   = https://batlehub.example.com/proxy/<registry>/galaxy/api/
-token = <a BatleHub token>
+token = <your-token>
 ```
 
 ```sh
@@ -94,6 +94,12 @@ Blocking the newest version also moves the collection document's `highest_versio
 - a `requirements.yml` entry with an explicit `src:` URL was never a registry request at all.
 
 ## The `roles` setting
+
+```sh
+ansible-galaxy role install geerlingguy.docker
+```
+
+How much of that command this instance serves is the operator's choice:
 
 | `roles` | Behaviour |
 |---|---|

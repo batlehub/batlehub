@@ -1870,7 +1870,11 @@ phase_galaxy() {
   # property of the file rather than of an environment variable a later step
   # could forget to change.
   galaxy_cfg() {  # <label> <token|-> → echoes the path
-    local label="$1" token="$2" cfg="$HEAVY_WORK/galaxy-$label.cfg"
+    # `cfg` on a second line: bash expands every word of a `local` statement
+    # before any of its assignments take effect, so `$label` here would be the
+    # *outer* one — unset, and fatal under `set -u`.
+    local label="$1" token="$2"
+    local cfg="$HEAVY_WORK/galaxy-$label.cfg"
     {
       printf '[galaxy]\nserver_list = batlehub\n\n'
       printf '[galaxy_server.batlehub]\nurl = %s\n' "$api"

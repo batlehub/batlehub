@@ -72,22 +72,52 @@ heavy_log "Pulling $NIX_IMAGE (the client)"
 "${CW_ENGINE[@]}" pull "$NIX_IMAGE" >"$HEAVY_WORK/pull.log" 2>&1 \
   || { cat "$HEAVY_WORK/pull.log" >&2; heavy_fail "could not pull $NIX_IMAGE"; }
 
+mkdir -p "$HEAVY_WORK/home"
+
+# NIX_RUN_USER — the identity the client runs as inside the image.
+#
+# Not a constant, because the two engines map identities in opposite
+# directions. **Rootless podman maps *container root* to the invoking host
+# user**, so `-u $(id -u)` there names a UID that maps to a *subordinate* one on
+# the host — which cannot so much as stat the bind mount. Nothing in the failure
+# says so: nix reports its own "couldn't stat $HOME ('/work/home')" and then
+# "creating directory '/.cache/nix': Permission denied", naming neither the
+# mount nor the mapping. **Rootful docker is the other way round**: container
+# root *is* host root, and every file the run leaves under $HEAVY_WORK is then
+# root-owned in a mktemp directory this script's cleanup cannot remove.
+#
+# So probe instead of inferring from the engine's name — rootless docker and
+# rootful podman both exist, and `podman info` would have to be parsed for each.
+# Whichever identity can actually write the mount is the one the client runs as.
+nix_probe_write() {  # <run flags…> → 0 when /work is writable under them
+  "${CW_ENGINE[@]}" run --rm "$@" -v "$HEAVY_WORK:/work:z" "$NIX_IMAGE" \
+    sh -c 'touch /work/.probe && rm -f /work/.probe' >/dev/null 2>&1
+}
+NIX_RUN_USER=()
+if nix_probe_write -u "$(id -u):$(id -g)"; then
+  NIX_RUN_USER=(-u "$(id -u):$(id -g)")
+  heavy_log "client identity: $(id -u):$(id -g) — the run directory is writable as this user"
+elif nix_probe_write; then
+  heavy_log "client identity: container root — a rootless engine, so it is $(id -un) on the host"
+else
+  heavy_fail "neither $(id -u):$(id -g) nor container root can write $HEAVY_WORK through ${CW_ENGINE[0]} — the client has nowhere to keep a store"
+fi
+
 # nix_run <args…> — the client, in its own image, against this run's directory.
 #
 # `--network host` so `127.0.0.1:$HEAVY_TAP_PORT` is the tap, exactly as it is
-# for a host process. `-u` to the calling user so the chroot stores it writes
-# under $HEAVY_WORK are removable by the cleanup that owns them — a root-owned
+# for a host process. `$NIX_RUN_USER` so the chroot stores it writes under
+# $HEAVY_WORK are removable by the cleanup that owns them — a root-owned
 # leftover in a mktemp directory is a mess the next run inherits. `HOME` inside
 # the mount for the same reason.
 nix_run() {
   "${CW_ENGINE[@]}" run --rm --network host \
-    -u "$(id -u):$(id -g)" \
+    "${NIX_RUN_USER[@]}" \
     -e HOME=/work/home \
     -v "$HEAVY_WORK:/work:z" \
     "$NIX_IMAGE" \
     nix --extra-experimental-features "nix-command flakes" "$@"
 }
-mkdir -p "$HEAVY_WORK/home"
 
 REG="nix-$HEAVY_RUN"
 

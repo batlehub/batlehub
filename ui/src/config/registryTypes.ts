@@ -2230,9 +2230,9 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
             `[[registries]]`,
             `name      = "${ctx.registryName}"`,
             `type      = "galaxy"`,
-            `mode      = "${ctx.mode}"`,
+            `mode      = "proxy"                              # proxy · local · hybrid`,
             `upstreams = ["https://galaxy.ansible.com/api/"]   # the default`,
-            `roles     = "proxy"                              # proxy | index | off`,
+            `roles     = "proxy"                              # proxy · index · off`,
             ``,
             `[registries.rbac]`,
             `# The versions list is a listing; the version document and the tarball are reads.`,
@@ -2297,10 +2297,10 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
         key: "nix-use",
         label: "Build",
         lang: "bash",
-        template: () =>
+        template: (ctx) =>
           [
             `nix build nixpkgs#hello`,
-            `nix copy --from <this cache> /nix/store/…-hello-2.12.2`,
+            `nix copy --from "${ctx.registryUrl}/nix" /nix/store/…-hello-2.12.2`,
             ``,
             `# A blocked store path answers 404 on its narinfo, which to Nix means`,
             `# "not in this cache": it consults the next substituter, or builds from`,
@@ -2337,7 +2337,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
             `[[registries]]`,
             `name      = "${ctx.registryName}"`,
             `type      = "nix"`,
-            `mode      = "${ctx.mode}"`,
+            `mode      = "proxy"`,
             `upstreams = ["https://cache.nixos.org"]   # the default`,
             ``,
             `# Refuse to relay a narinfo carrying no Sig: at all. Off by default —`,
