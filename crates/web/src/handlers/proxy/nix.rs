@@ -399,6 +399,42 @@ pub async fn nix_nar(
     .await
 }
 
+/// A blocked coordinate is **absent**, not forbidden — on every route that
+/// serves a store path, not only on the narinfo.
+///
+/// `proxy_stream` refuses a blocked version with a `403`, which is the right
+/// answer for a caller who may not read and the wrong one for a path this
+/// cache is declining to have. Nix's `HttpBinaryCacheStore` maps both to
+/// "absent" for `fileExists`, so the client behaves the same either way — but
+/// a `403` says *you* may not have this, and the block says *nobody* gets it
+/// here. Only the `404` is the protocol's own "this cache does not have it",
+/// and it is what this kind's page, this module's header and RFC 0028 §5.3 all
+/// promise on `{hash}.narinfo`, `{hash}.ls` and every `nar/` request alike.
+async fn refuse_blocked_path(
+    svc: &ProxyService,
+    registry: &str,
+    package: &str,
+    version: &str,
+    what: &str,
+) -> Result<(), AppError> {
+    let blocked = svc
+        .blocked_versions_for(registry, package, RegistryKind::Nix)
+        .await;
+    if blocked.contains(version) {
+        tracing::debug!(
+            registry = %registry,
+            package = %package,
+            version = %version,
+            route = %what,
+            "refusing a blocked store path"
+        );
+        return Err(AppError::from(batlehub_core::error::CoreError::NotFound(
+            format!("{what} is not in this cache"),
+        )));
+    }
+    Ok(())
+}
+
 /// The coordinate one store hash names, read from its own narinfo.
 ///
 /// The chicken-and-egg this protocol has and npm does not: a request carries a
@@ -435,9 +471,11 @@ async fn coordinate_for(
             .await
             .map_err(AppError::from)?
         {
-            return NarInfo::parse(&held)
+            let path = NarInfo::parse(&held)
                 .and_then(|i| i.store_path())
-                .map_err(AppError::from);
+                .map_err(AppError::from)?;
+            refuse_blocked_path(svc, registry, &path.package, &path.version, hash).await?;
+            return Ok(path);
         }
         if mode_map.get(registry) == RegistryMode::Local {
             return Err(AppError::from(batlehub_core::error::CoreError::NotFound(
@@ -473,6 +511,10 @@ async fn coordinate_for(
             ),
         )));
     }
+    // The block, on the coordinate the document just named — before any byte is
+    // authorized, so the answer is the narinfo's own `404` rather than
+    // `proxy_stream`'s `403`.
+    refuse_blocked_path(svc, registry, &path.package, &path.version, hash).await?;
     Ok(path)
 }
 
@@ -506,7 +548,7 @@ async fn coordinate_for(
         (status = 200, description = "The NAR, resolved through the reverse index and served under its coordinate", body = ArtifactBytes, content_type = "application/x-nix-nar"),
         (status = 400, description = "Unsafe file name"),
         (status = 403, description = "Access denied"),
-        (status = 404, description = "No narinfo served by this instance names this NAR — refetch the narinfo"),
+        (status = 404, description = "No narinfo served by this instance names this NAR (refetch the narinfo), or the coordinate is blocked"),
     ),
     security(("bearer_token" = [])),
 )]
@@ -529,6 +571,20 @@ pub async fn nix_nar_upstream_shape(
             ),
         )));
     };
+
+    // The reverse index is a second spelling of the same coordinate, so it is a
+    // second way to the same bytes: without this, a client whose cached narinfo
+    // predates the registry would be refused with a `403` where every other
+    // route says `404`, and the block would read differently depending on which
+    // URL shape the client happened to hold.
+    refuse_blocked_path(
+        &svc,
+        &registry,
+        &pkg.name,
+        &pkg.version,
+        &format!("nar/{file}"),
+    )
+    .await?;
 
     proxy_stream(
         svc,

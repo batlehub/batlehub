@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/galaxy.md
-sourceHash: 081b377107a0d1d2
+sourceHash: b75d9cc1b7d45c52
 ---
 
 # Ansible Galaxy
@@ -30,7 +30,7 @@ server_list = batlehub
 
 [galaxy_server.batlehub]
 url   = https://batlehub.example.com/proxy/<registre>/galaxy/api/
-token = <un jeton BatleHub>
+token = <your-token>
 ```
 
 ```sh
@@ -99,6 +99,12 @@ Bloquer la version la plus récente déplace également le `highest_version` du 
 - une entrée de `requirements.yml` avec une URL `src:` explicite n'a jamais été une requête de registre.
 
 ## Le réglage `roles`
+
+```sh
+ansible-galaxy role install geerlingguy.docker
+```
+
+La part de cette commande que sert cette instance est un choix de l'opérateur :
 
 | `roles` | Comportement |
 |---|---|

@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/nix.md
-sourceHash: 15595b7f3b802650
+sourceHash: ef9e4819d48372fb
 ---
 
 # Cache binaire Nix
@@ -61,6 +61,18 @@ anonymous = ["releases:read", "releases:list"]
 user      = ["releases:read", "releases:list"]
 admin     = ["*"]
 ```
+
+Les compilations se font ensuite comme auparavant : la substitution passe par
+cette instance, et un chemin du store peut en être tiré à la main :
+
+```sh
+nix build nixpkgs#hello
+nix copy --from "https://batlehub.example.com/proxy/<registry>/nix" /nix/store/…-hello-2.12.2
+```
+
+Un chemin du store bloqué répond `404` sur son narinfo, ce qui signifie pour Nix
+*« ce cache ne l'a pas »* : il consulte le substituter suivant, ou compile
+depuis les sources.
 
 ## Authentification
 

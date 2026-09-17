@@ -158,6 +158,14 @@ async fn a_blocked_store_path_is_absent_and_its_sibling_is_not() {
 /// route re-derives the coordinate from the store hash in its own path and asks
 /// again, so those bytes are refused too — and it is never a `403`
 /// mid-transfer.
+///
+/// **`404`, not "either".** This assertion read `403 || 404` until the heavy
+/// suite drove a real `nix copy` through a block and found the answer was the
+/// `403` — `proxy_stream`'s, the denial every kind shares. The client cannot
+/// tell the two apart (`fileExists` maps both to "absent"), which is exactly
+/// why nothing else would ever have caught it, and why the loose assertion was
+/// worth less than the sentence it was written under: this module's header,
+/// the registry page and RFC 0028 §5.3 all say `404` on the NAR as well.
 #[actix_web::test]
 async fn a_client_holding_a_pre_block_narinfo_is_still_refused_at_the_nar() {
     let app = proxy_app().await;
@@ -166,10 +174,59 @@ async fn a_client_holding_a_pre_block_narinfo_is_still_refused_at_the_nar() {
 
     block_version(&app, REG, NIX_PACKAGE, NIX_VERSION_A).await;
 
-    let (status, _) = get(&app, &nar).await;
-    assert!(
-        status == 403 || status == 404,
-        "a blocked coordinate must not serve its NAR, got {status}"
+    assert_eq!(
+        get(&app, &nar).await.0,
+        404,
+        "a blocked coordinate answers the protocol's own 'not in this cache' at \
+         the NAR too, not the shared 403"
+    );
+}
+
+/// The same block, through the *other* spelling of the same NAR. A client whose
+/// cached narinfo predates this registry asks in the upstream's shape, and the
+/// reverse index resolves it to a coordinate — so it must reach the same
+/// refusal, or the block would read differently depending on which URL a client
+/// happened to hold.
+#[actix_web::test]
+async fn a_blocked_coordinate_is_absent_through_the_reverse_index_too() {
+    let app = proxy_app().await;
+    let upstream_shape = format!("nar/{NIX_NAR_A}");
+
+    // The index is written by serving the narinfo, so this is also what puts
+    // the entry there to be refused.
+    assert_eq!(get(&app, &format!("{NIX_HASH_A}.narinfo")).await.0, 200);
+    assert_eq!(
+        get(&app, &upstream_shape).await.0,
+        200,
+        "indexed and served"
+    );
+
+    block_version(&app, REG, NIX_PACKAGE, NIX_VERSION_A).await;
+
+    assert_eq!(
+        get(&app, &upstream_shape).await.0,
+        404,
+        "the reverse index is a second way to the same bytes, and the block \
+         reaches it"
+    );
+}
+
+/// `.ls` is a read like any other, and the page says a blocked path answers
+/// `404` on it — `nix store ls` must not be a way to learn what a blocked NAR
+/// contains.
+#[actix_web::test]
+async fn a_blocked_store_path_is_absent_at_its_ls() {
+    let app = proxy_app().await;
+    let ls = format!("{NIX_HASH_A}.ls");
+    let before = get(&app, &ls).await.0;
+
+    block_version(&app, REG, NIX_PACKAGE, NIX_VERSION_A).await;
+
+    assert_eq!(
+        get(&app, &ls).await.0,
+        404,
+        "the .ls of a blocked path is absent, not forbidden (it answered \
+         {before} before the block)"
     );
 }
 

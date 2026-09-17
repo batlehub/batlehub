@@ -116,8 +116,23 @@ nix_run() {
     -e HOME=/work/home \
     -v "$HEAVY_WORK:/work:z" \
     "$NIX_IMAGE" \
-    nix --extra-experimental-features "nix-command flakes" "$@"
+    nix --extra-experimental-features "nix-command flakes" \
+        --option narinfo-cache-positive-ttl 0 \
+        --option narinfo-cache-negative-ttl 0 \
+        "$@"
 }
+
+# A Nix store directory is mode `r-xr-xr-x` and its files are `r--r--r--`, so
+# `rm -rf` on the work directory cannot unlink anything inside one — the shared
+# cleanup fails with a "Permission denied" per file (some 2 000 lines in CI,
+# which is what the real failure above them is read under) and leaves the whole
+# store on disk. `heavy_init` has already installed `heavy_cleanup` on EXIT;
+# this replaces it with one that makes the stores writable first.
+heavy_cleanup_nix() {
+  [[ -n "${HEAVY_WORK:-}" ]] && chmod -R u+w "$HEAVY_WORK" 2>/dev/null
+  heavy_cleanup
+}
+trap heavy_cleanup_nix EXIT
 
 REG="nix-$HEAVY_RUN"
 
@@ -233,7 +248,14 @@ heavy_block "$REG" "$PKG_NAME" "$PKG_VERSION"
 heavy_mark blocked
 RUN_OUT="$HEAVY_WORK/blocked.txt"
 # The path is already in store-a and store-b, so a third, empty root is what
-# makes the client actually ask again.
+# makes the client want it again — but an empty *store* is not a cold client.
+# Nix caches the narinfo itself in `$HOME/.cache/nix/binary-cache-v6.sqlite`
+# for `narinfo-cache-positive-ttl` (30 days by default), and `$HOME` is the one
+# directory every `nix_run` here shares. With that cache warm the client never
+# re-asked: it went straight to the NAR it already had a `URL:` for, and the
+# phase asserted a narinfo request that the run had no reason to make. Both
+# TTLs are pinned to 0 in `nix_run` for that reason — the client's own cache
+# must not decide what this suite reads off the wire.
 if nix_copy store-c; then
   cat "$RUN_OUT" >&2
   heavy_fail "nix copy succeeded with $PKG_NAME@$PKG_VERSION blocked — the block did not reach the narinfo"
