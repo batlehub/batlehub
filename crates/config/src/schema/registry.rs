@@ -399,6 +399,28 @@ pub struct RegistryConfig {
     /// (RFC 0028 §4.1).
     #[serde(default)]
     pub require_upstream_sigs: bool,
+    /// How long an unclaimed `nix` NAR upload is kept, in seconds
+    /// (RFC 0028 §4.4). Default 3600.
+    ///
+    /// `nix copy --to` sends a NAR before the narinfo that names it, so the
+    /// bytes wait in a staging area with no coordinate of their own. This is
+    /// how long they wait before a later upload sweeps them.
+    ///
+    /// **Raise it for a link where the two requests are far apart**, not for a
+    /// large closure: `nix copy` walks path by path, so the gap is one NAR's
+    /// upload and one narinfo's round trip, whatever the closure's size.
+    /// Lowering it is a tighter leash on abandoned uploads.
+    #[serde(default)]
+    pub pending_nar_ttl_secs: Option<u32>,
+    /// How many unclaimed `nix` NAR uploads one publisher may hold at once
+    /// (RFC 0028 §4.4). Default 64; the next one answers `429`.
+    ///
+    /// The floor that matters is the client's own concurrency: `nix copy`
+    /// parallelises over `http-connections` (default **25**), and each
+    /// in-flight path holds at most one unclaimed NAR, so a value below that
+    /// will refuse legitimate copies.
+    #[serde(default)]
+    pub max_pending_nars: Option<u32>,
     /// Optional RSA key an `apk` registry signs its generated `APKINDEX.tar.gz`
     /// with (RFC 0026 §4.1). `local`/`hybrid` only: in proxy mode the upstream
     /// index is relayed byte-exact and there is nothing to sign.

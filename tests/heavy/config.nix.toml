@@ -25,6 +25,15 @@ value = "heavy-admin-token"
 role = "admin"
 user_id = "ci-admin"
 
+# The publisher `nix copy --to` authenticates as. A `user`, not the admin
+# above: `admin = ["*"]` would carry the publish through whatever
+# `[registries.rbac].user` says, and then the phase would prove the wildcard
+# rather than the `releases:publish` line it is aimed at.
+[[auth.tokens]]
+value = "heavy-user-token"
+role = "user"
+user_id = "ci-user"
+
 [storage]
 type = "filesystem"
 path = "./tmp/heavy-nix-storage"

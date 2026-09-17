@@ -1133,6 +1133,44 @@ impl AppConfig {
                     ),
                 ));
             }
+            // The two staging limits, when they are set tight enough to refuse
+            // a publish that is doing nothing wrong. `nix copy` opens
+            // `http-connections` (25 by default) in parallel and each one holds
+            // an unclaimed NAR, so a smaller cap refuses a copy for its shape
+            // rather than for its size; and a NAR and its narinfo are one round
+            // trip apart, so a TTL under a minute is a race with the network.
+            if let Some(secs) = registry.pending_nar_ttl_secs {
+                if secs < 60 {
+                    out.push(ConfigWarning::new(
+                        warnings::NIX_STAGING_TIGHT,
+                        format!("registries[{index}].pending_nar_ttl_secs"),
+                        format!(
+                            "registry '{}' keeps an unclaimed NAR for {secs}s. `nix copy --to` \
+                             sends the NAR and its narinfo one round trip apart, so a window \
+                             this short sweeps uploads mid-publish on a slow or loaded link and \
+                             the client sees 'no NAR named … was uploaded by this publisher'.",
+                            registry.name
+                        ),
+                    ));
+                }
+            }
+            if let Some(max) = registry.max_pending_nars {
+                if max < 25 {
+                    out.push(ConfigWarning::new(
+                        warnings::NIX_STAGING_TIGHT,
+                        format!("registries[{index}].max_pending_nars"),
+                        format!(
+                            "registry '{}' allows {max} unclaimed NAR uploads per publisher. \
+                             `nix copy` parallelises over http-connections (25 by default) and \
+                             each in-flight path holds one, so a cap below that refuses copies \
+                             with a 429 for their concurrency rather than for their size — the \
+                             client's own `--option http-connections` is the other half of this \
+                             setting.",
+                            registry.name
+                        ),
+                    ));
+                }
+            }
             if registry.mode != RegistryMode::Proxy && registry.nix_signing.is_none() {
                 out.push(ConfigWarning::new(
                     warnings::NIX_LOCAL_UNSIGNED,
@@ -3797,7 +3835,44 @@ impl AppConfig {
                     registry.registry_type
                 );
             }
+            for (field, set) in [
+                (
+                    "pending_nar_ttl_secs",
+                    registry.pending_nar_ttl_secs.is_some(),
+                ),
+                ("max_pending_nars", registry.max_pending_nars.is_some()),
+            ] {
+                if set {
+                    anyhow::bail!(
+                        "registry '{}': '{field}' applies to type = \"nix\" only (it bounds the \
+                         staging area a NAR waits in before its narinfo claims it), not to '{}'",
+                        registry.name,
+                        registry.registry_type
+                    );
+                }
+            }
             return Ok(());
+        }
+
+        // Zero is not "no limit" for either of these, it is "refuse every
+        // publish": a TTL of 0 sweeps the NAR before its own narinfo can claim
+        // it, and a cap of 0 refuses the first upload. Both would look like a
+        // broken server rather than a policy.
+        if registry.pending_nar_ttl_secs == Some(0) {
+            anyhow::bail!(
+                "registry '{}': pending_nar_ttl_secs = 0 would sweep every upload before its \
+                 narinfo arrives, so no publish could ever complete. Omit it for the default \
+                 (3600), or set the number of seconds an unclaimed NAR may wait",
+                registry.name
+            );
+        }
+        if registry.max_pending_nars == Some(0) {
+            anyhow::bail!(
+                "registry '{}': max_pending_nars = 0 refuses every NAR upload, which refuses \
+                 every publish. Omit it for the default (64), or set how many unclaimed uploads \
+                 one publisher may hold",
+                registry.name
+            );
         }
 
         if let Some(signing) = &registry.nix_signing {

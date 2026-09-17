@@ -674,6 +674,26 @@ pub(super) fn build_hot_bundle(
             .filter(|r| r.require_upstream_sigs)
             .map(|r| r.name.clone())
             .collect(),
+        // nix only, read on every NAR upload: what the staging area a NAR waits
+        // in will hold (RFC 0028 §4.4). Only the registries that say something
+        // are here — an absent entry is the documented default pair, and a map
+        // holding every nix registry at its defaults would make a reload look
+        // like a change.
+        nix_staging: cfg
+            .registries
+            .iter()
+            .filter(|r| r.pending_nar_ttl_secs.is_some() || r.max_pending_nars.is_some())
+            .map(|r| {
+                let d = batlehub_core::services::local_registry::NixStagingLimits::default();
+                (
+                    r.name.clone(),
+                    batlehub_core::services::local_registry::NixStagingLimits {
+                        ttl_secs: r.pending_nar_ttl_secs.map_or(d.ttl_secs, i64::from),
+                        max_pending: r.max_pending_nars.map_or(d.max_pending, |m| m as usize),
+                    },
+                )
+            })
+            .collect(),
         grant_repo: grant_repo.clone(),
         policy_repo: policy_repo.clone(),
         signing_keys: signing_keys.clone(),

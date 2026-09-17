@@ -111,6 +111,13 @@ fi
 # leftover in a mktemp directory is a mess the next run inherits. `HOME` inside
 # the mount for the same reason.
 nix_run() {
+  # Nix sends no credential unless `netrc-file` names one, and the path must be
+  # absolute (RFC 0028 §4.2). Set per phase rather than for the whole run: the
+  # read phases are anonymous on purpose — that is what an ordinary
+  # `substituters` line gets, and `config.nix.toml` says so where it grants
+  # `anonymous` the read verbs.
+  local netrc=()
+  [[ -z "${NIX_CLIENT_NETRC:-}" ]] || netrc=(--option netrc-file "$NIX_CLIENT_NETRC")
   "${CW_ENGINE[@]}" run --rm --network host \
     "${NIX_RUN_USER[@]}" \
     -e HOME=/work/home \
@@ -120,6 +127,7 @@ nix_run() {
         --option narinfo-cache-positive-ttl 0 \
         --option narinfo-cache-negative-ttl 0 \
         --option substituters "" \
+        "${netrc[@]}" \
         "$@"
 }
 
@@ -350,6 +358,31 @@ PUBLISH_TO="$HEAVY_TAP_BASE/proxy/$LOCAL/nix"
 
 heavy_log "Publish — nix copy --to a local registry"
 
+# `nix copy --to` is a write, and the registry grants `releases:publish` to a
+# `user` rather than to `anonymous`. The credential can only reach it through a
+# netrc file: there is no header setting for a binary-cache store, which is the
+# whole of §4.2 and the reason the registry page leads with it.
+#
+# The login is the token's `user_id` and the password is the token itself; the
+# host is the tap's, because netrc matches on host and every request in this
+# phase goes through the tap.
+#
+# **No preemptive-auth flag is needed here, and that is a measured fact rather
+# than a hope.** Nix 2.35.2's `filetransfer.cc` sets `CURLOPT_NETRC_FILE` and
+# `CURLOPT_NETRC` and never touches `CURLOPT_HTTPAUTH`, so libcurl's default —
+# Basic — goes out on the *first* request. That matters because this server
+# refuses an ungranted write with `403` and sends no `WWW-Authenticate`: a
+# client that waited for a challenge would never send the credential at all,
+# which is what `-Daether.connector.http.preemptiveAuth=true` exists for one
+# suite over in `authz.sh`.
+cat >"$HEAVY_WORK/netrc" <<NETRC
+machine 127.0.0.1
+  login ci-user
+  password heavy-user-token
+NETRC
+chmod 600 "$HEAVY_WORK/netrc"
+export NIX_CLIENT_NETRC=/work/netrc
+
 # A path to publish. `nix store add-path` on a file we create makes one without
 # needing a build, an evaluation or nixpkgs — the suite is testing this server,
 # not Nix's evaluator.
@@ -360,6 +393,21 @@ MINE="$(nix_run store add-path --store "local?root=/work/store-pub" \
   || { cat "$HEAVY_WORK/addpath.err" >&2; heavy_fail "could not create a store path to publish"; }
 heavy_log "publishing $MINE"
 MINE_HASH="$(basename "$MINE" | cut -c1-32)"
+
+# ── The staging area is not open to strangers ────────────────────────────────
+#
+# The hole this pins was found here, by watching a `nix copy --to` that carried
+# no credential: `PUT nar/… -> 200` and then `PUT ….narinfo -> 403`. The bytes
+# arrive before the narinfo that names them, so the NAR route has no coordinate
+# to authorize — and it used to authorize nothing at all, which let anyone fill
+# a registry's staging area. Driven by curl rather than by `nix`, because the
+# client cannot be made to send the first request without the second.
+heavy_mark anon-nar
+ANON_NAR="$(curl -sS -o /dev/null -w '%{http_code}' -X PUT --data-binary 'not a nar' \
+  "$PUBLISH_TO/nar/0000000000000000000000000000000000000000000000000000.nar.xz")"
+[[ "$ANON_NAR" == 403 ]] \
+  || heavy_fail "an unauthenticated NAR upload answered $ANON_NAR, not 403 — the staging area \
+takes bytes from callers who hold no publish grant"
 
 heavy_mark publish
 RUN_OUT="$HEAVY_WORK/publish.txt"

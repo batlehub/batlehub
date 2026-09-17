@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/nix.md
-sourceHash: ef9e4819d48372fb
+sourceHash: 27cb1ec777095167
 ---
 
 # Cache binaire Nix
@@ -160,6 +160,45 @@ ses octets est un `400` nommant le champ fautif, et rien n'est stocké.
 
 Un NAR ne peut être réclamé que par le narinfo du **même publieur** que celui
 qui l'a téléversé.
+
+#### Ce que la zone d'attente accepte de garder
+
+Le téléversement qui arrive en premier ne nomme aucun paquet : il ne peut donc
+pas être autorisé par rapport à celui-ci. Trois limites s'y appliquent à la
+place :
+
+| | |
+|---|---|
+| **Qui** | Un appelant qui détient `releases:publish` sur le registre ou sur l'un de ses espaces de noms. Une autorisation limitée à un *seul paquet* ne couvre pas cette requête — aucun paquet n'est encore nommé — et le `403` le dit. |
+| **Combien de temps** | Un NAR non réclamé est balayé **une heure** après son arrivée — `pending_nar_ttl_secs`. Une publication réclame ses octets quelques secondes plus tard : la limite vise les téléversements abandonnés, pas les lents. |
+| **Combien** | **64** téléversements non réclamés par publieur simultanément — `max_pending_nars`. Le 65e répond `429` jusqu'à ce que l'un soit réclamé ou balayé. |
+
+Réclamer un NAR le supprime de la zone d'attente : une publication menée à son
+terme n'y laisse rien.
+
+Les deux se règlent par registre :
+
+```toml
+[[registries]]
+name = "<registry>"
+type = "nix"
+mode = "local"
+pending_nar_ttl_secs = 3600   # la valeur par défaut
+max_pending_nars     = 64     # la valeur par défaut
+```
+
+**Élargissez la fenêtre pour un lien lent, pas pour une grande clôture.**
+`nix copy` progresse chemin par chemin : l'écart entre un NAR et le narinfo qui
+le réclame vaut un téléversement et un aller-retour, quelle que soit la taille
+de la clôture. Ce réglage concerne la latence, pas le volume.
+
+**Le plancher du compteur est la concurrence du client.** `nix copy` parallélise
+selon `http-connections`, dont la valeur par défaut est 25, et chaque chemin en
+vol retient un NAR non réclamé ; un plafond inférieur refuse des copies pour
+leur forme plutôt que pour leur taille. Le serveur avertit au chargement lorsque
+l'une des deux limites est réglée assez bas pour cela, et refuse `0` dans les
+deux cas — une fenêtre nulle balaie chaque NAR avant l'arrivée de son narinfo, et
+un compteur nul refuse toute publication.
 
 ### Signer ce qu'il héberge
 

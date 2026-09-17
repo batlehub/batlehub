@@ -4150,6 +4150,96 @@ fn require_upstream_sigs_on_another_kind_is_rejected() {
 }
 
 #[test]
+fn the_staging_limits_are_nix_only() {
+    for field in ["pending_nar_ttl_secs = 600", "max_pending_nars = 8"] {
+        let cfg = parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        mode = "local"
+        {field}"#
+        ));
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("nix"), "{err}");
+        assert!(err.contains("npm"), "{err}");
+    }
+}
+
+/// Zero is not "no limit" for either: one sweeps the NAR before its own narinfo
+/// can claim it, the other refuses the first upload. Both would read as a
+/// broken server rather than as a policy, which is why they are refused at load
+/// rather than obeyed.
+#[test]
+fn a_staging_limit_of_zero_is_refused() {
+    for field in ["pending_nar_ttl_secs = 0", "max_pending_nars = 0"] {
+        let cfg = parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "local"
+        {field}
+
+        [registries.nix_signing]
+        seed_hex = "{}""#,
+            "ab".repeat(32)
+        ));
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("publish"), "{err}");
+    }
+}
+
+/// Tight enough to refuse a publish that is doing nothing wrong: warned about,
+/// not refused — an operator may know their fleet.
+#[test]
+fn staging_limits_below_what_nix_copy_needs_are_warned_about() {
+    let cfg = parse_config(&format!(
+        r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "local"
+        pending_nar_ttl_secs = 5
+        max_pending_nars = 4
+
+        [registries.nix_signing]
+        seed_hex = "{}""#,
+        "ab".repeat(32)
+    ));
+    cfg.validate()
+        .expect("a tight limit is a choice, not an error");
+    let codes: Vec<_> = cfg.warnings().into_iter().map(|w| w.code).collect();
+    assert_eq!(
+        codes.iter().filter(|c| *c == "nix-staging.tight").count(),
+        2,
+        "both halves warn: {codes:?}"
+    );
+}
+
+#[test]
+fn generous_staging_limits_warn_about_nothing() {
+    let cfg = parse_config(&format!(
+        r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "local"
+        pending_nar_ttl_secs = 7200
+        max_pending_nars = 128
+
+        [registries.nix_signing]
+        seed_hex = "{}""#,
+        "ab".repeat(32)
+    ));
+    cfg.validate().unwrap();
+    assert!(!cfg
+        .warnings()
+        .into_iter()
+        .any(|w| w.code == "nix-staging.tight"));
+}
+
+#[test]
 fn nix_signing_seed_must_be_a_32_byte_hex_string() {
     for seed in ["abcd", &"zz".repeat(32), &"ab".repeat(33)] {
         let cfg = parse_config(&format!(

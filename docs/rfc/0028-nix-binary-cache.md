@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | **In review** — phases 1, 2, 5 and 6 landed 2026-09-17 (reads, routes, surface, air gap); phase 4 (`nix copy --to`, verification, signing) is outstanding, and `tests/heavy/nix.sh` is written and **has not been run**. §13 records nine corrections to the design |
+| Status      | **In review** — phases 1, 2, 4, 5 and 6 landed 2026-09-17 (reads, routes, publish, surface, air gap). `tests/heavy/nix.sh` has now been run and reaches the publish phases; §13 records nine corrections to the design and §14 four more from that first real run, including a publish surface that authorized nobody |
 | Short       | Nix binary cache                                              |
 | Settles     | The substituter protocol as a registry kind: narinfo listings, NARs as artifacts, Ed25519 narinfo signing in local mode, and blocking by store path |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -1120,3 +1120,157 @@ decision and is recorded in §11 rather than taken here.
   project has shipped was found by a client and not by a test double.
 - **The reference-walking closure export**, so a bundle can be built from a
   root path by following `References:`.
+
+## 14. Revision against the tree (2026-09-17, phase 4 and the first real run)
+
+Phase 4 landed — `verify.rs`, the two `PUT` routes, signing, `GET public-key` —
+and `tests/heavy/nix.sh` ran for the first time, against a real `nix` 2.35.2 in
+the `nixos/nix` image under rootless podman. §13 ended with the instruction this
+project keeps relearning: *write the suite, then run it, then believe the kind
+works*. Running it took an afternoon and cost four corrections, one of them a
+hole in the publish surface that every test in the tree had agreed was fine.
+
+### 14.1 The `404` of §5.3 was a `403` on two routes of three
+
+§5.3 settles that a blocked store path is **absent** rather than forbidden, and
+this document's own §4.4 repeats it for `.narinfo`, `.ls` and every `nar/`
+request. The narinfo route did that. The NAR route and the `.ls` route did not:
+both resolve their coordinate and then read through `proxy_stream`, where a
+blocked version is the denial every kind shares — a `403`.
+
+Nothing caught it, and the reason is worth more than the defect. The in-process
+test for exactly this case asserted `status == 403 || status == 404`, because
+Nix's `HttpBinaryCacheStore` maps both to "absent" and the client cannot tell
+them apart. A loose assertion written from the client's tolerance rather than
+from the document's promise is a test that cannot fail the thing it is named
+after. The real `nix copy` found it in one run: the wire showed `403` where
+three separate places in this repository said `404`.
+
+Landed as `refuse_blocked_path` inside `coordinate_for` — the resolver both
+routes already share, so a future route that resolves a store hash inherits the
+refusal — plus the same check on the reverse-index route, which is a second
+spelling of the same coordinate and would otherwise have answered differently
+depending on which URL a client happened to hold. The test now asserts `404`.
+
+### 14.2 The staging area authorized nobody
+
+§4.4 establishes that `nix copy --to` sends the NAR **before** the narinfo that
+names it, and that the bytes therefore arrive with no coordinate. It never says
+who may send them, and the implementation answered: anyone. `publish_nix_nar`
+validated the file name and the size limit and stored the bytes. The grant check
+lived one request later, in `publish_nix_narinfo`'s `enforce_publish_policy`.
+
+The heavy suite drove an unauthenticated `nix copy --to` and printed the shape
+of it in two lines:
+
+```text
+PUT /proxy/nix-local-…/nix/nar/0hv8wxg….nar.xz     -> 200
+PUT /proxy/nix-local-…/nix/v906z7q6….narinfo       -> 403
+```
+
+So any caller who could reach a `local` or `hybrid` `nix` registry could park
+bytes in it, bounded per request by `max_artifact_size_bytes` and unbounded in
+count. They could never be *claimed* — the pending key is scoped by publisher
+and the narinfo check is unchanged — which is why this is a storage hole and not
+a content one, and why no correctness test was ever going to notice it.
+
+**The gate is the widest question that is still a question.** A coordinate
+check has nothing to resolve against here, so `holds_anywhere_in_registry`
+(`services/authz/chain.rs`) asks whether the subject holds `releases:publish`
+anywhere a *configured* node of this registry could grant it: the instance tier,
+the registry node, or any one namespace. Each candidate path resolves on its own
+rather than as one path holding every namespace, because a seal cuts everything
+above it on its own path (RFC 0015 §4.3) and a sealed namespace must not cut the
+registry node for a package it does not match. An active shadow answers yes, for
+§4.7's reason, and records nothing — the narinfo that follows is the decision
+worth recording.
+
+**What it deliberately cannot see** is the package and version tiers. They live
+in the `policy` table keyed by a coordinate this request has not got, and
+enumerating a registry's stored grants to find one is the N+1 that RFC 0015
+§13.2 measured at 806× the cached document. A publisher whose only
+`releases:publish` is scoped to a single package is therefore refused at the
+upload, and the refusal says so in as many words rather than reading as a wrong
+credential.
+
+### 14.3 Two limits the design did not have
+
+An authorization gate decides *who* may fill the staging area, not *how much* of
+it survives. A `nix copy` that dies between the NAR and its narinfo leaves bytes
+nothing will ever claim, and the design had no answer for them. Two per-registry
+settings now bound it:
+
+| Setting | Default | Refused | Warned |
+| --- | --- | --- | --- |
+| `pending_nar_ttl_secs` | `3600` | `0` — it would sweep every NAR before its own narinfo arrives, so no publish could complete | `< 60`: a NAR and its narinfo are one round trip apart, so a shorter window races the network |
+| `max_pending_nars` | `64` | `0` — it refuses the first upload, so it refuses every publish | `< 25`: `nix copy` parallelises over `http-connections` (25 by default) and each in-flight path holds one unclaimed NAR, so a smaller cap refuses copies for their *shape* rather than their size |
+
+Both are `nix`-only and refused on any other kind, like `nix_signing` and
+`require_upstream_sigs` before them. Per registry because both halves are
+deployment facts rather than protocol ones: a link where the two requests are
+far apart wants a longer window; an instance whose publishers are not all
+trusted equally wants a shorter one and a smaller pile.
+
+**The upload time is in the storage key.** `StorageBackend` offers `list_keys`,
+`retrieve`, `delete` and no modification time, so a key of the form
+`nix-pending:{registry}/{publisher}/{secs}/{file}` is the only backend-agnostic
+place to record when a NAR was parked — a `StorageMeta` field would have to be
+added to every backend, including the deduplicating router, where a logical
+key's age is not a well-defined question. The sweep runs on the write path: the
+only caller that cares is the one about to add to the pile, and a background
+sweeper would be a second home for the same rule.
+
+### 14.4 What the client decided, and no double could have
+
+Four facts the suite could only learn by running, each of which had a test
+asserting something else:
+
+1. **The block lands on a `HEAD`.** `nix copy` probes with `fileExists` before
+   it reads, so a blocked path answers `404` to a `HEAD` and the `GET` never
+   happens. The phase asserted `GET …narinfo -> 404` and failed on a run where
+   the block worked perfectly.
+2. **An empty store is not a cold client.** Nix caches narinfos in
+   `$HOME/.cache/nix` for `narinfo-cache-positive-ttl` (30 days) and negative
+   results for an hour. The Refuse phase gave the client a fresh *store* and
+   assumed it would re-ask; it did not, went straight to the NAR it already had
+   a `URL:` for, and the phase measured the client's cache rather than this
+   server. Both TTLs are now pinned to 0 for the run.
+3. **A `404` sends the client to its other substituters.** With the image's
+   default `substituters` in place, the refused path was fetched from
+   `cache.nixos.org` and discarded only because the chroot store did not trust
+   that key — on a machine that did, the phase would have gone green with the
+   path fetched from upstream. `substituters` is now emptied for the run: the
+   only source is the store each command names.
+4. **Nix sends a credential preemptively, and that is not luck.** `nix copy`
+   answered `403` on the narinfo because the suite sent no credential at all —
+   there is no header setting for a binary-cache store, only `netrc-file`.
+   Read from `filetransfer.cc` at tag 2.35.2: it sets `CURLOPT_NETRC_FILE` and
+   `CURLOPT_NETRC` and never touches `CURLOPT_HTTPAUTH`, so libcurl's default
+   Basic goes out on the first request. That matters because this server refuses
+   an ungranted write with `403` and no `WWW-Authenticate`: a client that waited
+   for a challenge would never send the credential, which is the trap
+   `-Daether.connector.http.preemptiveAuth=true` exists for in `authz.sh`.
+
+### 14.5 §9's "config migration: none" enumerates two settings; there are four
+
+The conclusion still holds — all four are optional and an existing file loads
+unchanged — but the sentence names `nix_signing` and `require_upstream_sigs`
+only. The `nix` surface is now those two plus `pending_nar_ttl_secs` and
+`max_pending_nars`.
+
+### 14.6 What the suite has observed, and where it stops
+
+Green on the wire, in order: substitution through the proxy with a real
+`cache.nixos.org-1` signature relayed intact; a second cold store served from
+storage (`batlehub_artifact_cache_hits_total` 0 → 50); a blocked path answering
+`404` at its narinfo with **zero** NAR requests after it, and `nix` reporting
+*"there is no substituter that can build it"*; recovery on the same store root
+after the block was lifted; the upstream-shaped NAR route resolving through the
+reverse index, and an unindexed one answering `404`.
+
+It stops at the publish phases. The credential is wired and an anonymous
+`PUT nar/…` is asserted to answer `403` — §14.2's hole, pinned where it was
+found — but the signed readback, the client-without-the-key refusal, the
+`NarHash` mismatch and the still-good check have not run. Until they have, phase
+4 is code with unit tests and not a kind proven against its client.
+

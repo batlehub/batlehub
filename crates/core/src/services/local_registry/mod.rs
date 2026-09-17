@@ -5,7 +5,7 @@ mod eco_go;
 mod eco_jetbrains;
 mod eco_maven;
 mod eco_nix;
-pub use eco_nix::{NixPublishRequest, PublishedStorePath};
+pub use eco_nix::{NixPublishRequest, NixStagingLimits, PublishedStorePath};
 mod eco_nuget;
 mod eco_openvsx;
 mod eco_pypi;

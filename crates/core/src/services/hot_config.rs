@@ -394,6 +394,13 @@ pub struct HotConfig {
     /// the documented default, and config validation refuses the option on any
     /// other kind.
     pub nix_require_upstream_sigs: std::collections::HashSet<String>,
+    /// nix only: what each registry's NAR staging area will hold
+    /// (`pending_nar_ttl_secs`, `max_pending_nars` — RFC 0028 §4.4).
+    ///
+    /// Read on every NAR upload, so a reload takes effect on the next one. Only
+    /// the registries that set either option are here; absent means the
+    /// documented defaults, which is what `NixStagingLimits::default` is.
+    pub nix_staging: HashMap<String, crate::services::local_registry::NixStagingLimits>,
     /// Per-namespace rule chains, for the namespaces that override a gate
     /// (RFC 0015 §4.1).
     ///
@@ -646,6 +653,7 @@ impl Default for HotConfig {
             deny_components: HashMap::new(),
             galaxy_roles: HashMap::new(),
             nix_require_upstream_sigs: std::collections::HashSet::new(),
+            nix_staging: HashMap::new(),
             namespace_policies: HashMap::new(),
             grants: HashMap::new(),
             instance: None,

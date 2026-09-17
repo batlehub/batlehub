@@ -152,6 +152,44 @@ nothing is stored.
 A NAR can only be claimed by the narinfo of **the same publisher** that
 uploaded it.
 
+#### What the staging area will hold
+
+The upload that arrives first names no package, so it cannot be authorized
+against one. Three limits apply to it instead:
+
+| | |
+|---|---|
+| **Who** | A caller who holds `releases:publish` on the registry or on one of its namespaces. A grant scoped to a *single package* does not reach this request — no package is named yet — and the `403` says so. |
+| **How long** | An unclaimed NAR is swept **an hour** after it arrives — `pending_nar_ttl_secs`. A publish claims its bytes seconds later, so this is a limit on abandoned uploads, not on slow ones. |
+| **How many** | **64** unclaimed uploads per publisher at once — `max_pending_nars`. The 65th answers `429` until one is claimed or swept. |
+
+Claiming a NAR deletes it from the staging area, so a completed publish holds
+nothing there.
+
+Both are per registry:
+
+```toml
+[[registries]]
+name = "<registry>"
+type = "nix"
+mode = "local"
+pending_nar_ttl_secs = 3600   # the default
+max_pending_nars     = 64     # the default
+```
+
+**Raise the window for a slow link, not for a large closure.** `nix copy` walks
+path by path, so the gap between a NAR and the narinfo that claims it is one
+upload and one round trip whatever the closure's size — the setting is about
+latency, not volume.
+
+**The floor under the count is the client's own concurrency.** `nix copy`
+parallelises over `http-connections`, which defaults to 25, and each in-flight
+path holds one unclaimed NAR; a cap below that refuses copies for their shape
+rather than for their size. The server warns at load about either limit set
+tight enough to do that, and refuses `0` for both — a window of zero sweeps
+every NAR before its own narinfo arrives, and a count of zero refuses every
+publish.
+
 ### Signing what it hosts
 
 ```toml

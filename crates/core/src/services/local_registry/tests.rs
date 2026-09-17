@@ -4127,3 +4127,330 @@ mod encoded_traversal {
         validate_path_safe("version", "1.0.0+build.1").expect("a real version still passes");
     }
 }
+
+// ── The nix staging area: who may fill it, and for how long (RFC 0028 §4.4) ──
+//
+// `nix copy --to` uploads a NAR *before* the narinfo that names it, so these
+// bytes arrive with no coordinate: no package, no version, nothing the
+// coordinate-scoped publish check can resolve against. What guards them is a
+// registry-wide grant, a time limit and a count — and the heavy suite found the
+// first one missing by watching an anonymous `PUT nar/… -> 200` be followed by
+// `PUT ….narinfo -> 403`.
+mod nix_staging {
+    use super::*;
+    use crate::entities::{GrantMap, Node, RegistryGrants, RegistryKind, SubjectMatcher, Tier};
+    use crate::services::local_registry::eco_nix::{
+        pending_nar_key, MAX_PENDING_NARS, PENDING_NAR_TTL_SECS,
+    };
+    use crate::services::local_registry::NixStagingLimits;
+
+    const REG: &str = "nix1";
+
+    fn nix_svc(store: Arc<MemStore>, closed: bool) -> LocalRegistryService {
+        nix_svc_with(store, closed, HashMap::new())
+    }
+
+    /// A service whose storage really stores, and whose registry grants
+    /// `releases:publish` to `user:publisher` and to nobody else.
+    fn nix_svc_with(
+        store: Arc<MemStore>,
+        closed: bool,
+        nix_staging: HashMap<String, NixStagingLimits>,
+    ) -> LocalRegistryService {
+        let mut grants = HashMap::new();
+        if closed {
+            let map = GrantMap::new()
+                .grant(
+                    SubjectMatcher::User("publisher".to_owned()),
+                    vec![Action::ReleasesPublish],
+                )
+                .grant(
+                    SubjectMatcher::User("publisher2".to_owned()),
+                    vec![Action::ReleasesPublish],
+                );
+            grants.insert(
+                REG.to_owned(),
+                Arc::new(RegistryGrants {
+                    kind: RegistryKind::Nix,
+                    registry: Node::new(Tier::Registry, "registry:nix1", Some(map)),
+                    namespaces: Vec::new(),
+                }),
+            );
+        }
+        LocalRegistryService {
+            backend: InMemBackend::arc(),
+            storage: store,
+            hot: new_hot_lock(HotConfig {
+                grants,
+                nix_staging,
+                ..Default::default()
+            }),
+            quota: None,
+            ownership: None,
+            team_namespace: None,
+            sbom: None,
+            explore_cache: None,
+            package_repo: None,
+            readme: None,
+        }
+    }
+
+    fn publisher() -> Identity {
+        Identity {
+            user_id: Some("publisher".to_owned()),
+            role: Role::User,
+            auth_provider: None,
+            groups: Vec::new(),
+        }
+    }
+
+    /// A second granted publisher, for the half of the cap that is about
+    /// *whose* bucket is full.
+    fn second() -> Identity {
+        Identity {
+            user_id: Some("publisher2".to_owned()),
+            role: Role::User,
+            auth_provider: None,
+            groups: Vec::new(),
+        }
+    }
+
+    fn stranger() -> Identity {
+        Identity {
+            user_id: Some("stranger".to_owned()),
+            role: Role::User,
+            auth_provider: None,
+            groups: Vec::new(),
+        }
+    }
+
+    fn anonymous() -> Identity {
+        Identity {
+            user_id: None,
+            role: Role::Anonymous,
+            auth_provider: None,
+            groups: Vec::new(),
+        }
+    }
+
+    /// **The hole the heavy suite found.** The bytes are refused before they are
+    /// stored, not one request later when the narinfo names a coordinate.
+    #[tokio::test]
+    async fn an_ungranted_caller_cannot_park_a_nar() {
+        let store = MemStore::arc();
+        let svc = nix_svc(store.clone(), true);
+
+        for who in [anonymous(), stranger()] {
+            let err = svc
+                .publish_nix_nar(REG, "abc.nar.xz", Bytes::from_static(b"x"), &who)
+                .await
+                .expect_err("a caller with no publish grant may not consume the staging area");
+            assert!(
+                matches!(err, CoreError::AccessDenied(_)),
+                "expected a 403-shaped refusal, got {err:?}"
+            );
+        }
+        assert!(
+            store.list_keys("nix-pending:").await.unwrap().is_empty(),
+            "nothing may be written for a caller that was refused"
+        );
+
+        svc.publish_nix_nar(REG, "abc.nar.xz", Bytes::from_static(b"x"), &publisher())
+            .await
+            .expect("the publisher the registry grants may park one");
+        assert_eq!(store.list_keys("nix-pending:").await.unwrap().len(), 1);
+    }
+
+    /// A registry with no policy at all keeps behaving as it did before RFC
+    /// 0015 — absence constrains nothing, which is the whole model's asymmetry.
+    #[tokio::test]
+    async fn a_registry_with_no_grants_configured_still_accepts_uploads() {
+        let svc = nix_svc(MemStore::arc(), false);
+        svc.publish_nix_nar(REG, "abc.nar.xz", Bytes::from_static(b"x"), &anonymous())
+            .await
+            .expect("no configured policy must not become a refusal");
+    }
+
+    /// An unclaimed NAR is not kept: the next upload sweeps it, and it stops
+    /// answering the `HEAD` probe before that.
+    #[tokio::test]
+    async fn an_expired_upload_is_swept_and_is_not_claimable() {
+        let store = MemStore::arc();
+        let svc = nix_svc(store.clone(), true);
+        let stale = pending_nar_key(
+            REG,
+            "publisher",
+            chrono::Utc::now().timestamp() - PENDING_NAR_TTL_SECS - 1,
+            "old.nar.xz",
+        );
+        store.put(&stale, Bytes::from_static(b"stale"));
+
+        assert!(
+            !svc.nix_nar_exists(REG, "old.nar.xz", &publisher())
+                .await
+                .unwrap(),
+            "an expired upload must answer the probe with 'no', so the client re-uploads"
+        );
+        assert!(
+            svc.take_pending_nix_nar(REG, "old.nar.xz", &publisher())
+                .await
+                .is_err(),
+            "and it must not be claimable"
+        );
+
+        svc.publish_nix_nar(REG, "new.nar.xz", Bytes::from_static(b"x"), &publisher())
+            .await
+            .unwrap();
+        let left = store.list_keys("nix-pending:").await.unwrap();
+        assert_eq!(left.len(), 1, "the stale entry is gone: {left:?}");
+        assert!(left[0].ends_with("/new.nar.xz"));
+    }
+
+    /// A live upload survives the sweep and is claimable by the publisher that
+    /// parked it — the positive control, without which the test above passes on
+    /// a method that deletes everything.
+    #[tokio::test]
+    async fn a_live_upload_survives_and_is_claimable() {
+        let store = MemStore::arc();
+        let svc = nix_svc(store.clone(), true);
+        svc.publish_nix_nar(REG, "a.nar.xz", Bytes::from_static(b"bytes"), &publisher())
+            .await
+            .unwrap();
+        svc.publish_nix_nar(REG, "b.nar.xz", Bytes::from_static(b"more"), &publisher())
+            .await
+            .unwrap();
+
+        assert!(svc
+            .nix_nar_exists(REG, "a.nar.xz", &publisher())
+            .await
+            .unwrap());
+        assert_eq!(
+            svc.take_pending_nix_nar(REG, "a.nar.xz", &publisher())
+                .await
+                .unwrap(),
+            Bytes::from_static(b"bytes")
+        );
+        assert_eq!(store.list_keys("nix-pending:").await.unwrap().len(), 2);
+    }
+
+    /// Re-uploading the same file replaces its entry rather than adding one,
+    /// or a client that retried would spend its own allowance.
+    #[tokio::test]
+    async fn a_re_upload_supersedes_rather_than_accumulates() {
+        let store = MemStore::arc();
+        let svc = nix_svc(store.clone(), true);
+        for _ in 0..3 {
+            svc.publish_nix_nar(REG, "a.nar.xz", Bytes::from_static(b"x"), &publisher())
+                .await
+                .unwrap();
+        }
+        assert_eq!(store.list_keys("nix-pending:").await.unwrap().len(), 1);
+    }
+
+    /// The ceiling, and the reason it is a `429`: the caller may publish here,
+    /// they are simply holding too much unclaimed at once.
+    #[tokio::test]
+    async fn a_publisher_may_not_hold_more_than_the_cap() {
+        let store = MemStore::arc();
+        let svc = nix_svc(store.clone(), true);
+        let now = chrono::Utc::now().timestamp();
+        for i in 0..MAX_PENDING_NARS {
+            store.put(
+                &pending_nar_key(REG, "publisher", now, &format!("f{i}.nar.xz")),
+                Bytes::from_static(b"x"),
+            );
+        }
+        let err = svc
+            .publish_nix_nar(
+                REG,
+                "one-too-many.nar.xz",
+                Bytes::from_static(b"x"),
+                &publisher(),
+            )
+            .await
+            .expect_err("the cap is a limit or it is decoration");
+        assert!(
+            matches!(err, CoreError::QuotaExceeded(_)),
+            "expected a 429-shaped refusal, got {err:?}"
+        );
+
+        // And the cap is per publisher, because the staging area is: a second
+        // one is unaffected by the first one's pile.
+        svc.publish_nix_nar(REG, "mine.nar.xz", Bytes::from_static(b"x"), &second())
+            .await
+            .expect("one publisher filling their bucket must not close the registry");
+    }
+
+    /// **Both limits are a deployment's to set** — the reason they are config
+    /// and not constants: a link where the NAR and its narinfo are far apart
+    /// needs a longer window, and an instance whose publishers are not all
+    /// trusted equally wants a shorter one and a smaller pile.
+    #[tokio::test]
+    async fn a_registry_may_set_its_own_window() {
+        let store = MemStore::arc();
+        let svc = nix_svc_with(
+            store.clone(),
+            true,
+            HashMap::from([(
+                REG.to_owned(),
+                NixStagingLimits {
+                    ttl_secs: 1,
+                    ..Default::default()
+                },
+            )]),
+        );
+        // Two seconds old: inside the default hour, outside this registry's second.
+        let key = pending_nar_key(
+            REG,
+            "publisher",
+            chrono::Utc::now().timestamp() - 2,
+            "old.nar.xz",
+        );
+        store.put(&key, Bytes::from_static(b"stale"));
+
+        assert!(
+            !svc.nix_nar_exists(REG, "old.nar.xz", &publisher())
+                .await
+                .unwrap(),
+            "the registry's own window decides, not the default"
+        );
+
+        // And the default still keeps it, so the test above is about the
+        // setting rather than about two seconds having passed.
+        let wide = nix_svc(store.clone(), true);
+        assert!(wide
+            .nix_nar_exists(REG, "old.nar.xz", &publisher())
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_registry_may_set_its_own_ceiling() {
+        let store = MemStore::arc();
+        let svc = nix_svc_with(
+            store.clone(),
+            true,
+            HashMap::from([(
+                REG.to_owned(),
+                NixStagingLimits {
+                    max_pending: 1,
+                    ..Default::default()
+                },
+            )]),
+        );
+        svc.publish_nix_nar(REG, "a.nar.xz", Bytes::from_static(b"x"), &publisher())
+            .await
+            .expect("the first is within a ceiling of one");
+        let err = svc
+            .publish_nix_nar(REG, "b.nar.xz", Bytes::from_static(b"x"), &publisher())
+            .await
+            .expect_err("the second is not");
+        match err {
+            CoreError::QuotaExceeded(msg) => assert!(
+                msg.contains("max_pending_nars"),
+                "the refusal names the setting an operator would change: {msg}"
+            ),
+            other => panic!("expected a 429-shaped refusal, got {other:?}"),
+        }
+    }
+}
