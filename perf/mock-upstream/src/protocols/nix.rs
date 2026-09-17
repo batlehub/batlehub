@@ -14,7 +14,7 @@
 
 use actix_web::{route, web, HttpResponse};
 
-use crate::support::{artifact_bytes, delay};
+use crate::support::{artifact_bytes, delay, sha256_hex};
 use crate::Args;
 
 /// `GET /nix/nix-cache-info`
@@ -32,6 +32,16 @@ async fn cache_info(args: web::Data<Args>) -> HttpResponse {
 /// library output carries: the fingerprint sorts and rewrites them into full
 /// store paths on every relay, so a one-entry fixture would soak a code path
 /// that barely runs.
+///
+/// **`FileHash:` is the real digest of the bytes `nar` below will serve**, and
+/// spelled in base16 rather than a narinfo's more usual Nix32 — both are legal
+/// (`nix_hash_to_sri` reads either), and hex is the one this mock can produce
+/// without carrying a Nix32 encoder. It has to be real because the proxy turns
+/// this field into `PackageMetadata::checksum` and verifies the NAR against it
+/// on the cache write, with `block_on_mismatch` on by default: a made-up digest
+/// makes every NAR read a `502`. That is the same defect the npm `dist.shasum`
+/// comment in this crate's `Cargo.toml` records, and it is what the soak's
+/// pre-flight caught on the `nix_nar` arm.
 #[route("/nix/{hash}.narinfo", method = "GET", method = "HEAD")]
 async fn narinfo(path: web::Path<String>, args: web::Data<Args>) -> HttpResponse {
     delay(args.delay_ms).await;
@@ -41,18 +51,21 @@ async fn narinfo(path: web::Path<String>, args: web::Data<Args>) -> HttpResponse
     let refs: Vec<String> = (0..5)
         .map(|i| format!("{}{i}-dep{i}-1.0.0", &"0123456789abcdfghijklmnpqrsvwxyz"[..31]))
         .collect();
+    // Exactly what `nar` answers for the `URL:` below — same name, same size,
+    // and `artifact_bytes` is deterministic in both.
+    let size = args.artifact_size_kb * 1024;
+    let file_hash = sha256_hex(&artifact_bytes(&format!("{hash}.nar.zst"), "", size));
     let body = format!(
         "StorePath: /nix/store/{hash}-demo-1.0.0\n\
          URL: nar/{hash}.nar.zst\n\
          Compression: zstd\n\
-         FileHash: sha256:10k72lz1iazridh4787xk3mfl6c5akf8x88xz7bnswc03b5gvyqp\n\
+         FileHash: sha256:{file_hash}\n\
          FileSize: {size}\n\
          NarHash: sha256:075lhsj33mkk02xn3lf59xn9glvh02wkw9xislbcj1jgjlpcn79x\n\
          NarSize: 226848\n\
          References: {refs}\n\
          Deriver: y1h1bh5gl539r42jydbnbmp3vyh11sva-demo-1.0.0.drv\n\
          Sig: cache.nixos.org-1:21qiHy652KfJ7Rsnc+dy5KndgujuIQEU/oudrFh7sWkkLlT9r8F3AxKA//dMvr9xWBA3tITPZA6ZFC7KxxRJBA==\n",
-        size = args.artifact_size_kb * 1024,
         refs = refs.join(" "),
     );
     HttpResponse::Ok()
