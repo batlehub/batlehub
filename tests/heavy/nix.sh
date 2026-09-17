@@ -375,22 +375,66 @@ heavy_log "Publish — nix copy --to a local registry"
 # client that waited for a challenge would never send the credential at all,
 # which is what `-Daether.connector.http.preemptiveAuth=true` exists for one
 # suite over in `authz.sh`.
+PUBLISH_LOGIN="ci-user"
+PUBLISH_TOKEN="heavy-user-token"
 cat >"$HEAVY_WORK/netrc" <<NETRC
 machine 127.0.0.1
-  login ci-user
-  password heavy-user-token
+  login $PUBLISH_LOGIN
+  password $PUBLISH_TOKEN
 NETRC
 chmod 600 "$HEAVY_WORK/netrc"
 export NIX_CLIENT_NETRC=/work/netrc
 
-# A path to publish. `nix store add-path` on a file we create makes one without
-# needing a build, an evaluation or nixpkgs — the suite is testing this server,
-# not Nix's evaluator.
-mkdir -p "$HEAVY_WORK/topublish"
-date > "$HEAVY_WORK/topublish/stamp.txt"
-MINE="$(nix_run store add-path --store "local?root=/work/store-pub" \
-  --name heavy-probe-1.0 /work/topublish 2>"$HEAVY_WORK/addpath.err")" \
-  || { cat "$HEAVY_WORK/addpath.err" >&2; heavy_fail "could not create a store path to publish"; }
+# The path to publish — and **not** `nix store add-path`, which is what this
+# phase used until the signature arms below were run for the first time.
+#
+# `add-path` produces a **content-addressed** path, and
+# `ValidPathInfo::checkSignatures` (path-info.cc, 2.35.2) opens with
+# `if (isContentAddressed(store)) return maxSigs;` — it answers "fully signed"
+# before it looks at a signature. So with a CA fixture the readback arm passes
+# whatever this server signs, *including nothing*, and the arm that proves an
+# untrusted client refuses cannot pass at all. Both controls were measuring the
+# short-circuit. This RFC quotes that same short-circuit in §4.1 as the reason
+# `require_upstream_sigs` is about non-CA paths only; it applies here too.
+#
+# The fixture therefore has to be input-addressed. The cheapest honest one is
+# already on disk: a **leaf of the closure store-a just substituted** — no
+# build, no sandbox, no nixpkgs, and one upload, because `nix copy` copies a
+# closure and a leaf's closure is itself.
+PATHS_JSON="$HEAVY_WORK/store-a-paths.json"
+nix_run path-info --store "local?root=/work/store-a" --json --recursive "$STORE_PATH" \
+  >"$PATHS_JSON" 2>"$HEAVY_WORK/pathinfo.err" \
+  || { cat "$HEAVY_WORK/pathinfo.err" >&2; heavy_fail "could not read store-a's closure"; }
+
+MINE="$(python3 - "$PATHS_JSON" <<'PYPICK'
+import json, sys
+
+with open(sys.argv[1]) as fh:
+    doc = json.load(fh)
+# 2.19+ answers an object keyed by store path; older versions a list of
+# objects carrying "path". Both shapes, because the image's nix is pinned but
+# this reads as though it will be bumped.
+entries = (
+    [(p, v or {}) for p, v in doc.items()]
+    if isinstance(doc, dict)
+    else [(e["path"], e) for e in doc]
+)
+leaves = [
+    (info.get("narSize") or 0, path)
+    for path, info in entries
+    # `ca` present means content-addressed, which is the whole point of this
+    # selection. References to itself are fine: the closure is still one path.
+    if not info.get("ca")
+    and not [r for r in (info.get("references") or []) if r != path]
+]
+if not leaves:
+    sys.exit("no input-addressed leaf in this closure — every candidate is "
+             "content-addressed or pulls others in, and a CA fixture makes "
+             "the signature arms vacuous")
+print(min(leaves)[1])
+PYPICK
+)" || heavy_fail "could not choose an input-addressed path to publish"
+
 heavy_log "publishing $MINE"
 MINE_HASH="$(basename "$MINE" | cut -c1-32)"
 
@@ -411,7 +455,7 @@ takes bytes from callers who hold no publish grant"
 
 heavy_mark publish
 RUN_OUT="$HEAVY_WORK/publish.txt"
-nix_run copy --to "$PUBLISH_TO" --from "local?root=/work/store-pub" "$MINE" \
+nix_run copy --to "$PUBLISH_TO" --from "local?root=/work/store-a" "$MINE" \
   >"$RUN_OUT" 2>&1 \
   || { cat "$RUN_OUT" >&2; heavy_fail "nix copy --to the local registry failed"; }
 
@@ -429,6 +473,19 @@ heavy_wire_after publish "PUT /proxy/$LOCAL/nix/$MINE_HASH.narinfo -> 200" \
 PUBKEY="$(curl -fsS "$HEAVY_TAP_BASE/proxy/$LOCAL/nix/public-key")" \
   || heavy_fail "the registry serves no public key, so nothing can trust what it publishes"
 heavy_log "registry key: $PUBKEY"
+
+# **The fixture's own property, asserted rather than assumed.** A `CA:` line
+# here would make both arms below vacuous — see the note above `PATHS_JSON` —
+# and the failure would be a green run, which is the one this suite must never
+# produce.
+SERVED_NARINFO="$(curl -fsS "$HEAVY_TAP_BASE/proxy/$LOCAL/nix/$MINE_HASH.narinfo")" \
+  || heavy_fail "the registry does not serve the narinfo it just accepted"
+if grep -q '^CA:' <<<"$SERVED_NARINFO"; then
+  heavy_fail "the published fixture is content-addressed: checkSignatures short-circuits for a \
+CA path, so neither signature arm below would prove anything"
+fi
+grep -q "^Sig: ${PUBKEY%%:*}:" <<<"$SERVED_NARINFO" \
+  || heavy_fail "the served narinfo carries no signature under this registry's own key name"
 
 heavy_mark readback
 RUN_OUT="$HEAVY_WORK/readback.txt"
@@ -461,18 +518,40 @@ heavy_log "and a client without the key refuses it, which is what makes the chec
 
 heavy_log "A narinfo whose NarHash does not match the bytes"
 heavy_mark badhash
-GOOD_NARINFO="$(curl -fsS "$HEAVY_TAP_BASE/proxy/$LOCAL/nix/$MINE_HASH.narinfo")"
+GOOD_NARINFO="$(curl -fsS "$HEAVY_TAP_BASE/proxy/$LOCAL/nix/$MINE_HASH.narinfo")" \
+  || heavy_fail "the registry does not serve the narinfo it accepted"
 BAD_NARINFO="$(printf '%s\n' "$GOOD_NARINFO" \
   | sed 's|^NarHash: .*|NarHash: sha256:0000000000000000000000000000000000000000000000000000|')"
+
+# **The NAR has to be parked again first, by the same publisher.** A successful
+# publish reaps the upload it claimed, so a bare re-PUT of a narinfo is refused
+# for having nothing to claim — *"no NAR named … was uploaded by this
+# publisher"* — and this assertion's old alternation (`NarHash|FileHash|nar`)
+# matched the `NAR` in that sentence. The phase was green without ever reaching
+# the hash check it is named after; it measured the reaping.
+NAR_URL="$(awk '/^URL: /{print $2}' <<<"$GOOD_NARINFO")"
+curl -fsS -o "$HEAVY_WORK/reupload.nar" "$PUBLISH_TO/$NAR_URL" \
+  || heavy_fail "the registry does not serve the NAR it just accepted"
+PARKED="$(curl -sS -o /dev/null -w '%{http_code}' -X PUT \
+  --data-binary @"$HEAVY_WORK/reupload.nar" \
+  -u "$PUBLISH_LOGIN:$PUBLISH_TOKEN" \
+  "$PUBLISH_TO/nar/$(basename "$NAR_URL")")"
+[[ "$PARKED" == 200 ]] \
+  || heavy_fail "re-parking the NAR answered $PARKED — without it the refusal below is about the \
+missing upload rather than about the hash"
+
 STATUS="$(printf '%s\n' "$BAD_NARINFO" \
   | curl -sS -o "$HEAVY_WORK/badhash.out" -w '%{http_code}' \
       -X PUT --data-binary @- \
-      -H "Authorization: Bearer $ADMIN_TOKEN" \
+      -u "$PUBLISH_LOGIN:$PUBLISH_TOKEN" \
       "$HEAVY_TAP_BASE/proxy/$LOCAL/nix/$MINE_HASH.narinfo")"
 [[ "$STATUS" == 400 ]] \
   || heavy_fail "a narinfo disagreeing with its bytes answered $STATUS, not 400 — this server would have signed a hash it never checked"
-grep -qiE "NarHash|FileHash|nar" "$HEAVY_WORK/badhash.out" \
-  || heavy_fail "the refusal does not say which field disagreed"
+# `NarHash` by name: the refusals in `check_nar` quote the field they are about
+# (`'NarHash' says … and …`), and an alternation wide enough to match any
+# message with "nar" in it is what let this phase pass on the wrong refusal.
+grep -q "NarHash" "$HEAVY_WORK/badhash.out" \
+  || heavy_fail "the refusal does not name NarHash: $(head -c 200 "$HEAVY_WORK/badhash.out")"
 heavy_log "refused, naming the field: $(head -c 200 "$HEAVY_WORK/badhash.out")"
 
 # And the path it names is still the *good* one — a refused publish must not
