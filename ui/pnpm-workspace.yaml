@@ -8,8 +8,9 @@
 #
 # TypeScript 7 (the native port) is the `latest` dist-tag, and `pnpm update
 # --latest` will offer it. It is not taken here because `typescript-eslint`
-# declares `typescript: ">=4.8.4 <6.1.0"` as a peer, and 8.68.0 is its newest
-# stable release — there is no 9.x. Taking TS 7 therefore breaks `pnpm run
+# declares `typescript: ">=4.8.4 <6.1.0"` as a peer, and 8.70.0 is its newest
+# stable release — there is no 9.x. (Re-checked 2026-09-17: the peer range is
+# unchanged at 8.70.0, so TS 7 is still out.) Taking TS 7 therefore breaks `pnpm run
 # lint:eslint`, which is the type-aware half of the lint gate and the job that
 # feeds SARIF to Code Scanning (oxlint, the fast half, does not type-check).
 # `^6.0.3` is the newest release of the 6 line. Revisit when typescript-eslint

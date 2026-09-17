@@ -1,5 +1,5 @@
 [tools]
-ruby = "3.3"
+ruby = "3.4"
 bundler = "latest"
 
 [tasks.install]

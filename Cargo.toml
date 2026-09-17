@@ -204,6 +204,15 @@ aws-config = { version = "1", default-features = false }
 # is disabled), but Cargo still resolves it with its full transitive chain:
 #   sqlx-macros → sqlx-macros-core → sqlx-mysql → rsa (RUSTSEC-2023-0071)
 # Replacing it with a local stub removes those packages from the lock file entirely.
+# Patch `paste` with a re-export of its maintained fork.
+# `paste` is archived upstream — RUSTSEC-2024-0436, "No safe upgrade is
+# available!". Its only holder in this tree is `tikv-jemalloc-ctl 0.7.0`, which
+# is the latest release and still wants `paste = "1"`, so there is nothing to
+# upgrade to; and `deny.toml` keeps `ignore = []`, so there is nothing to
+# suppress either. `patches/paste` is a plain lib that re-exports `pastey`, the
+# fork RustSec names as the drop-in replacement. See the crate's own doc comment
+# for why the substitution cannot change a mallctl key.
 [patch.crates-io]
+paste       = { path = "patches/paste" }
 sqlx-macros = { path = "patches/sqlx-macros" }
 sqlx-mysql  = { path = "patches/sqlx-mysql" }

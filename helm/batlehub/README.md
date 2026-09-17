@@ -57,7 +57,7 @@ concurrently.
 
 | Repository | Name | Version |
 |------------|------|---------|
-| https://aquasecurity.github.io/helm-charts/ | trivy | 0.14.1 |
+| https://aquasecurity.github.io/helm-charts/ | trivy | 0.26.0 |
 
 ## Values
 

@@ -6,11 +6,11 @@ terraform {
     # Configure the network mirror in .terraformrc (see this directory).
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.40"
+      version = "~> 6.65"
     }
     random = {
       source  = "hashicorp/random"
-      version = "~> 3.6"
+      version = "~> 3.9"
     }
   }
 }

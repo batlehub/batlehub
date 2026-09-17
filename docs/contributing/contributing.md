@@ -98,7 +98,8 @@ batlehub/
 │   └── tests/         CLI integration tests — subprocess binary against in-memory server
 ├── docs/              Guides (you are here)
 ├── ui/                Vue 3 front-end
-└── patches/           sqlx-macros stub (see sqlx note in Cargo.toml)
+└── patches/           Crates substituted by [patch.crates-io] (see Cargo.toml):
+                       sqlx-macros/sqlx-mysql stubs, and a paste shim over pastey
 ```
 
 ### Dependency direction

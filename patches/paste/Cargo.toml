@@ -1,0 +1,14 @@
+[package]
+name = "paste"
+version = "1.0.15"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Local shim — replaces crates.io `paste` (RUSTSEC-2024-0436, unmaintained and archived) with a re-export of its maintained fork `pastey`. The only consumer in this tree is tikv-jemalloc-ctl, which uses `paste::paste!` for identifier concatenation alone."
+
+# NOT `proc-macro = true`, deliberately. A proc-macro crate may only export
+# `#[proc_macro]` items of its own, so it cannot re-export somebody else's.
+# A plain lib can, and `paste::paste!` resolves through the re-export exactly
+# as it did through the original crate — the same arrangement as `serde`
+# re-exporting `serde_derive`.
+[dependencies]
+pastey = "0.2.3"

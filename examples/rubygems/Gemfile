@@ -1,13 +1,13 @@
 # All gems are fetched through the batlehub proxy instead of rubygems.org.
 source "http://localhost:8080/proxy/my-gems/"
 
-gem "rails", "~> 7.1"
-gem "puma", "~> 6.0"
-gem "pg", "~> 1.5"
+gem "rails", "~> 8.1"
+gem "puma", "~> 8.0"
+gem "pg", "~> 1.6"
 gem "bootsnap", require: false
 
 group :development, :test do
-  gem "rspec-rails", "~> 6.0"
+  gem "rspec-rails", "~> 8.0"
   gem "factory_bot_rails"
 end
 

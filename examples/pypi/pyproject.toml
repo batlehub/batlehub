@@ -5,18 +5,18 @@ build-backend = "hatchling.build"
 [project]
 name = "my-app"
 version = "0.1.0"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.104.0",
-    "uvicorn[standard]>=0.24.0",
-    "httpx>=0.25.0",
-    "pydantic>=2.5.0",
+    "fastapi>=0.141.0",
+    "uvicorn[standard]>=0.53.0",
+    "httpx>=0.28.0",
+    "pydantic>=2.13.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.4.0",
-    "ruff>=0.1.0",
+    "pytest>=9.1.0",
+    "ruff>=0.16.0",
 ]
 
 [[tool.uv.index]]

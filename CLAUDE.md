@@ -191,6 +191,8 @@ SQL migrations live in `crates/adapters/migrations/`. They are embedded via `cra
 
 The four invariants above are now also enforced by `cargo-deny`: `rsa`, `sqlx-mysql`, `sqlx-macros-core`, the legacy `rustls 0.21` / `rustls-webpki 0.101` line, `h2 <0.4`, and `lru <0.18.2` are in the `[bans].deny` list in `deny.toml`. If a dependency bump silently drags one back into the tree, `cargo deny check` (and CI) fails.
 
+`paste` is substituted by `patches/paste`, a plain lib that re-exports `pastey`. The crates.io `paste` is archived upstream (RUSTSEC-2024-0436, "No safe upgrade is available!"), and its only holder here is `tikv-jemalloc-ctl 0.7.0` — the latest release, still requiring `paste = "1"`. So there is nothing to upgrade to, and `deny.toml` keeps `ignore = []`, so there is nothing to suppress either. `pastey` is the fork RustSec names as the drop-in replacement, and `tikv-jemalloc-ctl`'s whole use of it is `[<$id _mib>]` identifier concatenation — no mallctl key string passes through the macro, so the substitution cannot change which key the stats reader looks up, and a mismatch would be a name-resolution error at compile time rather than a wrong key at run time. Do not add `paste` back as a direct dependency.
+
 ### Vulnerability scanning
 
 CVE detection runs continuously across every layer; see `docs/contributing/security-scanning.md` for the full matrix and the SBOM re-scan workflow. Reproduce the dependency/SBOM gate locally with `task security` (runs `cargo audit`, `cargo deny`, `pnpm audit` for `ui/` + `docs/`, and the Rust SBOM). Scanner tooling is provisioned by `mise install`.
