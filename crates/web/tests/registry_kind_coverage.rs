@@ -230,6 +230,117 @@ fn every_live_claim_names_a_phase_that_exists() {
     );
 }
 
+/// The values of one `include:` key in one job's matrix, e.g. every `- phase:`
+/// under `heavy-closed-world`.
+///
+/// A scoped text scan rather than a YAML parse, for the reason [`bash_array`] is
+/// one: a parser would be a dependency and a second spelling of the file, and
+/// what is being checked here is whether a literal row is present. The scan is
+/// bounded to the job's own block so a `- suite:` row in a *different* job
+/// cannot satisfy a claim about this one.
+fn workflow_matrix_values(source: &str, job: &str, key: &str) -> BTreeSet<String> {
+    let start = source
+        .find(&format!("\n  {job}:\n"))
+        .unwrap_or_else(|| panic!("the job '{job}' is not in test.yaml any more"));
+    // The job ends where the next one begins: a two-space key at the top level
+    // of `jobs:`. Anything indented further still belongs to this job.
+    let rest = &source[start + 1..];
+    let end = rest
+        .match_indices("\n  ")
+        .find(|(i, _)| {
+            let line = &rest[i + 1..];
+            line.starts_with("  ")
+                && !line[2..].starts_with(' ')
+                && !line[2..].starts_with('#')
+                && line[2..].split_once(':').is_some_and(|(k, _)| {
+                    !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                })
+        })
+        .map(|(i, _)| i + 1)
+        .unwrap_or(rest.len());
+
+    let needle = format!("- {key}:");
+    rest[..end]
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix(&needle))
+        .map(|v| v.trim().to_owned())
+        .collect()
+}
+
+/// A claim that names a phase which exists is not yet a claim that anything runs
+/// it.
+///
+/// `galaxy` declared `Live::ClosedWorld("ansible")`, `phase_ansible` was written
+/// and added to `PHASES`, and [`every_live_claim_names_a_phase_that_exists`] was
+/// green — while `.github/workflows/test.yaml` carried 22 `- phase:` rows and
+/// none of them was `ansible`. The phase had never run, on any commit, and the
+/// only proof of it was a name in a bash array checked against itself.
+///
+/// So the claim is followed one step further here, to the file that decides what
+/// CI actually executes. This is the same failure the module header describes
+/// for the air-gap column — a declaration checked against nothing — one level
+/// down.
+#[test]
+fn every_live_claim_is_actually_run_by_ci() {
+    let workflow = read(".github/workflows/test.yaml");
+    let phases = workflow_matrix_values(&workflow, "heavy-closed-world", "phase");
+    let suites = workflow_matrix_values(&workflow, "heavy-client", "suite");
+
+    // The guard `authz_check_kinds_covered` carries, and for the same reason: a
+    // scan that has drifted off its file reads as "nothing to check" and passes,
+    // which is worse than red.
+    assert!(
+        phases.len() >= 20 && suites.len() >= 20,
+        "\nread {} closed-world phase row(s) and {} client suite row(s) out of test.yaml,\n\
+         which cannot be right — the scan has drifted from the workflow and this test is\n\
+         no longer checking anything.\n",
+        phases.len(),
+        suites.len()
+    );
+
+    for (kind, live, _) in COVERAGE {
+        match live {
+            Live::ClosedWorld(phase) => assert!(
+                phases.contains(*phase),
+                "\n'{kind}' claims the closed-world phase '{phase}', which is in PHASES and has\n\
+                 no `- phase: {phase}` row under `heavy-closed-world` in\n\
+                 .github/workflows/test.yaml — so it has never run. Add the row (and whatever\n\
+                 client the phase needs, guarded by `if: matrix.phase == '{phase}'`).\n"
+            ),
+            Live::Suite(path) => {
+                let suite = path
+                    .strip_prefix("tests/heavy/")
+                    .and_then(|f| f.strip_suffix(".sh"))
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "'{kind}' claims '{path}', which is not a tests/heavy/<name>.sh suite"
+                        )
+                    });
+                assert!(
+                    suites.contains(suite),
+                    "\n'{kind}' claims the suite '{path}', which exists and has no\n\
+                     `- suite: {suite}` row under `heavy-client` in .github/workflows/test.yaml —\n\
+                     so it has never run. Add the row.\n"
+                );
+            }
+        }
+    }
+
+    // The other direction, as in `every_live_claim_names_a_phase_that_exists`: a
+    // matrix row for a phase that is not in `PHASES` fails the run with "unknown
+    // phase" rather than silently, so only the closed-world side is worth
+    // checking here — and it catches a rename that touched the workflow and not
+    // the script.
+    let script = read("tests/heavy/closed_world.sh");
+    let declared = bash_array(&script, "PHASES");
+    let unknown: Vec<&String> = phases.difference(&declared).collect();
+    assert!(
+        unknown.is_empty(),
+        "\n`heavy-closed-world` has row(s) for {unknown:?}, which are not in `PHASES` —\n\
+         every one of those jobs fails with 'unknown phase'.\n"
+    );
+}
+
 /// Not an assertion — the air-gap column is a declared gap, and this prints how
 /// big it is so it stays visible in the test output the way
 /// `authz_matrix.rs`'s coverage reports do.

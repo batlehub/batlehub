@@ -439,3 +439,69 @@ async fn fetch_platform_versions_invalid_json_returns_empty() {
         .await;
     assert!(versions.is_empty());
 }
+
+/// **A `HEAD` probe reports the header, not the body size hint.**
+///
+/// `reqwest`'s `content_length()` reads the decoded body length, and hyper
+/// hard-codes that to zero for a `HEAD` response whatever the server
+/// advertised — so this used to answer `Some(0)` and micromamba was told a
+/// 55 MiB index was empty. A probe that promises the wrong length is worse
+/// than one that promises none.
+#[tokio::test]
+async fn a_head_probe_reports_the_advertised_length_and_not_zero() {
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("HEAD", "/linux-64/repodata.json")
+        .with_status(200)
+        .with_header("content-length", "12345")
+        .with_header("etag", "\"abc\"")
+        .create_async()
+        .await;
+
+    let opts = UpstreamHttpOptions::default();
+    let client = CondaRegistryClient::new(server.url(), &opts).unwrap();
+    let probe = client
+        .probe_version_document(
+            "linux-64",
+            batlehub_core::ports::DocumentKind::Versions,
+            &[batlehub_core::ports::DocumentEncoding::Identity],
+        )
+        .await
+        .unwrap()
+        .expect("the channel answered the probe");
+
+    assert_eq!(probe.content_length, Some(12345));
+    assert_eq!(probe.etag.as_deref(), Some("\"abc\""));
+}
+
+/// A channel that refuses `HEAD` falls back to the body path rather than
+/// failing the request. Plenty of CDNs answer `405`, and S3-style backends
+/// answer `403` for a missing key; before this, either turned every conda and
+/// micromamba probe into a 502 on a channel that serves fine over `GET`.
+#[tokio::test]
+async fn a_head_the_channel_refuses_falls_back_instead_of_failing() {
+    for status in [405, 403, 500] {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("HEAD", "/linux-64/repodata.json")
+            .with_status(status)
+            .create_async()
+            .await;
+
+        let opts = UpstreamHttpOptions::default();
+        let client = CondaRegistryClient::new(server.url(), &opts).unwrap();
+        let probe = client
+            .probe_version_document(
+                "linux-64",
+                batlehub_core::ports::DocumentKind::Versions,
+                &[batlehub_core::ports::DocumentEncoding::Identity],
+            )
+            .await;
+
+        let gave_up = matches!(probe, Ok(None));
+        assert!(
+            gave_up,
+            "HEAD {status} should give up probing, not fail the request"
+        );
+    }
+}

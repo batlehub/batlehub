@@ -163,6 +163,19 @@ pub async fn nix_narinfo(
     // through to the upstream for a hash it does not hold, which is the same
     // ladder every other hybrid kind uses.
     if mode_map.get(&registry) != RegistryMode::Proxy {
+        // Authorize before the storage read, as `common.rs::local_first` does
+        // for every other local document route. `get_nix_narinfo` takes no
+        // `Identity` and reads storage directly, so without this a closed
+        // `local` registry answers an anonymous GET with the `StorePath`, the
+        // whole `References` closure, the `Deriver` and the signatures.
+        // The same coordinate the proxy fall-through below authorizes.
+        svc.authorize_read(
+            &PackageId::new(&registry, &hash, "-"),
+            &identity.0,
+            Action::ReleasesList,
+        )
+        .await
+        .map_err(AppError::from)?;
         if let Some(held) = local_svc
             .get_nix_narinfo(&registry, &hash)
             .await
@@ -466,6 +479,18 @@ async fn coordinate_for(
     // there is no upstream to ask — so this is not an optimisation, it is the
     // only thing that works there.
     if mode_map.get(registry) != RegistryMode::Proxy {
+        // The `releases:list` gate the doc comment above describes, applied to
+        // the local branch too. `get_nix_narinfo` reads storage with no
+        // identity, so without this the local arm skipped the first of the
+        // "two gates, in this order" and a caller holding neither grant
+        // learned the coordinate a hash names.
+        svc.authorize_read(
+            &PackageId::new(registry, hash, "-"),
+            &identity.0,
+            Action::ReleasesList,
+        )
+        .await
+        .map_err(AppError::from)?;
         if let Some(held) = local_svc
             .get_nix_narinfo(registry, hash)
             .await

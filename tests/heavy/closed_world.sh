@@ -2008,6 +2008,12 @@ EOF
   # `community.general` for the collection, and one of its own modules for the
   # banner: `community.general.dict` is pure Python with no external
   # dependency, so the play runs with egress denied.
+  #
+  # The filter takes a list **of pairs**, so the argument is `[['a', 1]]` and
+  # not `['a', 1]` — the flat form raises "dictionary update sequence element
+  # #0 has length 1; 2 is required" and fails the play. Verified against
+  # ansible-core 2.19.3 with community.general installed, both forms side by
+  # side; only the nested one yields the `{'a': 1}` that `cw_ran` asserts.
   cat >"$dir/play.yml" <<'EOF'
 - name: closed world
   hosts: localhost
@@ -2018,7 +2024,7 @@ EOF
   tasks:
     - name: a filter plugin out of the installed collection
       ansible.builtin.debug:
-        msg: "CLOSED-WORLD-RAN {{ ['a', 1] | community.general.dict }}"
+        msg: "CLOSED-WORLD-RAN {{ [['a', 1]] | community.general.dict }}"
 EOF
 
   heavy_mark ansible
@@ -2034,8 +2040,13 @@ EOF
   # the tarball would pass against a proxy that relayed the listing unfiltered.
   heavy_wire_re_after ansible "GET /proxy/$GALAXY_REG/galaxy/api/ -> 200" \
     "ansible: g_connect's discovery read did not come through the proxy"
+  # `([?][^ ]*)?` because `ansible-galaxy` pages this endpoint: it asks for
+  # `versions/?limit=100`, not the bare path `galaxy.sh`'s own curl uses. The
+  # query string has to be *tolerated* and the path still *bounded* — a looser
+  # `versions/[^ ]*` would be satisfied by `versions/13.4.0/`, which is the
+  # per-version detail document and not the list this asserts.
   heavy_wire_re_after ansible \
-    "GET /proxy/$GALAXY_REG/galaxy/api/v3/collections/community/general/versions/ -> 200" \
+    "GET /proxy/$GALAXY_REG/galaxy/api/v3/collections/community/general/versions/([?][^ ]*)? -> 200" \
     "ansible: the versions list — the enforcement chokepoint — did not come through the proxy"
   heavy_wire_re_after ansible \
     "GET /proxy/$GALAXY_REG/galaxy/api/v3/artifacts/collections/community-general-[^ ]*[.]tar[.]gz -> 200" \

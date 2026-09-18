@@ -456,7 +456,9 @@ impl EvictionService {
             let (count, remaining) = self.evict_lru_batch(candidates, total, cap, report).await;
             if remaining > cap && full_page {
                 report.incomplete_because = Some(format!(
-                    "the size-cap preview stopped after {count} artifacts, with the registry still                      {} bytes over the cap. A live run would keep going; re-read this after one.",
+                    "the size-cap preview stopped after {count} artifacts, with the registry \
+                     still {} bytes over the cap. A live run would keep going; re-read this \
+                     after one.",
                     remaining - cap
                 ));
             }

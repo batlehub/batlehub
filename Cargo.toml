@@ -69,7 +69,7 @@ futures = "0.3"
 # `default-features = false` for one reason: to drop `http2`, which is the only
 # thing pulling `h2 0.3` into the tree (RUSTSEC-2026-0258 — unbounded empty DATA
 # frames). The advisory is fixed in h2 0.4.16, which is already here for
-# hyper/reqwest, but `actix-http 3.13.3` — the latest published — still requires
+# hyper/reqwest, but `actix-http 3.13.6` — the latest published — still requires
 # the 0.3 line, and there is no 0.3 backport (0.3.27 is the newest). So the
 # choice is the feature or the advisory, and the feature costs nothing: this
 # server never terminates TLS (`server_factory.rs` calls plain `.bind()`, and the
@@ -78,9 +78,20 @@ futures = "0.3"
 # speaks to a registry — real deployments terminate HTTP/2 at the ingress and
 # talk HTTP/1.1 to this process, which is unaffected.
 #
-# The features below are actix-web 4.14's own `default` set with `http2` removed;
-# re-add it here if this process ever gains `bind_rustls`/`bind_openssl`, and take
-# the advisory up with actix at that point.
+# Upstream status, checked 2026-09-18 — this is not waiting on a release, it is
+# waiting on a major version. actix/actix-web#4199 has been open since
+# 2026-08-18: h2 0.4 is built on `http` 1.x while actix-web is on `http` 0.2, so
+# the bump is a breaking type change and has been put on the **actix-web v5.0**
+# milestone, with no date. The 0.3 backport was tried and closed —
+# hyperium/h2#948, closed unmerged on 2026-09-08, the maintainer having no time
+# for it — so the 0.3 line is finished at 0.3.27 and this does not resolve
+# itself. Re-check #4199 rather than the crate version.
+#
+# The features below are actix-web 4.15's own `default` set with `http2` removed
+# (4.14 and 4.15 declare the identical set; verified against the index, so
+# nothing has been silently dropped by the pin). Re-add `http2` here if this
+# process ever gains `bind_rustls`/`bind_openssl`, and take the advisory up with
+# actix at that point.
 actix-web = { version = "4", default-features = false, features = [
     "macros",
     "compress-brotli",

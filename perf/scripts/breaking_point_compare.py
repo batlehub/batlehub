@@ -69,8 +69,13 @@ def main() -> None:
     print()
 
     # The comparison that is easy to miss and expensive to learn twice.
+    # **Every arm, not every arm that broke.** Filtering the arms without a
+    # `broke_at` out of the *set* rather than out of the *conclusion* made this
+    # fire whenever exactly one arm broke — one knee in the set, more than one
+    # run — and announce a shared ceiling nothing had been shown to share.
     knees = {r.get("broke_at") for r in runs if r.get("broke_at")}
-    if len(knees) == 1 and len(runs) > 1:
+    all_broke = all(r.get("broke_at") for r in runs)
+    if all_broke and len(knees) == 1 and len(runs) > 1:
         print(
             f"> **Every arm broke at the same rate ({knees.pop()} req/s).** Backends that differ in "
             "storage, cache and pool size do not usually share a ceiling — when they do, the ceiling "

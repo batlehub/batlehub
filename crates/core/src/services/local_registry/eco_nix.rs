@@ -465,6 +465,21 @@ impl LocalRegistryService {
         // entire design rests on.
         info.set("URL", format!("nar/{artifact}"));
 
+        // **The two fields the fingerprint does cover are rewritten from what
+        // was recomputed, not kept as the publisher spelled them.** This is
+        // what makes the doc comment above true. `check_nar` compares
+        // `NarHash` with `digests_match`, which deliberately accepts base16
+        // and base64 as well as Nix32 — so a correct upload can carry
+        // `sha256:<64 hex>`, pass verification, and then be signed over a
+        // fingerprint no client will ever reconstruct: Nix prints the parsed
+        // hash in Nix32 when it builds the fingerprint to verify. The publish
+        // succeeded, a `Sig:` was stored, and every client refused the path
+        // with "lacks a signature by a trusted key" and nothing in the log.
+        // `NarSize` is canonicalised for the same reason — `0226848` parses
+        // equal and is a different string in the fingerprint.
+        info.set("NarHash", facts.nar_hash.clone());
+        info.set("NarSize", facts.nar_size.to_string());
+
         // A publisher cannot mint our signature. Every other `Sig:` is somebody
         // else's provenance and is kept: the publisher may legitimately have
         // signed client-side (`narInfo->sign(*this, signers)`).

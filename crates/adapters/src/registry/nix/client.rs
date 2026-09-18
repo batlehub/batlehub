@@ -176,7 +176,19 @@ impl RegistryClient for NixBinaryCacheClient {
         // `WARN` per download as the only symptom (RFC 0031 §13's defect 1).
         // `FileHash` is the right one of the two: it covers the compressed
         // bytes, which is what this server stores and re-serves.
-        let checksum = info.get("FileHash").and_then(nix::nix_hash_to_sri);
+        //
+        // Gated on the same coordinate shape as `download_url`, and for a
+        // sharper reason than symmetry: `FileHash` covers the *NAR*, so
+        // attaching it to a narinfo or a `{hash}.ls` coordinate hands the
+        // integrity check a digest of bytes it is not looking at, and every
+        // `nix store ls` fails verification against a cache that is serving
+        // exactly the right document.
+        let checksum = match pkg.artifact.as_deref() {
+            Some(a) if Self::split_nar_artifact(a).is_some() => {
+                info.get("FileHash").and_then(nix::nix_hash_to_sri)
+            }
+            _ => None,
+        };
 
         let extra = serde_json::json!({
             "store_path": path.to_full_path(),

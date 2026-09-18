@@ -304,3 +304,44 @@ async fn collect(fetched: batlehub_core::ports::FetchedArtifact) -> Vec<u8> {
     }
     out
 }
+
+/// **`checksum` is the NAR's, so it may only travel with a NAR coordinate.**
+///
+/// `download_url` is gated on the artifact shape and `checksum` was not, so a
+/// `{hash}.ls` or a bare narinfo coordinate carried `FileHash` — a digest of
+/// bytes the integrity check is not looking at. The verifier then refused a
+/// document the cache had served correctly, and `nix store ls` failed on
+/// every path in proxy mode.
+#[tokio::test]
+async fn only_a_nar_coordinate_carries_the_nar_checksum() {
+    let mut server = mockito::Server::new_async().await;
+    let _m = server
+        .mock("GET", format!("/{HASH}.narinfo").as_str())
+        .with_status(200)
+        .with_body(NARINFO)
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let c = client(&server.url());
+
+    // The NAR itself: verified against `FileHash`, in the SRI spelling
+    // `integrity::parse_expected` can actually read.
+    let nar = c.resolve_metadata(&nar_pkg()).await.expect("resolves");
+    let sri = nar.checksum.expect("a NAR coordinate is verifiable");
+    assert!(
+        sri.starts_with("sha256-"),
+        "the checksum must reach the verifier as SRI, got {sri}"
+    );
+
+    // A listing coordinate is the document, not the NAR: no checksum, and no
+    // download URL either — the two travel together.
+    for artifact in [format!("{HASH}.ls"), format!("{HASH}.narinfo")] {
+        let pkg = PackageId::new("nixcache", "hslua-aeson", "2.3.2-doc").with_artifact(&artifact);
+        let meta = c.resolve_metadata(&pkg).await.expect("resolves");
+        assert!(
+            meta.checksum.is_none(),
+            "{artifact} is not the NAR; a NAR digest here fails every download"
+        );
+        assert!(meta.download_url.is_none(), "{artifact}");
+    }
+}

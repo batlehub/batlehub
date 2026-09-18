@@ -1128,7 +1128,10 @@ impl AppConfig {
                     warnings::NIX_SIGNING_PROXY_MODE,
                     format!("registries[{index}].nix_signing"),
                     format!(
-                        "registry '{}' is in proxy mode with a [registries.nix_signing] key:                          nothing is published there, so the key signs nothing. A relayed                          narinfo keeps the upstream's Sig: lines byte-exact and is never                          re-signed.",
+                        "registry '{}' is in proxy mode with a [registries.nix_signing] key: \
+                         nothing is published there, so the key signs nothing. A relayed \
+                         narinfo keeps the upstream's Sig: lines byte-exact and is never \
+                         re-signed.",
                         registry.name
                     ),
                 ));
@@ -1176,7 +1179,12 @@ impl AppConfig {
                     warnings::NIX_LOCAL_UNSIGNED,
                     format!("registries[{index}].nix_signing"),
                     format!(
-                        "registry '{}' hosts store paths with no [registries.nix_signing] key,                          so the narinfos it serves carry no Sig: line. Every client running                          Nix's default require-sigs = true refuses them — \"cannot add path                          '…' because it lacks a signature by a trusted key\" — unless the path                          is content-addressed. Generate a seed with `openssl rand -hex 32` and                          hand the `GET public-key` line to every client's trusted-public-keys.",
+                        "registry '{}' hosts store paths with no [registries.nix_signing] key, \
+                         so the narinfos it serves carry no Sig: line. Every client running \
+                         Nix's default require-sigs = true refuses them — \"cannot add path \
+                         '…' because it lacks a signature by a trusted key\" — unless the path \
+                         is content-addressed. Generate a seed with `openssl rand -hex 32` and \
+                         hand the `GET public-key` line to every client's trusted-public-keys.",
                         registry.name
                     ),
                 ));
@@ -2549,7 +2557,9 @@ impl AppConfig {
             // it is the whole rule: `true` refuses every substitution on this
             // registry, `false` makes the gate inert (RFC 0028 §4.5).
             RegistryKind::Nix => {
-                "a narinfo carries no date anywhere in the protocol, so every store path reaches                  the gate without one: 'true' refuses every substitution on this registry,                  'false' makes the gate inert"
+                "a narinfo carries no date anywhere in the protocol, so every store path reaches \
+                 the gate without one: 'true' refuses every substitution on this registry, \
+                 'false' makes the gate inert"
             }
             _ => return Ok(()),
         };

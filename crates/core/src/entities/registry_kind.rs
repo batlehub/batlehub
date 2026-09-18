@@ -731,7 +731,8 @@ impl RegistryKind {
                 UpstreamDetailSupport::ListVersions
             }
             Self::Github | Self::Gitlab | Self::Forgejo => UpstreamDetailSupport::None(
-                "a release listing is this instance's own view of a repository it proxies by                  path, and the console's package page is not where a repository is browsed",
+                "a release listing is this instance's own view of a repository it proxies by \
+                 path, and the console's package page is not where a repository is browsed",
             ),
             Self::Deb | Self::Rpm | Self::Pacman | Self::Jetbrains | Self::Generic => {
                 UpstreamDetailSupport::None(

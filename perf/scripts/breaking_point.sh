@@ -200,16 +200,23 @@ while :; do
   fi
   log "Step: ${rate} req/s for ${STEP}s (${left}s of budget left)"
   step_start="$(date +%s)"
+  # k6's exit status is captured and passed on rather than discarded: a k6
+  # that was killed at a high rate is exactly the knee this loop is hunting,
+  # and treating it as a clean step made the search walk straight past it.
+  set +e
   BATLEHUB_URL="$BASE" BATLEHUB_BP_RATE="$rate" BATLEHUB_BP_STEP="${STEP}s" \
     k6 run --quiet --summary-export "$WORK/step-$rate.json" \
       --summary-trend-stats "min,med,p(95),p(98),max" \
       perf/k6/scenarios/14_breaking_point.js >"$WORK/k6-$rate.log" 2>&1
+  k6_exit=$?
+  set -e
   step_end="$(date +%s)"
 
   if ! kill -0 "$SERVER_PROC" 2>/dev/null; then
     broke_at="$rate"; break_reason="the server process died"
     python3 perf/scripts/breaking_point_row.py --rate "$rate" --summary "$WORK/step-$rate.json" \
-      --samples "$SAMPLES" --from "$step_start" --to "$step_end" --died --append "$ROWS" >/dev/null
+      --samples "$SAMPLES" --from "$step_start" --to "$step_end" --died \
+      --k6-exit "$k6_exit" --append "$ROWS" >/dev/null
     break
   fi
 
@@ -217,7 +224,7 @@ while :; do
     --summary "$WORK/step-$rate.json" --samples "$SAMPLES" \
     --from "$step_start" --to "$step_end" \
     --max-fail-pct "$MAX_FAIL_PCT" --max-p95-ms "$MAX_P95_MS" --max-drop-pct "$MAX_DROP_PCT" \
-    --append "$ROWS")"
+    --k6-exit "$k6_exit" --append "$ROWS")"
   log "  $verdict"
   if [[ "$verdict" == FAILED* ]]; then
     broke_at="$rate"; break_reason="${verdict#FAILED — }"

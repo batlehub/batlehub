@@ -88,8 +88,18 @@ pub async fn cargo_registry_config(
     };
     let auth_required = match explicit {
         Some(required) => required,
+        // `authorize_listing`, not `authorize_read`: grants only, no rule
+        // chain. The chain would be run against the synthetic coordinate
+        // above, and `authorize_read_against`'s own doc comment warns that a
+        // synthetic `PackageMetadata` reports `published_at` and `is_signed`
+        // as `None` — which `release_age_gate` and `require_signed_release`
+        // both read as *refuse*. An open, anonymous-readable registry that
+        // also carries a release-age rule would therefore advertise
+        // `auth-required: true` and stop working for anonymous cargo, which
+        // is the exact failure the comment above says the derivation exists to
+        // avoid. Whether the tier is readable anonymously is a grant question.
         None => svc
-            .authorize_read(
+            .authorize_listing(
                 &PackageId::new(&registry, "_", "_"),
                 &Identity::anonymous(),
                 Action::SourceRead,

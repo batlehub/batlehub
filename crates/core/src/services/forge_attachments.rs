@@ -121,6 +121,14 @@ fn is_plain_filename(name: &str) -> bool {
 /// document — which is what it did to learn the uuid in the first place.
 const TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
+/// How long "these uuids are already remembered" is believed.
+///
+/// Deliberately tiny beside [`TTL`]. It exists to stop a release listing
+/// rewriting its thousand entries on every single request, and five minutes of
+/// that is the whole saving; anything longer only risks outliving an entry the
+/// store evicted early, which would pin that attachment at `404`.
+const SENTINEL_TTL: Duration = Duration::from_secs(300);
+
 /// Where one attachment's coordinate is remembered.
 ///
 /// Scoped by registry: two registries may proxy two forges, and a uuid is only
@@ -147,32 +155,105 @@ pub async fn remember(
     owner_repo: &str,
     attachments: &[ForgeAttachment],
 ) {
+    // **Once per distinct document, not once per request.** This runs inline on
+    // the response path of every release listing — including one answered
+    // entirely from the document cache — and a 50-release listing names about a
+    // thousand assets. Writing them again on each request bought nothing: the
+    // uuids are immutable and the entries are already there.
+    //
+    // The sentinel is keyed by a digest of the uuids, so a listing that gains a
+    // release has a different key and is written; one that has not changed
+    // costs a single cache read.
+    //
+    // It expires far sooner than the entries it stands for ([`SENTINEL_TTL`]
+    // against [`TTL`]) on purpose: the store may evict an individual entry
+    // before its own TTL, and a sentinel outliving what it vouches for would
+    // pin that uuid at `404` for a month. A short one collapses the repeated
+    // writes — which is all of the cost — and lets the entries be re-asserted
+    // regularly anyway.
+    let sentinel = sentinel_key(registry, owner_repo, attachments);
+    if matches!(cache.get(&sentinel).await, Ok(Some(_))) {
+        return;
+    }
+
     let now = Utc::now();
     let expires_at = chrono::Duration::from_std(TTL).ok().map(|d| now + d);
+
+    // Concurrent rather than one awaited round trip after another: these are a
+    // thousand independent writes to the same store, and serialising them put
+    // the whole latency of the slowest backend on the client's response.
+    use futures::stream::StreamExt;
+    const MAX_CONCURRENT_WRITES: usize = 16;
+    futures::stream::iter(attachments)
+        .for_each_concurrent(MAX_CONCURRENT_WRITES, |attachment| {
+            let entry = CacheEntry {
+                metadata: PackageMetadata::minimal(
+                    coordinate(registry, owner_repo, attachment),
+                    serde_json::Value::Null,
+                ),
+                cached_at: now,
+                expires_at,
+            };
+            async move {
+                if let Err(e) = cache
+                    .set(
+                        &attachment_key(registry, &attachment.uuid),
+                        entry,
+                        Some(TTL),
+                    )
+                    .await
+                {
+                    tracing::debug!(
+                        uuid = %attachment.uuid,
+                        error = %e,
+                        "could not remember a forge attachment; it will answer 404 until the release document is read again"
+                    );
+                }
+            }
+        })
+        .await;
+
+    // Written last, so a run that failed part way is retried by the next
+    // request rather than suppressed by its own sentinel.
+    let entry = CacheEntry {
+        metadata: PackageMetadata::minimal(
+            PackageId::new(registry, owner_repo, "__attachments__"),
+            serde_json::Value::Null,
+        ),
+        cached_at: now,
+        expires_at: chrono::Duration::from_std(SENTINEL_TTL)
+            .ok()
+            .map(|d| now + d),
+    };
+    if let Err(e) = cache.set(&sentinel, entry, Some(SENTINEL_TTL)).await {
+        tracing::debug!(
+            owner_repo = %owner_repo,
+            error = %e,
+            "could not record that a release document's attachments were remembered"
+        );
+    }
+}
+
+/// A key that stands for "these exact uuids have already been remembered".
+///
+/// Digested rather than listed: the set runs to a thousand uuids for a busy
+/// repository, and the key has to be bounded. Order-independent, because the
+/// same document read twice must produce the same key and nothing guarantees
+/// the extraction order — each uuid is hashed on its own and the digests are
+/// summed by XOR.
+fn sentinel_key(registry: &str, owner_repo: &str, attachments: &[ForgeAttachment]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut acc = [0u8; 32];
     for attachment in attachments {
-        let entry = CacheEntry {
-            metadata: PackageMetadata::minimal(
-                coordinate(registry, owner_repo, attachment),
-                serde_json::Value::Null,
-            ),
-            cached_at: now,
-            expires_at,
-        };
-        if let Err(e) = cache
-            .set(
-                &attachment_key(registry, &attachment.uuid),
-                entry,
-                Some(TTL),
-            )
-            .await
-        {
-            tracing::debug!(
-                uuid = %attachment.uuid,
-                error = %e,
-                "could not remember a forge attachment; it will answer 404 until the release document is read again"
-            );
+        let digest = Sha256::digest(attachment.uuid.as_bytes());
+        for (a, d) in acc.iter_mut().zip(digest.iter()) {
+            *a ^= d;
         }
     }
+    format!(
+        "forge-attachments-seen:{registry}:{owner_repo}:{}",
+        hex::encode(acc)
+    )
 }
 
 /// Read a uuid back into the coordinate it was remembered as.
@@ -272,5 +353,44 @@ mod tests {
         let b = attachment_key("fj-two", &attachment().uuid);
 
         assert_ne!(a, b);
+    }
+
+    /// The sentinel says "*these* uuids", and it has to mean it: a listing that
+    /// gained a release must not be skipped because the old one was written.
+    /// Order-independent, because nothing promises the extraction order and the
+    /// same document read twice has to produce the same key.
+    #[test]
+    fn the_sentinel_names_the_exact_set_and_ignores_its_order() {
+        let one = attachment();
+        let two = ForgeAttachment {
+            uuid: "f1f1f1f1-0000-0000-0000-00000000000f".to_owned(),
+            tag: "v16.0.5".to_owned(),
+            filename: "forgejo-16.0.5-linux-amd64".to_owned(),
+        };
+
+        let forwards = sentinel_key("fj", "forgejo/forgejo", &[one.clone(), two.clone()]);
+        let backwards = sentinel_key("fj", "forgejo/forgejo", &[two.clone(), one.clone()]);
+        assert_eq!(forwards, backwards, "the same set is the same key");
+
+        let smaller = sentinel_key("fj", "forgejo/forgejo", std::slice::from_ref(&one));
+        assert_ne!(
+            forwards, smaller,
+            "a listing that gained a release must be written, not skipped"
+        );
+
+        // And it is scoped like the entries it vouches for.
+        assert_ne!(
+            forwards,
+            sentinel_key("fj-two", "forgejo/forgejo", &[one.clone(), two.clone()])
+        );
+        assert_ne!(forwards, sentinel_key("fj", "other/repo", &[one, two]));
+    }
+
+    /// The sentinel must expire long before the entries it stands for: a store
+    /// may evict one of them early, and a sentinel that outlived it would pin
+    /// that attachment at `404` for the rest of its month.
+    #[test]
+    fn the_sentinel_expires_far_sooner_than_what_it_vouches_for() {
+        assert!(SENTINEL_TTL < TTL / 100, "{SENTINEL_TTL:?} vs {TTL:?}");
     }
 }

@@ -780,6 +780,32 @@ pub async fn apk_publish(
 
     let filename = format!("{name}-{version}.apk");
 
+    // **The name this is stored under has to parse back to the coordinate it
+    // was stored for.** `apk_coordinate` splits a file name from the right and
+    // requires a `-r<digits>` release suffix, and nothing above guarantees
+    // `{name}-{version}` survives that round trip:
+    //
+    //   * `pkgver = 1.0` has no release suffix, so the publish returns 201 and
+    //     every download of it is a 400 — the bytes are unreachable for good.
+    //   * `pkgver = 1.0-beta-r0` splits back as `("foo-1.0", "beta-r0")`, so
+    //     the index carries one coordinate and the download gate authorises,
+    //     blocks and age-gates a different one. A block then removes the index
+    //     entry without refusing the direct path fetch.
+    //
+    // Checked by *doing* the round trip rather than by re-deriving the rule, so
+    // this cannot drift from `apk_coordinate` itself.
+    match batlehub_core::services::apk::apk_coordinate(&filename) {
+        Some((parsed_name, parsed_version)) if parsed_name == name && parsed_version == version => {
+        }
+        _ => {
+            return Err(AppError::bad_request(format!(
+                "'{name}' version '{version}' would be stored as '{filename}', which apk reads \
+                 back as a different package. An apk version must end in a '-r<number>' release \
+                 suffix and neither the name nor the version before it may contain one"
+            )))
+        }
+    }
+
     let artifact_len = bytes.len() as u64;
     local_svc
         .enforce_publish_policy(

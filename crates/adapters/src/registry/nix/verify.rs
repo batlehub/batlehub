@@ -92,7 +92,20 @@ impl Write for HashingSink {
 /// On success the caller may sign the fingerprint: every field the signature
 /// covers has now been computed here rather than taken from the document.
 pub fn check_nar(bytes: &[u8], info: &NarInfo) -> Result<NarFacts, CoreError> {
-    let compression = info.get("Compression").unwrap_or("none");
+    // Required, not defaulted. This field decides *which bytes* `NarHash`
+    // covers, so guessing it is guessing at the thing the signature attests.
+    // Nix's own `NarInfo` reads an absent `Compression` as `bzip2` — which is
+    // what `client.rs` does on the read side — while defaulting to `none` here
+    // meant the two halves of this kind disagreed about the same document. A
+    // publisher who omits it gets an error naming the field rather than a
+    // `NarHash` mismatch that looks like a corrupt upload.
+    let compression = info.get("Compression").ok_or_else(|| {
+        CoreError::InvalidInput(format!(
+            "corrupt NAR info file: missing 'Compression'. It decides which bytes 'NarHash' \
+             covers, so this registry will not guess it. Supported: {}",
+            SUPPORTED_COMPRESSION.join(", ")
+        ))
+    })?;
     if !SUPPORTED_COMPRESSION.contains(&compression) {
         return Err(CoreError::InvalidInput(format!(
             "'Compression: {compression}' cannot be verified by this registry, so a NAR compressed \

@@ -100,7 +100,12 @@ if [[ -z "$PID" ]]; then
   k6 run "${K6_ARGS[@]}"
   K6_EXIT=$?
   set -e
-  record 0 "" "" "$K6_EXIT"
+  # Two arguments, matching `record()`. It used to be called with four here —
+  # `record 0 "" "" "$K6_EXIT"` — so `exit_code` was the empty string, the
+  # recorder was handed `--k6-exit ""`, it exited 2 on the bad argument and the
+  # `|| true` inside `record` swallowed it: the no-PID path never landed a row
+  # in runs.jsonl, which is the one path that exists to make sure it does.
+  record 0 "$K6_EXIT"
   exit $K6_EXIT
 fi
 

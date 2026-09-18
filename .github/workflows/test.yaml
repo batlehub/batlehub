@@ -1289,6 +1289,12 @@ jobs:
           - phase: jbplugin
           - phase: dnf
           - phase: pacman
+          # `ansible` is galaxy's closed world, and the only phase whose client
+          # is a Python distribution: ansible-core is pinned into a run-local
+          # virtualenv by the step below, *before* egress is denied, so what the
+          # phase proves is the collection resolve and the module execution and
+          # not pip's ability to reach PyPI.
+          - phase: ansible
     services:
       postgres:
         image: postgres:17-alpine
@@ -1307,6 +1313,7 @@ jobs:
       DOTNET_CHANNEL: "10.0"
       TERRAFORM_VERSION: "1.16.2"
       MISE_VERSION: "2026.9.5"
+      UV_VERSION: "0.9.7"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
@@ -1357,6 +1364,18 @@ jobs:
           tar -xzf /tmp/mise.tar.gz -C /tmp
           sudo install -m 0755 /tmp/mise/bin/mise /usr/local/bin/mise
           mise --version
+      # The same release archive, version and reasoning as `heavy-client`'s
+      # galaxy row: one URL, one version, nothing else enters the runner, and
+      # the runner's system Python is untouched because the phase builds its
+      # own virtualenv.
+      - name: Install uv
+        if: matrix.phase == 'ansible'
+        run: |
+          curl -fsSL --proto '=https' --proto-redir '=https' -o /tmp/uv.tar.gz \
+            "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz"
+          tar -xzf /tmp/uv.tar.gz -C /tmp
+          sudo install -m 0755 /tmp/uv-x86_64-unknown-linux-gnu/uv /usr/local/bin/uv
+          uv --version
       # `dnf` and `pacman` bring their own client, in their own image; all the
       # runner has to provide is an engine. `ubuntu-latest` ships both podman
       # and docker, and the suite takes whichever answers `info` first — so this

@@ -96,14 +96,33 @@ def main() -> None:
     ap.add_argument("--max-drop-pct", type=float, default=5.0)
     ap.add_argument("--append", type=Path)
     ap.add_argument("--died", action="store_true")
+    # k6's own exit status. Defaulted so an older caller still works, but
+    # `breaking_point.sh` passes it: a non-zero k6 is a step that failed even
+    # when it managed to write a plausible-looking summary first.
+    ap.add_argument("--k6-exit", dest="k6_exit", type=int, default=0)
     args = ap.parse_args()
 
+    # **A summary that could not be read is a failed step, not a clean one.**
+    # Every threshold below is guarded by `is not None`, so an empty `metrics`
+    # skipped all of them, left `reasons` empty and printed `OK` — and since
+    # `breaking_point.sh` never checks k6's own exit status, a k6 that was
+    # OOM-killed at a high rate made the search keep doubling and the report
+    # conclude "No knee within the budget". That is the one outcome the
+    # escalation is driving toward, so it is the one it must not misread.
     metrics = {}
-    if args.summary.exists():
+    no_summary = None
+    if not args.summary.exists():
+        no_summary = "k6 wrote no summary"
+    else:
         try:
-            metrics = (json.loads(args.summary.read_text()) or {}).get("metrics") or {}
-        except json.JSONDecodeError:
-            metrics = {}
+            parsed = json.loads(args.summary.read_text())
+        except json.JSONDecodeError as e:
+            parsed = None
+            no_summary = f"k6's summary is not valid JSON ({e.msg})"
+        if parsed is not None:
+            metrics = (parsed or {}).get("metrics") or {}
+            if not metrics:
+                no_summary = "k6's summary carries no metrics"
 
     reqs = field(metrics, "http_reqs", "count")
     achieved = field(metrics, "http_reqs", "rate")
@@ -154,6 +173,10 @@ def main() -> None:
     reasons = []
     if args.died:
         reasons.append("the server process died")
+    if no_summary:
+        reasons.append(f"{no_summary} — this step measured nothing")
+    if args.k6_exit:
+        reasons.append(f"k6 exited {args.k6_exit}")
     if err_pct is not None and err_pct > args.max_fail_pct:
         reasons.append(f"{err_pct:.1f}% errors (limit {args.max_fail_pct:.0f}%)")
     if row["p95_ms"] is not None and row["p95_ms"] > args.max_p95_ms:

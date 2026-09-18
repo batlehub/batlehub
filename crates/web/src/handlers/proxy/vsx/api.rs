@@ -72,7 +72,9 @@ pub async fn openvsx_publish(
     // means we do not know what is being published — refuse rather than invent.
     let manifest = super::archive::parse_manifest(&vsix_bytes).ok_or_else(|| {
         AppError::bad_request(
-            "could not read extension/package.json from the uploaded VSIX:              /api/-/publish carries no coordinate in its URL, so the manifest is              the only thing that names what is being published"
+            "could not read extension/package.json from the uploaded VSIX: \
+             /api/-/publish carries no coordinate in its URL, so the manifest is \
+             the only thing that names what is being published"
                 .to_owned(),
         )
     })?;

@@ -16,12 +16,54 @@ name: Dependency CVEs (vuln.mlab.sh)
 # same RUSTSEC database and correctly reports this lockfile clean, so a blocking
 # gate would have failed every pull request on two retracted advisories.
 #
+# A **third** appeared on 2026-09-18 and has a different cause, worth writing
+# down because it is the more instructive one: `paste@1.0.15`,
+# RUSTSEC-2024-0436. That crate is not in this tree. `[patch.crates-io]` in the
+# root Cargo.toml replaces it with `patches/paste`, a local shim re-exporting
+# `pastey` — which is precisely the remediation RustSec names for that advisory.
+# A path-patched crate keeps its name and version in `Cargo.lock` and loses its
+# `source` field, and *that missing field* is how a lockfile says "this did not
+# come from crates.io": `cargo audit` reads it and stays silent, this scanner
+# does not and matches on name and version alone. So the finding reports the
+# advisory against the very fix for it. Nothing to do here but know it — a
+# blocking gate would fail this repository for having patched the crate.
+#
 # Severity is the other half of why there is no threshold to gate on. The
 # RUSTSEC-sourced findings all come back `severity: unknown`, which ranks below
-# `low`: `fail-on: high` could never trip and `fail-on: any` would trip on those
-# two withdrawn advisories. npm findings *do* carry a real severity — the one
+# `low`: `fail-on: high` could never trip and `fail-on: any` would trip on all
+# three of the findings above. npm findings *do* carry a real severity — the one
 # standing finding here is `@ai-sdk/provider-utils@4.0.5`, CVE-2026-8769, `low` —
 # so the data is not uniformly poor, just not yet uniform enough to gate on.
+# That npm one is **real for what is served** and cannot be pinned away; the
+# reasoning is in `ui/pnpm-workspace.yaml` next to the @scalar/api-reference
+# note, and was re-checked on 2026-09-18.
+#
+# ## Every finding this scan returns, as of 2026-09-18
+#
+# Written out because the counts in the pull-request comment carry no detail —
+# the per-finding table lives in the job summary and does not fit — so each
+# number below otherwise costs somebody a scan of their own to identify. Five
+# findings, of which **one** is a real property of what this repository ships:
+#
+# | root | finding | what it is |
+# | --- | --- | --- |
+# | `Cargo.lock` | `dirs@7.0.0` RUSTSEC-2020-0053 | unmaintained, withdrawn 2021 |
+# | `Cargo.lock` | `ring@0.17.14` RUSTSEC-2025-0007 | unmaintained, withdrawn 2025 |
+# | `Cargo.lock` | `paste@1.0.15` RUSTSEC-2024-0436 | the patched-out crate; see above |
+# | `ui/` | `@ai-sdk/provider-utils@4.0.5` GHSA-866g-f22w-33x8 | **real**, `low`, no upstream fix reachable |
+# | `docs/` | `esbuild@0.25.12` GHSA-gv7w-rqvm-qjhr | withdrawn, and about Deno's module loader |
+#
+# Four of the five are withdrawn advisories or a scanner artefact, which is the
+# measurement behind `fail-on: none` rather than a preference for it. Re-derive
+# this table with the endpoint directly rather than guessing:
+#
+#   curl -sS -X POST 'https://vuln.mlab.sh/api/v2/scan?format=cargo&filename=Cargo.lock' \
+#        -H 'Content-Type: application/octet-stream' --data-binary @Cargo.lock
+#
+# and for the frontend, `syft scan dir:ui -o cyclonedx-json` piped through
+# `.github/scripts/slim_sbom.py` first — the same two steps the job takes. The
+# response pairs `results[i].vulns` with `packages[i]`, which is the only place
+# a package name is attached to a finding.
 # `fail-on` is therefore `none`, and the blocking coverage stays where it already
 # is: `back-dep-audit.yaml` (cargo audit), `dep-audit-frontend.yaml` (pnpm
 # audit), `postmortem.yaml` (supply chain) and `image-scan.yaml` (Trivy).

@@ -1008,6 +1008,33 @@ def main() -> int:
     if heap_check is not None:
         exempt_heap_when_warmup_did_not_converge(heap_check, marks)
 
+    # **A gate that measured nothing does not pass.**
+    #
+    # `check_growth` returns `ok=True, "not measured"` when either idle window
+    # is empty, and `slope_ok` is vacuously true when the steady window was too
+    # short to judge — so a run whose samples stop mid-load, or one with no
+    # `soak-marks.txt`, satisfied `all(c.ok …) and slope_ok` while having
+    # compared nothing at all. That is how a fit of 175 MiB/min against a
+    # 2 MiB/min limit was reported as "no leak detected" with exit 0.
+    # `soak.sh:190` records this state having already happened once; the cause
+    # was fixed then and the verdict was not.
+    #
+    # The total-sample floor above does not cover it: the samples exist, they
+    # just do not fall inside the windows the comparison needs.
+    measured = [c for c in checks if c.growth is not None]
+    if not measured and not slope_judged:
+        REPORT_FILE.write_text(
+            "<!-- soak-report -->\n## Soak — inconclusive\n\n"
+            f"{len(samples)} samples were collected, but none of them fall in the idle "
+            "windows the leak checks compare, and the steady window is shorter than the "
+            f"{MIN_SLOPE_WINDOW_SECONDS}s a slope needs — so nothing was measured and "
+            "nothing can be concluded.\n\n"
+            "Usually one of: the run was cut short during load, `soak-marks.txt` is "
+            "missing or was not written, or the sampler stopped before the final idle "
+            "window. Check that the server outlived the load.\n"
+        )
+        return 1
+
     ok = all(c.ok for c in checks) and slope_ok and not panics and args.k6_exit == 0
 
     lines = header_lines(args.duration, args.rate, reqs, ok)

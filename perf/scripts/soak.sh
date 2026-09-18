@@ -521,6 +521,18 @@ mark steady_end
 quiesce "$SETTLE"
 mark final_end
 
+# **Did the server outlive the load?** `breaking_point.sh` asks this and the
+# soak did not, which mattered more here: a server that died mid-run stops
+# being sampled, so its final idle window is empty and every leak row reads
+# "not measured" — the shape a crash and a clean run were indistinguishable in.
+# The verdict refuses to conclude from empty windows now, but a dead server is
+# a failure in its own right and should say so rather than read as inconclusive.
+SERVER_ALIVE=1
+if [[ -n "$SERVER_PROC" ]] && ! kill -0 "$SERVER_PROC" 2>/dev/null; then
+  SERVER_ALIVE=0
+  log "the server process is gone — it did not survive the load"
+fi
+
 # Stop sampling, but leave the server up: the verdict reads /proc one last time
 # through the samples it already has, and a killed server would truncate them.
 kill "$SAMPLER_PID" 2>/dev/null || true
@@ -541,6 +553,15 @@ python3 perf/scripts/soak_verdict.py \
   --rate "$RATE"
 VERDICT=$?
 set -e
+
+if (( SERVER_ALIVE == 0 )); then
+  {
+    echo
+    echo "**The server process did not survive the load.** Whatever the rows below"
+    echo "say, they describe a process that stopped being sampled."
+  } >> "$REPORT"
+  VERDICT=1
+fi
 
 cat "$REPORT"
 [[ -n "${GITHUB_STEP_SUMMARY:-}" ]] && cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"

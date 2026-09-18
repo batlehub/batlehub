@@ -219,7 +219,18 @@ impl StorePath {
                  a dash and a name"
             )));
         }
-        let (hash, rest) = base.split_at(STORE_HASH_LEN);
+        // `split_at` panics when the index is not a char boundary, and the
+        // length guard above counts *bytes*: 31 ASCII characters followed by a
+        // multi-byte one is long enough and still splits mid-character. Any
+        // such input fails `is_nix32` anyway, so it is refused as the hash
+        // error it is rather than reaching the panic.
+        let Some((hash, rest)) = base.split_at_checked(STORE_HASH_LEN) else {
+            return Err(CoreError::InvalidInput(format!(
+                "not a store path: the first {STORE_HASH_LEN} bytes of '{base}' are not \
+                 {STORE_HASH_LEN} characters of Nix's base32 alphabet ({})",
+                String::from_utf8_lossy(NIX32_ALPHABET)
+            )));
+        };
         if !is_nix32(hash) {
             return Err(CoreError::InvalidInput(format!(
                 "not a store path: '{hash}' is not {STORE_HASH_LEN} characters of Nix's base32 \
@@ -344,12 +355,18 @@ impl NarInfo {
                     "corrupt NAR info file: line without a colon: '{raw}'"
                 )));
             };
-            if raw.len() < colon + 2 {
+            // `str::get` rather than a length check and an index: `colon + 2`
+            // is a *byte* offset, and the character after the colon need not
+            // be the single-byte space the grammar calls for. `URL:éx` is long
+            // enough to pass a length guard and lands inside the `é`, which
+            // panics when sliced. A `None` here is the same refusal either
+            // way — the line has no value at the offset the grammar puts it.
+            let Some(value) = raw.get(colon + 2..) else {
                 return Err(CoreError::InvalidInput(format!(
                     "corrupt NAR info file: line '{raw}' has no value after its colon"
                 )));
-            }
-            lines.push((raw[..colon].to_owned(), raw[colon + 2..].to_owned()));
+            };
+            lines.push((raw[..colon].to_owned(), value.to_owned()));
         }
         Ok(Self { lines })
     }
@@ -1041,5 +1058,37 @@ NarSize: 10
         let mut info = NarInfo::parse("A: 1\nB: 2\nA: 3\nC: 4\n").unwrap();
         info.set("A", "9");
         assert_eq!(info.to_wire(), "A: 9\nB: 2\nC: 4\n");
+    }
+
+    /// The value offset is a *byte* offset, and the character after the colon
+    /// need not be one byte wide. This document is long enough to clear a
+    /// length check and lands inside the `é`, which used to panic — on a route
+    /// that parses before it authorizes, so anonymously.
+    #[test]
+    fn a_multibyte_character_after_the_colon_is_refused_not_a_panic() {
+        let err = NarInfo::parse("URL:éx\n").expect_err("no value at the grammar's offset");
+        assert!(
+            matches!(err, CoreError::InvalidInput(ref m) if m.contains("no value after its colon")),
+            "unexpected error: {err:?}"
+        );
+        // The same shape one byte later: `:` then a two-byte character means
+        // byte `colon + 2` is the character's second byte.
+        assert!(NarInfo::parse("Compression:é\n").is_err());
+    }
+
+    /// `split_at(STORE_HASH_LEN)` counts bytes too: 31 ASCII characters and a
+    /// two-byte one clears `base.len() < STORE_HASH_LEN + 2` and splits inside
+    /// the character.
+    #[test]
+    fn a_store_path_splitting_inside_a_character_is_refused_not_a_panic() {
+        let base = format!("{}é-hello", "a".repeat(STORE_HASH_LEN - 1));
+        let err = StorePath::parse(&base).expect_err("not a store path");
+        assert!(
+            matches!(err, CoreError::InvalidInput(_)),
+            "unexpected error: {err:?}"
+        );
+        // And with a store directory in front, which is the spelling a narinfo
+        // carries.
+        assert!(StorePath::parse(&format!("/nix/store/{base}")).is_err());
     }
 }

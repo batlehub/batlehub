@@ -182,15 +182,30 @@ impl ApkRegistryClient {
     }
 }
 
-/// Read a `FetchedArtifact` into memory.
+/// The size past which an `APKINDEX.tar.gz` is not an index.
 ///
-/// Bounded by the index's real size — half a megabyte for a full Alpine
-/// repository — and by `limits.max_artifact_size_bytes` on the streaming path
-/// that already fetched it.
+/// A full Alpine repository's index is about half a megabyte, so this is three
+/// orders of magnitude of headroom. It exists because **nothing else bounds
+/// this read**: the doc comment here used to claim `limits.max_artifact_size_bytes`
+/// covered it, and it does not. That limit is applied by `ProxyService` to the
+/// stream it hands the *client*; `PathProxyRegistryClient::fetch_artifact`
+/// returns `resp.bytes_stream()` unbounded, and this call takes that stream
+/// directly. Alpine mirrors are routinely plain `http://`, so a hostile or
+/// MITM'd mirror answering a multi-GB body would otherwise fill RAM on the
+/// first `.apk` resolve.
+const MAX_INDEX_BYTES: usize = 64 * 1024 * 1024;
+
+/// Read a `FetchedArtifact` into memory, refusing one larger than
+/// [`MAX_INDEX_BYTES`].
 async fn collect(fetched: FetchedArtifact) -> Result<Vec<u8>, CoreError> {
     fetched
         .stream
-        .try_fold(Vec::new(), |mut acc, chunk| async move {
+        .try_fold(Vec::new(), |mut acc: Vec<u8>, chunk| async move {
+            if acc.len() + chunk.len() > MAX_INDEX_BYTES {
+                return Err(CoreError::Registry(format!(
+                    "the upstream APKINDEX is larger than the {MAX_INDEX_BYTES}-byte limit"
+                )));
+            }
             acc.extend_from_slice(&chunk);
             Ok(acc)
         })

@@ -142,9 +142,21 @@ impl RegistryClient for CondaRegistryClient {
             if resp.status() == reqwest::StatusCode::NOT_FOUND {
                 continue;
             }
-            let resp = resp
-                .error_for_status()
-                .map_err(super::super::http_client::to_registry_error)?;
+            // **Any other failure gives up probing, it does not fail the
+            // request.** A probe is an optimisation: the caller's fallback is
+            // the body path, which worked before this method existed. Plenty
+            // of CDNs answer `405` to a `HEAD`, and S3-style backends answer
+            // `403` for a missing key, so propagating here turns a channel
+            // that serves fine over `GET` into a 502 for every conda and
+            // micromamba probe.
+            if !resp.status().is_success() {
+                tracing::debug!(
+                    url = %url,
+                    status = %resp.status(),
+                    "conda: upstream refused the index probe; falling back to the body path"
+                );
+                return Ok(None);
+            }
             let header = |name: reqwest::header::HeaderName| {
                 resp.headers()
                     .get(name)
@@ -153,7 +165,15 @@ impl RegistryClient for CondaRegistryClient {
             };
             return Ok(Some(DocumentProbe {
                 encoding: *encoding,
-                content_length: resp.content_length(),
+                // **The header, not `content_length()`.** On a `HEAD` response
+                // `reqwest` reports the *body* size hint, and hyper hard-codes
+                // that to zero for `HEAD` regardless of what the server
+                // advertised — so this read `Some(0)` for every probe, and
+                // micromamba was told a 55 MiB index was empty. The service's
+                // own note says a probe that promises the wrong length is
+                // worse than one that promises none.
+                content_length: header(reqwest::header::CONTENT_LENGTH)
+                    .and_then(|v| v.trim().parse::<u64>().ok()),
                 etag: header(reqwest::header::ETAG),
                 last_modified: header(reqwest::header::LAST_MODIFIED),
             }));

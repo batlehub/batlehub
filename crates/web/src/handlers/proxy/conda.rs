@@ -62,6 +62,53 @@ pub async fn conda_repodata(
     require_registry_type(&registry, "conda", &map)?;
     let mode = mode_map.get(&registry);
 
+    // **This route has a cache again.** Moving it onto the byte path took its
+    // document cache away with the parsed path: `multi_package_document` read
+    // and wrote the `doc:` entry, and `multi_package_document_stream` goes
+    // straight to the socket. The compressed routes kept theirs, so the
+    // regression was asymmetric and invisible beside them — fifty clients
+    // inside one TTL pulled the whole channel index fifty times.
+    //
+    // Proxy mode only, for the same reason as those routes: a local or hybrid
+    // channel is built from the database on every request, and a key that sees
+    // only the blocked set cannot see a publish. The fingerprint is a lookup of
+    // its own, so it is not computed for a registry that cannot use it.
+    let keys = if mode == RegistryMode::Proxy {
+        let fingerprint = svc
+            .blocked_snapshot_fingerprint(&registry, batlehub_core::entities::RegistryKind::Conda)
+            .await;
+        Some((
+            format!("repodata-json:{registry}:{platform}:{fingerprint}"),
+            index_storage_key(&registry, &platform, PLAIN_INDEX_LABEL, &fingerprint),
+        ))
+    } else {
+        None
+    };
+
+    // Ahead of the probe, as on the compressed routes and for the reason stated
+    // there: a warm entry answers a `HEAD` without leaving the process at all.
+    if let Some((cache_key, storage_key)) = &keys {
+        if let Ok(Some(entry)) = svc.cache.get(cache_key).await {
+            let synthesised = entry
+                .metadata
+                .extra
+                .get("synthesised")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as u32);
+            if let Ok(Some(stored)) = svc.storage.retrieve(storage_key).await {
+                use futures::StreamExt;
+                let mut builder = HttpResponse::Ok();
+                builder.content_type("application/json");
+                builder.insert_header(("X-BatleHub-Cache", "hit"));
+                mark_synthesised(&mut builder, synthesised);
+                let body = stored.stream.filter_map(|chunk| async move {
+                    chunk.ok().map(Ok::<bytes::Bytes, actix_web::Error>)
+                });
+                return Ok(builder.streaming(body));
+            }
+        }
+    }
+
     // A probe is answered with a probe. Without this, micromamba's `HEAD` of
     // every subdir pulled the whole index upstream and discarded it.
     if req.method() == actix_web::http::Method::HEAD {
@@ -85,7 +132,13 @@ pub async fn conda_repodata(
     // see `ProxyService::multi_package_document_stream`. Only `Identity` is
     // accepted here: this route's client asked for the uncompressed document
     // and gets it, rather than a `.zst` it never said it could read.
-    match streamed_index(
+    //
+    // An error here falls through to the parsed path rather than failing the
+    // request: `repodata_bytes` is where `serve_stale_metadata` lives, and the
+    // byte path taking precedence must not quietly cost this route its
+    // stale-on-error behaviour. Nothing has been written to the client yet, so
+    // the fall-through is free.
+    let streamed = match streamed_index(
         &svc,
         &registry,
         &platform,
@@ -94,11 +147,51 @@ pub async fn conda_repodata(
         batlehub_core::ports::DocumentKind::Versions,
         &[batlehub_core::ports::DocumentEncoding::Identity],
     )
-    .await?
+    .await
     {
-        // Nothing to take out: socket to socket, one chunk at a time.
+        Ok(streamed) => streamed,
+        Err(e) => {
+            tracing::debug!(
+                registry = %registry,
+                platform = %platform,
+                error = %e,
+                "conda: the byte path failed; falling back to the parsed path, which can serve \
+                 a stale index"
+            );
+            None
+        }
+    };
+
+    match streamed {
+        // Nothing to take out. Buffered up to `MAX_CACHEABLE_PLAIN_INDEX_BYTES`
+        // so the answer can be stored on the way past; a channel bigger than
+        // that goes socket-to-socket as before, because holding
+        // conda-forge's 424 MiB `linux-64` index in memory to cache it would
+        // cost more than the re-fetch it saves. Its clients read the `.zst`,
+        // which has its own cache.
         Some(batlehub_core::services::StreamedIndex::AsIs(doc)) => {
-            return Ok(stream_to_client("application/json", doc))
+            match buffer_or_stream(doc, MAX_CACHEABLE_PLAIN_INDEX_BYTES).await? {
+                BufferedOrStream::Buffered(bytes) => {
+                    if let Some((cache_key, storage_key)) = &keys {
+                        store_plain_index(
+                            &svc,
+                            &registry,
+                            &platform,
+                            cache_key,
+                            storage_key,
+                            bytes.clone(),
+                        )
+                        .await;
+                    }
+                    return Ok(HttpResponse::Ok()
+                        .content_type("application/json")
+                        .insert_header(("X-BatleHub-Cache", "miss"))
+                        .body(bytes));
+                }
+                BufferedOrStream::TooBig(stream) => {
+                    return Ok(stream_to_client("application/json", stream))
+                }
+            }
         }
         // Something to take out: buffered, but the *compressed* form, and
         // filtered as it decodes rather than parsed into a `Value` first.
@@ -272,16 +365,33 @@ fn shard_index_routes_here(compressed: &[u8]) -> bool {
     let Ok(decoder) = zstd::Decoder::new(compressed) else {
         return false;
     };
+    // One byte past the bound, so the limit can be *detected* rather than
+    // silently applied. `Take::read_to_end` stops at its limit and returns
+    // `Ok`, so reading exactly `MAX_SHARD_INDEX_BYTES` would scan a prefix of
+    // a document this function then declares safe to relay in full — the bomb
+    // it exists to refuse would pass by being large enough.
     if decoder
-        .take(MAX_SHARD_INDEX_BYTES as u64)
+        .take(MAX_SHARD_INDEX_BYTES as u64 + 1)
         .read_to_end(&mut decoded)
         .is_err()
     {
         return false;
     }
-    !decoded
+    if decoded.len() > MAX_SHARD_INDEX_BYTES {
+        return false;
+    }
+    // Both schemes case-insensitively, and each against a window its own
+    // length. `windows(7)` with `starts_with(b"https:/")` is an equality test
+    // on a 7-byte slice, so it matched only lowercase — and `HTTPS://host/`
+    // in `info.base_url` routed every shard and package fetch off this proxy,
+    // which is the one thing this function exists to prevent.
+    let absolute = decoded
         .windows(7)
-        .any(|w| w.eq_ignore_ascii_case(b"http://") || w.starts_with(b"https:/"))
+        .any(|w| w.eq_ignore_ascii_case(b"http://"))
+        || decoded
+            .windows(8)
+            .any(|w| w.eq_ignore_ascii_case(b"https://"));
+    !absolute
 }
 
 /// `repodata_shards.msgpack.zst` — CEP-16's index of shards.
@@ -440,21 +550,22 @@ pub async fn conda_shard(
 ///
 /// The fingerprint is part of the key because the filtered document changes with
 /// the blocked set, exactly as it is part of the cache key beside it.
-fn index_storage_key(
-    registry: &str,
-    platform: &str,
-    encoding: Encoding,
-    fingerprint: &str,
-) -> String {
-    format!(
-        "index/{registry}/{platform}/{fingerprint}/repodata.json.{}",
-        encoding.suffix()
-    )
+/// `encoding` is the label the *route* stores under — the two compressed
+/// encodings' own suffixes, and `json` for the plain route — and it sits
+/// **above** the fingerprint in the key so that [`index_storage_prefix`] can
+/// sweep one encoding's stale fingerprints without touching another's.
+fn index_storage_key(registry: &str, platform: &str, encoding: &str, fingerprint: &str) -> String {
+    format!("index/{registry}/{platform}/{encoding}/{fingerprint}/repodata.json")
 }
 
-/// Everything stored for one subdir, whatever the fingerprint or encoding.
-fn index_storage_prefix(registry: &str, platform: &str) -> String {
-    format!("index/{registry}/{platform}/")
+/// Every fingerprint stored for one subdir **in one encoding**.
+///
+/// Scoped to the encoding because the writer below sweeps this prefix before it
+/// stores: a subdir-wide prefix also matched the *current* fingerprint's other
+/// encoding, so a channel read alternately as `.zst` and `.bz2` had each write
+/// delete the other's blob and neither route ever served a cache hit.
+fn index_storage_prefix(registry: &str, platform: &str, encoding: &str) -> String {
+    format!("index/{registry}/{platform}/{encoding}/")
 }
 
 /// The largest channel index this proxy will hold in memory to filter.
@@ -465,6 +576,101 @@ fn index_storage_prefix(registry: &str, platform: &str) -> String {
 /// past anything reasonable fails with a sentence rather than with the OOM
 /// killer.
 const MAX_FILTERABLE_INDEX_BYTES: usize = 512 * 1024 * 1024;
+
+/// The storage label the plain `repodata.json` route caches under.
+///
+/// A label rather than an [`Encoding`], because that enum is the *compressed*
+/// routes' dispatch and the identity encoding is not one of its arms.
+const PLAIN_INDEX_LABEL: &str = "json";
+
+/// The largest uncompressed index this proxy will hold in order to cache it.
+///
+/// Well under [`MAX_FILTERABLE_INDEX_BYTES`] on purpose. Caching means holding
+/// the whole document, and for conda-forge's `linux-64` that is 424 MiB per
+/// concurrent request — more than the upstream re-fetch it would save. Above
+/// this bound the route streams socket-to-socket as it did before, which is the
+/// case the byte path was built for; below it — every channel that is not
+/// conda-forge — the answer is stored and the next reader gets it for free.
+const MAX_CACHEABLE_PLAIN_INDEX_BYTES: usize = 64 * 1024 * 1024;
+
+/// A document small enough to hold, or the same document as a stream again.
+enum BufferedOrStream {
+    Buffered(bytes::Bytes),
+    TooBig(batlehub_core::ports::ArtifactStream),
+}
+
+/// Read up to `limit` bytes of `doc`; hand back the whole thing if it fits and
+/// an equivalent stream if it does not.
+///
+/// The bytes already read are put back in front of the remainder, so the
+/// caller's response is byte-identical either way — the difference is only
+/// whether the answer could also be stored.
+async fn buffer_or_stream(
+    doc: batlehub_core::ports::StreamedDocument,
+    limit: usize,
+) -> Result<BufferedOrStream, AppError> {
+    use futures::StreamExt;
+    let mut stream = doc.stream;
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(AppError::from)?;
+        buf.extend_from_slice(&chunk);
+        if buf.len() > limit {
+            let head = futures::stream::once(async move {
+                Ok::<bytes::Bytes, CoreError>(bytes::Bytes::from(buf))
+            });
+            return Ok(BufferedOrStream::TooBig(Box::pin(head.chain(stream))));
+        }
+    }
+    Ok(BufferedOrStream::Buffered(bytes::Bytes::from(buf)))
+}
+
+/// Store one plain index and point the cache entry at it.
+///
+/// Best-effort throughout, exactly as the compressed routes are: the bytes are
+/// already in hand, so neither a failed store nor a failed cache write is a
+/// failed request.
+async fn store_plain_index(
+    svc: &web::Data<Arc<ProxyService>>,
+    registry: &str,
+    platform: &str,
+    cache_key: &str,
+    storage_key: &str,
+    body: bytes::Bytes,
+) {
+    // Every other fingerprint of this subdir *in this encoding* is stale by
+    // construction — the fingerprint is the blocked set — so the old ones go.
+    // Scoped to the encoding, so this does not delete the `.zst` blob the
+    // compressed route just wrote for the same fingerprint.
+    let prefix = index_storage_prefix(registry, platform, PLAIN_INDEX_LABEL);
+    if let Err(e) = svc.storage.delete_by_prefix(&prefix).await {
+        tracing::debug!(prefix = %prefix, error = %e, "sweeping stale channel indexes failed");
+    }
+    let meta = batlehub_core::ports::StorageMeta {
+        content_type: Some("application/json".to_owned()),
+        size: Some(body.len() as u64),
+        checksum: None,
+    };
+    if let Err(e) = svc.storage.store(storage_key, body, meta).await {
+        tracing::warn!(key = %storage_key, error = %e, "storing the channel index failed");
+        return;
+    }
+    let entry = batlehub_core::ports::CacheEntry {
+        metadata: batlehub_core::entities::PackageMetadata::minimal(
+            PackageId::new(registry, platform, "__repodata__"),
+            serde_json::json!({ "storage_key": storage_key, "synthesised": null }),
+        ),
+        cached_at: chrono::Utc::now(),
+        expires_at: None,
+    };
+    if let Err(e) = svc
+        .cache
+        .set(cache_key, entry, Some(COMPRESSED_REPODATA_TTL))
+        .await
+    {
+        tracing::warn!(key = %cache_key, error = %e, "caching the channel index failed");
+    }
+}
 
 /// Collect a streamed document, refusing one past the bound.
 async fn collect_index(
@@ -554,13 +760,17 @@ async fn filtered_index_response(
 }
 
 /// Stream a document straight to the client, chunk by chunk.
+///
+/// Takes the stream rather than the `StreamedDocument` it came from: the plain
+/// route reaches here having already read a bounded prefix to decide whether
+/// the answer was small enough to cache, and hands back the prefix and the
+/// remainder rejoined.
 fn stream_to_client(
     content_type: &str,
-    doc: batlehub_core::ports::StreamedDocument,
+    stream: batlehub_core::ports::ArtifactStream,
 ) -> HttpResponse {
     use futures::StreamExt;
-    let body = doc
-        .stream
+    let body = stream
         .filter_map(|chunk| async move { chunk.ok().map(Ok::<bytes::Bytes, actix_web::Error>) });
     HttpResponse::Ok()
         .content_type(content_type)
@@ -921,7 +1131,7 @@ async fn serve_compressed_repodata(
     // serialisation of the whole thing — per write, and again per read to decode
     // it. Bytes belong where bytes go, and a hit now *streams* out of storage
     // instead of being decoded into memory first.
-    let storage_key = index_storage_key(&registry, &platform, encoding, &fingerprint);
+    let storage_key = index_storage_key(&registry, &platform, encoding.suffix(), &fingerprint);
     if cacheable {
         if let Ok(Some(entry)) = svc.cache.get(&cache_key).await {
             // A composed repodata cached in its encoding is still composed:
@@ -1030,7 +1240,7 @@ async fn serve_compressed_repodata(
         // Every other fingerprint of this subdir is stale by construction — the
         // fingerprint *is* the blocked set — so the old ones go. Worst case for
         // a concurrent reader is a cache miss and a re-fetch.
-        let prefix = index_storage_prefix(&registry, &platform);
+        let prefix = index_storage_prefix(&registry, &platform, encoding.suffix());
         if let Err(e) = svc.storage.delete_by_prefix(&prefix).await {
             tracing::debug!(prefix = %prefix, error = %e, "sweeping stale channel indexes failed");
         }
@@ -1441,6 +1651,13 @@ mod tests {
             &b"shards_base_url https://fast.prefix.dev/conda-forge/linux-64/"[..],
             &b"base_url HTTP://cdn.example/pkgs/"[..],
             &b"http://plain-http.example/"[..],
+            // The scheme is case-insensitive in the URL grammar, and the guard
+            // used to compare `https:/` as a 7-byte equality — so only the
+            // lowercase spelling was caught and a channel could route every
+            // shard and package off this proxy by shouting.
+            &b"base_url HTTPS://cdn.attacker.example/"[..],
+            &b"base_url HttPs://cdn.attacker.example/"[..],
+            &b"base_url hTTp://cdn.attacker.example/"[..],
         ] {
             assert!(
                 !shard_index_routes_here(&zstd(hostile)),
@@ -1456,6 +1673,63 @@ mod tests {
     fn an_unreadable_shard_index_is_refused() {
         assert!(!shard_index_routes_here(b"not zstd at all"));
         assert!(!shard_index_routes_here(&[]));
+    }
+
+    /// The bound has to *refuse*, not truncate. `Take::read_to_end` stops at
+    /// its limit and returns `Ok`, so scanning exactly `MAX_SHARD_INDEX_BYTES`
+    /// meant a document larger than that was vetted on its prefix and then
+    /// relayed whole — an absolute URL past the bound went unseen.
+    ///
+    /// Compresses to a few hundred bytes, so this costs nothing to run.
+    #[test]
+    fn a_shard_index_past_the_bound_is_refused_rather_than_truncated() {
+        let mut oversized = vec![b'x'; MAX_SHARD_INDEX_BYTES + 1];
+        // Past the bound, where a truncating scan would never look.
+        oversized.extend_from_slice(b"base_url https://cdn.attacker.example/");
+        assert!(
+            !shard_index_routes_here(&zstd(&oversized)),
+            "a document too large to vet must not be vouched for"
+        );
+
+        // And one byte under it is still read and judged on its contents.
+        let mut just_inside = vec![b'x'; MAX_SHARD_INDEX_BYTES - 64];
+        just_inside.extend_from_slice(b"base_url https://cdn.attacker.example/");
+        assert!(!shard_index_routes_here(&zstd(&just_inside)));
+    }
+
+    /// **The sweep must not delete the other encoding's blob.**
+    ///
+    /// The writer deletes `index_storage_prefix` before it stores, and the
+    /// prefix used to be the whole subdir — which also matched the *current*
+    /// fingerprint's other encoding. A channel read alternately as `.zst` and
+    /// `.bz2` therefore had each write evict the other's bytes, and neither
+    /// route ever served a cache hit. Putting the encoding above the
+    /// fingerprint in the key is what scopes the sweep.
+    #[test]
+    fn the_stale_sweep_is_scoped_to_one_encoding() {
+        let zst = index_storage_key("chan", "linux-64", Encoding::Zstd.suffix(), "fp1");
+        let bz2 = index_storage_key("chan", "linux-64", Encoding::Bzip2.suffix(), "fp1");
+        let json = index_storage_key("chan", "linux-64", PLAIN_INDEX_LABEL, "fp1");
+        let zst_stale = index_storage_key("chan", "linux-64", Encoding::Zstd.suffix(), "fp0");
+
+        let sweep = index_storage_prefix("chan", "linux-64", Encoding::Zstd.suffix());
+
+        assert!(zst.starts_with(&sweep), "{zst} vs {sweep}");
+        assert!(
+            zst_stale.starts_with(&sweep),
+            "a stale fingerprint of the same encoding is what the sweep is for"
+        );
+        assert!(
+            !bz2.starts_with(&sweep),
+            "the bz2 blob for the same fingerprint must survive: {bz2}"
+        );
+        assert!(!json.starts_with(&sweep), "so must the plain one: {json}");
+
+        // And every encoding still lives under the subdir, so a registry-wide
+        // sweep elsewhere still finds all of them.
+        for key in [&zst, &bz2, &json] {
+            assert!(key.starts_with("index/chan/linux-64/"), "{key}");
+        }
     }
 
     #[test]

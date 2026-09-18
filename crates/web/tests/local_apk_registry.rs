@@ -256,6 +256,36 @@ async fn apk_publish_traversal_version_returns_400() {
     assert_eq!(publish(&app, "alpine", evil).await, 400);
 }
 
+/// **The stored file name has to parse back to the coordinate it was stored
+/// for.** `apk_coordinate` splits from the right and needs a `-r<digits>`
+/// release suffix, and `{name}-{version}.apk` does not automatically survive
+/// that:
+///
+///   * `1.0` has no release suffix at all, so the publish used to return 201
+///     and every download of those bytes a 400 — unreachable for good.
+///   * `1.0-beta-r0` parses back as `("hello-1.0", "beta-r0")`, so the index
+///     entry and the download gate name different coordinates and a block
+///     removes the listing without refusing the direct fetch.
+///
+/// Both are refused at the edge now, where the publisher can still act on it.
+#[actix_web::test]
+async fn apk_publish_refuses_a_version_that_does_not_round_trip() {
+    let app = apk_app("alpine", RegistryMode::Local, false).await;
+
+    for bad in ["1.0", "1.0-beta-r0", "1.0-rX", "1.0-r"] {
+        let pkginfo = format!("pkgname = hello\npkgver = {bad}\narch = x86_64\n");
+        assert_eq!(
+            publish(&app, "alpine", &pkginfo).await,
+            400,
+            "pkgver {bad:?} does not round-trip through apk_coordinate and must be refused"
+        );
+    }
+
+    // The spelling `abuild` actually produces still publishes.
+    let good = "pkgname = hello\npkgver = 1.0-r0\narch = x86_64\n";
+    assert_eq!(publish(&app, "alpine", good).await, 201);
+}
+
 #[actix_web::test]
 async fn apk_publish_traversal_arch_returns_400() {
     let app = apk_app("alpine", RegistryMode::Local, false).await;

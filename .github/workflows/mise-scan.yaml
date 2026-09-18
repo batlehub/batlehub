@@ -118,6 +118,15 @@ jobs:
             --only-tools "$(bash .github/scripts/mise_repo_tools.sh)" \
             --out mise-cve-report.md \
             --json-out mise-cve-report.json
+        env:
+          # The report asks mise for the newest release of each tool that has a
+          # finding, to tell "bump to 1.52.0" from "no newer release" — see
+          # `upstream_latest`. Those are release listings from the tool's forge,
+          # and the runner's anonymous GitHub quota is shared with every other
+          # job on its IP, so they are authenticated. Without it the column
+          # degrades to "tool release unknown" rather than lying, but the whole
+          # point of the column is lost.
+          GITHUB_TOKEN: ${{ github.token }}
 
       # From here on `always()`: the report is most worth reading on the run
       # that went red, and the step above exits 1 precisely then.

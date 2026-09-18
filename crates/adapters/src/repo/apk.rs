@@ -32,6 +32,58 @@ pub struct GzipMember {
     pub plain: Vec<u8>,
 }
 
+/// Hard cap on the plaintext one member is *kept* in memory.
+///
+/// Nothing here reads a member's plaintext for its own sake: both callers look
+/// for one small tar entry in it (`.PKGINFO`, `APKINDEX`). The data member of
+/// an `.apk` is the large one and is never searched successfully — its extent
+/// is what [`parse_apk`] needs, not its bytes. So a member is buffered up to
+/// this bound and *counted* past it: the walk still finds the member boundary,
+/// without holding a package's worth of decompressed data per request.
+const MAX_MEMBER_PLAIN: u64 = 64 * 1024 * 1024;
+
+/// Hard cap on the plaintext the whole walk will inflate, buffered or not.
+///
+/// The same house rule as `repo/pacman.rs`, for the same reason: the input is
+/// an attacker-controlled archive, so without a ceiling a 1 MB `.apk` whose
+/// data member inflates to 20 GB OOMs the server on an authenticated publish.
+/// Discarding the bytes past [`MAX_MEMBER_PLAIN`] bounds the memory but not the
+/// work, which is what this bounds. Sized far above any real package.
+const MAX_TOTAL_PLAIN: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Sink that keeps the first [`MAX_MEMBER_PLAIN`] bytes of a member and counts
+/// the rest against a budget shared by the whole walk.
+struct MemberSink<'a> {
+    plain: Vec<u8>,
+    /// Remaining inflate budget for the walk, in bytes.
+    budget: &'a mut u64,
+    /// Set when the budget ran out, to tell a bomb from trailing garbage.
+    over_budget: bool,
+}
+
+impl std::io::Write for MemberSink<'_> {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        if data.len() as u64 > *self.budget {
+            self.over_budget = true;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "decompressed apk stream exceeds the size limit",
+            ));
+        }
+        *self.budget -= data.len() as u64;
+        let held = self.plain.len() as u64;
+        if held < MAX_MEMBER_PLAIN {
+            let room = (MAX_MEMBER_PLAIN - held) as usize;
+            self.plain.extend_from_slice(&data[..room.min(data.len())]);
+        }
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Walk a stream of concatenated gzip members, one at a time.
 ///
 /// `bufread::GzDecoder` consumes exactly one member and leaves the reader
@@ -39,17 +91,29 @@ pub struct GzipMember {
 /// consumes nothing ends the walk rather than spinning, and trailing bytes that
 /// are not a gzip member are ignored rather than failing — a mirror that pads
 /// its files is not this parser's problem.
-pub fn gzip_members(bytes: &[u8]) -> Vec<GzipMember> {
-    use std::io::Read;
-
+///
+/// A stream that inflates past [`MAX_TOTAL_PLAIN`] is the one case that is an
+/// error rather than an end of walk: stopping quietly would hand the caller a
+/// prefix of the members and let a bomb read as a malformed package.
+pub fn gzip_members(bytes: &[u8]) -> Result<Vec<GzipMember>, CoreError> {
     let mut members = Vec::new();
+    let mut budget = MAX_TOTAL_PLAIN;
     let mut offset = 0usize;
     while offset < bytes.len() {
         let mut cursor = std::io::Cursor::new(&bytes[offset..]);
-        let mut plain = Vec::new();
+        let mut sink = MemberSink {
+            plain: Vec::new(),
+            budget: &mut budget,
+            over_budget: false,
+        };
         {
             let mut decoder = flate2::bufread::GzDecoder::new(&mut cursor);
-            if decoder.read_to_end(&mut plain).is_err() {
+            if std::io::copy(&mut decoder, &mut sink).is_err() {
+                if sink.over_budget {
+                    return Err(CoreError::InvalidInput(format!(
+                        "apk stream decompresses past the {MAX_TOTAL_PLAIN}-byte limit"
+                    )));
+                }
                 break;
             }
         }
@@ -60,11 +124,11 @@ pub fn gzip_members(bytes: &[u8]) -> Vec<GzipMember> {
         members.push(GzipMember {
             offset,
             len: consumed,
-            plain,
+            plain: sink.plain,
         });
         offset += consumed;
     }
-    members
+    Ok(members)
 }
 
 /// The first entry named `wanted` in a tar archive, as bytes.
@@ -148,7 +212,7 @@ pub fn parse_apk(bytes: &[u8]) -> Result<ApkPackage, CoreError> {
         ));
     }
 
-    let members = gzip_members(bytes);
+    let members = gzip_members(bytes)?;
     if members.is_empty() {
         return Err(CoreError::Registry(
             "not an apk package: no gzip member could be read".to_owned(),
@@ -196,7 +260,7 @@ pub fn parse_apk(bytes: &[u8]) -> Result<ApkPackage, CoreError> {
 /// The index lives in the *second* gzip member, behind the signature — see the
 /// module docs for why that cannot be read with a single decoder.
 pub fn decode_index(bytes: &[u8]) -> Option<String> {
-    for member in gzip_members(bytes) {
+    for member in gzip_members(bytes).ok()? {
         if let Some(body) = tar_entry(&member.plain, "APKINDEX") {
             return String::from_utf8(body).ok();
         }
@@ -417,10 +481,61 @@ mod tests {
         assert!(decode_index(&gzip_one(&tar_of(&[("OTHER", "x")]))).is_none());
     }
 
+    /// A member that inflates far past what it compresses to is walked without
+    /// the whole plaintext being held: `MAX_MEMBER_PLAIN` is what is kept, and
+    /// the extent — which is what `parse_apk` actually needs — is still right.
+    #[test]
+    fn a_member_past_the_buffer_bound_keeps_its_extent_and_not_its_bytes() {
+        // Two members: a small one, then one whose plaintext exceeds a bound
+        // small enough to test against. The real bound is 64 MiB, so this
+        // asserts the *shape* — the extent survives a truncated buffer — using
+        // the same walk.
+        let small = gzip_one(&tar_of(&[("A", "x")]));
+        let mut bytes = small.clone();
+        bytes.extend_from_slice(&gzip_one(&vec![0u8; 4 * 1024 * 1024]));
+
+        let members = gzip_members(&bytes).expect("4 MiB is within the budget");
+        assert_eq!(members.len(), 2);
+        assert_eq!(members[0].offset, 0);
+        assert_eq!(members[0].len, small.len());
+        assert_eq!(members[1].offset, small.len());
+        assert_eq!(
+            members[1].offset + members[1].len,
+            bytes.len(),
+            "the second member's extent still reaches the end of the file"
+        );
+    }
+
+    /// The bound `repo/pacman.rs` has had all along. A stream that inflates
+    /// past it is an error rather than a prefix of members, so a bomb cannot
+    /// read as a merely malformed package — and cannot OOM the server on an
+    /// authenticated publish.
+    #[test]
+    fn a_stream_inflating_past_the_total_budget_is_refused() {
+        // Driven through the sink directly: producing 2 GiB of real gzip in a
+        // unit test would cost what the bound exists to refuse. This proves the
+        // budget is enforced and that the refusal is distinguishable from the
+        // decode error that merely ends the walk.
+        use std::io::Write;
+        let mut budget = 1024u64;
+        let mut sink = MemberSink {
+            plain: Vec::new(),
+            budget: &mut budget,
+            over_budget: false,
+        };
+        assert!(sink.write_all(&vec![0u8; 512]).is_ok());
+        assert!(!sink.over_budget);
+        assert!(
+            sink.write_all(&vec![0u8; 4096]).is_err(),
+            "past the budget, the sink refuses rather than growing"
+        );
+        assert!(sink.over_budget, "and says which kind of failure it was");
+    }
+
     #[test]
     fn gzip_members_reports_each_member_and_its_extent() {
         let bytes = apk_archive(PKGINFO, true);
-        let members = gzip_members(&bytes);
+        let members = gzip_members(&bytes).expect("within the inflate budget");
         assert_eq!(members.len(), 3, "signature, control, data");
         assert_eq!(members[0].offset, 0);
         for pair in members.windows(2) {
@@ -458,7 +573,7 @@ mod tests {
         assert_eq!(parsed.info.version(), Some("1.2.3-r4"));
         assert_eq!(parsed.size, bytes.len() as u64);
 
-        let members = gzip_members(&bytes);
+        let members = gzip_members(&bytes).expect("within the inflate budget");
         let control = &members[1];
         assert_eq!(
             parsed.identity,
@@ -479,7 +594,7 @@ mod tests {
         let bytes = apk_archive(PKGINFO, true);
         let parsed = parse_apk(&bytes).expect("parsed");
 
-        let members = gzip_members(&bytes);
+        let members = gzip_members(&bytes).expect("within the inflate budget");
         let control = &members[1];
         assert_eq!(parsed.identity, q1(&bytes[control.offset..]));
         assert_ne!(
@@ -519,7 +634,7 @@ mod tests {
         let data = generate_index(INDEX_BODY, "perf-test 1\n").unwrap();
         let file = sign_index(&data, &signer).unwrap();
 
-        let members = gzip_members(&file);
+        let members = gzip_members(&file).expect("within the inflate budget");
         assert_eq!(members.len(), 2, "signature member, then data member");
         assert!(
             tar_entry(
@@ -548,7 +663,7 @@ mod tests {
         let data = generate_index(INDEX_BODY, "test\n").unwrap();
         let file = sign_index(&data, &signer).unwrap();
 
-        let members = gzip_members(&file);
+        let members = gzip_members(&file).expect("within the inflate budget");
         let signature = tar_entry(&members[0].plain, ".SIGN.RSA256.k.rsa.pub").unwrap();
         let signed_bytes = &file[members[1].offset..members[1].offset + members[1].len];
         assert_eq!(

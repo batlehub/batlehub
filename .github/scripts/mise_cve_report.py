@@ -34,6 +34,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
+import subprocess
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -115,6 +118,132 @@ def collect(
     return per_tool, totals, skipped
 
 
+def upstream_latest(wanted: set[str], timeout: float = 30.0) -> dict[str, str | None]:
+    """Per install directory, the newest release **a bump could actually take**.
+
+    Every row of the fix column used to read "(fix available)" whenever the
+    vulnerable *Go module* had a fixed version — which is not the same question.
+    A Go binary vendors its modules, so the only lever is the tool's own release,
+    and on 2026-09-18 that lever did not exist for nearly any of this report.
+    helm-docs was pinned at 1.14.2 and 1.14.2 was still the newest release
+    upstream, two years on, with 92 findings all advertising a fix. gitleaks
+    (56), lazydocker (33), k6 (14), task (13), node (9), trivy (6), helm (2) and
+    sonar-scanner-cli (2) were at their newest release too. Of the 249 findings
+    that report listed, **syft's 19 were the only ones a `mise.toml` edit could
+    reach** — which makes the budget a number nobody can move and the table a
+    list nobody can act on. A local scan of the same toolchain the same day, on
+    a newer vulnerability database, put it the same way in the budget's own
+    unit: 13 of 147 fixable HIGH/CRITICAL reachable, 134 with nothing to bump
+    to. (The two totals differ because the database moved, not the toolchain —
+    which is why CI's number is the one the budget is recorded against.)
+
+    So the newest release is asked for, per tool, and **within the pin**:
+    `node = "24"` must be compared against the newest 24.x, not against 26.x,
+    or every pinned major reads as out of date for as long as the pin is right.
+    `mise ls --current --json` carries the three things that takes — the key to
+    ask about, the version requested and the version installed — and the install
+    directory's name, which is how Trivy labels a finding.
+
+    Only `wanted` — the tools that actually have findings — is asked about, which
+    is eleven questions rather than forty. That is not only speed: each one is a
+    release listing from the tool's forge, and the runner's GitHub quota is
+    shared with every other job on that IP, so the cheapest version of this is
+    the one that keeps working. `GITHUB_TOKEN` in the environment is what mise
+    uses to authenticate them; the workflow passes it for that reason.
+
+    Returns `{install_dir: newest_version_or_None}`; a tool that is missing from
+    the map was not resolvable and is reported as unknown rather than as either
+    answer.
+    """
+    if not shutil.which("mise"):
+        return {}
+    env = {**os.environ, "MISE_GLOBAL_CONFIG_FILE": os.devnull}
+    try:
+        listing = json.loads(
+            subprocess.run(
+                ["mise", "ls", "--current", "--json"],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=timeout,
+                env=env,
+            ).stdout
+        )
+    except (subprocess.SubprocessError, json.JSONDecodeError, OSError):
+        return {}
+
+    out: dict[str, str | None] = {}
+    for key, entries in listing.items():
+        for entry in entries or []:
+            path = entry.get("install_path")
+            if not path:
+                continue
+            install_dir = os.path.basename(os.path.dirname(path))
+            if install_dir not in wanted or install_dir in out:
+                continue
+            requested = entry.get("requested_version") or "latest"
+            spec = key if requested in ("latest", "") else f"{key}@{requested}"
+            try:
+                newest = subprocess.run(
+                    ["mise", "latest", spec],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=timeout,
+                    env=env,
+                ).stdout.strip()
+            except (subprocess.SubprocessError, OSError):
+                continue
+            # An empty answer is "mise could not say", not "no newer release":
+            # leaving the key out keeps the two apart in the report.
+            if newest:
+                out[install_dir] = newest
+    return out
+
+
+def installed_versions(report: dict, root: str) -> dict[str, set[str]]:
+    """Per install directory, the version segment(s) Trivy scanned.
+
+    `tool_of` drops the version on purpose — two installs of one tool are one
+    row to act on. The fix column needs it back, to say what a bump would move
+    *from*, so it is recovered here rather than by widening that function.
+    """
+    seen: dict[str, set[str]] = defaultdict(set)
+    for result in report.get("Results") or []:
+        for vuln in result.get("Vulnerabilities") or []:
+            target = vuln.get("PkgPath") or result.get("Target", "")
+            rest = target[len(root) :] if root and target.startswith(root) else target
+            if "installs/" in rest:
+                rest = rest.split("installs/", 1)[1]
+            parts = rest.lstrip("/").split("/")
+            if len(parts) >= 2 and parts[1]:
+                seen[parts[0]].add(parts[1])
+    return seen
+
+
+def bump_target(
+    tool: str,
+    findings: list[dict],
+    newest: dict[str, str | None],
+    installed: dict[str, set[str]],
+) -> tuple[str, bool]:
+    """The fix column for one tool, and whether a bump can reach it.
+
+    Three answers, and the third is the one that was missing: a newer release to
+    take, no newer release at all, or nothing asked.
+    """
+    has_module_fix = any(f["fixed"] for f in findings)
+    if not has_module_fix:
+        return "—", False
+    if tool not in newest:
+        return "fix upstream, tool release unknown", False
+    have = installed.get(tool) or set()
+    latest = newest[tool]
+    if have and latest not in have:
+        return f"bump to {latest}", True
+    return f"no newer release ({latest})", False
+
+
 def worst(findings: list[dict]) -> str:
     for severity in SEVERITY_ORDER:
         if any(f["severity"] == severity for f in findings):
@@ -131,6 +260,8 @@ def render(
     *,
     budget_recorded: bool,
     skipped: Counter | None = None,
+    newest: dict[str, str | None] | None = None,
+    installed: dict[str, set[str]] | None = None,
 ) -> str:
     blocking = sum(totals[s] for s in BLOCKING)
     lines: list[str] = []
@@ -154,10 +285,46 @@ def render(
     lines.append("")
     counts = " · ".join(f"{s.title()} {totals[s]}" for s in SEVERITY_ORDER if totals[s])
     lines.append(f"{sum(totals.values())} finding(s) in total — {counts or 'none'}.")
+    newest = newest or {}
+    installed = installed or {}
+    # Which of the counted findings a `mise.toml` edit could actually reach.
+    # Computed before the sentence below is written, because that sentence used
+    # to claim all of them and the number is usually a fraction — see
+    # `upstream_latest`.
+    reachable = 0
+    stuck: list[tuple[str, int]] = []
+    for tool, findings in per_tool.items():
+        blocking_here = sum(1 for f in findings if f["severity"] in BLOCKING)
+        if not blocking_here:
+            continue
+        if bump_target(tool, findings, newest, installed)[1]:
+            reachable += blocking_here
+        else:
+            stuck.append((tool, blocking_here))
     if only_fixable:
         lines.append("")
-        lines.append("*Only findings with a fixed version upstream are counted: the fix for every")
-        lines.append("one of them is a version bump in `mise.toml`.*")
+        lines.append(
+            "*Counted findings all have a fixed version in the vulnerable **package**. "
+            "That is not the same as a fix this repository can take: a Go binary vendors "
+            "its modules, so the only lever is the tool's own release.*"
+        )
+        if newest:
+            lines.append("")
+            if stuck:
+                worst_stuck = ", ".join(
+                    f"`{t}` ({n})" for t, n in sorted(stuck, key=lambda kv: -kv[1])[:4]
+                )
+                lines.append(
+                    f"**{reachable} of {blocking} are reachable by a version bump.** The other "
+                    f"{blocking - reachable} are in tools already at their newest release — "
+                    f"{worst_stuck}{', …' if len(stuck) > 4 else ''} — where there is nothing to "
+                    "bump to and the only levers left are dropping the tool or living with it."
+                )
+            else:
+                lines.append(
+                    f"**All {reachable} are reachable by a version bump** — every tool below has "
+                    "a newer release than the one installed."
+                )
     if skipped:
         # Printed, not assumed: a narrowed scope that goes unmentioned is a
         # number that looks like an improvement.
@@ -174,22 +341,21 @@ def render(
     lines.append("")
 
     if per_tool:
-        lines.append("| Tool | Worst | Findings | What to bump to |")
-        lines.append("|---|---|---|---|")
+        lines.append("| Tool | Worst | Findings | Vulnerable packages | What to bump to |")
+        lines.append("|---|---|---|---|---|")
         ranked = sorted(
             per_tool.items(),
             key=lambda kv: (SEVERITY_ORDER.index(worst(kv[1])), -len(kv[1])),
         )
         for tool, findings in ranked:
-            fixes = sorted({f["fixed"] for f in findings if f["fixed"]})
-            # The fix column names the packages, not versions: a Go binary's
-            # findings are against its vendored modules, and "bump the tool"
-            # is the only lever whatever the module versions say.
+            # The packages name *what* is vulnerable; the target says whether
+            # anything can be done about it. Both are needed: "(fix available)"
+            # alone read as actionable for 195 findings that were not.
             packages = sorted({f["package"] for f in findings if f["package"]})[:3]
             hint = ", ".join(packages) + ("…" if len(packages) == 3 else "")
+            target, _ = bump_target(tool, findings, newest, installed)
             lines.append(
-                f"| `{tool}` | {worst(findings)} | {len(findings)} | {hint or '—'}"
-                f"{' (fix available)' if fixes else ''} |"
+                f"| `{tool}` | {worst(findings)} | {len(findings)} | {hint or '—'} | {target} |"
             )
         lines.append("")
         lines.append("<details><summary>Every finding</summary>")
@@ -236,6 +402,12 @@ def main() -> int:
     )
     ap.add_argument("--write-budget", action="store_true", help="record the current count as the budget")
     ap.add_argument(
+        "--no-upstream-check",
+        action="store_true",
+        help="skip asking mise for each tool's newest release (offline, or mise unavailable). "
+        "The fix column then names the vulnerable packages only, as it did before.",
+    )
+    ap.add_argument(
         "--only-tools",
         default="",
         help="comma-separated install directories to count (e.g. from `mise ls --current --json` "
@@ -255,6 +427,12 @@ def main() -> int:
             "director(ies) outside this repository's mise.toml, not counted"
         )
     blocking = sum(totals[s] for s in BLOCKING)
+    newest = {} if args.no_upstream_check else upstream_latest(set(per_tool))
+    if not args.no_upstream_check and not newest:
+        # Said out loud: a report that silently lost the upstream column reads
+        # like one where every tool happens to be current.
+        print("upstream check: mise could not be asked — the fix column will not judge releases")
+    installed = installed_versions(report, args.root)
 
     budget = args.budget
     budget_recorded = budget is not None
@@ -294,6 +472,8 @@ def main() -> int:
         not args.include_unfixed,
         budget_recorded=budget_recorded,
         skipped=skipped,
+        newest=newest,
+        installed=installed,
     )
     args.out.write_text(markdown, encoding="utf-8")
     print(markdown)

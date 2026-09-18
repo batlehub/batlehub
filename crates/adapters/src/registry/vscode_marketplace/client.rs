@@ -202,7 +202,12 @@ where
     use futures::StreamExt;
     use std::io::Write;
 
-    let decoder = flate2::write::GzDecoder::new(Vec::new());
+    // `MultiGzDecoder`, not `GzDecoder`: the single-member decoder treats
+    // anything after the first member's trailer as a write past the end of the
+    // stream and fails the body with `WriteZero`. A gallery is free to answer
+    // with a concatenated (multi-member) gzip, and the symptom is a torn
+    // download rather than a decode error that names the cause.
+    let decoder = flate2::write::MultiGzDecoder::new(Vec::new());
     futures::stream::unfold(
         (stream, Some(decoder)),
         |(mut stream, mut decoder)| async move {
@@ -531,6 +536,43 @@ mod tests {
     }
 
     const EMPTY_RESULTS: &str = r#"{"results":[{"extensions":[]}]}"#;
+
+    /// **A gzip body may be more than one member.** `flate2::write::GzDecoder`
+    /// stops at the first member's trailer and fails everything after it with
+    /// `WriteZero`, so a gallery that answers with a concatenated stream — or
+    /// any proxy in front of it that re-frames the body — produced a torn
+    /// download rather than an error naming the cause. `MultiGzDecoder` reads
+    /// the whole thing.
+    #[tokio::test]
+    async fn a_multi_member_gzip_body_decodes_whole() {
+        use std::io::Write;
+
+        fn member(payload: &[u8]) -> Vec<u8> {
+            let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            enc.write_all(payload).unwrap();
+            enc.finish().unwrap()
+        }
+
+        let mut body = member(b"first-half:");
+        body.extend_from_slice(&member(b"second-half"));
+
+        let chunks: Vec<Result<bytes::Bytes, CoreError>> = body
+            .chunks(7)
+            .map(|c| Ok(bytes::Bytes::copy_from_slice(c)))
+            .collect();
+        let stream = futures::stream::iter(chunks);
+
+        let out: Vec<bytes::Bytes> = gunzip_stream(stream)
+            .try_collect()
+            .await
+            .expect("a multi-member body is a legal gzip stream");
+        let joined: Vec<u8> = out.concat();
+        assert_eq!(
+            String::from_utf8(joined).unwrap(),
+            "first-half:second-half",
+            "both members have to come through"
+        );
+    }
 
     /// Several versions, newest first, as the gallery returns them.
     fn ext_body_versions(versions: &[&str]) -> String {

@@ -213,17 +213,35 @@ fixed_blob_route!(
 /// that can be resolved and asking would dial out of an instance that may be
 /// air-gapped, so the coordinate is left as it arrived and answered from what is
 /// held — which for a numeric pair is a `404`, as before.
+/// **Authorized before it resolves.** `ProxyService::canonical_coordinate`
+/// dials upstream and writes the metadata cache, so without a gate here an
+/// anonymous caller on a closed registry spends two upstream requests per
+/// refusal, and — worse — an unknown update id comes back `NotFound` and 404s
+/// *before* the grant check, which is exactly the existence oracle
+/// `resolve_forge_ref` refuses to offer.
+///
+/// `action` is the verb the route will ultimately use rather than a fixed
+/// `releases:list`, so a caller holding only `releases:read` can still download
+/// through the numeric spelling. The check is `authorize_listing` — grants
+/// only: the rule chain needs metadata that has not been resolved yet, and
+/// running it against a synthetic stand-in is the defect `authorize_read_against`
+/// documents.
 async fn canonical_coordinate(
     svc: &Arc<ProxyService>,
     mode: RegistryMode,
     registry: &str,
     xml_id: &str,
     version: &str,
+    identity: &AuthIdentity,
+    action: Action,
 ) -> Result<Option<(String, String)>, AppError> {
     if mode == RegistryMode::Local {
         return Ok(None);
     }
     let pkg = batlehub_core::entities::PackageId::new(registry, xml_id, version);
+    svc.authorize_listing(&pkg, &identity.0, action)
+        .await
+        .map_err(AppError::from)?;
     Ok(svc
         .canonical_coordinate(&pkg)
         .await
@@ -334,11 +352,20 @@ pub async fn jbm_update_meta(
     validate_path_safe("version", &version).map_err(AppError::from)?;
 
     let mode = mode_map.get(&registry);
-    let (xml_id, version) =
-        match canonical_coordinate(&svc, mode.clone(), &registry, &xml_id, &version).await? {
-            Some(canonical) => canonical,
-            None => (xml_id, version),
-        };
+    let (xml_id, version) = match canonical_coordinate(
+        &svc,
+        mode.clone(),
+        &registry,
+        &xml_id,
+        &version,
+        &identity,
+        Action::ReleasesList,
+    )
+    .await?
+    {
+        Some(canonical) => canonical,
+        None => (xml_id, version),
+    };
     let entries = load_entries(&svc, &local_svc, mode, &registry, &xml_id, identity).await?;
     let entry = entries
         .iter()
@@ -390,11 +417,20 @@ pub async fn jbm_file_download(
     // download — the same artifact `plugin/download?pluginId=&version=` serves,
     // under the same storage key, which is the point of resolving at all.
     let mode = mode_map.get(&registry);
-    let (xml_id, version, artifact) =
-        match canonical_coordinate(&svc, mode, &registry, &xml_id, &version).await? {
-            Some((name, version)) => (name, version, super::PLUGIN_ARTIFACT.to_owned()),
-            None => (xml_id, version, format!("file/{file_name}")),
-        };
+    let (xml_id, version, artifact) = match canonical_coordinate(
+        &svc,
+        mode,
+        &registry,
+        &xml_id,
+        &version,
+        &identity,
+        Action::ReleasesRead,
+    )
+    .await?
+    {
+        Some((name, version)) => (name, version, super::PLUGIN_ARTIFACT.to_owned()),
+        None => (xml_id, version, format!("file/{file_name}")),
+    };
     serve_local_or_proxy_artifact(
         svc,
         local_svc,

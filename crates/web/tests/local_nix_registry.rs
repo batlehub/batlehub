@@ -422,3 +422,173 @@ async fn a_narinfo_with_no_uploaded_nar_is_refused_by_name() {
         "the message must name the NAR: {body}"
     );
 }
+
+// ── the closed registry ──────────────────────────────────────────────────────
+
+/// A `local` nix registry that denies anonymous callers, otherwise identical to
+/// the one above.
+async fn closed_app() -> impl actix_web::dev::Service<
+    actix_http::Request,
+    Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
+    Error = actix_web::Error,
+> {
+    let parts = local_registry_app_parts(REG, "nix", RegistryMode::Local, None);
+
+    // The *grant hierarchy* is what refuses under RFC 0015 phase 3, not
+    // `AccessConfig` — a fixture that only narrowed the latter would leave
+    // `authorize_read` permissive and the denial would never be under test.
+    let fixture = common::RbacFixture {
+        roles: std::collections::HashMap::from([
+            (batlehub_core::entities::Role::Anonymous, Vec::new()),
+            (
+                batlehub_core::entities::Role::User,
+                vec!["releases:read".to_owned(), "releases:list".to_owned()],
+            ),
+            (batlehub_core::entities::Role::Admin, vec!["*".to_owned()]),
+        ]),
+        groups: std::collections::HashMap::new(),
+    };
+    let grants = Arc::new(fixture_grants(REG, "nix", &RegistryMode::Local, &fixture));
+    parts
+        .proxy_svc
+        .hot
+        .write()
+        .await
+        .grants
+        .insert(REG.to_owned(), Arc::clone(&grants));
+    parts
+        .local_svc
+        .hot
+        .write()
+        .await
+        .grants
+        .insert(REG.to_owned(), grants);
+
+    build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await
+}
+
+async fn get_anonymous<S: TestService>(app: &S, path: &str) -> u16 {
+    call_service(
+        app,
+        TestRequest::get()
+            .uri(&format!("/proxy/{REG}/nix/{path}"))
+            .to_request(),
+    )
+    .await
+    .status()
+    .as_u16()
+}
+
+/// **The narinfo is the whole of the metadata, and it was served to anyone.**
+///
+/// `get_nix_narinfo` takes no `Identity` and reads storage directly, and the
+/// local branch of this route called it before authorizing — where every other
+/// local document route goes through `common.rs::local_first`, which does not.
+/// So a closed registry handed an anonymous caller the `StorePath`, the whole
+/// `References` closure, the `Deriver` and the signatures.
+#[actix_web::test]
+async fn an_anonymous_caller_cannot_read_a_narinfo_from_a_closed_registry() {
+    let app = closed_app().await;
+    let (status, body) = publish(&app).await;
+    assert_eq!(status, 200, "{body}");
+
+    // The publisher can still read it back.
+    let (status, served) = get(&app, &format!("{HASH}.narinfo")).await;
+    assert_eq!(status, 200, "{served}");
+    assert!(served.contains("StorePath:"));
+
+    let status = get_anonymous(&app, &format!("{HASH}.narinfo")).await;
+    assert!(
+        status == 403 || status == 404,
+        "an anonymous narinfo read of a closed registry must be refused, got {status}"
+    );
+}
+
+/// The same gate on the route that resolves a store hash to a coordinate.
+/// `coordinate_for`'s local branch read the stored narinfo to learn the
+/// package and version, which is the same disclosure by a different door.
+#[actix_web::test]
+async fn an_anonymous_caller_cannot_resolve_a_store_hash_to_its_coordinate() {
+    let app = closed_app().await;
+    let (status, body) = publish(&app).await;
+    assert_eq!(status, 200, "{body}");
+
+    let status = get_anonymous(&app, &format!("nar/{}", nar_file())).await;
+    assert!(
+        status == 403 || status == 404,
+        "an anonymous NAR fetch from a closed registry must be refused, got {status}"
+    );
+}
+
+/// **The signature must be over the canonical spelling, not the publisher's.**
+///
+/// `check_nar` compares `NarHash` with `digests_match`, which deliberately
+/// accepts base16 and base64 as well as Nix32 — Nix's own `parseHashField`
+/// does. So a correct upload can carry `sha256:<64 hex>` and pass every check.
+/// The fingerprint, though, is built from the *string*, and Nix always prints
+/// the parsed hash in Nix32 when it reconstructs one to verify. Signing the
+/// publisher's spelling produced a 201, a stored `Sig:`, and a path every
+/// client refuses with "lacks a signature by a trusted key" — with nothing in
+/// the server log to say why.
+#[actix_web::test]
+async fn a_narinfo_published_with_a_hex_nar_hash_is_signed_over_the_canonical_one() {
+    let app = local_app(true).await;
+
+    let bytes = nar();
+    let raw = Sha256::digest(&bytes);
+    let hex_spelling = format!("sha256:{}", hex::encode(raw));
+    let canonical = nix32(&raw);
+    assert_ne!(hex_spelling, canonical, "the two spellings must differ");
+
+    let (s, b) = put(
+        &app,
+        &format!("nar/{}", nar_file()),
+        bytes.clone(),
+        ADMIN_TOKEN,
+    )
+    .await;
+    assert_eq!(s, 200, "{b}");
+
+    // Only `NarHash` is respelled: it is the one field the fingerprint covers
+    // that `digests_match` is lenient about.
+    let doc = truthful_narinfo().replace(
+        &format!("NarHash: {canonical}"),
+        &format!("NarHash: {hex_spelling}"),
+    );
+    assert!(
+        doc.contains(&hex_spelling),
+        "the fixture must carry the hex spelling"
+    );
+    let (status, body) = put(
+        &app,
+        &format!("{HASH}.narinfo"),
+        doc.into_bytes(),
+        ADMIN_TOKEN,
+    )
+    .await;
+    assert_eq!(status, 200, "a hex NarHash is a legal upload: {body}");
+
+    let (status, served) = get(&app, &format!("{HASH}.narinfo")).await;
+    assert_eq!(status, 200, "{served}");
+    let info = NarInfo::parse(&served).expect("the served document parses");
+
+    assert_eq!(
+        info.get("NarHash"),
+        Some(canonical.as_str()),
+        "the stored document must carry the canonical spelling, which is what a \
+         client rebuilds the fingerprint from"
+    );
+
+    let (_, key_line) = get(&app, "public-key").await;
+    let trusted = vec![key_line.trim().to_owned()];
+    let fp = nix::fingerprint(&info).expect("fingerprints");
+    let sig = info
+        .get_all("Sig")
+        .into_iter()
+        .find(|s| s.starts_with(&format!("{KEY_NAME}:")))
+        .expect("the registry signed what it hosts");
+    assert!(
+        nix::verify_signature(&fp, sig, &trusted),
+        "the signature must verify over the fingerprint a client reconstructs"
+    );
+}
