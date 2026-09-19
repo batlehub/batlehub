@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: bf872feec00c218d
+sourceHash: e877c7981103a2b4
 ---
 
 # Référence de configuration
@@ -1092,19 +1092,27 @@ deny_missing_timestamp = false   # true pour refuser les paquets sans horodatage
 
 | Champ | Type | Obligatoire | Notes |
 |---|---|---|---|
-| `type` | chaîne | oui | `"github"`, `"forgejo"`, `"gitlab"`, `"npm"`, `"cargo"`, `"nuget"`, `"openvsx"`, `"vscode-marketplace"`, `"goproxy"`, `"maven"`, `"terraform"`, `"rubygems"`, `"composer"`, `"pypi"`, `"conda"`, `"deb"`, `"rpm"`, `"pacman"`, `"jetbrains"`, `"jetbrains-marketplace"`, `"generic"`, `"nodedist"`, `"sdkman"` |
+| `type` | chaîne | oui | `"github"`, `"forgejo"`, `"gitlab"`, `"npm"`, `"cargo"`, `"nuget"`, `"openvsx"`, `"vscode-marketplace"`, `"goproxy"`, `"maven"`, `"terraform"`, `"rubygems"`, `"composer"`, `"pypi"`, `"conda"`, `"deb"`, `"rpm"`, `"pacman"`, `"jetbrains"`, `"jetbrains-marketplace"`, `"generic"`, `"nodedist"`, `"sdkman"`, `"rustup"`, `"apk"`, `"galaxy"`, `"nix"` |
 | `name` | chaîne | oui | Identifiant unique ; employé dans les chemins d'URL du proxy |
-| `mode` | chaîne | non | `"proxy"` (défaut), `"local"` ou `"hybrid"`. Pris en charge par `cargo`, `npm`, `nuget`, `openvsx`, `vscode-marketplace`, `jetbrains-marketplace`, `goproxy`, `maven`, `terraform`, `rubygems`, `composer`, `pypi`, `conda`, `deb`, `rpm` et `pacman`. Voir [les modes de registre](#registry-modes). |
+| `mode` | chaîne | non | `"proxy"` (défaut), `"local"` ou `"hybrid"`. Pris en charge par `cargo`, `npm`, `nuget`, `openvsx`, `vscode-marketplace`, `jetbrains-marketplace`, `goproxy`, `maven`, `terraform`, `rubygems`, `composer`, `pypi`, `conda`, `deb`, `rpm`, `pacman`, `apk`, `galaxy` et `nix`. Voir [les modes de registre](#registry-modes). |
 | `upstreams` | chaîne[] | non | Les URL amont essayées dans l'ordre en cas de défaut de cache ; un 404 de l'une passe à la suivante. Vaut par défaut l'URL intégrée du registre. Obligatoire en mode `hybrid`. |
 | `index_url` | chaîne | non | Cargo uniquement : l'URL de l'index sparse. Vaut `https://index.crates.io` par défaut. Obligatoire en mode `hybrid` et pour les registres Gitea ou Forgejo auto-hébergés. |
 | `broker_url` | chaîne | non | **sdkman uniquement.** Le courtier de téléchargement, second hôte de l'unique protocole. Vaut `https://broker.sdkman.io` par défaut ; `upstreams` est l'API des candidats (`https://api.sdkman.io/2`). Une URL http(s) absolue ; rejetée sur tout autre type ([RFC 0010](/rfc/0010-toolchain-managers) §4.5). |
 | `storage` | chaîne | non | Le nom du backend de stockage. Doit correspondre à un `name` de `[[storage.backends]]`. À omettre pour employer le backend par défaut. |
-| `path_allow` | chaîne[] | non | Liste d'autorisation, en motifs glob, des chemins amont que ce registre peut servir. Valide uniquement pour les types adressés par chemin (`deb`, `rpm`, `pacman`, `jetbrains`, `generic`) — l'employer ailleurs est une erreur de configuration. **Obligatoire et non vide pour `generic`.** Employez `["**"]` pour tout autoriser délibérément. |
+| `deny_components` | chaîne[] | non | **rustup uniquement.** Les noms de paquets du manifeste (`rust-docs`, `clippy-preview`) que ce registre ne sert jamais, quoi que dise le manifeste de canal — appliqués avant `[renames]`, car c'est la table que le filtre modifie. Une installation de profil se poursuit sans eux ; un `rustup component add` explicite s'arrête sur le message de rustup lui-même, *« toolchain '…' does not contain component '…' »*. Vide, rien n'est refusé. Rejeté sur tout autre type ([RFC 0024](/rfc/0024-rustup-dist) §4.5). Voir [la chaîne d'outils Rust](/fr/registries/rustup). |
+| `roles` | chaîne | non | **galaxy uniquement.** L'étendue de la surface **rôles v1** d'Ansible Galaxy que ce registre sert : `"proxy"` (défaut — les lectures sont servies, `download_url` est réécrite vers cette instance et l'archive est récupérée côté serveur à travers le garde-fou SSRF), `"index"` (les mêmes lectures, `download_url` relayée, aucune sortie pour les octets des rôles) ou `"off"` (les endpoints v1 répondent `404` **et** `v1` est absent du document de découverte, de sorte qu'`ansible-galaxy role install` échoue sur son propre *« requires API versions 'v1' »*). Rejeté sur tout autre type ([RFC 0031](/rfc/0031-ansible-galaxy) §4.4). Voir [Ansible Galaxy](/fr/registries/galaxy#le-reglage-roles). |
+| `require_upstream_sigs` | booléen | non | **nix uniquement.** `false`. Refuser de relayer un narinfo qui ne porte aucune ligne `Sig:`. Désactivé par défaut : un chemin adressé par contenu (`CA:`) n'en a légitimement aucune, et le `require-sigs` du client est la vérification qui protège réellement le magasin. Activé, il ferme le seul cas que le client ne peut pas voir — un miroir amont qui a silencieusement supprimé les signatures ([RFC 0028](/rfc/0028-nix-binary-cache) §4.1). |
+| `pending_nar_ttl_secs` | entier | non | **nix uniquement.** `3600`. La durée pendant laquelle un NAR téléversé mais non réclamé attend en zone de transit avant qu'un téléversement ultérieur ne le balaie. `nix copy --to` envoie le NAR avant le narinfo qui le nomme : entre les deux, les octets n'ont pas de coordonnée propre. Augmentez-la pour un lien où les deux requêtes sont éloignées — pas pour une grande fermeture, que `nix copy` parcourt chemin par chemin ([RFC 0028](/rfc/0028-nix-binary-cache) §4.4). |
+| `max_pending_nars` | entier | non | **nix uniquement.** `64`. Le nombre de NAR non réclamés qu'un même publieur peut détenir à la fois ; le suivant reçoit un `429`. Le plancher qui compte est la concurrence de `nix copy` elle-même (`http-connections`, 25 par défaut) : en dessous, des copies légitimes sont refusées. |
+| `apk_unsigned` | booléen | non | **apk uniquement.** `false`. Publier un dépôt `apk` local ou hybride dont l'index n'est pas signé. Tout `apk` standard le refuse sans `--allow-untrusted`, qui désactive aussi le contrôle d'identité des paquets — c'est donc un choix consigné, jamais hérité ([RFC 0026](/rfc/0026-alpine-apk) §4.1). |
+| `path_allow` | chaîne[] | non | Liste d'autorisation, en motifs glob, des chemins amont que ce registre peut servir. Valide uniquement pour les types adressés par chemin (`deb`, `rpm`, `pacman`, `apk`, `jetbrains`, `generic`) — l'employer ailleurs est une erreur de configuration. **Obligatoire et non vide pour `generic`.** Employez `["**"]` pour tout autoriser délibérément. |
 | `on_confirmed` | chaîne | non | RFC 0014 §13 O6 — ce que fait l'audit amont d'une disparition confirmée sur *ce* registre : `"audit"` ou `"block"`. Remplace `[upstream_audit] on_confirmed` pour ce seul registre ; absent, la clé du parc s'applique. `"block"` exige que l'audit soit actif et que ce registre soit audité, sans quoi la configuration est refusée. |
 | `vuln_db_url` | chaîne | non | **goproxy uniquement.** L'URL amont de la base de vulnérabilités Go. Défaut : `https://vuln.go.dev`. Mettre `""` désactive les endpoints `/v1/`. Voir [Proxy de vulnérabilités](/fr/use/vulnerability-proxy#_1-go-govulncheck). |
 | `sumdb_url` | chaîne | non | **goproxy uniquement.** L'URL amont de la base de sommes de contrôle Go. Défaut : `https://sum.golang.org`. Mettre `""` désactive `/sumdb/{path}` — faites-le pour un registre qui ne sert que des modules privés, où une consultation divulguerait des chemins de modules privés à un journal public. |
 | `upstream_auth` | table | non | Les identifiants envoyés à chaque requête amont. Voir [l'authentification amont](#upstream_auth). |
 | `signed_downloads` | booléen | non | `false`. Émettre et accepter des URL de téléchargement signées pour ce registre, afin qu'il puisse garder `anonymous = []` même quand le client récupère les artefacts sans identifiants. Exige [`[server.signed_urls]`](#server-signed-urls) — le définir sans est une erreur de démarrage. Voir [les téléchargements signés](#registry-signed-downloads). |
+| `apk_signing` | table | non | **apk uniquement.** La clé RSA avec laquelle ce registre signe l'`APKINDEX.tar.gz` qu'il génère — apk-tools vérifie du RSA, ce n'est donc pas le signeur Ed25519 employé par `deb` et `rpm` — plus les `previous_keys` encore approuvées par les clients déployés. `local`/`hybrid` uniquement : en mode proxy l'index amont est relayé à l'octet près et il n'y a rien à signer. Une instance coupée du réseau en a besoin même en mode `proxy` pour répondre à `apk update`. Voir [Alpine / apk](/fr/registries/apk). |
+| `nix_signing` | table | non | **nix uniquement.** La clé Ed25519 avec laquelle ce registre signe les narinfos qu'il *héberge*, afin qu'un client réglé sur le `require-sigs = true` standard accepte un chemin publié localement. `local`/`hybrid` uniquement — un narinfo proxifié conserve les lignes `Sig:` de l'amont à l'octet près et n'est jamais resigné. Voir [le cache binaire Nix](/fr/registries/nix). |
 | `tls` | table | non | Les réglages TLS des connexions amont. Voir [le TLS amont](#upstream_tls). |
 | `proxy` | table | non | Un proxy HTTP ou SOCKS pour les connexions amont. Voir [le proxy amont](#upstream_proxy). |
 
@@ -1112,10 +1120,13 @@ deny_missing_timestamp = false   # true pour refuser les paquets sans horodatage
 
 Les registres `cargo`, `npm`, `nuget`, `openvsx`, `vscode-marketplace`,
 `jetbrains-marketplace`, `goproxy`, `maven`, `terraform`, `rubygems`,
-`composer`, `pypi`, `conda`, `deb`, `rpm` et `pacman` gèrent trois modes de
-fonctionnement, réglés par le champ `mode`. Les autres — les forges git,
-`jetbrains`, `generic`, `nodedist` et `sdkman` — sont en proxy seul, parce
-qu'ils n'ont pas de protocole de publication à héberger :
+`composer`, `pypi`, `conda`, `deb`, `rpm`, `pacman`, `apk`, `galaxy` et `nix`
+gèrent trois modes de fonctionnement, réglés par le champ `mode`. Les autres —
+les forges git, `jetbrains`, `generic`, `nodedist`, `sdkman` et `rustup` — sont
+en proxy seul, parce qu'ils n'ont pas de protocole de publication à héberger :
+les versions de Node sont construites par le projet Node, les candidats de
+SDKMAN par leurs éditeurs et les chaînes d'outils Rust par l'équipe de
+publication.
 
 | Mode | Description |
 |------|-------------|
@@ -2024,7 +2035,7 @@ on_webhook    = true
 | `mode` | chaîne | `"block"` | `block` refuse une version dont le verdict est `quarantined` ou `denied` ; `warn` la sert avec le verdict visible. `BLOCK_LIST` et `SOC_VERDICT` refusent dans les deux modes. |
 | `min_age_secs` | u64 | `86400` | En dessous de cet âge, une version est retenue (`MIN_AGE_NOT_MET`), quoi que disent les scanners. En dessous de `3600`, c'est une erreur de configuration : une heure est tout l'intérêt de la quarantaine. |
 | `mature_age_secs` | u64 | `86400` | Au-dessus de cet âge, une version dont l'analyse n'est pas revenue est servie `warned` (`SCAN_PENDING`) et analysée derrière la requête. `0` ne sert jamais rien de non analysé. Doit valoir au moins `min_age_secs`. Avec les deux à leur défaut, la fenêtre de retenue par analyse est vide — le profil de production recommandé est 3 jours / 30 jours. |
-| `hold_missing_timestamp` | booléen | `true` | Retient une version que l'amont n'a pas datée (`TIMESTAMP_MISSING`, sans terme : pas d'`available_at`, et le contournement par maturité ne l'atteint pas). `false` lui fait sauter le garde-fou d'âge, comme le fait `release_age_gate` par défaut. Sur les types proxifiés par chemin (`deb`, `rpm`, `pacman`, `generic`, `jetbrains`), aucune version n'est datée : `true` retient donc tout et lève `security.timestamp-hold-unavailable`. |
+| `hold_missing_timestamp` | booléen | `true` | Retient une version que l'amont n'a pas datée (`TIMESTAMP_MISSING`, sans terme : pas d'`available_at`, et le contournement par maturité ne l'atteint pas). `false` lui fait sauter le garde-fou d'âge, comme le fait `release_age_gate` par défaut. Sur les types proxifiés par chemin (`deb`, `rpm`, `pacman`, `generic`, `jetbrains`), aucune version n'est datée : `true` retient donc tout et lève `security.timestamp-hold-unavailable`. `apk` lève le même avertissement — il est adressé par chemin et le contrôle porte sur ce critère — alors même qu'un `APKINDEX` date dans `t:` chaque paquet qu'il liste. |
 | `scanners` | chaîne[] | `["osv"]` | Les scanners que le worker exécute sur ce registre. Chaque nom est une entrée `[scanners.<name>]` ; `osv` est implicite. Tous les types que la RFC nomme sont construits : `osv`, `postmortem`, `guarddog`, `trivy`, `sigstore`, et les deux services externes `socket` (Socket.dev, un appel par coordonnée, exige une `api_key`) et `mlab` (l'API CVE de mlab.sh, un *enrichissement* : elle attache CVSS, EPSS et CISA KEV aux constats de vulnérabilité produits par les autres et élève une CVE listée au KEV en `critical` ; elle ne crée jamais de constat, donc la lister sous `required_scanners` déclenche un avertissement). Un scanner répond sous sa clé de configuration : un second `osv` pointé vers une autre `api_url` est donc son propre nom. |
 | `required_scanners` | chaîne[] | `["osv"]` | Doivent tous avoir répondu avant que la version soit servie. Doit être un sous-ensemble de `scanners`. Vide avec `mode = "warn"` lève `security.unprotected` : rien ne peut plus jamais retenir une version. |
 | `max_severity` | chaîne | `"high"` | `low`, `medium`, `high` ou `critical`. Un constat à ce niveau ou au-dessus produit `denied` en mode `block` et `warned` en mode `warn`. |
@@ -2103,6 +2114,29 @@ on_webhook    = true
 >   la règle : `true` refuse tout téléchargement sur le registre, `false` rend le
 >   garde-fou inerte. Obligatoire ici pour la même raison, et un bloc
 >   `[registries.security]` retient plutôt par défaut sur un horodatage manquant.
+> - **Alpine (`apk`)** — chaque paquet listé par un `APKINDEX` porte sa date de
+>   construction dans `t:` (mesuré : 5 647 sur 5 647 dans v3.22/main/x86_64). Le
+>   cas non daté est donc étroit et précis : une coordonnée que l'index *en
+>   cache* ne liste plus. **Obligatoire** ici aussi : `true` la refuse, `false`
+>   la sert (RFC 0026 §4.5).
+> - **Ansible Galaxy (`galaxy`)** — toute version de collection amont porte son
+>   `created_at` : le champ est donc inerte en mode proxy. Le cas non daté est
+>   une collection publiée localement ou un listing en mode coupé, c'est-à-dire
+>   exactement là où les deux postures divergent — d'où son caractère
+>   **obligatoire** : `true` la refuse, `false` la sert (RFC 0031 §4.5).
+> - **Cache binaire Nix (`nix`)** — un narinfo porte des empreintes, une
+>   fermeture et un dériveur, et aucune date nulle part dans le protocole. Tout
+>   chemin du magasin atteint donc le garde-fou sans horodatage : le champ n'est
+>   pas un départage mais la règle entière, d'où son caractère **obligatoire** :
+>   `true` refuse toute substitution sur le registre, `false` rend le garde-fou
+>   inerte (RFC 0028 §4.5).
+> - **Chaînes d'outils Rust (`rustup`)** — une chaîne d'outils tient sa date du
+>   répertoire daté de `dist/` où vivent ses fichiers (`manifests.txt` la
+>   retrouve pour une publication stable) : le garde-fou s'applique donc
+>   normalement. Seule exception, le paquet **installeur** `rustup` lui-même :
+>   son arbre ne publie aucune date, `rustup-init` atteint donc le garde-fou
+>   sans horodatage et `deny_missing_timestamp` tranche. Non obligatoire ici : le
+>   champ garde son défaut `false`.
 
 **`[[registries.rules]]` — exiger une publication signée :**
 
@@ -2116,10 +2150,12 @@ on_webhook    = true
 > Cette règle contrôle `PackageMetadata.is_signed`, un signal au mieux, renseigné
 > par chaque adaptateur de registre — ce n'est pas une vérification
 > cryptographique complète. GitHub, Forgejo, GitLab, OpenVSX et la place de
-> marché VS Code le renseignent (présence d'un asset `.asc` ou `.sig`, ou d'un
-> blob de signature d'extension) ; les registres dont l'écosystème n'a pas de
+> marché VS Code et **nix** le renseignent (présence d'un asset `.asc` ou `.sig`,
+> d'un blob de signature d'extension ou, pour `nix`, d'au moins une ligne `Sig:`
+> sur le narinfo) ; les registres dont l'écosystème n'a pas de
 > notion de signature (npm, PyPI, crates.io, Maven, RubyGems, Conda, Composer,
-> Go, Terraform, NuGet, deb, rpm, pacman) renvoient `None` et sont laissés passer,
+> Go, Terraform, NuGet, deb, rpm, pacman, apk, Ansible Galaxy, rustup) renvoient
+> `None` et sont laissés passer,
 > sauf si `deny_missing_signature = true`.
 >
 > **Sur un registre `local` ou `hybrid`, associez-la à
@@ -3109,7 +3145,7 @@ réapparaisse.
 sondé — une requête de listing par paquet sur les types qui ont un document de
 listing, une requête par version (25 au plus par paquet et par passe) sur les
 types qui n'en ont pas, et un `HEAD` par fichier détenu sur les types adressés
-par chemin (`deb`, `rpm`, `pacman`, `jetbrains`, `generic`), dont les lignes et
+par chemin (`deb`, `rpm`, `pacman`, `apk`, `jetbrains`, `generic`), dont les lignes et
 les blocages nomment alors le chemin du fichier ; un amont qui ne répond pas est
 *non concluant* et ne compte d'aucun côté du ratio. Un défaut insère ou
 incrémente une ligne ; une sonde réussie la supprime purement et simplement,
@@ -3525,7 +3561,7 @@ miss_retention_days = 90
 |---|---|---|---|
 | `enabled` | booléen | `false` | Aucun registre en mode proxy ne tente de connexion amont. Un hit de cache est servi exactement comme aujourd'hui ; un défaut est un `503` immédiat qui nomme le registre et la coordonnée, et non une erreur de connexion quelques secondes plus tard. |
 | `bundle_trusted_keys` | chaîne[] | `[]` | Les clés publiques ed25519 de 32 octets, en hexadécimal, dont un lot importé doit porter la signature. **Obligatoire** quand `enabled` : une instance dont l'unique chemin d'entrée de contenu n'est pas authentifié est pire qu'une instance sans chemin d'entrée. |
-| `synthesise_listings` | booléen | `true` | Un listing dont cette instance ne détient aucun document — le packument que lit `npm install`, la page simple que lit `pip`, la release qu'un `mise install` figé demande — est composé à partir des versions qu'elle *détient* et répondu en `200`, avec `X-BatleHub-Listing: synthesised` (RFC 0008-bis). Toute version qu'un tel listing nomme est servie à la requête suivante ; une version non détenue n'est pas nommée, de sorte que le client s'arrête de lui-même (`ETARGET`, « no matching distribution ») plutôt que de réessayer sur un `503`. Composé pour le packument npm, la page simple PyPI (JSON de la PEP 691 et HTML de la PEP 503), l'index sparse de cargo (depuis le manifeste de la crate, lu à l'import), les `@v/list`, `@latest` et `.info` de Go, `maven-metadata.xml`, l'index plat de NuGet, les releases GitHub, Forgejo et GitLab (liste et par tag), les `index.tab` et `index.json` de nodedist, le `versions/all` de SDKMAN, l'index compact de RubyGems, le `repodata.json` de conda, la page d'enregistrement NuGet et le `p2` de Composer (les quatre derniers depuis des faits que l'import lit dans le paquet). Terraform n'est pas composé et reste un `503`. `false` est le comportement de la RFC 0008 : tout listing non détenu est un `503` et un défaut enregistré. Lu uniquement sous `enabled`. |
+| `synthesise_listings` | booléen | `true` | Un listing dont cette instance ne détient aucun document — le packument que lit `npm install`, la page simple que lit `pip`, la release qu'un `mise install` figé demande — est composé à partir des versions qu'elle *détient* et répondu en `200`, avec `X-BatleHub-Listing: synthesised` (RFC 0008-bis). Toute version qu'un tel listing nomme est servie à la requête suivante ; une version non détenue n'est pas nommée, de sorte que le client s'arrête de lui-même (`ETARGET`, « no matching distribution ») plutôt que de réessayer sur un `503`. Composé pour le packument npm, la page simple PyPI (JSON de la PEP 691 et HTML de la PEP 503), l'index sparse de cargo (depuis le manifeste de la crate, lu à l'import), les `@v/list`, `@latest` et `.info` de Go, `maven-metadata.xml`, l'index plat de NuGet, les releases GitHub, Forgejo et GitLab (liste et par tag), les `index.tab` et `index.json` de nodedist, le `versions/all` de SDKMAN, l'index compact de RubyGems, le `repodata.json` de conda, la page d'enregistrement NuGet et le `p2` de Composer (les quatre derniers depuis des faits que l'import lit dans le paquet), la liste de versions et le téléchargement de provider de Terraform, les trois documents d'Ansible Galaxy — la liste de versions, le document de collection dont l'`updated_at` décide si le client relit cette liste, et le document de version qui porte le `download_url` et son empreinte — et, pour `nix`, le `nix-cache-info` ainsi que les narinfos eux-mêmes. Un registre `apk` répond à `apk update` par-delà la coupure autrement : il compose et signe un `APKINDEX.tar.gz` sur les paquets qu'il détient, ce qui exige `[registries.apk_signing]` même en mode `proxy`. `false` est le comportement de la RFC 0008 : tout listing non détenu est un `503` et un défaut enregistré. Lu uniquement sous `enabled`. |
 | `record_misses` | booléen | `true` | Enregistrer ce qui a été demandé et n'était pas détenu, une ligne par `(registre, clé)` avec un compteur. Cet enregistrement est l'entrée du prochain lot. |
 | `miss_retention_days` | u32 | `90` | Combien de temps un défaut enregistré est conservé. `0` le garde jusqu'à une purge manuelle. |
 
@@ -3554,7 +3590,10 @@ n'autorisent que des imports, ce qui est la façon de préparer un lot
 `generic` sous `enabled = true` n'obtient aucun index synthétisé — un fichier
 `Packages` signé ne peut pas être re-signé ici — de sorte que son listing reste
 un `503` tandis qu'un fichier détenu est servi par chemin
-(`air-gap.listing-not-synthesised`).
+(`air-gap.listing-not-synthesised`). `apk` est le seul type de paquets système
+absent de cette liste : il détient sa propre clé de signature, si bien qu'une
+instance coupée du réseau compose et signe un `APKINDEX.tar.gz` sur les paquets
+qu'elle possède réellement — voir [Alpine / apk](/fr/registries/apk).
 
 **Ce que voit un opérateur.** Un défaut est un `503` avec
 `{"code": "content_unavailable", "registry", "coordinate", "bundle_hint"}` ; un

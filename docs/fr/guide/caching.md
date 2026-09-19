@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/caching.md
-sourceHash: 9be45cf333d73969
+sourceHash: 64e275ec543162ec
 ---
 
 # Mise en cache
@@ -296,8 +296,8 @@ curl -X POST http://localhost:8080/api/v1/admin/registries/npm/warm \
 ::: tip Ce que chaque registre gère
 L'énumération des versions (nécessaire pour préchauffer un nom nu) ne concerne
 que les types de registre fondés sur le paquet — ceux adressés par un nom et une
-version — et exclut ceux adressés par chemin (Deb, RPM, Pacman, IDE JetBrains,
-Generic). Elle est implémentée pour tous les types fondés sur le paquet : les
+version — et exclut ceux adressés par chemin (Deb, RPM, Pacman, **Alpine/apk**, IDE
+JetBrains, Generic). Elle est implémentée pour tous les types fondés sur le paquet : les
 noms nus fonctionnent donc partout ; passez une entrée `name@version` figée quand
 vous voulez exactement une version. La moitié « nom » est la coordonnée par
 laquelle le registre adresse ses paquets :
@@ -317,8 +317,9 @@ toutes les versions d'extension par l'API Gallery. Pour **Conda**, la liste des
 versions est synthétisée en parcourant `repodata.json` sur les plateformes
 standard. Pour la **place de marché JetBrains**, une entrée est l'`xmlId` du
 plugin et un nom nu n'énumère que le canal **Stable**. Les types adressés par
-chemin (Deb, RPM, Pacman, IDE JetBrains, Generic) n'ont pas de modèle de version
-du tout et préchauffent `warm_paths` plutôt que `warm_packages`. Les deux types
+chemin (Deb, RPM, Pacman, **Alpine/apk**, IDE JetBrains, Generic) n'ont pas de
+modèle de version du tout et préchauffent `warm_paths` plutôt que
+`warm_packages`. Les deux types
 de chaînes d'outils (**distributions Node**, **SDKMAN**) sont une archive *par
 plateforme* : une entrée comme `node@v22.11.0` ou `java@21.0.5-tem` préchauffe
 donc un fichier par entrée de `warm_platforms` (`linux-x64`, `darwin-arm64`, …

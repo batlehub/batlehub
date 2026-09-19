@@ -99,5 +99,23 @@ export function scenarios(): Scenario[] {
     out.push({ name: "two-registries-proxy-and-hybrid", state: s });
   }
 
+  {
+    // The kinds the generator learned last (RFC 0010, 0024, 0026, 0028, 0031).
+    // Each had a page, a nav entry and a matrix row while the form could not
+    // emit it; the point of the scenario is that the Rust validator says the
+    // TOML the form now writes for them is a config the server accepts —
+    // including `apk`, which has no default upstream and must be given one.
+    const s = defaultState();
+    s.registries = [
+      registry("apk", { name: "alpine", upstreams: "https://dl-cdn.alpinelinux.org/alpine" }),
+      registry("galaxy", { name: "galaxy" }),
+      registry("nix", { name: "nix" }),
+      registry("nodedist", { name: "node" }),
+      registry("sdkman", { name: "sdkman" }),
+      registry("rustup", { name: "rustup" }),
+    ];
+    out.push({ name: "toolchain-and-os-kinds-proxy", state: s });
+  }
+
   return out;
 }

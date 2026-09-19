@@ -1167,7 +1167,7 @@ A version this instance has never been asked for has no verdict to wait on: requ
 ## 18. Commands — download {#commands-download}
 
 Fetch one file through the proxy, which caches it on the way past. This is how a
-path-addressed registry (`deb`, `rpm`, `pacman`, `jetbrains`, `generic`) is
+path-addressed registry (`deb`, `rpm`, `pacman`, `apk`, `jetbrains`, `generic`) is
 warmed one file at a time, and how you check that a path the proxy is meant to
 serve actually resolves.
 

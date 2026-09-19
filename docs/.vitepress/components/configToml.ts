@@ -26,6 +26,12 @@ export type RegistryType =
   | "pacman"
   | "jetbrains"
   | "jetbrains-marketplace"
+  | "apk"
+  | "galaxy"
+  | "nix"
+  | "nodedist"
+  | "sdkman"
+  | "rustup"
   | "generic";
 export type AuthRole = "admin" | "user" | "anonymous";
 export type StorageBackendType = "filesystem" | "s3";
@@ -468,6 +474,19 @@ export const defaultUpstream: Record<RegistryType, string> = {
   pacman: "https://geo.mirror.pkgbuild.com",
   jetbrains: "https://download.jetbrains.com",
   "jetbrains-marketplace": "https://plugins.jetbrains.com",
+  // Alpine's CDN is one mirror of many, so `apk` joins deb/rpm/generic in
+  // having no default: a hostname nobody chose in front of every `apk update`
+  // in the estate is worse than a startup error (RFC 0026 §4.1).
+  apk: "",
+  galaxy: "https://galaxy.ansible.com/api/",
+  // Unlike the OS-package kinds, a Nix cache *does* have a universal default,
+  // and a narinfo names its NAR by a path under the same host (RFC 0028 §6.8).
+  nix: "https://cache.nixos.org",
+  nodedist: "https://nodejs.org/dist",
+  // `upstreams` is the candidates API; the download broker is the second host
+  // of the one protocol and has its own default (RFC 0010 §4.5).
+  sdkman: "https://api.sdkman.io/2",
+  rustup: "https://static.rust-lang.org",
   generic: "",
 };
 
@@ -478,10 +497,29 @@ export const PATH_ADDRESSED_TYPES = new Set<RegistryType>([
   "deb",
   "rpm",
   "pacman",
+  "apk",
   "jetbrains",
   "generic",
 ]);
 export const isPathAddressed = (reg: Registry) => PATH_ADDRESSED_TYPES.has(reg.type);
+
+// Registry kinds that only support proxy mode (no private/local hosting).
+// Mirrors `RegistryKind::supports_local_mode`, inverted: the forges and
+// `jetbrains` host nothing of their own, `generic` mirrors a file tree, and
+// the three toolchain distributions have no publish protocol at all — Node
+// releases are built by the Node project, SDKMAN's candidates by their
+// vendors and Rust's by the release team (RFC 0010 §3, RFC 0024 §3).
+export const PROXY_ONLY_TYPES = new Set<RegistryType>([
+  "github",
+  "forgejo",
+  "gitlab",
+  "jetbrains",
+  "generic",
+  "nodedist",
+  "sdkman",
+  "rustup",
+]);
+export const isProxyOnly = (reg: Registry) => PROXY_ONLY_TYPES.has(reg.type);
 
 // `deb`/`rpm` registries are the ones that publish signed repository metadata.
 export const REPO_SIGNING_TYPES = new Set<RegistryType>(["deb", "rpm"]);

@@ -5,6 +5,7 @@ import {
   blankAuthProvider,
   defaultUpstream,
   isPathAddressed,
+  isProxyOnly,
   defaultRegistry,
   defaultState,
   namespaceSeparator,
@@ -446,16 +447,6 @@ function addRegistry() {
 function removeRegistry(id: number) {
   registries.value = registries.value.filter((r) => r.id !== id);
 }
-// Registry types that only support proxy mode (no private/local hosting) — they
-// mirror the backend's local/hybrid allowlist: anything NOT in it is proxy-only.
-const PROXY_ONLY_TYPES = new Set<RegistryType>([
-  "github",
-  "forgejo",
-  "gitlab",
-  "jetbrains",
-  "generic",
-]);
-const isProxyOnly = (reg: Registry) => PROXY_ONLY_TYPES.has(reg.type);
 
 function onTypeChange(reg: Registry) {
   reg.upstreams = defaultUpstream[reg.type];
@@ -1457,6 +1448,12 @@ const composerAuthSnippet = `{
                 <option value="pacman">Pacman (Arch)</option>
                 <option value="jetbrains">JetBrains IDE</option>
                 <option value="jetbrains-marketplace">JetBrains Marketplace</option>
+                <option value="apk">Alpine (apk)</option>
+                <option value="galaxy">Ansible Galaxy</option>
+                <option value="nix">Nix binary cache</option>
+                <option value="nodedist">Node.js distributions</option>
+                <option value="sdkman">SDKMAN</option>
+                <option value="rustup">Rust toolchain (rustup)</option>
                 <option value="generic">Generic (raw file mirror)</option>
               </select>
             </label>

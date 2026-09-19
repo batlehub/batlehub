@@ -14,7 +14,7 @@ For discussion or to propose a feature, open an issue on the [project repository
 
 ## New registry types
 
-Current adapters: npm, Cargo, GitHub, Forgejo/Gitea, GitLab, OpenVSX, VS Code Marketplace, Go modules, Maven, RubyGems, Terraform, Composer, PyPI, Conda, NuGet, Deb (APT), RPM (YUM/DNF), Pacman, JetBrains (IDE archives), JetBrains Marketplace (plugins), Generic (path-addressed file mirror), Node distributions (`nodedist`), SDKMAN (`sdkman`).
+Current adapters: npm, Cargo, GitHub, Forgejo/Gitea, GitLab, OpenVSX, VS Code Marketplace, Go modules, Maven, RubyGems, Terraform, Composer, PyPI, Conda, NuGet, Deb (APT), RPM (YUM/DNF), Pacman, JetBrains (IDE archives), JetBrains Marketplace (plugins), Generic (path-addressed file mirror), Node distributions (`nodedist`), SDKMAN (`sdkman`), Rust toolchains (`rustup`), Alpine / apk (`apk`), Ansible Galaxy (`galaxy`), Nix binary cache (`nix`).
 
 - [x] **PyPI** — Python package index; Simple API proxy with URL rewriting; wheel / sdist downloads; private publishing via `twine` in `local`/`hybrid` mode
 - [x] **Maven / Gradle** — Maven Central-compatible metadata XML + JAR / POM downloads; private publishing via `mvn deploy` in `local`/`hybrid` mode

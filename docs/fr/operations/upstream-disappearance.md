@@ -1,7 +1,7 @@
 ---
 title: Disparition d'un amont
 sourcePath: operations/upstream-disappearance.md
-sourceHash: 5a79583fa694d6f1
+sourceHash: 9a85b44501fc2991
 ---
 
 # Disparition d'un amont
@@ -110,7 +110,7 @@ Les trois exigent `system:read` (le listing et l'état) ou `system:write`
 ## Ce que l'audit ne peut pas voir
 
 Les forges (`github`, `gitlab`, `forgejo`) sont proxifiées par chemin et ne sont
-pas sondées. Les types adressés par chemin — `deb`, `rpm`, `pacman`,
+pas sondées. Les types adressés par chemin — `deb`, `rpm`, `pacman`, `apk`,
 `jetbrains`, `generic` — n'ont pas d'identité de paquet : la passe interroge donc
 **chaque fichier détenu** par un `HEAD` sur son chemin amont (RFC 0014 §13.5).
 La ligne, l'événement et le blocage nomment le chemin du fichier là où ceux d'un

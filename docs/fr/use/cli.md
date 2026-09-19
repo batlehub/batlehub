@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: 8632f0eac132054c
+sourceHash: 00dce8c11f03ea19
 ---
 
 # batlehub-cli
@@ -1254,8 +1254,8 @@ retenue et met l'analyse en file), puis attendez.
 ## 18. Commandes — download {#commands-download}
 
 Récupère un fichier à travers le proxy, qui le met en cache au passage. C'est
-ainsi qu'un registre adressé par chemin (`deb`, `rpm`, `pacman`, `jetbrains`,
-`generic`) se préchauffe fichier par fichier, et ainsi qu'on vérifie qu'un chemin
+ainsi qu'un registre adressé par chemin (`deb`, `rpm`, `pacman`, `apk`,
+`jetbrains`, `generic`) se préchauffe fichier par fichier, et ainsi qu'on vérifie qu'un chemin
 que le proxy est censé servir se résout bien.
 
 ```

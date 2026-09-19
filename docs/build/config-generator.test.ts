@@ -14,8 +14,11 @@ import {
   ECOSYSTEM_VERBS,
   addVerb,
   blankAuthProvider,
+  PATH_ADDRESSED_TYPES,
+  PROXY_ONLY_TYPES,
   defaultRegistry,
   defaultState,
+  defaultUpstream,
   permsToToml,
   removeVerb,
   renderConfigToml,
@@ -123,6 +126,64 @@ test("the picker's vocabulary is Action::as_str, in Action::ALL order", () => {
   // Every ecosystem verb the form knows the kinds of is in the enum too.
   for (const v of Object.keys(ECOSYSTEM_VERBS)) assert.ok(arms.includes(v), v);
 });
+
+// The same pin, one level up: the generator's registry-type list is a
+// hand-maintained copy of `RegistryKind`, and the previous arrangement had no
+// gate at all — six kinds (nodedist, sdkman, apk, rustup, galaxy, nix) reached
+// `main` with pages, a nav entry and a matrix row, and stayed absent from the
+// one form an operator uses to write the config that turns them on. Nothing
+// failed, because nothing was checking. This reads the enum's `as_str` arms
+// and its two per-kind predicates, so a kind added to the server fails here
+// until the generator can emit it.
+
+test("the generator offers every RegistryKind, with the server's modes", () => {
+  const src = readFileSync(
+    new URL("../../crates/core/src/entities/registry_kind.rs", import.meta.url),
+    "utf8",
+  );
+  const kinds = [...src.matchAll(/Self::([A-Za-z]+) => "([a-z0-9-]+)",/g)].map((m) => ({
+    variant: m[1],
+    wire: m[2],
+  }));
+  assert.ok(kinds.length > 20, "no as_str arms parsed — the enum's shape changed");
+  assert.deepEqual(
+    kinds.map((k) => k.wire).sort(),
+    Object.keys(defaultUpstream).sort(),
+    "every RegistryKind needs a defaultUpstream entry and vice versa",
+  );
+
+  // `supports_local_mode` is written as the exclusion list, so the variants it
+  // names are exactly the proxy-only ones.
+  const localExclusions = variantsOf(src, "pub fn supports_local_mode");
+  assert.deepEqual(
+    [...PROXY_ONLY_TYPES].sort(),
+    wireOf(kinds, localExclusions).sort(),
+    "PROXY_ONLY_TYPES must mirror the kinds supports_local_mode excludes",
+  );
+
+  const pathAddressed = variantsOf(src, "pub fn is_path_addressed");
+  assert.deepEqual(
+    [...PATH_ADDRESSED_TYPES].sort(),
+    wireOf(kinds, pathAddressed).sort(),
+    "PATH_ADDRESSED_TYPES must mirror is_path_addressed",
+  );
+});
+
+// The `Self::X | Self::Y | …` variants inside one `matches!` body.
+function variantsOf(src: string, signature: string): string[] {
+  const at = src.indexOf(signature);
+  assert.ok(at > 0, `${signature} not found — the enum's shape changed`);
+  const body = src.slice(at, src.indexOf("\n    }", at));
+  return [...body.matchAll(/Self::([A-Za-z]+)/g)].map((m) => m[1]);
+}
+
+function wireOf(kinds: { variant: string; wire: string }[], variants: string[]): string[] {
+  return variants.map((v) => {
+    const hit = kinds.find((k) => k.variant === v);
+    assert.ok(hit, `no as_str arm for Self::${v}`);
+    return hit.wire;
+  });
+}
 
 test("a picker offers what its tier can hold", () => {
   const flat = (tier: Parameters<typeof verbOptions>[0]) =>

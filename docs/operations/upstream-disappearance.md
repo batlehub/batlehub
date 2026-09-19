@@ -104,8 +104,8 @@ All three take `system:read` (the listing and the status) or `system:write`
 ## What the audit cannot see
 
 The forges (`github`, `gitlab`, `forgejo`) are proxied by path and are
-not probed. The path-addressed kinds — `deb`, `rpm`, `pacman`, `jetbrains`,
-`generic` — have no package identity, so the sweep asks about **each held
+not probed. The path-addressed kinds — `deb`, `rpm`, `pacman`, `apk`,
+`jetbrains`, `generic` — have no package identity, so the sweep asks about **each held
 file** with a `HEAD` on its upstream path (RFC 0014 §13.5): the row, the
 event and the block name the file's path where a package kind's would name
 a version, under the one package these registries have (`repo`), and a

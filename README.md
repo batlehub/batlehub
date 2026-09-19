@@ -18,6 +18,7 @@ A self-hosted smart proxy and cache for package registries. It sits between your
 | **Go** | GOPROXY protocol (`.info`, `.mod`, `.zip`, `@latest`, `@v/list`) | `proxy.golang.org` |
 | **Maven** | Maven Central-compatible metadata XML + JAR / POM downloads | `repo1.maven.org/maven2` |
 | **Terraform** | Provider and module proxy protocol (v1 API) | `registry.terraform.io` |
+| **Ansible Galaxy** | Collections API v3 (versions, version document, tarball) + the v1 role reads | `galaxy.ansible.com/api/` |
 | **RubyGems** | Gem downloads, version listing, REST info API | `rubygems.org` |
 | **Composer** | Packagist v2 protocol (`packages.json`, p2 metadata, dist downloads) | `repo.packagist.org` |
 | **PyPI** | Simple Repository API (PEP 503/691) + JSON API; URL rewriting for pip/uv/Poetry | `pypi.org` |
@@ -25,9 +26,12 @@ A self-hosted smart proxy and cache for package registries. It sits between your
 | **Debian / APT** | Path-addressed repository mirror; BatleHub-signed indexes in local mode | `deb.debian.org` |
 | **RPM / YUM** | Path-addressed repository mirror; BatleHub-signed `repomd.xml` in local mode | *(explicit upstream required)* |
 | **Pacman** | Path-addressed Arch mirror (`$repo/os/$arch/…`) | `geo.mirror.pkgbuild.com` |
+| **Alpine / apk** | Path-addressed Alpine mirror; `APKINDEX.tar.gz` + `.apk`, BatleHub-signed index in local mode | *(explicit upstream required)* |
 | **JetBrains IDE** | Path-addressed IDE archive mirror | `download.jetbrains.com` |
 | **Node.js dist** | `index.tab` release listing + dist tarballs (nvm, fnm, Volta) | `nodejs.org/dist` |
 | **SDKMAN** | Candidates API + broker download redirects | `api.sdkman.io/2` |
+| **Rust toolchain** | Channel manifests (filtered) + per-target component tarballs and their `.sha256` | `static.rust-lang.org` |
+| **Nix binary cache** | `nix-cache-info`, `{hash}.narinfo` (only `URL:` rewritten, so every `Sig:` still verifies) and the NARs | `cache.nixos.org` |
 | **Generic** | Arbitrary path-addressed file tree mirror | *(explicit upstream required)* |
 
 Multiple instances of the same registry type can run in parallel (e.g. a private npm registry and the public one as fallback).
@@ -47,41 +51,41 @@ upstream file path.
 
 #### Package registries
 
-| Feature | npm | Cargo | NuGet | OpenVSX | VS Code Mkt | JetBrains Mkt | Go | Maven | Terraform | RubyGems | Composer | PyPI | Conda |
-|---------|:---:|:-----:|:-----:|:-------:|:-----------:|:-------------:|:--:|:-----:|:---------:|:--------:|:--------:|:----:|:-----:|
-| Version listing | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ ⁵ |
-| Version metadata | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `latest` pseudo-version ¹ | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | — | — | — | — | — | — |
-| Upstream search | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
-| Source archive download | ✓ | ✓ | — | — | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Binary / extension download | — | — | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ | — | — | ✓ | ✓ |
-| Sparse index proxy | — | ✓ | — | — | — | — | — | — | — | — | — | — | — |
-| Module definition file | — | — | — | — | — | — | ✓ | — | — | — | — | — | — |
-| Publish timestamp | ✓ | ✓ | ⚠ ⁶ | ✓ | ✓ | ✓ | ✓ | ✓ | ⚠ ⁴ | ✓ | ✓ | ✓ | ⚠ ⁵ |
-| Signed release detection | — | — | — | ✓ | ✓ | — | — | — | — | — | — | — | — |
-| Release age gate rule | ✓ | ✓ | ⚠ ⁶ | ✓ | ✓ | ✓ | ✓ | ✓ | ⚠ ⁴ | ✓ | ✓ | ✓ | ⚠ ⁵ |
-| **Private publish** (`mode = local/hybrid`) | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ |
+| Feature | npm | Cargo | NuGet | OpenVSX | VS Code Mkt | JetBrains Mkt | Go | Maven | Terraform | RubyGems | Composer | PyPI | Conda | Galaxy |
+|---------|:---:|:-----:|:-----:|:-------:|:-----------:|:-------------:|:--:|:-----:|:---------:|:--------:|:--------:|:----:|:-----:|:------:|
+| Version listing | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ ⁵ | ✓ |
+| Version metadata | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `latest` pseudo-version ¹ | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | — | — | — | — | — | — | — |
+| Upstream search | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ |
+| Source archive download | ✓ | ✓ | — | — | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Binary / extension download | — | — | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ | — | — | ✓ | ✓ | — |
+| Sparse index proxy | — | ✓ | — | — | — | — | — | — | — | — | — | — | — | — |
+| Module definition file | — | — | — | — | — | — | ✓ | — | — | — | — | — | — | — |
+| Publish timestamp | ✓ | ✓ | ⚠ ⁶ | ✓ | ✓ | ✓ | ✓ | ✓ | ⚠ ⁴ | ✓ | ✓ | ✓ | ⚠ ⁵ | ✓ ¹⁰ |
+| Signed release detection | — | — | — | ✓ | ✓ | — | — | — | — | — | — | — | — | — |
+| Release age gate rule | ✓ | ✓ | ⚠ ⁶ | ✓ | ✓ | ✓ | ✓ | ✓ | ⚠ ⁴ | ✓ | ✓ | ✓ | ⚠ ⁵ | ✓ ¹⁰ |
+| **Private publish** (`mode = local/hybrid`) | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ |
 
 #### Forges, mirrors and toolchain distributions
 
-| Feature | GitHub | Forgejo | GitLab | Debian | RPM | Pacman | JetBrains IDE | Node.js dist | SDKMAN | Generic |
-|---------|:------:|:-------:|:------:|:------:|:---:|:------:|:-------------:|:------------:|:------:|:-------:|
-| Release / version listing | ✓ | ✓ | ✓ | — | — | — | — | ✓ | ✓ | — |
-| Version metadata | ✓ | ✓ | ✓ | — | — | — | — | ✓ | ✓ | — |
-| Git refs (branches, tags, commits) | ✓ | ✓ | ✓ | — | — | — | — | — | — | — |
-| Raw file access | ✓ | ✓ | ✓ | — | — | — | — | — | — | — |
-| Path-addressed file fetch ⁸ | — | — | — | ✓ | ✓ | ✓ | ✓ | — | — | ✓ |
-| Upstream artifact probe (`HEAD`) | — | — | — | ✓ | ✓ | ✓ | ✓ | — | — | ✓ |
-| Publish timestamp | ⚠ ² | ⚠ ² | ⚠ ² | — | — | — | — | ✓ | — ⁷ | — |
-| Signed release detection | ✓ ⁹ | ✓ ⁹ | ✓ ⁹ | — | — | — | — | — | — | — |
-| Release age gate rule | ⚠ ² | ⚠ ² | ⚠ ² | — | — | — | — | ✓ | — ⁷ | — |
-| **Private publish** (`mode = local/hybrid`) | — | — | — | ✓ ³ | ✓ ³ | ✓ ³ | — | — | — | — |
+| Feature | GitHub | Forgejo | GitLab | Debian | RPM | Pacman | Alpine/apk | JetBrains IDE | Node.js dist | SDKMAN | Rust toolchain | Nix cache | Generic |
+|---------|:------:|:-------:|:------:|:------:|:---:|:------:|:----------:|:-------------:|:------------:|:------:|:--------------:|:---------:|:-------:|
+| Release / version listing | ✓ | ✓ | ✓ | — | — | — | — | — | ✓ | ✓ | ✓ | — ¹² | — |
+| Version metadata | ✓ | ✓ | ✓ | — | — | — | ✓ | — | ✓ | ✓ | ✓ | ✓ | — |
+| Git refs (branches, tags, commits) | ✓ | ✓ | ✓ | — | — | — | — | — | — | — | — | — | — |
+| Raw file access | ✓ | ✓ | ✓ | — | — | — | — | — | — | — | — | — | — |
+| Path-addressed file fetch ⁸ | — | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | — | — | — | — | ✓ |
+| Upstream artifact probe (`HEAD`) | — | — | — | ✓ | ✓ | ✓ | ✓ | ✓ | — | — | — | — | ✓ |
+| Publish timestamp | ⚠ ² | ⚠ ² | ⚠ ² | — | — | — | ✓ ¹¹ | — | ✓ | — ⁷ | ✓ ¹³ | — ¹² | — |
+| Signed release detection | ✓ ⁹ | ✓ ⁹ | ✓ ⁹ | — | — | — | — | — | — | — | — | ✓ ¹⁴ | — |
+| Release age gate rule | ⚠ ² | ⚠ ² | ⚠ ² | — | — | — | ✓ ¹¹ | — | ✓ | — ⁷ | ✓ ¹³ | ⚠ ¹² | — |
+| **Private publish** (`mode = local/hybrid`) | — | — | — | ✓ ³ | ✓ ³ | ✓ ³ | ✓ ³ | — | — | — | — | ✓ ³ | — |
 
 > ¹ **`latest` pseudo-version**: whether the adapter resolves the literal version string `latest` to a concrete version. Independent of the deny-latest-tag rule, which fires on that string for every registry type whether or not the adapter would have resolved it.
 >
 > ² **Forges (GitHub, Forgejo, GitLab)**: a tag coordinate takes its timestamp from the release, and a ref-addressed raw or archive coordinate from the resolved commit's date. The release-listing pseudo-version carries none, and a commit lookup the forge cannot answer serves the artifact undated — the age gate then does whatever `deny_missing_timestamp` says.
 >
-> ³ **Private publish**: set `mode = "local"` to use BatleHub as the authoritative registry (no upstream needed), or `mode = "hybrid"` to serve locally published packages first and fall through to an upstream for everything else. For Debian, RPM and Pacman, local mode also regenerates and signs the repository indexes and serves the public key. See the self-hosted / private registry example below, and [`docs/guide/configuration.md § Registry modes`](docs/guide/configuration.md#registry-modes) for the full reference.
+> ³ **Private publish**: set `mode = "local"` to use BatleHub as the authoritative registry (no upstream needed), or `mode = "hybrid"` to serve locally published packages first and fall through to an upstream for everything else. For Debian, RPM, Pacman and Alpine, local mode also regenerates and signs the repository indexes and serves the public key. See the self-hosted / private registry example below, and [`docs/guide/configuration.md § Registry modes`](docs/guide/configuration.md#registry-modes) for the full reference.
 >
 > ⁴ **Terraform publish timestamp**: the module version detail endpoint (`/v1/modules/{ns}/{name}/{prov}/{ver}`) is part of the official Terraform Module Registry Protocol and always provides `published_at`. The provider version detail endpoint (`/v1/providers/{ns}/{type}/{ver}`) is supported by `registry.terraform.io` but is not in the official spec — other Terraform registries may omit `published_at`. When absent, the release age gate is skipped rather than blocking access.
 >
@@ -94,11 +98,21 @@ upstream file path.
 > ⁸ **Path-addressed**: the whole upstream path travels in the coordinate and there is no per-package metadata API, so `path_allow` and `cache.warm_paths` are the controls that apply. These are also the only types whose upstream can be probed with a `HEAD` for the artifact-disappearance sweep.
 >
 > ⁹ **Forge signature detection**: applies to release assets. A ref-addressed raw or archive coordinate is served without a signature verdict.
+>
+> ¹⁰ **Ansible Galaxy**: every upstream collection version carries `created_at`, so the gate is enforced normally in proxy mode. A locally published collection or an air-gapped listing may carry none, which is where the two postures diverge — so a `release_age_gate` rule on a `galaxy` registry must state `deny_missing_timestamp` explicitly.
+>
+> ¹¹ **Alpine / apk**: an `APKINDEX` dates every package it lists in `t:`, so the only undated coordinate is one the *cached* index no longer lists. `deny_missing_timestamp` is mandatory on this kind for that case. `apk` is path-addressed and still publishes: local/hybrid mode regenerates `APKINDEX.tar.gz` and signs it with the registry's own RSA key (apk-tools verifies RSA), and it is the one OS-package kind whose index an air-gapped instance can synthesise for itself.
+>
+> ¹² **Nix binary cache**: a cache answers one store path at a time and the path is computed by an evaluation this instance cannot perform, so there is no listing to enumerate. A narinfo carries hashes, a closure and a deriver — and no date anywhere in the protocol — so every store path reaches the age gate undated: `deny_missing_timestamp` is not a tie-break but the whole rule, and is mandatory here (`true` refuses every substitution, `false` makes the gate inert).
+>
+> ¹³ **Rust toolchain**: a toolchain takes its date from the dated `dist/` directory its files live under (`manifests.txt` recovers it for a stable release). The `rustup` installer's own tree publishes no dates, so `rustup-init` reaches the gate undated and `deny_missing_timestamp` decides it.
+>
+> ¹⁴ **Nix signature detection**: reads the narinfo's `Sig:` lines. A proxied narinfo is relayed with only `URL:` rewritten, so the upstream's signatures still verify; `require_upstream_sigs = true` refuses to relay one that carries no `Sig:` at all.
 
 ## Key features
 
 - **Artifact caching** — first download is fetched from upstream and stored; subsequent requests are served from local or S3 storage.
-- **Private / local registry** — `npm`, `cargo`, `nuget`, `openvsx`, `vscode-marketplace`, `jetbrains-marketplace`, `goproxy`, `rubygems`, `maven`, `terraform`, `composer`, `pypi`, `conda`, `deb`, `rpm`, and `pacman` registries can be set to `mode = "local"` (fully private, no upstream) or `mode = "hybrid"` (local-first with upstream fallback). Teams publish packages directly to BatleHub using standard tools (`npm publish`, `cargo publish`, `gem push`, `mvn deploy`, `twine upload`, `dotnet nuget push`, raw VSIX / Go zip / Terraform provider upload / Composer ZIP / conda package upload / JetBrains plugin upload / `.deb`, `.rpm` and `.pkg.tar.zst` upload).
+- **Private / local registry** — `npm`, `cargo`, `nuget`, `openvsx`, `vscode-marketplace`, `jetbrains-marketplace`, `goproxy`, `rubygems`, `maven`, `terraform`, `composer`, `pypi`, `conda`, `deb`, `rpm`, `pacman`, `apk`, `galaxy`, and `nix` registries can be set to `mode = "local"` (fully private, no upstream) or `mode = "hybrid"` (local-first with upstream fallback). Teams publish packages directly to BatleHub using standard tools (`npm publish`, `cargo publish`, `gem push`, `mvn deploy`, `twine upload`, `dotnet nuget push`, raw VSIX / Go zip / Terraform provider upload / Composer ZIP / conda package upload / JetBrains plugin upload / `.deb`, `.rpm`, `.pkg.tar.zst` and `.apk` upload, `ansible-galaxy collection publish`, `nix copy --to`). Publishing to `apk` is a `PUT` whose name, version and architecture are read from the embedded `.PKGINFO`, never from the file name.
 - **Ownership & team management** — per-package owner table (user or group, admin or maintainer role). The first publisher becomes the package admin; subsequent publishes require an owner record. Manage via the admin API or let it be set automatically.
 - **Team namespaces & package visibility** — assign a package name prefix (e.g. `frontend/`) to an auth-provider group so only its members can publish there. Set per-package visibility to `public` (default), `internal` (any authenticated user), or `team` (group members only) to control who can download.
 - **Versioning policies** — enforce semver, block pre-release versions, or restrict accepted version strings with a regex. Violations return HTTP 422 at publish time.
@@ -389,7 +403,7 @@ channels:
 
 ```mermaid
 flowchart TD
-  CFG["config.toml — registries entries<br>type = npm | cargo | github | openvsx | vscode-marketplace<br>| goproxy | maven | terraform | rubygems | composer | pypi | conda"]
+  CFG["config.toml — registries entries<br>type = npm | cargo | github | openvsx | vscode-marketplace<br>| goproxy | maven | terraform | rubygems | composer | pypi | conda<br>| galaxy | apk | nix | rustup | nodedist | sdkman | … (see the table above)"]
   MAIN["server/src/main.rs<br>builds registry clients, policies, services"]
   HTTP["HTTP handlers (actix-web)<br>one module per registry type"]
 
