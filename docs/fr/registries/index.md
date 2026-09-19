@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/index.md
-sourceHash: 4f5aaf2aa313c487
+sourceHash: 43d224396747bb6e
 ---
 
 # Registres
@@ -50,6 +50,7 @@ amont), ainsi que les archives d'IDE **JetBrains** et les miroirs de fichiers
 | [RubyGems](./rubygems) | `rubygems` | Gems, versions et API d'information | proxy · local · hybrid | ✅ | `rubygems.org` |
 | [NuGet (.NET)](./nuget) | `nuget` | Index v3, index plat et `.nupkg` | proxy · local · hybrid | ✅ | `api.nuget.org` |
 | [Terraform](./terraform) | `terraform` | Providers et modules (API v1) | proxy · local · hybrid | ✅ | `registry.terraform.io` |
+| [Ansible Galaxy](./galaxy) | `galaxy` | API collections v3 (liste des versions, document de version, tarball) et les lectures v1 des rôles | proxy · local · hybrid | ✅ | `galaxy.ansible.com/api/` |
 
 ### Extensions d'éditeur
 
@@ -66,6 +67,7 @@ amont), ainsi que les archives d'IDE **JetBrains** et les miroirs de fichiers
 | [Debian / APT](./deb) | `deb` | `Packages`/`Release` et `.deb` | proxy · local · hybrid | ✅ | aucun — déclarez `upstreams` |
 | [RPM / YUM / DNF](./rpm) | `rpm` | `repodata/` et `.rpm` | proxy · local · hybrid | ✅ | aucun — déclarez `upstreams` |
 | [Pacman / Arch](./pacman) | `pacman` | `<repo>.db` et `.pkg.tar.zst` | proxy · local · hybrid | ✅ | aucun — déclarez `upstreams` |
+| [Alpine / apk](./apk) | `apk` | `APKINDEX.tar.gz` et `.apk` | proxy · local · hybrid | ✅ | aucun — déclarez `upstreams` |
 
 ### Binaires et miroirs <Badge type="tip" text="adressé par chemin" />
 
@@ -73,6 +75,12 @@ amont), ainsi que les archives d'IDE **JetBrains** et les miroirs de fichiers
 |----------|--------|-----------------|-------|:-------:|------------------|
 | [IDE JetBrains](./jetbrains) | `jetbrains` | Archives d'installation d'IDE | proxy seul | ❌ | `download.jetbrains.com` |
 | [Miroir générique](./generic) | `generic` | N'importe quelle arborescence HTTP | proxy seul | ❌ | aucun — déclarez `upstreams` et `path_allow` |
+
+### Caches de compilation <Badge type="tip" text="RFC 0028" />
+
+| Registre | `type` | Ce qu'il relaie | Modes | Publication | Amont par défaut |
+|----------|--------|-----------------|-------|:-----------:|------------------|
+| [Cache binaire Nix](./nix) | `nix` | `nix-cache-info`, un `{hash}.narinfo` par chemin du store (relayé avec la seule `URL:` réécrite, de sorte que chaque `Sig:` reste vérifiable) et les NAR | proxy · local · hybride | ✅ | `cache.nixos.org` |
 
 ### Chaînes d'outils <Badge type="tip" text="RFC 0010" />
 
@@ -83,6 +91,7 @@ cache — l'identité que le miroir générique ne sait pas donner aux mêmes oc
 |----------|--------|-----------------|-------|:-------:|------------------|
 | [Distributions Node](./nodedist) | `nodedist` | `index.tab`/`index.json`, archives de publication, `SHASUMS256.txt` octet pour octet (nvm, fnm, n, mise) | proxy seul | ❌ | `nodejs.org/dist` |
 | [SDKMAN](./sdkman) | `sdkman` | API des candidats et courtier de téléchargement (le JDK, Gradle, Maven, Kotlin, …) ; le 302 du courtier est suivi côté serveur | proxy seul | ❌ | `api.sdkman.io/2` et `broker.sdkman.io` |
+| [Chaîne d'outils Rust](./rustup) | `rustup` | Manifestes de canal (la liste filtrée), archives de composants par cible et leur `.sha256` ; le `.asc` est relayé octet pour octet | proxy seul | ❌ | `static.rust-lang.org` |
 
 ## Matrice des fonctionnalités
 
@@ -116,6 +125,7 @@ l'explorateur de paquets. ✓ pris en charge · `—` sans objet · ⚠ partiel.
 | RubyGems | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | — | ✓ |
 | NuGet | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Terraform | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ |
+| Ansible Galaxy | ✓ ⁶ | ✓ | — | ✓ | ✓ | ✓ ⁷ | ✓ | ✓ | — |
 | OpenVSX | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Place de marché VS Code | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
 | Place de marché JetBrains | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ |
@@ -157,6 +167,19 @@ l'explorateur de paquets. ✓ pris en charge · `—` sans objet · ⚠ partiel.
 > plateformes de `cache.warm_platforms`, avec pour défaut celle du serveur. Le
 > bouton de récupération par version de la console est refusé pour la même
 > raison.
+>
+> ⁶ **Une seule page, toujours** (RFC 0031 §4.4) : `ansible-galaxy` résout un
+> lien de pagination par rapport à la racine d'API configurée, et les liens de
+> l'amont sont des *chemins* absolus qui remplacent tout le chemin — aucune
+> continuation émise par BatleHub ne pourrait donc être suivie jusqu'à lui.
+> Chaque listing qu'il sert porte donc un `next` nul, et l'adaptateur parcourt
+> lui-même les pages de l'amont.
+>
+> ⁷ **Garde-fous d'âge Galaxy** : chaque version amont d'une collection porte
+> `created_at`, donc le garde-fou est entièrement décidé en mode proxy. Une
+> collection publiée localement et un listing hors ligne peuvent n'en porter
+> aucune : `deny_missing_timestamp` est donc **obligatoire** sur une règle
+> `release_age_gate` ici, comme sur les types de chaînes d'outils.
 >
 > Recherche amont de l'explorateur de paquets (« Pas encore passé par le
 > proxy ») : Go passe par pkg.go.dev ; PyPI est une recherche par nom exact ;
@@ -213,11 +236,15 @@ bouton désactivé — voir
 | deb | path-addressed: there is no package identity to hang a README on | — | neither | no |
 | rpm | path-addressed: there is no package identity to hang a README on | — | neither | no |
 | pacman | path-addressed: there is no package identity to hang a README on | — | neither | no |
+| apk | an `.apk` carries `pkgdesc`, one sentence in `.PKGINFO`; putting a sentence where a reader expects a document makes every package look thinly documented | — | neither | no |
 | jetbrains | path-addressed: there is no package identity to hang a README on | — | neither | no |
 | jetbrains-marketplace | the metadata document, already fetched | yes | versions + README | yes |
 | generic | path-addressed: there is no package identity to hang a README on | — | neither | no |
 | nodedist | a Node release is a set of tarballs and a checksum file; the dist tree carries no prose | — | versions only | no |
 | sdkman | SDKMAN describes a distribution, not a package: no document in the protocol carries prose about a candidate | — | versions only | no |
+| rustup | a toolchain release is a manifest and a set of tarballs; the dist tree carries no prose | — | versions only | no |
+| galaxy | a file inside the artifact | yes | versions only | yes |
+| nix | a store path is a NAR and its narinfo; the protocol carries no prose, and the NAR is a filesystem image rather than a package with a manifest | — | neither | no |
 <!-- END readme-coverage -->
 
 La table ci-dessus est générée depuis le code Rust et reste en anglais : ses

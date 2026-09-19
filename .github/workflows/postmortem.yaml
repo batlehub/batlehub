@@ -47,16 +47,20 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
-# Anonymous vuln.mlab.sh allows 8 scans/hour and one run spends 3 (one per
-# dependency root), so the ceiling is **two runs per hour** before throttling.
-# Dropping the `paths:` filter above raised the pressure on that budget: this now
-# fires on every PR push, not only on lockfile changes.
+# Anonymous vuln.mlab.sh allows 8 scans/hour and one run spends 3, one per
+# dependency root. **That budget is shared, and it is now spoken for:**
+# `vuln-scan.yaml` reads the same `VULN_MLAB_TOKEN` against the same quota and
+# spends 5 per run, so a single pull-request push costs 8 of 8 and anything after
+# it in the hour is throttled. Anonymous operation is no longer a workable
+# default for this repository — **set `VULN_MLAB_TOKEN`** (25/hour), which both
+# workflows already read.
 #
-# The concurrency group absorbs the common case — repeated pushes to one branch
-# supersede each other instead of each burning 3 scans. What it cannot absorb is
-# three *different* branches active in the same hour, since the group is keyed on
-# the ref. If that starts happening, the fix is to set `VULN_MLAB_TOKEN` (the
-# authenticated quota is higher), not to narrow the trigger again.
+# Dropping the `paths:` filter above raised the pressure on that budget: this now
+# fires on every PR push, not only on lockfile changes. The concurrency group
+# absorbs the common case — repeated pushes to one branch supersede each other
+# instead of each burning 3 scans. What it cannot absorb is three *different*
+# branches active in the same hour, since the group is keyed on the ref. The fix
+# for that is the token too, not narrowing the trigger again.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
   cancel-in-progress: true
@@ -106,11 +110,12 @@ jobs:
           sarif: "true"
           soft-fail: "true"
           github-token: ${{ github.token }}
-          # Optional but recommended: anonymous vuln.mlab.sh is capped at 8
-          # scans/hour, and this workflow spends 3 per run — a couple of PRs
-          # pushed in the same hour will start getting throttled. An absent
-          # secret resolves to an empty string, i.e. anonymous, which is what
-          # the action defaults to anyway, so this is safe to leave unset.
+          # The shared token — see the quota note at the top of this file.
+          # `vuln-scan.yaml` reads this same secret, and between them the two
+          # workflows spend the whole 8/hour anonymous budget on one push, so
+          # this is no longer the "safe to leave unset" it once was. An absent
+          # secret still resolves to an empty string, i.e. anonymous, so nothing
+          # breaks without it — it just gets throttled.
           vuln-token: ${{ secrets.VULN_MLAB_TOKEN }}
       # exit-code: 0 pass · 1 gate tripped · 2 misconfig / no ecosystem detected.
       # A 2 is a real failure here — every scanned path is known to hold a

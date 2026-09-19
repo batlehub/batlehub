@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/admin-storage-health.md
-sourceHash: 1e73922d0122b4bb
+sourceHash: 08a75e829b265120
 ---
 
 # Stockage et santé
@@ -15,7 +15,7 @@ type = "filesystem"
 path = "/var/cache/batlehub"
 ```
 
-### Compatible S3 (AWS S3, MinIO, RustFS)
+### Compatible S3 (AWS S3, RustFS)
 
 ```toml
 [storage]
@@ -23,7 +23,7 @@ type   = "s3"
 bucket = "batlehub-artifacts"
 region = "us-east-1"
 
-# Pour un S3 auto-hébergé (MinIO, RustFS) : déclarez un endpoint personnalisé
+# Pour un S3 auto-hébergé (RustFS) : déclarez un endpoint personnalisé
 # endpoint = "http://rustfs:9900"
 
 # Identifiants (à omettre pour utiliser le rôle IAM ou le profil d'instance sur AWS)
@@ -60,8 +60,8 @@ Démarrez RustFS par le fichier Compose fourni, puis créez le bucket :
 
 ```sh
 task compose:s3:db            # démarre RustFS + Postgres + Authentik
-mc alias set local http://localhost:9900 rustfsadmin rustfsadmin
-mc mb local/artifacts         # ou : task compose:s3:bucket:create
+rc alias set local http://localhost:9900 rustfsadmin rustfsadmin
+rc bucket create local/artifacts   # ou : task compose:s3:bucket:create
 task run:s3                   # lance le serveur avec la configuration S3
 ```
 

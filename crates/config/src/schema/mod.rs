@@ -41,10 +41,10 @@ pub use notifications::{
     SlackChannelConfig, TeamsChannelConfig, WebhookChannelConfig,
 };
 pub use registry::{
-    default_true, BetaChannelConfig, CachePolicy, FeatureFlagsConfig, GrantsShadowConfig,
-    Immutable, IntegrityConfig, NamespaceConfig, QuotaConfig, QuotaEnforcement, ReadmeConfig,
-    RegistryConfig, RegistryMode, RepoSigningConfig, RetentionConfig, SbomConfig, SigningConfig,
-    UpstreamDetailConfig, VersioningPolicy,
+    default_true, BetaChannelConfig, CachePolicy, FeatureFlagsConfig, GalaxyRoleMode,
+    GrantsShadowConfig, Immutable, IntegrityConfig, NamespaceConfig, QuotaConfig, QuotaEnforcement,
+    ReadmeConfig, RegistryConfig, RegistryMode, RepoSigningConfig, RetentionConfig, SbomConfig,
+    SigningConfig, UpstreamDetailConfig, VersioningPolicy,
 };
 pub use release_imports::{ImportPrincipalConfig, ReleaseImportConfig, MIN_IMPORT_INTERVAL_SECS};
 pub use routing::{
@@ -700,6 +700,7 @@ impl AppConfig {
         self.signed_url_warnings(&mut out);
         self.require_signed_release_warnings(&mut out);
         self.vsx_signing_warnings(&mut out);
+        self.nix_signing_warnings(&mut out);
         self.release_import_warnings(&mut out);
         self.forge_warnings(&mut out);
         self.security_warnings(&mut out);
@@ -1103,6 +1104,87 @@ impl AppConfig {
                         "registry '{}' is in proxy mode with a [registries.vsx_signing] key: \
                          nothing is published there, so the key signs nothing. An upstream's \
                          signature is relayed whether or not a key is configured.",
+                        registry.name
+                    ),
+                ));
+            }
+        }
+    }
+
+    /// The two things a `nix` registry's signing configuration can be that are
+    /// legitimate and still worth saying out loud (RFC 0028 §4.5).
+    ///
+    /// Neither is an error. A key in proxy mode signs nothing because a relayed
+    /// narinfo is never re-signed; no key in local mode produces paths every
+    /// stock client refuses, which is the operator's to choose but not to
+    /// discover from a client error message.
+    fn nix_signing_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        for (index, registry) in self.registries.iter().enumerate() {
+            if registry.registry_type != "nix" {
+                continue;
+            }
+            if registry.mode == RegistryMode::Proxy && registry.nix_signing.is_some() {
+                out.push(ConfigWarning::new(
+                    warnings::NIX_SIGNING_PROXY_MODE,
+                    format!("registries[{index}].nix_signing"),
+                    format!(
+                        "registry '{}' is in proxy mode with a [registries.nix_signing] key: \
+                         nothing is published there, so the key signs nothing. A relayed \
+                         narinfo keeps the upstream's Sig: lines byte-exact and is never \
+                         re-signed.",
+                        registry.name
+                    ),
+                ));
+            }
+            // The two staging limits, when they are set tight enough to refuse
+            // a publish that is doing nothing wrong. `nix copy` opens
+            // `http-connections` (25 by default) in parallel and each one holds
+            // an unclaimed NAR, so a smaller cap refuses a copy for its shape
+            // rather than for its size; and a NAR and its narinfo are one round
+            // trip apart, so a TTL under a minute is a race with the network.
+            if let Some(secs) = registry.pending_nar_ttl_secs {
+                if secs < 60 {
+                    out.push(ConfigWarning::new(
+                        warnings::NIX_STAGING_TIGHT,
+                        format!("registries[{index}].pending_nar_ttl_secs"),
+                        format!(
+                            "registry '{}' keeps an unclaimed NAR for {secs}s. `nix copy --to` \
+                             sends the NAR and its narinfo one round trip apart, so a window \
+                             this short sweeps uploads mid-publish on a slow or loaded link and \
+                             the client sees 'no NAR named … was uploaded by this publisher'.",
+                            registry.name
+                        ),
+                    ));
+                }
+            }
+            if let Some(max) = registry.max_pending_nars {
+                if max < 25 {
+                    out.push(ConfigWarning::new(
+                        warnings::NIX_STAGING_TIGHT,
+                        format!("registries[{index}].max_pending_nars"),
+                        format!(
+                            "registry '{}' allows {max} unclaimed NAR uploads per publisher. \
+                             `nix copy` parallelises over http-connections (25 by default) and \
+                             each in-flight path holds one, so a cap below that refuses copies \
+                             with a 429 for their concurrency rather than for their size — the \
+                             client's own `--option http-connections` is the other half of this \
+                             setting.",
+                            registry.name
+                        ),
+                    ));
+                }
+            }
+            if registry.mode != RegistryMode::Proxy && registry.nix_signing.is_none() {
+                out.push(ConfigWarning::new(
+                    warnings::NIX_LOCAL_UNSIGNED,
+                    format!("registries[{index}].nix_signing"),
+                    format!(
+                        "registry '{}' hosts store paths with no [registries.nix_signing] key, \
+                         so the narinfos it serves carry no Sig: line. Every client running \
+                         Nix's default require-sigs = true refuses them — \"cannot add path \
+                         '…' because it lacks a signature by a trusted key\" — unless the path \
+                         is content-addressed. Generate a seed with `openssl rand -hex 32` and \
+                         hand the `GET public-key` line to every client's trusted-public-keys.",
                         registry.name
                     ),
                 ));
@@ -2255,6 +2337,8 @@ impl AppConfig {
             Self::validate_registry_path_allow(registry, kind)?;
             Self::validate_registry_release_age(registry, kind)?;
             Self::validate_registry_broker_url(registry, kind)?;
+            Self::validate_registry_deny_components(registry, kind)?;
+            Self::validate_registry_roles(registry, kind)?;
             Self::validate_registry_warm_platforms(registry, kind)?;
             Self::validate_registry_refs(registry, kind)?;
             // Beside `refs`, not inside it: `[registries.raw]` and
@@ -2270,6 +2354,12 @@ impl AppConfig {
             Self::validate_registry_upstream_detail(registry)?;
             Self::validate_registry_versioning(registry)?;
             Self::validate_registry_vsx_signing(registry, kind)?;
+            Self::validate_registry_nix(registry, kind)?;
+            Self::validate_registry_apk(
+                registry,
+                kind,
+                self.air_gap.as_ref().is_some_and(|a| a.enabled),
+            )?;
         }
         Ok(())
     }
@@ -2345,6 +2435,25 @@ impl AppConfig {
                 kind
             );
         }
+        // A `rustup` upstream is the *root* of the tree, because the registry
+        // serves two subtrees of it (`dist/` and `rustup/`) plus
+        // `manifests.txt` at the root. `…/dist` is the most likely mistake for
+        // an operator migrating from the `generic` example, and it fails as a
+        // `404` per request rather than at boot (RFC 0024 §4.5).
+        if kind == batlehub_core::entities::RegistryKind::Rustup {
+            for upstream in &registry.upstreams {
+                let path = upstream.trim_end_matches('/');
+                if path.ends_with("/dist") {
+                    bail!(
+                        "registry '{}': a rustup upstream is the root of the tree, not its \
+                         'dist' directory — use '{}' instead of '{upstream}', because the \
+                         registry also serves 'rustup/' and 'manifests.txt' from the root",
+                        registry.name,
+                        path.trim_end_matches("/dist")
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
@@ -2398,7 +2507,11 @@ impl AppConfig {
     /// publishes no dates at all. "Quarantine everything undated" and "exempt
     /// it" are opposite security postures; inheriting one silently is how an
     /// operator ends up believing a toolchain is quarantined when it is not.
-    /// So the field is mandatory here, and only here.
+    /// `apk` joins them for a narrower reason: its index dates every package
+    /// it lists, so an undated coordinate means "the cached index has dropped
+    /// this version", and the two answers are still opposite postures
+    /// (RFC 0026 §4.5). So the field is mandatory on these three kinds and
+    /// nowhere else.
     ///
     /// Namespace rule overrides (RFC 0015 §4.1) are checked too: a namespace
     /// that re-tunes the gate re-inherits the same silent default.
@@ -2418,6 +2531,35 @@ impl AppConfig {
                 "SDKMAN publishes no dates at all, so every artifact reaches the gate without \
                  one: 'true' refuses every download on this registry, 'false' makes the gate \
                  inert"
+            }
+            // The index carries `t:` for every package it lists — measured:
+            // 5 647 of 5 647 in v3.22/main/x86_64 — so the undated case is
+            // narrow and specific: a package the *cached* index no longer has
+            // (RFC 0026 §4.5).
+            RegistryKind::Apk => {
+                "every package an APKINDEX lists carries its build time in 't:', so the only \
+                 undated coordinate is one the cached index no longer lists: 'true' refuses \
+                 it, 'false' serves it"
+            }
+            // Every *upstream* collection version carries `created_at`, so the
+            // field is inert in proxy mode — and a locally published
+            // collection and an air-gapped listing (RFC 0008-bis) may carry
+            // none, which is exactly where the two postures diverge
+            // (RFC 0031 §4.5).
+            RegistryKind::Galaxy => {
+                "every upstream collection version carries 'created_at', so the undated case is \
+                 a locally published collection or an air-gapped listing: 'true' refuses it, \
+                 'false' serves it"
+            }
+            // The substituter protocol carries no dates at all — a narinfo has
+            // hashes, a closure and a deriver, and nothing else. So *every*
+            // path reaches the gate undated and the field is not a tie-break,
+            // it is the whole rule: `true` refuses every substitution on this
+            // registry, `false` makes the gate inert (RFC 0028 §4.5).
+            RegistryKind::Nix => {
+                "a narinfo carries no date anywhere in the protocol, so every store path reaches \
+                 the gate without one: 'true' refuses every substitution on this registry, \
+                 'false' makes the gate inert"
             }
             _ => return Ok(()),
         };
@@ -2506,6 +2648,89 @@ impl AppConfig {
                 registry.name
             );
         }
+        Ok(())
+    }
+
+    /// RFC 0024 §4.5: `deny_components` is rustup's and nobody else's, its
+    /// entries are matched against `[pkg.{name}…]` headers, and three names
+    /// would leave a registry nothing can install from.
+    ///
+    /// The last rule is the one worth the code: `minimal` is
+    /// `rustc`, `cargo`, `rust-std`, so denying any of them serves manifests
+    /// every profile fails against — a registry that looks configured and
+    /// installs nothing.
+    fn validate_registry_deny_components(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+    ) -> Result<()> {
+        use batlehub_core::entities::RegistryKind;
+        if registry.deny_components.is_empty() {
+            return Ok(());
+        }
+        if kind != RegistryKind::Rustup {
+            bail!(
+                "registry '{}': 'deny_components' is only meaningful on a rustup registry (it \
+                 names channel-manifest components), not {}",
+                registry.name,
+                kind
+            );
+        }
+        const MINIMAL: &[&str] = &["rustc", "cargo", "rust-std"];
+        for name in &registry.deny_components {
+            // No dot, deliberately narrower than RFC 0024 §4.5's
+            // `[A-Za-z0-9_.-]+`: every one of the 22 components today's stable
+            // manifest carries is `[a-z0-9-]+`, and a dot is exactly what a
+            // `pkg.rust-docs` dot-path would bring — the value the §4.5
+            // rationale names as the one that matches nothing while the
+            // operator believes it enforces.
+            if name.is_empty()
+                || !name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+            {
+                bail!(
+                    "registry '{}': 'deny_components' entry '{name}' is not a manifest package \
+                     name ([A-Za-z0-9_-]+) — it is matched against '[pkg.{{name}}…]' headers, so \
+                     a dot-path, a separator or a space would match nothing and enforce nothing",
+                    registry.name
+                );
+            }
+            if MINIMAL.contains(&name.as_str()) {
+                bail!(
+                    "registry '{}': 'deny_components' names '{name}', which every profile needs \
+                     — the registry would serve manifests nothing can install from. The floor is \
+                     the 'minimal' profile: rustc, cargo, rust-std",
+                    registry.name
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// RFC 0031 §4.5: `roles` is galaxy's and nobody else's.
+    ///
+    /// The `broker_url` rule, one kind over. The spelling is checked by the
+    /// enum at deserialisation — a value that is not `proxy`, `index` or `off`
+    /// never reaches here — so the only thing left to refuse is the option on a
+    /// registry whose protocol has no role surface at all, where it would be
+    /// read, stored and never consulted.
+    fn validate_registry_roles(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+    ) -> Result<()> {
+        use batlehub_core::entities::RegistryKind;
+        let Some(roles) = registry.roles else {
+            return Ok(());
+        };
+        if kind != RegistryKind::Galaxy {
+            bail!(
+                "registry '{}': 'roles' is only meaningful on a galaxy registry (it selects how \
+                 much of Ansible Galaxy's v1 role API is served), not {}",
+                registry.name,
+                kind
+            );
+        }
+        let _ = roles;
         Ok(())
     }
 
@@ -3580,6 +3805,315 @@ impl AppConfig {
                 );
             }
         }
+        Ok(())
+    }
+
+    /// `[registries.nix_signing]`, `require_upstream_sigs` and the `nix`
+    /// upstream shape (RFC 0028 §4.5).
+    ///
+    /// Everything here fails at boot rather than at the first `nix build`,
+    /// because every one of these mistakes is silent from the inside: a seed
+    /// on the wrong kind means an operator believes uploads are signed, a
+    /// `key_name` with a colon in it produces a `Sig:` no client can parse
+    /// into a name and a key, and a query string on the upstream is a client
+    /// setting forwarded on every request to a cache that does not read it.
+    fn validate_registry_nix(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+    ) -> Result<()> {
+        use batlehub_core::entities::RegistryKind;
+        let is_nix = matches!(kind, RegistryKind::Nix);
+
+        // A signing key on a registry that will never sign anything, and a
+        // relay switch on a registry that relays nothing: the same class as
+        // `vsx_signing` off a VSX kind. A silently ignored secret is worse
+        // than an ignored option, because the operator believes it took.
+        if !is_nix {
+            if registry.nix_signing.is_some() {
+                anyhow::bail!(
+                    "registry '{}': [registries.nix_signing] applies to type = \"nix\" only \
+                     (it signs narinfos), not to '{}'",
+                    registry.name,
+                    registry.registry_type
+                );
+            }
+            if registry.require_upstream_sigs {
+                anyhow::bail!(
+                    "registry '{}': 'require_upstream_sigs' applies to type = \"nix\" only \
+                     (it is about relayed narinfo Sig: lines), not to '{}'",
+                    registry.name,
+                    registry.registry_type
+                );
+            }
+            for (field, set) in [
+                (
+                    "pending_nar_ttl_secs",
+                    registry.pending_nar_ttl_secs.is_some(),
+                ),
+                ("max_pending_nars", registry.max_pending_nars.is_some()),
+            ] {
+                if set {
+                    anyhow::bail!(
+                        "registry '{}': '{field}' applies to type = \"nix\" only (it bounds the \
+                         staging area a NAR waits in before its narinfo claims it), not to '{}'",
+                        registry.name,
+                        registry.registry_type
+                    );
+                }
+            }
+            return Ok(());
+        }
+
+        // Zero is not "no limit" for either of these, it is "refuse every
+        // publish": a TTL of 0 sweeps the NAR before its own narinfo can claim
+        // it, and a cap of 0 refuses the first upload. Both would look like a
+        // broken server rather than a policy.
+        if registry.pending_nar_ttl_secs == Some(0) {
+            anyhow::bail!(
+                "registry '{}': pending_nar_ttl_secs = 0 would sweep every upload before its \
+                 narinfo arrives, so no publish could ever complete. Omit it for the default \
+                 (3600), or set the number of seconds an unclaimed NAR may wait",
+                registry.name
+            );
+        }
+        if registry.max_pending_nars == Some(0) {
+            anyhow::bail!(
+                "registry '{}': max_pending_nars = 0 refuses every NAR upload, which refuses \
+                 every publish. Omit it for the default (64), or set how many unclaimed uploads \
+                 one publisher may hold",
+                registry.name
+            );
+        }
+
+        if let Some(signing) = &registry.nix_signing {
+            let seed = signing.seed_hex.trim();
+            if seed.len() != 64 || !seed.bytes().all(|b| b.is_ascii_hexdigit()) {
+                anyhow::bail!(
+                    "registry '{}': nix_signing.seed_hex must be 64 hex characters (a 32-byte \
+                     Ed25519 seed; `openssl rand -hex 32` prints one), got {} characters. A \
+                     wrong-length seed is a typo, and Ed25519 would sign with garbage rather \
+                     than refuse",
+                    registry.name,
+                    seed.len()
+                );
+            }
+            if let Some(name) = &signing.key_name {
+                // The colon separates name from key in `trusted-public-keys`
+                // and in `Sig:`; whitespace separates entries. Either produces
+                // a key no client can list.
+                if name.is_empty()
+                    || name.contains(':')
+                    || name.bytes().any(|b| b.is_ascii_whitespace())
+                {
+                    anyhow::bail!(
+                        "registry '{}': nix_signing.key_name must be non-empty and contain \
+                         neither ':' nor whitespace — the colon separates the name from the key \
+                         in trusted-public-keys and in Sig:, and whitespace separates entries, \
+                         so either produces a key no client can list",
+                        registry.name
+                    );
+                }
+            }
+        }
+
+        // `?priority=` and friends are settings on the *client's* store URL.
+        // On the upstream they would be forwarded on every request and mean
+        // nothing to the cache.
+        for upstream in &registry.upstreams {
+            if upstream.contains('?') {
+                anyhow::bail!(
+                    "registry '{}': upstream '{}' carries a query string. '?priority=' and the \
+                     other store-URL settings belong in the client's own 'substituters' line; \
+                     on the upstream they are forwarded on every request and mean nothing",
+                    registry.name,
+                    upstream
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// `[registries.apk_signing]`, `apk_unsigned` and the `apk` upstream shape
+    /// (RFC 0026 §4.5).
+    ///
+    /// Everything here fails at boot rather than at the first `apk update`,
+    /// because every one of these mistakes produces a *client-side* symptom —
+    /// an untrusted index, a doubled path segment, a repository nothing can
+    /// install from — that reads as this instance's bug from the outside and is
+    /// invisible from the inside.
+    fn validate_registry_apk(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+        air_gapped: bool,
+    ) -> Result<()> {
+        use batlehub_core::entities::RegistryKind;
+        let is_apk = matches!(kind, RegistryKind::Apk);
+
+        // A signing key on a registry that will never sign anything is the
+        // class of misconfiguration `broker_url` off `sdkman` is rejected for.
+        if !is_apk {
+            if registry.apk_signing.is_some() {
+                anyhow::bail!(
+                    "registry '{}': [registries.apk_signing] applies to type = \"apk\" only \
+                     (it signs the generated APKINDEX), not to '{}'",
+                    registry.name,
+                    registry.registry_type
+                );
+            }
+            if registry.apk_unsigned {
+                anyhow::bail!(
+                    "registry '{}': apk_unsigned applies to type = \"apk\" only, not to '{}'",
+                    registry.name,
+                    registry.registry_type
+                );
+            }
+            return Ok(());
+        }
+
+        let hosts_locally = matches!(registry.mode, RegistryMode::Local | RegistryMode::Hybrid);
+
+        // In proxy mode the upstream index is relayed byte-exact, so a key
+        // would advertise a trust this instance does not provide — **unless the
+        // instance is air-gapped**, where there is no upstream to relay and the
+        // index served is one this instance composes over the held set and
+        // signs itself (RFC 0026 §6.10). That is the one case where a proxy
+        // registry writes an `APKINDEX`, and without a key it cannot: the
+        // composition is skipped and `apk update` stays the RFC 0008 `503`.
+        if !hosts_locally && registry.apk_signing.is_some() && !air_gapped {
+            anyhow::bail!(
+                "registry '{}': [registries.apk_signing] needs mode = \"local\" or \"hybrid\", or \
+                 [air_gap] enabled = true — in proxy mode with a reachable upstream the APKINDEX \
+                 is relayed byte-exact with Alpine's own signature, and there is nothing for \
+                 this key to sign",
+                registry.name
+            );
+        }
+
+        // The client appends `{branch}/{repo}/{arch}/` itself, so an upstream
+        // that already names one puts the index at `…/v3.22/v3.22/main/…`.
+        // This is the mistake a `generic` migration makes, so it is named.
+        for upstream in &registry.upstreams {
+            let trimmed = upstream.trim_end_matches('/');
+            let last = trimmed.rsplit('/').next().unwrap_or_default();
+            let looks_like_branch = last == "edge"
+                || last == "latest-stable"
+                || last
+                    .strip_prefix('v')
+                    .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
+            let looks_like_repo = matches!(last, "main" | "community" | "testing");
+            if looks_like_branch || looks_like_repo {
+                anyhow::bail!(
+                    "registry '{}': upstreams entry '{}' ends in a branch or repository \
+                     ('{}'), but apk appends '{{branch}}/{{repo}}/{{arch}}/' itself — use the \
+                     tree root instead, e.g. https://dl-cdn.alpinelinux.org/alpine",
+                    registry.name,
+                    upstream,
+                    last
+                );
+            }
+        }
+
+        if let Some(signing) = &registry.apk_signing {
+            let name = signing.key_name.trim();
+            // apk opens the key by this exact name inside the keys directory
+            // (`openat(ctx->keys_fd, name, …)`), so it is one path segment and
+            // nothing else.
+            if !name.ends_with(".rsa.pub") {
+                anyhow::bail!(
+                    "registry '{}': apk_signing.key_name must end in '.rsa.pub' — it is the \
+                     file name the client holds in /etc/apk/keys/, and Alpine's convention is \
+                     <email>-<8 hex>.rsa.pub; got '{}'",
+                    registry.name,
+                    signing.key_name
+                );
+            }
+            if name.contains('/') || name.contains("..") || name.len() == ".rsa.pub".len() {
+                anyhow::bail!(
+                    "registry '{}': apk_signing.key_name must be a single non-empty path \
+                     segment with no '/' or '..'; got '{}'",
+                    registry.name,
+                    signing.key_name
+                );
+            }
+            if signing.private_key_pem.trim().is_empty() {
+                anyhow::bail!(
+                    "registry '{}': apk_signing.private_key_pem is empty — set it from the \
+                     environment with ${{APK_SIGNING_KEY_PEM}} rather than inline",
+                    registry.name
+                );
+            }
+            if registry.apk_unsigned {
+                anyhow::bail!(
+                    "registry '{}': apk_unsigned = true and [registries.apk_signing] are \
+                     contradictory — remove one",
+                    registry.name
+                );
+            }
+            // The rotation window. Every retired key is a `.SIGN.*` entry a
+            // client may install from, so each has to be as well formed as the
+            // current one — and none of them may be the current one, because a
+            // repeated entry name is an index with two signatures under one
+            // file name and apk reads the first.
+            let mut seen = vec![name.to_owned()];
+            for old in &signing.previous_keys {
+                let old_name = old.key_name.trim();
+                if !old_name.ends_with(".rsa.pub")
+                    || old_name.contains('/')
+                    || old_name.contains("..")
+                    || old_name.len() == ".rsa.pub".len()
+                {
+                    anyhow::bail!(
+                        "registry '{}': apk_signing.previous_keys[].key_name must be a single \
+                         path segment ending in '.rsa.pub'; got '{}'",
+                        registry.name,
+                        old.key_name
+                    );
+                }
+                if old.private_key_pem.trim().is_empty() {
+                    anyhow::bail!(
+                        "registry '{}': apk_signing.previous_keys entry '{}' has an empty \
+                         private_key_pem — set it from the environment, or drop the entry if \
+                         the rotation is finished",
+                        registry.name,
+                        old.key_name
+                    );
+                }
+                if seen.iter().any(|n| n == old_name) {
+                    anyhow::bail!(
+                        "registry '{}': apk_signing key name '{}' appears twice — an index with \
+                         two signatures under one file name installs from whichever apk reads \
+                         first, which is not a rotation",
+                        registry.name,
+                        old.key_name
+                    );
+                }
+                if !old.previous_keys.is_empty() {
+                    anyhow::bail!(
+                        "registry '{}': apk_signing.previous_keys entry '{}' has its own \
+                         previous_keys — the rotation window is one flat list",
+                        registry.name,
+                        old.key_name
+                    );
+                }
+                seen.push(old_name.to_owned());
+            }
+        } else if hosts_locally && !registry.apk_unsigned {
+            // Silence here would ship a repository nothing can install from.
+            anyhow::bail!(
+                "registry '{}': an apk registry in mode = \"{}\" needs \
+                 [registries.apk_signing], because every shipping apk refuses an unsigned \
+                 index unless the client passes --allow-untrusted (which also switches off the \
+                 package identity check). Set apk_unsigned = true to ship one anyway and say \
+                 so on the record",
+                registry.name,
+                if matches!(registry.mode, RegistryMode::Local) {
+                    "local"
+                } else {
+                    "hybrid"
+                }
+            );
+        }
+
         Ok(())
     }
 

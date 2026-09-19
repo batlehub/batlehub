@@ -16,7 +16,10 @@ use crate::{
 pub(super) const PENDING_TTL_SECS: i64 = 600; // 10 minutes
 
 pub mod applier;
+mod config_file;
 pub mod validator;
+
+use config_file::ConfigFile;
 
 pub use applier::{ConfigChangeRow, ReloadApplyError};
 
@@ -120,6 +123,7 @@ pub struct PendingReload {
     pub new_upstream_map: UpstreamMap,
     pub new_cargo_index_map: CargoIndexMap,
     pub new_repo_signer_map: RepoSignerMap,
+    pub new_apk_signer_map: crate::ApkSignerMap,
     pub new_vuln_db_map: VulnDbMap,
     pub new_sumdb_map: SumDbMap,
     pub new_registry_host_map: RegistryHostMap,
@@ -162,6 +166,9 @@ pub struct BuiltHotState {
     pub upstream_map: UpstreamMap,
     pub cargo_index_map: CargoIndexMap,
     pub repo_signer_map: RepoSignerMap,
+    /// The RSA index signers of `apk` registries, rebuilt so a rotated key takes
+    /// effect on reload rather than on restart (RFC 0026 §4.1).
+    pub apk_signer_map: crate::ApkSignerMap,
     pub vuln_db_map: VulnDbMap,
     /// Go checksum database URLs (RFC 0009 §7.4).
     pub sumdb_map: SumDbMap,
@@ -193,6 +200,7 @@ pub struct ConfigReloadService {
     pub(super) upstream_map: UpstreamMap,
     pub(super) cargo_index_map: CargoIndexMap,
     pub(super) repo_signer_map: RepoSignerMap,
+    pub(super) apk_signer_map: crate::ApkSignerMap,
     pub(super) vuln_db_map: VulnDbMap,
     pub(super) sumdb_map: SumDbMap,
     pub(super) registry_host_map: RegistryHostMap,
@@ -202,8 +210,15 @@ pub struct ConfigReloadService {
     /// [`ConfigReloadParams::proxy_trust`], which see for why it is a mandatory
     /// field rather than something defaulted here.
     pub(super) proxy_trust: ProxyTrust,
-    pub(super) config_path: String,
-    /// The layers merged *over* [`Self::config_path`], in order, when the
+    /// The config file this process was started with. A [`ConfigFile`], not a
+    /// `String`, so that nothing can put a path here that did not come from
+    /// process arguments — see that type for what the distinction buys and what
+    /// it does not.
+    /// Private, not `pub(super)` like its neighbours: `applier` and `validator`
+    /// are descendants of this module and reach it anyway, and nothing outside
+    /// has any business holding the path this service opens.
+    config_file: ConfigFile,
+    /// The layers merged *over* [`Self::config_file`], in order, when the
     /// process was started with more than one `--config`. Re-read on every
     /// reload, exactly like the primary, so a change to a credentials file is
     /// picked up by the same watcher event that a change to the main file is.
@@ -213,7 +228,7 @@ pub struct ConfigReloadService {
     /// holding credentials is never sent to a browser and never rewritten from
     /// one. It is still merged before validation, so the diff and the warnings
     /// an admin sees describe the config that would actually be in force.
-    pub(super) config_overlays: Vec<String>,
+    config_overlays: Vec<ConfigFile>,
     pub(super) config_change_repo: Option<Arc<dyn ConfigChangeRepository>>,
     pub hot_reload_enabled: bool,
     /// Intentionally panics (`.expect(...)`) rather than recovers on poison, unlike
@@ -261,6 +276,7 @@ pub struct ConfigReloadParams {
     pub upstream_map: UpstreamMap,
     pub cargo_index_map: CargoIndexMap,
     pub repo_signer_map: RepoSignerMap,
+    pub apk_signer_map: crate::ApkSignerMap,
     pub vuln_db_map: VulnDbMap,
     pub sumdb_map: SumDbMap,
     pub registry_host_map: RegistryHostMap,
@@ -270,10 +286,16 @@ pub struct ConfigReloadParams {
     /// middleware actually reads; a `ProxyTrust::default()` here would be a
     /// detached handle and every reload of it a silent no-op.
     pub proxy_trust: ProxyTrust,
+    /// The primary config file, as the process was started with it: the first
+    /// `--config`, or the first `BATLEHUB_CONFIG` segment, or `"config.toml"`.
+    ///
+    /// A `String` here and a `ConfigFile` on the service is deliberate — this
+    /// struct is the argv-shaped boundary, and `ConfigReloadService::new` is the
+    /// one crossing. Nothing but process arguments belongs in it.
     pub config_path: String,
-    /// Extra config files merged over `config_path`, in order. Empty for the
-    /// single-file case, which is every deployment that has not asked for
-    /// layering.
+    /// Extra config files merged over `config_path`, in order, and from the same
+    /// source. Empty for the single-file case, which is every deployment that
+    /// has not asked for layering.
     pub config_overlays: Vec<String>,
     pub config_change_repo: Option<Arc<dyn ConfigChangeRepository>>,
     pub hot_reload_enabled: bool,
@@ -292,6 +314,7 @@ impl ConfigReloadService {
             upstream_map,
             cargo_index_map,
             repo_signer_map,
+            apk_signer_map,
             vuln_db_map,
             sumdb_map,
             registry_host_map,
@@ -312,12 +335,20 @@ impl ConfigReloadService {
             upstream_map,
             cargo_index_map,
             repo_signer_map,
+            apk_signer_map,
             vuln_db_map,
             sumdb_map,
             registry_host_map,
             proxy_trust,
-            config_path,
-            config_overlays,
+            // The one place a `String` becomes a path this service will open.
+            // `ConfigReloadParams` still carries the operator's own arguments,
+            // which is what `server/src/main.rs` and the test fixtures have to
+            // hand; the conversion is here so that boundary is a single line.
+            config_file: ConfigFile::from_process_argument(&config_path),
+            config_overlays: config_overlays
+                .iter()
+                .map(|p| ConfigFile::from_process_argument(p))
+                .collect(),
             config_change_repo,
             hot_reload_enabled,
             pending: Mutex::new(None),

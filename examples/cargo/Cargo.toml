@@ -1,7 +1,7 @@
 [package]
 name = "my-app"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 # Cargo resolves crates through the batlehub proxy (see .cargo/config.toml).
 [dependencies]

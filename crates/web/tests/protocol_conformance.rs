@@ -686,6 +686,243 @@ const SDKMAN: &[Conformance] = &[
     ),
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// rustup — the Rust toolchain tree (RFC 0024)
+//
+// Every line is read from rustup 1.29's `src/dist` and from `rustup-init.sh`;
+// `tests/heavy/rustup.sh` is what turns "read" into "observed". The pair that
+// proves the parse rather than the router is `channel-rust-stable.toml` against
+// `channel-rust-stable.toml.sha256`: they differ only by a suffix inside one
+// path segment, so both must reach the same route and come back as different
+// documents. `dist/{date}/{file}` carries both a dated manifest and a component
+// archive, which is the other ordering hazard.
+// ─────────────────────────────────────────────────────────────────────────────
+const RUSTUP: &[Conformance] = &[
+    Conformance::get(
+        "/proxy/rustup/rustup/dist/channel-rust-stable.toml",
+        "/proxy/{registry}/rustup/dist/{file}",
+        "rustup 1.29 src/dist/mod.rs, `dl_v2_manifest` — every `rustup toolchain install`",
+    )
+    .must_find("[pkg.rust]"),
+    Conformance::get(
+        "/proxy/rustup/rustup/dist/channel-rust-stable.toml.sha256",
+        "/proxy/{registry}/rustup/dist/{file}",
+        "rustup 1.29 src/dist/mod.rs, `dl_v2_manifest` — read before the manifest, and \
+         refused on mismatch (ChecksumFailed)",
+    )
+    .must_find("channel-rust-stable.toml"),
+    Conformance::get(
+        "/proxy/rustup/rustup/dist/2026-09-05/channel-rust-nightly.toml",
+        "/proxy/{registry}/rustup/dist/{date}/{file}",
+        "rustup 1.29 — `rustup toolchain install nightly-2026-09-05`, the dated channel",
+    )
+    .must_find("[pkg.rust]"),
+    Conformance::get(
+        "/proxy/rustup/rustup/dist/2026-09-03/rust-std-1.98.1-x86_64-unknown-linux-gnu.tar.xz",
+        "/proxy/{registry}/rustup/dist/{date}/{file}",
+        "rustup 1.29 — the component URL out of the manifest, with the canonical host \
+         rewritten to RUSTUP_DIST_SERVER by the client",
+    ),
+    Conformance::get(
+        "/proxy/rustup/rustup/dist/channel-rust-stable-date.txt",
+        "/proxy/{registry}/rustup/dist/{file}",
+        "static.rust-lang.org/dist — read by people and by release tooling, never by rustup",
+    )
+    .must_find("2026-09-03"),
+    Conformance::get(
+        "/proxy/rustup/rustup/manifests.txt",
+        "/proxy/{registry}/rustup/manifests.txt",
+        "static.rust-lang.org/manifests.txt — the release tooling's list of every manifest",
+    )
+    .must_find("channel-rust-1.98.1.toml"),
+    Conformance::get(
+        "/proxy/rustup/rustup/rustup/release-stable.toml",
+        "/proxy/{registry}/rustup/rustup/release-stable.toml",
+        "rustup-init.sh and `rustup self update` — the installer's own current version",
+    )
+    .must_find("1.29.1"),
+    Conformance::get(
+        "/proxy/rustup/rustup/rustup/dist/x86_64-unknown-linux-gnu/rustup-init",
+        "/proxy/{registry}/rustup/rustup/dist/{triple}/{file}",
+        "rustup-init.sh — `${RUSTUP_UPDATE_ROOT}/dist/${ARCH}/rustup-init`, the bootstrap",
+    ),
+    Conformance::get(
+        "/proxy/rustup/rustup/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init",
+        "/proxy/{registry}/rustup/rustup/archive/{version}/{triple}/{file}",
+        "rustup 1.29 self-update — the versioned archive the bootstrap path resolves to",
+    ),
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// apk (Alpine)
+//
+// Every line here was **observed on the wire**, not read: `tests/heavy/apk.sh`
+// drives `apk.static` 2.14.10 and 3.0.8 through a logging tap, and these are
+// the request lines the two generations sent (RFC 0026 §13). Both send exactly
+// the same ones — the client appends `{arch}/APKINDEX.tar.gz` and
+// `{arch}/{name}-{version}.apk` to whatever the repositories file names, and
+// nothing else.
+//
+// The route is one catch-all, `/proxy/{registry}/apk/{path:.*}`, which is why
+// the pattern assertion is worth little here and the *shape* of the path is
+// worth a lot: the `.apk` file name is parsed into a real coordinate before a
+// storage key is built from it, so a path that reaches the handler and splits
+// wrong is a block that silently does not apply.
+// ─────────────────────────────────────────────────────────────────────────────
+const APK: &[Conformance] = &[
+    Conformance::get(
+        "/proxy/apk/apk/v3.22/main/x86_64/APKINDEX.tar.gz",
+        "/proxy/{registry}/apk/{path:.*}",
+        "apk-tools 2.14.10 and 3.0.8, observed: `apk update` through the tap",
+    ),
+    Conformance::get(
+        "/proxy/apk/apk/v3.22/main/x86_64/busybox-1.37.0-r20.apk",
+        "/proxy/{registry}/apk/{path:.*}",
+        "apk-tools 2.14.10 and 3.0.8, observed: `apk fetch busybox` through the tap",
+    ),
+    // The local half: the client appends `{arch}/…` to a repository line with
+    // no branch, so a hosted repository's index sits one segment in.
+    Conformance::get(
+        "/proxy/apk/apk/x86_64/APKINDEX.tar.gz",
+        "/proxy/{registry}/apk/{path:.*}",
+        "apk-tools 2.14.10 and 3.0.8, observed: `apk update` against a local registry",
+    ),
+    // Not a client path: the operator's, and the one reserved prefix in the
+    // tree. It is here because it shares the catch-all with everything above,
+    // so a future route added under `…/apk/` would swallow it silently.
+    Conformance::get(
+        "/proxy/apk/apk/keys/internal-apk@example.com-5f3a1c2e.rsa.pub",
+        "/proxy/{registry}/apk/{path:.*}",
+        "RFC 0026 §4.1 — the signing key download, observed in tests/heavy/apk.sh",
+    ),
+    Conformance::put(
+        "/proxy/apk/apk/upload",
+        "/proxy/{registry}/apk/upload",
+        "RFC 0026 §4.6 — publish, observed in tests/heavy/apk.sh",
+    ),
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ansible Galaxy (RFC 0031)
+//
+// Read from `ansible-core` devel: `lib/ansible/galaxy/api.py` (`g_connect`,
+// `get_collection_versions`, `get_collection_version_metadata`,
+// `publish_collection`, `wait_import_task`, `fetch_role_related`),
+// `lib/ansible/galaxy/collection/concrete_artifact_manager.py`
+// (`_download_file`) and `lib/ansible/galaxy/role.py` (`install`).
+//
+// Every v3 path ends in a slash, and that is load-bearing: the client builds
+// them by `urljoin`ing against the configured api_server, and a redirect to add
+// a slash would be a second request it does not expect.
+//
+// Three facts here were measured against ansible-core 2.19.3 *after* the RFC
+// recorded them differently, and each one was a defect until it was:
+// the credential arrives as `Authorization: Token …` and not `Bearer`
+// (`GalaxyToken.token_type`); the publish body's file part is base64 under
+// `Content-Transfer-Encoding` (`prepare_multipart`'s default encoder); and the
+// import task is polled at `imports/collections/{bare id}/`, a path the client
+// builds rather than one the server hands it.
+// ─────────────────────────────────────────────────────────────────────────────
+const GALAXY: &[Conformance] = &[
+    Conformance::get(
+        "/proxy/galaxy/galaxy/api/",
+        "/proxy/{registry}/galaxy/api/",
+        "galaxy/api.py, `g_connect` — read once per run before any action, and the action is \
+         refused when its API version is absent",
+    )
+    .must_find("available_versions"),
+    Conformance::get(
+        "/proxy/galaxy/galaxy/api/v3/collections/acme/util/",
+        "/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/",
+        "galaxy/api.py, `get_collection_versions` — re-read uncached on every resolve for its \
+         updated_at, which invalidates the client's cached versions list",
+    )
+    .must_find("highest_version"),
+    Conformance::get(
+        "/proxy/galaxy/galaxy/api/v3/collections/acme/util/versions/",
+        "/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/",
+        "galaxy/api.py, `get_collection_versions` — the resolver's candidate list, asked for \
+         every direct requirement and every dependency",
+    )
+    .must_find("1.1.0"),
+    Conformance::get(
+        "/proxy/galaxy/galaxy/api/v3/collections/acme/util/versions/1.0.0/",
+        "/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/{version}/",
+        "galaxy/api.py, `get_collection_version_metadata` — download_url, artifact.sha256 and \
+         the version's dependencies",
+    )
+    .must_find("download_url"),
+    Conformance::get(
+        "/proxy/galaxy/galaxy/api/v3/artifacts/collections/acme-util-1.0.0.tar.gz",
+        "/proxy/{registry}/galaxy/api/v3/artifacts/collections/{filename}",
+        "collection/concrete_artifact_manager.py, `_download_file` — the served path has to end \
+         in the upstream filename, which is how the client names the file it writes",
+    ),
+    Conformance::post(
+        "/proxy/galaxy/galaxy/api/v3/artifacts/collections/",
+        "/proxy/{registry}/galaxy/api/v3/artifacts/collections/",
+        "galaxy/api.py, `publish_collection` — multipart sha256 + file",
+    ),
+    Conformance::get(
+        "/proxy/galaxy/galaxy/api/v3/imports/collections/acme-util-1.0.0/",
+        "/proxy/{registry}/galaxy/api/v3/imports/collections/{task}/",
+        "galaxy/api.py, `wait_import_task` — `_urljoin(api_server, v3, 'imports/collections', \
+         task_id, '/')`. The client builds this path itself from the *bare id* the publish \
+         returned; it does not follow the value as a URL, which is what RFC 0031 §4.4 assumed \
+         (measured, ansible-core 2.19.3)",
+    ),
+    Conformance::get(
+        "/proxy/galaxy/galaxy/api/v1/roles/?owner__username=geerlingguy&name=docker",
+        "/proxy/{registry}/galaxy/api/v1/roles/",
+        "galaxy/api.py, `lookup_role_by_name` — takes results[0] for its numeric id",
+    )
+    .must_find("4567"),
+    Conformance::get(
+        "/proxy/galaxy/galaxy/api/v1/roles/4567/versions/?page_size=50",
+        "/proxy/{registry}/galaxy/api/v1/roles/{id}/versions/",
+        "galaxy/api.py, `fetch_role_related` — with the page_size the client always sends; \
+         Role.install takes the matching entry's download_url",
+    )
+    .must_find("1.1.0"),
+];
+
+/// Nix's substituter protocol, read from `libstore` (the 2.35 line).
+///
+/// Four request lines and one route-ordering hazard, which is why this suite
+/// exists at all: `nar/{hash}/{file}` and `nar/{file}` differ only in their
+/// segment count, and a registration in the wrong order would make every
+/// coordinate-carrying NAR request match the upstream-shape route with
+/// `{file}` = the store hash. Both patterns are asserted here, so the ordering
+/// is checked rather than commented.
+const NIX: &[Conformance] = &[
+    Conformance::get(
+        "/proxy/nix/nix/nix-cache-info",
+        "/proxy/{registry}/nix/nix-cache-info",
+        "binary-cache-store.cc, `BinaryCacheStore::init` — read once per substituter; a StoreDir \
+         that differs from the local one makes the cache unusable",
+    )
+    .must_find("StoreDir"),
+    Conformance::get(
+        "/proxy/nix/nix/0001npbf2n4z3pjy6vm2mw8ywkqixxs6.narinfo",
+        "/proxy/{registry}/nix/{hash}.narinfo",
+        "binary-cache-store.cc, `BinaryCacheStore::narInfoFileFor` — `{hashPart}.narinfo`, asked \
+         before anything else and once per store path in the closure",
+    )
+    .must_find("StorePath"),
+    Conformance::get(
+        "/proxy/nix/nix/nar/0001npbf2n4z3pjy6vm2mw8ywkqixxs6/075lhsj33mkk02xn3lf59xn9glvh02wkw9xislbcj1jgjlpcn79x.nar.zst",
+        "/proxy/{registry}/nix/nar/{hash}/{file}",
+        "the `URL:` this instance rewrites a narinfo to carry — a NAR request that names the \
+         store path its coordinate is derived from (RFC 0028 §4.4)",
+    ),
+    Conformance::get(
+        "/proxy/nix/nix/nar/075lhsj33mkk02xn3lf59xn9glvh02wkw9xislbcj1jgjlpcn79x.nar.zst",
+        "/proxy/{registry}/nix/nar/{file}",
+        "the `URL:` cache.nixos.org itself serves — what a client with a narinfo cached before \
+         this registry existed asks for, for up to narinfo-cache-positive-ttl (30 days)",
+    ),
+];
+
 const SUITES: &[(&str, &[Conformance])] = &[
     ("npm", NPM),
     ("rubygems", RUBYGEMS),
@@ -695,6 +932,10 @@ const SUITES: &[(&str, &[Conformance])] = &[
     ("nuget", NUGET),
     ("nodedist", NODEDIST),
     ("sdkman", SDKMAN),
+    ("rustup", RUSTUP),
+    ("galaxy", GALAXY),
+    ("nix", NIX),
+    ("apk", APK),
     ("others", OTHERS),
     ("long-tail", LONG_TAIL),
 ];

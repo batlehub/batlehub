@@ -107,6 +107,26 @@ tasks:
       - task: postmortem:ui
       - task: postmortem:docs
 
+  vex:
+    desc: "Check the VEX document — structure, policy, and that it and .trivyignore.yaml still agree"
+    cmds:
+      # The suppressions in `.trivyignore.yaml` are read by Trivy and nobody
+      # else; `vex/batlehub.openvex.json` says the same thing in the format every
+      # scanner reads, and the release binds a rendered copy of it to the images
+      # it published. This keeps the two from drifting apart — an entry in one
+      # and not the other fails the check, in both directions.
+      - python3 .github/scripts/vex.py check
+
+  vex:render:
+    desc: "Bind the VEX document to published image digests — VERSION=1.2.3 IMAGES='repo@sha256:… repo@sha256:…'"
+    requires:
+      vars: [VERSION, IMAGES]
+    cmds:
+      - python3 .github/scripts/vex.py render
+        --version {{.VERSION}}
+        {{range $i, $image := splitList " " .IMAGES}}--image {{$image}} {{end}}
+        --out {{.OUT | default "batlehub.openvex.json"}}
+
   sbom:rust:
     desc: "Generate a CycloneDX SBOM of the shipped server (sbom-rust.cdx.json) — feed to `trivy sbom` / `grype sbom:` to match future CVEs against a shipped build"
     cmds:
@@ -126,6 +146,7 @@ tasks:
       # Needs network (reputation + vuln lookups); the advisory-only audits above
       # can't see an upstream that went archived or got taken over.
       - task: postmortem
+      - task: vex
       - task: sbom:rust
       - echo "Local gate passed. Image scanning (Trivy) and secret/SAST (gitleaks, semgrep) run in CI."
 

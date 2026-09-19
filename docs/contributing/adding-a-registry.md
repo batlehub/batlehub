@@ -43,7 +43,28 @@ Every request goes through `ProxyService::handle()`, which:
 - [ ] `crates/web/src/handlers/proxy/myregistry.rs` — HTTP handler(s) *(if needed)*
 - [ ] `crates/web/src/handlers/proxy/mod.rs` — `pub mod`
 - [ ] `crates/web/src/lib.rs` — import handler, register route(s), update `ApiDoc` tags
-- [ ] `ui/src/config/registryTypes.ts` — add a `RegistryTypeDef` entry
+- [ ] `ui/src/config/registryTypes.ts` — add a `RegistryTypeDef` entry, and put
+      every line of its snippets on `docs/registries/<id>.md` *(see §10)*
+- [ ] `tests/heavy/closed_world.sh` — a phase, its `PHASES` entry, a registry in
+      `tests/heavy/config.closed-world.toml`, and a matrix row in
+      `.github/workflows/test.yaml` *(the live proof — see §11)*
+- [ ] An air-gap proof — a case in `crates/web/tests/air_gap.rs`, or a phase in
+      `tests/heavy/airgap.sh` if a real client can drive it *(see §11)*
+- [ ] `tests/heavy/authz.sh` — a client phase, hermetic if the kind has a local
+      mode and `live:<kind>` if it does not *(see §11)*
+- [ ] The soak — a protocol module in `perf/mock-upstream/src/protocols/`, a
+      registry in `perf/config.soak.toml` and at least one arm in
+      `perf/k6/soak_arms.js` *(see §11; `crates/web/tests/soak_kind_coverage.rs`
+      fails until this is done or the kind is written into `NOT_SOAKED`)*
+- [ ] `crates/web/tests/registry_kind_coverage.rs` — the row naming the live
+      phase and the air-gap claim *(see §11)*
+- [ ] `crates/web/tests/authz_matrix.rs` — every new route classified in
+      `ROUTE_INVENTORY` **and** `WRITE_ROUTE_INVENTORY` *(see §11)*
+- [ ] `crates/adapters/src/sbom/extractor/` — a README parser, if
+      `readme_support()` answers `Archive` *(see §6)*
+- [ ] `crates/core/src/services/listing_synthesis.rs` — an arm per air-gapped
+      document, **if** the kind has an air-gap case *(see §6 — this is the one
+      per-kind dispatch neither the compiler nor a gate will ask you for)*
 
 ---
 
@@ -119,6 +140,25 @@ impl RegistryClient for MyRegistryClient {
 
 `pkg.cache_key()` produces `"{registry}/{name}/{version}"` (no artifact) or `"{registry}/{name}/{version}/{artifact}"` (with artifact). These are the storage keys. Keep the conventions stable — changing them invalidates cached artifacts.
 
+### The checksum field has a shape, and getting it wrong is silent
+
+`PackageMetadata::checksum` is read by `integrity::parse_expected`, which
+accepts an SRI `<algo>-<base64>` token **or a bare hex digest** whose algorithm
+it infers from the length — and nothing else. A `"sha256:<hex>"` value parses as
+neither, so the cache-write verification skips itself and logs
+`advertised checksum could not be parsed; skipping verification` once per
+download. Nothing fails: the artifact is served, and a client that checksums
+independently still installs it. That one `WARN` is the only symptom, which is
+how it survived a full test suite in RFC 0031 §13.
+
+Filter the upstream's value rather than relaying it — a digest this instance
+cannot verify against is better dropped than passed on as unparseable:
+
+```rust
+checksum: upstream_sha256
+    .filter(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit())),
+```
+
 ### Error handling
 
 Return `CoreError::NotFound` for 404s (enables fanout fallback to the next upstream). Return `CoreError::Registry` for all other upstream errors.
@@ -190,6 +230,34 @@ Four of those matches are **exhaustive on purpose**, with no wildcard arm, becau
 | `fetchable_by_version()` | whether *Fetch this version* has a single meaning | the same table's *Fetchable* column |
 
 Each `None` variant carries the **reason** as a `&'static str`, and the endpoint, the config warning and the generated table all quote it — so there is one sentence about why a kind does not do something, not three that can drift apart. Write the reason for a reader who is looking for a gap, not for a compiler.
+
+### Three tiers of per-kind dispatch, and only the first is free
+
+"The compiler will point you at every match" is true of most of them and not of
+all, which is worth knowing before you trust a green build:
+
+1. **The compiler forces these**, and you cannot ship without answering:
+   `as_str`, the four accessors above, `blocking::strip`,
+   `upstream_detail::listing_carries_readmes` and `listing_carries_links`,
+   `handlers/security.rs`'s `native_body`, and both matches in
+   `server/src/builders.rs`.
+2. **A gate forces these** — green build, red test: the five in §11.
+3. **Nothing forces this one.**
+   `crates/core/src/services/listing_synthesis.rs`'s `render_listing` matches
+   on `(RegistryKind, DocumentKind)` *tuples* and ends `_ => return None`. Miss
+   it and an air-gapped registry of your kind refuses every listing — no
+   compile error, no failing test. `registry_kind_coverage.rs` only catches the
+   omission if you claimed `AirGap::Case`; declare `AirGap::Gap` and you are
+   consistent and wrong. RFC 0031 §6.11 asserted the air gap "needs nothing
+   new" and needed three arms, one per document an install reads.
+   `package_names_for` in the same file has the same shape and a benign
+   default, so it only matters when the kind addresses a document by more than
+   its package name.
+
+If your kind has an air-gap case, open `render_listing` and add an arm per
+document the client resolves through. A listing the bundle can compose and does
+not is the *listing* failure RFC 0008-bis exists to name, and it is a different
+bug from a missing artifact.
 
 ---
 
@@ -316,6 +384,34 @@ pub async fn download_myext(
 }
 ```
 
+### If the client's credential is not `Bearer` or `Basic`
+
+No `AuthProvider` reads anything else, so a credential in any other shape is
+**dropped on the floor** — and the symptom is silent in the worst direction: an
+authenticated read arrives anonymous, and a registry closed to anonymous callers
+refuses the very client that is holding its token. Normalise it in
+`crates/web/src/extractors.rs::raw_auth_from_request`, beside the four that are
+there already:
+
+| Client | What it sends | Normalised to |
+| --- | --- | --- |
+| NuGet | `X-NuGet-ApiKey: <key>` | `Authorization: Bearer <key>` |
+| cargo | `Authorization: <token>` — no scheme at all | `Bearer <token>` |
+| `ovsx publish` | `?token=…` in the query string | `Bearer <token>` |
+| `ansible-galaxy` | `Authorization: Token <token>` | `Bearer <token>` |
+
+Scope the rewrite by the registry's **type**, not by the request path. Path
+scoping is wrong in both directions and has been: too narrow, because a client
+sends its token on more routes than the obvious one; too wide, because a greedy
+route from another kind can claim the path you keyed on.
+
+**Read the client's source for the constant — do not assume `Bearer`.**
+`ansible-galaxy` has two token classes twenty lines apart in `galaxy/token.py`
+with different `token_type` values, and RFC 0031 quoted the wrong one; the
+result was that no authenticated galaxy request worked at all, and every layer
+of testing below a real client reproduced the mistake, because every fixture was
+written from the same sentence (RFC 0031 §13).
+
 ### Route ordering
 
 actix-web resolves routes in registration order for patterns with equal specificity. Literal path segments take priority over parameterized ones, so `/proxy/{r}/{p}/{v}/myext` (literal `myext` suffix) routes correctly without conflicting with `/proxy/{r}/{p}/{v}/tarball` or `/proxy/{r}/{p}/{v}/vsix`. Still, **register more specific routes before less specific ones**.
@@ -405,9 +501,34 @@ the bytes on the wire come from one type.
 
 `id` becomes the tab's value/key and, by default, the API `type` it activates for — set `apiTypes: [...]` instead when the tab should light up for more than one configured registry type (see the `mise` composite entry). `SetupGuide.vue` derives the tab trigger, tab content, registry-name input, and snippet copy button from this array automatically — see the `id: "nuget"` entry in `registryTypes.ts` for a fuller example with multiple snippets and a `note`.
 
+**The snippets are checked against the registry page.** `registryTypes.docs.test.ts` renders every snippet and asserts each line appears somewhere in `docs/registries/<id>.md`, so a console step the documentation never mentions fails the `test` job. The count of already-drifted snippets is pinned and **may only fall** (`docs/internal/rfc-0005-bis-snippet-drift.md` is the register), which means a new kind cannot add to it: write the snippet up on the page, in the same shape the console renders it — a `$KEY` the console assigns has to be a `$KEY` on the page, not the value expanded inline. Then mirror the edit into `docs/fr/registries/<id>.md` and run `task docs:i18n:stamp`, or `docs:i18n:check` fails on the stale translation.
+
 ---
 
 ## 11. Testing
+
+### The five gates, at a glance
+
+Five checks fail the build for a kind that is missing one, and you meet them
+**one red run at a time** — four of them long after the code compiles. Walking
+the list deliberately is faster than being told:
+
+| Gate | What it demands |
+| --- | --- |
+| `tests/heavy/authz.sh` → `authz_check_kinds_covered` | a hermetic client phase in `AUTHZ_CLIENT_KINDS`, a `live:<kind>` in `AUTHZ_LIVE_KINDS`, or a route-level row in `authz_read_rows` |
+| `crates/web/tests/registry_kind_coverage.rs` | one row naming the `closed_world.sh` phase that drives the kind **and** its air-gap claim. The air-gap column is *scanned* out of `air_gap.rs`, so a case with no row and a row with no case both fail |
+| `crates/web/tests/soak_kind_coverage.rs` | a registry in `perf/config.soak.toml`, a protocol module in `perf/mock-upstream/src/protocols/`, and arms in `perf/k6/soak_arms.js` — or a written reason in `NOT_SOAKED` |
+| `crates/web/tests/authz_matrix.rs` | every new route classified in **both** `ROUTE_INVENTORY` and `WRITE_ROUTE_INVENTORY`. It catches *renames* as well as additions: a changed path fails twice over, once unclassified and once stale |
+| `crates/adapters/src/sbom/extractor/mod.rs` → `readme_support_matches_the_extractors` | a README parser for any kind whose `readme_support()` answers `Archive`, listed in `README_EXTRACTION_TYPES` |
+
+Two of them offer an escape hatch, and both are worth resisting once.
+`authz_matrix`'s failure message hands you paste-able
+`Coverage::NoRow("package read, not yet exercised")` lines for every route —
+but a kind with a local mode can usually carry real `Coverage::Row`s, and the
+routes that most deserve one are the artifact reads whose coordinate the
+handler parses out of a *filename*. `soak_kind_coverage` accepts a
+`NOT_SOAKED` entry, which is right for a kind with no steady state and wrong
+for one that simply has not been wired yet.
 
 ### Unit tests for the adapter
 
@@ -461,6 +582,106 @@ Add a case to the relevant file under `crates/web/tests/` (one file per feature/
 1. Build a `RegistryMap` with `"myregistry"` as the type.
 2. Send a `TestRequest::get()` to the new URL.
 3. Assert the status code and response body.
+
+### The two heavy proofs every kind owes: air-gapped, and live
+
+A unit test says the adapter parses what the upstream sends, and an integration
+test says the route is wired. Neither says the thing an operator actually needs
+to know, and both have been green while a kind was unusable: the ovsx download
+URL pointed at a route no Open VSX client asks for, the GitLab client refused
+the document its own typed route requests, and the marketplace's numeric-id
+spelling — the only one an IDE ever learns — resolved nothing. Every one of
+those was found by a client, not by a test double.
+
+So a new kind is not finished until it has been driven **both ways**.
+
+**Live.** A real client, against the real upstream, with the client unable to
+reach anything but this instance — `tests/heavy/closed_world.sh`. One phase per
+kind, each proving the same sentence: egress is denied, the dependency comes
+from the instance, it builds, and what it built runs. Four pieces:
+
+```bash
+# 1. tests/heavy/closed_world.sh — phase_<kind>, and the name in PHASES
+# 2. tests/heavy/config.closed-world.toml — an [[registries]] block for it
+# 3. .github/workflows/test.yaml — a `- phase: <kind>` row under heavy-closed-world
+#    (plus a setup step there if the client is not on the runner image)
+bash tests/heavy/closed_world.sh <kind>      # run just yours
+```
+
+Assert on the **wire transcript**, not only on the client's exit code: a phase
+that passes because the client quietly reached the upstream proves nothing, and
+`heavy_wire_re_after` is what makes the difference visible. Where the kind has
+no local mode, it also needs `live:<kind>` in `tests/heavy/authz.sh`
+(`AUTHZ_LIVE_KINDS` + a registry in `config.authz-live.toml`): a credential
+boundary's *positive* arm cannot be observed against an empty registry, because
+the allowed caller has to actually succeed. Where it does have a local mode, the
+hermetic client phase in `authz.sh` covers it instead.
+
+**Air-gapped.** The same kind on an instance that can reach nothing, holding
+only what was bundled into it (RFC 0008 / 0008-bis). Writing the case is half
+of it: `registry_kind_coverage.rs` reads `air_gap.rs` and fails if a kind its
+labs drive still declares `AirGap::Gap`, so the row and the case cannot drift
+apart. They did once — eight kinds had a case and declared a gap, and the
+published count said 8 of 25 when the truth was 16. This is where a kind
+discovers that its client resolves through a *listing* it was never given, which
+is a different failure from "the artifact is missing" and has a different fix —
+`synthesise_listings`, and the recorded miss that tells the next bundle what to
+carry. Add a case to `crates/web/tests/air_gap.rs`; if a real client can drive
+the kind end to end, add a phase to `tests/heavy/airgap.sh` too and read the
+answer off the wire the way the npm, pip and mise phases do.
+
+Both suites need `DATABASE_URL`, and the live one needs network *for the server*
+— the client is the half that gets none.
+
+**Write the suite, then run it, then believe the kind works — in that order.**
+`apk` landed its local mode with 43 green tests and a heavy suite that had never
+been executed. The first run found five defects in under an hour, three of them
+in the server, and together they meant every repository the feature could host
+was uninstallable ([RFC 0026](/rfc/0026-alpine-apk) §13). They were invisible
+from inside because the tests used **fixtures built by the same hand as the
+code**: our reader walks an archive's gzip members independently, so a test
+double written the same way could not show that the real format is one tar
+stream across those members — and a client refused it on the first byte.
+
+Two habits fall out of that, and they cost nothing:
+
+- **Build one fixture with the client's own tooling** and compare. `apk index`
+  produced the reference index that showed our `C:` field was computed by the
+  wrong rule — a defect whose only symptom is the client downloading a package
+  and *then* rejecting it.
+- **Assert on what the client resolved, not on its exit code.** apk 3 reports a
+  repository it could not read as `N unavailable` and exits `0`; a suite
+  checking `$?` was green against a proxy that served nothing.
+
+### The soak owes a kind an arm too
+
+A kind that nothing drives under constant load is a kind whose client, parser
+and rewriter have never been asked to run for an hour, and
+`crates/web/tests/soak_kind_coverage.rs` fails on the next `cargo test` until
+that is fixed or written down. Three small pieces:
+
+1. **`perf/mock-upstream/src/protocols/<name>.rs`** — the upstream. What it owes
+   is narrow: the documents the *proxy's* client parses, every digest the format
+   names computed from the bytes that will be served (the proxy verifies them),
+   and the same answer for the same coordinate every time. It is not a registry
+   a real client could install from — that is `closed_world.sh`. Declare the
+   routes `#[route(..., method = "GET", method = "HEAD")]`: actix does not
+   derive `HEAD` from `#[get]`, and some clients ask before they stream.
+2. **`perf/config.soak.toml`** — a `[[registries]]` block pointed at the mock.
+3. **`perf/k6/soak_arms.js`** — one arm per request shape worth loading,
+   typically a listing and an artifact. Give the arm a bounded `space`: a
+   coordinate space that grows with the run adds a row and a stored object per
+   request forever, and a verdict cannot tell that from a leak.
+
+Then run the pre-flight, which is the part that tells you the truth:
+
+```bash
+task perf:soak PROFILE=debug DURATION=30s RATE=20
+```
+
+It asks for every arm once before the load and stops on any that does not answer
+the status it declares. Do not skip it and read the load's own result instead:
+that check is "not 5xx", which a `404` passes.
 
 ### Manual verification
 

@@ -303,7 +303,13 @@ impl ProxyService {
         self.metrics.record_artifact_miss(registry_name);
         let upstream_start = Instant::now();
         let mut upstream = self
-            .fetch_artifact_or_record_error(&client, &req, &timing.registry_label, upstream_start)
+            .fetch_artifact_or_record_error(
+                &client,
+                &req,
+                &metadata,
+                &timing.registry_label,
+                upstream_start,
+            )
             .await?;
         // Times the whole body transfer (not just time-to-headers) — see
         // `time_upstream_stream` for why.

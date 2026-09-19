@@ -5,6 +5,8 @@ use super::{
 
 use batlehub_core::entities::AccessAction;
 
+use crate::{RegistryMap, RegistryModeMap};
+
 // ── List all packages ─────────────────────────────────────────────────────────
 
 #[derive(Deserialize, IntoParams)]
@@ -105,6 +107,59 @@ pub struct BlockRequest {
     pub reason: String,
 }
 
+/// Rebuild the generated `apk` indexes of `registry` after a block changed.
+///
+/// A no-op for every other kind — the three other OS kinds do not filter their
+/// generated index, and the rest have no generated index at all — so the cost
+/// on the ordinary path is one map lookup.
+///
+/// **Failure is loud and the block still holds.** The status row is already
+/// committed and the download gate already refuses the version, so the estate
+/// is safe; what goes stale is the *listing*. Rolling the block back to keep
+/// the two in step would trade an enforced block with a stale listing for no
+/// block at all, which is the worse of the two (RFC 0026 §6.4, decision 11).
+async fn refresh_apk_index_after_block(
+    registry: &str,
+    map: &RegistryMap,
+    mode_map: &RegistryModeMap,
+    local_svc: &Arc<batlehub_core::services::LocalRegistryService>,
+    admin_svc: &Arc<AdminService>,
+    signers: &crate::ApkSignerMap,
+) {
+    if !map.is_type(registry, "apk") {
+        return;
+    }
+    if !matches!(
+        mode_map.get(registry),
+        batlehub_config::schema::RegistryMode::Local
+            | batlehub_config::schema::RegistryMode::Hybrid
+    ) {
+        return;
+    }
+
+    let result = crate::handlers::proxy::repo::publish::refresh_apk_indexes(
+        local_svc.storage.as_ref(),
+        admin_svc.repo.as_ref(),
+        registry,
+        signers.get(registry).as_deref(),
+    )
+    .await;
+
+    if let Err(e) = result {
+        metrics::counter!(
+            "batlehub_apk_index_regeneration_failures_total",
+            "registry" => registry.to_owned()
+        )
+        .increment(1);
+        tracing::error!(
+            registry,
+            error = %e,
+            "apk: the block is enforced at the download, but its index could not be \
+             regenerated and still lists the blocked version — republish or reload to retry"
+        );
+    }
+}
+
 /// Block a package (admin).
 #[utoipa::path(
     post,
@@ -118,11 +173,16 @@ pub struct BlockRequest {
     security(("bearer_token" = [])),
 )]
 #[post("/api/v1/admin/packages/block")]
+#[allow(clippy::too_many_arguments)]
 pub async fn block_package(
     identity: AuthIdentity,
     body: web::Json<BlockRequest>,
     admin_svc: web::Data<Arc<AdminService>>,
     hot: web::Data<batlehub_core::services::hot_config::HotConfigLock>,
+    map: web::Data<RegistryMap>,
+    mode_map: web::Data<RegistryModeMap>,
+    local_svc: web::Data<Arc<batlehub_core::services::LocalRegistryService>>,
+    apk_signers: web::Data<crate::ApkSignerMap>,
 ) -> Result<impl Responder, AppError> {
     // The registry is named in the body rather than the path, so the
     // check waits for it: a control verb resolves against the registry
@@ -146,6 +206,18 @@ pub async fn block_package(
         .block_package(&pkg, body.reason.clone(), &identity.0)
         .await
         .map_err(AppError::from)?;
+
+    // An `apk` registry's generated index is filtered, so the block has to
+    // reach the document as well as the gate.
+    refresh_apk_index_after_block(
+        &body.registry,
+        &map,
+        &mode_map,
+        &local_svc,
+        &admin_svc,
+        &apk_signers,
+    )
+    .await;
 
     Ok(web::Json(ActionResponse {
         success: true,
@@ -174,11 +246,16 @@ pub struct UnblockRequest {
     security(("bearer_token" = [])),
 )]
 #[post("/api/v1/admin/packages/unblock")]
+#[allow(clippy::too_many_arguments)]
 pub async fn unblock_package(
     identity: AuthIdentity,
     body: web::Json<UnblockRequest>,
     admin_svc: web::Data<Arc<AdminService>>,
     hot: web::Data<batlehub_core::services::hot_config::HotConfigLock>,
+    map: web::Data<RegistryMap>,
+    mode_map: web::Data<RegistryModeMap>,
+    local_svc: web::Data<Arc<batlehub_core::services::LocalRegistryService>>,
+    apk_signers: web::Data<crate::ApkSignerMap>,
 ) -> Result<impl Responder, AppError> {
     // The registry is named in the body rather than the path, so the
     // check waits for it: a control verb resolves against the registry
@@ -202,6 +279,17 @@ pub async fn unblock_package(
         .unblock_package(&pkg, &identity.0)
         .await
         .map_err(AppError::from)?;
+
+    // The entry reappears in the generated index, re-signed with it.
+    refresh_apk_index_after_block(
+        &body.registry,
+        &map,
+        &mode_map,
+        &local_svc,
+        &admin_svc,
+        &apk_signers,
+    )
+    .await;
 
     Ok(web::Json(ActionResponse {
         success: true,

@@ -238,6 +238,39 @@ pub struct RegistryConfig {
     /// bug (RFC 0010 §4.1, §4.5).
     #[serde(default)]
     pub broker_url: Option<String>,
+    /// rustup only: components this registry never serves, whatever the
+    /// channel manifest says.
+    ///
+    /// Names are manifest package names (`rust-docs`, `clippy-preview`),
+    /// before `[renames]` are applied, because that is the table the filter
+    /// edits; `[A-Za-z0-9_-]+`, which is every component the tree publishes.
+    /// A profile install proceeds without them, and an explicit `rustup
+    /// component add` stops before any request on rustup's own "toolchain '…'
+    /// does not contain component '…' for target '…'".
+    /// Empty — the default — denies nothing. Rejected on any other type, for
+    /// the reason `broker_url` is (RFC 0024 §4.1, §4.5).
+    #[serde(default)]
+    pub deny_components: Vec<String>,
+    /// galaxy only: how much of Ansible Galaxy's **v1 role** surface this
+    /// registry serves (RFC 0031 §4.4).
+    ///
+    /// - `proxy` (the default when absent) — the v1 read endpoints are served,
+    ///   each role version's `download_url` is rewritten to this instance, and
+    ///   the archive is fetched server-side from the host it names, through the
+    ///   SSRF guard and only from the fixed role-download allowlist.
+    /// - `index` — the same endpoints with `download_url` relayed. Role
+    ///   metadata is proxied; role bytes are not, so the server makes no egress
+    ///   to `github.com`.
+    /// - `off` — the v1 endpoints answer `404` **and** `v1` is absent from the
+    ///   discovery document, so `ansible-galaxy role install` fails on the
+    ///   client's own *"requires API versions 'v1'"* rather than on a `404` an
+    ///   operator reads as a proxy fault.
+    ///
+    /// Rejected on any other type, for the reason `broker_url` and
+    /// `deny_components` are: a silently ignored option is a misconfiguration
+    /// nobody sees.
+    #[serde(default)]
+    pub roles: Option<GalaxyRoleMode>,
     #[serde(default)]
     pub cache: CachePolicy,
     #[serde(default)]
@@ -270,6 +303,23 @@ pub struct RegistryConfig {
     /// is the failure this feature exists to prevent.
     #[serde(default)]
     pub signed_downloads: bool,
+    /// `cargo` only: force `"auth-required"` in the sparse index's
+    /// `config.json` on or off, instead of deriving it.
+    ///
+    /// The field tells cargo that "this is a private registry that requires all
+    /// operations to be authenticated including API requests, crate downloads
+    /// and sparse index updates" — and without it cargo sends **no credential
+    /// at all** on a read, so a registry that refuses anonymous callers is
+    /// simply unusable rather than authenticated.
+    ///
+    /// Left unset it is derived: `true` when an anonymous caller cannot read
+    /// this registry. The derivation reads the *registry* tier, so it is wrong
+    /// in one direction — a registry that closes the tier and then re-opens one
+    /// package to `*` through a grant would be advertised as fully closed, and
+    /// cargo would demand a token for the open package too. That is the case
+    /// this knob exists for.
+    #[serde(default)]
+    pub cargo_auth_required: Option<bool>,
     /// Credentials to send on every upstream request for this registry.
     #[serde(default)]
     pub upstream_auth: Option<UpstreamAuthConfig>,
@@ -330,6 +380,62 @@ pub struct RegistryConfig {
     /// Extensions view requires before it enables Install.
     #[serde(default)]
     pub vsx_signing: Option<VsxSigningConfig>,
+    /// Optional Ed25519 key a `nix` registry signs the narinfos it hosts with
+    /// (RFC 0028 §4.1). `local`/`hybrid` only: a proxied narinfo keeps the
+    /// upstream's `Sig:` lines byte-exact and is never re-signed.
+    ///
+    /// Absent in `local`/`hybrid` mode is allowed and warned about — every
+    /// stock client runs with `require-sigs = true` and refuses an unsigned
+    /// path, but a fleet that has turned it off is a legitimate lab.
+    #[serde(default)]
+    pub nix_signing: Option<NixSigningConfig>,
+    /// Refuse to relay a `nix` narinfo that carries no `Sig:` line at all.
+    ///
+    /// Off by default for two reasons: a content-addressed path (`CA:`)
+    /// legitimately has none — Nix's own `isContentAddressed` short-circuits
+    /// `checkSignatures` — and the client's `require-sigs` is the check that
+    /// actually protects the store. On, it closes the one case the client
+    /// cannot see: an upstream mirror that silently dropped signatures
+    /// (RFC 0028 §4.1).
+    #[serde(default)]
+    pub require_upstream_sigs: bool,
+    /// How long an unclaimed `nix` NAR upload is kept, in seconds
+    /// (RFC 0028 §4.4). Default 3600.
+    ///
+    /// `nix copy --to` sends a NAR before the narinfo that names it, so the
+    /// bytes wait in a staging area with no coordinate of their own. This is
+    /// how long they wait before a later upload sweeps them.
+    ///
+    /// **Raise it for a link where the two requests are far apart**, not for a
+    /// large closure: `nix copy` walks path by path, so the gap is one NAR's
+    /// upload and one narinfo's round trip, whatever the closure's size.
+    /// Lowering it is a tighter leash on abandoned uploads.
+    #[serde(default)]
+    pub pending_nar_ttl_secs: Option<u32>,
+    /// How many unclaimed `nix` NAR uploads one publisher may hold at once
+    /// (RFC 0028 §4.4). Default 64; the next one answers `429`.
+    ///
+    /// The floor that matters is the client's own concurrency: `nix copy`
+    /// parallelises over `http-connections` (default **25**), and each
+    /// in-flight path holds at most one unclaimed NAR, so a value below that
+    /// will refuse legitimate copies.
+    #[serde(default)]
+    pub max_pending_nars: Option<u32>,
+    /// Optional RSA key an `apk` registry signs its generated `APKINDEX.tar.gz`
+    /// with (RFC 0026 §4.1). `local`/`hybrid` only: in proxy mode the upstream
+    /// index is relayed byte-exact and there is nothing to sign.
+    #[serde(default)]
+    pub apk_signing: Option<ApkSigningConfig>,
+    /// Explicitly ship an `apk` repository whose index is unsigned.
+    ///
+    /// An unsigned index is uninstallable by every apk that ships unless the
+    /// client passes `--allow-untrusted`, which also switches off the package
+    /// identity check — so this is a choice put on the record rather than a
+    /// default anything inherits. Kind-prefixed like the signing fields beside
+    /// it: a bare `unsigned` on a struct shared by every registry type would
+    /// read as a promise the other kinds do not keep.
+    #[serde(default)]
+    pub apk_unsigned: bool,
     /// Optional beta-channel configuration (local/hybrid mode only).
     /// When enabled, pre-release versions are only visible to registered beta-channel members.
     #[serde(default)]
@@ -772,6 +878,45 @@ pub struct RepoSigningConfig {
     pub created: Option<u32>,
 }
 
+/// RSA signing key for a locally hosted `apk` repository's index
+/// (RFC 0026 §4.1).
+///
+/// ```toml
+/// [registries.apk_signing]
+/// key_name        = "internal-apk@example.com-5f3a1c2e.rsa.pub"
+/// private_key_pem = "${APK_SIGNING_KEY_PEM}"
+/// ```
+///
+/// `key_name` is the exact file name the client will hold under
+/// `/etc/apk/keys/`, because apk opens the key *by the name the signature entry
+/// carries* (`package.c:589`). A mismatch is not an error the client reports as
+/// one — it is an untrusted index — so the name is validated here and served
+/// back verbatim on the key route.
+///
+/// RSA rather than Ed25519 because no shipping apk accepts Ed25519 for a v2
+/// index, and without the banned `rsa` crate: the signing goes through
+/// `aws-lc-rs`, already this tree's TLS provider (RFC 0026 §2.4, decision 2).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ApkSigningConfig {
+    /// The `.rsa.pub` file name the public half lands under in
+    /// `/etc/apk/keys/`. Alpine's own convention is `<email>-<8 hex>.rsa.pub`.
+    pub key_name: String,
+    /// RSA private key, PEM (PKCS#8 or PKCS#1), 2048 bits or more. A secret of
+    /// the same class as `repo_signing.seed_hex`: keep it out of the file with
+    /// `${VAR}`. Never written back by the config editor.
+    pub private_key_pem: String,
+    /// Keys this one replaced, newest first — the rotation window.
+    ///
+    /// The index is signed with `key_name` **and then** with each of these, in
+    /// order, in one signature member. apk installs from the first `.SIGN.*`
+    /// entry whose key file it holds, so a fleet where some machines have the
+    /// new key and some do not keeps installing from both. Drop an entry once
+    /// every client has the new file; an empty list is a completed rotation
+    /// (RFC 0026 §11 decision 9).
+    #[serde(default)]
+    pub previous_keys: Vec<ApkSigningConfig>,
+}
+
 /// Ed25519 VSIX signing key for `vscode-marketplace`/`openvsx` registries
 /// (RFC 0020 §4.1).
 ///
@@ -790,6 +935,39 @@ pub struct VsxSigningConfig {
     /// key does; the default derives it from the key, so it does.
     #[serde(default)]
     pub key_id: Option<String>,
+}
+
+/// Ed25519 narinfo signing key for a `nix` registry (RFC 0028 §4.1).
+///
+/// ```toml
+/// [registries.nix_signing]
+/// seed_hex = "${NIX_SIGNING_SEED}"   # 32-byte Ed25519 seed, hex-encoded
+/// key_name = "batlehub-nix-1"        # optional; default: batlehub-{registry}-1
+/// ```
+///
+/// `key_name` is the half of a `trusted-public-keys` entry before the colon,
+/// and it is how Nix picks which key verifies a `Sig:`. It has to be stable
+/// across restarts and unique among the caches a client trusts — hence a
+/// default carrying the registry name, and a `-1` suffix an operator bumps on
+/// rotation exactly as `cache.nixos.org-1` does.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct NixSigningConfig {
+    /// Hex-encoded 32-byte Ed25519 seed. A secret of the same class as
+    /// `vsx_signing.seed_hex`: keep it out of the file with `${VAR}`.
+    pub seed_hex: String,
+    /// The name before the colon in `Sig:` and in `trusted-public-keys`.
+    #[serde(default)]
+    pub key_name: Option<String>,
+}
+
+impl NixSigningConfig {
+    /// The key name this registry signs under — the configured one, or the
+    /// default derived from the registry's name.
+    pub fn resolved_key_name(&self, registry: &str) -> String {
+        self.key_name
+            .clone()
+            .unwrap_or_else(|| format!("batlehub-{registry}-1"))
+    }
 }
 
 // ── SBOM generation ───────────────────────────────────────────────────────────
@@ -1121,3 +1299,7 @@ impl Default for CachePolicy {
         }
     }
 }
+
+/// Re-exported from `batlehub_core`: the value lives on `HotConfig`, which is
+/// core's, so the type has to be too (RFC 0031 §6.3).
+pub use batlehub_core::services::galaxy::GalaxyRoleMode;

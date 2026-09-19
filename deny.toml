@@ -192,6 +192,11 @@ deny = [
     # `http2` feature, and that feature is off (see the actix-web notes in
     # Cargo.toml). This entry is what stops a future `default-features = true`
     # from quietly reintroducing the advisory.
+    #
+    # Expect to keep it for a long time: the 0.3 backport was closed unmerged
+    # (hyperium/h2#948, 2026-09-08) and actix's own bump needs `http` 1.x, so it
+    # sits on the actix-web v5.0 milestone (actix/actix-web#4199). Checked
+    # 2026-09-18.
     { name = "h2", version = "<0.4" },
     # RUSTSEC-2026-0253 (`LruCache::pop()` is not panic-safe: a panicking key
     # `Drop` skips `detach()` and leaves dangling pointers for the next

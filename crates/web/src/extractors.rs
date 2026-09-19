@@ -69,6 +69,66 @@ impl std::ops::Deref for AuthIdentity {
     }
 }
 
+/// The registry a `/proxy/{registry}/…` request names.
+fn proxy_registry(path: &str) -> Option<&str> {
+    path.strip_prefix("/proxy/")?
+        .split('/')
+        .next()
+        .filter(|segment| !segment.is_empty())
+}
+
+/// Whether this request may carry cargo's bare, scheme-less token.
+///
+/// See the call site for why this is a question about the registry's type
+/// rather than about the path.
+fn cargo_bare_token_request(req: &HttpRequest) -> bool {
+    if let Some(name) = proxy_registry(req.path()) {
+        if let Some(map) = req.app_data::<actix_web::web::Data<crate::RegistryMap>>() {
+            if map.is_type(name, "cargo") {
+                return true;
+            }
+            // A registry this instance knows, and it is not cargo. No other
+            // client sends a scheme-less `Authorization`, so whatever this is,
+            // it is not a token to normalise.
+            if map.contains(name) {
+                return false;
+            }
+        }
+    }
+    // No map to ask — a unit-level request. Fall back to what this check was.
+    req.path().contains("/api/v1/crates")
+}
+
+/// Whether this request is to a `galaxy` registry, whose client sends its
+/// credential under the **`Token`** scheme rather than `Bearer`.
+///
+/// `ansible-galaxy`'s `GalaxyToken.token_type` is the literal string `Token`
+/// (Django REST Framework's scheme, which is what galaxy_ng speaks). Only
+/// `KeycloakToken` — Automation Hub's OAuth2 path, which this server does not
+/// implement (RFC 0031 §3) — uses `Bearer`. So the scheme a *configured*
+/// `ansible-galaxy` actually presents is one no `AuthProvider` here reads, and
+/// without this every authenticated read and every publish arrives anonymous:
+/// a `galaxy` registry closed to anonymous callers would refuse the client that
+/// is holding its token.
+///
+/// Measured against ansible-core 2.19.3 in `tests/heavy/galaxy.sh`, after RFC
+/// 0031 §4.2 and §5.1 both recorded it as `Bearer`.
+///
+/// Scoped by the registry's **type**, exactly as [`cargo_bare_token_request`]
+/// is and for the same reason: `Token` is a scheme other clients do not send,
+/// and a known registry that is not galaxy must not have its header rewritten.
+fn galaxy_token_scheme_request(req: &HttpRequest) -> bool {
+    let Some(name) = proxy_registry(req.path()) else {
+        return false;
+    };
+    let Some(map) = req.app_data::<actix_web::web::Data<crate::RegistryMap>>() else {
+        // No map to ask — a unit-level request. The path is the only signal,
+        // and it is a good one: `/galaxy/api/` is this kind's whole surface.
+        return req.path().contains("/galaxy/api/");
+    };
+    map.is_type(name, "galaxy")
+}
+
 /// Builds a `RawAuthRequest` from the actix-web `HttpRequest`.
 pub fn raw_auth_from_request(req: &HttpRequest) -> batlehub_core::ports::RawAuthRequest {
     let mut headers = req
@@ -91,19 +151,53 @@ pub fn raw_auth_from_request(req: &HttpRequest) -> batlehub_core::ports::RawAuth
     }
 
     // cargo sends its registry token *bare* — `Authorization: <token>`, no
-    // scheme; the registry web API says so and cargo 1.98 does so (measured,
-    // tests/heavy/cargo.sh). Every `AuthProvider` reads a `Bearer`, so a
-    // `cargo publish` arrived anonymous and was refused `releases:publish` by
-    // a registry whose admin token it carried. Normalised here, scoped to
-    // cargo's API namespace: no other client speaks this way, and a bare
-    // value elsewhere stays what it is — a malformed header.
-    if req.path().contains("/api/v1/crates") {
+    // scheme. The registry web API reference says so in as many words ("Cargo
+    // includes the `Authorization` header for requests that require
+    // authentication. The header value is the API token.") and cargo 1.98 does
+    // so (measured, tests/heavy/cargo.sh). Every `AuthProvider` reads a
+    // `Bearer`, so a `cargo publish` arrived anonymous and was refused
+    // `releases:publish` by a registry whose admin token it carried.
+    //
+    // Scoped by the registry's **type**, not by the path. It was the path
+    // (`/api/v1/crates`) and that was wrong in both directions:
+    //
+    //   - Too narrow. With `auth-required: true` in `config.json` cargo sends
+    //     the token on the *sparse index* and on *downloads* too, and neither
+    //     lives under that prefix — `/proxy/{reg}/registry/…` and
+    //     `/proxy/{reg}/{crate}/{version}/download`. The token arrived and was
+    //     dropped on the floor, which is the whole reason a cargo read could
+    //     not be authenticated at all.
+    //   - Too wide. openvsx's `api/{namespace}/{extension}` route is greedy
+    //     enough to claim `api/v1/crates` (see the ordering note in `lib.rs`),
+    //     so that path exists on an openvsx registry too, where a bare header
+    //     is simply malformed and should stay that way.
+    //
+    // A known registry that is not cargo therefore never takes this path. The
+    // old path check survives only as the fallback for a request carrying no
+    // registry map, which is what a unit-level `TestRequest` is.
+    if cargo_bare_token_request(req) {
         if let Some(bare) = headers
             .get("authorization")
             .filter(|v| !v.trim().is_empty() && !v.contains(' '))
             .cloned()
         {
             headers.insert("authorization".to_owned(), format!("Bearer {bare}"));
+        }
+    }
+
+    // `ansible-galaxy` sends `Authorization: Token <token>` — the scheme
+    // `GalaxyToken.token_type` names, which is Django REST Framework's and not
+    // HTTP's. Normalised here beside the NuGet header and cargo's bare token,
+    // so every `AuthProvider` still sees one shape (RFC 0031 §13).
+    if galaxy_token_scheme_request(req) {
+        if let Some(token) = headers
+            .get("authorization")
+            .and_then(|v| v.strip_prefix("Token "))
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_owned)
+        {
+            headers.insert("authorization".to_owned(), format!("Bearer {token}"));
         }
     }
 

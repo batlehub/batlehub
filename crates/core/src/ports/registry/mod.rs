@@ -8,8 +8,8 @@ pub use artifact_meta::{
     ArtifactCacheMeta, ArtifactInventory, ArtifactMeta, ArtifactMetaRecord, ArtifactMetaRepository,
 };
 pub use client::{
-    ArtifactStream, DocumentBody, DocumentKind, FetchedArtifact, RegistryClient, UpstreamPackage,
-    VersionDocument,
+    ArtifactStream, DocumentBody, DocumentEncoding, DocumentKind, DocumentProbe, FetchedArtifact,
+    RegistryClient, StreamedDocument, UpstreamPackage, VersionDocument,
 };
 pub use forge_releases::{ForgeAsset, ForgeRelease, ForgeReleaseSource};
 pub use local_registry::{BulkResult, LocalRegistryBackend};

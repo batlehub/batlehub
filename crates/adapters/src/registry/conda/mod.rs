@@ -49,6 +49,46 @@ impl CondaRegistryClient {
         basic_auth_get(&self.http, &self.basic_auth, url)
     }
 
+    /// `HEAD` of the same URL, with the same credential.
+    pub(super) fn head(&self, url: &str) -> reqwest::RequestBuilder {
+        let req = self.http.head(url);
+        match &self.basic_auth {
+            Some((user, pass)) => req.basic_auth(user, Some(pass)),
+            None => req,
+        }
+    }
+
+    /// The URL of one of the channel's index documents, and its filename.
+    ///
+    /// `None` for a kind this channel has no index file for — the parsed path
+    /// answers those. Shared by the byte path and the probe so the two cannot
+    /// come to disagree about where an index lives.
+    pub(super) fn index_url(
+        &self,
+        package: &str,
+        kind: batlehub_core::ports::DocumentKind,
+    ) -> Option<(String, &'static str)> {
+        use batlehub_core::ports::DocumentKind;
+        let base = self.base_url.trim_end_matches('/');
+        match kind {
+            DocumentKind::Versions => {
+                Some((format!("{base}/{package}/repodata.json"), "repodata.json"))
+            }
+            DocumentKind::REPODATA_SHARDS => Some((
+                format!("{base}/{package}/repodata_shards.msgpack"),
+                "repodata_shards.msgpack",
+            )),
+            DocumentKind::CURRENT_REPODATA => Some((
+                format!("{base}/{package}/current_repodata.json"),
+                "current_repodata.json",
+            )),
+            DocumentKind::CHANNELDATA => {
+                Some((format!("{base}/channeldata.json"), "channeldata.json"))
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn artifact_url(&self, pkg: &PackageId) -> String {
         let base = self.base_url.trim_end_matches('/');
         let (platform, artifact) = platform_and_file(pkg);

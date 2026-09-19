@@ -178,6 +178,10 @@ pub const README_EXTRACTION_TYPES: &[&str] = &[
     "cargo",
     "composer",
     "conda",
+    // The one kind whose README is *named* rather than matched:
+    // `MANIFEST.json`'s `collection_info.readme` says which file it is
+    // (RFC 0031 §6.1).
+    "galaxy",
     "goproxy",
     "npm",
     "nuget",

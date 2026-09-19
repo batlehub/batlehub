@@ -48,7 +48,9 @@ use crate::ports::{DocumentKind, VersionDocument};
 pub mod cargo;
 pub mod composer;
 pub mod conda;
+pub mod conda_stream;
 pub mod forge;
+pub mod galaxy;
 pub mod goproxy;
 pub mod maven;
 pub mod nodedist;
@@ -56,6 +58,7 @@ pub mod npm;
 pub mod nuget;
 pub mod pypi;
 pub mod rubygems;
+pub mod rustup;
 pub mod sdkman;
 pub mod terraform;
 
@@ -481,6 +484,49 @@ fn strip_sdkman(
     }
 }
 
+/// One filtered document, and three that are decided elsewhere (RFC 0024 §6.2).
+///
+/// `manifests.txt` is a list of releases and filters here, line by line. A
+/// **channel manifest** is not a list: it describes one release, so the
+/// question is whether *this document's own* coordinate is blocked — a `404`
+/// for an exact name, a repaired manifest for an alias — and the answer needs
+/// a second document the dispatch cannot fetch. Its `.sha256` is computed from
+/// the rendered body and `channel-rust-stable-date.txt` is read off it. All
+/// three are the handler's, the way RubyGems' `GEM` arm and SDKMAN's
+/// `candidates/default` are.
+fn strip_rustup(
+    ctx: &ListingContext<'_>,
+    doc: &mut VersionDocument,
+    blocked: &BlockedVersions,
+) -> Vec<String> {
+    match ctx.document {
+        DocumentKind::Versions => with_text(doc, |text| rustup::strip_manifests_txt(text, blocked)),
+        _ => Vec::new(),
+    }
+}
+
+/// Ansible Galaxy's three listing documents (RFC 0031 §6.2).
+///
+/// The versions list and the v1 role versions list filter here. The
+/// **collection document** does not: it names one version
+/// (`highest_version`) and carries no list to pick a replacement from, so the
+/// repair needs the versions list as well — the position Go's `@latest` and a
+/// RubyGems gem document are in, and it is done in the handler that holds
+/// both, by `galaxy::repair_collection`.
+fn strip_galaxy(
+    ctx: &ListingContext<'_>,
+    doc: &mut VersionDocument,
+    blocked: &BlockedVersions,
+) -> Vec<String> {
+    match ctx.document {
+        DocumentKind::COLLECTION => Vec::new(),
+        DocumentKind::ROLE_VERSIONS => {
+            with_json(doc, |json| galaxy::strip_role_versions(json, blocked))
+        }
+        _ => with_json(doc, |json| galaxy::strip_versions(json, blocked)),
+    }
+}
+
 /// The protocol switch behind [`dispatch`], without the logging.
 ///
 /// `None` means **this kind has no listing filter** — a signed deb index, a
@@ -539,6 +585,10 @@ fn strip(
 
         RegistryKind::Sdkman => Some(strip_sdkman(ctx, doc, blocked)),
 
+        RegistryKind::Rustup => Some(strip_rustup(ctx, doc, blocked)),
+
+        RegistryKind::Galaxy => Some(strip_galaxy(ctx, doc, blocked)),
+
         // No listing document, one that must not be rewritten, or one filtered
         // at a handler chokepoint instead (see `FILTERED_ELSEWHERE`). The
         // reasons are recorded once, in `listing_filter()`.
@@ -547,8 +597,19 @@ fn strip(
         | RegistryKind::Deb
         | RegistryKind::Rpm
         | RegistryKind::Pacman
+        // `apk` is `SIGNED` upstream — an edited `APKINDEX` is an index with a
+        // broken signature and the client refuses the whole repository. Its
+        // *local* index is filtered where it is generated and signed
+        // (`regenerate_apk`), never on the way out (RFC 0026 §4.4).
+        | RegistryKind::Apk
         | RegistryKind::Jetbrains
         | RegistryKind::JetbrainsMarketplace
+        // A narinfo *is* one version, so a block on its coordinate makes the
+        // whole document absent rather than shorter. The handler decides, which
+        // is also the only place that can answer `404` — `strip` returns the
+        // versions it removed and has no way to say "serve nothing"
+        // (RFC 0028 §4.4).
+        | RegistryKind::Nix
         | RegistryKind::Generic => None,
     }
 }
@@ -895,8 +956,16 @@ mod tests {
     ///   it; and the same entries render into two different client protocols
     ///   (`extensionquery` and the OpenVSX REST API), so filtering the entries
     ///   rather than the documents is what keeps them in agreement.
+    /// - **nix** filters at the narinfo handler. A narinfo describes one store
+    ///   path, so a blocked coordinate is the document answering `404` — the
+    ///   substituter protocol's own "not in this cache" — and `strip`, which
+    ///   returns the versions it removed from a document it hands back, has no
+    ///   way to express that. The NAR route re-derives the coordinate from the
+    ///   store hash in its own path and asks again, so a client holding a
+    ///   narinfo from before the block is refused there too (RFC 0028 §5.3).
     const FILTERED_ELSEWHERE: &[RegistryKind] = &[
         RegistryKind::Conda,
+        RegistryKind::Nix,
         RegistryKind::JetbrainsMarketplace,
         RegistryKind::Openvsx,
         RegistryKind::VscodeMarketplace,
@@ -1265,6 +1334,10 @@ mod tests {
             DocumentKind::SDKMAN_DEFAULT,
             DocumentKind::SDKMAN_VERSIONS_LIST,
             DocumentKind::RELAYED,
+            DocumentKind::COLLECTION,
+            DocumentKind::VERSION_DETAIL,
+            DocumentKind::ROLE_VERSIONS,
+            DocumentKind::ROLE,
         ];
         KNOWN.iter().find(|k| k.as_str() == name).copied()
     }

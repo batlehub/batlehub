@@ -83,6 +83,14 @@ they share a digest, and the bundle carries a single copy: the second address
 costs a manifest row and nothing else. It is not optional, because the
 `aqua:` and `github:` backends usually fetch the API one.
 
+On a **Forgejo** the API address is `{forge}/attachments/{uuid}`, and the
+`forgejo:` backend uses only that one — it builds the URL from its own
+configured forge root and never reads the download URL it was served. Two
+rules, not one, therefore route it; BatleHub answers the uuid shape at
+`/proxy/<registry>/attachments/<uuid>` (see
+[Forgejo](/registries/forgejo#assets-by-attachment-uuid)), and
+`registry suggest --mise` writes both.
+
 Add `--include-mise` to carry mise itself, so the bundle always contains the
 binary that will read the next plan. The version is the mise on your PATH
 unless `--mise-version` says otherwise.

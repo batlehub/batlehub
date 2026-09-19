@@ -1,20 +1,29 @@
 services:
 
-  # ── MinIO (S3-compatible object storage) ─────────────────────────────────────
-  perf-minio:
-    image: minio/minio:latest
+  # ── RustFS (S3-compatible object storage) ────────────────────────────────────
+  #
+  # RustFS rather than MinIO, the same move `mise.toml` records for the client
+  # and `test.yaml` already made for the S3 suite: MinIO withdrew its community
+  # download host — `dl.min.io` answers 410 Gone for every path — so nothing
+  # here can install either half of it any more.
+  #
+  # No `command:`, no console port: RustFS serves S3 on 9000 out of the box,
+  # which is also why CI can run it as a plain service container.
+  perf-rustfs:
+    image: rustfs/rustfs:latest
     restart: unless-stopped
-    command: server /data --console-address ":9201"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      RUSTFS_ROOT_USER: rustfsadmin
+      RUSTFS_ROOT_PASSWORD: rustfsadmin
     ports:
       - "9200:9000"   # S3 API
-      - "9201:9201"   # console UI
     volumes:
-      - perf_minio_data:/data
+      - perf_rustfs_data:/data
+    # A liveness probe on the S3 port rather than a vendor health endpoint:
+    # an unauthenticated request to the root is answered (403 is an answer),
+    # and `curl -s` without `--fail` is happy with any status.
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://localhost:9000/ || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -37,4 +46,4 @@ services:
       retries: 5
 
 volumes:
-  perf_minio_data:
+  perf_rustfs_data:

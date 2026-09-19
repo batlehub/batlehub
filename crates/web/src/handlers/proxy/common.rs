@@ -370,6 +370,8 @@ pub async fn proxy_release_document(
     public_base: String,
 ) -> Result<HttpResponse, AppError> {
     let owner_repo = pkg.name.clone();
+    let registry = pkg.registry.clone();
+    let cache = Arc::clone(&svc.cache);
     let response = proxy_stream(svc, pkg, identity, action, Some("application/json")).await?;
     if !response.status().is_success() || public_base.is_empty() {
         return Ok(response);
@@ -389,6 +391,12 @@ pub async fn proxy_release_document(
     let Ok(mut doc) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
         return Ok(parts.set_body(actix_web::body::BoxBody::new(bytes)));
     };
+    // Before the rewrite, though the rewrite leaves the fields it reads: a
+    // Forgejo asset's uuid is the handle a client builds its own download URL
+    // from, and such a client never reads the URLs rewritten below. This is one
+    // of the two places the uuid and the repository it belongs to are in hand
+    // together — see `services::forge_attachments`.
+    remember_forge_attachments(cache.as_ref(), &registry, &owner_repo, &doc).await;
     batlehub_core::services::blocking::forge::rewrite_release_urls(
         &mut doc,
         &public_base,
@@ -396,6 +404,32 @@ pub async fn proxy_release_document(
     );
     let rewritten = serde_json::to_vec(&doc).unwrap_or_else(|_| bytes.to_vec());
     Ok(parts.set_body(actix_web::body::BoxBody::new(rewritten)))
+}
+
+/// Remember the Forgejo attachment uuids a release document names.
+///
+/// Called from both document paths — the release routes, which serve one
+/// release or a list of them, and the listing pipeline's answer for the same
+/// routes — because a client may download from either and only one of them
+/// passes through `proxy_release_document`. Shape-gated inside
+/// [`batlehub_core::services::forge_attachments::from_document`], so a
+/// document of any other kind costs two field lookups and yields nothing.
+async fn remember_forge_attachments(
+    cache: &dyn batlehub_core::ports::CacheStore,
+    registry: &str,
+    owner_repo: &str,
+    doc: &serde_json::Value,
+) {
+    let attachments = batlehub_core::services::forge_attachments::from_document(doc);
+    if !attachments.is_empty() {
+        batlehub_core::services::forge_attachments::remember(
+            cache,
+            registry,
+            owner_repo,
+            &attachments,
+        )
+        .await;
+    }
 }
 
 /// Send a proxy request and stream the result back to the HTTP client.
@@ -582,9 +616,16 @@ pub async fn proxy_document(
     doc_kind: DocumentKind,
     public_base: String,
 ) -> Result<HttpResponse, AppError> {
-    Ok(document_response(
-        fetch_proxy_document(svc, pkg, identity, action, doc_kind, public_base).await?,
-    ))
+    let registry = pkg.registry.clone();
+    let owner_repo = pkg.name.clone();
+    let cache = Arc::clone(&svc.cache);
+    let doc = fetch_proxy_document(svc, pkg, identity, action, doc_kind, public_base).await?;
+    // A forge release listing reaches a client through here rather than through
+    // `proxy_release_document`, and it names the same attachment uuids.
+    if let Some(json) = doc.body.as_json() {
+        remember_forge_attachments(cache.as_ref(), &registry, &owner_repo, json).await;
+    }
+    Ok(document_response(doc))
 }
 
 /// [`proxy_document`] without the HTTP response, for the handlers that have to
@@ -884,6 +925,68 @@ where
     doc.body.as_json().cloned().ok_or_else(|| {
         AppError::internal("upstream document is not JSON and cannot be read as one".to_owned())
     })
+}
+
+/// [`local_or_proxy_document_value`], keeping the **synthesised count** beside
+/// the value.
+///
+/// A listing composed from the held set carries `X-BatleHub-Listing:
+/// synthesised` with the count beside it (RFC 0008-bis §4.2), and
+/// [`document_response`] sets those headers for a handler that returns the
+/// document as-is. A handler that reads the value, edits it and builds its own
+/// response — the galaxy collection document is repaired against its own
+/// listing, so it must — would otherwise drop the marker and report a composed
+/// document as a proxied one.
+#[allow(clippy::too_many_arguments)]
+pub async fn local_or_proxy_document_parts<T, F, Fut>(
+    svc: &web::Data<Arc<ProxyService>>,
+    mode_map: &RegistryModeMap,
+    registry: &str,
+    identity: AuthIdentity,
+    local_fetch: F,
+    not_found_msg: String,
+    pkg: PackageId,
+    action: Action,
+    doc_kind: DocumentKind,
+    public_base: String,
+) -> Result<(serde_json::Value, Option<u32>), AppError>
+where
+    T: serde::Serialize,
+    F: FnOnce(batlehub_core::entities::Identity) -> Fut,
+    Fut: std::future::Future<Output = Result<T, CoreError>>,
+{
+    let local = local_first(
+        svc,
+        mode_map.get(registry),
+        &identity,
+        local_fetch,
+        not_found_msg,
+        &pkg,
+        action,
+    )
+    .await?;
+    if let Some(x) = local {
+        let value = serde_json::to_value(x)
+            .map_err(|e| AppError::internal(format!("could not render the local document: {e}")))?;
+        return Ok((value, None));
+    }
+
+    let doc =
+        fetch_proxy_document(svc.clone(), pkg, identity, action, doc_kind, public_base).await?;
+    let synthesised = doc.synthesised;
+    let value = doc.body.as_json().cloned().ok_or_else(|| {
+        AppError::internal("upstream document is not JSON and cannot be read as one".to_owned())
+    })?;
+    Ok((value, synthesised))
+}
+
+/// Set the air-gap listing headers from a count [`local_or_proxy_document_parts`]
+/// carried out.
+pub fn synthesised_headers(builder: &mut actix_web::HttpResponseBuilder, synthesised: Option<u32>) {
+    if let Some(held) = synthesised {
+        builder.insert_header((LISTING_HEADER, "synthesised"));
+        builder.insert_header((LISTING_HELD_HEADER, held.to_string()));
+    }
 }
 
 /// Turn a filtered [`VersionDocument`] into an HTTP response in its own

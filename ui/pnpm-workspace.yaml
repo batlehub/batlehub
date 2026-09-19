@@ -8,8 +8,9 @@
 #
 # TypeScript 7 (the native port) is the `latest` dist-tag, and `pnpm update
 # --latest` will offer it. It is not taken here because `typescript-eslint`
-# declares `typescript: ">=4.8.4 <6.1.0"` as a peer, and 8.68.0 is its newest
-# stable release — there is no 9.x. Taking TS 7 therefore breaks `pnpm run
+# declares `typescript: ">=4.8.4 <6.1.0"` as a peer, and 8.70.0 is its newest
+# stable release — there is no 9.x. (Re-checked 2026-09-17: the peer range is
+# unchanged at 8.70.0, so TS 7 is still out.) Taking TS 7 therefore breaks `pnpm run
 # lint:eslint`, which is the type-aware half of the lint gate and the job that
 # feeds SARIF to Code Scanning (oxlint, the fast half, does not type-check).
 # `^6.0.3` is the newest release of the 6 line. Revisit when typescript-eslint
@@ -76,6 +77,31 @@
 # Remediation is therefore one of: bump @scalar/api-reference (Scalar rebuilds
 # the bundle), drop it, or ignore that one advisory deliberately — see the rule
 # written next to `pnpm audit` in `.tasks/security.yaml`.
+#
+# ── The standing instance: @ai-sdk/provider-utils. Checked 2026-09-18. ────────
+#
+# `pnpm audit` reports `@ai-sdk/provider-utils@4.0.5` (uncontrolled resource
+# consumption, `low`, fixed in 4.0.33). It arrives as
+# @scalar/api-reference → @scalar/agent-chat → ai → @ai-sdk/gateway, and both
+# questions the note above raises were answered rather than assumed:
+#
+#   * **Is it inlined in what we serve?** Yes. `standalone.js.map` in the
+#     published 1.68.0 tarball lists
+#     `@ai-sdk+provider-utils@4.0.5/…/dist/index.mjs` among its 2 299 sources,
+#     so this is one of the real ones, not one of the ~194 build-tooling
+#     packages. The console origin holds the bearer and refresh tokens, so it
+#     is worth knowing about.
+#   * **Does bumping Scalar fix it?** No, and this is why there is still no
+#     override here. The newest @scalar/api-reference (1.69.1) depends on
+#     agent-chat 0.12.32, which pins `ai` at exactly 6.0.33, which pins
+#     `@ai-sdk/provider-utils` at exactly 4.0.5. Every link is an equality, so
+#     no range resolution can move it and no newer Scalar carries a fix. It
+#     moves when Scalar rebuilds against a newer `ai`, and not before.
+#
+# So it stands, on purpose: `low` is below the `--audit-level high` the gate
+# uses, so nothing is being suppressed to keep CI green. Re-check the chain
+# before adding an override — if agent-chat ever loosens that pin, bumping
+# Scalar becomes the fix and an override still would not be.
 overrides:
   undici: ^7.28.0
   js-yaml: ^4.3.1

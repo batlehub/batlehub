@@ -136,7 +136,7 @@ MM_DIR="$(heavy_cached_dir "micromamba-$MICROMAMBA_VERSION" \
 MM="$MM_DIR/bin/micromamba"
 [[ -x "$MM" ]] || heavy_fail "micromamba was not where the archive was expected to put it ($MM)"
 # Terraform, as terraform.sh gets it.
-TERRAFORM_VERSION="${TERRAFORM_VERSION:-1.8.5}"
+TERRAFORM_VERSION="${TERRAFORM_VERSION:-1.16.2}"
 heavy_runner_for terraform "terraform@$TERRAFORM_VERSION"
 TF=("${HEAVY_RUNNER[@]}" terraform)
 TF_TAP_PORT="${HEAVY_TF_TAP_PORT:-8121}"
@@ -188,6 +188,28 @@ TOOL_UNHELD_VERSION="${HEAVY_MISE_UNHELD_VERSION:-2.59.0}"
 OWNER_REPO="${TOOL#github:}"
 AIRGAP_PORT="${HEAVY_AIRGAP_PORT:-8120}"
 
+# apk: the kind whose *listing* the estate can compose and sign (RFC 0026
+# §6.10). The coordinate is the file name, so the held package and the one the
+# bundle does not carry are two real versions of the same name on one branch.
+APK_REG="apk-$HEAVY_RUN"
+APK_BRANCH="${HEAVY_APK_BRANCH:-v3.22}"
+APK_ARCH="x86_64"
+APK_DIR="$APK_BRANCH/main/$APK_ARCH"
+APK_PKG="${HEAVY_APK_PKG:-busybox}"
+APK_VERSION="${HEAVY_APK_VERSION:-1.37.0-r20}"
+# A package upstream has and this instance does not: what a composed index
+# must *not* name.
+APK_UNHELD="${HEAVY_APK_UNHELD:-musl-utils}"
+APK_KEY_NAME="estate-$HEAVY_RUN@batlehub.test-5f3a1c2e.rsa.pub"
+
+# The estate's own index-signing key, generated per run. `\n` escapes rather
+# than newlines: the loader expands `${VAR}` into the TOML *source*, where a
+# raw newline inside a basic string is a parse error.
+heavy_need openssl "openssl (the estate's apk index signing key)"
+APK_SIGNING_KEY_PEM="$(openssl genrsa 2048 2>/dev/null | sed ':a;N;$!ba;s/\n/\\n/g')"
+[[ -n "$APK_SIGNING_KEY_PEM" ]] || heavy_fail "openssl genrsa produced nothing"
+export APK_SIGNING_KEY_PEM
+
 # The measurement rows, printed at the end and copied into 0008-bis §13.1.
 MEASURE_FILE="$HEAVY_WORK/measure.txt"
 : > "$MEASURE_FILE"
@@ -214,6 +236,8 @@ MARK_MVN_SYNTH="mvn-synth"
 MARK_BUNDLE_SYNTH="bundle-synth"
 MARK_CONDA_SYNTH="conda-synth"
 MARK_TERRAFORM_SYNTH="terraform-synth"
+MARK_APK_REFUSED="apk-refused"
+MARK_APK_SYNTH="apk-synth"
 
 # ── 0. The connected side: seed one version of each, export a bundle ────────
 
@@ -316,6 +340,28 @@ plan["entries"] += [
 json.dump(plan, open(path, "w"), indent=2)
 print(f"plan: {len(plan['entries'])} entries")
 PY
+# The `.apk`, appended on its own because its coordinate is read out of the
+# file name rather than declared: the plan entry, the cache key and the line the
+# composed index will carry all have to agree on `{name}-{version}` (RFC 0026
+# §4.3), so it is spelled once here and derived everywhere else.
+APK_ENTRY_PATH="$APK_DIR/$APK_PKG-$APK_VERSION.apk"
+APK_REG="$APK_REG" APK_ENTRY_PATH="$APK_ENTRY_PATH" APK_PKG="$APK_PKG" \
+APK_VERSION="$APK_VERSION" python3 - "$HEAVY_WORK/plan.json" <<'PY' \
+  || heavy_fail "could not add the apk entry to the plan"
+import json, os, sys
+path = sys.argv[1]
+reg, entry_path = os.environ["APK_REG"], os.environ["APK_ENTRY_PATH"]
+pkg, version = os.environ["APK_PKG"], os.environ["APK_VERSION"]
+plan = json.load(open(path))
+plan["entries"].append({
+    "tool": f"apk:{pkg}", "version": version, "platform": "any",
+    "url": f"https://dl-cdn.alpinelinux.org/alpine/{entry_path}",
+    "registry": {"name": reg, "type": "apk"},
+    "key": f"{reg}/{pkg}/{version}",
+    "proxy_path": f"/proxy/{reg}/apk/{entry_path}",
+})
+json.dump(plan, open(path, "w"), indent=2)
+PY
 heavy_log "AIRGAP-PLAN-OK ($(grep -c '"proxy_path"' "$HEAVY_WORK/plan.json") planned paths)"
 
 "$CLI" mise seed --plan "$HEAVY_WORK/plan.json" >"$HEAVY_WORK/seed.txt" 2>"$HEAVY_WORK/seed.err" \
@@ -328,7 +374,7 @@ head -c 32 /dev/urandom | od -An -tx1 | tr -d " \n" > "$HEAVY_WORK/estate.key"
   --bundle-id "heavy-airgap-$HEAVY_RUN" >"$HEAVY_WORK/export.json" 2>"$HEAVY_WORK/export.err" \
   || { cat "$HEAVY_WORK/export.json" "$HEAVY_WORK/export.err" >&2; heavy_fail "mise export failed"; }
 BLOBS="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["blobs"])' "$HEAVY_WORK/export.json")"
-[[ "$BLOBS" -eq 14 ]] || { cat "$HEAVY_WORK/export.json" "$HEAVY_WORK/export.err" >&2; heavy_fail "the bundle carried $BLOBS blob(s), expected 14 (asset, tarball, wheel, crate, zip, mod, jar, pom, nupkg, gem, conda package, provider archive, its checksum list and signature)"; }
+[[ "$BLOBS" -eq 15 ]] || { cat "$HEAVY_WORK/export.json" "$HEAVY_WORK/export.err" >&2; heavy_fail "the bundle carried $BLOBS blob(s), expected 15 (asset, tarball, wheel, crate, zip, mod, jar, pom, nupkg, gem, conda package, provider archive, its checksum list and signature, and the .apk)"; }
 # The export read the provider's download document and carried its facts.
 python3 - "$HEAVY_WORK/estate.bhub" "$TF_REG" <<'PY' || heavy_fail "the manifest does not carry the provider's signing keys (0008-bis §13.7)"
 import json, sys, tarfile
@@ -343,7 +389,7 @@ assert keys and all(k.get("key_id") and k.get("ascii_armor") for k in keys), fac
 print(f"provider facts: protocols={facts.get('protocols')} keys={[k['key_id'] for k in keys]}")
 PY
 export HEAVY_BUNDLE_PUBKEY="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["signer_key"])' "$HEAVY_WORK/export.json")"
-heavy_log "AIRGAP-EXPORT-OK (14 blobs, signed by ${HEAVY_BUNDLE_PUBKEY:0:8}…)"
+heavy_log "AIRGAP-EXPORT-OK ($BLOBS blobs, signed by ${HEAVY_BUNDLE_PUBKEY:0:8}…)"
 
 # Maven needs its plugins to resolve anything, and a disconnected instance
 # holds none of them: the local repository is warmed against the *connected*
@@ -437,6 +483,7 @@ heavy_log "AIRGAP-IMPORT-OK ($(head -1 "$HEAVY_WORK/import.txt"))"
 # that cannot dial. This is the premise of every row below.
 for p in "/proxy/$NPM_REG/$NPM_PKG/$NPM_VERSION/tarball" \
          "/proxy/$PIP_REG/packages/$PIP_WHEEL" \
+         "/proxy/$APK_REG/apk/$APK_DIR/$APK_PKG-$APK_VERSION.apk" \
          "/proxy/$GH_REG/$OWNER_REPO/releases/download/v$TOOL_VERSION/gh_${TOOL_VERSION}_linux_amd64.tar.gz" \
          "/proxy/$CARGO_REG/$CRATE/$CRATE_VERSION/download" \
          "/proxy/$GO_REG/$GO_MODULE/@v/$GO_VERSION.zip" \
@@ -449,7 +496,7 @@ for p in "/proxy/$NPM_REG/$NPM_PKG/$NPM_VERSION/tarball" \
   code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $ADMIN_TOKEN" "$AG_BASE$p")"
   [[ "$code" == "200" ]] || heavy_fail "the disconnected instance answered $code on $p, which the bundle carried"
 done
-heavy_log "AIRGAP-HELD-OK (all eleven artifacts 200 on the disconnected instance)"
+heavy_log "AIRGAP-HELD-OK (all twelve artifacts 200 on the disconnected instance)"
 
 NPM_URL="$HEAVY_TAP_BASE/proxy/$NPM_REG/"
 PIP_SIMPLE="$HEAVY_TAP_BASE/proxy/$PIP_REG/simple/"
@@ -634,6 +681,71 @@ MISE_SAID="$(grep -E 'mise ERROR' "$HEAVY_WORK/${MARK_MISE_NOLOCK}.txt" | tail -
 measure "mise | install $TOOL@$TOOL_VERSION, no lock | first $MISE_FIRST -> 503; by-tag x$MISE_BYTAG, listing x$MISE_LIST, asset never asked | exit $CLIENT_RC after ${CLIENT_SECS}s | $MISE_SAID"
 heavy_log "MISE-NOLOCK-MEASURED"
 
+# ── 6b. apk: with no index, the client stops before naming a package ────────
+#
+# The shape RFC 0026 §6.10 names: an `apk` repository resolves *through*
+# `APKINDEX.tar.gz` and has no second way to ask, so a missing listing is not a
+# package that cannot be found — it is a repository that does not exist as far
+# as the client is concerned. This is the phase-0 observation the composed index
+# below is measured against.
+
+CDN="https://dl-cdn.alpinelinux.org/alpine"
+APK_ROOT="$HEAVY_WORK/apk-client"
+mkdir -p "$APK_ROOT"
+APK_FILE="$(curl -fsSL "$CDN/$APK_BRANCH/main/$APK_ARCH/" \
+  | grep -oE 'apk-tools-static-[0-9][^"]*\.apk' | sort -u | head -1)"
+[[ -n "$APK_FILE" ]] || heavy_fail "no apk-tools-static on the CDN"
+curl -fsSL "$CDN/$APK_BRANCH/main/$APK_ARCH/$APK_FILE" -o "$APK_ROOT/apk-tools-static.apk" \
+  || heavy_fail "could not download $APK_FILE"
+( cd "$APK_ROOT" && tar -xzf apk-tools-static.apk 2>/dev/null ) || true
+APK_BIN="$APK_ROOT/sbin/apk.static"
+[[ -x "$APK_BIN" ]] || heavy_fail "apk.static was not in $APK_FILE"
+heavy_log "apk client: $("$APK_BIN" --version 2>&1 | head -1)"
+
+APK_KEYS="$HEAVY_WORK/apk-keys"
+mkdir -p "$APK_KEYS"
+# The estate's key, and nothing else: an index that verifies here verifies
+# against *this instance's* signature and not against Alpine's.
+curl -fsS "$AG_BASE/proxy/$APK_REG/apk/keys/$APK_KEY_NAME" -o "$APK_KEYS/$APK_KEY_NAME" \
+  || heavy_fail "the disconnected instance did not serve its apk signing key"
+grep -q "BEGIN PUBLIC KEY" "$APK_KEYS/$APK_KEY_NAME" \
+  || heavy_fail "the key route served something that is not a public key"
+
+# run_apk <root> <args...> — apk against its own root, with the estate's key.
+APK_OUT=""
+run_apk() {
+  local root="$1"; shift
+  mkdir -p "$root/etc/apk" "$root/cache"
+  printf '%s\n' "$HEAVY_TAP_BASE/proxy/$APK_REG/apk/$APK_BRANCH/main" > "$root/repositories"
+  local -a common=(--root "$root" --arch "$APK_ARCH" --keys-dir "$APK_KEYS"
+                   --repositories-file "$root/repositories" --cache-dir "$root/cache")
+  # `add --initdb` is the only applet that creates a database; both generations
+  # refuse to open a `--root` without one (RFC 0026 §13).
+  [[ -e "$root/lib/apk/db/installed" ]] \
+    || "$APK_BIN" "${common[@]}" add --initdb >/dev/null 2>&1 || true
+  APK_OUT="$HEAVY_WORK/apk-out.$RANDOM"
+  "$APK_BIN" "${common[@]}" "$@" >"$APK_OUT" 2>&1
+  return $?
+}
+
+heavy_mark "$MARK_APK_REFUSED"
+heavy_log "apk update against the disconnected instance, synthesis off"
+run_apk "$HEAVY_WORK/apk-refused" update || true
+if grep -qE '[1-9][0-9]* distinct packages available' "$APK_OUT"; then
+  cat "$APK_OUT" >&2
+  heavy_fail "apk resolved packages with no index — synthesis is off"
+fi
+heavy_wire_re_after "$MARK_APK_REFUSED" \
+  "GET /proxy/$APK_REG/apk/$APK_DIR/APKINDEX[.]tar[.]gz -> 503" \
+  "the index request was not the 503 of RFC 0008"
+# The client stopped at the listing: it never named a package, so nothing under
+# the directory was asked for.
+if [[ "$(heavy_wire_count_after "$MARK_APK_REFUSED" "GET /proxy/$APK_REG/apk/$APK_DIR/[^ ]*[.]apk")" != "0" ]]; then
+  heavy_fail "apk asked for a package after failing to read the index"
+fi
+measure "apk  | apk update, synthesis off | GET APKINDEX.tar.gz -> 503, no package requested | resolved nothing"
+heavy_log "APK-REFUSED-OK (no listing, so the client never names a package)"
+
 # ── 7. Synthesis on: the same commands, answered ────────────────────────────
 #
 # RFC 0008-bis phase 1. The miss log is purged first so what it says at the
@@ -642,7 +754,7 @@ heavy_log "MISE-NOLOCK-MEASURED"
 
 # `before` is required for a purge that means "everything": without it the
 # endpoint forgets only rows older than the retention, which is nothing.
-for r in "$NPM_REG" "$PIP_REG" "$GH_REG" "$CARGO_REG" "$GO_REG" "$MVN_REG" "$NUGET_REG" "$GEMS_REG" "$CONDA_REG" "$TF_REG"; do
+for r in "$NPM_REG" "$PIP_REG" "$GH_REG" "$CARGO_REG" "$GO_REG" "$MVN_REG" "$NUGET_REG" "$GEMS_REG" "$CONDA_REG" "$TF_REG" "$APK_REG"; do
   curl -fsS -o /dev/null -X DELETE -H "Authorization: Bearer $ADMIN_TOKEN" \
     "$AG_BASE/api/v1/admin/air-gap/missing?registry=$r&before=2099-01-01T00:00:00Z" \
     || heavy_fail "could not purge the miss log for $r"
@@ -1034,6 +1146,48 @@ heavy_wire_after "${MARK_TERRAFORM_SYNTH}" "$TF_BASE/$TF_PROVIDER_VERSION/artifa
   "the archive was not served from the held set"
 measure "terraform | init, $TF_PROVIDER $TF_PROVIDER_VERSION, synthesis on | versions and download document -> 200 synthesised (keys carried on the manifest), then shasums, shasums.sig and the archive -> 200 | exit 0 after ${CLIENT_SECS}s | initialized, $(grep -i "signed by" "$HEAVY_WORK/${MARK_TERRAFORM_SYNTH}.txt" | head -1 | sed 's/^ *//')"
 heavy_log "TERRAFORM-SYNTH-OK (a provider installed and verified through a download document this instance composed)"
+
+# ── 7e. apk: the index composed over the held set, signed by the estate ─────
+#
+# The row RFC 0008-bis §4 gives `pacman` as "cannot be re-signed here", answered
+# for the one OS kind that can: the bundle carried a `.apk`, and the index that
+# names it is this instance's own document to write and sign (RFC 0026 §6.10,
+# decision 8). Two halves, and the second is what makes the first mean
+# something — a listing that named everything would also let the client through.
+
+heavy_mark "$MARK_APK_SYNTH"
+heavy_log "apk update against the composed index, then a fetch of the held package"
+run_apk "$HEAVY_WORK/apk-synth" update \
+  || { cat "$APK_OUT" >&2; heavy_fail "apk update failed against the composed index — the estate's signature did not verify"; }
+grep -qE '[1-9][0-9]* distinct packages available' "$APK_OUT" \
+  || { cat "$APK_OUT" >&2; heavy_fail "the composed index verified but named nothing"; }
+heavy_client_said "$APK_OUT" '[0-9]+ distinct packages available'
+heavy_wire_re_after "$MARK_APK_SYNTH" \
+  "GET /proxy/$APK_REG/apk/$APK_DIR/APKINDEX[.]tar[.]gz -> 200 .*X-BatleHub-Listing: synthesised" \
+  "the index was not answered as synthesised"
+
+run_apk "$HEAVY_WORK/apk-synth" fetch --stdout "$APK_PKG" \
+  || { cat "$APK_OUT" >&2; heavy_fail "apk could not fetch the package the composed index named"; }
+heavy_wire_re_after "$MARK_APK_SYNTH" \
+  "GET /proxy/$APK_REG/apk/$APK_DIR/$APK_PKG-$APK_VERSION[.]apk -> 200" \
+  "the held package was not served"
+measure "apk  | apk update + fetch $APK_PKG, synthesis on | GET APKINDEX.tar.gz -> 200 synthesised, then the .apk -> 200 | fetched"
+heavy_log "APK-SYNTH-OK (the estate composed and signed a listing apk verified)"
+
+# A package the bundle does not carry: absent from the *listing*, so apk stops
+# in its own solver and never asks for a file. That is the distinction RFC
+# 0008-bis draws — a missing listing and a missing artifact fail differently.
+heavy_mark "apk-unheld"
+if run_apk "$HEAVY_WORK/apk-synth" fetch --stdout "$APK_UNHELD"; then
+  cat "$APK_OUT" >&2
+  heavy_fail "apk fetched $APK_UNHELD — the composed index named a package the instance does not hold"
+fi
+heavy_client_said "$APK_OUT" '(unable to select|not found|no such package|ERROR)'
+if [[ "$(heavy_wire_count_after "apk-unheld" "GET /proxy/$APK_REG/apk/$APK_DIR/$APK_UNHELD-[^ ]*[.]apk")" != "0" ]]; then
+  heavy_fail "apk asked for $APK_UNHELD — it was listed, and the listing must name only what is held"
+fi
+measure "apk  | apk fetch $APK_UNHELD (not held) | absent from the composed listing | stopped in the solver, no request"
+heavy_log "APK-UNHELD-OK (the listing named only what the bundle carried)"
 
 # ── 8. The miss log, after the second half ──────────────────────────────────
 #

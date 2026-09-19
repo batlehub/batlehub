@@ -28,4 +28,25 @@ actix-web = { version = "4", default-features = false, features = [
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
-rand = "0.8"
+# The packument advertises `dist.shasum`, and the proxy verifies it against the
+# bytes it receives (`crates/core/src/services/integrity.rs`). A mock that
+# advertises a made-up digest therefore has every artifact read refused with a
+# 502 — which is what happened, silently, from the day that check landed until
+# the soak harness tried to seed a warm cache. Same version line as the
+# workspace root, so the two agree if this is ever folded in.
+sha1 = "0.11"
+# The RubyGems compact index names its per-version `|checksum:` as the SHA-256
+# of the gem, so the mock emits one in that algorithm — the SHA-1 above is for
+# npm's `dist.shasum` and nothing else.
+sha2 = "0.11"
+# conda 23.x and mamba ask for `repodata.json.zst` before the plain document, and
+# the proxy's *streaming* filter only engages when the upstream has a compressed
+# index to stream (`StreamedIndex::Filter`). Without this the mock could only
+# exercise the parsed path — the one scenario 12 exists to compare against.
+# Already in this lockfile, via actix-web's `compress-zstd`.
+zstd = "0.13"
+# The apk arm's synthetic APKINDEX: two concatenated gzip members, each its own
+# tar. The proxy *reads* this one — it pulls a `.apk`'s build date out of it for
+# the age gate — so the mock has to produce the real shape, not random bytes.
+flate2 = "1"
+tar = "0.4"

@@ -505,3 +505,325 @@ admin = ["*"]
 
 [registries.grants]
 "user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The kinds the client phases above do not drive.
+#
+# `tests/heavy/authz.sh` drove eight ecosystems and left sixteen registry kinds
+# with no authenticated coverage anywhere — including every kind
+# `closed_world.sh` added, which proved only that an *anonymous* client can
+# reach them. These registries exist so the `reads` target can ask the one
+# question that applies to every kind alike: is the caller who holds no read
+# verb refused, and is the caller who holds one not refused by accident.
+#
+# **Grants are identical to the blocks above on purpose.** The question here is
+# not what this kind's vocabulary is — `authz_matrix.rs` walks that — it is
+# whether this kind's *routes* are wired to the same resolver as npm's. A kind
+# whose handler forgot its guard answers everybody, and a kind whose guard names
+# a verb nobody can hold answers nobody; one sweep with one grant shape finds
+# both.
+#
+# **Nothing here holds anything, and the sweep needs no upstream.** Both halves
+# of that rest on one property — authorization is decided before any fetch:
+#
+#   - On the **local** path, `read_gates` fetches the version's row and, when
+#     there is none, still calls `authorize_unheld_read`. A caller holding no
+#     read verb is refused with `403` *before* the `404` — so an empty registry
+#     measures the boundary exactly, and the reader's `404` is a pass
+#     (`authz_allowed` asserts "not a refusal", never a specific success).
+#   - On the **proxy** path, `handle_resolved` evaluates grants in step 1 and
+#     resolves upstream metadata in step 2. So a proxy registry pointed at a
+#     host that does not exist still answers `403` to the denied caller — the
+#     refusal happens before anything is dialled — and the reader gets the
+#     upstream's failure, which is *not* a refusal and therefore a pass.
+#
+#     That ordering is recent. Until it was fixed, grants were evaluated
+#     *after* the resolve, so both callers got the same upstream error and
+#     there was no boundary to observe; these eight kinds had no authenticated
+#     coverage anywhere as a direct result. `example.invalid` rows are the
+#     cheapest possible regression test for the ordering itself: if the two
+#     steps are ever swapped back, every one of them goes red.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[registries]]
+type = "goproxy"
+name = "authz-go-${HEAVY_RUN}"
+mode = "local"
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+"user:authz-lister" = ["releases:list"]
+
+[[registries]]
+type = "maven"
+name = "authz-maven-${HEAVY_RUN}"
+mode = "local"
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+"user:authz-lister" = ["releases:list"]
+
+[[registries]]
+type = "cargo"
+name = "authz-cargo-${HEAVY_RUN}"
+mode = "local"
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+[[registries]]
+type = "vscode-marketplace"
+name = "authz-vscode-${HEAVY_RUN}"
+mode = "local"
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+[[registries]]
+type = "deb"
+name = "authz-deb-${HEAVY_RUN}"
+mode = "local"
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+[[registries]]
+type = "rpm"
+name = "authz-rpm-${HEAVY_RUN}"
+mode = "local"
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+[[registries]]
+type = "pacman"
+name = "authz-pacman-${HEAVY_RUN}"
+mode = "local"
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+# apk, the fourth OS kind and the only one whose artifact path carries a real
+# coordinate: this row's probe is a `.apk`, so the grant is checked on
+# `probe`/`1.0.0-r0` and not on the synthetic `repo`/`_` the other three use.
+# `apk_unsigned` because nothing installs from this registry — the suite asks
+# it one question, about authorization, and an index it never generates does
+# not need a signing key (RFC 0026 §4.5).
+[[registries]]
+type = "apk"
+name = "authz-apk-${HEAVY_RUN}"
+mode = "local"
+apk_unsigned = true
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+# ── Proxy-only kinds ─────────────────────────────────────────────────────────
+#
+# No local mode exists for these, so `proxy` is the only shape available. The
+# upstream is a name that does not resolve: the boundary is decided before it
+# is dialled, and a real registry would cost a round trip per assertion and a
+# network dependency this suite does not otherwise have.
+
+[[registries]]
+type = "github"
+name = "authz-github-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://example.invalid/github"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+[[registries]]
+type = "forgejo"
+name = "authz-forgejo-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://example.invalid/forgejo"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+[[registries]]
+type = "gitlab"
+name = "authz-gitlab-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://example.invalid/gitlab"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+[[registries]]
+type = "nodedist"
+name = "authz-nodedist-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://example.invalid/nodedist"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+# nix: a binary cache pointed at a host that does not exist, for the reason
+# every `example.invalid` row above has — the boundary is crossed before
+# anything is dialled. Two gates are crossed on the NAR route rather than one:
+# the coordinate a store hash belongs to is only knowable by reading its
+# narinfo, so `releases:list` is consulted first (the narinfo *is* the listing
+# document for this kind) and `releases:read` second, on the bytes. A caller
+# holding neither is refused at the first, which is the row below.
+[[registries]]
+type = "nix"
+name = "authz-nix-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://example.invalid/nix"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+[[registries]]
+type = "sdkman"
+name = "authz-sdkman-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://example.invalid/sdkman"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+[[registries]]
+type = "jetbrains"
+name = "authz-jetbrains-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://example.invalid/jetbrains"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+# `path_allow` is mandatory for this kind — the upstream path is passed through,
+# so a registry with no allowlist would relay every path on the host.
+[[registries]]
+type = "generic"
+name = "authz-generic-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://example.invalid/generic"]
+path_allow = ["**"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+[[registries]]
+type = "rustup"
+name = "authz-rustup-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://example.invalid/rustup"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
+# ── Ansible Galaxy ───────────────────────────────────────────────────────────
+#
+# A local registry, because this is the one boundary a real `ansible-galaxy`
+# can actually be *shown*: it sends `Authorization: Bearer` on **every** call
+# once a `token` is configured, reads included — unlike `dotnet restore`, which
+# only offers a credential in answer to a `401` challenge this server does not
+# send, and unlike `ovsx`, which sends nothing on a read. So all three arms are
+# attributable through the client itself: an anonymous install is refused, a
+# reader's install succeeds, and a caller holding no read verb is refused.
+#
+# `roles = "off"`: there is no publish protocol for roles, so the v1 surface on
+# a local registry could only ever be empty (RFC 0031 §4.5).
+[[registries]]
+type = "galaxy"
+name = "authz-galaxy-${HEAVY_RUN}"
+mode = "local"
+roles = "off"
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+"user:authz-lister" = ["releases:list"]

@@ -169,8 +169,18 @@ impl StorageBackend for MemStore {
     async fn stat_by_prefix(&self, _: &str) -> Result<(u64, u64), CoreError> {
         Ok((0, 0))
     }
-    async fn list_keys(&self, _: &str) -> Result<Vec<String>, CoreError> {
-        Ok(vec![])
+    /// Really lists. It answered `vec![]` until the `nix` staging sweep needed
+    /// it, and a double that lies about the one call a feature depends on
+    /// cannot fail the test that feature is missing.
+    async fn list_keys(&self, prefix: &str) -> Result<Vec<String>, CoreError> {
+        Ok(self
+            .data
+            .lock()
+            .unwrap()
+            .keys()
+            .filter(|k| k.starts_with(prefix))
+            .cloned()
+            .collect())
     }
 }
 

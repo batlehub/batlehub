@@ -106,6 +106,17 @@ pub fn native_body(kind: RegistryKind, message: &str) -> (&'static str, String) 
             serde_json::json!({ "status": "error", "message": message }).to_string(),
         ),
         RegistryKind::Terraform => (JSON, serde_json::json!({ "errors": [message] }).to_string()),
+        // `GalaxyError` reads `errors[]` and renders each entry as
+        // "(HTTP Code: {status}, Message: {title} Code: {code})", so the text
+        // an operator sees is the `title` — which is why the message goes
+        // there as well as in `detail` (RFC 0031 §4.4).
+        RegistryKind::Galaxy => (
+            JSON,
+            serde_json::json!({
+                "errors": [{ "code": "error", "title": message, "detail": message }]
+            })
+            .to_string(),
+        ),
         RegistryKind::Github
         | RegistryKind::Gitlab
         | RegistryKind::Forgejo
@@ -124,10 +135,26 @@ pub fn native_body(kind: RegistryKind, message: &str) -> (&'static str, String) 
         | RegistryKind::Deb
         | RegistryKind::Rpm
         | RegistryKind::Pacman
+        // apk never reads the body: 2.14 maps a 403 through libfetch's
+        // FETCH_AUTH to -EACCES and prints "ERROR: <pkg>: Permission denied",
+        // apk 3 prints "HTTP 403: Forbidden" from the status alone. Text is
+        // what a person sees when they curl the same URL (RFC 0026 §4.4).
+        | RegistryKind::Apk
         | RegistryKind::Jetbrains
         | RegistryKind::Generic
         | RegistryKind::Nodedist
-        | RegistryKind::Sdkman => (TEXT, format!("{message}\n")),
+        | RegistryKind::Sdkman
+        // rustup prints the status and its reason phrase; text is what a
+        // person sees when they curl the same URL.
+        | RegistryKind::Rustup
+        // Nix never reads the body of a failed substituter request:
+        // `HttpBinaryCacheStore::getFile` maps 404/410 to
+        // `FileTransfer::NotFound` and 403 to `Forbidden` from the *status*,
+        // and `queryPathInfoUncached` turns either into "no info" — it moves
+        // to the next substituter or builds, in its own words. So the body is
+        // only ever read by a person with `curl`, and text is the honest
+        // shape (RFC 0028 §2).
+        | RegistryKind::Nix => (TEXT, format!("{message}\n")),
     }
 }
 

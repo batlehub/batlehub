@@ -5,6 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# Direct, for the apk index signer. Already in the graph as rustls' provider and
+# the workspace's TLS backend, so this adds a dependency *line* and no crate.
+# It is also the reason `apk` needs no `rsa` crate: RUSTSEC-2023-0071 bans that
+# implementation, `deny.toml` enforces the ban, and AWS-LC's constant-time RSA
+# is what signs the index instead (RFC 0026 §2.4).
+aws-lc-rs = { version = "1.18", optional = true }
 anyhow.workspace = true
 argon2.workspace = true
 async-trait.workspace = true
@@ -104,6 +110,7 @@ default = [
   "registry-goproxy",
   "registry-rpm",
   "registry-pacman",
+  "registry-apk",
   "registry-maven",
   "registry-npm",
   "registry-openvsx",
@@ -117,6 +124,9 @@ default = [
   "registry-generic",
   "registry-nodedist",
   "registry-sdkman",
+  "registry-rustup",
+  "registry-galaxy",
+  "registry-nix",
   "sbom",
   "storage-fs",
   "vuln-scan"
@@ -160,6 +170,8 @@ registry-rpm = [
   "dep:ed25519-dalek",
   "dep:sha1",
 ]
+# apk reads .PKGINFO out of gzip members and renders/signs APKINDEX.
+registry-apk = ["dep:flate2", "dep:tar", "dep:sha1", "dep:aws-lc-rs"]
 registry-pacman = [
   "dep:zstd",
   "dep:tar",
@@ -168,6 +180,11 @@ registry-pacman = [
   "dep:sha1",
   "dep:ed25519-dalek",
 ]
+# nix relays narinfos and streams NARs on the read path, and decompresses an
+# uploaded NAR on the publish path to verify NarHash before signing it.
+registry-nix = ["dep:zstd", "dep:lzma-rs", "dep:ed25519-dalek"]
+# galaxy reads MANIFEST.json/FILES.json out of a collection tarball on publish.
+registry-galaxy = ["dep:flate2", "dep:tar"]
 registry-pypi = []
 # JetBrains IDE-archive proxy cache. Reuses the generic `PathProxyRegistryClient`
 # (shared with deb/rpm), so it needs no extra dependencies.
@@ -183,9 +200,15 @@ registry-nodedist = []
 # SDKMAN: the candidates API and the download broker as one registry, the
 # broker's 302 followed server-side through the SSRF guard (RFC 0010).
 registry-sdkman = []
+# rustup: `release-stable.toml` is the one document in the tree with a DTO;
+# the channel manifest is indexed by section and never parsed (RFC 0024 §6.4).
+registry-rustup = ["dep:toml"]
 registry-rubygems = ["dep:flate2", "dep:tar"]
 registry-terraform = []
-registry-vscode-marketplace = []
+# `flate2`: the gallery's `vspackage` endpoint answers `Content-Encoding: gzip`
+# unsolicited, and a proxy that relays a transport encoding as if it were the
+# artifact serves every editor a gzip file named `.vsix` (see `gunzip_stream`).
+registry-vscode-marketplace = ["dep:flate2"]
 storage-fs = []
 storage-s3 = ["dep:aws-config", "dep:aws-sdk-s3"]
 # `bzip2`/`zstd` are for conda's two container formats, which the README

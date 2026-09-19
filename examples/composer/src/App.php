@@ -23,5 +23,5 @@ class HelloCommand extends Command
 }
 
 $app = new Application('my-app', '1.0.0');
-$app->add(new HelloCommand());
+$app->addCommand(new HelloCommand());
 $app->run();

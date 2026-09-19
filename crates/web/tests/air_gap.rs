@@ -1806,3 +1806,992 @@ async fn a_held_composer_dist_gets_its_p2_document_from_composer_json() {
         "Composer asks for ~dev whether or not anything dev is held"
     );
 }
+
+// ── RFC 0026 §6.10: the apk index an air-gapped estate composes ──────────────
+//
+// `apk` is the one OS kind that can answer here, and the reason is decision 8
+// of RFC 0026: its listing is a document *this instance signs*. `deb`, `rpm`
+// and `pacman` are stuck — their indexes are signed by keys the estate does
+// not hold — but an `APKINDEX.tar.gz` composed over the held set and signed
+// with the registry's own key is the §4.4 generator run over inventory.
+//
+// The listing is also not a document route: apk resolves through an artifact
+// path, so this never reaches `synthesised_listing` and the handler has to ask
+// (`ProxyService::synthesises_listings`). That is the whole reason this case
+// is here rather than beside the npm one.
+mod apk_air_gap {
+    use super::*;
+
+    const SIGNING_KEY: &str =
+        include_str!("../../adapters/src/repo/testdata/apk_signing_2048.pkcs8.pem");
+    const KEY_NAME: &str = "estate@example.com-5f3a1c2e.rsa.pub";
+    const DIR: &str = "v3.22/main/x86_64";
+
+    /// A disconnected `apk` registry holding the packages `held` names, each as
+    /// a bundle import leaves it: the bytes under the artifact key the route
+    /// files them at, the artifact-meta row, and the `meta:` entry.
+    async fn apk_lab(
+        held: &[(&str, &str)],
+        signed: bool,
+    ) -> (
+        impl TestService,
+        Arc<dyn batlehub_core::ports::PackageRepository>,
+    ) {
+        let meta = InMemoryArtifactMetaRepository::arc();
+        let parts = local_registry_app_parts_with_artifact_meta(
+            REG,
+            "apk",
+            RegistryMode::Proxy,
+            None,
+            None,
+            meta.clone(),
+        );
+        let repo = Arc::clone(&parts.proxy_svc.repo);
+
+        for (i, (name, version)) in held.iter().enumerate() {
+            let path = format!("{DIR}/{name}-{version}.apk");
+            let key = format!("artifact:{REG}/{name}/{version}/{path}");
+            // Real bytes: the composed index's `C:` is a digest of the package
+            // this instance holds, so a placeholder would compose nothing.
+            let bytes = make_apk_v2(
+                &apk_pkginfo(name, version, "x86_64"),
+                &format!("usr/share/{name}/hello.txt"),
+                b"held\n",
+            );
+            parts
+                .proxy_svc
+                .storage
+                .store(&key, bytes::Bytes::from(bytes), Default::default())
+                .await
+                .unwrap();
+            meta.record_artifact(ArtifactMetaRecord {
+                key: &key,
+                registry: REG,
+                package_name: name,
+                version,
+                size: Some(1000 + i as u64),
+                checksum: None,
+            })
+            .await
+            .unwrap();
+            parts
+                .proxy_svc
+                .cache
+                .set(
+                    &format!("meta:{REG}/{name}/{version}/{path}"),
+                    CacheEntry {
+                        metadata: PackageMetadata {
+                            id: PackageId::new(REG, *name, *version),
+                            published_at: None,
+                            download_url: None,
+                            checksum: None,
+                            is_signed: None,
+                            extra: serde_json::Value::Null,
+                            cache_control: None,
+                        },
+                        cached_at: chrono::Utc::now(),
+                        expires_at: None,
+                    },
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        {
+            let mut hot = parts.proxy_svc.hot.write().await;
+            let real = Arc::clone(hot.registries.get(REG).expect("the fixture built one"));
+            hot.registries.insert(
+                REG.to_owned(),
+                Arc::new(OfflineRegistryClient::new(real, REG)) as Arc<dyn RegistryClient>,
+            );
+            hot.air_gap = AirGapPolicy {
+                enabled: true,
+                record_misses: true,
+                miss_retention_days: 90,
+                bundle_trusted_keys: vec!["a".repeat(64)],
+                synthesise_listings: true,
+            };
+            hot.policies.insert(
+                REG.to_owned(),
+                Arc::new(RegistryPolicy {
+                    metadata_ttl: None,
+                    firewall_only: false,
+                    serve_stale_metadata: false,
+                    artifact_ttl: None,
+                    rules: vec![Box::new(BlockListRule::new(Arc::clone(&repo)))],
+                }),
+            );
+        }
+
+        let LocalRegistryAppParts {
+            proxy_svc,
+            admin_svc,
+            token_repo,
+            access_config,
+            registry_map,
+            local_svc,
+            mode_map,
+        } = parts;
+        let mut signers = std::collections::HashMap::new();
+        if signed {
+            signers.insert(
+                REG.to_owned(),
+                Arc::new(
+                    batlehub_adapters::repo::ApkSigner::from_pem(SIGNING_KEY, KEY_NAME).unwrap(),
+                ),
+            );
+        }
+        let app = finish_test_app_with_extra(
+            proxy_svc,
+            admin_svc,
+            token_repo,
+            access_config,
+            registry_map,
+            local_svc,
+            mode_map,
+            batlehub_web::CargoIndexMap::default(),
+            ConfigureAppDefaults::default(),
+            batlehub_web::ApkSignerMap::from(signers),
+            test_auth_providers(),
+        )
+        .await;
+        (app, repo)
+    }
+
+    async fn index_of(app: &impl TestService) -> actix_web::dev::ServiceResponse {
+        get(app, &format!("/proxy/{REG}/apk/{DIR}/APKINDEX.tar.gz")).await
+    }
+
+    /// The composed index lists exactly what the bundle carried — and every
+    /// line of it is served by the next request, which is the property a
+    /// snapshot taken on the connected side cannot have (RFC 0008-bis §5.2).
+    #[actix_web::test]
+    async fn a_held_apk_repository_gets_an_index_composed_over_what_it_holds() {
+        let (app, _repo) = apk_lab(&[("busybox", "1.37.0-r20"), ("musl", "1.2.5-r9")], true).await;
+
+        let resp = index_of(&app).await;
+        assert_eq!(resp.status(), 200, "the estate can answer this listing");
+        assert_eq!(header(&resp, "X-BatleHub-Listing"), Some("synthesised"));
+        assert_eq!(header(&resp, "X-BatleHub-Listing-Held"), Some("2"));
+
+        let body = actix_web::test::read_body(resp).await.to_vec();
+        let text = apk_index_text(&body);
+        assert!(text.contains("P:busybox\n"), "{text}");
+        assert!(text.contains("P:musl\n"), "{text}");
+        assert!(
+            !text.contains("P:coreutils\n"),
+            "a name the bundle does not carry is absent from the listing, not a 404 later"
+        );
+
+        // Signed with the estate's key, so an apk holding it installs from here.
+        let first = apk_first_member_entries(&body);
+        assert_eq!(first, vec![format!(".SIGN.RSA256.{KEY_NAME}")]);
+
+        // And every version it named is served.
+        let resp = get(
+            &app,
+            &format!("/proxy/{REG}/apk/{DIR}/busybox-1.37.0-r20.apk"),
+        )
+        .await;
+        assert_eq!(resp.status(), 200, "the listing named what the store holds");
+    }
+
+    /// A blocked coordinate is absent from the composed listing, not refused
+    /// after the client has selected it: this index is ours to filter.
+    #[actix_web::test]
+    async fn a_blocked_package_never_reaches_the_composed_index() {
+        let (app, repo) = apk_lab(&[("busybox", "1.37.0-r20"), ("musl", "1.2.5-r9")], true).await;
+        repo.set_status(
+            &PackageId::new(REG, "busybox", "1.37.0-r20"),
+            PackageStatus::Blocked {
+                reason: "known bad".into(),
+                blocked_by: "admin".into(),
+                blocked_at: chrono::Utc::now(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let resp = index_of(&app).await;
+        assert_eq!(resp.status(), 200);
+        assert_eq!(header(&resp, "X-BatleHub-Listing-Held"), Some("1"));
+        let text = apk_index_text(&actix_web::test::read_body(resp).await);
+        assert!(!text.contains("P:busybox\n"), "{text}");
+        assert!(text.contains("P:musl\n"), "{text}");
+    }
+
+    /// Nothing held, nothing composed — the `503` of RFC 0008 stands, because
+    /// an empty index would tell the client the repository is empty when the
+    /// truth is that this instance has not been given it.
+    #[actix_web::test]
+    async fn nothing_held_is_still_the_refusal() {
+        let (app, _repo) = apk_lab(&[], true).await;
+        assert_eq!(index_of(&app).await.status(), 503);
+    }
+
+    /// No key, no composition. An index no apk can verify is not a friendlier
+    /// answer than the `503` — it is the same refusal, arriving later and
+    /// spelled as an untrusted repository.
+    #[actix_web::test]
+    async fn a_registry_with_no_signing_key_composes_nothing() {
+        let (app, _repo) = apk_lab(&[("busybox", "1.37.0-r20")], false).await;
+        assert_eq!(index_of(&app).await.status(), 503);
+    }
+
+    /// The tar entry names of the file's first gzip member.
+    fn apk_first_member_entries(file: &[u8]) -> Vec<String> {
+        use std::io::Read;
+        let mut cursor = std::io::Cursor::new(file);
+        let mut plain = Vec::new();
+        {
+            let mut dec = flate2::bufread::GzDecoder::new(&mut cursor);
+            dec.read_to_end(&mut plain).unwrap();
+        }
+        tar::Archive::new(std::io::Cursor::new(plain))
+            .entries()
+            .unwrap()
+            .flatten()
+            .filter_map(|e| e.path().ok().map(|p| p.to_string_lossy().into_owned()))
+            .collect()
+    }
+}
+
+/// `forgejo` shares `github`'s renderer — one arm, `Github | Forgejo` — and the
+/// `/releases` route is not typed to either. Driving the *other* kind through
+/// it is what says the shared arm is reached from both, rather than assumed to
+/// be: a renderer matched on one variant and a route registered for one kind
+/// would pass every github test and serve a forgejo estate nothing.
+#[actix_web::test]
+async fn a_held_forgejo_release_is_composed_the_way_a_github_one_is() {
+    let (app, _lab) = holding_lab(
+        "forgejo",
+        true,
+        &[
+            (
+                "org/tool",
+                "v1.2.0",
+                Some("filename/tool_1.2.0_linux_amd64.tar.gz"),
+            ),
+            (
+                "org/tool",
+                "v1.1.0",
+                Some("filename/tool_1.1.0_linux_amd64.tar.gz"),
+            ),
+        ],
+    )
+    .await;
+
+    let resp = get(&app, &format!("/proxy/{REG}/org/tool/releases")).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "a forgejo estate gets its release listing"
+    );
+    assert_eq!(header(&resp, "X-BatleHub-Listing"), Some("synthesised"));
+    let body = body_of(resp).await;
+    let releases = body.as_array().unwrap();
+    assert_eq!(releases.len(), 2, "one release per held tag: {body}");
+    assert_eq!(releases[0]["tag_name"], "v1.2.0", "newest first");
+
+    // And the asset link points home, not at the forge this instance cannot
+    // reach — the property that makes the listing usable rather than merely
+    // well-formed.
+    let resp = get(&app, &format!("/proxy/{REG}/org/tool/releases/tags/v1.2.0")).await;
+    assert_eq!(resp.status(), 200);
+    let body = body_of(resp).await;
+    let url = body["assets"][0]["browser_download_url"].as_str().unwrap();
+    assert!(
+        url.contains(&format!("/proxy/{REG}/org/tool/releases/download/v1.2.0/")),
+        "{url}"
+    );
+}
+
+/// `nodedist` resolves through a **table**, not a package document: `index.tab`
+/// is every release nvm, fnm and mise choose from, and an air-gapped one has to
+/// be the releases this instance holds. The `.json` twin is the same rows in the
+/// shape fnm and mise read, and both are asserted because a kind that answered
+/// one and not the other would work for exactly one of the three clients.
+#[actix_web::test]
+async fn a_held_node_release_gets_both_the_index_tab_and_the_index_json() {
+    let (app, _lab) = holding_lab(
+        "nodedist",
+        true,
+        &[
+            ("node", "v22.11.0", Some("node-v22.11.0-linux-x64.tar.xz")),
+            ("node", "v20.18.0", Some("node-v20.18.0-linux-x64.tar.xz")),
+        ],
+    )
+    .await;
+
+    let resp = get(&app, &format!("/proxy/{REG}/nodedist/index.tab")).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(header(&resp, "X-BatleHub-Listing"), Some("synthesised"));
+    let tab = String::from_utf8(actix_web::test::read_body(resp).await.to_vec()).unwrap();
+    assert!(
+        tab.starts_with("version\tdate\tfiles\t"),
+        "nvm parses by column, so the header is load-bearing: {tab}"
+    );
+    assert!(tab.contains("v22.11.0\t"), "{tab}");
+    assert!(tab.contains("v20.18.0\t"), "{tab}");
+    assert!(
+        !tab.contains("v18."),
+        "only what is held may be listed: {tab}"
+    );
+
+    let resp = get(&app, &format!("/proxy/{REG}/nodedist/index.json")).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(header(&resp, "X-BatleHub-Listing"), Some("synthesised"));
+    let body = body_of(resp).await;
+    let rows = body.as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{body}");
+    assert_eq!(rows[0]["version"], "v22.11.0");
+}
+
+/// SDKMAN's listing coordinate carries the **platform** — `java/linuxx64` — and
+/// the held set is filtered by it. That is the detail worth a case: a composed
+/// list that ignored the platform would offer a linux JDK to a mac, and the
+/// client would install it.
+#[actix_web::test]
+async fn a_held_sdkman_candidate_lists_only_the_platform_asked_for() {
+    let (app, _lab) = holding_lab(
+        "sdkman",
+        true,
+        &[
+            ("java", "21.0.5-tem", Some("linuxx64")),
+            ("java", "17.0.13-tem", Some("linuxx64")),
+            ("java", "21.0.5-zulu", Some("darwinarm64")),
+        ],
+    )
+    .await;
+
+    let resp = get(
+        &app,
+        &format!("/proxy/{REG}/sdkman/candidates/java/linuxx64/versions/all"),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(header(&resp, "X-BatleHub-Listing"), Some("synthesised"));
+    let all = String::from_utf8(actix_web::test::read_body(resp).await.to_vec()).unwrap();
+    assert!(all.contains("21.0.5-tem"), "{all}");
+    assert!(all.contains("17.0.13-tem"), "{all}");
+    assert!(
+        !all.contains("zulu"),
+        "the darwin build is held and must not be offered to linux: {all}"
+    );
+
+    // `/candidates/default/{candidate}` carries **no platform**, so the held set
+    // is filtered against `UNIVERSAL` — and an estate holding only
+    // platform-specific builds gets no default. That is current behaviour and
+    // worth pinning rather than blessing: `sdk install java` with no version
+    // asks this endpoint, so a JDK estate that mirrored only `linuxx64` can
+    // install by version and not by default.
+    let resp = get(
+        &app,
+        &format!("/proxy/{REG}/sdkman/candidates/default/java"),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        503,
+        "no universal build is held, so there is no default to compose"
+    );
+
+    // Hold a universal one and the same endpoint answers.
+    let (app, _lab) = holding_lab(
+        "sdkman",
+        true,
+        &[
+            ("java", "21.0.5-tem", Some("linuxx64")),
+            ("java", "17.0.13-tem", Some("universal")),
+        ],
+    )
+    .await;
+    let resp = get(
+        &app,
+        &format!("/proxy/{REG}/sdkman/candidates/default/java"),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(header(&resp, "X-BatleHub-Listing"), Some("synthesised"));
+    let default = String::from_utf8(actix_web::test::read_body(resp).await.to_vec()).unwrap();
+    assert_eq!(default.trim(), "17.0.13-tem", "the newest universal build");
+}
+
+/// `rustup` resolves through `manifests.txt` and the channel files, and those
+/// are **document** routes — so unlike `deb`/`rpm`/`pacman` the request reaches
+/// the synthesis hook and is refused there, because no renderer answers for the
+/// kind. Same answer, different door, and worth its own case for exactly that
+/// reason: a `Gap` row here would otherwise look like the path family's when it
+/// is reached by another path entirely.
+///
+/// The half that works is the same: a dated dist file the bundle carried is
+/// served from the store, keyed on the coordinate `coordinate_of` reads out of
+/// the file name.
+#[actix_web::test]
+async fn a_rustup_channel_is_refused_while_its_held_dist_files_are_served() {
+    const FILE: &str = "rust-1.82.0-x86_64-unknown-linux-gnu.tar.xz";
+    let (app, lab) = holding_lab("rustup", true, &[("rust", "1.82.0", Some(FILE))]).await;
+
+    for doc in ["manifests.txt", "dist/channel-rust-stable-date.txt"] {
+        let resp = get(&app, &format!("/proxy/{REG}/rustup/{doc}")).await;
+        assert_eq!(resp.status(), 503, "{doc} was answered");
+        assert_eq!(
+            header(&resp, "X-BatleHub-Listing"),
+            None,
+            "{doc}: no renderer answers for rustup, so nothing may claim to have been composed"
+        );
+    }
+
+    // Held, and served: the bundle carried this file and the client asked for it
+    // by the path it was given.
+    let resp = get(&app, &format!("/proxy/{REG}/rustup/dist/2024-10-17/{FILE}")).await;
+    assert_eq!(resp.status(), 200, "the store holds it");
+
+    // And the refusal above was filed, so the next bundle can carry the channel.
+    let recorded = lab
+        .misses
+        .list(&MissFilter {
+            registry: Some(REG.to_owned()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let channel = recorded
+        .iter()
+        .find(|m| {
+            m.coordinate
+                .as_deref()
+                .is_some_and(|c| c.ends_with("/manifests"))
+        })
+        .unwrap_or_else(|| panic!("the channel miss is recorded: {recorded:?}"));
+    assert_eq!(channel.kind, MissKind::Document);
+    assert_eq!(
+        channel.held_versions,
+        vec!["1.82.0".to_owned()],
+        "the record names what this instance *does* hold, so the next bundle \
+         carries the channel rather than the toolchain again"
+    );
+}
+
+// ── RFC 0008-bis §4: the path family, which does not answer ──────────────────
+//
+// `apk` above composes its listing; `deb`, `rpm` and `pacman` do not, and the
+// reason is worth stating precisely because the obvious one is wrong.
+//
+// It is **not** that the index cannot be signed here. This server already
+// generates and signs all three in `local` mode — `regenerate_deb`,
+// `regenerate_rpm` and `regenerate_pacman` write them and sign with the
+// registry's Ed25519 OpenPGP key — exactly as it does for `apk`. The two real
+// differences are:
+//
+//   the shape    an `apk` index is **one** document. An `rpm` index is six —
+//                `repomd.xml` plus primary/filelists/other and the detached
+//                signature and key — and `repomd.xml` carries the checksums of
+//                the other three, so composing one means composing a *set*
+//                with internal integrity references. `deb` is the same shape:
+//                `Packages` and `Packages.gz` per component and architecture,
+//                then `Release`, `InRelease` and `Release.gpg` over them.
+//   the client   an air-gapped client reads a repository it was configured
+//                against. For `apk` that is a key the operator installs from
+//                the key route (RFC 0026 §4.1); for these three the estate
+//                would have to hand out its OpenPGP key the same way, and
+//                nothing does that today.
+//
+// So the refusal below is *current behaviour*, not an impossibility — and what
+// these tests pin is that it is an **honest** refusal: a `503` that names the
+// path, recorded once for the next bundle, with nothing invented and nothing
+// claiming to have been. The half that works is asserted beside it, because
+// that is what makes the refusal survivable: every file the bundle carried is
+// still served by path.
+mod path_family_air_gap {
+    use super::*;
+
+    /// One member of the family: the route segment (which is also the registry
+    /// type), the document a client resolves *through*, a second file of the
+    /// same index, and a package file a bundle would have carried.
+    struct PathKind {
+        kind: &'static str,
+        listing: &'static str,
+        second: &'static str,
+        held: &'static str,
+    }
+
+    const FAMILY: &[PathKind] = &[
+        PathKind {
+            kind: "deb",
+            listing: "dists/stable/InRelease",
+            second: "dists/stable/main/binary-amd64/Packages.gz",
+            held: "pool/main/f/foo/foo_1.0_amd64.deb",
+        },
+        PathKind {
+            kind: "rpm",
+            listing: "repodata/repomd.xml",
+            second: "repodata/primary.xml.gz",
+            held: "Packages/f/foo-1.0-1.x86_64.rpm",
+        },
+        // `generic` has no index at all — no listing to refuse, only paths. It
+        // belongs here because the *answer* is the same and the shape of the
+        // refusal has to be too: a `503` naming the path, and every held file
+        // still served. Its "listing" below is simply another unheld path.
+        PathKind {
+            kind: "generic",
+            listing: "charts/index.yaml",
+            second: "charts/index.yaml.asc",
+            held: "charts/app-1.2.3.tgz",
+        },
+        PathKind {
+            kind: "pacman",
+            // pacman names the database after the repository, which is the
+            // registry here.
+            listing: "npm-mirror.db",
+            second: "npm-mirror.files",
+            held: "foo-1.0-1-x86_64.pkg.tar.zst",
+        },
+    ];
+
+    /// A disconnected registry of `kind` holding `held`, with listing synthesis
+    /// **on** — so a refusal below is the feature declining, not the feature
+    /// being off.
+    async fn family_lab(kind: &str, held: &[&str]) -> (impl TestService, Lab) {
+        let parts = local_registry_app_parts(REG, kind, RegistryMode::Proxy, None);
+        let misses = InMemoryMissRecorder::new();
+        let repo = Arc::clone(&parts.proxy_svc.repo);
+
+        // What a bundle import leaves behind: the bytes, and the `meta:` entry
+        // the resolve reads before any artifact is served. Without the entry the
+        // read refuses at the resolve and never reaches the store — a fixture
+        // bug that looks exactly like the product one this file is about.
+        for path in held {
+            let key = format!("{REG}/repo/_/{path}");
+            parts
+                .proxy_svc
+                .storage
+                .store(
+                    &format!("artifact:{key}"),
+                    bytes::Bytes::from_static(b"held package bytes"),
+                    Default::default(),
+                )
+                .await
+                .unwrap();
+            parts
+                .proxy_svc
+                .cache
+                .set(
+                    &format!("meta:{key}"),
+                    CacheEntry {
+                        metadata: PackageMetadata {
+                            id: PackageId::new(REG, "repo", "_").with_artifact(*path),
+                            published_at: None,
+                            download_url: None,
+                            checksum: None,
+                            is_signed: None,
+                            extra: serde_json::Value::Null,
+                            cache_control: None,
+                        },
+                        cached_at: chrono::Utc::now(),
+                        expires_at: None,
+                    },
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        {
+            let mut hot = parts.proxy_svc.hot.write().await;
+            let real = Arc::clone(hot.registries.get(REG).expect("the fixture built one"));
+            hot.registries.insert(
+                REG.to_owned(),
+                Arc::new(OfflineRegistryClient::new(real, REG)) as Arc<dyn RegistryClient>,
+            );
+            hot.air_gap = AirGapPolicy {
+                enabled: true,
+                record_misses: true,
+                miss_retention_days: 90,
+                bundle_trusted_keys: vec!["a".repeat(64)],
+                synthesise_listings: true,
+            };
+            hot.miss_recorder = Some(Arc::clone(&misses) as Arc<dyn MissRecorder>);
+            hot.policies.insert(
+                REG.to_owned(),
+                Arc::new(RegistryPolicy {
+                    metadata_ttl: None,
+                    firewall_only: false,
+                    serve_stale_metadata: false,
+                    artifact_ttl: None,
+                    rules: vec![Box::new(BlockListRule::new(Arc::clone(&repo)))],
+                }),
+            );
+        }
+
+        let app =
+            build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+        (app, Lab { misses, repo })
+    }
+
+    fn uri(kind: &str, path: &str) -> String {
+        format!("/proxy/{REG}/{kind}/{path}")
+    }
+
+    /// Refused, and refused *as a listing*: no composed document, no header
+    /// claiming one, and the `503` that says "the next bundle needs this"
+    /// rather than the `404` that would say it does not exist.
+    #[actix_web::test]
+    async fn a_signed_index_is_refused_even_with_synthesis_on() {
+        for k in FAMILY {
+            let (app, _lab) = family_lab(k.kind, &[k.held]).await;
+
+            let resp = get(&app, &uri(k.kind, k.listing)).await;
+            assert_eq!(resp.status(), 503, "{}: {} was answered", k.kind, k.listing);
+            assert_eq!(
+                header(&resp, "X-BatleHub-Listing"),
+                None,
+                "{}: nothing was composed, so nothing may claim to have been",
+                k.kind
+            );
+            let body = body_of(resp).await;
+            assert_eq!(body["code"], "content_unavailable", "{}", k.kind);
+            assert_eq!(body["registry"], REG, "{}", k.kind);
+            assert!(
+                body["coordinate"].as_str().unwrap().contains(k.listing),
+                "{}: the refusal names the path a bundle has to carry: {body}",
+                k.kind
+            );
+        }
+    }
+
+    /// Holding the packages changes nothing, and this is the assertion that
+    /// separates these three from `apk`: there, the held set *is* the listing;
+    /// here the index is a set of documents with checksums of each other, and
+    /// none of it is composed today.
+    #[actix_web::test]
+    async fn holding_the_packages_does_not_make_a_listing() {
+        for k in FAMILY {
+            let held = [
+                k.held,
+                "pool/other/b/bar/bar_2.0_amd64.deb",
+                "other/baz.pkg",
+            ];
+            let (app, _lab) = family_lab(k.kind, &held).await;
+
+            assert_eq!(
+                get(&app, &uri(k.kind, k.listing)).await.status(),
+                503,
+                "{}: three held files are still not an index",
+                k.kind
+            );
+            assert_eq!(
+                get(&app, &uri(k.kind, k.second)).await.status(),
+                503,
+                "{}: nor is any other document of the same index",
+                k.kind
+            );
+        }
+    }
+
+    /// The half that works, and the reason the refusal is not a dead end: a
+    /// client pointed at a path the bundle carried gets the file, with no
+    /// network and no listing.
+    #[actix_web::test]
+    async fn a_held_file_is_still_served_by_path() {
+        for k in FAMILY {
+            let (app, _lab) = family_lab(k.kind, &[k.held]).await;
+
+            let resp = get(&app, &uri(k.kind, k.held)).await;
+            assert_eq!(
+                resp.status(),
+                200,
+                "{}: the store holds it; the network is not needed",
+                k.kind
+            );
+            assert_eq!(
+                actix_web::test::read_body(resp).await,
+                bytes::Bytes::from_static(b"held package bytes"),
+                "{}",
+                k.kind
+            );
+        }
+    }
+
+    /// One row per coordinate, however many times the client retries — `apt`,
+    /// `dnf` and `pacman` all retry, and a record that grew with the retries
+    /// would drown the list the next bundle is built from.
+    #[actix_web::test]
+    async fn the_refused_listing_is_recorded_once_for_the_next_bundle() {
+        for k in FAMILY {
+            let (app, lab) = family_lab(k.kind, &[k.held]).await;
+
+            for _ in 0..3 {
+                assert_eq!(get(&app, &uri(k.kind, k.listing)).await.status(), 503);
+            }
+
+            let recorded = lab
+                .misses
+                .list(&MissFilter {
+                    registry: Some(REG.to_owned()),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                recorded.len(),
+                1,
+                "{}: three retries, one row: {recorded:?}",
+                k.kind
+            );
+            assert!(
+                recorded[0].storage_key.contains(k.listing),
+                "{}: the row names the path to carry: {recorded:?}",
+                k.kind
+            );
+            assert_eq!(
+                recorded[0].count, 3,
+                "{}: the retries are counted, not filed",
+                k.kind
+            );
+        }
+    }
+}
+
+// ── Nix binary cache (RFC 0028 §6.11, RFC 0008-bis) ─────────────────────────
+
+/// The four fields of a narinfo that the NAR's own bytes do not carry, as they
+/// arrive in `BundleEntry::facts` and land in the `meta:` entry's `extra`.
+///
+/// `References` is the one that makes the case: a closure is not derivable from
+/// a compressed stream by any means, so an instance that composed a narinfo
+/// without it would hand the client a document describing a path with no
+/// dependencies — which installs, and then fails at run time in a way nothing
+/// here would catch. The `Sig:` is the publisher's, relayed and never re-made.
+fn nix_facts() -> serde_json::Value {
+    serde_json::json!({
+        "store_path": "/nix/store/0001npbf2n4z3pjy6vm2mw8ywkqixxs6-hslua-aeson-2.3.2-doc",
+        "store_hash": "0001npbf2n4z3pjy6vm2mw8ywkqixxs6",
+        "nar_hash": "sha256:075lhsj33mkk02xn3lf59xn9glvh02wkw9xislbcj1jgjlpcn79x",
+        "nar_size": "226848",
+        "compression": "zstd",
+        "references": ["ghpayap4j5fqg9ryyzrfdj9ygdi01iw9-aeson-2.2.4.1-doc"],
+        "deriver": "y1h1bh5gl539r42jydbnbmp3vyh11sva-hslua-aeson-2.3.2.drv",
+        "signatures": ["cache.nixos.org-1:21qiHy652KfJ7Rsnc+dy5KndgujuIQEU/oudrFh7sWkkLlT9r8F3AxKA//dMvr9xWBA3tITPZA6ZFC7KxxRJBA=="],
+    })
+}
+
+const NIX_HASH: &str = "0001npbf2n4z3pjy6vm2mw8ywkqixxs6";
+const NIX_NAR_FILE: &str = "075lhsj33mkk02xn3lf59xn9glvh02wkw9xislbcj1jgjlpcn79x.nar.zst";
+
+async fn nix_lab() -> (impl TestService, Lab) {
+    holding_lab_extra(
+        "nix",
+        true,
+        &[(
+            "hslua-aeson",
+            "2.3.2-doc",
+            Some(&format!("{NIX_HASH}/{NIX_NAR_FILE}")),
+            nix_facts(),
+        )],
+    )
+    .await
+}
+
+/// A held store path is substitutable across the gap, with the **publisher's**
+/// signature intact.
+///
+/// The claim RFC 0008-bis §11 q6 settles and this proves: the disconnected
+/// instance serves the `Sig:` exactly as the connected one did, so a client on
+/// the far side verifies with the same `trusted-public-keys` entry it uses
+/// connected — and this estate signs nothing. `URL:` is the one line that is
+/// this instance's own, which is free because it is not in the fingerprint.
+#[actix_web::test]
+async fn a_held_store_path_composes_a_narinfo_with_its_publishers_signature() {
+    let (app, _lab) = nix_lab().await;
+
+    let resp = get(&app, &format!("/proxy/{REG}/nix/{NIX_HASH}.narinfo")).await;
+    assert_eq!(resp.status(), 200);
+    let body = String::from_utf8(actix_web::test::read_body(resp).await.to_vec()).unwrap();
+
+    let info = batlehub_core::services::nix::NarInfo::parse(&body).expect("composes a narinfo");
+    info.require_fields()
+        .expect("every field Nix itself requires is present");
+
+    assert_eq!(
+        info.get("StorePath"),
+        Some("/nix/store/0001npbf2n4z3pjy6vm2mw8ywkqixxs6-hslua-aeson-2.3.2-doc")
+    );
+    // This instance's layout, not the connected side's.
+    assert_eq!(
+        info.get("URL"),
+        Some(format!("nar/{NIX_HASH}/{NIX_NAR_FILE}").as_str())
+    );
+    // The closure, which nothing in the bytes could have told us.
+    assert_eq!(
+        info.get("References"),
+        Some("ghpayap4j5fqg9ryyzrfdj9ygdi01iw9-aeson-2.2.4.1-doc"),
+        "a narinfo without its closure describes a path with no dependencies"
+    );
+    // The publisher's signature, relayed. Not re-made: this instance holds no
+    // key that could have produced it.
+    assert_eq!(
+        info.get("Sig"),
+        Some("cache.nixos.org-1:21qiHy652KfJ7Rsnc+dy5KndgujuIQEU/oudrFh7sWkkLlT9r8F3AxKA//dMvr9xWBA3tITPZA6ZFC7KxxRJBA=="),
+    );
+    // `FileHash` is the one field composed rather than relayed — it describes
+    // the bytes *this* instance holds — and it is in the spelling a narinfo
+    // uses: `sha256:{nix32}`, not hex and not SRI.
+    let file_hash = info.get("FileHash").expect("the held bytes are digested");
+    let digest = file_hash
+        .strip_prefix("sha256:")
+        .expect("narinfo spelling, not SRI");
+    assert_eq!(
+        batlehub_core::services::nix::nix32_decode(digest, 32).map(|d| d.len()),
+        Some(32),
+        "FileHash must be Nix base32, which is not RFC 4648: {file_hash}"
+    );
+
+    // …and the bytes are there, which is the invariant the whole design rests
+    // on: a path the narinfo describes is served by the next request.
+    let resp = get(
+        &app,
+        &format!("/proxy/{REG}/nix/nar/{NIX_HASH}/{NIX_NAR_FILE}"),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+}
+
+/// `nix-cache-info` is composed, because there is no upstream to relay one
+/// from — the one case §4.4 says composes rather than relays.
+///
+/// `StoreDir` is not a knob: a client whose own store dir differs refuses the
+/// whole cache with *"binary cache '…' is for Nix stores with prefix '…'"*.
+#[actix_web::test]
+async fn cache_info_is_composed_when_there_is_no_upstream_to_relay_one_from() {
+    let (app, _lab) = nix_lab().await;
+    let resp = get(&app, &format!("/proxy/{REG}/nix/nix-cache-info")).await;
+    assert_eq!(resp.status(), 200);
+    let body = String::from_utf8(actix_web::test::read_body(resp).await.to_vec()).unwrap();
+    assert!(body.contains("StoreDir: /nix/store"), "{body}");
+    assert!(body.contains("WantMassQuery: 1"), "{body}");
+}
+
+/// A store path the bundle does not carry is refused the way every other
+/// air-gapped coordinate is: a `503`, because it exists — it is simply not
+/// here — and a `404` is what a hybrid fall-through acts on.
+///
+/// **Worth a second look before this ships wider.** To Nix a `404` means "not
+/// in this cache" and it moves to the next substituter or builds; a `503` is a
+/// transport error it reports rather than routes around. On a disconnected
+/// machine building from source is usually the *right* next step, so the
+/// estate-wide convention and this protocol's own recoverable answer point
+/// different ways here. Recorded rather than decided: the convention is RFC
+/// 0008 §4.4's and changing it for one kind is an RFC question, not a test's.
+#[actix_web::test]
+async fn a_store_path_the_bundle_does_not_carry_is_refused_not_invented() {
+    let (app, _lab) = nix_lab().await;
+    let absent = "zzzznpbf2n4z3pjy6vm2mw8ywkqixxs6";
+    let resp = get(&app, &format!("/proxy/{REG}/nix/{absent}.narinfo")).await;
+    assert_eq!(
+        resp.status(),
+        503,
+        "held elsewhere, not absent — and never a composed narinfo for bytes this instance does not have"
+    );
+}
+
+/// Ansible Galaxy across the gap (RFC 0031 §6.11, RFC 0008-bis).
+///
+/// A collection install reads three documents before it reads a byte: the
+/// versions list it resolves against, the collection document whose
+/// `updated_at` decides whether that list is re-read, and the version document
+/// carrying `download_url` and `artifact.sha256`. An air-gapped instance that
+/// composed only the first would leave the client resolving a version it then
+/// could not describe — the *listing* failure RFC 0008-bis names, which is a
+/// different failure from a missing artifact.
+#[actix_web::test]
+async fn a_held_collection_gets_all_three_documents_it_installs_through() {
+    let (app, _lab) = holding_lab(
+        "galaxy",
+        true,
+        &[
+            ("acme.util", "1.0.0", Some("tarball")),
+            ("acme.util", "1.1.0", Some("tarball")),
+        ],
+    )
+    .await;
+
+    let base = format!("/proxy/{REG}/galaxy/api/v3/collections/acme/util");
+
+    // The resolver's candidate list: one page, and only what is held.
+    let resp = get(&app, &format!("{base}/versions/")).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(header(&resp, "X-BatleHub-Listing"), Some("synthesised"));
+    let body = body_of(resp).await;
+    // Order is the held set's, newest first; the resolver sorts for itself, so
+    // what matters is *which* versions are offered.
+    let mut served: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["version"].as_str().unwrap())
+        .collect();
+    served.sort_unstable();
+    assert_eq!(served, ["1.0.0", "1.1.0"]);
+    assert_eq!(body["meta"]["count"], 2);
+    assert!(
+        body["links"]["next"].is_null(),
+        "the one-page invariant is the client's urljoin, not the source of the document"
+    );
+
+    // The collection document, so `get_collection_versions` has an
+    // `updated_at` to compare against.
+    let resp = get(&app, &format!("{base}/")).await;
+    assert_eq!(resp.status(), 200);
+    let body = body_of(resp).await;
+    assert_eq!(body["highest_version"]["version"], "1.1.0");
+    assert!(body["updated_at"].is_string());
+
+    // The version document, with the digest the client checks the bytes
+    // against and a download_url on this instance.
+    let resp = get(&app, &format!("{base}/versions/1.1.0/")).await;
+    assert_eq!(resp.status(), 200);
+    let body = body_of(resp).await;
+    assert_eq!(
+        body["artifact"]["filename"], "acme-util-1.1.0.tar.gz",
+        "`_download_file` names the file it writes from the last path segment"
+    );
+    assert!(body["artifact"]["sha256"].is_string());
+    let url = body["download_url"].as_str().unwrap();
+    assert!(
+        url.ends_with("/api/v3/artifacts/collections/acme-util-1.1.0.tar.gz"),
+        "{url}"
+    );
+
+    // …and the bytes are there, which is the invariant the whole design rests
+    // on: a listed version is served by the next request.
+    let resp = get(
+        &app,
+        &format!("/proxy/{REG}/galaxy/api/v3/artifacts/collections/acme-util-1.1.0.tar.gz"),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+}
+
+/// A version the bundle does not carry is absent from the listing, and the
+/// document that describes it is a `503` rather than a `404`: it exists, it is
+/// simply not here, and a hybrid registry's `404` means *ask upstream* — the
+/// one thing an air-gapped instance must never do.
+#[actix_web::test]
+async fn a_collection_version_the_bundle_does_not_carry_is_not_listed() {
+    let (app, _lab) = holding_lab("galaxy", true, &[("acme.util", "1.0.0", Some("tarball"))]).await;
+    let base = format!("/proxy/{REG}/galaxy/api/v3/collections/acme/util");
+
+    let body = body_of(get(&app, &format!("{base}/versions/")).await).await;
+    let served: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["version"].as_str().unwrap())
+        .collect();
+    assert_eq!(served, ["1.0.0"]);
+
+    let resp = get(&app, &format!("{base}/versions/9.9.9/")).await;
+    assert_eq!(resp.status(), 503, "held elsewhere, not absent");
+}

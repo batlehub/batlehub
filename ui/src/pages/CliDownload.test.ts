@@ -21,11 +21,11 @@ beforeEach(() => {
   URL.createObjectURL = vi.fn(() => "blob:cli");
   URL.revokeObjectURL = vi.fn();
   // jsdom cannot follow a download, so the anchor is captured instead of clicked.
-  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
-    function (this: HTMLAnchorElement) {
-      clicked.push(this);
-    },
-  );
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+    this: HTMLAnchorElement,
+  ) {
+    clicked.push(this);
+  });
 });
 
 afterEach(() => vi.restoreAllMocks());

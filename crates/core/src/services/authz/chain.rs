@@ -272,6 +272,79 @@ async fn authorize_grants(
     )))
 }
 
+/// Does `subject` hold `action` anywhere a **configured** node of this registry
+/// could grant it — the instance tier, the registry node, or any one of its
+/// namespaces?
+///
+/// # Why a second question exists at all
+///
+/// [`authorize_grants`] answers about a coordinate, and one request in this
+/// tree has none. `nix copy --to` sends a NAR *before* the narinfo that names
+/// it (RFC 0028 §4.4): when the bytes arrive nothing is known about them, not
+/// the package, not the version. The choice there is between authorizing
+/// something and authorizing nothing, and authorizing nothing is what let an
+/// anonymous caller park bytes in a registry's staging area until the heavy
+/// suite caught it — `PUT nar/… -> 200` followed by `PUT ….narinfo -> 403`.
+///
+/// So this is the widest question that is still a question: *could this subject
+/// publish here at all?* The coordinate-scoped check still runs when the
+/// narinfo arrives, so this gate narrows who may consume storage without
+/// widening what anyone may claim.
+///
+/// # What it deliberately does not see
+///
+/// The package and version tiers. They live in the `policy` table keyed by a
+/// coordinate this request has not got, and enumerating a registry's stored
+/// grants to find one is the N+1 §13.2 measured at 806× the cached document.
+/// A publisher whose *only* `releases:publish` is scoped to a single package is
+/// therefore refused here — the refusal says so in as many words, because a
+/// silent one would be indistinguishable from a wrong credential.
+///
+/// # Seals and shadows
+///
+/// Each candidate path is resolved on its own rather than as one path holding
+/// every namespace: a seal cuts everything above it *on its path* (§4.3), and a
+/// sealed namespace must not cut the registry node for a package it does not
+/// match. An active shadow answers yes for the same reason it answers yes in
+/// enforcement — §4.7's "enable in shadow, watch, then enforce" is worth
+/// nothing if one route enforces anyway — and it records nothing here, because
+/// the narinfo that follows is the decision worth recording.
+pub async fn holds_anywhere_in_registry(
+    hot: &HotConfigLock,
+    registry: &str,
+    subject: &Identity,
+    action: Action,
+) -> bool {
+    let grants = {
+        let hot = hot.read().await;
+        hot.grants.get(registry).cloned()
+    };
+    // Absent policy constrains nothing — `authorize_grants`' own reading, and
+    // for its reason: a deployment that has never written a policy has to
+    // behave exactly as it did before phase 4.
+    let Some(grants) = grants else {
+        return true;
+    };
+    let subject = crate::entities::Subject::Identity(subject.clone());
+
+    let mut registry_path = instance_prefix(hot).await;
+    registry_path.push(grants.registry.clone());
+    let holds = |path: &[crate::entities::Node]| {
+        crate::entities::resolve(path, &subject).holds(action) || active_shadow(path).is_some()
+    };
+    if holds(&registry_path) {
+        return true;
+    }
+    for (_, node) in &grants.namespaces {
+        let mut path = registry_path.clone();
+        path.push(node.clone());
+        if holds(&path) {
+            return true;
+        }
+    }
+    false
+}
+
 /// The instance node, as a one-element path prefix.
 ///
 /// RFC 0015 §4.1's tier above `registry`. Prepended to every resolution so a

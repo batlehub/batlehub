@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "1.1.0"
+    "version": "1.2.0"
   },
   "paths": {
     "/.well-known/terraform.json": {
@@ -8700,6 +8700,72 @@
       }
     },
     "/proxy/{registry}/api/search/updates/compatible": {
+      "get": {
+        "tags": [
+          "proxy/jetbrains-marketplace"
+        ],
+        "summary": "`GET /api/search/updates/compatible` — the compatible-updates question in\nthe spelling the IDE actually speaks: `?build=…&pluginXmlId=…`, repeated.",
+        "description": "`installPlugins` on IntelliJ 2026.1 asks this way and no other: the POST\nform is the marketplace's own API, the GET form is what ships in the IDE.\nWithout this route the request fell past every jetbrains service to\nopenvsx's `api/{namespace}/{extension}` catch-all, which answered \"registry\n… is not an openvsx or vscode-marketplace registry\" — a 404 that reads like\na misconfigured registry and is a missing route. `closed_world.sh`'s\njbplugin phase is the regression test at the client end.\n\n`pluginXmlId` repeats, and `web::Query` cannot express that — serde_urlencoded\nkeeps one value per key — so the query is read with `form_urlencoded`.",
+        "operationId": "jbm_compatible_updates_get",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "build",
+            "in": "query",
+            "description": "IDE build, e.g. IU-261.25134.95",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pluginXmlId",
+            "in": "query",
+            "description": "Plugin xml id; repeatable",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Array of compatible updates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UpstreamDocument"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No build in the query"
+          },
+          "404": {
+            "description": "Unknown or non-marketplace registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      },
       "post": {
         "tags": [
           "proxy/jetbrains-marketplace"
@@ -9991,6 +10057,160 @@
         ]
       }
     },
+    "/proxy/{registry}/apk/upload": {
+      "put": {
+        "tags": [
+          "proxy/apk"
+        ],
+        "summary": "`PUT /proxy/{registry}/apk/upload`",
+        "operationId": "apk_publish",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Package published; APKINDEX regenerated and signed",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid package"
+          },
+          "403": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Unknown or non-local registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/apk/{path}": {
+      "get": {
+        "tags": [
+          "proxy/apk"
+        ],
+        "summary": "Serve a file from an Alpine repository (`/proxy/{registry}/apk/{path}`).",
+        "operationId": "apk_get",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "description": "Repository file path (e.g. v3.22/main/x86_64/APKINDEX.tar.gz, v3.22/main/x86_64/busybox-1.37.0-r20.apk)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Repository file, or the signing key under keys/{name}",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed .apk file name"
+          },
+          "403": {
+            "description": "Access denied, or the version is blocked"
+          },
+          "404": {
+            "description": "Not found or unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/attachments/{uuid}": {
+      "get": {
+        "tags": [
+          "proxy/forgejo"
+        ],
+        "summary": "Download a release asset by its Forgejo attachment uuid.",
+        "description": "`{forge}/attachments/{uuid}` is how Forgejo addresses a release asset\nwithout naming its repository, and clients build that URL themselves rather\nthan follow the release document — `mise`'s `forgejo:` backend uses it for\nevery asset it installs, and never the `browser_download_url` this proxy\nrewrites. Without this route there is no URL such a client could be pointed\nat, so its download goes to the forge: past the rule chain, the cache and\nthe audit trail, and in a closed world nowhere at all.\n\nThe uuid names no repository, so the coordinate is the one remembered when\nthis instance served the release document the uuid came from (see\n[`batlehub_core::services::forge_attachments`]). A uuid nothing was\nremembered for is a `404`: this is a route onto what this instance has\nserved, not an opaque relay for the forge's attachment space.",
+        "operationId": "fj_attachment",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "uuid",
+            "in": "path",
+            "description": "Forgejo attachment uuid, as the release document gave it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Asset binary stream",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry, or an attachment this instance has not served a release document for"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/proxy/{registry}/channeldata.json": {
       "get": {
         "tags": [
@@ -10598,6 +10818,598 @@
         ]
       }
     },
+    "/proxy/{registry}/galaxy/api/": {
+      "get": {
+        "tags": [
+          "proxy/galaxy"
+        ],
+        "summary": "The API versions this registry serves — read by `g_connect` before any action, and `v1` is absent when `roles = \"off\"`.",
+        "description": "`GET /proxy/{registry}/galaxy/api/`",
+        "operationId": "galaxy_discovery",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The API versions this registry serves",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GalaxyDiscovery"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/galaxy/api/v1/roles/": {
+      "get": {
+        "tags": [
+          "proxy/galaxy"
+        ],
+        "summary": "Look a role up by owner and name — what `lookup_role_by_name` reads for the numeric id every later v1 request uses.",
+        "description": "`GET …/api/v1/roles/?owner__username={user}&name={role}`\n\nRelayed. It names no version, so it carries no filtering obligation — a role\nwith one blocked version still exists.",
+        "operationId": "galaxy_role_search",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "owner__username",
+            "in": "query",
+            "description": "The role's GitHub user",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "The role's name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The role, if it exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a role name"
+          },
+          "404": {
+            "description": "Unknown registry, or roles = \"off\""
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/galaxy/api/v1/roles/{id}/download/{filename}": {
+      "get": {
+        "tags": [
+          "proxy/galaxy"
+        ],
+        "summary": "A role archive, fetched server-side from the host its listing named — served only under `roles = \"proxy\"`.",
+        "description": "`GET …/api/v1/roles/{id}/download/{filename}`\n\nOnly under `roles = \"proxy\"`. The archive is fetched server-side, through\nthe SSRF guard and only from the fixed role-download allowlist — the\nregistry's own upstream plus `github.com`.",
+        "operationId": "galaxy_role_artifact",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The numeric role id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "path",
+            "description": "{version}.tar.gz",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The role archive",
+            "content": {
+              "application/gzip": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a role id or archive name"
+          },
+          "403": {
+            "description": "Blocked version or access denied"
+          },
+          "404": {
+            "description": "Unknown role or registry, or roles is not \"proxy\""
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/galaxy/api/v1/roles/{id}/versions/": {
+      "get": {
+        "tags": [
+          "proxy/galaxy"
+        ],
+        "summary": "Every allowed version of a role, as one page, each `download_url` pointed here under `roles = \"proxy\"`.",
+        "description": "`GET …/api/v1/roles/{id}/versions/`\n\nFiltered, one page, and each surviving entry's `download_url` rewritten to\nthis instance under `roles = \"proxy\"`.",
+        "operationId": "galaxy_role_versions",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The numeric role id from the search above",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every allowed version of the role, as one page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a role id"
+          },
+          "404": {
+            "description": "Unknown role or registry, or roles = \"off\""
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/galaxy/api/v3/artifacts/collections/": {
+      "post": {
+        "tags": [
+          "proxy/galaxy"
+        ],
+        "summary": "Publish a collection — synchronous, so the import task it answers with is already finished.",
+        "description": "`POST …/api/v3/artifacts/collections/`",
+        "operationId": "galaxy_publish",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "multipart/form-data with `sha256` and `file`",
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Stored; the task named is already finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GalaxyImportTask"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a collection tarball, or the sha256 field disagrees with the bytes"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry, or mode = proxy"
+          },
+          "409": {
+            "description": "That version is already published"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/galaxy/api/v3/artifacts/collections/{filename}": {
+      "get": {
+        "tags": [
+          "proxy/galaxy"
+        ],
+        "summary": "The collection tarball, byte-exact — the client hashes it against `artifact.sha256` from the version document.",
+        "description": "`GET …/api/v3/artifacts/collections/{filename}`\n\nThe served path ends in the upstream filename because `_download_file`\nderives the name it writes by slicing `.tar.gz` off the last path segment.",
+        "operationId": "galaxy_artifact",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filename",
+            "in": "path",
+            "description": "{namespace}-{name}-{version}.tar.gz",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The collection tarball, byte-exact",
+            "content": {
+              "application/gzip": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a collection artifact name"
+          },
+          "403": {
+            "description": "Blocked version or access denied"
+          },
+          "404": {
+            "description": "Unknown version or registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/": {
+      "get": {
+        "tags": [
+          "proxy/galaxy"
+        ],
+        "summary": "The collection document, with `highest_version` moved off a blocked version and `updated_at` bumped past the block.",
+        "description": "`GET …/api/v3/collections/{namespace}/{name}/`",
+        "operationId": "galaxy_collection",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "namespace",
+            "in": "path",
+            "description": "Collection namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The collection document, with highest_version repaired and updated_at bumped past any block",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a collection name"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown collection or registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/": {
+      "get": {
+        "tags": [
+          "proxy/galaxy"
+        ],
+        "summary": "Every allowed version of a collection, as one page — the chokepoint the resolver picks from.",
+        "description": "`GET …/api/v3/collections/{namespace}/{name}/versions/`\n\nThe chokepoint. One page, always: `links` is entirely null and `meta.count`\ndescribes what is served, because no continuation this instance could emit\nsurvives the client's own `urljoin` under a path prefix.",
+        "operationId": "galaxy_versions",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "namespace",
+            "in": "path",
+            "description": "Collection namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every allowed version of the collection, as one page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a collection name"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown collection or registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/{version}/": {
+      "get": {
+        "tags": [
+          "proxy/galaxy"
+        ],
+        "summary": "One version's document — `download_url` pointed here, `artifact.sha256` relayed untouched, `404` when the version is blocked.",
+        "description": "`GET …/api/v3/collections/{namespace}/{name}/versions/{version}/`",
+        "operationId": "galaxy_version_detail",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "namespace",
+            "in": "path",
+            "description": "Collection namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Collection name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "Collection version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The version document, with download_url pointed at this instance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a collection coordinate"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Blocked, unknown version, or unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/galaxy/api/v3/imports/collections/{task}/": {
+      "get": {
+        "tags": [
+          "proxy/galaxy"
+        ],
+        "summary": "The import task a publish returned — always `completed`, because the work is done before the task exists.",
+        "description": "`GET …/api/v3/imports/collections/{task}/`\n\nAlways `completed`: the publish that named this task finished before it\nanswered. A task id nobody published under is still `completed` rather than\na `404`, because a `404` is what the client reads as *\"not started yet\"* and\nit would poll forever.",
+        "operationId": "galaxy_import_task",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "task",
+            "in": "path",
+            "description": "The bare task id the publish returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The import task, already finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GalaxyTaskStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown registry, or mode = proxy"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/proxy/{registry}/gems/{filename}": {
       "get": {
         "tags": [
@@ -11142,6 +11954,547 @@
           },
           "416": {
             "description": "The requested range starts past the end of the document"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/nix/log/{drv}": {
+      "get": {
+        "tags": [
+          "proxy/nix"
+        ],
+        "summary": "`log/{drv}` — a build log, read by `nix log`.",
+        "description": "A passthrough with no coordinate in it for a policy to act on, which is why\n§3 makes it a non-goal to treat as anything else.",
+        "operationId": "nix_build_log",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "drv",
+            "in": "path",
+            "description": "The derivation file name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The build log",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe derivation name"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Not in this cache"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/nix/nar/{file}": {
+      "get": {
+        "tags": [
+          "proxy/nix"
+        ],
+        "summary": "A NAR asked for in the **upstream's** own shape, resolved through the reverse index.",
+        "description": "Two callers reach this route, and the second is the reason it answers\n`HEAD`:\n\n- a client whose cached narinfo predates this registry and still holds\n  upstream's `nar/{fileHash}.nar.zst` (30-day positive TTL);\n- **`nix copy --to`**, which asks `HEAD nar/{fileHash}.nar.{ext}` before\n  uploading, because that is the path `narInfo->url` names. `fileExists`\n  treats anything but `404`/`403` as a hard error and disables the cache\n  for 60 seconds, so a GET-only route would fail every publish.\n\nNix keeps a positive narinfo entry for 30 days, so for a month after a\nmigration these are real requests. Resolved through the reverse index a\nserved narinfo wrote; a miss is a `404`, which makes Nix drop its cached\nnarinfo, refetch it, get the rewritten `URL:` and succeed. One extra round\ntrip, once per path — and never a NAR served outside a coordinate, which is\nthe property the whole rewrite exists for.",
+        "operationId": "nix_nar_upstream_shape",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "description": "The upstream NAR file name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The NAR, resolved through the reverse index and served under its coordinate",
+            "content": {
+              "application/x-nix-nar": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe file name"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "No narinfo served by this instance names this NAR — refetch the narinfo"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "proxy/nix"
+        ],
+        "summary": "`PUT nar/{file}` — the NAR, arriving before anything knows what it is.",
+        "description": "This is the first byte of a `nix copy --to` and it names **no coordinate**:\nthe client uploads `nar/{fileHash}.nar.{ext}` and only later sends the\nnarinfo that says which store path those bytes are. So the upload is parked\nunder a pending key owned by this publisher, and\n[`nix_put_narinfo`] is what claims it.",
+        "operationId": "nix_put_nar",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "description": "The NAR file name the client chose, `{fileHash}.nar.{ext}`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The NAR is held, unclaimed, until its narinfo arrives",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe file name"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry, or not a local/hybrid registry"
+          },
+          "413": {
+            "description": "Larger than limits.max_artifact_size_bytes"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/nix/nar/{hash}/{file}": {
+      "get": {
+        "tags": [
+          "proxy/nix"
+        ],
+        "summary": "The NAR, under the coordinate the rewritten `URL:` gave it.",
+        "description": "**Answers `HEAD`, and that is not a nicety.** `nix copy --to` guards its\nNAR upload with `if (repair || !fileExists(narInfo->url))`, and\n`HttpBinaryCacheStore::fileExists` maps only `NotFound` and `Forbidden` to\n\"absent\" — every other status calls `disable(e)`, which takes the whole\ncache out of the client's substituter list for 60 seconds and fails the\ncopy. A `405` from a GET-only route is one of those, so a publish would die\non its first NAR (RFC 0028 §13).",
+        "operationId": "nix_nar",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "The 32-character Nix base32 store hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "description": "The NAR file name, as upstream names it (e.g. 075lhsj….nar.zst)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The NAR, streamed and cached under the coordinate",
+            "content": {
+              "application/x-nix-nar": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a Nix base32 store hash, or an unsafe file name"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Not in this cache, or the coordinate is blocked"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/nix/nix-cache-info": {
+      "get": {
+        "tags": [
+          "proxy/nix"
+        ],
+        "summary": "`nix-cache-info` — the three lines a client reads once per substituter.",
+        "description": "Relayed, not composed. `StoreDir` is what decides whether the cache is\nusable at all (a mismatch is a hard client-side error naming both prefixes),\nand `Priority` is the one value an operator would change — which they do on\ntheir own `substituters` line with `?priority=`, not here. A second knob for\nthe same number in a second place is what decision 5 rejected.",
+        "operationId": "nix_cache_info",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The cache's StoreDir, WantMassQuery and Priority",
+            "content": {
+              "text/x-nix-cache-info": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/nix/public-key": {
+      "get": {
+        "tags": [
+          "proxy/nix"
+        ],
+        "summary": "`GET public-key` — the line an operator pastes into `trusted-public-keys`.",
+        "description": "Nix reads no such endpoint; the console snippet and provisioning scripts do,\nwhich is exactly what RFC 0020 serves as an Open VSX asset for the same\nreason. A registry that signs nothing answers `404` rather than an empty\nbody, because \"no key\" and \"a key I could not read\" must not look alike.",
+        "operationId": "nix_public_key",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One `name:base64` line for trusted-public-keys",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown registry, or this registry signs nothing"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/nix/realisations/{id}.doi": {
+      "get": {
+        "tags": [
+          "proxy/nix"
+        ],
+        "summary": "`realisations/{id}.doi` — the derivation-to-output mapping of a content-addressed derivation.",
+        "description": "**The id is a tail, because the protocol has two spellings.** Nix 2.24\nbuilds `realisations/{drvHash}!{output}.doi` — one segment — while master's\n`makeRealisationPath` builds `realisations/{drvPath}/{outputName}.doi` —\ntwo. A single-segment pattern serves one client generation and `404`s the\nother, so this matches either and validates the whole tail\n(RFC 0028 §13).\n\nA passthrough document: the policy lives on the narinfo of the `outPath` it\nnames, not here. Blocking it as well would refuse the *mapping* while the\npath it maps to is still served, which is the wrong half.",
+        "operationId": "nix_realisation",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The realisation id, `sha256:{drvHash}!{output}`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The realisation document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe realisation id"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Not in this cache"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/nix/{hash}.ls": {
+      "get": {
+        "tags": [
+          "proxy/nix"
+        ],
+        "summary": "`{hash}.ls` — a JSON listing of a NAR's contents, for `nix store ls` alone.",
+        "description": "Never read by an install, which is why it is a read rather than a listing:\nnothing resolves through it. Answers `HEAD` for the same reason the NAR\nroutes do — a client that probes before reading must get a status it\nunderstands.",
+        "operationId": "nix_ls",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "The 32-character Nix base32 store hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The NAR listing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a Nix base32 store hash"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Not in this cache, or the coordinate is blocked"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/nix/{hash}.narinfo": {
+      "get": {
+        "tags": [
+          "proxy/nix"
+        ],
+        "summary": "One store path's metadata — the chokepoint every substitution goes through.",
+        "description": "`HEAD` is answered from the same code path with no body, because `nix copy`\nasks before it uploads (`fileExists`) and a `HEAD` that 405'd would make\nevery publish re-upload a NAR the cache already has.",
+        "operationId": "nix_narinfo",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "The 32-character Nix base32 store hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The narinfo, with only `URL:` rewritten and every `Sig:` relayed byte-exact",
+            "content": {
+              "text/x-nix-narinfo": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a Nix base32 store hash"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Not in this cache — because upstream does not have it, or because the coordinate is blocked"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "proxy/nix"
+        ],
+        "summary": "`PUT {hash}.narinfo` — the document that names the coordinate, and where this registry signs.",
+        "description": "Everything happens here because this is the first moment anything is known:\nthe NAR is verified against the claims, the coordinate is parsed out of\n`StorePath:`, `URL:` is rewritten to this instance's layout, any `Sig:`\nforging *our* key name is dropped, the publisher's own signatures are kept,\nand ours is appended over a fingerprint computed from bytes we hold.",
+        "operationId": "nix_put_narinfo",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "The 32-character Nix base32 store hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The store path is published and signed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a store hash, an unverifiable codec, or a field the bytes disagree with"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry, or not a local/hybrid registry"
           }
         },
         "security": [
@@ -12249,8 +13602,8 @@
           {
             "name": "action",
             "in": "query",
-            "description": "Only 'download' is supported",
-            "required": true,
+            "description": "Only 'download' is supported; absent means download, which is what the IDE sends",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -12671,6 +14024,349 @@
           },
           "404": {
             "description": "Not found or unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/rustup/dist/{date}/{file}": {
+      "get": {
+        "tags": [
+          "proxy/rustup"
+        ],
+        "summary": "`dist/{date}/{file}`: the same three channel documents under a dated\ndirectory, or one component archive of that release.",
+        "operationId": "rustup_dist_dated",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "date",
+            "in": "path",
+            "description": "Release date directory (YYYY-MM-DD)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "description": "A channel document, or a component archive such as rust-std-1.98.1-x86_64-unknown-linux-gnu.tar.xz",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Channel document, or the component archive streamed from upstream (cached), byte-exact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe date or file name, or a file naming no Rust release"
+          },
+          "403": {
+            "description": "Access denied, or the release is blocked"
+          },
+          "404": {
+            "description": "Not found upstream, or unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/rustup/dist/{file}": {
+      "get": {
+        "tags": [
+          "proxy/rustup"
+        ],
+        "summary": "`dist/{file}`: a channel manifest, its checksum, its signature, the v1 name\nrustup falls back to, or the stable-date file.",
+        "operationId": "rustup_dist_root",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "description": "channel-rust-{name}.toml, .toml.sha256, .toml.asc, or channel-rust-stable-date.txt",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Channel manifest, its computed checksum line, its relayed signature, or the stable-date file",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a rustup toolchain name"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Blocked release, unknown document, or unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/rustup/manifests.txt": {
+      "get": {
+        "tags": [
+          "proxy/rustup"
+        ],
+        "summary": "`manifests.txt`: every manifest the release tooling published, blocked\nreleases removed.",
+        "operationId": "rustup_manifests_txt",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One manifest path per line, blocked releases removed",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/rustup/rustup/archive/{version}/{triple}/{file}": {
+      "get": {
+        "tags": [
+          "proxy/rustup"
+        ],
+        "summary": "`rustup/archive/{version}/{triple}/{file}`: one installer release.",
+        "operationId": "rustup_archive",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "rustup release (e.g. 1.29.1)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "triple",
+            "in": "path",
+            "description": "Target triple",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "description": "rustup-init, rustup-init.exe, or a checksum sibling",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Installer binary streamed from upstream (cached)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe path segment"
+          },
+          "403": {
+            "description": "Access denied, or the release is blocked"
+          },
+          "404": {
+            "description": "Not found upstream, or unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/rustup/rustup/dist/{triple}/{file}": {
+      "get": {
+        "tags": [
+          "proxy/rustup"
+        ],
+        "summary": "`rustup/dist/{triple}/{file}`: what `rustup-init.sh` fetches, which names no\nversion.",
+        "description": "The version is read from `release-stable.toml` and the archive entry is\nserved under it, so the cache holds a release rather than a moving name —\nRFC 0019's lesson, that a cache entry is a commit and not a branch. The\nbytes are identical upstream by construction: the release process copies the\narchive into `dist/`.",
+        "operationId": "rustup_bootstrap",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "triple",
+            "in": "path",
+            "description": "Target triple",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "description": "rustup-init or rustup-init.exe",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Installer binary for the current release, streamed from upstream (cached)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsafe path segment"
+          },
+          "403": {
+            "description": "Access denied, or the release is blocked"
+          },
+          "404": {
+            "description": "Not found upstream, or unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/rustup/rustup/release-stable.toml": {
+      "get": {
+        "tags": [
+          "proxy/rustup"
+        ],
+        "summary": "`rustup/release-stable.toml`: the installer's own current version, relayed.",
+        "operationId": "rustup_release_stable",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The installer's current version, byte-exact",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
           }
         },
         "security": [
@@ -17295,6 +18991,58 @@
         ]
       }
     },
+    "/proxy/{registry}/{platform}/repodata_shards.msgpack.zst": {
+      "get": {
+        "tags": [
+          "proxy/conda"
+        ],
+        "summary": "`repodata_shards.msgpack.zst` — CEP-16's index of shards.",
+        "operationId": "conda_repodata_shards",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "path",
+            "description": "Platform string, e.g. linux-64 or noarch",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The shard index, as the channel published it",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "The channel publishes no shard index, or this registry cannot serve one"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/proxy/{registry}/{platform}/{filename}": {
       "get": {
         "tags": [
@@ -17344,6 +19092,67 @@
           },
           "404": {
             "description": "Package not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/{platform}/{shard}.msgpack.zst": {
+      "get": {
+        "tags": [
+          "proxy/conda"
+        ],
+        "summary": "One shard — `{sha256}.msgpack.zst`, one package's records.",
+        "operationId": "conda_shard",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "path",
+            "description": "Platform string",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "shard",
+            "in": "path",
+            "description": "The shard's sha256, as the index named it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Shard bytes",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "No such shard, or this registry serves no shards"
           }
         },
         "security": [
@@ -20848,6 +22657,65 @@
           }
         }
       },
+      "GalaxyDiscovery": {
+        "type": "object",
+        "description": "`GET api/` — the discovery document `g_connect` reads before any action.",
+        "required": [
+          "available_versions",
+          "description"
+        ],
+        "properties": {
+          "available_versions": {
+            "type": "object",
+            "description": "API version → the path segment it is served under, relative to this\nURL. `v1` is absent when `roles = \"off\"`."
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      },
+      "GalaxyImportTask": {
+        "type": "object",
+        "description": "The publish response: a **bare task id**, not a URL and not a path.\n\nRFC 0031 §4.4 specified an absolute path here, reasoning about\n`urljoin(self.api_server, resp['task'])`. That is not what the v3 client\ndoes. `wait_import_task` ignores the value as a URL and interpolates it as a\nsingle **path segment**:\n\n```text\n_urljoin(api_server, v3, 'imports/collections', task_id, '/')\n```\n\nso a path or a URL here lands in the middle of the polled path and the\nclient spends its whole timeout asking for a route that cannot exist — it\ntreats a `404` as \"the import has not started yet\" and retries with backoff,\nso the symptom is a hang, not an error. Measured against ansible-core 2.19.3\n(RFC 0031 §13).",
+        "required": [
+          "task"
+        ],
+        "properties": {
+          "task": {
+            "type": "string"
+          }
+        }
+      },
+      "GalaxyTaskStatus": {
+        "type": "object",
+        "description": "The import-task poll. `finished_at` set is what `wait_import_task` waits\nfor.",
+        "required": [
+          "state",
+          "messages"
+        ],
+        "properties": {
+          "error": {},
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "messages": {
+            "type": "array",
+            "items": {}
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
       "GateDto": {
         "type": "object",
         "required": [
@@ -22376,7 +24244,7 @@
       },
       "Pull": {
         "type": "object",
-        "description": "One coordinate an identity pulled inside the window.\n\n`user_agent` and `source_ip` are **last seen**, not a distinct set. Both are\nmulti-valued across a window — a runner is redeployed, an agent is upgraded —\nand RFC 0018 §4.2 names them singular. The last value is the one an incident\nacts on (\"where is it pulling from *now*\"); the full set is a different\nreport, and pretending one field carries it would be worse than saying which\none this is.\n\nBoth are **empty for a local or hybrid registry's own downloads**, and that\nis a gap in the recording layer rather than in this aggregation:\n`LocalRegistryService::record_download` builds its event from the `Identity`\nalone, while the proxy path threads the address and agent through\n`ProxyRequest`. Until those two agree, an operator reading this report\nagainst a locally published package sees the columns and no values.",
+        "description": "One coordinate an identity pulled inside the window.\n\n`user_agent` and `source_ip` are **last seen**, not a distinct set. Both are\nmulti-valued across a window — a runner is redeployed, an agent is upgraded —\nand RFC 0018 §4.2 names them singular. The last value is the one an incident\nacts on (\"where is it pulling from *now*\"); the full set is a different\nreport, and pretending one field carries it would be worse than saying which\none this is.\n\nBoth are recorded on **every** delivered download, local and proxied alike:\nthe proxy path threads them through `ProxyRequest`, and the local read path\ntakes a `CallerNet` down to `LocalRegistryService::record_download`. They were\nempty for a local or hybrid registry's own downloads until that second half\nlanded, which is why an old row can still carry a count and no values —\nnothing backfills a column that was never written.",
         "required": [
           "registry",
           "package_name",
@@ -25076,6 +26944,10 @@
       "description": "Arch Linux pacman repository — proxy + local hosting (.pkg.tar.zst, repo DB generation, Ed25519 OpenPGP signing)"
     },
     {
+      "name": "proxy/apk",
+      "description": "Alpine apk repository — proxy with the index relayed byte-exact and a real coordinate on every .apk, plus local hosting with an RSA-signed APKINDEX"
+    },
+    {
       "name": "proxy/npm",
       "description": "npm proxy — packuments, version metadata, tarballs"
     },
@@ -25122,6 +26994,18 @@
     {
       "name": "proxy/nodedist",
       "description": "Node distributions (nvm, fnm, n, mise) — the nodejs.org/dist tree as a typed registry: filtered index.tab/index.json listings, per-release tarballs and SHASUMS256.txt byte-exact"
+    },
+    {
+      "name": "proxy/nix",
+      "description": "Nix binary cache (nix, cachix-style substituters) — the substituter protocol as a registry kind: narinfos relayed with only `URL:` rewritten so every `Sig:` still verifies, a blocked store path absent as the protocol's own 404, NARs cached under a coordinate, and stale upstream-shaped NAR URLs resolved through a reverse index"
+    },
+    {
+      "name": "proxy/galaxy",
+      "description": "Ansible Galaxy — the collections API v3 as a registry kind: the versions list filtered and served as one page, download_url rewritten to this instance, collection publish with its import-task poll, and the v1 role surface behind `roles`"
+    },
+    {
+      "name": "proxy/rustup",
+      "description": "Rust toolchains (rustup, mise) — the static.rust-lang.org tree as a typed registry: channel manifests filtered and their .sha256 recomputed, blocked releases refused or repaired, component archives cached per release"
     },
     {
       "name": "proxy/sdkman",

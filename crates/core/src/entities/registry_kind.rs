@@ -198,6 +198,14 @@ pub enum RegistryKind {
     Deb,
     Rpm,
     Pacman,
+    /// Alpine's package tree as a *path-addressed* registry with a coordinate:
+    /// `{branch}/{repo}/{arch}/APKINDEX.tar.gz` plus the `.apk` files beside
+    /// it. The index is relayed byte-exact — it is RSA-signed over its own
+    /// bytes and every shipping apk refuses an unverifiable one — so the block
+    /// is enforced at the package, whose file name carries a real `name` and
+    /// `version`. That makes `apk` the only member of the OS family with a
+    /// coordinate (RFC 0026).
+    Apk,
     Jetbrains,
     JetbrainsMarketplace,
     Generic,
@@ -210,6 +218,32 @@ pub enum RegistryKind {
     /// `{candidate}/{version}/{platform}`, the broker's `302` to a third-party
     /// CDN followed server-side through the SSRF guard (RFC 0010).
     Sdkman,
+    /// The Rust toolchain tree (`static.rust-lang.org`) as a *typed* registry:
+    /// one package `rust`, whose versions are rustup's own toolchain names
+    /// (`1.98.1`, `nightly-2026-09-05`), plus `rustup` for the installer's
+    /// self-update tree. The channel manifests are the enforcement chokepoint
+    /// — rustup resolves every install through one — so a release can be
+    /// blocked rather than merely cached (RFC 0024).
+    Rustup,
+    /// Ansible's collections API v3 (`galaxy.ansible.com`) as a registry kind:
+    /// `{namespace}.{name}` is the package, the per-collection versions list is
+    /// the enforcement chokepoint every `ansible-galaxy collection install`
+    /// resolves through, and the `{ns}-{name}-{v}.tar.gz` tarball is the
+    /// artifact. Roles — the v1 API — are served read-only behind
+    /// `roles = proxy | index | off` (RFC 0031).
+    Galaxy,
+    /// A Nix *binary cache* — the substituter protocol. Three kinds of file
+    /// behind one URL: `nix-cache-info`, one `{hash}.narinfo` per store path
+    /// and the NARs under `nar/`. There is no index and no search: a client
+    /// asks for exactly the store path it has already computed, and the cache
+    /// either has it or answers `404`, which is the protocol's own "not here".
+    ///
+    /// The package model is Nix's own — `DrvName` splits a store name at the
+    /// first dash not followed by a letter, so `hello-1.0.0.2-doc` is `hello`
+    /// at `1.0.0.2-doc` — and the 32-character store hash is the *artifact*
+    /// within that version, because two builds of one version differ in the
+    /// hash and in nothing a policy reads (RFC 0028).
+    Nix,
 }
 
 impl RegistryKind {
@@ -234,11 +268,15 @@ impl RegistryKind {
         Self::Deb,
         Self::Rpm,
         Self::Pacman,
+        Self::Apk,
         Self::Jetbrains,
         Self::JetbrainsMarketplace,
         Self::Generic,
         Self::Nodedist,
         Self::Sdkman,
+        Self::Rustup,
+        Self::Galaxy,
+        Self::Nix,
     ];
 
     /// The kebab-case wire string for this kind (matches TOML `type = "..."`).
@@ -262,11 +300,15 @@ impl RegistryKind {
             Self::Deb => "deb",
             Self::Rpm => "rpm",
             Self::Pacman => "pacman",
+            Self::Apk => "apk",
             Self::Jetbrains => "jetbrains",
             Self::JetbrainsMarketplace => "jetbrains-marketplace",
             Self::Generic => "generic",
             Self::Nodedist => "nodedist",
             Self::Sdkman => "sdkman",
+            Self::Rustup => "rustup",
+            Self::Galaxy => "galaxy",
+            Self::Nix => "nix",
         }
     }
 
@@ -282,6 +324,19 @@ impl RegistryKind {
     pub fn blocking_package_name<'a>(&self, package: &'a str) -> &'a str {
         match self {
             Self::Sdkman => crate::services::sdkman::candidate_of(package),
+            // `rust/stable` and `rust/2026-09-05/nightly` are one manifest
+            // each, so the channel travels in the listing package string to
+            // keep them separate cache entries — and a block is still a
+            // statement about the *release*, held on `rust` (RFC 0024 §6.2).
+            // `rustup`, the installer's own tree, blocks independently.
+            Self::Rustup => crate::services::rustup::package_of(package),
+            // A collection's version document is addressed
+            // `community.general@13.4.0` and a role listing
+            // `roles/geerlingguy.docker@4567`, because both need a coordinate
+            // the `(package, document)` cache key has nowhere else to put. A
+            // block is a statement about the collection or the role, so the
+            // address is stripped before the lookup (RFC 0031 §6.2).
+            Self::Galaxy => crate::services::galaxy::package_of(package),
             _ => package,
         }
     }
@@ -290,9 +345,10 @@ impl RegistryKind {
     /// package versions for itself — the read-only source-hosting types
     /// (github/forgejo/gitlab/jetbrains) have no local publish model. `generic`
     /// is proxy-only for now; hosting arbitrary files is a separate roadmap item.
-    /// `nodedist` and `sdkman` have no publish protocol either: Node releases
-    /// are built by the Node project and SDKMAN's candidates by their vendors,
-    /// and hosting a private toolchain is a separate feature (RFC 0010 §3).
+    /// `nodedist`, `sdkman` and `rustup` have no publish protocol either: Node
+    /// releases are built by the Node project, SDKMAN's candidates by their
+    /// vendors and Rust's by the release team, and hosting a private toolchain
+    /// is a separate feature (RFC 0010 §3, RFC 0024 §3).
     pub fn supports_local_mode(&self) -> bool {
         !matches!(
             self,
@@ -303,6 +359,7 @@ impl RegistryKind {
                 | Self::Generic
                 | Self::Nodedist
                 | Self::Sdkman
+                | Self::Rustup
         )
     }
 
@@ -311,7 +368,10 @@ impl RegistryKind {
     /// otherwise every fetch would silently hit an unreachable placeholder.
     /// `generic` mirrors an arbitrary file tree, so it has no default at all.
     pub fn requires_explicit_upstream_in_proxy_mode(&self) -> bool {
-        matches!(self, Self::Deb | Self::Rpm | Self::Generic)
+        // `apk` joins deb and rpm for their reason: Alpine's CDN is one mirror
+        // of many, and a default would put a hostname nobody chose in front of
+        // every `apk update` in the estate (RFC 0026 §4.1).
+        matches!(self, Self::Deb | Self::Rpm | Self::Apk | Self::Generic)
     }
 
     /// Whether this kind is a git forge — GitHub, GitLab, Forgejo — and so
@@ -328,7 +388,7 @@ impl RegistryKind {
     pub fn is_path_addressed(&self) -> bool {
         matches!(
             self,
-            Self::Deb | Self::Rpm | Self::Pacman | Self::Jetbrains | Self::Generic
+            Self::Deb | Self::Rpm | Self::Pacman | Self::Apk | Self::Jetbrains | Self::Generic
         )
     }
 
@@ -470,6 +530,46 @@ impl RegistryKind {
             ),
         ];
 
+        // Two rows, and the second one is why the slice is empty: a channel
+        // manifest describes *one* release, so the question is not "which
+        // versions does this document list" but "is this document's own
+        // release blocked" — a `404` for an exact name, a repaired manifest
+        // for an alias — and `deny_components` is configuration the strip
+        // dispatch does not carry. Both are decided at the handler, which is
+        // also where `.sha256` is computed from the rendered body and where
+        // `channel-rust-stable-date.txt` is read off it (RFC 0024 §6.2, §6.5).
+        const RUSTUP: &[ListingDocument] = &[
+            ListingDocument::filtered("`manifests.txt`", &["versions"]),
+            ListingDocument::filtered(
+                "channel manifests, their `.sha256` and `channel-rust-stable-date.txt`",
+                &[],
+            ),
+        ];
+
+        // Three filtered documents (RFC 0031 §4.4). The versions list is the
+        // chokepoint the resolver reads; the collection document names one
+        // version (`highest_version`) and is repaired from the survivors the
+        // way npm's `dist-tags.latest` is; the v1 role versions document is a
+        // second listing for a second namespace. The per-version document is
+        // not here: it describes one version, so the question is whether *its*
+        // coordinate is blocked — a `404` decided at the handler, the way
+        // rustup's channel manifest is.
+        const GALAXY: &[ListingDocument] = &[
+            ListingDocument::filtered("collection versions", &["versions"]),
+            ListingDocument::filtered("the collection document", &["collection"]),
+            ListingDocument::filtered("role versions", &["role-versions"]),
+        ];
+
+        // One row, and its `documents` slice is empty for rustup's reason one
+        // const up: a narinfo describes *one* store path, so the question is
+        // not "which versions does this document list" but "is this document's
+        // own coordinate blocked" — and the answer is the whole document
+        // answering `404`, which is the substituter protocol's own "not in this
+        // cache". Nothing is ever stripped from a narinfo body, so it never
+        // travels through `strip`; the handler decides, and `blocking`'s
+        // `FILTERED_ELSEWHERE` records that (RFC 0028 §4.4, §6.2).
+        const NIX: &[ListingDocument] = &[ListingDocument::filtered("narinfo", &[])];
+
         match self {
             Self::Npm => NPM,
             Self::Nuget => NUGET,
@@ -483,10 +583,13 @@ impl RegistryKind {
             Self::Conda => CONDA,
             Self::JetbrainsMarketplace => JETBRAINS_MARKETPLACE,
             Self::Github | Self::Gitlab | Self::Forgejo => FORGE,
-            Self::Deb | Self::Rpm | Self::Pacman => SIGNED,
+            Self::Deb | Self::Rpm | Self::Pacman | Self::Apk => SIGNED,
             Self::Openvsx | Self::VscodeMarketplace => EXTENSION_GALLERY,
             Self::Nodedist => NODEDIST,
             Self::Sdkman => SDKMAN,
+            Self::Rustup => RUSTUP,
+            Self::Galaxy => GALAXY,
+            Self::Nix => NIX,
             // `generic` and `jetbrains` mirror an arbitrary file tree by path —
             // there is no listing document in the protocol at all, so there is
             // nothing to say beyond that. (JetBrains *plugins* are the separate
@@ -551,6 +654,14 @@ impl RegistryKind {
                     "path-addressed: there is no package identity to hang a README on",
                 )
             }
+            // `apk` *has* an identity — it is the one path kind that does —
+            // but the identity comes from a file name, and a file name carries
+            // no prose. `.PKGINFO`'s `pkgdesc` is a sentence, which is the
+            // reason Maven's `<description>` is refused one line up.
+            Self::Apk => ReadmeSupport::None(
+                "an `.apk` carries `pkgdesc`, one sentence in `.PKGINFO`; putting a sentence \
+                 where a reader expects a document makes every package look thinly documented",
+            ),
             Self::Github | Self::Gitlab | Self::Forgejo => ReadmeSupport::None(
                 "the README is one of the repository files this proxy already serves by path, \
                  under `raw/{ref}/`, so a second URL for it would be a second answer to a \
@@ -563,6 +674,19 @@ impl RegistryKind {
             Self::Sdkman => ReadmeSupport::None(
                 "SDKMAN describes a distribution, not a package: no document in the protocol \
                  carries prose about a candidate",
+            ),
+            Self::Rustup => ReadmeSupport::None(
+                "a toolchain release is a manifest and a set of tarballs; the dist tree carries \
+                 no prose",
+            ),
+            // `MANIFEST.json`'s `collection_info.readme` names a file inside
+            // the tarball, conventionally `README.md`. The listing documents
+            // carry no prose, so a version this instance holds no bytes for has
+            // none — the honest limit every `Archive` kind has (RFC 0031 §6.1).
+            Self::Galaxy => ReadmeSupport::Archive,
+            Self::Nix => ReadmeSupport::None(
+                "a store path is a NAR and its narinfo; the protocol carries no prose, and the \
+                 NAR is a filesystem image rather than a package with a manifest",
             ),
         }
     }
@@ -607,18 +731,43 @@ impl RegistryKind {
                 UpstreamDetailSupport::ListVersions
             }
             Self::Github | Self::Gitlab | Self::Forgejo => UpstreamDetailSupport::None(
-                "a release listing is this instance's own view of a repository it proxies by                  path, and the console's package page is not where a repository is browsed",
+                "a release listing is this instance's own view of a repository it proxies by \
+                 path, and the console's package page is not where a repository is browsed",
             ),
             Self::Deb | Self::Rpm | Self::Pacman | Self::Jetbrains | Self::Generic => {
                 UpstreamDetailSupport::None(
                     "path-addressed: there is no package identity to ask about",
                 )
             }
+            // The per-package build date *does* reach the age gate, through
+            // `resolve_metadata` reading the cached `APKINDEX`'s `t:` field —
+            // but that is a metadata lookup, not a document the console can
+            // render, and there is no per-package endpoint to point one at
+            // (RFC 0026 §6.1, §6.2).
+            Self::Apk => UpstreamDetailSupport::None(
+                "the index is the only document in the protocol, and it describes a whole \
+                 repository rather than one package",
+            ),
             // `index.tab`: one row per release, with its date and LTS codename.
             Self::Nodedist => UpstreamDetailSupport::Document("versions"),
             // `versions/all` for the candidate on the default platform — the
             // identifiers and nothing else; SDKMAN publishes no dates.
             Self::Sdkman => UpstreamDetailSupport::Document("versions"),
+            // `manifests.txt`: every manifest the release tooling ever
+            // published, one path per line, with the release date in the
+            // dated ones and the version in the rest (RFC 0024 §6.1).
+            Self::Rustup => UpstreamDetailSupport::Document("versions"),
+            // The collection's own versions list: every entry carries
+            // `created_at`, `version` and `requires_ansible` (RFC 0031 §6.1).
+            Self::Galaxy => UpstreamDetailSupport::Document("versions"),
+            // A binary cache has no index: it answers a store path or it does
+            // not, and the path has to be computed by an evaluation this
+            // instance cannot perform. So explore shows what this instance has
+            // served or holds, and never a remote list (RFC 0028 §6.1).
+            Self::Nix => UpstreamDetailSupport::None(
+                "a binary cache has no index: it answers one store path at a time, and the path \
+                 is computed by the client rather than listed by the cache",
+            ),
         }
     }
 
@@ -653,6 +802,9 @@ impl RegistryKind {
             // (the metadata document, not the gem), so the button downloaded the
             // wrong thing and cached it under the name of the right one.
             Self::Npm => FetchSupport::ByVersion(FetchArtifact::Fixed("tarball")),
+            // A collection version is exactly one file (RFC 0031 §4.3), which
+            // is also what makes the kind scannable with no new machinery.
+            Self::Galaxy => FetchSupport::ByVersion(FetchArtifact::Fixed("tarball")),
             Self::Cargo => FetchSupport::ByVersion(FetchArtifact::Fixed("dl")),
             Self::Composer => FetchSupport::ByVersion(FetchArtifact::Fixed("dist")),
             Self::Rubygems => FetchSupport::ByVersion(FetchArtifact::Fixed("gem")),
@@ -703,6 +855,10 @@ impl RegistryKind {
             Self::Deb | Self::Rpm | Self::Pacman | Self::Jetbrains | Self::Generic => {
                 FetchSupport::None("path-addressed: there is no version to fetch by")
             }
+            Self::Apk => FetchSupport::None(
+                "a version needs a branch, a repo and an architecture as well, so \
+                 \"fetch this version\" has no single meaning",
+            ),
             Self::Github | Self::Gitlab | Self::Forgejo => FetchSupport::None(
                 "a release asset is addressed by its filename, which the page does not know",
             ),
@@ -717,6 +873,23 @@ impl RegistryKind {
             Self::Sdkman => FetchSupport::None(
                 "an SDKMAN artifact is addressed by platform as well as version — one archive \
                  per platform — so \"fetch this version\" has no single meaning",
+            ),
+            // Maven's reasoning, one ecosystem over, with a second axis: the
+            // profile. Warming names the files anyway, because it reads them
+            // out of the release's own manifest (RFC 0024 §6.9).
+            Self::Rustup => FetchSupport::None(
+                "a Rust release is a manifest plus one tarball per component per target, so \
+                 \"fetch this version\" needs a target and a profile",
+            ),
+            // The artifact is the *store hash*, and one version holds as many
+            // of them as it has been built times — each a different NAR of the
+            // same software. Neither the console nor warming can name one, so
+            // both say why instead of writing to a slot nothing reads; an
+            // operator who does know the path uses `cache.warm_paths`
+            // (RFC 0028 §6.1).
+            Self::Nix => FetchSupport::None(
+                "a version is one or more store paths, each a separate build with its own \
+                 32-character hash, and the hash is not derivable from the version",
             ),
         }
     }
@@ -1119,6 +1292,11 @@ mod tests {
                 // Marshal indexes only; the JSON APIs are filtered.
                 "rubygems", // Signed repository indexes.
                 "deb", "rpm", "pacman",
+                // `apk`'s index is signed over its own bytes too, and every
+                // shipping apk verifies it before reading one — so the block
+                // is enforced at the `.apk`, whose file name carries a real
+                // coordinate (RFC 0026 §4.4).
+                "apk",
             ]
         );
     }
@@ -1159,12 +1337,24 @@ mod tests {
                 "deb",
                 "rpm",
                 "pacman",
+                // `apk` is the one path kind with an identity, and still has no
+                // README: `pkgdesc` is one sentence in `.PKGINFO`, which the
+                // explore row already carries (RFC 0026 §6.1).
+                "apk",
                 "jetbrains",
                 "generic",
                 // Tarballs and a checksum file: no prose anywhere in the tree.
                 "nodedist",
                 // A distribution, not a package: no document carries prose.
                 "sdkman",
+                // A manifest and a set of tarballs; the dist tree carries no
+                // prose either.
+                "rustup",
+                // A store path is a NAR — a filesystem image — and its narinfo,
+                // which carries hashes, a closure and a deriver. There is no
+                // manifest in the protocol at all, so there is nowhere prose
+                // could live (RFC 0028 §6.1).
+                "nix",
             ]
         );
     }
@@ -1405,9 +1595,26 @@ mod tests {
             "java"
         );
         assert_eq!(RegistryKind::Sdkman.blocking_package_name("java"), "java");
+        // rustup's listing package string carries the channel for the same
+        // reason — one manifest per cache entry — and a block is still held on
+        // the release (RFC 0024 §6.2). `rustup`, the installer's own tree, is
+        // its own package and is unaffected.
+        assert_eq!(
+            RegistryKind::Rustup.blocking_package_name("rust/stable"),
+            "rust"
+        );
+        assert_eq!(
+            RegistryKind::Rustup.blocking_package_name("rust/2026-09-05/nightly"),
+            "rust"
+        );
+        assert_eq!(RegistryKind::Rustup.blocking_package_name("rust"), "rust");
+        assert_eq!(
+            RegistryKind::Rustup.blocking_package_name("rustup"),
+            "rustup"
+        );
         for kind in RegistryKind::ALL
             .iter()
-            .filter(|k| **k != RegistryKind::Sdkman)
+            .filter(|k| !matches!(k, RegistryKind::Sdkman | RegistryKind::Rustup))
         {
             assert_eq!(kind.blocking_package_name("a/b?c"), "a/b?c", "{kind}");
         }

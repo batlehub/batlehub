@@ -62,6 +62,9 @@ pub fn coordinate_from_filename(file_name: &str) -> Option<FilenameCoordinate> {
     if let Some(found) = conda_coordinate(file_name) {
         return Some(found);
     }
+    if let Some(found) = apk_coordinate_for_import(file_name) {
+        return Some(found);
+    }
     match file_name.rsplit_once('.')?.1 {
         "nupkg" => nuget_coordinate(file_name),
         "whl" => wheel_coordinate(file_name),
@@ -100,6 +103,18 @@ fn pacman_coordinate(file_name: &str) -> Option<FilenameCoordinate> {
         parts[3],
         format!("{}-{}", parts[2], parts[1]),
     ))
+}
+
+/// `<name>-<pkgver>-r<N>.apk`.
+///
+/// Unlike `deb` and `rpm` — whose arms below are cosmetic because the server
+/// reads the real coordinate from the package's control data — an Alpine file
+/// name *is* the coordinate, so this one is publishable and an import can use
+/// it (RFC 0026 §6.1). The split itself lives in `services::apk`, next to the
+/// parser that has to agree with it.
+fn apk_coordinate_for_import(file_name: &str) -> Option<FilenameCoordinate> {
+    let (name, version) = crate::services::apk::apk_coordinate(file_name)?;
+    Some(FilenameCoordinate::new("apk", name, version))
 }
 
 /// `<name>-<version>-<build>.tar.bz2` (legacy) or `.conda`.

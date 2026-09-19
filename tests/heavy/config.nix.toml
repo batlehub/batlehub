@@ -1,0 +1,81 @@
+# Server configuration for the heavy Nix binary-cache test
+# (tests/heavy/nix.sh). See tests/heavy/config.npm.toml for the env-var
+# conventions.
+#
+# One registry for now, because phase 3 proves the *proxy* half: substitution
+# through this instance, a blocked store path absent in the protocol's own
+# terms, and the second machine served from the cache. The `local`/`hybrid`
+# registry `nix copy --to` publishes into arrives with phase 4, together with
+# `[registries.nix_signing]`.
+
+[server]
+host = "127.0.0.1"
+port = 8161
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+# The publisher `nix copy --to` authenticates as. A `user`, not the admin
+# above: `admin = ["*"]` would carry the publish through whatever
+# `[registries.rbac].user` says, and then the phase would prove the wildcard
+# rather than the `releases:publish` line it is aimed at.
+[[auth.tokens]]
+value = "heavy-user-token"
+role = "user"
+user_id = "ci-user"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-nix-storage"
+
+# ── Local: the publish half ──────────────────────────────────────────────────
+#
+# A registry of its own rather than `hybrid` on the one below, because the two
+# prove different things and one registry cannot be both: this one has no
+# upstream to fall through to, so a path it serves is a path it was *given*.
+[[registries]]
+type = "nix"
+name = "nix-local-${HEAVY_RUN}"
+mode = "local"
+
+# The key every published narinfo is signed with. Without it this registry
+# would serve unsigned paths, which every stock client refuses — `require-sigs`
+# defaults to true — so the suite's phase 4 would fail for a reason that has
+# nothing to do with the code under test.
+[registries.nix_signing]
+seed_hex = "0101010101010101010101010101010101010101010101010101010101010101"
+key_name = "batlehub-heavy-1"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list", "releases:publish"]
+admin = ["*"]
+
+# ── Proxy: the real cache.nixos.org ──────────────────────────────────────────
+[[registries]]
+type = "nix"
+name = "nix-${HEAVY_RUN}"
+mode = "proxy"
+# The default, written out so the file says what it talks to. No query string:
+# `?priority=` is a setting on the *client's* `substituters` line, and the
+# config validator refuses one here because on the upstream it would be
+# forwarded on every request and mean nothing (RFC 0028 §4.5).
+upstreams = ["https://cache.nixos.org"]
+
+[registries.rbac]
+# Nix sends no credentials unless `netrc-file` points at a real file, so an
+# anonymous read is what an ordinary `substituters` entry gets. The credential
+# boundary is `authz.sh`'s to prove, not this suite's.
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list"]
+admin = ["*"]

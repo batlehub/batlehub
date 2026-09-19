@@ -44,9 +44,10 @@ pub use ops::{
 pub use readme::{ReadmeImageFetcher, ReadmeRepository, ReadmeSearchHit};
 pub use registry::{
     ArtifactCacheMeta, ArtifactInventory, ArtifactMeta, ArtifactMetaRecord, ArtifactMetaRepository,
-    ArtifactStream, BulkResult, DocumentBody, DocumentKind, FetchedArtifact, ForgeAsset,
-    ForgeRelease, ForgeReleaseSource, LocalRegistryBackend, PackageRepository, RecentErrorRecord,
-    RegistryClient, UpstreamPackage, VersionDocument,
+    ArtifactStream, BulkResult, DocumentBody, DocumentEncoding, DocumentKind, DocumentProbe,
+    FetchedArtifact, ForgeAsset, ForgeRelease, ForgeReleaseSource, LocalRegistryBackend,
+    PackageRepository, RecentErrorRecord, RegistryClient, StreamedDocument, UpstreamPackage,
+    VersionDocument,
 };
 pub use release_import::ImportHistory;
 pub use sbom::{

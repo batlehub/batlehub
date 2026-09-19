@@ -90,7 +90,7 @@ tasks:
       - cargo test -p batlehub-adapters --test {{.TEST}} -- --nocapture
 
   test:external:
-    desc: "The Postgres, S3 and Redis integration tests CI's `integration` job runs, on a machine without Podman: a reachable DATABASE_URL (the Che sidecar), MinIO and redis-server started from cached binaries unless S3_TEST_ENDPOINT / REDIS_URL are set — the tests skip silently and report green when those are unset, which is the trap this closes"
+    desc: "The Postgres, S3 and Redis integration tests CI's `integration` job runs, on a machine without Podman: a reachable DATABASE_URL (the Che sidecar), RustFS and redis-server started from cached binaries unless S3_TEST_ENDPOINT / REDIS_URL are set — the tests skip silently and report green when those are unset, which is the trap this closes"
     cmds:
       - bash tests/external_tests.sh
 
@@ -218,21 +218,21 @@ tasks:
           TEST: artifact_meta
 
   test:s3:
-    desc: Run S3 storage integration tests (starts a temporary MinIO container via Podman)
+    desc: Run S3 storage integration tests (starts a temporary RustFS container via Podman)
     vars:
-      MINIO_CONTAINER: batlehub-test-minio
-      MINIO_PORT: "19000"
+      RUSTFS_CONTAINER: batlehub-test-rustfs
+      RUSTFS_PORT: "19000"
       CONF_OVERRIDE: /tmp/batlehub-containers.conf
     env:
       CONTAINERS_CONF_OVERRIDE: "{{.CONF_OVERRIDE}}"
-      S3_TEST_ENDPOINT: "http://127.0.0.1:{{.MINIO_PORT}}"
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
+      S3_TEST_ENDPOINT: "http://127.0.0.1:{{.RUSTFS_PORT}}"
+      AWS_ACCESS_KEY_ID: rustfsadmin
+      AWS_SECRET_ACCESS_KEY: rustfsadmin
     cmds:
       - printf '[network]\ndefault_rootless_network_cmd = "pasta"\n' > {{.CONF_OVERRIDE}}
-      - defer: podman rm -f {{.MINIO_CONTAINER}} 2>/dev/null || true
-      - podman run -d --name {{.MINIO_CONTAINER}} -p {{.MINIO_PORT}}:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin minio/minio server /data
-      - until curl -sf http://127.0.0.1:{{.MINIO_PORT}}/minio/health/live; do sleep 1; done
+      - defer: podman rm -f {{.RUSTFS_CONTAINER}} 2>/dev/null || true
+      - podman run -d --name {{.RUSTFS_CONTAINER}} -p {{.RUSTFS_PORT}}:9000 -e RUSTFS_ROOT_USER=rustfsadmin -e RUSTFS_ROOT_PASSWORD=rustfsadmin rustfs/rustfs
+      - until curl -sf http://127.0.0.1:{{.RUSTFS_PORT}}/minio/health/live; do sleep 1; done
       - cargo test -p batlehub-adapters --features storage-s3 --test s3_storage -- --nocapture
 
   test:repo-interop:
@@ -265,10 +265,30 @@ tasks:
     cmds:
       - bash tests/heavy/bundler.sh
 
+  test:apk-heavy:
+    desc: "Heavy Alpine apk integration: both apk generations (2.14.10 and 3.0.8, each as apk-tools-static so neither needs a rootfs) against a local apk registry — the relayed index, the coordinate on a .apk, a blocked version refused at the download, and apk's URL-embedded Basic credential proven in both directions (needs DATABASE_URL + network)"
+    cmds:
+      - bash tests/heavy/apk.sh
+
+  test:galaxy-heavy:
+    desc: "Heavy Ansible Galaxy integration: the real ansible-galaxy against galaxy.ansible.com through the proxy — the versions list as the chokepoint, a blocked version stepped down from and a pinned one refused, download_url rewritten, collection publish with its one-poll import task, and roles proxied vs relayed (needs DATABASE_URL + network + uv). Pass a phase name to run one"
+    cmds:
+      - bash tests/heavy/galaxy.sh {{.CLI_ARGS}}
+
+  test:nix-heavy:
+    desc: "Heavy Nix binary-cache integration: the real `nix` substituting from cache.nixos.org through the proxy — the narinfo relayed with only URL: rewritten and cache.nixos.org's own Sig: still verifying, a blocked store path absent as the protocol's own 404 with nothing fetched under its NAR prefix, a second cold store served from the cache, and the upstream-shaped NAR URL resolved through the reverse index (needs DATABASE_URL + network + podman or docker — the client runs in the `nixos/nix` image, so nothing is installed on the host)"
+    cmds:
+      - bash tests/heavy/nix.sh
+
   test:npm-heavy:
     desc: "Heavy npm integration: publish/install/whoami/ping/dist-tags/search against a local registry, and `npm audit` on the path npm really sends (needs DATABASE_URL + network)"
     cmds:
       - bash tests/heavy/npm.sh
+
+  test:soak-heavy:
+    desc: "Heavy soak: npm in a loop against a served upstream, asserting the server gave back the memory, descriptors and threads it took (needs DATABASE_URL; no network). SOAK_ROUNDS/SOAK_PACKAGES/SOAK_SETTLE tune it"
+    cmds:
+      - bash tests/heavy/soak.sh
 
   test:pypi-heavy:
     desc: "Heavy PyPI integration: `twine upload` then `pip install`, and the PEP 658 `.metadata` sibling pip refuses to do without (needs DATABASE_URL + network)"
@@ -357,6 +377,16 @@ tasks:
     cmds:
       - bash tests/heavy/cargo.sh
 
+  test:rustup-heavy:
+    desc: "Heavy rustup integration (RFC 0024 §6.10), a closed world: with egress denied to every client process, `rustup toolchain install` takes the compiler from a rustup registry, cargo resolves a dependency through a cargo registry, and the binary is compiled and run; a blocked release refused on rustup's own missing-release path with nothing requested under its dated directory, `stable` repaired to the previous release and served from cache, a filtered manifest whose recomputed sidecar rustup accepts with `rust-docs` denied, and rustup-init through RUSTUP_UPDATE_ROOT (needs DATABASE_URL + network + rustup)"
+    cmds:
+      - bash tests/heavy/rustup.sh
+
+  test:closed-world-heavy:
+    desc: "Heavy closed-world suite: BatleHub keeps its egress, every client process is denied all of it, and each registry kind then resolves from this instance, builds, and runs what it built — go, node, python, java, ruby, dotnet, php, conda, terraform, mise, nvm, sdkman, ovsx, helm, apt, forgejo, gitlab, jbr, vscode, jbplugin, dnf, pacman. One phase per kind: `task test:closed-world-heavy -- go`, or no argument for all of them (needs DATABASE_URL + network; Rust's closed world is `task test:rustup-heavy`, which proves the toolchain too). The dnf and pacman phases run their client inside an AlmaLinux 9 / Arch image (podman or docker), because a distribution package only runs in its own userland. HEAVY_CW_SKIP_RPM / HEAVY_CW_SKIP_PACMAN / HEAVY_CW_SKIP_JB=1 leave a row unmeasured on a runner without an engine or the disk, and say so in the banner"
+    cmds:
+      - bash tests/heavy/closed_world.sh {{.CLI_ARGS}}
+
   test:go-heavy:
     desc: "Heavy Go integration (RFC 0018 §4.4): a blocked module version hidden from @v/list and @latest, a pinned go.mod refused with 403 and 404, GOPROXY=proxy,direct measured on both, the checksum database routed through the proxy, the same module cache recovering after the unblock (needs DATABASE_URL + network)"
     cmds:
@@ -396,13 +426,14 @@ tasks:
       - bash tests/heavy/authz.sh matrix
 
   test:authz-heavy:
-    desc: "The whole authorization suite: the matrix, then the pull boundary as each ecosystem's real client meets it (needs DATABASE_URL + the clients; see docs/contributing/testing.md)"
+    desc: "The whole authorization suite: the matrix, the read boundary on the kinds no client drives (`reads`), then the pull boundary as each ecosystem's real client meets it (needs DATABASE_URL + the clients; see docs/contributing/testing.md)"
     # One invocation per target rather than one script doing all of them: each
     # starts its own server and tap, and Terraform's tap has to terminate TLS
     # while the others must not. CI runs the same list as a matrix.
     cmds:
       - bash tests/heavy/authz.sh matrix
       - bash tests/heavy/authz.sh signing
+      - bash tests/heavy/authz.sh reads
       - bash tests/heavy/authz.sh npm
       - bash tests/heavy/authz.sh pypi
       - bash tests/heavy/authz.sh openvsx
@@ -411,6 +442,23 @@ tasks:
       - bash tests/heavy/authz.sh composer
       - bash tests/heavy/authz.sh rubygems
       - bash tests/heavy/authz.sh terraform
+      - bash tests/heavy/authz.sh maven
+      - bash tests/heavy/authz.sh cargo
+
+  test:authz-live-heavy:
+    desc: "The authorization suite's live targets: the pull boundary as a real client meets it, for the eleven kinds with no local mode (goproxy, nodedist, sdkman, github, forgejo, gitlab, generic, deb, rpm, pacman, rustup). The one family in that suite that reaches the public internet — CI runs it nightly, not per-PR (needs DATABASE_URL, network, and podman/docker for the rpm target)"
+    cmds:
+      - bash tests/heavy/authz.sh live:goproxy
+      - bash tests/heavy/authz.sh live:nodedist
+      - bash tests/heavy/authz.sh live:sdkman
+      - bash tests/heavy/authz.sh live:github
+      - bash tests/heavy/authz.sh live:forgejo
+      - bash tests/heavy/authz.sh live:gitlab
+      - bash tests/heavy/authz.sh live:generic
+      - bash tests/heavy/authz.sh live:deb
+      - bash tests/heavy/authz.sh live:rpm
+      - bash tests/heavy/authz.sh live:pacman
+      - bash tests/heavy/authz.sh live:rustup
 
   test:heavy:
     desc: "Every heavy client suite except the marketplaces (which download two IDEs). Sequential: each one binds its own ports but they all share one Postgres."
@@ -427,6 +475,7 @@ tasks:
       - bash tests/heavy/backends.sh
       - bash tests/heavy/hybrid.sh
       - bash tests/heavy/conda.sh
+      - bash tests/heavy/apk.sh
       - bash tests/heavy/nuget.sh
       - bash tests/heavy/composer.sh
       - bash tests/heavy/terraform.sh
@@ -434,6 +483,13 @@ tasks:
       - bash tests/heavy/sdkman.sh
       - bash tests/heavy/mise.sh
       - bash tests/heavy/cargo.sh
+      - bash tests/heavy/rustup.sh
+      # `nix` runs its client in the `nixos/nix` image, so this needs podman or
+      # docker and nothing on the host. A machine without either fails this line
+      # rather than skipping it, which is deliberate: a heavy suite that
+      # silently skipped would report green for a kind no client ever drove.
+      - bash tests/heavy/nix.sh
+      - bash tests/heavy/closed_world.sh all
       - bash tests/heavy/go.sh
       - bash tests/heavy/maven.sh
       - bash tests/heavy/pathproxy.sh

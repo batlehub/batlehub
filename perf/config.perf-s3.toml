@@ -16,7 +16,7 @@ type = "postgresql"
 url = "postgresql://batlehub:changeme@localhost:5432/batlehub"
 max_connections = 50
 
-# ── S3 storage (MinIO started by task perf:s3:infra:up) ──────────────────────
+# ── S3 storage (RustFS started by task perf:s3:infra:up) ─────────────────────
 # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are injected by perf:s3:server.
 
 [storage]

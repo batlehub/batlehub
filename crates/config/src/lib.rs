@@ -1419,7 +1419,7 @@ mod tests {
         let mut cfg: AppConfig = toml::from_str(toml).unwrap();
         std::env::set_var("PROXY_CACHE__STORAGE__BUCKET", "new-bucket");
         std::env::set_var("PROXY_CACHE__STORAGE__REGION", "us-east-1");
-        std::env::set_var("PROXY_CACHE__STORAGE__ENDPOINT_URL", "http://minio:9000");
+        std::env::set_var("PROXY_CACHE__STORAGE__ENDPOINT_URL", "http://rustfs:9000");
         cfg.apply_env_overrides();
         std::env::remove_var("PROXY_CACHE__STORAGE__BUCKET");
         std::env::remove_var("PROXY_CACHE__STORAGE__REGION");
@@ -1427,7 +1427,7 @@ mod tests {
         if let StoragesConfig::Single(StorageBackendConfig::S3(s3)) = &cfg.storage {
             assert_eq!(s3.bucket, "new-bucket");
             assert_eq!(s3.region, "us-east-1");
-            assert_eq!(s3.endpoint_url.as_deref(), Some("http://minio:9000"));
+            assert_eq!(s3.endpoint_url.as_deref(), Some("http://rustfs:9000"));
         } else {
             panic!("expected s3 storage");
         }

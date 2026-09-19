@@ -22,13 +22,18 @@
  * when they have drifted. Only the block between the markers is replaced; the
  * prose around it — which argues about what these documents mean to each
  * other — stays hand-written.
+ *
+ * Both listings are split into the three shelves of `RFC_SHELVES` — in the
+ * works, ready to build, settled — so a reader looking for what is still a
+ * proposal does not scan twenty-five implemented pages to find four. The
+ * shelf is read off the status; nothing about the files moves.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { readRfcs } from "./rfc-meta.mjs";
+import { RFC_SHELVES, readRfcs } from "./rfc-meta.mjs";
 
 const DOCS = fileURLToPath(new URL("..", import.meta.url));
 const RFC_DIR = join(DOCS, "rfc");
@@ -52,7 +57,16 @@ const WORDS = [
   "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
   "seventeen", "eighteen", "nineteen", "twenty",
 ];
-const count = (n) => (n < WORDS.length ? WORDS[n] : String(n));
+const TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+/** A count in words, the way the surrounding prose writes numbers; digits past 99. */
+const count = (n) => {
+  if (n < WORDS.length) return WORDS[n];
+  if (n < 100) {
+    const unit = n % 10 ? `-${WORDS[n % 10]}` : "";
+    return `${TENS[Math.floor(n / 10)]}${unit}`;
+  }
+  return String(n);
+};
 
 /** Wrap to the width the rest of the documentation's prose is written to. */
 function wrap(text, width = 80) {
@@ -95,31 +109,62 @@ function summary(rfcs) {
   return wrap(`Of the ${count(rfcs.length)} below, ${list}.`);
 }
 
+/** The RFCs on one shelf, in number order — the order `readRfcs` returns. */
+const onShelf = (rfcs, shelf) => rfcs.filter((r) => shelf.test.test(r.status.state));
+
 function indexBlock(rfcs) {
-  const rows = rfcs.map(
-    (r) =>
-      `| [${r.id} — ${r.short}](/rfc/${r.slug}) | ${r.status.state} | ${r.settles} |`,
-  );
-  return [
-    summary(rfcs),
-    "",
-    "| RFC | Status | What it settles |",
-    "| --- | --- | --- |",
-    ...rows,
-  ].join("\n");
+  const parts = [summary(rfcs)];
+  for (const shelf of RFC_SHELVES) {
+    const rows = onShelf(rfcs, shelf);
+    // An empty shelf is still named: "nothing is accepted and unbuilt" is a
+    // fact worth one line, and a heading that appears only sometimes would
+    // make the page look different for no reason a reader can see.
+    parts.push("", `**${shelf.text}** — ${rows.length ? count(rows.length) : "none"} ${shelf.what}.`);
+    if (!rows.length) continue;
+    parts.push(
+      "",
+      "| RFC | Status | What it settles |",
+      "| --- | --- | --- |",
+      ...rows.map(
+        (r) =>
+          `| [${r.id} — ${r.short}](/rfc/${r.slug}) | ${r.status.state} | ${r.settles} |`,
+      ),
+    );
+  }
+  return parts.join("\n");
 }
 
 function sidebarBlock(rfcs, pad) {
-  return rfcs
-    .map((r) =>
+  const groups = [];
+  for (const shelf of RFC_SHELVES) {
+    const rows = onShelf(rfcs, shelf);
+    // An empty group would render as a heading with nothing under it; the
+    // index page carries the "none" line, the sidebar does not need to.
+    if (!rows.length) continue;
+    groups.push(
       [
         `${pad}{`,
-        `${pad}  text: "${r.id} — ${r.short}",`,
-        `${pad}  link: "/rfc/${r.slug}",`,
+        `${pad}  text: "${shelf.text}",`,
+        // No `collapsed`: it is what makes VitePress render the group title as
+        // a `role="button"` around a focusable caret (axe `nested-interactive`)
+        // and as an `h3` at the sidebar's 14px, off the type ramp. Both are
+        // rendered-gate failures on every RFC page, and the fold buys a sidebar
+        // that is already one screen.
+        `${pad}  items: [`,
+        ...rows.map((r) =>
+          [
+            `${pad}    {`,
+            `${pad}      text: "${r.id} — ${r.short}",`,
+            `${pad}      link: "/rfc/${r.slug}",`,
+            `${pad}    },`,
+          ].join("\n"),
+        ),
+        `${pad}  ],`,
         `${pad}},`,
       ].join("\n"),
-    )
-    .join("\n");
+    );
+  }
+  return groups.join("\n");
 }
 
 /**

@@ -10,7 +10,7 @@ is the canonical one; the GitHub copy is a mirror.
   workspace, how to build and run it, and the conventions a change is expected
   to follow.
 - **[Testing](/contributing/testing)** — the test suites, what each one covers,
-  and which ones need Postgres or MinIO running.
+  and which ones need Postgres or RustFS running.
 - **[Adding a registry](/contributing/adding-a-registry)** — the nine places a
   new registry type has to be wired in, in order.
 - **[Adding a vulnerability scanner](/contributing/adding-a-vulnerability-scanner)**

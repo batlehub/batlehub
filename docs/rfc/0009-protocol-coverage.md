@@ -951,9 +951,10 @@ prefix would splice two different documents together.
 
 What the warning missed is that the client hands us the means to check. Bundler
 sends `If-None-Match` alongside the `Range`, and the validator it sends is the
-`ETag` we issued with the bytes it holds — which is the MD5 of those bytes. So
-"is the client's prefix our prefix" is answerable rather than assumable, and a
-`206` is served only when it is provably yes. §13.24 has the implementation and
+`ETag` we issued with the bytes it holds — an opaque value it read back out of
+its own etag file, so the algorithm is ours to choose (a SHA-256 since
+2026-09-15). So "is the client's prefix our prefix" is answerable rather than
+assumable, and a `206` is served only when it is provably yes. §13.24 has the implementation and
 the two things measurement corrected in it.
 
 ### 12.3 Terraform — discharged
@@ -2080,9 +2081,10 @@ document filtered under a different blocked set — ours is generated from a
 query, so a gem published under a name that sorts early changes the *middle* of
 the document, not only its end. True, and it stops being a problem the moment
 you notice the client tells you what it holds: Bundler sends `If-None-Match`
-with the range, carrying the MD5 of its local file. Our `ETag` is the MD5 of
-ours. So if the client's validator equals the MD5 of our document's first *N*
-bytes, its copy **is** our prefix and appending the tail is provably correct;
+with the range, carrying the `ETag` we issued with the bytes now in its cache.
+Ours is a SHA-256 of the document. So if the client's validator equals the
+SHA-256 of our document's first *N* bytes, its copy **is** our prefix and
+appending the tail is provably correct;
 otherwise it diverges somewhere inside the part it is not asking for, and it
 gets `200` — one round trip instead of a `206` it would have to detect as
 corrupt and re-fetch. The guard is what makes ranges safe over a generated

@@ -189,6 +189,39 @@ async fn proxy_forgejo_package_on_github_registry_is_404() {
     assert_eq!(resp.status(), 404);
 }
 
+/// A GitLab project that is **one** path segment — which is how mise spells it,
+/// percent-encoded — must still land on the typed `/-/` route. It did not: with
+/// the GitHub routes registered first, `{owner}/{repo}/releases` claimed the
+/// three segments with `repo = "-"` and the GitHub guard answered 404.
+#[actix_web::test]
+async fn proxy_gitlab_single_segment_project_is_not_claimed_by_the_github_route() {
+    let app = make_app(InMemoryRepo::new()).await;
+
+    for uri in [
+        "/proxy/gl/cli/-/releases",
+        "/proxy/gl/gitlab-org%2Fcli/-/releases",
+    ] {
+        let resp = call_service(&app, TestRequest::get().uri(uri).to_request()).await;
+        assert_eq!(resp.status(), 200, "{uri} did not reach the gitlab route");
+    }
+}
+
+/// The same collision on the raw route: `{project}/-/raw/{ref}/{path}` against
+/// GitHub's `{owner}/{repo}/raw/{ref}/{path}`.
+#[actix_web::test]
+async fn proxy_gitlab_single_segment_raw_is_not_claimed_by_the_github_route() {
+    let app = make_app(InMemoryRepo::new()).await;
+    let resp = call_service(
+        &app,
+        TestRequest::get()
+            .uri("/proxy/gl/cli/-/raw/main/README.md")
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+}
+
 #[actix_web::test]
 async fn proxy_gitlab_route_on_github_registry_is_404() {
     let app = make_app(InMemoryRepo::new()).await;

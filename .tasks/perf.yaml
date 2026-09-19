@@ -65,7 +65,7 @@ tasks:
       - bash perf/scripts/run_with_metrics.sh perf/k6/scenarios/07_eviction.js
 
   perf:run:all:
-    desc: Run the full perf suite in sequence (scenarios 01-07); threshold violations are reported but do not stop the suite
+    desc: Run the full perf suite in sequence (scenarios 01-07) and write the report; threshold violations are reported but do not stop the suite
     cmds:
       - bash perf/scripts/run_with_metrics.sh --no-thresholds perf/k6/scenarios/01_at_rest.js
       - bash perf/scripts/run_with_metrics.sh --no-thresholds perf/k6/scenarios/02_warm_read.js
@@ -74,22 +74,199 @@ tasks:
       - bash perf/scripts/run_with_metrics.sh --no-thresholds perf/k6/scenarios/05_mixed.js
       - bash perf/scripts/run_with_metrics.sh --no-thresholds perf/k6/scenarios/06_sbom.js
       - bash perf/scripts/run_with_metrics.sh --no-thresholds perf/k6/scenarios/07_eviction.js
+      - task: perf:report
+
+  # ── The results table ───────────────────────────────────────────────────────
+  #
+  # Every scenario above records one row — peak and median RSS, peak and median
+  # CPU, throughput and latency — into `perf/results/runs.jsonl`. These two turn
+  # those rows into the table, and the table into something a release can carry.
+
+  perf:report:
+    desc: "Build the results table from the recorded runs (perf/results/perf-report.md + .json)"
+    cmds:
+      - python3 perf/scripts/perf_report.py {{.CLI_ARGS}}
+
+  perf:report:compare:
+    desc: "Diff the recorded runs against a previous release's perf-report.json — BASE=<file name in perf/results/> (FAIL=1 to exit non-zero on a regression past MARGIN%)"
+    # BASE is a *name*, not a path: `perf_report.py` reads and writes only
+    # perf/results/, so copy the release's perf-report.json in there first.
+    # `cp ~/Downloads/perf-report.json perf/results/v1.2.3.json` then
+    # `task perf:report:compare BASE=v1.2.3.json`.
+    requires:
+      vars: [BASE]
+    cmds:
+      - python3 perf/scripts/perf_report.py
+        --baseline {{.BASE}}
+        --margin-pct {{.MARGIN | default "25"}}
+        {{if eq (.FAIL | default "0") "1"}}--fail-on-regression{{end}}
+
+  # ── Scenario 12 — what filtering a channel index costs ──────────────────────
+  #
+  # Four steps, in order, and the size is the independent variable:
+  #
+  #   task perf:conda:upstream PACKAGES=200000   # (separate shell)
+  #   task perf:conda:server                     # (separate shell)
+  #   task perf:conda:seed
+  #   task perf:run:conda
+  #
+  # PACKAGES is how many entries the generated `repodata.json` names.
+  # conda-forge's `linux-64` names ~1.4 million; 200 000 is ~53 MiB of JSON and
+  # takes a few seconds to generate, which is enough for the difference between
+  # the parsed path and the streaming one to be unmistakable.
+
+  perf:conda:upstream:
+    desc: "Mock upstream serving a channel-sized conda index (PACKAGES, ARTIFACT_KB)"
+    cmds:
+      - cargo build --release --manifest-path perf/mock-upstream/Cargo.toml
+      - ./perf/mock-upstream/target/release/mock-upstream --port 9999
+        --conda-packages {{.PACKAGES | default "200000"}}
+        --conda-artifact-kb {{.ARTIFACT_KB | default "1"}}
+        --delay-ms {{.DELAY_MS | default "0"}}
+
+  perf:conda:server:
+    desc: "Run BatleHub with the two conda registries scenario 12 compares (needs postgres and perf:conda:upstream)"
+    env:
+      BATLEHUB_CONFIG: perf/config.perf-conda.toml
+    cmds:
+      - cargo run -p batlehub-server --release
+
+  perf:conda:seed:
+    desc: "Block one version in perf-conda-filtered and prove the two arms differ"
+    cmds:
+      - bash perf/scripts/seed_conda.sh {{.BASE_URL | default "http://localhost:8080"}}
+
+  perf:run:conda:
+    desc: "k6 scenario 12 — the RAM cost of filtering a channel index, one row per path (parsed vs streaming, filtered vs not)"
+    cmds:
+      # One k6 run per arm, and one table row each: peak RSS is the result, and
+      # a run that mixed two paths could not say which one the peak belongs to.
+      - BATLEHUB_CONDA_ARM=plain_unfiltered bash perf/scripts/run_with_metrics.sh
+        --label 12_conda_plain_unfiltered perf/k6/scenarios/12_conda_filter.js
+      - BATLEHUB_CONDA_ARM=plain_filtered bash perf/scripts/run_with_metrics.sh
+        --label 12_conda_plain_filtered perf/k6/scenarios/12_conda_filter.js
+      - BATLEHUB_CONDA_ARM=zst_unfiltered bash perf/scripts/run_with_metrics.sh
+        --label 12_conda_zst_unfiltered perf/k6/scenarios/12_conda_filter.js
+      - BATLEHUB_CONDA_ARM=zst_filtered bash perf/scripts/run_with_metrics.sh
+        --label 12_conda_zst_filtered perf/k6/scenarios/12_conda_filter.js
+      - task: perf:report
+
+  # ── Scenario 13 — what regenerating a signed APKINDEX costs ─────────────────
+  #
+  # Three steps, and the independent variable is how many packages the index
+  # already holds when the publish lands:
+  #
+  #   task perf:apk:server                 # (separate shell)
+  #   task perf:apk:seed COUNT=5000
+  #   BATLEHUB_APK_ARM=n5000 task perf:run:apk
+  #
+  # Every publish re-renders the whole index for that architecture and RSA-signs
+  # it, on the upload path, under a lock (RFC 0026 §6.4). `v3.22/main/x86_64` is
+  # 5 647 packages, so `COUNT=5000` is the realistic arm and 20 000 is the one
+  # that says whether the curve is flat. Seeding 20 000 packages takes a while:
+  # it is 20 000 publishes, each of which regenerates the index.
+
+  perf:apk:server:
+    desc: "Run BatleHub with the local apk registry scenario 13 publishes into (needs postgres)"
+    env:
+      BATLEHUB_CONFIG: perf/config.perf-apk.toml
+    cmds:
+      # The signing key is part of what a publish pays for, so the measurement
+      # needs a real one. Generated per invocation: nothing here is a secret
+      # that outlives the run.
+      - APK_SIGNING_KEY_PEM="$(openssl genrsa 2048 2>/dev/null | sed ':a;N;$!ba;s/\n/\\n/g')"
+        cargo run -p batlehub-server --release
+
+  perf:apk:seed:
+    desc: "Fill perf-apk with COUNT packages, so scenario 13 publishes into an index of a known size"
+    cmds:
+      - bash perf/scripts/seed_apk.sh {{.BASE_URL | default "http://localhost:8080"}} {{.COUNT | default "1000"}}
+
+  perf:run:apk:
+    desc: "k6 scenario 13 — what a publish costs as the index it regenerates grows (BATLEHUB_APK_ARM=n100|n1000|n5000|n20000)"
+    cmds:
+      # One arm per run, because the arm *is* the state of the registry: the
+      # seed sets it, and a run that changed size under itself would produce a
+      # number that belongs to no index in particular.
+      - bash perf/scripts/run_with_metrics.sh
+        --label 13_apk_{{.ARM | default "$BATLEHUB_APK_ARM"}}
+        perf/k6/scenarios/13_apk_index_regeneration.js
+      - task: perf:report
+
+  # ── Scenario 14 — where it breaks, per backend ──────────────────────────────
+  #
+  # Escalates the offered rate (doubling at each step) until the server answers
+  # with errors, answers too slowly, or stops absorbing the rate at all, and
+  # records RAM, CPU and the latency distribution at every rate on the way.
+  #
+  # **The matrix is CI's** (`.github/workflows/breaking-point.yaml`, four
+  # backends: filesystem or S3, memory or Redis). This task runs one backend, and
+  # the S3 and Redis arms need RustFS and Redis on the ports `config.perf-s3.toml`
+  # names — `task perf:s3:infra:up` starts both, and wants Podman.
+  #
+  #   task perf:break                                   # filesystem + in-memory
+  #   task perf:break CONFIG=perf/config.perf-s3.toml LABEL=s3-redis
+  #
+  # It is a measurement, not a gate: only a server that *died* exits non-zero.
+
+  perf:break:
+    desc: "k6 scenario 14 — escalate until it breaks, recording RAM/CPU/p95/p98/min/max per rate (needs DATABASE_URL, k6). CONFIG, LABEL, BUDGET, STEP, START_RATE"
+    cmds:
+      - bash perf/scripts/breaking_point.sh
+        --config {{.CONFIG | default "perf/config.perf.toml"}}
+        --label {{.LABEL | default "fs-memory"}}
+        --budget {{.BUDGET | default "1200"}}
+        --step {{.STEP | default "60"}}
+        --start-rate {{.START_RATE | default "100"}}
+
+  # ── Soak / leak detection (RFC-less: this is a gate, not a measurement) ──────
+  #
+  # Unlike every scenario above, this one starts its own server and mock
+  # upstream and returns a verdict: it fails when the process is holding more
+  # memory, descriptors, threads or database connections *at idle* after the
+  # load than it was before. Manual — nothing schedules it.
+
+  perf:soak:
+    desc: "Soak the server under constant load and fail if it did not give back what it took (leak gate; needs DATABASE_URL and k6). DURATION, RATE, WARMUP, SETTLE, PROFILE"
+    cmds:
+      # WARMUP is forwarded only when set: its default is the script's, because
+      # the warm-up has to be long enough to fill the mix and a second copy of
+      # that number here is one to forget when the mix grows.
+      - bash perf/scripts/soak.sh
+        --duration {{.DURATION | default "10m"}}
+        --rate {{.RATE | default "100"}}
+        {{if .WARMUP}}--warmup {{.WARMUP}}{{end}}
+        --settle {{.SETTLE | default "60"}}
+        --profile {{.PROFILE | default "release"}}
+
+  perf:lifecycle:
+    desc: "Measure how long the process takes to become healthy and how long it takes to stop, idle and draining (needs DATABASE_URL). ITERATIONS, IN_FLIGHT, UPSTREAM_DELAY_MS, PROFILE"
+    cmds:
+      - bash perf/scripts/lifecycle.sh
+        --iterations {{.ITERATIONS | default "5"}}
+        --in-flight {{.IN_FLIGHT | default "20"}}
+        --upstream-delay-ms {{.UPSTREAM_DELAY_MS | default "3000"}}
+        --profile {{.PROFILE | default "release"}}
 
   # ── Performance testing — S3 + Redis backends ─────────────────────────────────
   # Same k6 scenarios as the filesystem/memory suite; only the server config
   # differs.  Run both suites back-to-back to compare backends head-to-head.
 
   perf:s3:infra:up:
-    desc: Start MinIO (S3, :9200) + Redis (:6380) and create the perf-artifacts bucket
+    desc: Start RustFS (S3, :9200) + Redis (:6380) and create the perf-artifacts bucket
     cmds:
-      - podman compose -f perf/docker-compose.perf-s3.yml up -d perf-minio
-      - until curl -sf http://localhost:9200/minio/health/live; do sleep 1; done
-      - mc alias set perf-minio http://localhost:9200 minioadmin minioadmin
-      - mc mb --ignore-existing perf-minio/perf-artifacts
+      - podman compose -f perf/docker-compose.perf-s3.yml up -d perf-rustfs
+      # A request to the root rather than a vendor health path. RustFS does
+      # answer `/minio/health/live` — `tests/heavy/backends.sh` measured that and
+      # relies on it — but probing the root asks nothing of the vendor: any
+      # answer at all, 403 included, means the S3 port is serving.
+      - until curl -s -o /dev/null http://localhost:9200/; do sleep 1; done
+      - rc alias set perf-s3 http://localhost:9200 rustfsadmin rustfsadmin
+      - rc bucket create --ignore-existing perf-s3/perf-artifacts
       - podman compose -f perf/docker-compose.perf-s3.yml up -d perf-redis
 
   perf:s3:infra:down:
-    desc: Stop MinIO and Redis perf containers
+    desc: Stop the RustFS and Redis perf containers
     cmds:
       - podman compose -f perf/docker-compose.perf-s3.yml down
 
@@ -97,8 +274,8 @@ tasks:
     desc: Run BatleHub with the S3 + Redis perf config (requires compose:db and perf:s3:infra:up)
     env:
       BATLEHUB_CONFIG: perf/config.perf-s3.toml
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_ACCESS_KEY_ID: rustfsadmin
+      AWS_SECRET_ACCESS_KEY: rustfsadmin
     cmds:
       - cargo run -p batlehub-server --release --features storage-s3
 

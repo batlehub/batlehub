@@ -197,6 +197,58 @@ fixed_blob_route!(
 /// Load render entries for one plugin: local first in Local/Hybrid, cached
 /// proxy metadata otherwise (`Ok(None)` = fall through happened but nothing
 /// found upstream either).
+/// Resolve the `/files/{plugin}/{update}/…` spelling onto the coordinate this
+/// registry publishes under, or leave it alone.
+///
+/// The IDE learns the marketplace's **numeric** plugin and update ids from
+/// `api/search/updates/compatible` and addresses the update by them — there is
+/// no other spelling it can use, because that is the only document it read. Both
+/// routes below therefore start here, and everything after this line runs on one
+/// coordinate per release: the renderer finds the version it holds, the archive
+/// is cached under its real key, and a block on `IdeaVIM@2.46.2` matches the
+/// request the IDE actually makes rather than missing it because the request
+/// said `164/1149038`.
+///
+/// Only on a registry with an upstream. On a local one the pair names nothing
+/// that can be resolved and asking would dial out of an instance that may be
+/// air-gapped, so the coordinate is left as it arrived and answered from what is
+/// held — which for a numeric pair is a `404`, as before.
+/// **Authorized before it resolves.** `ProxyService::canonical_coordinate`
+/// dials upstream and writes the metadata cache, so without a gate here an
+/// anonymous caller on a closed registry spends two upstream requests per
+/// refusal, and — worse — an unknown update id comes back `NotFound` and 404s
+/// *before* the grant check, which is exactly the existence oracle
+/// `resolve_forge_ref` refuses to offer.
+///
+/// `action` is the verb the route will ultimately use rather than a fixed
+/// `releases:list`, so a caller holding only `releases:read` can still download
+/// through the numeric spelling. The check is `authorize_listing` — grants
+/// only: the rule chain needs metadata that has not been resolved yet, and
+/// running it against a synthetic stand-in is the defect `authorize_read_against`
+/// documents.
+async fn canonical_coordinate(
+    svc: &Arc<ProxyService>,
+    mode: RegistryMode,
+    registry: &str,
+    xml_id: &str,
+    version: &str,
+    identity: &AuthIdentity,
+    action: Action,
+) -> Result<Option<(String, String)>, AppError> {
+    if mode == RegistryMode::Local {
+        return Ok(None);
+    }
+    let pkg = batlehub_core::entities::PackageId::new(registry, xml_id, version);
+    svc.authorize_listing(&pkg, &identity.0, action)
+        .await
+        .map_err(AppError::from)?;
+    Ok(svc
+        .canonical_coordinate(&pkg)
+        .await
+        .map_err(AppError::from)?
+        .map(|id| (id.name, id.version)))
+}
+
 async fn load_entries(
     svc: &Arc<ProxyService>,
     local_svc: &Arc<LocalRegistryService>,
@@ -300,6 +352,20 @@ pub async fn jbm_update_meta(
     validate_path_safe("version", &version).map_err(AppError::from)?;
 
     let mode = mode_map.get(&registry);
+    let (xml_id, version) = match canonical_coordinate(
+        &svc,
+        mode.clone(),
+        &registry,
+        &xml_id,
+        &version,
+        &identity,
+        Action::ReleasesList,
+    )
+    .await?
+    {
+        Some(canonical) => canonical,
+        None => (xml_id, version),
+    };
     let entries = load_entries(&svc, &local_svc, mode, &registry, &xml_id, identity).await?;
     let entry = entries
         .iter()
@@ -345,7 +411,26 @@ pub async fn jbm_file_download(
     validate_path_safe("file name", &file_name).map_err(AppError::from)?;
     super::require_single_segment("file name", &file_name)?;
 
-    let artifact = format!("file/{file_name}");
+    // A resolved alias changes the *selector* as well as the coordinate: the
+    // `files/{name}/{version}/{file}` URL only exists upstream in the numeric
+    // spelling, and once the pair is canonical the archive is the plugin's own
+    // download — the same artifact `plugin/download?pluginId=&version=` serves,
+    // under the same storage key, which is the point of resolving at all.
+    let mode = mode_map.get(&registry);
+    let (xml_id, version, artifact) = match canonical_coordinate(
+        &svc,
+        mode,
+        &registry,
+        &xml_id,
+        &version,
+        &identity,
+        Action::ReleasesRead,
+    )
+    .await?
+    {
+        Some((name, version)) => (name, version, super::PLUGIN_ARTIFACT.to_owned()),
+        None => (xml_id, version, format!("file/{file_name}")),
+    };
     serve_local_or_proxy_artifact(
         svc,
         local_svc,
@@ -456,7 +541,16 @@ pub async fn jbm_plugin_download(
 
 #[derive(Debug, Deserialize)]
 pub struct PluginManagerQuery {
-    pub action: String,
+    /// Absent means `download`, which is the spelling the **IDE** uses.
+    ///
+    /// `action=download` is the documented form and the one a human types.
+    /// IntelliJ sends no `action` at all —
+    /// `pluginManager?os=&build=&updatedFrom&id=&arch=&uuid=` — and the
+    /// marketplace answers that with a `301` to the plugin archive, so the two
+    /// spellings are one endpoint. Required here, it was a `400` that stopped
+    /// `installPlugins` one request after it had resolved and described the
+    /// update it wanted (the closed-world `jbplugin` phase).
+    pub action: Option<String>,
     pub id: String,
     pub build: Option<String>,
 }
@@ -471,7 +565,7 @@ pub struct PluginManagerQuery {
     tag = "proxy/jetbrains-marketplace",
     params(
         ("registry" = String, Path, description = "Registry name"),
-        ("action" = String, Query, description = "Only 'download' is supported"),
+        ("action" = Option<String>, Query, description = "Only 'download' is supported; absent means download, which is what the IDE sends"),
         ("id" = String, Query, description = "Plugin xmlId"),
         ("build" = Option<String>, Query, description = "IDE build for compatibility"),
     ),
@@ -494,10 +588,9 @@ pub async fn jbm_plugin_manager(
 ) -> Result<impl Responder, AppError> {
     let registry = path.into_inner();
     require_jbm(&registry, &map)?;
-    if query.action != "download" {
+    if let Some(action) = query.action.as_deref().filter(|a| *a != "download") {
         return Err(AppError::bad_request(format!(
-            "unsupported action '{}'; expected 'download'",
-            query.action
+            "unsupported action '{action}'; expected 'download'"
         )));
     }
     validate_package_name(&query.id).map_err(AppError::from)?;

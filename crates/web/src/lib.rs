@@ -197,6 +197,33 @@ impl RepoSignerMap {
     }
 }
 
+/// The RSA signers of `apk` registries, by registry name.
+///
+/// A separate map from [`RepoSignerMap`] rather than a variant inside it: they
+/// hold different key types for different algorithms, and the three OpenPGP
+/// kinds and `apk` never consult each other's. `deb`/`rpm`/`pacman` sign with
+/// Ed25519 OpenPGP; `apk` signs with RSA through `aws-lc-rs`, because no
+/// shipping apk reads anything else (RFC 0026 §2.4).
+#[derive(Clone, Default)]
+pub struct ApkSignerMap(LockedMap<Arc<batlehub_adapters::repo::ApkSigner>>);
+
+impl ApkSignerMap {
+    pub fn get(&self, name: &str) -> Option<Arc<batlehub_adapters::repo::ApkSigner>> {
+        self.0.get(name)
+    }
+
+    /// Replace this map's contents with `other`'s (called by the hot-reload applier).
+    pub fn replace_from(&self, other: &Self) {
+        self.0.replace_from(&other.0);
+    }
+}
+
+impl From<HashMap<String, Arc<batlehub_adapters::repo::ApkSigner>>> for ApkSignerMap {
+    fn from(map: HashMap<String, Arc<batlehub_adapters::repo::ApkSigner>>) -> Self {
+        Self(LockedMap::new(map))
+    }
+}
+
 impl From<HashMap<String, Arc<batlehub_adapters::repo::OpenPgpSigner>>> for RepoSignerMap {
     fn from(map: HashMap<String, Arc<batlehub_adapters::repo::OpenPgpSigner>>) -> Self {
         Self(LockedMap::new(map))
@@ -468,6 +495,7 @@ pub use spa::{configure_spa, narrow_csp, SpaDir};
         (name = "proxy/deb",      description = "Debian APT repository — proxy + local hosting (Packages/Release generation, Ed25519 OpenPGP signing)"),
         (name = "proxy/rpm",      description = "RPM/YUM repository — proxy + local hosting (repodata generation, Ed25519 OpenPGP signing)"),
         (name = "proxy/pacman",   description = "Arch Linux pacman repository — proxy + local hosting (.pkg.tar.zst, repo DB generation, Ed25519 OpenPGP signing)"),
+        (name = "proxy/apk",      description = "Alpine apk repository — proxy with the index relayed byte-exact and a real coordinate on every .apk, plus local hosting with an RSA-signed APKINDEX"),
         (name = "proxy/npm",      description = "npm proxy — packuments, version metadata, tarballs"),
         (name = "proxy/cargo",    description = "Cargo proxy — sparse index, crate metadata, .crate downloads"),
         (name = "proxy/openvsx",  description = "OpenVSX & VS Code Marketplace — extension gallery (extensionquery, assets, item), the OpenVSX REST API, VSIX packages, and private extension publishing"),
@@ -480,6 +508,9 @@ pub use spa::{configure_spa, narrow_csp, SpaDir};
         (name = "proxy/jetbrains-marketplace", description = "JetBrains Marketplace — IDE-facing plugin API (search, compatible updates, meta.json, downloads), updatePlugins.xml custom repository, and marketplace-compatible plugin publishing"),
         (name = "proxy/generic",    description = "Generic file mirror — path-addressed proxy cache for upstreams with no package protocol (toolchain tarballs, vendor CDNs), restricted by a path_allow allowlist"),
         (name = "proxy/nodedist",   description = "Node distributions (nvm, fnm, n, mise) — the nodejs.org/dist tree as a typed registry: filtered index.tab/index.json listings, per-release tarballs and SHASUMS256.txt byte-exact"),
+        (name = "proxy/nix",        description = "Nix binary cache (nix, cachix-style substituters) — the substituter protocol as a registry kind: narinfos relayed with only `URL:` rewritten so every `Sig:` still verifies, a blocked store path absent as the protocol's own 404, NARs cached under a coordinate, and stale upstream-shaped NAR URLs resolved through a reverse index"),
+        (name = "proxy/galaxy",     description = "Ansible Galaxy — the collections API v3 as a registry kind: the versions list filtered and served as one page, download_url rewritten to this instance, collection publish with its import-task poll, and the v1 role surface behind `roles`"),
+        (name = "proxy/rustup",     description = "Rust toolchains (rustup, mise) — the static.rust-lang.org tree as a typed registry: channel manifests filtered and their .sha256 recomputed, blocked releases refused or repaired, component archives cached per release"),
         (name = "proxy/sdkman",     description = "SDKMAN — the candidates API and the download broker as one registry: filtered versions/all, candidates/default and the rendered sdk list table, a blocked version answered `invalid` at candidates/validate, hook scripts relayed byte-exact, the broker's 302 followed server-side and cached"),
         (name = "front-office",     description = "User-facing package information"),
         (name = "user",             description = "Caller-scoped reads — quota, downloads and advisories for whoever holds the token, never for anyone else"),
@@ -615,9 +646,16 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
             //   files/{p}/{u}/{file} — all before the shared npm version/packument wildcards
             conda::{
                 conda_channeldata, conda_current_repodata, conda_file_download, conda_publish,
-                conda_repodata, conda_repodata_bz2, conda_repodata_zst,
+                conda_repodata, conda_repodata_bz2, conda_repodata_shards, conda_repodata_zst,
+                conda_shard,
             },
+            forgejo::fj_attachment,
             forgejo::fj_packages,
+            galaxy::{
+                galaxy_artifact, galaxy_collection, galaxy_discovery, galaxy_import_task,
+                galaxy_publish, galaxy_role_artifact, galaxy_role_search, galaxy_role_versions,
+                galaxy_version_detail, galaxy_versions,
+            },
             generic::generic_get,
             github::{
                 download_asset, download_asset_by_name, download_raw, download_tarball,
@@ -634,13 +672,17 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
             jetbrains::jetbrains_get,
             jetbrains_marketplace::{
                 jbm_aggregation, jbm_broken_plugins, jbm_comments, jbm_compatible_updates,
-                jbm_feature_implementations, jbm_file_download, jbm_ide_extensions,
-                jbm_jb_plugins_xml_ids, jbm_plugin_download, jbm_plugin_info, jbm_plugin_manager,
-                jbm_plugin_meta, jbm_plugin_updates, jbm_plugins_list, jbm_plugins_xml_ids,
-                jbm_search_plugins, jbm_search_plugins_ide, jbm_update_meta,
+                jbm_compatible_updates_get, jbm_feature_implementations, jbm_file_download,
+                jbm_ide_extensions, jbm_jb_plugins_xml_ids, jbm_plugin_download, jbm_plugin_info,
+                jbm_plugin_manager, jbm_plugin_meta, jbm_plugin_updates, jbm_plugins_list,
+                jbm_plugins_xml_ids, jbm_search_plugins, jbm_search_plugins_ide, jbm_update_meta,
                 jbm_update_plugins_xml, jbm_upload,
             },
             maven::{maven_get, maven_put},
+            nix::{
+                nix_build_log, nix_cache_info, nix_ls, nix_nar, nix_nar_upstream_shape,
+                nix_narinfo, nix_public_key, nix_put_nar, nix_put_narinfo, nix_realisation,
+            },
             nodedist::{nodedist_file, nodedist_index_json, nodedist_index_tab},
             npm::{
                 audit_bulk, audit_bulk_legacy, audit_quick, audit_quick_legacy,
@@ -658,14 +700,19 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 pypi_file_download, pypi_json, pypi_publish, pypi_simple_package, pypi_simple_root,
             },
             repo::{
+                apk::apk_get,
                 deb_get, pacman_get,
-                publish::{deb_publish, pacman_publish, rpm_publish},
+                publish::{apk_publish, deb_publish, pacman_publish, rpm_publish},
                 rpm_get,
             },
             rubygems::{
                 gem_compact_info, gem_compact_names, gem_compact_versions, gem_download,
                 gem_gemspec, gem_info, gem_publish, gem_specs_full, gem_specs_latest,
                 gem_specs_prerelease, gem_unyank, gem_versions, gem_yank,
+            },
+            rustup::{
+                rustup_archive, rustup_bootstrap, rustup_dist_dated, rustup_dist_root,
+                rustup_manifests_txt, rustup_release_stable,
             },
             sdkman::{
                 sdkman_candidate_default, sdkman_candidates_all, sdkman_candidates_list,
@@ -721,8 +768,34 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     // Forgejo/GitLab package registries: literal `api/…` prefix — register before
     // the GitHub `{owner}/{repo}` routes so it isn't captured as owner="api".
     cfg.service(fj_packages); // GET …/api/packages/{path}  (Forgejo/Gitea)
+                              // Forgejo addresses a release asset by uuid on a repository-less path, and
+                              // `mise` builds that URL for every asset it installs. Literal `attachments`
+                              // prefix, so it is registered here for the same reason as the line above:
+                              // the GitHub `{owner}/{repo}/…` routes below would claim owner="attachments".
+    cfg.service(fj_attachment); // GET …/attachments/{uuid}  (Forgejo/Gitea)
     cfg.service(gl_packages); // GET …/api/v4/{path}         (GitLab)
-                              // GitHub (owner/repo structure, multi-segment) — also serves Forgejo releases.
+
+    // GitLab (distinct `/-/` delimiter; most-specific first) — **before** the
+    // GitHub routes below, not after them. A GitLab project may be a *single*
+    // path segment, and mise percent-encodes it, so `…/gitlab-org%2Fcli/-/releases`
+    // is three segments and `{owner}/{repo}/releases` claimed it first with
+    // `repo = "-"`; the GitHub guard then answered "not a github or forgejo
+    // registry" and mise's `gitlab:` backend could resolve nothing. `…/-/raw/…`
+    // collided with `{owner}/{repo}/raw/…` the same way. The reverse shadowing
+    // cannot happen: every route here carries the literal `/-/` segment.
+    cfg.service(gl_download_link); // …/-/releases/{tag}/downloads/{name}
+    cfg.service(gl_get_release); // …/-/releases/{tag}
+    cfg.service(gl_list_releases); // …/-/releases
+    cfg.service(gl_download_archive); // …/-/archive/{tag}/{filename}
+    cfg.service(gl_download_raw); // …/-/raw/{ref}/{path}
+
+    // RFC 0019 §4.1 `[api_reads]` — typed, read-only, opt-in. Before the
+    // archive and raw routes so `/tags` is not read as a ref.
+    cfg.service(crate::handlers::proxy::forge_api::forge_tags); // …/{o}/{r}/tags
+    cfg.service(crate::handlers::proxy::forge_api::forge_commit); // …/{o}/{r}/commits/{sha}
+    cfg.service(crate::handlers::proxy::forge_api::forge_branch); // …/{o}/{r}/branches/{name}
+
+    // GitHub (owner/repo structure, multi-segment) — also serves Forgejo releases.
     cfg.service(list_releases);
     cfg.service(get_release);
     cfg.service(download_asset_by_name);
@@ -730,24 +803,15 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(download_tarball);
     cfg.service(download_zipball);
     cfg.service(download_raw);
-    // GitLab (distinct `/-/` delimiter; most-specific first)
-    // RFC 0019 §4.1 `[api_reads]` — typed, read-only, opt-in. Before the
-    // archive and raw routes so `/tags` is not read as a ref.
-    cfg.service(crate::handlers::proxy::forge_api::forge_tags); // …/{o}/{r}/tags
-    cfg.service(crate::handlers::proxy::forge_api::forge_commit); // …/{o}/{r}/commits/{sha}
-    cfg.service(crate::handlers::proxy::forge_api::forge_branch); // …/{o}/{r}/branches/{name}
-    cfg.service(gl_download_link); // …/-/releases/{tag}/downloads/{name}
-    cfg.service(gl_get_release); // …/-/releases/{tag}
-    cfg.service(gl_list_releases); // …/-/releases
-    cfg.service(gl_download_archive); // …/-/archive/{tag}/{filename}
-    cfg.service(gl_download_raw); // …/-/raw/{ref}/{path}
-                                  // Deb / RPM repositories: publish (PUT) before the catch-all read (GET).
+    // Deb / RPM repositories: publish (PUT) before the catch-all read (GET).
     cfg.service(deb_publish); // PUT …/deb/pool/{dist}/{component}/upload
     cfg.service(rpm_publish); // PUT …/rpm/upload
     cfg.service(deb_get); // GET …/deb/{path}
     cfg.service(rpm_get); // GET …/rpm/{path}
     cfg.service(pacman_publish); // PUT …/pacman/upload
     cfg.service(pacman_get); // GET …/pacman/{path}
+    cfg.service(apk_publish); // PUT …/apk/upload
+    cfg.service(apk_get); // GET …/apk/{path}      (coordinate on .apk files)
     cfg.service(jetbrains_get); // GET …/jetbrains/{path} (proxy-only cache)
     cfg.service(generic_get); // GET …/generic/{path}   (proxy-only cache)
                               // Node dist tree (RFC 0010): the two listing documents before the
@@ -756,12 +820,63 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(nodedist_index_tab); // GET …/nodedist/index.tab   (filtered document)
     cfg.service(nodedist_index_json); // GET …/nodedist/index.json  (filtered document)
     cfg.service(nodedist_file); // GET …/nodedist/{version}/{file}
-                                // SDKMAN (RFC 0010 phase 6). The literal `candidates/all`,
-                                // `candidates/list`, `candidates/default/{c}` and
-                                // `candidates/validate/…` routes before the
-                                // `candidates/{c}/{plat}/…` ones, so a candidate named
-                                // `default` or `validate` cannot shadow them; every one
-                                // before the npm catch-alls below.
+
+    // Nix binary cache (RFC 0028). One ordering rule and it is load-bearing:
+    // `nar/{hash}/{file}` registers **before** `nar/{file}`, or every
+    // coordinate-carrying NAR request would match the upstream-shape route
+    // with `{file}` = the store hash and be refused. The literal
+    // `nix-cache-info` before the `{hash}.narinfo`/`{hash}.ls` patterns for the
+    // same reason, and `realisations/`/`log/` are literal prefixes that cannot
+    // collide with a hash. `protocol_conformance` asserts both NAR patterns.
+    // The publish half (RFC 0028 §4.4). `PUT nar/{file}` shares its path with
+    // the upstream-shape `GET`, and actix matches on method as well as path, so
+    // the two coexist — but both must register before any wildcard below.
+    cfg.service(nix_put_nar); // PUT     …/nix/nar/{file}         (parked, unclaimed)
+    cfg.service(nix_put_narinfo); // PUT …/nix/{hash}.narinfo     (claim · verify · sign)
+    cfg.service(nix_public_key); // GET  …/nix/public-key         (trusted-public-keys)
+    cfg.service(nix_cache_info); // GET     …/nix/nix-cache-info
+    cfg.service(nix_nar); // GET     …/nix/nar/{hash}/{file}  (the rewritten URL)
+    cfg.service(nix_nar_upstream_shape); // GET     …/nix/nar/{file}         (reverse index)
+    cfg.service(nix_realisation); // GET     …/nix/realisations/{id}.doi
+    cfg.service(nix_build_log); // GET     …/nix/log/{drv}
+    cfg.service(nix_narinfo); // GET|HEAD …/nix/{hash}.narinfo   (the chokepoint)
+    cfg.service(nix_ls); // GET     …/nix/{hash}.ls
+
+    // Ansible Galaxy (RFC 0031). Every path here is literal down to the
+    // coordinate, so the only ordering that matters is inside the collections
+    // tree: the publish `POST` and the import-task route carry literal
+    // `artifacts`/`imports` segments that could otherwise be read as a
+    // namespace, the `versions/` listing has to register before
+    // `versions/{version}/`, and the collection document before both. The
+    // trailing slash is part of every v3 path: a redirect to add one would be a
+    // second request the client's `urljoin` does not expect. All of them before
+    // the shared npm version/packument wildcards below.
+    cfg.service(galaxy_discovery); // GET  …/galaxy/api/                      (composed)
+    cfg.service(galaxy_publish); // POST …/galaxy/api/v3/artifacts/collections/
+    cfg.service(galaxy_artifact); // GET  …/galaxy/api/v3/artifacts/collections/{file}
+    cfg.service(galaxy_import_task); // GET  …/galaxy/api/v3/imports/collections/{task}/
+    cfg.service(galaxy_versions); // GET  …/galaxy/api/v3/collections/{ns}/{n}/versions/  (filtered)
+    cfg.service(galaxy_version_detail); // GET  …/…/versions/{version}/        (404 when blocked)
+    cfg.service(galaxy_collection); // GET  …/galaxy/api/v3/collections/{ns}/{n}/  (repaired)
+    cfg.service(galaxy_role_search); // GET  …/galaxy/api/v1/roles/
+    cfg.service(galaxy_role_versions); // GET  …/galaxy/api/v1/roles/{id}/versions/  (filtered)
+    cfg.service(galaxy_role_artifact); // GET  …/galaxy/api/v1/roles/{id}/download/{file}
+
+    // rustup: the literal paths first, then the two `dist/` patterns. The
+    // installer's tree is `…/rustup/rustup/…`, which is upstream's own layout
+    // under the protocol prefix, so its routes cannot collide with `dist/`.
+    cfg.service(rustup_manifests_txt); // GET …/rustup/manifests.txt        (filtered document)
+    cfg.service(rustup_release_stable); // GET …/rustup/rustup/release-stable.toml
+    cfg.service(rustup_archive); // GET …/rustup/rustup/archive/{version}/{triple}/{file}
+    cfg.service(rustup_bootstrap); // GET …/rustup/rustup/dist/{triple}/{file}
+    cfg.service(rustup_dist_root); // GET …/rustup/dist/{file}              (channel documents)
+    cfg.service(rustup_dist_dated); // GET …/rustup/dist/{date}/{file}
+                                    // SDKMAN (RFC 0010 phase 6). The literal `candidates/all`,
+                                    // `candidates/list`, `candidates/default/{c}` and
+                                    // `candidates/validate/…` routes before the
+                                    // `candidates/{c}/{plat}/…` ones, so a candidate named
+                                    // `default` or `validate` cannot shadow them; every one
+                                    // before the npm catch-alls below.
     cfg.service(sdkman_candidates_all); // GET …/sdkman/candidates/all      (relayed)
     cfg.service(sdkman_candidates_list); // GET …/sdkman/candidates/list     (relayed)
     cfg.service(sdkman_candidate_default); // GET …/sdkman/candidates/default/{c}  (filtered, composed)
@@ -891,6 +1006,13 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                                 // (RFC 0009 §7.5). `channeldata.json` is channel-root, so it must precede
                                 // the two-segment npm catch-all as well.
     cfg.service(conda_channeldata); // GET …/channeldata.json
+                                    // CEP-16, before the two index routes and well before the filename
+                                    // catch-all: `repodata_shards.msgpack.zst` is a literal name, and a
+                                    // shard is hex-named with its own suffix, so neither can be confused
+                                    // with a package (`.conda`/`.tar.bz2`) — but both would be swallowed
+                                    // by the npm three-segment wildcard further down.
+    cfg.service(conda_repodata_shards); // GET …/{platform}/repodata_shards.msgpack.zst
+    cfg.service(conda_shard); // GET …/{platform}/{sha256}.msgpack.zst
     cfg.service(conda_repodata_zst); // GET …/{platform}/repodata.json.zst
     cfg.service(conda_repodata_bz2); // GET …/{platform}/repodata.json.bz2
     cfg.service(conda_repodata); // GET …/{platform}/repodata.json
@@ -915,6 +1037,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     // otherwise swallow e.g. "plugins/list" as {name}/{version}.
     cfg.service(jbm_upload); // POST …/api/updates/upload
     cfg.service(jbm_compatible_updates); // POST …/api/search/updates/compatible
+    cfg.service(jbm_compatible_updates_get); // GET  …/api/search/updates/compatible
     cfg.service(jbm_aggregation); // GET …/api/search/aggregation/{field}
     cfg.service(jbm_search_plugins); // GET …/api/search/plugins
     cfg.service(jbm_search_plugins_ide); // GET …/api/searchPlugins

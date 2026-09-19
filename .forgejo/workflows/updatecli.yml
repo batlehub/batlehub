@@ -22,9 +22,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Updatecli
-        uses: https://github.com/updatecli/updatecli-action@41b9c8d707830a9daebaeaa84c1b62d60b779564 # v3.6.0
+        uses: https://github.com/updatecli/updatecli-action@ca8c01bf875e2520512c344a71dd02f3dc3326a7 # v3.7.0
       - name: "\U0001F980 Install Rust Toolchain"
-        uses: https://github.com/dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # v1
+        uses: https://github.com/dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: stable
       - name: Setup pnpm

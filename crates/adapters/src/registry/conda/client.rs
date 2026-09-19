@@ -6,7 +6,10 @@ use super::{models, CondaRegistryClient};
 use batlehub_core::{
     entities::{PackageId, PackageMetadata},
     error::CoreError,
-    ports::{DocumentKind, FetchedArtifact, RegistryClient, VersionDocument},
+    ports::{
+        DocumentEncoding, DocumentKind, DocumentProbe, FetchedArtifact, RegistryClient,
+        StreamedDocument, VersionDocument,
+    },
 };
 use models::{CondaIndexJson, CondaPackageInfo, CondaRepodata};
 
@@ -113,6 +116,111 @@ impl RegistryClient for CondaRegistryClient {
     /// `noarch` — because a conda listing is scoped to a subdir rather than to a
     /// package. That is also why this document goes through
     /// `ProxyService::multi_package_document`: it describes the whole channel.
+    /// Which index encodings this channel publishes, asked with `HEAD`.
+    ///
+    /// conda clients probe before they fetch — micromamba sends a `HEAD` for
+    /// every subdir and encoding it might use — and answering those by pulling
+    /// the body and discarding it is, for `conda-forge/linux-64`, 57 MiB per
+    /// probe. This asks upstream the same question the client asked.
+    async fn probe_version_document(
+        &self,
+        package: &str,
+        kind: DocumentKind,
+        accept: &[DocumentEncoding],
+    ) -> Result<Option<DocumentProbe>, CoreError> {
+        let Some((url_base, _)) = self.index_url(package, kind) else {
+            return Ok(None);
+        };
+
+        for encoding in accept {
+            let url = format!("{url_base}{}", encoding.suffix());
+            let resp = self
+                .head(&url)
+                .send()
+                .await
+                .map_err(super::super::http_client::to_registry_error)?;
+            if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                continue;
+            }
+            // **Any other failure gives up probing, it does not fail the
+            // request.** A probe is an optimisation: the caller's fallback is
+            // the body path, which worked before this method existed. Plenty
+            // of CDNs answer `405` to a `HEAD`, and S3-style backends answer
+            // `403` for a missing key, so propagating here turns a channel
+            // that serves fine over `GET` into a 502 for every conda and
+            // micromamba probe.
+            if !resp.status().is_success() {
+                tracing::debug!(
+                    url = %url,
+                    status = %resp.status(),
+                    "conda: upstream refused the index probe; falling back to the body path"
+                );
+                return Ok(None);
+            }
+            let header = |name: reqwest::header::HeaderName| {
+                resp.headers()
+                    .get(name)
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned)
+            };
+            return Ok(Some(DocumentProbe {
+                encoding: *encoding,
+                // **The header, not `content_length()`.** On a `HEAD` response
+                // `reqwest` reports the *body* size hint, and hyper hard-codes
+                // that to zero for `HEAD` regardless of what the server
+                // advertised — so this read `Some(0)` for every probe, and
+                // micromamba was told a 55 MiB index was empty. The service's
+                // own note says a probe that promises the wrong length is
+                // worse than one that promises none.
+                content_length: header(reqwest::header::CONTENT_LENGTH)
+                    .and_then(|v| v.trim().parse::<u64>().ok()),
+                etag: header(reqwest::header::ETAG),
+                last_modified: header(reqwest::header::LAST_MODIFIED),
+            }));
+        }
+        Ok(None)
+    }
+
+    /// The channel index as bytes, in the first encoding the caller accepts that
+    /// the channel actually publishes.
+    ///
+    /// This is the path that makes a conda channel affordable. `repodata.json`
+    /// for `conda-forge/linux-64` is 424 MiB and parsing it costs several GB;
+    /// its `.zst` is 55 MiB and, when there is nothing to filter out of it,
+    /// neither the proxy nor anyone else has any reason to look inside.
+    ///
+    /// A `404` on one encoding is not an error — a channel need not publish all
+    /// three — so the next one is tried, and exhausting the list answers `None`,
+    /// which puts the caller back on the parsed path.
+    async fn fetch_version_document_stream(
+        &self,
+        package: &str,
+        kind: DocumentKind,
+        accept: &[DocumentEncoding],
+    ) -> Result<Option<StreamedDocument>, CoreError> {
+        let Some((url_base, what)) = self.index_url(package, kind) else {
+            // Anything else has no byte path; the parsed one answers it.
+            return Ok(None);
+        };
+
+        for encoding in accept {
+            let url = format!("{url_base}{}", encoding.suffix());
+            let resp = self.get(&url).send().await.map_err(to_registry_error)?;
+            if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                continue;
+            }
+            let resp = resp.error_for_status().map_err(to_registry_error)?;
+            tracing::debug!(url = %url, what, "streaming conda index");
+            let cache_control = cache_control(&resp);
+            return Ok(Some(StreamedDocument {
+                stream: Box::pin(resp.bytes_stream().map_err(to_registry_error)),
+                encoding: *encoding,
+                cache_control,
+            }));
+        }
+        Ok(None)
+    }
+
     async fn fetch_version_document(
         &self,
         package: &str,
@@ -150,6 +258,26 @@ impl RegistryClient for CondaRegistryClient {
     async fn resolve_metadata(&self, pkg: &PackageId) -> Result<PackageMetadata, CoreError> {
         let base = self.base_url.trim_end_matches('/');
         let (platform, filename) = super::platform_and_file(pkg);
+
+        // A CEP-16 shard is **content-addressed**: the coordinate is the digest,
+        // the bytes under it never change, and there is nothing about it to look
+        // up. Looking one up in `repodata.json` would parse the 424 MiB document
+        // that sharding exists to avoid — once per shard, which is the opposite
+        // of the point.
+        if filename.is_some_and(|f| f.ends_with(".msgpack.zst")) {
+            return Ok(PackageMetadata {
+                id: pkg.clone(),
+                published_at: None,
+                download_url: Some(self.artifact_url(pkg)),
+                checksum: None,
+                is_signed: None,
+                extra: serde_json::Value::Null,
+                // Immutable by construction, so the cache never has to ask
+                // again. The upstream says so too, but this does not depend on
+                // it saying so.
+                cache_control: Some("public, max-age=31536000, immutable".to_owned()),
+            });
+        }
 
         // For specific package files, look them up in repodata.json.
         if pkg.name != "repodata" {

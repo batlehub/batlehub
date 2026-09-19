@@ -1,8 +1,11 @@
 mod eco_composer;
 mod eco_conda;
+mod eco_galaxy;
 mod eco_go;
 mod eco_jetbrains;
 mod eco_maven;
+mod eco_nix;
+pub use eco_nix::{NixPublishRequest, NixStagingLimits, PublishedStorePath};
 mod eco_nuget;
 mod eco_openvsx;
 mod eco_pypi;
@@ -375,6 +378,40 @@ pub fn maven_artifact_storage_key(
     filename: &str,
 ) -> String {
     format!("local:{}/{}/{}/{}", registry, name, version, filename)
+}
+
+/// Storage key for one store path's NAR.
+///
+/// Four levels rather than three, for the reason `maven_artifact_storage_key`
+/// has one extra: a version holds **many** store paths. Two builds of
+/// `hello-1.0` differ only in their 32-character hash, and both are legitimate
+/// members of the same version — so the hash is part of the key, not a
+/// collision to resolve. The file name is kept beside it because it *is* the
+/// `FileHash`: an upstream recompression lands on a new key rather than serving
+/// stale bytes under a digest the narinfo no longer advertises (RFC 0028 §4.3).
+pub fn nix_nar_storage_key(
+    registry: &str,
+    name: &str,
+    version: &str,
+    store_hash: &str,
+    file: &str,
+) -> String {
+    format!("local:{registry}/{name}/{version}/{store_hash}/{file}")
+}
+
+/// Storage key for the narinfo this instance serves for one store path.
+///
+/// Stored rather than recomposed on every read: it carries the publisher's
+/// signatures and ours, and re-deriving it would mean re-signing — which would
+/// produce a *different* document each time the key rotated, for bytes that
+/// never changed.
+pub fn nix_narinfo_storage_key(
+    registry: &str,
+    name: &str,
+    version: &str,
+    store_hash: &str,
+) -> String {
+    format!("local:{registry}/{name}/{version}/{store_hash}.narinfo")
 }
 
 /// Storage key for a Terraform provider platform binary.

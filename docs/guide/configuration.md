@@ -354,6 +354,38 @@ max_connections = 10    # default
 
 The `url` field can be overridden at runtime via `PROXY_CACHE__DATABASE__URL` without touching the config file.
 
+#### Sizing `max_connections`
+
+The default of **10 is small**, and what it costs is latency rather than throughput. Measured on the
+breaking-point matrix (scenario 14, S3 + Redis, the same build and the same load, only the pool size
+changed):
+
+| offered | pool 10 | pool 50 |
+| ---: | ---: | ---: |
+| 100 req/s — p95 | 144 ms | **19 ms** |
+| 200 req/s — p95 | 362 ms | **32 ms** |
+| 200 req/s — p98 | 528 ms | **43 ms** |
+
+**The rate at which the server gave out did not move** — both sizes broke at the same offered rate,
+on a harness whose own ceiling was lower. So a bigger pool does not buy throughput here; it stops
+requests queueing for a connection, which is most of the tail latency at any rate a real instance
+would see.
+
+It is not free, and the cost lands on the database host rather than on this one: PostgreSQL forks a
+backend process per connection, and the same run measured its resident memory at **~490 MiB with a
+pool of 10 and ~2 GiB with a pool of 50**. Budget for it where Postgres runs.
+
+Three things to hold when you pick a number:
+
+- **The pool is per instance.** `replicas × max_connections` is what reaches PostgreSQL, and its own
+  `max_connections` defaults to 100 — three replicas at 50 exhaust it, and the failure is a refused
+  connection at startup, not a slow query.
+- **Idle connections are recycled.** sqlx retires a connection 30 minutes after it was opened
+  (`max_lifetime`), which is also why a pool that has been busy releases memory on its own.
+- **Size it against concurrency, not traffic.** The pool caps requests *in flight* that need the
+  database, not requests per second; a workload that misses cache more often needs more of it at the
+  same rate.
+
 ---
 
 ### 3.2a `[cache]`
@@ -742,14 +774,14 @@ Two formats are supported: single-backend (simpler, supports env-var overrides) 
 type = "filesystem"
 path = "./cache"
 
-# S3 (or S3-compatible: MinIO, RustFS, etc.)
+# S3 (or S3-compatible: RustFS, etc.)
 [storage]
 type = "s3"
 bucket = "my-artifacts"
 region = "us-east-1"
 prefix = "batlehub/"         # optional, default: none
-endpoint_url = "http://minio:9000"  # optional: omit for real AWS
-force_path_style = true         # optional: required for MinIO and RustFS
+endpoint_url = "http://rustfs:9000" # optional: omit for real AWS
+force_path_style = true         # optional: required for RustFS
 ```
 
 **Filesystem fields:**
@@ -766,9 +798,18 @@ force_path_style = true         # optional: required for MinIO and RustFS
 | `region` | string | yes | AWS region (e.g. `"us-east-1"`) |
 | `prefix` | string | no | Key prefix for all stored objects |
 | `endpoint_url` | string | no | Custom endpoint for S3-compatible stores |
-| `force_path_style` | bool | no | Required for MinIO, RustFS, and other S3-compatible stores that use path-style URLs |
+| `force_path_style` | bool | no | Required for RustFS and other S3-compatible stores that use path-style URLs |
+
+> **MinIO is no longer officially supported.** Its publisher withdrew the community distribution —
+> `dl.min.io` answers `410 Gone` for every path under it — so nothing in this project installs, starts
+> or tests against MinIO any more: the S3 suites, the coverage run and the perf harness all use
+> **RustFS**. A MinIO endpoint may well still work, because this backend speaks nothing but S3 and
+> `force_path_style` is all a path-style store needs from it — but no gate here exercises it, so
+> nothing would catch it breaking. Support means *measured*, and MinIO is no longer measured.
 
 S3 credentials are sourced from the standard AWS SDK credential chain: `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` environment variables, `~/.aws/credentials`, EC2/ECS instance metadata, and so on.
+
+> **S3 feature flag:** The `s3` backend is only compiled when the `storage-s3` feature is enabled. It is a default feature, so the official Docker image and the worker image both include it. When building from source with `--no-default-features`, pass `--features storage-s3` to `cargo build`; configuring `type = "s3"` on a build without it is a startup error, not a silent fallback. `batlehub --version` prints the features of a running build.
 
 #### Multi-backend
 
@@ -1314,7 +1355,7 @@ curl -X PUT \
 
 ---
 
-**`generic`** — a path-addressed mirror of any plain HTTP file tree, for upstreams that have no package protocol at all: toolchain tarballs (`nodejs.org/dist`, `static.rust-lang.org`, `dl.google.com/go`) and single-binary vendor CDNs (`get.helm.sh`, `dl.min.io`, `binaries.sonarsource.com`). Proxy-only — there is no publish, index or signing model. A request to `/proxy/{registry}/generic/{path}` streams `{upstream}/{path}` and caches it on the first miss.
+**`generic`** — a path-addressed mirror of any plain HTTP file tree, for upstreams that have no package protocol at all: toolchain tarballs (`nodejs.org/dist`, `static.rust-lang.org`, `dl.google.com/go`) and single-binary vendor CDNs (`get.helm.sh`, `binaries.sonarsource.com`). Proxy-only — there is no publish, index or signing model. A request to `/proxy/{registry}/generic/{path}` streams `{upstream}/{path}` and caches it on the first miss.
 
 Two fields are **mandatory** for this type:
 

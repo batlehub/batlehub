@@ -92,13 +92,13 @@ services:
 
   # ── RustFS bucket initialiser (runs once, then exits) ────────────────────────
   # rustfs-init:
-  #   image: minio/mc:latest
+  #   image: rustfs/rc:latest
   #   restart: "no"
   #   user: "1000:1000"
   #   entrypoint: >
   #     /bin/sh -c "
-  #       mc alias set local http://rustfs:9900 rustfsadmin rustfsadmin &&
-  #       mc mb --ignore-existing local/artifacts &&
+  #       rc alias set local http://rustfs:9900 rustfsadmin rustfsadmin &&
+  #       rc bucket create --ignore-existing local/artifacts &&
   #       echo 'bucket ready'
   #     "
 

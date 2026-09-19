@@ -16,17 +16,65 @@ name = "batlehub"
 path = "src/main.rs"
 
 [features]
-default = ["cache-redis", "sbom", "jemalloc"]
+# Every backend the documentation tells an operator to configure is on by
+# default, because the published images are built from this list and nothing
+# else. `storage-s3` was the one that was not, and it is the backend the whole
+# high-availability guide is built on: `[storage] type = "s3"` is refused at
+# startup without it (src/setup.rs), so the images shipped a configuration the
+# docs recommended and the process could not serve. It costs 23 `aws-*` crates,
+# `aws-lc-sys` among them; that is the price of an image that can do what it is
+# documented to do, and `--no-default-features` is still there for a build that
+# wants neither S3 nor Redis. `batlehub --version` prints what a build carries.
+default = ["storage-s3", "cache-redis", "sbom", "jemalloc"]
 storage-s3 = ["batlehub-adapters/storage-s3"]
 cache-redis = ["batlehub-adapters/cache-redis"]
 sbom = ["batlehub-adapters/sbom"]
 # Use jemalloc as the global allocator. Reduces RSS/fragmentation under
 # concurrent load; disable with --no-default-features on platforms where
 # jemalloc doesn't build (e.g. some musl targets).
-jemalloc = ["tikv-jemallocator"]
+jemalloc = ["tikv-jemallocator", "tikv-jemalloc-ctl"]
 
 [dependencies]
-tikv-jemallocator = { version = "0.7", optional = true }
+# `background_threads`, and it is the difference between "jemalloc can return
+# dirty pages to the OS" and "jemalloc does".
+#
+# jemalloc's decay is driven by *allocator activity*: a page goes dirty, its
+# decay deadline passes, and the purge happens on the next allocation that
+# ticks that arena. A process with nothing in flight ticks nothing, so an idle
+# server keeps every page its last burst of traffic touched — for as long as it
+# stays idle. Without this feature `tikv-jemalloc-sys` compiles jemalloc with
+# `--with-malloc-conf=background_thread:false`, which is that behaviour, and
+# the default `background_threads_runtime_support` only makes it *switchable*
+# at runtime — it switches nothing on.
+#
+# Measured on `perf/scripts/soak.sh`, 10m at 100 req/s, same binary and same
+# 60-second quiesce, the only difference being this setting:
+#
+#   off — idle RSS 272.5 → 300.5 MiB (+10.3 %), trend 1.27 MiB/min   FAILED
+#   on  — idle RSS 258.4 → 262.9 MiB (+1.7 %),  trend 0.28 MiB/min   passed
+#
+# So it is also what makes the leak gate mean anything: with purging off, the
+# final window is measured after ten minutes of load and the baseline after
+# one, the difference is retained arenas rather than anything the process is
+# holding, and a clean build fails its own gate. Costs up to one purger thread
+# per CPU, asleep except when there is decayed memory to hand back.
+#
+# Unsupported targets (musl, iOS) warn at build time and carry on; the feature
+# is not what makes them fall back to the system allocator, `--no-default-
+# features` is.
+tikv-jemallocator = { version = "0.7", optional = true, features = [
+    "background_threads",
+    # `stats` compiles jemalloc with `--enable-stats`, which is what makes
+    # `stats.allocated` readable at all — without it the mallctl does not exist
+    # and `src/allocator.rs` warns once and publishes nothing. The counters are
+    # per-arena and bumped on the slow paths, which is why every distribution
+    # that ships jemalloc ships it this way.
+    "stats",
+] }
+# Reads those statistics. Separate crate from the allocator itself because the
+# allocator is a `#[global_allocator]` and this is a `mallctl` client; both are
+# gated on the `jemalloc` feature, so a system-allocator build carries neither.
+tikv-jemalloc-ctl = { version = "0.7", optional = true, features = ["stats"] }
 batlehub-core = { path = "../crates/core" }
 batlehub-config = { path = "../crates/config" }
 batlehub-adapters = { path = "../crates/adapters" }

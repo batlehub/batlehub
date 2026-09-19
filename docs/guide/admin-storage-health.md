@@ -10,7 +10,7 @@ type = "filesystem"
 path = "/var/cache/batlehub"
 ```
 
-### S3-compatible (AWS S3, MinIO, RustFS)
+### S3-compatible (AWS S3, RustFS)
 
 ```toml
 [storage]
@@ -18,7 +18,7 @@ type   = "s3"
 bucket = "batlehub-artifacts"
 region = "us-east-1"
 
-# For self-hosted S3 (MinIO, RustFS): set a custom endpoint
+# For self-hosted S3 (RustFS): set a custom endpoint
 # endpoint = "http://rustfs:9900"
 
 # Credentials (omit to use IAM role / instance profile on AWS)
@@ -53,8 +53,8 @@ Start RustFS via the bundled Compose file, then create the bucket:
 
 ```sh
 task compose:s3:db            # start RustFS + Postgres + Authentik
-mc alias set local http://localhost:9900 rustfsadmin rustfsadmin
-mc mb local/artifacts         # or: task compose:s3:bucket:create
+rc alias set local http://localhost:9900 rustfsadmin rustfsadmin
+rc bucket create local/artifacts   # or: task compose:s3:bucket:create
 task run:s3                   # run the server with the S3 config
 ```
 

@@ -24,6 +24,6 @@ install_extension() {
   rm "/tmp/${vsix}"
 }
 
-install_extension "ms-python.python"        "2024.2.1"
-install_extension "charliermarsh.ruff"      "2024.10.0"
-install_extension "ms-toolsai.jupyter"      "2024.2.0"
+install_extension "ms-python.python"        "2026.7.2026082601"
+install_extension "charliermarsh.ruff"      "2026.82.0"
+install_extension "ms-toolsai.jupyter"      "2026.6.2026071501"

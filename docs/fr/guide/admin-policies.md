@@ -5,7 +5,7 @@
 # plafond, une déclaration que quelqu'un a dû écrire (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/admin-policies.md
-sourceHash: 851ce5fe2cda21b9
+sourceHash: 1484172c016209be
 ---
 
 # Politiques et paquets
@@ -326,6 +326,7 @@ sans danger :
 | deb | signed repository indexes | no — editing one invalidates its signature and the client rejects the whole repository, which is a worse failure than the one filtering fixes |
 | rpm | signed repository indexes | no — editing one invalidates its signature and the client rejects the whole repository, which is a worse failure than the one filtering fixes |
 | pacman | signed repository indexes | no — editing one invalidates its signature and the client rejects the whole repository, which is a worse failure than the one filtering fixes |
+| apk | signed repository indexes | no — editing one invalidates its signature and the client rejects the whole repository, which is a worse failure than the one filtering fixes |
 | jetbrains | — | no listing document |
 | jetbrains-marketplace | `updatePlugins.xml`, `/plugins/list` and the plugin-updates API | yes |
 | generic | — | no listing document |
@@ -334,6 +335,12 @@ sans danger :
 | sdkman | `versions/all` | yes |
 | sdkman | `candidates/default` | yes |
 | sdkman | the rendered `versions/list` table (`sdk list`) | yes |
+| rustup | `manifests.txt` | yes |
+| rustup | channel manifests, their `.sha256` and `channel-rust-stable-date.txt` | yes |
+| galaxy | collection versions | yes |
+| galaxy | the collection document | yes |
+| galaxy | role versions | yes |
+| nix | narinfo | yes |
 <!-- END listing-coverage -->
 
 La table ci-dessus est générée depuis le code Rust et reste en anglais : ses

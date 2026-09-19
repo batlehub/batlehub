@@ -1,0 +1,76 @@
+name: PR checklist
+# What this pull request's diff implies, posted on it as a checklist.
+#
+# **Advisory, and deliberately so.** Every other workflow here fails on what it
+# can decide mechanically; this one answers what they cannot — which of this
+# repository's written obligations the changed paths pull in. A new
+# `RegistryKind` variant owes nine things in eight files; a file under
+# `migrations/` owes a `mig!` entry; a `values.yaml` edit owes a regenerated
+# chart README. Those rules are real, they are written down, and they are the
+# ones a hurried author skips.
+#
+# It does not gate the merge. A required check that turns green when somebody
+# ticks a box measures nothing but the ticking, and a bot's reading of a diff
+# is not a reason to block a human's merge. What it does is put the list where
+# the review happens, with the items the diff suggests are *missing* marked.
+#
+# One comment per pull request, edited in place on every push, so the
+# conversation is not buried under a wall of near-identical reports — the same
+# shape as the SonarCloud gate comment beside it.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+  # `write`, for the comment. A fork's `GITHUB_TOKEN` stays read-only whatever
+  # this says, which is why the post step tolerates its own failure below
+  # rather than turning a fork's pull request red over a comment.
+  pull-requests: write
+jobs:
+  checklist:
+    name: Derive the checklist
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The merge base is needed to diff against it, and `actions/checkout`
+          # fetches one commit by default — `git diff main...HEAD` against a
+          # shallow clone lists the whole tree, and the checklist would then be
+          # every rule in the file on every pull request.
+          fetch-depth: 0
+      - name: The files this branch changes
+        id: files
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # `$BASE...$HEAD` — the three-dot form, so the list is what this
+          # branch changed and not what has landed on the base since it forked.
+          git diff --name-only "$BASE...$HEAD" > changed.txt
+          echo "count=$(wc -l < changed.txt)" >> "$GITHUB_OUTPUT"
+          echo "Changed files:"; cat changed.txt
+      - name: Build the checklist
+        run: |
+          python3 .github/scripts/pr_checklist.py < changed.txt | tee checklist.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Post it on the pull request
+        # Never fails the job: this is a comment, and a repository configuration
+        # that refuses it (a fork, a read-only token) is not a fault in the
+        # branch being reviewed. The checklist is in the step summary either way.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- pr-checklist -->")) | .id' \
+            | head -n1)
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" \
+              -F body=@checklist.md >/dev/null
+            echo "Updated comment $existing"
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+              -F body=@checklist.md >/dev/null
+            echo "Posted a new comment"
+          fi

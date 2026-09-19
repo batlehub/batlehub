@@ -1,4 +1,5 @@
-//! Publish handlers for locally-hosted Debian (`deb`) and RPM (`rpm`) repositories.
+//! Publish handlers for locally-hosted Debian (`deb`), RPM (`rpm`), pacman and
+//! Alpine (`apk`) repositories.
 //!
 //! Uploading a package stores it under a `local:` storage key, records a small
 //! metadata sidecar, and regenerates the affected index files (APT
@@ -10,7 +11,7 @@ use std::sync::Arc;
 
 use actix_web::{put, web, HttpResponse, Responder};
 
-use batlehub_adapters::repo::{deb, gzip, pacman, rpm, OpenPgpSigner};
+use batlehub_adapters::repo::{apk, deb, gzip, pacman, rpm, ApkSigner, OpenPgpSigner};
 use batlehub_core::{
     entities::NotificationEventType,
     error::CoreError,
@@ -25,7 +26,7 @@ use super::repo_storage_key;
 use crate::handlers::schemas::ProtocolDocument;
 use crate::{
     error::AppError, extractors::AuthIdentity, handlers::back_office::require_authenticated,
-    services::NotificationService, RegistryMap, RegistryModeMap, RepoSignerMap,
+    services::NotificationService, ApkSignerMap, RegistryMap, RegistryModeMap, RepoSignerMap,
 };
 
 // ── Small storage helpers ───────────────────────────────────────────────────
@@ -691,6 +692,317 @@ async fn regenerate_pacman(
             signer.armored_public_key().into_bytes(),
         )
         .await?;
+    }
+    Ok(())
+}
+
+// ── Alpine apk publish ───────────────────────────────────────────────────────
+
+/// `PUT /proxy/{registry}/apk/upload`
+#[utoipa::path(
+    put,
+    path = "/proxy/{registry}/apk/upload",
+    tag = "proxy/apk",
+    params(("registry" = String, Path, description = "Registry name")),
+    responses(
+        (status = 201, description = "Package published; APKINDEX regenerated and signed", body = ProtocolDocument, content_type = "text/plain"),
+        (status = 400, description = "Invalid package"),
+        (status = 403, description = "Authentication required"),
+        (status = 404, description = "Unknown or non-local registry"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[allow(clippy::too_many_arguments)]
+#[put("/proxy/{registry}/apk/upload")]
+pub async fn apk_publish(
+    path: web::Path<String>,
+    payload: web::Payload,
+    identity: AuthIdentity,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
+    admin_svc: web::Data<Arc<batlehub_core::services::AdminService>>,
+    map: web::Data<RegistryMap>,
+    mode_map: web::Data<RegistryModeMap>,
+    signers: web::Data<ApkSignerMap>,
+    notification_svc: web::Data<Option<Arc<NotificationService>>>,
+) -> Result<impl Responder, AppError> {
+    let registry = path.into_inner();
+    require_registry_type(&registry, "apk", &map)?;
+    super::super::common::require_local_mode(&registry, &mode_map)?;
+    require_authenticated(&identity)?;
+
+    let bytes = collect_payload(payload).await?;
+
+    // Everything below comes from the package's own `.PKGINFO`, never from the
+    // client's file name: the stored name, the index entry and the coordinate a
+    // block is written against all have to agree, and only the archive knows.
+    // A `400`, not whatever status the parse error's own variant maps to: the
+    // bytes came from the client, so an archive this server cannot read is a
+    // bad request and never a bad gateway. Found by the heavy suite's first
+    // local publish, which sent an `apk mkpkg` package and was answered `502`.
+    let parsed = apk::parse_apk(&bytes).map_err(|e| AppError::bad_request(e.to_string()))?;
+    let name = parsed
+        .info
+        .name()
+        .ok_or_else(|| AppError::bad_request(".PKGINFO is missing pkgname".to_owned()))?
+        .to_owned();
+    let version = parsed
+        .info
+        .version()
+        .ok_or_else(|| AppError::bad_request(".PKGINFO is missing pkgver".to_owned()))?
+        .to_owned();
+    let arch = parsed
+        .info
+        .arch()
+        .ok_or_else(|| AppError::bad_request(".PKGINFO is missing arch".to_owned()))?
+        .to_owned();
+
+    batlehub_core::services::validate_coordinate(&name, &version, None).map_err(AppError::from)?;
+    // `arch` is a path segment of both the package key (`{arch}/{file}`) and the
+    // sidecar key `regenerate_apk` groups on.
+    batlehub_core::services::validate_path_safe("architecture", &arch).map_err(AppError::from)?;
+    if arch.contains('/') {
+        return Err(AppError::bad_request(
+            "architecture must not contain '/'".to_owned(),
+        ));
+    }
+    // A newline in any `.PKGINFO` value would inject a line into the index,
+    // which is a line apk parses as a field of *this* package. Rejected for
+    // every field, not only the three above, because `index_entry` renders more
+    // than three.
+    for (key, value) in &parsed.info.fields {
+        if value.contains('\n') || value.contains('\r') {
+            return Err(AppError::bad_request(format!(
+                ".PKGINFO field '{key}' contains a newline, which would inject a line into the \
+                 generated APKINDEX"
+            )));
+        }
+    }
+
+    let filename = format!("{name}-{version}.apk");
+
+    // **The name this is stored under has to parse back to the coordinate it
+    // was stored for.** `apk_coordinate` splits a file name from the right and
+    // requires a `-r<digits>` release suffix, and nothing above guarantees
+    // `{name}-{version}` survives that round trip:
+    //
+    //   * `pkgver = 1.0` has no release suffix, so the publish returns 201 and
+    //     every download of it is a 400 — the bytes are unreachable for good.
+    //   * `pkgver = 1.0-beta-r0` splits back as `("foo-1.0", "beta-r0")`, so
+    //     the index carries one coordinate and the download gate authorises,
+    //     blocks and age-gates a different one. A block then removes the index
+    //     entry without refusing the direct path fetch.
+    //
+    // Checked by *doing* the round trip rather than by re-deriving the rule, so
+    // this cannot drift from `apk_coordinate` itself.
+    match batlehub_core::services::apk::apk_coordinate(&filename) {
+        Some((parsed_name, parsed_version)) if parsed_name == name && parsed_version == version => {
+        }
+        _ => {
+            return Err(AppError::bad_request(format!(
+                "'{name}' version '{version}' would be stored as '{filename}', which apk reads \
+                 back as a different package. An apk version must end in a '-r<number>' release \
+                 suffix and neither the name nor the version before it may contain one"
+            )))
+        }
+    }
+
+    let artifact_len = bytes.len() as u64;
+    local_svc
+        .enforce_publish_policy(
+            &PublishPolicyRequest {
+                registry: &registry,
+                name: &name,
+                version: &version,
+                artifact_len,
+                signature_bytes: None,
+                signature_type: None,
+                artifact_key: None,
+            },
+            &identity.0,
+        )
+        .await
+        .map_err(AppError::from)?;
+
+    publish_with_quota_rollback(&local_svc, &identity.0, &registry, artifact_len, async {
+        let storage = local_svc.storage.as_ref();
+
+        // 1. The package, byte-exact. A signature member from `abuild` is kept
+        //    as uploaded and one from `apk mkpkg` is absent — both install,
+        //    because the install path checks the index's `C:` (RFC 0026 §2.5).
+        store_bytes(
+            storage,
+            &repo_storage_key(&registry, &format!("{arch}/{filename}")),
+            bytes.clone(),
+        )
+        .await?;
+
+        // 2. The sidecar: the rendered index entry, keyed by arch. Rendering at
+        //    publish time rather than at regeneration means a rebuild re-reads
+        //    small text files instead of re-parsing every `.apk` in the
+        //    repository — which is what makes the block hook affordable.
+        let sidecar = ApkSidecar {
+            name: name.clone(),
+            version: version.clone(),
+            entry: batlehub_core::services::apk::index_entry(
+                &parsed.info,
+                &parsed.identity,
+                parsed.size,
+            ),
+        };
+        let json =
+            serde_json::to_vec(&sidecar).map_err(|e| CoreError::Other(anyhow::anyhow!(e)))?;
+        store_bytes(
+            storage,
+            &format!("local:{registry}/_index/apk/{arch}/{filename}.json"),
+            json,
+        )
+        .await?;
+
+        // 3. The index, filtered and signed.
+        regenerate_apk(
+            storage,
+            admin_svc.repo.as_ref(),
+            &registry,
+            &arch,
+            signers.get(&registry).as_deref(),
+        )
+        .await
+    })
+    .await?;
+
+    dispatch_notification(
+        &notification_svc,
+        NotificationEventType::PackagePublished,
+        &registry,
+        &name,
+        Some(version.clone()),
+        &identity.0.user_id.clone().unwrap_or_default(),
+    );
+
+    Ok(HttpResponse::Created().body(format!("published {name} {version} ({arch})")))
+}
+
+/// What a publish records so the index can be rebuilt without re-reading every
+/// `.apk` in the repository.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct ApkSidecar {
+    pub name: String,
+    pub version: String,
+    /// The rendered `APKINDEX` block for this package, `C:` included.
+    pub entry: String,
+}
+
+/// Rebuild `{arch}/APKINDEX.tar.gz` from the stored sidecars, **omitting
+/// blocked versions**, and sign it.
+///
+/// The filtering is the difference from `regenerate_pacman`, and it is the
+/// whole reason this index is worth generating: it is *this instance's*
+/// document, signed with *this instance's* key, so RFC 0006's rule applies in
+/// full — a blocked version is absent, and apk's solver reports its own
+/// "unable to select" rather than downloading anything and failing.
+pub async fn regenerate_apk(
+    storage: &dyn StorageBackend,
+    packages: &dyn batlehub_core::ports::PackageRepository,
+    registry: &str,
+    arch: &str,
+    signer: Option<&ApkSigner>,
+) -> Result<(), AppError> {
+    let prefix = format!("local:{registry}/_index/apk/{arch}/");
+    let keys = storage.list_keys(&prefix).await.map_err(AppError::from)?;
+
+    let mut sidecars: Vec<ApkSidecar> = read_many(storage, keys)
+        .await?
+        .into_iter()
+        .filter_map(|bytes| {
+            serde_json::from_slice::<ApkSidecar>(&bytes)
+                .map_err(|e| {
+                    // One unreadable sidecar must not wedge the whole index —
+                    // but it does make its package vanish from what clients can
+                    // select, so it is logged rather than swallowed.
+                    tracing::warn!("apk: skipping unreadable sidecar in {registry}/{arch}: {e}");
+                })
+                .ok()
+        })
+        .collect();
+
+    // One query for the registry, not one per package: this runs on every
+    // publish and on every block change.
+    let blocked: std::collections::HashSet<(String, String)> = packages
+        .blocked_in_registry(registry)
+        .await
+        .map_err(AppError::from)?
+        .into_iter()
+        .collect();
+    let before = sidecars.len();
+    sidecars.retain(|s| !blocked.contains(&(s.name.clone(), s.version.clone())));
+    if sidecars.len() != before {
+        tracing::info!(
+            registry,
+            arch,
+            omitted = before - sidecars.len(),
+            "apk: blocked versions omitted from the generated index"
+        );
+    }
+
+    // Deterministic: the same set of packages produces the same bytes, so a
+    // regeneration that changes nothing changes no signature either.
+    sidecars.sort_by(|a, b| (&a.name, &a.version).cmp(&(&b.name, &b.version)));
+
+    let entries: Vec<String> = sidecars.into_iter().map(|s| s.entry).collect();
+    let body = batlehub_core::services::apk::render_index(&entries);
+    let description = format!("{registry} {arch}\n");
+    let data_member = apk::generate_index(&body, &description)
+        .map_err(|e| CoreError::Other(anyhow::anyhow!(e)))?;
+
+    // An unsigned index is what `apk_unsigned = true` asks for; config
+    // validation has already refused the silent case, so reaching here with no
+    // signer is a deliberate choice on the record.
+    let file = match signer {
+        Some(signer) => apk::sign_index(&data_member, signer)
+            .map_err(|e| CoreError::Other(anyhow::anyhow!(e)))?,
+        None => data_member,
+    };
+
+    store_bytes(
+        storage,
+        &repo_storage_key(registry, &format!("{arch}/APKINDEX.tar.gz")),
+        file,
+    )
+    .await
+}
+
+/// Rebuild every architecture's index for one `apk` registry.
+///
+/// The block-change hook (RFC 0026 §6.4). Nothing else in this tree calls a
+/// `regenerate_*` outside its own publish handler, because no other generated
+/// index is *filtered* — `pacman`'s database is not, so a block there needs no
+/// rebuild. An `apk` index is, and without this a block would be enforced at
+/// the download only until the next upload: correct behaviour resting on a
+/// stale document, which is the silent-until-it-is-not failure the design
+/// promises does not exist.
+///
+/// The architectures are discovered from the sidecar keys rather than
+/// configured, so an architecture nobody has published to costs nothing and one
+/// added tomorrow is picked up without a config change.
+pub async fn refresh_apk_indexes(
+    storage: &dyn StorageBackend,
+    packages: &dyn batlehub_core::ports::PackageRepository,
+    registry: &str,
+    signer: Option<&ApkSigner>,
+) -> Result<(), AppError> {
+    let prefix = format!("local:{registry}/_index/apk/");
+    let keys = storage.list_keys(&prefix).await.map_err(AppError::from)?;
+
+    let arches: std::collections::BTreeSet<String> = keys
+        .iter()
+        .filter_map(|k| k.strip_prefix(&prefix))
+        .filter_map(|rest| rest.split('/').next())
+        .filter(|a| !a.is_empty())
+        .map(str::to_owned)
+        .collect();
+
+    for arch in arches {
+        regenerate_apk(storage, packages, registry, &arch, signer).await?;
     }
     Ok(())
 }

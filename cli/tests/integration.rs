@@ -300,6 +300,7 @@ impl TestServer {
             upstream_map: UpstreamMap::default(),
             cargo_index_map: batlehub_web::CargoIndexMap::default(),
             repo_signer_map: batlehub_web::RepoSignerMap::default(),
+            apk_signer_map: batlehub_web::ApkSignerMap::default(),
             vuln_db_map: batlehub_web::VulnDbMap::default(),
             sumdb_map: batlehub_web::SumDbMap::default(),
             registry_host_map: batlehub_web::RegistryHostMap::default(),

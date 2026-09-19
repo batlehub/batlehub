@@ -244,8 +244,8 @@ config:
   #   type: "s3"
   #   bucket: ""
   #   region: "us-east-1"
-  #   endpoint_url: ""       # omit for AWS S3; set for MinIO/RustFS
-  #   force_path_style: true # required for MinIO, RustFS, etc.
+  #   endpoint_url: ""       # omit for AWS S3; set for RustFS
+  #   force_path_style: true # required for RustFS and other path-style stores
   #   prefix: ""             # optional: store under a bucket subfolder
 
   # ── [[auth]] ────────────────────────────────────────────────────────────────

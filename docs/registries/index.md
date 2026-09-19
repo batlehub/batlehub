@@ -34,6 +34,7 @@ Five types are **proxy-only** (no private publish model): **GitHub**, **Forgejo*
 | [RubyGems](./rubygems) | `rubygems` | Gems + versions + info API | proxy · local · hybrid | ✅ | `rubygems.org` |
 | [NuGet (.NET)](./nuget) | `nuget` | v3 index + flat + `.nupkg` | proxy · local · hybrid | ✅ | `api.nuget.org` |
 | [Terraform](./terraform) | `terraform` | Providers + modules (v1 API) | proxy · local · hybrid | ✅ | `registry.terraform.io` |
+| [Ansible Galaxy](./galaxy) | `galaxy` | Collections API v3 (versions list, version document, tarball) + the v1 role reads | proxy · local · hybrid | ✅ | `galaxy.ansible.com/api/` |
 
 ### Editor extensions
 
@@ -50,6 +51,7 @@ Five types are **proxy-only** (no private publish model): **GitHub**, **Forgejo*
 | [Debian / APT](./deb) | `deb` | `Packages`/`Release` + `.deb` | proxy · local · hybrid | ✅ | none — set `upstreams` |
 | [RPM / YUM / DNF](./rpm) | `rpm` | `repodata/` + `.rpm` | proxy · local · hybrid | ✅ | none — set `upstreams` |
 | [Pacman / Arch](./pacman) | `pacman` | `<repo>.db` + `.pkg.tar.zst` | proxy · local · hybrid | ✅ | none — set `upstreams` |
+| [Alpine / apk](./apk) | `apk` | `APKINDEX.tar.gz` + `.apk` | proxy · local · hybrid | ✅ | none — set `upstreams` |
 
 ### Binaries & mirrors <Badge type="tip" text="path-addressed" />
 
@@ -57,6 +59,12 @@ Five types are **proxy-only** (no private publish model): **GitHub**, **Forgejo*
 |----------|--------|-----------------|-------|:-------:|------------------|
 | [JetBrains IDEs](./jetbrains) | `jetbrains` | IDE installer archives | proxy-only | ❌ | `download.jetbrains.com` |
 | [Generic mirror](./generic) | `generic` | Any HTTP file tree | proxy-only | ❌ | none — set `upstreams` + `path_allow` |
+
+### Build caches <Badge type="tip" text="RFC 0028" />
+
+| Registry | `type` | What it proxies | Modes | Publish | Default upstream |
+|----------|--------|-----------------|-------|:-------:|------------------|
+| [Nix binary cache](./nix) | `nix` | `nix-cache-info`, one `{hash}.narinfo` per store path (relayed with only `URL:` rewritten, so every `Sig:` still verifies) and the NARs | proxy · local · hybrid | ✅ | `cache.nixos.org` |
 
 ### Toolchains <Badge type="tip" text="RFC 0010" />
 
@@ -66,6 +74,7 @@ Typed, so a release can be *blocked* rather than merely cached — the identity 
 |----------|--------|-----------------|-------|:-------:|------------------|
 | [Node distributions](./nodedist) | `nodedist` | `index.tab`/`index.json` + release tarballs, `SHASUMS256.txt` byte-exact (nvm, fnm, n, mise) | proxy-only | ❌ | `nodejs.org/dist` |
 | [SDKMAN](./sdkman) | `sdkman` | Candidates API + download broker (the JDK, Gradle, Maven, Kotlin, …); the broker's 302 followed server-side | proxy-only | ❌ | `api.sdkman.io/2` + `broker.sdkman.io` |
+| [Rust toolchain](./rustup) | `rustup` | Channel manifests (the filtered listing) + per-target component tarballs and their `.sha256`; the `.asc` relayed byte-exact | proxy-only | ❌ | `static.rust-lang.org` |
 
 ## Feature matrix
 
@@ -93,6 +102,7 @@ Legend: **Ver.** version listing · **Src** source archive · **Bin** binary/ext
 | RubyGems | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | — | ✓ |
 | NuGet | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Terraform | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ |
+| Ansible Galaxy | ✓ ⁶ | ✓ | — | ✓ | ✓ | ✓ ⁷ | ✓ | ✓ | — |
 | OpenVSX | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | VS Code Marketplace | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
 | JetBrains Marketplace | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ |
@@ -113,6 +123,10 @@ Legend: **Ver.** version listing · **Src** source archive · **Bin** binary/ext
 > ⁴ **Toolchain age gates** (RFC 0010 §6.7): `nodedist` reads the release date from `index.tab`, so current releases are gated and a de-listed one reaches the gate undated; `sdkman` publishes no dates at all, so the gate is decided entirely by `deny_missing_timestamp`. On both kinds that field is **mandatory** on a `release_age_gate` rule.
 >
 > ⁵ **Warming by platform**: a Node release and an SDKMAN version are one archive *per platform*, so `warm_packages` warms the platforms in `cache.warm_platforms`, defaulting to the server's own. The console's per-version fetch button is refused for the same reason.
+>
+> ⁶ **One page, always** (RFC 0031 §4.4): `ansible-galaxy` resolves a pagination link against the configured API root, and upstream's links are absolute *paths* that replace the whole path — so no continuation BatleHub could emit would be followed back to it. Every listing it serves therefore carries a null `next`, and the adapter walks upstream's pages itself.
+>
+> ⁷ **Galaxy age gates**: every upstream collection version carries `created_at`, so the gate is fully decided in proxy mode. A locally published collection and an air-gapped listing may carry no date, so `deny_missing_timestamp` is **mandatory** on a `release_age_gate` rule here, as it is on the toolchain kinds.
 >
 > Package Explorer upstream ("Not Yet Proxied") search: Go uses pkg.go.dev; PyPI is exact-name lookup; Terraform combines module search with namespace/exact provider lookup. The release proxies (GitHub/Forgejo/GitLab), VS Code Marketplace, Conda, and the path-addressed types have no upstream search API — see the [Package Explorer guide](/use/package-explorer-search#upstream-search).
 
@@ -161,11 +175,15 @@ any of them. The page says which rather than showing a disabled button — see
 | deb | path-addressed: there is no package identity to hang a README on | — | neither | no |
 | rpm | path-addressed: there is no package identity to hang a README on | — | neither | no |
 | pacman | path-addressed: there is no package identity to hang a README on | — | neither | no |
+| apk | an `.apk` carries `pkgdesc`, one sentence in `.PKGINFO`; putting a sentence where a reader expects a document makes every package look thinly documented | — | neither | no |
 | jetbrains | path-addressed: there is no package identity to hang a README on | — | neither | no |
 | jetbrains-marketplace | the metadata document, already fetched | yes | versions + README | yes |
 | generic | path-addressed: there is no package identity to hang a README on | — | neither | no |
 | nodedist | a Node release is a set of tarballs and a checksum file; the dist tree carries no prose | — | versions only | no |
 | sdkman | SDKMAN describes a distribution, not a package: no document in the protocol carries prose about a candidate | — | versions only | no |
+| rustup | a toolchain release is a manifest and a set of tarballs; the dist tree carries no prose | — | versions only | no |
+| galaxy | a file inside the artifact | yes | versions only | yes |
+| nix | a store path is a NAR and its narinfo; the protocol carries no prose, and the NAR is a filesystem image rather than a package with a manifest | — | neither | no |
 <!-- END readme-coverage -->
 
 Configured per registry with

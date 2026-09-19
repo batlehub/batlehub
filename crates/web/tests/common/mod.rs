@@ -58,6 +58,128 @@ use batlehub_web::{
     configure_app, new_access_lock, AuthMiddlewareFactory, RegistryModeMap, RepoSignerMap,
 };
 
+/// `(date, [pkg.rust] version)` for a channel string the rustup fixture knows.
+///
+/// The channel travels in the listing package string (`rust/stable`,
+/// `rust/2026-09-05/nightly`), so this is where the fixture decides which
+/// release a channel currently denotes — the thing the repair walk moves.
+fn rustup_channel_release(package: &str) -> Option<(String, String)> {
+    let channel = package.strip_prefix("rust/")?;
+    let (date, name) = match channel.split_once('/') {
+        Some((date, name)) => (Some(date.to_owned()), name),
+        None => (None, channel),
+    };
+    let (default_date, version) = match name {
+        "stable" => ("2026-09-03", "1.98.1"),
+        "nightly" => ("2026-09-05", "1.99.0-nightly"),
+        "1.98.1" => ("2026-09-03", "1.98.1"),
+        "1.98.0" => ("2026-08-20", "1.98.0"),
+        _ => return None,
+    };
+    let date = date.unwrap_or_else(|| default_date.to_owned());
+    // A dated nightly directory names that day's nightly.
+    Some((date, version.to_owned()))
+}
+
+/// A channel manifest, trimmed to what the filter and the coordinate reader
+/// need: the preamble, one component with a target table, and the `rust`
+/// package with a components list that names it.
+fn rustup_manifest(date: &str, version: &str) -> String {
+    format!(
+        "manifest-version = \"2\"\n\
+         date = \"{date}\"\n\
+         \n\
+         [pkg.rust-docs]\n\
+         version = \"{version} (fixture)\"\n\
+         \n\
+         [pkg.rust-docs.target.x86_64-unknown-linux-gnu]\n\
+         available = true\n\
+         url = \"https://static.rust-lang.org/dist/{date}/rust-docs-{version}-x86_64-unknown-linux-gnu.tar.gz\"\n\
+         hash = \"cccc\"\n\
+         \n\
+         [pkg.rust]\n\
+         version = \"{version} (fixture)\"\n\
+         \n\
+         [pkg.rust.target.x86_64-unknown-linux-gnu]\n\
+         available = true\n\
+         url = \"https://static.rust-lang.org/dist/{date}/rust-{version}-x86_64-unknown-linux-gnu.tar.gz\"\n\
+         hash = \"dddd\"\n\
+         \n\
+         [[pkg.rust.target.x86_64-unknown-linux-gnu.components]]\n\
+         pkg = \"rustc\"\n\
+         target = \"x86_64-unknown-linux-gnu\"\n\
+         \n\
+         [[pkg.rust.target.x86_64-unknown-linux-gnu.components]]\n\
+         pkg = \"rust-docs\"\n\
+         target = \"x86_64-unknown-linux-gnu\"\n\
+         \n\
+         [profiles]\n\
+         minimal = [\"rustc\", \"cargo\", \"rust-std\"]\n\
+         default = [\"rustc\", \"cargo\", \"rust-std\", \"rust-docs\"]\n"
+    )
+}
+
+/// The two store paths the `nix` fixture serves, and the narinfo of each.
+///
+/// `NIX_HASH_A` is the real `cache.nixos.org` path RFC 0028 §5.1 quotes, with
+/// its real signature: a test that rewrites its `URL:` and re-verifies the
+/// signature is checking this proxy's fingerprint against a signer it does not
+/// control, which is the only check that can catch a wrong one.
+///
+/// `NIX_HASH_B` is a second *version* of the same package, so "blocked" can be
+/// told from "gone".
+pub const NIX_HASH_A: &str = "0001npbf2n4z3pjy6vm2mw8ywkqixxs6";
+pub const NIX_HASH_B: &str = "1111npbf2n4z3pjy6vm2mw8ywkqixxs6";
+/// The package both paths belong to, as `DrvName` splits their store names.
+pub const NIX_PACKAGE: &str = "hslua-aeson";
+pub const NIX_VERSION_A: &str = "2.3.2-doc";
+pub const NIX_VERSION_B: &str = "2.4.0";
+/// `cache.nixos.org`'s published key, as `nix.conf` ships it.
+pub const NIX_UPSTREAM_KEY: &str = "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=";
+/// The NAR file name `NIX_HASH_A`'s narinfo advertises — upstream's own shape,
+/// which is what the reverse-index route is asked for.
+pub const NIX_NAR_A: &str = "075lhsj33mkk02xn3lf59xn9glvh02wkw9xislbcj1jgjlpcn79x.nar.zst";
+
+/// The narinfo the `nix` fixture serves for `hash`, or `None`.
+///
+/// Public so a route test can diff what was *served* against what was *sent*
+/// rather than against a second copy of the document that could drift from it.
+pub fn nix_fixture_for(hash: &str) -> Option<String> {
+    if hash == NIX_HASH_A {
+        // Byte-exact from cache.nixos.org, 2026-09-17.
+        Some(format!("\
+StorePath: /nix/store/{NIX_HASH_A}-{NIX_PACKAGE}-{NIX_VERSION_A}
+URL: nar/{NIX_NAR_A}
+Compression: zstd
+FileHash: sha256:10k72lz1iazridh4787xk3mfl6c5akf8x88xz7bnswc03b5gvyqp
+FileSize: 46064
+NarHash: sha256:075lhsj33mkk02xn3lf59xn9glvh02wkw9xislbcj1jgjlpcn79x
+NarSize: 226848
+References: ghpayap4j5fqg9ryyzrfdj9ygdi01iw9-aeson-2.2.4.1-doc ibfrnxf4jrihd9gkax1sjlr707gz36jb-scientific-0.3.8.1-doc p6xzjlrry42f3pdcgk1xn53hps56ai8s-lua-2.3.4-doc q9915zjvbv0pi4hijw3hgx0nb8asyjlr-hslua-marshalling-2.3.2-doc r0fajfsqr1xlvr9177gh0jjq9b0axk7n-hslua-core-2.3.2.1-doc
+Deriver: y1h1bh5gl539r42jydbnbmp3vyh11sva-hslua-aeson-2.3.2.drv
+Sig: cache.nixos.org-1:21qiHy652KfJ7Rsnc+dy5KndgujuIQEU/oudrFh7sWkkLlT9r8F3AxKA//dMvr9xWBA3tITPZA6ZFC7KxxRJBA==
+"))
+    } else if hash == NIX_HASH_B {
+        // A second version. Its `Sig:` is deliberately *not* a real one: no
+        // test asserts over it, and inventing a plausible-looking signature
+        // that verifies against nothing would be the kind of fixture that makes
+        // a broken verifier look green.
+        Some(format!(
+            "\
+StorePath: /nix/store/{NIX_HASH_B}-{NIX_PACKAGE}-{NIX_VERSION_B}
+URL: nar/22k72lz1iazridh4787xk3mfl6c5akf8x88xz7bnswc03b5gvy.nar.zst
+Compression: zstd
+FileHash: sha256:22k72lz1iazridh4787xk3mfl6c5akf8x88xz7bnswc03b5gvyqp
+FileSize: 1024
+NarHash: sha256:175lhsj33mkk02xn3lf59xn9glvh02wkw9xislbcj1jgjlpcn79x
+NarSize: 4096
+"
+        ))
+    } else {
+        None
+    }
+}
+
 pub struct FixedRegistry {
     registry_type: String,
 }
@@ -132,6 +254,30 @@ impl RegistryClient for FixedRegistry {
             .collect())
     }
 
+    /// `roles/#{id}` → `roles/{user}.{role}` for the galaxy fixture, and
+    /// "already canonical" for everything else.
+    ///
+    /// The v1 role surface is addressed by a numeric id the client learns from
+    /// the search document, and the proxy resolves it to the name a block is
+    /// written on before anything else runs (RFC 0031 §6.2).
+    async fn canonical_coordinate(&self, pkg: &PackageId) -> Result<Option<PackageId>, CoreError> {
+        if self.registry_type != "galaxy" {
+            return Ok(None);
+        }
+        let Some(id) = batlehub_core::services::galaxy::role_id_of(&pkg.name) else {
+            return Ok(None);
+        };
+        if id != "4567" {
+            return Err(CoreError::NotFound(format!(
+                "role {id} is not in the fixture"
+            )));
+        }
+        Ok(Some(PackageId {
+            name: "roles/geerlingguy.docker".to_owned(),
+            ..pkg.clone()
+        }))
+    }
+
     async fn fetch_version_document(
         &self,
         package: &str,
@@ -144,6 +290,22 @@ impl RegistryClient for FixedRegistry {
             )))
         };
         match (self.registry_type.as_str(), kind) {
+            // A Nix binary cache: two store paths of one package, so a block on
+            // one version can be told from a block on the package. The
+            // `Sig:` is real — it is `cache.nixos.org-1`'s over the *first*
+            // path's fingerprint — so a relay test can assert the signature
+            // survived the `URL:` rewrite rather than merely that a line is
+            // still present (RFC 0028 §5.2).
+            ("nix", k) if k == DocumentKind::NARINFO => match nix_fixture_for(package) {
+                Some(body) => Ok(VersionDocument::text("text/x-nix-narinfo", body)),
+                None => Err(CoreError::NotFound(format!(
+                    "{package}.narinfo is not in this cache"
+                ))),
+            },
+            ("nix", k) if k == DocumentKind::CACHE_INFO => Ok(VersionDocument::text(
+                "text/x-nix-cache-info",
+                "StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 40\n",
+            )),
             ("npm", DocumentKind::Versions) => {
                 let tarball = |v: &str| {
                     serde_json::json!({
@@ -427,6 +589,139 @@ impl RegistryClient for FixedRegistry {
                 { "version": "v1.0.0", "date": "2020-01-02", "files": ["headers", "linux-x64", "src"],
                   "npm": "6.13.0", "lts": "Argon", "security": true }
             ]))),
+
+            // The Rust dist tree (RFC 0024). `manifests.txt` is the list; a
+            // channel manifest is one release, addressed by the channel in the
+            // package string (`rust/stable`, `rust/2026-09-05/nightly`). The
+            // five rows below are consistent with each other so the repair walk
+            // has somewhere to walk: `stable` is 1.98.1 of 2026-09-03, the
+            // release before it is 1.98.0 of 2026-08-20, and there are two
+            // nightlies a day apart.
+            // Ansible Galaxy (RFC 0031). The same three versions every other
+            // fixture advertises, in the v3 shape: `data`, a `meta.count`, and
+            // `links` already null — the one-page invariant the adapter
+            // applies after walking upstream's pages.
+            ("galaxy", DocumentKind::Versions) => {
+                let (ns, name) = package.split_once('.').unwrap_or(("acme", "util"));
+                let entry = |v: &str| {
+                    serde_json::json!({
+                        "version": v,
+                        "href": format!("https://upstream.invalid/api/v3/collections/{ns}/{name}/versions/{v}/"),
+                        "created_at": "2020-01-02T00:00:00Z",
+                        "updated_at": "2020-01-02T00:00:00Z",
+                        "requires_ansible": ">=2.15.0",
+                        "marks": [],
+                    })
+                };
+                Ok(VersionDocument::json(serde_json::json!({
+                    "meta": { "count": 3 },
+                    "links": { "first": null, "previous": null, "next": null, "last": null },
+                    "data": [entry("1.0.0"), entry("1.1.0"), entry("2.0.0-beta.1")],
+                })))
+            }
+            ("galaxy", DocumentKind::COLLECTION) => {
+                let (ns, name) = package.split_once('.').unwrap_or(("acme", "util"));
+                Ok(VersionDocument::json(serde_json::json!({
+                    // Upstream's own URLs, so a test can tell whether the
+                    // handler repointed them.
+                    "href": format!("https://upstream.invalid/api/v3/collections/{ns}/{name}/"),
+                    "namespace": ns,
+                    "name": name,
+                    "deprecated": false,
+                    "versions_url": format!("https://upstream.invalid/api/v3/collections/{ns}/{name}/versions/"),
+                    "highest_version": {
+                        "href": format!("https://upstream.invalid/api/v3/collections/{ns}/{name}/versions/1.1.0/"),
+                        "version": "1.1.0",
+                    },
+                    "created_at": "2020-01-01T00:00:00Z",
+                    "updated_at": "2020-02-01T00:00:00Z",
+                })))
+            }
+            ("galaxy", DocumentKind::VERSION_DETAIL) => {
+                let name = batlehub_core::services::galaxy::package_of(package);
+                let version = batlehub_core::services::galaxy::address_of(package)
+                    .unwrap_or("1.0.0");
+                let (ns, coll) = name.split_once('.').unwrap_or(("acme", "util"));
+                Ok(VersionDocument::json(serde_json::json!({
+                    "version": version,
+                    "href": format!("https://upstream.invalid/api/v3/collections/{ns}/{coll}/versions/{version}/"),
+                    "created_at": "2020-01-02T00:00:00Z",
+                    "requires_ansible": ">=2.15.0",
+                    // The two fields the client verifies, and which therefore
+                    // have to survive untouched.
+                    "artifact": {
+                        "filename": format!("{ns}-{coll}-{version}.tar.gz"),
+                        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                        "size": 2866617,
+                    },
+                    "collection": {
+                        "name": coll,
+                        "href": format!("https://upstream.invalid/api/v3/collections/{ns}/{coll}/"),
+                    },
+                    "namespace": { "name": ns },
+                    "download_url": format!("https://upstream.invalid/api/v3/plugin/ansible/content/published/collections/artifacts/{ns}-{coll}-{version}.tar.gz"),
+                    "metadata": { "dependencies": {} },
+                    "signatures": [],
+                })))
+            }
+            ("galaxy", DocumentKind::ROLE) => Ok(VersionDocument::json(serde_json::json!({
+                "count": 1,
+                "results": [{
+                    "id": 4567,
+                    "github_user": "geerlingguy",
+                    "github_repo": "ansible-role-docker",
+                    "name": "docker",
+                }],
+            }))),
+            ("galaxy", DocumentKind::ROLE_VERSIONS) => {
+                let entry = |v: &str| {
+                    serde_json::json!({
+                        "id": 1,
+                        "name": v,
+                        "release_date": "2020-01-02T00:00:00Z",
+                        "download_url": format!("https://github.com/geerlingguy/ansible-role-docker/archive/{v}.tar.gz"),
+                    })
+                };
+                Ok(VersionDocument::json(serde_json::json!({
+                    "count": 3,
+                    "next": null,
+                    "next_link": null,
+                    "results": [entry("1.0.0"), entry("1.1.0"), entry("2.0.0-beta.1")],
+                })))
+            }
+            ("rustup", DocumentKind::Versions) => Ok(VersionDocument::text(
+                "text/plain; charset=utf-8",
+                "static.rust-lang.org/dist/2026-08-20/channel-rust-1.98.0.toml\n\
+                 static.rust-lang.org/dist/2026-09-03/channel-rust-1.98.1.toml\n\
+                 static.rust-lang.org/dist/2026-09-03/channel-rust-stable.toml\n\
+                 static.rust-lang.org/dist/2026-09-04/channel-rust-nightly.toml\n\
+                 static.rust-lang.org/dist/2026-09-05/channel-rust-nightly.toml\n",
+            )),
+            ("rustup", DocumentKind::MANIFEST) => {
+                let Some((date, version)) = rustup_channel_release(package) else {
+                    return Err(CoreError::NotFound(format!(
+                        "no manifest for '{package}' in the fixture tree"
+                    )));
+                };
+                Ok(VersionDocument::text(
+                    "text/plain; charset=utf-8",
+                    rustup_manifest(&date, &version),
+                ))
+            }
+            ("rustup", DocumentKind::MANIFEST_ASC) => Ok(VersionDocument::text(
+                "application/pgp-signature",
+                "-----BEGIN PGP SIGNATURE-----\nfixture\n-----END PGP SIGNATURE-----\n",
+            )),
+            ("rustup", DocumentKind::STABLE_DATE) => {
+                Ok(VersionDocument::text("text/plain; charset=utf-8", "2026-09-03"))
+            }
+            // Single-quoted, as upstream writes it: a double-quoted fixture
+            // is what let the bootstrap route pass here and 404 against the
+            // real tree (tests/heavy/rustup.sh §7).
+            ("rustup", DocumentKind::RUSTUP_RELEASE) => Ok(VersionDocument::text(
+                "text/plain; charset=utf-8",
+                "schema-version = '1'\nversion = '1.29.1'\n",
+            )),
 
             // SDKMAN's text documents (RFC 0010 phase 6). The same three
             // versions as everywhere else. `java` renders the vendor-table
@@ -1268,6 +1563,9 @@ pub async fn finish_test_app(
         .app_data(actix_web::web::Data::new(local_svc))
         .app_data(actix_web::web::Data::new(mode_map))
         .app_data(actix_web::web::Data::new(RepoSignerMap::default()))
+        .app_data(actix_web::web::Data::new(
+            batlehub_web::ApkSignerMap::default(),
+        ))
         .app_data(actix_web::web::Data::new(batlehub_web::VulnDbMap::default()))
         // Empty by default: absence means the `/sumdb/{path}` route answers 404,
         // which is the contract a registry with no checksum database wants
@@ -1367,6 +1665,9 @@ pub async fn finish_test_app_with_extra<E: 'static>(
         .app_data(actix_web::web::Data::new(local_svc))
         .app_data(actix_web::web::Data::new(mode_map))
         .app_data(actix_web::web::Data::new(RepoSignerMap::default()))
+        .app_data(actix_web::web::Data::new(
+            batlehub_web::ApkSignerMap::default(),
+        ))
         .app_data(actix_web::web::Data::new(batlehub_web::VulnDbMap::default()))
         // Empty by default: absence means the `/sumdb/{path}` route answers 404,
         // which is the contract a registry with no checksum database wants
@@ -1539,6 +1840,25 @@ pub async fn make_app_with_defaults_and_access(
             "sdkman".to_owned(),
             FixedRegistry::new("sdkman") as Arc<dyn RegistryClient>,
         ),
+        // RFC 0024: same reason — the conformance fixture asserts rustup's
+        // request lines reach the rustup routes.
+        (
+            "rustup".to_owned(),
+            FixedRegistry::new("rustup") as Arc<dyn RegistryClient>,
+        ),
+        // RFC 0031: the conformance fixture asserts `ansible-galaxy`'s request
+        // lines reach the galaxy routes rather than the npm catch-alls.
+        (
+            "galaxy".to_owned(),
+            FixedRegistry::new("galaxy") as Arc<dyn RegistryClient>,
+        ),
+        // RFC 0028: the conformance fixture asserts both NAR patterns —
+        // `nar/{hash}/{file}` and `nar/{file}` — match their own routes, which
+        // is the one route-ordering hazard this kind has.
+        (
+            "nix".to_owned(),
+            FixedRegistry::new("nix") as Arc<dyn RegistryClient>,
+        ),
     ]
     .into();
 
@@ -1581,6 +1901,15 @@ pub async fn make_app_with_defaults_and_access(
             "sdkman".to_owned(),
             Arc::new(rbac_policy(repo_dyn.clone()).0),
         ),
+        (
+            "rustup".to_owned(),
+            Arc::new(rbac_policy(repo_dyn.clone()).0),
+        ),
+        (
+            "galaxy".to_owned(),
+            Arc::new(rbac_policy(repo_dyn.clone()).0),
+        ),
+        ("nix".to_owned(), Arc::new(rbac_policy(repo_dyn.clone()).0)),
     ]
     .into();
     // Every fixture registry gets a hierarchy, derived from the same
@@ -1654,6 +1983,9 @@ pub async fn make_app_with_defaults_and_access(
         ("composer", "composer"),
         ("nodedist", "nodedist"),
         ("sdkman", "sdkman"),
+        ("rustup", "rustup"),
+        ("galaxy", "galaxy"),
+        ("nix", "nix"),
     ]);
     let cargo_indexes = batlehub_web::CargoIndexMap::default();
     finish_test_app(
@@ -2660,4 +2992,89 @@ pub fn make_composer_zip(name: &str, version: &str) -> Vec<u8> {
         writer.finish().unwrap();
     }
     buf.into_inner()
+}
+
+/// A `.apk` in the **v2** container: gzip(control tar with `.PKGINFO`) followed
+/// by gzip(data tar).
+///
+/// Deliberately unsigned, and deliberately v2. A package with no `.SIGN.*`
+/// member still installs from a signed index, because the install path checks
+/// the index's `C:` and never the package's own signature (RFC 0026 §2.5) —
+/// and v2 because that is what every Alpine branch ships and what an
+/// `APKINDEX` can describe. apk-tools 3's own `mkpkg` writes the v3 (ADB)
+/// container instead, which this registry refuses with a `400` naming the
+/// format.
+pub fn make_apk_v2(pkginfo: &str, data_path: &str, data: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+
+    let tar_of = |name: &str, content: &[u8]| {
+        let mut tb = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_path(name).unwrap();
+        header.set_size(content.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tb.append(&header, content).unwrap();
+        tb.into_inner().unwrap()
+    };
+    let gz = |bytes: &[u8]| {
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        enc.write_all(bytes).unwrap();
+        enc.finish().unwrap()
+    };
+
+    [
+        gz(&tar_of(".PKGINFO", pkginfo.as_bytes())),
+        gz(&tar_of(data_path, data)),
+    ]
+    .concat()
+}
+
+/// The `.PKGINFO` of a minimal package, for [`make_apk_v2`].
+pub fn apk_pkginfo(name: &str, version: &str, arch: &str) -> String {
+    format!(
+        "pkgname = {name}\npkgver = {version}\narch = {arch}\nsize = 1024\n\
+         builddate = 1700000000\npkgdesc = a test package\nlicense = MIT\n"
+    )
+}
+
+/// Read the `APKINDEX` text back out of a served `APKINDEX.tar.gz`.
+///
+/// Walks the concatenated gzip members: the index lives behind the signature,
+/// and a single-member reader finds only the signature.
+pub fn apk_index_text(file: &[u8]) -> String {
+    use std::io::Read;
+
+    let mut offset = 0usize;
+    while offset < file.len() {
+        let mut cursor = std::io::Cursor::new(&file[offset..]);
+        let mut plain = Vec::new();
+        {
+            let mut dec = flate2::bufread::GzDecoder::new(&mut cursor);
+            if dec.read_to_end(&mut plain).is_err() {
+                break;
+            }
+        }
+        let consumed = cursor.position() as usize;
+        if consumed == 0 {
+            break;
+        }
+        let mut archive = tar::Archive::new(std::io::Cursor::new(plain));
+        if let Ok(entries) = archive.entries() {
+            for entry in entries.flatten() {
+                let is_index = entry
+                    .path()
+                    .ok()
+                    .is_some_and(|p| p.to_string_lossy() == "APKINDEX");
+                if is_index {
+                    let mut text = String::new();
+                    let mut entry = entry;
+                    entry.read_to_string(&mut text).unwrap();
+                    return text;
+                }
+            }
+        }
+        offset += consumed;
+    }
+    panic!("no APKINDEX entry in the served file");
 }

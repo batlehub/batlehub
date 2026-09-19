@@ -4,7 +4,7 @@
 #
 # Every other heavy suite runs on `storage = filesystem`, `auth = token` and
 # the in-memory cache — the shape no deployment has. The adapters have their
-# own integration tests against MinIO and Redis, but none of those is a
+# own integration tests against an S3 server and Redis, but none of those is a
 # client fetching a package, and a stream cut in the middle of a `.vsix`, a
 # document served from a cache under an older block list, or a JWT the
 # server refuses for a reason npm cannot show are all things only a client
@@ -26,14 +26,15 @@
 #      page through Redis, a second install with no upstream request.
 #
 # What the suite starts itself when the environment does not name one:
-# MinIO (`S3_TEST_ENDPOINT`, a cached download of the server binary), Redis
+# RustFS (`S3_TEST_ENDPOINT`, a cached download of the server binary — the same
+# implementation CI runs as a service, and MinIO's replacement here), Redis
 # (`REDIS_URL`, the `redis-server` binary out of the PyPI `redis-server`
 # wheel), and it discovers dex at `OIDC_ISSUER` or the workspace sidecar on
 # port 9000. CI provides all three as services (test.yaml, `heavy-backends`).
 #
-# Ports: 8140 (server), 8141 (tap), 8142 (upstream), 8143 (MinIO), 8144
+# Ports: 8140 (server), 8141 (tap), 8142 (upstream), 8143 (S3), 8144
 # (Redis). Environment: DATABASE_URL (required); S3_TEST_ENDPOINT,
-# AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY (default minioadmin), REDIS_URL,
+# AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY (default rustfsadmin), REDIS_URL,
 # OIDC_ISSUER, OIDC_CLIENT_ID/OIDC_CLIENT_SECRET (proxy-auth), OIDC_USER/
 # OIDC_PASSWORD (dev@example.com / password); HEAVY_PORT, HEAVY_TAP_PORT,
 # HEAVY_UPSTREAM_PORT; COVERAGE.
@@ -56,10 +57,12 @@ PKG_VERSION="1.0.0"
 DIST="heavybackends"
 MODULE="heavybackends"
 DIST_VERSION="1.0.0"
-MINIO_PORT="${HEAVY_MINIO_PORT:-8143}"
+# The port a local run's own S3 server binds. `HEAVY_MINIO_PORT` is still read,
+# because it is what every note and runbook about this suite names.
+S3_PORT="${HEAVY_S3_PORT:-${HEAVY_MINIO_PORT:-8143}}"
 REDIS_PORT="${HEAVY_REDIS_PORT:-8144}"
-export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-minioadmin}"
-export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-minioadmin}"
+export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-rustfsadmin}"
+export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-rustfsadmin}"
 # The SDK would otherwise spend seconds probing EC2's metadata service on a
 # machine that has none, before falling back to the variables above.
 export AWS_EC2_METADATA_DISABLED=true
@@ -70,23 +73,48 @@ OIDC_PASSWORD="${OIDC_PASSWORD:-password}"
 
 fetch() { curl -fsSL --proto '=https' --proto-redir '=https' "$@"; return $?; }
 
+# The S3 server a local run starts for itself is **RustFS**, which is also the
+# `rustfs/rustfs` image the CI job runs as a service: one S3 implementation
+# measured in both places rather than MinIO here and RustFS there. It replaced
+# MinIO because MinIO's own download host now answers **410 Gone** for every
+# path under `dl.min.io/{server,client}/…`, so the local half of this suite
+# could not be started at all.
+#
+# The *client* is still MinIO's `mc`, and now deliberately rather than for want
+# of an alternative: RustFS does ship a CLI (`rustfs/cli`, the `rc` binary,
+# which `mise.toml` installs for the compose and perf bucket tasks), but `rc`
+# has no `--config-dir`. Its alias file is fixed at `~/.config/rc/config.toml`,
+# so a heavy run would write its throwaway credentials into the caller's own
+# config instead of into `$HEAVY_WORK`, and two runs at once would fight over
+# it. `mc` is a plain S3 client and the four things this suite asks of it
+# (alias, mb, ls --recursive, cat) are S3 calls, verified against RustFS. From
+# the project's GitHub release for the same reason `rustfs` is, pinned so an
+# upstream release cannot re-point a heavy suite.
+#
+# If that isolation arrives, `rc object list -r --json` is the migration: it
+# replaces the `awk '{print $NF}'` below with a parsed key list.
+RUSTFS_RELEASE="${HEAVY_RUSTFS_RELEASE:-1.0.0-rc.6}"
+MC_RELEASE="${HEAVY_MC_RELEASE:-RELEASE.2025-08-13T08-35-41Z}"
+
 # ── 0. The backends ─────────────────────────────────────────────────────────
 
 if [[ -z "${S3_TEST_ENDPOINT:-}" ]]; then
-  MINIO="$HEAVY_CACHE/minio"
-  if [[ ! -x "$MINIO" ]]; then
-    heavy_log "Downloading the MinIO server into $MINIO"
-    fetch -o "$MINIO.download" "https://dl.min.io/server/minio/release/linux-amd64/minio" \
-      && mv "$MINIO.download" "$MINIO" && chmod +x "$MINIO"
-  fi
-  mkdir -p "$HEAVY_WORK/minio-data"
-  MINIO_ROOT_USER="$AWS_ACCESS_KEY_ID" MINIO_ROOT_PASSWORD="$AWS_SECRET_ACCESS_KEY" MINIO_BROWSER=off \
-    "$MINIO" server "$HEAVY_WORK/minio-data" --address "127.0.0.1:$MINIO_PORT" >"$HEAVY_WORK/minio.log" 2>&1 &
+  # One binary in a zip; `heavy_cached_dir` keeps it across runs, as it does
+  # every other client this suite downloads.
+  RUSTFS="$(heavy_cached_dir "rustfs-$RUSTFS_RELEASE" \
+    "https://github.com/rustfs/rustfs/releases/download/$RUSTFS_RELEASE/rustfs-linux-x86_64-musl-v$RUSTFS_RELEASE.zip" \
+    zip)/rustfs"
+  [[ -x "$RUSTFS" ]] || chmod +x "$RUSTFS"
+  mkdir -p "$HEAVY_WORK/s3-data"
+  "$RUSTFS" server "$HEAVY_WORK/s3-data" --address "127.0.0.1:$S3_PORT" \
+    --access-key "$AWS_ACCESS_KEY_ID" --secret-key "$AWS_SECRET_ACCESS_KEY" \
+    >"$HEAVY_WORK/s3.log" 2>&1 &
   HEAVY_EXTRA_PIDS+=($!)
-  export S3_TEST_ENDPOINT="http://127.0.0.1:$MINIO_PORT"
+  export S3_TEST_ENDPOINT="http://127.0.0.1:$S3_PORT"
+  # RustFS answers MinIO's own liveness path, so the probe is unchanged.
   for _ in $(seq 1 60); do curl -sf -o /dev/null "$S3_TEST_ENDPOINT/minio/health/live" && break; sleep 0.5; done
-  curl -sf -o /dev/null "$S3_TEST_ENDPOINT/minio/health/live" || { tail -20 "$HEAVY_WORK/minio.log" >&2; heavy_fail "MinIO never came up on $MINIO_PORT"; }
-  heavy_log "MinIO at $S3_TEST_ENDPOINT ($("$MINIO" --version 2>/dev/null | head -1))"
+  curl -sf -o /dev/null "$S3_TEST_ENDPOINT/minio/health/live" || { tail -20 "$HEAVY_WORK/s3.log" >&2; heavy_fail "RustFS never came up on $S3_PORT"; }
+  heavy_log "RustFS at $S3_TEST_ENDPOINT ($("$RUSTFS" --version 2>/dev/null | head -1))"
 fi
 export S3_TEST_ENDPOINT
 
@@ -186,7 +214,9 @@ upstream_serve
 MC="$(command -v mc || true)"
 if [[ -z "$MC" ]]; then
   MC="$HEAVY_CACHE/mc"
-  [[ -x "$MC" ]] || { heavy_log "Downloading the MinIO client into $MC"; fetch -o "$MC" https://dl.min.io/client/mc/release/linux-amd64/mc && chmod +x "$MC"; }
+  [[ -x "$MC" ]] || { heavy_log "Downloading the MinIO client into $MC"; \
+    fetch -o "$MC" "https://github.com/minio/mc/releases/download/$MC_RELEASE/mc.linux-amd64.$MC_RELEASE" \
+      && chmod +x "$MC"; }
 fi
 export MC_CONFIG_DIR="$HEAVY_WORK/mc"
 export HEAVY_S3_BUCKET="heavy-$HEAVY_RUN"

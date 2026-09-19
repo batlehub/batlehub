@@ -3,5 +3,5 @@ channels:
   - http://localhost:8080/proxy/my-conda
   - nodefaults
 dependencies:
-  - python=3.11
+  - python=3.13
   - numpy

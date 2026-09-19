@@ -49,6 +49,106 @@ async fn hybrid_cargo_config_returns_api_url() {
     );
 }
 
+/// **`auth-required` answers a grant question, and must not be derived by
+/// running the rule chain.**
+///
+/// It used to come from `authorize_read`, which evaluates the whole chain
+/// against a synthetic `_@_` coordinate — and `authorize_read_against`'s own
+/// doc comment warns that a synthetic `PackageMetadata` reports `published_at`
+/// and `is_signed` as `None`, which `release_age_gate` reads as *refuse*. So an
+/// open, anonymously readable registry that also carried a release-age rule
+/// advertised `auth-required: true`, and anonymous cargo stopped working
+/// against a registry that would happily have served it — the exact inverse of
+/// what the derivation exists to prevent.
+///
+/// The grant hierarchy here is the part that has to be anonymous-readable;
+/// the default fixture is not, which is why it is spelled out.
+#[actix_web::test]
+async fn a_release_age_gate_does_not_make_an_open_registry_advertise_auth_required() {
+    use batlehub_core::{
+        entities::Role,
+        rules::{BlockListRule, ReleaseAgeGateRule},
+        services::RegistryPolicy,
+    };
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    async fn config_json(with_age_gate: bool) -> Value {
+        let parts = local_registry_app_parts("local-cargo", "cargo", RegistryMode::Local, None);
+
+        // Anonymous may read the index and download: an open registry.
+        let fixture = common::RbacFixture {
+            roles: std::collections::HashMap::from([
+                (
+                    Role::Anonymous,
+                    vec!["source:read".to_owned(), "releases:read".to_owned()],
+                ),
+                (
+                    Role::User,
+                    vec!["source:read".to_owned(), "releases:read".to_owned()],
+                ),
+                (Role::Admin, vec!["*".to_owned()]),
+            ]),
+            groups: std::collections::HashMap::new(),
+        };
+        let grants = Arc::new(fixture_grants(
+            "local-cargo",
+            "cargo",
+            &RegistryMode::Local,
+            &fixture,
+        ));
+        {
+            let mut hot = parts.proxy_svc.hot.write().await;
+            hot.grants.insert("local-cargo".to_owned(), grants);
+            if with_age_gate {
+                hot.policies.insert(
+                    "local-cargo".to_owned(),
+                    Arc::new(RegistryPolicy {
+                        metadata_ttl: Some(Duration::from_secs(300)),
+                        firewall_only: false,
+                        serve_stale_metadata: false,
+                        artifact_ttl: None,
+                        rules: vec![
+                            Box::new(BlockListRule::new(Arc::clone(&parts.proxy_svc.repo))),
+                            // The rule that reads an absent timestamp as a refusal.
+                            Box::new(
+                                ReleaseAgeGateRule::new(Duration::from_secs(86_400), vec![])
+                                    .with_deny_missing_timestamp(true),
+                            ),
+                        ],
+                    }),
+                );
+            }
+        }
+        let app =
+            build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+        let resp = call_service(
+            &app,
+            TestRequest::get()
+                .uri("/proxy/local-cargo/registry/config.json")
+                .to_request(),
+        )
+        .await;
+        assert_eq!(resp.status(), 200);
+        read_body_json(resp).await
+    }
+
+    // The control: an open registry with no age gate advertises nothing.
+    let open = config_json(false).await;
+    assert!(
+        open.get("auth-required").is_none(),
+        "control: an anonymously readable registry must not demand a credential: {open}"
+    );
+
+    // And adding a rule that cannot judge a synthetic coordinate does not
+    // change the answer, because the answer is about grants.
+    let gated = config_json(true).await;
+    assert!(
+        gated.get("auth-required").is_none(),
+        "a release-age gate is not a credential requirement: {gated}"
+    );
+}
+
 // ── cargo publish ─────────────────────────────────────────────────────────────
 
 #[actix_web::test]

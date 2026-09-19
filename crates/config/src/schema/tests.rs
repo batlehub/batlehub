@@ -2911,6 +2911,110 @@ fn an_age_gate_on_sdkman_must_state_deny_missing_timestamp() {
     }
 }
 
+/// Proxy-only, a default upstream that is the tree *root*, and a deny list
+/// whose entries have to be manifest package names (RFC 0024 §4.5).
+#[test]
+fn rustup_is_proxy_only_and_takes_the_tree_root_as_its_upstream() {
+    parse_config(
+        r#"
+        [[registries]]
+        type = "rustup"
+        name = "rust"
+        "#,
+    )
+    .validate()
+    .expect("a bare rustup registry loads");
+
+    parse_config(
+        r#"
+        [[registries]]
+        type = "rustup"
+        name = "rust"
+        upstreams = ["https://mirror.internal/rust"]
+        deny_components = ["rust-docs", "rust-mingw"]
+        "#,
+    )
+    .validate()
+    .expect("a mirror and a deny list load");
+
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "rustup"
+        name = "rust"
+        mode = "hybrid"
+        "#,
+        "rustup has no publish protocol, so hybrid mode must be refused",
+    );
+    assert!(err.contains("not supported for rustup"), "{err}");
+
+    // The most likely mistake for an operator migrating from the `generic`
+    // example, and it would otherwise fail as a 404 per request.
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "rustup"
+        name = "rust"
+        upstreams = ["https://static.rust-lang.org/dist"]
+        "#,
+        "an upstream ending in /dist must not load",
+    );
+    assert!(err.contains("root of the tree"), "{err}");
+    assert!(
+        err.contains("https://static.rust-lang.org"),
+        "the message names the fix: {err}"
+    );
+}
+
+/// `deny_components` is rustup's, its entries are matched against
+/// `[pkg.{name}…]` headers, and three names would leave a registry nothing can
+/// install from.
+#[test]
+fn deny_components_is_refused_off_rustup_and_never_names_the_minimal_profile() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        deny_components = ["rust-docs"]
+        "#,
+        "deny_components on npm must not load",
+    );
+    assert!(err.contains("deny_components"), "{err}");
+    assert!(err.contains("rustup"), "{err}");
+
+    for name in ["rustc", "cargo", "rust-std"] {
+        let err = validation_error(
+            &format!(
+                r#"
+                [[registries]]
+                type = "rustup"
+                name = "rust"
+                deny_components = ["{name}"]
+                "#
+            ),
+            "denying a component every profile needs must not load",
+        );
+        assert!(err.contains("every profile needs"), "{name}: {err}");
+        assert!(err.contains("minimal"), "{name}: {err}");
+    }
+
+    for bad in ["pkg.rust-docs", "rust docs", ""] {
+        let err = validation_error(
+            &format!(
+                r#"
+                [[registries]]
+                type = "rustup"
+                name = "rust"
+                deny_components = ["{bad}"]
+                "#
+            ),
+            "a value that is not a manifest package name must not load",
+        );
+        assert!(err.contains("manifest package name"), "'{bad}': {err}");
+    }
+}
+
 /// Proxy-only, default upstream, and `broker_url` optional.
 #[test]
 fn sdkman_is_proxy_only_and_needs_no_explicit_upstream() {
@@ -3928,6 +4032,348 @@ fn a_local_registry_cannot_say_block() {
         err.contains("'mine'") && err.contains("not audited"),
         "{err}"
     );
+}
+
+// ── nix: [registries.nix_signing] and require_upstream_sigs (RFC 0028 §4.5) ─
+
+#[test]
+fn nix_signing_is_accepted_on_a_nix_registry_and_warns_in_proxy_mode() {
+    let cfg = parse_config(&format!(
+        r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "local"
+
+        [registries.nix_signing]
+        seed_hex = "{}"
+        key_name = "batlehub-nix-1""#,
+        "ab".repeat(32)
+    ));
+    cfg.validate().expect("a key on a nix registry is valid");
+    assert!(
+        !cfg.warnings()
+            .iter()
+            .any(|w| w.code == warnings::NIX_LOCAL_UNSIGNED),
+        "a signed local registry must not be warned about: {:?}",
+        cfg.warnings()
+    );
+
+    // The same key in proxy mode signs nothing: a relayed narinfo keeps the
+    // upstream's Sig: and is never re-signed.
+    let cfg = parse_config(&format!(
+        r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "proxy"
+
+        [registries.nix_signing]
+        seed_hex = "{}""#,
+        "ab".repeat(32)
+    ));
+    cfg.validate().expect("valid, just pointless");
+    assert!(
+        cfg.warnings()
+            .iter()
+            .any(|w| w.code == warnings::NIX_SIGNING_PROXY_MODE),
+        "{:?}",
+        cfg.warnings()
+    );
+}
+
+/// A registry that hosts store paths and cannot sign them produces narinfos
+/// every stock client refuses — Nix's `require-sigs` defaults to on. Warned,
+/// not refused: a fleet that has turned it off is a legitimate lab.
+#[test]
+fn a_nix_registry_that_hosts_without_a_key_is_warned_about() {
+    // `hybrid` names its upstream explicitly: that is a generic rule — every
+    // kind's hybrid mode requires one, default or no default — and not
+    // something about nix. RFC 0028 §1's example writes it out for this reason.
+    for (mode, upstream) in [
+        ("local", ""),
+        ("hybrid", "upstreams = [\"https://cache.nixos.org\"]"),
+    ] {
+        let cfg = parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "{mode}"
+        {upstream}"#
+        ));
+        cfg.validate()
+            .expect("not an error — the operator's choice");
+        let warnings = cfg.warnings();
+        let warning = warnings
+            .iter()
+            .find(|w| w.code == warnings::NIX_LOCAL_UNSIGNED)
+            .unwrap_or_else(|| panic!("{mode}: expected a warning, got {warnings:?}"));
+        assert!(
+            warning.message.contains("require-sigs"),
+            "the warning has to name the client setting that refuses it: {}",
+            warning.message
+        );
+    }
+}
+
+#[test]
+fn nix_signing_on_another_kind_is_rejected() {
+    let cfg = parse_config(&format!(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        mode = "local"
+
+        [registries.nix_signing]
+        seed_hex = "{}""#,
+        "ab".repeat(32)
+    ));
+    let err = cfg.validate().unwrap_err().to_string();
+    assert!(err.contains("nix_signing"), "{err}");
+    assert!(err.contains("npm"), "{err}");
+}
+
+#[test]
+fn require_upstream_sigs_on_another_kind_is_rejected() {
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        mode = "proxy"
+        require_upstream_sigs = true"#,
+    );
+    let err = cfg.validate().unwrap_err().to_string();
+    assert!(err.contains("require_upstream_sigs"), "{err}");
+}
+
+#[test]
+fn the_staging_limits_are_nix_only() {
+    for field in ["pending_nar_ttl_secs = 600", "max_pending_nars = 8"] {
+        let cfg = parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        mode = "local"
+        {field}"#
+        ));
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("nix"), "{err}");
+        assert!(err.contains("npm"), "{err}");
+    }
+}
+
+/// Zero is not "no limit" for either: one sweeps the NAR before its own narinfo
+/// can claim it, the other refuses the first upload. Both would read as a
+/// broken server rather than as a policy, which is why they are refused at load
+/// rather than obeyed.
+#[test]
+fn a_staging_limit_of_zero_is_refused() {
+    for field in ["pending_nar_ttl_secs = 0", "max_pending_nars = 0"] {
+        let cfg = parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "local"
+        {field}
+
+        [registries.nix_signing]
+        seed_hex = "{}""#,
+            "ab".repeat(32)
+        ));
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("publish"), "{err}");
+    }
+}
+
+/// Tight enough to refuse a publish that is doing nothing wrong: warned about,
+/// not refused — an operator may know their fleet.
+#[test]
+fn staging_limits_below_what_nix_copy_needs_are_warned_about() {
+    let cfg = parse_config(&format!(
+        r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "local"
+        pending_nar_ttl_secs = 5
+        max_pending_nars = 4
+
+        [registries.nix_signing]
+        seed_hex = "{}""#,
+        "ab".repeat(32)
+    ));
+    cfg.validate()
+        .expect("a tight limit is a choice, not an error");
+    let codes: Vec<_> = cfg.warnings().into_iter().map(|w| w.code).collect();
+    assert_eq!(
+        codes.iter().filter(|c| *c == "nix-staging.tight").count(),
+        2,
+        "both halves warn: {codes:?}"
+    );
+}
+
+#[test]
+fn generous_staging_limits_warn_about_nothing() {
+    let cfg = parse_config(&format!(
+        r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "local"
+        pending_nar_ttl_secs = 7200
+        max_pending_nars = 128
+
+        [registries.nix_signing]
+        seed_hex = "{}""#,
+        "ab".repeat(32)
+    ));
+    cfg.validate().unwrap();
+    assert!(!cfg
+        .warnings()
+        .into_iter()
+        .any(|w| w.code == "nix-staging.tight"));
+}
+
+#[test]
+fn nix_signing_seed_must_be_a_32_byte_hex_string() {
+    for seed in ["abcd", &"zz".repeat(32), &"ab".repeat(33)] {
+        let cfg = parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "local"
+
+        [registries.nix_signing]
+        seed_hex = "{seed}""#
+        ));
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("64 hex characters"), "{seed}: {err}");
+    }
+}
+
+/// The colon separates the name from the key in `trusted-public-keys` and in
+/// `Sig:`; whitespace separates entries. Either produces a key no client can
+/// list — and the failure is on the *client*, which is why it is refused here.
+#[test]
+fn a_nix_key_name_with_a_colon_or_whitespace_is_rejected() {
+    for name in ["batlehub:nix", "batlehub nix 1", "batlehub\tnix", ""] {
+        let cfg = parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "local"
+
+        [registries.nix_signing]
+        seed_hex = "{}"
+        key_name = "{name}""#,
+            "ab".repeat(32)
+        ));
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("key_name"), "'{name}': {err}");
+    }
+}
+
+/// `?priority=` and its friends are settings on the *client's* store URL. On
+/// the upstream they would be forwarded on every request and mean nothing.
+#[test]
+fn a_nix_upstream_with_a_query_string_is_rejected() {
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "proxy"
+        upstreams = ["https://cache.nixos.org?priority=30"]"#,
+    );
+    let err = cfg.validate().unwrap_err().to_string();
+    assert!(err.contains("query string"), "{err}");
+    assert!(err.contains("substituters"), "{err}");
+}
+
+/// The protocol carries no dates at all, so the field is not a tie-break — it
+/// is the whole rule, and inheriting a default silently is how an operator
+/// ends up believing a registry is quarantined when it is not.
+#[test]
+fn a_nix_age_gate_must_decide_the_undated_case_explicitly() {
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "proxy"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 86400"#,
+    );
+    let err = cfg.validate().unwrap_err().to_string();
+    assert!(err.contains("deny_missing_timestamp"), "{err}");
+    assert!(
+        err.contains("carries no date"),
+        "the error must say why the field is mandatory here: {err}"
+    );
+
+    // Set explicitly — either way — it loads.
+    for decision in ["true", "false"] {
+        let cfg = parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "proxy"
+
+        [[registries.rules]]
+        kind = "release_age_gate"
+        min_age_secs = 86400
+        deny_missing_timestamp = {decision}"#
+        ));
+        cfg.validate()
+            .unwrap_or_else(|e| panic!("deny_missing_timestamp = {decision}: {e}"));
+    }
+}
+
+/// `path_allow` is refused by the generic guard, not by a nix-specific one —
+/// asserted here so a future refactor of `is_path_addressed` cannot quietly
+/// open it.
+#[test]
+fn path_allow_on_a_nix_registry_is_rejected() {
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "nix"
+        name = "nixcache"
+        mode = "proxy"
+        path_allow = ["**"]"#,
+    );
+    let err = cfg.validate().unwrap_err().to_string();
+    assert!(err.contains("path_allow"), "{err}");
+}
+
+/// The default key name carries the registry's own name, so two registries on
+/// one instance cannot sign under the same identity — and a client listing
+/// both in `trusted-public-keys` can tell them apart.
+#[test]
+fn the_default_nix_key_name_is_derived_from_the_registry() {
+    use crate::schema::registry::NixSigningConfig;
+    let signing = NixSigningConfig {
+        seed_hex: "ab".repeat(32),
+        key_name: None,
+    };
+    assert_eq!(signing.resolved_key_name("nixcache"), "batlehub-nixcache-1");
+    assert_eq!(signing.resolved_key_name("other"), "batlehub-other-1");
+
+    let named = NixSigningConfig {
+        seed_hex: "ab".repeat(32),
+        key_name: Some("acme-cache-4".to_owned()),
+    };
+    assert_eq!(named.resolved_key_name("nixcache"), "acme-cache-4");
 }
 
 // ── [registries.vsx_signing] (RFC 0020 §4.3) ───────────────────────────────

@@ -382,6 +382,21 @@ async fn jbm_hybrid_download_falls_through_to_upstream() {
     );
 }
 
+/// The xmlId/version spelling still answers from what a local registry holds,
+/// and an unknown version there is still a `404` rather than a fall-through.
+#[actix_web::test]
+async fn jbm_update_meta_on_a_local_registry_still_404s_an_unknown_version() {
+    let app = make_local_jbm_app(RegistryMode::Local).await;
+    let jar = make_plugin_jar(&plugin_xml("org.demo.a", "1.0.0", "233.0", "241.*"));
+    assert_eq!(publish_plugin(&app, &jar, None, false).await.status(), 201);
+
+    let req = TestRequest::get()
+        .uri("/proxy/local-jbm/files/org.demo.a/9.9.9/meta.json")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 404);
+}
+
 // ── Search / listings / compatible updates ───────────────────────────────────
 
 #[actix_web::test]
@@ -446,6 +461,49 @@ async fn jbm_compatible_updates_respects_build_range() {
     assert_eq!(body.as_array().unwrap().len(), 0);
 }
 
+/// The GET spelling of the same endpoint — the one IntelliJ's `installPlugins`
+/// uses, with a repeated `pluginXmlId` and the `os`/`arch` it appends. It had no
+/// route at all: the request fell through to openvsx's `api/{ns}/{ext}`
+/// catch-all and came back 404, and the IDE reported "unknown plugins".
+#[actix_web::test]
+async fn jbm_compatible_updates_get_answers_the_ide_spelling() {
+    let app = make_local_jbm_app(RegistryMode::Local).await;
+    let jar = make_plugin_jar(&plugin_xml("org.demo.a", "1.0.0", "233.0", "241.*"));
+    assert_eq!(publish_plugin(&app, &jar, None, false).await.status(), 201);
+
+    let get = |query: &str| {
+        TestRequest::get()
+            .uri(&format!(
+                "/proxy/local-jbm/api/search/updates/compatible?{query}"
+            ))
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .to_request()
+    };
+
+    // In range, exactly as the IDE asks: repeated id, volatile os/arch beside it.
+    let resp = call_service(
+        &app,
+        get("build=IU-240.5&os=Linux+6.17.0&arch=X86_64&pluginXmlId=org.demo.a&pluginXmlId=org.unknown"),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = read_body_json(resp).await;
+    let updates = body.as_array().unwrap();
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0]["pluginXmlId"], "org.demo.a");
+    assert_eq!(updates[0]["version"], "1.0.0");
+
+    // Out of range: the same empty answer the POST gives.
+    let body: Value =
+        read_body_json(call_service(&app, get("build=IU-243.1&pluginXmlId=org.demo.a")).await)
+            .await;
+    assert_eq!(body.as_array().unwrap().len(), 0);
+
+    // No build is a bad request, not a silent empty list.
+    let resp = call_service(&app, get("pluginXmlId=org.demo.a")).await;
+    assert_eq!(resp.status(), 400);
+}
+
 #[actix_web::test]
 async fn jbm_plugin_manager_resolves_latest_compatible() {
     let app = make_local_jbm_app(RegistryMode::Local).await;
@@ -480,6 +538,19 @@ async fn jbm_plugin_manager_resolves_latest_compatible() {
         .insert_header(("Authorization", bearer(USER_TOKEN)))
         .to_request();
     assert_eq!(call_service(&app, req).await.status(), 400);
+
+    // No `action` at all, which is the spelling IntelliJ sends — with the
+    // `os`/`arch`/`uuid` it appends and a valueless `updatedFrom`. The
+    // marketplace answers this with the archive, so this server must too:
+    // required, `action` made it a `400` that stopped `installPlugins` one
+    // request after it had already resolved the update.
+    let req = TestRequest::get()
+        .uri("/proxy/local-jbm/pluginManager?os=Linux%206.1&build=IU-234.100&updatedFrom&id=org.demo.a&arch=X86_64&uuid=14092636110fa3f")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(read_body(resp).await.to_vec(), v1);
 }
 
 // ── Plugin JSON + meta.json shapes ───────────────────────────────────────────

@@ -120,6 +120,30 @@ fn build_vsx_signing_map(
     Ok(out)
 }
 
+fn build_nix_signing_map(
+    registries: &[RegistryConfig],
+) -> anyhow::Result<HashMap<String, Arc<batlehub_core::services::nix::NixSigningKey>>> {
+    let mut out = HashMap::new();
+    for reg in registries {
+        if let Some(cfg) = &reg.nix_signing {
+            // The name, not an id: Nix looks a `Sig:` up in
+            // `trusted-public-keys` by the half before the colon, so this
+            // string is what every client has to list. The default carries the
+            // registry's own name so two registries on one instance cannot sign
+            // under the same identity.
+            let key = batlehub_core::services::nix::NixSigningKey::from_seed_hex(
+                &cfg.seed_hex,
+                cfg.resolved_key_name(&reg.name),
+            )
+            .map_err(|e| {
+                anyhow::anyhow!("building the narinfo signing key for '{}': {e}", reg.name)
+            })?;
+            out.insert(reg.name.clone(), Arc::new(key));
+        }
+    }
+    Ok(out)
+}
+
 fn build_signing_map(registries: &[RegistryConfig]) -> HashMap<String, CoreSigningConfig> {
     map_registries(
         registries,
@@ -627,6 +651,49 @@ pub(super) fn build_hot_bundle(
         )),
         grants: reg_grants,
         policy_tiers: reg_policy,
+        // rustup only, and read on every manifest request so a reload takes
+        // effect before the cached upstream document expires (RFC 0024 §6.5).
+        deny_components: cfg
+            .registries
+            .iter()
+            .filter(|r| !r.deny_components.is_empty())
+            .map(|r| (r.name.clone(), r.deny_components.clone()))
+            .collect(),
+        // galaxy only, and read on every role request for the same reason
+        // (RFC 0031 §6.3).
+        galaxy_roles: cfg
+            .registries
+            .iter()
+            .filter_map(|r| r.roles.map(|roles| (r.name.clone(), roles)))
+            .collect(),
+        // nix only, read on every narinfo relay for the same reason
+        // (RFC 0028 §6.3).
+        nix_require_upstream_sigs: cfg
+            .registries
+            .iter()
+            .filter(|r| r.require_upstream_sigs)
+            .map(|r| r.name.clone())
+            .collect(),
+        // nix only, read on every NAR upload: what the staging area a NAR waits
+        // in will hold (RFC 0028 §4.4). Only the registries that say something
+        // are here — an absent entry is the documented default pair, and a map
+        // holding every nix registry at its defaults would make a reload look
+        // like a change.
+        nix_staging: cfg
+            .registries
+            .iter()
+            .filter(|r| r.pending_nar_ttl_secs.is_some() || r.max_pending_nars.is_some())
+            .map(|r| {
+                let d = batlehub_core::services::local_registry::NixStagingLimits::default();
+                (
+                    r.name.clone(),
+                    batlehub_core::services::local_registry::NixStagingLimits {
+                        ttl_secs: r.pending_nar_ttl_secs.map_or(d.ttl_secs, i64::from),
+                        max_pending: r.max_pending_nars.map_or(d.max_pending, |m| m as usize),
+                    },
+                )
+            })
+            .collect(),
         grant_repo: grant_repo.clone(),
         policy_repo: policy_repo.clone(),
         signing_keys: signing_keys.clone(),
@@ -667,6 +734,7 @@ pub(super) fn build_hot_bundle(
         versioning: build_versioning_map(&cfg.registries),
         signing: build_signing_map(&cfg.registries),
         vsx_signing: build_vsx_signing_map(&cfg.registries)?,
+        nix_signing: build_nix_signing_map(&cfg.registries)?,
         sbom: build_sbom_map(&cfg.registries),
         readme: build_readme_map(&cfg.registries),
         upstream_detail: build_upstream_detail_map(&cfg.registries),
@@ -684,6 +752,11 @@ pub(super) fn build_hot_bundle(
             .registries
             .iter()
             .map(|r| (r.name.clone(), r.signed_downloads))
+            .collect(),
+        cargo_auth_required: cfg
+            .registries
+            .iter()
+            .filter_map(|r| r.cargo_auth_required.map(|v| (r.name.clone(), v)))
             .collect(),
         signed_url: build_signed_url_service(cfg),
         max_artifact_size_bytes: cfg.limits.max_artifact_size_bytes,
@@ -998,6 +1071,7 @@ pub(super) fn make_hot_builder(
             }
         }
         let repo_signer_map = crate::builders::build_repo_signer_map(cfg)?;
+        let apk_signer_map = crate::builders::build_apk_signer_map(cfg)?;
         Ok(batlehub_web::services::BuiltHotState {
             hot,
             access,
@@ -1007,6 +1081,7 @@ pub(super) fn make_hot_builder(
             upstream_map: um,
             cargo_index_map: CargoIndexMap::new(cargo_map),
             repo_signer_map,
+            apk_signer_map,
             vuln_db_map: vuln_db,
             sumdb_map: sumdb,
             registry_host_map: RegistryHostMap::from_app_config(cfg),

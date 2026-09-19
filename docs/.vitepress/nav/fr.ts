@@ -100,6 +100,7 @@ export const sidebar = {
         { text: "RubyGems", link: "/fr/registries/rubygems" },
         { text: "NuGet", link: "/fr/registries/nuget" },
         { text: "Terraform", link: "/fr/registries/terraform" },
+        { text: "Ansible Galaxy", link: "/fr/registries/galaxy" },
       ],
     },
     {
@@ -122,6 +123,7 @@ export const sidebar = {
         { text: "Debian / APT", link: "/fr/registries/deb" },
         { text: "RPM / YUM / DNF", link: "/fr/registries/rpm" },
         { text: "Pacman / Arch", link: "/fr/registries/pacman" },
+        { text: "Alpine / apk", link: "/fr/registries/apk" },
       ],
     },
     {
@@ -132,9 +134,14 @@ export const sidebar = {
       ],
     },
     {
+      text: "Caches de compilation",
+      items: [{ text: "Cache binaire Nix", link: "/fr/registries/nix" }],
+    },
+    {
       text: "Chaînes d'outils",
       items: [
         { text: "Node (nvm, fnm, n, mise)", link: "/fr/registries/nodedist" },
+        { text: "Chaîne d'outils Rust (rustup)", link: "/fr/registries/rustup" },
         { text: "SDKMAN", link: "/fr/registries/sdkman" },
       ],
     },

@@ -191,6 +191,7 @@ pub(super) struct ServerParams {
     pub stats_history: Arc<dyn batlehub_core::ports::StatsHistoryRepository>,
     pub registry_mode_map: RegistryModeMap,
     pub repo_signer_map: batlehub_web::RepoSignerMap,
+    pub apk_signer_map: batlehub_web::ApkSignerMap,
     pub ip_block_store: Arc<dyn IpBlockStore>,
     pub user_block_repo: Arc<dyn UserBlockRepository>,
     pub beta_channel_store: Arc<dyn BetaChannelPort>,
@@ -259,6 +260,7 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
         stats_history,
         registry_mode_map,
         repo_signer_map,
+        apk_signer_map,
         ip_block_store,
         user_block_repo,
         beta_channel_store,
@@ -340,6 +342,7 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
             .app_data(web::Data::new(Arc::clone(&stats_history)))
             .app_data(web::Data::new(registry_mode_map.clone()))
             .app_data(web::Data::new(repo_signer_map.clone()))
+            .app_data(web::Data::new(apk_signer_map.clone()))
             .app_data(web::Data::new(Arc::clone(&ip_block_store)))
             .app_data(web::Data::new(Arc::clone(&user_block_repo)))
             .app_data(web::Data::new(Arc::clone(&beta_channel_store)))

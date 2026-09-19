@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/high-availability.md
-sourceHash: fc2725d91361c397
+sourceHash: 877447548e408fce
 ---
 
 # Haute disponibilité
@@ -60,7 +60,7 @@ d'IP et le bandeau global, sans configuration supplémentaire.
 Avant de passer à plus d'un réplica :
 
 - **PostgreSQL 14+** — déjà requis ; rien à changer.
-- **Un magasin d'objets compatible S3** — AWS S3, MinIO ou RustFS. Le stockage
+- **Un magasin d'objets compatible S3** — AWS S3 ou RustFS ([MinIO n'est plus officiellement pris en charge](/fr/guide/configuration#_3-4-storage)). Le stockage
   sur système de fichiers est mono-nœud.
 - **Un backend de cache partagé** — soit la même instance PostgreSQL (le plus
   simple), soit une instance Redis 7+.
@@ -109,8 +109,8 @@ type   = "s3"
 bucket = "batlehub-artifacts"
 region = "us-east-1"
 
-# Pour un S3 auto-hébergé (MinIO, RustFS) :
-# endpoint         = "http://minio:9000"
+# Pour un S3 auto-hébergé (RustFS) :
+# endpoint         = "http://rustfs:9000"
 # force_path_style = true
 
 # Identifiants (à omettre sur AWS avec un rôle IAM) :

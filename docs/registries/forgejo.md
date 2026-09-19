@@ -160,6 +160,38 @@ API links are removed. A client that reads the release document instead of
 building a path — `mise`, `gh` — therefore stays behind the proxy, with its
 policy, its cache and its audit trail.
 
+## Assets by attachment uuid
+
+Forgejo also serves a release asset from a path that names no repository:
+
+```
+GET /proxy/<registry>/attachments/<uuid>
+```
+
+It exists because rewriting the document is not enough for every client. A
+Forgejo asset carries a `uuid`, and some clients build
+`<forge>/attachments/<uuid>` themselves from their own configured forge root
+rather than following the `browser_download_url` they were given — **`mise`'s
+`forgejo:` backend downloads every asset that way and no other**. Left to
+itself, such a client reads its release document here and then fetches the
+binary straight from the forge, past the rules, the cache and the audit trail.
+
+The uuid names no repository, so BatleHub resolves it from the release document
+it served: the answer is the *same* artifact as
+`…/releases/download/<tag>/<file>`, under the same storage key and the same
+rule chain. A uuid from a release document this registry has not served answers
+`404` — the route reads what this instance knows, not whatever the forge holds.
+
+With `mise`, that is the second rule of the pair:
+
+```toml
+[settings.url_replacements]
+"regex:^https://codeberg\\.org/api/v1/repos/(.+)" = "https://batlehub.example/proxy/<registry>/$1"
+"regex:^https://codeberg\\.org/attachments/(.+)" = "https://batlehub.example/proxy/<registry>/attachments/$1"
+```
+
+`batlehub registry suggest --mise` writes both — see [mise](/use/mise).
+
 ## Authentication
 
 Pass a BatleHub token as a Bearer header (`-H "Authorization: Bearer $BATLEHUB_TOKEN"`) when the registry's RBAC requires it. For **private instances**, configure a bearer token as the registry's upstream auth in the server config.

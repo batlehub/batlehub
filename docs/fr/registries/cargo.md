@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/cargo.md
-sourceHash: e367b1d384402bc4
+sourceHash: ed751e26fd208c43
 ---
 
 # Cargo
@@ -161,6 +161,46 @@ Cargo envoie le `token` du bloc `[registries.<name>]`. En CI, définissez-le
 plutôt par l'environnement :
 `export CARGO_REGISTRIES_INTERNAL_TOKEN=$BATLEHUB_TOKEN` (le nom du registre en
 majuscules).
+
+L'en-tête que cargo envoie est le **jeton nu, sans schéma** — la
+[référence de l'API web des registres](https://doc.rust-lang.org/cargo/reference/registry-web-api.html)
+dit « the header value is the API token » —, que BatleHub normalise pour toutes
+les routes d'un registre `cargo`.
+
+### Quand le jeton est envoyé
+
+Par défaut, cargo ne l'envoie que sur l'API web : publication, `yank`, `unyank`
+et propriétaires. Les lectures de l'index et les téléchargements de `.crate`
+partent **anonymes**, ce qui rend un registre refusant les appelants anonymes
+inutilisable plutôt qu'authentifié.
+
+Le commutateur est `auth-required` dans le `config.json` de l'index épars, que la
+[référence de l'index](https://doc.rust-lang.org/cargo/reference/registry-index.html)
+définit comme marquant « a private registry that requires all operations to be
+authenticated including API requests, crate downloads and sparse index updates ».
+
+BatleHub le **dérive** : le champ est annoncé lorsqu'un appelant anonyme ne peut
+pas lire le registre, et omis lorsqu'il le peut — un registre ouvert continue
+donc de servir les appelants sans jeton, et un registre fermé s'authentifie de
+bout en bout.
+
+::: tip Forcer la dérivation
+La dérivation interroge le niveau *registre*, parce que c'est ce que cargo
+demande : il lit ce fichier une fois, avant de savoir quelle caisse il veut. Un
+registre qui ferme le niveau puis rouvre un paquet à `*` par une habilitation
+est donc annoncé comme entièrement fermé, et cargo exigera un jeton pour le
+paquet ouvert aussi.
+
+Définissez `cargo_auth_required` sur le registre pour forcer la réponse dans un
+sens ou dans l'autre :
+
+```toml
+[[registries]]
+name = "internal"
+type = "cargo"
+cargo_auth_required = false   # annoncer ouvert malgré un niveau registre fermé
+```
+:::
 
 ## Notes
 

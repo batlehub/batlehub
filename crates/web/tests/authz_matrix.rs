@@ -401,6 +401,24 @@ fn go_list_meta() -> serde_json::Value {
 
 fn matrix() -> Vec<Row> {
     vec![
+        // ── galaxy (RFC 0031) ────────────────────────────────────────────────
+        // The package is `{namespace}.{name}` and the URL spells it
+        // `{namespace}/{name}`, so every row carries the coordinate explicitly.
+        // Four routes, and the fourth is the one worth the others: the tarball
+        // is addressed by *filename*, and the handler parses the coordinate back
+        // out of it — a read that reached storage on the filename alone would be
+        // the NuGet-download shape of survey finding 6.
+        Row::new("galaxy", "/proxy/reg/galaxy/api/v3/collections/acme/util/versions/")
+            .coord("acme.util", "9.8.7"),
+        Row::new("galaxy", "/proxy/reg/galaxy/api/v3/collections/acme/util/")
+            .coord("acme.util", "9.8.7"),
+        Row::new("galaxy", "/proxy/reg/galaxy/api/v3/collections/acme/util/versions/9.8.7/")
+            .coord("acme.util", "9.8.7"),
+        Row::new(
+            "galaxy",
+            "/proxy/reg/galaxy/api/v3/artifacts/collections/acme-util-9.8.7.tar.gz",
+        )
+        .coord("acme.util", "9.8.7"),
         // ── cargo ────────────────────────────────────────────────────────────
         Row::new("cargo", "/proxy/reg/pkg/9.8.7/download").meta(cargo_index_meta),
         // ── npm ──────────────────────────────────────────────────────────────
@@ -522,6 +540,24 @@ fn matrix() -> Vec<Row> {
         Row::new("pacman", "/proxy/reg/pacman/reg.db")
             .vis(WHOLE_REGISTRY)
             .no_control(),
+        // `apk` sits with them in the path family and is the one member that
+        // does **not** take `WHOLE_REGISTRY`: a `.apk` file name is split into
+        // a real `name` and `version` before the `PackageId` is built, so
+        // per-package visibility is the axis this route actually has
+        // (RFC 0026 §4.3). The coordinate is spelled in the file name — apk's
+        // grammar is `{name}-{pkgver}-r{N}`, so the version carries the release
+        // token and `coord` has to agree with the URI.
+        Row::new("apk", "/proxy/reg/apk/v3.22/main/x86_64/pkg-9.8.7-r0.apk")
+            .coord("pkg", "9.8.7-r0")
+            // No positive control, for the reason the three rows above have
+            // none: the read is served from `local:{registry}/{path}`, and the
+            // fixture seeds a *package*, not a file at that path. What this row
+            // still asserts is the half that is apk-specific — the refusal is
+            // keyed on the coordinate the file name yields, which is why the
+            // visibility axis is per-package here and `WHOLE_REGISTRY` there.
+            // The positive half is `tests/heavy/apk.sh`, where a real apk
+            // fetches the file and a blocked version is refused at the gate.
+            .no_control(),
         // Axis B is not a finding, and worth stating so nobody re-raises it:
         // `generic` is a path mirror with no local branch at all. Its coordinate
         // is the synthetic `repo/_` with the whole request path as the artifact,
@@ -551,6 +587,50 @@ fn matrix() -> Vec<Row> {
             .coord("node", "v9.8.7")
             .token("v1.1.0")
             .vis(WHOLE_REGISTRY),
+        // ── rustup (RFC 0024) ────────────────────────────────────────────────
+        // Proxy-only like `nodedist`, with two packages rather than one: `rust`
+        // for the toolchains and `rustup` for the installer's own tree, so a
+        // block on a release and a block on the installer are separate rows in
+        // the same registry. The channel manifest is a per-release document and
+        // `manifests.txt` a whole-registry one.
+        Row::new("rustup", "/proxy/reg/rustup/dist/channel-rust-stable.toml")
+            .coord("rust", "1.98.1")
+            .vis(Expect::NotChecked(
+                "proxy-only document: the manifest is upstream's and no local package is read",
+            )),
+        Row::new(
+            "rustup",
+            "/proxy/reg/rustup/dist/2026-09-03/rust-std-1.98.1-x86_64-unknown-linux-gnu.tar.xz",
+        )
+        .coord("rust", "1.98.1")
+        .vis(Expect::NotChecked(
+            "proxy-only: the archive is streamed from upstream and no local package is read",
+        )),
+        Row::new("rustup", "/proxy/reg/rustup/manifests.txt")
+            .coord("rust", "1.98.1")
+            .token("channel-rust-1.98.1.toml")
+            .vis(WHOLE_REGISTRY),
+        Row::new("rustup", "/proxy/reg/rustup/rustup/release-stable.toml")
+            .coord("rustup", "1.29.1")
+            .vis(Expect::NotChecked(
+                "proxy-only document: the installer's own version, relayed byte-exact",
+            )),
+        Row::new(
+            "rustup",
+            "/proxy/reg/rustup/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init",
+        )
+        .coord("rustup", "1.29.1")
+        .vis(Expect::NotChecked(
+            "proxy-only: the installer binary is streamed from upstream",
+        )),
+        Row::new(
+            "rustup",
+            "/proxy/reg/rustup/rustup/dist/x86_64-unknown-linux-gnu/rustup-init",
+        )
+        .coord("rustup", "1.29.1")
+        .vis(Expect::NotChecked(
+            "proxy-only: the bootstrap path resolves a version, then streams as above",
+        )),
         // ── sdkman (RFC 0010 phase 6) ────────────────────────────────────────
         // Proxy-only like `nodedist`, with a real coordinate: the candidate is
         // the package and the platform the artifact. The per-candidate listings
@@ -658,6 +738,20 @@ fn matrix() -> Vec<Row> {
         )
         .pkg("org.acme.plugin")
         .meta(plugin_meta),
+        // The GET spelling of compatible-updates — `installPlugins` on
+        // IntelliJ 2026.1 asks this way and no other, and it reaches the same
+        // answer as the POST row further down. Two verbs on one path is two
+        // routes to the rule chain, and only one of them was classified.
+        Row::new(
+            "jetbrains-marketplace",
+            "/proxy/reg/api/search/updates/compatible?build=IU-261.25134.95&pluginXmlId=org.acme.plugin",
+        )
+        .pkg("org.acme.plugin")
+        .meta(plugin_meta)
+        .vis(WHOLE_REGISTRY)
+        // Same reason as its POST twin: the fixture publishes no plugin
+        // *update* rows, which is what this route answers from.
+        .no_control(),
         // ── routes the inventory claimed and no row reached ──────────────────
         //
         // Five entries were marked `Coverage::Row` with nothing behind them,
@@ -914,6 +1008,15 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/-/v1/search", Coverage::Row),
     ("/proxy/{registry}/-/whoami", Coverage::NoPackage("echoes the caller's own identity, never a package")),
     ("/proxy/{registry}/.well-known/terraform.json", Coverage::NoPackage("Terraform service discovery; static endpoint map")),
+    ("/proxy/{registry}/galaxy/api/", Coverage::NoPackage("the discovery document: the API versions this registry serves, composed here and naming no package")),
+    ("/proxy/{registry}/galaxy/api/v1/roles/", Coverage::NoRow("the v1 role surface has no local mode — there is no publish protocol for roles — so this local-registry matrix cannot seed one. `tests/heavy/authz.sh`'s galaxy phase drives the collections boundary with a real client, and `closed_world.sh`'s ansible phase drives the role reads")),
+    ("/proxy/{registry}/galaxy/api/v1/roles/{id}/download/{filename}", Coverage::NoRow("no local mode for roles; see the note on `v1/roles/` above")),
+    ("/proxy/{registry}/galaxy/api/v1/roles/{id}/versions/", Coverage::NoRow("no local mode for roles; see the note on `v1/roles/` above")),
+    ("/proxy/{registry}/galaxy/api/v3/artifacts/collections/{filename}", Coverage::Row),
+    ("/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/", Coverage::Row),
+    ("/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/", Coverage::Row),
+    ("/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/{version}/", Coverage::Row),
+    ("/proxy/{registry}/galaxy/api/v3/imports/collections/{task}/", Coverage::NoPackage("the import-task poll: a state document for a publish that has already finished, naming no package and carrying no content. The route the *client* builds — `_urljoin(api_server, v3, \"imports/collections\", task_id, \"/\")` — not the one RFC 0031 §4.4 specified")),
     ("/proxy/{registry}/api/-/search", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/api/-/public-key/{key_id}", Coverage::NoRow("anonymous by design (RFC 0020 §4.2): serves the registry's own VSIX signing public key, which names a key id and no coordinate — no package is read, and a public key is public. `vsx_signing.rs` asserts the anonymous `200` and the `404` for any other id")),
     ("/proxy/{registry}/api/packages/{path}", Coverage::NoRow("package read, not yet exercised")),
@@ -922,6 +1025,7 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/api/products/intellij/plugins/{id}/comments", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/api/search/aggregation/{field}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/api/search/plugins", Coverage::NoRow("package read, not yet exercised")),
+    ("/proxy/{registry}/api/search/updates/compatible", Coverage::Row),
     ("/proxy/{registry}/api/searchPlugins", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/api/security-advisories/", Coverage::NoPackage("Composer advisory feed; CVE data, not package contents")),
     ("/proxy/{registry}/api/v1/crates", Coverage::NoRow("package read, not yet exercised")),
@@ -934,7 +1038,9 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/api/{namespace}/{extension}", Coverage::Row),
     ("/proxy/{registry}/api/{namespace}/{extension}/{version}", Coverage::Row),
     ("/proxy/{registry}/api/{namespace}/{extension}/{version}/file/{filename}", Coverage::NoRow("package read, not yet exercised")),
+    ("/proxy/{registry}/attachments/{uuid}", Coverage::NoRow("package read, not yet exercised: the uuid resolves only against a release document this registry has already served, which this fixture never seeds, so a row here would assert a 404 rather than a refusal — the closed-world forgejo phase is the client-end regression test")),
     ("/proxy/{registry}/channeldata.json", Coverage::NoRow("package read, not yet exercised")),
+    ("/proxy/{registry}/apk/{path}", Coverage::Row),
     ("/proxy/{registry}/deb/{path}", Coverage::Row),
     ("/proxy/{registry}/dist/{vendor}/{package}/{version}", Coverage::Row),
     ("/proxy/{registry}/feature/getImplementations", Coverage::NoPackage("JetBrains feature lookup; no package coordinate in the answer")),
@@ -953,6 +1059,35 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/list.json", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/maven2/{path}", Coverage::Row),
     ("/proxy/{registry}/names", Coverage::Row),
+    ("/proxy/{registry}/rustup/dist/{date}/{file}", Coverage::Row),
+    ("/proxy/{registry}/rustup/dist/{file}", Coverage::Row),
+    ("/proxy/{registry}/rustup/manifests.txt", Coverage::Row),
+    (
+        "/proxy/{registry}/rustup/rustup/archive/{version}/{triple}/{file}",
+        Coverage::Row,
+    ),
+    ("/proxy/{registry}/rustup/rustup/dist/{triple}/{file}", Coverage::Row),
+    (
+        "/proxy/{registry}/rustup/rustup/release-stable.toml",
+        Coverage::Row,
+    ),
+    // ── nix (RFC 0028) ──────────────────────────────────────────────────────
+    // Five package reads with no row, and the reason is one fact rather than
+    // five: this matrix seeds a **locally published** package, and `nix` has no
+    // publish protocol yet (phase 4). Every one of these routes is addressed by
+    // a *store hash*, and the coordinate it belongs to is only knowable by
+    // reading the narinfo — which, with nothing published, only an upstream can
+    // supply. `tests/heavy/authz.sh`'s nix phase drives the boundary with a
+    // real client against a real cache instead; these rows become `Row` the day
+    // `PUT {hash}.narinfo` lands, and that is the actual work, not this note.
+    ("/proxy/{registry}/nix/log/{drv}", Coverage::NoPackage("a build log, read by `nix log`. RFC 0028 §3 makes it a passthrough: there is no coordinate in it for a policy to act on")),
+    ("/proxy/{registry}/nix/nar/{file}", Coverage::NoRow("the upstream-shaped NAR URL, resolved through the reverse index a *served narinfo* writes — so it cannot be reached at all without a narinfo this instance has served, which needs an upstream or a publish. See the note above")),
+    ("/proxy/{registry}/nix/nar/{hash}/{file}", Coverage::NoRow("no local mode yet, so this matrix cannot seed a store path; see the note above")),
+    ("/proxy/{registry}/nix/public-key", Coverage::NoPackage("the registry's own narinfo signing public key, one `name:base64` line. Names no coordinate, and a public key is public — every client that reads this registry has to list it in trusted-public-keys. `local_nix_registry.rs` asserts the 200 and the 404 for a registry that signs nothing")),
+    ("/proxy/{registry}/nix/nix-cache-info", Coverage::NoPackage("the cache's own StoreDir, WantMassQuery and Priority; it describes the registry and names no package")),
+    ("/proxy/{registry}/nix/realisations/{id}.doi", Coverage::NoPackage("a derivation-to-output mapping. The policy lives on the narinfo of the `outPath` it names, not here — refusing the mapping while serving the path would be the wrong half (RFC 0028 §4.4)")),
+    ("/proxy/{registry}/nix/{hash}.ls", Coverage::NoRow("no local mode yet; see the note above")),
+    ("/proxy/{registry}/nix/{hash}.narinfo", Coverage::NoRow("no local mode yet; see the note above. This is the chokepoint every substitution resolves through, so it is the first of these to earn a real row when publish lands")),
     ("/proxy/{registry}/nodedist/index.json", Coverage::Row),
     ("/proxy/{registry}/nodedist/index.tab", Coverage::Row),
     ("/proxy/{registry}/nodedist/{version}/{file}", Coverage::Row),
@@ -1032,9 +1167,11 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/{package}/{version}/tarball", Coverage::Row),
     ("/proxy/{registry}/{platform}/current_repodata.json", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{platform}/repodata.json", Coverage::NoRow("package read, not yet exercised")),
+    ("/proxy/{registry}/{platform}/repodata_shards.msgpack.zst", Coverage::NoRow("package read, not yet exercised: CEP-16's shard index, the same whole-channel document as repodata.json and served through the same gate")),
     ("/proxy/{registry}/{platform}/repodata.json.bz2", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{platform}/repodata.json.zst", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{platform}/{filename}", Coverage::Row),
+    ("/proxy/{registry}/{platform}/{shard}.msgpack.zst", Coverage::NoRow("package read, not yet exercised: one package's records, content-addressed, and served only while the registry blocks nothing")),
     ("/proxy/{registry}/{project}/-/archive/{tag}/{filename}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{project}/-/raw/{git_ref}/{path}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/{project}/-/releases", Coverage::NoRow("package read, not yet exercised")),
@@ -1587,6 +1724,59 @@ fn nuget_publish_body() -> (Vec<u8>, &'static str) {
     (body, "multipart/form-data; boundary=matrixboundary")
 }
 
+/// The `ansible-galaxy collection publish` envelope: `sha256` and `file`.
+///
+/// A real collection tarball, because the publish handler reads `MANIFEST.json`
+/// out of it *before* it reaches the gate — a body the reader refuses would be
+/// a `400`, and this row would then assert that a malformed upload is refused
+/// rather than that an unauthorised caller is.
+fn galaxy_publish_body() -> (Vec<u8>, &'static str) {
+    use std::io::Write as _;
+
+    let manifest = json!({
+        "collection_info": {
+            "namespace": "acme", "name": "util", "version": "9.8.7",
+            "readme": "README.md",
+        },
+        "format": 1,
+    })
+    .to_string();
+    let mut tar = tar::Builder::new(Vec::new());
+    for (path, bytes) in [
+        ("MANIFEST.json", manifest.as_bytes()),
+        ("FILES.json", b"{\"files\":[]}".as_slice()),
+    ] {
+        let mut header = tar::Header::new_gnu();
+        header.set_path(path).expect("tar path");
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append(&header, bytes).expect("tar entry");
+    }
+    let raw = tar.into_inner().expect("tar");
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gz.write_all(&raw).expect("gzip");
+    let tarball = gz.finish().expect("gzip finish");
+
+    let digest = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(&tarball);
+        hex::encode(h.finalize())
+    };
+
+    let boundary = "matrixboundary";
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"sha256\"\r\n\r\n{digest}\r\n\
+         --{boundary}\r\nContent-Disposition: form-data; name=\"file\"; \
+         filename=\"acme-util-9.8.7.tar.gz\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(&tarball);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    (body, "multipart/form-data; boundary=matrixboundary")
+}
+
 /// A minimal `.gem`: a tar holding a gzipped `metadata.gz`.
 fn gem_publish_body() -> (Vec<u8>, &'static str) {
     (make_gem("pkg", "9.8.7"), "application/octet-stream")
@@ -1700,6 +1890,17 @@ fn write_matrix() -> Vec<WriteRow> {
     vec![
         // ── npm ──────────────────────────────────────────────────────────────
         WriteRow::new("npm", Verb::Put, "/proxy/reg/pkg", npm_publish_body),
+        // ── galaxy ───────────────────────────────────────────────────────────
+        WriteRow::new(
+            "galaxy",
+            Verb::Post,
+            "/proxy/reg/galaxy/api/v3/artifacts/collections/",
+            galaxy_publish_body,
+        )
+        // The coordinate is inside `MANIFEST.json`, not in the URL — the state
+        // probe has to look under the name the tarball actually declares, or
+        // the positive control sees no change and reports the route broken.
+        .coord("acme.util", "9.8.7"),
         // ── cargo ────────────────────────────────────────────────────────────
         WriteRow::new(
             "cargo",
@@ -2077,6 +2278,22 @@ enum WriteCoverage {
 }
 
 const WRITE_ROUTE_INVENTORY: &[(&str, &str, WriteCoverage)] = &[
+    // ── nix (RFC 0028) ───────────────────────────────────────────────────────
+    // Two PUTs and they are one publish, which is why neither carries a row
+    // here. `write_matrix` sends a single request and asserts it was refused
+    // and wrote nothing; a `nix copy --to` is *two* requests where the first
+    // deliberately writes — the NAR is parked before anything knows what it is
+    // — and the second is what applies the gate to a coordinate. A row on the
+    // first would assert "nothing was written" about the step whose whole job
+    // is to write, and a row on the second in isolation would exercise the
+    // not-claimable path rather than the boundary.
+    //
+    // So the boundary is asserted where both halves exist:
+    // `local_nix_registry.rs` drives the pair and covers the publisher scoping
+    // (`a_narinfo_cannot_claim_another_publishers_upload`), the verification
+    // refusal that leaves nothing behind, and the forged-signature drop.
+    ("PUT", "/proxy/{registry}/nix/nar/{file}", WriteCoverage::NoRow("half of a two-request publish: the NAR is parked with no coordinate yet, so `require_local_mode` and `releases:write` are the whole gate and there is no package to disclose. Covered by `local_nix_registry.rs`, which drives both halves — a single-request row would assert 'nothing written' about the step that exists to write")),
+    ("PUT", "/proxy/{registry}/nix/{hash}.narinfo", WriteCoverage::NoRow("the claiming half: it applies the coordinate gate, but only to a NAR this same publisher already parked, so it cannot be exercised alone. Covered by `local_nix_registry.rs`")),
     // ── npm ──────────────────────────────────────────────────────────────────
     ("PUT", "/proxy/{registry}/{name}", WriteCoverage::Row),
     ("PUT", "/proxy/{registry}/-/package/{package}/dist-tags/{tag}", WriteCoverage::NoWrite("declined unconditionally with 501: dist-tags are derived from the published version set here, so nothing is mutated for any caller. RFC 0015 §4.2 files the action itself under a future `npm:dist-tags:write`")),
@@ -2085,6 +2302,8 @@ const WRITE_ROUTE_INVENTORY: &[(&str, &str, WriteCoverage)] = &[
     ("POST", "/proxy/{registry}/-/npm/v1/audit/bulk", WriteCoverage::NoWrite("npm audit, bulk form; same shape")),
     ("POST", "/proxy/{registry}/-/npm/v1/security/audits/quick", WriteCoverage::NoWrite("npm audit under its current path; same shape")),
     ("POST", "/proxy/{registry}/-/npm/v1/security/advisories/bulk", WriteCoverage::NoWrite("npm advisories, bulk form; same shape")),
+    // ── galaxy ───────────────────────────────────────────────────────────────
+    ("POST", "/proxy/{registry}/galaxy/api/v3/artifacts/collections/", WriteCoverage::Row),
     // ── cargo ────────────────────────────────────────────────────────────────
     ("PUT", "/proxy/{registry}/api/v1/crates/new", WriteCoverage::Row),
     ("DELETE", "/proxy/{registry}/api/v1/crates/{name}/{version}/yank", WriteCoverage::Row),
@@ -2132,6 +2351,7 @@ const WRITE_ROUTE_INVENTORY: &[(&str, &str, WriteCoverage)] = &[
     ("PUT", "/proxy/{registry}/deb/pool/{distribution}/{component}/upload", WriteCoverage::NoRow("write, not yet exercised: needs a real .deb, whose control archive supplies the coordinate")),
     ("PUT", "/proxy/{registry}/rpm/upload", WriteCoverage::NoRow("write, not yet exercised: needs a real .rpm header")),
     ("PUT", "/proxy/{registry}/pacman/upload", WriteCoverage::NoRow("write, not yet exercised: needs a real .pkg.tar.zst with a .PKGINFO")),
+    ("PUT", "/proxy/{registry}/apk/upload", WriteCoverage::NoRow("write, not yet exercised here: needs a real v2 .apk — one tar stream across two gzip members, the control member unterminated, `datahash` present — which tests/heavy/apk.sh builds and drives with both apk generations")),
 ];
 
 /// Every non-GET `/proxy/**` route this server registers is classified, exactly.

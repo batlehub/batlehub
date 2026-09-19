@@ -1,7 +1,7 @@
 ---
 title: mise
 sourcePath: use/mise.md
-sourceHash: b17491d0e1e62915
+sourceHash: da940cf35f94219e
 ---
 
 # Faire pointer mise vers BatleHub
@@ -90,6 +90,15 @@ artefact atteint de deux manières, elles partagent une empreinte, et le lot n'e
 porte qu'une copie : la seconde adresse coûte une ligne de manifeste et rien
 d'autre. Ce n'est pas optionnel, parce que les backends `aqua:` et `github:` vont
 d'ordinaire chercher celle de l'API.
+
+Sur une **Forgejo**, l'adresse d'API est `{forge}/attachments/{uuid}`, et le
+backend `forgejo:` n'utilise que celle-là — il construit l'URL à partir de la
+racine de forge qu'il a en configuration et ne lit jamais l'URL de
+téléchargement qu'on lui a servie. Ce sont donc deux règles, et non une, qui
+l'acheminent ; BatleHub répond à la forme par uuid sur
+`/proxy/<registre>/attachments/<uuid>` (voir
+[Forgejo](/fr/registries/forgejo#assets-par-uuid-de-piece-jointe)), et
+`registry suggest --mise` écrit les deux.
 
 Ajoutez `--include-mise` pour embarquer mise lui-même : le lot contient alors
 toujours le binaire qui lira le prochain plan. La version est celle du mise

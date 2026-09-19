@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/generic.md
-sourceHash: 55918216a2661f4c
+sourceHash: 695d0dd262c4b728
 ---
 
 # Miroir générique
@@ -9,7 +9,7 @@ Un miroir en proxy seul, adressé par chemin, de n'importe quelle arborescence d
 fichiers en HTTP — pour les amonts qui n'ont aucun protocole de paquets :
 archives de chaînes d'outils (`nodejs.org/dist`, `static.rust-lang.org`,
 `dl.google.com/go`) et CDN d'éditeurs à binaire unique (`get.helm.sh`,
-`dl.min.io`). Chaque requête diffuse `{upstream}/{path}` et le met en cache au
+`binaries.sonarsource.com`). Chaque requête diffuse `{upstream}/{path}` et le met en cache au
 premier défaut. Il n'y a ni publication, ni index, ni modèle de signature.
 
 ## En un coup d'œil
@@ -85,6 +85,12 @@ diagnostics du genre `mise doctor` — préférez `~/.netrc`.
 
 ## Notes
 
+- Un miroir `generic` d'un CDN Alpine pose le même problème, un arbre plus loin :
+  le nom de fichier d'un `.apk` porte un nom et une version réels, et un registre
+  `generic` n'a nulle part où les mettre. Utilisez [`apk`](/fr/registries/apk)
+  pour bloquer, appliquer un délai de fraîcheur ou compter un paquet Alpine ;
+  `generic` reste le bon choix pour un arbre Alpine que vous voulez seulement
+  mettre en cache.
 - Un miroir `generic` de `nodejs.org/dist` met Node en cache correctement et ne
   peut rien lui appliquer : un registre adressé par chemin n'a qu'un paquet
   synthétique et aucune version à bloquer. Pour appliquer une politique à une
@@ -92,6 +98,14 @@ diagnostics du genre `mise doctor` — préférez `~/.netrc`.
   d'âge sur une version publiée hier — utilisez plutôt
   [`nodedist`](/fr/registries/nodedist) ; `generic` reste la bonne réponse pour
   une arborescence que vous voulez mettre en cache sans politique.
+- Un miroir `generic` d'un cache binaire Nix reprend la même histoire une
+  troisième fois, en pire : chaque chemin est un paquet synthétique, une CVE
+  dans un chemin du store est donc invisible depuis la console et
+  `nix copy --to` n'a nulle part où aller. C'est tout un parc — le compilateur
+  compris — qui tire sa clôture par ce trou. Utilisez [`nix`](/fr/registries/nix)
+  pour bloquer un chemin du store selon le paquet et la version que Nix lui-même
+  en extrait ; `generic` reste la bonne réponse pour `channels.nixos.org`, qui
+  est un autre hôte et un autre protocole.
 - Une requête vers un chemin en dehors de la liste `path_allow` du registre
   renvoie `403`, pas 404 — c'est la liste d'autorisation qui la rejette
   localement, avant toute requête amont. Élargissez les motifs si

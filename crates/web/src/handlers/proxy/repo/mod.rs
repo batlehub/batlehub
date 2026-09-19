@@ -23,6 +23,7 @@ use crate::{
 };
 use batlehub_core::entities::Action;
 
+pub mod apk;
 pub mod publish;
 
 /// Storage key for a file in a locally-hosted deb/rpm repository.

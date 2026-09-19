@@ -1,0 +1,88 @@
+# Server configuration for the heavy Alpine apk integration test
+# (tests/heavy/apk.sh). See tests/heavy/config.npm.toml for the env-var
+# conventions; `${HEAVY_RUN}` keeps each run's registries out of the last one's.
+
+[server]
+host = "127.0.0.1"
+port = 8108
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+# The reader used by the credential arm. apk's only mechanism is HTTP Basic
+# from userinfo in the repository URL, so this token is what the *allowed* arm
+# sends — and the allowed arm has to succeed, or the denial below proves only
+# that an anonymous client is anonymous.
+[[auth.tokens]]
+value = "heavy-apk-reader"
+role = "user"
+user_id = "ci-reader"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-apk-storage"
+
+# ── proxy: the Alpine CDN, tree root ─────────────────────────────────────────
+#
+# The *root*, not a branch: the client appends `{branch}/{repo}/{arch}/` itself
+# and this registry serves every branch under one name. Config validation
+# refuses an upstream that already names one (RFC 0026 §4.5).
+[[registries]]
+type = "apk"
+name = "apk-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://dl-cdn.alpinelinux.org/alpine"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── proxy, authenticated: the credential boundary ────────────────────────────
+#
+# No anonymous verbs at all, so an unauthenticated `apk update` is a 403 and an
+# authenticated one is a 200. The difference between those two is the only
+# thing that proves apk's URL-embedded Basic credential reaches the server.
+[[registries]]
+type = "apk"
+name = "apk-auth-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://dl-cdn.alpinelinux.org/alpine"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── local: the repository this instance hosts and signs ──────────────────────
+#
+# The half `deb`, `rpm` and `pacman` cannot have: the index here is *ours* to
+# write, so it is filtered at generation and RSA-signed with a key the client
+# is handed on the key route. The suite's clients trust that key and nothing
+# else in their `--keys-dir`, so an `apk update` that verifies here verifies
+# against this instance's signature and not against Alpine's (RFC 0026 §6.8
+# step 5). `${APK_SIGNING_KEY_PEM}` carries the PEM with `\n` escapes, which
+# TOML turns back into newlines after the loader's `${VAR}` expansion.
+[[registries]]
+type = "apk"
+name = "apk-local-${HEAVY_RUN}"
+mode = "local"
+
+[registries.apk_signing]
+key_name = "heavy-${HEAVY_RUN}@batlehub.test-5f3a1c2e.rsa.pub"
+private_key_pem = "${APK_SIGNING_KEY_PEM}"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read", "releases:publish"]
+admin = ["*"]

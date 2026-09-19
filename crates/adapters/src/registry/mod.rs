@@ -33,6 +33,7 @@ pub use gitlab::GitlabRegistryClient;
     feature = "registry-deb",
     feature = "registry-rpm",
     feature = "registry-pacman",
+    feature = "registry-apk",
     feature = "registry-jetbrains",
     feature = "registry-generic"
 ))]
@@ -41,10 +42,31 @@ pub mod path_proxy;
     feature = "registry-deb",
     feature = "registry-rpm",
     feature = "registry-pacman",
+    feature = "registry-apk",
     feature = "registry-jetbrains",
     feature = "registry-generic"
 ))]
 pub use path_proxy::PathProxyRegistryClient;
+
+// `apk` wraps `PathProxyRegistryClient` rather than adding an arm to it, so it
+// is gated on its own feature and pulls the path client in above (RFC 0026 §6.2).
+#[cfg(feature = "registry-apk")]
+pub mod apk;
+#[cfg(feature = "registry-apk")]
+pub use apk::ApkRegistryClient;
+
+// The substituter protocol (RFC 0028). No compression or archive dependencies
+// on the read path — a NAR is streamed, never opened; `verify.rs` (phase 4)
+// is what pulls zstd and lzma-rs in, to earn the registry's own signature.
+#[cfg(feature = "registry-nix")]
+pub mod nix;
+#[cfg(feature = "registry-nix")]
+pub use nix::NixBinaryCacheClient;
+
+#[cfg(feature = "registry-galaxy")]
+pub mod galaxy;
+#[cfg(feature = "registry-galaxy")]
+pub use galaxy::GalaxyRegistryClient;
 
 #[cfg(feature = "registry-npm")]
 pub mod npm;
@@ -120,6 +142,11 @@ pub use nodedist::NodeDistRegistryClient;
 pub mod sdkman;
 #[cfg(feature = "registry-sdkman")]
 pub use sdkman::SdkmanRegistryClient;
+
+#[cfg(feature = "registry-rustup")]
+pub mod rustup;
+#[cfg(feature = "registry-rustup")]
+pub use rustup::RustupRegistryClient;
 
 #[cfg(all(test, feature = "registry-github", feature = "registry-forgejo"))]
 mod provenance_tests {

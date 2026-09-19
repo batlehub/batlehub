@@ -1,0 +1,309 @@
+name: Breaking point
+# Where the server stops coping, per backend — and what every rate below it cost.
+#
+# **Nothing schedules this.** It escalates the offered rate until something gives
+# and holds each rate for a minute, so it is minutes of saturating load per
+# backend; running it per commit would answer a question no single commit changes.
+# Run it when a change could move the knee: a storage or cache backend, the
+# request path, the pool, an allocator setting — or before a release, to have the
+# number.
+#
+# Two ways in, and neither runs by itself. `workflow_dispatch` once this file is
+# on the default branch, and a **`breaking-point` label** on a pull request until
+# then (a workflow whose only trigger is `workflow_dispatch` is not registered on
+# any branch until it has landed — the same reason `soak.yaml` takes a label).
+on:
+  workflow_dispatch:
+    inputs:
+      budget:
+        description: "Seconds the escalation may take, per backend"
+        default: "1200"
+      step:
+        description: "Seconds held at each rate"
+        default: "60"
+      start_rate:
+        description: "First offered rate (req/s), doubled at each step"
+        default: "100"
+      pr:
+        description: "Pull request to comment the result on (blank: the open PR for this branch)"
+        default: ""
+  pull_request:
+    types: [labeled]
+permissions:
+  contents: read
+
+jobs:
+  escalate:
+    name: Breaking point (${{ matrix.label }})
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'pull_request' && github.event.label.name == 'breaking-point')
+    runs-on: ubuntu-latest
+    # The budget is per backend and the release build is on top of it. This bound
+    # is what a runaway looks like, not the default 360 minutes.
+    timeout-minutes: 90
+    strategy:
+      # Every backend reports, even when one of them breaks early: the comparison
+      # is the deliverable, and three rows out of four is still a comparison.
+      fail-fast: false
+      matrix:
+        include:
+          # The four combinations the deployment guide actually describes. The
+          # cache override is applied on top of the config rather than duplicated
+          # into four files, so a change to the workload lands in one place.
+          # One config — `config.soak.toml`, the only one that declares every
+          # registry the mix asks for — and four sets of backend overrides on
+          # top. Four config files would drift; these cannot.
+          - label: fs-memory
+            s3: false
+            cache_type: memory
+          - label: fs-redis
+            s3: false
+            cache_type: redis
+            cache_url: redis://localhost:6380
+          - label: s3-memory
+            s3: true
+            cache_type: memory
+          - label: s3-redis
+            s3: true
+            cache_type: redis
+            cache_url: redis://localhost:6380
+          # The same backend as the arm above with one thing changed: the
+          # database pool. `config.soak.toml` sizes it at 10 on purpose — small
+          # enough that a leaked connection shows up inside a single soak — and
+          # the first run of this test broke at 400 req/s on all four arms with
+          # the server at 58-67% of one core, which is the signature of a pool
+          # ceiling rather than a server one. Ten connections at 400 req/s is 40
+          # queries a second each, or 25 ms apiece: the arithmetic fits. This arm
+          # is the control that settles it — if the knee moves, the other four
+          # measured the pool.
+          - label: s3-redis-pool50
+            s3: true
+            cache_type: redis
+            cache_url: redis://localhost:6380
+            db_pool: "50"
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: testpass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
+      # Started for every arm, not only the S3 ones: a service container cannot
+      # be made conditional on the matrix entry, and an unused object store costs
+      # this job nothing. The same image and the same two variables `test.yaml`
+      # already runs its S3 suite against.
+      rustfs:
+        image: rustfs/rustfs:latest
+        env:
+          RUSTFS_ROOT_USER: rustfsadmin
+          RUSTFS_ROOT_PASSWORD: rustfsadmin
+        ports:
+          - 9200:9000
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6380:6379
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:testpass@localhost:5432/postgres
+      # Pinned like every client the heavy suites drive: what this reports is
+      # partly a property of the load generator, and an unannounced k6 upgrade
+      # moving the knee should name itself here.
+      K6_VERSION: "2.2.0"
+      AWS_ACCESS_KEY_ID: rustfsadmin
+      AWS_SECRET_ACCESS_KEY: rustfsadmin
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: "stable"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+      - name: Install k6
+        run: |
+          curl -fsSL --proto '=https' --proto-redir '=https' \
+            "https://github.com/grafana/k6/releases/download/v${K6_VERSION}/k6-v${K6_VERSION}-linux-amd64.tar.gz" \
+            | tar -xz -C /tmp
+          sudo install "/tmp/k6-v${K6_VERSION}-linux-amd64/k6" /usr/local/bin/k6
+          k6 version
+      # The bucket, and only for the arms that store there. `aws s3api` rather
+      # than RustFS's `rc`: the AWS CLI is already on the runner, creating a
+      # bucket is a plain S3 call, and this saves installing a client to make
+      # one request. `|| true` because a re-run against a warm service finds it
+      # already there.
+      - name: Create the bucket
+        if: matrix.s3
+        run: |
+          for _ in $(seq 1 60); do
+            curl -s -o /dev/null http://localhost:9200/ && break
+            sleep 1
+          done
+          aws --endpoint-url http://localhost:9200 s3api create-bucket \
+            --bucket perf-artifacts >/dev/null 2>&1 || true
+          aws --endpoint-url http://localhost:9200 s3api head-bucket --bucket perf-artifacts
+      # Only when the matrix entry asks for it: an empty `PROXY_CACHE__CACHE__TYPE`
+      # is still an override, and it would override the config with nothing.
+      # Only what this arm asks for: an empty `PROXY_CACHE__CACHE__TYPE` is still
+      # an override, and it would override the config with nothing.
+      - name: Backend overrides
+        run: |
+          if [ -n "${{ matrix.cache_type }}" ]; then
+            echo "PROXY_CACHE__CACHE__TYPE=${{ matrix.cache_type }}" >> "$GITHUB_ENV"
+          fi
+          if [ -n "${{ matrix.cache_url }}" ]; then
+            echo "PROXY_CACHE__CACHE__URL=${{ matrix.cache_url }}" >> "$GITHUB_ENV"
+          fi
+          if [ -n "${{ matrix.db_pool }}" ]; then
+            echo "PROXY_CACHE__DATABASE__MAX_CONNECTIONS=${{ matrix.db_pool }}" >> "$GITHUB_ENV"
+          fi
+          if [ "${{ matrix.s3 }}" = "true" ]; then
+            {
+              echo "PROXY_CACHE__STORAGE__TYPE=s3"
+              echo "PROXY_CACHE__STORAGE__BUCKET=perf-artifacts"
+              echo "PROXY_CACHE__STORAGE__REGION=us-east-1"
+              echo "PROXY_CACHE__STORAGE__ENDPOINT_URL=http://localhost:9200"
+              echo "PROXY_CACHE__STORAGE__FORCE_PATH_STYLE=true"
+            } >> "$GITHUB_ENV"
+          fi
+      - name: Escalate
+        run: |
+          bash perf/scripts/breaking_point.sh \
+            --label "${{ matrix.label }}" \
+            --budget "${{ inputs.budget || '1200' }}" \
+            --step "${{ inputs.step || '60' }}" \
+            --start-rate "${{ inputs.start_rate || '100' }}"
+      - name: Job summary
+        if: always()
+        run: |
+          [ -f "perf/results/breaking-point-${{ matrix.label }}.md" ] \
+            && cat "perf/results/breaking-point-${{ matrix.label }}.md" >> "$GITHUB_STEP_SUMMARY" \
+            || echo "No report — the escalation did not get far enough to write one." >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: breaking-point-${{ matrix.label }}
+          path: |
+            perf/results/breaking-point-${{ matrix.label }}.md
+            perf/results/breaking-point-${{ matrix.label }}.json
+            perf/results/breaking-point-${{ matrix.label }}-samples.csv
+            perf/results/breaking-point-${{ matrix.label }}-server.log
+          retention-days: 14
+
+  comment:
+    name: Comment the result
+    needs: [escalate]
+    permissions:
+      contents: read
+      pull-requests: write
+    # `always()`, so a backend that broke still reports — but only for a run that
+    # was asked for, or an unrelated label on any pull request would get a comment.
+    if: >-
+      always()
+      && (github.event_name == 'workflow_dispatch'
+          || (github.event_name == 'pull_request' && github.event.label.name == 'breaking-point'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Checked out for one file: `breaking_point_compare.py`. A comment job that
+      # inlines the table generator instead would be the sixth place this repo's
+      # report formatting lives.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        continue-on-error: true
+        with:
+          pattern: breaking-point-*
+          path: artifacts
+          merge-multiple: true
+      - name: Assemble the report
+        id: report
+        run: |
+          {
+            echo "<!-- breaking-point-report -->"
+            echo "# Breaking point"
+            echo
+            echo "Run from \`${GITHUB_REF_NAME}\` at \`${GITHUB_SHA:0:7}\` —"
+            echo "[full logs and artifacts](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})."
+            echo
+            # The comparison first, the per-arm detail after it: a matrix exists
+            # to be compared, and five sections in a row leave the diffing to
+            # whoever reads them.
+            if ls artifacts/breaking-point-*.json >/dev/null 2>&1; then
+              python3 perf/scripts/breaking_point_compare.py artifacts/breaking-point-*.json
+            fi
+            found=0
+            for f in artifacts/breaking-point-*.md; do
+              [ -f "$f" ] || continue
+              found=1
+              echo "---"
+              echo
+              # Each section keeps its own heading; its marker is stripped, because
+              # one comment carries one marker and a second copy inside the body
+              # would make the next run's upsert match its own text.
+              grep -v '^<!-- breaking-point:' "$f"
+              echo
+            done
+            [ "$found" = 0 ] && echo "No backend produced a report — see the run's logs."
+          } > comment.md
+          cat comment.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Find the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPLICIT: ${{ inputs.pr }}
+          FROM_EVENT: ${{ github.event.pull_request.number }}
+        run: |
+          if [ -n "$EXPLICIT" ]; then echo "number=$EXPLICIT" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [ -n "$FROM_EVENT" ]; then echo "number=$FROM_EVENT" >> "$GITHUB_OUTPUT"; exit 0; fi
+          # Filtered on `head.ref` rather than with the API's `head=<owner>:<ref>`
+          # parameter, which matches nothing here — `soak.yaml` records why: that
+          # parameter wants the owner of the head *repository*, and this one
+          # answers its canonical name on a redirect.
+          number=$(gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
+            --jq 'map(select(.head.ref == env.GITHUB_REF_NAME)) | .[0].number // empty' \
+            2>/dev/null || true)
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+          if [ -z "$number" ]; then
+            echo "No open pull request for $GITHUB_REF_NAME — the report is in the job summary." \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Post it
+        if: steps.pr.outputs.number != ''
+        # Never fails the job: the measurement is the escalation jobs' to report,
+        # and a comment that could not be posted is not a result.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          # One comment per pull request, edited in place.
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- breaking-point-report -->")) | .id' \
+            | head -n1)
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" \
+              -F body=@comment.md >/dev/null
+            echo "Updated comment $existing on #$PR"
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+              -F body=@comment.md >/dev/null
+            echo "Commented on #$PR"
+          fi
+      - name: Clear the label
+        # So adding it again re-runs the escalation.
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          LABEL: ${{ github.event.label.name }}
+        run: |
+          gh api -X DELETE \
+            "repos/$GITHUB_REPOSITORY/issues/$PR/labels/$LABEL" >/dev/null \
+            && echo "Removed '$LABEL' from #$PR — add it again to re-run"

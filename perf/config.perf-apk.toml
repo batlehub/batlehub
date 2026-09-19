@@ -1,0 +1,63 @@
+# BatleHub performance configuration for the apk index-regeneration measurement
+# (scenario 13). Start the server with:
+#   BATLEHUB_CONFIG=perf/config.perf-apk.toml cargo run -p batlehub-server --release
+# or via: task perf:apk:server
+#
+# **One local `apk` registry, and the measurement is what a publish costs as its
+# index grows.** Every upload re-renders the whole `APKINDEX` for that
+# architecture and RSA-signs it — O(n) in packages, on the upload path, under a
+# lock (RFC 0026 §6.4). `v3.22/main/x86_64` is 5 647 packages and 2.26 MB, so a
+# plausible internal repository is not small, and whether the re-render is free
+# in the steady state is a measurement rather than a claim.
+#
+# There is no upstream: `mode = "local"` is the only mode where regeneration
+# happens at all, and a proxy arm would measure the network instead.
+
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[database]
+type = "postgresql"
+url = "postgresql://batlehub:changeme@localhost:5432/batlehub"
+max_connections = 50
+
+[storage]
+type = "filesystem"
+path = "./tmp/perf-apk-storage"
+
+# ── Token auth (no OIDC needed for perf tests) ────────────────────────────────
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "perf-admin-token"
+role = "admin"
+user_id = "perf-admin"
+
+[[auth.tokens]]
+value = "perf-user-token"
+role = "user"
+user_id = "perf-user"
+
+# ── The repository under measurement ──────────────────────────────────────────
+#
+# Signed, because an unsigned index is not the thing being measured: the RSA
+# signature over the rendered document is part of what every publish pays for,
+# and `apk_unsigned = true` would take it out of the number while leaving a
+# repository nothing can install from (RFC 0026 §11 decision 7).
+
+[[registries]]
+type = "apk"
+name = "perf-apk"
+mode = "local"
+
+[registries.apk_signing]
+key_name = "perf@example.com-5f3a1c2e.rsa.pub"
+private_key_pem = "${APK_SIGNING_KEY_PEM}"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read", "releases:publish"]
+admin = ["*"]
