@@ -124,9 +124,17 @@ function buildApkV2(name, version) {
   return concat([controlMember, dataMember]);
 }
 
+/** ASCII bytes of `s`, one byte per character.
+ *
+ *  Everything this scenario encodes is ASCII by construction — tar header
+ *  fields, a `.PKGINFO` of `key = value` lines, a package name this file
+ *  generates — so `codePointAt` and `charCodeAt` agree on every input, and the
+ *  mask below is what makes that explicit rather than assumed: a character
+ *  outside ASCII would be truncated here rather than silently emitting half of
+ *  a surrogate pair into a tar header. */
 function str(s) {
   const out = new Uint8Array(s.length);
-  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0xff;
+  for (let i = 0; i < s.length; i++) out[i] = s.codePointAt(i) & 0xff;
   return out;
 }
 
@@ -148,9 +156,13 @@ function tar(entries, terminate) {
   const blocks = [];
   for (const [path, content] of entries) {
     const h = new Uint8Array(512);
-    const put = (off, s) => {
-      for (let i = 0; i < s.length; i++) h[off + i] = s.charCodeAt(i);
-    };
+    // `set` rather than a per-character loop, so both writers of ASCII bytes
+    // in this file are the one `str` above. It also *refuses* a field that
+    // would run past the 512-byte header instead of dropping the overflow
+    // silently the way an out-of-range index does — every offset below is a
+    // fixed ustar field and the longest path here is a generated one well
+    // under 100 bytes, so nothing reaches that bound.
+    const put = (off, s) => h.set(str(s), off);
     const octal = (n, width) => n.toString(8).padStart(width - 1, "0");
     put(0, path);
     put(100, octal(0o644, 8));
@@ -220,7 +232,7 @@ function crc32(bytes) {
     }
   }
   let c = -1;
-  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  for (const byte of bytes) c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
   return (c ^ -1) >>> 0;
 }
 

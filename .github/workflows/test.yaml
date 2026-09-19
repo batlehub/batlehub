@@ -559,7 +559,13 @@ jobs:
           # password hashed here rather than committed, for the same reason
           # the task hashes it: a bcrypt literal in a tracked file is a
           # secret-scanner finding it cannot tell from a live credential.
-          python3 -m pip install --quiet --user bcrypt==5.0.0
+          # `--only-binary :all:` refuses a source distribution, and with it the
+          # `setup.py` a sdist runs at install time — an arbitrary script from the
+          # index, executed on the runner before anything here gets a say. bcrypt
+          # publishes manylinux wheels, so nothing is given up by insisting on one;
+          # if the wheel is ever missing this fails loudly rather than quietly
+          # building from source.
+          python3 -m pip install --quiet --user --only-binary :all: bcrypt==5.0.0
           python3 - <<'PY'
           import bcrypt, pathlib
           t = pathlib.Path("dev/dex/config.tmpl.yaml").read_text()

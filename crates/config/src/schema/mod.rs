@@ -3947,38 +3947,58 @@ impl AppConfig {
         air_gapped: bool,
     ) -> Result<()> {
         use batlehub_core::entities::RegistryKind;
-        let is_apk = matches!(kind, RegistryKind::Apk);
 
-        // A signing key on a registry that will never sign anything is the
-        // class of misconfiguration `broker_url` off `sdkman` is rejected for.
-        if !is_apk {
-            if registry.apk_signing.is_some() {
-                anyhow::bail!(
-                    "registry '{}': [registries.apk_signing] applies to type = \"apk\" only \
-                     (it signs the generated APKINDEX), not to '{}'",
-                    registry.name,
-                    registry.registry_type
-                );
-            }
-            if registry.apk_unsigned {
-                anyhow::bail!(
-                    "registry '{}': apk_unsigned applies to type = \"apk\" only, not to '{}'",
-                    registry.name,
-                    registry.registry_type
-                );
-            }
-            return Ok(());
+        if !matches!(kind, RegistryKind::Apk) {
+            return Self::reject_apk_fields_on_other_kind(registry);
         }
 
         let hosts_locally = matches!(registry.mode, RegistryMode::Local | RegistryMode::Hybrid);
+        Self::validate_apk_signing_mode(registry, hosts_locally, air_gapped)?;
+        Self::validate_apk_upstreams(registry)?;
 
-        // In proxy mode the upstream index is relayed byte-exact, so a key
-        // would advertise a trust this instance does not provide — **unless the
-        // instance is air-gapped**, where there is no upstream to relay and the
-        // index served is one this instance composes over the held set and
-        // signs itself (RFC 0026 §6.10). That is the one case where a proxy
-        // registry writes an `APKINDEX`, and without a key it cannot: the
-        // composition is skipped and `apk update` stays the RFC 0008 `503`.
+        match &registry.apk_signing {
+            Some(signing) => Self::validate_apk_signing(registry, signing),
+            None => Self::require_apk_signing_when_hosting(registry, hosts_locally),
+        }
+    }
+
+    /// `apk_signing` and `apk_unsigned` on a registry of any other type.
+    ///
+    /// A signing key on a registry that will never sign anything is the class of
+    /// misconfiguration `broker_url` off `sdkman` is rejected for.
+    fn reject_apk_fields_on_other_kind(registry: &RegistryConfig) -> Result<()> {
+        if registry.apk_signing.is_some() {
+            anyhow::bail!(
+                "registry '{}': [registries.apk_signing] applies to type = \"apk\" only \
+                 (it signs the generated APKINDEX), not to '{}'",
+                registry.name,
+                registry.registry_type
+            );
+        }
+        if registry.apk_unsigned {
+            anyhow::bail!(
+                "registry '{}': apk_unsigned applies to type = \"apk\" only, not to '{}'",
+                registry.name,
+                registry.registry_type
+            );
+        }
+        Ok(())
+    }
+
+    /// Whether this registry is one that writes an `APKINDEX` at all.
+    ///
+    /// In proxy mode the upstream index is relayed byte-exact, so a key would
+    /// advertise a trust this instance does not provide — **unless the instance
+    /// is air-gapped**, where there is no upstream to relay and the index served
+    /// is one this instance composes over the held set and signs itself
+    /// (RFC 0026 §6.10). That is the one case where a proxy registry writes an
+    /// `APKINDEX`, and without a key it cannot: the composition is skipped and
+    /// `apk update` stays the RFC 0008 `503`.
+    fn validate_apk_signing_mode(
+        registry: &RegistryConfig,
+        hosts_locally: bool,
+        air_gapped: bool,
+    ) -> Result<()> {
         if !hosts_locally && registry.apk_signing.is_some() && !air_gapped {
             anyhow::bail!(
                 "registry '{}': [registries.apk_signing] needs mode = \"local\" or \"hybrid\", or \
@@ -3988,10 +4008,15 @@ impl AppConfig {
                 registry.name
             );
         }
+        Ok(())
+    }
 
-        // The client appends `{branch}/{repo}/{arch}/` itself, so an upstream
-        // that already names one puts the index at `…/v3.22/v3.22/main/…`.
-        // This is the mistake a `generic` migration makes, so it is named.
+    /// The upstream is the tree root, not a branch or a repository inside it.
+    ///
+    /// The client appends `{branch}/{repo}/{arch}/` itself, so an upstream that
+    /// already names one puts the index at `…/v3.22/v3.22/main/…`. This is the
+    /// mistake a `generic` migration makes, so it is named.
+    fn validate_apk_upstreams(registry: &RegistryConfig) -> Result<()> {
         for upstream in &registry.upstreams {
             let trimmed = upstream.trim_end_matches('/');
             let last = trimmed.rsplit('/').next().unwrap_or_default();
@@ -4012,93 +4037,122 @@ impl AppConfig {
                 );
             }
         }
+        Ok(())
+    }
 
-        if let Some(signing) = &registry.apk_signing {
-            let name = signing.key_name.trim();
-            // apk opens the key by this exact name inside the keys directory
-            // (`openat(ctx->keys_fd, name, …)`), so it is one path segment and
-            // nothing else.
-            if !name.ends_with(".rsa.pub") {
+    /// The key that signs, and the rotation window behind it.
+    fn validate_apk_signing(
+        registry: &RegistryConfig,
+        signing: &crate::schema::registry::ApkSigningConfig,
+    ) -> Result<()> {
+        let name = signing.key_name.trim();
+        // apk opens the key by this exact name inside the keys directory
+        // (`openat(ctx->keys_fd, name, …)`), so it is one path segment and
+        // nothing else.
+        if !name.ends_with(".rsa.pub") {
+            anyhow::bail!(
+                "registry '{}': apk_signing.key_name must end in '.rsa.pub' — it is the \
+                 file name the client holds in /etc/apk/keys/, and Alpine's convention is \
+                 <email>-<8 hex>.rsa.pub; got '{}'",
+                registry.name,
+                signing.key_name
+            );
+        }
+        if !Self::is_apk_key_segment(name) {
+            anyhow::bail!(
+                "registry '{}': apk_signing.key_name must be a single non-empty path \
+                 segment with no '/' or '..'; got '{}'",
+                registry.name,
+                signing.key_name
+            );
+        }
+        if signing.private_key_pem.trim().is_empty() {
+            anyhow::bail!(
+                "registry '{}': apk_signing.private_key_pem is empty — set it from the \
+                 environment with ${{APK_SIGNING_KEY_PEM}} rather than inline",
+                registry.name
+            );
+        }
+        if registry.apk_unsigned {
+            anyhow::bail!(
+                "registry '{}': apk_unsigned = true and [registries.apk_signing] are \
+                 contradictory — remove one",
+                registry.name
+            );
+        }
+        Self::validate_apk_rotation(registry, signing, name)
+    }
+
+    /// Whether a key name is the single path segment apk will `openat`.
+    ///
+    /// Shared by the current key and every retired one, which is the point: the
+    /// two used to spell the same three conditions separately, and a rotation
+    /// entry is installed from exactly like the key in front of it.
+    fn is_apk_key_segment(name: &str) -> bool {
+        !name.contains('/') && !name.contains("..") && name.len() != ".rsa.pub".len()
+    }
+
+    /// The retired keys still advertised beside the current one.
+    ///
+    /// Every retired key is a `.SIGN.*` entry a client may install from, so each
+    /// has to be as well formed as the current one — and none of them may *be*
+    /// the current one, because a repeated entry name is an index with two
+    /// signatures under one file name and apk reads the first.
+    fn validate_apk_rotation(
+        registry: &RegistryConfig,
+        signing: &crate::schema::registry::ApkSigningConfig,
+        current: &str,
+    ) -> Result<()> {
+        let mut seen = vec![current.to_owned()];
+        for old in &signing.previous_keys {
+            let old_name = old.key_name.trim();
+            if !old_name.ends_with(".rsa.pub") || !Self::is_apk_key_segment(old_name) {
                 anyhow::bail!(
-                    "registry '{}': apk_signing.key_name must end in '.rsa.pub' — it is the \
-                     file name the client holds in /etc/apk/keys/, and Alpine's convention is \
-                     <email>-<8 hex>.rsa.pub; got '{}'",
+                    "registry '{}': apk_signing.previous_keys[].key_name must be a single \
+                     path segment ending in '.rsa.pub'; got '{}'",
                     registry.name,
-                    signing.key_name
+                    old.key_name
                 );
             }
-            if name.contains('/') || name.contains("..") || name.len() == ".rsa.pub".len() {
+            if old.private_key_pem.trim().is_empty() {
                 anyhow::bail!(
-                    "registry '{}': apk_signing.key_name must be a single non-empty path \
-                     segment with no '/' or '..'; got '{}'",
+                    "registry '{}': apk_signing.previous_keys entry '{}' has an empty \
+                     private_key_pem — set it from the environment, or drop the entry if \
+                     the rotation is finished",
                     registry.name,
-                    signing.key_name
+                    old.key_name
                 );
             }
-            if signing.private_key_pem.trim().is_empty() {
+            if seen.iter().any(|n| n == old_name) {
                 anyhow::bail!(
-                    "registry '{}': apk_signing.private_key_pem is empty — set it from the \
-                     environment with ${{APK_SIGNING_KEY_PEM}} rather than inline",
-                    registry.name
+                    "registry '{}': apk_signing key name '{}' appears twice — an index with \
+                     two signatures under one file name installs from whichever apk reads \
+                     first, which is not a rotation",
+                    registry.name,
+                    old.key_name
                 );
             }
-            if registry.apk_unsigned {
+            if !old.previous_keys.is_empty() {
                 anyhow::bail!(
-                    "registry '{}': apk_unsigned = true and [registries.apk_signing] are \
-                     contradictory — remove one",
-                    registry.name
+                    "registry '{}': apk_signing.previous_keys entry '{}' has its own \
+                     previous_keys — the rotation window is one flat list",
+                    registry.name,
+                    old.key_name
                 );
             }
-            // The rotation window. Every retired key is a `.SIGN.*` entry a
-            // client may install from, so each has to be as well formed as the
-            // current one — and none of them may be the current one, because a
-            // repeated entry name is an index with two signatures under one
-            // file name and apk reads the first.
-            let mut seen = vec![name.to_owned()];
-            for old in &signing.previous_keys {
-                let old_name = old.key_name.trim();
-                if !old_name.ends_with(".rsa.pub")
-                    || old_name.contains('/')
-                    || old_name.contains("..")
-                    || old_name.len() == ".rsa.pub".len()
-                {
-                    anyhow::bail!(
-                        "registry '{}': apk_signing.previous_keys[].key_name must be a single \
-                         path segment ending in '.rsa.pub'; got '{}'",
-                        registry.name,
-                        old.key_name
-                    );
-                }
-                if old.private_key_pem.trim().is_empty() {
-                    anyhow::bail!(
-                        "registry '{}': apk_signing.previous_keys entry '{}' has an empty \
-                         private_key_pem — set it from the environment, or drop the entry if \
-                         the rotation is finished",
-                        registry.name,
-                        old.key_name
-                    );
-                }
-                if seen.iter().any(|n| n == old_name) {
-                    anyhow::bail!(
-                        "registry '{}': apk_signing key name '{}' appears twice — an index with \
-                         two signatures under one file name installs from whichever apk reads \
-                         first, which is not a rotation",
-                        registry.name,
-                        old.key_name
-                    );
-                }
-                if !old.previous_keys.is_empty() {
-                    anyhow::bail!(
-                        "registry '{}': apk_signing.previous_keys entry '{}' has its own \
-                         previous_keys — the rotation window is one flat list",
-                        registry.name,
-                        old.key_name
-                    );
-                }
-                seen.push(old_name.to_owned());
-            }
-        } else if hosts_locally && !registry.apk_unsigned {
-            // Silence here would ship a repository nothing can install from.
+            seen.push(old_name.to_owned());
+        }
+        Ok(())
+    }
+
+    /// A local or hybrid apk registry with no key at all.
+    ///
+    /// Silence here would ship a repository nothing can install from.
+    fn require_apk_signing_when_hosting(
+        registry: &RegistryConfig,
+        hosts_locally: bool,
+    ) -> Result<()> {
+        if hosts_locally && !registry.apk_unsigned {
             anyhow::bail!(
                 "registry '{}': an apk registry in mode = \"{}\" needs \
                  [registries.apk_signing], because every shipping apk refuses an unsigned \
@@ -4113,7 +4167,6 @@ impl AppConfig {
                 }
             );
         }
-
         Ok(())
     }
 

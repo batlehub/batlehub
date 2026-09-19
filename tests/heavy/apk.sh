@@ -73,6 +73,17 @@ heavy_start_tap
 
 CDN="https://dl-cdn.alpinelinux.org/alpine"
 
+# `-L` follows a redirect, and the CDN redirects; `--proto-redir` pins the
+# redirect chain to HTTPS so a downgrade cannot slip a plain-HTTP hop into a
+# download that goes straight into `tar`. A wrapper rather than the flags
+# spliced in at each call site, for the reason `marketplace.sh` records: an
+# array splat is opaque to the rule that checks for this, and a call site that
+# names the wrapper cannot omit half of the pair.
+fetch_https() {
+  curl -fsSL --proto '=https' --proto-redir '=https' "$@"
+  return $?
+}
+
 # apk_static_for <branch> <dest-dir> — unpack apk-tools-static and echo the
 # path to the binary.
 apk_static_for() {
@@ -80,7 +91,7 @@ apk_static_for() {
   mkdir -p "$dest"
 
   local listing="$HEAVY_WORK/listing-$branch.html"
-  curl -fsSL "$CDN/$branch/main/x86_64/" -o "$listing" \
+  fetch_https "$CDN/$branch/main/x86_64/" -o "$listing" \
     || heavy_fail "could not list $branch/main/x86_64 on the CDN"
 
   local file
@@ -88,7 +99,7 @@ apk_static_for() {
     || true
   [[ -n "$file" ]] || heavy_fail "no apk-tools-static package found in $branch/main/x86_64"
 
-  curl -fsSL "$CDN/$branch/main/x86_64/$file" -o "$dest/apk-tools-static.apk" \
+  fetch_https "$CDN/$branch/main/x86_64/$file" -o "$dest/apk-tools-static.apk" \
     || heavy_fail "could not download $file"
 
   # A .apk is concatenated gzip members; GNU tar walks them and extracts the
@@ -98,6 +109,7 @@ apk_static_for() {
     || heavy_fail "apk.static was not where $file said it would be ($dest/sbin/apk.static)"
 
   printf '%s' "$dest/sbin/apk.static"
+  return $?
 }
 
 # The Alpine signing keys, so a relayed index verifies. Taken from the same
@@ -106,16 +118,17 @@ alpine_keys() {
   local dest="$1"
   mkdir -p "$dest"
   local listing="$HEAVY_WORK/keys-listing.html"
-  curl -fsSL "$CDN/$GEN2_BRANCH/main/x86_64/" -o "$listing" \
+  fetch_https "$CDN/$GEN2_BRANCH/main/x86_64/" -o "$listing" \
     || heavy_fail "could not list the CDN for alpine-keys"
   local file
   file="$(grep -oE 'alpine-keys-[0-9][^"]*\.apk' "$listing" | sort -u | head -1)"
   [[ -n "$file" ]] || heavy_fail "no alpine-keys package on the CDN"
-  curl -fsSL "$CDN/$GEN2_BRANCH/main/x86_64/$file" -o "$HEAVY_WORK/alpine-keys.apk" \
+  fetch_https "$CDN/$GEN2_BRANCH/main/x86_64/$file" -o "$HEAVY_WORK/alpine-keys.apk" \
     || heavy_fail "could not download $file"
   (cd "$HEAVY_WORK" && tar -xzf alpine-keys.apk 2>/dev/null) || true
   cp "$HEAVY_WORK"/usr/share/apk/keys/*.rsa.pub "$dest/" 2>/dev/null \
     || heavy_fail "alpine-keys carried no .rsa.pub files"
+  return $?
 }
 
 KEYS="$HEAVY_WORK/keys"
@@ -189,6 +202,7 @@ assert_update_resolved() {
     heavy_fail "[$label] apk reported an unavailable repository while exiting 0"
   fi
   heavy_client_said "$RUN_OUT" '[0-9]+ distinct packages available'
+  return $?
 }
 
 # ── The per-generation body ──────────────────────────────────────────────────
@@ -302,6 +316,7 @@ for block in text.split("\n\n"):
     "GET /proxy/$AUTH_REG/apk/$branch/main/x86_64/APKINDEX[.]tar[.]gz.* 200" \
     "[$label] the authenticated index request did not succeed"
   heavy_log "[$label] credential boundary proven both ways"
+  return $?
 }
 
 # ── The local half ──────────────────────────────────────────────────────────
@@ -374,6 +389,7 @@ PKGINFO
   cat "$src/data.gz" >> "$dest"
 
   [[ -s "$dest" ]] || heavy_fail "could not build the v2 fixture $name-$version"
+  return $?
 }
 
 # local_generation <label> <binary>
@@ -448,6 +464,7 @@ local_generation() {
 
   heavy_unblock "$LOCAL_REG" "$name" "$version"
   heavy_log "[$label] local repository proven: signed index, identity, block in the listing"
+  return $?
 }
 
 generation "apk2" "$APK2" "$GEN2_BRANCH"

@@ -26,6 +26,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Announcer } from "@/components/ui/announcer";
+import { ChevronRight } from "@lucide/vue";
 
 const { t } = useI18n();
 
@@ -758,11 +759,37 @@ onUnmounted(() => {
           </thead>
           <tbody>
             <template v-for="row in changeHistory" :key="row.id">
-              <tr
-                class="border-b cursor-pointer hover:bg-muted/30"
-                @click="expandedRow = expandedRow === row.id ? null : row.id"
-              >
-                <td class="py-2 pr-4">{{ formatDate(row.triggered_at) }}</td>
+              <!-- The disclosure is a button in the first cell, not a `@click`
+                   on the `<tr>`. A clickable row with `cursor-pointer`, no
+                   `tabindex`, no `role` and no key handler is unreachable by
+                   keyboard and announces nothing, which is the same finding
+                   `PackageDetailPage.vue` records against its version list.
+                   A button brings the focus ring, Enter and Space with it, and
+                   `aria-expanded` is what tells a reader whether the diff below
+                   is open — the chevron alone says it only to someone who can
+                   see it. -->
+              <tr class="border-b hover:bg-muted/30">
+                <td class="py-2 pr-4">
+                  <button
+                    type="button"
+                    class="inline-flex items-center gap-1.5 text-left hover:underline underline-offset-[3px]"
+                    :aria-expanded="expandedRow === row.id"
+                    :aria-controls="expandedRow === row.id ? `config-change-${row.id}` : undefined"
+                    @click="expandedRow = expandedRow === row.id ? null : row.id"
+                  >
+                    <ChevronRight
+                      class="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform"
+                      :class="expandedRow === row.id ? 'rotate-90' : ''"
+                      aria-hidden="true"
+                    />
+                    {{ formatDate(row.triggered_at) }}
+                    <span class="sr-only">{{
+                      expandedRow === row.id
+                        ? t("adminConfigReload.hideDiff")
+                        : t("adminConfigReload.showDiff")
+                    }}</span>
+                  </button>
+                </td>
                 <td class="py-2 pr-4">{{ row.triggered_by }}</td>
                 <td class="py-2 pr-4">
                   <Badge :class="row.status === 'applied' ? 'text-foreground' : 'text-destructive'">
@@ -771,7 +798,7 @@ onUnmounted(() => {
                 </td>
                 <td class="py-2">{{ row.summary }}</td>
               </tr>
-              <tr v-if="expandedRow === row.id">
+              <tr v-if="expandedRow === row.id" :id="`config-change-${row.id}`">
                 <td colspan="4" class="pb-3">
                   <pre class="bg-muted text-xs p-2 rounded-sm overflow-x-auto">{{
                     JSON.stringify(row.diff, null, 2)

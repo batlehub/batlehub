@@ -124,40 +124,57 @@ class Check:
     note: str = ""
 
 
+def column(row: dict[str, str], key: str) -> float | None:
+    """One optional numeric column of a sampler row, or None when it is absent.
+
+    Absent and unparseable are the same answer on purpose: a sampler that could
+    not read `/proc` for one tick writes an empty cell, and a column the build
+    does not carry at all (`heap_kb` without the `jemalloc` feature) is missing
+    from every row. Both mean "not measured", which is what every check below
+    distinguishes from zero.
+    """
+    raw = (row.get(key) or "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def sample_of(row: dict[str, str]) -> Sample | None:
+    """One sampler row as a `Sample`, or None when it carries no epoch and RSS.
+
+    Those two are the row's identity — a sample that cannot say *when* it was
+    taken or what the process weighed measures nothing — so they are the only
+    columns whose absence drops the row.
+    """
+    try:
+        epoch = int(row["epoch_s"])
+        rss = float(row["rss_kb"]) / 1024.0
+    except (KeyError, TypeError, ValueError):
+        return None
+    fds = column(row, "fds")
+    threads = column(row, "threads")
+    heap = column(row, "heap_kb")
+    return Sample(
+        epoch_s=epoch,
+        rss_mib=rss,
+        fds=int(fds) if fds is not None else None,
+        threads=int(threads) if threads is not None else None,
+        pool_size=column(row, "pool_size"),
+        pool_idle=column(row, "pool_idle"),
+        heap_mib=heap / 1024.0 if heap is not None else None,
+    )
+
+
 def read_samples(path: Path) -> list[Sample]:
     out: list[Sample] = []
     with path.open() as fh:
         for row in csv.DictReader(fh):
-            try:
-                epoch = int(row["epoch_s"])
-                rss = float(row["rss_kb"]) / 1024.0
-            except (KeyError, TypeError, ValueError):
-                continue
-
-            def num(key: str):
-                raw = (row.get(key) or "").strip()
-                if not raw:
-                    return None
-                try:
-                    return float(raw)
-                except ValueError:
-                    return None
-
-            fds = num("fds")
-            threads = num("threads")
-            out.append(
-                Sample(
-                    epoch_s=epoch,
-                    rss_mib=rss,
-                    fds=int(fds) if fds is not None else None,
-                    threads=int(threads) if threads is not None else None,
-                    pool_size=num("pool_size"),
-                    pool_idle=num("pool_idle"),
-                    heap_mib=(
-                        heap / 1024.0 if (heap := num("heap_kb")) is not None else None
-                    ),
-                )
-            )
+            sample = sample_of(row)
+            if sample is not None:
+                out.append(sample)
     return out
 
 

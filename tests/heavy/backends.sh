@@ -258,7 +258,9 @@ npm_install() {
   return $?
 }
 installed_ok() {  # <label>
-  node -e "const p=require('$HEAVY_WORK/proj-$1/node_modules/$PKG/package.json'); if (p.version !== '$PKG_VERSION') process.exit(1)"
+  local label="$1"
+  node -e "const p=require('$HEAVY_WORK/proj-$label/node_modules/$PKG/package.json'); if (p.version !== '$PKG_VERSION') process.exit(1)"
+  return $?
 }
 
 # ── 2. Anonymous and tampered: refused, and the upstream never asked ────────
@@ -331,6 +333,7 @@ pip_install() {  # <label>
   "$venv/bin/python" -m pip install --quiet --no-cache-dir --index-url "$PYPI_SIMPLE" "$DIST==$DIST_VERSION" \
     >"$HEAVY_WORK/pip-$label.txt" 2>&1 || { cat "$HEAVY_WORK/pip-$label.txt" >&2; return 1; }
   "$venv/bin/python" -c "import $MODULE; assert $MODULE.VALUE == '$DIST'" || heavy_fail "the installed distribution is not the upstream's"
+  return $?
 }
 heavy_mark "pip-first"
 pip_install first || heavy_fail "pip install through the PyPI registry failed"

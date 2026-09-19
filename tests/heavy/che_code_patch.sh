@@ -48,18 +48,22 @@ elif [[ -x "$POD_TREE/node" && -f "$POD_TREE/product.json" ]]; then
   fi
 else
   heavy_need docker "docker (to copy the build out of quay.io/che-incubator/che-code)"
+  # The throwaway container the build is copied out of. Named once: it is
+  # created, copied from and removed on three paths (including the failure
+  # one), and a name that matched in two of them would leak a container.
+  CHE_SRC_CONTAINER="batlehub-che-code-src"
   CHE_DIR="$HEAVY_CACHE/che-code-image-$CHE_CODE_TAG"
   if [[ ! -f "$CHE_DIR/product.json" ]]; then
     heavy_log "Copying che-code out of quay.io/che-incubator/che-code:$CHE_CODE_TAG"
-    docker rm -f "batlehub-che-code-src" >/dev/null 2>&1 || true
-    docker create --name "batlehub-che-code-src" "quay.io/che-incubator/che-code:$CHE_CODE_TAG" >/dev/null
+    docker rm -f "$CHE_SRC_CONTAINER" >/dev/null 2>&1 || true
+    docker create --name "$CHE_SRC_CONTAINER" "quay.io/che-incubator/che-code:$CHE_CODE_TAG" >/dev/null
     rm -rf "$CHE_DIR.partial"
     # `a && b` is exempt from `set -e`: a failed copy used to fall through to
     # the "not a che-code build" check below, hiding docker's own error.
-    docker cp "batlehub-che-code-src:/checode-linux-libc/ubi9" "$CHE_DIR.partial" \
-      || { docker rm -f "batlehub-che-code-src" >/dev/null 2>&1
+    docker cp "$CHE_SRC_CONTAINER:/checode-linux-libc/ubi9" "$CHE_DIR.partial" \
+      || { docker rm -f "$CHE_SRC_CONTAINER" >/dev/null 2>&1
            heavy_fail "docker cp out of quay.io/che-incubator/che-code:$CHE_CODE_TAG failed"; }
-    docker rm -f "batlehub-che-code-src" >/dev/null
+    docker rm -f "$CHE_SRC_CONTAINER" >/dev/null
     mv "$CHE_DIR.partial" "$CHE_DIR"
   fi
 fi

@@ -49,7 +49,7 @@ export const options = {
   thresholds: {},
 };
 
-export default function () {
+export default function breaking_point() {
   const slot = (__VU * 7919 + __ITER) % TOTAL_WEIGHT;
   const arm = armForSlot(slot);
   const n = arm.space ? (__VU * 7919 + __ITER) % arm.space : 0;

@@ -66,21 +66,35 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -z "$LABEL" ]] && LABEL="$(basename "$CONFIG" .toml | sed 's/^config\.//')"
+# The label names every file this run writes, here and in the two Python
+# helpers, which derive their paths from it rather than being handed one
+# (`perf/scripts/perf_paths.py`). Refused here as well as there so the failure
+# is one message at the top rather than a stack trace forty minutes in.
+if [[ ! "$LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  echo "ERROR: --label must start with a letter or digit and carry only letters, digits, '.', '-' and '_': $LABEL" >&2
+  exit 2
+fi
 
 : "${DATABASE_URL:?DATABASE_URL is required}"
 BASE="http://127.0.0.1:$PORT"
 RESULTS="perf/results"
-WORK="$(mktemp -d)"
-mkdir -p "$RESULTS"
+# Scratch for this run — k6's per-step summaries, the accumulating rows, the
+# build log. Under `perf/results/` rather than in a `mktemp -d` so that the two
+# Python helpers can *derive* it from the label instead of being handed a path:
+# the names they read and write are then not something a caller can choose.
+# Removed by `cleanup`, and gitignored in case it is not.
+WORK="$RESULTS/breaking-point-$LABEL-work"
 SAMPLES="$RESULTS/breaking-point-$LABEL-samples.csv"
 REPORT="$RESULTS/breaking-point-$LABEL.md"
 ROWS="$WORK/rows.jsonl"
 SERVER_LOG="$RESULTS/breaking-point-$LABEL-server.log"
+rm -rf "$WORK"
+mkdir -p "$RESULTS" "$WORK"
 TARGET_DIR="release"; [[ "$PROFILE" == "debug" ]] && TARGET_DIR="debug"
 SERVER_PROC=""
 : > "$ROWS"
 
-log() { echo "==> $*"; }
+log() { echo "==> $*"; return $?; }
 cleanup() {
   [[ -n "${SAMPLER_PID:-}" ]] && kill "$SAMPLER_PID" 2>/dev/null
   [[ -n "$SERVER_PROC" ]] && kill "$SERVER_PROC" 2>/dev/null
@@ -221,17 +235,16 @@ while :; do
 
   if ! kill -0 "$SERVER_PROC" 2>/dev/null; then
     broke_at="$rate"; break_reason="the server process died"
-    python3 perf/scripts/breaking_point_row.py --rate "$rate" --summary "$WORK/step-$rate.json" \
-      --samples "$SAMPLES" --from "$step_start" --to "$step_end" --died \
-      --k6-exit "$k6_exit" --append "$ROWS" >/dev/null
+    python3 perf/scripts/breaking_point_row.py --label "$LABEL" --rate "$rate" \
+      --from "$step_start" --to "$step_end" --died \
+      --k6-exit "$k6_exit" >/dev/null
     break
   fi
 
-  verdict="$(python3 perf/scripts/breaking_point_row.py --rate "$rate" \
-    --summary "$WORK/step-$rate.json" --samples "$SAMPLES" \
+  verdict="$(python3 perf/scripts/breaking_point_row.py --label "$LABEL" --rate "$rate" \
     --from "$step_start" --to "$step_end" \
     --max-fail-pct "$MAX_FAIL_PCT" --max-p95-ms "$MAX_P95_MS" --max-drop-pct "$MAX_DROP_PCT" \
-    --k6-exit "$k6_exit" --append "$ROWS")"
+    --k6-exit "$k6_exit")"
   log "  $verdict"
   if [[ "$verdict" == FAILED* ]]; then
     broke_at="$rate"; break_reason="${verdict#FAILED — }"
@@ -250,7 +263,7 @@ panics="${panics:-0}"
 alive=1; kill -0 "$SERVER_PROC" 2>/dev/null || alive=0
 
 python3 perf/scripts/breaking_point_report.py \
-  --label "$LABEL" --config "$CONFIG" --rows "$ROWS" --report "$REPORT" \
+  --label "$LABEL" --config "$CONFIG" \
   --broke-at "${broke_at:-}" --reason "${break_reason:-}" \
   --panics "$panics" --alive "$alive" --budget "$BUDGET" --step "$STEP" --factor "$FACTOR" \
   --cpus "$(nproc)" --pool-max "${PROXY_CACHE__DATABASE__MAX_CONNECTIONS:-}"

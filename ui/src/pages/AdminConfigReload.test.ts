@@ -667,11 +667,22 @@ describe("AdminConfigReload", () => {
     const failed = wrapper.findAll("tbody tr").find((r) => r.text().includes("failed"))!;
     expect(failed.html()).toContain("text-destructive");
 
-    await wrapper.findAll("tbody tr")[0].trigger("click");
-    expect(wrapper.find("pre").text()).toContain("added_registries");
+    // The disclosure is a button, not the row: a keyboard reaches it, and
+    // `aria-expanded` is what says whether the diff below is open.
+    const disclosure = wrapper.findAll("tbody tr")[0].find("button");
+    expect(disclosure.exists()).toBe(true);
+    expect(disclosure.attributes("aria-expanded")).toBe("false");
 
-    // Clicking the same row again collapses it.
-    await wrapper.findAll("tbody tr")[0].trigger("click");
+    await disclosure.trigger("click");
+    expect(wrapper.find("pre").text()).toContain("added_registries");
+    expect(wrapper.findAll("tbody tr")[0].find("button").attributes("aria-expanded")).toBe("true");
+    // The button names the row it opens, and that row exists under that id.
+    const controls = wrapper.findAll("tbody tr")[0].find("button").attributes("aria-controls")!;
+    expect(wrapper.find(`#${controls}`).exists()).toBe(true);
+
+    // Pressing it again collapses it.
+    await wrapper.findAll("tbody tr")[0].find("button").trigger("click");
     expect(wrapper.find("pre").exists()).toBe(false);
+    expect(wrapper.findAll("tbody tr")[0].find("button").attributes("aria-expanded")).toBe("false");
   });
 });

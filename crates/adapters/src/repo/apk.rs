@@ -328,6 +328,13 @@ fn tar_of(entries: &[(&str, &[u8])]) -> Result<Vec<u8>, CoreError> {
         // writes (`ustar\0` + `00`, typeflag `0`, octal uid/gid/mtime) is what
         // both generations accept; measured against `apk.static` in RFC 0026
         // §13, not deduced.
+        //
+        // The mode is a *field of this tar header*, not a permission this
+        // process asks a filesystem for: the archive is built in memory and
+        // served over HTTP, and nothing here ever unpacks it. 0o644 is what GNU
+        // tar writes for a regular file and what apk expects to read back, so
+        // it is an interop constant — narrowing it would only produce an index
+        // some client refuses.
         let mut header = tar::Header::new_ustar();
         header.set_size(content.len() as u64);
         header.set_mode(0o644);

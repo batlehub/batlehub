@@ -690,12 +690,24 @@ heavy_log "MISE-NOLOCK-MEASURED"
 # below is measured against.
 
 CDN="https://dl-cdn.alpinelinux.org/alpine"
+
+# `-L` follows a redirect, and the CDN redirects; `--proto-redir` pins the
+# redirect chain to HTTPS so a downgrade cannot slip a plain-HTTP hop into a
+# download that goes straight into `tar`. A wrapper rather than the flags
+# spliced in at each call site, for the reason `marketplace.sh` records: an
+# array splat is opaque to the rule that checks for this, and a call site that
+# names the wrapper cannot omit half of the pair.
+fetch_https() {
+  curl -fsSL --proto '=https' --proto-redir '=https' "$@"
+  return $?
+}
+
 APK_ROOT="$HEAVY_WORK/apk-client"
 mkdir -p "$APK_ROOT"
-APK_FILE="$(curl -fsSL "$CDN/$APK_BRANCH/main/$APK_ARCH/" \
+APK_FILE="$(fetch_https "$CDN/$APK_BRANCH/main/$APK_ARCH/" \
   | grep -oE 'apk-tools-static-[0-9][^"]*\.apk' | sort -u | head -1)"
 [[ -n "$APK_FILE" ]] || heavy_fail "no apk-tools-static on the CDN"
-curl -fsSL "$CDN/$APK_BRANCH/main/$APK_ARCH/$APK_FILE" -o "$APK_ROOT/apk-tools-static.apk" \
+fetch_https "$CDN/$APK_BRANCH/main/$APK_ARCH/$APK_FILE" -o "$APK_ROOT/apk-tools-static.apk" \
   || heavy_fail "could not download $APK_FILE"
 ( cd "$APK_ROOT" && tar -xzf apk-tools-static.apk 2>/dev/null ) || true
 APK_BIN="$APK_ROOT/sbin/apk.static"

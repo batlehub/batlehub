@@ -89,6 +89,7 @@ write_cfg() {  # <registry> <cfg path> [token]
       "$HEAVY_TAP_BASE" "$registry"
     [[ -z "$token" ]] || printf 'token = %s\n' "$token"
   } > "$cfg"
+  return $?
 }
 
 CFG="$HEAVY_WORK/ansible.cfg"
@@ -127,6 +128,7 @@ said() {
   echo "--- the client's output ---" >&2
   tail -n 40 "$file" >&2
   heavy_fail "$explanation (nothing matching /$ere/ in $(basename "$file"))"
+  return $?
 }
 
 # The versions the proxy currently serves, newest first.
@@ -137,10 +139,12 @@ said() {
 # report that nothing changed — a pass for the wrong reason.
 versions_json() {
   curl -fsS "$HEAVY_TAP_BASE/proxy/$REG/galaxy/api/v3/collections/$COLL_NS/$COLL_NAME/versions/"
+  return $?
 }
 
 # newest_versions <n> — the n newest *stable* versions, one per line.
-newest_versions() {
+newest_versions() {  # <how many>
+  local how_many="$1"
   versions_json | python3 -c '
 import json, sys
 
@@ -152,7 +156,8 @@ versions = [e["version"] for e in json.load(sys.stdin)["data"]]
 versions = [v for v in versions if "-" not in v] or versions
 for v in sorted(versions, key=key, reverse=True)[: int(sys.argv[1])]:
     print(v)
-' "$1"
+' "$how_many"
+  return $?
 }
 
 # ── phase: install ───────────────────────────────────────────────────────────
@@ -198,6 +203,7 @@ phase_install() {
   # with downloaded file" and the install above would not have succeeded.
   said "$HEAVY_WORK/install.out" "was installed successfully" \
     "the install did not succeed, so the tarball's digest is unproven"
+  return $?
 }
 
 # ── phase: blocked ───────────────────────────────────────────────────────────
@@ -257,6 +263,7 @@ phase_stale() {
     ANSIBLE_CONFIG="$CFG" ANSIBLE_HOME="$home" \
     ANSIBLE_GALAXY_CACHE_DIR="$home/cache" ANSIBLE_LOCAL_TEMP="$home/tmp" \
       "$GALAXY" "$@" > "$HEAVY_WORK/stale.out" 2>&1
+    return $?
   }
 
   run_warm collection install "$COLLECTION" || heavy_fail "the warming install failed"
@@ -347,6 +354,7 @@ YML
     || { cat "$HEAVY_WORK/build-$name.out"; heavy_fail "collection build failed for $ns.$name"; }
   BUILT_TARBALL="$HEAVY_WORK/$ns-$name-$version.tar.gz"
   [[ -f "$BUILT_TARBALL" ]] || heavy_fail "collection build did not produce $BUILT_TARBALL"
+  return $?
 }
 
 # publish_collection <label> <tarball> — publish it into the local registry.
@@ -356,6 +364,7 @@ publish_collection() {
     "$GALAXY" collection publish "$tarball" --server batlehub \
     > "$HEAVY_WORK/$label.out" 2>&1 \
     || { cat "$HEAVY_WORK/$label.out"; heavy_fail "collection publish failed ($label)"; }
+  return $?
 }
 
 phase_publish() {

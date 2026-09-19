@@ -188,6 +188,11 @@ HDR_JSON="Content-Type: application/json"
 WIRE_403="-> 403"
 IP_BLOCKS="/api/v1/admin/ip-blocks"
 WHO_DENIED="the denied user"
+# The denied subject as the *oracle* names it — a `user:` principal, not the
+# token that resolves to it. The two are spelled differently on purpose
+# (`T_DENIED` is the credential), and an oracle asked about the token instead
+# answers about a subject that holds nothing, which is an `allow`-shaped pass.
+SUBJECT_DENIED="user:authz-denied"
 
 # ── Assertion helpers ────────────────────────────────────────────────────────
 
@@ -429,7 +434,7 @@ phase_matrix() {
   authz_denied source:read "the lister, who holds neither read verb for bytes" \
     GET "$T_LISTER" "/proxy/$NPM/$PKG/1.0.0/tarball"
 
-  authz_oracle source:read "$NPM" "user:authz-denied" deny "$PKG"
+  authz_oracle source:read "$NPM" "$SUBJECT_DENIED" deny "$PKG"
   authz_oracle source:read "$NPM" "user:authz-reader" allow "$PKG"
 
   # ── 2. releases:list — wired on one document path and not the other ────────
@@ -492,8 +497,8 @@ phase_matrix() {
     GET "$T_DENIED" "/proxy/$NPM/$team_enc/1.0.0/tarball"
   authz_denied source:read "…and is still refused one namespace over" \
     GET "$T_DENIED" "/proxy/$NPM/$teamx_enc/1.0.0/tarball"
-  authz_oracle source:read "$NPM" "user:authz-denied" allow "$TEAM_PKG"
-  authz_oracle source:read "$NPM" "user:authz-denied" deny "$TEAMX_PKG"
+  authz_oracle source:read "$NPM" "$SUBJECT_DENIED" allow "$TEAM_PKG"
+  authz_oracle source:read "$NPM" "$SUBJECT_DENIED" deny "$TEAMX_PKG"
 
   # A namespace granting the metadata verbs and not `source:read`: the same
   # caller resolves every version of the package and can install none of them.
@@ -1968,7 +1973,7 @@ YML
   verdict="$(authz_explain "$GALAXY_R" "user:authz-reader" "releases:read" "$ns.$name" "$version")"
   [[ "$verdict" == "allow" ]] \
     || heavy_fail "galaxy: explain says '$verdict' for the reader the server just served"
-  verdict="$(authz_explain "$GALAXY_R" "user:authz-denied" "releases:read" "$ns.$name" "$version")"
+  verdict="$(authz_explain "$GALAXY_R" "$SUBJECT_DENIED" "releases:read" "$ns.$name" "$version")"
   [[ "$verdict" == "deny" ]] \
     || heavy_fail "galaxy: explain says '$verdict' for the caller the server just refused"
   return 0

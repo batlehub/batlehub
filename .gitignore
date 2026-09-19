@@ -115,6 +115,10 @@ perf/results/breaking-point-*.md
 perf/results/breaking-point-*.json
 perf/results/breaking-point-*-samples.csv
 perf/results/breaking-point-*-server.log
+# Scratch for one run: k6's per-step summaries, the accumulating rows, the
+# build log. `breaking_point.sh` removes it on exit; this is for the run that
+# was killed before it could.
+perf/results/breaking-point-*-work/
 # The results table (`task perf:report`) is the same kind of thing: one machine,
 # one day. A release's copy lives on the release, not in the tree.
 perf/results/runs.jsonl

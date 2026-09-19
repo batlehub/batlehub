@@ -92,6 +92,7 @@ mkdir -p "$HEAVY_WORK/home"
 nix_probe_write() {  # <run flags…> → 0 when /work is writable under them
   "${CW_ENGINE[@]}" run --rm "$@" -v "$HEAVY_WORK:/work:z" "$NIX_IMAGE" \
     sh -c 'touch /work/.probe && rm -f /work/.probe' >/dev/null 2>&1
+  return $?
 }
 NIX_RUN_USER=()
 if nix_probe_write -u "$(id -u):$(id -g)"; then
@@ -129,6 +130,7 @@ nix_run() {
         --option substituters "" \
         "${netrc[@]}" \
         "$@"
+  return $?
 }
 
 # A Nix store directory is mode `r-xr-xr-x` and its files are `r--r--r--`, so
@@ -140,10 +142,17 @@ nix_run() {
 heavy_cleanup_nix() {
   [[ -n "${HEAVY_WORK:-}" ]] && chmod -R u+w "$HEAVY_WORK" 2>/dev/null
   heavy_cleanup
+  return $?
 }
 trap heavy_cleanup_nix EXIT
 
 REG="nix-$HEAVY_RUN"
+
+# curl's write-out format for "give me only the status". Named because the
+# assertions below compare against the string it produces, and a run that
+# silently wrote something else would compare an empty variable against a
+# status code and pass.
+HTTP_CODE='%{http_code}'
 
 # The store path to substitute. A *doc* output on purpose: it is small and its
 # closure is other doc outputs, so the suite moves kilobytes rather than a
@@ -342,7 +351,7 @@ heavy_wire_after upstream-shape "GET /proxy/$REG/nix/nar/$UPSTREAM_NAR -> 200" \
 # And an unknown one is a 404 rather than a pass-through, which is what makes
 # the client refetch its narinfo instead of receiving bytes outside a coordinate.
 heavy_mark upstream-shape-miss
-UNKNOWN="$(curl -sS -o /dev/null -w '%{http_code}' \
+UNKNOWN="$(curl -sS -o /dev/null -w "$HTTP_CODE" \
   "$HEAVY_TAP_BASE/proxy/$REG/nix/nar/0000000000000000000000000000000000000000000000000000.nar.zst")"
 [[ "$UNKNOWN" == 404 ]] \
   || heavy_fail "an unindexed upstream-shaped NAR answered $UNKNOWN, not 404 — a NAR must never be served outside a coordinate"
@@ -447,7 +456,7 @@ MINE_HASH="$(basename "$MINE" | cut -c1-32)"
 # a registry's staging area. Driven by curl rather than by `nix`, because the
 # client cannot be made to send the first request without the second.
 heavy_mark anon-nar
-ANON_NAR="$(curl -sS -o /dev/null -w '%{http_code}' -X PUT --data-binary 'not a nar' \
+ANON_NAR="$(curl -sS -o /dev/null -w "$HTTP_CODE" -X PUT --data-binary 'not a nar' \
   "$PUBLISH_TO/nar/0000000000000000000000000000000000000000000000000000.nar.xz")"
 [[ "$ANON_NAR" == 403 ]] \
   || heavy_fail "an unauthenticated NAR upload answered $ANON_NAR, not 403 — the staging area \
@@ -532,7 +541,7 @@ BAD_NARINFO="$(printf '%s\n' "$GOOD_NARINFO" \
 NAR_URL="$(awk '/^URL: /{print $2}' <<<"$GOOD_NARINFO")"
 curl -fsS -o "$HEAVY_WORK/reupload.nar" "$PUBLISH_TO/$NAR_URL" \
   || heavy_fail "the registry does not serve the NAR it just accepted"
-PARKED="$(curl -sS -o /dev/null -w '%{http_code}' -X PUT \
+PARKED="$(curl -sS -o /dev/null -w "$HTTP_CODE" -X PUT \
   --data-binary @"$HEAVY_WORK/reupload.nar" \
   -u "$PUBLISH_LOGIN:$PUBLISH_TOKEN" \
   "$PUBLISH_TO/nar/$(basename "$NAR_URL")")"
@@ -541,7 +550,7 @@ PARKED="$(curl -sS -o /dev/null -w '%{http_code}' -X PUT \
 missing upload rather than about the hash"
 
 STATUS="$(printf '%s\n' "$BAD_NARINFO" \
-  | curl -sS -o "$HEAVY_WORK/badhash.out" -w '%{http_code}' \
+  | curl -sS -o "$HEAVY_WORK/badhash.out" -w "$HTTP_CODE" \
       -X PUT --data-binary @- \
       -u "$PUBLISH_LOGIN:$PUBLISH_TOKEN" \
       "$HEAVY_TAP_BASE/proxy/$LOCAL/nix/$MINE_HASH.narinfo")"
