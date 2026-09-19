@@ -62,6 +62,24 @@ async fn make_prefixed_backend(endpoint: &str, prefix: &str) -> (S3StorageBacken
     )
 }
 
+/// A key no previous run has written.
+///
+/// The bucket outlives the run: `task test:s3` starts a fresh RustFS, but a
+/// run against a long-lived endpoint — a container left up from an earlier
+/// session, a CI service reused across jobs — reads back everything every
+/// earlier run stored, and nothing here cleans up after itself. That is
+/// harmless for a test that overwrites its own keys, and fatal for one that
+/// asserts a key is *absent* first: `exists_before_and_after_store` passed on
+/// a virgin bucket and failed on every run after it. So a test that asserts
+/// absence addresses a key that has never existed anywhere.
+fn unique_key(name: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock is after the epoch")
+        .as_nanos();
+    format!("{name}-{}-{nanos}", std::process::id())
+}
+
 async fn collect(artifact: StoredArtifact) -> Vec<u8> {
     let mut out = Vec::new();
     let mut stream = artifact.stream;
@@ -111,19 +129,16 @@ async fn retrieve_missing_key_returns_none() {
 async fn exists_before_and_after_store() {
     let Some(ep) = s3_endpoint() else { return };
     let backend = make_backend(&ep).await;
+    let key = unique_key("key-ex");
 
-    assert!(!backend.exists("key-ex").await.unwrap());
+    assert!(!backend.exists(&key).await.unwrap());
 
     backend
-        .store(
-            "key-ex",
-            Bytes::from_static(b"data"),
-            StorageMeta::default(),
-        )
+        .store(&key, Bytes::from_static(b"data"), StorageMeta::default())
         .await
         .unwrap();
 
-    assert!(backend.exists("key-ex").await.unwrap());
+    assert!(backend.exists(&key).await.unwrap());
 }
 
 #[tokio::test]
