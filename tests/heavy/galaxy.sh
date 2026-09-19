@@ -306,13 +306,23 @@ phase_pinned() {
 
 # ── phase: publish ───────────────────────────────────────────────────────────
 
-phase_publish() {
-  heavy_log "5. collection publish, its import task, and an install of what was published"
-
-  local ns="acme$HEAVY_RUN" name="util" version="1.0.0"
+# build_collection <ns> <name> <version> [dependency…] — `collection build`, with
+# the tarball it produced left in `BUILT_TARBALL`.
+#
+# A global rather than stdout: `heavy_fail` exits, and inside `$(…)` it would
+# exit the *subshell* — the caller would carry on with an empty path and fail
+# somewhere else, which is the "green for the wrong reason" shape one step
+# removed.
+#
+# Each `dependency` is a `ns.name: range` line for galaxy.yml's `dependencies`
+# map, which is where the resolver's edges come from.
+BUILT_TARBALL=""
+build_collection() {
+  local ns="$1" name="$2" version="$3"; shift 3
   local src="$HEAVY_WORK/collection/$ns/$name"
   mkdir -p "$src/plugins/modules"
-  cat > "$src/galaxy.yml" <<YML
+  {
+    cat <<YML
 namespace: $ns
 name: $name
 version: $version
@@ -323,20 +333,40 @@ description: a two-file collection built by tests/heavy/galaxy.sh
 license:
   - MIT
 YML
+    if [[ $# -gt 0 ]]; then
+      printf 'dependencies:\n'
+      printf '  %s\n' "$@"
+    fi
+  } > "$src/galaxy.yml"
   echo "# $ns.$name" > "$src/README.md"
   echo "# a plugin, so the build has something to put in FILES.json" \
     > "$src/plugins/modules/noop.py"
 
-  ( cd "$src" && ANSIBLE_CONFIG="$CFG_LOCAL" "$GALAXY" collection build --output-path "$HEAVY_WORK" ) \
-    > "$HEAVY_WORK/build.out" 2>&1 || { cat "$HEAVY_WORK/build.out"; heavy_fail "collection build failed"; }
-  local tarball="$HEAVY_WORK/$ns-$name-$version.tar.gz"
-  [[ -f "$tarball" ]] || heavy_fail "collection build did not produce $tarball"
+  ( cd "$src" && ANSIBLE_CONFIG="$CFG_LOCAL" "$GALAXY" collection build --force \
+      --output-path "$HEAVY_WORK" ) > "$HEAVY_WORK/build-$name.out" 2>&1 \
+    || { cat "$HEAVY_WORK/build-$name.out"; heavy_fail "collection build failed for $ns.$name"; }
+  BUILT_TARBALL="$HEAVY_WORK/$ns-$name-$version.tar.gz"
+  [[ -f "$BUILT_TARBALL" ]] || heavy_fail "collection build did not produce $BUILT_TARBALL"
+}
+
+# publish_collection <label> <tarball> — publish it into the local registry.
+publish_collection() {
+  local label="$1" tarball="$2"
+  ANSIBLE_CONFIG="$CFG_LOCAL" ANSIBLE_HOME="$HEAVY_WORK/home-$label" \
+    "$GALAXY" collection publish "$tarball" --server batlehub \
+    > "$HEAVY_WORK/$label.out" 2>&1 \
+    || { cat "$HEAVY_WORK/$label.out"; heavy_fail "collection publish failed ($label)"; }
+}
+
+phase_publish() {
+  heavy_log "5. collection publish, its import task, and an install of what was published"
+
+  local ns="acme$HEAVY_RUN" name="util" version="1.0.0"
+  build_collection "$ns" "$name" "$version"
+  local tarball="$BUILT_TARBALL"
 
   heavy_mark publish
-  ANSIBLE_CONFIG="$CFG_LOCAL" ANSIBLE_HOME="$HEAVY_WORK/home-publish" \
-    "$GALAXY" collection publish "$tarball" --server batlehub \
-    > "$HEAVY_WORK/publish.out" 2>&1 \
-    || { cat "$HEAVY_WORK/publish.out"; heavy_fail "collection publish failed"; }
+  publish_collection publish "$tarball"
   cat "$HEAVY_WORK/publish.out"
 
   heavy_wire_re_after publish \
@@ -378,6 +408,35 @@ so the client should stop on its first or second read"
   fi
   said "$HEAVY_WORK/duplicate.out" "409" \
     "the duplicate publish did not surface as a 409"
+
+  # ── a dependency edge between two locally published collections ────────────
+  #
+  # Everything above is one leaf collection, and a leaf is the one shape of
+  # install that never reads `metadata.dependencies`. That field is *composed*
+  # here for a locally published version — upstream fills it in for a proxied
+  # one — so this is the only way to prove the resolver follows an edge out of a
+  # document this server wrote: publish a dependency, publish something that
+  # requires it, install only the latter.
+  local dep="dep$HEAVY_RUN" app="app$HEAVY_RUN" dep_version="1.2.0"
+  local dep_tarball app_tarball
+  build_collection "$ns" "$dep" "$dep_version"
+  dep_tarball="$BUILT_TARBALL"
+  build_collection "$ns" "$app" "1.0.0" "$ns.$dep: \">=1.0.0\""
+  app_tarball="$BUILT_TARBALL"
+  publish_collection publish-dep "$dep_tarball"
+  publish_collection publish-app "$app_tarball"
+
+  heavy_mark depinstall
+  galaxy_run "$CFG_LOCAL" depinstall collection install "$ns.$app" \
+    || heavy_fail "installing a collection whose dependency is published here failed"
+  said "$HEAVY_WORK/depinstall.out" "$ns[.]$dep" \
+    "the client did not report installing the dependency"
+  heavy_wire_re_after depinstall \
+    "GET /proxy/$REG_LOCAL/galaxy/api/v3/collections/$ns/$dep/versions/" \
+    "the dependency's listing was never read: the edge in metadata.dependencies was not followed"
+  heavy_wire_re_after depinstall \
+    "GET /proxy/$REG_LOCAL/galaxy/api/v3/artifacts/collections/$ns-$dep-${dep_version//./[.]}[.]tar[.]gz" \
+    "the dependency's tarball was not served from the local registry"
   return 0
 }
 

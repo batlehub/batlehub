@@ -61,7 +61,9 @@ task docs:design        # the finish line: index drift, links, structure, audien
 sets `Draft`, and writes the page into both listings so it is never an orphan.
 Then fill the template top to bottom and **delete every HTML comment**; what
 is left must read as a document, not a filled-in form. Sections that do not
-apply are deleted and the numbering closed up, never left as "N/A".
+apply are deleted and the numbering closed up, never left as "N/A" — with the
+one exception §4 names, the heavy-case list, which no document is allowed to
+be without.
 
 Set `Co-author` to the model that wrote with the user, in the form the
 existing RFCs use. `Touches` lists the crates and trees the design actually
@@ -81,7 +83,7 @@ house rules, from the RFCs that read well:
 - **Before / after shows, prose tells, and it is drawn.** §1 carries both: a
   config block or client snippet *and* a mermaid diagram of the two paths, the
   one the request takes today and the one it takes after. §4 shows again, in
-  its own terms. See §4 for what the diagram has to contain.
+  its own terms. See §5.1 of this skill for what the diagram has to contain.
 - **Behaviour rules state the uninteresting case.** What happens when nothing
   is blocked, when the upstream is the default, when the option is absent as
   distinct from empty.
@@ -102,20 +104,123 @@ house rules, from the RFCs that read well:
 - **Phases each leave the tree green**, and the note says which phase is
   useful on its own. Two phases that cannot land apart (a kind with no client)
   say so and land together.
+- **The heavy-case block is present in every document**, as §4 requires, and
+  the document is not valid without it — including when all it says is that no
+  heavy test applies, which is a written decision rather than a silence. The
+  list in the RFC and the suite that gets built diverge later; that delta is
+  the record §13 keeps, and it only exists if the list came first.
 - **Word count.** A page over 4 000 words declares `reference: true` in
   frontmatter, or `docs:structure` fails. Most RFCs are over it; check with
   `wc -w`.
 - **Prose width** is 80 columns like the rest of the tree; tables and code
   are exempt.
 
-## 4. A new registry kind carries three more things
+## 4. The heavy-case block, which no document may omit
 
-Most RFCs here add a protocol. Three sections separate the ones that were
-implementable from the ones that had to be re-researched at implementation
-time, and none of them is optional for a kind, an upstream or a protocol
-surface that does not exist yet.
+Every RFC names the cases a **real client** will prove it by, and it names them
+before any of it is built. The list is the last `§6.x` before the docs
+subsection — `tests/heavy/<name>.sh` — and §10's test plan points at it by
+number rather than repeating it, the way RFC 0031 §10 does: ``**Heavy**
+(`tests/heavy/galaxy.sh`): §6.10.``
 
-### 4.1 The before / after diagram in §1
+**The block is mandatory unconditionally — an RFC without it is not valid.**
+It stays `Draft`: it does not move to `In review`, it is not signed off, and
+`land` has nothing to write its §13 against. This is the second readiness test
+beside *Still open* being empty, and it binds a *bis* exactly as it binds a
+first document.
+
+"This change needs no heavy test" is a **valid answer inside the block** and
+never a reason to leave the block out. The subsection is written either way,
+and so is the §10 bullet pointing at it; only the contents differ — a numbered
+list of cases, or the paragraph §4.2 describes saying why there are none. This
+is the one place §2's "sections that do not apply are deleted" does not reach,
+and the reason is that the two are indistinguishable afterwards: an RFC with
+no block does not tell a reviewer whether the author decided no client could
+see the change or never asked the question. One of those is a decision, the
+other an omission, and only the written block separates them.
+
+Each case is **numbered, and an observation rather than an intention**: the
+command a client actually runs, what crosses the tap while it runs, and the
+fact that settles it — an exit code, the client's own error text quoted, a
+request that was *not* made, a counter that moved. "Verify that blocking
+works" is not a case. "An exact pin on a blocked version exits non-zero with
+*Failed to resolve the requested dependencies map* and issues no artifact
+request" is. A case a reviewer cannot check against a wire transcript
+afterwards is not a case — and `heavy_client_said` prints rather than asserts,
+so the assertion is on the transcript either way.
+
+### 4.1 The floor for a kind, an upstream or a protocol surface
+
+A route test proves routing. The suite that finds the shipped bugs is the one
+that runs the real package manager, and an RFC that does not name it is an RFC
+whose "it works" is a guess. For a new kind the `§6.x` names:
+
+- the script, its `config.<name>.toml`, `task test:<name>-heavy`, and the row
+  it adds to the `heavy-client` matrix;
+- **the client, and how it is pinned** — the version, where the job installs
+  it from, and which of its caches are redirected into the run's directory so
+  no two steps share state;
+- **what it proves on the wire, through the tap**, as the numbered list above.
+  At minimum: an install that succeeds; a **refusal**, with the client's own
+  error text and the assertion that the refused bytes were never requested; a
+  listing that no longer names the blocked version; and a second install that
+  moves `batlehub_artifact_cache_hits_total`.
+- for a kind with a publish protocol, a publish followed by an install of what
+  was published, from a clean client cache.
+
+A kind owes four more proofs beside this one — the closed-world phase, the
+credential boundary, the air gap, and the soak arm — and five gates fail the
+build without them; `CLAUDE.md` § *Adding a new registry adapter* step 9 and
+`docs/contributing/adding-a-registry.md` §11 are where they are enumerated.
+The RFC lists them in the same `§6.x`, one line each, so the document a
+reviewer signs off names every suite the branch will have to turn green.
+
+Read `docs/rfc/0010-toolchain-managers.md` §13 for what the difference between
+this list and the built thing looks like afterwards — that delta is the reason
+the list is written before the code.
+
+### 4.2 A change that adds no registry kind of its own
+
+Most RFCs here are not a new kind, and the rule does not soften for them. The
+`§6.x` then names the **existing** suite that is the change's regression
+signal, the phase or arm it adds to it, and the same numbered observations.
+The cross-cutting suites already own most surfaces:
+
+| What the RFC touches | The suite that proves it |
+| --- | --- |
+| grants, tokens, a credential boundary | `tests/heavy/authz.sh` |
+| a bundle, an instance with no upstream | `tests/heavy/airgap.sh` |
+| a rule, a policy, a gate, a scan | `tests/heavy/quarantine.sh` |
+| storage, a backend, the router | `tests/heavy/backends.sh` |
+| memory, latency, a cache under load | `tests/heavy/soak.sh` |
+| routing, a path prefix, a host | `tests/heavy/pathproxy.sh` |
+| local, proxy and hybrid against each other | `tests/heavy/hybrid.sh` |
+| every kind at once | `tests/heavy/closed_world.sh` |
+| the console, the UI against a live server | `tests/heavy/console_fetch.sh` |
+
+When the change genuinely cannot be seen from a client — a generated table, a
+refactor with no user-facing surface, a docs reorganisation — the subsection
+stays, titled `### 6.N Heavy coverage` since there is no script to name, and
+its content becomes the argument for that. Three sentences, in this order:
+what a client *would* have observed if the change had a client surface; why it
+does not have one; and which non-heavy suite carries the regression signal
+instead (`cargo test --workspace`, a `docs:*` gate, a conformance fixture).
+The §10 bullet stays too, reading ``**Heavy**: none, §6.N`` rather than
+disappearing.
+
+That paragraph is a claim a reviewer can refuse, which is exactly why it is
+written rather than left out. The one judgement to distrust is your own on a
+change that *feels* invisible: `console_fetch.sh`, `airgap.sh` and `soak.sh`
+all exist because a change that looked client-invisible was not.
+
+## 5. A new registry kind carries two more things
+
+Most RFCs here add a protocol. Two sections, beside the heavy list §4 already
+demands of every document, separate the ones that were implementable from the
+ones that had to be re-researched at implementation time, and neither is
+optional for a kind, an upstream or a protocol surface that does not exist yet.
+
+### 5.1 The before / after diagram in §1
 
 The text block says what the operator writes; the diagram says what changes on
 the wire. Both, always, in `### Before / after`.
@@ -134,8 +239,7 @@ That sketch is the floor, not the target. A good one names the documents, and
 marks the one request that is refused or rewritten — the whole point of the
 RFC, in the place a reviewer looks first. A reader who stops after §1 should be
 able to draw the request path from memory.
-
-### 4.2 How the real registry actually works, as §5.1
+### 5.2 How the real registry actually works, as §5.1
 
 **A new registry kind, a new upstream protocol, or a new protocol surface on an
 existing kind opens §5 with the protocol as the real thing serves it** —
@@ -180,36 +284,12 @@ subsection it is in. When a fact could not be observed — a WAF refused the
 probe, the endpoint needs a credential nobody has — say so in place rather
 than filling the gap from memory.
 
-### 4.3 The heavy suite it will add, in §6
+## 6. Diagrams
 
-A route test proves routing. The suite that finds the shipped bugs is the one
-that runs the real package manager, and an RFC that does not name it is an RFC
-whose "it works" is a guess. The last `§6.x` before the docs subsection is
-`tests/heavy/<name>.sh`, and it names:
-
-- the script, its `config.<name>.toml`, `task test:<name>-heavy`, and the row
-  it adds to the `heavy-client` matrix;
-- **the client, and how it is pinned** — the version, where the job installs
-  it from, and which of its caches are redirected into the run's directory so
-  no two steps share state;
-- **a numbered list of what it proves on the wire, through the tap**, each
-  step an observation rather than an intention. At minimum: an install that
-  succeeds; a **refusal**, with the client's own error text and the assertion
-  that the refused bytes were never requested; a listing that no longer names
-  the blocked version; and a second install that moves
-  `batlehub_artifact_cache_hits_total`.
-- for a kind with a publish protocol, a publish followed by an install of what
-  was published, from a clean client cache.
-
-Read `docs/rfc/0010-toolchain-managers.md` §13 for what the difference between
-this list and the built thing looks like afterwards — that delta is the reason
-the list is written before the code.
-
-## 5. Diagrams
-
-Two to four mermaid diagrams in §5, beside the two §4 asks for. `flowchart`
-for a decision, a `sequenceDiagram` for a request crossing components, `graph`
-for wiring. Each one carries a sentence beneath it stating what it proves.
+Two to four mermaid diagrams in the RFC's §5, beside the two §5 of this skill
+asks for. `flowchart` for a decision, a `sequenceDiagram` for a request
+crossing components, `graph` for wiring. Each one carries a sentence beneath
+it stating what it proves.
 
 - Wrap labels in double quotes; use `<br/>` for line breaks.
 - Inside a label, brackets and braces are HTML entities: `#91;` `#93;`
@@ -221,7 +301,7 @@ for wiring. Each one carries a sentence beneath it stating what it proves.
   on the client, so a broken diagram builds green and draws an error box for
   the reader. Run it before calling the RFC done.
 
-## 6. What else changes with an RFC
+## 7. What else changes with an RFC
 
 An RFC is never the only file. The table is the checklist.
 
@@ -234,14 +314,22 @@ An RFC is never the only file. The table is the checklist.
 | The RFC adds a repo convention | `CLAUDE.md`, one paragraph, and `docs/contributing/` where a person reads it | by hand |
 | The design adds a generated table (support, endpoints, listing coverage) | The generator, not the page | `task docs:*:check` names the task |
 
-## 7. `revise` — open questions and status
+## 8. `revise` — open questions and status
 
-`task rfc:status` prints every RFC's status and open-question count. The
-template's readiness test is that *Still open* is empty.
+`task rfc:status` prints every RFC's status and open-question count. Readiness
+is two tests, not one: *Still open* is empty, **and** the heavy-case block of
+§4 is there — with cases in it, or with the paragraph that says none apply.
+`rfc:status` counts the first; the second is read by opening the document at
+its `§6.x`, and an RFC that fails it stays `Draft` however settled its
+questions are.
 
 - Resolve a question by moving it up with its number and writing the
   decision; do not delete it. If the answer went against the draft's own
   recommendation, say so, that is the useful part.
+- **A status move past `Draft` is refused while the block is missing.** Write
+  it — the numbered cases, or the paragraph §4.2 asks for when none apply —
+  then move the status. Adding it after sign-off inverts the order the rule
+  exists to protect.
 - Status moves in the header table only, and the listings follow through
   `task rfc:index`. The vocabulary is the template's: `Draft`, `In review`,
   `Accepted`, `Implemented`, `Rejected`, `Superseded by NNNN`. Anything
@@ -254,7 +342,7 @@ template's readiness test is that *Still open* is empty.
 - A follow-on that reopens a settled RFC is a *bis* (`BIS=NNNN`), not an edit
   to the settled one beyond a pointer in its header.
 
-## 8. `land` — when the implementation ships
+## 9. `land` — when the implementation ships
 
 - Add `## 13. Revision against the tree (date)` at the end, in the form RFC
   0010 §13 uses: what shipped, and every point where the built thing differs
@@ -268,9 +356,12 @@ template's readiness test is that *Still open* is empty.
   updated if the tree differs; the roadmap entry ticked and its status word
   removed; `task rfc:index`, `task docs:roadmap`, `task docs:design`.
 
-## 9. Finish
+## 10. Finish
 
 Run `task docs:design` and report its last line. Then tell the user, in that
-order: the number and path, what is still open in §11, every other file the
-change touched, and what was verified against a real client versus read from
-its source. Do not commit; the user signs.
+order: the number and path, where the heavy-case block is (the `§6.x`, by
+number) and whether it carries cases or the paragraph saying none apply, what
+is still open in §11, every other file the change touched, and what was
+verified against a real client versus read from its source. If the block is
+absent, say the document is not valid yet, and say it first. Do not commit;
+the user signs.

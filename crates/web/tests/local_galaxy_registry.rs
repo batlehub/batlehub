@@ -307,6 +307,21 @@ async fn an_artifact_filename_that_disagrees_with_itself_returns_400() {
 /// A two-file collection tarball: `MANIFEST.json` and `FILES.json`, gzipped
 /// tar, exactly what `ansible-galaxy collection build` produces.
 fn build_collection(namespace: &str, name: &str, version: &str) -> Vec<u8> {
+    build_collection_with(namespace, name, version, serde_json::json!({}))
+}
+
+/// [`build_collection`] with a `dependencies` map.
+///
+/// The resolver builds its graph from `metadata.dependencies` of the *version
+/// document* (`get_collection_version_metadata`, api.py), so a publish that
+/// declares dependencies and a document that does not is a collection which
+/// installs alone and then fails at run time.
+fn build_collection_with(
+    namespace: &str,
+    name: &str,
+    version: &str,
+    dependencies: serde_json::Value,
+) -> Vec<u8> {
     use std::io::Write;
 
     let manifest = serde_json::json!({
@@ -314,7 +329,7 @@ fn build_collection(namespace: &str, name: &str, version: &str) -> Vec<u8> {
             "namespace": namespace,
             "name": name,
             "version": version,
-            "dependencies": {},
+            "dependencies": dependencies,
             "tags": ["utility"],
             "license": ["MIT"],
             "readme": "README.md",
@@ -368,15 +383,40 @@ fn multipart_publish_with(
     tarball: &[u8],
     base64_encoded: bool,
 ) -> actix_http::Request {
+    publish_request(
+        uri,
+        filename,
+        Some(sha256),
+        tarball,
+        base64_encoded,
+        Some(ADMIN_TOKEN),
+    )
+}
+
+/// The publish request, with the two things a caller may want to leave out: the
+/// `sha256` field (optional in the protocol — the server hashes the bytes
+/// either way) and the credential (a publish is a write, and an anonymous one
+/// has to be refused before anything is stored).
+fn publish_request(
+    uri: &str,
+    filename: &str,
+    sha256: Option<&str>,
+    tarball: &[u8],
+    base64_encoded: bool,
+    token: Option<&str>,
+) -> actix_http::Request {
     use base64::Engine as _;
     const BOUNDARY: &str = "----batlehubgalaxy";
     let mut body: Vec<u8> = Vec::new();
-    body.extend_from_slice(
-        format!(
-            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"sha256\"\r\n\r\n{sha256}\r\n"
-        )
-        .as_bytes(),
-    );
+    if let Some(sha256) = sha256 {
+        body.extend_from_slice(
+            format!(
+                "--{BOUNDARY}\r\nContent-Disposition: form-data; \
+                 name=\"sha256\"\r\n\r\n{sha256}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
     let encoding = if base64_encoded {
         "Content-Transfer-Encoding: base64\r\n"
     } else {
@@ -401,15 +441,14 @@ fn multipart_publish_with(
     }
     body.extend_from_slice(format!("\r\n--{BOUNDARY}--\r\n").as_bytes());
 
-    TestRequest::post()
-        .uri(uri)
-        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
-        .insert_header((
-            "Content-Type",
-            format!("multipart/form-data; boundary={BOUNDARY}"),
-        ))
-        .set_payload(body)
-        .to_request()
+    let mut req = TestRequest::post().uri(uri).insert_header((
+        "Content-Type",
+        format!("multipart/form-data; boundary={BOUNDARY}"),
+    ));
+    if let Some(token) = token {
+        req = req.insert_header(("Authorization", bearer(token)));
+    }
+    req.set_payload(body).to_request()
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -763,4 +802,411 @@ async fn the_token_scheme_the_client_sends_is_accepted() {
         "a `Token`-scheme credential must authenticate, or an authenticated \
          galaxy registry works for nobody"
     );
+}
+
+// ── the install a client actually performs ───────────────────────────────────
+//
+// The tests above prove each document in isolation, against the routes *they*
+// construct. That is the shape of gap this section closes: a suite that builds
+// every URL itself agrees with itself, and `download_url` — the one URL the
+// client follows rather than builds — was asserted only in proxy mode. A local
+// registry whose version document still carried the `null` it is composed with
+// would have passed every test in this file and failed every real install.
+//
+// What the client builds, and what it follows, read from ansible-core 2.19.3:
+//
+// - `api/`, `v3/collections/{ns}/{n}/`, `v3/collections/{ns}/{n}/versions/` and
+//   `…/versions/{v}/` are built from `api_server` (`_urljoin`), so a test may
+//   build them too — the listing with `?limit=100` on it, which is what
+//   `get_collection_versions` sends;
+// - `download_url` is *followed* (`urljoin(self.api_server, data['download_url'])`),
+//   and refused outright with `Invalid non absolute download_url` when it has
+//   neither a scheme nor a leading `/`;
+// - `links.next` is followed the same way, under the same check — which is the
+//   second reason every listing here carries a null one.
+
+/// The path of an absolute URL a document advertised.
+///
+/// Asserting the scheme is half the point: `get_collection_version_metadata`
+/// raises `Invalid non absolute download_url` on a value with neither a scheme
+/// nor a leading `/`, so a document carrying a bare filename fails in the
+/// client — where no test of this server would see it.
+fn advertised_path(url: &str, field: &str) -> String {
+    assert!(
+        url.starts_with("http://") || url.starts_with("https://"),
+        "{field} has to be absolute or the client refuses it outright, got {url:?}"
+    );
+    let rest = url.splitn(4, '/').nth(3).unwrap_or_default();
+    format!("/{rest}")
+}
+
+/// Publish one collection as the client does, and return its bytes and digest.
+async fn publish_collection<S: TestService>(
+    app: &S,
+    namespace: &str,
+    name: &str,
+    version: &str,
+) -> (Vec<u8>, String) {
+    publish_tarball(
+        app,
+        namespace,
+        name,
+        version,
+        build_collection(namespace, name, version),
+    )
+    .await
+}
+
+/// [`publish_collection`] for a tarball the caller built itself.
+async fn publish_tarball<S: TestService>(
+    app: &S,
+    namespace: &str,
+    name: &str,
+    version: &str,
+    tarball: Vec<u8>,
+) -> (Vec<u8>, String) {
+    let digest = sha256_hex(&tarball);
+    let resp = call_service(
+        app,
+        multipart_publish(
+            &api("v3/artifacts/collections/"),
+            &format!("{namespace}-{name}-{version}.tar.gz"),
+            &digest,
+            &tarball,
+        ),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        202,
+        "publishing {namespace}.{name} {version} should be accepted"
+    );
+    (tarball, digest)
+}
+
+/// The whole install, end to end, over a locally published collection —
+/// following `download_url` instead of rebuilding it.
+#[actix_web::test]
+async fn an_install_walks_the_four_documents_and_follows_download_url() {
+    let app = local_app().await;
+    let (_, digest) = publish_collection(&app, "acme", "util", "1.0.0").await;
+
+    // 1. `g_connect`, before any action. Composed here, so it answers in local
+    //    mode as well — a registry that only serves what it was published to
+    //    still has to advertise `v3` or the client stops at the version check.
+    let discovery = get_json(&app, &api("")).await;
+    assert_eq!(discovery["available_versions"]["v3"], "v3/");
+
+    // 2. the collection document. `get_collection_metadata` reads `updated_at`
+    //    as `modified_str` and compares it with what it cached to decide
+    //    whether its day-old listing is still good; a null there means the
+    //    client never notices a publish for a day.
+    let collection = get_json(&app, &collection_url()).await;
+    assert_eq!(collection["highest_version"]["version"], "1.0.0");
+    assert!(
+        collection["updated_at"].as_str().is_some(),
+        "updated_at is the client's cache key for the listing: {collection}"
+    );
+    let advertised_versions = advertised_path(
+        collection["versions_url"].as_str().expect("versions_url"),
+        "versions_url",
+    );
+    assert_eq!(advertised_versions, versions_url());
+
+    // 3. the listing, at the URL the client builds — page size and all.
+    let listing = get_json(&app, &format!("{}?limit=100", versions_url())).await;
+    assert_eq!(versions_in(&listing), ["1.0.0"]);
+    assert!(
+        listing["links"]["next"].is_null(),
+        "a non-null next is followed under the same absolute-URL check: {listing}"
+    );
+
+    // 4. the version document, and the one URL in this walk that is *followed*.
+    let detail = get_json(&app, &version_url("1.0.0")).await;
+    let download = advertised_path(
+        detail["download_url"].as_str().expect("download_url"),
+        "download_url",
+    );
+    assert!(
+        download.ends_with("/v3/artifacts/collections/acme-util-1.0.0.tar.gz"),
+        "`_download_file` names the file it writes by slicing `.tar.gz` off the last path \
+         segment, got {download}"
+    );
+    let bytes = get_bytes(&app, &download).await;
+    assert_eq!(
+        sha256_hex(&bytes),
+        digest,
+        "the client hashes the body as it streams and compares it with artifact.sha256"
+    );
+}
+
+/// The seven fields `get_collection_version_metadata` indexes **by key**.
+///
+/// ```python
+/// return CollectionVersionMetadata(data['namespace']['name'], data['collection']['name'],
+///                                  data['version'], download_url, data['artifact']['sha256'],
+///                                  data['metadata']['dependencies'], data['href'], signatures)
+/// ```
+///
+/// Not `.get()` — so a field missing from a locally composed document is a
+/// `KeyError` inside the client, which surfaces as an unhandled traceback and
+/// not as a status this server ever sees.
+#[actix_web::test]
+async fn the_local_version_document_carries_every_field_the_client_indexes() {
+    let app = local_app().await;
+    let (_, digest) = publish_collection(&app, "acme", "util", "1.0.0").await;
+    let doc = get_json(&app, &version_url("1.0.0")).await;
+
+    assert_eq!(doc["namespace"]["name"], "acme");
+    assert_eq!(doc["collection"]["name"], "util");
+    assert_eq!(doc["version"], "1.0.0");
+    assert_eq!(doc["artifact"]["sha256"], digest);
+    assert!(doc["download_url"].as_str().is_some());
+    assert!(doc["href"].as_str().is_some());
+    assert!(
+        doc["metadata"]["dependencies"].is_object(),
+        "metadata.dependencies is indexed unconditionally: {doc}"
+    );
+    // Read with `.get()`, and honest: a locally published collection is
+    // unsigned, and an absent key would be read the same way.
+    assert_eq!(doc["signatures"], serde_json::json!([]));
+}
+
+/// A dependency declared in `MANIFEST.json` reaches the document the resolver
+/// reads.
+#[actix_web::test]
+async fn a_declared_dependency_survives_the_publish_into_the_version_document() {
+    let app = local_app().await;
+    let deps = serde_json::json!({ "acme.base": ">=1.0.0" });
+    let tarball = build_collection_with("acme", "util", "1.0.0", deps.clone());
+    publish_tarball(&app, "acme", "util", "1.0.0", tarball).await;
+
+    let doc = get_json(&app, &version_url("1.0.0")).await;
+    assert_eq!(
+        doc["metadata"]["dependencies"], deps,
+        "the resolver builds its graph from this map; an empty one installs a collection \
+         whose dependencies are never fetched"
+    );
+}
+
+/// A second publish moves `highest_version`, and leaves the first installable.
+///
+/// The second half is the pinned install: `install acme.util:==1.0.0` resolves
+/// through the listing and then reads that version's own document, which is a
+/// different path from the one a range takes.
+#[actix_web::test]
+async fn a_second_publish_moves_the_highest_version_and_keeps_the_first_installable() {
+    let app = local_app().await;
+    let (_, first) = publish_collection(&app, "acme", "util", "1.0.0").await;
+    publish_collection(&app, "acme", "util", "1.2.0").await;
+
+    let listing = get_json(&app, &versions_url()).await;
+    let mut versions = versions_in(&listing);
+    versions.sort();
+    assert_eq!(versions, ["1.0.0", "1.2.0"]);
+    assert_eq!(listing["meta"]["count"], 2);
+
+    let collection = get_json(&app, &collection_url()).await;
+    assert_eq!(
+        collection["highest_version"]["version"], "1.2.0",
+        "the newest published version, not the first one seen"
+    );
+
+    let detail = get_json(&app, &version_url("1.0.0")).await;
+    assert_eq!(detail["artifact"]["sha256"], first);
+    let download = advertised_path(
+        detail["download_url"].as_str().expect("download_url"),
+        "download_url",
+    );
+    assert_eq!(sha256_hex(&get_bytes(&app, &download).await), first);
+}
+
+/// A yank leaves the listing, and stays installable by exact pin.
+///
+/// Galaxy's protocol has no yank of its own — the surface is the admin bulk
+/// route — so this is the only place the `yanked` filter in the composed
+/// listing is exercised. The two halves are the difference between a yank and a
+/// **block**, which the tests above pin at `404` on the version document and
+/// `403` on the tarball: a yank is absent from the list the resolver chooses
+/// from, so nothing new resolves to it, and stays resolvable by exact pin for
+/// the lockfiles that already name it
+/// (`docs/guide/admin-policies.md` § deprecate, yank or delete). A test that
+/// asserted `404` here would be asserting a block.
+#[actix_web::test]
+async fn a_yanked_version_leaves_the_listing_and_stays_pinnable() {
+    let app = local_app().await;
+    publish_collection(&app, "acme", "util", "1.0.0").await;
+    publish_collection(&app, "acme", "util", "1.1.0").await;
+
+    let req = TestRequest::post()
+        .uri(&format!("/api/v1/admin/registries/{REG}/bulk-yank"))
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .set_json(serde_json::json!({
+            "packages": [{ "name": COLLECTION, "version": "1.0.0" }]
+        }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let listing = get_json(&app, &versions_url()).await;
+    assert_eq!(
+        versions_in(&listing),
+        ["1.1.0"],
+        "the resolver picks from this document, so a yank has to be absent from it"
+    );
+    assert_eq!(listing["meta"]["count"], 1);
+    let collection = get_json(&app, &collection_url()).await;
+    assert_eq!(collection["highest_version"]["version"], "1.1.0");
+
+    // …and the pin still works, bytes and all.
+    let detail = get_json(&app, &version_url("1.0.0")).await;
+    let download = advertised_path(
+        detail["download_url"].as_str().expect("download_url"),
+        "download_url",
+    );
+    let bytes = get_bytes(&app, &download).await;
+    assert_eq!(
+        sha256_hex(&bytes),
+        detail["artifact"]["sha256"].as_str().unwrap(),
+        "a yanked version an existing lockfile pins still installs, byte-exact"
+    );
+}
+
+/// Hybrid mode: the published collection is served from here, everything else
+/// falls through upstream.
+///
+/// The mode a real deployment runs — internal collections beside the public
+/// ones — and the one no in-process galaxy test covered.
+#[actix_web::test]
+async fn a_hybrid_registry_serves_what_was_published_and_proxies_the_rest() {
+    let app = registry_app(REG, "galaxy", RegistryMode::Hybrid).await;
+    let (_, digest) = publish_collection(&app, "acme", "util", "1.0.0").await;
+
+    // The published collection: the local rows, and only those. Upstream's
+    // fixture serves three versions of every collection it is asked for, so a
+    // listing that leaked them would name 1.1.0 and 2.0.0-beta.1 as well.
+    let listing = get_json(&app, &versions_url()).await;
+    assert_eq!(
+        versions_in(&listing),
+        ["1.0.0"],
+        "a hybrid registry answers from its own rows when it has them"
+    );
+    let detail = get_json(&app, &version_url("1.0.0")).await;
+    assert_eq!(detail["artifact"]["sha256"], digest);
+    let download = advertised_path(
+        detail["download_url"].as_str().expect("download_url"),
+        "download_url",
+    );
+    assert_eq!(sha256_hex(&get_bytes(&app, &download).await), digest);
+
+    // Anything else: upstream's listing, through the same route.
+    let other = get_json(&app, &api("v3/collections/other/thing/versions/")).await;
+    assert_eq!(
+        versions_in(&other),
+        ["1.0.0", "1.1.0", "2.0.0-beta.1"],
+        "an unpublished collection has to fall through, or a hybrid registry is a local one"
+    );
+}
+
+// ── the upload path ─────────────────────────────────────────────────────────
+
+/// An anonymous publish is refused before anything is stored.
+#[actix_web::test]
+async fn an_anonymous_publish_is_refused() {
+    let app = local_app().await;
+    let tarball = build_collection("acme", "util", "1.0.0");
+    let digest = sha256_hex(&tarball);
+    let resp = call_service(
+        &app,
+        publish_request(
+            &api("v3/artifacts/collections/"),
+            "acme-util-1.0.0.tar.gz",
+            Some(&digest),
+            &tarball,
+            true,
+            None,
+        ),
+    )
+    .await;
+    assert!(
+        resp.status() == 401 || resp.status() == 403,
+        "an unauthenticated publish must not be accepted, got {}",
+        resp.status()
+    );
+    assert_eq!(
+        call_service(&app, admin_get(&versions_url()))
+            .await
+            .status(),
+        404,
+        "nothing may have been stored"
+    );
+}
+
+/// The `sha256` field is optional, and its absence does not mean "unverified":
+/// the server hashes the bytes either way and publishes that digest, which is
+/// what the client then checks the download against.
+#[actix_web::test]
+async fn a_publish_without_the_sha256_field_still_publishes_the_real_digest() {
+    let app = local_app().await;
+    let tarball = build_collection("acme", "util", "1.0.0");
+    let digest = sha256_hex(&tarball);
+    let resp = call_service(
+        &app,
+        publish_request(
+            &api("v3/artifacts/collections/"),
+            "acme-util-1.0.0.tar.gz",
+            None,
+            &tarball,
+            true,
+            Some(ADMIN_TOKEN),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), 202);
+    let detail = get_json(&app, &version_url("1.0.0")).await;
+    assert_eq!(detail["artifact"]["sha256"], digest);
+}
+
+/// A digest in upper-case hex is the same digest.
+#[actix_web::test]
+async fn an_uppercase_sha256_field_is_accepted() {
+    let app = local_app().await;
+    let tarball = build_collection("acme", "util", "1.0.0");
+    let digest = sha256_hex(&tarball).to_uppercase();
+    let resp = call_service(
+        &app,
+        multipart_publish(
+            &api("v3/artifacts/collections/"),
+            "acme-util-1.0.0.tar.gz",
+            &digest,
+            &tarball,
+        ),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        202,
+        "the comparison is case-insensitive: hex has no case"
+    );
+}
+
+/// Publishing into a hybrid registry is accepted — `require_local_mode` admits
+/// local *and* hybrid, and hybrid is the mode a registry that both proxies and
+/// hosts runs in.
+#[actix_web::test]
+async fn publishing_into_a_hybrid_registry_is_accepted() {
+    let app = registry_app(REG, "galaxy", RegistryMode::Hybrid).await;
+    let tarball = build_collection("acme", "util", "1.0.0");
+    let digest = sha256_hex(&tarball);
+    let resp = call_service(
+        &app,
+        multipart_publish(
+            &api("v3/artifacts/collections/"),
+            "acme-util-1.0.0.tar.gz",
+            &digest,
+            &tarball,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), 202);
 }

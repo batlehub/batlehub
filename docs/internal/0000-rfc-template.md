@@ -193,6 +193,56 @@ reasonably expect to change and that does not. It saves a round trip.
 
 ### 6.2 …
 
+### 6.N `tests/heavy/<name>.sh`
+
+<!--
+NOT OPTIONAL, AND NOT CONDITIONAL. This subsection exists in every RFC. An
+RFC that does not carry it is not valid: it stays Draft, it is not signed off,
+and there is nothing to write the landing note against. It is the last
+subsection before the docs one, and §10 points at it by number rather than
+repeating it.
+
+"This change needs no heavy test" is an answer that goes INSIDE the block, and
+it is never a reason to delete the block — see the last paragraph below for
+the three sentences it takes. A missing block and a defended one read the same
+a month later, which is the whole reason this one is exempt from the "sections
+that do not apply are deleted" rule at the top of this file.
+
+Name the suite — a new script with its `config.<name>.toml`, `task
+test:<name>-heavy` and its row in the `heavy-client` matrix, or the existing
+cross-cutting suite (`authz.sh`, `airgap.sh`, `quarantine.sh`, `backends.sh`,
+`soak.sh`, `pathproxy.sh`, `hybrid.sh`, `closed_world.sh`) this change adds a
+phase to — and the client, with the version it is pinned to and the caches
+redirected into the run's directory.
+
+Then the numbered cases. Each one is an observation, not an intention: the
+command the client runs, what crosses the tap while it runs, and the fact that
+settles it — an exit code, the client's own error text quoted, a request that
+was *not* made, a counter that moved. For a registry kind the floor is an
+install that succeeds, a refusal whose bytes were never requested, a listing
+that no longer names the blocked version, a second install that moves
+`batlehub_artifact_cache_hits_total`, and — where there is a publish protocol —
+a publish followed by an install of what was published.
+
+If the change genuinely cannot be seen from a client — a generated table, a
+refactor with no user-facing surface, a docs reorganisation — keep the heading
+(titled `### 6.N Heavy coverage`, since there is no script to name) and keep
+the §10 bullet, and write three sentences instead of the list: what a
+client would have observed if the change had a client surface; why it has
+none; and which non-heavy suite carries the regression signal instead
+(`cargo test --workspace`, a `docs:*` gate, a conformance fixture). Then
+delete the two lines of list skeleton below, not the section.
+
+Distrust your own judgement on a change that merely *feels* client-invisible:
+`console_fetch.sh`, `airgap.sh` and `soak.sh` all exist because one was not.
+-->
+
+<Suite, client and pinning, in one paragraph — or the three sentences above,
+when no heavy test applies.> What it proves, on the wire, through the tap:
+
+1. <Command run> — <what was requested, what answered, what settles it.>
+2. …
+
 **Deliberately untouched**, so reviewers do not go looking:
 
 - `<path>` — <why it looks relevant but is not.>
@@ -248,6 +298,9 @@ that is often the strongest guarantee in the plan.
 
 - **Unit** (`<path>`): <cases>.
 - **Integration** (`<path>`): <cases>.
+- **Heavy** (`tests/heavy/<name>.sh`): §6.N. <!-- by reference; the cases live
+  there. This line is written even when the answer is none, as `**Heavy**:
+  none, §6.N` — neither it nor §6.N is ever absent -->
 - **Existing suites** that must pass unchanged: <which, and what they prove>.
 
 ---
@@ -259,7 +312,9 @@ Start with everything under "Still open". As questions are answered, move them u
 with the decision and its one-line rationale — the record of *why* is the point.
 Do not delete answered questions.
 
-The RFC is ready for sign-off when "Still open" is empty.
+The RFC is ready for sign-off when "Still open" is empty *and* §6's heavy-case
+block is there — carrying cases, or carrying the reasoned "none". Both, not
+either.
 -->
 
 ### Resolved

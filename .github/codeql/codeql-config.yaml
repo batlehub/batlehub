@@ -27,8 +27,11 @@ name: BatleHub CodeQL config
 #     header copy as the `perf/` pair above, bounded by the same 128 KiB.
 #     (2026-08-30, relocated 2026-09-06.)
 #   - `rust/path-injection` ×3 on `crates/web/src/services/reload/applier.rs` —
-#     the `--config` path, read once at boot; no request-borne route reaches it.
-#     (2026-08-30.)
+#     reads of `self.config_path`, set once at boot from `--config`. The source
+#     CodeQL names is **not** argv: it is the `web::Data<Arc<ConfigReloadService>>`
+#     handler parameter — app state registered at startup — whose taint rides
+#     `&self` onto every field of the service. (2026-08-30, reasoning corrected
+#     2026-09-19.)
 #   - `rust/path-injection` ×2 on `cli/src/contract.rs` — `--contract`, the
 #     same CLI-argument-as-path shape, in a binary that is not a service.
 #     (2026-09-06.)
@@ -45,8 +48,16 @@ name: BatleHub CodeQL config
 # `rust/path-injection` is a query this codebase needs live, because several
 # handlers build storage keys out of request-supplied package coordinates and
 # `ensure_safe_key` is the backstop for precisely that. Turning it off repo-wide
-# to quiet three boot-time reads of a CLI flag trades a real control for a green
-# check. If a future alert is genuinely unfixable in code, dismiss it and add it
-# to the triage note — do not add it here.
+# to quiet a handful of app-state reads trades a real control for a green check.
+# If a future alert is genuinely unfixable in code, dismiss it and add it to the
+# triage note — do not add it here.
+#
+# **Read every `rust/path-injection` alert down to the step that names its
+# source before triaging it.** Under CodeQL's actix model *every* parameter of a
+# handler fn is a remote source, `web::Data<T>` included, and the taint then
+# rides `&self` onto every field of the state it carries. So an alert from this
+# query is not by itself evidence of a request-borne path — and conversely the
+# ones that matter here, the `Path`/`Query` package coordinates, have real
+# sources. See `docs/internal/codeql-triage-2026-09-19.md`.
 paths-ignore:
   - perf/**

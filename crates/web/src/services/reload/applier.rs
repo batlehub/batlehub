@@ -56,11 +56,12 @@ impl ConfigReloadService {
         }
         let mut layers = Vec::with_capacity(self.config_overlays.len() + 1);
         layers.push(primary.to_owned());
-        for path in &self.config_overlays {
+        for overlay in &self.config_overlays {
             layers.push(
-                tokio::fs::read_to_string(path)
+                overlay
+                    .read()
                     .await
-                    .map_err(|e| anyhow::anyhow!("reading config overlay '{path}': {e}"))?,
+                    .map_err(|e| anyhow::anyhow!("reading config overlay '{overlay}': {e}"))?,
             );
         }
         load_layered_from_str(&layers)
@@ -75,9 +76,9 @@ impl ConfigReloadService {
     /// appear in a TOML file, so two different splits cannot fingerprint alike.
     async fn layered_fingerprint(&self, primary: &str) -> String {
         let mut out = primary.to_owned();
-        for path in &self.config_overlays {
+        for overlay in &self.config_overlays {
             out.push('\0');
-            match tokio::fs::read_to_string(path).await {
+            match overlay.read().await {
                 Ok(content) => out.push_str(&content),
                 // An unreadable overlay must not fingerprint like an empty one.
                 // The comparison happens *before* `load_layers` runs, so a
@@ -100,7 +101,7 @@ impl ConfigReloadService {
         if !self.hot_reload_enabled {
             anyhow::bail!("hot reload is disabled (BATLEHUB_DISABLE_HOT_RELOAD=1)");
         }
-        let content = tokio::fs::read_to_string(&self.config_path).await?;
+        let content = self.config_file.read().await?;
         if self.mark_seen_and_check_unchanged(&self.layered_fingerprint(&content).await) {
             // File-watcher fired (touch/atomic-save rewrite) but no layer's bytes
             // differ from the last load attempt — nothing to rebuild.
@@ -175,7 +176,7 @@ impl ConfigReloadService {
     /// Read the current on-disk config content without parsing or validating it.
     /// Non-blocking: uses `tokio::fs` so it does not stall a tokio worker thread.
     pub async fn config_content(&self) -> Result<String, std::io::Error> {
-        tokio::fs::read_to_string(&self.config_path).await
+        self.config_file.read().await
     }
 
     /// Records `content` as the last-seen raw config text and reports whether it is
@@ -338,7 +339,7 @@ impl ConfigReloadService {
         if let Some(ref text) = pending.content {
             if let Err(e) = self.persist_config_to_disk(text, pending.id).await {
                 tracing::warn!(
-                    path = %self.config_path,
+                    path = %self.config_file,
                     error = %e,
                     "failed to persist editor config to disk; change is live in memory but will be lost on restart"
                 );
@@ -375,15 +376,17 @@ impl ConfigReloadService {
     /// rename itself across a power cut, which is a different failure from the one
     /// this guards, and opening a directory as a file is not portable off Unix.
     async fn persist_config_to_disk(&self, text: &str, id: Uuid) -> std::io::Result<()> {
-        let target = std::path::Path::new(&self.config_path);
-        // `parent()` is `Some("")` for a bare relative name like `config.toml`;
-        // joining onto that keeps the temp file in the current directory, which is
-        // exactly where the target lives too.
-        let dir = target.parent().unwrap_or_else(|| std::path::Path::new(""));
-        let name = target
-            .file_name()
-            .unwrap_or_else(|| std::ffi::OsStr::new("config.toml"));
-        let tmp = dir.join(format!(".{}.{id}.tmp", name.to_string_lossy()));
+        // The directory and the name come from the split done once at
+        // construction, rather than being re-derived from a string here. The
+        // target was never in doubt — the old code renamed onto the raw path,
+        // which is what the readers opened too — but the temp file's placement
+        // was a second reading of that string, and now it is the same one. See
+        // `ConfigFile`.
+        let target = self.config_file.path();
+        let tmp = self.config_file.dir().join(format!(
+            ".{}.{id}.tmp",
+            self.config_file.name().to_string_lossy()
+        ));
 
         let staged = async {
             Self::write_and_sync(&tmp, text).await?;
