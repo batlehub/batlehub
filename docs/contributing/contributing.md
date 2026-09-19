@@ -828,3 +828,137 @@ The procedure around the form — what to verify before writing, the diagram
 rules, the readability rules no gate checks, and every other file an RFC
 changes — is the `rfc` skill in `.claude/skills/rfc/SKILL.md`, which a coding
 agent loads on `/rfc` and a person can read as a checklist.
+
+---
+
+## 13. Cutting a release
+
+A release is a **tag**, and pushing it is the whole of the publish:
+`.github/workflows/build.yaml` fires on `push: tags`, builds the server binary
+and the image, signs both keylessly, attaches the CycloneDX SBOM as an
+attestation bound to the binary's digest, and pushes the Helm chart to
+`ghcr.io/…/charts`. `.github/workflows/perf-report.yaml` runs the perf suite on
+the same tag and diffs it against the previous release's report. Nothing else
+starts a release, and nothing stops one once the tag is pushed.
+
+### 13.1 The version lives in six places
+
+The Rust workspace version (every crate inherits it with
+`version.workspace = true`, and the binary reports it at `/livez`), the
+lockfile that records those crates, `ui/package.json`, `docs/package.json`, and
+the chart **twice** — `version` (the chart's own) and `appVersion` (the image
+tag it deploys). The chart README carries both in a badge and is generated, so
+it moves with them.
+
+Never edit those by hand:
+
+```bash
+task version:set VERSION=1.3.0   # writes all six, regenerates the chart README, then checks
+task version:check               # fails if any of them disagree
+```
+
+`version:set` refuses anything that is not a bare semver, because cocogitto
+hands the version with no `v` and a prefix reaching the files would write
+`version = "vv1.3.0"` into `Cargo.toml` and a chart that no longer parses.
+
+### 13.2 The changelog is written, not generated
+
+`cog.toml` sets `disable_changelog = true` on purpose: the generated
+alternative is the list of commit subjects since the last tag, which for a
+typical release here reads `wip`, `wip`, `ouais ouais…`. `CHANGELOG.md` is one
+narrative entry per change instead.
+
+Update `[Unreleased]` **as the work lands**, and rename it when you cut. If it
+says "Nothing yet" on the day of a release, the entry has to be reconstructed
+from the diff, which is the expensive way round. What a reconstruction reads:
+
+```bash
+git log --oneline v1.2.0..HEAD                       # the commits (usually not enough on their own)
+git diff --diff-filter=A --name-only v1.2.0..HEAD    # what was added — new kinds, suites, workflows
+git diff v1.2.0..HEAD -- ROADMAP.md                  # what the roadmap now claims is done
+task rfc:status                                      # which RFCs moved
+git diff v1.2.0..HEAD -- crates/adapters/src/registry/   # what changed in kinds that already shipped
+```
+
+The last one is where the **Fixed** section comes from. This project's module
+headers carry the reason a thing is the way it is, so
+`git diff … | grep -E '^\+\s*//'` over a changed adapter usually hands you the
+defect, the client that found it and the symptom it showed, in the author's own
+words.
+
+House style for an entry, from the sections above it: a **bold lead sentence
+that states the change**, then what was wrong before and why it mattered, then
+the limit or the switch. Name the RFC where there is one. Do not claim a count
+("eight defects") unless something in the tree counts them — state what is
+sourced and leave the rest unsaid.
+
+Sections in use, in this order: `Added`, `Changed`, `Security`, `Fixed`,
+`Breaking`, `Deprecated`. Only the ones with content appear.
+
+Finally, the compare links at the foot — two lines, both needed:
+
+```markdown
+[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.3.0...HEAD
+[1.3.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.2.0...v1.3.0
+```
+
+### 13.3 Before the tag
+
+Nothing here is enforced by the release workflow, which builds whatever the tag
+points at.
+
+- **CI is green on the commit you are about to tag.** Without `gh`, the
+  check-runs API is anonymous:
+  `curl -sL "https://api.github.com/repos/batleforc/batlehub/commits/$(git rev-parse HEAD)/check-runs?per_page=100"`
+  (follow the redirect — the repository answers `301` to its numeric id).
+- **The drift gates**, which a release publishes the output of:
+
+  ```bash
+  task version:check rfc:index:check docs:roadmap:check helm:docs:check docs:links
+  ```
+
+- **Every RFC whose code ships says so.** The status banner, the `/rfc/` index
+  table and the sidebar are generated from each RFC's own `Status` row
+  (§12), so a kind that ships under a `Draft` banner is a wrong fact on the
+  published site. `task rfc:status` lists them; update the row and run
+  `task rfc:index`. Where phases are outstanding, say which in the row rather
+  than rounding up — [RFC 0021](/rfc/0021-forge-releases-into-registries) and
+  [RFC 0024](/rfc/0024-rustup-dist) are the pattern.
+- **The load suites, if anything could have moved the numbers.** Neither is
+  scheduled, and both headers say "or before a release": `soak.yaml` (an hour,
+  reports a slope) when a streaming, caching or pooling path changed, and
+  `breaking-point.yaml` (minutes of saturating load per backend) when a
+  storage or cache backend, the request path, the pool or an allocator setting
+  did. Run them from the Actions tab, or with a `breaking-point` label on the
+  pull request.
+
+### 13.4 Cutting it
+
+```bash
+cog bump --version 1.3.0      # or --minor / --auto
+```
+
+That runs `task version:set` as its pre-bump hook, commits whatever the hook
+changed as `chore(version): v1.3.0`, and tags **that** commit — so the tag can
+never point at a tree that still declares the version before it. `tag_prefix`
+is `v`, so the tag is `v1.3.0` and the compare links at the foot of the
+changelog keep working.
+
+By hand, for a cut that does not go through cog:
+
+```bash
+task version:set VERSION=1.3.0
+git commit -am "chore(version): v1.3.0"
+git tag -a v1.3.0 -m "v1.3.0"
+```
+
+Then, and only then:
+
+```bash
+git push origin main
+git push origin v1.3.0
+```
+
+`origin` carries both remotes (GitHub and the Forgejo instance), so one push
+reaches both. **The second command is the release.** Nothing before it is
+visible to anyone, and everything after it is.

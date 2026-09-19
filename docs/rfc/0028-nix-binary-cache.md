@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | **In review** — phases 1, 2, 4, 5 and 6 landed 2026-09-17 (reads, routes, publish, surface, air gap). `tests/heavy/nix.sh` has now been run and reaches the publish phases; §13 records nine corrections to the design and §14 four more from that first real run, including a publish surface that authorized nobody |
+| Status      | **Implemented** — all six phases of §12 landed: 1, 2, 4, 5 and 6 on 2026-09-17 (reads, routes, publish, surface, air gap) and phase 3's `tests/heavy/nix.sh` with them, run against a real `nix` before the kind was called done. §13 records nine corrections to the design and §14 four more from that first real run, including a publish surface that authorized nobody — the fix is `holds_anywhere_in_registry` (§14). Shipped in v1.3.0 |
 | Short       | Nix binary cache                                              |
 | Settles     | The substituter protocol as a registry kind: narinfo listings, NARs as artifacts, Ed25519 narinfo signing in local mode, and blocking by store path |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |

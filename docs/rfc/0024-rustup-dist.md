@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Draft                                                         |
+| Status      | **Implemented** — phases 1, 2, 3 and 5 of §12 landed 2026-09-19 (the kind, the routes, `tests/heavy/rustup.sh`, the surface) and shipped in v1.3.0. **Two phases are outstanding and §13 says so**: `registry suggest` on `rust-toolchain.toml` (phase 4) and the air-gapped manifest render (phase 6), which ships on its own |
 | Short       | rustup dist                                                   |
 | Settles     | Proxying static.rust-lang.org as a typed registry, so a Rust toolchain can be blocked rather than merely cached: the channel manifest as the filtered listing, its checksum recomputed, and no signature replaced |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -1121,3 +1121,64 @@ Nothing. The one question this draft opened is row 3 above.
 | 4 | `cli`: `rust-toolchain.toml` / `rust-toolchain` in `registry suggest`; warming of the `minimal` profile per `warm_platforms` triple. |
 | 5 | `ui` entry, `docs/registries/rustup.md`, sidebar, `generic.md` pointer, `ROADMAP.md` and the regenerated roadmap page; the §13 revision note against the tree. |
 | 6 | Air gap: the held-manifest render and the RFC 0008-bis table row, proven in `tests/heavy/airgap.sh`. Ships on its own. |
+
+---
+
+## 13. Implementation notes
+
+Phases 1, 2, 3 and 5 landed together on 2026-09-19 and shipped in v1.3.0. This
+section is written from the tree rather than kept as the work went, so it
+records where the built thing differs from §1–§12 and what is still owed, and
+not the order things were found in.
+
+### 13.1 What landed
+
+| §12 | Where it is |
+| --- | --- |
+| 1 | `RegistryKind::Rustup` and its exhaustive answers; `crates/core/src/services/rustup.rs` (the name grammar, `coordinate_of`, `render_manifest`, `sidecar_line`, `ManifestsTxt`); `crates/core/src/services/blocking/rustup.rs` (`strip_manifests_txt`) |
+| 2 | `crates/adapters/src/registry/rustup/`; `RegistryKind::Rustup` in both `server/src/builders.rs` matches, defaulting to `https://static.rust-lang.org`; `crates/web/src/handlers/proxy/rustup/` with `render.rs` beside it; `crates/web/tests/local_rustup_registry.rs` |
+| 3 | `tests/heavy/rustup.sh` and `tests/heavy/config.rustup.toml`, declared in `registry_kind_coverage.rs` as this kind's live phase |
+| 5 | The `ui/src/config/registryTypes.ts` entry, `docs/registries/rustup.md` and its French translation, the `docs/.vitepress/nav/` sidebar item, and the `ROADMAP.md` row with the regenerated roadmap page |
+
+`deny_components` is enforced end to end rather than only validated:
+`ConfigSchema::validate_registry_deny_components` refuses it on any other kind
+and refuses a name every profile needs, `HotConfig::deny_components` carries it
+per registry, and the handler passes it to `render_manifest`, which drops the
+denied `[pkg.…]` blocks and flips the per-target ones to `available = false`.
+
+### 13.2 Six route handlers, not eleven
+
+§12 phase 2 says "all eleven routes". The surface is the one §4 describes and
+the count is six, because two of the handlers take a path pattern that covers a
+family rather than a file: `rustup_dist_root` answers every channel document
+under `dist/` and `rustup_dist_dated` every one under `dist/{date}/`, each
+including the `.sha256` sidecar for the document beside it. The other four are
+literal paths — `manifests.txt`, `rustup/release-stable.toml`,
+`rustup/archive/{version}/{triple}/{file}` and `rustup/dist/{triple}/{file}` —
+and the registration order in `crates/web/src/lib.rs` is literal-first for the
+reason noted there. Nothing in §4 is unserved; the number in §12 counted
+documents.
+
+### 13.3 Two phases are outstanding
+
+- **Phase 4 — `registry suggest` on `rust-toolchain.toml`.** Not built. A
+  project pinning its toolchain still has to write the `[[registries]]` block by
+  hand; `cli/src/api/suggest.rs` reads `mise.lock`, `mise.toml` and the usual
+  manifests and does not read `rust-toolchain.toml` or `rust-toolchain`.
+  `warm_platforms` exists on the registry config and is not yet driven from a
+  toolchain file.
+- **Phase 6 — the air-gapped manifest render.** Not built, and the gap is
+  pinned rather than left to be discovered:
+  `a_rustup_channel_is_refused_while_its_held_dist_files_are_served` in
+  `crates/web/tests/air_gap.rs` asserts the *refusal* — an `[air_gap]` instance
+  holding the component tarballs still has no channel manifest to resolve them
+  through, because a manifest is composed at import for the four kinds RFC
+  0008-bis §13.6 names and `rustup` is not one of them. `listing_synthesis.rs`
+  has no `RegistryKind::Rustup` arm, which is the air gap CLAUDE.md's step 5
+  warns is silent: it costs no compile error and no failing test. The test is
+  what makes it loud.
+
+One phase-5 residue: `docs/registries/generic.md` gained no pointer at
+`rustup`, so the paragraph that sends a reader from a `generic` mirror of
+`nodejs.org/dist` to [`nodedist`](/registries/nodedist) has no counterpart
+sending them from a mirror of `static.rust-lang.org` to this kind.

@@ -302,20 +302,12 @@ export const sidebar = {
           link: "/rfc/0023-che-code-fork",
         },
         {
-          text: "0024 — rustup dist",
-          link: "/rfc/0024-rustup-dist",
-        },
-        {
           text: "0025 — Generic publish",
           link: "/rfc/0025-generic-local-mode",
         },
         {
           text: "0027 — Homebrew",
           link: "/rfc/0027-homebrew",
-        },
-        {
-          text: "0028 — Nix binary cache",
-          link: "/rfc/0028-nix-binary-cache",
         },
         {
           text: "0029 — Helm charts",
@@ -447,8 +439,16 @@ export const sidebar = {
           link: "/rfc/0021-forge-releases-into-registries",
         },
         {
+          text: "0024 — rustup dist",
+          link: "/rfc/0024-rustup-dist",
+        },
+        {
           text: "0026 — Alpine apk",
           link: "/rfc/0026-alpine-apk",
+        },
+        {
+          text: "0028 — Nix binary cache",
+          link: "/rfc/0028-nix-binary-cache",
         },
         {
           text: "0031 — Ansible Galaxy",

@@ -12,6 +12,359 @@ Nothing yet.
 
 ---
 
+## [1.3.0] - 2026-09-19
+
+Four registry kinds, and the machinery that found out they worked. Every kind
+this release adds was driven by its real package manager before it shipped, and
+the suite built to do that — one closed-world phase per kind, with the client
+able to reach nothing but this instance — then turned on the kinds that had
+shipped green months ago. Three of them were unusable. Those, and the rest of
+what a real client found, are in **Fixed** below.
+
+### Added
+
+- **Alpine `apk` (RFC 0026).** `type = "apk"` completes the OS family beside
+  `deb`, `rpm` and `pacman`: in proxy mode a path tree per
+  `{branch}/{repo}/{arch}` with `APKINDEX.tar.gz` and the `.apk` files under it;
+  in `local`/`hybrid` mode a repository this instance hosts, regenerating and
+  **signing** its index on every upload the way `pacman` regenerates
+  `<repo>.db`.
+
+  Two things decide the shape, and both were read out of apk-tools rather than
+  remembered. The index cannot be a filtered listing: every shipping apk — 2.14
+  on Alpine 3.21/3.22, 3.0.8 on 3.23, 3.24, `latest-stable` and `edge` —
+  verifies Alpine's RSA signature before reading a byte of it and refuses an
+  unverifiable index unless `--allow-untrusted` is on, which also switches off
+  the package identity check. So the upstream index is relayed byte-exact and
+  the block is enforced at the `.apk`, whose file name carries a real name and
+  version. That makes `apk` the first member of the path-proxy family with a
+  coordinate — a block list, an age gate, a row in explore — and the honest
+  limit is that apk's solver still *selects* the blocked version and fails on
+  the download, in its own words rather than as a not-found.
+
+  Publishing signs with **RSA and without the banned crate**: apk 3.0.8 accepts
+  exactly the `.SIGN.RSA*` entries 2.14 does and OpenSSL refuses an Ed25519 key
+  for them, so "wait for an apk that takes Ed25519" was waiting for something
+  that did not happen. The ban (RUSTSEC-2023-0071) is on the pure-Rust `rsa`
+  crate's timing side channel, not on the algorithm, so signing goes through
+  `aws-lc-rs` — already in the graph as this tree's TLS provider — and
+  `cargo deny check` staying green is the regression test that nothing smuggled
+  `rsa` back in. `[registries.apk_signing]` takes the key name and PEM, with
+  `previous_keys` for rotation and `apk_unsigned` for a repository that is not
+  signed at all.
+
+- **Ansible Galaxy (RFC 0031).** `type = "galaxy"` serves the collections API
+  v3: `/api/` is the discovery document, `v3/collections/{ns}/{name}/versions/`
+  is the listing and the enforcement chokepoint, the version document carries
+  `download_url` and `artifact.sha256`, and the `{ns}-{name}-{v}.tar.gz` tarball
+  is the artifact. `local` and `hybrid` mode accept `ansible-galaxy collection
+  publish` and answer the import-task poll the client makes afterwards. Roles
+  (the v1 API) are served read-only. The client switch is `server_list` in
+  `ansible.cfg`; `roles` selects the role mode.
+
+  Three facts about `ansible-core` decide the design and all three came from its
+  source. Every pagination link the client follows loses a path prefix —
+  `get_collection_versions` does `urljoin(api_server, next_link)`, so an
+  absolute-path `next` sends the following request to the root of the host
+  rather than to `/proxy/{registry}/galaxy/…` — so every listing this instance
+  serves is one page with its `next` null and the adapter walks upstream's pages
+  itself. The client hashes the body against `artifact.sha256` from the version
+  document. And the credential arrives under the `Token` scheme, which
+  `raw_auth_from_request` now normalises.
+
+- **Nix binary cache (RFC 0028).** `type = "nix"` serves the substituter
+  protocol: `nix-cache-info`, one `{hash}.narinfo` per store path, and the NARs
+  under `nar/`. In proxy mode it fronts `cache.nixos.org` (or any other cache),
+  relaying every narinfo's `Sig:` lines byte-exact so the client's own
+  `trusted-public-keys` keep doing the verifying, and rewriting the one field
+  the signature does not cover — `URL:` — so the NAR is fetched under a
+  coordinate this instance can block, cache and count. In `local`/`hybrid` mode
+  it accepts `nix copy --to`, verifies what was uploaded and signs each narinfo
+  with the registry's own Ed25519 key in the `name:base64` form `nix.conf`
+  already expects. No OpenPGP, no `rsa`, and nothing upstream signed is
+  re-signed.
+
+  The package model is Nix's own: `builtins.parseDrvName` splits a store path's
+  name at the first dash not followed by a letter, so `hello-1.0.0.2-doc` is
+  package `hello` at version `1.0.0.2-doc`. A block makes every narinfo whose
+  path parses to it answer `404`, which is the protocol's own "this cache does
+  not have it" — Nix moves to the next substituter or builds from source, and
+  says so itself.
+
+- **Rust toolchains (`rustup`, RFC 0024).** A BatleHub instance proxied every
+  crate a Rust build resolved and not the compiler it resolved them with: the
+  dist tree is a file tree with no package protocol, so the only way through was
+  a `generic` registry, which caches bytes and enforces nothing. `type =
+  "rustup"` serves it as one package, `rust`, whose versions are rustup's own
+  toolchain names — `1.98.1`, `beta-2026-09-11`, `nightly-2026-09-05` — plus a
+  `rustup` package for the installer's self-update tree.
+
+  The channel manifests are the filtered listing and the chokepoint, because
+  rustup resolves **every** install through one: a blocked toolchain fails on
+  rustup's own *"could not download nonexistent rust version"* with nothing
+  downloaded. rustup verifies each manifest against its `.sha256` sidecar, so
+  the sidecar this instance serves is always the hash of the bytes it serves —
+  a filtered manifest with the upstream's sidecar would break every install.
+  `deny_components` refuses a component (`rust-analyzer`, `miri`) across every
+  toolchain.
+
+- **Forgejo's attachment endpoint (RFC 0019 §4.2).** Forgejo gives every release
+  asset a uuid and serves it from `{forge}/attachments/{uuid}`, a repository-less
+  path beside the API. `mise`'s `forgejo:` backend builds that URL itself rather
+  than following the `browser_download_url` in the release document — and *only*
+  that — so rewriting the document's URLs, which is what routes every other
+  forge client here, left that one going straight to the forge: a failure in a
+  closed world, and a silent bypass of the policy, the cache and the audit trail
+  in an open one. BatleHub answers the same shape. The uuid names no repository,
+  so the coordinate is not read out of the request but remembered from the
+  release document this proxy rewrote; a uuid nothing has been remembered for is
+  a `404`, because the route resolves what this instance has served rather than
+  relaying the forge's whole attachment space.
+
+- **`batlehub registry suggest` derives the registries a project needs from what
+  it actually downloads.** `mise.lock` is the precise input — it records the
+  exact URL of every tool the project installs, per platform, and each URL maps
+  either onto a typed registry (a `github.com` release asset → `type =
+  "github"`) or, where the host speaks no package protocol at all, onto a
+  `generic` mirror of it. `mise.toml` and the usual manifests are the
+  best-effort fallback, mapped by backend prefix and tool name. The output is a
+  set of `[[registries]]` blocks plus the client-side environment variables that
+  point each toolchain at them, deduplicated by registry name.
+
+- **The allocator's own accounting, as gauges.** RSS says how much memory this
+  process holds and cannot say who holds it — and those differ exactly when the
+  allocator keeps pages the program already freed, which is jemalloc by design
+  and is what a leak looks like from outside. Five jemalloc series are exported
+  now: `allocated` (the leak signal), `active`, `resident`, `mapped` and
+  `retained`. Settling one 16.6% idle-RSS report against a server whose live
+  heap never moved cost four ten-minute runs and two seventeen-minute builds
+  because the process could not be asked. It can now.
+
+- **A leak suite, a saturation suite and a per-release performance record.**
+  `soak.yaml` runs a fixed arrival rate across the paths that allocate
+  differently and, beside it, npm in a loop against a served upstream; both
+  compare two *idle* windows, so what they report is what was not given back.
+  `breaking-point.yaml` escalates the offered rate per backend until something
+  gives and reports what every rate below the knee cost. Neither is scheduled —
+  each is minutes to an hour of load answering a question no single commit
+  changes the answer to — and both are run before a release. `perf-report.yaml`
+  runs on the release tag, attaches the report and diffs it against the previous
+  release's copy: a record rather than a gate, because a shared runner is too
+  noisy for a threshold that would hold, but peak RSS doubling or a scenario
+  that started erroring shows up in the shape.
+
+- **One closed-world phase per registry kind, and two gates that keep it that
+  way.** `tests/heavy/closed_world.sh` gives the package manager no egress at
+  all while BatleHub keeps its own, so anything a phase obtains it obtained
+  here, and asserts on the wire transcript rather than on the client's exit
+  code. `registry_kind_coverage.rs` refuses a kind added to `RegistryKind::ALL`
+  without a phase that drives it and an air-gap claim, checking both against the
+  files rather than trusting the declaration; `soak_kind_coverage.rs` does the
+  same for the soak arms, because a soak that drives npm alone would be just as
+  green against a kind that leaked a megabyte per listing. Three more suites
+  joined them: `hybrid.sh` (local shadows upstream, upstream fills the rest,
+  with "never asked" as a count of zero), `backends.sh` (S3, Redis and a real
+  OIDC issuer under real clients — the shape every deployment has and no other
+  heavy suite ran), and `external_tests.sh`, which runs the Postgres/S3/Redis
+  integration tests for real on a machine with no Podman, where they had been
+  skipping silently and reporting green.
+
+- **Two scanners for what the other one cannot see.** `vuln-scan.yaml` sends all
+  four dependency roots to vuln.mlab.sh on every pull request, with `ui/` and
+  `docs/` going through a CycloneDX SBOM because the endpoint has no pnpm
+  parser. `mise-scan.yaml` scans the *installed* development toolchain, because
+  the lockfile scan reads four of the forty-odd tools in `mise.lock` — the rest
+  arrive as GitHub release assets and come back with no findings, which is
+  indistinguishable from clean. A `trivy rootfs` over the same toolchain found
+  854 findings, 461 of them fixable HIGH or CRITICAL, the day it was reported
+  clean. Both are advisory and say why in their own headers. `vex/batlehub.openvex.json`
+  is the OpenVEX document for findings that are not exploitable here, validated
+  by `task vex`, which also checks that it and `.trivyignore.yaml` still agree.
+
+- **`pr-checklist.yaml` posts what a diff implies.** A new `RegistryKind`
+  variant owes nine things in eight files; a file under `migrations/` owes a
+  `mig!` entry; a `values.yaml` edit owes a regenerated chart README. Advisory
+  by design — a required check that turns green when somebody ticks a box
+  measures the ticking — and one comment per pull request, edited in place.
+
+- **Thirteen more fuzz targets**, taking the set from 7 to 20: bundle reads,
+  escaping, image hosts, integrity parsing, listing filters, URL normalisation,
+  path safety, release coordinates, SBOM and scanner extraction, signed URLs and
+  version ordering.
+
+- **`cargo_auth_required`.** Whether a cargo registry advertises itself as
+  closed is derived from whether an anonymous caller can read it, and the
+  derivation reads the *registry* tier — so a registry that closes the tier and
+  re-opens one package to `*` through a grant was advertised as fully closed and
+  cargo demanded a token for the open package too. The knob is the override for
+  that case.
+
+- **The config-change history is reachable by keyboard.** The row disclosure on
+  the reload page was a `@click` on a `<tr>` with `cursor-pointer`, no
+  `tabindex`, no `role` and no key handler: unreachable without a mouse and
+  announcing nothing. It is a button in the first cell now, carrying the focus
+  ring, Enter and Space, and `aria-expanded` — the chevron alone said the state
+  only to a reader who could see it.
+
+### Changed
+
+- **Grants are evaluated before anything is fetched.** `authorize_grants_public`
+  reads the request coordinate, the identity and the action, and nothing else —
+  the answer is the same whether or not any package or version row exists — but
+  it ran *after* the metadata resolve, so every refused request first fetched
+  the artifact's metadata from upstream and filled the cache with it. An
+  unauthenticated caller naming coordinates nobody had asked for could spend the
+  upstream's rate limit and this instance's bandwidth one refusal at a time. The
+  check now runs first in both funnels. Nothing about *what* is evaluated
+  changes: the coordinate is not touched in between. The rule chain stays below
+  the resolve, because it genuinely needs what the resolve produces — the
+  release-age gate reads `published_at` off the metadata, and a `latest` request
+  is only known to be blocked once it has resolved to a version.
+
+- **conda's index is streamed, and cached as bytes.** `conda-forge/linux-64`'s
+  `repodata.json` is 424 MiB of about 1.4 million small objects, and a
+  `serde_json::Value` of that measured ~11.5 GB resident for a single request —
+  past what a client will wait for and past what a 16 GB runner has. The block
+  filter now reads the document and writes the filtered one at the same time,
+  holding one package entry at a time, emitting the input's own keys, order and
+  values so a solver still agrees with the artifacts behind it. The compressed
+  index is cached as bytes in the storage backend rather than as base64 inside a
+  metadata-cache entry: `repodata.json.zst` is 57 MiB, which held the old way
+  was a 77 MiB string, a JSON document around it, a serialisation on every write
+  and a decode on every read — paid several times over, because micromamba asks
+  per subdir and per encoding. The cache entry is a pointer now and a hit
+  streams out of storage.
+
+- **A document parsed at a size that costs real memory says so.** No limit
+  covered this — `[limits] max_artifact_size_bytes` applies to artifacts, not to
+  documents — so the first symptom of the 424 MiB case was a client timing out
+  with nothing in the log to explain it. Past 64 MiB, comfortably above every
+  other listing this proxy serves and below the one that hurts, the parse is
+  logged with the document named.
+
+- **`paste` is substituted rather than suppressed.** The crates.io `paste` is
+  archived upstream (RUSTSEC-2024-0436, "No safe upgrade is available!") and its
+  only holder here is `tikv-jemalloc-ctl 0.7.0`, the latest release, which still
+  requires `paste = "1"` — so there is nothing to upgrade to. `patches/paste` is
+  a plain lib re-exporting `pastey`, the fork RustSec names as the drop-in
+  replacement, which keeps `deny.toml`'s `ignore = []` empty. `tikv-jemalloc-ctl`
+  uses the macro only for `[<$id _mib>]` identifier concatenation — no mallctl
+  key string passes through it — so the substitution cannot change which key the
+  stats reader looks up, and a mismatch would be a compile-time name-resolution
+  error rather than a wrong key at run time.
+
+### Security
+
+- **Two routes reached the proxy funnel without a grant check.** The RubyGems
+  gemspec route and the `generic` path mirror have no local branch at all, so
+  neither passed through a `chain::*` funnel, and `RbacRule` is no longer in the
+  rule chain — the rules below it judge only the artifact. Both were found by
+  the route-by-route authorization matrix rather than by a test, which is the
+  transferable part: a funnel the callers do not all pass through is not a
+  funnel. Grants are resolved on the proxy path itself now.
+
+- **An anonymous caller could park bytes in a `nix` registry's staging area.**
+  `nix copy --to` sends a NAR *before* the narinfo that names it, so when the
+  bytes arrive nothing is known about them — not the package, not the version —
+  and the coordinate-scoped check had nothing to answer about. It authorized
+  nothing instead: `PUT nar/… -> 200` followed by `PUT ….narinfo -> 403`, which
+  the heavy suite caught. `holds_anywhere_in_registry` is the widest question
+  that is still a question — *could this subject publish here at all?* — asked
+  at the instance tier, the registry node and its namespaces. The
+  coordinate-scoped check still runs when the narinfo arrives, so this narrows
+  who may consume storage without widening what anyone may claim.
+
+### Fixed
+
+Most of these were found by a real client rather than by a test, in kinds that
+had shipped with passing ones.
+
+- **npm refused three packages outright.** A packument is not a schema: every
+  version entry is the `package.json` it was published with, including shapes
+  npm itself stopped accepting years ago. `tmp@0.0.4` (2012) spells `repository`
+  as a one-element array of the object form, and `fs-extra@0.0.1`,
+  `jsonfile@0.0.1` and their siblings spell `homepage` as a one-element array of
+  the string. serde reads the whole document, so one such entry failed the
+  *package* — `data did not match any variant of untagged enum NpmRepository`,
+  surfaced as `502 malformed npm packument` — and every version of `tmp`,
+  `fs-extra` and `jsonfile` was un-installable through this proxy. Both fields
+  feed links on a metadata page and nothing else, so a shape neither reader
+  understands is now dropped, the same as absent. A document a client asked for
+  is never failed for a field no client reads.
+
+- **Every editor got a gzip file named `.vsix`.** The VS Code gallery's
+  `vspackage` endpoint answers `Content-Encoding: gzip` *unsolicited* — this
+  client asks for no encoding and is sent one anyway — and a content encoding is
+  a property of the transfer, not of the artifact. Relaying it as it came served
+  a gzip stream wrapping the VSIX under a `.vsix` name, which every editor
+  reported as `Could not find EOCD`, a zip's directory living at the end. The
+  body is decoded now.
+
+- **A pinned extension version was a `400`.** There is no version criterion in
+  `extensionquery`: the filter types are a closed set naming extensions, and a
+  body carrying one the API does not know is refused with *"Value does not fall
+  within the expected range"* rather than returning nothing. A pinned version is
+  asked for the way the editor asks for it — the extension's whole version list,
+  picked from here.
+
+- **Open VSX's asset URLs pointed at a route no `ovsx` client asks for.** Every
+  `files.*` URL in an extension document is on the API host and answers `302` to
+  the `openvsx.eclipsecontent.org` CDN. The linked-README read follows redirects
+  hop by hop and re-checks the origin at each one, with credentials attached only
+  while the chain stays on `base_url`; the CDN exception is granted only when the
+  configured base really is public Open VSX, since a self-hosted instance serves
+  its own files from its own origin and has no business being pointed at
+  Eclipse's CDN by a response it proxies. Both fetch paths share one helper, so
+  the origin check cannot be present on one and missing on the other — which is
+  the shape this bug had.
+
+- **GitLab answered `502` to every single-release read.** The typed route hands
+  the client a `PackageId` with no selector on purpose — `proxy_release_document`
+  wants the upstream document so it can repoint the asset URLs inside it — and
+  the client refused that shape with *"fetch_artifact requires
+  PackageId::artifact to be set"*. That is the first thing `mise`'s `gitlab:`
+  backend asks for. The Forgejo and GitHub clients had carried the arm all
+  along.
+
+- **Forgejo's release listing was fetched from the instance root.** Every other
+  API call here goes to `api_base_url`; this one went to `base_url`, so `mise`'s
+  `forgejo:` backend asked codeberg.org for `/repos/forgejo/forgejo/releases` and
+  was told `404` by the web host.
+
+- **The JetBrains Marketplace could not resolve the only coordinate an IDE ever
+  learns.** An IDE addresses a plugin as `/files/{pluginId}/{updateId}/…`, both
+  numeric, while the published coordinate is `xmlId@version`. The numeric
+  spelling is now recognised — all-digit segments are unambiguous, since an
+  xmlId is reverse-DNS-ish and a version is dotted — and resolved through the
+  plugin's updates listing plus the one field that listing does not carry, the
+  `xmlId` itself.
+
+- **conda paid 57 MiB per `HEAD`.** Clients probe before they fetch —
+  micromamba sends a `HEAD` for every subdir and encoding it might use — and
+  those were answered by pulling the body and discarding it. The probe is now
+  the same question asked upstream, read off the `Content-Length` header rather
+  than a decoded body. Any failure gives up probing rather than failing the
+  request: plenty of CDNs answer `405` to a `HEAD` and S3-style backends answer
+  `403` for a missing key, and propagating either turned a channel that serves
+  fine over `GET` into a `502` for every probe.
+
+- **PyPI could not serve a PEP 503-only index.** A missing
+  `/pypi/{name}/{version}/json` was not distinguished from an upstream that has
+  no JSON API at all, and only the latter should fall back to the simple page.
+  The two answers are separate now, and the simple-page path reads what such a
+  page can say about a file — its URL and the sha256 in the link's fragment —
+  and nothing it cannot.
+
+- **npm fetched each packument twice.** The document the artifact route needs is
+  the one `resolve_metadata` already fetched and cached, and resolving the
+  coordinate again on the tarball request cost two more upstream fetches per
+  first read. The cached packument is read instead — except for a synthesised
+  listing, whose URLs point back at this instance and would be refused by the
+  origin check for reading the wrong document rather than for anything being
+  wrong.
+
+---
+
 ## [1.2.0] - 2026-09-09
 
 ### Added
@@ -880,7 +1233,8 @@ First stable release.
 
 ---
 
-[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.2.0...HEAD
+[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.3.0...HEAD
+[1.3.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.2.0...v1.3.0
 [1.2.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.1.0...v1.2.0
 [1.1.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.0.0...v1.1.0
 [1.0.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v0.5.0...v1.0.0
