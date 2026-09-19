@@ -555,7 +555,26 @@ pub async fn conda_shard(
 /// **above** the fingerprint in the key so that [`index_storage_prefix`] can
 /// sweep one encoding's stale fingerprints without touching another's.
 fn index_storage_key(registry: &str, platform: &str, encoding: &str, fingerprint: &str) -> String {
-    format!("index/{registry}/{platform}/{encoding}/{fingerprint}/repodata.json")
+    format!(
+        "index/{registry}/{platform}/{encoding}/{fingerprint}/{}",
+        index_file_name(encoding)
+    )
+}
+
+/// The file name one encoding's index is stored under — the channel's own
+/// spelling of it, `repodata.json` plus the compression extension.
+///
+/// So that a blob's name describes its bytes. The encoding is already a
+/// directory segment above, and naming the file for it too is mild
+/// duplication against a real trap: the filesystem backend writes these as
+/// actual files, and an object called `repodata.json` holding zstd misleads
+/// anyone reading the storage backend directly.
+fn index_file_name(encoding: &str) -> String {
+    if encoding == PLAIN_INDEX_LABEL {
+        "repodata.json".to_owned()
+    } else {
+        format!("repodata.json.{encoding}")
+    }
 }
 
 /// Every fingerprint stored for one subdir **in one encoding**.
@@ -1730,6 +1749,13 @@ mod tests {
         for key in [&zst, &bz2, &json] {
             assert!(key.starts_with("index/chan/linux-64/"), "{key}");
         }
+
+        // The blob is named for what is in it. The filesystem backend writes
+        // these as real files, so an object called `repodata.json` holding
+        // zstd would mislead anyone reading storage directly.
+        assert!(zst.ends_with("/repodata.json.zst"), "{zst}");
+        assert!(bz2.ends_with("/repodata.json.bz2"), "{bz2}");
+        assert!(json.ends_with("/repodata.json"), "{json}");
     }
 
     #[test]
