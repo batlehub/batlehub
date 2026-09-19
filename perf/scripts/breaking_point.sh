@@ -203,13 +203,20 @@ while :; do
   # k6's exit status is captured and passed on rather than discarded: a k6
   # that was killed at a high rate is exactly the knee this loop is hunting,
   # and treating it as a clean step made the search walk straight past it.
-  set +e
+  #
+  # **No `set +e` / `set -e` around it**, which is what `soak.sh` and
+  # `run_with_metrics.sh` write, because those two run under `set -euo pipefail`
+  # and the pair restores what they had. This script runs under `set -uo
+  # pipefail` — errexit was never on — so the same idiom copied here does not
+  # restore it, it *enables* it, for the whole rest of the script: the first run
+  # with it died at the `grep -c` below, which exits 1 on a server that did not
+  # panic, and every arm failed with exit 1 and no report. Without errexit,
+  # `$?` already carries k6's status.
   BATLEHUB_URL="$BASE" BATLEHUB_BP_RATE="$rate" BATLEHUB_BP_STEP="${STEP}s" \
     k6 run --quiet --summary-export "$WORK/step-$rate.json" \
       --summary-trend-stats "min,med,p(95),p(98),max" \
       perf/k6/scenarios/14_breaking_point.js >"$WORK/k6-$rate.log" 2>&1
   k6_exit=$?
-  set -e
   step_end="$(date +%s)"
 
   if ! kill -0 "$SERVER_PROC" 2>/dev/null; then
@@ -235,8 +242,10 @@ done
 
 # `grep -c` prints 0 *and* exits 1 when it matches nothing, so a `|| echo 0`
 # appends a second line and every arithmetic test on it dies. Default the
-# variable instead of appending to it.
-panics="$(grep -c "panicked at" "$SERVER_LOG" 2>/dev/null)"
+# variable instead of appending to it, and keep the status non-zero-proof with
+# `|| true` so this line survives an errexit anyone adds later — it is the last
+# thing standing between a clean escalation and no report at all.
+panics="$(grep -c "panicked at" "$SERVER_LOG" 2>/dev/null || true)"
 panics="${panics:-0}"
 alive=1; kill -0 "$SERVER_PROC" 2>/dev/null || alive=0
 
