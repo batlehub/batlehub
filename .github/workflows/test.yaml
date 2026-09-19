@@ -27,6 +27,11 @@ on:
       - ".github/scripts/merge_coverage.py"
   pull_request:
     branches: ["main"]
+    # `labeled` on top of the three defaults: the `full-test` label below is a
+    # *condition*, and a condition nothing re-evaluates is a condition nobody can
+    # use — adding the label to an open dependabot pull request has to start a
+    # run, not wait for the next push that will never come.
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - "crates/**"
       - "server/**"
@@ -59,9 +64,65 @@ env:
   COVERAGE_EXCLUDE: >-
     server/src/(main|server_factory|setup|stores|watcher)\.rs|crates/web/src/handlers/auth/oidc(\.rs|/)|crates/web/src/handlers/back_office/health/system\.rs|crates/adapters/src/db/|crates/adapters/src/registry/(cargo|npm)\.rs|crates/adapters/src/registry/github/|crates/adapters/src/notification/postgres\.rs|crates/adapters/src/sbom/fetcher\.rs|crates/adapters/src/cache/(postgres|banner_redis)\.rs|crates/adapters/src/local_registry/postgres\.rs|crates/adapters/src/rate_limit/(postgres|ip_block_postgres)\.rs|crates/adapters/src/storage/router/|cli/src/tui/|cli/src/(api|cli)/owner\.rs
 jobs:
+  # Dependabot opens a pull request per bump, daily, across four ecosystems
+  # (`.github/dependabot.yaml`) — and every one of them used to buy the whole
+  # workflow below, the heavy clients included: a `Cargo.lock` bump paying for a
+  # real `ansible-galaxy`, a real `dotnet restore` and a headless VS Code to
+  # prove it had not broken them. It almost never has, and when it might, the
+  # answer is to *ask* for the run rather than to buy it forty times a week.
+  #
+  # So this job is the one gate the rest of the workflow hangs off: on a
+  # `dependabot/*` head branch every job below is skipped unless the pull
+  # request carries the **`full-test`** label. Nothing else changes — a human
+  # branch, a push to `main`, the nightly schedule and `workflow_dispatch` all
+  # run the full suite as before, because `github.head_ref` is empty outside a
+  # pull request and the dependabot test is then false.
+  #
+  # It also swallows the cost of the `labeled` trigger that makes the label
+  # usable: any label on any pull request now starts this workflow, so a label
+  # that is not `full-test` (`soak`, `breaking-point`, a triage label) stops
+  # here rather than re-running a suite that already ran on the push.
+  #
+  # Every job in this file must declare `needs: gate` and the `if` below —
+  # a job that forgets it is a job dependabot still pays for.
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - id: decide
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          ACTION: ${{ github.event.action }}
+          LABEL: ${{ github.event.label.name }}
+          FULL_TEST: ${{ contains(github.event.pull_request.labels.*.name, 'full-test') }}
+        run: |
+          run=true
+          why=""
+          if [[ "$ACTION" == "labeled" && "$LABEL" != "full-test" ]]; then
+            run=false
+            why="the \`$LABEL\` label is not \`full-test\` — the suite already ran on the push"
+          elif [[ "$HEAD_REF" == dependabot/* && "$FULL_TEST" != "true" ]]; then
+            run=false
+            why="\`$HEAD_REF\` is a dependabot branch and the pull request is not labelled \`full-test\`"
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          if [[ "$run" == "false" ]]; then
+            {
+              echo "### Test suite skipped"
+              echo
+              echo "Skipped because $why."
+              echo
+              echo "Add the **\`full-test\`** label to the pull request to run it."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   lint:
     name: Lint (clippy + fmt)
     runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
@@ -118,6 +179,8 @@ jobs:
     # nightly run pays for the actual fuzzing, which is what finds bugs.
     name: Fuzz targets
     runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
@@ -193,6 +256,8 @@ jobs:
   unit:
     name: Unit tests (+ coverage)
     runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
@@ -224,6 +289,8 @@ jobs:
   integration:
     name: Integration tests (+ coverage)
     runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     services:
       postgres:
         image: postgres:17-alpine
@@ -299,6 +366,8 @@ jobs:
   heavy-marketplace:
     name: Heavy integration (marketplaces)
     runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     services:
       postgres:
         image: postgres:17-alpine
@@ -367,6 +436,8 @@ jobs:
   heavy-vsx-extension:
     name: Heavy integration (batlehub-vsx extension, real editor)
     runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     services:
       postgres:
         image: postgres:17-alpine
@@ -432,6 +503,8 @@ jobs:
   heavy-backends:
     name: Heavy integration (S3 + Redis + OIDC backends)
     runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     services:
       postgres:
         image: postgres:17-alpine
@@ -553,6 +626,8 @@ jobs:
   heavy-browser:
     name: "Heavy integration (real browser: VS Code views, console Fetch)"
     runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     services:
       postgres:
         image: postgres:17-alpine
@@ -638,6 +713,8 @@ jobs:
   heavy-bundler:
     name: Heavy integration (Bundler)
     runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     services:
       postgres:
         image: postgres:17-alpine
@@ -709,6 +786,8 @@ jobs:
   heavy-client:
     name: Heavy integration (${{ matrix.suite }})
     runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     strategy:
       # One ecosystem failing says nothing about the others, and the whole point
       # is to learn which clients are unhappy.
@@ -994,6 +1073,8 @@ jobs:
   heavy-authz:
     name: Heavy authorization (${{ matrix.target }})
     runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     strategy:
       # One client being unhappy says nothing about the others, and which ones
       # are is the thing being learned.
@@ -1144,8 +1225,9 @@ jobs:
   heavy-authz-live:
     name: Heavy authorization, live (${{ matrix.kind }})
     runs-on: ubuntu-latest
+    needs: gate
     # Nightly and on demand, like the rest of the network-dependent heavy work.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: needs.gate.outputs.run == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     strategy:
       fail-fast: false
       matrix:
@@ -1259,6 +1341,8 @@ jobs:
   heavy-closed-world:
     name: Heavy closed world (${{ matrix.phase }})
     runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     strategy:
       # One ecosystem failing says nothing about the others, and which ones can
       # survive the closed world is the thing being learned.
@@ -1427,11 +1511,11 @@ jobs:
   coverage-report:
     name: Coverage report (merged)
     runs-on: ubuntu-latest
-    needs: [unit, integration, heavy-marketplace, heavy-bundler, heavy-backends, heavy-browser, heavy-client, heavy-authz, heavy-closed-world]
+    needs: [gate, unit, integration, heavy-marketplace, heavy-bundler, heavy-backends, heavy-browser, heavy-client, heavy-authz, heavy-closed-world]
     # Run even when a coverage job fails: merge_coverage.py renders an "absent"
     # row for any missing LCOV, so a partially-green pipeline still reports
     # (download-artifact with a pattern warns, not fails, on zero matches).
-    if: ${{ !cancelled() }}
+    if: ${{ needs.gate.outputs.run == 'true' && !cancelled() }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

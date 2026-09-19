@@ -1257,6 +1257,33 @@ to start under a restricted `ptrace_scope`, not a finding — re-run with
   their own registries, pinned VS Code, IntelliJ, Terraform, .NET and
   micromamba builds — so a new client release can break a tree that no commit
   touched, and only a scheduled run finds it.
+
+  Every job in it hangs off one **`gate`** job, and the gate has one rule:
+  a pull request whose head branch starts with **`dependabot/`** runs nothing
+  unless it carries the **`full-test`** label. Dependabot opens a pull request
+  per bump, daily, across four ecosystems, and each one used to buy the whole
+  workflow — a `Cargo.lock` bump paying for a real `ansible-galaxy`, a real
+  `dotnet restore` and a headless VS Code to prove it had not broken them. It
+  almost never has; when a bump *could* (an `actix-web`, `sqlx` or `aws-sdk-s3`
+  line, anything the security constraints in `CLAUDE.md` name), label the pull
+  request and the full suite runs on the spot.
+
+  Nothing else changes: a human branch, a push to `main`, the nightly schedule
+  and `workflow_dispatch` all run the suite as before, because `github.head_ref`
+  is empty outside a pull request and the dependabot test is then false. The
+  gate writes the reason for a skip into the run summary, so fourteen skipped
+  jobs are never unexplained.
+
+  The label has to be a *trigger* as well as a condition — `pull_request`
+  declares `labeled` in its `types`, or adding `full-test` to an open pull
+  request would change the answer with no run left to ask the question. That
+  trigger fires on *any* label, so the gate's other clause drops a run whose
+  label is not `full-test`: a `soak` or `breaking-point` label no longer
+  re-runs a suite that already ran on the push.
+
+  **A new job in this file must declare `needs: gate` and
+  `if: needs.gate.outputs.run == 'true'`** — a job that forgets it is a job
+  dependabot still pays for, and nothing fails the build over it.
 - **`soak.yaml`** — the two soak suites, **started by hand only**: a
   `workflow_dispatch`, or the `soak` label on a pull request. No push, no cron,
   and no pull request without that label. Inputs for the duration, the arrival rate, the
@@ -1287,7 +1314,10 @@ to start under a restricted `ptrace_scope`, not a finding — re-run with
 - **`repo-interop.yaml`** — `bash tests/interop/verify.sh` (apt + dnf + pacman
   accept signed repos).
 - **`sonar.yaml`** — SonarCloud: rebuilds full Rust + frontend coverage and
-  uploads `lcov.info`.
+  uploads `lcov.info`. Carries the same dependabot gate as `test.yaml`, for the
+  same reason — rebuilding both coverage trees costs about what that whole
+  workflow does — written inline on its single job rather than as a `gate` job,
+  because one job needs no job to hang off.
 
 The `.github` workflows start their own Postgres/RustFS/Redis service containers
 in YAML; the `task test:*` targets are the local-dev equivalents (Podman).

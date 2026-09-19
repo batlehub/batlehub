@@ -14,6 +14,11 @@ on:
       - ".github/workflows/sonar.yaml"
   pull_request:
     branches: ["main"]
+    # `labeled` on top of the three defaults: the `full-test` label below is a
+    # *condition*, and a condition nothing re-evaluates is a condition nobody can
+    # use — adding the label to an open dependabot pull request has to start a
+    # run, not wait for the next push that will never come.
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - "crates/**"
       - "server/**"
@@ -45,6 +50,17 @@ jobs:
   sonar:
     name: SonarCloud Analysis
     runs-on: ubuntu-latest
+    # The same dependabot gate `test.yaml` carries, and for the same reason:
+    # this job rebuilds the full Rust + frontend coverage, so it costs about
+    # what that whole workflow does, and a lockfile bump buys it daily. Skipped
+    # on a `dependabot/*` head branch unless the pull request is labelled
+    # `full-test`; the second clause drops the re-run that the `labeled` trigger
+    # would otherwise fire for every unrelated label. `test.yaml` has a `gate`
+    # job because it has fourteen jobs to hang off it — one job needs no job.
+    if: >-
+      (github.event.action != 'labeled' || github.event.label.name == 'full-test')
+      && (!startsWith(github.head_ref, 'dependabot/')
+          || contains(github.event.pull_request.labels.*.name, 'full-test'))
     services:
       postgres:
         image: postgres:17-alpine
