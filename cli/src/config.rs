@@ -76,6 +76,10 @@ impl ConfigFile {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating config dir {}", parent.display()))?;
+            // The file below is 0600, but a 0755 directory around it still
+            // tells every other local user which servers and profiles exist.
+            // `contract.rs` already restricts its own parent this way.
+            restrict_dir_to_owner(parent);
         }
         let content = toml::to_string_pretty(self).context("serializing config")?;
         std::fs::write(&path, content).with_context(|| format!("writing {}", path.display()))?;
@@ -123,8 +127,18 @@ fn restrict_to_owner(path: &std::path::Path) {
     let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
 }
 
+/// Restrict `path` to owner-only (`0700`) on Unix. Best-effort, as above.
+#[cfg(unix)]
+fn restrict_dir_to_owner(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
+}
+
 #[cfg(not(unix))]
 fn restrict_to_owner(_path: &std::path::Path) {}
+
+#[cfg(not(unix))]
+fn restrict_dir_to_owner(_path: &std::path::Path) {}
 
 #[cfg(test)]
 mod tests {
@@ -218,6 +232,22 @@ mod tests {
     fn token_not_expiring_when_no_expiry_set() {
         let profile = Profile::default();
         assert!(!profile.is_token_expiring_soon());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restrict_dir_to_owner_sets_0700() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("batlehub");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        restrict_dir_to_owner(&nested);
+
+        let mode = std::fs::metadata(&nested).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "{mode:o}");
     }
 
     #[cfg(unix)]

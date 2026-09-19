@@ -127,6 +127,15 @@ async fn serve(args: ServeArgs) -> Result<()> {
 /// file is as secret as the URL.
 fn write_state_file(dir: &std::path::Path, url: &str, session: &str, registry: &str) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    // The file is 0600 because the session in it is the secret; the directory
+    // it sits in is restricted for the same reason — a 0755 state dir under
+    // the default umask leaks that a proxy is running and against which
+    // registry. Best-effort, like `contract::restrict_dir`.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
     let path = dir.join("gallery-proxy.json");
     let body = serde_json::to_vec_pretty(&serde_json::json!({
         "gallery_url": url,
@@ -181,6 +190,8 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "{mode:o}");
+            let dir_mode = std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777;
+            assert_eq!(dir_mode, 0o700, "{dir_mode:o}");
         }
     }
 }

@@ -18,7 +18,7 @@ silences the sink somebody adds next year without the guard.
 | --- | --- | --- |
 | `pythonsecurity:S8707` / `S2083` — path traversal | 7 | **2 fixed in code** (the breaking-point pair now take a label, not a path); **5 resolved per issue in the UI** — see below |
 | `githubactions` — `pip install` without `--only-binary` | 1 | fixed in code |
-| `rust` — "make sure this permission is safe" | 1 | **UI, reviewed safe** — a tar header field, not a permission |
+| `rust` — "make sure this permission is safe" | 1 | **UI, reviewed safe** at the reported site — a tar header field, not a permission — but the sweep it prompted found four *real* permission sites and narrowed them; see below |
 | shell — "not enforcing HTTPS" | 6 | fixed in code, `fetch_https` wrapper |
 | `python:S3776` / `rust` — cognitive complexity | 5 | fixed in code |
 | shell — no explicit return at end of function | 18 | fixed in code |
@@ -50,22 +50,38 @@ api/issues/search?componentKeys=batleforc_batlehub&additionalFields=_all
 well), and the `basename`-and-compare rewrite moved nothing. So the condition
 that sentence set is met, and those three are resolved per issue.
 
-Two findings in the batch are **new and of a different kind**, and they are
-worth separating out because they are not the same claim at all:
+Three findings in the batch are **of a different kind**, and they are worth
+separating out because they are not the same claim at all. Read the execution
+flow rather than the title: what the rule says it found is a tainted *path*,
+and what the flow actually walks is a tainted *string of report prose*.
 
-| File | Function | Sink | Any path argument? |
-| --- | --- | --- | --- |
-| `lifecycle_report.py` | `main` | `REPORT_FILE.write_text(...)` | **none** — `--iterations`, `--in-flight`, `--upstream-delay-ms`, all `type=int` |
-| `soak_verdict.py` | `main` | `REPORT_FILE.write_text(...)` | **none** — `--k6-exit` (int), `--duration`, `--rate` (strings, printed) |
+| File | Function | Sink | What the flow ends in | Any path argument? |
+| --- | --- | --- | --- | --- |
+| `lifecycle_report.py` | `main` | `REPORT_FILE.write_text(...)` | the report text | **none** — `--iterations`, `--in-flight`, `--upstream-delay-ms`, all `type=int` |
+| `soak_verdict.py` | `main` | `REPORT_FILE.write_text(...)` | the report text | **none** — `--k6-exit` (int), `--duration`, `--rate` (strings, printed) |
+| `perf_report.py` | `main` | `args.out.write_text(markdown, …)` | `markdown` | `--out`, but it is not on this flow |
 
-Both write to a module constant derived from `Path(__file__)`. Neither takes an
-argument that could name a file — `soak_verdict.py`'s three were removed by
-2026-09-15's own fix, and `lifecycle_report.py` never had any. What both do is
-interpolate a CLI *string* into the report's prose. The rule is reading tainted
-**content** reaching a file sink and reporting it as a tainted **path**, which
-is a different defect from the `resolve()`-is-not-a-sanitiser limitation: there
-is no guard to model here, because there is nothing to guard. Resolved in the
-UI, rule left armed.
+The first two write to a module constant derived from `Path(__file__)`. Neither
+takes an argument that could name a file — `soak_verdict.py`'s three were
+removed by 2026-09-15's own fix, and `lifecycle_report.py` never had any. What
+both do is interpolate a CLI *string* into the report's prose. The rule is
+reading tainted **content** reaching a file sink and reporting it as a tainted
+**path**, which is a different defect from the `resolve()`-is-not-a-sanitiser
+limitation: there is no guard to model here, because there is nothing to guard.
+Resolved in the UI, rule left armed.
+
+`perf_report.py`'s S2083 belongs with them rather than with its own file's other
+two, and the twelve steps of its flow are what say so: source at `report`,
+through `report.get('version')` into `preamble`'s f-string, into `out`, through
+`render`'s list concatenation and `"\n".join`, out as `markdown`, and into
+`args.out.write_text(markdown)` as the *content* argument. The receiver —
+`args.out`, the only thing on that call that is a path — is never on the flow at
+all: `results_file` built it as `RESULTS_DIR / basename`, and the analyser
+evidently accepts that much. So the S8707 pair on this file are the
+guard-not-modelled claim and stay as 2026-09-15 left them; the S2083 report on
+`main` is the content-as-path claim and there is nothing in it to fix. The taint
+it walks is a value this file *prints to stdout on the next line* — a report the
+script exists to write.
 
 ### Fixed in code: the breaking-point pair
 
@@ -141,23 +157,52 @@ anything in the workflow gets a say. bcrypt publishes manylinux wheels, so
 fails loudly instead of quietly building from source. It was the only
 `pip install` in any workflow.
 
-## The permission hotspot — reviewed safe, not changed
+## The permission hotspot — safe where reported, narrowed where real
 
 `crates/adapters/src/repo/apk.rs`, `tar_of`'s `header.set_mode(0o644)`, flagged
 "make sure this permission is safe" and marked `former-hotspot`.
 
-It is safe, and the evidence is in the tree: **there are ten identical
-`set_mode(0o644)` calls** across `listing_facts.rs`, `deb.rs`, `pacman.rs`, the
-conda and readme SBOM extractors and the conda tests, and none of the other nine
-is flagged. The mode is a field of a tar header built in memory and served over
-HTTP; no filesystem is asked for anything, nothing here unpacks the archive, and
-0o644 is what GNU `tar` writes for a regular file and what `apk` expects to read
-back — RFC 0026 §13 records that the ustar spelling of this header was measured
-against `apk.static`, not deduced. Narrowing it would only produce an index some
-client refuses.
+**At the reported site it is safe.** The mode is a field of a tar header built
+in memory and served over HTTP; no filesystem is asked for anything, nothing
+here unpacks the archive, and 0o644 is what GNU `tar` writes for a regular file
+and what `apk` expects to read back — RFC 0026 §13 records that the ustar
+spelling of this header was measured against `apk.static`, not deduced.
+Narrowing it would only produce an index some client refuses. That the scanner
+flagged this one and not the sixteen other identical `set_mode(0o644)` calls in
+the tree is itself the tell that it is matching a literal, not a data flow.
 
-Not changed; the reasoning is now a comment at the call site, so the next reader
-meets it where the scanner does. Resolved in the UI as safe.
+**But the question it asks is the right one to ask of the whole tree**, so the
+sweep was done properly: every site was classified by whether this process asks
+a *filesystem* for a right, or writes a *byte into an archive*. Only 3 of the
+19 `set_mode` calls are production tar headers (`apk.rs`'s `tar_of`,
+`pacman.rs`'s `generate_db`, `bundle.rs`'s `write_bundle`); the other 16 are
+test fixtures. The real permission sites were four, and all four were wider
+than they needed to be:
+
+| Site | Was | Now | Why |
+| --- | --- | --- | --- |
+| `scanners/extract.rs` `write_bounded` | file 0o644 | **0o600** | the work dir holds an attacker-controlled artifact, unpacked. The only readers are this process and the scanner, which `subprocess::run` starts with `--unshare-user` and no `--uid`, so the invoking uid maps to itself inside the sandbox and reads its own files unchanged |
+| `scanners/extract.rs`, five `create_dir_all` | umask (0o755) | **0o700** | the extracted tree was listable by every other local user. `create_dir_private` chmods each ancestor it actually created, and leaves ones that already existed alone |
+| `cli/src/config.rs` `save` | umask (0o755) | **0o700** | the file inside was already 0600, but a 0755 directory still names every server and profile. `contract.rs` already restricted its own parent this way — this is the inconsistency, not a new rule |
+| `cli/src/cli/proxy.rs` `write_state_file` | umask (0o755) | **0o700** | same shape: the state file is 0600 because the session in it is the secret, and the directory named it anyway |
+
+Each is pinned by an assertion, not left to the umask of whoever runs the
+tests: `a_tarball_extracts_with_exec_bits_dropped` now checks the created
+directory as well as the file, `restrict_dir_to_owner_sets_0700` starts from an
+explicit 0755 so it would fail if the call were a no-op, and
+`the_state_file_is_private_and_names_the_service_url` checks its directory.
+
+The apk/pacman/bundle tar headers are unchanged, and the reasoning is a comment
+at the `tar_of` call site so the next reader meets it where the scanner does.
+Resolved in the UI as safe.
+
+Left alone deliberately: `storage/filesystem.rs` creates the artifact-cache
+tree under the process umask (0o755 dirs, 0o644 files). That is wider than
+necessary for a cache that can hold privately-published packages, but it is the
+standard Unix contract — hard-coding 0o700 there takes the choice away from the
+operator and breaks a deployment whose uid changes between rollouts while the
+volume does not. It belongs in the deployment (umask, `securityContext`), not
+in a literal.
 
 ---
 
@@ -265,7 +310,7 @@ row that exists.
 | `cargo fmt --all --check` | clean |
 | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
 | `cargo test -p batlehub-config` | 341 passed |
-| `cargo test --workspace` | see the run this round was landed with |
+| `cargo test --workspace` | 5 611 passed, 0 failed, 151 targets |
 | `pnpm run lint` (oxlint) | clean |
 | `pnpm run build` (vue-tsc + vite) | clean |
 | `pnpm run test` (vitest) | 1327 passed, 112 files |
@@ -274,6 +319,11 @@ row that exists.
 | `breaking_point_row.py` parity | 90 cases byte-identical |
 | `validate_registry_apk` messages | 13 of 13 preserved character-for-character |
 | ustar header encoding parity | 30 cases byte-identical |
+
+The workspace run was repeated without the `| tail` the first one had: a
+pipeline reports the *last* command's status, so the exit code of a piped
+`cargo test` is `tail`'s and is 0 whatever cargo did. The number above is from
+the unpiped run.
 
 The heavy suites were **not** run: the six scripts touched in `tests/heavy/`
 changed only in ways `bash -n` and reading can settle — a `curl` behind a

@@ -178,7 +178,7 @@ pub fn extract_to(
     policy: &ExtractPolicy,
 ) -> Result<ExtractReport, ExtractError> {
     let kind = sniff(data).ok_or(ExtractError::Unrecognised)?;
-    std::fs::create_dir_all(root)?;
+    create_dir_private(root)?;
     let mut budget = Budget {
         policy,
         compressed: data.len() as u64,
@@ -193,6 +193,37 @@ pub fn extract_to(
         ArchiveKind::Tar => extract_tar(tar::Archive::new(data), root, &mut budget),
         ArchiveKind::Zip => extract_zip(data, root, &mut budget),
     }
+}
+
+/// `create_dir_all`, then 0o700 on what was created.
+///
+/// `create_dir_all` gives 0o777 & ~umask — 0o755 under the usual umask, so the
+/// extracted tree of an attacker-controlled artifact is listable by every other
+/// local user. The mode is applied to each ancestor that did not already exist,
+/// which is why this walks the components instead of chmod-ing `path` alone: a
+/// nested entry creates several levels at once, and an ancestor that was
+/// already there is not ours to narrow.
+#[cfg(unix)]
+fn create_dir_private(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut built = PathBuf::new();
+    let mut fresh: Vec<PathBuf> = Vec::new();
+    for component in path.components() {
+        built.push(component);
+        if !built.exists() {
+            fresh.push(built.clone());
+        }
+    }
+    std::fs::create_dir_all(path)?;
+    for dir in fresh {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn create_dir_private(path: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(path)
 }
 
 fn extract_tar<R: Read>(
@@ -221,7 +252,7 @@ fn extract_tar<R: Read>(
         let kind = entry.header().entry_type();
         match kind {
             tar::EntryType::Directory => {
-                std::fs::create_dir_all(root.join(&rel))?;
+                create_dir_private(&root.join(&rel))?;
                 report.directories += 1;
             }
             tar::EntryType::Regular | tar::EntryType::Continuous | tar::EntryType::GNUSparse => {
@@ -229,7 +260,7 @@ fn extract_tar<R: Read>(
                 budget.bytes(declared)?;
                 let target = root.join(&rel);
                 if let Some(parent) = target.parent() {
-                    std::fs::create_dir_all(parent)?;
+                    create_dir_private(parent)?;
                 }
                 let name = rel
                     .file_name()
@@ -280,14 +311,14 @@ fn extract_zip(
             }
         }
         if file.is_dir() {
-            std::fs::create_dir_all(root.join(&rel))?;
+            create_dir_private(&root.join(&rel))?;
             report.directories += 1;
             continue;
         }
         budget.bytes(file.size())?;
         let target = root.join(&rel);
         if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)?;
+            create_dir_private(parent)?;
         }
         let name = rel
             .file_name()
@@ -336,7 +367,15 @@ fn write_bounded<R: Read>(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o644))?;
+        // 0o600, not 0o644 and not whatever the entry's header asked for.
+        // Dropping the exec bits is the point (an archive does not get to
+        // leave something runnable in the work dir), and owner-only is what
+        // the reader set actually is: this process, and the scanner, which
+        // `subprocess::run` starts with `--unshare-user` and no `--uid`, so
+        // the invoking uid maps to itself inside the sandbox and reads its
+        // own files unchanged. Nothing else has any business here — the work
+        // dir holds an attacker-controlled artifact, unpacked.
+        std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o600))?;
     }
     Ok(written)
 }
@@ -422,7 +461,16 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(&run).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o644, "exec bits dropped: {mode:o}");
+            assert_eq!(mode, 0o600, "exec bits dropped, owner only: {mode:o}");
+            // The directories the archive created are owner-only too; the
+            // default umask would have left them 0o755 and the unpacked
+            // artifact listable by every other local user.
+            let bin = std::fs::metadata(dir.path().join("package/bin"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(bin, 0o700, "{bin:o}");
         }
     }
 
