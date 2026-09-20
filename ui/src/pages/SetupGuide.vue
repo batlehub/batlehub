@@ -176,7 +176,7 @@ async function copy(key: string, text: string) {
     <PageHeader
       :title="t('setupGuide.setupGuide')"
       :description="t('setupGuide.configureYourToolsToRoute')"
-      variant="display"
+      variant="poster"
     />
 
     <!-- Loading state -->

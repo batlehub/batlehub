@@ -42,19 +42,46 @@ const registries = computed<RegistryInfo[]>(() => data.value ?? []);
 const isFresh = computed(() => !loading.value && !error.value && registries.value.length === 0);
 const publishable = computed(() => registries.value.filter((r) => r.mode !== "proxy").length);
 const name = computed(() => identity.value?.user_id ?? "");
+const greeting = computed(() =>
+  name.value ? t("home.greeting", { user: name.value }) : t("home.greetingNoName"),
+);
+
+/**
+ * Whether the greeting can hold the Display step.
+ *
+ * `user_id` is whatever the provider's `user_id_claim` says, and that defaults
+ * to `sub` — a 36-character UUID on Keycloak. Silkscreen's advance is ~0.8em,
+ * so at 104px a UUID greeting is four lines of poster and the dashboard starts
+ * below the fold. The step down is to Pixel Medium, which is on the ramp.
+ * ponytail: a length threshold, not a measurement — swap for a fit measurement
+ * if a name lands just the wrong side of it.
+ */
+const displayFits = computed(() => greeting.value.length <= 24);
 </script>
 
 <template>
   <div class="space-y-6">
-    <header class="space-y-1">
-      <!-- Pixel Medium: DESIGN.md reserves this step for the wordmark, and the
-           home route is the one view whose title *is* the wordmark. -->
-      <h1 class="font-display text-2xl font-bold tracking-[0.04em]">
-        BatleHub<span class="text-primary">.</span>
+    <header class="space-y-3">
+      <!-- The Display step, which DESIGN.md gives one element per view: the
+           wordmark used to hold it here, three centimetres under the identical
+           wordmark in the bar above. The greeting is what this route actually
+           says that no other route does, so it takes the poster.
+           No `uppercase`, unlike the catalog's: Silkscreen has no lowercase
+           glyphs, so the class would only be telling the browser something the
+           face already decided.
+
+           `text-display` is 56px, 72px from 640 — the console's one page-title
+           step, shared with the catalog, the package sheet and the setup guide.
+           It was a four-step ramp topping out at 104px until this greeting
+           showed what that costs a title that is not a single short word. -->
+      <h1
+        class="font-display font-bold tracking-[0.02em] leading-[0.92] break-words"
+        :class="displayFits ? 'text-display' : 'text-2xl'"
+      >
+        {{ greeting }}
       </h1>
-      <p class="text-sm text-muted-foreground">
-        <template v-if="isAuthenticated">{{ t("home.signedInAs", { user: name }) }}</template>
-        <template v-else>{{ t("homePage.aCacheAndRegistry") }}</template>
+      <p v-if="!isAuthenticated" class="text-sm text-muted-foreground">
+        {{ t("homePage.aCacheAndRegistry") }}
       </p>
     </header>
 

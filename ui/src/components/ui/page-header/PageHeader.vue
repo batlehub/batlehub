@@ -5,7 +5,7 @@ withDefaults(
   defineProps<{
     title?: string;
     description?: string;
-    variant?: "default" | "display";
+    variant?: "default" | "display" | "poster";
   }>(),
   { variant: "default" },
 );
@@ -33,6 +33,11 @@ withDefaults(
             // inked, not lit. Tracked 0.04em because Silkscreen's square pixel
             // sets tight at its own em.
             variant === 'display' && 'font-display font-bold tracking-[0.04em]',
+            // The page-title step (`--t-display`), the same one the home
+            // greeting and the two package surfaces set. It overrides
+            // `text-2xl` above, so it comes after it.
+            variant === 'poster' &&
+              'font-display font-bold tracking-[0.02em] leading-[0.92] text-display break-words',
           )
         "
       >
@@ -40,7 +45,9 @@ withDefaults(
       </h1>
       <p
         v-if="description || $slots.description"
-        class="text-sm text-muted-foreground mt-0.5 max-w-[64ch]"
+        :class="
+          cn('text-sm text-muted-foreground max-w-[64ch]', variant === 'poster' ? 'mt-3' : 'mt-0.5')
+        "
       >
         <slot name="description">{{ description }}</slot>
       </p>

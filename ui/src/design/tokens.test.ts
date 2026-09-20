@@ -149,7 +149,7 @@ describe("display ramp", () => {
     const sizes = [...CSS.matchAll(/--t-(?:px-sm|px-md|display):\s*(\d+)px/g)].map((m) =>
       Number(m[1]),
     );
-    expect(sizes.length).toBeGreaterThanOrEqual(6); // 2 pixel steps + 4 display steps
+    expect(sizes.length).toBeGreaterThanOrEqual(4); // 2 pixel steps + 2 display steps
     for (const size of sizes) expect(size % 8, `${size}px is not a multiple of 8`).toBe(0);
   });
 

@@ -476,7 +476,7 @@ it, type it, or match it against the docs — which is worse than English.
 | `home.myNamespace` | My namespace | Mon namespace | **Kept verbatim** for the same reason as `account.namespace`. |
 | `home.openConfig` | Open config | Ouvrir la configuration |  |
 | `home.pointTool` | Point a tool at this instance | Configurer un outil pour cette instance | **34% longer than English** — check it does not overflow. |
-| `home.signedInAs` | Signed in as {user}. | Connecté en tant que {user}. | **40% longer than English** — check it does not overflow. |
+| `home.greeting` | Hello {user}. | Bonjour {user}. | — |
 | `home.statPublishing` | Accepting publishes | Acceptent les publications |  |
 | `home.statRegistries` | Registries | Registres |  |
 | `home.statYou` | You | Vous |  |

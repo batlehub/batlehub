@@ -87,9 +87,12 @@ const RAMP = new Set([12, 13, 15, 16, 20, 24, 56, 72, 88, 104]);
  * measurement and it needs a distinct assertion, or merging the route lists
  * would have changed what is *covered* without changing what is *observed*.
  */
+// Two steps, following `--t-display`: the proof's own four-step ramp was cut
+// to 56/72 when every page title in the console moved onto this step, and the
+// assertion is "spends the Display step on its subject", not "spends 104px".
+// Transcribed from tokens.css now rather than from the proof's media queries —
+// the proof is the artefact of the decision, the token is the decision.
 const PROOF_DISPLAY_STEPS = [
-  [1140, 104],
-  [880, 88],
   [640, 72],
   [0, 56],
 ];

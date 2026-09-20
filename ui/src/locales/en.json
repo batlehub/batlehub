@@ -773,7 +773,8 @@
     "freshBodyAdmin": "Add a [[registries]] block to config.toml, then reload the configuration. Nothing is cached or served until a registry exists.",
     "freshBodyOther": "An administrator has not configured any registries. Until one exists there is nothing to pull or publish.",
     "freshTitleOther": "This instance has no registries yet",
-    "signedInAs": "Signed in as {user}."
+    "greeting": "Hello {user}.",
+    "greetingNoName": "Hello."
   },
   "homePage": {
     "aCacheAndRegistry": "A cache and registry for the packages your builds pull.",

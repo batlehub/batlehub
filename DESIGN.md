@@ -401,9 +401,14 @@ JetBrains Mono carries no such constraint and uses a conventional
 
 ### Hierarchy
 
-- **Display** (Silkscreen 700, 56px → 72 → 88 → 104 discrete per breakpoint, line-height 0.92,
-  0.02em, uppercase): the one form set at poster scale — the registry name at the top of the sheet.
-  One per view.
+- **Display** (Silkscreen 700, 56px → 72 discrete per breakpoint, line-height 0.92, 0.02em): the
+  page-title step, and the one form set at poster scale — the subject at the top of the sheet, one
+  per view. Every primary destination sets its title here: the home greeting, the catalog's
+  registry, the package sheet's package, the setup guide. Uppercase where the subject has no case
+  of its own (the catalog's registry name); not where it does (a package name, a `user_id`), since
+  Silkscreen is caps-only and the transform would only restate the face.
+  It was 56 → 72 → 88 → 104, authored for the catalog specimen alone; 104px costs two lines to any
+  title that is not one short word, which is what made it a per-page decision instead of a step.
 - **Pixel Medium** (Silkscreen 700, 24px, 0.04em): the `BatleHub.` wordmark only.
 - **Pixel Small** (Silkscreen, 16px): pixel-scale labels inside components — the registry name in a
   list row (0.02em), the primary action's label (0.04em, uppercase), a panel heading, the settings

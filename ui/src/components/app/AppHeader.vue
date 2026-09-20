@@ -100,33 +100,22 @@ function handleLogout() {
            blind redirect there; Phase 4 made `/` a real identity-aware surface
            (RFC 0003 §4.3), so the logo had been skipping past it ever since.
 
-           The mark is the proof's own: a 3×3 dot matrix, which is the display
-           face's pixel drawn at logo scale rather than a stock parcel icon from
-           a different drawing system. Set in Silkscreen at the Pixel-md step,
-           ink not crimson — the accent is one dot, spent where it terminates
-           the word, so the bar holds a single saturated pixel instead of a
-           saturated line of type. -->
+           The mark is the brand mark itself, drawn on the same pixel grid as
+           the display face rather than being a stock parcel icon from another
+           drawing system. It inherits the link's colour (`currentColor`), which
+           is what keeps it right in both renditions — `public/logo.svg` is the
+           standalone twin, and it has to carry its own colour because a favicon
+           inherits nothing. Ink not crimson: the accent is one dot, spent where
+           it terminates the word, so the bar holds a single saturated pixel
+           instead of a saturated line of type. -->
       <RouterLink
         to="/"
         class="flex items-center gap-3 shrink-0 font-display text-sub leading-none tracking-[0.04em] text-foreground transition-colors hover:text-copper sm:text-xl"
       >
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 16 16"
-          aria-hidden="true"
-          fill="currentColor"
-          class="shrink-0"
-        >
-          <rect x="0" y="0" width="4" height="4" />
-          <rect x="6" y="0" width="4" height="4" />
-          <rect x="12" y="0" width="4" height="4" />
-          <rect x="0" y="6" width="4" height="4" />
-          <rect x="6" y="6" width="4" height="4" />
-          <rect x="12" y="6" width="4" height="4" />
-          <rect x="0" y="12" width="4" height="4" />
-          <rect x="6" y="12" width="4" height="4" />
-          <rect x="12" y="12" width="4" height="4" />
+        <svg viewBox="0 0 26 41" aria-hidden="true" fill="currentColor" class="h-6 w-auto shrink-0">
+          <path
+            d="M3 0h2v1h-2zM6 0h2v1h-2zM18 0h2v1h-2zM21 0h2v1h-2zM3 1h2v1h-2zM6 1h2v1h-2zM18 1h2v1h-2zM21 1h2v1h-2zM3 2h5v1h-5zM18 2h5v1h-5zM3 3h5v1h-5zM10 3h2v1h-2zM14 3h2v1h-2zM18 3h5v1h-5zM4 4h4v1h-4zM10 4h2v1h-2zM14 4h2v1h-2zM18 4h4v1h-4zM5 5h2v1h-2zM11 5h1v1h-1zM14 5h1v1h-1zM19 5h2v1h-2zM6 6h14v1h-14zM5 7h16v1h-16zM5 8h7v1h-7zM14 8h7v1h-7zM5 9h16v1h-16zM6 10h14v1h-14zM7 11h12v1h-12zM5 12h1v1h-1zM8 12h1v1h-1zM17 12h1v1h-1zM20 12h1v1h-1zM0 13h26v1h-26zM0 14h26v1h-26zM0 15h2v1h-2zM24 15h2v1h-2zM0 16h2v1h-2zM8 16h4v1h-4zM24 16h2v1h-2zM0 17h2v1h-2zM4 17h3v1h-3zM8 17h4v1h-4zM24 17h2v1h-2zM0 18h2v1h-2zM4 18h3v1h-3zM8 18h4v1h-4zM13 18h3v1h-3zM17 18h4v1h-4zM24 18h2v1h-2zM0 19h2v1h-2zM4 19h3v1h-3zM8 19h1v1h-1zM11 19h1v1h-1zM13 19h3v1h-3zM17 19h4v1h-4zM24 19h2v1h-2zM0 20h2v1h-2zM4 20h3v1h-3zM8 20h1v1h-1zM11 20h1v1h-1zM13 20h1v1h-1zM15 20h1v1h-1zM18 20h4v1h-4zM24 20h2v1h-2zM0 21h2v1h-2zM4 21h3v1h-3zM8 21h4v1h-4zM13 21h1v1h-1zM15 21h1v1h-1zM18 21h4v1h-4zM24 21h2v1h-2zM0 22h2v1h-2zM4 22h3v1h-3zM8 22h4v1h-4zM13 22h3v1h-3zM19 22h4v1h-4zM24 22h2v1h-2zM0 23h2v1h-2zM4 23h3v1h-3zM8 23h4v1h-4zM13 23h3v1h-3zM19 23h4v1h-4zM24 23h2v1h-2zM0 24h2v1h-2zM4 24h3v1h-3zM8 24h4v1h-4zM13 24h3v1h-3zM20 24h6v1h-6zM0 25h2v1h-2zM4 25h3v1h-3zM8 25h4v1h-4zM13 25h3v1h-3zM20 25h6v1h-6zM0 26h26v1h-26zM0 27h26v1h-26zM0 28h2v1h-2zM24 28h2v1h-2zM0 29h2v1h-2zM9 29h3v1h-3zM24 29h2v1h-2zM0 30h2v1h-2zM4 30h4v1h-4zM9 30h3v1h-3zM18 30h3v1h-3zM24 30h2v1h-2zM0 31h2v1h-2zM4 31h4v1h-4zM9 31h3v1h-3zM13 31h4v1h-4zM18 31h3v1h-3zM24 31h2v1h-2zM0 32h2v1h-2zM4 32h4v1h-4zM9 32h3v1h-3zM13 32h4v1h-4zM18 32h3v1h-3zM22 32h1v1h-1zM24 32h2v1h-2zM0 33h2v1h-2zM4 33h1v1h-1zM7 33h1v1h-1zM9 33h3v1h-3zM13 33h4v1h-4zM18 33h3v1h-3zM22 33h1v1h-1zM24 33h2v1h-2zM0 34h2v1h-2zM4 34h1v1h-1zM7 34h1v1h-1zM9 34h3v1h-3zM13 34h1v1h-1zM16 34h1v1h-1zM18 34h3v1h-3zM22 34h1v1h-1zM24 34h2v1h-2zM0 35h2v1h-2zM4 35h4v1h-4zM9 35h3v1h-3zM13 35h1v1h-1zM16 35h1v1h-1zM18 35h3v1h-3zM22 35h1v1h-1zM24 35h2v1h-2zM0 36h2v1h-2zM4 36h4v1h-4zM9 36h3v1h-3zM13 36h4v1h-4zM18 36h3v1h-3zM22 36h1v1h-1zM24 36h2v1h-2zM0 37h2v1h-2zM4 37h4v1h-4zM9 37h3v1h-3zM13 37h4v1h-4zM18 37h3v1h-3zM22 37h1v1h-1zM24 37h2v1h-2zM0 38h2v1h-2zM4 38h4v1h-4zM9 38h3v1h-3zM13 38h4v1h-4zM18 38h3v1h-3zM22 38h1v1h-1zM24 38h2v1h-2zM0 39h26v1h-26zM0 40h26v1h-26z"
+          />
         </svg>
         <span>BatleHub<span class="text-primary">.</span></span>
       </RouterLink>

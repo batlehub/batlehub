@@ -162,7 +162,7 @@ const config = withMermaid(defineConfig({
       "meta",
       {
         property: "og:image",
-        content: (process.env.BASE_URL || "/") + "logo.svg",
+        content: (process.env.BASE_URL || "/") + "banner.png",
       },
     ],
     ["meta", { name: "twitter:card", content: "summary" }],
@@ -179,7 +179,7 @@ const config = withMermaid(defineConfig({
       "meta",
       {
         name: "twitter:image",
-        content: (process.env.BASE_URL || "/") + "logo.svg",
+        content: (process.env.BASE_URL || "/") + "banner.png",
       },
     ],
   ],
@@ -208,7 +208,7 @@ const config = withMermaid(defineConfig({
   // over this one, and that merge is what keeps the shared half from being
   // maintained twice.
   themeConfig: {
-    logo: "/logo.svg",
+    logo: { light: "/logo-ink.svg", dark: "/logo-cream.svg" },
     siteTitle: "BatleHub.",
 
     socialLinks: [

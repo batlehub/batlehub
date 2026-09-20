@@ -59,7 +59,13 @@
   /* Two ramps, because the display face has a constraint the text face does
      not: Silkscreen is drawn on an 8px em, so its square pixel only stays
      square at integer multiples. --t-display is therefore discrete, never
-     clamp() — 10vw lands on the grid at only a handful of viewport widths. */
+     clamp() — 10vw lands on the grid at only a handful of viewport widths.
+
+     Two steps, not four. The ramp was 56 → 72 → 88 → 104, authored for a
+     full-bleed specimen head, and every page title in the console now uses it:
+     at 104px a greeting or a package name with an ordinary number of glyphs is
+     two lines of poster before it says anything. 7× and 9× are what the titles
+     are uniform at. */
   --t-px-sm: 16px; /* 2× */
   --t-px-md: 24px; /* 3× */
   --t-display: 56px; /* 7× */
@@ -82,16 +88,6 @@
   :root {
     --t-display: 72px;
   } /* 9× */
-}
-@media (min-width: 880px) {
-  :root {
-    --t-display: 88px;
-  } /* 11× */
-}
-@media (min-width: 1140px) {
-  :root {
-    --t-display: 104px;
-  } /* 13× */
 }
 
 /* ── Light rendition ──────────────────────────────────────────────────────────

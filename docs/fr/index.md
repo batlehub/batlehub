@@ -1,11 +1,11 @@
 ---
 layout: home
 sourcePath: index.md
-sourceHash: 7211cfa21b239cfc
-
+sourceHash: bb2d450a703a81b0
 hero:
   image:
-    src: /logo.svg
+    light: /logo-ink.svg
+    dark: /logo-cream.svg
     alt: BatleHub
   name: BatleHub
   text: Votre hub de paquets. Proxy, cache et hébergement.

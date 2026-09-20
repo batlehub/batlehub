@@ -1143,8 +1143,8 @@ const {
       <!-- The specimen, as the catalog builds it: the page announces its
            subject at the Display step, and the facts sit under it as a caption.
 
-           DESIGN.md gives Display ("Silkscreen 700, 56 → 72 → 88 → 104 per
-           breakpoint, line-height 0.92, 0.02em") to *the subject at the top of
+           DESIGN.md gives Display ("Silkscreen 700, 56 → 72 per breakpoint,
+           line-height 0.92, 0.02em") to *the subject at the top of
            the sheet, one per view*. This h1 was `text-2xl font-mono` — 24px of
            JetBrains Mono — so the one page dedicated to a single package set its
            name in the reading face at a size the doc reserves for the wordmark,

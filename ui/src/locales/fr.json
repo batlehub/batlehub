@@ -773,7 +773,8 @@
     "freshBodyAdmin": "Ajoutez un bloc [[registries]] dans config.toml, puis rechargez la configuration. Rien n'est mis en cache ni servi tant qu'aucun registre n'existe.",
     "freshBodyOther": "Aucun registre n'a été configuré par un administrateur. Tant qu'il n'en existe pas, il n'y a rien à télécharger ni à publier.",
     "freshTitleOther": "Cette instance n'a encore aucun registre",
-    "signedInAs": "Connecté en tant que {user}."
+    "greeting": "Bonjour {user}.",
+    "greetingNoName": "Bonjour."
   },
   "homePage": {
     "aCacheAndRegistry": "Un cache et un registre pour les paquets que vos builds téléchargent.",

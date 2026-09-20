@@ -65,7 +65,7 @@
      Same class as RFC 0003 §13's `--font-family-*`: a token that generates no
      utility is a token that was never adopted. */
   --text-sub: var(--t-sub); /* 16 — the Silkscreen small step, --t-px-sm's twin */
-  --text-display: var(--t-display); /* 56 → 72 → 88 → 104, discrete per breakpoint */
+  --text-display: var(--t-display); /* 56 → 72, discrete per breakpoint */
 
   --radius-lg: var(--radius);
   --radius-md: var(--radius);
