@@ -18,13 +18,16 @@ Common failure modes, their symptoms, and how to fix them.
 
 **Symptom:** `502 Bad Gateway` when downloading artifacts that should be cached; logs show `InvalidAccessKeyId` or `ExpiredTokenException`.
 
-**Cause:** The S3 credentials in `[storage]` have expired (e.g. a temporary STS token, or a rotated key).
+**Cause:** The S3 credentials the server picked up from its environment have
+expired (e.g. a temporary STS token, or a rotated key). They are never in
+`[storage]` — that block has no credential field.
 
 **Fix:**
 1. Rotate the credentials in your secrets manager.
-2. Update `[storage] access_key_id` and `secret_access_key` in the config file.
-3. Trigger a hot reload: `batlehub-cli admin config reload`.
-   Alternatively, restart the server; the new credentials are picked up at startup.
+2. Update `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` in the server's
+   environment — the Secret behind `env`/`envFrom` under Kubernetes.
+3. Restart the server: the SDK reads the environment at startup, so a config
+   hot reload does not pick up a new key.
 
 For temporary STS tokens, consider switching to an IAM instance role or IRSA (no static credentials needed).
 

@@ -1,0 +1,163 @@
+# The opposite of values-open.yaml, block for block: nothing is served to an
+# unauthenticated caller, nothing is published by anyone but a release pipeline,
+# and four gates stand between a request and the upstream.
+#
+#   helm install batlehub ./helm/batlehub -n batlehub --create-namespace \
+#     -f deploy/helm/values-restricted.yaml
+#
+# Every refusal here is deliberate and every one of them will eventually page
+# someone: a release blocked for being an hour old looks exactly like an outage
+# to whoever is waiting for it. Read each rule before adopting it, and keep
+# bypass_roles = ["admin"] so there is a way through that is not a redeploy.
+replicaCount: 3
+
+config:
+  server:
+    roles: ["proxy"]
+    trusted_proxies: ["10.42.0.0/16"]
+
+  database:
+    type: "postgresql"
+    url: "postgresql://batlehub:changeme@postgres-svc:5432/batlehub"
+    max_connections: 5
+
+  storage:
+    type: "s3"
+    bucket: "batlehub-artifacts"
+    region: "us-east-1"
+
+  cache:
+    type: "redis"
+    url: "redis://redis:6379"
+
+  # No static token at all: every identity comes from the IdP or from the
+  # cluster. There is nothing here to leak, rotate or find in a CI log.
+  auth:
+    - type: "oidc"
+      issuer_url: "https://sso.example.com/application/o/batlehub/"
+      client_id: "batlehub"
+      client_secret: "${OIDC_CLIENT_SECRET}"
+      redirect_uri: "https://batlehub.example.com/api/v1/auth/oidc/callback"
+      scopes: ["openid", "profile", "email", "groups"]
+      user_id_claim: "preferred_username"
+      role_claim: "groups"
+      role_mappings:
+        "platform-admins": "admin"
+        "developers": "user"
+    - type: "kubernetes"
+
+  registries:
+    - type: "npm"
+      name: "npm"
+      rbac:
+        # Not "no anonymous reads by default" — none at all. An unauthenticated
+        # request gets a 401 before any upstream is contacted.
+        anonymous: []
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+      rules:
+        # Nothing published in the last hour is served: the window in which a
+        # compromised release is usually found and yanked upstream.
+        - kind: "release_age_gate"
+          min_age_secs: 3600
+          bypass_roles: ["admin"]
+        # A moving target is not a dependency. Consumers pin.
+        - kind: "deny_latest"
+          bypass_roles: ["admin"]
+        # Refuse, not warn, on a known high-severity vulnerability. Needs the
+        # [vulnerability_scan] background task to have recorded findings —
+        # with no scan behind it this rule has nothing to read.
+        - kind: "cve_gate"
+          min_severity: "high"
+          block: true
+          bypass_roles: ["admin"]
+        # Only packages from the org's own npm scope.
+        - kind: "trusted_publisher"
+          allow: ["@acme"]
+          bypass_roles: ["admin"]
+
+  limits:
+    max_artifact_size_bytes: 104857600   # 100 MiB
+
+  ip_blocking:
+    enabled: true
+    violation_threshold: 5
+    violation_window_secs: 300
+    ban_duration_secs: 86400
+
+  otel:
+    endpoint: "http://otel-collector:4317"
+    service_name: "batlehub"
+
+# No credential in this file: both Secrets come from outside it. See
+# values-external-secrets.yaml for the ExternalSecret that fills them.
+credentials:
+  enabled: true
+  existingSecret: batlehub-credentials
+  key: credentials.toml
+
+env:
+  - name: OIDC_CLIENT_SECRET
+    valueFrom:
+      secretKeyRef:
+        name: batlehub-secrets
+        key: oidc-client-secret
+
+envFrom:
+  - secretRef:
+      name: batlehub-s3-credentials
+
+persistence:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: batlehub
+
+# Only the ingress controller may reach the Service, and only the worker gets
+# out. An empty ingressFrom would render a rule with no `from`, which the
+# NetworkPolicy spec reads as *any source* — naming the controller is the
+# whole point of turning this on.
+networkPolicy:
+  enabled: true
+  ingressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+
+# Scanners hold an artifact until it has a verdict, in a sandboxed pod that is
+# the only thing with egress to the internet.
+worker:
+  enabled: true
+  runtimeClassName: gvisor
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits:   { memory: 4Gi }
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 6
+
+trivy:
+  enabled: true
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  host: batlehub.example.com
+  tls:
+    - secretName: batlehub-tls
+      hosts: ["batlehub.example.com"]

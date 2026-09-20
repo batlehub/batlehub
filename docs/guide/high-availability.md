@@ -89,13 +89,16 @@ bucket = "batlehub-artifacts"
 region = "us-east-1"
 
 # For self-hosted S3 (RustFS):
-# endpoint         = "http://rustfs:9000"
+# endpoint_url     = "http://rustfs:9000"
 # force_path_style = true
-
-# Credentials (omit on AWS with an IAM role):
-# access_key_id     = "AKIAIOSFODNN7EXAMPLE"
-# secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 ```
+
+There is no credential field here: the block takes `bucket`, `region`,
+`prefix`, `endpoint_url` and `force_path_style`, and nothing else. Keys are not
+rejected, they are ignored — an `access_key_id` written here looks like a
+bucket policy problem at the first cache miss. Credentials come from the
+standard AWS SDK chain: the instance or pod role, or `AWS_ACCESS_KEY_ID` /
+`AWS_SECRET_ACCESS_KEY` in the process environment.
 
 ### Database connection pool {#config-db}
 

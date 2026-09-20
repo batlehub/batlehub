@@ -142,6 +142,22 @@ export const sidebar = {
       ],
     },
   ],
+  // I am installing it, by one method. The hub page that chooses between them
+  // stays in `/guide/` — listing it here too would file one page under two
+  // sidebars, which is the thing `check-audience.mjs` refuses.
+  "/guide/install/": [
+    {
+      text: "Installation",
+      items: [
+        { text: "Docker Compose", link: "/guide/install/compose" },
+        { text: "Container image", link: "/guide/install/container" },
+        { text: "Pre-built binary", link: "/guide/install/binary" },
+        { text: "From source", link: "/guide/install/source" },
+        { text: "Helm chart", link: "/guide/install/helm" },
+      ],
+    },
+  ],
+
   // I run this server.
   "/guide/": [
     {

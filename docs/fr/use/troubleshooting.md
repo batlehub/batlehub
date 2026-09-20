@@ -1,6 +1,6 @@
 ---
 sourcePath: use/troubleshooting.md
-sourceHash: 86d863a083e7b080
+sourceHash: 96347395794ee6c2
 ---
 
 # Dépannage
@@ -26,14 +26,17 @@ des requêtes, ou une requête lente monopolise des connexions.
 **Symptôme :** `502 Bad Gateway` au téléchargement d'artefacts censés être en
 cache ; les logs montrent `InvalidAccessKeyId` ou `ExpiredTokenException`.
 
-**Cause :** les identifiants S3 de `[storage]` ont expiré (un token STS
-temporaire, ou une clé qui a tourné).
+**Cause :** les identifiants S3 que le serveur a lus dans son environnement ont
+expiré (un token STS temporaire, ou une clé qui a tourné). Ils ne sont jamais
+dans `[storage]` : ce bloc n'a pas de champ d'identifiant.
 
 **Correction :**
 1. Faites tourner les identifiants dans votre gestionnaire de secrets.
-2. Mettez à jour `[storage] access_key_id` et `secret_access_key` dans le fichier de configuration.
-3. Déclenchez un rechargement à chaud : `batlehub-cli admin config reload`.
-   À défaut, redémarrez le serveur ; les nouveaux identifiants sont pris au démarrage.
+2. Mettez à jour `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` dans
+   l'environnement du serveur — le Secret derrière `env`/`envFrom` sous
+   Kubernetes.
+3. Redémarrez le serveur : le SDK lit l'environnement au démarrage, un
+   rechargement à chaud de la configuration ne prend donc pas la nouvelle clé.
 
 Pour des tokens STS temporaires, envisagez plutôt un rôle IAM d'instance ou
 IRSA : plus aucun identifiant statique.

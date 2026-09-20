@@ -27,7 +27,7 @@ Splitting the roles is what the chart's `worker.enabled` does, and it is worth
 doing for two reasons. The scanner toolchains — bubblewrap, `postmortem`, the
 Trivy client, optionally GuardDog — live only in the worker image, and only the
 worker needs egress to upstream artifacts, the Trivy server and Rekor. See
-[Installation](/guide/installation) for the chart values and
+[the Helm chart](/guide/install/helm) for the chart values and
 [What leaves this instance](/operations/egress) for the egress.
 
 ## How a job reaches the queue

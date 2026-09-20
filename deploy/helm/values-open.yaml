@@ -1,0 +1,81 @@
+# Open bar: no identity required for anything, including publishing.
+#
+# This is a lab fixture — a demo, a workshop, a CI sandbox that is thrown away
+# at the end of the day. Anyone who can reach the Service can publish, overwrite
+# and yank a release, and there is no audit trail worth the name because there
+# is no identity to record. Do not put this on a network you do not own.
+#
+#   helm install batlehub ./helm/batlehub -n batlehub --create-namespace \
+#     -f deploy/helm/values-open.yaml
+#
+# Its opposite, block for block, is values-restricted.yaml.
+replicaCount: 1
+
+config:
+  database:
+    type: "postgresql"
+    url: "postgresql://batlehub:changeme@postgres-svc:5432/batlehub"
+
+  # Still one admin token: the console, the config editor and every
+  # /api/v1/admin route need a role, and no role comes from an anonymous
+  # request. "Open" is about the registries, not about the instance.
+  auth:
+    - type: "token"
+      tokens:
+        - value: "change-me-admin-token"
+          role: "admin"
+          user_id: "admin"
+
+  registries:
+    # hybrid: reads fall through to the upstream, writes land locally.
+    - type: "npm"
+      name: "npm"
+      mode: "hybrid"
+      # Explicit, because hybrid mode refuses to start without one: a registry
+      # that both serves local releases and falls through needs to be told
+      # where "through" is, rather than inheriting the kind's default.
+      upstreams: ["https://registry.npmjs.org"]
+      rbac:
+        # `"*"` expands to the read verbs only (RFC 0015 §10 rule 3), so the
+        # write verbs are named one by one — that expansion is the whole reason
+        # an open-bar file cannot be written as `anonymous: ["*"]`.
+        anonymous:
+          - "releases:read"
+          - "releases:list"
+          - "source:read"
+          - "catalogue:browse"
+          - "releases:publish"
+          - "releases:overwrite"
+          - "releases:yank"
+        user: ["*"]
+        admin: ["*"]
+
+    - type: "cargo"
+      name: "cargo"
+      mode: "hybrid"
+      upstreams: ["https://crates.io"]
+      rbac:
+        anonymous:
+          - "releases:read"
+          - "releases:list"
+          - "source:read"
+          - "catalogue:browse"
+          - "releases:publish"
+          - "releases:overwrite"
+          - "releases:yank"
+        user: ["*"]
+        admin: ["*"]
+
+  # No [[registries.rules]] anywhere: no age gate, no deny_latest, no CVE gate.
+  # Nothing stands between a request and the upstream.
+
+persistence:
+  enabled: true
+  size: 20Gi
+
+# No NetworkPolicy, no ingress TLS block, no limits, no ip_blocking. Every one
+# of those is present in values-restricted.yaml.
+ingress:
+  enabled: true
+  className: nginx
+  host: batlehub.lab.example.com

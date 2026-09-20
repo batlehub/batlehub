@@ -1,0 +1,241 @@
+# Every registry kind BatleHub supports, one [[registries]] block each, with a
+# read-only RBAC block they all share. The point of this file is coverage: it is
+# the shape of a full instance, not a recommendation to run 27 registries.
+#
+#   helm install batlehub ./helm/batlehub -n batlehub --create-namespace \
+#     -f deploy/helm/values-all-registries.yaml
+#
+# Each kind has a page of its own under docs/registries/ with the client
+# snippet, what it proxies and what it cannot. Upstreams are omitted wherever
+# the kind has a default; where one is named here, the kind has none.
+replicaCount: 1
+
+config:
+  database:
+    type: "postgresql"
+    url: "postgresql://batlehub:changeme@postgres-svc:5432/batlehub"
+
+  auth:
+    - type: "token"
+      tokens:
+        - value: "my-admin-token"
+          role: "admin"
+          user_id: "admin"
+
+  registries:
+    # ── Source hosting ──
+    - type: "github"
+      name: "github"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "forgejo"
+      name: "forgejo"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "gitlab"
+      name: "gitlab"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    # ── Language package managers ──
+    - type: "npm"
+      name: "npm"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "cargo"
+      name: "cargo"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "goproxy"
+      name: "go"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "maven"
+      name: "maven"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "pypi"
+      name: "pypi"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "conda"
+      name: "conda"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "composer"
+      name: "composer"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "rubygems"
+      name: "rubygems"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "nuget"
+      name: "nuget"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "terraform"
+      name: "terraform"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "galaxy"
+      name: "galaxy"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    # ── Editor extensions ──
+    - type: "openvsx"
+      name: "openvsx"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "vscode-marketplace"
+      name: "vscode"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "jetbrains-marketplace"
+      name: "jbmarket"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    # ── OS / system packages ──
+    - type: "deb"
+      name: "deb"
+      upstreams:
+        - "http://deb.debian.org/debian"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "rpm"
+      name: "rpm"
+      upstreams:
+        - "https://dl.fedoraproject.org/pub/fedora/linux"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "pacman"
+      name: "pacman"
+      upstreams:
+        - "https://geo.mirror.pkgbuild.com"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "apk"
+      name: "apk"
+      upstreams:
+        - "https://dl-cdn.alpinelinux.org/alpine"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    # ── Binaries, mirrors and toolchains ──
+    - type: "jetbrains"
+      name: "jetbrains"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "generic"
+      name: "generic"
+      upstreams:
+        - "https://download.example.com"
+      # A generic mirror has no protocol to constrain it, so the allowlist is
+      # mandatory — "**" mirrors the whole upstream, deliberately.
+      path_allow: ["releases/**"]
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "nodedist"
+      name: "nodedist"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "sdkman"
+      name: "sdkman"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "rustup"
+      name: "rustup"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    # ── Build caches ──
+    - type: "nix"
+      name: "nix"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+persistence:
+  enabled: true
+  size: 100Gi
+
+ingress:
+  enabled: true
+  className: nginx
+  host: batlehub.example.com

@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/high-availability.md
-sourceHash: 877447548e408fce
+sourceHash: 876e0b9a9802ae9f
 ---
 
 # Haute disponibilité
@@ -110,13 +110,17 @@ bucket = "batlehub-artifacts"
 region = "us-east-1"
 
 # Pour un S3 auto-hébergé (RustFS) :
-# endpoint         = "http://rustfs:9000"
+# endpoint_url     = "http://rustfs:9000"
 # force_path_style = true
-
-# Identifiants (à omettre sur AWS avec un rôle IAM) :
-# access_key_id     = "AKIAIOSFODNN7EXAMPLE"
-# secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 ```
+
+Il n'y a aucun champ d'identifiant ici : le bloc accepte `bucket`, `region`,
+`prefix`, `endpoint_url` et `force_path_style`, et rien d'autre. Les clés
+inconnues ne sont pas refusées, elles sont ignorées — un `access_key_id` écrit
+là ressemble à un problème de politique de bucket au premier défaut de cache.
+Les identifiants viennent de la chaîne standard du SDK AWS : le rôle de
+l'instance ou du pod, ou `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` dans
+l'environnement du processus.
 
 ### Le pool de connexions à la base {#config-db}
 

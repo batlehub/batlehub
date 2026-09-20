@@ -19,12 +19,13 @@ bucket = "batlehub-artifacts"
 region = "us-east-1"
 
 # For self-hosted S3 (RustFS): set a custom endpoint
-# endpoint = "http://rustfs:9900"
-
-# Credentials (omit to use IAM role / instance profile on AWS)
-# access_key_id     = "AKIAIOSFODNN7EXAMPLE"
-# secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+# endpoint_url     = "http://rustfs:9900"
+# force_path_style = true
 ```
+
+The block takes no credentials, and an unknown key here is ignored rather than
+refused. They come from the AWS SDK chain — an IAM role, or
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` in the environment.
 
 ### Multi-backend storage
 

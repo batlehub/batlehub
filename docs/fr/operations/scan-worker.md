@@ -1,7 +1,7 @@
 ---
 title: Le worker d'analyse
 sourcePath: operations/scan-worker.md
-sourceHash: c62e392f2459ad0d
+sourceHash: cd05789eb4328a24
 ---
 
 # Le worker d'analyse
@@ -30,7 +30,7 @@ Séparer les rôles est ce que fait `worker.enabled` dans le chart, et cela vaut
 la peine pour deux raisons. Les outils d'analyse — bubblewrap, `postmortem`, le
 client Trivy, éventuellement GuardDog — ne vivent que dans l'image du worker, et
 seul le worker a besoin de sortir vers les artefacts amont, le serveur Trivy et
-Rekor. Voir [Installation](/fr/guide/installation) pour les valeurs du chart et
+Rekor. Voir [le chart Helm](/fr/guide/install/helm) pour les valeurs du chart et
 [Ce qui sort de cette instance](/fr/operations/egress) pour les flux sortants.
 
 ## Comment un travail arrive dans la file

@@ -53,3 +53,66 @@ tasks:
     cmds:
       - helm dependency build helm/batlehub
       - helm lint helm/batlehub
+
+  # ── The example values files (deploy/helm/) ──────────────────────────────────
+  # Seven complete `-f` files, referenced one by one from
+  # docs/guide/install/helm.md. A values file that no longer renders — a key the
+  # chart dropped, a config block the server stopped accepting — is a worse
+  # defect than a stale paragraph: it is copied verbatim and fails in someone
+  # else's cluster, not here.
+  #
+  # Two failures are possible and only the second is interesting: the chart
+  # refusing to template it, and the *rendered* config.toml being something the
+  # server will not load. `explain-config` is what catches the second, and it is
+  # the reason this runs the binary rather than stopping at `helm template`.
+
+  helm:examples:
+    desc: Every deploy/helm/values-*.yaml renders and its config.toml loads
+    silent: true
+    cmds:
+      - task: helm:examples:check
+      - |
+        set -euo pipefail
+        tmp=$(mktemp -d)
+        trap 'rm -rf "$tmp"' EXIT
+        # Built once: `cargo run` per file would re-check the workspace seven times.
+        cargo build --quiet -p batlehub-server
+        bin=$(cargo metadata --format-version 1 --no-deps \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')/debug/batlehub
+        for f in deploy/helm/values-*.yaml; do
+          helm template batlehub ./helm/batlehub -f "$f" > "$tmp/rendered.yaml"
+          python3 - "$tmp/rendered.yaml" "$tmp/config.toml" <<'PY'
+        import sys, yaml
+        for d in yaml.safe_load_all(open(sys.argv[1])):
+            if d and d.get("kind") == "Secret" and "config.toml" in (d.get("stringData") or {}):
+                open(sys.argv[2], "w").write(d["stringData"]["config.toml"])
+                break
+        else:
+            sys.exit("no config.toml Secret rendered")
+        PY
+          # The placeholders the examples deliberately leave to the environment.
+          out=$(OIDC_CLIENT_SECRET=placeholder "$bin" --config "$tmp/config.toml" explain-config 2>&1) || {
+            echo "$f: the rendered config does not load" >&2
+            echo "$out" >&2
+            exit 1
+          }
+          # explain-config exits 0 on a config that loads with warnings, so the
+          # `!!` lines are read rather than the status code.
+          if echo "$out" | grep -q '!!'; then
+            echo "$f: the rendered config loads with warnings" >&2
+            echo "$out" | grep '!!' >&2
+            exit 1
+          fi
+          echo "  ok  $f"
+        done
+        echo "every example values file renders and loads"
+
+  helm:examples:sync:
+    desc: Write each deploy/helm values file back into the recipe that names it
+    cmds:
+      - python3 .tasks/scripts/helm_examples_sync.py
+
+  helm:examples:check:
+    desc: Fail if an inline recipe has drifted from the values file it names
+    cmds:
+      - python3 .tasks/scripts/helm_examples_sync.py --check

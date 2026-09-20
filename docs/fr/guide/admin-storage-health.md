@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/admin-storage-health.md
-sourceHash: 08a75e829b265120
+sourceHash: 0e15f14cef0693eb
 ---
 
 # Stockage et santé
@@ -24,12 +24,13 @@ bucket = "batlehub-artifacts"
 region = "us-east-1"
 
 # Pour un S3 auto-hébergé (RustFS) : déclarez un endpoint personnalisé
-# endpoint = "http://rustfs:9900"
-
-# Identifiants (à omettre pour utiliser le rôle IAM ou le profil d'instance sur AWS)
-# access_key_id     = "AKIAIOSFODNN7EXAMPLE"
-# secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+# endpoint_url     = "http://rustfs:9900"
+# force_path_style = true
 ```
+
+Le bloc n'accepte aucun identifiant, et une clé inconnue y est ignorée plutôt
+que refusée. Ils viennent de la chaîne du SDK AWS — un rôle IAM, ou
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` dans l'environnement.
 
 ### Stockage multi-backend
 

@@ -1,0 +1,51 @@
+# The smallest thing that works: one replica, artifacts on a PVC, metadata
+# cached in the process. PostgreSQL is the only service to bring.
+#
+#   helm install batlehub ./helm/batlehub -n batlehub --create-namespace \
+#     -f deploy/helm/values-minimal.yaml
+#
+# Documented at docs/guide/install/helm.md § Setup 1.
+replicaCount: 1
+
+config:
+  database:
+    type: "postgresql"
+    url: "postgresql://batlehub:changeme@postgres-svc:5432/batlehub"
+
+  auth:
+    - type: "token"
+      tokens:
+        - value: "my-admin-token"
+          role: "admin"
+          user_id: "admin"
+
+  registries:
+    - type: "npm"
+      name: "npm"
+      rbac:
+        anonymous: ["releases:read", "source:read"]
+        user: ["releases:read", "source:read"]
+        admin: ["*"]
+
+    - type: "cargo"
+      name: "internal"
+      mode: "local"
+      rbac:
+        user: ["source:read"]
+        admin: ["*"]
+
+# No [cache] block at all: absent means in-memory, which is correct for one
+# replica and wrong for two.
+
+persistence:
+  enabled: true
+  size: 50Gi
+
+ingress:
+  enabled: true
+  className: nginx
+  host: batlehub.example.com
+  tls:
+    - secretName: batlehub-tls
+      hosts:
+        - batlehub.example.com

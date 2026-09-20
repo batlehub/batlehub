@@ -148,6 +148,19 @@ export const sidebar = {
   ],
 
   // J'exploite ce serveur.
+  "/fr/guide/install/": [
+    {
+      text: "Installation",
+      items: [
+        { text: "Docker Compose", link: "/fr/guide/install/compose" },
+        { text: "Image de conteneur", link: "/fr/guide/install/container" },
+        { text: "Binaire précompilé", link: "/fr/guide/install/binary" },
+        { text: "Depuis les sources", link: "/fr/guide/install/source" },
+        { text: "Chart Helm", link: "/fr/guide/install/helm" },
+      ],
+    },
+  ],
+
   "/fr/guide/": [
     {
       text: "Pour commencer",
