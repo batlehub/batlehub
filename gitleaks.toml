@@ -64,4 +64,10 @@ regexes = [
     # which is two files now and was one when this was a path entry, so it is
     # matched on the value instead.
     '''perf-user-token''',
+    # The Vault path the External Secrets example reads from, as the
+    # `remoteRef.key` of three ExternalSecret manifests in
+    # `deploy/helm/values-external-secrets.yaml`. It is where a secret lives,
+    # not a secret: `generic-api-key` reads `key: batlehub/prod` as an
+    # assignment and the slash pushes it over the entropy floor.
+    '''batlehub/prod''',
 ]

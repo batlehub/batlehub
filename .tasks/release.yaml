@@ -1,11 +1,12 @@
 version: "3"
 
-# The release version is written in six places, and they have to agree: the
+# The release version is written in seven places, and they have to agree: the
 # Rust workspace (which every crate inherits with `version.workspace = true`,
 # and which the binary reports at `/livez`), the lockfile that records those
-# crates, the two pnpm projects, and the chart — twice, as `version` (the
-# chart's own) and `appVersion` (the image tag it deploys). The chart README
-# carries both in a badge and is generated, so it moves with them.
+# crates, the two pnpm projects, the checked-in OpenAPI spec, and the chart —
+# twice, as `version` (the chart's own) and `appVersion` (the image tag it
+# deploys). The chart README carries both in a badge and is generated, so it
+# moves with them.
 #
 # `cog bump` calls `version:set` as its pre-bump hook (see cog.toml), so the
 # tag and the files it points at can never disagree. Run it by hand for a
@@ -38,6 +39,12 @@ tasks:
         sed -i '0,/"version": ".*"/s//"version": "'"$v"'"/' ui/package.json
         sed -i '0,/"version": ".*"/s//"version": "'"$v"'"/' docs/package.json
 
+        # `info.version` comes from the workspace version via utoipa, so this is
+        # the edit `task dump-spec` would produce — done inline so a release cut
+        # does not need a running server. Missed until 1.4.0, which is why the
+        # spec shipped 1.2.0 through the 1.3.0 release.
+        sed -i '0,/"version": ".*"/s//"version": "'"$v"'"/' ui/openapi.json
+
         sed -i 's/^version: .*/version: '"$v"'/; s/^appVersion: .*/appVersion: "'"$v"'"/' helm/batlehub/Chart.yaml
 
         # Rewrites the seven workspace entries in Cargo.lock and nothing else.
@@ -48,7 +55,7 @@ tasks:
       - task: version:check
 
   version:check:
-    desc: Fail if the six version declarations disagree
+    desc: Fail if the seven version declarations disagree
     silent: true
     cmds:
       - |
@@ -57,13 +64,15 @@ tasks:
         lock_v=$(sed -n '/^name = "batlehub-server"$/{n;s/^version = "\(.*\)"$/\1/p;}' Cargo.lock)
         ui_v=$(node -p 'require("./ui/package.json").version')
         docs_v=$(node -p 'require("./docs/package.json").version')
+        spec_v=$(node -p 'require("./ui/openapi.json").info.version')
         chart_v=$(sed -n 's/^version: //p' helm/batlehub/Chart.yaml)
         app_v=$(sed -n 's/^appVersion: "\(.*\)"$/\1/p' helm/batlehub/Chart.yaml)
         readme_v=$(sed -n 's/.*badge\/AppVersion-\([0-9][^-]*\)-.*/\1/p' helm/batlehub/README.md | head -1)
 
         fail=0
         for pair in "Cargo.toml:$cargo_v" "Cargo.lock:$lock_v" "ui/package.json:$ui_v" \
-                    "docs/package.json:$docs_v" "Chart.yaml version:$chart_v" \
+                    "docs/package.json:$docs_v" "ui/openapi.json:$spec_v" \
+                    "Chart.yaml version:$chart_v" \
                     "Chart.yaml appVersion:$app_v" "chart README badge:$readme_v"; do
           where=${pair%:*}; got=${pair##*:}
           if [ "$got" != "$cargo_v" ]; then

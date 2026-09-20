@@ -12,6 +12,71 @@ Nothing yet.
 
 ---
 
+## [1.4.0] - 2026-09-20
+
+A documentation release. No registry kind, no request path and no
+configuration key moved: what changed is the page someone installs from, the
+files they install with, and the mark on the front of it.
+
+### Added
+
+- **Every Helm setup the documentation shows is a file you can install from.**
+  `deploy/helm/` carries seven complete values files — `minimal`,
+  `production`, `open`, `restricted`, `multi-replica`, `all-registries` and
+  `external-secrets` — each a whole `my-values.yaml` rather than a fragment, so
+  `helm install -f deploy/helm/values-production.yaml` is the documented path
+  and not a transcription exercise.
+
+  Two gates keep them honest, because a values file that stopped templating is
+  copied verbatim and fails in someone else's cluster rather than in this one.
+  `task helm:examples` renders each file against the chart, extracts the
+  `config.toml` its Secret carries and feeds that to the server's own
+  `explain-config` — reading the `!!` lines rather than the exit status, which
+  is `0` for a config that loads with warnings. `task helm:examples:check`
+  compares the inline recipes on the Helm page against the files they name: the
+  file is canonical, and the page is written from it by
+  `task helm:examples:sync`. Two places carrying the same YAML is the
+  arrangement this repository keeps finding drifted — the two documentation
+  trees RFC 0005 merged, the token copy nothing read.
+
+- **One installation page per method.** `guide/install/` splits what was a
+  578-line `installation.md` into `compose`, `container`, `binary`, `source`
+  and `helm`, under a sidebar of their own. `installation.md` is 58 lines now
+  and is the page that chooses between them — listed in `/guide/` alone, so no
+  page sits under two sidebars, which is what `check-audience.mjs` refuses.
+  The French tree has the same five pages.
+
+### Changed
+
+- **A new logo**, in three renditions — `logo.svg`, `logo-ink.svg` and
+  `logo-cream.svg` — with a redrawn banner, across the console header, the
+  documentation home and the README.
+
+- **The display ramp is two steps, not four.** `--t-display` was
+  56 → 72 → 88 → 104 px, authored for a full-bleed specimen head; every page
+  title in the console uses that ramp now, and at 104 px a greeting or a
+  package name with an ordinary number of glyphs is two lines of poster before
+  it says anything. 7× and 9× are what the titles are uniform at. Silkscreen is
+  drawn on an 8 px em, so the ramp stays discrete rather than becoming a
+  `clamp()`.
+
+- **The README is 92 lines rather than 496.** It is the quick start and a table
+  of where everything else lives; the documentation site is the one home.
+
+### Fixed
+
+- **The secret scan read a Vault path as a credential.** The
+  `remoteRef.key: batlehub/prod` of the three ExternalSecret manifests in the
+  External Secrets example is where a secret lives, not a secret —
+  `generic-api-key` reads `key: <value>` as an assignment and the slash carries
+  it over the entropy floor. Allowlisted by value rather than by file, like the
+  entries above it: the scan walks full history, so an inline `gitleaks:allow`
+  would fix the working tree and leave the commit that introduced the line
+  flagged forever, and allowlisting the file would let a real credential pasted
+  into it pass.
+
+---
+
 ## [1.3.0] - 2026-09-19
 
 Four registry kinds, and the machinery that found out they worked. Every kind
@@ -1233,7 +1298,8 @@ First stable release.
 
 ---
 
-[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.3.0...HEAD
+[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.4.0...HEAD
+[1.4.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.3.0...v1.4.0
 [1.3.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.2.0...v1.3.0
 [1.2.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.1.0...v1.2.0
 [1.1.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.0.0...v1.1.0
