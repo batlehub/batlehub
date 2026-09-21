@@ -133,7 +133,7 @@ tracing-actix-web = { version = "0.7", default-features = false }
 tracing-opentelemetry = "0.33"
 opentelemetry = "0.32"
 opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic"] }
+opentelemetry-otlp = { version = "0.33", features = ["grpc-tonic"] }
 
 # Database — default-features = false to avoid sqlx-macros → sqlx-macros-core →
 # sqlx-mysql → rsa (RUSTSEC-2023-0071, no upstream fix available).
