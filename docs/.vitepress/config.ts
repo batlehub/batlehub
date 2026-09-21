@@ -1,11 +1,18 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vitepress";
+import { type HeadConfig, defineConfig } from "vitepress";
 import { withMermaid } from "vitepress-plugin-mermaid";
 
 // The banner, the table on /rfc/ and the sidebar in `nav/en.ts` all quote the
 // same header rows, so the parser lives in one place — `build/rfc-meta.mjs`,
 // shared with `task rfc:index` and `task rfc:status`.
 import { parseFilename, rfcStatus } from "../build/rfc-meta.mjs";
+
+// The per-page meta description, derived from the page's own first paragraph.
+// Its own header says why it is derived rather than written into frontmatter —
+// the short version is `check-i18n.mjs`.
+import { extractDescription } from "../build/page-description.mjs";
 
 // One module per locale, holding that locale's navbar and sidebars — every
 // navigation label the site has. They are imported rather than written inline
@@ -22,6 +29,12 @@ import { nav as navFr, sidebar as sidebarFr } from "./nav/fr.ts";
 //
 // Diagram *syntax* is not checked by the build (the plugin renders on the
 // client), which is why `task docs:mermaid` parses every fence separately.
+const siteUrl =
+  (process.env.SITE_ORIGIN || "https://batleforc.git.batleforc.fr").replace(
+    /\/$/,
+    "",
+  ) + (process.env.BASE_URL || "/");
+
 const config = withMermaid(defineConfig({
   appearance: "dark",
   title: "BatleHub",
@@ -50,7 +63,81 @@ const config = withMermaid(defineConfig({
   // about the RFCs — a listing and a build plan — and neither has a status of
   // its own to quote, so they are recognised by the same filename rule
   // `task rfc:index` uses to decide what is an RFC at all.
+  // The site's own address. Every social crawler and every canonical link
+  // wants an absolute URL, and a root-relative `/batlehub/banner.png` is
+  // resolved by almost none of them — which is why the og:image below carries
+  // the origin and the one in `head` used not to. `SITE_ORIGIN` is an override
+  // for a preview page published elsewhere; `BASE_URL` already carries the
+  // publish prefix (see `.forgejo/workflows/website.yaml`).
+  sitemap: { hostname: siteUrl },
+
+  // The per-page half of the social tags. `head` below is static, so before
+  // this hook every page of the site announced itself to a crawler, a chat
+  // unfurl and a search result as the home page: one title, one description,
+  // no URL of its own. `transformHead` is the only place that sees the
+  // resolved page, and `ctx.title`/`ctx.description` are the values VitePress
+  // itself computed — frontmatter first, then the locale's description, then
+  // the site's — so the fallback chain is not re-implemented here.
+  transformHead(ctx) {
+    const page = ctx.pageData.relativePath
+      .replace(/(^|\/)index\.md$/, "$1")
+      .replace(/\.md$/, ".html");
+    const url = siteUrl + page;
+    const image = siteUrl + "banner.png";
+    // The locale is decided by the path, not by `siteData.lang`: French is
+    // served under `/fr/` and that prefix is the whole of the distinction.
+    const locale = page.startsWith("fr/") ? "fr_FR" : "en_US";
+    // hreflang, and only where the pair actually exists. VitePress does not
+    // fall back: a page present in English and absent in French is a 404 under
+    // `/fr/` (see `locales` below), so an unconditional alternate would point
+    // half the site's crawlers at a missing page — worse than declaring
+    // nothing. `existsSync` on the counterpart source is the whole test.
+    const srcDir = ctx.siteConfig.srcDir;
+    const [en, fr] = page.startsWith("fr/")
+      ? [page.slice("fr/".length), page]
+      : [page, `fr/${page}`];
+    const source = (p: string) =>
+      join(srcDir, p.replace(/\.html$/, ".md").replace(/\/$/, "/index.md") || "index.md");
+    const bothExist = existsSync(source(en)) && existsSync(source(fr));
+
+    return [
+      ["link", { rel: "canonical", href: url }],
+      ...(bothExist
+        ? ([
+            ["link", { rel: "alternate", hreflang: "en", href: siteUrl + en }],
+            ["link", { rel: "alternate", hreflang: "fr", href: siteUrl + fr }],
+            [
+              "link",
+              { rel: "alternate", hreflang: "x-default", href: siteUrl + en },
+            ],
+          ] as HeadConfig[])
+        : []),
+      ["meta", { property: "og:url", content: url }],
+      ["meta", { property: "og:locale", content: locale }],
+      ["meta", { property: "og:title", content: ctx.title }],
+      ["meta", { property: "og:description", content: ctx.description }],
+      ["meta", { property: "og:image", content: image }],
+      ["meta", { name: "twitter:title", content: ctx.title }],
+      ["meta", { name: "twitter:description", content: ctx.description }],
+      ["meta", { name: "twitter:image", content: image }],
+    ];
+  },
+
   transformPageData(pageData, ctx) {
+    // Without this every page inherits the site description — 211 pages
+    // claiming to be the home page, which is the one duplicate a crawler
+    // answers by discarding the tag. A `description:` in frontmatter still
+    // wins; this only fills the silence.
+    if (!pageData.frontmatter.description) {
+      const derived = extractDescription(
+        readFileSync(join(ctx.siteConfig.srcDir, pageData.filePath), "utf-8"),
+      );
+      // A `layout: home` page has no prose to derive from, and its hero
+      // tagline is the sentence someone already wrote for exactly this job.
+      pageData.description =
+        derived || pageData.frontmatter.hero?.tagline || pageData.description;
+    }
+
     const inRfc = pageData.filePath.startsWith("rfc/");
     if (inRfc && parseFilename(pageData.filePath.slice("rfc/".length))) {
       pageData.frontmatter.rfcStatus = rfcStatus(
@@ -149,39 +236,11 @@ const config = withMermaid(defineConfig({
     ["meta", { name: "theme-color", content: "#dc2626" }],
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { property: "og:site_name", content: "BatleHub" }],
-    ["meta", { property: "og:title", content: "BatleHub" }],
-    [
-      "meta",
-      {
-        property: "og:description",
-        content:
-          "Your package hub. Proxy, cache, and host npm, Cargo, Maven, PyPI, NuGet, Go, RubyGems, Terraform, and more.",
-      },
-    ],
-    [
-      "meta",
-      {
-        property: "og:image",
-        content: (process.env.BASE_URL || "/") + "banner.png",
-      },
-    ],
+    // The card type is the one social tag that is a property of the *image*
+    // rather than of the page: banner.png is 915×739, and `summary_large_image`
+    // crops to 1.91:1, so the large card would cut it. Everything else a
+    // crawler reads is per-page and absolute — see `transformHead` above.
     ["meta", { name: "twitter:card", content: "summary" }],
-    ["meta", { name: "twitter:title", content: "BatleHub" }],
-    [
-      "meta",
-      {
-        name: "twitter:description",
-        content:
-          "Your package hub. Proxy, cache, and host npm, Cargo, Maven, PyPI, NuGet, Go, RubyGems, Terraform, and more.",
-      },
-    ],
-    [
-      "meta",
-      {
-        name: "twitter:image",
-        content: (process.env.BASE_URL || "/") + "banner.png",
-      },
-    ],
   ],
 
   markdown: {

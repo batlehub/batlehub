@@ -204,6 +204,16 @@ tasks:
       - node --test build/config-generator.test.ts
       - node build/config-generator-fixtures.ts
 
+  # The extractor behind every page's meta description. Its own header says why
+  # the descriptions are derived rather than written into each page's
+  # frontmatter; this is the check that the derivation still picks prose over
+  # tables, fences and headings.
+  docs:meta:
+    desc: Test the per-page meta description extractor
+    dir: docs
+    cmds:
+      - node --test build/page-description.test.mjs
+
   docs:generator:check:
     desc: Fail if the config generator's fixtures have drifted from the generator
     dir: docs
@@ -229,6 +239,7 @@ tasks:
       - task: docs:readme-coverage:check
       - task: docs:endpoints:check
       - task: docs:generator:check
+      - task: docs:meta
       # The /rfc/ table and sidebar, generated from the documents themselves —
       # see .tasks/rfc.yaml. Ahead of docs:links because a new RFC missing from
       # the sidebar reads as an orphan there, and "run task rfc:index" is a more
