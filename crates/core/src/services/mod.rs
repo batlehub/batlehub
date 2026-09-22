@@ -5,6 +5,7 @@ pub mod blocking;
 pub mod bundle;
 pub mod cache_control;
 pub mod csv;
+pub mod devfile;
 pub mod document_cache;
 pub mod escaping;
 pub mod eviction;

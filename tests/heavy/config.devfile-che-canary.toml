@@ -1,0 +1,39 @@
+# Server configuration for the manual Che canary of RFC 0035 §11 q3
+# (tests/heavy/devfile_che_canary.sh). Listens on every interface, because the
+# client is Eclipse Che's dashboard backend, in another pod: it reaches this
+# server through the workspace's own Service, the way it would reach any
+# external devfile registry.
+
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-devfile-che-canary-storage"
+
+# No `hosts`: Che keeps a path prefix (`resolveLinks` joins the registry URL
+# it was given), which is the thing this canary observes. The warning the
+# server logs for it concerns registry-library, which is not the client here.
+[[registries]]
+type = "devfile"
+name = "devfile-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list"]
+admin = ["*"]

@@ -45,6 +45,11 @@ Every request goes through `ProxyService::handle()`, which:
 - [ ] `crates/web/src/lib.rs` — import handler, register route(s), update `ApiDoc` tags
 - [ ] `ui/src/config/registryTypes.ts` — add a `RegistryTypeDef` entry, and put
       every line of its snippets on `docs/registries/<id>.md` *(see §10)*
+- [ ] `docs/.vitepress/components/configToml.ts` and `ConfigGenerator.vue` — the
+      docs site's config generator: a `RegistryType` member, a `defaultUpstream`
+      entry, `PROXY_ONLY_TYPES`/`PATH_ADDRESSED_TYPES` as the server says, and an
+      `<option>` (`docs/build/config-generator.test.ts` fails in `task docs:design`
+      until the first three are done)
 - [ ] `tests/heavy/closed_world.sh` — a phase, its `PHASES` entry, a registry in
       `tests/heavy/config.closed-world.toml`, and a matrix row in
       `.github/workflows/test.yaml` *(the live proof — see §11)*

@@ -10371,6 +10371,262 @@
         ]
       }
     },
+    "/proxy/{registry}/devfiles/{stack}": {
+      "get": {
+        "tags": [
+          "proxy/devfile"
+        ],
+        "summary": "A stack's devfile at its default version — the file Che's tile links to.",
+        "operationId": "devfile_stack",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stack",
+            "in": "path",
+            "description": "Stack name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "devfile.yaml of the default version, byte-exact",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a stack name"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown stack, or every version blocked"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/devfiles/{stack}/starter-projects/{name}": {
+      "get": {
+        "tags": [
+          "proxy/devfile"
+        ],
+        "summary": "A starter project of the stack's default version. `registry-library` asks\nfor this one, at the host root, with no version in the URL.",
+        "operationId": "devfile_starter",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stack",
+            "in": "path",
+            "description": "Stack name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Starter project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The starter project as a zip",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a stack or starter project name"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown stack or starter project"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/devfiles/{stack}/{version}": {
+      "get": {
+        "tags": [
+          "proxy/devfile"
+        ],
+        "summary": "One version's devfile.",
+        "operationId": "devfile_version",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stack",
+            "in": "path",
+            "description": "Stack name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "Stack version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "devfile.yaml, byte-exact",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a stack name or version"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown or blocked version"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/devfiles/{stack}/{version}/starter-projects/{name}": {
+      "get": {
+        "tags": [
+          "proxy/devfile"
+        ],
+        "summary": "A starter project of one version.",
+        "operationId": "devfile_version_starter",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stack",
+            "in": "path",
+            "description": "Stack name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "Stack version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Starter project name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The starter project as a zip",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a stack, version or starter project name"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown or blocked version, or unknown starter project"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/proxy/{registry}/dist/{vendor}/{package}/{version}": {
       "get": {
         "tags": [
@@ -11517,6 +11773,358 @@
         ]
       }
     },
+    "/proxy/{registry}/index": {
+      "get": {
+        "tags": [
+          "proxy/devfile"
+        ],
+        "summary": "The legacy stack index Che's *Get Started* page reads (`index/all`), blocked default versions removed with their stack.",
+        "operationId": "devfile_index",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "arch",
+            "in": "query",
+            "description": "Architecture filter, repeatable",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "deprecated",
+            "in": "query",
+            "description": "Deprecated filter (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "minSchemaVersion",
+            "in": "query",
+            "description": "Lowest devfile schema version (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "maxSchemaVersion",
+            "in": "query",
+            "description": "Highest devfile schema version (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The index document, blocked versions removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UpstreamDocument"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter upstream would refuse"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/index/all": {
+      "get": {
+        "tags": [
+          "proxy/devfile"
+        ],
+        "summary": "The legacy index of stacks and samples — the document Che's dashboard reads.",
+        "operationId": "devfile_index_all",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "arch",
+            "in": "query",
+            "description": "Architecture filter, repeatable",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "deprecated",
+            "in": "query",
+            "description": "Deprecated filter (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "minSchemaVersion",
+            "in": "query",
+            "description": "Lowest devfile schema version (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "maxSchemaVersion",
+            "in": "query",
+            "description": "Highest devfile schema version (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The index document, blocked versions removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UpstreamDocument"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter upstream would refuse"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/index/sample": {
+      "get": {
+        "tags": [
+          "proxy/devfile"
+        ],
+        "summary": "The legacy index of samples.",
+        "operationId": "devfile_index_sample",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "arch",
+            "in": "query",
+            "description": "Architecture filter, repeatable",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "deprecated",
+            "in": "query",
+            "description": "Deprecated filter (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "minSchemaVersion",
+            "in": "query",
+            "description": "Lowest devfile schema version (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "maxSchemaVersion",
+            "in": "query",
+            "description": "Highest devfile schema version (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The index document, blocked versions removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UpstreamDocument"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter upstream would refuse"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/index/stack": {
+      "get": {
+        "tags": [
+          "proxy/devfile"
+        ],
+        "summary": "The legacy stack index (`index/stack` is upstream's alias for `index`).",
+        "operationId": "devfile_index_stack",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "arch",
+            "in": "query",
+            "description": "Architecture filter, repeatable",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "deprecated",
+            "in": "query",
+            "description": "Deprecated filter (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "minSchemaVersion",
+            "in": "query",
+            "description": "Lowest devfile schema version (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "maxSchemaVersion",
+            "in": "query",
+            "description": "Highest devfile schema version (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The index document, blocked versions removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UpstreamDocument"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter upstream would refuse"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/proxy/{registry}/info/{gem}": {
       "get": {
         "tags": [
@@ -12065,7 +12673,7 @@
             "description": "Access denied"
           },
           "404": {
-            "description": "No narinfo served by this instance names this NAR — refetch the narinfo"
+            "description": "No narinfo served by this instance names this NAR (refetch the narinfo), or the coordinate is blocked"
           }
         },
         "security": [
@@ -16725,6 +17333,599 @@
           },
           "502": {
             "description": "Upstream vuln DB error"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/v2/": {
+      "get": {
+        "tags": [
+          "proxy/devfile"
+        ],
+        "summary": "The OCI API version check. `registry-library` does not send it; other OCI\ntools do.",
+        "operationId": "devfile_oci_ping",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An empty object, with Docker-Distribution-Api-Version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OciPing"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/v2/{ns}/{stack}/blobs/{digest}": {
+      "get": {
+        "tags": [
+          "proxy/devfile"
+        ],
+        "summary": "One layer of a stack version, by digest — served only when an allowed\nversion's manifest names it.",
+        "operationId": "devfile_oci_blob",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ns",
+            "in": "path",
+            "description": "OCI namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stack",
+            "in": "path",
+            "description": "Stack name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "digest",
+            "in": "path",
+            "description": "sha256 digest",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The layer, verified against its digest",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown repository, or a digest no allowed version names (OCI error body)"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/v2/{ns}/{stack}/manifests/{reference}": {
+      "get": {
+        "tags": [
+          "proxy/devfile"
+        ],
+        "summary": "A stack version's OCI manifest, by tag or by digest — the chokepoint every\n`registry-library pull` goes through first (RFC 0035 §5.2).",
+        "operationId": "devfile_oci_manifest",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ns",
+            "in": "path",
+            "description": "OCI namespace, from the index's links.self",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stack",
+            "in": "path",
+            "description": "Stack name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "reference",
+            "in": "path",
+            "description": "Tag (the stack version) or sha256 digest",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The OCI manifest, byte-exact, with Docker-Content-Digest",
+            "content": {
+              "application/vnd.oci.image.manifest.v1+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown repository, or a blocked or unknown tag or digest (OCI error body)"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/v2/{ns}/{stack}/tags/list": {
+      "get": {
+        "tags": [
+          "proxy/devfile"
+        ],
+        "summary": "The tags of a stack — the versions the filtered index lists.",
+        "operationId": "devfile_oci_tags",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ns",
+            "in": "path",
+            "description": "OCI namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stack",
+            "in": "path",
+            "description": "Stack name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The allowed tags",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OciTagList"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown repository (OCI error body)"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/v2index": {
+      "get": {
+        "tags": [
+          "proxy/devfile"
+        ],
+        "summary": "The v2 stack index `registry-library` resolves every pull through, blocked versions removed and `default` moved off a blocked one.",
+        "operationId": "devfile_v2index",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "arch",
+            "in": "query",
+            "description": "Architecture filter, repeatable",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "deprecated",
+            "in": "query",
+            "description": "Deprecated filter (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "minSchemaVersion",
+            "in": "query",
+            "description": "Lowest devfile schema version (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "maxSchemaVersion",
+            "in": "query",
+            "description": "Highest devfile schema version (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The index document, blocked versions removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UpstreamDocument"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter upstream would refuse"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/v2index/all": {
+      "get": {
+        "tags": [
+          "proxy/devfile"
+        ],
+        "summary": "The v2 index of stacks and samples.",
+        "operationId": "devfile_v2index_all",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "arch",
+            "in": "query",
+            "description": "Architecture filter, repeatable",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "deprecated",
+            "in": "query",
+            "description": "Deprecated filter (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "minSchemaVersion",
+            "in": "query",
+            "description": "Lowest devfile schema version (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "maxSchemaVersion",
+            "in": "query",
+            "description": "Highest devfile schema version (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The index document, blocked versions removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UpstreamDocument"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter upstream would refuse"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/v2index/sample": {
+      "get": {
+        "tags": [
+          "proxy/devfile"
+        ],
+        "summary": "The v2 index of samples.",
+        "operationId": "devfile_v2index_sample",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "arch",
+            "in": "query",
+            "description": "Architecture filter, repeatable",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "deprecated",
+            "in": "query",
+            "description": "Deprecated filter (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "minSchemaVersion",
+            "in": "query",
+            "description": "Lowest devfile schema version (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "maxSchemaVersion",
+            "in": "query",
+            "description": "Highest devfile schema version (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The index document, blocked versions removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UpstreamDocument"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter upstream would refuse"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/v2index/stack": {
+      "get": {
+        "tags": [
+          "proxy/devfile"
+        ],
+        "summary": "The v2 stack index (`v2index/stack` is upstream's alias for `v2index`).",
+        "operationId": "devfile_v2index_stack",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "arch",
+            "in": "query",
+            "description": "Architecture filter, repeatable",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "deprecated",
+            "in": "query",
+            "description": "Deprecated filter (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "minSchemaVersion",
+            "in": "query",
+            "description": "Lowest devfile schema version (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "maxSchemaVersion",
+            "in": "query",
+            "description": "Highest devfile schema version (v2 index)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The index document, blocked versions removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UpstreamDocument"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A query parameter upstream would refuse"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
           }
         },
         "security": [
@@ -23488,6 +24689,31 @@
         "type": "object",
         "description": "npm's publish acknowledgement: an empty JSON object.\n\n`npm publish` reports success from the status code and the quota headers;\nthe body carries nothing, and this type says so rather than leaving the\nresponse undocumented."
       },
+      "OciPing": {
+        "type": "object",
+        "description": "`GET v2/` — the OCI API version check."
+      },
+      "OciTagList": {
+        "type": "object",
+        "description": "`GET v2/{ns}/{stack}/tags/list`.",
+        "required": [
+          "name",
+          "tags"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "`{ns}/{stack}`."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The versions the filtered index lists for the stack."
+          }
+        }
+      },
       "OidcProviderInfo": {
         "type": "object",
         "required": [
@@ -26998,6 +28224,10 @@
     {
       "name": "proxy/nix",
       "description": "Nix binary cache (nix, cachix-style substituters) — the substituter protocol as a registry kind: narinfos relayed with only `URL:` rewritten so every `Sig:` still verifies, a blocked store path absent as the protocol's own 404, NARs cached under a coordinate, and stale upstream-shaped NAR URLs resolved through a reverse index"
+    },
+    {
+      "name": "proxy/devfile",
+      "description": "Devfile registries (Eclipse Che, registry-library, odo) — the stack catalogue as a registry kind: the legacy and v2 indexes filtered registry-wide, each stack version's devfile, OCI manifest and layers relayed byte-exact and verified, a digest served only when an allowed version names it"
     },
     {
       "name": "proxy/galaxy",

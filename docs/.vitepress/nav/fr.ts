@@ -142,6 +142,7 @@ export const sidebar = {
       items: [
         { text: "Node (nvm, fnm, n, mise)", link: "/fr/registries/nodedist" },
         { text: "Chaîne d'outils Rust (rustup)", link: "/fr/registries/rustup" },
+        { text: "Registre devfile (Che, odo)", link: "/fr/registries/devfile" },
         { text: "SDKMAN", link: "/fr/registries/sdkman" },
       ],
     },

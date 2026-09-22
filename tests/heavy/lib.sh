@@ -728,6 +728,31 @@ heavy_cached_dir() {
   echo "$dest"
 }
 
+# heavy_devfile_client — set HEAVY_DEVFILE_CLIENT to the `registry-library`
+# CLI (the library `odo` and the IDE plugins embed), built once per commit into
+# HEAVY_CACHE. Here because two suites drive it: `devfile.sh` and
+# `closed_world.sh`'s devfile phase (RFC 0035 §6.9).
+#
+# Not `go install …@commit`: the module carries a `replace` to a sibling
+# directory of the same repository, which `go install` refuses. So the whole
+# repository tarball is unpacked, and built where the replace resolves.
+#
+# A variable rather than a printed path, for `heavy_runner_for`'s reason:
+# `heavy_fail` inside a `$(…)` ends the subshell only.
+heavy_devfile_client() {
+  local commit="${HEAVY_DEVFILE_CLIENT_COMMIT:-f299e1e13e9eb6f1e18cf199c31ee797284336dc}" src
+  heavy_need go "the Go toolchain (mise)"
+  HEAVY_DEVFILE_CLIENT="$HEAVY_CACHE/registry-library-$commit"
+  [[ -x "$HEAVY_DEVFILE_CLIENT" ]] && return 0
+  src="$(heavy_cached_dir "registry-support-$commit" \
+    "https://codeload.github.com/devfile/registry-support/tar.gz/$commit" tar.gz)"
+  heavy_log "Building registry-library at $commit"
+  (cd "$src"/registry-support-*/registry-library \
+    && GOFLAGS=-mod=mod go build -o "$HEAVY_DEVFILE_CLIENT.tmp" .) \
+    || heavy_fail "registry-library did not build at $commit"
+  mv "$HEAVY_DEVFILE_CLIENT.tmp" "$HEAVY_DEVFILE_CLIENT"
+}
+
 # ── The [[flag_sources]] push credential (RFC 0002 §4.3) ─────────────────────
 #
 # A SOC signs `X-Hub-Signature-256: sha256=<hex>` with the source's secret.

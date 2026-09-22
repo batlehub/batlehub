@@ -2,6 +2,7 @@ pub mod cargo;
 pub mod common;
 pub mod composer;
 pub mod conda;
+pub mod devfile;
 pub mod forge_api;
 pub mod forgejo;
 pub mod galaxy;

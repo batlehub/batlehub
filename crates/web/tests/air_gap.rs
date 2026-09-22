@@ -2795,3 +2795,174 @@ async fn a_collection_version_the_bundle_does_not_carry_is_not_listed() {
     let resp = get(&app, &format!("{base}/versions/9.9.9/")).await;
     assert_eq!(resp.status(), 503, "held elsewhere, not absent");
 }
+
+// ── devfile (RFC 0035 §6.8) ─────────────────────────────────────────────────
+
+/// A disconnected devfile registry holding `nodejs@2.2.1` and `@2.2.0` — each
+/// as its manifest and its devfile, with the facts a bundle import reads off
+/// those bytes (`devfile::import_facts`) — and `go@2.6.0` as its devfile only.
+async fn devfile_lab() -> (impl TestService, Lab) {
+    use batlehub_core::services::devfile::import_facts;
+    let manifest = |devfile: &str| {
+        serde_json::json!({
+            "schemaVersion": 2,
+            "layers": [{
+                "mediaType": "application/vnd.devfileio.devfile.layer.v1",
+                "digest": format!("sha256:{}", devfile.repeat(64)),
+                "size": 10,
+                "annotations": {"org.opencontainers.image.title": "devfile.yaml"}
+            }]
+        })
+        .to_string()
+    };
+    let devfile = |name: &str, version: &str| {
+        format!(
+            "schemaVersion: 2.2.2\nmetadata:\n  name: {name}\n  displayName: {name} runtime\n  \
+             tags:\n    - Node.js\n  version: {version}\nstarterProjects:\n  - name: {name}-starter\n"
+        )
+    };
+    let m221 = import_facts(Some("manifest"), manifest("a").as_bytes());
+    let m220 = import_facts(Some("manifest"), manifest("b").as_bytes());
+    holding_lab_extra(
+        "devfile",
+        true,
+        &[
+            ("nodejs", "2.2.1", Some("manifest"), m221),
+            (
+                "nodejs",
+                "2.2.1",
+                Some("layer/devfile.yaml"),
+                import_facts(
+                    Some("layer/devfile.yaml"),
+                    devfile("nodejs", "2.2.1").as_bytes(),
+                ),
+            ),
+            ("nodejs", "2.2.0", Some("manifest"), m220),
+            (
+                "nodejs",
+                "2.2.0",
+                Some("layer/devfile.yaml"),
+                import_facts(
+                    Some("layer/devfile.yaml"),
+                    devfile("nodejs", "2.2.0").as_bytes(),
+                ),
+            ),
+            (
+                "go",
+                "2.6.0",
+                Some("layer/devfile.yaml"),
+                import_facts(
+                    Some("layer/devfile.yaml"),
+                    devfile("go", "2.6.0").as_bytes(),
+                ),
+            ),
+        ],
+    )
+    .await
+}
+
+fn stack<'a>(index: &'a serde_json::Value, name: &str) -> Option<&'a serde_json::Value> {
+    index.as_array()?.iter().find(|e| e["name"] == name)
+}
+
+#[actix_web::test]
+async fn a_held_devfile_stack_gets_both_indexes_composed_from_what_is_held() {
+    let (app, _lab) = devfile_lab().await;
+
+    let resp = get(&app, &format!("/proxy/{REG}/v2index")).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(header(&resp, "X-BatleHub-Listing"), Some("synthesised"));
+    let v2 = body_of(resp).await;
+    let node = stack(&v2, "nodejs").expect("nodejs is held");
+    let versions: Vec<&str> = node["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["version"].as_str().unwrap())
+        .collect();
+    assert_eq!(versions, ["2.2.1", "2.2.0"]);
+    assert_eq!(node["versions"][0]["default"], true);
+    assert_eq!(
+        node["versions"][0]["links"]["self"],
+        "devfile-catalog/nodejs:2.2.1"
+    );
+    assert_eq!(
+        node["versions"][0]["starterProjects"],
+        serde_json::json!(["nodejs-starter"])
+    );
+    // The four fields Che's `isDevfileMetaData` requires, or it drops the tile.
+    assert_eq!(node["displayName"], "nodejs runtime");
+    assert_eq!(node["icon"], "");
+    assert_eq!(node["tags"], serde_json::json!(["Node.js"]));
+    assert!(
+        stack(&v2, "go").is_some(),
+        "a version held as its devfile alone is listed"
+    );
+
+    let legacy = body_of(get(&app, &format!("/proxy/{REG}/index/all")).await).await;
+    let node = stack(&legacy, "nodejs").unwrap();
+    assert_eq!(node["version"], "2.2.1");
+    assert_eq!(node["links"]["self"], "devfile-catalog/nodejs:2.2.1");
+
+    let samples = body_of(get(&app, &format!("/proxy/{REG}/index/sample")).await).await;
+    assert_eq!(
+        samples,
+        serde_json::json!([]),
+        "a sample's source is a git remote the air gap lacks"
+    );
+}
+
+#[actix_web::test]
+async fn a_held_devfile_is_served_through_the_composed_index_by_tag_and_by_digest() {
+    let (app, _lab) = devfile_lab().await;
+    let resp = get(&app, &format!("/proxy/{REG}/devfiles/nodejs")).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "the default of the composed index is held"
+    );
+    let resp = get(
+        &app,
+        &format!("/proxy/{REG}/v2/devfile-catalog/nodejs/manifests/2.2.0"),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    assert!(header(&resp, "Docker-Content-Digest").is_some());
+    let resp = get(
+        &app,
+        &format!(
+            "/proxy/{REG}/v2/devfile-catalog/nodejs/blobs/sha256:{}",
+            "a".repeat(64)
+        ),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "the digest the held manifest's facts name"
+    );
+}
+
+#[actix_web::test]
+async fn a_blocked_held_devfile_version_leaves_the_composed_index() {
+    let (app, lab) = devfile_lab().await;
+    lab.repo
+        .set_status(
+            &PackageId::new(REG, "nodejs", "2.2.1"),
+            PackageStatus::Blocked {
+                reason: "known bad".into(),
+                blocked_by: "admin".into(),
+                blocked_at: chrono::Utc::now(),
+            },
+        )
+        .await
+        .unwrap();
+    let v2 = body_of(get(&app, &format!("/proxy/{REG}/v2index")).await).await;
+    let node = stack(&v2, "nodejs").unwrap();
+    assert_eq!(node["versions"].as_array().unwrap().len(), 1, "{v2}");
+    assert_eq!(node["versions"][0]["version"], "2.2.0");
+    assert_eq!(
+        node["versions"][0]["default"], true,
+        "the default moves with it"
+    );
+}

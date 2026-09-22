@@ -299,6 +299,8 @@ protocol has one and editing it is safe:
 | galaxy | the collection document | yes |
 | galaxy | role versions | yes |
 | nix | narinfo | yes |
+| devfile | stack index (`/v2index`, with `/sample` and `/all`) | yes — the index describes the whole registry, so a new block reaches it within the blocked-set snapshot's 30-second TTL rather than instantly; a blocked default version moves `default` to the highest version left |
+| devfile | legacy stack index (`/index`, with `/sample` and `/all`) | yes — a legacy entry names one version, the default, so blocking it removes the stack from this index rather than substituting another version |
 <!-- END listing-coverage -->
 
 Filtering is invisible when it works, which is exactly when you want evidence

@@ -275,6 +275,11 @@ tasks:
     cmds:
       - bash tests/heavy/galaxy.sh {{.CLI_ARGS}}
 
+  test:devfile-heavy:
+    desc: "Heavy devfile-registry integration (RFC 0035): the real registry-library CLI — built from its source at a pinned commit — pulling stacks from registry.devfile.io through a host-bound devfile registry: the OCI manifest and layers verified, a blocked version refused at the listing and its kept digest refused at the OCI routes, a blocked default moved, a starter project, the path-prefix trap, and Che's three reads transcribed (needs DATABASE_URL + network + Go)"
+    cmds:
+      - bash tests/heavy/devfile.sh
+
   test:nix-heavy:
     desc: "Heavy Nix binary-cache integration: the real `nix` substituting from cache.nixos.org through the proxy — the narinfo relayed with only URL: rewritten and cache.nixos.org's own Sig: still verifying, a blocked store path absent as the protocol's own 404 with nothing fetched under its NAR prefix, a second cold store served from the cache, and the upstream-shaped NAR URL resolved through the reverse index (needs DATABASE_URL + network + podman or docker — the client runs in the `nixos/nix` image, so nothing is installed on the host)"
     cmds:
@@ -489,6 +494,7 @@ tasks:
       # rather than skipping it, which is deliberate: a heavy suite that
       # silently skipped would report green for a kind no client ever drove.
       - bash tests/heavy/nix.sh
+      - bash tests/heavy/devfile.sh
       - bash tests/heavy/closed_world.sh all
       - bash tests/heavy/go.sh
       - bash tests/heavy/maven.sh

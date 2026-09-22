@@ -587,6 +587,73 @@ fn matrix() -> Vec<Row> {
             .coord("node", "v9.8.7")
             .token("v1.1.0")
             .vis(WHOLE_REGISTRY),
+        // ── devfile (RFC 0035) ───────────────────────────────────────────────
+        // Proxy-only, and every route that names a package reaches the gate
+        // through the index listing first — the REST devfile and the OCI routes
+        // resolve their version from the *filtered* v2 index — so the refusal
+        // is observable with no upstream at all. The positive control is not:
+        // there is no devfile index in this fixture for a permitted caller to
+        // read, which the in-process suite (`tests/devfile.rs`, against the
+        // real client and a mock upstream) and `tests/heavy/devfile.sh` cover.
+        Row::new("devfile", "/proxy/reg/index")
+            .vis(WHOLE_REGISTRY)
+            .no_control(),
+        Row::new("devfile", "/proxy/reg/index/sample")
+            .vis(WHOLE_REGISTRY)
+            .no_control(),
+        Row::new("devfile", "/proxy/reg/index/stack")
+            .vis(WHOLE_REGISTRY)
+            .no_control(),
+        Row::new("devfile", "/proxy/reg/index/all")
+            .vis(WHOLE_REGISTRY)
+            .no_control(),
+        Row::new("devfile", "/proxy/reg/v2index")
+            .vis(WHOLE_REGISTRY)
+            .no_control(),
+        Row::new("devfile", "/proxy/reg/v2index/sample")
+            .vis(WHOLE_REGISTRY)
+            .no_control(),
+        Row::new("devfile", "/proxy/reg/v2index/stack")
+            .vis(WHOLE_REGISTRY)
+            .no_control(),
+        Row::new("devfile", "/proxy/reg/v2index/all")
+            .vis(WHOLE_REGISTRY)
+            .no_control(),
+        Row::new("devfile", "/proxy/reg/devfiles/pkg")
+            .vis(Expect::NotChecked(
+                "proxy-only: the version is resolved from the filtered index and no local package is read",
+            ))
+            .no_control(),
+        Row::new("devfile", "/proxy/reg/devfiles/pkg/9.8.7")
+            .vis(Expect::NotChecked(
+                "proxy-only: the version is resolved from the filtered index and no local package is read",
+            ))
+            .no_control(),
+        Row::new("devfile", "/proxy/reg/devfiles/pkg/starter-projects/pkg-starter")
+            .vis(Expect::NotChecked(
+                "proxy-only: the version is resolved from the filtered index and no local package is read",
+            ))
+            .no_control(),
+        Row::new("devfile", "/proxy/reg/devfiles/pkg/9.8.7/starter-projects/pkg-starter")
+            .vis(Expect::NotChecked(
+                "proxy-only: the version is resolved from the filtered index and no local package is read",
+            ))
+            .no_control(),
+        Row::new("devfile", "/proxy/reg/v2/devfile-catalog/pkg/manifests/9.8.7")
+            .vis(Expect::NotChecked(
+                "proxy-only: the version is resolved from the filtered index and no local package is read",
+            ))
+            .no_control(),
+        Row::new("devfile", "/proxy/reg/v2/devfile-catalog/pkg/blobs/sha256:0000000000000000000000000000000000000000000000000000000000000000")
+            .vis(Expect::NotChecked(
+                "proxy-only: the version is resolved from the filtered index and no local package is read",
+            ))
+            .no_control(),
+        Row::new("devfile", "/proxy/reg/v2/devfile-catalog/pkg/tags/list")
+            .vis(Expect::NotChecked(
+                "proxy-only: the version is resolved from the filtered index and no local package is read",
+            ))
+            .no_control(),
         // ── rustup (RFC 0024) ────────────────────────────────────────────────
         // Proxy-only like `nodedist`, with two packages rather than one: `rust`
         // for the toolchains and `rustup` for the installer's own tree, so a
@@ -1088,6 +1155,22 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/nix/realisations/{id}.doi", Coverage::NoPackage("a derivation-to-output mapping. The policy lives on the narinfo of the `outPath` it names, not here — refusing the mapping while serving the path would be the wrong half (RFC 0028 §4.4)")),
     ("/proxy/{registry}/nix/{hash}.ls", Coverage::NoRow("no local mode yet; see the note above")),
     ("/proxy/{registry}/nix/{hash}.narinfo", Coverage::NoRow("no local mode yet; see the note above. This is the chokepoint every substitution resolves through, so it is the first of these to earn a real row when publish lands")),
+    ("/proxy/{registry}/devfiles/{stack}", Coverage::Row),
+    ("/proxy/{registry}/devfiles/{stack}/starter-projects/{name}", Coverage::Row),
+    ("/proxy/{registry}/devfiles/{stack}/{version}", Coverage::Row),
+    ("/proxy/{registry}/devfiles/{stack}/{version}/starter-projects/{name}", Coverage::Row),
+    ("/proxy/{registry}/index", Coverage::Row),
+    ("/proxy/{registry}/index/all", Coverage::Row),
+    ("/proxy/{registry}/index/sample", Coverage::Row),
+    ("/proxy/{registry}/index/stack", Coverage::Row),
+    ("/proxy/{registry}/v2/{ns}/{stack}/blobs/{digest}", Coverage::Row),
+    ("/proxy/{registry}/v2/{ns}/{stack}/manifests/{reference}", Coverage::Row),
+    ("/proxy/{registry}/v2/{ns}/{stack}/tags/list", Coverage::Row),
+    ("/proxy/{registry}/v2index", Coverage::Row),
+    ("/proxy/{registry}/v2index/all", Coverage::Row),
+    ("/proxy/{registry}/v2index/sample", Coverage::Row),
+    ("/proxy/{registry}/v2index/stack", Coverage::Row),
+    ("/proxy/{registry}/v2/", Coverage::NoPackage("the OCI API version check; answers `{}` to everyone and names no repository")),
     ("/proxy/{registry}/nodedist/index.json", Coverage::Row),
     ("/proxy/{registry}/nodedist/index.tab", Coverage::Row),
     ("/proxy/{registry}/nodedist/{version}/{file}", Coverage::Row),
@@ -2594,6 +2677,20 @@ async fn coverage_claims_match_the_routes_rows_actually_reach() {
     )
     .await;
     let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+    // The devfile routes carry a registry-type guard (RFC 0035): they match a
+    // devfile registry and nothing else, so on the npm app above their paths
+    // fall through to npm's wildcards — which is the guard working. Their rows
+    // are routed on a devfile app instead.
+    let devfile_parts = local_only_app_parts_with_policy(
+        "reg",
+        "devfile",
+        RegistryMode::Local,
+        true,
+        rbac_policy_deny_anonymous,
+    )
+    .await;
+    let devfile_app =
+        build_local_registry_app(devfile_parts, batlehub_web::CargoIndexMap::default(), None).await;
 
     let mut reached: BTreeSet<String> = BTreeSet::new();
     let mut unrouted: Vec<&str> = Vec::new();
@@ -2605,7 +2702,12 @@ async fn coverage_claims_match_the_routes_rows_actually_reach() {
         if row.post.is_some() {
             continue;
         }
-        let resp = call_service(&app, TestRequest::get().uri(row.uri).to_request()).await;
+        let req = TestRequest::get().uri(row.uri).to_request();
+        let resp = if row.kind == "devfile" {
+            call_service(&devfile_app, req).await
+        } else {
+            call_service(&app, req).await
+        };
         match resp.request().match_pattern() {
             Some(pattern) => {
                 reached.insert(canonical(&pattern));

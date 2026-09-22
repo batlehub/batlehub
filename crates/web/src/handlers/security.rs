@@ -117,6 +117,15 @@ pub fn native_body(kind: RegistryKind, message: &str) -> (&'static str, String) 
             })
             .to_string(),
         ),
+        // The OCI distribution error shape: containerd reads `errors[].code`
+        // and prints the message beside it. The REST routes' clients (Che's
+        // resolver, `registry-library`'s index read) read the status only, and
+        // this is still JSON to a person with `curl` (RFC 0035 §6.5).
+        RegistryKind::Devfile => (
+            JSON,
+            serde_json::json!({ "errors": [{ "code": "DENIED", "message": message }] })
+                .to_string(),
+        ),
         RegistryKind::Github
         | RegistryKind::Gitlab
         | RegistryKind::Forgejo

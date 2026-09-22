@@ -322,6 +322,19 @@ anonymous = []
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
 
+# A devfile registry (RFC 0035). No `hosts`: the arms go through the path
+# prefix, which serves every route; only `registry-library` needs a host, and it
+# is not what the soak drives. The reload warning that says so is expected here.
+[[registries]]
+type = "devfile"
+name = "perf-devfile"
+upstreams = ["${SOAK_UPSTREAM_URL}/devfile"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
 [[registries]]
 type = "rustup"
 name = "perf-rustup"

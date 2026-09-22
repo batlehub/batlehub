@@ -76,6 +76,12 @@ Typed, so a release can be *blocked* rather than merely cached — the identity 
 | [SDKMAN](./sdkman) | `sdkman` | Candidates API + download broker (the JDK, Gradle, Maven, Kotlin, …); the broker's 302 followed server-side | proxy-only | ❌ | `api.sdkman.io/2` + `broker.sdkman.io` |
 | [Rust toolchain](./rustup) | `rustup` | Channel manifests (the filtered listing) + per-target component tarballs and their `.sha256`; the `.asc` relayed byte-exact | proxy-only | ❌ | `static.rust-lang.org` |
 
+### Development environments <Badge type="tip" text="RFC 0035" />
+
+| Registry | `type` | What it proxies | Modes | Publish | Default upstream |
+|----------|--------|-----------------|-------|:-------:|------------------|
+| [Devfile registry](./devfile) | `devfile` | The stack indexes (filtered), each stack version's devfile, OCI manifest and layers (verified, byte-exact) and starter projects — for Eclipse Che and `registry-library`/`odo`; needs a host of its own | proxy-only | ❌ | `registry.devfile.io` |
+
 ## Feature matrix
 
 Every registry and how its capabilities map across BatleHub's features. The
@@ -113,6 +119,7 @@ Legend: **Ver.** version listing · **Src** source archive · **Bin** binary/ext
 | Generic ³ | — | — | — | — | ✓ | — | ✓ | — | — |
 | Node distributions | ✓ | ✓ | ✓ | — | ✓ | ✓ ⁴ | ✓ | ✓ ⁵ | — |
 | SDKMAN | ✓ | — | ✓ | — | ✓ | ⚠ ⁴ | ✓ | ✓ ⁵ | — |
+| Devfile registry | ✓ | — | ✓ | — | — | ⚠ ⁴ | ✓ | ✓ | — |
 
 > ¹ Conda has no dedicated per-package version listing API. BatleHub synthesises one by scanning `repodata.json` across `noarch`, `linux-64`, `osx-64`, `osx-arm64`, and `win-64`; results are the union of versions found on all available platforms.
 >
@@ -120,7 +127,7 @@ Legend: **Ver.** version listing · **Src** source archive · **Bin** binary/ext
 >
 > ³ **Path-addressed** type: artifacts are fetched by file path with no per-package version model, so the structural axes show `—`. These types don't enumerate versions but can pre-warm specific files via `cache.warm_paths`, and are gated with a mandatory `path_allow` allowlist. Deb/RPM/Pacman additionally support signed private hosting (`local`/`hybrid`); JetBrains IDE archives and Generic are proxy-only.
 >
-> ⁴ **Toolchain age gates** (RFC 0010 §6.7): `nodedist` reads the release date from `index.tab`, so current releases are gated and a de-listed one reaches the gate undated; `sdkman` publishes no dates at all, so the gate is decided entirely by `deny_missing_timestamp`. On both kinds that field is **mandatory** on a `release_age_gate` rule.
+> ⁴ **Toolchain age gates** (RFC 0010 §6.7): `nodedist` reads the release date from `index.tab`, so current releases are gated and a de-listed one reaches the gate undated; `sdkman` publishes no dates at all, so the gate is decided entirely by `deny_missing_timestamp`; `devfile` dates nothing either, because upstream's `lastModified` is the time the whole registry was rebuilt (RFC 0035 §6.7). On all three kinds that field is **mandatory** on a `release_age_gate` rule.
 >
 > ⁵ **Warming by platform**: a Node release and an SDKMAN version are one archive *per platform*, so `warm_packages` warms the platforms in `cache.warm_platforms`, defaulting to the server's own. The console's per-version fetch button is refused for the same reason.
 >
@@ -184,6 +191,7 @@ any of them. The page says which rather than showing a disabled button — see
 | rustup | a toolchain release is a manifest and a set of tarballs; the dist tree carries no prose | — | versions only | no |
 | galaxy | a file inside the artifact | yes | versions only | yes |
 | nix | a store path is a NAR and its narinfo; the protocol carries no prose, and the NAR is a filesystem image rather than a package with a manifest | — | neither | no |
+| devfile | a devfile has no readme; its description is a field of the stack index | — | versions only | yes |
 <!-- END readme-coverage -->
 
 Configured per registry with

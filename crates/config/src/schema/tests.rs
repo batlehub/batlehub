@@ -3188,6 +3188,93 @@ fn an_sdkman_upstream_without_the_api_version_is_warned_not_refused() {
     );
 }
 
+// ── RFC 0035 §4.5: devfile registries ───────────────────────────────────────
+
+#[test]
+fn a_devfile_registry_with_one_root_upstream_validates() {
+    let cfg = host_routing_config(
+        r#"
+        [[registries]]
+        type = "devfile"
+        name = "devfile"
+        hosts = ["devfile.hub.example"]
+        [registries.rbac]
+        anonymous = ["releases:read", "releases:list"]
+        "#,
+    );
+    cfg.validate()
+        .expect("the default upstream is the registry root");
+    assert!(
+        !cfg.warnings()
+            .iter()
+            .any(|w| w.code.starts_with("devfile.")),
+        "{:?}",
+        cfg.warnings()
+    );
+}
+
+#[test]
+fn a_devfile_upstream_naming_the_index_is_refused_with_the_root() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "devfile"
+        name = "devfile"
+        upstreams = ["https://registry.devfile.io/v2index/"]
+        "#,
+        "the index is not the root",
+    );
+    assert!(err.contains("'https://registry.devfile.io'"), "{err}");
+}
+
+#[test]
+fn a_devfile_registry_takes_one_upstream() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "devfile"
+        name = "devfile"
+        upstreams = ["https://registry.devfile.io", "https://devfiles.internal.example"]
+        "#,
+        "two indexes cannot be merged",
+    );
+    assert!(err.contains("one upstream"), "{err}");
+}
+
+#[test]
+fn a_devfile_registry_cannot_be_local() {
+    validation_error(
+        r#"
+        [[registries]]
+        type = "devfile"
+        name = "devfile"
+        mode = "local"
+        "#,
+        "no publish protocol",
+    );
+}
+
+#[test]
+fn a_devfile_registry_without_a_host_or_anonymous_reads_is_warned() {
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "devfile"
+        name = "devfile"
+        "#,
+    );
+    cfg.validate().expect("served, with warnings");
+    let codes: Vec<String> = cfg.warnings().into_iter().map(|w| w.code).collect();
+    assert!(
+        codes.iter().any(|c| c == warnings::DEVFILE_WITHOUT_HOST),
+        "{codes:?}"
+    );
+    assert!(
+        codes.iter().any(|c| c == warnings::DEVFILE_NOT_ANONYMOUS),
+        "{codes:?}"
+    );
+}
+
 // ── RFC 0019 §4.3: [registries.refs] and the anonymous-forge warning ─────────
 
 #[test]

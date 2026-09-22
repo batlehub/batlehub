@@ -363,6 +363,12 @@ impl DocumentKind {
     /// kind rather than six, because the only thing that varies is the path;
     /// each is still its own cache entry, keyed by that path.
     pub const RELAYED: Self = Self::Secondary("relayed");
+    /// A devfile registry's legacy index (`/index`, `/index/sample`,
+    /// `/index/all`), as against the v2 index (`/v2index…`), which is
+    /// `Versions`. A separate upstream document rather than a projection of
+    /// the v2 one: the stack-level `description` differs from the default
+    /// version's for 9 of 31 stacks on `registry.devfile.io` (RFC 0035 §8).
+    pub const LEGACY_INDEX: Self = Self::Secondary("legacy-index");
 
     /// The cache-key and log discriminant.
     pub fn as_str(&self) -> &'static str {

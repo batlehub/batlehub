@@ -6,14 +6,14 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Draft                                                         |
+| Status      | **Implemented** — all five phases of §12 landed 2026-09-22, each driven by a real client before being called done: `tests/heavy/devfile.sh` and the closed-world phase against `registry.devfile.io`, `airgap.sh` §7f through a signed bundle, and the Che canary against a live dashboard backend. §13 records where the built thing differs from the text |
 | Short       | Devfile registries                                            |
 | Settles     | The devfile registry (registry.devfile.io) as a registry kind: the index documents filtered, the stack's OCI manifest and blobs relayed byte-exact behind a tag chokepoint |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
 | Co-author   | Claude Opus 5.5 <noreply@anthropic.com>                       |
 | Created     | 2026-09-22                                                    |
 | Supersedes  | —                                                             |
-| Touches     | `crates/core`, `crates/config`, `crates/adapters`, `crates/web`, `server`, `ui`, `docs`, `tests/heavy` |
+| Touches     | `crates/core`, `crates/config`, `crates/adapters`, `crates/web`, `server`, `ui`, `docs`, `tests/heavy`, `perf`, `.github/workflows/test.yaml` |
 
 ---
 
@@ -870,37 +870,14 @@ And the two gates that are not suites: both route inventories in
 | 5 | The index query string | **Forwarded, four parameters validated and sorted, the rest dropped** (§4.4, §8). |
 | 6 | Local mode | **Not in this RFC** (§3). There is no protocol to serve; an instance-defined one is its own document. |
 | 7 | Where the starter-project zip is stored | **Under the default version**, because the client's URL has no version and the default is what the server upstream resolves. |
+| 8 | (was open 1) What the v2 index says when the default version is blocked | **`default` moves to the highest version left**, as recommended — `blocking::best_latest`, so a stable release beats a pre-release. Observed with the real client: an unpinned `pull nodejs` after blocking `2.2.1` fetched the moved default. The move is not logged separately; the filter's own debug line names the removed version. |
+| 10 | (was open 2) Icons | **Relayed as upstream wrote them when connected; empty in a composed index.** A remote image proxy would need the icons carried in the bundle, and an icon is an artifact of no coordinate. Omitting the field was the obvious alternative and is wrong: Che's `isDevfileMetaData` drops an index entry whose `icon` is undefined, so every tile would vanish. `icon: ""` keeps the entry. |
+| 11 | (was open 3) Che as a real heavy client | **A manual canary, `tests/heavy/devfile_che_canary.sh`**, as recommended — not the tiles, which need the registry in the `CheCluster` (a cluster change the script does not make), but the dashboard backend's own `data/resolver`, which is where Che's three properties live. Run from this workspace against `cde.batleforc.fr` on 2026-09-22: four cases green (§13). |
+| 9 | (was open 4) The age gate on a build date | **Undated**, against the recommendation: `published_at` is `None` and `deny_missing_timestamp` is mandatory on the kind, as on `sdkman` and `nix`. First-seen dates are a new mechanism with a store of their own, and nothing in this kind needed one to ship; it stays a candidate for a bis. |
 
 ### Still open
 
-1. **What the v2 index says when the default version is blocked.** Left
-   alone, the stack has no `default: true` and an unpinned `pull` fails with
-   *no version specified for stack … which no default version exists*.
-   Moving `default` to the highest remaining version keeps unpinned pulls
-   working but changes what they install, silently. *Recommendation*: move
-   it — the block already changed what can be installed, and the failure text
-   blames the registry rather than the policy — and log the move with the
-   block's reason.
-2. **Icons.** Upstream's are absolute GitHub URLs the browser fetches; an
-   air-gapped Che shows broken images, and every connected one tells GitHub
-   which catalogue it is browsing. Rewriting `icon` through
-   `ReadmeImageFetcher` (RFC 0007-bis) fixes both at the cost of a served
-   URL that is ours (the one place `registry_public_base` would be needed).
-   *Recommendation*: pass through in phase 1–3, rewrite in the air-gap phase
-   where the broken tile is certain.
-3. **Che as a real heavy client.** §6.9 case 9 transcribes Che's resolver;
-   the real dashboard needs a cluster. This workspace runs in one, and a
-   manual canary against its `CheCluster` (as `vsx_view.sh` is for RFC 0011)
-   would observe the tiles, the link and the one-hour cache for real.
-   *Recommendation*: a documented manual canary, not a CI job, run once before
-   the kind is called done.
-4. **The age gate on a build date.** `lastModified` is the rebuild time of
-   the whole registry (§6.7). Either the kind declares it undated (every
-   version passes or fails `deny_missing_timestamp` alike) or it records a
-   first-seen date per version and gates on that. *Recommendation*:
-   first-seen, which is what an operator means by "too young" for a source
-   that does not know its own dates — but it is a new mechanism, and RFC
-   0014's disappearance record is the nearest thing to reuse.
+None.
 
 ---
 
@@ -913,3 +890,107 @@ And the two gates that are not suites: both route inventories in
 | 3 | `tests/heavy/devfile.sh` and the closed-world, authz-live and soak arms of §6.9. The kind is not called done before this is green against the live upstream. |
 | 4 | Air gap: `render_listing` arms, the composed indexes, `air_gap.rs` and the `airgap.sh` phase. |
 | 5 | `ui` entry, `docs/registries/devfile.md`, roadmap; the Che canary of §11 question 3. |
+
+---
+
+## 13. Revision against the tree (2026-09-22)
+
+Phases 1, 2, 3 and 5 are built; phase 4 (the air gap) is not, and
+`registry_kind_coverage.rs` declares the gap in those words. What the heavy
+suite observed, against `registry.devfile.io` and `registry-library` built
+from `registry-support@f299e1e`:
+
+- `pull go:2.6.0 --all --new-index-schema` through a host-bound registry
+  made the five requests of §5.1 in order — `GET /v2index`, `HEAD` of the
+  manifest by tag, `GET` by digest, two blobs — all on the instance, and the
+  `devfile.yaml` on disk hashed to the layer the manifest names. containerd
+  accepted the `HEAD`'s `Docker-Content-Digest` and length; the in-process
+  harness cannot show the latter, because `call_service` never runs the
+  HTTP/1 encoder that writes `Content-Length`.
+- After blocking `nodejs@2.1.1`, `pull nodejs:2.1.1` printed *the requested
+  version 2.1.1 for stack nodejs does not exist in the registry* and made no
+  request under `/v2/`. The tag and a layer digest kept from before the block,
+  replayed with `curl`, were `404 MANIFEST_UNKNOWN` and `404 BLOB_UNKNOWN`.
+- A second pull moved `batlehub_artifact_cache_hits_total` from 2 to 6.
+- Through `/proxy/{registry}/` the index answered `200` and the manifest
+  `HEAD` went to the main host's `/v2/` and got `404` — the trap of §5.3,
+  observed rather than read.
+- The closed-world phase pulled the same stack with egress denied.
+
+Where the built thing differs from the text above, each deliberately:
+
+1. **A digest is found through the filtered index, not through a record of
+   resolved manifests (§5.2).** The OCI routes walk the versions the
+   filtered v2 index still lists for the stack and resolve each one's
+   manifest metadata (cached), looking for the digest. The invariant is the
+   same — no digest of a version the index no longer lists is reachable, and
+   the artifact fetch re-checks the coordinate — but a cold instance now
+   answers a digest a client kept, where the text said `404`; it needed no
+   new cache entry to do it. Every OCI object is an *artifact* of its
+   `stack@version` coordinate (`manifest`, `layer/{title}`), so the block
+   list, the rules and the artifact cache apply through `ProxyService::handle`
+   unchanged.
+2. **A rule's refusal on an OCI route is `403 DENIED`**, not
+   `404 MANIFEST_UNKNOWN`. A version absent from the filtered index is still
+   the `404` §4.4 names; `403` is for a coordinate the index lists and a rule
+   refuses, where hiding it would read as an upstream fault.
+3. **Every devfile route carries a registry-type guard** (`is_devfile`), so
+   it matches a devfile registry and nothing else. Without it, the literal
+   `index` and `v2index` routes would take an npm package of that name away
+   from the npm packument route. `authz_matrix.rs`'s coverage test builds a
+   devfile app for the devfile rows for this reason.
+4. **`blocking/devfile.rs` does not exist**; `strip_v2` and `strip_legacy`
+   live in `services/devfile.rs` beside the rest of the protocol, and
+   `blocking::dispatch_multi` calls them.
+5. **§6.9 case 6 is in-process**, in `crates/web/tests/devfile.rs`
+   (`an_altered_layer_is_never_served`): the heavy harness has no tap on the
+   upstream side to alter a byte with.
+6. **There is no `live:devfile`.** Its positive arm cannot succeed: the live
+   config grants anonymous nothing, and `registry-library` sends its OCI
+   requests without `Authorization` whatever URL it is given. The credential
+   boundary is proven at route level instead — a row in `authz.sh`'s
+   `authz_read_rows`, observed `403`/`403`/`502` for anonymous, the caller
+   holding no read verb, and the reader.
+7. **The index is re-serialised on every read.** The uninteresting case is
+   upstream's *document*, not its bytes: `multi_package_document` parses it,
+   and the filter is a no-op when nothing is blocked.
+8. **The docs site's config generator** (`configToml.ts`) was a fifth place
+   the kind had to be named, beside the five gates of `CLAUDE.md`; its test
+   in `docs/build/config-generator.test.ts` is what said so.
+
+### Phase 4 and the two remaining questions (2026-09-22, later)
+
+Phase 4 is built, and nothing in §11 is open.
+
+- **The air gap composes both indexes** from the held set
+  (`listing_synthesis`'s `render_registry`, `services::devfile::compose_index`).
+  A bundle names its entries by package and version, not by file, so the
+  import recognises a devfile stack version's two files from their bytes — a
+  manifest parses as one, a devfile has a `schemaVersion:` line — and files
+  facts from each: the layers and their digests from the manifest, the
+  metadata and starter projects from the devfile. The adapter files the same
+  shape under `extra.devfile` when connected, so the OCI routes and the
+  composition read one place either way. The devfile is read by a narrow
+  line-based reader rather than a YAML parser: the workspace has none, and
+  the one field set needed sits in one shape in every devfile
+  `registry-support` builds.
+- **`tests/heavy/airgap.sh` §7f** carried `nodejs@2.2.1` as its manifest and
+  its devfile (17 blobs, 0 rejected), and the real `registry-library` pulled
+  it from the disconnected instance with egress denied: `GET /v2index` 200
+  (composed), manifest `HEAD` by tag 200, the layer by digest 200, and the
+  devfile on disk hashed to the layer the carried manifest names. The miss
+  log recorded no devfile listing missing.
+- **A defect the seed found**: the OCI routes answered without
+  `X-BatleHub-Storage-Key`, which `batlehub mise export` reads to file each
+  entry under the key the server keeps it at. They now send the same
+  identity headers `proxy_stream` does.
+- **The Che canary**, against the dashboard backend of this cluster's Che
+  (7.x, `che-dashboard.eclipse-che.svc`): its resolver read `index/all`
+  through the path prefix and all 31 stacks passed `isDevfileMetaData`; the
+  tile link `resolveLinks` builds answered `nodejs@2.2.1`'s devfile; after
+  blocking that version the index had no `nodejs` tile and the old link
+  answered `404`; and the same index named by the pod's IPv4 address was
+  refused by Che itself — *Requests to private addresses are not allowed*.
+- **The soak pre-flight** answered all three devfile arms with their declared
+  status, beside the other 54.
+

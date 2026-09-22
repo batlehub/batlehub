@@ -32,6 +32,7 @@ export type RegistryType =
   | "nodedist"
   | "sdkman"
   | "rustup"
+  | "devfile"
   | "generic";
 export type AuthRole = "admin" | "user" | "anonymous";
 export type StorageBackendType = "filesystem" | "s3";
@@ -487,6 +488,9 @@ export const defaultUpstream: Record<RegistryType, string> = {
   // of the one protocol and has its own default (RFC 0010 §4.5).
   sdkman: "https://api.sdkman.io/2",
   rustup: "https://static.rust-lang.org",
+  // One upstream only: one registry's index says nothing about another's
+  // stacks, and config validation refuses a second (RFC 0035 §4.5).
+  devfile: "https://registry.devfile.io",
   generic: "",
 };
 
@@ -518,6 +522,8 @@ export const PROXY_ONLY_TYPES = new Set<RegistryType>([
   "nodedist",
   "sdkman",
   "rustup",
+  // Built offline into an image; no publish protocol (RFC 0035 §3).
+  "devfile",
 ]);
 export const isProxyOnly = (reg: Registry) => PROXY_ONLY_TYPES.has(reg.type);
 

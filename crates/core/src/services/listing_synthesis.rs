@@ -263,6 +263,9 @@ pub fn is_registry_wide(kind: RegistryKind, doc_kind: DocumentKind) -> bool {
         // `nix-cache-info` is registry-wide for the ordinary reason: it
         // describes the cache and names no package at all.
         RegistryKind::Nix => matches!(doc_kind.as_str(), "narinfo" | "cache-info"),
+        // Both devfile index shapes list every stack of the registry
+        // (RFC 0035 §6.8).
+        RegistryKind::Devfile => matches!(doc_kind.as_str(), "versions" | "legacy-index"),
         _ => false,
     }
 }
@@ -294,6 +297,13 @@ pub fn render_registry(
         (RegistryKind::Nix, "narinfo") => {
             VersionDocument::text("text/x-nix-narinfo", nix_narinfo(name, held)?)
         }
+        (RegistryKind::Devfile, "versions" | "legacy-index") => {
+            VersionDocument::json(crate::services::devfile::compose_index(
+                name,
+                doc_kind.as_str() == "legacy-index",
+                &devfile_held(held),
+            ))
+        }
         (RegistryKind::Nix, "cache-info") => VersionDocument::text(
             "text/x-nix-cache-info",
             // Composed, because there is no upstream to relay one from — the
@@ -307,6 +317,40 @@ pub fn render_registry(
         synthesised: Some(count),
         ..doc
     })
+}
+
+/// The held devfile rows grouped into stack versions, each version's facts
+/// merged across its rows — the manifest's and the devfile's are two
+/// artifacts, and each `meta:` entry carries only what its own bytes said.
+fn devfile_held(
+    held: &[(String, HeldVersion)],
+) -> Vec<(String, crate::services::devfile::HeldStackVersion)> {
+    let mut out: Vec<(String, crate::services::devfile::HeldStackVersion)> = Vec::new();
+    for (stack, h) in held {
+        let at = match out
+            .iter()
+            .position(|(s, v)| s == stack && v.version == h.version)
+        {
+            Some(i) => i,
+            None => {
+                out.push((
+                    stack.clone(),
+                    crate::services::devfile::HeldStackVersion {
+                        version: h.version.clone(),
+                        facts: Map::new(),
+                    },
+                ));
+                out.len() - 1
+            }
+        };
+        if let Some(facts) = h.extra.get("devfile").and_then(Value::as_object) {
+            out[at]
+                .1
+                .facts
+                .extend(facts.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+    }
+    out
 }
 
 /// The narinfo for one store hash, composed from what this instance holds
