@@ -714,15 +714,20 @@ heavy_cached_dir() {
   fi
   if [[ ! -d "$dest" ]]; then
     heavy_log "Downloading $name" >&2
-    rm -rf "$dest.tmp"
+    rm -rf "$dest.tmp" "$dest.archive"
     mkdir -p "$dest.tmp"
+    # To a file, not `curl | tar`: the pipe reported tar's status, and a 503
+    # from micro.mamba.pm left an empty directory cached under the final name,
+    # failing every later run on that cache too.
+    heavy_retry 3 "the $name download" curl -fsSL "$url" -o "$dest.archive" >&2 \
+      || heavy_fail "heavy_cached_dir: could not download $url"
     case "$format" in
-      tar.gz)  curl -fsSL "$url" | tar -xz -C "$dest.tmp" ;;
-      tar.bz2) curl -fsSL "$url" | tar -xj -C "$dest.tmp" ;;
-      zip)     curl -fsSL "$url" -o "$dest.tmp/archive.zip"
-               (cd "$dest.tmp" && unzip -q archive.zip && rm archive.zip) ;;
+      tar.gz)  tar -xzf "$dest.archive" -C "$dest.tmp" ;;
+      tar.bz2) tar -xjf "$dest.archive" -C "$dest.tmp" ;;
+      zip)     unzip -q "$dest.archive" -d "$dest.tmp" ;;
       *)       heavy_fail "heavy_cached_dir: unknown format '$format'" ;;
-    esac
+    esac || heavy_fail "heavy_cached_dir: could not unpack $name from $url"
+    rm -f "$dest.archive"
     mv "$dest.tmp" "$dest"
   fi
   echo "$dest"
