@@ -58,11 +58,13 @@ rl() {
   mkdir -p "$ctx"
   OUT="$ctx.out"
   HOME="$HEAVY_WORK/home" "$CLIENT" "$@" --context "$ctx" >"$OUT" 2>&1 || true
+  return $?
 }
 
 hits() {
   curl -fsS "$HEAVY_BASE/metrics" \
     | awk '/^batlehub_artifact_cache_hits_total/ { total += $2 } END { print total + 0 }'
+  return $?
 }
 
 # ── 1. A pull, end to end ────────────────────────────────────────────────────
@@ -123,9 +125,11 @@ heavy_mark replay
 # `--head` for a HEAD, never `-X HEAD`: with `-X` curl still expects the body
 # the Content-Length announces and waits for it until the server gives up.
 code_of() {
-  local method=(-X "$1")
-  [[ "$1" == HEAD ]] && method=(--head)
-  curl -s -o "$HEAVY_WORK/replay.json" -w '%{http_code}' --max-time 30 "${method[@]}" "$2"
+  local verb="$1" url="$2"
+  local method=(-X "$verb")
+  [[ "$verb" == HEAD ]] && method=(--head)
+  curl -s -o "$HEAVY_WORK/replay.json" -w '%{http_code}' --max-time 30 "${method[@]}" "$url"
+  return $?
 }
 [[ "$(code_of HEAD "$HOST_ROOT"v2/devfile-catalog/nodejs/manifests/2.1.1)" == 404 ]] \
   || heavy_fail "3: the blocked tag's manifest HEAD was not 404"

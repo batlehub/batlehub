@@ -53,15 +53,18 @@ resolve() {
   curl -s --max-time 60 -o "$out" -w '%{http_code}' -X POST "$API/dashboard/api/data/resolver" \
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
     --data "$(python3 -c 'import json,sys; print(json.dumps({"url": sys.argv[1]}))' "$url")"
+  return $?
 }
 
 # tile_link <root> <links.self> — what `resolveLinks` makes of an entry.
 tile_link() {
+  local root="$1" self="$2"
   node -e '
 const [root, self] = process.argv.slice(1);
 const catalog = new URL("devfiles", root).toString();
 console.log(self.startsWith("devfile-catalog") ? self.replace(":", "/").replace("devfile-catalog", catalog) : self);
-' "$1" "$2"
+' "$root" "$self"
+  return $?
 }
 
 # ── 1 ────────────────────────────────────────────────────────────────────────

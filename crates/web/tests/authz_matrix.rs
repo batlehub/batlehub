@@ -400,7 +400,7 @@ fn go_list_meta() -> serde_json::Value {
 }
 
 fn matrix() -> Vec<Row> {
-    vec![
+    let mut rows = vec![
         // ── galaxy (RFC 0031) ────────────────────────────────────────────────
         // The package is `{namespace}.{name}` and the URL spells it
         // `{namespace}/{name}`, so every row carries the coordinate explicitly.
@@ -587,73 +587,6 @@ fn matrix() -> Vec<Row> {
             .coord("node", "v9.8.7")
             .token("v1.1.0")
             .vis(WHOLE_REGISTRY),
-        // ── devfile (RFC 0035) ───────────────────────────────────────────────
-        // Proxy-only, and every route that names a package reaches the gate
-        // through the index listing first — the REST devfile and the OCI routes
-        // resolve their version from the *filtered* v2 index — so the refusal
-        // is observable with no upstream at all. The positive control is not:
-        // there is no devfile index in this fixture for a permitted caller to
-        // read, which the in-process suite (`tests/devfile.rs`, against the
-        // real client and a mock upstream) and `tests/heavy/devfile.sh` cover.
-        Row::new("devfile", "/proxy/reg/index")
-            .vis(WHOLE_REGISTRY)
-            .no_control(),
-        Row::new("devfile", "/proxy/reg/index/sample")
-            .vis(WHOLE_REGISTRY)
-            .no_control(),
-        Row::new("devfile", "/proxy/reg/index/stack")
-            .vis(WHOLE_REGISTRY)
-            .no_control(),
-        Row::new("devfile", "/proxy/reg/index/all")
-            .vis(WHOLE_REGISTRY)
-            .no_control(),
-        Row::new("devfile", "/proxy/reg/v2index")
-            .vis(WHOLE_REGISTRY)
-            .no_control(),
-        Row::new("devfile", "/proxy/reg/v2index/sample")
-            .vis(WHOLE_REGISTRY)
-            .no_control(),
-        Row::new("devfile", "/proxy/reg/v2index/stack")
-            .vis(WHOLE_REGISTRY)
-            .no_control(),
-        Row::new("devfile", "/proxy/reg/v2index/all")
-            .vis(WHOLE_REGISTRY)
-            .no_control(),
-        Row::new("devfile", "/proxy/reg/devfiles/pkg")
-            .vis(Expect::NotChecked(
-                "proxy-only: the version is resolved from the filtered index and no local package is read",
-            ))
-            .no_control(),
-        Row::new("devfile", "/proxy/reg/devfiles/pkg/9.8.7")
-            .vis(Expect::NotChecked(
-                "proxy-only: the version is resolved from the filtered index and no local package is read",
-            ))
-            .no_control(),
-        Row::new("devfile", "/proxy/reg/devfiles/pkg/starter-projects/pkg-starter")
-            .vis(Expect::NotChecked(
-                "proxy-only: the version is resolved from the filtered index and no local package is read",
-            ))
-            .no_control(),
-        Row::new("devfile", "/proxy/reg/devfiles/pkg/9.8.7/starter-projects/pkg-starter")
-            .vis(Expect::NotChecked(
-                "proxy-only: the version is resolved from the filtered index and no local package is read",
-            ))
-            .no_control(),
-        Row::new("devfile", "/proxy/reg/v2/devfile-catalog/pkg/manifests/9.8.7")
-            .vis(Expect::NotChecked(
-                "proxy-only: the version is resolved from the filtered index and no local package is read",
-            ))
-            .no_control(),
-        Row::new("devfile", "/proxy/reg/v2/devfile-catalog/pkg/blobs/sha256:0000000000000000000000000000000000000000000000000000000000000000")
-            .vis(Expect::NotChecked(
-                "proxy-only: the version is resolved from the filtered index and no local package is read",
-            ))
-            .no_control(),
-        Row::new("devfile", "/proxy/reg/v2/devfile-catalog/pkg/tags/list")
-            .vis(Expect::NotChecked(
-                "proxy-only: the version is resolved from the filtered index and no local package is read",
-            ))
-            .no_control(),
         // ── rustup (RFC 0024) ────────────────────────────────────────────────
         // Proxy-only like `nodedist`, with two packages rather than one: `rust`
         // for the toolchains and `rustup` for the installer's own tree, so a
@@ -874,7 +807,47 @@ fn matrix() -> Vec<Row> {
         // The fixture publishes no plugin *update* rows, which is what this
         // route answers from — a permitted caller gets `[]` too.
         .no_control(),
-    ]
+    ];
+    rows.extend(devfile_rows());
+    rows
+}
+
+/// The devfile rows, generated: two families of eight and seven routes that
+/// differ only by path.
+fn devfile_rows() -> Vec<Row> {
+    // Proxy-only, and every route that names a package reaches the gate
+    // through the index listing first — the REST devfile and the OCI routes
+    // resolve their version from the *filtered* v2 index — so the refusal
+    // is observable with no upstream at all. The positive control is not:
+    // there is no devfile index in this fixture for a permitted caller to
+    // read, which the in-process suite (`tests/devfile.rs`, against the
+    // real client and a mock upstream) and `tests/heavy/devfile.sh` cover.
+    const RESOLVED: Expect = Expect::NotChecked(
+        "proxy-only: the version is resolved from the filtered index and no local package is read",
+    );
+    let whole = [
+        "/proxy/reg/index",
+        "/proxy/reg/index/sample",
+        "/proxy/reg/index/stack",
+        "/proxy/reg/index/all",
+        "/proxy/reg/v2index",
+        "/proxy/reg/v2index/sample",
+        "/proxy/reg/v2index/stack",
+        "/proxy/reg/v2index/all",
+    ];
+    let resolved = [
+        "/proxy/reg/devfiles/pkg",
+        "/proxy/reg/devfiles/pkg/9.8.7",
+        "/proxy/reg/devfiles/pkg/starter-projects/pkg-starter",
+        "/proxy/reg/devfiles/pkg/9.8.7/starter-projects/pkg-starter",
+        "/proxy/reg/v2/devfile-catalog/pkg/manifests/9.8.7",
+        "/proxy/reg/v2/devfile-catalog/pkg/blobs/sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "/proxy/reg/v2/devfile-catalog/pkg/tags/list",
+    ];
+    let rows = whole.into_iter().map(|uri| (uri, WHOLE_REGISTRY));
+    rows.chain(resolved.into_iter().map(|uri| (uri, RESOLVED)))
+        .map(|(uri, vis)| Row::new("devfile", uri).vis(vis).no_control())
+        .collect()
 }
 
 /// The VS Code gallery query an editor sends to resolve one extension by name.

@@ -1241,18 +1241,19 @@ heavy_log "APK-UNHELD-OK (the listing named only what the bundle carried)"
 # bundle's bytes. The devfile it writes must hash to the layer the carried
 # manifest names — the check `registry-library` itself does not enforce.
 heavy_devfile_client
-DEVFILE_OUT="$HEAVY_WORK/devfile-synth"
+DEVFILE_MARK="devfile-synth"
+DEVFILE_OUT="$HEAVY_WORK/$DEVFILE_MARK"
 mkdir -p "$DEVFILE_OUT/ctx"
-heavy_mark "devfile-synth"
+heavy_mark "$DEVFILE_MARK"
 "${DENY[@]}" HOME="$DEVFILE_OUT" "$HEAVY_DEVFILE_CLIENT" pull \
   "http://devfile.localhost:$HEAVY_TAP_PORT/" "$DEVFILE_STACK:$DEVFILE_VERSION" \
   --new-index-schema --context "$DEVFILE_OUT/ctx" >"$DEVFILE_OUT.txt" 2>&1 || true
 grep -q "Failed" "$DEVFILE_OUT.txt" && { cat "$DEVFILE_OUT.txt" >&2; heavy_fail "registry-library reported a failure against the disconnected instance"; }
-heavy_wire_re_after "devfile-synth" '^GET /v2index -> 200' \
+heavy_wire_re_after "$DEVFILE_MARK" '^GET /v2index -> 200' \
   "the composed v2 index did not answer"
-heavy_wire_re_after "devfile-synth" "^HEAD /v2/devfile-catalog/$DEVFILE_STACK/manifests/$DEVFILE_VERSION -> 200" \
+heavy_wire_re_after "$DEVFILE_MARK" "^HEAD /v2/devfile-catalog/$DEVFILE_STACK/manifests/$DEVFILE_VERSION -> 200" \
   "the held manifest did not answer by tag"
-heavy_wire_re_after "devfile-synth" "^GET /v2/devfile-catalog/$DEVFILE_STACK/blobs/sha256:[0-9a-f]{64} -> 200" \
+heavy_wire_re_after "$DEVFILE_MARK" "^GET /v2/devfile-catalog/$DEVFILE_STACK/blobs/sha256:[0-9a-f]{64} -> 200" \
   "the held layer did not answer by digest"
 [[ -s "$DEVFILE_OUT/ctx/devfile.yaml" ]] || { cat "$DEVFILE_OUT.txt" >&2; heavy_fail "the pull wrote no devfile"; }
 WANT="$(curl -fsS "$AG_BASE/proxy/$DEVFILE_REG/v2/devfile-catalog/$DEVFILE_STACK/manifests/$DEVFILE_VERSION" \

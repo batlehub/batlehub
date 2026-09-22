@@ -22,7 +22,9 @@
 //!
 //! Every route carries [`is_devfile`] as a guard, so it matches only on a
 //! devfile registry: without it the literal `index` route would take an npm
-//! package called `index` away from the npm packument route below it.
+//! package called `index` away from the npm packument route below it. The guard
+//! is also the registry-type check, so no handler repeats
+//! `require_registry_type`: a request for another kind never reaches one.
 
 use std::sync::Arc;
 
@@ -45,7 +47,6 @@ use batlehub_core::{
 
 use super::common::{
     attachment_disposition, collect_storage_stream, document_response, proxy_stream,
-    require_registry_type,
 };
 use crate::handlers::schemas::{ArtifactBytes, ProtocolDocument, UpstreamDocument};
 use crate::middleware::extract_registry_from_path;
@@ -205,10 +206,8 @@ macro_rules! index_route {
             path: web::Path<String>,
             identity: AuthIdentity,
             svc: web::Data<Arc<ProxyService>>,
-            map: web::Data<RegistryMap>,
         ) -> Result<impl Responder, AppError> {
             let registry = path.into_inner();
-            require_registry_type(&registry, KIND, &map)?;
             serve_index(&req, &registry, $doc, &identity, &svc).await
         }
     };
@@ -285,10 +284,8 @@ pub async fn devfile_stack(
     path: web::Path<(String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
-    map: web::Data<RegistryMap>,
 ) -> Result<impl Responder, AppError> {
     let (registry, stack) = path.into_inner();
-    require_registry_type(&registry, KIND, &map)?;
     let version = resolve_version(&registry, &stack, None, &identity, &svc).await?;
     let pkg =
         PackageId::new(&registry, &stack, &version).with_artifact(layer_artifact(DEVFILE_TITLE));
@@ -318,10 +315,8 @@ pub async fn devfile_version(
     path: web::Path<(String, String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
-    map: web::Data<RegistryMap>,
 ) -> Result<impl Responder, AppError> {
     let (registry, stack, version) = path.into_inner();
-    require_registry_type(&registry, KIND, &map)?;
     let version = resolve_version(&registry, &stack, Some(&version), &identity, &svc).await?;
     let pkg =
         PackageId::new(&registry, &stack, &version).with_artifact(layer_artifact(DEVFILE_TITLE));
@@ -374,10 +369,8 @@ pub async fn devfile_starter(
     path: web::Path<(String, String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
-    map: web::Data<RegistryMap>,
 ) -> Result<impl Responder, AppError> {
     let (registry, stack, name) = path.into_inner();
-    require_registry_type(&registry, KIND, &map)?;
     serve_starter(registry, stack, None, name, identity, svc).await
 }
 
@@ -408,10 +401,8 @@ pub async fn devfile_version_starter(
     path: web::Path<(String, String, String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
-    map: web::Data<RegistryMap>,
 ) -> Result<impl Responder, AppError> {
     let (registry, stack, version, name) = path.into_inner();
-    require_registry_type(&registry, KIND, &map)?;
     serve_starter(registry, stack, Some(version), name, identity, svc).await
 }
 
@@ -429,15 +420,10 @@ pub async fn devfile_version_starter(
     security(("bearer_token" = [])),
 )]
 #[get("/proxy/{registry}/v2/", guard = "is_devfile")]
-pub async fn devfile_oci_ping(
-    path: web::Path<String>,
-    map: web::Data<RegistryMap>,
-) -> Result<impl Responder, AppError> {
-    let registry = path.into_inner();
-    require_registry_type(&registry, KIND, &map)?;
-    Ok(HttpResponse::Ok()
+pub async fn devfile_oci_ping() -> impl Responder {
+    HttpResponse::Ok()
         .insert_header(API_VERSION)
-        .json(OciPing {}))
+        .json(OciPing {})
 }
 
 /// The stack's entry in the filtered index, checked against the namespace the
@@ -618,10 +604,8 @@ pub async fn devfile_oci_manifest(
     path: web::Path<(String, String, String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
-    map: web::Data<RegistryMap>,
 ) -> Result<impl Responder, AppError> {
     let (registry, ns, stack, reference) = path.into_inner();
-    require_registry_type(&registry, KIND, &map)?;
     let tags = match oci_stack(&registry, &ns, &stack, &identity, &svc).await? {
         Ok(t) => t,
         Err(resp) => return Ok(resp),
@@ -694,10 +678,8 @@ pub async fn devfile_oci_blob(
     path: web::Path<(String, String, String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
-    map: web::Data<RegistryMap>,
 ) -> Result<impl Responder, AppError> {
     let (registry, ns, stack, digest) = path.into_inner();
-    require_registry_type(&registry, KIND, &map)?;
     if validate_digest(&digest).is_err() {
         return Ok(oci_not_found(
             "DIGEST_INVALID",
@@ -749,10 +731,8 @@ pub async fn devfile_oci_tags(
     path: web::Path<(String, String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
-    map: web::Data<RegistryMap>,
 ) -> Result<impl Responder, AppError> {
     let (registry, ns, stack) = path.into_inner();
-    require_registry_type(&registry, KIND, &map)?;
     let tags = match oci_stack(&registry, &ns, &stack, &identity, &svc).await? {
         Ok(t) => t,
         Err(resp) => return Ok(resp),
