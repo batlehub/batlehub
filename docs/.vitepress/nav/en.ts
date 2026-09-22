@@ -157,6 +157,10 @@ export const sidebar = {
         { text: "Helm chart", link: "/guide/install/helm" },
       ],
     },
+    {
+      text: "Migration",
+      items: [{ text: "Migrating from Nexus", link: "/guide/install/migrate-from-nexus" }],
+    },
   ],
 
   // I run this server.

@@ -160,6 +160,10 @@ export const sidebar = {
         { text: "Chart Helm", link: "/fr/guide/install/helm" },
       ],
     },
+    {
+      text: "Migration",
+      items: [{ text: "Migrer depuis Nexus", link: "/fr/guide/install/migrate-from-nexus" }],
+    },
   ],
 
   "/fr/guide/": [
