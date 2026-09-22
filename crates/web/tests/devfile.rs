@@ -26,7 +26,11 @@ use actix_web::http::Method;
 use actix_web::test::{call_service, read_body, TestRequest};
 use batlehub_adapters::registry::DevfileRegistryClient;
 use batlehub_config::schema::RegistryMode;
-use batlehub_core::{ports::RegistryClient, rules::BlockListRule, services::RegistryPolicy};
+use batlehub_core::{
+    ports::RegistryClient,
+    rules::{BlockListRule, DenyLatestRule, Rule},
+    services::RegistryPolicy,
+};
 use sha2::{Digest, Sha256};
 
 const REG: &str = "devfile";
@@ -132,7 +136,7 @@ async fn upstream(devfile_221_layer: &[u8]) -> mockito::ServerGuard {
     s
 }
 
-async fn app_against(base: String) -> impl TestService {
+async fn app_against(base: String, deny_latest: bool) -> impl TestService {
     let parts = local_registry_app_parts(REG, "devfile", RegistryMode::Proxy, None);
     {
         let mut hot = parts.proxy_svc.hot.write().await;
@@ -148,9 +152,15 @@ async fn app_against(base: String) -> impl TestService {
                 firewall_only: false,
                 serve_stale_metadata: false,
                 artifact_ttl: None,
-                rules: vec![Box::new(BlockListRule::new(Arc::clone(
-                    &parts.proxy_svc.repo,
-                )))],
+                rules: {
+                    let mut rules: Vec<Box<dyn Rule>> = vec![Box::new(BlockListRule::new(
+                        Arc::clone(&parts.proxy_svc.repo),
+                    ))];
+                    if deny_latest {
+                        rules.push(Box::new(DenyLatestRule::new(vec![])));
+                    }
+                    rules
+                },
             }),
         );
     }
@@ -159,7 +169,7 @@ async fn app_against(base: String) -> impl TestService {
 
 async fn app() -> (mockito::ServerGuard, impl TestService) {
     let server = upstream(DEVFILE_221).await;
-    let app = app_against(server.url()).await;
+    let app = app_against(server.url(), false).await;
     (server, app)
 }
 
@@ -282,6 +292,23 @@ async fn a_blocked_version_is_refused_and_the_default_follows_the_filter() {
         body, DEVFILE_220,
         "the versionless route takes the moved default"
     );
+}
+
+#[actix_web::test]
+async fn deny_latest_refuses_the_default_and_leaves_a_pinned_version() {
+    let server = upstream(DEVFILE_221).await;
+    let app = app_against(server.url(), true).await;
+    for uri in [
+        format!("/proxy/{REG}/devfiles/nodejs"),
+        format!("/proxy/{REG}/devfiles/nodejs/starter-projects/nodejs-starter"),
+    ] {
+        let (status, _) = status_and_body(&app, &uri).await;
+        assert_eq!(status, 403, "{uri}: the default is this registry's latest");
+    }
+    let (status, body) =
+        status_and_body(&app, &format!("/proxy/{REG}/devfiles/nodejs/2.2.0")).await;
+    assert_eq!(status, 200);
+    assert_eq!(body, DEVFILE_220);
 }
 
 #[actix_web::test]
@@ -439,7 +466,7 @@ async fn an_altered_layer_is_never_served() {
     let mut tampered = DEVFILE_221.to_vec();
     *tampered.last_mut().unwrap() = b'#';
     let server = upstream(&tampered).await;
-    let app = app_against(server.url()).await;
+    let app = app_against(server.url(), false).await;
     let (status, body) = status_and_body(
         &app,
         &format!(

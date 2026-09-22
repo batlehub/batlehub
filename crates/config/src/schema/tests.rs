@@ -3225,6 +3225,10 @@ fn a_devfile_upstream_naming_the_index_is_refused_with_the_root() {
         "the index is not the root",
     );
     assert!(err.contains("'https://registry.devfile.io'"), "{err}");
+    assert!(
+        err.contains("not its index —"),
+        "no stray line break: {err}"
+    );
 }
 
 #[test]
@@ -3239,6 +3243,10 @@ fn a_devfile_registry_takes_one_upstream() {
         "two indexes cannot be merged",
     );
     assert!(err.contains("one upstream"), "{err}");
+    assert!(
+        err.contains("configured — one"),
+        "no stray line break: {err}"
+    );
 }
 
 #[test]

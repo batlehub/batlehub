@@ -662,7 +662,13 @@ pub fn compose_index(address: &str, legacy: bool, held: &[(String, HeldStackVers
         .split('&')
         .filter_map(|p| p.strip_prefix("arch="))
         .collect();
-    let hide_deprecated = query.split('&').any(|p| p == "deprecated=false");
+    // Upstream's `FilterDevfileDeprecated` judges a whole stack by its default
+    // version's tags: `false` drops deprecated stacks, `true` keeps only them.
+    let want_deprecated = query.split('&').find_map(|p| match p {
+        "deprecated=true" => Some(true),
+        "deprecated=false" => Some(false),
+        _ => None,
+    });
 
     let mut stacks: std::collections::BTreeMap<&str, Vec<&HeldStackVersion>> = Default::default();
     for (stack, v) in held {
@@ -680,11 +686,10 @@ pub fn compose_index(address: &str, legacy: bool, held: &[(String, HeldStackVers
                         .map(|a| a.iter().filter_map(Value::as_str).collect())
                         .unwrap_or_default()
                 };
-                let arch_ok = archs.is_empty() || {
+                archs.is_empty() || {
                     let have = list("architectures");
                     have.is_empty() || archs.iter().all(|a| have.contains(a))
-                };
-                arch_ok && !(hide_deprecated && list("tags").contains(&"Deprecated"))
+                }
             })
             .map(|v| (v.version.clone(), version_record(stack, v)))
             .collect();
@@ -703,6 +708,13 @@ pub fn compose_index(address: &str, legacy: bool, held: &[(String, HeldStackVers
             .cloned()
             .unwrap_or_default();
         let meta = top.facts.get("metadata").cloned().unwrap_or_default();
+        let deprecated = meta
+            .get("tags")
+            .and_then(Value::as_array)
+            .is_some_and(|t| t.iter().any(|t| t.as_str() == Some("Deprecated")));
+        if want_deprecated.is_some_and(|want| want != deprecated) {
+            continue;
+        }
         let field = |k: &str| meta.get(k).cloned();
         let mut entry = Map::new();
         entry.insert("name".into(), Value::String(stack.to_owned()));
@@ -1051,19 +1063,22 @@ mod tests {
     }
 
     #[test]
-    fn deprecated_false_drops_the_versions_upstream_tags_deprecated() {
-        let doc = compose_index(
-            "v2index?deprecated=false",
-            false,
-            &[
-                held("nodejs", "2.1.1", &["Deprecated"]),
-                held("nodejs", "2.2.1", &[]),
-            ],
-        );
+    fn the_deprecated_filter_judges_a_stack_by_its_default_version() {
+        let held = [
+            // A deprecated old version does not deprecate a live stack.
+            held("nodejs", "2.1.1", &["Deprecated"]),
+            held("nodejs", "2.2.1", &[]),
+            held("python", "1.0.0", &["Deprecated"]),
+        ];
+        let live = compose_index("v2index?deprecated=false", false, &held);
         assert_eq!(
-            versions_of(find_stack(&doc, "nodejs").unwrap()),
-            vec!["2.2.1"]
+            versions_of(find_stack(&live, "nodejs").unwrap()),
+            vec!["2.2.1", "2.1.1"]
         );
+        assert!(find_stack(&live, "python").is_none());
+        let only = compose_index("v2index?deprecated=true", false, &held);
+        assert!(find_stack(&only, "nodejs").is_none());
+        assert!(find_stack(&only, "python").is_some());
     }
 
     #[test]

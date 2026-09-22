@@ -42,7 +42,7 @@ use batlehub_core::{
         validate_digest, validate_namespace, validate_stack, validate_starter, validate_version,
         version_entry, versions_of, DEVFILE_TITLE, MANIFEST_ARTIFACT, MANIFEST_MEDIA_TYPE,
     },
-    services::{ProxyRequest, ProxyResponse, ProxyService},
+    services::{authz::authorize_unpinned, ProxyRequest, ProxyResponse, ProxyService},
 };
 
 use super::common::{
@@ -167,8 +167,19 @@ async fn resolve_version(
         .ok_or_else(|| AppError::not_found(format!("stack '{stack}' is not in this registry")))?;
     let version = match version {
         Some(v) => v,
-        None => default_version(entry)
-            .ok_or_else(|| AppError::not_found(format!("stack '{stack}' has no versions")))?,
+        None => {
+            // The default is this registry's "latest" (RFC 0035 §6.7).
+            authorize_unpinned(
+                &svc.hot,
+                &PackageId::new(registry, stack, "latest"),
+                &identity.0,
+                Action::ReleasesRead,
+            )
+            .await
+            .map_err(AppError::from)?;
+            default_version(entry)
+                .ok_or_else(|| AppError::not_found(format!("stack '{stack}' has no versions")))?
+        }
     };
     if version_entry(entry, version).is_none() {
         return Err(AppError::not_found(format!(

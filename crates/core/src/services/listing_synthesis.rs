@@ -298,11 +298,20 @@ pub fn render_registry(
             VersionDocument::text("text/x-nix-narinfo", nix_narinfo(name, held)?)
         }
         (RegistryKind::Devfile, "versions" | "legacy-index") => {
-            VersionDocument::json(crate::services::devfile::compose_index(
-                name,
-                doc_kind.as_str() == "legacy-index",
-                &devfile_held(held),
-            ))
+            use crate::services::devfile::{compose_index, find_stack, is_index_address};
+            let held = devfile_held(held);
+            if is_index_address(name) {
+                VersionDocument::json(compose_index(
+                    name,
+                    doc_kind.as_str() == "legacy-index",
+                    &held,
+                ))
+            } else {
+                // The console's discovery read names one stack, and the
+                // adapter answers it with that stack's v2 entry alone.
+                let index = compose_index("v2index", false, &held);
+                VersionDocument::json(find_stack(&index, name)?.clone())
+            }
         }
         (RegistryKind::Nix, "cache-info") => VersionDocument::text(
             "text/x-nix-cache-info",
@@ -1716,6 +1725,22 @@ mod tests {
             received_at: "2026-09-05T08:00:00Z".parse().unwrap(),
             extra: Value::Null,
         }
+    }
+
+    #[test]
+    fn a_devfile_stack_read_gets_its_entry_and_an_index_read_the_array() {
+        let held = [(
+            "nodejs".to_owned(),
+            held("2.2.1", Some("layer/devfile.yaml")),
+        )];
+        let versions = DocumentKind::Versions;
+        let stack = render_registry(RegistryKind::Devfile, versions, "nodejs", &held).unwrap();
+        let entry = stack.body.as_json().unwrap();
+        assert_eq!(entry["name"], "nodejs", "one stack object, not the index");
+        assert_eq!(entry["versions"][0]["version"], "2.2.1");
+        let index = render_registry(RegistryKind::Devfile, versions, "v2index", &held).unwrap();
+        assert!(index.body.as_json().unwrap().is_array());
+        assert!(render_registry(RegistryKind::Devfile, versions, "go", &held).is_none());
     }
 
     #[test]

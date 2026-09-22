@@ -2510,7 +2510,8 @@ impl AppConfig {
         if kind == batlehub_core::entities::RegistryKind::Devfile {
             if registry.upstreams.len() > 1 {
                 bail!(
-                    "registry '{}': a devfile registry has one upstream, and {} are configured                      — one registry's index says nothing about another's stacks",
+                    "registry '{}': a devfile registry has one upstream, and {} are configured \
+                     — one registry's index says nothing about another's stacks",
                     registry.name,
                     registry.upstreams.len()
                 );
@@ -2520,7 +2521,8 @@ impl AppConfig {
                 for doc in ["/v2index", "/index"] {
                     if path.ends_with(doc) {
                         bail!(
-                            "registry '{}': a devfile upstream is the registry root, not its                              index — use '{}' instead of '{upstream}'",
+                            "registry '{}': a devfile upstream is the registry root, not its \
+                             index — use '{}' instead of '{upstream}'",
                             registry.name,
                             path.trim_end_matches(doc)
                         );

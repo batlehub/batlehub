@@ -829,6 +829,41 @@ pub async fn authorize_unheld_read(
     Ok(())
 }
 
+/// `deny_latest` for a read that named **no version** — where the handler, not
+/// the client, picked the default (a devfile stack's `default: true` version,
+/// RFC 0035 §6.7). The read that follows carries that concrete version, so the
+/// rule would never see `"latest"` there.
+///
+/// Only `deny_latest` runs. Handing `"latest"` to the whole chain would let a
+/// `version_gate` allowlist refuse it too, which is not what the operator
+/// configured; every other rule still judges the concrete version downstream.
+pub async fn authorize_unpinned(
+    hot: &HotConfigLock,
+    package_id: &PackageId,
+    identity: &Identity,
+    action: Action,
+) -> Result<(), CoreError> {
+    let Some(policy) =
+        policy_for(hot, package_id.registry.as_str(), package_id.name.as_str()).await
+    else {
+        return Ok(());
+    };
+    let metadata = synthetic_metadata(package_id);
+    let ctx = RuleContext {
+        identity,
+        package: &metadata,
+        action,
+        cache_entry: None,
+        requested_version: Some("latest"),
+    };
+    for rule in policy.rules.iter().filter(|r| r.name() == "deny_latest") {
+        if let RuleDecision::Deny { reason } = rule.evaluate(&ctx).await {
+            return Err(CoreError::AccessDenied(reason));
+        }
+    }
+    Ok(())
+}
+
 /// Authorize a *listing* — a request for a whole package's version document,
 /// not for one version of it.
 ///
