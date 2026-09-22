@@ -34,7 +34,8 @@
 # or `.github/actions/headless-chrome` in CI); BATLEHUB_VSX_SRC (a checkout
 # of the extension repository; default ../batlehub-vsx beside this one, else
 # a shallow clone under HEAVY_CACHE); BATLEHUB_VSX_REF (what to clone,
-# default main); VSCODE_VERSION (1.136.2); HEAVY_ONLY=marketplace|broker.
+# default main); VSCODE_VERSION (1.136.2); HEAVY_ONLY (space-separated view.sh
+# modes, default "marketplace broker").
 # Ports are the extension suite's own: 8124 (server), 8132 (editor).
 set -euo pipefail
 
@@ -99,6 +100,11 @@ log "Running $VSX_SRC/tests/heavy/view.sh with BATLEHUB_SRC=$ROOT (VS Code $VSCO
   if command -v mise >/dev/null 2>&1 && [[ -f mise.toml ]]; then
     eval "$(mise env -s bash 2>/dev/null)" || true
   fi
-  bash tests/heavy/view.sh
+  # One mode per run: view.sh's default, `all`, also runs its `registry` and
+  # `java` halves, which need mise's JDK and Maven and are that repository's
+  # own nightly (`nightly.yaml`); this gate is the two modes above.
+  for only in ${HEAVY_ONLY:-marketplace broker}; do
+    HEAVY_ONLY="$only" bash tests/heavy/view.sh || exit 1
+  done
 ) || { echo "screenshots and logs: $VSX_SRC/tests/heavy/work/last" >&2; fail "the extension's suite failed against this checkout"; }
 log "VSX-EXTENSION-HEAVY-OK (batlehub-vsx, both modes, in VS Code $VSCODE_VERSION against this checkout — screenshots in $VSX_SRC/tests/heavy/work/last/shots)"

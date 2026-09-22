@@ -142,6 +142,7 @@ export const sidebar = {
       items: [
         { text: "Node (nvm, fnm, n, mise)", link: "/fr/registries/nodedist" },
         { text: "Chaîne d'outils Rust (rustup)", link: "/fr/registries/rustup" },
+        { text: "Registre devfile (Che, odo)", link: "/fr/registries/devfile" },
         { text: "SDKMAN", link: "/fr/registries/sdkman" },
       ],
     },
@@ -158,6 +159,10 @@ export const sidebar = {
         { text: "Depuis les sources", link: "/fr/guide/install/source" },
         { text: "Chart Helm", link: "/fr/guide/install/helm" },
       ],
+    },
+    {
+      text: "Migration",
+      items: [{ text: "Migrer depuis Nexus", link: "/fr/guide/install/migrate-from-nexus" }],
     },
   ],
 

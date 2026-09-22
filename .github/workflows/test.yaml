@@ -886,6 +886,11 @@ jobs:
           # exactly as `closed_world.sh`'s dnf and pacman phases do. Nothing is
           # installed on the runner.
           - suite: nix
+          # devfile: registry-library built from its source at a pinned commit
+          # (Go is on the runner), pulling stacks from registry.devfile.io
+          # through a registry bound to `devfile.localhost` — the client drops
+          # any path prefix for its OCI requests (RFC 0035 §5.3).
+          - suite: devfile
     services:
       postgres:
         image: postgres:17-alpine
@@ -1033,7 +1038,7 @@ jobs:
         # `~` is expanded by the action; it is deliberately not passed to the
         # scripts as `HEAVY_CACHE`, where bash would take it literally and put
         # the downloads in a directory named `~`.
-        if: matrix.suite == 'conda' || matrix.suite == 'composer' || matrix.suite == 'nvm' || matrix.suite == 'sdkman' || matrix.suite == 'vscode_patch'
+        if: matrix.suite == 'conda' || matrix.suite == 'composer' || matrix.suite == 'nvm' || matrix.suite == 'sdkman' || matrix.suite == 'vscode_patch' || matrix.suite == 'devfile'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/batlehub-heavy
@@ -1385,6 +1390,10 @@ jobs:
           # phase proves is the collection resolve and the module execution and
           # not pip's ability to reach PyPI.
           - phase: ansible
+          # registry-library, built from its source at a pinned commit by the
+          # phase itself (Go is on the runner), pulling a stack at the host
+          # root the registry is bound to (RFC 0035).
+          - phase: devfile
     services:
       postgres:
         image: postgres:17-alpine
@@ -1480,7 +1489,7 @@ jobs:
           echo "neither podman nor docker answered 'info' on this runner" >&2
           exit 1
       - name: Cache heavy client downloads
-        if: matrix.phase == 'conda' || matrix.phase == 'php' || matrix.phase == 'nvm' || matrix.phase == 'sdkman' || matrix.phase == 'vscode' || matrix.phase == 'jbplugin'
+        if: matrix.phase == 'conda' || matrix.phase == 'php' || matrix.phase == 'nvm' || matrix.phase == 'sdkman' || matrix.phase == 'vscode' || matrix.phase == 'jbplugin' || matrix.phase == 'devfile'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/batlehub-heavy

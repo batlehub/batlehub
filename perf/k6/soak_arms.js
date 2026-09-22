@@ -44,6 +44,7 @@ import {
   COMPOSER_REGISTRY,
   CONDA_REGISTRY,
   DEB_REGISTRY,
+  DEVFILE_REGISTRY,
   FORGEJO_REGISTRY,
   GALAXY_REGISTRY,
   GEMS_REGISTRY,
@@ -602,6 +603,48 @@ export const ARMS = [
       url: p(
         `/proxy/${CONDA_REGISTRY}/linux-64/perf-conda-${String(n).padStart(4, "0")}-1.0.0-py311_0.conda`,
       ),
+    }),
+  },
+
+  // ── Devfile registries (RFC 0035) ─────────────────────────────────────────
+  // The v2 index is registry-wide and filtered on every read; the manifest is
+  // an artifact of its stack version, fetched and verified against its own
+  // digest; the REST devfile resolves the version from the filtered index and
+  // then reads the layer by the digest the manifest names. `space: 16` is the
+  // mock's four stacks of four versions (`protocols/devfile.rs`).
+  {
+    op: "devfile_index",
+    kind: "devfile",
+    registry: DEVFILE_REGISTRY,
+    weight: 2,
+    expect: [200],
+    doc: "the v2 stack index, filtered registry-wide",
+    request: () => ({ url: p(`/proxy/${DEVFILE_REGISTRY}/v2index`) }),
+  },
+  {
+    op: "devfile_manifest",
+    kind: "devfile",
+    registry: DEVFILE_REGISTRY,
+    weight: 2,
+    expect: [200],
+    space: 16,
+    doc: "a stack version's OCI manifest by tag, byte-exact with its digest",
+    request: (n) => ({
+      url: p(
+        `/proxy/${DEVFILE_REGISTRY}/v2/devfile-catalog/acme${n % 4}/manifests/1.${Math.floor(n / 4)}.0`,
+      ),
+    }),
+  },
+  {
+    op: "devfile_devfile",
+    kind: "devfile",
+    registry: DEVFILE_REGISTRY,
+    weight: 2,
+    expect: [200],
+    space: 16,
+    doc: "a stack version's devfile.yaml — the layer, found through the manifest",
+    request: (n) => ({
+      url: p(`/proxy/${DEVFILE_REGISTRY}/devfiles/acme${n % 4}/1.${Math.floor(n / 4)}.0`),
     }),
   },
 

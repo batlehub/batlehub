@@ -16,6 +16,7 @@
 mod cargo;
 mod composer;
 pub mod conda;
+mod devfile;
 mod files;
 mod forge;
 mod galaxy;
@@ -39,6 +40,7 @@ pub fn configure(cfg: &mut actix_web::web::ServiceConfig) {
     cargo::configure(cfg);
     composer::configure(cfg);
     conda::configure(cfg);
+    devfile::configure(cfg);
     files::configure(cfg);
     forge::configure(cfg);
     galaxy::configure(cfg);

@@ -117,6 +117,15 @@ pub const SIGNED_URLS_ANONYMOUS_STILL_GRANTED: &str = "signed-urls.anonymous-sti
 /// missing version segment is more likely a typo than a choice (RFC 0010 §4.5).
 pub const SDKMAN_UPSTREAM_WITHOUT_API_VERSION: &str = "sdkman.upstream-without-api-version";
 
+/// A `devfile` registry has no host binding. `registry-library` (and `odo`)
+/// build the OCI reference from the host alone, so a registry served under a
+/// path prefix answers the index and 404s every pull (RFC 0035 §5.3).
+pub const DEVFILE_WITHOUT_HOST: &str = "devfile.without-host";
+
+/// A `devfile` registry does not grant anonymous reads. Neither client sends a
+/// credential, so every read would be refused (RFC 0035 §4.5).
+pub const DEVFILE_NOT_ANONYMOUS: &str = "devfile.not-anonymous";
+
 /// `[server.signed_urls]` is configured and no registry sets
 /// `signed_downloads = true`, so the secret signs nothing. Harmless, and worth
 /// saying: it is the shape of a feature enabled on the wrong side.

@@ -709,6 +709,7 @@ impl AppConfig {
         self.dry_run_warnings(&mut out);
         self.coherence_warnings(&mut out);
         self.sdkman_warnings(&mut out);
+        self.devfile_warnings(&mut out);
         self.flag_source_warnings(&mut out);
         self.air_gap_warnings(&mut out);
         out
@@ -736,6 +737,53 @@ impl AppConfig {
                          SDKMAN's candidates API is versioned in the path \
                          (https://api.sdkman.io/2); the URL is served as given, so `sdk list` \
                          will answer 404 if this is a typo",
+                        reg.name
+                    ),
+                ));
+            }
+        }
+    }
+
+    /// RFC 0035 §4.5: the two ways a devfile registry can be configured and
+    /// still fail its clients, both of which read as an outage rather than a
+    /// setting unless something says so.
+    fn devfile_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        let bound: std::collections::HashSet<String> = self
+            .registry_host_bindings()
+            .into_iter()
+            .map(|b| b.registry)
+            .collect();
+        for (index, reg) in self.registries.iter().enumerate() {
+            if reg.registry_type != batlehub_core::entities::RegistryKind::Devfile.as_str() {
+                continue;
+            }
+            if !bound.contains(&reg.name) {
+                out.push(ConfigWarning::new(
+                    warnings::DEVFILE_WITHOUT_HOST,
+                    format!("registries[{index}].hosts"),
+                    format!(
+                        "registry '{}': a devfile registry with no host is served under \
+                         /proxy/{}/ only. Che works from there; registry-library and odo \
+                         resolve the index and then fail every pull, because they build the \
+                         OCI reference from the host alone and ask for /v2/… at its root",
+                        reg.name, reg.name
+                    ),
+                ));
+            }
+            let anonymous_reads = reg
+                .rbac
+                .anonymous
+                .iter()
+                .any(|p| p == "releases:read" || p == "*");
+            if !anonymous_reads {
+                out.push(ConfigWarning::new(
+                    warnings::DEVFILE_NOT_ANONYMOUS,
+                    format!("registries[{index}].rbac.anonymous"),
+                    format!(
+                        "registry '{}': neither Che's resolver nor registry-library sends a \
+                         credential, and 'anonymous' here does not hold 'releases:read' — \
+                         unless a grant elsewhere gives it, every tile and every pull will be \
+                         refused",
                         reg.name
                     ),
                 ));
@@ -2454,6 +2502,34 @@ impl AppConfig {
                 }
             }
         }
+        // A devfile upstream is the registry *root* — what Che and
+        // `registry-library` are both given — and there is one: the tags and
+        // digests of two registries cannot be merged into one index, and a
+        // second entry would otherwise be a fan-out nobody asked for
+        // (RFC 0035 §4.5).
+        if kind == batlehub_core::entities::RegistryKind::Devfile {
+            if registry.upstreams.len() > 1 {
+                bail!(
+                    "registry '{}': a devfile registry has one upstream, and {} are configured \
+                     — one registry's index says nothing about another's stacks",
+                    registry.name,
+                    registry.upstreams.len()
+                );
+            }
+            for upstream in &registry.upstreams {
+                let path = upstream.trim_end_matches('/');
+                for doc in ["/v2index", "/index"] {
+                    if path.ends_with(doc) {
+                        bail!(
+                            "registry '{}': a devfile upstream is the registry root, not its \
+                             index — use '{}' instead of '{upstream}'",
+                            registry.name,
+                            path.trim_end_matches(doc)
+                        );
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -2560,6 +2636,15 @@ impl AppConfig {
                 "a narinfo carries no date anywhere in the protocol, so every store path reaches \
                  the gate without one: 'true' refuses every substitution on this registry, \
                  'false' makes the gate inert"
+            }
+            // `lastModified` is the time upstream last rebuilt the whole
+            // registry — the same instant on every version — so the adapter
+            // dates nothing, and every stack version reaches the gate undated
+            // (RFC 0035 §6.7).
+            RegistryKind::Devfile => {
+                "a devfile registry's 'lastModified' is the time the whole registry was last \
+                 rebuilt, so no stack version is dated: 'true' refuses every download on this \
+                 registry, 'false' makes the gate inert"
             }
             _ => return Ok(()),
         };

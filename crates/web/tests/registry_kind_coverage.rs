@@ -148,6 +148,10 @@ const COVERAGE: &[(&str, Live, AirGap)] = &[
     // closed-world phase would have to duplicate that whole apparatus for no
     // extra evidence (RFC 0028 §6.10 and the suite's own header).
     ("nix", Live::Suite("tests/heavy/nix.sh"), AirGap::Case),
+    // `tests/heavy/devfile.sh` is the wider suite — blocking, the replayed
+    // digest, the prefix trap and Che's reads; the closed world is the one
+    // that pulls with egress denied (RFC 0035 §6.9).
+    ("devfile", Live::ClosedWorld("devfile"), AirGap::Case),
 ];
 
 fn repo_root() -> PathBuf {

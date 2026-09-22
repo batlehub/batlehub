@@ -138,6 +138,7 @@ export const sidebar = {
       items: [
         { text: "Node (nvm, fnm, n, mise)", link: "/registries/nodedist" },
         { text: "Rust toolchain (rustup)", link: "/registries/rustup" },
+        { text: "Devfile registry (Che, odo)", link: "/registries/devfile" },
         { text: "SDKMAN", link: "/registries/sdkman" },
       ],
     },
@@ -155,6 +156,10 @@ export const sidebar = {
         { text: "From source", link: "/guide/install/source" },
         { text: "Helm chart", link: "/guide/install/helm" },
       ],
+    },
+    {
+      text: "Migration",
+      items: [{ text: "Migrating from Nexus", link: "/guide/install/migrate-from-nexus" }],
     },
   ],
 
@@ -469,6 +474,10 @@ export const sidebar = {
         {
           text: "0031 — Ansible Galaxy",
           link: "/rfc/0031-ansible-galaxy",
+        },
+        {
+          text: "0035 — Devfile registries",
+          link: "/rfc/0035-devfile-registry",
         },
       ],
     },
