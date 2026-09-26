@@ -375,8 +375,7 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
         let enabled = ip_blocking_cfg.as_ref().is_some_and(|c| c.enabled);
         let ip_block_cfg_for_mw = ip_blocking_cfg.clone().unwrap_or_default();
 
-        app.wrap(TracingLogger::<BatleHubSpanBuilder>::new())
-            .wrap(RateLimitMiddlewareFactory::new(rate_limit_svc.clone()))
+        app.wrap(RateLimitMiddlewareFactory::new(rate_limit_svc.clone()))
             .wrap(UserBlockMiddlewareFactory::new(Arc::clone(
                 &user_block_repo,
             )))
@@ -388,6 +387,12 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
                 enabled,
                 IpBlockMiddlewareFactory::new(Arc::clone(&ip_block_store), ip_block_cfg_for_mw),
             ))
+            // Outside every layer that can answer or query the database — IP
+            // block, CORS, auth, user block, rate limit — so their refusals get
+            // an access-log line and their statements count against the request
+            // (`db_metrics`). Inside host routing, so the path it logs is the
+            // rewritten one the router matched.
+            .wrap(TracingLogger::<BatleHubSpanBuilder>::new())
             // Outside the IP-block layer so its 403 — and the rate limiter's 429,
             // and anything the static-file service returns — carry the baseline
             // headers too, not just handler responses.

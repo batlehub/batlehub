@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/incident-response.md
-sourceHash: a44f5e9b2acde705
+sourceHash: 92b18df0400b6702
 ---
 
 # Procédure de réponse à incident — BatleHub
@@ -35,7 +35,7 @@ vôtres. Personne n'est appelé par cette page.
 
 | Source | Alerte | Où regarder |
 |--------|-------|----------------|
-| Prometheus | `BatleHubDown`, `BatleHubHighErrorRate`, `BatleHubHighDenyRate` | `deploy/prometheus-alerts.yaml` |
+| Prometheus | `BatleHubDown`, `BatleHubHighErrorRate`, `BatleHubHighDeniedRequestRate` | `deploy/prometheus-alerts.yaml` |
 | Journal d'audit | Pic d'issues `denied`, identifiants inconnus dans la colonne `user_id` | `GET /api/v1/admin/audit-log` |
 | Limiteur de débit | 429 soutenus depuis une même IP | Filtre du journal d'audit par IP |
 | Analyse de conteneur | Constat HIGH ou CRITICAL de Trivy sur l'image déployée | `.github/workflows/image-scan.yaml` |

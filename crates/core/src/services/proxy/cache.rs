@@ -21,7 +21,7 @@ use super::{ProxyRequest, ProxyResponse, ProxyService, RequestTiming};
 
 /// The artifact-cache storage key for `req`. A pure function of the package
 /// coordinate, so functions below recompute it instead of taking it as a
-/// parameter — `handle.rs` still holds its own copy for the `artifact_is_fresh`
+/// parameter — `handle.rs` still holds its own copy for the `fresh_cached_artifact`
 /// check that picks between the cache-hit and fetch-and-cache paths.
 /// Read the first chunk of a raw response and refuse it when it starts like
 /// a script and the registry's policy is `deny`.
@@ -90,6 +90,7 @@ impl ProxyService {
         &self,
         req: ProxyRequest,
         artifact_key: String,
+        artifact: crate::ports::StoredArtifact,
         integrity: &IntegrityPolicy,
         timing: &RequestTiming,
     ) -> Result<ProxyResponse, CoreError> {
@@ -97,11 +98,6 @@ impl ProxyService {
         tracing::debug!(key = %artifact_key, "artifact cache hit");
         metrics::counter!("batlehub_artifact_cache_hits_total", "registry" => timing.registry_label.clone()).increment(1);
         self.metrics.record_artifact_hit(registry_name);
-        let artifact = self.storage.retrieve(&artifact_key).await?.ok_or_else(|| {
-            CoreError::Registry(format!(
-                "artifact '{artifact_key}' vanished between exists and retrieve"
-            ))
-        })?;
 
         // Re-serve integrity verification (opt-in via `verify_on_serve`): re-hash
         // the stored bytes against the SHA-256 we computed when they were first
@@ -295,7 +291,7 @@ impl ProxyService {
     ) -> Result<ProxyResponse, CoreError> {
         let registry_name = req.package_id.registry.as_str();
         // Pure function of `req`, cheap to recompute — the caller already holds its
-        // own copy (needed for the `artifact_is_fresh` check before choosing this
+        // own copy (needed for the `fresh_cached_artifact` check before choosing this
         // path), so this isn't threaded through as a ninth parameter.
         let artifact_key = artifact_key_for(&req);
         tracing::debug!(key = %artifact_key, "artifact not cached, fetching from upstream");
@@ -372,7 +368,7 @@ impl ProxyService {
         let had_verifier = verifier.is_some();
         let must_stage = had_verifier && integrity.block_on_mismatch;
         let store_key = if must_stage {
-            format!("staging:{}", uuid::Uuid::new_v4())
+            crate::ports::staging_key_for(&artifact_key)
         } else {
             artifact_key.clone()
         };
@@ -421,11 +417,12 @@ impl ProxyService {
 
         // Verified (or warn-only): promote a staged blob to the real key now —
         // after verification — so the artifact only becomes visible to concurrent
-        // readers as already-verified bytes. The promote re-streams the staged
-        // bytes (bounded memory) and dedup-hits the existing blob, so it costs no
-        // extra blob copy.
+        // readers as already-verified bytes. See `StorageBackend::promote`: on
+        // the router it is a rename of the blob already written, not a copy.
         if must_stage {
-            self.promote_staged(&store_key, &artifact_key).await?;
+            self.storage
+                .promote(&store_key, &artifact_key, &store_outcome)
+                .await?;
         }
 
         // The digest computed by the streaming store is the same bare SHA-256 the
@@ -589,31 +586,6 @@ impl ProxyService {
             audit_label,
         );
         super::finish_request(&timing.registry_label, "integrity_failed", timing.start);
-    }
-
-    /// Promote verified staged bytes to the real artifact key, then drop the
-    /// staging copy. The promote re-streams the staged bytes (bounded memory) and
-    /// dedup-hits the existing blob, so it costs no extra blob copy.
-    async fn promote_staged(&self, store_key: &str, artifact_key: &str) -> Result<(), CoreError> {
-        let staged = self.storage.retrieve(store_key).await?.ok_or_else(|| {
-            CoreError::Registry(format!(
-                "staged artifact '{store_key}' vanished before promotion"
-            ))
-        })?;
-        if let Err(e) = self
-            .storage
-            .store_streaming(artifact_key, staged.stream, StorageMeta::default())
-            .await
-        {
-            if let Err(cleanup_err) = self.storage.delete(store_key).await {
-                tracing::warn!(key = %store_key, error = %cleanup_err, "failed to delete staging artifact after promotion failure");
-            }
-            return Err(e);
-        }
-        if let Err(e) = self.storage.delete(store_key).await {
-            tracing::warn!(key = %store_key, error = %e, "failed to delete staging artifact after promotion");
-        }
-        Ok(())
     }
 
     /// `no-store` fallback: the upstream forbids caching, so there is nothing to

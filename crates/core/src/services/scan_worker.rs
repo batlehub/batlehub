@@ -86,6 +86,16 @@ pub struct ScanWorker {
     pub events: Option<Arc<dyn PackageRepository>>,
 }
 
+/// The longest an idle worker waits between polls of the queue. What a worker
+/// in another process adds to a scan's start, at worst; an embedded worker is
+/// woken by the enqueue itself.
+pub const MAX_IDLE_POLL: Duration = Duration::from_secs(16);
+
+/// How often the heartbeat, the queue-depth gauges and the exhausted-jobs
+/// sweep run on an idle worker. The heartbeat is read with a 120 s window
+/// (`--roles` start-up check), so this leaves it four beats of slack.
+const HOUSEKEEPING_INTERVAL: Duration = Duration::from_secs(30);
+
 /// The actor the worker's own events carry (RFC 0014 decision 12's form).
 pub const WORKER_ACTOR: &str = "system:security-worker";
 
@@ -142,8 +152,18 @@ impl ScanWorker {
     /// Lease and run one batch, then close out any job whose attempts are
     /// spent. Returns what happened so an embedded caller can pace itself.
     pub async fn run_once(&self) -> Result<PassReport, CoreError> {
+        self.pass(true).await
+    }
+
+    /// One pass. `housekeeping` adds the statements that do not need the
+    /// poll's cadence: the heartbeat (read with a 120 s window), the
+    /// queue-depth gauges, and the exhausted-jobs sweep — which a pass that
+    /// ran jobs does anyway, since a failure is what exhausts one.
+    async fn pass(&self, housekeeping: bool) -> Result<PassReport, CoreError> {
         let mut report = PassReport::default();
-        self.report_liveness().await;
+        if housekeeping {
+            self.report_liveness().await;
+        }
 
         let jobs = self
             .queue
@@ -163,6 +183,9 @@ impl ScanWorker {
             self.run_and_close(&job, &mut report).await;
         }
 
+        if !housekeeping && report.leased == 0 {
+            return Ok(report);
+        }
         // Jobs nobody could finish: the verdict says so, and the row closes.
         for job in self
             .queue
@@ -176,13 +199,27 @@ impl ScanWorker {
     }
 
     /// Run forever, pacing on the queue.
+    ///
+    /// An idle pass is one statement (the lease), and the wait between idle
+    /// passes doubles from `idle_poll` up to [`MAX_IDLE_POLL`]: an empty
+    /// queue polled every two seconds was five statements, three of them
+    /// writes, around 216 000 a day per replica with no traffic at all. A job
+    /// this process enqueues wakes it at once ([`ScanQueue::wait_for_work`]).
     pub async fn run(self: Arc<Self>) {
+        let mut idle = self.config.idle_poll;
+        let mut last_housekeeping: Option<Instant> = None;
         loop {
-            match self.run_once().await {
+            let housekeeping =
+                last_housekeeping.is_none_or(|at| at.elapsed() >= HOUSEKEEPING_INTERVAL);
+            if housekeeping {
+                last_housekeeping = Some(Instant::now());
+            }
+            match self.pass(housekeeping).await {
                 Ok(r) if r.leased == 0 && r.exhausted == 0 => {
-                    tokio::time::sleep(self.config.idle_poll).await
+                    self.queue.wait_for_work(idle).await;
+                    idle = (idle * 2).min(MAX_IDLE_POLL.max(self.config.idle_poll));
                 }
-                Ok(_) => {}
+                Ok(_) => idle = self.config.idle_poll,
                 Err(e) => {
                     tracing::warn!(error = %e, "security worker: pass failed; retrying");
                     tokio::time::sleep(self.config.idle_poll).await;

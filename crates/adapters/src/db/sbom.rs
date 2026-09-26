@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
@@ -6,7 +8,7 @@ use crate::db::DbResultExt;
 use batlehub_core::{
     entities::{ArtifactSbom, SbomFormat, SbomSource},
     error::CoreError,
-    ports::SbomRepository,
+    ports::{SbomFacts, SbomRepository},
 };
 
 pub struct PgSbomRepository {
@@ -149,6 +151,51 @@ impl SbomRepository for PgSbomRepository {
             .into_iter()
             .filter(|f| held.iter().any(|h| h == f.as_str()))
             .collect())
+    }
+
+    /// One statement for the page: the two per-version reads above, over
+    /// `version = ANY($3)`, without the `document` column.
+    async fn sbom_facts_for_versions(
+        &self,
+        registry: &str,
+        package_name: &str,
+        versions: &[String],
+    ) -> Result<HashMap<String, SbomFacts>, CoreError> {
+        if versions.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = sqlx::query(
+            "SELECT version, format, license FROM artifact_sboms \
+             WHERE registry = $1 AND package_name = $2 AND version = ANY($3) \
+             ORDER BY created_at DESC",
+        )
+        .bind(registry)
+        .bind(package_name)
+        .bind(versions)
+        .fetch_all(&self.pool)
+        .await
+        .db_err()?;
+
+        let mut out: HashMap<String, SbomFacts> = HashMap::new();
+        for r in &rows {
+            let facts = out.entry(r.get("version")).or_default();
+            // Newest first, so the first licence seen is the one
+            // `get_license_for_coordinate` would answer.
+            if facts.license.is_none() {
+                facts.license = r.get("license");
+            }
+            if let Some(f) = SbomFormat::parse(r.get("format")) {
+                if !facts.formats.contains(&f) {
+                    facts.formats.push(f);
+                }
+            }
+        }
+        for facts in out.values_mut() {
+            facts
+                .formats
+                .sort_by_key(|f| matches!(f, SbomFormat::CycloneDx));
+        }
+        Ok(out)
     }
 
     async fn get_license_for_coordinate(

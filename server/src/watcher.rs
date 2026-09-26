@@ -5,7 +5,7 @@ use actix_cors::Cors;
 use actix_web::http;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{trace as sdktrace, Resource};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
 use batlehub_config::schema::{AppConfig, OtelConfig};
 use batlehub_web::handlers::back_office::ops::warming::WarmingServiceMap;
@@ -739,7 +739,10 @@ pub(super) fn spawn_config_watcher(
 /// Initialise tracing. Returns the `TracerProvider` when OTLP is configured
 /// so the caller can keep it alive for the process lifetime and flush on exit.
 pub(super) fn init_tracing(otel_cfg: Option<&OtelConfig>) -> Option<sdktrace::SdkTracerProvider> {
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // Per layer rather than global: a global `RUST_LOG=info` would disable
+    // sqlx's DEBUG statement events for every layer, the counting one too.
+    let env_filter =
+        || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     let (otel_layer, provider) = match otel_cfg {
         Some(cfg) => match build_otlp_provider(cfg) {
@@ -758,9 +761,9 @@ pub(super) fn init_tracing(otel_cfg: Option<&OtelConfig>) -> Option<sdktrace::Sd
     };
 
     tracing_subscriber::registry()
-        .with(env_filter)
-        .with(tracing_subscriber::fmt::layer())
-        .with(otel_layer)
+        .with(tracing_subscriber::fmt::layer().with_filter(env_filter()))
+        .with(otel_layer.with_filter(env_filter()))
+        .with(crate::db_metrics::DbStatementLayer.with_filter(crate::db_metrics::filter()))
         .init();
 
     provider

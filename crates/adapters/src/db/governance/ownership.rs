@@ -47,57 +47,28 @@ impl OwnershipPort for PgOwnershipStore {
         package: &str,
         identity: &Identity,
     ) -> Result<bool, CoreError> {
-        // If there are no owners yet, any authenticated user may publish.
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM package_owners \
-             WHERE registry = $1 AND package_name = $2",
+        // One statement for the three questions: no owners yet (then any
+        // authenticated user may publish), the caller owns it, or one of the
+        // caller's groups does. A `NULL` user id and an empty group list each
+        // match nothing, as the separate checks skipped them.
+        let groups: Vec<&str> = identity.groups.iter().map(String::as_str).collect();
+        sqlx::query_scalar(
+            "SELECT NOT EXISTS(SELECT 1 FROM package_owners \
+                                WHERE registry = $1 AND package_name = $2) \
+                 OR EXISTS(SELECT 1 FROM package_owners \
+                            WHERE registry = $1 AND package_name = $2 \
+                              AND principal_type = 'user' AND principal_id = $3) \
+                 OR EXISTS(SELECT 1 FROM package_owners \
+                            WHERE registry = $1 AND package_name = $2 \
+                              AND principal_type = 'group' AND principal_id = ANY($4))",
         )
         .bind(registry)
         .bind(package)
+        .bind(identity.user_id.as_deref())
+        .bind(&groups)
         .fetch_one(&self.pool)
         .await
-        .db_err()?;
-
-        if count == 0 {
-            return Ok(true);
-        }
-
-        if let Some(ref uid) = identity.user_id {
-            let exists: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM package_owners \
-                  WHERE registry = $1 AND package_name = $2 \
-                    AND principal_type = 'user' AND principal_id = $3)",
-            )
-            .bind(registry)
-            .bind(package)
-            .bind(uid)
-            .fetch_one(&self.pool)
-            .await
-            .db_err()?;
-            if exists {
-                return Ok(true);
-            }
-        }
-
-        if !identity.groups.is_empty() {
-            let groups: Vec<&str> = identity.groups.iter().map(String::as_str).collect();
-            let exists: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM package_owners \
-                  WHERE registry = $1 AND package_name = $2 \
-                    AND principal_type = 'group' AND principal_id = ANY($3))",
-            )
-            .bind(registry)
-            .bind(package)
-            .bind(&groups)
-            .fetch_one(&self.pool)
-            .await
-            .db_err()?;
-            if exists {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
+        .db_err()
     }
 
     async fn add_owner(

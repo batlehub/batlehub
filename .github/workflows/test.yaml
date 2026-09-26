@@ -855,6 +855,10 @@ jobs:
           # hybrid: npm and pip on a `mode = "hybrid"` registry over a served
           # directory; both clients are on the runner image.
           - suite: hybrid
+          # db_calls: statements per request on the critical paths, counted
+          # from sqlx's own log against tests/heavy/db_calls.budget.json. No
+          # client and no network — the npm upstream is a stdlib mock.
+          - suite: db_calls
           # RFC 0018 from the client side: npm against a `[registries.security]`
           # registry backed by npmjs.org and the real OSV, the worker embedded.
           # Needs Node (installed below) and bubblewrap for the egress row —
@@ -968,7 +972,8 @@ jobs:
           sudo install -m 0755 /tmp/mise/bin/mise /usr/local/bin/mise
           mise --version
       - name: Install uv
-        if: matrix.suite == 'galaxy'
+        # db_calls: psycopg, to mint the PAT its token-auth scenarios present.
+        if: matrix.suite == 'galaxy' || matrix.suite == 'db_calls'
         run: |
           # From the release archive rather than the `curl | sh` installer:
           # one URL, one version, and nothing else enters the runner. The

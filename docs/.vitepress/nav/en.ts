@@ -350,6 +350,10 @@ export const sidebar = {
           text: "0034 — full-ICU node",
           link: "/rfc/0034-full-icu-node",
         },
+        {
+          text: "0036 — Regulatory alignment",
+          link: "/rfc/0036-regulatory-alignment",
+        },
       ],
     },
     {

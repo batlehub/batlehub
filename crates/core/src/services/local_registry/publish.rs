@@ -258,6 +258,18 @@ impl LocalRegistryService {
         req: &PublishPolicyRequest<'_>,
         publisher: &Identity,
     ) -> Result<(QuotaCheck, bool), CoreError> {
+        let (quota, is_new, _) = self.enforce_publish_policy_resolved(req, publisher).await?;
+        Ok((quota, is_new))
+    }
+
+    /// [`Self::enforce_publish_policy`], and the policy it resolved — which
+    /// [`Self::publish`] needs again for the visibility default, and would
+    /// otherwise read from the `policy` table a second time.
+    async fn enforce_publish_policy_resolved(
+        &self,
+        req: &PublishPolicyRequest<'_>,
+        publisher: &Identity,
+    ) -> Result<(QuotaCheck, bool, crate::entities::ResolvedPolicy), CoreError> {
         // Reject names/versions that could escape the storage root via path
         // traversal once interpolated into the storage key. Runs unconditionally,
         // independent of the optional versioning policy below.
@@ -415,7 +427,7 @@ impl LocalRegistryService {
             QuotaCheck::default()
         };
 
-        Ok((quota_check, is_new_package))
+        Ok((quota_check, is_new_package, resolved))
     }
 
     /// The versioning policy to enforce, when a tier deeper than the registry
@@ -666,8 +678,8 @@ impl LocalRegistryService {
     /// after the publish (useful for setting `X-Quota-*` response headers).
     /// Returns a zeroed `QuotaCheck` when no quota is configured.
     pub async fn publish(&self, req: PublishRequest) -> Result<QuotaCheck, CoreError> {
-        let (quota_check, is_new_package) = self
-            .enforce_publish_policy(
+        let (quota_check, is_new_package, resolved) = self
+            .enforce_publish_policy_resolved(
                 &PublishPolicyRequest {
                     registry: &req.registry,
                     name: &req.name,
@@ -718,10 +730,6 @@ impl LocalRegistryService {
         // namespace it happens to sit under, because a per-package override
         // remains (RFC 0011-bis §4.3) and deepest wins.
         let visibility = if visibility == Visibility::Public {
-            let resolved = self
-                .resolve_policy(&req.registry, &req.name, Some(&req.version))
-                .await
-                .unwrap_or_default();
             if crate::services::version_order::is_prerelease(&req.version) {
                 resolved.prerelease_visibility
             } else {

@@ -10,6 +10,9 @@ use batlehub_core::{
 };
 
 use crate::RegistryModeMap;
+use batlehub_core::entities::{ArtifactVulnerability, PackageId};
+use batlehub_core::ports::SbomFacts;
+use std::collections::HashMap;
 
 use crate::badges::socket_badge_url;
 use crate::handlers::back_office::packages::detail::VulnerabilityDto;
@@ -52,56 +55,38 @@ impl SbomDto {
 }
 
 /// What one version's SBOM availability is, for a row this instance holds bytes
-/// of.
+/// of, from the page's one batched read (`None` when that read failed).
 ///
 /// A lookup failure reads as `unknown` rather than as `none`, and rather than
 /// propagating: the SBOM is one control on a page whose job is showing versions,
 /// and an outage should neither error the page nor let it state that a version
 /// has no SBOM when we simply could not ask.
-async fn sbom_state_for(
+fn sbom_state_for(
     sbom_svc: &Option<web::Data<Arc<SbomService>>>,
-    registry: &str,
-    name: &str,
+    facts: Option<&HashMap<String, SbomFacts>>,
     version: &str,
 ) -> SbomDto {
-    let Some(svc) = sbom_svc.as_ref() else {
+    if sbom_svc.is_none() {
         // No SBOM service wired at all: nothing generates them here, so there is
         // definitively nothing to download — a statement, not an unknown.
         return SbomDto {
             state: "none".to_owned(),
             formats: Vec::new(),
         };
+    }
+    let Some(facts) = facts else {
+        return SbomDto::unknown();
     };
-    match svc.formats_for_coordinate(registry, name, version).await {
-        Ok(formats) if formats.is_empty() => SbomDto {
+    match facts.get(version) {
+        Some(f) if !f.formats.is_empty() => SbomDto {
+            state: "available".to_owned(),
+            formats: f.formats.iter().map(|f| f.as_str().to_owned()).collect(),
+        },
+        _ => SbomDto {
             state: "none".to_owned(),
             formats: Vec::new(),
         },
-        Ok(formats) => SbomDto {
-            state: "available".to_owned(),
-            formats: formats.iter().map(|f| f.as_str().to_owned()).collect(),
-        },
-        Err(_) => SbomDto::unknown(),
     }
-}
-
-/// The recorded licence for one version, or `None` when it is not known.
-///
-/// A lookup failure reads as unknown rather than propagating: the licence is
-/// one field on a page whose job is showing versions, and an SBOM outage should
-/// not turn the package page into an error. `LicenseGateRule` is where a failed
-/// lookup carries weight, and it logs its own.
-async fn license_for(
-    sbom_svc: &Option<web::Data<Arc<SbomService>>>,
-    registry: &str,
-    name: &str,
-    version: &str,
-) -> Option<String> {
-    let svc = sbom_svc.as_ref()?;
-    svc.repo
-        .get_license_for_coordinate(registry, name, version)
-        .await
-        .unwrap_or(None)
 }
 
 // ── Package detail ─────────────────────────────────────────────────────────────
@@ -1372,6 +1357,36 @@ async fn enrich_page(
     name: &str,
     badge_for: &impl Fn(&str) -> Option<String>,
 ) {
+    // Three reads for the page, whatever its length: a lookup per held row was
+    // three statements per row, seventy-five for a full page.
+    let held: Vec<String> = versions
+        .iter()
+        .filter(|r| r.source != "upstream")
+        .map(|r| r.version.clone())
+        .collect();
+    let coordinates: Vec<PackageId> = held
+        .iter()
+        .map(|v| PackageId::new(registry, name, v))
+        .collect();
+    let mut vulns: HashMap<String, Vec<ArtifactVulnerability>> = admin_svc
+        .list_vulnerabilities_for(&coordinates)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, found)| (id.version, found))
+        .collect();
+    // A licence lookup failure reads as unknown rather than propagating: the
+    // licence is one field on a page whose job is showing versions, and
+    // `LicenseGateRule` is where a failed lookup carries weight.
+    let facts = match sbom_svc.as_ref() {
+        Some(svc) if !held.is_empty() => svc
+            .repo
+            .sbom_facts_for_versions(registry, name, &held)
+            .await
+            .ok(),
+        _ => Some(HashMap::new()),
+    };
+
     for row in versions.iter_mut() {
         row.socket_badge_url = badge_for(&row.version);
         // Graded here because this is the one funnel every row the console draws
@@ -1381,15 +1396,17 @@ async fn enrich_page(
         if row.source == "upstream" {
             continue;
         }
-        row.vulnerabilities = admin_svc
-            .list_vulnerabilities(registry, name, &row.version)
-            .await
+        row.vulnerabilities = vulns
+            .remove(&row.version)
             .unwrap_or_default()
             .into_iter()
             .map(VulnerabilityDto::from)
             .collect();
-        row.license = license_for(sbom_svc, registry, name, &row.version).await;
-        row.sbom = sbom_state_for(sbom_svc, registry, name, &row.version).await;
+        row.license = facts
+            .as_ref()
+            .and_then(|f| f.get(&row.version))
+            .and_then(|f| f.license.clone());
+        row.sbom = sbom_state_for(sbom_svc, facts.as_ref(), &row.version);
     }
 }
 
