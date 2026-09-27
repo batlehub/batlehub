@@ -280,6 +280,18 @@ async fn the_devfile_is_served_byte_exact_at_its_default_and_its_version() {
     assert_eq!(body, DEVFILE_220);
 }
 
+/// Upstream's REST route resolves `latest` and `default` from its version map.
+#[actix_web::test]
+async fn the_latest_and_default_keywords_resolve_like_upstream() {
+    let (_s, app) = app().await;
+    for keyword in ["latest", "default"] {
+        let (status, body) =
+            status_and_body(&app, &format!("/proxy/{REG}/devfiles/nodejs/{keyword}")).await;
+        assert_eq!(status, 200, "{keyword}");
+        assert_eq!(body, DEVFILE_221, "{keyword}");
+    }
+}
+
 #[actix_web::test]
 async fn a_blocked_version_is_refused_and_the_default_follows_the_filter() {
     let (_s, app) = app().await;

@@ -42,7 +42,9 @@ use batlehub_core::{
         validate_digest, validate_namespace, validate_stack, validate_starter, validate_version,
         version_entry, versions_of, DEVFILE_TITLE, MANIFEST_ARTIFACT, MANIFEST_MEDIA_TYPE,
     },
-    services::{authz::authorize_unpinned, ProxyRequest, ProxyResponse, ProxyService},
+    services::{
+        authz::authorize_unpinned, blocking::best_latest, ProxyRequest, ProxyResponse, ProxyService,
+    },
 };
 
 use super::common::{
@@ -166,8 +168,10 @@ async fn resolve_version(
     let entry = find_stack(&index, stack)
         .ok_or_else(|| AppError::not_found(format!("stack '{stack}' is not in this registry")))?;
     let version = match version {
-        Some(v) => v,
-        None => {
+        // Upstream's REST route also takes the two keywords its version map
+        // carries: `latest` (the highest version) and `default`.
+        Some(v) if v != "latest" && v != "default" => v.to_owned(),
+        keyword => {
             // The default is this registry's "latest" (RFC 0035 §6.7).
             authorize_unpinned(
                 &svc.hot,
@@ -177,16 +181,21 @@ async fn resolve_version(
             )
             .await
             .map_err(AppError::from)?;
-            default_version(entry)
-                .ok_or_else(|| AppError::not_found(format!("stack '{stack}' has no versions")))?
+            let picked = if keyword == Some("latest") {
+                let all: Vec<String> = versions_of(entry).into_iter().map(str::to_owned).collect();
+                best_latest(&all)
+            } else {
+                default_version(entry).map(str::to_owned)
+            };
+            picked.ok_or_else(|| AppError::not_found(format!("stack '{stack}' has no versions")))?
         }
     };
-    if version_entry(entry, version).is_none() {
+    if version_entry(entry, &version).is_none() {
         return Err(AppError::not_found(format!(
             "the requested version {version} for stack {stack} does not exist in the registry"
         )));
     }
-    Ok(version.to_owned())
+    Ok(version)
 }
 
 macro_rules! index_route {
