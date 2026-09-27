@@ -315,7 +315,8 @@ task perf:soak DURATION=1h RATE=200   # overnight
 
 It compares idle RSS, the idle **live heap** (jemalloc's `stats.allocated`, via
 `batlehub_memory_allocated_bytes`), open file descriptors, OS threads and held
-database connections between the two windows, fits the RSS trend across the
+database connections between the two windows, fits the live-heap trend (RSS
+without jemalloc stats) across the
 sustained load, plots the curves (a text chart in the report, an SVG beside it),
 and **ranks the registries by what they cost** — from the server's own
 `/metrics`, scraped at both ends of the load and subtracted. That last one is
