@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Draft                                                         |
+| Status      | In review                                                     |
 | Short       | Regulatory alignment                                          |
 | Settles     | Which regulatory frameworks BatleHub is built to support, and what the audit trail, personal data and vulnerability handling must do to meet them |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -26,10 +26,11 @@ Resilience Act** — and names **NIS2 and DORA** as the next target, reached
 when the first regulated operator needs them. It is not a certification: a
 certificate belongs to an organisation running a service, never to the
 software. What the software owes is the evidence and the controls an auditor
-asks the operator for, and today four of those are missing or weak: the audit
-trail can be edited and is purged only by hand, sign-ins are not audit events,
-personal data in it has no lifecycle, and vulnerabilities are reported through
-a public issue template.
+asks the operator for, and four of those were missing or weak when this
+document was written: the audit trail can be edited and is purged only by
+hand, sign-ins are not audit events, personal data in it has no lifecycle, and
+vulnerabilities were reported through a public issue template (closed by
+phase 1, which landed with this document on 2026-09-26).
 
 The RFC changes four things, in the order they can land: the project's own
 **vulnerability handling** (a private channel, stated targets, advisories); an
@@ -48,10 +49,11 @@ access_events            one table, every action, kept forever unless an
 sign-in / token minted   not recorded
 SIEM                     GET /api/v1/admin/audit-log/export, by hand
 SECURITY.md              "open an issue using the Security Issue template"
+                         (until 2026-09-26, when phase 1 landed)
 
 # with this RFC
 [logging]
-format = "json"          # every log line JSON; audit events carry event.kind="audit"
+format = "json"          # every log line JSON; audit events carry event.dataset="batlehub.audit"
 
 [audit]
 access_retention_days     = 365   # downloads and metadata reads
@@ -75,7 +77,7 @@ flowchart LR
     end
     subgraph W["with this RFC"]
         R2["request or sign-in"] --> A2["access_events"]
-        R2 --> S2["JSON log line<br/>event.kind=audit"]
+        R2 --> S2["JSON log line<br/>event.dataset=batlehub.audit"]
         S2 --> C2["collector<br/>(Vector, Fluent Bit)"] --> SIEM["SIEM<br/>Sigma rules"]
         A2 --> SEAL["audit_seals<br/>hash chain, signed"]
         A2 --> LC["lifecycle job<br/>pseudonymise, then expire"]
@@ -92,8 +94,9 @@ copy was not rewritten either.
 
 1. **The audit trail is editable, and its own purge is erasable.**
    `access_events` is a plain Postgres table. `DELETE
-   /api/v1/admin/audit-log?before=` (`crates/web/src/handlers/back_office/audit.rs`,
-   `purge_audit_log`) writes an `AuditPurge` event — and the handler's own
+   /api/v1/admin/audit-log?before=`
+   (`crates/web/src/handlers/back_office/audit.rs`, `purge_audit_log`)
+   writes an `AuditPurge` event — and the handler's own
    comment says a second call with the same cutoff removes it. ISO 27001
    A.8.15 asks that logs be *protected against tampering and unauthorised
    access*; nothing here can show they were.
@@ -117,19 +120,22 @@ copy was not rewritten either.
    export has no rule set to start from. Detection is ISO A.8.16; for a
    future NIS2 or DORA operator it is the control incident reporting depends
    on.
-5. **Vulnerabilities are reported in public.** `SECURITY.md` says *do not
-   open a public issue* and then directs the reporter to
+5. **Vulnerabilities were reported in public** (until phase 1 landed with
+   this document, 2026-09-26). `SECURITY.md` said *do not open a public
+   issue* and then directed the reporter to
    `.github/ISSUE_TEMPLATE/security-issue.md` — a public issue template.
-   There is no private channel, no stated response target, no advisory or CVE
-   process and no support window. The CRA's vulnerability-handling
+   There was no private channel, no stated response target, no advisory or
+   CVE process and no support window. The CRA's vulnerability-handling
    requirements (Annex I, Part II) are exactly these things, and a
    prospective client's supplier questionnaire asks for them whether or not
    the CRA binds the project yet.
 6. **Nothing maps BatleHub to the frameworks its operators are audited
-   against.** `docs/operations/soc2-checklist.md` is the only mapping; GDPR,
-   ISO 27001, the CRA, NIS2 and DORA appear nowhere in the tree. An operator
-   whose auditor asks "which control does this satisfy" has to derive the
-   answer from source.
+   against.** `docs/operations/soc2-checklist.md` is the only mapping. GDPR
+   and the CRA are each named once in passing (`incident-response.md` §PII
+   handling, `guide/sbom.md`'s first line); ISO 27001, NIS2 and DORA appear
+   nowhere, and no page maps a control to any of the five. An operator whose
+   auditor asks "which control does this satisfy" has to derive the answer
+   from source.
 
 ---
 
@@ -183,7 +189,7 @@ copy was not rewritten either.
 ```toml
 [logging]
 # "text" (the default, today's output) or "json": one JSON object per line
-# on stdout. Audit events are ordinary lines with event.kind = "audit".
+# on stdout. Audit events are ordinary lines with event.dataset = "batlehub.audit".
 format = "json"
 
 [audit]
@@ -222,6 +228,14 @@ private vulnerability reporting, and a `security.txt` on the docs site.
   `pseudonymise_after_days` keeps its user id, its action and its outcome and
   loses the precision of its IP and its user agent. A row past its class's
   retention is deleted.
+- **Pseudonymisation reaches the access class only.** A security-class row
+  keeps its full IP for the whole of `security_retention_days`, because the
+  source of a sign-in, a grant or a purge *is* the evidence: a truncated IP
+  cannot tell two hosts in one `/24` apart in an access review. The basis is
+  the operator's legitimate interest in the security of processing (GDPR
+  Art. 6(1)(f), Art. 32) and, where one applies, a legal obligation to keep
+  the record; the compliance page says which, and the shorter retention
+  proposed for the access class is what keeps the two proportionate.
 - **A purge is security class and outlives later purges.** The manual purge
   (`purge_audit_log`) deletes access-class rows only; security-class rows are
   removed by their retention and by nothing else. That closes motivation 1's
@@ -232,10 +246,13 @@ private vulnerability reporting, and a `security.txt` on the docs site.
 - **Erasure pseudonymises; it does not delete.** `gdpr erase --user X`
   replaces `X` with `erased:<hmac>` in `access_events`, token rows and block
   rows, with a key the operator holds, so two rows of the same subject stay
-  linkable to each other and to nobody. Deleting the rows would destroy the
-  security evidence the retention class exists to keep; the regulation
-  allows keeping what a legal obligation or legitimate interest requires, and
-  the operator documents which one applies.
+  linkable to each other and to nobody. Publication and ownership rows
+  (`published_by`, `package_ownership`) are exempt (§11 q5): they are
+  retained under legitimate interest, and `gdpr export` lists them so the
+  subject sees what is kept. Deleting the rows would destroy the security
+  evidence the retention class exists to keep; the regulation allows keeping
+  what a legal obligation or legitimate interest requires, and the operator
+  documents which one applies.
 - **The stream is the table, not a second opinion.** An event is logged at
   the moment `record_access` writes it, with the same fields, so a SIEM rule
   and an export can never disagree about what happened. A failed database
@@ -297,7 +314,7 @@ flowchart TD
     E["record_access(event)"] --> DB["INSERT access_events"]
     E --> LOG["tracing event<br/>target batlehub::audit"]
     LOG --> J{"logging.format"}
-    J -->|"json"| OUT["stdout line<br/>event.kind=audit"]
+    J -->|"json"| OUT["stdout line<br/>event.dataset=batlehub.audit"]
     J -->|"text"| TXT["human line, as today"]
     DB --> W{"window closed?"}
     W -->|"yes"| SEAL["audit_seals row<br/>digest, prev, signature"]
@@ -347,6 +364,17 @@ window. Because every amend and expire is signed and chained, the lifecycle
 can change the rows and an attacker cannot: rewriting a row, or deleting one,
 without the key leaves a window whose digest matches no signed record.
 
+One edit the chain alone cannot see is **truncation**: an attacker with write
+access to the database deletes the last *N* windows' rows *and* their seal
+records, and `verify` walks a shorter chain that is valid end to end. The
+anchor has to live outside the database, so **every seal, amend and expire
+record is also an audit line on the stream** (`event.action=audit_seal`,
+carrying the record's digest), and `verify --head <digest>` refuses a chain
+whose newest record is not the digest the SIEM last received. Because the
+stream copy leaves the host before the window it seals can be deleted, a
+truncated tail is a head that no longer matches — which is the same reason
+§4.3 warns about sealing without a stream.
+
 ### 5.4 Reporting a vulnerability in BatleHub
 
 ```mermaid
@@ -375,7 +403,8 @@ scanner, their reading and their auditor see one answer.
 ### 6.1 Authentication events
 
 - `crates/core/src/entities/access_log.rs` gains `SignIn`, `SignInFailed`,
-  `TokenCreate`, `TokenRevoke` and `CredentialRejected`, with their
+  `TokenCreate`, `TokenRevoke`, `TokenNewSource` and `CredentialRejected`,
+  with their
   `as_str` spellings and the `action_to_str` arm in
   `crates/adapters/src/db/packages/mod.rs`. All are security class.
 - `SignIn` / `SignInFailed` are recorded in `oidc_callback`
@@ -385,10 +414,20 @@ scanner, their reading and their auditor see one answer.
 - `TokenCreate` / `TokenRevoke` in `crates/web/src/handlers/auth/tokens.rs`,
   carrying the token id and name, never its value or hash.
 - `CredentialRejected` in `crates/web/src/middleware/auth.rs` when a bearer
-  was presented and no provider accepted it. Throttled in process to one row
-  per source IP per minute, so a credential-stuffing burst costs one write a
+  was presented and no provider accepted it — the middleware is the one
+  place that knows both facts, since it falls back to `Identity::anonymous()`
+  rather than answering, and the refusal the client then sees is the
+  registry's own for an anonymous read. Throttled in process to one row per
+  source IP per minute, so a credential-stuffing burst costs one write a
   minute rather than one per attempt; the throttled count is carried on the
-  row that is written.
+  row that is written. The throttle is per process: an estate of *n* proxy
+  replicas writes up to *n* rows a minute per IP, and the burst rule's
+  threshold in §6.2 is set with that in mind.
+- `TokenNewSource` in the PAT provider, when a token is accepted from a
+  source IP it was last used from a different one — the row already carries
+  `last_used` (migration 038), so the comparison is a read that happens
+  anyway. A first-seen detection is stateful and outside what a Sigma rule
+  can express (§6.2), so the server emits the fact and the rule matches it.
 
 ### 6.2 The audit stream
 
@@ -396,15 +435,26 @@ scanner, their reading and their auditor see one answer.
   `tracing_subscriber::fmt::layer().json()` with the current span flattened,
   so `request_id` is on every line (the request span already carries it,
   `server/src/server_factory.rs`).
-- `record_access` callers do not change. There are 25 of them across
+- `record_access` callers do not change. There are 15 of them across
   `crates/core` and `crates/web` and no shared helper above the port, so the
   event is emitted where every one of them lands:
   `crates/adapters/src/db/packages/crud.rs::record_access_impl` (and the
   in-memory repository, for the web tests), on target `batlehub::audit`, with
-  ECS-style field names: `event.kind`,
-  `event.action`, `event.outcome`, `event.reason`, `user.id`, `user.roles`,
-  `source.ip`, `user_agent.original`, `batlehub.registry`, `package.name`,
+  ECS field names: `event.dataset` (`batlehub.audit`, the selector a
+  collector and every Sigma `logsource` key on), `event.kind` (`event`, the
+  ECS value — `audit` is not one, and a collector's ECS mapping would refuse
+  it), `event.category` (`authentication`, `iam`, `package` or
+  `configuration` by action), `event.action`, `event.outcome`,
+  `event.reason`, `user.id`, `user.roles`, `source.ip`,
+  `user_agent.original`, `batlehub.registry`, `package.name`,
   `package.version`, `http.request.id`.
+- Two writes outside `record_access` join the stream with their own emit,
+  same target and field names: the `config_changes` insert
+  (`crates/adapters/src/db/config_change.rs`, `event.action=config_applied`
+  or `config_rejected` from its `status` column) and the seal records of
+  §5.3 (`event.action=audit_seal`). Without the first, `config_rejected.yml`
+  below has nothing to fire on; without the second, the chain has no anchor
+  off the host.
 - `deploy/siem/sigma/` carries the rules, one file each, with a
   `README.md` that shows `sigma convert -t splunk` and a Vector and a Fluent
   Bit snippet. The initial set:
@@ -418,9 +468,10 @@ scanner, their reading and their auditor see one answer.
 | `denied_download_burst.yml` | `download` + `outcome: denied` per IP over threshold |
 | `bulk_pull.yml` | one principal pulling an unusual number of distinct packages in 10 min (exfiltration of a private registry) |
 | `blocked_package_pulled.yml` | a download of a coordinate a flag or verdict marked malicious (`event.reason` carries it) |
-| `token_used_new_ip.yml` | a PAT seen from a source IP it was never seen from (correlation rule) |
+| `token_new_source.yml` | any `token_new_source` (§6.1): a PAT used from a source IP other than its last one. Emitted by the server, because "never seen before" is stateful and Sigma correlations only count, count distinct values, or order events in a window |
 | `retention_or_cache_clear.yml` | `cache_clear`, `retention_run`, `tombstone_compact` outside a maintenance window |
-| `config_rejected.yml` | a rejected config reload |
+| `config_rejected.yml` | `config_rejected`, from the `config_changes` emit above |
+| `audit_chain_gap.yml` | two consecutive `audit_seal` lines whose `prev` and digest do not chain — the SIEM-side half of the truncation check of §5.3 |
 
 - `task siem:check` runs `sigma check` over the directory, and a fixture
   test replays recorded audit lines (from §6.7's run) through a minimal
@@ -439,9 +490,10 @@ scanner, their reading and their auditor see one answer.
 - `crates/adapters`: `purge_events_before` gains the class restriction; a
   migration adds an index on `(action, created_at)` for the class scans.
 - `batlehub admin gdpr erase --user <id>` and
-  `POST /api/v1/admin/gdpr/erase` (`audit:purge` plus a new `gdpr:erase`
-  verb), and `gdpr export --user <id>` answering an access request from the
-  same rows.
+  `POST /api/v1/admin/gdpr/erase`, behind a new `gdpr:erase` verb on its
+  own — `audit:purge` does not imply it, since a purge removes traffic and
+  an erasure rewrites evidence — and `gdpr export --user <id>` answering an
+  access request from the same rows, behind `audit:read`.
 
 ### 6.4 Seals
 
@@ -453,11 +505,20 @@ scanner, their reading and their auditor see one answer.
 - `crates/core/src/services/audit_seal.rs`: the job of §5.3, leader-elected
   like §6.3, and the verifier. The canonical row form is the export's JSON
   with keys sorted, one per line.
-- `batlehub admin audit verify [--from --to]`: exits `0` when every window
-  verifies, `1` naming the first window that does not, and prints windows
-  expired by retention as such.
+- `batlehub admin audit verify [--from --to] [--head <digest>]`: exits `0`
+  when every window verifies, `1` naming the first window that does not, and
+  prints windows expired by retention as such. `--head` is the digest of the
+  newest `audit_seal` line the SIEM holds; a chain whose last record is not
+  that digest is reported as truncated (§5.3), and `verify` without it says
+  in its output that truncation was not checked.
 
 ### 6.5 The project's vulnerability handling (phase 1)
+
+**Landed 2026-09-26, in the commit that adds this document** (`37e2d15e`):
+the rewritten `SECURITY.md`, both templates removed and replaced by the
+contact-link configs, the console's footer link, the advisory procedure in
+`security-scanning.md`, and the changelog entry. The list below is what was
+built, kept as the record.
 
 - `SECURITY.md` rewritten: GitHub private vulnerability reporting as the
   channel (already enabled on `batlehub/batlehub`: the repository's
@@ -487,11 +548,11 @@ scanner, their reading and their auditor see one answer.
 
 - A `yara` scanner kind for the scan worker (`ArtifactScanner`, RFC 0018),
   reading operator-supplied rule files from `[scanners.yara] rules_dir` and
-  run inside the RFC 0022 sandbox like the other byte-reading scanners. A
-  match is a finding with the rule name; the policy decides whether it
-  blocks.
-- Kept out of the earlier phases because it adds a dependency (open
-  question 3) and is useful only to an operator who has rules to run.
+  running yara-x's `yr scan` binary inside the RFC 0022 sandbox like the
+  other byte-reading scanners (§11 q6). A match is a finding with the rule
+  name; the policy decides whether it blocks.
+- Kept out of the earlier phases because it adds a binary to the worker
+  image and is useful only to an operator who has rules to run.
 
 ### 6.7 `tests/heavy/authz.sh`, phase `audit`
 
@@ -503,15 +564,19 @@ proves, on the wire and in the stream:
 
 1. `npm install` of a public package with a PAT — the tap shows the tarball
    `GET ... -> 200` with request id *R*, and the server's stdout carries exactly
-   one line with `event.kind=audit`, `event.action=download`,
+   one line with `event.dataset=batlehub.audit`, `event.action=download`,
    `event.outcome=allowed`, `http.request.id=R`, and the PAT's `user.id`.
 2. `npm install` of a blocked version — npm exits non-zero with its own
    `E403` text, the tap shows no tarball request, and the stream carries one
    `download` line with `event.outcome=denied` and the block reason.
-3. The PAT is revoked through the API, then used — npm exits with `E401`; the
-   stream carries `token_revoke` then `credential_rejected` from the tap's
-   source IP; twenty further attempts in the same minute produce no further
-   rows (the throttle) and one row's `throttled_count` says 20.
+3. The PAT is revoked through the API, then used — the middleware falls
+   back to anonymous (§6.1), so what npm sees is the closed registry's
+   refusal of an anonymous read: the tap shows the packument
+   `GET ... -> 403`, the status the suite's existing npm-deny arm already
+   asserts through `WIRE_403`, and npm exits non-zero with its `E403` text.
+   The stream carries `token_revoke` then `credential_rejected` from the
+   tap's source IP; twenty further attempts in the same minute produce no
+   further rows (the throttle) and one row's `throttled_count` says 20.
 4. `batlehub admin audit verify` exits `0` after the run. One row is then
    altered with SQL; `verify` exits `1` and names the window holding it.
 5. `DELETE /api/v1/admin/audit-log?before=now` removes the run's `download`
@@ -535,8 +600,8 @@ cross-references.
 **Deliberately untouched**, so reviewers do not go looking:
 
 - `config_changes` (`018_config_changes.sql`) — already an append-only record
-  with actor and diff; it joins the stream through its existing write, and
-  full before/after snapshots are a separate question.
+  with actor, status and diff; §6.2 adds one emit beside its insert and
+  nothing else, and full before/after snapshots are a separate question.
 - `timed_query` and `db_metrics` — observability, not audit; a metric is not
   evidence of who did what.
 - The SOC 2 page — kept as it is; the new pages sit beside it and link to it.
@@ -552,10 +617,11 @@ cross-references.
   `-nis2-dora.md` listing what exists today and what §12's last phase adds.
 - `docs/operations/siem.md`: the stream, the field reference, the collectors,
   the rules and how to add one.
-- `docs/operations/incident-response.md`: the alert named
-  `BatleHubHighDenyRate` becomes `BatleHubHighDeniedRequestRate`, the name
-  in `deploy/prometheus-alerts.yaml`; a section on what NIS2 Art. 23's
-  timeline asks of an operator and where BatleHub's evidence for it lives.
+- `docs/operations/incident-response.md`: a section on what NIS2 Art. 23's
+  timeline asks of an operator and where BatleHub's evidence for it lives,
+  and §PII handling rewritten around `gdpr erase` instead of the hand-written
+  `UPDATE`. (The alert name it quoted was corrected to
+  `BatleHubHighDeniedRequestRate` in both locales with phase 1.)
 - French translations of each, as for every `operations/` page.
 
 ---
@@ -605,7 +671,7 @@ cross-references.
 - **Default behaviour**: unchanged. No `[audit]`, no `[logging]` → text logs,
   nothing expires, nothing is sealed; one startup warning.
 - **New audit actions** appear in the audit log, its export and the console's
-  filters; a consumer that switches on action names sees five new values.
+  filters; a consumer that switches on action names sees six new values.
 - **Migrations**: `audit_seals`, the `(action, created_at)` index, and the
   CHECK/enum widening for the new actions. Additive; `CURRENT_CONFIG_VERSION`
   does not move.
@@ -630,10 +696,13 @@ cross-references.
   create/revoke and credential-rejected rows, with the throttle.
 - **SIEM** (`task siem:check`): `sigma check`, and the replay fixture of §6.2.
 - **Heavy** (`tests/heavy/authz.sh`, phase `audit`): §6.7.
-- **Existing suites** that must pass unchanged: `crates/web/tests/audit*`,
-  `authz_matrix.rs` (the new verb joins its inventory), and
-  `tests/heavy/db_calls.sh` — the stream must add no statement to any
-  request, and the budget says so.
+- **Existing suites** that must pass unchanged: the web tests that read
+  the audit log today (`admin_packages.rs`, `tokens_and_pagination.rs`,
+  `proxy_basic.rs`, `bulk_and_quota_and_cache.rs`, `dynamic_groups.rs`,
+  `listing_audit.rs`); `authz_matrix.rs`, whose route inventory
+  (`the_route_inventory_matches_the_router`) fails until the erase route has
+  its row; and `tests/heavy/db_calls.sh` — the stream must add no statement
+  to any request, and the budget says so.
 
 ---
 
@@ -647,25 +716,15 @@ cross-references.
 | 2 | "YARA rules for the SIEM"? | **Sigma for the audit stream, YARA as an artifact scanner (§6.6).** Each format for what it matches. |
 | 3 | Does the CRA bind the project now? | **No: non-commercial.** Its vulnerability-handling requirements are built now anyway (§6.5), because they are cheap and a paid offer would make them binding from its first release. |
 
+| 4 | Default retention values? | **Absent means unchanged.** No `[audit]` block expires nothing and warns once; 365 days for access rows and 1 095 for security rows ship as the documented example, not the default. An upgrade that deleted a year of rows unasked is the incident this RFC exists to prevent, and a DORA operator who wants security events longer sets the number. Decided 2026-09-27. |
+| 5 | Erasure of `published_by` and ownership rows? | **The audit trail and tokens only.** Publication and ownership rows are exempt, documented as retained under legitimate interest: "who published this" has to stay answerable for every consumer of the package, and an owner-less package has no one to administer it. `gdpr export` still lists those rows, so the subject sees what is kept and why. Decided 2026-09-27. |
+| 6 | YARA engine? | **yara-x's `yr` binary, in the sandbox.** VirusTotal's Rust rewrite is the maintained line, and a binary in the RFC 0022 sandbox is how GuardDog and Trivy already run: the rules execute outside the worker process and the server links nothing. The in-process `yara-x` crate was rejected because operator-supplied rules would run in the worker's own address space. Decided 2026-09-27. |
+| 7 | Where the stream goes when logs stay text? | **stdout, and only under `format = "json"`.** The default stays today's text output from the tracing layer; switching to `json` is what produces the stream, on stdout, where a collector reads. No file sink and no second shape on stderr: one switch, one place, nothing to rotate. Decided 2026-09-27. |
+
 ### Still open
 
-1. **Default retention values.** 365 days for access rows and 1 095 for
-   security rows are proposals. Access logs are commonly kept six months to
-   a year; a DORA operator may want security events longer. Recommendation:
-   ship the proposals as the documented examples, keep the default "absent".
-2. **Erasure of `published_by` and ownership rows.** Pseudonymising the
-   publisher of a package breaks "who published this" for every consumer of
-   it. Recommendation: exempt publication records, documented as retained
-   under legitimate interest, and pseudonymise only the audit trail and
-   tokens.
-3. **YARA engine.** The `yara-x` crate (Rust, in-process) against the
-   `yara` binary in the sandbox. Recommendation: the binary in the sandbox,
-   matching how GuardDog and Trivy already run and adding no linked
-   dependency to the server.
-4. **Where the stream goes in a non-JSON deployment.** Keeping text logs and
-   writing the audit lines to a separate file would let an operator adopt the
-   stream without changing log parsing. Recommendation: not now — one switch,
-   stdout, which is what a collector reads.
+None. The questions numbered 1–4 of the first draft's open list are rows
+4–7 above; each was decided as the draft recommended.
 
 ---
 
@@ -673,10 +732,10 @@ cross-references.
 
 | Phase | Content |
 | --- | --- |
-| 1 | **Project vulnerability handling** (§6.5) and the compliance pages (§6.8, without the SIEM page). Useful alone: it answers a supplier questionnaire today. |
+| 1 | **Project vulnerability handling** (§6.5) — **landed 2026-09-26** with this document — and the compliance pages (§6.8, without the SIEM page), still to write. Useful alone: it answers a supplier questionnaire today. |
 | 2 | **Authentication events and the JSON stream** (§6.1, §6.2 without the rules), `[logging] format`. |
 | 3 | **Sigma rules**, `task siem:check`, `docs/operations/siem.md`, and §6.7 cases 1–3 and 6. |
 | 4 | **Retention classes, pseudonymisation, erasure** (§6.3) and §6.7 case 5. |
 | 5 | **Seals and `audit verify`** (§6.4) and §6.7 case 4. |
-| 6 | **YARA scanner** (§6.6), once open question 3 is settled. |
+| 6 | **YARA scanner** (§6.6) with yara-x's `yr` in the worker image (§11 q6). |
 | 7 | **NIS2 / DORA**, when a regulated operator needs them: MFA enforcement through the OIDC `acr`/`amr` claims; signing keys (publish, APK, VS Code, seal) held in a KMS with a rotation procedure; a restore test in CI with a stated RPO/RTO; incident classification fields on notifications; a DORA Art. 30 contract annex template for a hosted offer. |
