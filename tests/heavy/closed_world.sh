@@ -77,7 +77,7 @@ heavy_need python3 "python3 (the wire tap)"
 # `go` in a minute than by `jbplugin` after a 1.5 GB download.
 PHASES=(go node python java ruby dotnet php conda terraform mise
         nvm sdkman ovsx helm apt forgejo gitlab jbr vscode jbplugin dnf pacman
-        ansible)
+        ansible devfile)
 WANTED=("$@")
 [[ "${#WANTED[@]}" == 0 || "${WANTED[0]}" == "all" ]] && WANTED=("${PHASES[@]}")
 for want in "${WANTED[@]}"; do
@@ -181,6 +181,7 @@ DEB_REG="deb-$HEAVY_RUN"
 RPM_REG="rpm-$HEAVY_RUN"
 PACMAN_REG="pacman-$HEAVY_RUN"
 GALAXY_REG="galaxy-$HEAVY_RUN"
+DEVFILE_REG="devfile-$HEAVY_RUN"
 
 heavy_forge_auth_config tests/heavy/config.closed-world.toml
 heavy_start_server "$HEAVY_CONFIG"
@@ -2065,6 +2066,50 @@ EOF
 # ── Run the phases that were asked for ───────────────────────────────────────
 
 RAN=()
+# ── §24. devfile ─────────────────────────────────────────────────────────────
+#
+# `registry-library` — the library `odo` and the IDE plugins embed — pulling a
+# stack through a `devfile` registry (RFC 0035). The client asks for the OCI
+# manifest and layers at the **host root**, dropping any path prefix, so it is
+# pointed at `devfile.localhost`, which the registry is bound to; the loopback
+# exemption in `DENY` covers it, because Go's `NO_PROXY` matching treats the
+# bare `localhost` entry as covering its subdomains.
+#
+# There is no "and it ran" step: a devfile is instructions a Che workspace
+# executes, not code its client runs. What this phase proves instead is the
+# thing the client itself fails to enforce — every file it wrote is the one the
+# manifest names — because `registry-library` keeps a file that fails its own
+# digest check and exits 0 (RFC 0035 §2.3). The wider cases (blocking, replay,
+# the prefix trap, Che's reads) are `tests/heavy/devfile.sh`.
+phase_devfile() {
+  local out dir="$HEAVY_WORK/devfile" root want got
+  heavy_devfile_client
+  out="$(cw_out devfile)"
+  root="http://devfile.localhost:$HEAVY_TAP_PORT/"
+  mkdir -p "$dir/ctx" "$dir/home"
+
+  heavy_mark devfile
+  heavy_log "registry-library pull go:2.6.0 --all — a stack through the proxy, with egress denied"
+  "${DENY[@]}" HOME="$dir/home" "$HEAVY_DEVFILE_CLIENT" pull "$root" go:2.6.0 \
+    --all --new-index-schema --context "$dir/ctx" >"$out" 2>&1 || true
+  grep -q "Failed" "$out" && { cat "$out" >&2; heavy_fail "devfile: the client reported a failure"; }
+  heavy_wire_re_after devfile '^GET /v2index -> 200' \
+    "devfile: the index was not read through the proxy"
+  heavy_wire_re_after devfile '^HEAD /v2/devfile-catalog/go/manifests/2[.]6[.]0 -> 200' \
+    "devfile: the manifest was not resolved through the proxy"
+  [[ "$(heavy_wire_count_after devfile '^GET /v2/devfile-catalog/go/blobs/sha256:[0-9a-f]{64} -> 200')" -ge 2 ]] \
+    || heavy_fail "devfile: the layers did not come through the proxy"
+  [[ -s "$dir/ctx/devfile.yaml" && -d "$dir/ctx/docker" ]] \
+    || { cat "$out" >&2; heavy_fail "devfile: the pull left no devfile and no unpacked archive"; }
+
+  want="$(curl -fsS "$HEAVY_TAP_BASE/proxy/$DEVFILE_REG/v2/devfile-catalog/go/manifests/2.6.0" \
+    | python3 -c 'import json,sys; m=json.load(sys.stdin); print([l["digest"] for l in m["layers"] if l.get("annotations",{}).get("org.opencontainers.image.title")=="devfile.yaml"][0])')"
+  got="sha256:$(sha256sum "$dir/ctx/devfile.yaml" | cut -d' ' -f1)"
+  [[ "$got" == "$want" ]] \
+    || heavy_fail "devfile: the devfile on disk ($got) is not the layer the manifest names ($want)"
+  heavy_log "CLOSED-WORLD-DEVFILE-OK (the stack came from the instance: $got)"
+}
+
 for phase in "${WANTED[@]}"; do
   heavy_log "── phase: $phase ──"
   "phase_$phase"

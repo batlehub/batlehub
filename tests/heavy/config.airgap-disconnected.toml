@@ -180,3 +180,16 @@ private_key_pem = "${APK_SIGNING_KEY_PEM}"
 anonymous = ["releases:read", "releases:list", "source:read"]
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
+
+# ── devfile (RFC 0035) ───────────────────────────────────────────────────────
+[[registries]]
+type = "devfile"
+name = "devfile-${HEAVY_RUN}"
+mode = "proxy"
+# registry-library asks for /v2/… at the host root (RFC 0035 §5.3).
+hosts = ["devfile.localhost"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

@@ -57,9 +57,9 @@ on a large registry from queueing the whole table.
 
 Jobs are **leased, not consumed**. One pass is:
 
-1. **Heartbeat and publish depths.** The worker writes to `worker_heartbeats`
-   and sets the queued-jobs gauge. Neither is load-bearing, so neither can fail
-   the pass.
+1. **Heartbeat and publish depths**, at most every 30 seconds. The worker
+   writes to `worker_heartbeats` and sets the queued-jobs gauge. Neither is
+   load-bearing, so neither can fail the pass.
 2. **Lease a batch** — at most `max_concurrent`, filtered to `[worker]
    registries` when that list is set, taken with `FOR UPDATE SKIP LOCKED` so
    any number of workers can share the queue.
@@ -70,10 +70,18 @@ Jobs are **leased, not consumed**. One pass is:
    the enrichers over what they found.
 5. **Record the verdict** and close the row.
 
-Between passes the loop sleeps `idle_poll` only when the queue was empty.
+Exhausted jobs are swept after a pass that ran jobs, and otherwise with the
+heartbeat.
+
+Between passes the loop waits only when the queue was empty, and the wait
+doubles from `idle_poll` up to 16 seconds while it stays empty: an idle worker
+runs about ten statements a minute, not the 150 a flat two-second poll cost. A
+job enqueued by the **same process** wakes the worker at once, so an embedded
+worker starts a scan sooner than the poll ever did; a worker in its own process
+(`--roles worker`) picks it up within 16 seconds at worst.
 
 The defaults are four concurrent jobs, a ten-minute `job_timeout`, three
-attempts and a two-second idle poll. They live in `[worker]`, documented in the
+attempts and an idle poll that starts at two seconds. They live in `[worker]`, documented in the
 [configuration reference](/guide/configuration#scanners-and-worker).
 
 ### When an attempt does not finish

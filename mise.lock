@@ -22,13 +22,13 @@ version = "0.8.0"
 backend = "cargo:cargo-sweep"
 
 [[tools.claude]]
-version = "2.1.270"
+version = "2.1.280"
 backend = "aqua:anthropics/claude-code"
 
 [tools.claude."platforms.linux-x64"]
-checksum = "sha256:b069b327de3ad6c8cda70886675da46fb213797ac99a367df384e2202b37e0b7"
-url = "https://github.com/anthropics/claude-code/releases/download/v2.1.270/claude-linux-x64.tar.gz"
-url_api = "https://api.github.com/repos/anthropics/claude-code/releases/assets/559771973"
+checksum = "sha256:4239c476881f46f5bd2cccee97c10b1c8073f4ab4ae40e3c829493210e757764"
+url = "https://github.com/anthropics/claude-code/releases/download/v2.1.280/claude-linux-x64.tar.gz"
+url_api = "https://api.github.com/repos/anthropics/claude-code/releases/assets/581709942"
 
 [[tools.cocogitto]]
 version = "7.0.0"
@@ -49,22 +49,22 @@ url = "https://github.com/mlab-sh/mlab-cli/releases/download/v1.0.4/mlab-1.0.4-x
 url_api = "https://api.github.com/repos/mlab-sh/mlab-cli/releases/assets/547198585"
 
 [[tools."github:mlab-sh/postmortem"]]
-version = "2.4.0"
+version = "2.5.0"
 backend = "github:mlab-sh/postmortem"
 
 [tools."github:mlab-sh/postmortem"."platforms.linux-x64"]
-checksum = "sha256:63f16a0368eb40ed751b6d0a9e93b02b93ef124bdc3b81957dcf5bae27e61672"
-url = "https://github.com/mlab-sh/postmortem/releases/download/v2.4.0/postmortem-2.4.0-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/mlab-sh/postmortem/releases/assets/552826290"
+checksum = "sha256:c60f578273cb747bcb54cb8f022fc221bf28689e4550178e290ce74d49ff47e5"
+url = "https://github.com/mlab-sh/postmortem/releases/download/v2.5.0/postmortem-2.5.0-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/mlab-sh/postmortem/releases/assets/578909690"
 
 [[tools."github:rustfs/cli"]]
-version = "0.1.35"
+version = "0.1.36"
 backend = "github:rustfs/cli"
 
 [tools."github:rustfs/cli"."platforms.linux-x64"]
-checksum = "sha256:9187c683b41d9f71f3dbe59b1c483fa9010de63a2c3596aee3d93617111b4cda"
-url = "https://github.com/rustfs/cli/releases/download/v0.1.35/rustfs-cli-linux-amd64-gnu-v0.1.35.tar.gz"
-url_api = "https://api.github.com/repos/rustfs/cli/releases/assets/555110563"
+checksum = "sha256:4f784f8e3715fbd27105e9b932998b54faf1149782ec80954a7b8e743bbeab3a"
+url = "https://github.com/rustfs/cli/releases/download/v0.1.36/rustfs-cli-linux-amd64-gnu-v0.1.36.tar.gz"
+url_api = "https://api.github.com/repos/rustfs/cli/releases/assets/567366150"
 
 [[tools.gitleaks]]
 version = "8.30.1"
@@ -101,13 +101,13 @@ url = "https://github.com/norwoodj/helm-docs/releases/download/v1.14.2/helm-docs
 url_api = "https://api.github.com/repos/norwoodj/helm-docs/releases/assets/178327210"
 
 [[tools.k6]]
-version = "2.2.0"
+version = "2.3.0"
 backend = "aqua:grafana/k6"
 
 [tools.k6."platforms.linux-x64"]
-checksum = "sha256:b5a8003c86f35f5cd5ceef1490312c48e587696c94d998cefc6d7b3b4cb1597d"
-url = "https://github.com/grafana/k6/releases/download/v2.2.0/k6-v2.2.0-linux-amd64.tar.gz"
-url_api = "https://api.github.com/repos/grafana/k6/releases/assets/508824467"
+checksum = "sha256:39c3117b6af817592dcd0ce4242105c0a7af10948c2a425306f0be8f7a8a8ab1"
+url = "https://github.com/grafana/k6/releases/download/v2.3.0/k6-v2.3.0-linux-amd64.tar.gz"
+url_api = "https://api.github.com/repos/grafana/k6/releases/assets/579287772"
 
 [[tools.lazydocker]]
 version = "0.25.2"
@@ -119,21 +119,21 @@ url = "https://github.com/jesseduffield/lazydocker/releases/download/v0.25.2/laz
 url_api = "https://api.github.com/repos/jesseduffield/lazydocker/releases/assets/399711577"
 
 [[tools.node]]
-version = "24.21.0"
+version = "26.10.0"
 backend = "core:node"
 
 [tools.node."platforms.linux-x64"]
-checksum = "sha256:6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff"
-url = "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.gz"
+checksum = "sha256:cb5c9ce9c80d7b8821e3a258543c71b939138cf17c74d5cc44bbe85d6dbc5ad8"
+url = "https://nodejs.org/dist/v26.10.0/node-v26.10.0-linux-x64.tar.gz"
 
 [[tools.pnpm]]
-version = "11.27.0"
+version = "12.6.0"
 backend = "aqua:pnpm/pnpm"
 
 [tools.pnpm."platforms.linux-x64"]
-checksum = "sha256:14ed04e631e4563abf3570dda1a365316683149a482b741a2db37e495f6b9cdb"
-url = "https://github.com/pnpm/pnpm/releases/download/v11.27.0/pnpm-linux-x64.tar.gz"
-url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/559064655"
+checksum = "sha256:3f4c66f668d0e84219679982d095b30da68325e1fac9284e7f5dc1584bd3d13e"
+url = "https://github.com/pnpm/pnpm/releases/download/v12.6.0/pnpm-linux-x64.tar.gz"
+url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/581813243"
 provenance = "github-attestations"
 
 [[tools.python]]
@@ -189,11 +189,11 @@ url_api = "https://api.github.com/repos/aquasecurity/trivy/releases/assets/51433
 provenance = "cosign"
 
 [[tools.uv]]
-version = "0.12.13"
+version = "0.12.17"
 backend = "aqua:astral-sh/uv"
 
 [tools.uv."platforms.linux-x64"]
-checksum = "sha256:745765a3b6e360ad76743599ae5c42e9278c7edf8bbff9fc76d05bf2623a04dd"
-url = "https://github.com/astral-sh/uv/releases/download/0.12.13/uv-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/555670375"
+checksum = "sha256:6401c4665d8fa2a9893e087c91f585430738e3170f5398a1141483efb4a93310"
+url = "https://github.com/astral-sh/uv/releases/download/0.12.17/uv-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/573253085"
 provenance = "github-attestations"

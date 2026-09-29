@@ -358,6 +358,10 @@ impl PackageRepository for PgPackageRepository {
         crud::get_status_impl(&self.pool, pkg).await
     }
 
+    async fn covering_block(&self, pkg: &PackageId) -> Result<Option<String>, CoreError> {
+        crud::covering_block_impl(&self.pool, pkg).await
+    }
+
     async fn blocked_versions(&self, registry: &str, name: &str) -> Result<Vec<String>, CoreError> {
         crud::blocked_versions_impl(&self.pool, registry, name).await
     }

@@ -283,6 +283,10 @@ pub struct PgScanQueue {
     /// the connection is kept out of the pool for as long as the lock is
     /// wanted, and giving it back is how leadership is released.
     leader: tokio::sync::Mutex<Option<sqlx::pool::PoolConnection<sqlx::Postgres>>>,
+    /// Signalled by [`ScanQueue::enqueue`] when it creates a row, so this
+    /// process's own worker wakes without polling. `notify_one` keeps a permit
+    /// when nobody is waiting, so a job enqueued mid-pass is not missed.
+    work: tokio::sync::Notify,
 }
 
 impl PgScanQueue {
@@ -290,6 +294,7 @@ impl PgScanQueue {
         Self {
             pool,
             leader: tokio::sync::Mutex::new(None),
+            work: tokio::sync::Notify::new(),
         }
     }
 
@@ -381,7 +386,15 @@ impl ScanQueue for PgScanQueue {
         .execute(&self.pool)
         .await
         .db_err()?;
-        Ok(result.rows_affected() == 1)
+        let created = result.rows_affected() == 1;
+        if created {
+            self.work.notify_one();
+        }
+        Ok(created)
+    }
+
+    async fn wait_for_work(&self, max: std::time::Duration) {
+        let _ = tokio::time::timeout(max, self.work.notified()).await;
     }
 
     async fn lease(
@@ -411,7 +424,11 @@ impl ScanQueue for PgScanQueue {
                 "priority, created_at",
             )
             .await?;
-        if n >= 2 {
+        // A first pick that came back short drained everything leasable, so
+        // there is no lower tier left waiting and the second statement would
+        // only find nothing — which, on an idle queue, it did every pass.
+        let drained = jobs.len() < n.saturating_sub(1).max(1) as usize;
+        if n >= 2 && !drained {
             let low = self
                 .lease_ordered(
                     worker_id,

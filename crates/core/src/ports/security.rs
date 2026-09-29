@@ -95,6 +95,16 @@ pub trait ScanQueue: Send + Sync {
 
     async fn queued(&self) -> Result<Vec<QueuedCount>, CoreError>;
 
+    /// Wait up to `max` for work: an idle worker's sleep between passes.
+    ///
+    /// The default just sleeps. The Postgres queue returns early when *this
+    /// process* enqueues, so an embedded worker starts a scan at once however
+    /// long its idle backoff has grown; a worker in another process still
+    /// waits out `max`.
+    async fn wait_for_work(&self, max: std::time::Duration) {
+        tokio::time::sleep(max).await;
+    }
+
     /// Whether this process leads the scheduled work keyed by `key` (RFC
     /// 0018 §6.3: one rescan timer per estate, elected with a PostgreSQL
     /// advisory lock). `true` while the lock is held — a process that got

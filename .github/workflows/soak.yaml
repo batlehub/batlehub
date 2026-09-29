@@ -68,7 +68,7 @@ on:
         description: "heavy: fail above this % of idle RSS growth (looser — five samples a window, not sixty)"
         default: "15"
       rss_slope:
-        description: "Fail above this RSS trend under load, MiB/min"
+        description: "Fail above this live-heap trend under load, MiB/min"
         default: "2.0"
       fd_growth:
         description: "Fail above this many extra open descriptors"

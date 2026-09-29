@@ -128,6 +128,24 @@ impl FilesystemStorageBackend {
         Ok(self.root.join(format!("{rel}.dat")))
     }
 
+    /// A staging key (`staging:<uuid>/<artifact key>`) nests its file under a
+    /// per-upload `staging__<uuid>/…` tree; once the file is gone the tree is
+    /// empty and would otherwise be left behind, one per verified download.
+    async fn prune_staging_dir(&self, key: &str) {
+        let Some((id, _)) = key
+            .strip_prefix(batlehub_core::ports::STAGING_PREFIX)
+            .and_then(|rest| rest.split_once('/'))
+        else {
+            return;
+        };
+        let dir = self.root.join(format!("staging__{id}"));
+        if let Err(e) = tokio::fs::remove_dir_all(&dir).await {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(dir = %dir.display(), error = %e, "failed to prune staging directory");
+            }
+        }
+    }
+
     /// Resolve `prefix` (a logical key prefix, not a full key) to the
     /// directory it maps to on disk. Shared by `stat_by_prefix`/`list_keys`/
     /// `delete_by_prefix`, which otherwise each repeat this same conversion.
@@ -237,7 +255,9 @@ impl StorageBackend for FilesystemStorageBackend {
                 from_path.display(),
                 to_path.display()
             ))
-        })
+        })?;
+        self.prune_staging_dir(from).await;
+        Ok(())
     }
 
     async fn retrieve(&self, key: &str) -> Result<Option<StoredArtifact>, CoreError> {
@@ -279,7 +299,10 @@ impl StorageBackend for FilesystemStorageBackend {
     async fn delete(&self, key: &str) -> Result<bool, CoreError> {
         let path = self.key_to_path(key)?;
         match tokio::fs::remove_file(&path).await {
-            Ok(()) => Ok(true),
+            Ok(()) => {
+                self.prune_staging_dir(key).await;
+                Ok(true)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(e) => Err(CoreError::Storage(format!(
                 "delete file {}: {e}",
@@ -455,6 +478,31 @@ mod tests {
             chunks >= 2,
             "expected a chunked read, got {chunks} chunk(s)"
         );
+    }
+
+    #[tokio::test]
+    async fn a_staging_key_leaves_no_directory_behind() {
+        let b = make_backend().await;
+        let empty = |b: &FilesystemStorageBackend| {
+            std::fs::read_dir(&b.root).unwrap().all(|e| {
+                !e.unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("staging__")
+            })
+        };
+        let promoted = batlehub_core::ports::staging_key_for("artifact:npm/a/1.0.0");
+        b.store(&promoted, Bytes::from_static(b"x"), StorageMeta::default())
+            .await
+            .unwrap();
+        b.move_key(&promoted, "blob/abc").await.unwrap();
+        assert!(empty(&b), "move_key left the staging tree");
+        let dropped = batlehub_core::ports::staging_key_for("artifact:npm/a/1.0.0");
+        b.store(&dropped, Bytes::from_static(b"x"), StorageMeta::default())
+            .await
+            .unwrap();
+        assert!(b.delete(&dropped).await.unwrap());
+        assert!(empty(&b), "delete left the staging tree");
     }
 
     #[tokio::test]

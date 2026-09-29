@@ -261,6 +261,30 @@ the person who has to believe it.
 The expiry stays in `.trivyignore.yaml` and is deliberately not duplicated here — that file is the
 gate, and a date with two homes has one that is wrong.
 
+## Publishing an advisory for BatleHub itself {#advisory}
+
+VEX above states what the project decided about *other people's* CVEs. A
+vulnerability in BatleHub's own code follows [`SECURITY.md`](https://github.com/batlehub/batlehub/blob/main/SECURITY.md):
+it arrives through GitHub's private vulnerability reporting, never an issue,
+and it is fixed and published in one release that carries three things
+together, so a scanner, a reader and an auditor see one answer:
+
+1. **The GitHub Security Advisory**, drafted in the private report, with its
+   CVE requested from GitHub (a CNA) before the release and the affected and
+   patched version ranges filled in. The fix is developed in the advisory's
+   temporary private fork, not on a public branch.
+2. **An entry under `### Security`** in the release's `CHANGELOG.md` section,
+   naming the GHSA and CVE identifiers and the upgrade.
+3. **A statement in `vex/batlehub.openvex.json`** for the CVE: `fixed` for the
+   release that carries the fix and `affected` — with an `action_statement`
+   saying *upgrade to* — for the supported release before it. `task vex`
+   accepts both statuses and ties neither to `.trivyignore.yaml`.
+
+Publish the advisory once the release's images and binaries are up, not
+before: the advisory is what tells an attacker where to look, and the fixed
+build has to exist when it does. The disclosure clock — at the fix, or 90 days
+after the report — and the response targets are the policy's, not this page's.
+
 ## The development toolchain
 
 `mise.toml` installs some forty tools, and until recently nothing looked at them. The one thing

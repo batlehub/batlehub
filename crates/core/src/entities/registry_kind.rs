@@ -244,6 +244,15 @@ pub enum RegistryKind {
     /// within that version, because two builds of one version differ in the
     /// hash and in nothing a policy reads (RFC 0028).
     Nix,
+    /// A devfile registry (`registry.devfile.io`) — the stack catalogue Eclipse
+    /// Che's *Get Started* page and `registry-library` (so `odo`) read. The
+    /// package is a stack (`nodejs`), the version a stack version (`2.2.1`),
+    /// and every file of a version is an artifact of it: the OCI manifest, each
+    /// layer by its title (`layer/devfile.yaml`, `layer/archive.tar`) and each
+    /// starter-project zip. The six index documents describe the whole
+    /// registry, so they filter through `dispatch_multi` as conda's
+    /// `repodata.json` does (RFC 0035).
+    Devfile,
 }
 
 impl RegistryKind {
@@ -277,6 +286,7 @@ impl RegistryKind {
         Self::Rustup,
         Self::Galaxy,
         Self::Nix,
+        Self::Devfile,
     ];
 
     /// The kebab-case wire string for this kind (matches TOML `type = "..."`).
@@ -309,6 +319,7 @@ impl RegistryKind {
             Self::Rustup => "rustup",
             Self::Galaxy => "galaxy",
             Self::Nix => "nix",
+            Self::Devfile => "devfile",
         }
     }
 
@@ -360,6 +371,10 @@ impl RegistryKind {
                 | Self::Nodedist
                 | Self::Sdkman
                 | Self::Rustup
+                // A devfile registry is built offline into an image by
+                // `registry-support`'s tooling; there is no publish protocol to
+                // be a server for (RFC 0035 §3).
+                | Self::Devfile
         )
     }
 
@@ -570,6 +585,27 @@ impl RegistryKind {
         // `FILTERED_ELSEWHERE` records that (RFC 0028 §4.4, §6.2).
         const NIX: &[ListingDocument] = &[ListingDocument::filtered("narinfo", &[])];
 
+        // Both index shapes describe the whole registry, so they filter through
+        // `dispatch_multi` against the registry-wide blocked set and carry its
+        // 30-second snapshot lag, as conda's `repodata.json` does. The legacy
+        // entry names one version, so a blocked one removes the stack rather
+        // than moving it (RFC 0035 §11 decision 2).
+        const DEVFILE: &[ListingDocument] = &[
+            ListingDocument::qualified(
+                "stack index (`/v2index`, with `/sample` and `/all`)",
+                "the index describes the whole registry, so a new block reaches it within the \
+                 blocked-set snapshot's 30-second TTL rather than instantly; a blocked default \
+                 version moves `default` to the highest version left",
+                &["versions"],
+            ),
+            ListingDocument::qualified(
+                "legacy stack index (`/index`, with `/sample` and `/all`)",
+                "a legacy entry names one version, the default, so blocking it removes the \
+                 stack from this index rather than substituting another version",
+                &["legacy-index"],
+            ),
+        ];
+
         match self {
             Self::Npm => NPM,
             Self::Nuget => NUGET,
@@ -590,6 +626,7 @@ impl RegistryKind {
             Self::Rustup => RUSTUP,
             Self::Galaxy => GALAXY,
             Self::Nix => NIX,
+            Self::Devfile => DEVFILE,
             // `generic` and `jetbrains` mirror an arbitrary file tree by path —
             // there is no listing document in the protocol at all, so there is
             // nothing to say beyond that. (JetBrains *plugins* are the separate
@@ -684,6 +721,9 @@ impl RegistryKind {
             // carry no prose, so a version this instance holds no bytes for has
             // none — the honest limit every `Archive` kind has (RFC 0031 §6.1).
             Self::Galaxy => ReadmeSupport::Archive,
+            Self::Devfile => ReadmeSupport::None(
+                "a devfile has no readme; its description is a field of the stack index",
+            ),
             Self::Nix => ReadmeSupport::None(
                 "a store path is a NAR and its narinfo; the protocol carries no prose, and the \
                  NAR is a filesystem image rather than a package with a manifest",
@@ -764,6 +804,9 @@ impl RegistryKind {
             // not, and the path has to be computed by an evaluation this
             // instance cannot perform. So explore shows what this instance has
             // served or holds, and never a remote list (RFC 0028 §6.1).
+            // The v2 index entry of the stack: every version with its
+            // description, schemaVersion and tags (RFC 0035 §6.1).
+            Self::Devfile => UpstreamDetailSupport::Document("versions"),
             Self::Nix => UpstreamDetailSupport::None(
                 "a binary cache has no index: it answers one store path at a time, and the path \
                  is computed by the client rather than listed by the cache",
@@ -887,6 +930,9 @@ impl RegistryKind {
             // both say why instead of writing to a slot nothing reads; an
             // operator who does know the path uses `cache.warm_paths`
             // (RFC 0028 §6.1).
+            // One devfile per version, the OCI layer titled `devfile.yaml` —
+            // the file every client reads first, and the one Che links to.
+            Self::Devfile => FetchSupport::ByVersion(FetchArtifact::Fixed("layer/devfile.yaml")),
             Self::Nix => FetchSupport::None(
                 "a version is one or more store paths, each a separate build with its own \
                  32-character hash, and the hash is not derivable from the version",
@@ -1355,6 +1401,9 @@ mod tests {
                 // manifest in the protocol at all, so there is nowhere prose
                 // could live (RFC 0028 §6.1).
                 "nix",
+                // A devfile is YAML a workspace runs, not prose; the stack's
+                // description is one index field (RFC 0035 §6.1).
+                "devfile",
             ]
         );
     }

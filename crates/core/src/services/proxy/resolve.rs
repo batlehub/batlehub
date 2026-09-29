@@ -290,18 +290,24 @@ impl ProxyService {
         });
     }
 
-    /// Returns `true` if a cached artifact exists and has not yet exceeded its TTL.
-    pub(super) async fn artifact_is_fresh(
+    /// The cached artifact, opened, if one exists and has not yet exceeded its
+    /// TTL.
+    ///
+    /// Opened here rather than probed with `exists` and opened again by the
+    /// hit path: the storage router resolves a key through the dedup tables,
+    /// so the probe was a second lookup of the same row on every cache hit —
+    /// and left a window for the entry to vanish between the two.
+    pub(super) async fn fresh_cached_artifact(
         &self,
         artifact_key: &str,
         artifact_ttl: Option<std::time::Duration>,
         registry_name: &str,
-    ) -> Result<bool, CoreError> {
-        if !self.storage.exists(artifact_key).await? {
-            return Ok(false);
-        }
+    ) -> Result<Option<crate::ports::StoredArtifact>, CoreError> {
+        let Some(artifact) = self.storage.retrieve(artifact_key).await? else {
+            return Ok(None);
+        };
         let Some(ttl) = artifact_ttl else {
-            return Ok(true);
+            return Ok(Some(artifact));
         };
         match chrono::Duration::from_std(ttl) {
             Ok(d) => {
@@ -309,11 +315,11 @@ impl ProxyService {
                     .artifact_meta
                     .is_artifact_expired(artifact_key, Utc::now() - d)
                     .await?;
-                Ok(!expired)
+                Ok((!expired).then_some(artifact))
             }
             Err(e) => {
                 tracing::warn!(registry = %registry_name, error = %e, "artifact_ttl overflows chrono::Duration; treating artifact as fresh");
-                Ok(true)
+                Ok(Some(artifact))
             }
         }
     }

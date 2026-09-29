@@ -63,6 +63,11 @@ pub mod nix;
 #[cfg(feature = "registry-nix")]
 pub use nix::NixBinaryCacheClient;
 
+#[cfg(feature = "registry-devfile")]
+pub mod devfile;
+#[cfg(feature = "registry-devfile")]
+pub use devfile::DevfileRegistryClient;
+
 #[cfg(feature = "registry-galaxy")]
 pub mod galaxy;
 #[cfg(feature = "registry-galaxy")]

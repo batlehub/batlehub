@@ -509,6 +509,7 @@ pub use spa::{configure_spa, narrow_csp, SpaDir};
         (name = "proxy/generic",    description = "Generic file mirror — path-addressed proxy cache for upstreams with no package protocol (toolchain tarballs, vendor CDNs), restricted by a path_allow allowlist"),
         (name = "proxy/nodedist",   description = "Node distributions (nvm, fnm, n, mise) — the nodejs.org/dist tree as a typed registry: filtered index.tab/index.json listings, per-release tarballs and SHASUMS256.txt byte-exact"),
         (name = "proxy/nix",        description = "Nix binary cache (nix, cachix-style substituters) — the substituter protocol as a registry kind: narinfos relayed with only `URL:` rewritten so every `Sig:` still verifies, a blocked store path absent as the protocol's own 404, NARs cached under a coordinate, and stale upstream-shaped NAR URLs resolved through a reverse index"),
+        (name = "proxy/devfile",    description = "Devfile registries (Eclipse Che, registry-library, odo) — the stack catalogue as a registry kind: the legacy and v2 indexes filtered registry-wide, each stack version's devfile, OCI manifest and layers relayed byte-exact and verified, a digest served only when an allowed version names it"),
         (name = "proxy/galaxy",     description = "Ansible Galaxy — the collections API v3 as a registry kind: the versions list filtered and served as one page, download_url rewritten to this instance, collection publish with its import-task poll, and the v1 role surface behind `roles`"),
         (name = "proxy/rustup",     description = "Rust toolchains (rustup, mise) — the static.rust-lang.org tree as a typed registry: channel manifests filtered and their .sha256 recomputed, blocked releases refused or repaired, component archives cached per release"),
         (name = "proxy/sdkman",     description = "SDKMAN — the candidates API and the download broker as one registry: filtered versions/all, candidates/default and the rendered sdk list table, a blocked version answered `invalid` at candidates/validate, hook scripts relayed byte-exact, the broker's 302 followed server-side and cached"),
@@ -649,6 +650,13 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 conda_repodata, conda_repodata_bz2, conda_repodata_shards, conda_repodata_zst,
                 conda_shard,
             },
+            devfile::{
+                devfile_index, devfile_index_all, devfile_index_sample, devfile_index_stack,
+                devfile_oci_blob, devfile_oci_manifest, devfile_oci_ping, devfile_oci_tags,
+                devfile_stack, devfile_starter, devfile_v2index, devfile_v2index_all,
+                devfile_v2index_sample, devfile_v2index_stack, devfile_version,
+                devfile_version_starter,
+            },
             forgejo::fj_attachment,
             forgejo::fj_packages,
             galaxy::{
@@ -747,6 +755,29 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(create_token);
     cfg.service(list_tokens);
     cfg.service(revoke_token);
+    // Devfile registries (RFC 0035). First of the proxy routes, and harmless
+    // there: each carries the `is_devfile` guard, so it matches a devfile
+    // registry and nothing else — while no other kind's pattern (the npm
+    // `{package}` wildcards, the forge `{owner}/{repo}/…` ones) gets to claim a
+    // devfile path before it. The starter-project routes precede the
+    // `devfiles/{stack}/{version}` one they would otherwise share a prefix with.
+    cfg.service(devfile_index); // GET …/index
+    cfg.service(devfile_index_sample); // GET …/index/sample
+    cfg.service(devfile_index_stack); // GET …/index/stack
+    cfg.service(devfile_index_all); // GET …/index/all
+    cfg.service(devfile_v2index); // GET …/v2index
+    cfg.service(devfile_v2index_sample); // GET …/v2index/sample
+    cfg.service(devfile_v2index_stack); // GET …/v2index/stack
+    cfg.service(devfile_v2index_all); // GET …/v2index/all
+    cfg.service(devfile_starter); // GET …/devfiles/{stack}/starter-projects/{name}
+    cfg.service(devfile_version_starter); // GET …/devfiles/{stack}/{version}/starter-projects/{name}
+    cfg.service(devfile_stack); // GET …/devfiles/{stack}
+    cfg.service(devfile_version); // GET …/devfiles/{stack}/{version}
+    cfg.service(devfile_oci_ping); // GET …/v2/
+    cfg.service(devfile_oci_manifest); // GET|HEAD …/v2/{ns}/{stack}/manifests/{reference}
+    cfg.service(devfile_oci_blob); // GET|HEAD …/v2/{ns}/{stack}/blobs/{digest}
+    cfg.service(devfile_oci_tags); // GET …/v2/{ns}/{stack}/tags/list
+
     // Cargo publish API (literal "api/v1" sub-path — most specific, must precede download)
     //
     // `cargo_search` is here rather than with the other search routes because

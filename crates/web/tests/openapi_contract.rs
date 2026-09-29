@@ -17,10 +17,11 @@ use utoipa::openapi::{PathItem, RefOr, Response};
 const MUST_HAVE_BODY: [&str; 2] = ["200", "201"];
 
 fn response_has_schema(response: &Response) -> bool {
-    response
-        .content
-        .values()
-        .any(|content| content.schema.is_some())
+    response.content.values().any(|content| match content {
+        // utoipa 6: a `$ref` to a component media type, which carries its own schema.
+        RefOr::Ref(_) => true,
+        RefOr::T(content) => content.schema.is_some(),
+    })
 }
 
 fn operations(item: &PathItem) -> Vec<(&'static str, &Operation)> {

@@ -1,5 +1,6 @@
 mod allocator;
 mod builders;
+mod db_metrics;
 mod explain;
 mod grants;
 mod hot_config;

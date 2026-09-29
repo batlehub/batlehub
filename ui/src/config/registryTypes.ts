@@ -1962,6 +1962,55 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
     ],
   },
   {
+    id: "devfile",
+    label: "Devfile registry (Che, odo)",
+    fileHint: "devfile.yaml",
+    description:
+      `A devfile registry (<code>registry.devfile.io</code> by default) — the stack ` +
+      `catalogue Eclipse Che's <em>Get Started</em> page and <code>registry-library</code> ` +
+      `(so <code>odo</code>) read. The indexes are filtered, and each stack version's ` +
+      `devfile, OCI manifest and layers are served byte-exact and verified. ` +
+      `<code>registry-library</code> asks for <code>/v2/…</code> at the <strong>host root</strong>, ` +
+      `so give the registry a host of its own. Proxy-only: there is no publish protocol.`,
+    snippets: [
+      {
+        key: "devfile-che",
+        label: "Eclipse Che",
+        lang: "yaml",
+        template: (ctx) =>
+          [
+            `# CheCluster — the dashboard reads index/all and follows each tile to devfiles/…`,
+            `spec:`,
+            `  components:`,
+            `    devfileRegistry:`,
+            `      externalDevfileRegistries:`,
+            `        - url: ${ctx.registryUrl}/`,
+          ].join("\n"),
+        note: () =>
+          `Che's dashboard fetches the index through its own backend, with no credential and ` +
+          `no redirect, and caches it for an hour per browser session — a version blocked ` +
+          `after a user's last fetch still shows as a tile until then, and is refused when ` +
+          `opened.`,
+      },
+      {
+        key: "devfile-cli",
+        label: "registry-library, odo",
+        lang: "bash",
+        template: (ctx) =>
+          [
+            `# The trailing slash matters under a path prefix: the index is resolved`,
+            `# relative to the URL. The OCI requests always go to the host root.`,
+            `registry-library pull ${ctx.registryUrl}/ nodejs:2.2.1 --new-index-schema`,
+            `odo preference add registry batlehub ${ctx.registryUrl}/`,
+          ].join("\n"),
+        note: () =>
+          `Neither client sends a credential — <code>registry-library</code> builds its OCI ` +
+          `requests from the host alone and carries no <code>Authorization</code> on them — so ` +
+          `the registry must grant anonymous reads.`,
+      },
+    ],
+  },
+  {
     id: "nodedist",
     label: "Node (nvm, fnm, n, mise)",
     fileHint: ".nvmrc",

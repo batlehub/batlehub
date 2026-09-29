@@ -796,7 +796,7 @@ editing anything:
 | --- | --- | --- |
 | `SOAK_MAX_RSS_GROWTH_PCT` | `10` | idle RSS grew more than this, as a percentage |
 | `SOAK_MAX_HEAP_GROWTH_PCT` | `5` | idle live heap grew more than this — jemalloc builds only |
-| `SOAK_MAX_RSS_SLOPE_MIB_PER_MIN` | `2.0` | RSS trended upwards faster than this under load — compared against the fit's 95 % lower bound, not the fit |
+| `SOAK_MAX_RSS_SLOPE_MIB_PER_MIN` | `2.0` | The live heap (RSS without jemalloc stats) trended upwards faster than this under load — compared against the fit's 95 % lower bound, not the fit |
 | `SOAK_MAX_FD_GROWTH` | `16` | this many more descriptors are open at idle |
 | `SOAK_MAX_THREAD_GROWTH` | `4` | this many more threads are running |
 | `SOAK_MAX_POOL_GROWTH` | `2` | this many more pool connections are held at idle |

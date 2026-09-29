@@ -28,7 +28,7 @@ are yours. Nobody is paged by this page.
 
 | Source | Alert | Where to check |
 |--------|-------|----------------|
-| Prometheus | `BatleHubDown`, `BatleHubHighErrorRate`, `BatleHubHighDenyRate` | `deploy/prometheus-alerts.yaml` |
+| Prometheus | `BatleHubDown`, `BatleHubHighErrorRate`, `BatleHubHighDeniedRequestRate` | `deploy/prometheus-alerts.yaml` |
 | Audit log | Spike in `denied` outcomes, unknown user IDs in `user_id` column | `GET /api/v1/admin/audit-log` |
 | Rate limiter | Sustained 429 responses from one IP | Audit log filter by IP |
 | Container scan | Trivy HIGH/CRITICAL finding in deployed image | `.github/workflows/image-scan.yaml` |

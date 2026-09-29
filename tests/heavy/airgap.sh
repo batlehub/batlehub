@@ -202,6 +202,15 @@ APK_VERSION="${HEAVY_APK_VERSION:-1.37.0-r20}"
 APK_UNHELD="${HEAVY_APK_UNHELD:-musl-utils}"
 APK_KEY_NAME="estate-$HEAVY_RUN@batlehub.test-5f3a1c2e.rsa.pub"
 
+# devfile (RFC 0035 §6.8): one stack version, carried as its two files — the
+# OCI manifest and the devfile layer — and pulled on the far side by the real
+# `registry-library`, through the indexes the disconnected instance composes.
+# The client asks for `/v2/…` at the host root, so the disconnected config
+# binds the registry to `devfile.localhost`.
+DEVFILE_REG="devfile-$HEAVY_RUN"
+DEVFILE_STACK="${HEAVY_DEVFILE_STACK:-nodejs}"
+DEVFILE_VERSION="${HEAVY_DEVFILE_VERSION:-2.2.1}"
+
 # The estate's own index-signing key, generated per run. `\n` escapes rather
 # than newlines: the loader expands `${VAR}` into the TOML *source*, where a
 # raw newline inside a basic string is a parse error.
@@ -362,6 +371,27 @@ plan["entries"].append({
 })
 json.dump(plan, open(path, "w"), indent=2)
 PY
+# The two files of one devfile stack version. The manifest by tag, and the
+# devfile through the REST route — the same layer the OCI route serves by
+# digest, filed under the same key (`layer/devfile.yaml`).
+DEVFILE_REG="$DEVFILE_REG" DEVFILE_STACK="$DEVFILE_STACK" DEVFILE_VERSION="$DEVFILE_VERSION" \
+  python3 - "$HEAVY_WORK/plan.json" <<'PY' || heavy_fail "could not add the devfile entries to the plan"
+import json, os, sys
+path = sys.argv[1]
+reg, stack, v = os.environ["DEVFILE_REG"], os.environ["DEVFILE_STACK"], os.environ["DEVFILE_VERSION"]
+plan = json.load(open(path))
+plan["entries"] += [
+    {"tool": f"devfile:{stack} (manifest)", "version": v, "platform": "any",
+     "url": f"https://registry.devfile.io/v2/devfile-catalog/{stack}/manifests/{v}",
+     "registry": {"name": reg, "type": "devfile"}, "key": f"{reg}/{stack}/{v}/manifest",
+     "proxy_path": f"/proxy/{reg}/v2/devfile-catalog/{stack}/manifests/{v}"},
+    {"tool": f"devfile:{stack}", "version": v, "platform": "any",
+     "url": f"https://registry.devfile.io/devfiles/{stack}/{v}",
+     "registry": {"name": reg, "type": "devfile"}, "key": f"{reg}/{stack}/{v}/layer/devfile.yaml",
+     "proxy_path": f"/proxy/{reg}/devfiles/{stack}/{v}"},
+]
+json.dump(plan, open(path, "w"), indent=2)
+PY
 heavy_log "AIRGAP-PLAN-OK ($(grep -c '"proxy_path"' "$HEAVY_WORK/plan.json") planned paths)"
 
 "$CLI" mise seed --plan "$HEAVY_WORK/plan.json" >"$HEAVY_WORK/seed.txt" 2>"$HEAVY_WORK/seed.err" \
@@ -374,7 +404,7 @@ head -c 32 /dev/urandom | od -An -tx1 | tr -d " \n" > "$HEAVY_WORK/estate.key"
   --bundle-id "heavy-airgap-$HEAVY_RUN" >"$HEAVY_WORK/export.json" 2>"$HEAVY_WORK/export.err" \
   || { cat "$HEAVY_WORK/export.json" "$HEAVY_WORK/export.err" >&2; heavy_fail "mise export failed"; }
 BLOBS="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["blobs"])' "$HEAVY_WORK/export.json")"
-[[ "$BLOBS" -eq 15 ]] || { cat "$HEAVY_WORK/export.json" "$HEAVY_WORK/export.err" >&2; heavy_fail "the bundle carried $BLOBS blob(s), expected 15 (asset, tarball, wheel, crate, zip, mod, jar, pom, nupkg, gem, conda package, provider archive, its checksum list and signature, and the .apk)"; }
+[[ "$BLOBS" -eq 17 ]] || { cat "$HEAVY_WORK/export.json" "$HEAVY_WORK/export.err" >&2; heavy_fail "the bundle carried $BLOBS blob(s), expected 17 (asset, tarball, wheel, crate, zip, mod, jar, pom, nupkg, gem, conda package, provider archive, its checksum list and signature, the .apk, and a devfile stack's manifest and devfile)"; }
 # The export read the provider's download document and carried its facts.
 python3 - "$HEAVY_WORK/estate.bhub" "$TF_REG" <<'PY' || heavy_fail "the manifest does not carry the provider's signing keys (0008-bis §13.7)"
 import json, sys, tarfile
@@ -493,6 +523,8 @@ for p in "/proxy/$NPM_REG/$NPM_PKG/$NPM_VERSION/tarball" \
          "/proxy/$NUGET_REG/nuget/v3/flat/$NUGET_PKG/$NUGET_VERSION/$NUGET_PKG.$NUGET_VERSION.nupkg" \
          "/proxy/$GEMS_REG/gems/$GEM-$GEM_VERSION.gem" \
          "/proxy/$CONDA_REG/$CONDA_SUBDIR/$CONDA_FILE"; do
+  # (the devfile stack is asserted in §7f, where the listing its routes read
+  # through exists — both of them resolve the version through the index)
   code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $ADMIN_TOKEN" "$AG_BASE$p")"
   [[ "$code" == "200" ]] || heavy_fail "the disconnected instance answered $code on $p, which the bundle carried"
 done
@@ -766,7 +798,7 @@ heavy_log "APK-REFUSED-OK (no listing, so the client never names a package)"
 
 # `before` is required for a purge that means "everything": without it the
 # endpoint forgets only rows older than the retention, which is nothing.
-for r in "$NPM_REG" "$PIP_REG" "$GH_REG" "$CARGO_REG" "$GO_REG" "$MVN_REG" "$NUGET_REG" "$GEMS_REG" "$CONDA_REG" "$TF_REG" "$APK_REG"; do
+for r in "$NPM_REG" "$PIP_REG" "$GH_REG" "$CARGO_REG" "$GO_REG" "$MVN_REG" "$NUGET_REG" "$GEMS_REG" "$CONDA_REG" "$TF_REG" "$APK_REG" "$DEVFILE_REG"; do
   curl -fsS -o /dev/null -X DELETE -H "Authorization: Bearer $ADMIN_TOKEN" \
     "$AG_BASE/api/v1/admin/air-gap/missing?registry=$r&before=2099-01-01T00:00:00Z" \
     || heavy_fail "could not purge the miss log for $r"
@@ -1200,6 +1232,36 @@ if [[ "$(heavy_wire_count_after "apk-unheld" "GET /proxy/$APK_REG/apk/$APK_DIR/$
 fi
 measure "apk  | apk fetch $APK_UNHELD (not held) | absent from the composed listing | stopped in the solver, no request"
 heavy_log "APK-UNHELD-OK (the listing named only what the bundle carried)"
+
+# ── 7f. devfile: the indexes composed over the held stack (RFC 0035 §6.8) ───
+#
+# The real `registry-library` against the disconnected instance, egress
+# denied: its index read resolves through a v2 index composed from the held
+# facts, and the manifest and the layer it then asks for by digest are the
+# bundle's bytes. The devfile it writes must hash to the layer the carried
+# manifest names — the check `registry-library` itself does not enforce.
+heavy_devfile_client
+DEVFILE_MARK="devfile-synth"
+DEVFILE_OUT="$HEAVY_WORK/$DEVFILE_MARK"
+mkdir -p "$DEVFILE_OUT/ctx"
+heavy_mark "$DEVFILE_MARK"
+"${DENY[@]}" HOME="$DEVFILE_OUT" "$HEAVY_DEVFILE_CLIENT" pull \
+  "http://devfile.localhost:$HEAVY_TAP_PORT/" "$DEVFILE_STACK:$DEVFILE_VERSION" \
+  --new-index-schema --context "$DEVFILE_OUT/ctx" >"$DEVFILE_OUT.txt" 2>&1 || true
+grep -q "Failed" "$DEVFILE_OUT.txt" && { cat "$DEVFILE_OUT.txt" >&2; heavy_fail "registry-library reported a failure against the disconnected instance"; }
+heavy_wire_re_after "$DEVFILE_MARK" '^GET /v2index -> 200' \
+  "the composed v2 index did not answer"
+heavy_wire_re_after "$DEVFILE_MARK" "^HEAD /v2/devfile-catalog/$DEVFILE_STACK/manifests/$DEVFILE_VERSION -> 200" \
+  "the held manifest did not answer by tag"
+heavy_wire_re_after "$DEVFILE_MARK" "^GET /v2/devfile-catalog/$DEVFILE_STACK/blobs/sha256:[0-9a-f]{64} -> 200" \
+  "the held layer did not answer by digest"
+[[ -s "$DEVFILE_OUT/ctx/devfile.yaml" ]] || { cat "$DEVFILE_OUT.txt" >&2; heavy_fail "the pull wrote no devfile"; }
+WANT="$(curl -fsS "$AG_BASE/proxy/$DEVFILE_REG/v2/devfile-catalog/$DEVFILE_STACK/manifests/$DEVFILE_VERSION" \
+  | python3 -c 'import json,sys; m=json.load(sys.stdin); print([l["digest"] for l in m["layers"] if l.get("annotations",{}).get("org.opencontainers.image.title")=="devfile.yaml"][0])')"
+GOT="sha256:$(sha256sum "$DEVFILE_OUT/ctx/devfile.yaml" | cut -d' ' -f1)"
+[[ "$GOT" == "$WANT" ]] || heavy_fail "the devfile pulled from the air gap ($GOT) is not the layer its manifest names ($WANT)"
+measure "devfile | registry-library pull $DEVFILE_STACK:$DEVFILE_VERSION | composed v2 index, held manifest and layer | pulled, digest verified"
+heavy_log "DEVFILE-SYNTH-OK (a stack pulled through indexes composed from the held facts)"
 
 # ── 8. The miss log, after the second half ──────────────────────────────────
 #

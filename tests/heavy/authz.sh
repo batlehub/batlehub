@@ -127,6 +127,7 @@ GH_R="authz-github-$HEAVY_RUN"
 FJ_R="authz-forgejo-$HEAVY_RUN"
 GL_R="authz-gitlab-$HEAVY_RUN"
 NODEDIST_R="authz-nodedist-$HEAVY_RUN"
+DEVFILE_R="authz-devfile-$HEAVY_RUN"
 NIX_R="authz-nix-$HEAVY_RUN"
 SDKMAN_R="authz-sdkman-$HEAVY_RUN"
 JETBRAINS_R="authz-jetbrains-$HEAVY_RUN"
@@ -3511,6 +3512,7 @@ sdkman|releases:read|GET|/proxy/$SDKMAN_R/sdkman/broker/download/java/1.0.0/linu
 rustup|releases:read|GET|/proxy/$RUSTUP_R/rustup/dist/2026-01-01/rust-std-1.0.0-x86_64-unknown-linux-gnu.tar.gz|a dated dist component
 jetbrains|releases:read|GET|/proxy/$JETBRAINS_R/jetbrains/idea/probe.tar.gz|an archive by path
 generic|releases:read|GET|/proxy/$GENERIC_R/generic/probe.tar.gz|a file by path
+devfile|releases:read|GET|/proxy/$DEVFILE_R/devfiles/probe/1.0.0|one version's devfile. Route level and not live:devfile, because no client can carry the credential: registry-library sends its OCI requests with no Authorization whatever URL it is given (it builds the reference from the host alone), so a reader's pull cannot succeed against a registry closed to anonymous callers — the positive arm a live pair needs (RFC 0035 §5.1). The route resolves its version through the index listing first, so a refused caller is stopped there
 EOF
   return $?
 }

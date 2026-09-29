@@ -1,7 +1,7 @@
 ---
 title: Le worker d'analyse
 sourcePath: operations/scan-worker.md
-sourceHash: cd05789eb4328a24
+sourceHash: da2fc7131da0cde8
 ---
 
 # Le worker d'analyse
@@ -61,8 +61,9 @@ file d'un coup.
 
 Les travaux sont **loués, pas consommés**. Une passe, c'est :
 
-1. **Battement de cœur et publication des profondeurs.** Le worker écrit dans
-   `worker_heartbeats` et met à jour la jauge des travaux en file. Ni l'un ni
+1. **Battement de cœur et publication des profondeurs**, au plus toutes les
+   30 secondes. Le worker écrit dans `worker_heartbeats` et met à jour la jauge
+   des travaux en file. Ni l'un ni
    l'autre n'est porteur, donc aucun des deux ne peut faire échouer la passe.
 2. **Louer un lot** — au plus `max_concurrent`, filtré sur les registres de
    `[worker]` quand cette liste est renseignée, pris avec
@@ -75,10 +76,19 @@ Les travaux sont **loués, pas consommés**. Une passe, c'est :
    chacun, puis lancer les enrichisseurs sur ce qu'ils ont trouvé.
 5. **Enregistrer le verdict** et fermer la ligne.
 
-Entre deux passes, la boucle ne dort `idle_poll` que si la file était vide.
+Les travaux épuisés sont balayés après une passe qui a traité des travaux, et
+sinon avec le battement de cœur.
+
+Entre deux passes, la boucle n'attend que si la file était vide, et l'attente
+double depuis `idle_poll` jusqu'à 16 secondes tant qu'elle le reste : un worker
+au repos exécute une dizaine de requêtes par minute, au lieu des 150 que coûtait
+une interrogation fixe toutes les deux secondes. Un travail mis en file par le
+**même processus** réveille le worker aussitôt, si bien qu'un worker embarqué
+démarre une analyse plus tôt qu'avant ; un worker dans son propre processus
+(`--roles worker`) le prend en au plus 16 secondes.
 
 Les valeurs par défaut sont quatre travaux simultanés, un `job_timeout` de dix
-minutes, trois tentatives et une attente à vide de deux secondes. Elles vivent
+minutes, trois tentatives et une attente à vide qui commence à deux secondes. Elles vivent
 dans `[worker]`, documenté dans la
 [référence de configuration](/fr/guide/configuration#scanners-and-worker).
 

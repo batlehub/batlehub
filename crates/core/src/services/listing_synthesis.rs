@@ -263,6 +263,9 @@ pub fn is_registry_wide(kind: RegistryKind, doc_kind: DocumentKind) -> bool {
         // `nix-cache-info` is registry-wide for the ordinary reason: it
         // describes the cache and names no package at all.
         RegistryKind::Nix => matches!(doc_kind.as_str(), "narinfo" | "cache-info"),
+        // Both devfile index shapes list every stack of the registry
+        // (RFC 0035 §6.8).
+        RegistryKind::Devfile => matches!(doc_kind.as_str(), "versions" | "legacy-index"),
         _ => false,
     }
 }
@@ -294,6 +297,22 @@ pub fn render_registry(
         (RegistryKind::Nix, "narinfo") => {
             VersionDocument::text("text/x-nix-narinfo", nix_narinfo(name, held)?)
         }
+        (RegistryKind::Devfile, "versions" | "legacy-index") => {
+            use crate::services::devfile::{compose_index, find_stack, is_index_address};
+            let held = devfile_held(held);
+            if is_index_address(name) {
+                VersionDocument::json(compose_index(
+                    name,
+                    doc_kind.as_str() == "legacy-index",
+                    &held,
+                ))
+            } else {
+                // The console's discovery read names one stack, and the
+                // adapter answers it with that stack's v2 entry alone.
+                let index = compose_index("v2index", false, &held);
+                VersionDocument::json(find_stack(&index, name)?.clone())
+            }
+        }
         (RegistryKind::Nix, "cache-info") => VersionDocument::text(
             "text/x-nix-cache-info",
             // Composed, because there is no upstream to relay one from — the
@@ -307,6 +326,40 @@ pub fn render_registry(
         synthesised: Some(count),
         ..doc
     })
+}
+
+/// The held devfile rows grouped into stack versions, each version's facts
+/// merged across its rows — the manifest's and the devfile's are two
+/// artifacts, and each `meta:` entry carries only what its own bytes said.
+fn devfile_held(
+    held: &[(String, HeldVersion)],
+) -> Vec<(String, crate::services::devfile::HeldStackVersion)> {
+    let mut out: Vec<(String, crate::services::devfile::HeldStackVersion)> = Vec::new();
+    for (stack, h) in held {
+        let at = match out
+            .iter()
+            .position(|(s, v)| s == stack && v.version == h.version)
+        {
+            Some(i) => i,
+            None => {
+                out.push((
+                    stack.clone(),
+                    crate::services::devfile::HeldStackVersion {
+                        version: h.version.clone(),
+                        facts: Map::new(),
+                    },
+                ));
+                out.len() - 1
+            }
+        };
+        if let Some(facts) = h.extra.get("devfile").and_then(Value::as_object) {
+            out[at]
+                .1
+                .facts
+                .extend(facts.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+    }
+    out
 }
 
 /// The narinfo for one store hash, composed from what this instance holds
@@ -1672,6 +1725,22 @@ mod tests {
             received_at: "2026-09-05T08:00:00Z".parse().unwrap(),
             extra: Value::Null,
         }
+    }
+
+    #[test]
+    fn a_devfile_stack_read_gets_its_entry_and_an_index_read_the_array() {
+        let held = [(
+            "nodejs".to_owned(),
+            held("2.2.1", Some("layer/devfile.yaml")),
+        )];
+        let versions = DocumentKind::Versions;
+        let stack = render_registry(RegistryKind::Devfile, versions, "nodejs", &held).unwrap();
+        let entry = stack.body.as_json().unwrap();
+        assert_eq!(entry["name"], "nodejs", "one stack object, not the index");
+        assert_eq!(entry["versions"][0]["version"], "2.2.1");
+        let index = render_registry(RegistryKind::Devfile, versions, "v2index", &held).unwrap();
+        assert!(index.body.as_json().unwrap().is_array());
+        assert!(render_registry(RegistryKind::Devfile, versions, "go", &held).is_none());
     }
 
     #[test]

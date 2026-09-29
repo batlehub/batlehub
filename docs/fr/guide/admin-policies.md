@@ -5,7 +5,7 @@
 # plafond, une déclaration que quelqu'un a dû écrire (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/admin-policies.md
-sourceHash: 1484172c016209be
+sourceHash: dbc4b7cf76dcedab
 ---
 
 # Politiques et paquets
@@ -341,6 +341,8 @@ sans danger :
 | galaxy | the collection document | yes |
 | galaxy | role versions | yes |
 | nix | narinfo | yes |
+| devfile | stack index (`/v2index`, with `/sample` and `/all`) | yes — the index describes the whole registry, so a new block reaches it within the blocked-set snapshot's 30-second TTL rather than instantly; a blocked default version moves `default` to the highest version left |
+| devfile | legacy stack index (`/index`, with `/sample` and `/all`) | yes — a legacy entry names one version, the default, so blocking it removes the stack from this index rather than substituting another version |
 <!-- END listing-coverage -->
 
 La table ci-dessus est générée depuis le code Rust et reste en anglais : ses

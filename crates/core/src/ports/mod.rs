@@ -51,15 +51,15 @@ pub use registry::{
 };
 pub use release_import::ImportHistory;
 pub use sbom::{
-    ExtractedManifest, ExtractedReadme, SbomDependency, SbomExtractor, SbomRepository,
+    ExtractedManifest, ExtractedReadme, SbomDependency, SbomExtractor, SbomFacts, SbomRepository,
     UpstreamSbomFetcher, LICENSE_EXTRACTION_TYPES, README_EXTRACTION_TYPES, README_EXTRACT_CEILING,
 };
 pub use scanner::{ArtifactScanner, FindingEnricher, ScanInput, ScannerError};
 pub use security::{QueuedCount, ScanQueue, VerdictRepository, WorkerRegistry};
 pub use stats_history::{StatsHistoryRepository, StatsRollupRow};
 pub use storage::{
-    collect_byte_stream, ArtifactStorageRecord, ByteStream, CacheEntry, CacheStore,
-    S3StorageConfig, StorageAdminRepository, StorageBackend, StorageMeta, StoreOutcome,
-    StoredArtifact,
+    collect_byte_stream, staged_destination, staging_key_for, ArtifactStorageRecord, ByteStream,
+    CacheEntry, CacheStore, S3StorageConfig, StorageAdminRepository, StorageBackend, StorageMeta,
+    StoreOutcome, StoredArtifact, STAGING_PREFIX,
 };
 pub use vulnerability::{OsvMatch, VulnerabilityRepository, VulnerabilityScanner};

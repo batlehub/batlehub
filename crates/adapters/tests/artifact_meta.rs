@@ -22,6 +22,7 @@ static TEST_ID: AtomicU64 = AtomicU64::new(0);
 
 struct TestRepo {
     repo: PgArtifactMetaRepository,
+    pool: PgPool,
     prefix: String,
 }
 
@@ -40,7 +41,8 @@ async fn make_repo(url: &str) -> TestRepo {
         .await
         .expect("run migrations");
     TestRepo {
-        repo: PgArtifactMetaRepository::new(pool),
+        repo: PgArtifactMetaRepository::new(pool.clone()),
+        pool,
         prefix,
     }
 }
@@ -143,9 +145,17 @@ async fn touch_updates_last_accessed_at() {
         .unwrap()
         .last_accessed_at;
 
-    // Sleep long enough that the timestamp reliably advances despite DB write
-    // latency and clock resolution jitter (10ms was occasionally too tight).
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    // A touch within the minute is throttled away (the next test); backdate
+    // the stamp so this one is due.
+    sqlx::query(
+        "UPDATE artifact_cache_meta SET last_accessed_at = NOW() - INTERVAL '2 minutes' \
+         WHERE artifact_key = $1",
+    )
+    .bind(&key)
+    .execute(&t.pool)
+    .await
+    .unwrap();
+    let before_accessed = before_accessed - Duration::minutes(2);
     t.repo.touch_artifact(&key).await.unwrap();
 
     let after = t.repo.list_artifacts("npm").await.unwrap();
@@ -158,6 +168,43 @@ async fn touch_updates_last_accessed_at() {
     assert!(
         after_accessed > before_accessed,
         "last_accessed_at must advance after touch"
+    );
+}
+
+/// Every cache hit touches, so a fresh stamp is not rewritten: the row of a
+/// hot artifact would otherwise be updated once per download.
+#[tokio::test]
+async fn touch_within_a_minute_does_not_write() {
+    let Some(url) = db_url() else { return };
+    let t = make_repo(&url).await;
+    let key = t.key("hot:1.0.0");
+    t.repo
+        .record_artifact(ArtifactMetaRecord {
+            key: &key,
+            registry: "npm",
+            package_name: "hot",
+            version: "1.0.0",
+            size: Some(1),
+            checksum: None,
+        })
+        .await
+        .unwrap();
+    let stamp = || async {
+        sqlx::query_scalar::<_, DateTime<Utc>>(
+            "SELECT last_accessed_at FROM artifact_cache_meta WHERE artifact_key = $1",
+        )
+        .bind(&key)
+        .fetch_one(&t.pool)
+        .await
+        .unwrap()
+    };
+    let before = stamp().await;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    t.repo.touch_artifact(&key).await.unwrap();
+    assert_eq!(
+        stamp().await,
+        before,
+        "a stamp under a minute old is left alone"
     );
 }
 
