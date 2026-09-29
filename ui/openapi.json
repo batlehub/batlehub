@@ -5978,10 +5978,10 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "type": "null"
+                      "$ref": "#/components/schemas/GlobalBanner"
                     },
                     {
-                      "$ref": "#/components/schemas/GlobalBanner"
+                      "type": "null"
                     }
                   ]
                 }
@@ -20841,11 +20841,11 @@
           "package_id": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/PackageId",
                 "description": "The package coordinate this event is about, when applicable.\n\n`None` for account-wide/network-wide admin actions that are not scoped\nto a specific package (e.g. blocking a user or an IP address)."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -20938,11 +20938,11 @@
           "blocked_by": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/BlockedBy",
                 "description": "Which layer denied, when one did."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -22156,11 +22156,11 @@
           "last_run": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ImportRun",
                 "description": "The last completed run, or `null` when none has happened.\n\nThe distinction the console exists to show: \"ran and found nothing new\"\nis a run with `imported: 0`, \"has not run\" is this being absent, and a\npage that could not tell them apart would be worse than no page."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -22626,11 +22626,11 @@
           "shadowed_by": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ShadowNote",
                 "description": "Set when a node on this path is in **shadow** (§4.7), meaning a `deny`\nhere is *not* what the request would receive — it would be served, and\nthe refusal only recorded.\n\nReported rather than folded into `decision`, and the distinction is the\none this endpoint exists to make. Answering `allow` would hide that the\ngrants refuse; answering a bare `deny` would contradict what the server\nactually does, and §11.6 is explicit that *\"a diagnostic that can\ndisagree with reality is worse than none, because it is trusted.\"* So it\nsays both: the grants refuse, and the shadow serves it anyway."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -22781,11 +22781,11 @@
           "links": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/PackageLinksDto",
                 "description": "Where this package's code and site live, as its own metadata names them.\n\n`None` whenever we cannot say: a registry kind whose client does not read\nthese fields, a package the metadata cache has never held, or a locally\npublished one (asking a public index about a private name on a page view\nwould leak that the software exists — the same suppression the derived\nREADME applies)."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -22798,11 +22798,11 @@
           "selected": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ExploreVersionDto",
                 "description": "The selected version's row, whatever page it is on.\n\n`selected_version` names it; this *is* it. The console renders its subject\nregion from this rather than from whatever happens to be in `versions`,\nbecause the two are routinely different: the page writes `?version=X&page=N`\ninto the URL itself, and X is on page 1 while N is 3."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -23156,10 +23156,10 @@
           "severity": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/Severity"
               },
               {
-                "$ref": "#/components/schemas/Severity"
+                "type": "null"
               }
             ]
           },
@@ -23547,10 +23547,10 @@
           "severity": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/Severity"
               },
               {
-                "$ref": "#/components/schemas/Severity"
+                "type": "null"
               }
             ]
           },
@@ -24483,11 +24483,11 @@
           "bytes_state": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/QuotaStateDto",
                 "description": "This dimension's own verdict, or `null` when it has no limit. Present so\na reader can see *which* threshold was crossed (RFC 0004 §4.2) — a\nregistry whose versions are at 82% while its storage sits at 68% is not\n\"at 82%\" in both."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -24507,11 +24507,11 @@
           "packages_state": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/QuotaStateDto",
                 "description": "This dimension's own verdict, or `null` when it has no limit."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -24905,11 +24905,11 @@
           "severity": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/Severity",
                 "description": "The severity a `gate` flag is judged at; absent, `High`."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -25417,20 +25417,20 @@
           "prerelease_visibility": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/Visibility"
               },
               {
-                "$ref": "#/components/schemas/Visibility"
+                "type": "null"
               }
             ]
           },
           "quota": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/QuotaDto"
               },
               {
-                "$ref": "#/components/schemas/QuotaDto"
+                "type": "null"
               }
             ]
           },
@@ -25444,20 +25444,20 @@
           "versioning": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/VersioningDto"
               },
               {
-                "$ref": "#/components/schemas/VersioningDto"
+                "type": "null"
               }
             ]
           },
           "visibility": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/Visibility"
               },
               {
-                "$ref": "#/components/schemas/Visibility"
+                "type": "null"
               }
             ]
           }
@@ -26035,11 +26035,11 @@
           "status": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/UpstreamStatus",
                 "description": "The row after the probe: absent when upstream has the package and no\nmiss is on record."
+              },
+              {
+                "type": "null"
               }
             ]
           },
