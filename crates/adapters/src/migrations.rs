@@ -241,6 +241,11 @@ pub fn embedded_migrator() -> Migrator {
             "release_import_runs",
             "../migrations/059_release_import_runs.sql"
         ),
+        mig!(
+            60,
+            "index diet and autovacuum",
+            "../migrations/060_index_diet_and_autovacuum.sql"
+        ),
     ])
 }
 

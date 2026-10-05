@@ -604,6 +604,7 @@ async fn main() -> Result<()> {
     );
     repo.run_migrations().await.context("running migrations")?;
     stores::spawn_db_pool_gauge_sampler(repo.pool());
+    stores::spawn_db_housekeeping(repo.pool());
     allocator::spawn_allocator_gauge_sampler();
 
     let storage = setup::initialize_storage(&config, repo.pool()).await?;

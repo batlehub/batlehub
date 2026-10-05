@@ -45,6 +45,22 @@ policy stops sending vulnerability reports to a public issue.
 
 ### Changed
 
+- **The database stops growing where nothing reads.** An hourly sweep
+  (`batlehub_adapters::db::housekeeping`) deletes, in batches of 5 000, the
+  rows every reader already ignored: expired metadata-cache entries, scan jobs
+  finished over 7 days ago, inbound webhook events over 30 days, worker
+  heartbeats over 7 days, expired IP blocks and IP violation windows over 30
+  days. None of them was pruned before. The audit trail (`access_events`,
+  `config_changes`) is untouched: its retention is RFC 0036 phase 4's.
+
+- **Fewer indexes on the hot tables** (migration 060). Seven indexes that were
+  a leading prefix of another index or of the primary key are dropped — three
+  of them on `access_events`, which takes one insert per proxied read — and
+  autovacuum is tuned per table so the audit trail's visibility map stays
+  fresh for the index-only scans of migration 021 and the counter tables
+  reclaim their churn. The drops are instant; the one index it builds is on
+  `inbound_webhook_events` and takes that table's write lock for its build.
+
 - **A cached download runs 5 statements, not 8** — 7 rather than 10 with a
   personal access token. The block check asks for the artifact and its bare
   version in one query rather than two; the storage lookup runs once rather

@@ -129,14 +129,13 @@ déploiement conscientes des réplicas.
 
 Les requêtes du catalogue exécutent deux CTE qui font l'union de
 `package_statuses` et de `local_packages`, puis joignent les comptes d'événements
-d'accès. Les index suivants (ajoutés par la migration 017) les gardent rapides :
+d'accès. Les index suivants (migrations 017, 021 et 060) les gardent rapides :
 
 | Index | Rôle |
 | --- | --- |
-| `idx_access_events_pkg` sur `(registry, package_name, package_version)` | Condition de JOIN dans la liste des paquets |
-| `idx_access_events_pkg_allowed_recent` sur `(registry, package_name, package_version, outcome, created_at DESC)` | Sous-requête corrélée `last_accessed_by` |
-| `idx_access_events_registry_name` sur `(registry, package_name)` | Comptage LATERAL des événements d'accès dans le catalogue |
-| `idx_package_statuses_registry_name` sur `(registry, package_name)` | Agrégation GROUP BY de l'explorateur |
+| `idx_access_events_pkg` sur `(registry, package_name, package_version, created_at DESC)` | Condition de JOIN dans la liste des paquets, et comptage LATERAL par paquet via son préfixe `(registry, package_name)` |
+| `idx_access_events_pkg_allowed_recent` sur `(registry, package_name, package_version, outcome, created_at DESC) INCLUDE (user_id)` | Sous-requête corrélée `last_accessed_by` |
+| `uq_package_status` sur `(registry, package_name, package_version, …)` | Agrégation GROUP BY de l'explorateur, via son préfixe `(registry, package_name)` |
 
 Ces index sont créés automatiquement au démarrage de BatleHub, avec les
 migrations. Aucune action manuelle n'est nécessaire.
