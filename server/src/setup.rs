@@ -451,8 +451,11 @@ pub(super) fn spawn_login_state_prune(store: Arc<dyn batlehub_core::ports::Login
 pub(super) fn add_user_token_provider(
     auth_providers: &mut Vec<Arc<dyn AuthProvider>>,
     token_repo: Arc<dyn UserTokenRepository>,
+    audit: Arc<dyn batlehub_core::ports::PackageRepository>,
 ) {
-    auth_providers.push(Arc::new(UserTokenAuthProvider::new(token_repo)));
+    auth_providers.push(Arc::new(
+        UserTokenAuthProvider::new(token_repo).with_audit(audit),
+    ));
     info!("configured user-token auth provider");
 }
 
@@ -669,4 +672,45 @@ pub(super) fn build_scanners(config: &batlehub_config::schema::AppConfig) -> Res
         scanners: out,
         enrichers,
     })
+}
+
+// ── The audit trail (RFC 0036 §6.3–6.4) ──────────────────────────────────────
+
+/// The audit-trail service, from `[audit]`. Built whatever the config says:
+/// without `[audit]` it seals nothing and expires nothing, and still answers
+/// the purge (class-restricted), the export and — with an `erasure_key` — the
+/// erasure.
+pub(super) fn build_audit_trail(
+    config: &batlehub_config::schema::AppConfig,
+    repo: &Arc<batlehub_adapters::db::PgPackageRepository>,
+) -> anyhow::Result<batlehub_core::services::audit_trail::AuditTrailService> {
+    use batlehub_core::services::audit_trail::{AuditPolicy, AuditTrailService, AUDIT_LEADER_KEY};
+    let policy = match &config.audit {
+        None => AuditPolicy::default(),
+        Some(a) => {
+            let mut policy = AuditPolicy::from_days(
+                a.access_retention_days,
+                a.security_retention_days,
+                a.pseudonymise_after_days,
+            );
+            if a.sealing() {
+                let seed = a.seal_signing_key.as_deref().unwrap_or_default();
+                let key =
+                    batlehub_core::services::signature::VsxSigningKey::from_seed_hex(seed, None)
+                        .map_err(|e| anyhow::anyhow!("[audit] seal_signing_key: {e}"))?;
+                policy.sealing = Some((std::time::Duration::from_secs(a.seal_interval_secs), key));
+            }
+            policy.erasure_key = a.erasure_key.clone();
+            policy
+        }
+    };
+    Ok(AuditTrailService::new(
+        repo.clone(),
+        repo.clone(),
+        Arc::new(batlehub_adapters::db::PgAdvisoryLeader::new(
+            repo.pool(),
+            AUDIT_LEADER_KEY,
+        )),
+        policy,
+    ))
 }

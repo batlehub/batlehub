@@ -81,7 +81,7 @@ pub async fn extension_entry(
         ip_address: identity.1.ip.clone(),
         user_agent: identity.1.user_agent.clone(),
     };
-    let meta = match svc.resolve_metadata_for(&req).await {
+    let meta = match svc.resolve_listing_for(&req).await {
         Ok(m) => m,
         Err(CoreError::NotFound(_)) => return Ok(None),
         Err(e) => return Err(AppError::from(e)),

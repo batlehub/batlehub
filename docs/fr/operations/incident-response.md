@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/incident-response.md
-sourceHash: 92b18df0400b6702
+sourceHash: f89004ce0f8db3e8
 ---
 
 # Procédure de réponse à incident — BatleHub
@@ -200,18 +200,84 @@ l'incident suivant parte d'un formulaire plutôt que d'une page blanche.
 
 ---
 
-## Traitement des données personnelles
+## Calendrier de notification NIS2 {#nis2-reporting}
 
-Les entrées du journal d'audit contiennent des identifiants d'utilisateur et des
-adresses IP. Si une demande de suppression au titre du RGPD ou du CCPA arrive :
+Une entité essentielle ou importante au sens de NIS2 (art. 23) doit trois
+notifications à son CSIRT ou à son autorité compétente au sujet d'un incident
+important. Les notifications vous reviennent ; BatleHub détient les éléments de
+preuve à partir desquels elles sont rédigées.
 
-1. Identifiez l'identifiant de l'utilisateur depuis son compte.
-2. Exportez ses enregistrements :
-   `export-audit-log | jq '[.[] | select(.user_id == "X")]'`
-3. Fournissez-lui une copie si votre juridiction l'exige.
-4. Pour purger la base, exécutez la migration d'anonymisation (fonctionnalité
-   prévue) ou un `UPDATE access_events SET user_id = 'anonymized', ip_address =
-   NULL WHERE user_id = 'X'` ciblé, sous la supervision d'un DBA.
+| Échéance | Ce que demande NIS2 | Où se trouvent les preuves |
+|----------|---------------------|----------------------------|
+| **24 h** après en avoir eu connaissance — alerte précoce | Si l'incident est soupçonné d'être malveillant ou d'avoir un impact transfrontière | Le flux d'audit dans votre SIEM et la règle Sigma qui s'est déclenchée ([Intégration SIEM](./siem.md)) |
+| **72 h** — notification de l'incident | Une première évaluation : gravité, impact, indicateurs de compromission | Le journal d'audit de la fenêtre : `batlehub-cli admin export-audit-log --from <start> --to <end> --format json` |
+| **Un mois** — rapport final | Cause racine, mesures d'atténuation appliquées, impact transfrontière | Le retour d'expérience de la phase 5, le journal exporté et une chaîne vérifiée pour la fenêtre |
+
+Avant de citer le journal exporté, montrez qu'il n'a pas été modifié :
+
+```bash
+# <digest> est la ligne audit_seal la plus récente que détient votre SIEM
+batlehub-cli admin audit verify --from <start> --to <end> --head <digest>
+```
+
+La commande sort avec `0` lorsque chaque fenêtre scellée se vérifie, et avec
+`1` en nommant la première qui échoue. Sans `--head`, elle indique que la
+troncature n'a pas été vérifiée — une chaîne dont la fin a été supprimée en même
+temps que ses enregistrements de scellement se vérifie encore, et seule la copie
+hors de la base peut le montrer. La copie du flux est cette copie ;
+`deploy/siem/sigma/audit_chain_gap.yml` se déclenche lorsque deux lignes
+`audit_seal` consécutives ne s'enchaînent pas.
+
+Ce que NIS2 et DORA demandent d'autre, et ce qui n'est pas encore construit, se
+trouve dans [NIS2 et DORA](./compliance-nis2-dora.md).
+
+---
+
+## Traitement des données personnelles {#pii-handling}
+
+Les lignes d'audit portent des identifiants d'utilisateur, des adresses IP et des
+user agents ; les lignes de tokens et de blocage portent des identifiants
+d'utilisateur. La conservation et la pseudonymisation de la piste tournent
+d'elles-mêmes une fois `[audit]` configuré
+([Correspondance RGPD](./compliance-gdpr.md)). La demande d'une personne
+concernée se traite avec deux commandes.
+
+**Demande d'accès (RGPD, art. 15) :**
+
+```bash
+batlehub-cli admin gdpr export --user <id>
+```
+
+La commande liste toutes les lignes concernant la personne, y compris les lignes
+de publication et de propriété qu'un effacement conserve, et elle est enregistrée
+comme événement d'audit `gdpr_export`. Elle exige le verbe `audit:read`
+(`GET /api/v1/admin/gdpr/export?user_id=<id>`).
+
+**Demande d'effacement (RGPD, art. 17) :**
+
+```bash
+batlehub-cli admin gdpr erase --user <id>
+```
+
+La commande remplace l'identifiant par `erased:<hmac>` dans `access_events`, les
+lignes de tokens et les lignes de blocage, si bien que les lignes de la personne
+restent liées entre elles et à personne d'autre. Elle exige le verbe
+`gdpr:erase` — `audit:purge` ne l'implique pas — et un `[audit] erasure_key`
+renseigné, un secret HMAC que vous conservez hors de la base de données.
+L'effacement est lui-même un événement de sécurité `gdpr_erase` qui nomme son
+auteur.
+
+- **Les lignes de publication et de propriété sont conservées**, au titre de
+  l'intérêt légitime : qui a publié une version doit rester connu de chacun de
+  ses consommateurs. Dites-le à la personne ; l'export les liste.
+- **Une personne visée par une quarantaine ou un blocage ouvert est refusée**,
+  parce que l'effacer effacerait la preuve d'un dossier en cours. Clôturez
+  d'abord le dossier, ou passez `--force` et consignez pourquoi.
+- **Une copie déjà présente dans votre SIEM n'est pas touchée.** Effacez-la par
+  les moyens propres à votre collecteur, ou laissez sa conservation l'expirer.
+
+Ne modifiez jamais `access_events` en SQL : un `UPDATE` écrit à la main rompt la
+chaîne de scellement, et `audit verify` signalera la fenêtre comme altérée.
 
 ---
 

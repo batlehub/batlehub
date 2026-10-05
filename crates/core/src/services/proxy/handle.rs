@@ -223,6 +223,27 @@ impl ProxyService {
         self.resolve_metadata_for_inner(req, true).await
     }
 
+    /// [`Self::resolve_metadata_for`] for a handler that answers a **listing**
+    /// from the metadata — the JetBrains Marketplace plugin documents and the
+    /// VS Code gallery entries — counted and timed as [`Self::timed_listing`]
+    /// counts every other listing.
+    ///
+    /// Those handlers render from `PackageMetadata.extra` rather than going
+    /// through `proxy_document`, so until this they recorded no
+    /// `batlehub_requests_total` at all and ranked as costing nothing. A path
+    /// that resolves metadata on its way to a download keeps
+    /// `resolve_metadata_for`: the download already counts itself.
+    pub async fn resolve_listing_for(
+        &self,
+        req: &ProxyRequest,
+    ) -> Result<crate::entities::PackageMetadata, CoreError> {
+        let meta = self
+            .timed_listing(&req.package_id.registry, self.resolve_metadata_for(req))
+            .await?;
+        self.metrics.record_listing_read(&req.package_id.registry);
+        Ok(meta)
+    }
+
     /// [`Self::resolve_metadata_for`] without the README capture.
     ///
     /// For the console: a **page view** must write nothing. `resolve_metadata_for`

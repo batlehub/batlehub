@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: e877c7981103a2b4
+sourceHash: d8e32672602fa5c9
 ---
 
 # Référence de configuration
@@ -2937,6 +2937,97 @@ service_name = "batlehub"   # défaut
 Toute la section s'active sans modifier le fichier de configuration, en
 définissant `PROXY_CACHE__OTEL__ENDPOINT` — la section est créée automatiquement
 si la variable est présente.
+
+---
+
+### 3.7a `[logging]` (facultatif) {#logging}
+
+Le format des lignes de journal que le processus écrit sur la sortie standard.
+
+```toml
+[logging]
+format = "json"   # "text" (le défaut) ou "json"
+```
+
+| Champ | Type | Défaut | Notes |
+|---|---|---|---|
+| `format` | `"text"` \| `"json"` | `"text"` | `json` écrit un objet par ligne et active le **flux d'audit** |
+
+`text` est la sortie lisible que ce serveur a toujours écrite ; omettre la
+section ne change rien. `json` écrit un objet JSON par ligne, avec les champs
+de l'événement au premier niveau et le span de la requête à côté
+(`span.request_id`), et active le flux d'audit : chaque ligne que le journal
+d'audit enregistre devient aussi une ligne portant `event.dataset =
+"batlehub.audit"` et des noms de champs ECS — téléchargements, refus, actions
+d'administration, connexions, création et révocation de tokens, identifiants
+refusés et rechargements de configuration. Un collecteur la lit sur la sortie
+standard ; il n'y a pas d'écriture dans un fichier.
+
+La référence des champs, les règles Sigma livrées et les extraits de
+configuration des collecteurs sont dans [Intégration SIEM](../operations/siem.md).
+Le flux suit `RUST_LOG` comme toute autre ligne : un filtre qui écarte `info`
+pour la cible `batlehub::audit` écarte le flux.
+
+---
+
+### 3.7b `[audit]` (facultatif) {#audit}
+
+Le cycle de vie du journal d'audit (RFC 0036) : la durée de conservation de
+chaque classe de ligne, le moment où les lignes d'accès perdent leur précision,
+le scellement qui rend une modification détectable, et la clé qu'utilise
+l'effacement d'une personne concernée.
+
+```toml
+[audit]
+access_retention_days   = 365    # download, view_metadata
+security_retention_days = 1095   # toutes les autres actions, dont l'authentification
+pseudonymise_after_days = 30     # lignes d'accès : IP réduite à /24 ou /48, user agent supprimé
+seal_interval_secs      = 300    # 0 désactive le scellement
+seal_signing_key        = "${BATLEHUB_AUDIT_SEAL_KEY}"   # graine Ed25519, 64 hex
+erasure_key             = "${BATLEHUB_AUDIT_ERASURE_KEY}" # secret HMAC, 32 caractères ou plus
+```
+
+| Champ | Type | Défaut | Notes |
+|---|---|---|---|
+| `access_retention_days` | entier | `0` | Jours de conservation d'une ligne `download` / `view_metadata`. `0` ne l'expire jamais |
+| `security_retention_days` | entier | `0` | Jours de conservation de toutes les autres lignes. `0` ne les expire jamais |
+| `pseudonymise_after_days` | entier | `0` | Les lignes d'accès plus anciennes gardent leur utilisateur et perdent la précision de l'IP et le user agent. `0` désactive |
+| `seal_interval_secs` | entier | `0` | Durée d'une fenêtre de la chaîne de sceaux. `0` désactive le scellement |
+| `seal_signing_key` | chaîne | — | Requise pour sceller : une graine Ed25519 de 32 octets, en hexadécimal |
+| `erasure_key` | chaîne | — | Requise par `gdpr erase` ; 32 caractères au moins. À conserver hors de la base |
+
+**Omettre la section ne change rien** : aucune ligne n'expire, aucune n'est
+pseudonymisée, rien n'est scellé, et le serveur l'indique une fois
+(`audit.no-retention`). Les valeurs ci-dessus sont l'exemple documenté, pas un
+défaut. Le chargement refuse un intervalle de scellement sans clé, une clé qui
+n'est pas une graine, une pseudonymisation postérieure à la rétention des
+accès, et une rétention de sécurité plus courte que celle des accès.
+
+**Les classes.** `download` et `view_metadata` forment la classe d'accès ;
+toutes les autres actions — actions d'administration, connexions, événements
+de token, purges — forment la classe de sécurité, qui garde son IP complète
+pendant toute sa rétention, parce que la source d'une connexion *est* la
+preuve. Une nouvelle action est de classe sécurité, sauf ajout délibéré à la
+classe d'accès.
+
+**Le scellement.** Toutes les `seal_interval_secs`, le worker qui détient le
+verrou d'audit ferme la fenêtre terminée depuis au moins une fenêtre : ses
+lignes sont hachées, l'empreinte est chaînée à l'enregistrement précédent et
+signée. La pseudonymisation, la rétention, une purge et un effacement
+consignent chacun ce qu'ils ont modifié dans une fenêtre scellée par un `amend`
+ou un `expire` signé : `batlehub-cli admin audit verify` distingue ainsi les
+modifications du cycle de vie de toutes les autres. Associez le scellement à
+`[logging] format = "json"` : chaque enregistrement devient aussi une ligne
+`audit_seal`, et la copie que détient votre SIEM est ce qui détecte une queue
+tronquée ([Intégration SIEM](../operations/siem.md)).
+
+**La purge manuelle** (`DELETE /api/v1/admin/audit-log`) ne supprime que les
+lignes de la classe d'accès ; l'enregistrement d'une purge survit à toutes les
+purges suivantes. Les lignes déjà pseudonymisées ou supprimées ne se récupèrent
+pas — c'est l'objet du réglage.
+
+Les deux tâches tournent sur le rôle `worker`, un processus à la fois. La
+section est lue au démarrage ; une modification prend effet au redémarrage.
 
 ---
 

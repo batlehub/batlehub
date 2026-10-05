@@ -35,7 +35,7 @@ pub(super) async fn list_events_impl(
         SELECT
             id, user_id, user_role, registry, package_name, package_version,
             package_artifact, action, outcome, deny_reason, created_at,
-            ip_address, user_agent
+            ip_address, user_agent, throttled_count, detail
         FROM access_events
         WHERE ($1::text IS NULL OR registry = $1)
           AND ($2::text IS NULL OR user_id = $2)
@@ -69,7 +69,7 @@ pub(super) async fn list_events_impl(
 /// Every query feeding this must select the same thirteen columns; sqlx 0.9
 /// rejects non-literal SQL, so the list is repeated per query rather than
 /// shared through a `const`.
-fn map_access_event(r: &sqlx::postgres::PgRow) -> Result<AccessEvent, CoreError> {
+pub(super) fn map_access_event(r: &sqlx::postgres::PgRow) -> Result<AccessEvent, CoreError> {
     let outcome: String = r.get("outcome");
     // Account-wide/network-wide events store NULL in all three coordinate
     // columns (see migration 030); only build a `PackageId` when the row
@@ -114,6 +114,10 @@ fn map_access_event(r: &sqlx::postgres::PgRow) -> Result<AccessEvent, CoreError>
         timestamp: r.get("created_at"),
         ip_address: r.get("ip_address"),
         user_agent: r.get("user_agent"),
+        throttled_count: r
+            .get::<Option<i32>, _>("throttled_count")
+            .map(|n| n.max(0) as u32),
+        detail: r.get("detail"),
     })
 }
 
@@ -134,7 +138,7 @@ pub(super) async fn list_own_downloads_impl(
         SELECT
             id, user_id, user_role, registry, package_name, package_version,
             package_artifact, action, outcome, deny_reason, created_at,
-            ip_address, user_agent
+            ip_address, user_agent, throttled_count, detail
         FROM access_events
         WHERE user_id = $1
           AND action = 'download'
@@ -619,11 +623,16 @@ pub(super) async fn purge_events_before_impl(
     pool: &PgPool,
     before: DateTime<Utc>,
 ) -> Result<u64, CoreError> {
-    let result = sqlx::query("DELETE FROM access_events WHERE created_at < $1")
-        .bind(before)
-        .execute(pool)
-        .await
-        .db_err()?;
+    // Access class only (RFC 0036 §4.2): a purge removes traffic, never the
+    // evidence — so a second purge cannot erase the first one's row.
+    let result = sqlx::query(
+        "DELETE FROM access_events WHERE created_at < $1 \
+         AND action IN ('download', 'view_metadata')",
+    )
+    .bind(before)
+    .execute(pool)
+    .await
+    .db_err()?;
     Ok(result.rows_affected())
 }
 

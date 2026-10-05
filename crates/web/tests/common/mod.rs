@@ -1521,7 +1521,7 @@ pub async fn finish_test_app(
         .into_utoipa_app()
         .configure(configure_test_app(
             proxy_svc,
-            admin_svc,
+            Arc::clone(&admin_svc),
             token_repo,
             access_config,
             registry_map,
@@ -1592,7 +1592,13 @@ pub async fn finish_test_app(
             batlehub_web::ExposureConfig::default(),
         ));
 
-    init_service(app.wrap(AuthMiddlewareFactory::new(auth_providers))).await
+    init_service(
+        app.wrap(
+            AuthMiddlewareFactory::new(auth_providers)
+                .with_audit(batlehub_web::CredentialRejectionAudit::new(admin_svc)),
+        ),
+    )
+    .await
 }
 #[allow(clippy::too_many_arguments)]
 pub async fn finish_test_app_with_extra<E: 'static>(
@@ -1636,7 +1642,7 @@ pub async fn finish_test_app_with_extra<E: 'static>(
         .into_utoipa_app()
         .configure(configure_test_app(
             proxy_svc,
-            admin_svc,
+            Arc::clone(&admin_svc),
             token_repo,
             access_config,
             registry_map,
@@ -1692,7 +1698,13 @@ pub async fn finish_test_app_with_extra<E: 'static>(
         ))
         .app_data(actix_web::web::Data::new(extra));
 
-    init_service(app.wrap(AuthMiddlewareFactory::new(auth_providers))).await
+    init_service(
+        app.wrap(
+            AuthMiddlewareFactory::new(auth_providers)
+                .with_audit(batlehub_web::CredentialRejectionAudit::new(admin_svc)),
+        ),
+    )
+    .await
 }
 pub async fn make_app(
     repo: Arc<InMemoryRepo>,

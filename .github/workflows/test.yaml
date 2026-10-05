@@ -25,6 +25,7 @@ on:
       - "**/Cargo.lock"
       - ".github/workflows/test.yaml"
       - ".github/scripts/merge_coverage.py"
+      - "deploy/siem/**"
   pull_request:
     branches: ["main"]
     # `labeled` on top of the three defaults: the `full-test` label below is a
@@ -43,6 +44,7 @@ on:
       - "**/Cargo.lock"
       - ".github/workflows/test.yaml"
       - ".github/scripts/merge_coverage.py"
+      - "deploy/siem/**"
   # Nightly as well as per-PR, for the heavy client jobs: what they drive is not
   # all in this repository. They install Bundler and npm from their own
   # registries, pinned IDE, Terraform, .NET and micromamba builds, and several
@@ -163,6 +165,30 @@ jobs:
             git --no-pager diff -- "$page"
             exit 1
           fi
+
+  siem:
+    # RFC 0036 §6.2. `sigma check` proves the rules are well-formed; the replay
+    # proves they still read fields the audit stream emits and fire on a
+    # recorded stream — a renamed field in `audit_stream.rs` fails here instead
+    # of silently blinding a SOC. Mirrors `task siem:check`.
+    name: SIEM rules (sigma check + replay)
+    runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # A venv rather than `pip --user`: the runner's Python is externally
+      # managed (PEP 668) and refuses user installs.
+      - name: Install sigma-cli
+        run: |
+          python3 -m venv "$RUNNER_TEMP/siem"
+          "$RUNNER_TEMP/siem/bin/pip" install --quiet sigma-cli==3.1.0 pyyaml==6.0.2
+      - name: sigma check
+        run: >-
+          "$RUNNER_TEMP/siem/bin/sigma" check --fail-on-issues
+          --exclude escaped_wildcard deploy/siem/sigma
+      - name: Replay the recorded stream
+        run: '"$RUNNER_TEMP/siem/bin/python" deploy/siem/replay.py'
 
   fuzz:
     # `fuzz/**` has been in this workflow's path filters since the targets
@@ -1103,6 +1129,9 @@ jobs:
           # client and no upstream: every registry it touches is local and
           # empty, which is exactly what makes the boundary observable.
           - target: reads
+          # RFC 0036 §6.7: the audit stream as npm produces it, replayed through
+          # the shipped Sigma rules.
+          - target: audit
           - target: npm
           - target: pypi
           - target: openvsx
@@ -1163,7 +1192,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
 
       - name: Set up Node (npm / Open VSX)
-        if: matrix.target == 'npm' || matrix.target == 'openvsx'
+        if: matrix.target == 'npm' || matrix.target == 'openvsx' || matrix.target == 'audit'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -1183,7 +1212,7 @@ jobs:
           sudo unzip -o -q /tmp/terraform.zip -d /usr/local/bin
           terraform version
       - name: Install uv
-        if: matrix.target == 'galaxy'
+        if: matrix.target == 'galaxy' || matrix.target == 'audit'
         run: |
           curl -fsSL --proto '=https' --proto-redir '=https' -o /tmp/uv.tar.gz \
             "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz"

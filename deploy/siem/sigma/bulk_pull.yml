@@ -1,0 +1,48 @@
+title: BatleHub allowed downloads
+name: batlehub_allowed_download
+id: e39bc3c1-3348-42a7-baae-cb4cb4c2c713
+status: experimental
+description: >-
+  A download the server allowed.
+references:
+  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+author: BatleHub
+date: 2026-10-05
+logsource:
+  product: batlehub
+  service: audit
+detection:
+  selection:
+    event.dataset: batlehub.audit
+    event.action: download
+    event.outcome: allowed
+  condition: selection
+falsepositives:
+  - Every ordinary install
+level: informational
+---
+title: BatleHub bulk pull by one principal
+id: bde0788c-ebf8-4315-896f-6ff98bd10f84
+status: experimental
+description: >-
+  One principal pulled an unusual number of distinct packages in ten minutes —
+  the shape of a private registry being exfiltrated. Tune the threshold to the
+  largest dependency graph your builds resolve.
+references:
+  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+author: BatleHub
+date: 2026-10-05
+tags:
+  - attack.collection
+  - attack.exfiltration
+correlation:
+  type: value_count
+  rules:
+    - batlehub_allowed_download
+  group-by:
+    - user.id
+  timespan: 10m
+  condition:
+    field: package.name
+    gte: 300
+level: medium

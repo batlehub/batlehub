@@ -444,6 +444,7 @@ tasks:
       - bash tests/heavy/authz.sh matrix
       - bash tests/heavy/authz.sh signing
       - bash tests/heavy/authz.sh reads
+      - bash tests/heavy/authz.sh audit
       - bash tests/heavy/authz.sh npm
       - bash tests/heavy/authz.sh pypi
       - bash tests/heavy/authz.sh openvsx

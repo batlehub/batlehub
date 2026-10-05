@@ -2230,6 +2230,90 @@ The entire section can be enabled without a config file change by setting `PROXY
 
 ---
 
+### 3.7a `[logging]` (optional) {#logging}
+
+How the process writes its log lines on stdout.
+
+```toml
+[logging]
+format = "json"   # "text" (the default) or "json"
+```
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `format` | `"text"` \| `"json"` | `"text"` | `json` writes one object per line and turns on the **audit stream** |
+
+`text` is the human-readable output this server has always written; leaving the
+section out changes nothing. `json` writes one JSON object per line, with the
+event's fields at the top level and the request span beside them (`span.request_id`),
+and turns on the audit stream: every row the audit trail records is also a line
+with `event.dataset = "batlehub.audit"` and ECS field names — downloads, denials,
+admin actions, sign-ins, token minting and revocation, refused credentials and
+config reloads. A collector reads it from stdout; there is no file sink.
+
+The field reference, the shipped Sigma rules and the collector snippets are in
+[SIEM integration](../operations/siem.md). The stream follows `RUST_LOG` like every
+other line: a filter that drops `info` for the `batlehub::audit` target drops the stream.
+
+---
+
+### 3.7b `[audit]` (optional) {#audit}
+
+The audit trail's lifecycle (RFC 0036): how long each class of row is kept,
+when access rows lose their precision, how the trail is sealed against edits,
+and the key data-subject erasure uses.
+
+```toml
+[audit]
+access_retention_days   = 365    # download, view_metadata
+security_retention_days = 1095   # every other action, every auth event
+pseudonymise_after_days = 30     # access rows: IP to /24 or /48, user agent dropped
+seal_interval_secs      = 300    # 0 disables sealing
+seal_signing_key        = "${BATLEHUB_AUDIT_SEAL_KEY}"   # Ed25519 seed, 64 hex
+erasure_key             = "${BATLEHUB_AUDIT_ERASURE_KEY}" # HMAC secret, 32+ chars
+```
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `access_retention_days` | integer | `0` | Days a `download` / `view_metadata` row is kept. `0` never expires |
+| `security_retention_days` | integer | `0` | Days every other row is kept. `0` never expires |
+| `pseudonymise_after_days` | integer | `0` | Access rows older than this keep their user and lose IP precision and user agent. `0` disables |
+| `seal_interval_secs` | integer | `0` | Window length of the seal chain. `0` disables sealing |
+| `seal_signing_key` | string | — | Required when sealing: a 32-byte Ed25519 seed, hex |
+| `erasure_key` | string | — | Required by `gdpr erase`; at least 32 characters. Keep it outside the database |
+
+**Leaving the section out changes nothing**: no row expires, none is
+pseudonymised, nothing is sealed, and the server warns once
+(`audit.no-retention`). The values above are the documented example, not a
+default. The load refuses a seal interval without a key, a key that is not a
+seed, pseudonymisation set past the access retention, and a security retention
+shorter than the access one.
+
+**Classes.** `download` and `view_metadata` are the access class; every other
+action — admin actions, sign-ins, token events, purges — is the security
+class, and keeps its full IP for its whole retention because the source of a
+sign-in *is* the evidence. A new action is security class unless added to the
+access class deliberately.
+
+**Sealing.** Every `seal_interval_secs`, the worker holding the audit lock
+closes the window that ended one window ago: its rows are hashed, the digest is
+chained to the previous record and signed. Pseudonymisation, retention, a purge
+and an erasure each record what they changed in a sealed window as a signed
+`amend` or `expire`, so `batlehub-cli admin audit verify` can tell the
+lifecycle's changes from anyone else's. Pair sealing with `[logging] format =
+"json"`: every record is also an `audit_seal` line, and the copy your SIEM holds
+is what detects a truncated tail ([SIEM integration](../operations/siem.md)).
+
+**The manual purge** (`DELETE /api/v1/admin/audit-log`) deletes access-class
+rows only; a purge record outlives every later purge. Rows already
+pseudonymised or deleted cannot be recovered — which is the point of the
+setting.
+
+The two jobs run on the `worker` role, one process at a time. The section is
+read at startup; a change takes effect on restart.
+
+---
+
 ### 3.8 `[proxy]` (optional)
 
 A **global** HTTP/SOCKS proxy that applies to all upstream registry requests. Individual registries that define their own `[registries.proxy]` section override this global setting for that registry only.

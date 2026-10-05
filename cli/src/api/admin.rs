@@ -577,6 +577,37 @@ impl BatleHubClient {
             .await
     }
 
+    // ── RFC 0036: data-subject requests and the sealed trail ──────────────────
+
+    pub async fn gdpr_erase(&self, user_id: &str, force: bool) -> Result<serde_json::Value> {
+        self.post(
+            "/api/v1/admin/gdpr/erase",
+            &serde_json::json!({ "user_id": user_id, "force": force }),
+        )
+        .await
+    }
+
+    pub async fn gdpr_export(&self, user_id: &str) -> Result<serde_json::Value> {
+        self.get_with_params(
+            "/api/v1/admin/gdpr/export",
+            &serde_json::json!({ "user_id": user_id }),
+        )
+        .await
+    }
+
+    pub async fn audit_verify(
+        &self,
+        from: Option<String>,
+        to: Option<String>,
+        head: Option<String>,
+    ) -> Result<serde_json::Value> {
+        self.post(
+            "/api/v1/admin/audit/verify",
+            &serde_json::json!({ "from": from, "to": to, "head": head }),
+        )
+        .await
+    }
+
     // ── Stats ──────────────────────────────────────────────────────────────────
 
     pub async fn admin_stats(&self) -> Result<StatsResponse> {

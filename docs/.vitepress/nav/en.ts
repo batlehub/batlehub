@@ -259,8 +259,14 @@ export const sidebar = {
     {
       text: "Compliance",
       items: [
+        { text: "Overview", link: "/operations/compliance" },
+        { text: "GDPR", link: "/operations/compliance-gdpr" },
+        { text: "ISO/IEC 27001", link: "/operations/compliance-iso27001" },
+        { text: "Cyber Resilience Act", link: "/operations/compliance-cra" },
+        { text: "NIS2 and DORA", link: "/operations/compliance-nis2-dora" },
         { text: "Change management", link: "/operations/change-management" },
         { text: "SOC 2 checklist", link: "/operations/soc2-checklist" },
+        { text: "SIEM integration", link: "/operations/siem" },
         { text: "MD5 and SHA-1", link: "/operations/weak-hashes" },
       ],
     },

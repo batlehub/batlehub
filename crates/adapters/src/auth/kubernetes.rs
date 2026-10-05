@@ -556,6 +556,7 @@ mod tests {
         RawAuthRequest {
             headers: [("authorization".to_owned(), format!("Bearer {token}"))].into(),
             query_params: Default::default(),
+            source_ip: None,
         }
     }
 
@@ -598,6 +599,7 @@ mod tests {
         RawAuthRequest {
             headers: Default::default(),
             query_params: Default::default(),
+            source_ip: None,
         }
     }
 
@@ -619,6 +621,7 @@ mod tests {
         let req = RawAuthRequest {
             headers: [("authorization".to_owned(), "Basic dXNlcjpwYXNz".to_owned())].into(),
             query_params: Default::default(),
+            source_ip: None,
         };
         assert!(p.authenticate(&req).await.unwrap().is_none());
     }

@@ -233,7 +233,12 @@ pub async fn put_grant(
     // the question after an incident, and a grant write is the only event that
     // answers it.
     admin_svc
-        .record_package_action(&audit_id(&target), AccessAction::GrantWrite, &identity.0)
+        .record_admin_action_about(
+            Some(audit_id(&target)),
+            AccessAction::GrantWrite,
+            &identity.0,
+            Some(grant_detail(&body.subject, &body.actions)),
+        )
         .await;
 
     let stored = svc.list(&target).await?;
@@ -296,10 +301,25 @@ pub async fn delete_grant(
     // would make the trail read as "granted, still held" (§7), and "someone
     // tried to revoke this" is itself worth having.
     admin_svc
-        .record_package_action(&audit_id(&target), AccessAction::GrantRevoke, &identity.0)
+        .record_admin_action_about(
+            Some(audit_id(&target)),
+            AccessAction::GrantRevoke,
+            &identity.0,
+            Some(grant_detail(&body.subject, &[])),
+        )
         .await;
 
     Ok(HttpResponse::Ok().json(DeleteGrantResponse { removed }))
+}
+
+/// A grant event's `detail`: who it was for and which verbs. The subject is
+/// what `grant_to_anonymous.yml` keys on (RFC 0036 §6.2), so its spelling here
+/// — `subject=<subject> actions=<verbs>` — is part of the stream's contract.
+fn grant_detail(subject: &str, actions: &[String]) -> String {
+    if actions.is_empty() {
+        return format!("subject={subject}");
+    }
+    format!("subject={subject} actions={}", actions.join(","))
 }
 
 #[cfg(test)]

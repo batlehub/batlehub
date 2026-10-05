@@ -233,6 +233,7 @@ pub fn raw_auth_from_request(req: &HttpRequest) -> batlehub_core::ports::RawAuth
     batlehub_core::ports::RawAuthRequest {
         headers,
         query_params,
+        source_ip: caller_net(req).ip,
     }
 }
 

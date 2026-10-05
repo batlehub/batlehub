@@ -246,6 +246,12 @@ pub fn embedded_migrator() -> Migrator {
             "index diet and autovacuum",
             "../migrations/060_index_diet_and_autovacuum.sql"
         ),
+        mig!(
+            61,
+            "audit auth events",
+            "../migrations/061_audit_auth_events.sql"
+        ),
+        mig!(62, "audit seals", "../migrations/062_audit_seals.sql"),
     ])
 }
 

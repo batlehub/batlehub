@@ -1,0 +1,26 @@
+title: BatleHub download of a package marked malicious
+id: d6742d85-31c0-4fe4-bdcf-e35f3a3fb1ea
+status: experimental
+description: >-
+  A client asked for a coordinate that a flag or a scan verdict marks malicious. The server refused it, but the request means a lockfile, a cache or a developer machine still names it.
+references:
+  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+author: BatleHub
+date: 2026-10-05
+tags:
+  - attack.initial-access
+  - attack.t1195.001
+logsource:
+  product: batlehub
+  service: audit
+detection:
+  selection:
+    event.dataset: batlehub.audit
+    event.action: download
+    event.reason|contains:
+      - 'malware flagged'
+      - 'MALWARE_SIGNAL'
+  condition: selection
+falsepositives:
+  - A security team deliberately fetching a sample
+level: high

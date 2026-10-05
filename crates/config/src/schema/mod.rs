@@ -1,4 +1,5 @@
 pub mod air_gap;
+pub mod audit;
 pub mod auth;
 pub mod flag_sources;
 pub mod forge;
@@ -14,6 +15,7 @@ pub mod storage;
 pub mod warnings;
 
 pub use air_gap::{valid_ed25519_hex_key, AirGapConfig};
+pub use audit::AuditConfig;
 pub use auth::{
     ActionsGroupRule, ActionsOidcAuthConfig, AuthConfig, Condition, ConditionMatchType,
     KubernetesAuthConfig, OidcAuthConfig, RuleMatch, TokenAuthConfig, TokenEntry,
@@ -62,7 +64,7 @@ pub use security::{
 };
 pub use server::{
     default_service_name, is_secure_issuer_url, parse_trusted_proxies, CacheConfig, DatabaseConfig,
-    OtelConfig, ServerConfig, SignedUrlsConfig,
+    LogFormat, LoggingConfig, OtelConfig, ServerConfig, SignedUrlsConfig,
 };
 pub use warnings::ConfigWarning;
 
@@ -115,6 +117,14 @@ pub struct AppConfig {
     pub grants: Option<std::collections::HashMap<String, Vec<String>>>,
     #[serde(default)]
     pub otel: Option<OtelConfig>,
+    /// `[logging]`: the log line format, and with `json` the audit stream
+    /// (RFC 0036 §4.1). Absent means `text`, byte-identical to before.
+    #[serde(default)]
+    pub logging: LoggingConfig,
+    /// `[audit]`: retention, pseudonymisation, sealing and erasure of the
+    /// audit trail (RFC 0036 §4.1). Absent changes nothing.
+    #[serde(default)]
+    pub audit: Option<AuditConfig>,
     #[serde(default)]
     pub limits: LimitsConfig,
     /// Optional global IP-based blocking (fail2ban) configuration.
@@ -712,7 +722,39 @@ impl AppConfig {
         self.devfile_warnings(&mut out);
         self.flag_source_warnings(&mut out);
         self.air_gap_warnings(&mut out);
+        self.audit_warnings(&mut out);
         out
+    }
+
+    /// RFC 0036 §4.3's warnings: the trail's lifecycle as configured, stated.
+    fn audit_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        let Some(audit) = &self.audit else {
+            out.push(ConfigWarning::new(
+                warnings::AUDIT_NO_RETENTION,
+                "audit",
+                "audit trail has no retention: personal data in access_events is kept \
+                 indefinitely. Add an [audit] block (RFC 0036) to expire and pseudonymise it",
+            ));
+            return;
+        };
+        let access = audit.access_retention_days;
+        if audit.pseudonymise_after_days == 0 && (access == 0 || access > 90) {
+            out.push(ConfigWarning::new(
+                warnings::AUDIT_FULL_IPS_KEPT,
+                "audit.pseudonymise_after_days",
+                "access rows keep their full IP and user agent for their whole retention; \
+                 set pseudonymise_after_days to truncate them sooner",
+            ));
+        }
+        if audit.sealing() && self.logging.format == LogFormat::Text {
+            out.push(ConfigWarning::new(
+                warnings::AUDIT_SEALING_WITHOUT_STREAM,
+                "audit.seal_interval_secs",
+                "the trail is sealed but [logging] format is text: the chain is verifiable, \
+                 but no copy of its head leaves the database, so a truncated tail cannot be \
+                 detected",
+            ));
+        }
     }
 
     /// RFC 0010 §4.5: SDKMAN versions its API in the path, so an `upstreams`
@@ -2257,6 +2299,9 @@ impl AppConfig {
         self.validate_security_globals()?;
         self.validate_upstream_audit()?;
         self.validate_release_imports()?;
+        if let Some(audit) = &self.audit {
+            audit.validate()?;
+        }
         Ok(())
     }
 

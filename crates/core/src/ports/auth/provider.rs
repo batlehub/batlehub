@@ -10,6 +10,10 @@ use crate::error::CoreError;
 pub struct RawAuthRequest {
     pub headers: HashMap<String, String>,
     pub query_params: HashMap<String, String>,
+    /// The caller's address, as the proxy-trust rules resolved it — what a
+    /// provider compares against a credential's last-seen source
+    /// (RFC 0036 §6.1). `None` where there is no request behind the call.
+    pub source_ip: Option<String>,
 }
 
 impl RawAuthRequest {

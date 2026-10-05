@@ -219,11 +219,10 @@ impl UpstreamDetailCoordinator {
 
     /// Forget every remembered absence.
     ///
-    /// For tests. It was written *also* for a config reload that changes what
-    /// "absent" would mean — a real need, since a reload that adds an upstream
-    /// leaves this cache still remembering the coordinate as missing — but no
-    /// reload path calls it, and audited 2026-09-01 none ever has. Left here
-    /// rather than deleted because the reload is the caller it is waiting for.
+    /// Called by every applied config reload: a reload that adds an upstream,
+    /// fixes its base URL or repairs its credentials changes what "absent"
+    /// means, and the coordinates that failed under the old config must be
+    /// asked again.
     pub fn clear_absent(&self) {
         self.absent.lock().unwrap().clear();
     }

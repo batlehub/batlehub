@@ -119,6 +119,9 @@ pub use ops::quota::PgQuotaRepository;
 #[cfg(feature = "db-postgres")]
 pub use packages::PgPackageRepository;
 
+#[cfg(feature = "db-postgres")]
+pub use packages::audit_trail::PgAdvisoryLeader;
+
 pub use ops::upstream_status::PgUpstreamStatusStore;
 #[cfg(feature = "db-postgres")]
 pub use stats_history::PgStatsHistoryRepository;

@@ -73,6 +73,7 @@ pas une permission accordée à personne.
 | `stats:read` | lire les agrégats du tableau de bord |
 | `audit:read` | lire le journal d'audit |
 | `audit:purge` | supprimer les entrées d'audit antérieures à une coupure |
+| `gdpr:erase` | pseudonymiser une personne concernée dans la piste d'audit, ses jetons et ses blocages (RFC 0036) ; non impliqué par `audit:purge` |
 | `quarantine:read` | voir qu'une version est retenue ou refusée par la couche de chaîne d'approvisionnement, ses codes de motif et sa date de disponibilité ([RFC 0018](/rfc/0018-supply-chain-quarantine-and-verdicts)) |
 | `findings:read` | voir les constats derrière ces codes — identifiants CVE, sortie de scanner, texte SOC |
 | `flags:read` | lister les signalements de vulnérabilités poussés par `[[flag_sources]]` — quelle source a dit quoi sur quelle version ([RFC 0002](/rfc/0002-vulnerability-flags-and-exposure)) |

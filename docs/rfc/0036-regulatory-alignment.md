@@ -733,9 +733,66 @@ None. The questions numbered 1–4 of the first draft's open list are rows
 | Phase | Content |
 | --- | --- |
 | 1 | **Project vulnerability handling** (§6.5) — **landed 2026-09-26** with this document — and the compliance pages (§6.8, without the SIEM page), still to write. Useful alone: it answers a supplier questionnaire today. |
-| 2 | **Authentication events and the JSON stream** (§6.1, §6.2 without the rules), `[logging] format`. |
-| 3 | **Sigma rules**, `task siem:check`, `docs/operations/siem.md`, and §6.7 cases 1–3 and 6. |
+| 2 | **Authentication events and the JSON stream** (§6.1, §6.2 without the rules), `[logging] format` — **landed 2026-10-05**; see §13. |
+| 3 | **Sigma rules**, `task siem:check`, `docs/operations/siem.md`, and §6.7 cases 1–3 and 6 — **landed 2026-10-05**, without `audit_chain_gap.yml`, which needs phase 5's seals; see §13. |
 | 4 | **Retention classes, pseudonymisation, erasure** (§6.3) and §6.7 case 5. |
 | 5 | **Seals and `audit verify`** (§6.4) and §6.7 case 4. |
 | 6 | **YARA scanner** (§6.6) with yara-x's `yr` in the worker image (§11 q6). |
 | 7 | **NIS2 / DORA**, when a regulated operator needs them: MFA enforcement through the OIDC `acr`/`amr` claims; signing keys (publish, APK, VS Code, seal) held in a KMS with a rotation procedure; a restore test in CI with a stated RPO/RTO; incident classification fields on notifications; a DORA Art. 30 contract annex template for a hosted offer. |
+
+---
+
+## 13. Implementation notes
+
+Phases 2 and 3 landed 2026-10-05. What follows is where the design was wrong
+or under-specified, recorded because the next phase reads this document and not
+the diff.
+
+### Corrections to the design
+
+| # | § | What the RFC said | What landed, and why |
+| --- | --- | --- | --- |
+| 1 | §6.1 | `TokenNewSource`: *"the row already carries `last_used` (migration 038), so the comparison is a read that happens anyway"* | Migration 038 stores `last_used_at`, a **time**, and no address. Migration 061 adds `user_tokens.last_used_ip`, written by `touch_last_used` beside the time, and `RawAuthRequest` gained `source_ip` so a provider can see the caller at all. The comparison still costs no extra read: it runs only when the provider claims its once-a-minute `last_used_at` slot, so a token bouncing between two hosts is one row a minute. A token with no recorded address — every token, the first time after the upgrade — is not "new". |
+| 2 | §6.1 | `TokenCreate` *"carrying the token id and name"*; `SignIn` *"with the provider name"* | `AccessEvent` had nowhere to carry either: its only free text is a *denial's* reason. Migration 061 adds `access_events.detail`, `AccessEvent::detail`, and `batlehub.audit.detail` on the stream. Never a secret: `token_id=… name="…"`, `provider=…`, `subject=… actions=…`. |
+| 3 | §6.2 | `grant_to_anonymous.yml` fires on *"`grant_write` whose subject is anonymous or `*`"* | A `grant_write` row recorded the coordinate and nothing about the subject, so the rule had nothing to read. Grant writes and revocations now carry `subject=<subject> actions=<verbs>` in `detail`, and the rule keys on its prefix. That spelling is part of the stream's contract and is said so where it is written (`grant_detail` in `governance/grants.rs`). |
+| 4 | §6.1 | *"the throttled count is carried on the row that is written"* | A row cannot carry a count of attempts that have not happened yet, and rewriting it later is the write per attempt the throttle exists to avoid. The count rides on the **next** row written for that source IP. §6.7 case 3's *"one row's `throttled_count` says 20"* therefore needs one attempt after the window, which the heavy phase makes; the replayed `credential_rejected_burst.yml` keys on `throttled_count >= 10`, not on a count of rows. |
+| 5 | §6.2 | `http.request.id` on every line, *"with the current span flattened"* | `tracing-subscriber`'s JSON layer flattens the *event's* fields and nests the span's: the request id is `span.request_id`. Re-emitting it per event would need the id inside `record_access`, which every caller would have to pass down. The field reference documents `span.request_id`. |
+| 6 | §6.2 | ECS `event.outcome` | ECS's own vocabulary is `success` / `failure` / `unknown`; the stream says `allowed` / `denied` / `error`, the audit log's words, because §6.7 asserts those and an operator reading the console and the SIEM side by side should not translate. A collector that enforces ECS's expected values maps them. |
+| 7 | §6.2 | `config_rejected` from the `config_changes` insert's `status` column | The column has documented `"applied" \| "rejected"` since migration 018, and nothing ever wrote `rejected`: a refused candidate left no row. The reload service now writes one when the file watcher's or the editor's candidate does not parse, validate or build (the editor's dry-run *validate* button writes nothing). The stream line is emitted in `persist_audit`, the one funnel both repositories go through, rather than in the Postgres adapter — and is emitted with `persisted = false` when there is no table to write to. |
+| 8 | §6.2 | The stream emitted where `record_access` lands | It is, in both repositories, through `audit_stream::emit` — and only under `format = "json"`: a process-wide switch set by the tracing setup, so the text format stays byte-identical, as §4.1 promises, rather than gaining a line per download. |
+| 9 | §6.7 | Case 2: *"`npm install` of a blocked version — npm exits non-zero with its own `E403` text, the tap shows no tarball request, and the stream carries one `download` line with `event.outcome=denied`"* | Contradictory, and the first heavy run said which half: with no tarball request there is no download, so there is no download row. RFC 0006 hides a blocked version from the packument; npm stops on `ETARGET` after one *allowed* listing read, and **the block leaves nothing in the audit trail** on that path. The request that reaches the download gate is a lockfile that still names the version — `npm ci` fetches the tarball it resolved before the block, is refused `403`, and that is the `denied` row with the block's reason. The phase drives that. It is also exactly the client `blocked_package_pulled.yml` is written for: a lockfile, a cache or a machine that still names the coordinate. |
+| 10 | §6.7 | Case 3: *"the PAT is revoked through the API, then used"* | Minting a PAT needs an interactive OIDC session, and no heavy suite has an identity provider. The phase presents a `bh_pat_` token that was never minted, which takes the middleware's path exactly; `token_revoke` is proven in-process by `crates/web/tests/tokens_and_pagination.rs`. |
+
+### Three things the RFC did not mention
+
+- **`tracing`'s macros cannot open an event with a dotted field.**
+  `info!(target: …, event.dataset = …)` is a macro ambiguity error, and a
+  quoted first field is read as the message. `audit_stream.rs` uses `event!`
+  with an explicit level and an identifier path first; the comment there says
+  why, so the next field does not undo it.
+- **The rules are tested against the emitter's source.** `sigma check`
+  validates a rule's shape and cannot see a renamed field. `deploy/siem/replay.py`
+  reads the field names out of `audit_stream.rs` and fails when a rule reads one
+  that is not there, then replays a recorded stream through every rule against
+  `fixtures/expected.json`. Renaming `source.ip` in the emitter fails two rules
+  by name.
+- **An actix app factory runs once per worker.** The first `credential_rejected`
+  throttle was built inside it, so each of the server's workers had its own:
+  the heavy phase's twenty attempts in one minute wrote eight rows, not one.
+  The in-process test could not see it — a test app has one worker. The
+  throttle is now a `CredentialRejectionAudit` built once, outside the factory,
+  and every worker holds a clone of the same `Arc`.
+- **`AccessEvent` is a struct literal in twenty-two places.** Two new fields
+  meant two passes over every one of them; both are `Option`s defaulting to
+  `None`, so no existing row or caller changed meaning.
+
+### Still owed
+
+- `audit_chain_gap.yml`, with phase 5's seals.
+- `source.ip` on admin actions: `record_admin_action` has never carried the
+  caller's address, so a `grant_write`, `audit_purge` or `block_ip` line names
+  who but not from where. The web handlers have it (`AuthIdentity` carries
+  `CallerNet`); threading it through `AdminService` is a follow-up that touches
+  every admin handler.
+- The compliance pages of §6.8, still phase 1's.
+

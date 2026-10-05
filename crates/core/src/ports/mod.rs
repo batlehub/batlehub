@@ -1,5 +1,6 @@
 pub mod advisory;
 pub mod air_gap;
+pub mod audit_trail;
 pub mod auth;
 pub mod banner;
 pub mod config_change;
@@ -19,6 +20,9 @@ pub mod vulnerability;
 
 pub use advisory::AdvisoryRepository;
 pub use air_gap::{BundleHistory, MissRecorder};
+pub use audit_trail::{
+    AuditTrailStore, CandidateQuery, ErasedElsewhere, LeaderLock, RowOp, TrailBatch,
+};
 pub use auth::{
     ActionsGroupRule, ActionsOidcAuthConfig, AuthProvider, Condition, ConditionMatchType,
     KubernetesAuthConfig, LoginState, LoginStateStore, OidcAuthConfig, RawAuthRequest, RuleMatch,

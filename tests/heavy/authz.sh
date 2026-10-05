@@ -53,6 +53,9 @@
 #               target at all                                     (no client)
 #   signing     RFC 0012 capabilities: artifact binding, expiry, and secret
 #               rotation in both directions                      (no client)
+#   audit       RFC 0036 §6.7: the audit stream under `[logging] format =
+#               "json"`, as npm produces it, replayed through the shipped
+#               Sigma rules                                        (npm, uv)
 #   npm | pypi | nuget | composer | conda | openvsx | rubygems | terraform |
 #   maven | cargo
 #               the pull boundary, driven by that ecosystem's real client.
@@ -3410,6 +3413,13 @@ elif [[ "$TARGET" == live:* ]]; then
   # to the ones the phases carry, which are this instance's.
   heavy_forge_auth_config tests/heavy/config.authz-live.toml
   heavy_start_server "$HEAVY_CONFIG"
+elif [[ "$TARGET" == "audit" ]]; then
+  # The same roster with the audit stream on (RFC 0036 §6.7). Appended rather
+  # than a second file: everything else about the server must be identical.
+  HEAVY_AUTHZ_AUDIT_CONFIG="$HEAVY_WORK/config.audit.toml"
+  cp tests/heavy/config.authz.toml "$HEAVY_AUTHZ_AUDIT_CONFIG"
+  printf '\n[logging]\nformat = "json"\n' >> "$HEAVY_AUTHZ_AUDIT_CONFIG"
+  heavy_start_server "$HEAVY_AUTHZ_AUDIT_CONFIG"
 else
   heavy_start_server tests/heavy/config.authz.toml
 fi
@@ -3568,6 +3578,212 @@ only looks covered."
   return 0
 }
 
+# ── RFC 0036 §6.7: the audit stream, as a real client produces it ────────────
+#
+# The server runs with `[logging] format = "json"`, so every audit row is also a
+# line on its stdout. What this target proves is that the *stream* — the thing a
+# SIEM reads — says what happened on the wire, and that the table agrees with it:
+#
+#   1. an allowed `npm install` is one `download` / `allowed` line naming the
+#      reader;
+#   2. a lockfile still naming a blocked version: `npm ci` is refused the
+#      tarball, and the stream has a `download` / `denied` line carrying the
+#      block's reason (a plain install never asks — see the case);
+#   3. a credential no provider accepts falls back to anonymous — npm meets the
+#      closed registry's `403` — and leaves one `credential_rejected` line;
+#      twenty more in the same minute leave none, and the next row after the
+#      minute carries the count it held back;
+#   6. the recorded stream, replayed through the shipped Sigma rules, makes
+#      `credential_rejected_burst.yml` and `audit_purge.yml` fire and leaves
+#      `bulk_pull.yml` quiet.
+#
+# Cases 4 and 5 (seals, class-restricted purges) belong to RFC 0036's phases 4
+# and 5. Case 3 uses a `bh_pat_` token that was never minted rather than a
+# revoked one: minting needs an OIDC session, which no heavy suite has, and the
+# path the middleware takes is the same — `token_revoke` itself is proven by
+# `crates/web/tests/tokens_and_pagination.rs`.
+
+# audit_lines — every audit line the server has written so far. `cargo run`
+# puts its own stderr in the same file, so only JSON lines are kept.
+audit_lines() {
+  grep -F '"event.dataset":"batlehub.audit"' "$HEAVY_WORK/server.log" || true
+  return 0
+}
+
+# audit_count <action> [key=value]... — how many stream lines carry that
+# action and every one of the given fields.
+audit_count() {
+  local action="$1"
+  shift
+  audit_lines | python3 -c '
+import json, sys
+action, wanted = sys.argv[1], dict(a.split("=", 1) for a in sys.argv[2:])
+n = 0
+for line in sys.stdin:
+    e = json.loads(line)
+    if e.get("event.action") == action and all(str(e.get(k)) == v for k, v in wanted.items()):
+        n += 1
+print(n)' "$action" "$@"
+  return 0
+}
+
+phase_audit() {
+  heavy_need npm "nodejs"
+  heavy_need uv "uv"
+  heavy_log "npm $(npm --version)"
+  export NPM_CONFIG_FUND=false NPM_CONFIG_AUDIT=false NPM_CONFIG_UPDATE_NOTIFIER=false
+
+  local base="$HEAVY_TAP_BASE/proxy/$NPM/"
+  local host_key="//127.0.0.1:$HEAVY_TAP_PORT/proxy/$NPM/"
+  audit_npmrc() {  # token, suffix -> echoes the file path
+    local file="$HEAVY_WORK/npmrc-audit-$2"
+    printf 'registry=%s\n%s:_authToken=%s\n' "$base" "$host_key" "$1" > "$file"
+    echo "$file"
+    return 0
+  }
+  audit_pkg() {  # dir, version
+    mkdir -p "$1"
+    printf '{ "name": "%s", "version": "%s", "license": "MIT", "main": "index.js" }\n' \
+      "$PKG" "$2" > "$1/package.json"
+    echo "module.exports = 1;" > "$1/index.js"
+    return 0
+  }
+
+  [[ "$(audit_count download)" == 0 ]] \
+    || heavy_fail "the stream carried download lines before any download — the assertions below would count them"
+
+  heavy_mark "audit-seed"
+  local v
+  for v in 1.0.0 1.0.1; do
+    audit_pkg "$HEAVY_WORK/audit-pkg-$v" "$v"
+    NPM_CONFIG_USERCONFIG="$(audit_npmrc "$T_ADMIN" admin)" \
+      NPM_CONFIG_CACHE="$HEAVY_WORK/npm-audit-seed-cache" \
+      bash -c "cd '$HEAVY_WORK/audit-pkg-$v' && npm publish --registry '$base'" \
+      >>"$HEAVY_WORK/npm-audit-seed.log" 2>&1 \
+      || { tail -20 "$HEAVY_WORK/npm-audit-seed.log" >&2; heavy_fail "seeding $PKG@$v failed"; }
+  done
+  # A project whose lockfile pins 1.0.1, resolved while it was still allowed —
+  # case 2's client. See there for why a lockfile and not a plain install.
+  NPM_CONFIG_USERCONFIG="$(audit_npmrc "$T_READER" locker)" \
+    NPM_CONFIG_CACHE="$HEAVY_WORK/npm-audit-lock-cache" \
+    npm install --prefix "$HEAVY_WORK/audit-locked" "$PKG@1.0.1" \
+    >"$HEAVY_WORK/npm-audit-lock.log" 2>&1 \
+    || { cat "$HEAVY_WORK/npm-audit-lock.log" >&2; heavy_fail "locking $PKG@1.0.1 before the block failed"; }
+  [[ -f "$HEAVY_WORK/audit-locked/package-lock.json" ]] || heavy_fail "npm wrote no lockfile"
+  heavy_block "$NPM" "$PKG" 1.0.1
+
+  # ── 1. an allowed install is one allowed download line ──
+  heavy_mark "audit-allowed"
+  NPM_CONFIG_USERCONFIG="$(audit_npmrc "$T_READER" reader)" \
+    NPM_CONFIG_CACHE="$HEAVY_WORK/npm-audit-allow-cache" \
+    npm install --prefix "$HEAVY_WORK/audit-allow" --no-save "$PKG@1.0.0" \
+    >"$HEAVY_WORK/npm-audit-allow.log" 2>&1 \
+    || { cat "$HEAVY_WORK/npm-audit-allow.log" >&2; heavy_fail "npm install failed for the reader — the positive control"; }
+  heavy_wire_re_after "audit-allowed" "GET /proxy/$NPM/.*/tarball -> 200" \
+    "npm succeeded without the tarball crossing the tap — the stream line below would not be about this install"
+  local n
+  n="$(audit_count download package.name="$PKG" package.version=1.0.0 \
+    event.outcome=allowed user.id=authz-reader)"
+  [[ "$n" == 1 ]] || heavy_fail "expected exactly one allowed download line for the reader's install, found $n"
+  audit_lines | python3 -c '
+import json, sys
+for line in sys.stdin:
+    e = json.loads(line)
+    if e.get("event.action") == "download" and e.get("event.outcome") == "allowed":
+        assert e.get("span", {}).get("request_id"), f"no request id on {line}"
+        assert e["event.category"] == "package" and e["event.kind"] == "event", line
+        assert e["batlehub.audit.persisted"] is True, line
+' || heavy_fail "an allowed download line is missing a field a SIEM keys on"
+
+  # ── 2. a blocked version is a denied line with its reason ──
+  #
+  # **Through a lockfile.** `npm install pkg@1.0.1` never asks for the tarball:
+  # RFC 0006 hides a blocked version from the packument, npm stops on ETARGET,
+  # and the only request is an allowed listing — no download, so no download
+  # row. The request that *does* reach the download gate, and that
+  # `blocked_package_pulled.yml` is about, is a lockfile still naming the
+  # version: `npm ci` goes straight to the tarball it resolved before the block.
+  heavy_mark "audit-blocked"
+  rm -rf "$HEAVY_WORK/audit-locked/node_modules"
+  set +e
+  NPM_CONFIG_USERCONFIG="$(audit_npmrc "$T_READER" reader2)" \
+    NPM_CONFIG_CACHE="$HEAVY_WORK/npm-audit-block-cache" \
+    npm ci --prefix "$HEAVY_WORK/audit-locked" \
+    >"$HEAVY_WORK/npm-audit-block.log" 2>&1
+  local rc=$?
+  set -e
+  [[ $rc -ne 0 ]] || heavy_fail "npm ci installed a blocked version from the lockfile"
+  heavy_wire_re_after "audit-blocked" "GET /proxy/$NPM/.*tarball -> 403" \
+    "npm ci failed without the tarball being refused — the denial below would not be about it"
+  n="$(audit_count download package.name="$PKG" package.version=1.0.1 event.outcome=denied)"
+  [[ "$n" -ge 1 ]] || heavy_fail "npm was refused the blocked version and the stream has no denied download line for it"
+  audit_lines | python3 -c '
+import json, sys
+reasons = [json.loads(l)["event.reason"] for l in sys.stdin
+           if "\"package.version\":\"1.0.1\"" in l and "\"event.outcome\":\"denied\"" in l]
+assert reasons and all(reasons), f"a denied line with no reason: {reasons}"
+' || heavy_fail "the denied download line does not say why"
+
+  # ── 3. a refused credential: one row a minute, the rest counted ──
+  heavy_mark "audit-rejected"
+  local bogus="bh_pat_0000000000000000000000000000000000000000000000000000000000000000"
+  set +e
+  NPM_CONFIG_USERCONFIG="$(audit_npmrc "$bogus" bogus)" \
+    NPM_CONFIG_CACHE="$HEAVY_WORK/npm-audit-bogus-cache" \
+    npm install --prefix "$HEAVY_WORK/audit-bogus" --no-save "$PKG@1.0.0" \
+    >"$HEAVY_WORK/npm-audit-bogus.log" 2>&1
+  rc=$?
+  set -e
+  [[ $rc -ne 0 ]] || heavy_fail "npm installed from a closed registry with a credential nobody accepts"
+  heavy_wire_after "audit-rejected" "$WIRE_403" \
+    "npm was stopped, but not by the closed registry's 403 — the fallback to anonymous is not what refused it"
+  local first_at
+  first_at="$(date +%s)"
+  n="$(audit_count credential_rejected)"
+  [[ "$n" == 1 ]] || heavy_fail "expected one credential_rejected line for the refused credential, found $n"
+
+  local i
+  for i in $(seq 1 20); do
+    curl -s -o /dev/null -H "Authorization: Bearer $bogus" "$HEAVY_TAP_BASE/proxy/$NPM/$PKG"
+  done
+  n="$(audit_count credential_rejected)"
+  [[ "$n" == 1 ]] || heavy_fail "twenty further attempts in the same minute wrote $((n - 1)) more rows — the throttle is not holding"
+
+  heavy_log "waiting out the throttle window"
+  sleep $(( 62 - ($(date +%s) - first_at) ))
+  curl -s -o /dev/null -H "Authorization: Bearer $bogus" "$HEAVY_TAP_BASE/proxy/$NPM/$PKG"
+  n="$(audit_count credential_rejected)"
+  [[ "$n" == 2 ]] || heavy_fail "after the window the next attempt should write the second row, found $n rows"
+  audit_lines | python3 -c '
+import json, sys
+rows = [json.loads(l) for l in sys.stdin if "\"event.action\":\"credential_rejected\"" in l]
+held = rows[-1]["batlehub.audit.throttled_count"]
+assert held >= 20, f"the row after the window carries {held}, not the twenty (and more) held back"
+' || heavy_fail "the attempts the throttle held back are not counted on the next row"
+
+  # The table says the same as the stream.
+  local table
+  table="$(curl -fsS "$HEAVY_BASE/api/v1/admin/audit-log?action=credential_rejected&per_page=10" \
+    -H "Authorization: Bearer $T_ADMIN" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["items"]))')"
+  [[ "$table" == 2 ]] || heavy_fail "the stream has two credential_rejected rows and the table has $table"
+
+  # ── 6. the recorded stream through the shipped rules ──
+  heavy_mark "audit-replay"
+  curl -fsS -X DELETE -o /dev/null \
+    "$HEAVY_BASE/api/v1/admin/audit-log?before=$(date -u -d '-1 day' +%Y-%m-%dT%H:%M:%SZ)" \
+    -H "Authorization: Bearer $T_ADMIN" || heavy_fail "the audit purge request failed"
+  [[ "$(audit_count audit_purge)" == 1 ]] || heavy_fail "the purge left no audit_purge line in the stream"
+  audit_lines > "$HEAVY_WORK/audit-stream.jsonl"
+  printf '%s\n' '{"audit_purge.yml": true, "credential_rejected_burst.yml": true, "bulk_pull.yml": false}' \
+    > "$HEAVY_WORK/audit-expect.json"
+  uv run --quiet --with pyyaml==6.0.2 python deploy/siem/replay.py \
+    --stream "$HEAVY_WORK/audit-stream.jsonl" --expect "$HEAVY_WORK/audit-expect.json" \
+    || heavy_fail "the shipped rules do not fire on the stream this run recorded"
+
+  heavy_log "AUDIT-STREAM-OK ($(audit_lines | wc -l) audit lines)"
+  return 0
+}
+
 phase_reads() {
   heavy_log "The read boundary, on the kinds no client phase drives"
   heavy_mark "reads"
@@ -3599,6 +3815,7 @@ case "$TARGET" in
     heavy_done "AUTHZ-HEAVY-LIVE-${TARGET#live:}-OK"
     ;;
   npm)       phase_npm;       heavy_done "AUTHZ-HEAVY-NPM-OK" ;;
+  audit)     phase_audit;     heavy_done "AUTHZ-HEAVY-AUDIT-OK" ;;
   pypi)      phase_pypi;      heavy_done "AUTHZ-HEAVY-PYPI-OK" ;;
   nuget)     phase_nuget;     heavy_done "AUTHZ-HEAVY-NUGET-OK" ;;
   conda)     phase_conda;     heavy_done "AUTHZ-HEAVY-CONDA-OK" ;;
@@ -3608,7 +3825,7 @@ case "$TARGET" in
   composer)  phase_composer;  heavy_done "AUTHZ-HEAVY-COMPOSER-OK" ;;
   galaxy)    phase_galaxy;    heavy_done "AUTHZ-HEAVY-GALAXY-OK" ;;
   *)
-    heavy_fail "unknown target '$TARGET' — one of: matrix signing reads npm pypi nuget \
+    heavy_fail "unknown target '$TARGET' — one of: matrix signing reads audit npm pypi nuget \
 composer conda openvsx rubygems terraform maven cargo galaxy, or live:<kind> for one of: ${AUTHZ_LIVE_KINDS[*]}"
     ;;
 esac

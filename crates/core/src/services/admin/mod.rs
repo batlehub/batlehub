@@ -220,6 +220,20 @@ impl AdminService {
         action: AccessAction,
         by_identity: &Identity,
     ) {
+        self.record_admin_action_about(package_id, action, by_identity, None)
+            .await;
+    }
+
+    /// [`Self::record_admin_action`] with a `detail` saying what the action was
+    /// about beyond the coordinate — a grant's subject and verbs, which is what
+    /// a SIEM rule like `grant_to_anonymous` keys on (RFC 0036 §6.2).
+    pub async fn record_admin_action_about(
+        &self,
+        package_id: Option<PackageId>,
+        action: AccessAction,
+        by_identity: &Identity,
+        detail: Option<String>,
+    ) {
         self.repo
             .record_access(AccessEvent {
                 id: uuid::Uuid::new_v4(),
@@ -231,9 +245,22 @@ impl AdminService {
                 timestamp: chrono::Utc::now(),
                 ip_address: None,
                 user_agent: None,
+                throttled_count: None,
+                detail,
             })
             .await
             .unwrap_or_else(|e| tracing::warn!(error = %e, "failed to record admin action"));
+    }
+
+    /// Write one audit event, fail-open: a failed write is logged and never
+    /// fails the request that caused it — the same contract as
+    /// [`Self::record_admin_action`]. For the authentication events of
+    /// RFC 0036 §6.1, which the web layer builds itself.
+    pub async fn record_event(&self, event: AccessEvent) {
+        self.repo
+            .record_access(event)
+            .await
+            .unwrap_or_else(|e| tracing::warn!(error = %e, "failed to record audit event"));
     }
 
     /// Shared fan-out path for bulk admin actions: runs `op` over `items` with

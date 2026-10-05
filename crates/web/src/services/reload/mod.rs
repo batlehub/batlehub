@@ -103,6 +103,17 @@ pub enum ReloadSource {
     AdminRequest,
 }
 
+impl ReloadSource {
+    /// Who a rejected candidate is attributed to in `config_changes`: the
+    /// candidate is refused before anyone applies it, so there is no actor yet.
+    pub fn actor_label(&self) -> &'static str {
+        match self {
+            Self::FileWatcher => "file-watcher",
+            Self::AdminRequest => "config-editor",
+        }
+    }
+}
+
 pub struct PendingReload {
     pub id: Uuid,
     pub created_at: DateTime<Utc>,
@@ -210,6 +221,8 @@ pub struct ConfigReloadService {
     /// [`ConfigReloadParams::proxy_trust`], which see for why it is a mandatory
     /// field rather than something defaulted here.
     pub(super) proxy_trust: ProxyTrust,
+    /// See [`ConfigReloadParams::discovery`].
+    pub(super) discovery: Arc<batlehub_core::services::UpstreamDetailCoordinator>,
     /// The config file this process was started with. A [`ConfigFile`], not a
     /// `String`, so that nothing can put a path here that did not come from
     /// process arguments — see that type for what the distinction buys and what
@@ -286,6 +299,11 @@ pub struct ConfigReloadParams {
     /// middleware actually reads; a `ProxyTrust::default()` here would be a
     /// detached handle and every reload of it a silent no-op.
     pub proxy_trust: ProxyTrust,
+    /// The app's live discovery coordinator — the one held by `ProxyService`.
+    /// `apply` forgets its remembered upstream absences: a reload that adds an
+    /// upstream or repairs its credentials changes what "absent" means, and a
+    /// fresh handle here would leave the operator's fix invisible until restart.
+    pub discovery: Arc<batlehub_core::services::UpstreamDetailCoordinator>,
     /// The primary config file, as the process was started with it: the first
     /// `--config`, or the first `BATLEHUB_CONFIG` segment, or `"config.toml"`.
     ///
@@ -319,6 +337,7 @@ impl ConfigReloadService {
             sumdb_map,
             registry_host_map,
             proxy_trust,
+            discovery,
             config_path,
             config_overlays,
             config_change_repo,
@@ -340,6 +359,7 @@ impl ConfigReloadService {
             sumdb_map,
             registry_host_map,
             proxy_trust,
+            discovery,
             // The one place a `String` becomes a path this service will open.
             // `ConfigReloadParams` still carries the operator's own arguments,
             // which is what `server/src/main.rs` and the test fixtures have to

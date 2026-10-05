@@ -213,6 +213,29 @@ impl Default for CacheConfig {
     }
 }
 
+// ── Logging ───────────────────────────────────────────────────────────────────
+
+/// `[logging]` (RFC 0036 §4.1).
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoggingConfig {
+    #[serde(default)]
+    pub format: LogFormat,
+}
+
+/// How the process writes its log lines on stdout.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogFormat {
+    /// Human-readable lines — the default, unchanged from before `[logging]`
+    /// existed.
+    #[default]
+    Text,
+    /// One JSON object per line, and the audit stream on: every audit row is
+    /// also a line with `event.dataset = "batlehub.audit"` (RFC 0036 §6.2).
+    Json,
+}
+
 // ── OTel ──────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]

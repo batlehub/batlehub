@@ -151,6 +151,8 @@ pub(super) struct ServerParams {
     pub db_pool: sqlx::PgPool,
     pub proxy_svc: Arc<ProxyService>,
     pub admin_svc: Arc<AdminService>,
+    /// RFC 0036: purge, erase, export and verify go through it.
+    pub audit_trail: Arc<batlehub_core::services::audit_trail::AuditTrailService>,
     pub token_repo: Arc<dyn UserTokenRepository>,
     pub access_config: AccessConfigLock,
     /// `[search] readmes`, shared with the reload path so turning prose search
@@ -236,6 +238,7 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
         db_pool,
         proxy_svc,
         admin_svc,
+        audit_trail,
         token_repo,
         access_config,
         registry_map,
@@ -286,6 +289,8 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
     } = p;
 
     let notification_svc_for_shutdown = notification_svc.clone();
+    // Outside the factory: one throttle for the process, not one per worker.
+    let rejection_audit = batlehub_web::CredentialRejectionAudit::new(admin_svc.clone());
 
     HttpServer::new(move || {
         let configure = configure_app(
@@ -370,6 +375,7 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
             app = app.app_data(web::Data::new(Arc::clone(audit)));
         }
         app = app.app_data(web::Data::new(Arc::clone(&artifact_inventory)));
+        app = app.app_data(web::Data::new(Arc::clone(&audit_trail)));
 
         let cors = crate::watcher::build_cors(&cors_allowed_origins);
         let enabled = ip_blocking_cfg.as_ref().is_some_and(|c| c.enabled);
@@ -379,9 +385,10 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
             .wrap(UserBlockMiddlewareFactory::new(Arc::clone(
                 &user_block_repo,
             )))
-            .wrap(batlehub_web::AuthMiddlewareFactory::new(
-                auth_providers.clone(),
-            ))
+            .wrap(
+                batlehub_web::AuthMiddlewareFactory::new(auth_providers.clone())
+                    .with_audit(Arc::clone(&rejection_audit)),
+            )
             .wrap(cors)
             .wrap(actix_web::middleware::Condition::new(
                 enabled,

@@ -136,6 +136,16 @@ tasks:
       - cp server/batlehub-server.cdx.json sbom-rust.cdx.json
       - find . -maxdepth 3 -name '*.cdx.json' -not -path './sbom-rust.cdx.json' -delete
 
+  siem:check:
+    desc: "Validate the shipped Sigma rules (deploy/siem/sigma) and replay a recorded audit stream through them (RFC 0036 §6.2)"
+    cmds:
+      # Strict: a validation issue fails like an error. The one exclusion is
+      # deliberate — `grant_to_anonymous.yml` matches a literal `*` subject.
+      - uvx --from sigma-cli==3.1.0 sigma check --fail-on-issues --exclude escaped_wildcard deploy/siem/sigma
+      # Every field a rule reads is one `audit_stream.rs` emits, and each rule
+      # fires — or stays quiet — on the recorded stream as `expected.json` says.
+      - uv run --quiet --with pyyaml==6.0.2 python deploy/siem/replay.py
+
   security:
     desc: "Run the full local security gate — Rust advisories + bans, frontend audits, dependency supply chain, and Rust SBOM. Trivy/gitleaks/semgrep run in CI (see .github/workflows)"
     cmds:

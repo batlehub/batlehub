@@ -449,6 +449,7 @@ pub async fn purge_audit_log(
     query: web::Query<PurgeQuery>,
     identity: AuthIdentity,
     admin_svc: web::Data<Arc<AdminService>>,
+    trail: Option<web::Data<Arc<batlehub_core::services::audit_trail::AuditTrailService>>>,
     hot: web::Data<batlehub_core::services::hot_config::HotConfigLock>,
 ) -> Result<impl Responder, AppError> {
     // **`audit:purge`, not `audit:read`.** The two reads above ask for the read
@@ -465,9 +466,18 @@ pub async fn purge_audit_log(
         &hot,
     )
     .await?;
-    let deleted = admin_svc
-        .purge_events_before(query.before, &identity.0)
-        .await
-        .map_err(AppError::from)?;
+    // Through the audit trail when there is one: on a sealed trail a deletion
+    // is an `expire` record, or it would break the chain (RFC 0036 §5.3).
+    let deleted = match trail {
+        Some(trail) => {
+            trail
+                .purge_access_before(query.before, &identity.0, identity.1.clone())
+                .await?
+        }
+        None => admin_svc
+            .purge_events_before(query.before, &identity.0)
+            .await
+            .map_err(AppError::from)?,
+    };
     Ok(web::Json(PurgeResponse { deleted }))
 }

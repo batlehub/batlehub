@@ -419,8 +419,61 @@ fn an_empty_deprecated_list_is_not_a_policy_but_an_empty_server_list_is() {
 
 // ── Config warnings ───────────────────────────────────────────────────────────
 
+/// Every warning but RFC 0036's `audit.*`, which a config with no `[audit]`
+/// block always raises — these tests are about the other policies.
+fn other_warnings(cfg: &AppConfig) -> Vec<ConfigWarning> {
+    cfg.warnings()
+        .into_iter()
+        .filter(|w| !w.code.starts_with("audit."))
+        .collect()
+}
+
 fn warning_codes(cfg: &AppConfig) -> Vec<String> {
-    cfg.warnings().into_iter().map(|w| w.code).collect()
+    other_warnings(cfg).into_iter().map(|w| w.code).collect()
+}
+
+fn audit_warning_codes(extra: &str) -> Vec<String> {
+    parse_config(extra)
+        .warnings()
+        .into_iter()
+        .map(|w| w.code)
+        .filter(|c| c.starts_with("audit."))
+        .collect()
+}
+
+#[test]
+fn no_audit_block_warns_that_nothing_expires() {
+    assert_eq!(audit_warning_codes(""), vec![warnings::AUDIT_NO_RETENTION]);
+}
+
+#[test]
+fn audit_retention_with_pseudonymisation_is_quiet() {
+    assert!(audit_warning_codes(
+        "\n        [audit]\n        access_retention_days = 365\n        pseudonymise_after_days = 30"
+    )
+    .is_empty());
+}
+
+#[test]
+fn long_access_retention_without_pseudonymisation_warns() {
+    assert_eq!(
+        audit_warning_codes("\n        [audit]\n        access_retention_days = 365"),
+        vec![warnings::AUDIT_FULL_IPS_KEPT]
+    );
+}
+
+#[test]
+fn sealing_with_text_logs_warns_and_json_logs_do_not() {
+    let audit =
+        "\n        [audit]\n        access_retention_days = 30\n        seal_interval_secs = 3600";
+    assert_eq!(
+        audit_warning_codes(audit),
+        vec![warnings::AUDIT_SEALING_WITHOUT_STREAM]
+    );
+    assert!(audit_warning_codes(&format!(
+        "{audit}\n        [logging]\n        format = \"json\""
+    ))
+    .is_empty());
 }
 
 #[test]
@@ -430,21 +483,19 @@ fn a_config_with_no_proxy_trust_policy_warns_about_it() {
         warning_codes(&cfg),
         vec![warnings::PROXY_TRUST_UNCONFIGURED]
     );
-    assert_eq!(cfg.warnings()[0].path, "server.trusted_proxies");
+    assert_eq!(other_warnings(&cfg)[0].path, "server.trusted_proxies");
 }
 
 #[test]
 fn an_explicit_empty_server_list_is_a_policy_and_does_not_warn() {
-    assert!(parse_config("        trusted_proxies = []")
-        .warnings()
-        .is_empty());
+    assert!(other_warnings(&parse_config("        trusted_proxies = []")).is_empty());
 }
 
 #[test]
 fn a_configured_server_list_does_not_warn() {
-    assert!(parse_config(r#"        trusted_proxies = ["10.0.0.0/8"]"#)
-        .warnings()
-        .is_empty());
+    assert!(
+        other_warnings(&parse_config(r#"        trusted_proxies = ["10.0.0.0/8"]"#)).is_empty()
+    );
 }
 
 #[test]
@@ -748,7 +799,7 @@ fn a_non_dns_label_registry_name_warns_and_derives_no_wildcard() {
     cfg.validate()
         .expect("valid — this degrades, it does not fail");
 
-    let w = cfg.warnings();
+    let w = other_warnings(&cfg);
     assert_eq!(w.len(), 1);
     assert_eq!(w[0].code, warnings::SUBDOMAIN_INVALID_DNS_LABEL);
     assert_eq!(w[0].path, "registries[0].name");
@@ -4749,4 +4800,27 @@ fn an_unsigned_gallery_target_warns() {
         codes.contains(&crate::schema::warnings::RELEASE_IMPORT_UNSIGNED_GALLERY),
         "{codes:?}"
     );
+}
+
+// ── [logging] (RFC 0036 §4.1) ─────────────────────────────────────────────────
+
+#[test]
+fn logging_format_defaults_to_text_and_reads_json() {
+    assert_eq!(parse_config("").logging.format, LogFormat::Text);
+    assert_eq!(
+        parse_config("[logging]\nformat = \"json\"\n")
+            .logging
+            .format,
+        LogFormat::Json
+    );
+}
+
+#[test]
+fn an_unknown_logging_format_or_key_is_refused() {
+    for bad in ["format = \"xml\"", "level = \"debug\""] {
+        assert!(
+            toml::from_str::<LoggingConfig>(bad).is_err(),
+            "accepted: {bad}"
+        );
+    }
 }

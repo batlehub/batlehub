@@ -4,7 +4,10 @@ use super::{
     PackageStatus, PackageSummary, PgPool, Row, Utc, Uuid,
 };
 
-pub(super) async fn record_access_impl(pool: &PgPool, event: AccessEvent) -> Result<(), CoreError> {
+pub(super) async fn record_access_impl(
+    pool: &PgPool,
+    event: &AccessEvent,
+) -> Result<(), CoreError> {
     let (outcome, deny_reason): (&str, Option<String>) = match &event.result {
         AccessResult::Allowed => ("allowed", None),
         AccessResult::Denied { reason } => ("denied", Some(reason.clone())),
@@ -46,8 +49,8 @@ pub(super) async fn record_access_impl(pool: &PgPool, event: AccessEvent) -> Res
             INSERT INTO access_events
                 (id, user_id, user_role, registry, package_name, package_version,
                  package_artifact, action, outcome, deny_reason, created_at,
-                 ip_address, user_agent)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                 ip_address, user_agent, throttled_count, detail)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $16, $17)
         )
         INSERT INTO package_statuses
             (id, registry, package_name, package_version, package_artifact,
@@ -73,6 +76,8 @@ pub(super) async fn record_access_impl(pool: &PgPool, event: AccessEvent) -> Res
     .bind(&event.user_agent)
     .bind(Uuid::new_v4())
     .bind(creates_status_row)
+    .bind(event.throttled_count.map(|n| n as i32))
+    .bind(&event.detail)
     .execute(pool);
     crate::db::timed_query("record_access", query)
         .await

@@ -8,6 +8,7 @@ pub mod air_gap;
 ///
 /// Re-exported at the crate root as `batlehub_adapters::in_memory::*`.
 pub mod artifact_meta;
+pub mod audit_trail;
 pub mod forge;
 pub mod package_repo;
 pub mod readme_repo;
@@ -28,6 +29,7 @@ pub mod storage;
 pub use advisory::InMemoryAdvisoryRepository;
 pub use air_gap::{InMemoryBundleHistory, InMemoryMissRecorder};
 pub use artifact_meta::{InMemoryArtifactMetaRepository, NoopArtifactMetaRepository};
+pub use audit_trail::AlwaysLeader;
 pub use auth::login_states::InMemoryLoginStateStore;
 pub use auth::user_tokens::NullUserTokenRepository;
 pub use forge::{InMemoryRateLimitBudget, InMemoryRefResolutionRepository};

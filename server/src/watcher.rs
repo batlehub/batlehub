@@ -281,6 +281,50 @@ pub(super) fn spawn_rescan_scheduler(scheduler: Arc<batlehub_core::services::Res
     });
 }
 
+/// Spawn the audit trail's two jobs (RFC 0036 §6.3–6.4) on a worker process:
+/// the sealer, one tick per window, and the lifecycle, hourly. Both act only
+/// on the process holding the audit leader lock.
+pub(super) fn spawn_audit_trail_jobs(
+    svc: Arc<batlehub_core::services::audit_trail::AuditTrailService>,
+    seal_interval: Option<Duration>,
+) {
+    if let Some(period) = seal_interval {
+        let sealer = Arc::clone(&svc);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(period.max(Duration::from_secs(1)));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                match sealer.seal_tick(chrono::Utc::now()).await {
+                    Ok(sealed) if !sealed.is_empty() => {
+                        metrics::counter!("batlehub_audit_windows_sealed_total")
+                            .increment(sealed.len() as u64);
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(error = %e, "audit: seal tick failed"),
+                }
+            }
+        });
+    }
+    tokio::spawn(async move {
+        let mut ticker =
+            tokio::time::interval(batlehub_core::services::audit_trail::LIFECYCLE_TICK);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+            match svc.lifecycle_tick(chrono::Utc::now()).await {
+                Ok(r) if r.pseudonymised + r.expired > 0 => tracing::info!(
+                    pseudonymised = r.pseudonymised,
+                    expired = r.expired,
+                    "audit: lifecycle run"
+                ),
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "audit: lifecycle tick failed"),
+            }
+        }
+    });
+}
+
 /// Spawn the upstream audit (RFC 0014 §6.10): one sweep per interval, on
 /// the worker role. Copies `spawn_periodic_coherence_sweep`'s first tick —
 /// never at second zero, so `skip_recently_seen` has a picture to compare
@@ -738,7 +782,26 @@ pub(super) fn spawn_config_watcher(
 
 /// Initialise tracing. Returns the `TracerProvider` when OTLP is configured
 /// so the caller can keep it alive for the process lifetime and flush on exit.
-pub(super) fn init_tracing(otel_cfg: Option<&OtelConfig>) -> Option<sdktrace::SdkTracerProvider> {
+/// The `[logging] format = "json"` layer: one object per line, the event's own
+/// fields flattened to the top level (the audit stream's ECS keys), and the
+/// request span alongside so every line of a request carries its `request_id`.
+fn json_layer<S, W>(writer: W) -> impl tracing_subscriber::Layer<S>
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+    W: for<'a> tracing_subscriber::fmt::MakeWriter<'a> + Send + Sync + 'static,
+{
+    tracing_subscriber::fmt::layer()
+        .json()
+        .flatten_event(true)
+        .with_current_span(true)
+        .with_span_list(false)
+        .with_writer(writer)
+}
+
+pub(super) fn init_tracing(
+    otel_cfg: Option<&OtelConfig>,
+    format: batlehub_config::schema::LogFormat,
+) -> Option<sdktrace::SdkTracerProvider> {
     // Per layer rather than global: a global `RUST_LOG=info` would disable
     // sqlx's DEBUG statement events for every layer, the counting one too.
     let env_filter =
@@ -760,8 +823,20 @@ pub(super) fn init_tracing(otel_cfg: Option<&OtelConfig>) -> Option<sdktrace::Sd
         None => (None, None),
     };
 
+    // `[logging] format` (RFC 0036 §6.2). Exactly one of the two is `Some`;
+    // an `Option` layer is a no-op when `None`. JSON flattens the event's own
+    // fields to the top level — the audit stream's ECS keys — and carries the
+    // request span, so every line of a request has its `request_id`.
+    let json = format == batlehub_config::schema::LogFormat::Json;
+    if json {
+        batlehub_core::services::audit_stream::enable();
+    }
+    let text_layer = (!json).then(|| tracing_subscriber::fmt::layer().with_filter(env_filter()));
+    let json_layer = json.then(|| json_layer(std::io::stdout).with_filter(env_filter()));
+
     tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().with_filter(env_filter()))
+        .with(text_layer)
+        .with(json_layer)
         .with(otel_layer.with_filter(env_filter()))
         .with(crate::db_metrics::DbStatementLayer.with_filter(crate::db_metrics::filter()))
         .init();
@@ -788,6 +863,75 @@ fn build_otlp_provider(cfg: &OtelConfig) -> anyhow::Result<sdktrace::SdkTracerPr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A shared buffer the JSON layer writes into.
+    #[derive(Clone, Default)]
+    struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The audit stream's contract with a SIEM (RFC 0036 §6.2): ECS keys at the
+    /// top level of the line, the request id beside them. A Sigma rule keys on
+    /// these names, so a rename here blinds it silently — this is what breaks
+    /// instead.
+    #[test]
+    fn an_audit_row_is_one_json_line_with_ecs_keys_and_the_request_id() {
+        use batlehub_core::entities::{AccessAction, AccessEvent, AccessResult, CallerNet, Role};
+        use batlehub_core::services::audit_stream;
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let out = Captured::default();
+        let sink = out.clone();
+        let subscriber = tracing_subscriber::registry().with(json_layer(move || sink.clone()));
+        audit_stream::enable();
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!("HTTP request", request_id = "req-42");
+            let _entered = span.enter();
+            let mut event = AccessEvent::about_identity(
+                AccessAction::CredentialRejected,
+                None,
+                Role::Anonymous,
+                AccessResult::Denied {
+                    reason: "no provider".to_owned(),
+                },
+                CallerNet {
+                    ip: Some("203.0.113.9".to_owned()),
+                    user_agent: Some("npm/10".to_owned()),
+                },
+                None,
+            );
+            event.throttled_count = Some(20);
+            audit_stream::emit(&event, false);
+        });
+
+        let text = String::from_utf8(out.0.lock().unwrap().clone()).unwrap();
+        let line: serde_json::Value =
+            serde_json::from_str(text.lines().next().expect("one line")).unwrap();
+        for (key, want) in [
+            ("event.dataset", "batlehub.audit"),
+            ("event.kind", "event"),
+            ("event.category", "authentication"),
+            ("event.action", "credential_rejected"),
+            ("event.outcome", "denied"),
+            ("event.reason", "no provider"),
+            ("source.ip", "203.0.113.9"),
+            ("user_agent.original", "npm/10"),
+        ] {
+            assert_eq!(line[key], want, "{key} in {line}");
+        }
+        assert_eq!(line["batlehub.audit.persisted"], false);
+        assert_eq!(line["batlehub.audit.throttled_count"], 20);
+        assert_eq!(line["target"], "batlehub::audit");
+        assert_eq!(line["span"]["request_id"], "req-42");
+    }
     // `actix_web::test` is both a module and an attribute macro, so importing it
     // unqualified shadows the built-in `#[test]` attribute for this whole module
     // and the plain sync tests below stop compiling. Alias it.

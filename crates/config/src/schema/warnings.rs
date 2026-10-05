@@ -44,6 +44,15 @@ impl ConfigWarning {
 
 // ── Warning codes ─────────────────────────────────────────────────────────────
 
+/// No `[audit]` block: nothing in the audit trail ever expires (RFC 0036 §4.3).
+pub const AUDIT_NO_RETENTION: &str = "audit.no-retention";
+
+/// Access rows keep full IPs for more than 90 days, or forever.
+pub const AUDIT_FULL_IPS_KEPT: &str = "audit.full-ips-kept";
+
+/// Sealing on, stream off: no copy of the chain's head leaves the host.
+pub const AUDIT_SEALING_WITHOUT_STREAM: &str = "audit.sealing-without-stream";
+
 /// Both `[server].trusted_proxies` and the deprecated
 /// `[ip_blocking].trusted_proxies` carry a list; `[server]` wins.
 pub const PROXY_TRUST_SHADOWED_DEPRECATED_KEY: &str = "proxy-trust.shadowed-deprecated-key";

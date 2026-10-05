@@ -115,6 +115,8 @@ async fn app(
                 timestamp: chrono::Utc::now(),
                 ip_address: None,
                 user_agent: None,
+                throttled_count: None,
+                detail: None,
             })
             .await
             .expect("seed catalogue row");

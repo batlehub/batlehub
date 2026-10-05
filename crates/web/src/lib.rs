@@ -474,7 +474,6 @@ pub use handlers::front_office::cli_download::CliBinaryPath;
 pub use handlers::healthz::{healthz, livez};
 pub use handlers::metrics::prometheus_metrics;
 pub use handlers::proxy::cargo::CargoIndexProxy;
-pub use middleware::AuthMiddlewareFactory;
 pub use middleware::HostRoutingMiddlewareFactory;
 pub use middleware::IpBlockMiddlewareFactory;
 pub use middleware::PeerTrust;
@@ -485,6 +484,7 @@ pub use middleware::UserBlockMiddlewareFactory;
 pub use middleware::{
     protocol_document_csp, security_headers, API_DOCS_CSP, PROTOCOL_DOCUMENT_CSP,
 };
+pub use middleware::{AuthMiddlewareFactory, CredentialRejectionAudit};
 pub use spa::{configure_spa, narrow_csp, SpaDir};
 
 #[derive(OpenApi)]
@@ -562,6 +562,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 load_config_from_content, reload_config, set_banner, validate_config_content,
             },
             explore::invalidate_explore_cache,
+            gdpr::{audit_verify, gdpr_erase, gdpr_export},
             governance::{
                 beta_channel::{add_beta_member, list_beta_members, remove_beta_member},
                 grants::{delete_grant, list_grants, put_grant},
@@ -1191,6 +1192,10 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(export_audit_log); // specific path before parameterised handlers
     cfg.service(audit_log);
     cfg.service(purge_audit_log);
+    // RFC 0036 §6.3–6.4: erasure, export, and the seal chain's verifier.
+    cfg.service(gdpr_erase);
+    cfg.service(gdpr_export);
+    cfg.service(audit_verify);
     // The identity-scoped half of RFC 0018 §4.2, transposing `verdicts pullers`.
     cfg.service(audit_pulls); // GET /api/v1/audit/pulls
                               // RFC 0002 (recast): pushed flags and the exposure report.

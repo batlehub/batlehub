@@ -1,0 +1,26 @@
+title: BatleHub retention run or cache clear
+id: be6a3fba-ba97-491b-8aa3-888f66ce5e5d
+status: experimental
+description: >-
+  A whole-registry cache clear, a retention run or a tombstone compaction. All three are destructive to history; restrict the alert to outside your maintenance window with your SIEM's own time filter.
+references:
+  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+author: BatleHub
+date: 2026-10-05
+tags:
+  - attack.impact
+  - attack.t1485
+logsource:
+  product: batlehub
+  service: audit
+detection:
+  selection:
+    event.dataset: batlehub.audit
+    event.action:
+      - cache_clear
+      - retention_run
+      - tombstone_compact
+  condition: selection
+falsepositives:
+  - Scheduled maintenance
+level: low

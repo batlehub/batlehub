@@ -560,7 +560,7 @@ async fn plugin_entries(
         user_agent: identity.1.user_agent.clone(),
     };
     let meta = svc
-        .resolve_metadata_for(&proxy_req)
+        .resolve_listing_for(&proxy_req)
         .await
         .map_err(AppError::from)?;
     let extra = ExtraMeta::from_extra(&meta.extra);

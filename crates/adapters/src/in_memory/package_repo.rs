@@ -24,7 +24,9 @@ use batlehub_core::{
 #[derive(Debug, Default)]
 pub struct InMemoryPackageRepository {
     summaries: Arc<RwLock<HashMap<String, PackageSummary>>>,
-    events: Arc<RwLock<Vec<AccessEvent>>>,
+    pub(crate) events: Arc<RwLock<Vec<AccessEvent>>>,
+    /// The audit seal chain (RFC 0036 §5.3), for `AuditTrailStore`.
+    pub(crate) seals: Arc<RwLock<Vec<batlehub_core::entities::SealRecord>>>,
 }
 
 impl InMemoryPackageRepository {
@@ -133,6 +135,7 @@ impl PackageRepository for InMemoryPackageRepository {
     }
 
     async fn record_access(&self, event: AccessEvent) -> Result<(), CoreError> {
+        batlehub_core::services::audit_stream::emit(&event, true);
         // Only actions that always carry a real, version-specific package
         // coordinate should create/update a `PackageSummary` row. Ownership,
         // visibility, and account-wide actions (package_id: None, or Delete
@@ -752,6 +755,8 @@ mod tests {
             timestamp: Utc::now(),
             ip_address: None,
             user_agent: None,
+            throttled_count: None,
+            detail: None,
         }
     }
 

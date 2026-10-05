@@ -86,6 +86,7 @@ fn reload_params(
         sumdb_map: crate::SumDbMap::default(),
         registry_host_map: crate::RegistryHostMap::default(),
         proxy_trust: crate::middleware::ProxyTrust::default(),
+        discovery: Default::default(),
         config_path,
         config_overlays: Vec::new(),
         config_change_repo: None,
@@ -288,6 +289,19 @@ async fn apply_success_swaps_hot_config() {
         live_trust.verdict_for(Some("10.42.7.1".parse().unwrap())),
         crate::middleware::PeerTrust::Trusted
     );
+}
+
+#[tokio::test]
+async fn apply_forgets_remembered_upstream_absences() {
+    // A reload that fixes an upstream must not leave its old 404s remembered.
+    let svc = make_svc(true);
+    let live = Arc::clone(&svc.discovery);
+    live.record_absent("npm1:express", std::time::Duration::from_secs(600));
+    *svc.pending.lock().unwrap() = Some(empty_pending());
+
+    svc.apply("test-user").await.unwrap();
+
+    assert!(!live.is_absent("npm1:express"));
 }
 
 #[tokio::test]

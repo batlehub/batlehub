@@ -1,0 +1,26 @@
+title: BatleHub grant written for everyone
+id: de860835-81ec-4a44-84dc-1587893581e6
+status: experimental
+description: >-
+  A package- or version-tier grant was written whose subject is everyone (`*`) or the anonymous role, which makes the package readable, or writable, without a credential.
+references:
+  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+author: BatleHub
+date: 2026-10-05
+tags:
+  - attack.persistence
+  - attack.t1098
+logsource:
+  product: batlehub
+  service: audit
+detection:
+  selection:
+    event.dataset: batlehub.audit
+    event.action: grant_write
+    batlehub.audit.detail|startswith:
+      - 'subject=\* '
+      - 'subject=role:anonymous '
+  condition: selection
+falsepositives:
+  - Deliberately publishing an internal package to every reader
+level: high

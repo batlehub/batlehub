@@ -3,7 +3,7 @@ use uuid::Uuid;
 use super::{ConfigReloadService, ReloadDiff};
 use crate::AccessConfig;
 use batlehub_core::ports::ConfigChangeRecord;
-use batlehub_core::services::HotConfig;
+use batlehub_core::services::{audit_stream, HotConfig};
 
 impl ConfigReloadService {
     pub(super) async fn compute_diff(
@@ -53,9 +53,21 @@ impl ConfigReloadService {
         status: &str,
         error_msg: Option<&str>,
     ) {
+        // The stream line goes out whether or not there is a table to write to:
+        // `config_rejected.yml` has to see a rejection on a deployment whose
+        // database write failed too (RFC 0036 §6.2).
+        let action = format!("config_{status}");
+        let outcome = if status == "applied" {
+            "allowed"
+        } else {
+            "denied"
+        };
         let repo = match self.config_change_repo.as_ref() {
             Some(r) => r,
-            None => return,
+            None => {
+                audit_stream::emit_config_change(&action, triggered_by, outcome, false);
+                return;
+            }
         };
         let diff_json = match serde_json::to_value(diff) {
             Ok(v) => v,
@@ -81,8 +93,13 @@ impl ConfigReloadService {
             summary,
             error_msg: error_msg.map(str::to_owned),
         };
-        if let Err(e) = repo.insert(record).await {
-            tracing::warn!(error = %e, "failed to persist config change audit row");
-        }
+        let persisted = match repo.insert(record).await {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to persist config change audit row");
+                false
+            }
+        };
+        audit_stream::emit_config_change(&action, triggered_by, outcome, persisted);
     }
 }

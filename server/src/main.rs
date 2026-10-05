@@ -587,7 +587,7 @@ async fn main() -> Result<()> {
 
     let prometheus_handle = install_metrics_recorder(&config)?;
 
-    let _tracer_provider = watcher::init_tracing(config.otel.as_ref());
+    let _tracer_provider = watcher::init_tracing(config.otel.as_ref(), config.logging.format);
     tracing::info!(config = %config_paths.join(", "), "batlehub starting");
 
     let repo = Arc::new(
@@ -614,7 +614,11 @@ async fn main() -> Result<()> {
         oidc_provider_names,
     } = setup::initialize_auth_providers(&config).await?;
     let token_repo = repo.clone() as Arc<dyn UserTokenRepository>;
-    setup::add_user_token_provider(&mut auth_providers, token_repo.clone());
+    setup::add_user_token_provider(
+        &mut auth_providers,
+        token_repo.clone(),
+        repo.clone() as Arc<dyn batlehub_core::ports::PackageRepository>,
+    );
 
     // Postgres-backed rather than Redis: the server always has a database, a
     // login writes one row and deletes it, and `DELETE … RETURNING` gives the
@@ -935,6 +939,7 @@ async fn main() -> Result<()> {
         // as `app_data` below — clones share a lock, which is what lets a reload
         // reach the policy those two actually read.
         proxy_trust: proxy_trust.clone(),
+        discovery: Arc::clone(&proxy_svc.discovery),
         config_path: config_path.clone(),
         config_overlays: config_overlays.clone(),
         config_change_repo: Some(Arc::clone(&config_change_repo)),
@@ -983,6 +988,19 @@ async fn main() -> Result<()> {
         .filter(|r| r.security.is_some())
         .map(|r| r.name.clone())
         .collect();
+    // RFC 0036: the audit trail. Served by every proxy (purge, erase, export,
+    // verify); its sealer and lifecycle run on the worker role.
+    let audit_trail = Arc::new(setup::build_audit_trail(&config, &repo)?);
+    if is_worker {
+        watcher::spawn_audit_trail_jobs(
+            Arc::clone(&audit_trail),
+            config
+                .audit
+                .as_ref()
+                .filter(|a| a.sealing())
+                .map(|a| std::time::Duration::from_secs(a.seal_interval_secs)),
+        );
+    }
     if is_worker {
         start_scan_worker(&StartWorkerParams {
             config: &config,
@@ -1047,6 +1065,7 @@ async fn main() -> Result<()> {
         db_pool: repo.pool(),
         proxy_svc,
         admin_svc,
+        audit_trail,
         token_repo,
         access_config,
         search_config: Arc::clone(&search_config),
