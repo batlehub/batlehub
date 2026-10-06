@@ -4824,3 +4824,22 @@ fn an_unknown_logging_format_or_key_is_refused() {
         );
     }
 }
+
+/// Housekeeping prunes violation counters after 30 days; a longer window would
+/// lose its count before reaching the threshold and never ban.
+#[test]
+fn a_violation_window_past_the_counter_retention_refuses_to_start() {
+    let ok = parse_config(
+        r#"
+        [ip_blocking]
+        violation_window_secs = 2592000"#,
+    );
+    ok.validate().unwrap();
+    let cfg = parse_config(
+        r#"
+        [ip_blocking]
+        violation_window_secs = 2592001"#,
+    );
+    let err = cfg.validate().unwrap_err().to_string();
+    assert!(err.contains("violation_window_secs"), "{err}");
+}

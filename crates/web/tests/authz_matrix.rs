@@ -775,6 +775,14 @@ fn matrix() -> Vec<Row> {
         Row::new("openvsx", "/proxy/reg/api/acme/ext/9.8.7")
             .pkg("acme.ext")
             .meta(extension_meta),
+        // Theia's lookup (v2) and its v1 fallback: an extension document by id,
+        // so the same leak class as the two rows above with `-` in front.
+        Row::new("openvsx", "/proxy/reg/api/-/query?extensionId=acme.ext")
+            .pkg("acme.ext")
+            .meta(extension_meta),
+        Row::new("openvsx", "/proxy/reg/api/v2/-/query?extensionId=acme.ext")
+            .pkg("acme.ext")
+            .meta(extension_meta),
         Row::new("terraform", "/proxy/reg/v1/modules/acme/vpc/aws/9.8.7")
             .pkg("modules/acme/vpc/aws")
             .meta(terraform_module_version_meta)
@@ -1058,6 +1066,8 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/{version}/", Coverage::Row),
     ("/proxy/{registry}/galaxy/api/v3/imports/collections/{task}/", Coverage::NoPackage("the import-task poll: a state document for a publish that has already finished, naming no package and carrying no content. The route the *client* builds — `_urljoin(api_server, v3, \"imports/collections\", task_id, \"/\")` — not the one RFC 0031 §4.4 specified")),
     ("/proxy/{registry}/api/-/search", Coverage::NoRow("package read, not yet exercised")),
+    ("/proxy/{registry}/api/-/query", Coverage::Row),
+    ("/proxy/{registry}/api/v2/-/query", Coverage::Row),
     ("/proxy/{registry}/api/-/public-key/{key_id}", Coverage::NoRow("anonymous by design (RFC 0020 §4.2): serves the registry's own VSIX signing public key, which names a key id and no coordinate — no package is read, and a public key is public. `vsx_signing.rs` asserts the anonymous `200` and the `404` for any other id")),
     ("/proxy/{registry}/api/packages/{path}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/api/plugins/{id}", Coverage::NoRow("package read, not yet exercised")),

@@ -1,6 +1,6 @@
 ---
 sourcePath: use/package-explorer-cache.md
-sourceHash: fdc074c0b68f3811
+sourceHash: 992737a26a9d9fe3
 ---
 
 # Explorateur de paquets — cache et API

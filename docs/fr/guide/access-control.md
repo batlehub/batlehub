@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/access-control.md
-sourceHash: 949d02893b382a55
+sourceHash: 43b799e8a37951e0
 ---
 
 # Contrôle d'accès
@@ -766,7 +766,7 @@ trigger_on_status     = [429, 401]
 |-------|---------|-------------|
 | `enabled` | `false` | Activer le blocage par IP |
 | `violation_threshold` | `10` | Violations dans la fenêtre avant blocage automatique |
-| `violation_window_secs` | `300` | Durée de la fenêtre, en secondes |
+| `violation_window_secs` | `300` | Durée de la fenêtre, en secondes, au plus 2 592 000 (30 jours) |
 | `ban_duration_secs` | `3600` | Durée d'un blocage automatique |
 | `trigger_on_status` | `[429, 401]` | Codes de statut HTTP comptés comme violations |
 

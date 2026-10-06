@@ -392,7 +392,8 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
             .wrap(cors)
             .wrap(actix_web::middleware::Condition::new(
                 enabled,
-                IpBlockMiddlewareFactory::new(Arc::clone(&ip_block_store), ip_block_cfg_for_mw),
+                IpBlockMiddlewareFactory::new(Arc::clone(&ip_block_store), ip_block_cfg_for_mw)
+                    .with_audit(admin_svc.clone()),
             ))
             // Outside every layer that can answer or query the database — IP
             // block, CORS, auth, user block, rate limit — so their refusals get

@@ -13,7 +13,7 @@ reference: true
 | Co-author   | Claude Opus 5.5 <noreply@anthropic.com>                       |
 | Created     | 2026-09-26                                                    |
 | Supersedes  | —                                                             |
-| Touches     | `crates/core` (`entities/access_log.rs`, audit services), `crates/adapters` (`db/packages`, migrations), `crates/web` (`handlers/auth`, `handlers/back_office/audit.rs`, `middleware/auth.rs`), `crates/config`, `server` (`watcher.rs::init_tracing`), `deploy/siem/`, `SECURITY.md`, `.github/`, docs |
+| Touches     | `crates/core` (`entities/access_log.rs`, `entities/audit_seal.rs`, `services/audit_trail.rs`, `services/audit_stream.rs`), `crates/adapters` (`db/packages/audit_trail.rs`, migrations 061–062), `crates/web` (`handlers/auth`, `handlers/back_office/audit.rs`, `handlers/back_office/gdpr.rs`, `middleware/auth.rs`, `middleware/ip_block.rs`), `crates/config` (`schema/audit.rs`), `cli` (`admin gdpr`, `admin audit verify`), `server` (`watcher.rs`), `deploy/siem/`, `tests/heavy/authz.sh`, `SECURITY.md`, `.github/`, docs |
 
 ---
 
@@ -732,11 +732,11 @@ None. The questions numbered 1–4 of the first draft's open list are rows
 
 | Phase | Content |
 | --- | --- |
-| 1 | **Project vulnerability handling** (§6.5) — **landed 2026-09-26** with this document — and the compliance pages (§6.8, without the SIEM page), still to write. Useful alone: it answers a supplier questionnaire today. |
+| 1 | **Project vulnerability handling** (§6.5) — **landed 2026-09-26** with this document — and the compliance pages (§6.8, without the SIEM page), **written 2026-10-05**. Useful alone: it answers a supplier questionnaire today. |
 | 2 | **Authentication events and the JSON stream** (§6.1, §6.2 without the rules), `[logging] format` — **landed 2026-10-05**; see §13. |
 | 3 | **Sigma rules**, `task siem:check`, `docs/operations/siem.md`, and §6.7 cases 1–3 and 6 — **landed 2026-10-05**, without `audit_chain_gap.yml`, which needs phase 5's seals; see §13. |
-| 4 | **Retention classes, pseudonymisation, erasure** (§6.3) and §6.7 case 5. |
-| 5 | **Seals and `audit verify`** (§6.4) and §6.7 case 4. |
+| 4 | **Retention classes, pseudonymisation, erasure** (§6.3) and §6.7 case 5 — **landed 2026-10-05**; see §13. |
+| 5 | **Seals and `audit verify`** (§6.4) and §6.7 case 4 — **landed 2026-10-05**, with `audit_chain_gap.yml` and a truncation case §6.7 did not list; see §13. |
 | 6 | **YARA scanner** (§6.6) with yara-x's `yr` in the worker image (§11 q6). |
 | 7 | **NIS2 / DORA**, when a regulated operator needs them: MFA enforcement through the OIDC `acr`/`amr` claims; signing keys (publish, APK, VS Code, seal) held in a KMS with a rotation procedure; a restore test in CI with a stated RPO/RTO; incident classification fields on notifications; a DORA Art. 30 contract annex template for a hosted offer. |
 
@@ -744,9 +744,11 @@ None. The questions numbered 1–4 of the first draft's open list are rows
 
 ## 13. Implementation notes
 
-Phases 2 and 3 landed 2026-10-05. What follows is where the design was wrong
-or under-specified, recorded because the next phase reads this document and not
-the diff.
+Phases 2 and 3 landed 2026-10-05, and phases 4 and 5 the same day. What
+follows is where the design was wrong or under-specified, recorded because the
+next phase reads this document and not the diff. Rows 1–10 are phases 2–3's,
+rows 11–19 phases 4–5's. Phase 6 (YARA) is not built, which is why the status
+stays *In review*; phase 7 waits for a regulated operator, as §12 says.
 
 ### Corrections to the design
 
@@ -762,8 +764,17 @@ the diff.
 | 8 | §6.2 | The stream emitted where `record_access` lands | It is, in both repositories, through `audit_stream::emit` — and only under `format = "json"`: a process-wide switch set by the tracing setup, so the text format stays byte-identical, as §4.1 promises, rather than gaining a line per download. |
 | 9 | §6.7 | Case 2: *"`npm install` of a blocked version — npm exits non-zero with its own `E403` text, the tap shows no tarball request, and the stream carries one `download` line with `event.outcome=denied`"* | Contradictory, and the first heavy run said which half: with no tarball request there is no download, so there is no download row. RFC 0006 hides a blocked version from the packument; npm stops on `ETARGET` after one *allowed* listing read, and **the block leaves nothing in the audit trail** on that path. The request that reaches the download gate is a lockfile that still names the version — `npm ci` fetches the tarball it resolved before the block, is refused `403`, and that is the `denied` row with the block's reason. The phase drives that. It is also exactly the client `blocked_package_pulled.yml` is written for: a lockfile, a cache or a machine that still names the coordinate. |
 | 10 | §6.7 | Case 3: *"the PAT is revoked through the API, then used"* | Minting a PAT needs an interactive OIDC session, and no heavy suite has an identity provider. The phase presents a `bh_pat_` token that was never minted, which takes the middleware's path exactly; `token_revoke` is proven in-process by `crates/web/tests/tokens_and_pagination.rs`. |
+| 11 | §6.3, §6.4 | Two services, `services/audit_lifecycle.rs` and `services/audit_seal.rs` | One, `services/audit_trail.rs`: the sealer, the lifecycle, erasure, export and the verifier. The canonical row form and the digests are pure functions in `entities/audit_seal.rs`. A lifecycle change to a sealed row has to commit its `amend` or `expire` record in the same transaction as the change, against a chain head the sealer may be moving — so the two share the head guard (`TrailBatch::expect_head`, a `Conflict` retried from a fresh read), and splitting them would have split that guard. |
+| 12 | §6.3 | The job *"pseudonymises then expires"* | It expires, then pseudonymises: a row due both ways is deleted once, not rewritten into an `amend` record and then deleted into an `expire` record. |
+| 13 | §6.3 | Leader-elected through `ScanQueue::try_lead`, *"the same advisory-lock election the rescan timer uses"* | A `LeaderLock` port with a key of its own (`AUDIT_LEADER_KEY`), a Postgres advisory lock in `crates/adapters` and an always-leader for in-memory tests — so `crates/core` stays without I/O and the audit jobs do not ride on the rescan queue's election. |
+| 14 | §6.3 | *"`purge_events_before` gains the class restriction"* | The restriction is `AuditTrailService::purge_access_before`, which the purge handler calls: **access-class rows only**, through `expire` records on sealed windows, and its own `audit_purge` row naming the cutoff and the count. `purge_events_before` is unchanged and is reached only by an app built without the trail service — the in-process test apps; the server always builds one. |
+| 15 | §6.4 | `audit_seals (id, kind, …)` | `seq BIGINT PRIMARY KEY` — the position in the chain, which is what a SIEM keys on and what `audit_chain_gap.yml` correlates — and an `affected` column carrying how many rows an `amend` or `expire` changed. |
+| 16 | §6.4 | Unstated: where the chain starts, and what the lifecycle may touch | The first tick seals the newest window already one window in the past; rows before it are pre-chain and the lifecycle handles them without records. With sealing on, the lifecycle touches nothing past the end of the sealed range and waits for the first seal before touching anything, so an open window is never rewritten under the sealer. |
+| 17 | §6.4 | `batlehub admin audit verify` | `batlehub-cli admin audit verify`, over `POST /api/v1/admin/audit/verify` behind `audit:read` — a body, because `--head` is a digest and `--from`/`--to` are instants — answering `501` on an unsealed trail. `--from`/`--to` select the windows whose rows are re-digested; the chain itself is always replayed whole. |
+| 18 | §6.7 | Case 4: alter a row, `verify` exits 1 | Built as written, then extended both ways. The row is **put back** and `verify` passes again, so the failure is shown to be that row and nothing else; and a case **5b** the list did not have: the attack §5.3 is written against — a sealed row altered, the seal records from its window on deleted, the sealer left to re-seal over it. Observed: the chain verifies on its own (*that is the attack*), and `--head` with the digest the stream last carried fails with *"the chain's newest record is not the head the SIEM last received: its tail was truncated or rewritten"*; the stream carries record 21 twice and the replay makes `audit_chain_gap.yml` fire. |
+| 19 | §6.7, §10 | Case 5 checks `token_revoke` survives the purge; §10 names `pg_audit_seal.rs` and unit tests in `services/audit_seal.rs` | No run mints a token (row 10), so case 5 checks the two `credential_rejected` rows survive instead — the same class. Observed: the purge deleted 3 `download` rows, written as one `expire` record; a second purge deleted 0 and left the first's row. The seal tests share `crates/adapters/tests/pg_audit_lifecycle.rs`, which makes a database of its own because the chain is one per database; the digest tests sit beside `entities/audit_seal.rs`. |
 
-### Three things the RFC did not mention
+### What the RFC did not mention
 
 - **`tracing`'s macros cannot open an event with a dotted field.**
   `info!(target: …, event.dataset = …)` is a macro ambiguity error, and a
@@ -785,14 +796,31 @@ the diff.
 - **`AccessEvent` is a struct literal in twenty-two places.** Two new fields
   meant two passes over every one of them; both are `Option`s defaulting to
   `None`, so no existing row or caller changed meaning.
+- **An automatic IP ban left no audit row.** The middleware logged it with
+  `tracing` and nothing else; the ban row is deleted when it expires and the
+  violation counters after 30 days, so a ban was gone from the database within
+  a month — the detection evidence §2 is about. Since 2026-10-05 every
+  automatic ban writes `block_ip` as `system`, the banned caller in the network
+  fields and `ip=… until=… reason=auto status=… violations=… threshold=…
+  window_secs=…` in `detail`; the manual `block_ip` and `unblock_ip` rows, which
+  said an IP was blocked and not which one, carry `ip=…` too. And
+  `[ip_blocking].violation_window_secs` is refused above 30 days, the counters'
+  retention, past which a window never reached its threshold.
 
 ### Still owed
 
-- `audit_chain_gap.yml`, with phase 5's seals.
+- **Phase 6**, the YARA scanner (§6.6).
 - `source.ip` on admin actions: `record_admin_action` has never carried the
-  caller's address, so a `grant_write`, `audit_purge` or `block_ip` line names
-  who but not from where. The web handlers have it (`AuthIdentity` carries
-  `CallerNet`); threading it through `AdminService` is a follow-up that touches
-  every admin handler.
-- The compliance pages of §6.8, still phase 1's.
-
+  caller's address, so a `grant_write`, `audit_purge` or manual `block_ip` line
+  names who but not from where. The web handlers have it (`AuthIdentity`
+  carries `CallerNet`); threading it through `AdminService` is a follow-up that
+  touches every admin handler.
+- **Erasure misses a subject named in another row's `detail`.** It rewrites
+  rows whose `user_id` is the subject, and the `gdpr_export` row whose `detail`
+  is exactly `subject=<id>`. A `grant_write` or `grant_revoke` an admin wrote
+  about the subject carries `subject=user:<id> actions=…` under the *admin's*
+  `user_id`, and keeps it. The candidate query and the rewrite both need the
+  grant spelling; a test that erases a user someone granted to is what proves it.
+- **"The process did it" has two spellings.** An automatic ban is written as
+  `user_id = "system"` (`Identity::system`), the lifecycle's `audit_lifecycle_run`
+  row as `user_id = NULL`. A SIEM rule keying on either misses the other.

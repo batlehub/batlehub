@@ -869,6 +869,7 @@ export const RESOURCE_VERBS: string[] = [
   "findings:read",
   "flags:read",
   "audit:purge",
+  "gdpr:erase",
 ];
 
 export const CONTROL_VERBS: string[] = [

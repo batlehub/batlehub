@@ -2195,7 +2195,7 @@ trusted_proxies       = ["10.0.0.1"] # IPs whose X-Forwarded-For header is trust
 |---|---|---|---|
 | `enabled` | bool | `false` | Enable/disable the middleware |
 | `violation_threshold` | int | `10` | Number of violations before auto-block |
-| `violation_window_secs` | int | `300` | Window length for counting violations |
+| `violation_window_secs` | int | `300` | Window length for counting violations, at most 2 592 000 (30 days, the counters' retention) |
 | `ban_duration_secs` | int | `3600` | How long the auto-block lasts |
 | `trigger_on_status` | int[] | `[429, 401]` | Response status codes that count as violations |
 | `trusted_proxies` | string[] | `[]` | Upstream proxy IPs allowed to set `X-Forwarded-For` |

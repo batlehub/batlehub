@@ -118,6 +118,34 @@ struct OpenVsxExtension {
     repository: Option<String>,
     #[serde(default)]
     homepage: Option<String>,
+    #[serde(default)]
+    engines: OpenVsxEngines,
+    #[serde(rename = "preRelease", default)]
+    pre_release: bool,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+struct OpenVsxEngines {
+    vscode: Option<String>,
+}
+
+/// One page of `GET /api/{ns}/{ext}/version-references` — every version with
+/// its own `engines`, which the extension document carries for the newest only.
+#[derive(Debug, Deserialize)]
+struct OpenVsxVersionReferences {
+    #[serde(rename = "totalSize", default)]
+    total_size: usize,
+    #[serde(default)]
+    versions: Vec<OpenVsxVersionReference>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenVsxVersionReference {
+    version: String,
+    #[serde(default)]
+    engines: OpenVsxEngines,
+    #[serde(default)]
+    files: OpenVsxFiles,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -168,6 +196,13 @@ impl RegistryClient for OpenVsxRegistryClient {
 
         let is_signed = Some(ext.files.signature.is_some());
 
+        // Only the listing needs every version; a pinned resolve names one.
+        let vsx_versions = if pkg.version == "latest" {
+            self.version_references(publisher, ext_name).await
+        } else {
+            None
+        };
+
         let extra = serde_json::json!({
             "resolved_version": ext.version,
             "namespace": ext.namespace,
@@ -187,6 +222,9 @@ impl RegistryClient for OpenVsxRegistryClient {
                 MetadataReadme::linked(url, ReadmeFormat::Markdown)
             }),
             "all_versions_count": ext.all_versions.len(),
+            "engine": ext.engines.vscode,
+            "pre_release": ext.pre_release,
+            "vsx_versions": vsx_versions,
             "links": MetadataLinks::new(ext.repository.as_deref(), ext.homepage.as_deref()),
         });
 
@@ -375,7 +413,83 @@ impl RegistryClient for OpenVsxRegistryClient {
     }
 }
 
+/// 1 000 universal versions. rust-analyzer, the longest history on open-vsx.org,
+/// has ~200 universal builds; this is a bound on a misbehaving upstream, not a
+/// limit any real extension reaches.
+const MAX_REFERENCE_PAGES: usize = 10;
+
 impl OpenVsxRegistryClient {
+    /// Every version the upstream lists, newest first, each with its own
+    /// `engines.vscode` — what lets an editor that is too old for the newest
+    /// version fall back to one it can run, instead of installing it anyway.
+    ///
+    /// The universal builds, as those are what `fetch_artifact` serves; an
+    /// extension published only per platform has none, and falls back to the
+    /// unfiltered list, first reference per version. `None` when the first page
+    /// fails, which leaves the listing at the newest version as before — an
+    /// upstream older than the endpoint answers `404`, and the listing must not
+    /// fail for it.
+    async fn version_references(&self, publisher: &str, name: &str) -> Option<serde_json::Value> {
+        let base = format!("{}/api/{}/{}", self.base_url, publisher, name);
+        let mut refs = self
+            .version_reference_pages(&format!("{base}/universal/version-references"))
+            .await?;
+        if refs.is_empty() {
+            refs = self
+                .version_reference_pages(&format!("{base}/version-references"))
+                .await?;
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        let out: Vec<serde_json::Value> = refs
+            .into_iter()
+            .filter(|r| seen.insert(r.version.clone()))
+            .map(|r| {
+                serde_json::json!({
+                    "version": r.version,
+                    "engine": r.engines.vscode,
+                    "signed": r.files.signature.is_some(),
+                    "public_key": r.files.public_key.is_some(),
+                })
+            })
+            .collect();
+        (!out.is_empty()).then_some(serde_json::Value::Array(out))
+    }
+
+    /// Every page of one `version-references` listing, up to `totalSize`.
+    ///
+    /// The upstream caps a page at 100. Bounded at [`MAX_REFERENCE_PAGES`] so an
+    /// upstream whose `totalSize` never stops growing cannot hold a resolve
+    /// open; a page that fails after the first keeps what came before it, which
+    /// is still the newest versions in order.
+    async fn version_reference_pages(&self, url: &str) -> Option<Vec<OpenVsxVersionReference>> {
+        const PAGE: usize = 100;
+        let mut out = Vec::new();
+        for page in 0..MAX_REFERENCE_PAGES {
+            let fetched = async {
+                self.get(&format!("{url}?size={PAGE}&offset={}", page * PAGE))
+                    .send()
+                    .await
+                    .ok()?
+                    .error_for_status()
+                    .ok()?
+                    .json::<OpenVsxVersionReferences>()
+                    .await
+                    .ok()
+            }
+            .await;
+            let Some(p) = fetched else {
+                return (page > 0).then_some(out);
+            };
+            let got = p.versions.len();
+            out.extend(p.versions);
+            if got < PAGE || out.len() >= p.total_size {
+                break;
+            }
+        }
+        Some(out)
+    }
+
     async fn fetch_extension(
         &self,
         publisher: &str,
@@ -461,6 +575,167 @@ mod tests {
             .unwrap();
 
         assert_eq!(meta.id.version, "2023.20.0");
+    }
+
+    /// A `version-references` page: `n` universal versions counting down from
+    /// `top`, each needing an engine one minor below the last.
+    fn reference_page(total: usize, top: usize, n: usize) -> String {
+        let versions: Vec<_> = (0..n)
+            .map(|i| {
+                let v = top - i;
+                serde_json::json!({
+                    "version": format!("1.0.{v}"),
+                    "targetPlatform": "universal",
+                    "engines": {"vscode": format!("^1.{v}.0")},
+                    "files": if v == top { serde_json::json!({"signature": "s"}) } else { serde_json::json!({}) },
+                })
+            })
+            .collect();
+        serde_json::json!({"offset": 0, "totalSize": total, "versions": versions}).to_string()
+    }
+
+    async fn refs_mock(
+        server: &mut mockito::ServerGuard,
+        path: &str,
+        offset: &str,
+        status: usize,
+        body: String,
+    ) -> mockito::Mock {
+        server
+            .mock("GET", path)
+            .match_query(mockito::Matcher::UrlEncoded("offset".into(), offset.into()))
+            .with_status(status)
+            .with_body(body)
+            .expect(1)
+            .create_async()
+            .await
+    }
+
+    const UNIVERSAL_REFS: &str = "/api/ms-python/python/universal/version-references";
+
+    /// Every universal version, across pages, each with its own engine — and a
+    /// pinned resolve makes no reference call at all.
+    #[tokio::test]
+    async fn the_latest_resolve_pages_every_universal_version() {
+        let mut server = Server::new_async().await;
+        let _ext = server
+            .mock("GET", "/api/ms-python/python")
+            .with_status(200)
+            .with_body(EXT_BODY)
+            .create_async()
+            .await;
+        let p0 = refs_mock(
+            &mut server,
+            UNIVERSAL_REFS,
+            "0",
+            200,
+            reference_page(150, 199, 100),
+        )
+        .await;
+        let p1 = refs_mock(
+            &mut server,
+            UNIVERSAL_REFS,
+            "100",
+            200,
+            reference_page(150, 99, 50),
+        )
+        .await;
+
+        let client = OpenVsxRegistryClient::new(server.url(), &Default::default()).unwrap();
+        let meta = client
+            .resolve_metadata(&pkg("ms-python.python", "latest"))
+            .await
+            .unwrap();
+        let v = meta.extra["vsx_versions"].as_array().unwrap();
+        assert_eq!(v.len(), 150);
+        assert_eq!(v[0]["version"], "1.0.199");
+        assert_eq!(v[0]["signed"], true);
+        assert_eq!(v[149]["version"], "1.0.50");
+        assert_eq!(v[149]["engine"], "^1.50.0");
+        p0.assert_async().await;
+        p1.assert_async().await;
+
+        let _pinned = server
+            .mock("GET", "/api/ms-python/python/2023.18.0")
+            .with_status(200)
+            .with_body(EXT_BODY)
+            .create_async()
+            .await;
+        let meta = client
+            .resolve_metadata(&pkg("ms-python.python", "2023.18.0"))
+            .await
+            .unwrap();
+        assert!(meta.extra["vsx_versions"].is_null());
+        p0.assert_async().await;
+    }
+
+    /// A page failing after the first keeps the newest versions it already had.
+    #[tokio::test]
+    async fn a_later_page_failing_keeps_the_pages_before_it() {
+        let mut server = Server::new_async().await;
+        let _ext = server
+            .mock("GET", "/api/ms-python/python")
+            .with_status(200)
+            .with_body(EXT_BODY)
+            .create_async()
+            .await;
+        let _p0 = refs_mock(
+            &mut server,
+            UNIVERSAL_REFS,
+            "0",
+            200,
+            reference_page(150, 199, 100),
+        )
+        .await;
+        let _p1 = refs_mock(&mut server, UNIVERSAL_REFS, "100", 500, String::new()).await;
+
+        let client = OpenVsxRegistryClient::new(server.url(), &Default::default()).unwrap();
+        let meta = client
+            .resolve_metadata(&pkg("ms-python.python", "latest"))
+            .await
+            .unwrap();
+        assert_eq!(meta.extra["vsx_versions"].as_array().unwrap().len(), 100);
+    }
+
+    /// No universal build at all: the unfiltered list, one reference per version.
+    #[tokio::test]
+    async fn a_platform_only_extension_falls_back_to_the_unfiltered_list() {
+        let mut server = Server::new_async().await;
+        let _ext = server
+            .mock("GET", "/api/ms-python/python")
+            .with_status(200)
+            .with_body(EXT_BODY)
+            .create_async()
+            .await;
+        let _u = refs_mock(
+            &mut server,
+            UNIVERSAL_REFS,
+            "0",
+            200,
+            r#"{"offset":0,"totalSize":0,"versions":[]}"#.into(),
+        )
+        .await;
+        let _all = refs_mock(
+            &mut server,
+            "/api/ms-python/python/version-references",
+            "0",
+            200,
+            r#"{"offset":0,"totalSize":3,"versions":[
+                {"version":"2.0.0","engines":{"vscode":"^1.90.0"},"files":{}},
+                {"version":"2.0.0","engines":{"vscode":"^1.90.0"},"files":{}},
+                {"version":"1.0.0","engines":{"vscode":"^1.60.0"},"files":{}}]}"#
+                .into(),
+        )
+        .await;
+
+        let client = OpenVsxRegistryClient::new(server.url(), &Default::default()).unwrap();
+        let meta = client
+            .resolve_metadata(&pkg("ms-python.python", "latest"))
+            .await
+            .unwrap();
+        let v = meta.extra["vsx_versions"].as_array().unwrap();
+        let got: Vec<_> = v.iter().map(|r| r["version"].as_str().unwrap()).collect();
+        assert_eq!(got, ["2.0.0", "1.0.0"]);
     }
 
     #[tokio::test]

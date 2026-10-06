@@ -35,7 +35,8 @@ const SWEEPS: &[(&str, &str)] = &[
     ),
     // Pruned per IP only when that IP misbehaves again; one that never comes
     // back left its rows forever.
-    // ponytail: a violation_window_secs over 30 days would lose its count here.
+    // 30 days is also the ceiling config validation puts on
+    // `[ip_blocking].violation_window_secs`; move both together.
     (
         "ip_violation_counters",
         "window_start < EXTRACT(EPOCH FROM NOW() - INTERVAL '30 days')::BIGINT",

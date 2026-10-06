@@ -742,9 +742,9 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
             },
             vsx::{
                 openvsx_extension, openvsx_extension_version, openvsx_file, openvsx_namespace,
-                openvsx_namespace_create, openvsx_public_key, openvsx_publish, openvsx_search,
-                openvsx_version, vsx_asset, vsx_extension_query, vsx_item, vsx_unpkg,
-                vsx_vspackage,
+                openvsx_namespace_create, openvsx_public_key, openvsx_publish, openvsx_query,
+                openvsx_query_v2, openvsx_search, openvsx_version, vsx_asset, vsx_extension_query,
+                vsx_item, vsx_unpkg, vsx_vspackage,
             },
         },
     };
@@ -1103,9 +1103,11 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(openvsx_version); // GET …/api/version
     cfg.service(openvsx_publish); // POST …/api/-/publish
     cfg.service(openvsx_search); // GET …/api/-/search
-                                 // RFC 0020 §4.2: `/api/-/public-key/{id}` sits under the same `-` segment
-                                 // as search, and for the same reason is registered before the greedy
-                                 // `api/{ns}/{ext}` route below.
+    cfg.service(openvsx_query); // GET …/api/-/query
+    cfg.service(openvsx_query_v2); // GET …/api/v2/-/query — before `api/{ns}/{ext}/{v}`
+                                   // RFC 0020 §4.2: `/api/-/public-key/{id}` sits under the same `-` segment
+                                   // as search, and for the same reason is registered before the greedy
+                                   // `api/{ns}/{ext}` route below.
     cfg.service(openvsx_public_key);
     cfg.service(openvsx_file); // GET …/api/{ns}/{ext}/{v}/file/{name}
     cfg.service(openvsx_extension_version); // GET …/api/{ns}/{ext}/{v}

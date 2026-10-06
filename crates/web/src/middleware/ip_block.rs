@@ -12,7 +12,9 @@ use actix_web::{
 use futures::future::LocalBoxFuture;
 
 use batlehub_config::schema::IpBlockingConfig;
+use batlehub_core::entities::{AccessAction, AccessEvent, AccessResult, CallerNet, Identity};
 use batlehub_core::ports::IpBlockStore;
+use batlehub_core::services::AdminService;
 
 use super::proxy_trust::{client_ip, peer_trust_of_service, PeerTrust};
 
@@ -40,6 +42,7 @@ fn now_unix() -> u64 {
 pub struct IpBlockMiddlewareFactory {
     store: Arc<dyn IpBlockStore>,
     config: Arc<IpBlockingConfig>,
+    audit: Option<Arc<AdminService>>,
 }
 
 impl IpBlockMiddlewareFactory {
@@ -47,7 +50,19 @@ impl IpBlockMiddlewareFactory {
         Self {
             store,
             config: Arc::new(config),
+            audit: None,
         }
+    }
+
+    /// Write a `block_ip` audit event for every automatic ban.
+    ///
+    /// The ban row itself is deleted once it expires and the violation
+    /// counters after 30 days, so without this an automatic ban leaves no
+    /// durable trace — the manual one in the console always did. The event
+    /// follows the audit trail's own retention (RFC 0036 §6.3).
+    pub fn with_audit(mut self, audit: Arc<AdminService>) -> Self {
+        self.audit = Some(audit);
+        self
     }
 }
 
@@ -67,6 +82,7 @@ where
             service: Rc::new(service),
             store: self.store.clone(),
             config: self.config.clone(),
+            audit: self.audit.clone(),
         }))
     }
 }
@@ -77,6 +93,7 @@ pub struct IpBlockMiddleware<S> {
     service: Rc<S>,
     store: Arc<dyn IpBlockStore>,
     config: Arc<IpBlockingConfig>,
+    audit: Option<Arc<AdminService>>,
 }
 
 impl<S, B> Service<ServiceRequest> for IpBlockMiddleware<S>
@@ -94,9 +111,15 @@ where
         let service = self.service.clone();
         let store = self.store.clone();
         let config = self.config.clone();
+        let audit = self.audit.clone();
 
         Box::pin(async move {
             let ip = extract_client_ip(&req, peer_trust_of_service(&req));
+            let user_agent = req
+                .headers()
+                .get(actix_web::http::header::USER_AGENT)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned);
 
             match store.blocked_until(&ip).await {
                 Ok(Some(unblock_at)) => {
@@ -132,6 +155,13 @@ where
                                 tracing::warn!(error = %e, ip = %ip, "failed to auto-block ip");
                             } else {
                                 tracing::info!(ip = %ip, unblock_at, "auto-blocked ip after violation threshold");
+                                if let Some(audit) = &audit {
+                                    audit
+                                        .record_event(auto_block_event(
+                                            &ip, user_agent, unblock_at, status, count, &config,
+                                        ))
+                                        .await;
+                                }
                             }
                         }
                     }
@@ -144,6 +174,34 @@ where
             Ok(res)
         })
     }
+}
+
+/// The audit event for an automatic ban: done by the process (`system`), about
+/// the caller it banned, saying what tipped it over.
+fn auto_block_event(
+    ip: &str,
+    user_agent: Option<String>,
+    unblock_at: u64,
+    status: u16,
+    count: u64,
+    config: &IpBlockingConfig,
+) -> AccessEvent {
+    let system = Identity::system();
+    AccessEvent::about_identity(
+        AccessAction::BlockIp,
+        system.user_id,
+        system.role,
+        AccessResult::Allowed,
+        CallerNet {
+            ip: Some(ip.to_owned()),
+            user_agent,
+        },
+        Some(format!(
+            "ip={ip} until={unblock_at} reason=auto status={status} violations={count} \
+             threshold={} window_secs={}",
+            config.violation_threshold, config.violation_window_secs
+        )),
+    )
 }
 
 #[cfg(test)]
@@ -235,6 +293,60 @@ mod tests {
         let req = TestRequest::get().to_srv_request();
         let ip = extract_client_ip(&req, PeerTrust::LegacyPermissive);
         assert!(!ip.is_empty());
+    }
+
+    /// An automatic ban lands in the audit trail — done by `system`, about the
+    /// banned caller — because the ban row and the counters are both pruned.
+    /// Requests after the ban are refused before counting, so one ban, one event.
+    #[actix_web::test]
+    async fn an_automatic_ban_is_audited_once() {
+        use batlehub_core::entities::EventFilter;
+
+        let store: Arc<dyn IpBlockStore> = Arc::new(InMemoryIpBlockStore::new());
+        let admin = Arc::new(AdminService::new(
+            batlehub_adapters::in_memory::InMemoryPackageRepository::new(),
+        ));
+        let app = test::init_service(
+            App::new()
+                .wrap(
+                    IpBlockMiddlewareFactory::new(Arc::clone(&store), default_config())
+                        .with_audit(Arc::clone(&admin)),
+                )
+                .route(
+                    "/rate",
+                    web::get().to(|| async { HttpResponse::TooManyRequests().finish() }),
+                ),
+        )
+        .await;
+
+        for _ in 0..5 {
+            let req = TestRequest::get()
+                .peer_addr("198.51.100.4:1234".parse().unwrap())
+                .insert_header(("user-agent", "spray/1.0"))
+                .uri("/rate")
+                .to_request();
+            test::call_service(&app, req).await;
+        }
+
+        let events = admin
+            .list_events(EventFilter {
+                actions: vec![AccessAction::BlockIp],
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 1, "{events:?}");
+        let e = &events[0];
+        assert_eq!(e.user_id.as_deref(), Some(Identity::SYSTEM_USER_ID));
+        assert_eq!(e.ip_address.as_deref(), Some("198.51.100.4"));
+        assert_eq!(e.user_agent.as_deref(), Some("spray/1.0"));
+        let detail = e.detail.as_deref().unwrap();
+        assert!(detail.starts_with("ip=198.51.100.4 until="), "{detail}");
+        assert!(
+            detail.contains("reason=auto status=429 violations=3 threshold=3"),
+            "{detail}"
+        );
     }
 
     #[actix_web::test]

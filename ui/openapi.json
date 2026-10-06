@@ -532,6 +532,48 @@
         ]
       }
     },
+    "/api/v1/admin/audit/verify": {
+      "post": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "Replay the seal chain and every sealed window against it (RFC 0036 §6.4).",
+        "operationId": "audit_verify",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What the replay found; `ok` is the verdict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyReport"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`audit:read` required"
+          },
+          "501": {
+            "description": "The trail is not sealed"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/api/v1/admin/authz/explain": {
       "get": {
         "tags": [
@@ -1554,6 +1596,91 @@
           },
           "403": {
             "description": "`flags:read` required"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/gdpr/erase": {
+      "post": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "Pseudonymise a data subject (RFC 0036 §4.2): their audit rows, tokens\n(revoked) and blocks. Publication and ownership rows are exempt.",
+        "operationId": "gdpr_erase",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EraseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Erased; the pseudonym and the counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EraseReport"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`gdpr:erase` required"
+          },
+          "409": {
+            "description": "An open decision names the subject; retry with `force`"
+          },
+          "501": {
+            "description": "No `[audit] erasure_key` is configured"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/gdpr/export": {
+      "get": {
+        "tags": [
+          "back-office"
+        ],
+        "summary": "Export a data subject's records, answering an access request (RFC 0036\n§6.3). Recorded as `gdpr_export`.",
+        "operationId": "gdpr_export",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "query",
+            "description": "The subject, exactly as the audit log names them.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The subject's records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GdprExport"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`audit:read` required"
           }
         },
         "security": [
@@ -8251,6 +8378,110 @@
         ]
       }
     },
+    "/proxy/{registry}/api/-/query": {
+      "get": {
+        "tags": [
+          "proxy/openvsx"
+        ],
+        "summary": "Query the registry — `GET …/api/-/query`.",
+        "description": "What Theia (and so Eclipse Che) resolves an extension through, by\n`extensionId` or `namespaceName` + `extensionName`, rather than by search.\nEach result is the full extension document `api/{ns}/{ext}/{v}` serves, one\nper version, built from the same filtered entry list — so a version hidden\nthere is absent here.",
+        "operationId": "openvsx_query",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "extensionId",
+            "in": "query",
+            "description": "`{namespace}.{extension}`; wins over the two fields below.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "namespaceName",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "extensionName",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "extensionVersion",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "includeAllVersions",
+            "in": "query",
+            "description": "`true` returns one document per version; anything else, the newest.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Query results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No usable criterion"
+          },
+          "404": {
+            "description": "Unknown registry or wrong type"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/proxy/{registry}/api/-/search": {
       "get": {
         "tags": [
@@ -9701,6 +9932,110 @@
           },
           "404": {
             "description": "Gem not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/api/v2/-/query": {
+      "get": {
+        "tags": [
+          "proxy/openvsx"
+        ],
+        "summary": "Query the registry — `GET …/api/v2/-/query`, the version Theia prefers.",
+        "description": "Same criteria and document as v1; `includeAllVersions=links` is read as\n\"newest only\", whose document already carries every version's link.",
+        "operationId": "openvsx_query_v2",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "extensionId",
+            "in": "query",
+            "description": "`{namespace}.{extension}`; wins over the two fields below.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "namespaceName",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "extensionName",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "extensionVersion",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "includeAllVersions",
+            "in": "query",
+            "description": "`true` returns one document per version; anything else, the newest.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Query results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No usable criterion"
+          },
+          "404": {
+            "description": "Unknown registry or wrong type"
           }
         },
         "security": [
@@ -20731,7 +21066,16 @@
           "cacheevictrun",
           "cacheevictdryrun",
           "cachecoherencerun",
-          "cachecoherencedryrun"
+          "cachecoherencedryrun",
+          "signin",
+          "signinfailed",
+          "tokencreate",
+          "tokenrevoke",
+          "tokennewsource",
+          "credentialrejected",
+          "gdprerase",
+          "gdprexport",
+          "auditlifecyclerun"
         ]
       },
       "AccessCheckRequest": {
@@ -20827,6 +21171,13 @@
           "action": {
             "$ref": "#/components/schemas/AccessAction"
           },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What an event that is not about a package is about — a token's id and\nname, the provider of a sign-in. Never a secret: no token value, no\nhash, no authorization code (RFC 0036 §6.1)."
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -20851,6 +21202,15 @@
           },
           "result": {
             "$ref": "#/components/schemas/AccessResult"
+          },
+          "throttled_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many further events of the same kind were suppressed before this\none was written — set by a throttled writer such as\n[`AccessAction::CredentialRejected`]'s, `None` everywhere else.",
+            "minimum": 0
           },
           "timestamp": {
             "type": "string",
@@ -22441,6 +22801,53 @@
           }
         }
       },
+      "EraseReport": {
+        "type": "object",
+        "description": "What an erasure did.",
+        "required": [
+          "pseudonym",
+          "audit_rows",
+          "tokens",
+          "blocks"
+        ],
+        "properties": {
+          "audit_rows": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "blocks": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "pseudonym": {
+            "type": "string",
+            "description": "What the subject is called from now on, in every row it touched."
+          },
+          "tokens": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "EraseRequest": {
+        "type": "object",
+        "required": [
+          "user_id"
+        ],
+        "properties": {
+          "force": {
+            "type": "boolean",
+            "description": "Erase even while an open decision — an account block, a package block\nthey placed — names the subject."
+          },
+          "user_id": {
+            "type": "string",
+            "description": "The subject, exactly as the audit log names them."
+          }
+        }
+      },
       "EvictResponse": {
         "type": "object",
         "required": [
@@ -23928,6 +24335,15 @@
             "description": "Whether the caller is a beta-channel member for this registry."
           }
         }
+      },
+      "GdprExport": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "One section per store: `access_events`, `tokens` (never their hashes),\n`account_blocks`, `package_blocks_placed`, `quota_usage`, and the rows\nerasure keeps — `publications_retained`, `ownership_retained`, `grants`."
+          }
+        ],
+        "description": "Everything the instance holds about a data subject (Art. 15)."
       },
       "GlobalBanner": {
         "type": "object",
@@ -27878,6 +28294,117 @@
           "quarantined",
           "denied"
         ]
+      },
+      "VerifyFailure": {
+        "type": "object",
+        "description": "One problem `verify` found.",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "seq": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "window_end": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "window_start": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "VerifyReport": {
+        "type": "object",
+        "description": "What `verify` found (RFC 0036 §6.4).",
+        "required": [
+          "ok",
+          "records",
+          "windows_checked",
+          "windows_expired",
+          "truncation_checked",
+          "failures"
+        ],
+        "properties": {
+          "failures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VerifyFailure"
+            }
+          },
+          "head": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The newest record's digest — what `--head` compares against."
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "records": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "truncation_checked": {
+            "type": "boolean",
+            "description": "Whether `head` was compared with a digest the SIEM holds. Without it a\ntruncated tail verifies (RFC 0036 §5.3)."
+          },
+          "windows_checked": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "windows_expired": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Windows whose rows retention has removed entirely.",
+            "minimum": 0
+          }
+        }
+      },
+      "VerifyRequest": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Check only windows ending after this instant."
+          },
+          "head": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The digest of the newest `audit_seal` line the SIEM holds. Without it a\ntruncated tail verifies (RFC 0036 §5.3)."
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Check only windows starting before this instant."
+          }
+        }
       },
       "VersionPageDto": {
         "type": "object",

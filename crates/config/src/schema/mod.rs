@@ -3061,6 +3061,17 @@ impl AppConfig {
         self.validate_flag_sources()?;
         self.validate_air_gap()?;
         self.validate_raw_ceilings()?;
+        if let Some(ip) = &self.ip_blocking {
+            if ip.violation_window_secs > network::MAX_VIOLATION_WINDOW_SECS {
+                bail!(
+                    "[ip_blocking].violation_window_secs = {} exceeds {} (30 days): violation \
+                     counters are pruned after 30 days, so a longer window would never reach \
+                     its threshold",
+                    ip.violation_window_secs,
+                    network::MAX_VIOLATION_WINDOW_SECS
+                );
+            }
+        }
         for name in &self.worker.registries {
             if !self.registries.iter().any(|r| &r.name == name) {
                 bail!("[worker] registries names '{name}', which is not a configured registry");

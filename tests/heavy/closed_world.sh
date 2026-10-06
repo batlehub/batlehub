@@ -116,6 +116,10 @@ SDKMAN_CLI_VERSION="${HEAVY_CW_SDKMAN_CLI:-5.23.0}"
 # developer that day. `HEAVY_CW_SDKMAN_JAVA` overrides.
 OVSX_VERSION="${HEAVY_CW_OVSX:-1.1.1}"
 OVSX_EXT="${HEAVY_CW_OVSX_EXT:-redhat.vscode-yaml}"
+THEIA_OVSX_VERSION="${HEAVY_CW_THEIA_OVSX:-1.76.0}"
+# Its newest version needs VS Code ^1.90 and its older ones ^1.68: an editor at
+# 1.80 has to page past the newest to find one it can run.
+THEIA_FALLBACK_EXT="${HEAVY_CW_THEIA_FALLBACK_EXT:-dbaeumer.vscode-eslint}"
 VSCODE_VERSION="${HEAVY_CW_VSCODE:-1.136.2}"
 VSCODE_EXT="${HEAVY_CW_VSCODE_EXT:-redhat.vscode-yaml}"
 IDEA_VERSION="${HEAVY_CW_IDEA:-2026.1.3}"
@@ -1358,6 +1362,79 @@ JS
   cw_step "$out" "$dir" "${DENY[@]}" node identity.js package.json \
     || { cat "$out" >&2; heavy_fail "ovsx: the downloaded VSIX could not be opened"; }
   cw_ran ovsx "$out" "$OVSX_EXT"
+
+  # Theia's client — and so Eclipse Che's — does not search and does not read
+  # `api/{ns}/{ext}`: it resolves an extension through `api/v2/-/query`, paged
+  # five at a time, and picks the newest version whose `engines.vscode` the
+  # editor satisfies. `OVSXApiFilterImpl` is that exact code path, not a
+  # re-implementation of it, so a field it reads and this server omits fails
+  # here and not in a user's IDE. Its request service honours the proxy
+  # variables, so `DENY` closes the world for it as it does for npm.
+  #
+  # Its own directory: installed beside `ovsx`, npm re-resolves ovsx's tree too
+  # and reaches a Playwright postinstall that downloads Chrome. `--ignore-scripts`
+  # because the client has none and a closed world should run nobody's.
+  local tdir="$dir/theia"
+  mkdir -p "$tdir"
+  cp "$dir/.npmrc" "$tdir/.npmrc"
+  heavy_log "@theia/ovsx-client@$THEIA_OVSX_VERSION resolves $OVSX_EXT through api/v2/-/query"
+  cw_step "$out" "$tdir" "${DENY[@]}" npm_config_cache="$HEAVY_WORK/ovsx-npm-cache" \
+    npm install --no-audit --no-fund --no-save --ignore-scripts "@theia/ovsx-client@$THEIA_OVSX_VERSION" \
+    || { cat "$out" >&2; heavy_fail "ovsx: @theia/ovsx-client could not be installed from the proxied npm registry"; }
+  cat >"$tdir/theia.js" <<'JS'
+const { OVSXHttpClient, OVSXApiFilterImpl } = require("@theia/ovsx-client");
+const { NodeRequestService } = require("@theia/request/lib/node-request-service");
+const [base, extensionId] = process.argv.slice(2);
+(async () => {
+  const client = new OVSXHttpClient(base, new NodeRequestService());
+  // The engine a current Theia advertises; an older match is still a pass,
+  // and reaching it is what exercises the paging.
+  const filter = new OVSXApiFilterImpl(client, "1.104.0");
+  const ext = await filter.findLatestCompatibleExtension({
+    extensionId, includeAllVersions: true, targetPlatform: "linux-x64",
+  });
+  if (!ext) throw new Error("no compatible version of " + extensionId);
+  // Unrewritten, the IDE would fetch the VSIX from open-vsx.org.
+  if (!ext.files.download.startsWith(base)) throw new Error("files.download leaves the proxy: " + ext.files.download);
+  console.log("CLOSED-WORLD-RAN", ext.namespace + "." + ext.name + "@" + ext.version);
+})().catch(e => { console.error(e); process.exit(1); });
+JS
+  heavy_retry 3 "the Theia query" \
+    cw_step "$out" "$tdir" "${DENY[@]}" node theia.js "$HEAVY_TAP_BASE/proxy/$OVSX_REG/" "$OVSX_EXT" \
+    || { cat "$out" >&2; heavy_fail "ovsx: Theia's client could not resolve the extension through api/v2/-/query"; }
+  heavy_wire_re_after ovsx "GET /proxy/$OVSX_REG/api/v2/-/query[?][^ ]*extensionId=${OVSX_EXT}[^ ]* -> 200" \
+    "Theia's client did not query this instance's api/v2/-/query"
+  cw_ran ovsx "$out" "$OVSX_EXT@"
+
+  # The fallback is the reason the query returns every version with its own
+  # `engines`. Asked for an editor older than the newest version needs, the
+  # client must page past it to an older one — without per-version engines it
+  # takes the newest, and the IDE installs an extension it cannot activate.
+  cat >"$tdir/fallback.js" <<'JS'
+const semver = require("semver");
+const { OVSXHttpClient, OVSXApiFilterImpl } = require("@theia/ovsx-client");
+const { NodeRequestService } = require("@theia/request/lib/node-request-service");
+const [base, extensionId, editor] = process.argv.slice(2);
+(async () => {
+  const client = new OVSXHttpClient(base, new NodeRequestService());
+  const newest = (await client.query({ extensionId, size: 1 })).extensions[0];
+  if (!newest) throw new Error("no " + extensionId);
+  if (semver.satisfies(editor, newest.engines?.vscode ?? "*"))
+    throw new Error(`the newest version (${newest.version}, ${newest.engines?.vscode}) already runs on ${editor}: nothing to fall back from`);
+  const ext = await new OVSXApiFilterImpl(client, editor).findLatestCompatibleExtension({
+    extensionId, includeAllVersions: true, targetPlatform: "linux-x64",
+  });
+  if (!ext) throw new Error("no version of " + extensionId + " runs on " + editor);
+  if (ext.version === newest.version || !semver.satisfies(editor, ext.engines?.vscode ?? ""))
+    throw new Error(`picked ${ext.version} (${ext.engines?.vscode}) for an editor at ${editor}`);
+  console.log("CLOSED-WORLD-RAN fallback", ext.namespace + "." + ext.name, newest.version, "->", ext.version);
+})().catch(e => { console.error(e); process.exit(1); });
+JS
+  heavy_log "the same client, as an editor at 1.80.0, falls back past $THEIA_FALLBACK_EXT's newest version"
+  heavy_retry 3 "the Theia fallback" \
+    cw_step "$out" "$tdir" "${DENY[@]}" node fallback.js "$HEAVY_TAP_BASE/proxy/$OVSX_REG/" "$THEIA_FALLBACK_EXT" 1.80.0 \
+    || { cat "$out" >&2; heavy_fail "ovsx: Theia's client could not fall back to a version its editor can run — the query is not carrying per-version engines"; }
+  cw_ran ovsx "$out" "fallback $THEIA_FALLBACK_EXT"
   heavy_log "CLOSED-WORLD-OVSX-OK ($OVSX_EXT fetched and opened, client and extension both from the instance)"
 }
 # ── §14. VS Code ─────────────────────────────────────────────────────────────

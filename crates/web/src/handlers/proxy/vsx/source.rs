@@ -349,6 +349,52 @@ fn entry_from_metadata(
         .map(|t| t.to_rfc3339())
         .unwrap_or_default();
 
+    // The newest version keeps what the extension document said about it; the
+    // rest come from the upstream's version references, each with its own
+    // `engines.vscode` so an editor too old for the newest can fall back.
+    let signature = |signed: bool, public_key: bool| {
+        // RFC 0020 §5.1's relay branch: the upstream signed it, this registry
+        // advertises the archive at its own route and fetches it on request.
+        // Never re-signed.
+        signed.then_some(super::render::SignatureSource::Upstream { public_key })
+    };
+    let newest = super::render::GalleryVersion {
+        version,
+        last_updated,
+        engine: s("engine"),
+        extension_pack: Vec::new(),
+        extension_dependencies: Vec::new(),
+        pre_release: extra
+            .get("pre_release")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        signature: signature(meta.is_signed == Some(true), s("public_key_url").is_some()),
+    };
+    let mut versions = vec![newest];
+    for r in extra
+        .get("vsx_versions")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+    {
+        let Some(v) = r.get("version").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if versions.iter().any(|x| x.version == v) {
+            continue;
+        }
+        let flag = |k: &str| r.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+        versions.push(super::render::GalleryVersion {
+            version: v.to_owned(),
+            last_updated: String::new(),
+            engine: r.get("engine").and_then(|v| v.as_str()).map(str::to_owned),
+            extension_pack: Vec::new(),
+            extension_dependencies: Vec::new(),
+            pre_release: false,
+            signature: signature(flag("signed"), flag("public_key")),
+        });
+    }
+
     Some(GalleryEntry {
         publisher: publisher.to_owned(),
         extension_name: name.to_owned(),
@@ -361,22 +407,7 @@ fn entry_from_metadata(
             .get("download_count")
             .and_then(|v| v.as_u64())
             .unwrap_or(0),
-        versions: vec![super::render::GalleryVersion {
-            version,
-            last_updated,
-            engine: None,
-            extension_pack: Vec::new(),
-            extension_dependencies: Vec::new(),
-            pre_release: false,
-            // RFC 0020 §5.1's relay branch: the upstream signed it, this
-            // registry advertises the archive at its own route and fetches
-            // it on request. Never re-signed.
-            signature: (meta.is_signed == Some(true)).then(|| {
-                super::render::SignatureSource::Upstream {
-                    public_key: s("public_key_url").is_some(),
-                }
-            }),
-        }],
+        versions,
         upstream: None,
     })
 }
@@ -396,6 +427,35 @@ mod tests {
             extra,
             cache_control: None,
         }
+    }
+
+    /// Every upstream version reaches the entry with its own engine, newest
+    /// first, so an editor too old for the newest one can fall back.
+    #[test]
+    fn upstream_version_references_become_versions() {
+        let e = entry_from_metadata(
+            "acme.tool",
+            &metadata(serde_json::json!({
+                "resolved_version": "2.1.0",
+                "engine": "^1.99.0",
+                "vsx_versions": [
+                    {"version": "2.1.0", "engine": "^1.99.0", "signed": false},
+                    {"version": "2.0.0", "engine": "^1.80.0", "signed": true, "public_key": true}
+                ]
+            })),
+        )
+        .expect("entry");
+
+        let got: Vec<_> = e
+            .versions
+            .iter()
+            .map(|v| (v.version.as_str(), v.engine.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            [("2.1.0", Some("^1.99.0")), ("2.0.0", Some("^1.80.0"))]
+        );
+        assert!(e.versions[1].signature.is_some());
     }
 
     #[test]

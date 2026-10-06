@@ -702,7 +702,7 @@ trigger_on_status     = [429, 401]
 |-------|---------|-------------|
 | `enabled` | `false` | Activate IP blocking |
 | `violation_threshold` | `10` | Violations in the window before auto-block |
-| `violation_window_secs` | `300` | Window duration in seconds |
+| `violation_window_secs` | `300` | Window duration in seconds, at most 2 592 000 (30 days) |
 | `ban_duration_secs` | `3600` | How long an auto-block lasts |
 | `trigger_on_status` | `[429, 401]` | HTTP status codes that count as violations |
 

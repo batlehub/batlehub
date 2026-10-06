@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: d8e32672602fa5c9
+sourceHash: 476cb692da18f5fe
 ---
 
 # Référence de configuration
@@ -2897,7 +2897,7 @@ trusted_proxies       = ["10.0.0.1"] # IP dont l'en-tête X-Forwarded-For est cr
 |---|---|---|---|
 | `enabled` | booléen | `false` | Activer ou désactiver le middleware |
 | `violation_threshold` | entier | `10` | Nombre de violations avant blocage automatique |
-| `violation_window_secs` | entier | `300` | Longueur de la fenêtre de comptage |
+| `violation_window_secs` | entier | `300` | Longueur de la fenêtre de comptage, au plus 2 592 000 (30 jours, la rétention des compteurs) |
 | `ban_duration_secs` | entier | `3600` | Durée d'un blocage automatique |
 | `trigger_on_status` | entier[] | `[429, 401]` | Les codes de statut comptés comme violations |
 | `trusted_proxies` | chaîne[] | `[]` | Les IP de proxys amont autorisées à poser `X-Forwarded-For` |

@@ -3205,6 +3205,7 @@ curl -X POST \
                 v-model.number="ipBlocking.violation_window_secs"
                 type="number"
                 min="1"
+                max="2592000"
             /></label>
           </div>
           <label

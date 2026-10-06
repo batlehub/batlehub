@@ -3419,6 +3419,11 @@ elif [[ "$TARGET" == "audit" ]]; then
   HEAVY_AUTHZ_AUDIT_CONFIG="$HEAVY_WORK/config.audit.toml"
   cp tests/heavy/config.authz.toml "$HEAVY_AUTHZ_AUDIT_CONFIG"
   printf '\n[logging]\nformat = "json"\n' >> "$HEAVY_AUTHZ_AUDIT_CONFIG"
+  # Cases 4 and 5 need a sealed trail. Five seconds, so a window closes and is
+  # sealed within the phase; a fixed test seed, so a rerun against the same
+  # database still verifies the chain an earlier run left.
+  printf '\n[audit]\nseal_interval_secs = 5\nseal_signing_key = "%s"\n' \
+    "9d61b19deffeba00aa3f3b6e3b0fe6a3f3a76b08e2c0a3f3b6e3b0fe6a3f3a76" >> "$HEAVY_AUTHZ_AUDIT_CONFIG"
   heavy_start_server "$HEAVY_AUTHZ_AUDIT_CONFIG"
 else
   heavy_start_server tests/heavy/config.authz.toml
@@ -3593,12 +3598,22 @@ only looks covered."
 #      closed registry's `403` — and leaves one `credential_rejected` line;
 #      twenty more in the same minute leave none, and the next row after the
 #      minute carries the count it held back;
+#   4. once the run's windows are sealed, `batlehub-cli admin audit verify`
+#      exits 0; one row altered with SQL makes it exit 1 naming the window
+#      that holds it, and putting the row back makes it pass again;
+#   5. a purge removes the access rows and nothing else — the purge's own row
+#      and the credential rows stay, a second purge does not remove the
+#      first's row — and, the windows being sealed, goes through `expire`
+#      records, so the trail still verifies;
+#   5b. a sealed row altered and its seal records deleted, so the sealer
+#      re-seals the window over the altered row: the chain verifies on its
+#      own — that is the attack — and fails against the head the SIEM last
+#      received (RFC 0036 §5.3);
 #   6. the recorded stream, replayed through the shipped Sigma rules, makes
-#      `credential_rejected_burst.yml` and `audit_purge.yml` fire and leaves
-#      `bulk_pull.yml` quiet.
+#      `credential_rejected_burst.yml`, `audit_purge.yml` and
+#      `audit_chain_gap.yml` fire and leaves `bulk_pull.yml` quiet.
 #
-# Cases 4 and 5 (seals, class-restricted purges) belong to RFC 0036's phases 4
-# and 5. Case 3 uses a `bh_pat_` token that was never minted rather than a
+# Case 3 uses a `bh_pat_` token that was never minted rather than a
 # revoked one: minting needs an OIDC session, which no heavy suite has, and the
 # path the middleware takes is the same — `token_revoke` itself is proven by
 # `crates/web/tests/tokens_and_pagination.rs`.
@@ -3627,6 +3642,53 @@ print(n)' "$action" "$@"
   return 0
 }
 
+# audit_sql <python> [arg]... — run a snippet against the server's database,
+# with `db` an autocommit psycopg connection and `args` the arguments. The
+# tampering cases change rows behind the server's back, which is the point:
+# nothing but the database can do that, so nothing but SQL can test for it.
+audit_sql() {
+  local code="$1"
+  shift
+  uv run --quiet --with "psycopg[binary]==3.2.10" python -c "
+import sys, psycopg
+db = psycopg.connect(sys.argv[1], autocommit=True)
+args = sys.argv[2:]
+$code" "$DATABASE_URL" "$@"
+  return 0
+}
+
+# audit_wait_sealed <rfc3339> — wait until a window ending after that instant
+# is sealed. A window is sealed one window after it closes, so 5 s windows
+# take up to ~15 s; 60 s is a stalled sealer, not a slow one.
+audit_wait_sealed() {
+  local t="$1" i
+  for i in $(seq 1 60); do
+    if audit_lines | python3 -c '
+import json, sys
+from datetime import datetime
+t = datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+ends = [datetime.fromisoformat(json.loads(l)["batlehub.audit.seal.window_end"])
+        for l in sys.stdin if "\"event.action\":\"audit_seal\"" in l]
+sys.exit(0 if any(e > t for e in ends) else 1)' "$t"; then
+      return 0
+    fi
+    sleep 1
+  done
+  heavy_fail "no window ending after $t was sealed within 60 s — the sealer is not running"
+}
+
+# audit_verify <out> [flag]... — `batlehub-cli admin audit verify` over this
+# run's windows; returns the CLI's exit code, output in <out>.
+audit_verify() {
+  local out="$1"
+  shift
+  set +e
+  "$AUDIT_CLI" --json admin audit verify --from "$AUDIT_FROM" "$@" >"$out" 2>"$out.err"
+  local rc=$?
+  set -e
+  return $rc
+}
+
 phase_audit() {
   heavy_need npm "nodejs"
   heavy_need uv "uv"
@@ -3651,6 +3713,17 @@ phase_audit() {
 
   [[ "$(audit_count download)" == 0 ]] \
     || heavy_fail "the stream carried download lines before any download — the assertions below would count them"
+
+  # Cases 4 and 5 verify only this run's windows: a database an earlier run
+  # left behind holds windows this run did not write, and one of them may
+  # still carry case 4's alteration.
+  AUDIT_FROM="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  cargo build --quiet -p batlehub-cli >"$HEAVY_WORK/cli-build.txt" 2>&1 \
+    || { cat "$HEAVY_WORK/cli-build.txt" >&2; heavy_fail "the CLI did not build"; }
+  AUDIT_CLI="$(cargo metadata --format-version 1 --no-deps \
+    | python3 -c 'import json,sys;print(json.load(sys.stdin)["target_directory"])')/debug/batlehub-cli"
+  [[ -x "$AUDIT_CLI" ]] || heavy_fail "no batlehub-cli binary at $AUDIT_CLI"
+  export BATLEHUB_SERVER="$HEAVY_BASE" BATLEHUB_TOKEN="$T_ADMIN"
 
   heavy_mark "audit-seed"
   local v
@@ -3767,14 +3840,125 @@ assert held >= 20, f"the row after the window carries {held}, not the twenty (an
     -H "Authorization: Bearer $T_ADMIN" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["items"]))')"
   [[ "$table" == 2 ]] || heavy_fail "the stream has two credential_rejected rows and the table has $table"
 
+  # ── 4. the sealed trail verifies, and an altered row breaks its window ──
+  heavy_mark "audit-verify"
+  audit_wait_sealed "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local vout="$HEAVY_WORK/audit-verify.json"
+  audit_verify "$vout" || { cat "$vout" >&2; heavy_fail "the run's own audit trail does not verify"; }
+  python3 -c '
+import json, sys
+r = json.load(open(sys.argv[1]))
+assert r["ok"] and r["windows_checked"] > 0, r
+' "$vout" || heavy_fail "verify passed without checking a single window — it proves nothing"
+
+  # The first credential_rejected row: security class, so case 5's purge
+  # leaves it, and sealed long ago (case 3 waited out a minute after it).
+  local tampered
+  tampered="$(audit_sql '
+row = db.execute("SELECT id, user_agent, created_at FROM access_events "
+                 "WHERE action = %s AND created_at >= %s ORDER BY created_at LIMIT 1",
+                 ("credential_rejected", args[0])).fetchone()
+assert row, "no credential_rejected row to alter"
+db.execute("UPDATE access_events SET user_agent = %s WHERE id = %s", ("tampered/1.0", row[0]))
+print(row[0], row[2].isoformat(), row[1] or "")' "$AUDIT_FROM")" \
+    || heavy_fail "could not alter a row for case 4"
+  local t_id t_at t_ua
+  read -r t_id t_at t_ua <<<"$tampered"
+  if audit_verify "$vout"; then
+    heavy_fail "a row was altered with SQL and verify still exits 0"
+  fi
+  python3 -c '
+import json, sys
+from datetime import datetime
+r = json.load(open(sys.argv[1]))
+at = datetime.fromisoformat(sys.argv[2])
+hit = [f for f in r["failures"] if f["window_start"]
+       and datetime.fromisoformat(f["window_start"].replace("Z", "+00:00")) <= at
+       < datetime.fromisoformat(f["window_end"].replace("Z", "+00:00"))]
+fails = r["failures"]
+assert hit, f"no failure names the window holding {at}: {fails}"
+' "$vout" "$t_at" || heavy_fail "verify failed, but not on the window holding the altered row"
+  audit_sql 'db.execute("UPDATE access_events SET user_agent = %s WHERE id = %s", (args[1] or None, args[0]))' \
+    "$t_id" "$t_ua"
+  audit_verify "$vout" || { cat "$vout" >&2; heavy_fail "the row was put back and verify still fails"; }
+
+  # ── 5. a purge removes access rows only, and keeps the chain whole ──
+  heavy_mark "audit-purge"
+  local purged
+  purged="$(curl -fsS -X DELETE \
+    "$HEAVY_BASE/api/v1/admin/audit-log?before=$(date -u -d '+1 second' +%Y-%m-%dT%H:%M:%SZ)" \
+    -H "Authorization: Bearer $T_ADMIN" | python3 -c 'import json,sys; print(json.load(sys.stdin)["deleted"])')" \
+    || heavy_fail "the audit purge request failed"
+  [[ "$purged" -ge 3 ]] || heavy_fail "the purge deleted $purged rows; the run wrote at least three downloads"
+  audit_rows() {  # action -> rows the table still lists
+    curl -fsS "$HEAVY_BASE/api/v1/admin/audit-log?action=$1&per_page=100" \
+      -H "Authorization: Bearer $T_ADMIN" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["items"]))'
+  }
+  [[ "$(audit_rows download)" == 0 ]] || heavy_fail "download rows survived a purge past them"
+  [[ "$(audit_rows credential_rejected)" == 2 ]] \
+    || heavy_fail "the purge removed credential_rejected rows — security rows are not the purge's to remove"
+  [[ "$(audit_rows audit_purge)" -ge 1 ]] || heavy_fail "the purge left no row of itself"
+  local purges
+  purges="$(audit_rows audit_purge)"
+  curl -fsS -X DELETE -o /dev/null \
+    "$HEAVY_BASE/api/v1/admin/audit-log?before=$(date -u -d '+1 second' +%Y-%m-%dT%H:%M:%SZ)" \
+    -H "Authorization: Bearer $T_ADMIN" || heavy_fail "the second purge request failed"
+  [[ "$(audit_rows audit_purge)" == $((purges + 1)) ]] \
+    || heavy_fail "a second purge removed the first purge's row — a purge could erase the record of itself"
+  [[ "$(audit_count audit_seal batlehub.audit.seal.kind=expire)" -ge 1 ]] \
+    || heavy_fail "rows were deleted from sealed windows and the chain has no expire record of it"
+  audit_verify "$vout" || { cat "$vout" >&2; heavy_fail "a purge through the API broke the chain"; }
+
+  # ── 5b. a re-sealed alteration verifies alone and fails against the SIEM ──
+  #
+  # The attack §5.3 is written against: alter a sealed row, delete the seal
+  # records from its window on, and let the sealer extend the chain again over
+  # the altered row. Every record then chains and signs — the trail is
+  # self-consistent — and only the copy of the head that left the host says
+  # otherwise. A block makes the fresh row; any security row would.
+  heavy_mark "audit-truncate"
+  curl -fsS -X POST -o /dev/null "$HEAVY_BASE/api/v1/admin/ip-blocks" \
+    -H "Authorization: Bearer $T_ADMIN" -H 'Content-Type: application/json' \
+    -d '{"ip": "192.0.2.77", "reason": "heavy: audit truncation", "duration_secs": 60}' \
+    || heavy_fail "the block that makes case 5b's row failed"
+  audit_wait_sealed "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local siem_head
+  siem_head="$(audit_lines | python3 -c '
+import json, sys
+seals = [json.loads(l) for l in sys.stdin if "\"event.action\":\"audit_seal\"" in l]
+print(max(seals, key=lambda e: e["batlehub.audit.seal.seq"])["batlehub.audit.seal.digest"])')"
+  local cut
+  cut="$(audit_sql '
+row = db.execute("SELECT id, created_at FROM access_events WHERE action = %s "
+                 "ORDER BY created_at DESC LIMIT 1", ("block_ip",)).fetchone()
+db.execute("UPDATE access_events SET user_agent = %s WHERE id = %s", ("tampered/1.0", row[0]))
+seq = db.execute("SELECT min(seq) FROM audit_seals WHERE window_end > %s", (row[1],)).fetchone()[0]
+assert seq, "the block row is in no sealed window"
+db.execute("DELETE FROM audit_seals WHERE seq >= %s", (seq,))
+print(seq)')" || heavy_fail "could not truncate the chain for case 5b"
+  # Re-sealed when the stream carries the cut position a second time.
+  local i resealed=0
+  for i in $(seq 1 60); do
+    if [[ "$(audit_count audit_seal batlehub.audit.seal.seq="$cut")" -ge 2 ]]; then
+      resealed=1
+      break
+    fi
+    sleep 1
+  done
+  [[ "$resealed" == 1 ]] || heavy_fail "the sealer did not re-seal from record $cut within 60 s"
+  audit_verify "$vout" \
+    || { cat "$vout" >&2; heavy_fail "a re-sealed chain should verify on its own — the attack is that it does"; }
+  if audit_verify "$vout" --head "$siem_head"; then
+    heavy_fail "the chain was cut and re-sealed and verify accepts the head the SIEM holds"
+  fi
+  grep -q "truncated or rewritten" "$vout" \
+    || { cat "$vout" >&2; heavy_fail "verify failed against the SIEM's head, but not for the truncation"; }
+
   # ── 6. the recorded stream through the shipped rules ──
   heavy_mark "audit-replay"
-  curl -fsS -X DELETE -o /dev/null \
-    "$HEAVY_BASE/api/v1/admin/audit-log?before=$(date -u -d '-1 day' +%Y-%m-%dT%H:%M:%SZ)" \
-    -H "Authorization: Bearer $T_ADMIN" || heavy_fail "the audit purge request failed"
-  [[ "$(audit_count audit_purge)" == 1 ]] || heavy_fail "the purge left no audit_purge line in the stream"
+  [[ "$(audit_count audit_purge)" == 2 ]] || heavy_fail "the two purges left $(audit_count audit_purge) audit_purge lines in the stream"
   audit_lines > "$HEAVY_WORK/audit-stream.jsonl"
-  printf '%s\n' '{"audit_purge.yml": true, "credential_rejected_burst.yml": true, "bulk_pull.yml": false}' \
+  printf '%s\n' '{"audit_purge.yml": true, "credential_rejected_burst.yml": true, "audit_chain_gap.yml": true, "bulk_pull.yml": false}' \
     > "$HEAVY_WORK/audit-expect.json"
   uv run --quiet --with pyyaml==6.0.2 python deploy/siem/replay.py \
     --stream "$HEAVY_WORK/audit-stream.jsonl" --expect "$HEAVY_WORK/audit-expect.json" \
