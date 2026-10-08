@@ -18,8 +18,8 @@ importers:
         version: 4.12.0
     devDependencies:
       axe-core:
-        specifier: 4.13.0
-        version: 4.13.0
+        specifier: 4.14.0
+        version: 4.14.0
       jsdom:
         specifier: ^30.0.1
         version: 30.0.1
@@ -813,8 +813,8 @@ packages:
     resolution: {integrity: sha512-4Dj6M28JB+oAH8kFkTLUo+a2jwOFkuqb3yucU0CANcRRUbxS0cP0nZYCGjcc3BNXwRIsUVmDGgzawme7zvJHvg==}
     engines: {node: '>=12'}
 
-  axe-core@4.13.0:
-    resolution: {integrity: sha512-UzGt8zg7Ny8djbYMhxl2zuEevVa7r2gJjYY5Lwr1xM7+XU2nd6CkIWFTVcCIbAP63vSz71NaVyyuSk9lHKcy0A==}
+  axe-core@4.14.0:
+    resolution: {integrity: sha512-9WTZxEjsZ7b13TH8JPmbV2z8CHbl80/2hm3XPEG4JgNdQLK81IBRXmSxHfMAOkSqQeRxT/0dwNDz2GOm3zzpcQ==}
     engines: {node: '>=4'}
 
   bidi-js@1.1.0:
@@ -2274,7 +2274,7 @@ snapshots:
 
   ansi-styles@6.2.3: {}
 
-  axe-core@4.13.0: {}
+  axe-core@4.14.0: {}
 
   bidi-js@1.1.0:
     dependencies:
