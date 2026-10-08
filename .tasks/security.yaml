@@ -144,7 +144,7 @@ tasks:
       - uvx --from sigma-cli==3.1.0 sigma check --fail-on-issues --exclude escaped_wildcard deploy/siem/sigma
       # Every field a rule reads is one `audit_stream.rs` emits, and each rule
       # fires — or stays quiet — on the recorded stream as `expected.json` says.
-      - uv run --quiet --with pyyaml==6.0.2 python deploy/siem/replay.py
+      - uv run --quiet --with pyyaml==6.0.3 python deploy/siem/replay.py
 
   security:
     desc: "Run the full local security gate — Rust advisories + bans, frontend audits, dependency supply chain, and Rust SBOM. Trivy/gitleaks/semgrep run in CI (see .github/workflows)"

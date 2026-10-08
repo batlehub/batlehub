@@ -973,6 +973,17 @@ because an anonymous publish creates an owner-less package and \`can_publish\` a
   authz_denied flags:read "$WHO_DENIED, who is role:user" \
     GET "$T_DENIED" "/api/v1/admin/flags"
 
+  # `gdpr:erase` (RFC 0036 §6.3): instance-wide like `audit:purge`, since a
+  # subject's audit rows span every registry. The subject has never existed,
+  # so the allowed arm erases nothing. It answers 200, or 501 when no
+  # `[audit] erasure_key` is set, and either one is a non-refusal.
+  authz_denied gdpr:erase "$WHO_DENIED erases a data subject" \
+    POST "$T_DENIED" "/api/v1/admin/gdpr/erase" \
+    -H "$HDR_JSON" --data "{\"user_id\":\"authz-nobody-$HEAVY_RUN\"}"
+  authz_allowed gdpr:erase "the administrator erases a data subject" \
+    POST "$T_ADMIN" "/api/v1/admin/gdpr/erase" \
+    -H "$HDR_JSON" --data "{\"user_id\":\"authz-nobody-$HEAVY_RUN\"}"
+
   # ── 14. The ecosystem verbs ────────────────────────────────────────────────
   #
   # All three shipped **unreachable**: no §10 rule produces a verb no legacy

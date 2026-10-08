@@ -182,7 +182,7 @@ jobs:
       - name: Install sigma-cli
         run: |
           python3 -m venv "$RUNNER_TEMP/siem"
-          "$RUNNER_TEMP/siem/bin/pip" install --quiet sigma-cli==3.1.0 pyyaml==6.0.2
+          "$RUNNER_TEMP/siem/bin/pip" install --quiet sigma-cli==3.1.0 pyyaml==6.0.3
       - name: sigma check
         run: >-
           "$RUNNER_TEMP/siem/bin/sigma" check --fail-on-issues
