@@ -11,7 +11,7 @@
     "docs:preview": "vitepress preview"
   },
   "devDependencies": {
-    "axe-core": "4.13.0",
+    "axe-core": "4.14.0",
     "jsdom": "^30.0.1",
     "mermaid": "^11.17.2",
     "puppeteer-core": "25.11.0",
