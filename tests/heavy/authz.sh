@@ -2777,8 +2777,13 @@ phase_maven() {
   # fails outright (the plugins are ungranted to nobody), and the denied arm
   # would be refused for carrying no identity rather than for holding no verb,
   # which is the failure mode `authz-heavy-client-credentials` exists to catch.
-  # Resolver 1.9's spelling, which is Maven 3.9's resolver.
-  local mvn=("${HEAVY_RUNNER[@]}" mvn -Daether.connector.http.preemptiveAuth=true)
+  # Both spellings: `aether.connector.http.*` is Resolver 1.9 (Maven 3.9), and
+  # Resolver 2 (Maven 3.10+) renamed it `aether.transport.http.*` and silently
+  # ignores the old key. `heavy_runner_for` prefers a `mvn` already on PATH,
+  # and the GitHub image started shipping 3.10.0 on some runners in 2026-10.
+  # With only the old key, every arm went anonymous and the reader got a 403.
+  local mvn=("${HEAVY_RUNNER[@]}" mvn -Daether.connector.http.preemptiveAuth=true
+    -Daether.transport.http.preemptiveAuth=true)
   local work="$HEAVY_WORK/mvn"
   mkdir -p "$work"
 
