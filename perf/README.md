@@ -9,7 +9,7 @@ This directory contains everything needed to measure throughput, latency, and re
 3. [Quick start — filesystem + memory (default)](#quick-start-—-filesystem-memory-default)
 4. [Quick start — S3 + Redis](#quick-start-—-s3-redis)
 5. [Comparing backends head-to-head](#comparing-backends-head-to-head)
-6. [Scenarios](#scenarios) — including [10 — soak / leak detection](#_10-—-soak-leak-detection-perf-soak), [11 — startup and shutdown](#_11-—-startup-and-shutdown-perf-lifecycle) and [14 — breaking point, per backend](#_14-—-breaking-point-per-backend-perf-break)
+6. [Scenarios](#scenarios) — including [10 — soak / leak detection](#_10-—-soak-leak-detection-perf-soak), [11 — startup and shutdown](#_11-—-startup-and-shutdown-perf-lifecycle), [14 — breaking point, per backend](#_14-—-breaking-point-per-backend-perf-break) and [15 — CPU profile per request path](#_15-—-cpu-profile-per-request-path-perf-profile)
 7. [Tuning the mock upstream](#tuning-the-mock-upstream)
 8. [The results table, and the report a release carries](#the-results-table)
 9. [Reading the results](#reading-the-results)
@@ -337,6 +337,57 @@ The full rationale — why both windows are idle, why the baseline comes after a
 warm-up, and what each of the six signals means — is in
 [`docs/contributing/testing.md` § 7-quater](../docs/contributing/testing.md),
 and the thresholds are environment variables listed there.
+
+---
+
+### 15 — CPU profile per request path (`perf:profile`)
+
+**Goal:** say *which code* a request costs, per path — what the soak's
+"worst consumer" table cannot, because it stops at the registry.
+
+Every soak arm (`k6/soak_arms.js`) runs **alone** for a window at a constant
+rate, while a release build with the `profiling` feature samples its own CPU
+(`server/src/profiling.rs`, pprof-rs on `SIGPROF`). One arm per window is what
+attributes the CPU to a path: under tokio a task changes thread, so tagging a
+sample with "the current route" is wrong as soon as it does.
+
+```bash
+task perf:profile                                # every arm, 15 s each at 50 req/s
+task perf:profile ARMS='^npm' SECONDS=30          # some arms, longer windows
+```
+
+The report (`perf/results/profile/profile.md`) gives, per arm, the CPU per
+request and the **nearest BatleHub function** on each sampled stack — the part
+of our code that burned the CPU or handed it to a dependency — then the
+hottest of those across every path. Beside it: a flamegraph per arm
+(`arms/<op>.svg`, when `inferno-flamegraph` is installed), the folded stacks
+(`arms/<op>.folded`, which [speedscope](https://www.speedscope.app) opens as
+they are), and `profile.json`, which `PROFILE_BASELINE=<file>` compares the
+next run against.
+
+**Which paths.** The server counts every request by the route the router
+matched (`/debug/routes`), so what each arm covers is measured, not inferred
+from its URL. `perf/profile_routes.txt` names every API operation as
+`profiled` or `skip: <reason>`, and two gates hold it honest:
+`crates/web/tests/profile_route_coverage.rs` (every PR: no operation
+unnamed, none stale) and the report itself (a `profiled` route no arm reached,
+or a reached route marked `skip`, fails the run). To profile a new route, add
+an arm that reaches it and flip its line to `profiled`.
+
+**The wall time, too.** A CPU profile cannot see waiting, so the report has a
+second table: per request, the wall time split into CPU, *blocked in a poll*
+(a future holding its thread without computing — a `std` lock, synchronous
+I/O), SQL (sqlx's elapsed per statement), upstream, and other awaits (tokio
+locks, channels, `spawn_blocking`). It comes from `/debug/wait`, a `tracing`
+layer on the request span (`WaitLayer` in `profiling.rs`). A path that is slow
+without being CPU-heavy shows up there, and only there.
+
+The sampler unwinds with `framehop` (pprof-rs's `framehop-unwinder`), which is
+safe inside the signal handler, so time in libc and the allocator is counted
+rather than dropped. In CI: the `profile` label on a pull request, or a
+dispatch of `.github/workflows/profile.yaml`; a weekly run on `main` is the
+baseline. Report-only — no CPU delta fails it until runner noise has been
+measured.
 
 ---
 

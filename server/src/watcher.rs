@@ -834,12 +834,15 @@ pub(super) fn init_tracing(
     let text_layer = (!json).then(|| tracing_subscriber::fmt::layer().with_filter(env_filter()));
     let json_layer = json.then(|| json_layer(std::io::stdout).with_filter(env_filter()));
 
-    tracing_subscriber::registry()
+    let registry = tracing_subscriber::registry()
         .with(text_layer)
         .with(json_layer)
         .with(otel_layer.with_filter(env_filter()))
-        .with(crate::db_metrics::DbStatementLayer.with_filter(crate::db_metrics::filter()))
-        .init();
+        .with(crate::db_metrics::DbStatementLayer.with_filter(crate::db_metrics::filter()));
+    #[cfg(feature = "profiling")]
+    let registry =
+        registry.with(crate::profiling::WaitLayer.with_filter(crate::profiling::wait_filter()));
+    registry.init();
 
     provider
 }

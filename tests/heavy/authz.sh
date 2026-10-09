@@ -3714,16 +3714,18 @@ phase_audit() {
   local base="$HEAVY_TAP_BASE/proxy/$NPM/"
   local host_key="//127.0.0.1:$HEAVY_TAP_PORT/proxy/$NPM/"
   audit_npmrc() {  # token, suffix -> echoes the file path
-    local file="$HEAVY_WORK/npmrc-audit-$2"
-    printf 'registry=%s\n%s:_authToken=%s\n' "$base" "$host_key" "$1" > "$file"
+    local token="$1" suffix="$2"
+    local file="$HEAVY_WORK/npmrc-audit-$suffix"
+    printf 'registry=%s\n%s:_authToken=%s\n' "$base" "$host_key" "$token" > "$file"
     echo "$file"
     return 0
   }
   audit_pkg() {  # dir, version
-    mkdir -p "$1"
+    local dir="$1" version="$2"
+    mkdir -p "$dir"
     printf '{ "name": "%s", "version": "%s", "license": "MIT", "main": "index.js" }\n' \
-      "$PKG" "$2" > "$1/package.json"
-    echo "module.exports = 1;" > "$1/index.js"
+      "$PKG" "$version" > "$dir/package.json"
+    echo "module.exports = 1;" > "$dir/index.js"
     return 0
   }
 
@@ -3907,8 +3909,10 @@ assert hit, f"no failure names the window holding {at}: {fails}"
     || heavy_fail "the audit purge request failed"
   [[ "$purged" -ge 3 ]] || heavy_fail "the purge deleted $purged rows; the run wrote at least three downloads"
   audit_rows() {  # action -> rows the table still lists
-    curl -fsS "$HEAVY_BASE/api/v1/admin/audit-log?action=$1&per_page=100" \
+    local action="$1"
+    curl -fsS "$HEAVY_BASE/api/v1/admin/audit-log?action=$action&per_page=100" \
       -H "Authorization: Bearer $T_ADMIN" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["items"]))'
+    return $?
   }
   [[ "$(audit_rows download)" == 0 ]] || heavy_fail "download rows survived a purge past them"
   [[ "$(audit_rows credential_rejected)" == 2 ]] \
@@ -3976,8 +3980,9 @@ print(seq)')" || heavy_fail "could not truncate the chain for case 5b"
   audit_lines > "$HEAVY_WORK/audit-stream.jsonl"
   printf '%s\n' '{"audit_purge.yml": true, "credential_rejected_burst.yml": true, "audit_chain_gap.yml": true, "bulk_pull.yml": false}' \
     > "$HEAVY_WORK/audit-expect.json"
-  uv run --quiet --with pyyaml==6.0.2 python deploy/siem/replay.py \
-    --stream "$HEAVY_WORK/audit-stream.jsonl" --expect "$HEAVY_WORK/audit-expect.json" \
+  # From inside the work dir: replay.py refuses a path outside its cwd.
+  (cd "$HEAVY_WORK" && uv run --quiet --with pyyaml==6.0.3 python "$HEAVY_ROOT/deploy/siem/replay.py" \
+    --stream audit-stream.jsonl --expect audit-expect.json) \
     || heavy_fail "the shipped rules do not fire on the stream this run recorded"
 
   heavy_log "AUDIT-STREAM-OK ($(audit_lines | wc -l) audit lines)"

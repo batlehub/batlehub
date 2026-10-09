@@ -166,6 +166,17 @@ skip = [
     # `default-features = false` for the rustls advisories.
     { name = "hmac", version = "0.12" },
     { name = "const-oid", version = "0.9" },
+    # pprof 0.15.0 (latest), behind batlehub-server's opt-in `profiling` feature
+    # and never in a published image: its `nix ^0.26` holds bitflags 1, and its
+    # `backtrace` (0.3.76, latest) holds `miniz_oxide ^0.8`. Its
+    # `framehop-unwinder` (the signal-safe unwinder) pins `framehop ^0.13`, which
+    # holds gimli 0.31, and pprof itself pins `object ^0.29` and `memmap2 ^0.5`
+    # for it; framehop 0.16 exists, but pprof does not take it.
+    { name = "bitflags", version = "1" },
+    { name = "miniz_oxide", version = "0.8" },
+    { name = "gimli", version = "0.31" },
+    { name = "object", version = "0.29" },
+    { name = "memmap2", version = "0.5" },
 ]
 # Wildcards left as "allow": the workspace crates depend on each other via
 # versionless `{ path = … }`, which cargo-deny counts as wildcards for public

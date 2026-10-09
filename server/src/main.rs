@@ -4,6 +4,8 @@ mod db_metrics;
 mod explain;
 mod grants;
 mod hot_config;
+#[cfg(feature = "profiling")]
+mod profiling;
 mod server_factory;
 mod setup;
 mod stores;
@@ -53,6 +55,7 @@ fn compiled_features() -> String {
         ("cache-redis", cfg!(feature = "cache-redis")),
         ("sbom", cfg!(feature = "sbom")),
         ("jemalloc", cfg!(feature = "jemalloc")),
+        ("profiling", cfg!(feature = "profiling")),
     ]
     .iter()
     .filter_map(|(name, on)| on.then_some(*name))

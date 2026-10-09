@@ -1,0 +1,384 @@
+# Every API operation, and whether perf/scripts/profile.sh profiles it.
+#
+# One line per operation: `METHOD /path<TAB>profiled` or `METHOD /path<TAB>skip: <reason>`.
+# The path is the OpenAPI spelling (constraints dropped, `}/@` as `}@`).
+#
+# `profiled` means a soak arm (perf/k6/soak_arms.js) reaches the route — measured
+# by the router during the profile run, not inferred from a URL. Two gates hold it:
+#   crates/web/tests/profile_route_coverage.rs  every PR: each operation named once, none stale
+#   perf/scripts/profile_report.py              a profile run: `profiled` ⇔ actually reached
+#
+# To profile a route: add an arm that reaches it, then flip its line to `profiled`.
+
+GET /.well-known/terraform.json	skip: no arm yet
+GET /_air-gap/unmirrored/{tail}	skip: no arm yet
+POST /api/v1/admin/access-check	skip: no arm yet
+DELETE /api/v1/admin/air-gap/missing	skip: no arm yet
+GET /api/v1/admin/air-gap/missing	skip: no arm yet
+DELETE /api/v1/admin/audit-log	skip: no arm yet
+GET /api/v1/admin/audit-log	skip: no arm yet
+GET /api/v1/admin/audit-log/export	skip: no arm yet
+POST /api/v1/admin/audit/verify	skip: no arm yet
+GET /api/v1/admin/authz/explain	skip: no arm yet
+GET /api/v1/admin/authz/shadow	skip: no arm yet
+DELETE /api/v1/admin/banner	skip: no arm yet
+PUT /api/v1/admin/banner	skip: no arm yet
+GET /api/v1/admin/bundle	skip: no arm yet
+POST /api/v1/admin/bundle/import	skip: no arm yet
+GET /api/v1/admin/config/changes	skip: no arm yet
+GET /api/v1/admin/config/content	skip: no arm yet
+POST /api/v1/admin/config/from-content	skip: no arm yet
+DELETE /api/v1/admin/config/pending	skip: no arm yet
+GET /api/v1/admin/config/pending	skip: no arm yet
+POST /api/v1/admin/config/pending/apply	skip: no arm yet
+POST /api/v1/admin/config/reload	skip: no arm yet
+POST /api/v1/admin/config/validate	skip: no arm yet
+GET /api/v1/admin/config/warnings	skip: no arm yet
+POST /api/v1/admin/explore/invalidate	skip: no arm yet
+GET /api/v1/admin/exposure	skip: no arm yet
+GET /api/v1/admin/exposure/export	skip: no arm yet
+GET /api/v1/admin/flags	skip: no arm yet
+POST /api/v1/admin/gdpr/erase	skip: no arm yet
+GET /api/v1/admin/gdpr/export	skip: no arm yet
+GET /api/v1/admin/health	skip: no arm yet
+GET /api/v1/admin/imports	skip: no arm yet
+GET /api/v1/admin/ip-blocks	skip: no arm yet
+POST /api/v1/admin/ip-blocks	skip: no arm yet
+DELETE /api/v1/admin/ip-blocks/{ip}	skip: no arm yet
+GET /api/v1/admin/notifications/channels	skip: no arm yet
+GET /api/v1/admin/notifications/inbound	skip: no arm yet
+GET /api/v1/admin/notifications/subscriptions	skip: no arm yet
+POST /api/v1/admin/notifications/subscriptions	skip: no arm yet
+DELETE /api/v1/admin/notifications/subscriptions/{id}	skip: no arm yet
+GET /api/v1/admin/notifications/subscriptions/{id}	skip: no arm yet
+PUT /api/v1/admin/notifications/subscriptions/{id}	skip: no arm yet
+POST /api/v1/admin/notifications/subscriptions/{id}/test	skip: no arm yet
+GET /api/v1/admin/packages	skip: no arm yet
+POST /api/v1/admin/packages/block	skip: no arm yet
+POST /api/v1/admin/packages/bulk-block	skip: no arm yet
+POST /api/v1/admin/packages/bulk-delete	skip: no arm yet
+POST /api/v1/admin/packages/bulk-unblock	skip: no arm yet
+POST /api/v1/admin/packages/delete	skip: no arm yet
+GET /api/v1/admin/packages/detail	skip: no arm yet
+POST /api/v1/admin/packages/invalidate	skip: no arm yet
+POST /api/v1/admin/packages/unblock	skip: no arm yet
+GET /api/v1/admin/quota	skip: no arm yet
+GET /api/v1/admin/quota/{registry}	skip: no arm yet
+DELETE /api/v1/admin/quota/{registry}/{user_id}	skip: no arm yet
+GET /api/v1/admin/quota/{registry}/{user_id}	skip: no arm yet
+GET /api/v1/admin/registries/{registry}/beta-channel	skip: no arm yet
+POST /api/v1/admin/registries/{registry}/beta-channel	skip: no arm yet
+DELETE /api/v1/admin/registries/{registry}/beta-channel/{principal_type}/{principal_id}	skip: no arm yet
+POST /api/v1/admin/registries/{registry}/bulk-delete	skip: no arm yet
+POST /api/v1/admin/registries/{registry}/bulk-unyank	skip: no arm yet
+POST /api/v1/admin/registries/{registry}/bulk-yank	skip: no arm yet
+DELETE /api/v1/admin/registries/{registry}/cache	skip: no arm yet
+POST /api/v1/admin/registries/{registry}/clear-cache	skip: no arm yet
+POST /api/v1/admin/registries/{registry}/coherence	skip: no arm yet
+POST /api/v1/admin/registries/{registry}/deprecate	skip: no arm yet
+POST /api/v1/admin/registries/{registry}/evict	skip: no arm yet
+GET /api/v1/admin/registries/{registry}/exemptions	skip: no arm yet
+DELETE /api/v1/admin/registries/{registry}/grants	skip: no arm yet
+GET /api/v1/admin/registries/{registry}/grants	skip: no arm yet
+PUT /api/v1/admin/registries/{registry}/grants	skip: no arm yet
+POST /api/v1/admin/registries/{registry}/import	skip: no arm yet
+GET /api/v1/admin/registries/{registry}/imports	skip: no arm yet
+GET /api/v1/admin/registries/{registry}/namespaces	skip: no arm yet
+POST /api/v1/admin/registries/{registry}/namespaces	skip: no arm yet
+DELETE /api/v1/admin/registries/{registry}/namespaces/{prefix}	skip: no arm yet
+GET /api/v1/admin/registries/{registry}/packages/{name}/owners	skip: no arm yet
+POST /api/v1/admin/registries/{registry}/packages/{name}/owners	skip: no arm yet
+DELETE /api/v1/admin/registries/{registry}/packages/{name}/owners/{principal_type}/{principal_id}	skip: no arm yet
+GET /api/v1/admin/registries/{registry}/packages/{name}/visibility	skip: no arm yet
+PUT /api/v1/admin/registries/{registry}/packages/{name}/visibility	skip: no arm yet
+PUT /api/v1/admin/registries/{registry}/plugins/{plugin}/{version}/channel	skip: no arm yet
+DELETE /api/v1/admin/registries/{registry}/policy/package/{package}	skip: no arm yet
+GET /api/v1/admin/registries/{registry}/policy/package/{package}	skip: no arm yet
+PUT /api/v1/admin/registries/{registry}/policy/package/{package}	skip: no arm yet
+DELETE /api/v1/admin/registries/{registry}/policy/version/{package}/{version}	skip: no arm yet
+GET /api/v1/admin/registries/{registry}/policy/version/{package}/{version}	skip: no arm yet
+PUT /api/v1/admin/registries/{registry}/policy/version/{package}/{version}	skip: no arm yet
+DELETE /api/v1/admin/registries/{registry}/policy/version/{package}/{version}/rules/{gate}	skip: no arm yet
+PUT /api/v1/admin/registries/{registry}/policy/version/{package}/{version}/rules/{gate}	skip: no arm yet
+POST /api/v1/admin/registries/{registry}/relist	skip: no arm yet
+POST /api/v1/admin/registries/{registry}/retention	skip: no arm yet
+POST /api/v1/admin/registries/{registry}/retention-pin	skip: no arm yet
+GET /api/v1/admin/registries/{registry}/signing-keys/{namespace}	skip: no arm yet
+PUT /api/v1/admin/registries/{registry}/signing-keys/{namespace}	skip: no arm yet
+DELETE /api/v1/admin/registries/{registry}/signing-keys/{namespace}/{key_id}	skip: no arm yet
+GET /api/v1/admin/registries/{registry}/tombstones	skip: no arm yet
+POST /api/v1/admin/registries/{registry}/tombstones/compact	skip: no arm yet
+POST /api/v1/admin/registries/{registry}/undeprecate	skip: no arm yet
+POST /api/v1/admin/registries/{registry}/unlist	skip: no arm yet
+POST /api/v1/admin/registries/{registry}/warm	skip: no arm yet
+GET /api/v1/admin/stats	skip: no arm yet
+GET /api/v1/admin/stats/history	skip: no arm yet
+GET /api/v1/admin/subjects	skip: no arm yet
+GET /api/v1/admin/upstream/disappeared	skip: no arm yet
+POST /api/v1/admin/upstream/recheck	skip: no arm yet
+GET /api/v1/admin/upstream/status/{registry}/{name}	skip: no arm yet
+GET /api/v1/admin/users/blocked	skip: no arm yet
+DELETE /api/v1/admin/users/{user_id}/block	skip: no arm yet
+POST /api/v1/admin/users/{user_id}/block	skip: no arm yet
+GET /api/v1/admin/verdicts	skip: no arm yet
+POST /api/v1/admin/verdicts/backfill	skip: no arm yet
+POST /api/v1/admin/verdicts/rescan	skip: no arm yet
+GET /api/v1/admin/warming	skip: no arm yet
+GET /api/v1/audit/pulls	skip: no arm yet
+GET /api/v1/auth/oidc/callback	skip: no arm yet
+GET /api/v1/auth/oidc/login	skip: no arm yet
+GET /api/v1/auth/oidc/providers	skip: no arm yet
+POST /api/v1/auth/oidc/refresh	skip: no arm yet
+GET /api/v1/auth/tokens	skip: no arm yet
+POST /api/v1/auth/tokens	skip: no arm yet
+DELETE /api/v1/auth/tokens/{id}	skip: no arm yet
+GET /api/v1/banner	skip: no arm yet
+GET /api/v1/cli/download	skip: no arm yet
+GET /api/v1/explore/packages	skip: no arm yet
+GET /api/v1/explore/packages/{registry}/{name}	skip: no arm yet
+GET /api/v1/explore/packages/{registry}/{name}/readme	skip: no arm yet
+POST /api/v1/explore/packages/{registry}/{name}/{version}/fetch	skip: no arm yet
+GET /api/v1/explore/packages/{registry}/{name}/{version}/readme-image/{index}	skip: no arm yet
+GET /api/v1/explore/registries	skip: no arm yet
+GET /api/v1/explore/upstream	skip: no arm yet
+GET /api/v1/explore/{registry}/{name}/refs	skip: no arm yet
+POST /api/v1/flags/{source}	skip: no arm yet
+DELETE /api/v1/flags/{source}/{external_id}	skip: no arm yet
+GET /api/v1/me	skip: no arm yet
+GET /api/v1/me/advisories	skip: no arm yet
+GET /api/v1/me/downloads	skip: no arm yet
+GET /api/v1/me/namespaces	skip: no arm yet
+GET /api/v1/me/namespaces/{registry}/{prefix}/packages	skip: no arm yet
+GET /api/v1/me/quota	skip: no arm yet
+GET /api/v1/packages	profiled
+GET /api/v1/packages/access	skip: no arm yet
+GET /api/v1/registries	skip: no arm yet
+GET /api/v1/sbom/export	skip: no arm yet
+GET /api/v1/sbom/{registry}/{name}/{version}	profiled
+GET /api/v1/verdicts/{registry}/{name}/{version}	skip: no arm yet
+GET /api/v1/verdicts/{registry}/{name}/{version}/pullers	skip: no arm yet
+POST /api/v1/verdicts/{registry}/{name}/{version}/rescan	skip: no arm yet
+POST /api/v1/webhooks/inbound/{name}	skip: no arm yet
+POST /proxy/{registry}/-/npm/v1/audit/bulk	skip: no arm yet
+POST /proxy/{registry}/-/npm/v1/audit/quick	skip: no arm yet
+POST /proxy/{registry}/-/npm/v1/security/advisories/bulk	skip: no arm yet
+POST /proxy/{registry}/-/npm/v1/security/audits/quick	skip: no arm yet
+GET /proxy/{registry}/-/package/{package}/dist-tags	skip: no arm yet
+DELETE /proxy/{registry}/-/package/{package}/dist-tags/{tag}	skip: no arm yet
+PUT /proxy/{registry}/-/package/{package}/dist-tags/{tag}	skip: no arm yet
+GET /proxy/{registry}/-/ping	skip: no arm yet
+GET /proxy/{registry}/-/v1/search	skip: no arm yet
+GET /proxy/{registry}/-/whoami	skip: no arm yet
+GET /proxy/{registry}/.well-known/terraform.json	skip: no arm yet
+POST /proxy/{registry}/api/-/namespace/create	skip: no arm yet
+GET /proxy/{registry}/api/-/public-key/{key_id}	skip: no arm yet
+POST /proxy/{registry}/api/-/publish	skip: no arm yet
+GET /proxy/{registry}/api/-/query	skip: no arm yet
+GET /proxy/{registry}/api/-/search	skip: no arm yet
+GET /proxy/{registry}/api/packages/{path}	skip: no arm yet
+DELETE /proxy/{registry}/api/packages/{vendor}/{package}/versions/{version}	skip: no arm yet
+GET /proxy/{registry}/api/plugins/{id}	profiled
+GET /proxy/{registry}/api/plugins/{id}/updates	profiled
+GET /proxy/{registry}/api/products/intellij/plugins/{id}/comments	skip: no arm yet
+GET /proxy/{registry}/api/search/aggregation/{field}	skip: no arm yet
+GET /proxy/{registry}/api/search/plugins	skip: no arm yet
+GET /proxy/{registry}/api/search/updates/compatible	skip: no arm yet
+POST /proxy/{registry}/api/search/updates/compatible	skip: no arm yet
+GET /proxy/{registry}/api/searchPlugins	skip: no arm yet
+GET /proxy/{registry}/api/security-advisories/	skip: no arm yet
+POST /proxy/{registry}/api/updates/upload	skip: no arm yet
+POST /proxy/{registry}/api/upload	skip: no arm yet
+GET /proxy/{registry}/api/v1/crates	skip: no arm yet
+PUT /proxy/{registry}/api/v1/crates/new	skip: no arm yet
+DELETE /proxy/{registry}/api/v1/crates/{name}/owners	skip: no arm yet
+GET /proxy/{registry}/api/v1/crates/{name}/owners	skip: no arm yet
+PUT /proxy/{registry}/api/v1/crates/{name}/owners	skip: no arm yet
+PUT /proxy/{registry}/api/v1/crates/{name}/{version}/unyank	skip: no arm yet
+DELETE /proxy/{registry}/api/v1/crates/{name}/{version}/yank	skip: no arm yet
+POST /proxy/{registry}/api/v1/gems	skip: no arm yet
+PUT /proxy/{registry}/api/v1/gems/unyank	skip: no arm yet
+DELETE /proxy/{registry}/api/v1/gems/yank	skip: no arm yet
+GET /proxy/{registry}/api/v1/gems/{name}.json	skip: no arm yet
+GET /proxy/{registry}/api/v1/versions/{name}.json	skip: no arm yet
+GET /proxy/{registry}/api/v2/-/query	skip: no arm yet
+GET /proxy/{registry}/api/v4/{path}	skip: no arm yet
+GET /proxy/{registry}/api/version	skip: no arm yet
+GET /proxy/{registry}/api/{namespace}	skip: no arm yet
+GET /proxy/{registry}/api/{namespace}/{extension}	profiled
+GET /proxy/{registry}/api/{namespace}/{extension}/{version}	skip: no arm yet
+GET /proxy/{registry}/api/{namespace}/{extension}/{version}/file/{filename}	skip: no arm yet
+PUT /proxy/{registry}/apk/upload	skip: no arm yet
+GET /proxy/{registry}/apk/{path}	profiled
+GET /proxy/{registry}/attachments/{uuid}	skip: no arm yet
+GET /proxy/{registry}/channeldata.json	skip: no arm yet
+PUT /proxy/{registry}/deb/pool/{distribution}/{component}/upload	skip: no arm yet
+GET /proxy/{registry}/deb/{path}	profiled
+GET /proxy/{registry}/devfiles/{stack}	skip: no arm yet
+GET /proxy/{registry}/devfiles/{stack}/starter-projects/{name}	skip: no arm yet
+GET /proxy/{registry}/devfiles/{stack}/{version}	profiled
+GET /proxy/{registry}/devfiles/{stack}/{version}/starter-projects/{name}	skip: no arm yet
+GET /proxy/{registry}/dist/{vendor}/{package}/{version}	skip: no arm yet
+GET /proxy/{registry}/feature/getImplementations	skip: no arm yet
+GET /proxy/{registry}/files/IDE/extensions.json	skip: no arm yet
+GET /proxy/{registry}/files/brokenPlugins.json	skip: no arm yet
+GET /proxy/{registry}/files/jbPluginsXMLIds.json	skip: no arm yet
+GET /proxy/{registry}/files/pluginsXMLIds.json	skip: no arm yet
+GET /proxy/{registry}/files/{plugin}/meta.json	skip: no arm yet
+GET /proxy/{registry}/files/{plugin}/{update}/meta.json	skip: no arm yet
+GET /proxy/{registry}/files/{plugin}/{update}/{file_name}	skip: no arm yet
+GET /proxy/{registry}/galaxy/api/	skip: no arm yet
+GET /proxy/{registry}/galaxy/api/v1/roles/	skip: no arm yet
+GET /proxy/{registry}/galaxy/api/v1/roles/{id}/download/{filename}	skip: no arm yet
+GET /proxy/{registry}/galaxy/api/v1/roles/{id}/versions/	skip: no arm yet
+POST /proxy/{registry}/galaxy/api/v3/artifacts/collections/	skip: no arm yet
+GET /proxy/{registry}/galaxy/api/v3/artifacts/collections/{filename}	profiled
+GET /proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/	profiled
+GET /proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/	profiled
+GET /proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/{version}/	skip: no arm yet
+GET /proxy/{registry}/galaxy/api/v3/imports/collections/{task}/	skip: no arm yet
+GET /proxy/{registry}/gems/{filename}	skip: no arm yet
+GET /proxy/{registry}/generic/{path}	profiled
+GET /proxy/{registry}/index	skip: no arm yet
+GET /proxy/{registry}/index/all	skip: no arm yet
+GET /proxy/{registry}/index/sample	skip: no arm yet
+GET /proxy/{registry}/index/stack	skip: no arm yet
+GET /proxy/{registry}/info/{gem}	profiled
+GET /proxy/{registry}/jetbrains/{path}	profiled
+GET /proxy/{registry}/latest_specs.4.8.gz	skip: no arm yet
+POST /proxy/{registry}/legacy/	skip: no arm yet
+GET /proxy/{registry}/list.json	skip: no arm yet
+GET /proxy/{registry}/maven2/{path}	profiled
+PUT /proxy/{registry}/maven2/{path}	skip: no arm yet
+GET /proxy/{registry}/names	skip: no arm yet
+GET /proxy/{registry}/nix/log/{drv}	skip: no arm yet
+GET /proxy/{registry}/nix/nar/{file}	skip: no arm yet
+PUT /proxy/{registry}/nix/nar/{file}	skip: no arm yet
+GET /proxy/{registry}/nix/nar/{hash}/{file}	profiled
+GET /proxy/{registry}/nix/nix-cache-info	profiled
+GET /proxy/{registry}/nix/public-key	skip: no arm yet
+GET /proxy/{registry}/nix/realisations/{id}.doi	skip: no arm yet
+GET /proxy/{registry}/nix/{hash}.ls	skip: no arm yet
+GET /proxy/{registry}/nix/{hash}.narinfo	profiled
+PUT /proxy/{registry}/nix/{hash}.narinfo	skip: no arm yet
+GET /proxy/{registry}/nodedist/index.json	profiled
+GET /proxy/{registry}/nodedist/index.tab	skip: no arm yet
+GET /proxy/{registry}/nodedist/{version}/{file}	profiled
+PUT /proxy/{registry}/nuget/api/v2/package	skip: no arm yet
+PUT /proxy/{registry}/nuget/api/v2/symbolpackage	skip: no arm yet
+DELETE /proxy/{registry}/nuget/v2/package/{id}/{version}	skip: no arm yet
+GET /proxy/{registry}/nuget/v3/autocomplete	skip: no arm yet
+GET /proxy/{registry}/nuget/v3/flat/{id}/index.json	profiled
+GET /proxy/{registry}/nuget/v3/flat/{id}/{version}/{filename}	profiled
+GET /proxy/{registry}/nuget/v3/index.json	skip: no arm yet
+GET /proxy/{registry}/nuget/v3/query	skip: no arm yet
+GET /proxy/{registry}/nuget/v3/registration5/{id}/index.json	skip: no arm yet
+GET /proxy/{registry}/nuget/v3/vulnerabilities/index.json	skip: no arm yet
+GET /proxy/{registry}/nuget/v3/vulnerabilities/page/{page}	skip: no arm yet
+GET /proxy/{registry}/p2/{path}	profiled
+GET /proxy/{registry}/packages.json	profiled
+GET /proxy/{registry}/packages/{filename}	profiled
+PUT /proxy/{registry}/pacman/upload	skip: no arm yet
+GET /proxy/{registry}/pacman/{path}	profiled
+GET /proxy/{registry}/plugin/download	skip: no arm yet
+GET /proxy/{registry}/pluginManager	skip: no arm yet
+GET /proxy/{registry}/plugins/list	skip: no arm yet
+GET /proxy/{registry}/prerelease_specs.4.8.gz	skip: no arm yet
+GET /proxy/{registry}/pypi/{package}/json	skip: no arm yet
+GET /proxy/{registry}/quick/Marshal.4.8/{filename}	skip: no arm yet
+GET /proxy/{registry}/registry/config.json	skip: no arm yet
+GET /proxy/{registry}/registry/{path}	profiled
+PUT /proxy/{registry}/rpm/upload	skip: no arm yet
+GET /proxy/{registry}/rpm/{path}	profiled
+GET /proxy/{registry}/rustup/dist/{date}/{file}	profiled
+GET /proxy/{registry}/rustup/dist/{file}	skip: no arm yet
+GET /proxy/{registry}/rustup/manifests.txt	skip: no arm yet
+GET /proxy/{registry}/rustup/rustup/archive/{version}/{triple}/{file}	skip: no arm yet
+GET /proxy/{registry}/rustup/rustup/dist/{triple}/{file}	skip: no arm yet
+GET /proxy/{registry}/rustup/rustup/release-stable.toml	skip: no arm yet
+GET /proxy/{registry}/sdkman/broker/download/{candidate}/{version}/{platform}	profiled
+GET /proxy/{registry}/sdkman/broker/version/sdkman/{component}/{channel}	skip: no arm yet
+GET /proxy/{registry}/sdkman/candidates/all	skip: no arm yet
+GET /proxy/{registry}/sdkman/candidates/default/{candidate}	skip: no arm yet
+GET /proxy/{registry}/sdkman/candidates/list	skip: no arm yet
+GET /proxy/{registry}/sdkman/candidates/validate/{candidate}/{version}/{platform}	skip: no arm yet
+GET /proxy/{registry}/sdkman/candidates/{candidate}/{platform}/versions/all	profiled
+GET /proxy/{registry}/sdkman/candidates/{candidate}/{platform}/versions/list	skip: no arm yet
+GET /proxy/{registry}/sdkman/healthcheck	skip: no arm yet
+GET /proxy/{registry}/sdkman/hooks/{phase}/{candidate}/{version}/{platform}	skip: no arm yet
+GET /proxy/{registry}/sdkman/selfupdate/{channel}/{platform}	skip: no arm yet
+GET /proxy/{registry}/search.json	skip: no arm yet
+GET /proxy/{registry}/simple/	skip: no arm yet
+GET /proxy/{registry}/simple/{package}/	profiled
+GET /proxy/{registry}/specs.4.8.gz	skip: no arm yet
+GET /proxy/{registry}/sumdb/{path}	skip: no arm yet
+GET /proxy/{registry}/updatePlugins.xml	skip: no arm yet
+GET /proxy/{registry}/v1/ID/{id}.json	skip: no arm yet
+GET /proxy/{registry}/v1/index.json	skip: no arm yet
+GET /proxy/{registry}/v1/modules/{namespace}/{name}/{provider}/versions	skip: no arm yet
+DELETE /proxy/{registry}/v1/modules/{namespace}/{name}/{provider}/versions/{version}	skip: no arm yet
+POST /proxy/{registry}/v1/modules/{namespace}/{name}/{provider}/versions/{version}/unyank	skip: no arm yet
+GET /proxy/{registry}/v1/modules/{namespace}/{name}/{provider}/{version}	skip: no arm yet
+POST /proxy/{registry}/v1/modules/{namespace}/{name}/{provider}/{version}	skip: no arm yet
+GET /proxy/{registry}/v1/modules/{namespace}/{name}/{provider}/{version}/artifact	skip: no arm yet
+GET /proxy/{registry}/v1/modules/{namespace}/{name}/{provider}/{version}/download	skip: no arm yet
+GET /proxy/{registry}/v1/providers/{namespace}/{ptype}/versions	profiled
+POST /proxy/{registry}/v1/providers/{namespace}/{ptype}/versions	skip: no arm yet
+DELETE /proxy/{registry}/v1/providers/{namespace}/{ptype}/versions/{version}	skip: no arm yet
+POST /proxy/{registry}/v1/providers/{namespace}/{ptype}/versions/{version}/unyank	skip: no arm yet
+GET /proxy/{registry}/v1/providers/{namespace}/{ptype}/{version}/artifact/{os}/{arch}	skip: no arm yet
+PUT /proxy/{registry}/v1/providers/{namespace}/{ptype}/{version}/artifact/{os}/{arch}	skip: no arm yet
+GET /proxy/{registry}/v1/providers/{namespace}/{ptype}/{version}/download/{os}/{arch}	skip: no arm yet
+GET /proxy/{registry}/v1/providers/{namespace}/{ptype}/{version}/shasums	skip: no arm yet
+GET /proxy/{registry}/v1/providers/{namespace}/{ptype}/{version}/shasums.sig	skip: no arm yet
+POST /proxy/{registry}/v1/query	skip: no arm yet
+GET /proxy/{registry}/v2/	skip: no arm yet
+GET /proxy/{registry}/v2/{ns}/{stack}/blobs/{digest}	skip: no arm yet
+GET /proxy/{registry}/v2/{ns}/{stack}/manifests/{reference}	profiled
+GET /proxy/{registry}/v2/{ns}/{stack}/tags/list	skip: no arm yet
+GET /proxy/{registry}/v2index	profiled
+GET /proxy/{registry}/v2index/all	skip: no arm yet
+GET /proxy/{registry}/v2index/sample	skip: no arm yet
+GET /proxy/{registry}/v2index/stack	skip: no arm yet
+GET /proxy/{registry}/versions	profiled
+GET /proxy/{registry}/vscode/asset/{publisher}/{name}/{version}/{asset_type}	skip: no arm yet
+POST /proxy/{registry}/vscode/gallery/extensionquery	skip: no arm yet
+GET /proxy/{registry}/vscode/gallery/publishers/{publisher}/vsextensions/{name}/{version}/vspackage	profiled
+GET /proxy/{registry}/vscode/item	skip: no arm yet
+GET /proxy/{registry}/vscode/unpkg/{publisher}/{name}/{version}/{path}	skip: no arm yet
+GET /proxy/{registry}/{extension_id}/{version}/vsix	profiled
+PUT /proxy/{registry}/{extension_id}/{version}/vsix	skip: no arm yet
+PUT /proxy/{registry}/{extension_id}/{version}/vsix/signature	skip: no arm yet
+GET /proxy/{registry}/{hostname}/{namespace}/{ptype}/index.json	profiled
+GET /proxy/{registry}/{hostname}/{namespace}/{ptype}/{version}.json	skip: no arm yet
+GET /proxy/{registry}/{module}@latest	skip: no arm yet
+GET /proxy/{registry}/{module}@v/list	profiled
+GET /proxy/{registry}/{module}@v/{filename}	profiled
+PUT /proxy/{registry}/{module}@v/{filename}	skip: no arm yet
+PUT /proxy/{registry}/{name}	profiled
+GET /proxy/{registry}/{name}/{version}/download	profiled
+GET /proxy/{registry}/{owner}/{repo}/branches/{branch}	skip: no arm yet
+GET /proxy/{registry}/{owner}/{repo}/commits/{sha}	skip: no arm yet
+GET /proxy/{registry}/{owner}/{repo}/raw/{git_ref}/{path}	skip: no arm yet
+GET /proxy/{registry}/{owner}/{repo}/releases	profiled
+GET /proxy/{registry}/{owner}/{repo}/releases/assets/{asset_id}	skip: no arm yet
+GET /proxy/{registry}/{owner}/{repo}/releases/download/{tag}/{filename}	profiled
+GET /proxy/{registry}/{owner}/{repo}/releases/tags/{tag}	skip: no arm yet
+GET /proxy/{registry}/{owner}/{repo}/tags	skip: no arm yet
+GET /proxy/{registry}/{owner}/{repo}/tarball/{tag}	skip: no arm yet
+GET /proxy/{registry}/{owner}/{repo}/zipball/{tag}	skip: no arm yet
+GET /proxy/{registry}/{package}	profiled
+GET /proxy/{registry}/{package}/{version}	skip: no arm yet
+GET /proxy/{registry}/{package}/{version}/tarball	profiled
+POST /proxy/{registry}/{platform}/	skip: no arm yet
+GET /proxy/{registry}/{platform}/current_repodata.json	skip: no arm yet
+GET /proxy/{registry}/{platform}/repodata.json	profiled
+GET /proxy/{registry}/{platform}/repodata.json.bz2	skip: no arm yet
+GET /proxy/{registry}/{platform}/repodata.json.zst	skip: no arm yet
+GET /proxy/{registry}/{platform}/repodata_shards.msgpack.zst	skip: no arm yet
+GET /proxy/{registry}/{platform}/{filename}	profiled
+GET /proxy/{registry}/{platform}/{shard}.msgpack.zst	skip: no arm yet
+GET /proxy/{registry}/{project}/-/archive/{tag}/{filename}	skip: no arm yet
+GET /proxy/{registry}/{project}/-/raw/{git_ref}/{path}	skip: no arm yet
+GET /proxy/{registry}/{project}/-/releases	profiled
+GET /proxy/{registry}/{project}/-/releases/{tag}	skip: no arm yet
+GET /proxy/{registry}/{project}/-/releases/{tag}/downloads/{name}	profiled

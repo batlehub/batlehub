@@ -139,6 +139,11 @@ jobs:
       # CI fails on any warning — clippy is denied, formatting must be clean.
       - name: clippy
         run: cargo clippy --workspace -- -D warnings
+      # The `profiling` feature (server/src/profiling.rs) is off in every other
+      # build, so without this its code is only compiled when someone adds the
+      # `profile` label — and rots in between.
+      - name: clippy (profiling feature)
+        run: cargo clippy -p batlehub-server --features profiling -- -D warnings
       - name: rustfmt
         run: cargo fmt --all --check
       # Which registries hide blocked versions from their listings is generated

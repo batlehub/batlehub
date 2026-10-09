@@ -3090,3 +3090,54 @@ pub fn apk_index_text(file: &[u8]) -> String {
     }
     panic!("no APKINDEX entry in the served file");
 }
+
+// ── Route patterns, in one spelling ──────────────────────────────────────────
+
+/// Consume one `{param:regex}` body, having already read the opening brace, and
+/// return just the parameter name.
+///
+/// The scan is brace-balanced rather than a search for `}`: a constraint can
+/// contain braces of its own (`{filename:.+\.(?:tar\.bz2|conda)}` does not, but
+/// `{n:\d{1,3}}` would), and a naive split would truncate mid-pattern and
+/// silently invent a route.
+pub fn param_name(chars: &mut std::str::Chars<'_>) -> String {
+    let mut name = String::new();
+    let mut depth = 1usize;
+    let mut in_constraint = false;
+    for c in chars.by_ref() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            ':' if depth == 1 && !in_constraint => in_constraint = true,
+            _ if !in_constraint => name.push(c),
+            _ => {}
+        }
+    }
+    name
+}
+
+/// Drop `:regex` from every `{param:regex}`, then join `}/@` back to `}@`.
+///
+/// Both sides of the coverage comparison go through this: actix reports the
+/// pattern as registered, the inventory is written without the constraints, and
+/// comparing the two spellings directly would report thirteen phantom
+/// mismatches.
+pub fn canonical(pattern: &str) -> String {
+    let mut out = String::with_capacity(pattern.len());
+    let mut chars = pattern.chars();
+    while let Some(c) = chars.next() {
+        if c != '{' {
+            out.push(c);
+            continue;
+        }
+        out.push('{');
+        out.push_str(&param_name(&mut chars));
+        out.push('}');
+    }
+    out.replace("}/@", "}@")
+}

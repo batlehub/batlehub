@@ -805,37 +805,38 @@ def costs_section(costs: list[RegistryCost]) -> list[str]:
     """Which registry cost the most, ranked by handling time. Empty without metrics."""
     if not costs:
         return []
-    lines: list[str] = []
     peak = costs[0].seconds or 1.0
     total = sum(c.seconds for c in costs) or 1.0
-    lines.append(f"### Worst consumer: `{costs[0].name}`")
-    lines.append("")
-    lines.append(
+    lines: list[str] = [
+        f"### Worst consumer: `{costs[0].name}`",
+        "",
         f"{costs[0].seconds / total * 100:.0f}% of all request-handling time "
         "during the load. Ranked by seconds spent inside the handler, which "
         "counts the upstream wait, the parse and the filter alike — the "
-        "closest thing the server knows to what a registry cost it."
-    )
-    lines.append("")
-    lines.append("```")
+        "closest thing the server knows to what a registry cost it.",
+        "",
+        "```",
+    ]
     for c in costs:
         lines.append(
             f"{c.name:<18} {bar(c.seconds, peak):<25} {c.seconds:7.1f}s"
             f"  {c.requests:6.0f} req"
             + (f"  {c.ms_per_request:6.1f} ms/req" if c.ms_per_request else "")
         )
-    lines.append("```")
-    lines.append("")
-    lines.append("| registry | handling time | requests | ms/req | pulled from upstream | artifact misses | document misses | resolved from cache |")
-    lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    lines.extend([
+        "```",
+        "",
+        "| registry | handling time | requests | ms/req | pulled from upstream | artifact misses | document misses | resolved from cache |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ])
     for c in costs:
         lines.append(
             f"| `{c.name}` | {c.seconds:.1f} s | {c.requests:.0f} | "
             f"{fmt(c.ms_per_request)} | {human_bytes(c.upstream_bytes)} | "
             f"{c.artifact_misses:.0f} | {c.metadata_misses:.0f} | {c.from_document:.0f} |"
         )
-    lines.append("")
-    lines.append(
+    lines.extend([
+        "",
         "<sub>*ms/req* is where the cost is, not the traffic: a registry "
         "that is dear because it misses is a caching problem, one that is "
         "dear per request is a document problem. *resolved from cache* "
@@ -846,9 +847,9 @@ def costs_section(costs: list[RegistryCost]) -> list[str]:
         "`batlehub_request_duration_seconds`. A **local** registry's own "
         "publishes and reads go through `LocalRegistryService`, which emits "
         "neither, so a local-mode registry is absent from this table rather "
-        "than cheap.</sub>"
-    )
-    lines.append("")
+        "than cheap.</sub>",
+        "",
+    ])
     return lines
 
 

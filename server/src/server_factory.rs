@@ -365,6 +365,13 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
             .service(prometheus_metrics)
             .service(healthz)
             .service(livez);
+        #[cfg(feature = "profiling")]
+        {
+            app = app
+                .service(crate::profiling::folded)
+                .service(crate::profiling::routes)
+                .service(crate::profiling::wait);
+        }
 
         if let Some(path) = cli_binary_path_inner {
             app = app.app_data(web::Data::new(CliBinaryPath(path)));
@@ -381,7 +388,8 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
         let enabled = ip_blocking_cfg.as_ref().is_some_and(|c| c.enabled);
         let ip_block_cfg_for_mw = ip_blocking_cfg.clone().unwrap_or_default();
 
-        app.wrap(RateLimitMiddlewareFactory::new(rate_limit_svc.clone()))
+        let app = app
+            .wrap(RateLimitMiddlewareFactory::new(rate_limit_svc.clone()))
             .wrap(UserBlockMiddlewareFactory::new(Arc::clone(
                 &user_block_repo,
             )))
@@ -412,49 +420,55 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
             // rewrite. See `protocol_document_csp`.
             .wrap(actix_web::middleware::from_fn(
                 batlehub_web::protocol_document_csp,
-            ))
-            // Outermost, so the URI rewrite lands before route matching and the
-            // proxy-trust verdict before anything that reads a forwarded header.
-            // `.wrap` builds inside-out, so this must stay the last call.
-            .wrap(HostRoutingMiddlewareFactory::new(
-                registry_host_map.clone(),
-                proxy_trust.clone(),
-            ))
-            // The API reference's bundle is part of the console's build output
-            // and is served from this origin, so which document `/scalar`
-            // answers with depends on whether that output is actually here. A
-            // server configured without `static_dir` gets the degraded page
-            // rather than a CDN fallback — see `batlehub_web::SCALAR_BUNDLE_PATH`.
-            .service(batlehub_web::scalar(
-                openapi,
-                static_dir_inner.as_deref().map(std::path::Path::new),
-            ))
-            .configure(move |cfg| {
-                if let Some(ref dir) = static_dir_inner {
-                    // Still no CSP *header* here, for the two reasons that have
-                    // not changed: it cannot be global — `/proxy/**`, `/scalar`
-                    // and the console each need a different policy, and the
-                    // first two now get theirs from the middleware wrapped
-                    // above — and the `actix_files::Files` service behind
-                    // `configure_spa` is not a `ServiceFactory`, so it
-                    // cannot be wrapped individually either. The SPA carries its own policy in a
-                    // `<meta http-equiv>` tag, generated at build time by
-                    // `ui/build/csp.ts` so `connect-src` can follow the configured
-                    // API origin. `frame-ancestors` is ignored in meta form, which
-                    // is why `security_headers()` sends `X-Frame-Options: DENY`.
-                    //
-                    // What *is* new: the document is served by `configure_spa`
-                    // rather than straight off disk, so the built policy can be
-                    // narrowed to the running config on the way out — see
-                    // `crates/web/src/spa.rs` for why that narrowing can only
-                    // ever subtract, and for the deep-link fallback that sits
-                    // behind the file service so `/packages/npm/chalk` resolves
-                    // to the console rather than to a 404.
-                    // Document, static files and the deep-link fallback, in the
-                    // one place that knows their order matters.
-                    batlehub_web::configure_spa(cfg, std::path::PathBuf::from(dir));
-                }
-            })
+            ));
+        // Just inside host routing, so it counts the pattern of the rewritten
+        // URI — the route that actually served the request.
+        #[cfg(feature = "profiling")]
+        let app = app.wrap(actix_web::middleware::from_fn(
+            crate::profiling::tally_route,
+        ));
+        // Outermost, so the URI rewrite lands before route matching and the
+        // proxy-trust verdict before anything that reads a forwarded header.
+        // `.wrap` builds inside-out, so this must stay the last call.
+        app.wrap(HostRoutingMiddlewareFactory::new(
+            registry_host_map.clone(),
+            proxy_trust.clone(),
+        ))
+        // The API reference's bundle is part of the console's build output
+        // and is served from this origin, so which document `/scalar`
+        // answers with depends on whether that output is actually here. A
+        // server configured without `static_dir` gets the degraded page
+        // rather than a CDN fallback — see `batlehub_web::SCALAR_BUNDLE_PATH`.
+        .service(batlehub_web::scalar(
+            openapi,
+            static_dir_inner.as_deref().map(std::path::Path::new),
+        ))
+        .configure(move |cfg| {
+            if let Some(ref dir) = static_dir_inner {
+                // Still no CSP *header* here, for the two reasons that have
+                // not changed: it cannot be global — `/proxy/**`, `/scalar`
+                // and the console each need a different policy, and the
+                // first two now get theirs from the middleware wrapped
+                // above — and the `actix_files::Files` service behind
+                // `configure_spa` is not a `ServiceFactory`, so it
+                // cannot be wrapped individually either. The SPA carries its own policy in a
+                // `<meta http-equiv>` tag, generated at build time by
+                // `ui/build/csp.ts` so `connect-src` can follow the configured
+                // API origin. `frame-ancestors` is ignored in meta form, which
+                // is why `security_headers()` sends `X-Frame-Options: DENY`.
+                //
+                // What *is* new: the document is served by `configure_spa`
+                // rather than straight off disk, so the built policy can be
+                // narrowed to the running config on the way out — see
+                // `crates/web/src/spa.rs` for why that narrowing can only
+                // ever subtract, and for the deep-link fallback that sits
+                // behind the file service so `/packages/npm/chalk` resolves
+                // to the console rather than to a 404.
+                // Document, static files and the deep-link fallback, in the
+                // one place that knows their order matters.
+                batlehub_web::configure_spa(cfg, std::path::PathBuf::from(dir));
+            }
+        })
     })
     .bind(&bind_addr)
     .with_context(|| format!("binding to {bind_addr}"))?

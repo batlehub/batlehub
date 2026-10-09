@@ -89,7 +89,10 @@ impl RejectionThrottle {
     /// many attempts were held back since its last one — or `None` when this
     /// attempt is itself held back.
     fn admit(&self, ip: &str, now: Instant) -> Option<u32> {
-        let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
+        let mut seen = self
+            .seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some((at, suppressed)) = seen.get_mut(ip) {
             if now.duration_since(*at) < Self::WINDOW {
                 *suppressed += 1;

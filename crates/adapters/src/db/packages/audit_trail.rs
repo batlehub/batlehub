@@ -98,7 +98,7 @@ impl AuditTrailStore for PgPackageRepository {
         created_before: Option<DateTime<Utc>>,
         limit: u64,
     ) -> Result<Vec<AccessEvent>, CoreError> {
-        let access: Vec<String> = ACCESS_ACTIONS.iter().map(|s| s.to_string()).collect();
+        let access: Vec<String> = ACCESS_ACTIONS.iter().map(ToString::to_string).collect();
         // One statement for the three shapes: each arm is guarded by the
         // parameter that selects it, so the planner keeps one plan per arm.
         let (kind, before, access_before, security_before, user) = match query {

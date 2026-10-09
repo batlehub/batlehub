@@ -1,0 +1,206 @@
+# CPU profile per request path — perf/scripts/profile.sh.
+#
+# Every soak arm (perf/k6/soak_arms.js), alone, under a constant load, while a
+# release build with the `profiling` feature samples its own CPU. The report
+# says what one request costs on each path, which BatleHub functions that CPU
+# is spent in, and how each path compares with the last profile of `main`.
+#
+# **Report-only.** A CPU delta never fails this workflow: a shared runner's
+# noise has not been measured yet, and a threshold set before it has would be
+# a gate that cries wolf. What does fail it is the route inventory
+# (perf/profile_routes.txt) disagreeing with the routes the run actually
+# reached — that is deterministic. Its other half, every API operation named,
+# is `crates/web/tests/profile_route_coverage.rs` and runs on every PR.
+name: Profile
+
+on:
+  # Same two ways in as soak.yaml, for the same reason (a dispatch-only
+  # workflow does not exist until it is on the default branch): a `profile`
+  # label on a pull request, removed again when the report is posted.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Pull request to comment the result on (blank: the open PR for this branch, if there is one)"
+        default: ""
+      seconds:
+        description: "CPU window per arm, seconds"
+        default: "15"
+      rate:
+        description: "Requests per second offered to each arm"
+        default: "50"
+      arms:
+        description: "Extended regex selecting arms by op (blank: all)"
+        default: ""
+  pull_request:
+    branches: ["main"]
+    types: [labeled]
+  # The baseline every pull request compares with: the latest successful run
+  # on `main`, whatever triggered it.
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: profile-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  DATABASE_URL: postgresql://postgres:testpass@localhost:5432/postgres
+  PROFILE_LABEL: profile
+
+jobs:
+  profile:
+    name: Profile (${{ inputs.seconds || '15' }} s per arm at ${{ inputs.rate || '50' }}/s)
+    if: >-
+      github.event_name != 'pull_request' || github.event.label.name == 'profile'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read   # the baseline: the latest `main` run's artifact
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: testpass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      K6_VERSION: "2.2.0"
+      INFERNO_VERSION: "0.12.8"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: "stable"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Its own key: the profiling build keeps debuginfo and a feature the
+          # other workflows do not, so sharing their cache would evict both.
+          key: profile
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+      - name: Install k6
+        run: |
+          curl -fsSL --proto '=https' --proto-redir '=https' \
+            "https://github.com/grafana/k6/releases/download/v${K6_VERSION}/k6-v${K6_VERSION}-linux-amd64.tar.gz" \
+            | tar -xz -C /tmp
+          sudo install "/tmp/k6-v${K6_VERSION}-linux-amd64/k6" /usr/local/bin/k6
+      - name: Install inferno (flamegraph SVGs)
+        run: cargo install inferno --locked --version "$INFERNO_VERSION"
+      - name: Fetch the baseline from main
+        if: github.ref_name != 'main'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow profile.yaml --branch main \
+            --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          if [ -n "$id" ]; then
+            gh run download "$id" -R "$GITHUB_REPOSITORY" -n profile -D baseline
+            echo "PROFILE_BASELINE=$PWD/baseline/profile.json" >> "$GITHUB_ENV"
+            echo "Baseline: run $id"
+          else
+            echo "No successful profile of main yet — no comparison this time."
+          fi
+      - name: Frame-name simplification (its unit test)
+        run: cargo test -p batlehub-server --features profiling --bin batlehub profiling
+      - name: Profile
+        env:
+          PROFILE_SECONDS: ${{ inputs.seconds || '15' }}
+          PROFILE_RATE: ${{ inputs.rate || '50' }}
+          PROFILE_ARMS: ${{ inputs.arms || '.' }}
+        run: bash perf/scripts/profile.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: profile
+          path: perf/results/profile/
+          if-no-files-found: warn
+
+  comment:
+    name: Comment the result
+    needs: [profile]
+    permissions:
+      contents: read
+      pull-requests: write
+    if: >-
+      always()
+      && (github.event_name == 'workflow_dispatch'
+          || (github.event_name == 'pull_request' && github.event.label.name == 'profile'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        continue-on-error: true
+        with:
+          name: profile
+          path: artifacts
+      - name: Assemble the report
+        env:
+          RESULT: ${{ needs.profile.result }}
+        run: |
+          {
+            echo "<!-- profile-report -->"
+            echo "# Profile — \`$RESULT\`"
+            echo
+            echo "Run from \`${GITHUB_REF_NAME}\` at \`${GITHUB_SHA:0:7}\` —"
+            echo "[logs, flamegraphs and folded stacks](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})."
+            echo
+            if [ -f artifacts/profile.md ]; then
+              cat artifacts/profile.md
+            else
+              echo "No report was produced — the run failed before the report step."
+            fi
+          } > comment.md
+          # A PR comment is capped at 65 536 characters; the per-arm details
+          # are the part to drop, and the full report is in the artifact.
+          if [ "$(wc -c < comment.md)" -gt 60000 ]; then
+            sed -i '/<details><summary>Per arm/,/<\/details>/c\_Per-arm details omitted for length — see `profile.md` in the artifact._' comment.md
+          fi
+          cat comment.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Find the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPLICIT: ${{ inputs.pr }}
+          FROM_EVENT: ${{ github.event.pull_request.number }}
+        run: |
+          # Same resolution as soak.yaml's, including why it filters on head.ref.
+          number="${EXPLICIT:-$FROM_EVENT}"
+          if [ -z "$number" ]; then
+            number=$(gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" \
+              --jq 'map(select(.head.ref == env.GITHUB_REF_NAME)) | .[0].number // empty' \
+              2>/dev/null || true)
+          fi
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+      - name: Post it
+        if: steps.pr.outputs.number != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- profile-report -->")) | .id' | head -n1)
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" -F body=@comment.md >/dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@comment.md >/dev/null
+          fi
+      - name: Clear the label
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/$PR/labels/$PROFILE_LABEL" >/dev/null \
+            && echo "Removed '$PROFILE_LABEL' from #$PR — add it again to re-run"

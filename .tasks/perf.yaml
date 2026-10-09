@@ -226,6 +226,14 @@ tasks:
   # memory, descriptors, threads or database connections *at idle* after the
   # load than it was before. Manual — nothing schedules it.
 
+  perf:profile:
+    desc: "CPU profile per request path: every soak arm alone under constant load, flamegraphs + report in perf/results/profile (needs DATABASE_URL and k6). SECONDS, RATE, ARMS"
+    cmds:
+      - PROFILE_SECONDS={{.SECONDS | default "15"}}
+        PROFILE_RATE={{.RATE | default "50"}}
+        PROFILE_ARMS='{{.ARMS | default "."}}'
+        bash perf/scripts/profile.sh
+
   perf:soak:
     desc: "Soak the server under constant load and fail if it did not give back what it took (leak gate; needs DATABASE_URL and k6). DURATION, RATE, WARMUP, SETTLE, PROFILE"
     cmds:

@@ -653,6 +653,22 @@ pub struct HeldStackVersion {
 /// The default is the highest held version. `icon` is always present and
 /// empty: Che's `isDevfileMetaData` drops an entry whose icon is undefined,
 /// and the upstream icon is a URL a disconnected browser cannot reach.
+/// Whether a held version runs on every requested arch. A version that names
+/// no architectures runs on all of them, as upstream's index treats it.
+fn serves_archs(v: &HeldStackVersion, archs: &[&str]) -> bool {
+    if archs.is_empty() {
+        return true;
+    }
+    let have: Vec<&str> = v
+        .facts
+        .get("metadata")
+        .and_then(|m| m.get("architectures"))
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    have.is_empty() || archs.iter().all(|a| have.contains(a))
+}
+
 pub fn compose_index(address: &str, legacy: bool, held: &[(String, HeldStackVersion)]) -> Value {
     let (path, query) = address.split_once('?').unwrap_or((address, ""));
     if path.ends_with("/sample") {
@@ -678,19 +694,7 @@ pub fn compose_index(address: &str, legacy: bool, held: &[(String, HeldStackVers
     for (stack, versions) in stacks {
         let mut records: Vec<(String, Value)> = versions
             .iter()
-            .filter(|v| {
-                let meta = v.facts.get("metadata");
-                let list = |k: &str| -> Vec<&str> {
-                    meta.and_then(|m| m.get(k))
-                        .and_then(Value::as_array)
-                        .map(|a| a.iter().filter_map(Value::as_str).collect())
-                        .unwrap_or_default()
-                };
-                archs.is_empty() || {
-                    let have = list("architectures");
-                    have.is_empty() || archs.iter().all(|a| have.contains(a))
-                }
-            })
+            .filter(|v| serves_archs(v, &archs))
             .map(|v| (v.version.clone(), version_record(stack, v)))
             .collect();
         if records.is_empty() {
@@ -1079,6 +1083,32 @@ mod tests {
         let only = compose_index("v2index?deprecated=true", false, &held);
         assert!(find_stack(&only, "nodejs").is_none());
         assert!(find_stack(&only, "python").is_some());
+    }
+
+    #[test]
+    fn the_arch_filter_keeps_versions_that_name_no_architectures() {
+        let with_archs = |stack: &str, archs: &[&str]| {
+            let (s, mut v) = held(stack, "1.0.0", &[]);
+            v.facts["metadata"]["architectures"] = json!(archs);
+            (s, v)
+        };
+        let held = [
+            with_archs("both", &["amd64", "arm64"]),
+            with_archs("amd", &["amd64"]),
+            held("any", "1.0.0", &[]),
+        ];
+        let doc = compose_index("v2index?arch=amd64&arch=arm64", false, &held);
+        assert!(find_stack(&doc, "both").is_some());
+        assert!(
+            find_stack(&doc, "amd").is_none(),
+            "must run on every requested arch"
+        );
+        assert!(
+            find_stack(&doc, "any").is_some(),
+            "no architectures means all of them"
+        );
+        let unfiltered = compose_index("v2index", false, &held);
+        assert!(find_stack(&unfiltered, "amd").is_some());
     }
 
     #[test]

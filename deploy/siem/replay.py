@@ -17,12 +17,14 @@ selection maps, the `contains` / `startswith` / `endswith` / `gte` / `gt` /
 than being judged by a matcher that does not understand it.
 
 Usage: uv run --with pyyaml python deploy/siem/replay.py [--stream F] [--expect F]
+(both must resolve inside the current directory — run from the repo root)
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from collections import defaultdict
@@ -192,34 +194,55 @@ def load_stream(path: Path) -> list[dict]:
     return events
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--stream", type=Path, default=HERE / "fixtures/stream.jsonl")
-    ap.add_argument("--expect", type=Path, default=HERE / "fixtures/expected.json")
-    args = ap.parse_args()
+def inside_cwd(arg: str) -> Path:
+    """The path, resolved, if it lies under the working directory; else exit.
+    `--stream` and `--expect` are only ever read, but a check script has no
+    business opening files outside the tree it was started in."""
+    root = os.path.realpath(os.getcwd())
+    real = os.path.realpath(arg)
+    if os.path.commonpath([root, real]) != root:
+        sys.exit(f"replay: {arg} is outside {root} — run from a directory that contains it")
+    return Path(real)
 
+
+def field_failures(files: dict[str, list[dict]]) -> list[str]:
+    """Every field a rule reads that the audit stream never emits."""
     emitted = emitted_fields()
-    files = load_rule_files()
-    failures = []
-    for name, docs in files.items():
-        for doc in docs:
-            missing = fields_read(doc) - emitted
-            if missing:
-                failures.append(f"{name}: reads {sorted(missing)}, which the stream never emits")
+    return [
+        f"{name}: reads {sorted(missing)}, which the stream never emits"
+        for name, docs in files.items()
+        for missing in (fields_read(doc) - emitted for doc in docs)
+        if missing
+    ]
 
-    events = load_stream(args.stream)
-    expected: dict[str, bool] = json.loads(args.expect.read_text())
-    for name in sorted(set(expected) - set(files)):
-        failures.append(f"{args.expect.name} names {name}, which is not a rule file")
+
+def replay_failures(files: dict[str, list[dict]], events: list[dict],
+                    expected: dict[str, bool], expect_name: str) -> list[str]:
+    """Replay the stream through each rule file and compare with `expected`."""
+    failures = [f"{expect_name} names {name}, which is not a rule file"
+                for name in sorted(set(expected) - set(files))]
     for name, docs in files.items():
         if name not in expected:
             continue
         fired = file_fires(docs, events)
-        mark = "fires" if fired else "quiet"
         ok = fired == expected[name]
-        print(f"  {'ok ' if ok else 'BAD'} {name}: {mark}")
+        print(f"  {'ok ' if ok else 'BAD'} {name}: {'fires' if fired else 'quiet'}")
         if not ok:
             failures.append(f"{name}: expected {'to fire' if expected[name] else 'silence'}")
+    return failures
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--stream", default=str(HERE / "fixtures/stream.jsonl"))
+    ap.add_argument("--expect", default=str(HERE / "fixtures/expected.json"))
+    args = ap.parse_args()
+    stream, expect = inside_cwd(args.stream), inside_cwd(args.expect)
+
+    files = load_rule_files()
+    events = load_stream(stream)
+    expected: dict[str, bool] = json.loads(expect.read_text())
+    failures = field_failures(files) + replay_failures(files, events, expected, expect.name)
 
     if failures:
         print("\nreplay failed:\n  " + "\n  ".join(failures), file=sys.stderr)
