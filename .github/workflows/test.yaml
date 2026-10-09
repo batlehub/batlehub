@@ -28,11 +28,11 @@ on:
       - "deploy/siem/**"
   pull_request:
     branches: ["main"]
-    # `labeled` on top of the three defaults: the `full-test` label below is a
-    # *condition*, and a condition nothing re-evaluates is a condition nobody can
-    # use — adding the label to an open dependabot pull request has to start a
-    # run, not wait for the next push that will never come.
-    types: [opened, synchronize, reopened, labeled]
+    # No `labeled`: GitHub shows the newest check of each name on a pull
+    # request, so a run started by *any* label — `profile`, `soak` — and
+    # skipped would mask the real run on the same commit, and count as passing.
+    # The `full-test` label is read on the next push instead; on a dependabot
+    # pull request, label it and comment `@dependabot recreate`.
     paths:
       - "crates/**"
       - "server/**"
@@ -80,11 +80,6 @@ jobs:
   # run the full suite as before, because `github.head_ref` is empty outside a
   # pull request and the dependabot test is then false.
   #
-  # It also swallows the cost of the `labeled` trigger that makes the label
-  # usable: any label on any pull request now starts this workflow, so a label
-  # that is not `full-test` (`soak`, `breaking-point`, a triage label) stops
-  # here rather than re-running a suite that already ran on the push.
-  #
   # Every job in this file must declare `needs: gate` and the `if` below —
   # a job that forgets it is a job dependabot still pays for.
   gate:
@@ -96,16 +91,11 @@ jobs:
       - id: decide
         env:
           HEAD_REF: ${{ github.head_ref }}
-          ACTION: ${{ github.event.action }}
-          LABEL: ${{ github.event.label.name }}
           FULL_TEST: ${{ contains(github.event.pull_request.labels.*.name, 'full-test') }}
         run: |
           run=true
           why=""
-          if [[ "$ACTION" == "labeled" && "$LABEL" != "full-test" ]]; then
-            run=false
-            why="the \`$LABEL\` label is not \`full-test\` — the suite already ran on the push"
-          elif [[ "$HEAD_REF" == dependabot/* && "$FULL_TEST" != "true" ]]; then
+          if [[ "$HEAD_REF" == dependabot/* && "$FULL_TEST" != "true" ]]; then
             run=false
             why="\`$HEAD_REF\` is a dependabot branch and the pull request is not labelled \`full-test\`"
           fi
@@ -116,7 +106,7 @@ jobs:
               echo
               echo "Skipped because $why."
               echo
-              echo "Add the **\`full-test\`** label to the pull request to run it."
+              echo "Add the **\`full-test\`** label to the pull request, then comment \`@dependabot recreate\` to run it."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 

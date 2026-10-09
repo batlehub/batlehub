@@ -134,11 +134,28 @@ impl Visit for StageName {
     fn record_debug(&mut self, _: &Field, _: &dyn std::fmt::Debug) {}
 }
 
+/// The request span's `http.target`, the path alone (`BatleHubSpanBuilder`).
+#[derive(Default)]
+struct Target(String);
+
+impl Visit for Target {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "http.target" {
+            self.0 = value.to_owned();
+        }
+    }
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        // `%http_target` arrives here, as `Display` through `Debug`.
+        if field.name() == "http.target" {
+            self.0 = format!("{value:?}");
+        }
+    }
+}
+
 /// Carried by each request span.
 struct RequestClock {
     opened: Instant,
     entered: Option<Instant>,
-    last_exit: Option<Instant>,
     polled: Duration,
     db: Duration,
     db_statements: u64,
@@ -158,12 +175,11 @@ pub fn wait_filter() -> Targets {
 /// Splits each request's wall time into the parts a CPU profile cannot tell
 /// apart.
 ///
-/// - **wall** — from the request span opening to its *last exit*, which is the
-///   last poll of the response body (`tracing-actix-web` polls the body inside
-///   the span). Not to its close: the span closes when its last handle drops,
-///   and a handle can outlive the response — the first `perf:profile` run read
-///   a flat ~18 ms of "other awaits" on every path, `composer_root` included,
-///   while k6 measured those same requests at a 1–2 ms p95;
+/// - **wall** — the request span's lifetime, open to close. The profiler's own
+///   `/debug/` requests are left out: `/debug/pprof/folded` stays open for the
+///   whole sampling window, and counting it added 15 s to every arm — a flat
+///   ~18 ms of "other awaits" per request on the first two `perf:profile`
+///   runs, `composer_root` included, where k6 measured 0.8 ms;
 /// - **polled** — the time the span was *entered*, which is the time its
 ///   future was being polled on a thread. `polled − CPU` is time a poll spent
 ///   blocked without burning CPU: a `std` lock, synchronous file I/O, a page
@@ -209,11 +225,15 @@ where
         if attrs.metadata().name() != REQUEST_SPAN {
             return;
         }
+        let mut target = Target::default();
+        attrs.record(&mut target);
+        if target.0.starts_with("/debug/") {
+            return;
+        }
         if let Some(span) = ctx.span(id) {
             span.extensions_mut().insert(RequestClock {
                 opened: Instant::now(),
                 entered: None,
-                last_exit: None,
                 polled: Duration::ZERO,
                 db: Duration::ZERO,
                 db_statements: 0,
@@ -233,9 +253,7 @@ where
         if let Some(span) = ctx.span(id) {
             if let Some(clock) = span.extensions_mut().get_mut::<RequestClock>() {
                 if let Some(at) = clock.entered.take() {
-                    let now = Instant::now();
-                    clock.polled += now - at;
-                    clock.last_exit = Some(now);
+                    clock.polled += at.elapsed();
                 }
             }
         }
@@ -282,7 +300,7 @@ where
         };
         add_wait([
             1,
-            nanos(clock.last_exit.unwrap_or_else(Instant::now) - clock.opened),
+            nanos(clock.opened.elapsed()),
             nanos(clock.polled),
             nanos(clock.db),
             clock.db_statements,
@@ -478,9 +496,11 @@ mod tests {
                     tracing::info_span!(target: "batlehub::stage", "stage", stage = "store")
                         .entered();
             }
-            // A handle that outlives the last poll is not the request's time.
-            std::thread::sleep(std::time::Duration::from_millis(50));
             drop(request);
+            // The profiler's own request is open for the whole sampling window.
+            let pprof = tracing::info_span!("HTTP request", http.target = %"/debug/pprof/folded");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            drop(pprof);
         });
         let totals: std::collections::BTreeMap<_, _> =
             WAIT_FIELDS.into_iter().zip(*WAIT.lock().unwrap()).collect();
@@ -492,7 +512,7 @@ mod tests {
         assert!(totals["polled_ns"] <= totals["wall_ns"]);
         assert!(
             totals["wall_ns"] < 50_000_000,
-            "wall counted the held tail: {totals:?}"
+            "wall counted the profiler: {totals:?}"
         );
         assert_eq!(super::STAGES.lock().unwrap()["store"].1, 1);
     }

@@ -1266,7 +1266,8 @@ to start under a restricted `ptrace_scope`, not a finding — re-run with
   `dotnet restore` and a headless VS Code to prove it had not broken them. It
   almost never has; when a bump *could* (an `actix-web`, `sqlx` or `aws-sdk-s3`
   line, anything the security constraints in `CLAUDE.md` name), label the pull
-  request and the full suite runs on the spot.
+  request and comment `@dependabot recreate`: the full suite runs on the push
+  that follows.
 
   Nothing else changes: a human branch, a push to `main`, the nightly schedule
   and `workflow_dispatch` all run the suite as before, because `github.head_ref`
@@ -1274,12 +1275,13 @@ to start under a restricted `ptrace_scope`, not a finding — re-run with
   gate writes the reason for a skip into the run summary, so fourteen skipped
   jobs are never unexplained.
 
-  The label has to be a *trigger* as well as a condition — `pull_request`
-  declares `labeled` in its `types`, or adding `full-test` to an open pull
-  request would change the answer with no run left to ask the question. That
-  trigger fires on *any* label, so the gate's other clause drops a run whose
-  label is not `full-test`: a `soak` or `breaking-point` label no longer
-  re-runs a suite that already ran on the push.
+  The label is a condition and not a trigger: neither `test.yaml` nor
+  `sonar.yaml` declares `labeled`. A `labeled` trigger fires on *every* label,
+  and GitHub shows the newest check of each name on a pull request. So adding
+  `profile` or `soak` started a second run of both on the same commit, and its
+  skipped jobs replaced the real ones still running, counting as passing for
+  branch protection. `@dependabot recreate` is the push that re-asks the
+  question.
 
   **A new job in this file must declare `needs: gate` and
   `if: needs.gate.outputs.run == 'true'`** — a job that forgets it is a job
