@@ -356,7 +356,7 @@ task perf:profile                                # every arm, 15 s each at 50 re
 task perf:profile ARMS='^npm' SECONDS=30          # some arms, longer windows
 ```
 
-The report (`perf/results/profile/profile.md`) gives, per arm, the CPU per
+The report (`profile.md` in `perf/results/profile/`) gives, per arm, the CPU per
 request and the **nearest BatleHub function** on each sampled stack — the part
 of our code that burned the CPU or handed it to a dependency — then the
 hottest of those across every path. Beside it: a flamegraph per arm
@@ -381,6 +381,11 @@ I/O), SQL (sqlx's elapsed per statement), upstream, and other awaits (tokio
 locks, channels, `spawn_blocking`). It comes from `/debug/wait`, a `tracing`
 layer on the request span (`WaitLayer` in `profiling.rs`). A path that is slow
 without being CPU-heavy shows up there, and only there.
+
+To split a path's awaits into its steps, wrap each step in
+`batlehub_core::services::stage("name")` (`.instrument(stage("store"))`); the
+report then adds a third table, the milliseconds per request in each step. The
+npm publish is marked this way, `publish_body` through `publish_owner`.
 
 The sampler unwinds with `framehop` (pprof-rs's `framehop-unwinder`), which is
 safe inside the signal handler, so time in libc and the allocator is counted

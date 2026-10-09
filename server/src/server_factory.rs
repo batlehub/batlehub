@@ -73,10 +73,11 @@ impl RootSpanBuilder for BatleHubSpanBuilder {
             .get("User-Agent")
             .map(|h| h.to_str().unwrap_or(""))
             .unwrap_or("");
-        let http_route: std::borrow::Cow<'static, str> = request
-            .match_pattern()
-            .map(Into::into)
-            .unwrap_or_else(|| "default".into());
+        // `http.route` and `otel.name` are recorded in `on_request_end`, not
+        // here: this runs before routing, and `match_pattern()` before routing
+        // tries every route's regex against the path — 12.8 % of the server's
+        // CPU in the first `perf:profile` run. After routing it is a lookup of
+        // the resource the router already chose.
         let http_method = http_method_str(request.method());
         let connection_info = request.connection_info();
         let request_id = get_request_id(request);
@@ -93,7 +94,7 @@ impl RootSpanBuilder for BatleHubSpanBuilder {
                     tracing::Level::INFO,
                     "HTTP request",
                     http.method = %http_method,
-                    http.route = %http_route,
+                    http.route = tracing::field::Empty,
                     http.flavor = %http_flavor(request.version()),
                     http.scheme = %http_scheme(connection_info.scheme()),
                     http.host = %connection_info.host(),
@@ -101,7 +102,7 @@ impl RootSpanBuilder for BatleHubSpanBuilder {
                     http.user_agent = %user_agent,
                     http.target = %http_target,
                     http.status_code = tracing::field::Empty,
-                    otel.name = %format!("{} {}", http_method, http_route),
+                    otel.name = tracing::field::Empty,
                     otel.kind = "server",
                     otel.status_code = tracing::field::Empty,
                     trace_id = $trace_id,
@@ -125,6 +126,13 @@ impl RootSpanBuilder for BatleHubSpanBuilder {
         span: tracing::Span,
         outcome: &anyhow::Result<actix_web::dev::ServiceResponse<B>, actix_web::Error>,
     ) {
+        if let Ok(resp) = outcome {
+            let route = resp.request().match_pattern();
+            let route = route.as_deref().unwrap_or("default");
+            let method = resp.request().method();
+            span.record("http.route", route);
+            span.record("otel.name", format!("{method} {route}"));
+        }
         let status = match outcome {
             Ok(resp) => resp.status(),
             Err(err) => err.as_response_error().status_code(),
@@ -562,6 +570,15 @@ mod span_tests {
             );
             attrs.record(&mut Grab(Arc::clone(&self.0.values)));
         }
+
+        fn on_record(
+            &self,
+            _id: &tracing::span::Id,
+            values: &tracing::span::Record<'_>,
+            _ctx: Context<'_, S>,
+        ) {
+            values.record(&mut Grab(Arc::clone(&self.0.values)));
+        }
     }
 
     fn fields_for(uri: &str) -> Vec<(String, String)> {
@@ -595,6 +612,42 @@ mod span_tests {
             .find(|(k, _)| k == name)
             .map(|(_, v)| v.as_str())
             .unwrap_or_else(|| panic!("no field {name} in {fields:?}"))
+    }
+
+    /// The route is recorded once the router has matched, never before: a
+    /// pre-routing `match_pattern()` scans every route's regex (the first
+    /// `perf:profile` run's top BatleHub frame). Still recorded, and still
+    /// the pattern rather than the path.
+    #[actix_web::test]
+    async fn the_route_is_recorded_after_routing() {
+        let sink = Sink::default();
+        let _guard = tracing::subscriber::set_default(
+            tracing_subscriber::registry().with(Captured(sink.clone())),
+        );
+        let app = actix_web::test::init_service(
+            actix_web::App::new()
+                .wrap(tracing_actix_web::TracingLogger::<BatleHubSpanBuilder>::new())
+                .route(
+                    "/items/{id}",
+                    actix_web::web::get().to(actix_web::HttpResponse::Ok),
+                ),
+        )
+        .await;
+        let req = actix_web::test::TestRequest::get()
+            .uri("/items/42")
+            .to_request();
+        actix_web::test::call_service(&app, req).await;
+
+        let values = sink.values.lock().unwrap().clone();
+        let recorded = |name: &str| {
+            values
+                .iter()
+                .filter(|(k, _)| k == name)
+                .map(|(_, v)| v.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(recorded("http.route"), ["/items/{id}"]);
+        assert_eq!(recorded("otel.name"), ["GET /items/{id}"]);
     }
 
     /// RFC 0012 §7.1. The reason this builder is hand-written instead of

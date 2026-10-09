@@ -68,8 +68,9 @@ export const nav = [
       { text: "Feuille de route (en)", link: "/guide/roadmap" },
       { text: "Contribuer (en)", link: "/contributing/" },
       { text: "Historique de conception (en)", link: "/rfc/" },
+      { text: "Dette technique (en)", link: "/techdebt/" },
     ],
-    activeMatch: "/(contributing|rfc)/",
+    activeMatch: "/(contributing|rfc|techdebt)/",
   },
 ];
 

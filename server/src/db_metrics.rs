@@ -108,6 +108,20 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for DbStatementLayer {
         }
     }
 
+    /// The route arrives after routing, in `on_request_end`, not with the span.
+    fn on_record(&self, id: &span::Id, values: &span::Record<'_>, ctx: Context<'_, S>) {
+        let mut fields = Fields::default();
+        values.record(&mut fields);
+        let Some(route) = fields.route else {
+            return;
+        };
+        if let Some(span) = ctx.span(id) {
+            if let Some(tally) = span.extensions_mut().get_mut::<Tally>() {
+                tally.route = route;
+            }
+        }
+    }
+
     fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
         if event.metadata().target() != "sqlx::query" {
             return;
@@ -157,8 +171,11 @@ mod tests {
         metrics::with_local_recorder(&recorder, || {
             tracing::subscriber::with_default(subscriber, || {
                 {
-                    let span = tracing::info_span!("HTTP request", http.route = %"/proxy/{registry}/{package}");
+                    // Declared empty and recorded later, as `BatleHubSpanBuilder` does.
+                    let span =
+                        tracing::info_span!("HTTP request", http.route = tracing::field::Empty);
                     let _in = span.enter();
+                    span.record("http.route", "/proxy/{registry}/{package}");
                     tracing::debug!(target: "sqlx::query", summary = "SELECT 1", elapsed_secs = 0.001_f64);
                     tracing::debug!(target: "sqlx::query", summary = "INSERT INTO access_events (id, …", elapsed_secs = 0.002_f64);
                 }

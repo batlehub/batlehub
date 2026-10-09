@@ -49,7 +49,8 @@ export SOAK_UPSTREAM_URL="http://127.0.0.1:$UPSTREAM_PORT"
 
 log() { printf '\n==> %s\n' "$*"; }
 need() {
-  command -v "$1" >/dev/null 2>&1 || { echo "ERROR: $1 not found on PATH — $2" >&2; exit 1; }
+  local tool="$1" hint="$2"
+  command -v "$tool" >/dev/null 2>&1 || { echo "ERROR: $tool not found on PATH — $hint" >&2; exit 1; }
 }
 need k6 "mise install k6"
 need cargo "rustup"
@@ -159,8 +160,7 @@ fi
 
 # ── Report ────────────────────────────────────────────────────────────────────
 log "Report"
-REPORT_ARGS=(--dir "$OUT" --seconds "$SECONDS_PER_ARM" --rate "$RATE" --frequency "$FREQ"
-  --routes perf/profile_routes.txt --spec ui/openapi.json)
+REPORT_ARGS=(--dir "$OUT" --seconds "$SECONDS_PER_ARM" --rate "$RATE" --frequency "$FREQ")
 [[ -n "${PROFILE_BASELINE:-}" && -f "${PROFILE_BASELINE:-}" ]] && REPORT_ARGS+=(--baseline "$PROFILE_BASELINE")
 [[ "$ARM_FILTER" != "." ]] && REPORT_ARGS+=(--partial)
 STATUS=0

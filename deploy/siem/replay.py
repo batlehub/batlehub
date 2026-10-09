@@ -16,15 +16,16 @@ selection maps, the `contains` / `startswith` / `endswith` / `gte` / `gt` /
 `value_count` correlations. A rule that needs more fails loudly here rather
 than being judged by a matcher that does not understand it.
 
-Usage: uv run --with pyyaml python deploy/siem/replay.py [--stream F] [--expect F]
-(both must resolve inside the current directory — run from the repo root)
+Usage: uv run --with pyyaml python deploy/siem/replay.py [--stdin --expect-json JSON]
+With no arguments it replays `fixtures/`. A recorded stream comes in on stdin
+and its expectations inline: the script takes no paths, so it opens nothing
+but its own fixtures.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 from collections import defaultdict
@@ -179,9 +180,9 @@ def file_fires(docs: list[dict], events: list[dict]) -> bool:
     return any(detection_matches(alert["detection"], e) for e in events)
 
 
-def load_stream(path: Path) -> list[dict]:
+def load_stream(text: str, source: str) -> list[dict]:
     events = []
-    for line in path.read_text().splitlines():
+    for line in text.splitlines():
         if not line.strip():
             continue
         e = json.loads(line)
@@ -190,19 +191,8 @@ def load_stream(path: Path) -> list[dict]:
         e["_ts"] = datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00"))
         events.append(e)
     if not events:
-        sys.exit(f"replay: {path} holds no audit lines")
+        sys.exit(f"replay: {source} holds no audit lines")
     return events
-
-
-def inside_cwd(arg: str) -> Path:
-    """The path, resolved, if it lies under the working directory; else exit.
-    `--stream` and `--expect` are only ever read, but a check script has no
-    business opening files outside the tree it was started in."""
-    root = os.path.realpath(os.getcwd())
-    real = os.path.realpath(arg)
-    if os.path.commonpath([root, real]) != root:
-        sys.exit(f"replay: {arg} is outside {root} — run from a directory that contains it")
-    return Path(real)
 
 
 def field_failures(files: dict[str, list[dict]]) -> list[str]:
@@ -234,15 +224,22 @@ def replay_failures(files: dict[str, list[dict]], events: list[dict],
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stream", default=str(HERE / "fixtures/stream.jsonl"))
-    ap.add_argument("--expect", default=str(HERE / "fixtures/expected.json"))
+    ap.add_argument("--stdin", action="store_true", help="read the stream from stdin")
+    ap.add_argument("--expect-json", help="the expectations, as JSON (required with --stdin)")
     args = ap.parse_args()
-    stream, expect = inside_cwd(args.stream), inside_cwd(args.expect)
+    if args.stdin != (args.expect_json is not None):
+        ap.error("--stdin and --expect-json go together")
+
+    if args.stdin:
+        text, source, expect_raw = sys.stdin.read(), "stdin", args.expect_json
+    else:
+        text, source = (HERE / "fixtures/stream.jsonl").read_text(), "fixtures/stream.jsonl"
+        expect_raw = (HERE / "fixtures/expected.json").read_text()
 
     files = load_rule_files()
-    events = load_stream(stream)
-    expected: dict[str, bool] = json.loads(expect.read_text())
-    failures = field_failures(files) + replay_failures(files, events, expected, expect.name)
+    events = load_stream(text, source)
+    expected: dict[str, bool] = json.loads(expect_raw)
+    failures = field_failures(files) + replay_failures(files, events, expected, "the expectations")
 
     if failures:
         print("\nreplay failed:\n  " + "\n  ".join(failures), file=sys.stderr)

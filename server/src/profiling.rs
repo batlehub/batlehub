@@ -20,8 +20,9 @@
 //!   `wall`, `polled` (the request's future was running on a thread), `db`
 //!   (sqlx's own elapsed time for each statement run inside the request) and
 //!   `upstream` (`record_upstream_duration` in `batlehub-core`), in
-//!   nanoseconds, with the counts. A CPU profile cannot see time spent
-//!   waiting; this is the half it misses. See [`WaitLayer`].
+//!   nanoseconds, with the counts — plus `stage.<name>_ns`/`_count` for each
+//!   step a request marked with a `batlehub::stage` span. A CPU profile cannot
+//!   see time spent waiting; this is the half it misses. See [`WaitLayer`].
 //!
 //! The arm-by-arm design is what attributes CPU to a path. Tagging samples
 //! with the current route does not work under tokio: a task moves between
@@ -96,6 +97,14 @@ const WAIT_FIELDS: [&str; 7] = [
 ];
 static WAIT: Mutex<[u64; 7]> = Mutex::new([0; 7]);
 
+/// The span target a named step of a request is timed under, and its name.
+/// `tracing::info_span!(target: "batlehub::stage", "stage", stage = "store")`
+/// anywhere inside a request adds its open-to-close time to `stage.store_ns`
+/// in `/debug/wait` — how a path's "other awaits" is split into the steps
+/// that spent it.
+const STAGE_TARGET: &str = "batlehub::stage";
+static STAGES: Mutex<BTreeMap<String, (u64, u64)>> = Mutex::new(BTreeMap::new());
+
 fn add_wait(values: [u64; 7]) {
     let mut totals = WAIT.lock().unwrap_or_else(PoisonError::into_inner);
     for (total, v) in totals.iter_mut().zip(values) {
@@ -107,10 +116,29 @@ fn nanos(d: Duration) -> u64 {
     u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
 }
 
+/// Carried by each `stage` span.
+struct StageClock {
+    stage: String,
+    opened: Instant,
+}
+
+#[derive(Default)]
+struct StageName(Option<String>);
+
+impl Visit for StageName {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "stage" {
+            self.0 = Some(value.to_owned());
+        }
+    }
+    fn record_debug(&mut self, _: &Field, _: &dyn std::fmt::Debug) {}
+}
+
 /// Carried by each request span.
 struct RequestClock {
     opened: Instant,
     entered: Option<Instant>,
+    last_exit: Option<Instant>,
     polled: Duration,
     db: Duration,
     db_statements: u64,
@@ -124,12 +152,18 @@ pub fn wait_filter() -> Targets {
         .with_target("batlehub::server_factory", Level::INFO)
         .with_target("sqlx::query", Level::DEBUG)
         .with_target(UPSTREAM_TARGET, Level::TRACE)
+        .with_target(STAGE_TARGET, Level::INFO)
 }
 
 /// Splits each request's wall time into the parts a CPU profile cannot tell
 /// apart.
 ///
-/// - **wall** — the request span's lifetime, open to close;
+/// - **wall** — from the request span opening to its *last exit*, which is the
+///   last poll of the response body (`tracing-actix-web` polls the body inside
+///   the span). Not to its close: the span closes when its last handle drops,
+///   and a handle can outlive the response — the first `perf:profile` run read
+///   a flat ~18 ms of "other awaits" on every path, `composer_root` included,
+///   while k6 measured those same requests at a 1–2 ms p95;
 /// - **polled** — the time the span was *entered*, which is the time its
 ///   future was being polled on a thread. `polled − CPU` is time a poll spent
 ///   blocked without burning CPU: a `std` lock, synchronous file I/O, a page
@@ -161,6 +195,17 @@ where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
     fn on_new_span(&self, attrs: &span::Attributes<'_>, id: &span::Id, ctx: Context<'_, S>) {
+        if attrs.metadata().target() == STAGE_TARGET {
+            let mut name = StageName::default();
+            attrs.record(&mut name);
+            if let (Some(stage), Some(span)) = (name.0, ctx.span(id)) {
+                span.extensions_mut().insert(StageClock {
+                    stage,
+                    opened: Instant::now(),
+                });
+            }
+            return;
+        }
         if attrs.metadata().name() != REQUEST_SPAN {
             return;
         }
@@ -168,6 +213,7 @@ where
             span.extensions_mut().insert(RequestClock {
                 opened: Instant::now(),
                 entered: None,
+                last_exit: None,
                 polled: Duration::ZERO,
                 db: Duration::ZERO,
                 db_statements: 0,
@@ -187,7 +233,9 @@ where
         if let Some(span) = ctx.span(id) {
             if let Some(clock) = span.extensions_mut().get_mut::<RequestClock>() {
                 if let Some(at) = clock.entered.take() {
-                    clock.polled += at.elapsed();
+                    let now = Instant::now();
+                    clock.polled += now - at;
+                    clock.last_exit = Some(now);
                 }
             }
         }
@@ -222,12 +270,19 @@ where
         let Some(span) = ctx.span(&id) else {
             return;
         };
+        if let Some(stage) = span.extensions_mut().remove::<StageClock>() {
+            let mut stages = STAGES.lock().unwrap_or_else(PoisonError::into_inner);
+            let entry = stages.entry(stage.stage).or_default();
+            entry.0 = entry.0.saturating_add(nanos(stage.opened.elapsed()));
+            entry.1 += 1;
+            return;
+        }
         let Some(clock) = span.extensions_mut().remove::<RequestClock>() else {
             return;
         };
         add_wait([
             1,
-            nanos(clock.opened.elapsed()),
+            nanos(clock.last_exit.unwrap_or_else(Instant::now) - clock.opened),
             nanos(clock.polled),
             nanos(clock.db),
             clock.db_statements,
@@ -243,7 +298,16 @@ pub async fn wait(identity: AuthIdentity) -> HttpResponse {
         return HttpResponse::Forbidden().finish();
     }
     let drained = std::mem::take(&mut *WAIT.lock().unwrap_or_else(PoisonError::into_inner));
-    let body: BTreeMap<&str, u64> = WAIT_FIELDS.into_iter().zip(drained).collect();
+    let mut body: BTreeMap<String, u64> = WAIT_FIELDS
+        .into_iter()
+        .map(str::to_owned)
+        .zip(drained)
+        .collect();
+    let stages = std::mem::take(&mut *STAGES.lock().unwrap_or_else(PoisonError::into_inner));
+    for (stage, (ns, count)) in stages {
+        body.insert(format!("stage.{stage}_ns"), ns);
+        body.insert(format!("stage.{stage}_count"), count);
+    }
     HttpResponse::Ok().json(body)
 }
 
@@ -408,6 +472,14 @@ mod tests {
             }
             // Outside any request: a background statement, not counted.
             tracing::debug!(target: "sqlx::query", elapsed_secs = 9.0_f64, "SELECT 2");
+            {
+                let _in = request.enter();
+                let _store =
+                    tracing::info_span!(target: "batlehub::stage", "stage", stage = "store")
+                        .entered();
+            }
+            // A handle that outlives the last poll is not the request's time.
+            std::thread::sleep(std::time::Duration::from_millis(50));
             drop(request);
         });
         let totals: std::collections::BTreeMap<_, _> =
@@ -418,6 +490,11 @@ mod tests {
         assert_eq!(totals["upstream_calls"], 1);
         assert_eq!(totals["upstream_ns"], 500_000_000);
         assert!(totals["polled_ns"] <= totals["wall_ns"]);
+        assert!(
+            totals["wall_ns"] < 50_000_000,
+            "wall counted the held tail: {totals:?}"
+        );
+        assert_eq!(super::STAGES.lock().unwrap()["store"].1, 1);
     }
 
     #[test]

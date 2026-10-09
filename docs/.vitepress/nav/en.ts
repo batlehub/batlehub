@@ -67,8 +67,9 @@ export const nav = [
       { text: "Roadmap", link: "/guide/roadmap" },
       { text: "Contributing", link: "/contributing/" },
       { text: "Design history", link: "/rfc/" },
+      { text: "Technical debt", link: "/techdebt/" },
     ],
-    activeMatch: "/(contributing|rfc)/",
+    activeMatch: "/(contributing|rfc|techdebt)/",
   },
 ];
 
@@ -291,6 +292,21 @@ export const sidebar = {
         {
           text: "Adding a vulnerability scanner",
           link: "/contributing/adding-a-vulnerability-scanner",
+        },
+      ],
+    },
+  ],
+
+  // What is known to be owed: measured, not yet decided. Beside the RFCs
+  // because an entry that needs a design becomes one.
+  "/techdebt/": [
+    {
+      text: "Technical debt",
+      items: [
+        { text: "What this is", link: "/techdebt/" },
+        {
+          text: "TD-0001 — Per-request SQL, profile coverage",
+          link: "/techdebt/0001-per-request-sql-and-profile-coverage",
         },
       ],
     },

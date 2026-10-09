@@ -27,7 +27,13 @@ from pathlib import Path
 
 # Ours: a symbol path in one of our crates, or — for an inlined frame, which has
 # no path — the `[crates/…]` / `[server/…]` source tag `profiling.rs` appends.
-OWN = re.compile(r"^<?batlehub|\[(crates|server|cli)/")
+# The two fixed inputs, from this file's own location rather than the command
+# line: the script opens no path it was handed except the run's own output.
+REPO = Path(__file__).resolve().parents[2]
+ROUTES = REPO / "perf/profile_routes.txt"
+SPEC = REPO / "ui/openapi.json"
+
+OWN = re.compile(r"(?:^<?batlehub)|(?:\[(?:crates|server|cli)/)")
 HASH = re.compile(r"::h[0-9a-f]{16}$")
 METHODS = ("get", "put", "post", "delete", "patch", "head")
 
@@ -91,7 +97,7 @@ def crate_of(frame: str) -> str:
     tag = re.search(r"\[([A-Za-z0-9_\-]+?)-\d+\.\d+[^/\]]*/", frame)
     if tag:
         return tag.group(1).replace("-", "_")
-    path = re.match(r"^<*([A-Za-z0-9_]+)::", frame)
+    path = re.match(r"^<*(\w+)::", frame)
     return path.group(1) if path else frame.split(" ")[0]
 
 
@@ -141,11 +147,25 @@ def arm_numbers(arms: Path, op: str, seconds: int, rate: int, frequency: int) ->
         "samples": samples,
         "cpu_ms_per_request": cpu_ms,
         "wall": wall_split(wait, cpu_ms),
+        "stages": stage_split(wait),
         "dropped_iterations": dropped,
         "p95_ms": k6.get("http_req_duration", {}).get("p(95)"),
         "top_leaf": leaf.most_common(5),
         "top_own": own.most_common(5),
         "routes": routes,
+    }
+
+
+def stage_split(wait: dict) -> dict[str, float]:
+    """Per-request milliseconds in each step a request marked with a
+    `batlehub::stage` span (`batlehub_core::services::stage`)."""
+    n = wait.get("requests", 0)
+    if not n:
+        return {}
+    return {
+        key[len("stage."):-len("_ns")]: value / n / 1e6
+        for key, value in wait.items()
+        if key.startswith("stage.") and key.endswith("_ns")
     }
 
 
@@ -261,6 +281,17 @@ def render(arms: dict, args, coverage: dict, problems: list[str], baseline: dict
                    f"{w['sql_ms']:.2f} ({w['sql_statements']:.1f}) | {w['upstream_ms']:.2f} | "
                    f"{w['other_await_ms']:.2f} |")
 
+    staged = [op for op in arms if arms[op].get("stages")]
+    if staged:
+        out += ["", "### Where the steps go", "",
+                "Per request, in ms, for the paths that mark their steps with a `batlehub::stage` span. "
+                "Steps can nest and can run outside the request's own time, so they need not sum to "
+                "its wall time; the largest is the one to read first.", ""]
+        for op in staged:
+            steps = sorted(arms[op]["stages"].items(), key=lambda kv: kv[1], reverse=True)
+            out.append(f"**`{op}`**: " + ", ".join(f"`{name}` {ms:.2f}" for name, ms in steps))
+            out.append("")
+
     total = Counter()
     for a in arms.values():
         for fn, n in a["top_own"]:
@@ -299,8 +330,6 @@ def main() -> int:
     ap.add_argument("--seconds", type=int, required=True)
     ap.add_argument("--rate", type=int, required=True)
     ap.add_argument("--frequency", type=int, required=True)
-    ap.add_argument("--routes", type=Path, required=True)
-    ap.add_argument("--spec", type=Path, required=True)
     ap.add_argument("--baseline", type=Path)
     ap.add_argument("--partial", action="store_true",
                     help="only some arms ran: do not require every `profiled` route to be reached")
@@ -310,8 +339,8 @@ def main() -> int:
     ops = sorted(p.name[: -len(".k6.json")] for p in arms_dir.glob("*.k6.json"))
     arms = {op: arm_numbers(arms_dir, op, args.seconds, args.rate, args.frequency) for op in ops}
 
-    spec = spec_operations(args.spec)
-    inventory = read_inventory(args.routes)
+    spec = spec_operations(SPEC)
+    inventory = read_inventory(ROUTES)
     hit = {r for a in arms.values() for r in a["routes"]}
     problems = inventory_problems(inventory, hit, spec, args.partial)
     unmatched = [op for op, a in arms.items() if any("<unmatched>" in r for r in a["routes"])]

@@ -3977,12 +3977,9 @@ print(seq)')" || heavy_fail "could not truncate the chain for case 5b"
   # ── 6. the recorded stream through the shipped rules ──
   heavy_mark "audit-replay"
   [[ "$(audit_count audit_purge)" == 2 ]] || heavy_fail "the two purges left $(audit_count audit_purge) audit_purge lines in the stream"
-  audit_lines > "$HEAVY_WORK/audit-stream.jsonl"
-  printf '%s\n' '{"audit_purge.yml": true, "credential_rejected_burst.yml": true, "audit_chain_gap.yml": true, "bulk_pull.yml": false}' \
-    > "$HEAVY_WORK/audit-expect.json"
-  # From inside the work dir: replay.py refuses a path outside its cwd.
-  (cd "$HEAVY_WORK" && uv run --quiet --with pyyaml==6.0.3 python "$HEAVY_ROOT/deploy/siem/replay.py" \
-    --stream audit-stream.jsonl --expect audit-expect.json) \
+  # replay.py takes no paths: the stream on stdin, the expectations inline.
+  audit_lines | uv run --quiet --with pyyaml==6.0.3 python "$HEAVY_ROOT/deploy/siem/replay.py" --stdin \
+    --expect-json '{"audit_purge.yml": true, "credential_rejected_burst.yml": true, "audit_chain_gap.yml": true, "bulk_pull.yml": false}' \
     || heavy_fail "the shipped rules do not fire on the stream this run recorded"
 
   heavy_log "AUDIT-STREAM-OK ($(audit_lines | wc -l) audit lines)"

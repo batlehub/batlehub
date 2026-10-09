@@ -3,6 +3,8 @@ use super::{
     CoreError, Identity, LocalRegistryService, PackageId, PublishRequest, PublishedPackage,
     QuotaCheck, StorageMeta, Visibility,
 };
+use crate::services::stage;
+use tracing::Instrument as _;
 
 /// Everything [`LocalRegistryService::enforce_publish_policy`] needs to know about
 /// the artifact being published, grouped so the function takes one parameter for
@@ -691,6 +693,7 @@ impl LocalRegistryService {
                 },
                 &req.publisher,
             )
+            .instrument(stage("publish_policy"))
             .await?;
 
         // Inherit the existing package visibility so that publishing a new version
@@ -704,7 +707,11 @@ impl LocalRegistryService {
             // that revokes on rollback) would otherwise charge the publisher for
             // bytes that are never stored, so revoke the reservation before
             // propagating the error.
-            match ns_port.get_visibility(&req.registry, &req.name).await {
+            match ns_port
+                .get_visibility(&req.registry, &req.name)
+                .instrument(stage("publish_visibility"))
+                .await
+            {
                 Ok(v) => v,
                 Err(e) => {
                     self.revoke_quota(&req.publisher, &req.registry, req.artifact.len() as u64)
@@ -776,23 +783,31 @@ impl LocalRegistryService {
         // — from the moment it is stored, and a `FirstSeen` job is queued, so
         // the seconds between publish and first pull are not a window in
         // which an unscanned version is listed.
-        self.first_sight_after_publish(&req).await;
+        self.first_sight_after_publish(&req)
+            .instrument(stage("publish_first_sight"))
+            .await;
 
         // Invalidate explore cache so the new version appears without waiting for TTL expiry.
         if let Some(ref cache) = self.explore_cache {
-            cache.invalidate(Some(&req.registry)).await;
+            cache
+                .invalidate(Some(&req.registry))
+                .instrument(stage("publish_explore_invalidate"))
+                .await;
         }
 
         // Step 4: generate SBOM. When `required` is true and generation fails,
         // roll back the publish (version row + bytes + quota) and return the
         // error. This runs *before* owner registration so a rejected publish
         // never leaves a dangling owner claim on a name with no versions.
-        self.run_publish_sbom(&req, &storage_key, bytes).await?;
+        self.run_publish_sbom(&req, &storage_key, bytes)
+            .instrument(stage("publish_sbom"))
+            .await?;
 
         // Step 5: on first publish, register the publisher as the package admin.
         // Last, and only once the publish is fully committed, so it is never
         // orphaned by a later rollback.
         self.register_initial_owner(is_new_package, &req.registry, &req.name, &req.publisher)
+            .instrument(stage("publish_owner"))
             .await;
 
         Ok(quota_check)
@@ -841,7 +856,12 @@ impl LocalRegistryService {
         let version = req.version.as_str();
 
         // Step 1: reserve the version (inserted as 'pending', invisible to readers).
-        if let Err(e) = self.backend.publish(pkg).await {
+        if let Err(e) = self
+            .backend
+            .publish(pkg)
+            .instrument(stage("publish_reserve"))
+            .await
+        {
             self.revoke_quota(publisher, registry, bytes).await;
             return Err(e);
         }
@@ -858,6 +878,7 @@ impl LocalRegistryService {
                     checksum: Some(req.checksum.clone()),
                 },
             )
+            .instrument(stage("publish_store"))
             .await
         {
             self.remove_pending(registry, name, version).await;
@@ -867,8 +888,15 @@ impl LocalRegistryService {
 
         // Step 3: promote the pending row to 'published'. On failure, undo both
         // the storage write and the pending row so the caller gets a clean error.
-        self.invalidate_documents(registry).await;
-        if let Err(e) = self.backend.commit_publish(registry, name, version).await {
+        self.invalidate_documents(registry)
+            .instrument(stage("publish_invalidate_documents"))
+            .await;
+        if let Err(e) = self
+            .backend
+            .commit_publish(registry, name, version)
+            .instrument(stage("publish_commit"))
+            .await
+        {
             self.remove_pending(registry, name, version).await;
             if let Err(err) = self.storage.delete(storage_key).await {
                 tracing::error!("storage cleanup after commit failure: {err}");
