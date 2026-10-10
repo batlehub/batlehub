@@ -1,6 +1,7 @@
 pub mod access_log;
 pub mod advisory;
 pub mod air_gap;
+pub mod audit_seal;
 pub mod banner;
 pub mod explore;
 pub mod forge;
@@ -33,6 +34,7 @@ pub use air_gap::{
     AirGapPolicy, BundleImport, ContentMiss, MissFilter, MissKind, RecordedMiss,
     MAX_MISSES_PER_REGISTRY,
 };
+pub use audit_seal::{SealKind, SealRecord};
 pub use banner::{BannerLevel, GlobalBanner};
 pub use explore::{
     resolve_state, ExploreEntry, ExploreFilter, ExplorePackageDetail, ExploreSortBy,

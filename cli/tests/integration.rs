@@ -305,6 +305,7 @@ impl TestServer {
             sumdb_map: batlehub_web::SumDbMap::default(),
             registry_host_map: batlehub_web::RegistryHostMap::default(),
             proxy_trust: batlehub_web::ProxyTrust::default(),
+            discovery: Default::default(),
             config_path: "config.toml".to_owned(),
             config_overlays: Vec::new(),
             config_change_repo: None,

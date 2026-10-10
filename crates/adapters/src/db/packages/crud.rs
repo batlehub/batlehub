@@ -4,7 +4,10 @@ use super::{
     PackageStatus, PackageSummary, PgPool, Row, Utc, Uuid,
 };
 
-pub(super) async fn record_access_impl(pool: &PgPool, event: AccessEvent) -> Result<(), CoreError> {
+pub(super) async fn record_access_impl(
+    pool: &PgPool,
+    event: &AccessEvent,
+) -> Result<(), CoreError> {
     let (outcome, deny_reason): (&str, Option<String>) = match &event.result {
         AccessResult::Allowed => ("allowed", None),
         AccessResult::Denied { reason } => ("denied", Some(reason.clone())),
@@ -22,13 +25,40 @@ pub(super) async fn record_access_impl(pool: &PgPool, event: AccessEvent) -> Res
         .as_ref()
         .and_then(|p| p.artifact.as_deref());
 
+    // Ensure the package appears in list_packages by creating an 'available' status
+    // row on first access. DO NOTHING preserves any existing blocked status.
+    // Restricted to the actions that always carry a real, version-specific
+    // package coordinate — ownership/visibility/account-wide actions must not
+    // spuriously create (or reuse an empty-version) package_statuses row.
+    let creates_status_row = event.package_id.is_some()
+        && matches!(event.result, AccessResult::Allowed)
+        && matches!(
+            event.action,
+            AccessAction::Download
+                | AccessAction::ViewMetadata
+                | AccessAction::Block
+                | AccessAction::Unblock
+        );
+
+    // One statement, not two: this runs on every read, and the status insert
+    // is a no-op after a coordinate's first one. A data-modifying `WITH` runs
+    // exactly once whether or not the outer statement reads it.
     let query = sqlx::query(
         r#"
-        INSERT INTO access_events
-            (id, user_id, user_role, registry, package_name, package_version,
-             package_artifact, action, outcome, deny_reason, created_at,
-             ip_address, user_agent)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        WITH event AS (
+            INSERT INTO access_events
+                (id, user_id, user_role, registry, package_name, package_version,
+                 package_artifact, action, outcome, deny_reason, created_at,
+                 ip_address, user_agent, throttled_count, detail)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $16, $17)
+        )
+        INSERT INTO package_statuses
+            (id, registry, package_name, package_version, package_artifact,
+             status, updated_at)
+        SELECT $14, $4, $5, $6, $7, 'available', NOW()
+        WHERE $15
+        ON CONFLICT (registry, package_name, package_version, COALESCE(package_artifact, ''))
+        DO NOTHING
         "#,
     )
     .bind(event.id)
@@ -44,48 +74,48 @@ pub(super) async fn record_access_impl(pool: &PgPool, event: AccessEvent) -> Res
     .bind(event.timestamp)
     .bind(&event.ip_address)
     .bind(&event.user_agent)
+    .bind(Uuid::new_v4())
+    .bind(creates_status_row)
+    .bind(event.throttled_count.map(|n| n as i32))
+    .bind(&event.detail)
     .execute(pool);
     crate::db::timed_query("record_access", query)
         .await
         .db_err()?;
 
-    // Ensure the package appears in list_packages by creating an 'available' status
-    // row on first access. DO NOTHING preserves any existing blocked status.
-    // Restricted to the actions that always carry a real, version-specific
-    // package coordinate — ownership/visibility/account-wide actions must not
-    // spuriously create (or reuse an empty-version) package_statuses row.
-    let creates_status_row = matches!(event.result, AccessResult::Allowed)
-        && matches!(
-            event.action,
-            AccessAction::Download
-                | AccessAction::ViewMetadata
-                | AccessAction::Block
-                | AccessAction::Unblock
-        );
-    if creates_status_row {
-        if let Some(pkg) = &event.package_id {
-            sqlx::query(
-                r#"
-                INSERT INTO package_statuses
-                    (id, registry, package_name, package_version, package_artifact,
-                     status, updated_at)
-                VALUES ($1, $2, $3, $4, $5, 'available', NOW())
-                ON CONFLICT (registry, package_name, package_version, COALESCE(package_artifact, ''))
-                DO NOTHING
-                "#,
-            )
-            .bind(Uuid::new_v4())
-            .bind(&pkg.registry)
-            .bind(&pkg.name)
-            .bind(&pkg.version)
-            .bind(&pkg.artifact)
-            .execute(pool)
-            .await
-            .db_err()?;
-        }
-    }
-
     Ok(())
+}
+
+/// Both reads of the trait default in one: the coordinate's own row sorts
+/// before the bare version's (`IS NULL` is false first), so a block on the
+/// artifact is the reason reported when both exist, as it was before.
+pub(super) async fn covering_block_impl(
+    pool: &PgPool,
+    pkg: &PackageId,
+) -> Result<Option<String>, CoreError> {
+    let row = sqlx::query(
+        r#"
+        SELECT block_reason
+        FROM package_statuses
+        WHERE registry = $1 AND package_name = $2 AND package_version = $3
+          AND (package_artifact IS NOT DISTINCT FROM $4 OR package_artifact IS NULL)
+          AND status = 'blocked'
+        ORDER BY package_artifact IS NULL
+        LIMIT 1
+        "#,
+    )
+    .bind(&pkg.registry)
+    .bind(&pkg.name)
+    .bind(&pkg.version)
+    .bind(&pkg.artifact)
+    .fetch_optional(pool)
+    .await
+    .db_err()?;
+
+    Ok(row.map(|r| {
+        r.get::<Option<String>, _>("block_reason")
+            .unwrap_or_default()
+    }))
 }
 
 /// Every blocked version of one package.

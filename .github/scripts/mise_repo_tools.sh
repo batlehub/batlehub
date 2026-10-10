@@ -2,7 +2,7 @@
 # The install directories *this repository's* mise.toml asks for, comma
 # separated — the `--only-tools` argument of `mise_cve_report.py`.
 #
-# `MISE_GLOBAL_CONFIG_FILE=/dev/null` is the whole point. mise merges
+# Pointing `MISE_GLOBAL_CONFIG_FILE` at an empty file is the whole point. mise merges
 # `~/.config/mise/config.toml` into every resolution and keeps a tool installed
 # for as long as any tracked config asks for it, so a workstation's install
 # tree holds its owner's global tools and every other project's as well: this
@@ -18,7 +18,13 @@
 # reports a finding against.
 set -euo pipefail
 
-MISE_GLOBAL_CONFIG_FILE=/dev/null mise ls --current --json | python3 -c '
+# An empty `.toml`, not `/dev/null`: mise 2026.10 parses the file and refuses
+# one with no config extension ("unknown config file type"), and the empty
+# output that left made `--only-tools` a silent no-op.
+empty_global="$(mktemp --suffix .toml)"
+trap 'rm -f "$empty_global"' EXIT
+
+MISE_GLOBAL_CONFIG_FILE="$empty_global" mise ls --current --json | python3 -c '
 import json, os, sys
 
 tools = json.load(sys.stdin)

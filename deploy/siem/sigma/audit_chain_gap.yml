@@ -1,0 +1,49 @@
+title: BatleHub audit seal record
+name: batlehub_audit_seal
+id: f4e7ac3d-3b16-48bb-b533-b2f7f030f0da
+status: experimental
+description: >-
+  One record of the audit trail's seal chain, as it left the host.
+references:
+  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+author: BatleHub
+date: 2026-10-05
+logsource:
+  product: batlehub
+  service: audit
+detection:
+  selection:
+    event.dataset: batlehub.audit
+    event.action: audit_seal
+  condition: selection
+falsepositives:
+  - Every sealed window
+level: informational
+---
+title: BatleHub audit chain rewritten
+id: 5dc02314-95ea-4aa3-8eec-14c3d70c23a0
+status: experimental
+description: >-
+  The same position in the audit trail's seal chain arrived with two different
+  digests. A chain only grows, so a position is sealed once: seeing it twice
+  means the records after some point were deleted and the chain was extended
+  again from there — the truncation the stream copy exists to expose (RFC 0036
+  §5.3). Run `batlehub-cli admin audit verify --head <the digest you received
+  last>` to confirm.
+references:
+  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+author: BatleHub
+date: 2026-10-05
+tags:
+  - attack.t1070
+correlation:
+  type: value_count
+  rules:
+    - batlehub_audit_seal
+  group-by:
+    - batlehub.audit.seal.seq
+  timespan: 30d
+  condition:
+    field: batlehub.audit.seal.digest
+    gte: 2
+level: critical

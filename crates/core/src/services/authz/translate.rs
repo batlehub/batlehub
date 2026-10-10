@@ -368,6 +368,7 @@ pub fn instance_node(explicit: Option<&GrantMap>) -> Node {
             // registry) resolves for an administrator without naming one.
             Action::AuditRead,
             Action::AuditPurge,
+            Action::GdprErase,
             Action::StatsRead,
             Action::PackagesBlock,
             // RFC 0002 (recast): the flag listing spans every registry too.
@@ -753,6 +754,7 @@ mod control_surface_tests {
             Action::PackagesBlock,
             Action::AuditRead,
             Action::AuditPurge,
+            Action::GdprErase,
             Action::StatsRead,
             Action::OwnersRead,
             Action::OwnersWrite,

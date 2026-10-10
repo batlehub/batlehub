@@ -1,7 +1,7 @@
 # The worker image (RFC 0018 §5.4, §6.3): the same `batlehub` binary as the
 # proxy image, started with `--roles worker`, plus the scanner toolchains the
 # proxy image deliberately does not carry — bubblewrap for the sandbox,
-# postmortem and the Trivy client.
+# postmortem, the Trivy client and yara-x's `yr` (RFC 0036 §6.6).
 #
 # Why a second image rather than a fatter proxy image: only the worker opens
 # artifacts, so only the worker needs the tools that open them, and the proxy
@@ -22,6 +22,10 @@
 
 ARG POSTMORTEM_VERSION=2.4.0
 ARG TRIVY_VERSION=0.74.0
+ARG YARA_X_VERSION=1.20.0
+# The release's own asset digest (GitHub's `digest` field); the binary runs
+# operator rules over hostile bytes, so it is checked, not only fetched.
+ARG YARA_X_SHA256=cabb8df46492fff59c51261302c71ed9cb2cef393d3f0ca560801a34a8e24cbe
 
 # ── Build stage: the server binary, as the proxy image builds it ─────────────
 FROM rust:1.98-slim-bookworm@sha256:ebd900bae66fd508b466cef82d64a83a5fb34682e4c8b2797a42908bddc95a57 AS builder
@@ -57,6 +61,8 @@ RUN touch crates/*/src/lib.rs server/src/main.rs cli/src/main.rs && \
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS tools
 ARG POSTMORTEM_VERSION
 ARG TRIVY_VERSION
+ARG YARA_X_VERSION
+ARG YARA_X_SHA256
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl gzip tar \
     && rm -rf /var/lib/apt/lists/*
@@ -80,6 +86,17 @@ RUN releases="https://github.com/aquasecurity/trivy/releases/download" \
     | tar -xz -C /tmp/tv \
     && install -m 0755 "$(find /tmp/tv -type f -name trivy | head -1)" /usr/local/bin/trivy \
     && rm -rf /tmp/tv
+# yara-x's CLI, for `[scanners.yara]`: a static binary, idle unless a rules
+# directory is configured.
+RUN releases="https://github.com/VirusTotal/yara-x/releases/download" \
+    && asset="yara-x-v${YARA_X_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+    && mkdir -p /tmp/yx \
+    && curl -fsSL --proto '=https' --proto-redir '=https' -o "/tmp/yx/$asset" \
+        "$releases/v${YARA_X_VERSION}/$asset" \
+    && echo "${YARA_X_SHA256}  /tmp/yx/$asset" | sha256sum -c - \
+    && tar -xzf "/tmp/yx/$asset" -C /tmp/yx \
+    && install -m 0755 /tmp/yx/yr /usr/local/bin/yr \
+    && rm -rf /tmp/yx
 
 # ── Runtime image ─────────────────────────────────────────────────────────────
 # Debian rather than distroless: `bwrap` needs a userland, and the GuardDog
@@ -105,6 +122,7 @@ RUN apt-get update && apt-get upgrade -y --no-install-recommends \
 COPY --from=builder /build/target/release/batlehub /usr/local/bin/batlehub
 COPY --from=tools /usr/local/bin/postmortem /usr/local/bin/postmortem
 COPY --from=tools /usr/local/bin/trivy      /usr/local/bin/trivy
+COPY --from=tools /usr/local/bin/yr         /usr/local/bin/yr
 
 # The sandbox's per-job work directories go under TMPDIR; the chart mounts an
 # emptyDir here (`noexec` where the node allows it).

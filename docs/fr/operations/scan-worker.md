@@ -1,7 +1,7 @@
 ---
 title: Le worker d'analyse
 sourcePath: operations/scan-worker.md
-sourceHash: cd05789eb4328a24
+sourceHash: 3404edf7adaae344
 ---
 
 # Le worker d'analyse
@@ -28,7 +28,7 @@ garder en tête quand quelque chose ne va pas : un worker mort ou saturé
 
 Séparer les rôles est ce que fait `worker.enabled` dans le chart, et cela vaut
 la peine pour deux raisons. Les outils d'analyse — bubblewrap, `postmortem`, le
-client Trivy, éventuellement GuardDog — ne vivent que dans l'image du worker, et
+client Trivy, `yr` de yara-x, éventuellement GuardDog — ne vivent que dans l'image du worker, et
 seul le worker a besoin de sortir vers les artefacts amont, le serveur Trivy et
 Rekor. Voir [le chart Helm](/fr/guide/install/helm) pour les valeurs du chart et
 [Ce qui sort de cette instance](/fr/operations/egress) pour les flux sortants.
@@ -61,8 +61,9 @@ file d'un coup.
 
 Les travaux sont **loués, pas consommés**. Une passe, c'est :
 
-1. **Battement de cœur et publication des profondeurs.** Le worker écrit dans
-   `worker_heartbeats` et met à jour la jauge des travaux en file. Ni l'un ni
+1. **Battement de cœur et publication des profondeurs**, au plus toutes les
+   30 secondes. Le worker écrit dans `worker_heartbeats` et met à jour la jauge
+   des travaux en file. Ni l'un ni
    l'autre n'est porteur, donc aucun des deux ne peut faire échouer la passe.
 2. **Louer un lot** — au plus `max_concurrent`, filtré sur les registres de
    `[worker]` quand cette liste est renseignée, pris avec
@@ -75,10 +76,19 @@ Les travaux sont **loués, pas consommés**. Une passe, c'est :
    chacun, puis lancer les enrichisseurs sur ce qu'ils ont trouvé.
 5. **Enregistrer le verdict** et fermer la ligne.
 
-Entre deux passes, la boucle ne dort `idle_poll` que si la file était vide.
+Les travaux épuisés sont balayés après une passe qui a traité des travaux, et
+sinon avec le battement de cœur.
+
+Entre deux passes, la boucle n'attend que si la file était vide, et l'attente
+double depuis `idle_poll` jusqu'à 16 secondes tant qu'elle le reste : un worker
+au repos exécute une dizaine de requêtes par minute, au lieu des 150 que coûtait
+une interrogation fixe toutes les deux secondes. Un travail mis en file par le
+**même processus** réveille le worker aussitôt, si bien qu'un worker embarqué
+démarre une analyse plus tôt qu'avant ; un worker dans son propre processus
+(`--roles worker`) le prend en au plus 16 secondes.
 
 Les valeurs par défaut sont quatre travaux simultanés, un `job_timeout` de dix
-minutes, trois tentatives et une attente à vide de deux secondes. Elles vivent
+minutes, trois tentatives et une attente à vide qui commence à deux secondes. Elles vivent
 dans `[worker]`, documenté dans la
 [référence de configuration](/fr/guide/configuration#scanners-and-worker).
 
@@ -104,7 +114,7 @@ lieu de faire comme si elle était passée.
 
 ## Ce sous quoi tournent les analyseurs
 
-Tout analyseur binaire — `postmortem`, `guarddog`, `trivy` — passe par un seul
+Tout analyseur binaire — `postmortem`, `guarddog`, `trivy`, `yara` — passe par un seul
 lanceur, et par `bwrap`. L'artefact est une entrée contrôlée par l'attaquant, et
 le worker est le seul processus qui l'ouvre tout en détenant les identifiants de
 la base et du stockage : le bac à sable est donc la frontière qui compte le plus
@@ -192,6 +202,14 @@ départ du chemin de [réponse à incident](/fr/operations/incident-response).
 `ghcr.io/batleforc/batlehub-worker-guarddog` est la même image avec GuardDog en
 plus, construite sur elle, et c'est ce que `worker.image.repository` doit viser
 quand un registre nomme `guarddog` dans ses analyseurs.
+
+`yr` est présent sur les deux, inactif tant que `[scanners.yara]` ne nomme pas
+de répertoire de règles. Les règles sont à fournir : placez-les dans une
+ConfigMap et donnez son nom à `worker.yaraRules.configMap`, qui la monte en
+lecture seule sur `/etc/batlehub/yara`. Une mise à jour de la ConfigMap atteint
+le pod sans redémarrage, et l'analyse suivante compile les nouvelles règles ;
+une règle qui ne compile plus fait de chaque analyse un `SCANNER_ERROR`, donc
+vérifiez une modification avec `yr check <dir>` avant de l'appliquer.
 
 Les deux sont analysées à chaque construction et lors d'une reconstruction
 quotidienne, et les analyseurs qu'elles embarquent sont eux-mêmes des binaires

@@ -451,8 +451,11 @@ pub(super) fn spawn_login_state_prune(store: Arc<dyn batlehub_core::ports::Login
 pub(super) fn add_user_token_provider(
     auth_providers: &mut Vec<Arc<dyn AuthProvider>>,
     token_repo: Arc<dyn UserTokenRepository>,
+    audit: Arc<dyn batlehub_core::ports::PackageRepository>,
 ) {
-    auth_providers.push(Arc::new(UserTokenAuthProvider::new(token_repo)));
+    auth_providers.push(Arc::new(
+        UserTokenAuthProvider::new(token_repo).with_audit(audit),
+    ));
     info!("configured user-token auth provider");
 }
 
@@ -567,6 +570,30 @@ pub(super) fn build_scanners(config: &batlehub_config::schema::AppConfig) -> Res
                     }),
                 );
             }
+            ScannerConfig::Yara {
+                command, rules_dir, ..
+            } => {
+                let rules_dir = std::path::PathBuf::from(rules_dir);
+                // An empty directory compiles to no rules and every scan is
+                // clean: a typo in the path would read as "nothing found".
+                if !batlehub_adapters::scanners::YaraScanner::has_rules(&rules_dir) {
+                    anyhow::bail!(
+                        "[scanners.{name}] rules_dir '{}' holds no .yar or .yara file; \
+                         a YARA scanner with no rules answers clean for every artifact",
+                        rules_dir.display()
+                    );
+                }
+                out.insert(
+                    name.clone(),
+                    Arc::new(batlehub_adapters::scanners::YaraScanner {
+                        command: require_command(name, command)?,
+                        rules_dir,
+                        sandbox: sandbox.clone(),
+                        extract: extract.clone(),
+                        timeout: job_timeout,
+                    }),
+                );
+            }
             ScannerConfig::Trivy {
                 endpoint,
                 timeout_secs,
@@ -669,4 +696,98 @@ pub(super) fn build_scanners(config: &batlehub_config::schema::AppConfig) -> Res
         scanners: out,
         enrichers,
     })
+}
+
+// ── The audit trail (RFC 0036 §6.3–6.4) ──────────────────────────────────────
+
+/// The audit-trail service, from `[audit]`. Built whatever the config says:
+/// without `[audit]` it seals nothing and expires nothing, and still answers
+/// the purge (class-restricted), the export and — with an `erasure_key` — the
+/// erasure.
+pub(super) fn build_audit_trail(
+    config: &batlehub_config::schema::AppConfig,
+    repo: &Arc<batlehub_adapters::db::PgPackageRepository>,
+) -> anyhow::Result<batlehub_core::services::audit_trail::AuditTrailService> {
+    use batlehub_core::services::audit_trail::{AuditPolicy, AuditTrailService, AUDIT_LEADER_KEY};
+    let policy = match &config.audit {
+        None => AuditPolicy::default(),
+        Some(a) => {
+            let mut policy = AuditPolicy::from_days(
+                a.access_retention_days,
+                a.security_retention_days,
+                a.pseudonymise_after_days,
+            );
+            if a.sealing() {
+                let seed = a.seal_signing_key.as_deref().unwrap_or_default();
+                let key =
+                    batlehub_core::services::signature::VsxSigningKey::from_seed_hex(seed, None)
+                        .map_err(|e| anyhow::anyhow!("[audit] seal_signing_key: {e}"))?;
+                policy.sealing = Some((std::time::Duration::from_secs(a.seal_interval_secs), key));
+            }
+            policy.erasure_key = a.erasure_key.clone();
+            policy
+        }
+    };
+    Ok(AuditTrailService::new(
+        repo.clone(),
+        repo.clone(),
+        Arc::new(batlehub_adapters::db::PgAdvisoryLeader::new(
+            repo.pool(),
+            AUDIT_LEADER_KEY,
+        )),
+        policy,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(scanners: &str) -> batlehub_config::schema::AppConfig {
+        batlehub_config::load_from_str(&format!(
+            r#"
+            [database]
+            type = "postgresql"
+            url = "postgresql://localhost/test"
+
+            [storage]
+            type = "filesystem"
+            path = "/tmp/batlehub-test"
+
+            [server]
+            host = "127.0.0.1"
+            port = 8080
+            {scanners}
+            "#
+        ))
+        .expect("the config loads: a scanner's command is the worker's to check")
+    }
+
+    /// The checks config validation no longer makes (it runs on proxy-only
+    /// processes too) are the worker's, here, before any job is leased.
+    #[test]
+    fn the_worker_refuses_a_command_it_cannot_run_and_a_yara_dir_with_no_rules() {
+        let err = build_scanners(&config(
+            "[scanners.pm]\ntype = \"postmortem\"\ncommand = \"/nonexistent/postmortem\"",
+        ))
+        .err()
+        .expect("a missing postmortem must not start the worker")
+        .to_string();
+        assert!(err.contains("not an executable file"), "{err}");
+
+        let rules = tempfile::tempdir().unwrap();
+        let yara = format!(
+            "[scanners.y]\ntype = \"yara\"\ncommand = \"/bin/sh\"\nrules_dir = \"{}\"",
+            rules.path().display()
+        );
+        let err = build_scanners(&config(&yara))
+            .err()
+            .expect("an empty rules dir must not start the worker")
+            .to_string();
+        assert!(err.contains("holds no .yar"), "{err}");
+
+        std::fs::write(rules.path().join("r.yar"), "rule r { condition: true }").unwrap();
+        let built = build_scanners(&config(&yara)).expect("rules and a command: the worker starts");
+        assert!(built.scanners.contains_key("y"));
+    }
 }

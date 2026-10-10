@@ -259,6 +259,9 @@ fn default_upstreams(kind: RegistryKind, reg: &RegistryConfig) -> Vec<String> {
         // operator would otherwise retype, and it is the one every stock
         // client already trusts the key of (RFC 0028 §4.1).
         RegistryKind::Nix => resolve_urls(&reg.upstreams, "https://cache.nixos.org"),
+        // The registry root Che and `registry-library` are both given; one
+        // entry, which config validation enforces (RFC 0035 §4.5).
+        RegistryKind::Devfile => resolve_urls(&reg.upstreams, "https://registry.devfile.io"),
     }
 }
 
@@ -360,6 +363,9 @@ fn make_one(
         // service (it signs what was published, never what was relayed), and
         // `require_upstream_sigs` is read at the handler, on the document.
         RegistryKind::Nix => Arc::new(batlehub_adapters::registry::NixBinaryCacheClient::new(
+            url, opts,
+        )?),
+        RegistryKind::Devfile => Arc::new(batlehub_adapters::registry::DevfileRegistryClient::new(
             url, opts,
         )?),
     };

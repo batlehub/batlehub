@@ -433,7 +433,7 @@ tool needs it.
 Closed by RFC 0006 §13.1-bis. Served: `POST vscode/gallery/extensionquery`,
 `vscode/gallery/publishers/{p}/vsextensions/{n}/{v}/vspackage`,
 `vscode/asset/…`, `vscode/unpkg/…`, `vscode/item`, the OpenVSX REST API
-(`api/-/search`, `api/{ns}/{ext}`, `api/{ns}/{ext}/{v}`,
+(`api/-/search`, `api/-/query`, `api/v2/-/query`, `api/{ns}/{ext}`, `api/{ns}/{ext}/{v}`,
 `api/{ns}/{ext}/{v}/file/{name}`), plus VSIX `GET`/`PUT`.
 
 `extensionquery` handles filter types 1, 4, 5, 7, 8, 9 and 10 and the flags
@@ -443,7 +443,7 @@ failing — the right default.
 Residual gaps, all secondary: `sortBy`/`sortOrder` are parsed but the result
 order is our own; filter type 12 (exclude-with-flags) is not honoured; the
 OpenVSX namespace endpoints (`api/{namespace}`, `api/{ns}/{ext}/reviews`,
-`api/-/query`, `api/version`) and the OpenVSX publish API (`api/-/publish`,
+`api/version`) and the OpenVSX publish API (`api/-/publish`,
 `api/user/publish`) are absent — we publish via `PUT …/{ext}/{version}/vsix`
 instead, which `ovsx publish` does not call.
 

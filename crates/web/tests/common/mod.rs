@@ -1233,7 +1233,7 @@ pub fn fixture_grants_with_explore(
     let expand = |v: &Vec<String>| {
         expand_patterns(v, WildcardScope::Legacy).expect("fixture patterns are valid")
     };
-    let get = |r: &Role| fixture.roles.get(r).map(&expand).unwrap_or_default();
+    let get = |r: &Role| fixture.roles.get(r).map(expand).unwrap_or_default();
 
     let snapshot = RbacSnapshot {
         anonymous: get(&Role::Anonymous),
@@ -1521,7 +1521,7 @@ pub async fn finish_test_app(
         .into_utoipa_app()
         .configure(configure_test_app(
             proxy_svc,
-            admin_svc,
+            Arc::clone(&admin_svc),
             token_repo,
             access_config,
             registry_map,
@@ -1592,7 +1592,13 @@ pub async fn finish_test_app(
             batlehub_web::ExposureConfig::default(),
         ));
 
-    init_service(app.wrap(AuthMiddlewareFactory::new(auth_providers))).await
+    init_service(
+        app.wrap(
+            AuthMiddlewareFactory::new(auth_providers)
+                .with_audit(batlehub_web::CredentialRejectionAudit::new(admin_svc)),
+        ),
+    )
+    .await
 }
 #[allow(clippy::too_many_arguments)]
 pub async fn finish_test_app_with_extra<E: 'static>(
@@ -1636,7 +1642,7 @@ pub async fn finish_test_app_with_extra<E: 'static>(
         .into_utoipa_app()
         .configure(configure_test_app(
             proxy_svc,
-            admin_svc,
+            Arc::clone(&admin_svc),
             token_repo,
             access_config,
             registry_map,
@@ -1692,7 +1698,13 @@ pub async fn finish_test_app_with_extra<E: 'static>(
         ))
         .app_data(actix_web::web::Data::new(extra));
 
-    init_service(app.wrap(AuthMiddlewareFactory::new(auth_providers))).await
+    init_service(
+        app.wrap(
+            AuthMiddlewareFactory::new(auth_providers)
+                .with_audit(batlehub_web::CredentialRejectionAudit::new(admin_svc)),
+        ),
+    )
+    .await
 }
 pub async fn make_app(
     repo: Arc<InMemoryRepo>,
@@ -3077,4 +3089,55 @@ pub fn apk_index_text(file: &[u8]) -> String {
         offset += consumed;
     }
     panic!("no APKINDEX entry in the served file");
+}
+
+// ── Route patterns, in one spelling ──────────────────────────────────────────
+
+/// Consume one `{param:regex}` body, having already read the opening brace, and
+/// return just the parameter name.
+///
+/// The scan is brace-balanced rather than a search for `}`: a constraint can
+/// contain braces of its own (`{filename:.+\.(?:tar\.bz2|conda)}` does not, but
+/// `{n:\d{1,3}}` would), and a naive split would truncate mid-pattern and
+/// silently invent a route.
+pub fn param_name(chars: &mut std::str::Chars<'_>) -> String {
+    let mut name = String::new();
+    let mut depth = 1usize;
+    let mut in_constraint = false;
+    for c in chars.by_ref() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            ':' if depth == 1 && !in_constraint => in_constraint = true,
+            _ if !in_constraint => name.push(c),
+            _ => {}
+        }
+    }
+    name
+}
+
+/// Drop `:regex` from every `{param:regex}`, then join `}/@` back to `}@`.
+///
+/// Both sides of the coverage comparison go through this: actix reports the
+/// pattern as registered, the inventory is written without the constraints, and
+/// comparing the two spellings directly would report thirteen phantom
+/// mismatches.
+pub fn canonical(pattern: &str) -> String {
+    let mut out = String::with_capacity(pattern.len());
+    let mut chars = pattern.chars();
+    while let Some(c) = chars.next() {
+        if c != '{' {
+            out.push(c);
+            continue;
+        }
+        out.push('{');
+        out.push_str(&param_name(&mut chars));
+        out.push('}');
+    }
+    out.replace("}/@", "}@")
 }

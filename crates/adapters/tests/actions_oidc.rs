@@ -54,6 +54,7 @@ fn bearer(token: &str) -> RawAuthRequest {
     RawAuthRequest {
         headers: [("authorization".to_owned(), format!("Bearer {token}"))].into(),
         query_params: Default::default(),
+        source_ip: None,
     }
 }
 

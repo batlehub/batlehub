@@ -268,6 +268,19 @@ pub fn dispatch_multi(
             _ => Vec::new(),
         },
 
+        // Both devfile index shapes list the whole registry. The v2 one loses
+        // blocked versions (and moves `default` off one); the legacy one names
+        // a single version per stack and loses the stack (RFC 0035 §4.4).
+        RegistryKind::Devfile => match ctx.document {
+            DocumentKind::Versions => with_json(doc, |json| {
+                crate::services::devfile::strip_v2(json, blocked)
+            }),
+            DocumentKind::LEGACY_INDEX => with_json(doc, |json| {
+                crate::services::devfile::strip_legacy(json, blocked)
+            }),
+            _ => Vec::new(),
+        },
+
         other => {
             tracing::warn!(
                 kind = %other,
@@ -567,6 +580,10 @@ fn strip(
         // `dispatch_multi`, not here. `Some(vec![])` rather than `None` because
         // the kind *is* filtered — just on the other entry point.
         RegistryKind::Conda => Some(Vec::new()),
+
+        // The devfile indexes describe the whole registry too, and take the same
+        // entry point for the same reason (RFC 0035 §6.2).
+        RegistryKind::Devfile => Some(Vec::new()),
 
         // Three APIs, one document shape. Forgejo is GitHub-compatible here and
         // GitLab uses the same `tag_name` field.
@@ -963,8 +980,11 @@ mod tests {
     ///   way to express that. The NAR route re-derives the coordinate from the
     ///   store hash in its own path and asks again, so a client holding a
     ///   narinfo from before the block is refused there too (RFC 0028 §5.3).
+    /// - **devfile** filters through [`dispatch_multi`] for conda's reason: its
+    ///   two index shapes list every stack of the registry (RFC 0035 §6.2).
     const FILTERED_ELSEWHERE: &[RegistryKind] = &[
         RegistryKind::Conda,
+        RegistryKind::Devfile,
         RegistryKind::Nix,
         RegistryKind::JetbrainsMarketplace,
         RegistryKind::Openvsx,

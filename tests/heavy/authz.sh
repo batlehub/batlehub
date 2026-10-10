@@ -53,6 +53,9 @@
 #               target at all                                     (no client)
 #   signing     RFC 0012 capabilities: artifact binding, expiry, and secret
 #               rotation in both directions                      (no client)
+#   audit       RFC 0036 §6.7: the audit stream under `[logging] format =
+#               "json"`, as npm produces it, replayed through the shipped
+#               Sigma rules                                        (npm, uv)
 #   npm | pypi | nuget | composer | conda | openvsx | rubygems | terraform |
 #   maven | cargo
 #               the pull boundary, driven by that ecosystem's real client.
@@ -127,6 +130,7 @@ GH_R="authz-github-$HEAVY_RUN"
 FJ_R="authz-forgejo-$HEAVY_RUN"
 GL_R="authz-gitlab-$HEAVY_RUN"
 NODEDIST_R="authz-nodedist-$HEAVY_RUN"
+DEVFILE_R="authz-devfile-$HEAVY_RUN"
 NIX_R="authz-nix-$HEAVY_RUN"
 SDKMAN_R="authz-sdkman-$HEAVY_RUN"
 JETBRAINS_R="authz-jetbrains-$HEAVY_RUN"
@@ -968,6 +972,17 @@ because an anonymous publish creates an owner-less package and \`can_publish\` a
     GET "$T_ADMIN" "/api/v1/admin/flags"
   authz_denied flags:read "$WHO_DENIED, who is role:user" \
     GET "$T_DENIED" "/api/v1/admin/flags"
+
+  # `gdpr:erase` (RFC 0036 §6.3): instance-wide like `audit:purge`, since a
+  # subject's audit rows span every registry. The subject has never existed,
+  # so the allowed arm erases nothing. It answers 200, or 501 when no
+  # `[audit] erasure_key` is set, and either one is a non-refusal.
+  authz_denied gdpr:erase "$WHO_DENIED erases a data subject" \
+    POST "$T_DENIED" "/api/v1/admin/gdpr/erase" \
+    -H "$HDR_JSON" --data "{\"user_id\":\"authz-nobody-$HEAVY_RUN\"}"
+  authz_allowed gdpr:erase "the administrator erases a data subject" \
+    POST "$T_ADMIN" "/api/v1/admin/gdpr/erase" \
+    -H "$HDR_JSON" --data "{\"user_id\":\"authz-nobody-$HEAVY_RUN\"}"
 
   # ── 14. The ecosystem verbs ────────────────────────────────────────────────
   #
@@ -2762,8 +2777,13 @@ phase_maven() {
   # fails outright (the plugins are ungranted to nobody), and the denied arm
   # would be refused for carrying no identity rather than for holding no verb,
   # which is the failure mode `authz-heavy-client-credentials` exists to catch.
-  # Resolver 1.9's spelling, which is Maven 3.9's resolver.
-  local mvn=("${HEAVY_RUNNER[@]}" mvn -Daether.connector.http.preemptiveAuth=true)
+  # Both spellings: `aether.connector.http.*` is Resolver 1.9 (Maven 3.9), and
+  # Resolver 2 (Maven 3.10+) renamed it `aether.transport.http.*` and silently
+  # ignores the old key. `heavy_runner_for` prefers a `mvn` already on PATH,
+  # and the GitHub image started shipping 3.10.0 on some runners in 2026-10.
+  # With only the old key, every arm went anonymous and the reader got a 403.
+  local mvn=("${HEAVY_RUNNER[@]}" mvn -Daether.connector.http.preemptiveAuth=true
+    -Daether.transport.http.preemptiveAuth=true)
   local work="$HEAVY_WORK/mvn"
   mkdir -p "$work"
 
@@ -3409,6 +3429,18 @@ elif [[ "$TARGET" == live:* ]]; then
   # to the ones the phases carry, which are this instance's.
   heavy_forge_auth_config tests/heavy/config.authz-live.toml
   heavy_start_server "$HEAVY_CONFIG"
+elif [[ "$TARGET" == "audit" ]]; then
+  # The same roster with the audit stream on (RFC 0036 §6.7). Appended rather
+  # than a second file: everything else about the server must be identical.
+  HEAVY_AUTHZ_AUDIT_CONFIG="$HEAVY_WORK/config.audit.toml"
+  cp tests/heavy/config.authz.toml "$HEAVY_AUTHZ_AUDIT_CONFIG"
+  printf '\n[logging]\nformat = "json"\n' >> "$HEAVY_AUTHZ_AUDIT_CONFIG"
+  # Cases 4 and 5 need a sealed trail. Five seconds, so a window closes and is
+  # sealed within the phase; a fixed test seed, so a rerun against the same
+  # database still verifies the chain an earlier run left.
+  printf '\n[audit]\nseal_interval_secs = 5\nseal_signing_key = "%s"\n' \
+    "9d61b19deffeba00aa3f3b6e3b0fe6a3f3a76b08e2c0a3f3b6e3b0fe6a3f3a76" >> "$HEAVY_AUTHZ_AUDIT_CONFIG"
+  heavy_start_server "$HEAVY_AUTHZ_AUDIT_CONFIG"
 else
   heavy_start_server tests/heavy/config.authz.toml
 fi
@@ -3511,6 +3543,7 @@ sdkman|releases:read|GET|/proxy/$SDKMAN_R/sdkman/broker/download/java/1.0.0/linu
 rustup|releases:read|GET|/proxy/$RUSTUP_R/rustup/dist/2026-01-01/rust-std-1.0.0-x86_64-unknown-linux-gnu.tar.gz|a dated dist component
 jetbrains|releases:read|GET|/proxy/$JETBRAINS_R/jetbrains/idea/probe.tar.gz|an archive by path
 generic|releases:read|GET|/proxy/$GENERIC_R/generic/probe.tar.gz|a file by path
+devfile|releases:read|GET|/proxy/$DEVFILE_R/devfiles/probe/1.0.0|one version's devfile. Route level and not live:devfile, because no client can carry the credential: registry-library sends its OCI requests with no Authorization whatever URL it is given (it builds the reference from the host alone), so a reader's pull cannot succeed against a registry closed to anonymous callers — the positive arm a live pair needs (RFC 0035 §5.1). The route resolves its version through the index listing first, so a refused caller is stopped there
 EOF
   return $?
 }
@@ -3566,6 +3599,393 @@ only looks covered."
   return 0
 }
 
+# ── RFC 0036 §6.7: the audit stream, as a real client produces it ────────────
+#
+# The server runs with `[logging] format = "json"`, so every audit row is also a
+# line on its stdout. What this target proves is that the *stream* — the thing a
+# SIEM reads — says what happened on the wire, and that the table agrees with it:
+#
+#   1. an allowed `npm install` is one `download` / `allowed` line naming the
+#      reader;
+#   2. a lockfile still naming a blocked version: `npm ci` is refused the
+#      tarball, and the stream has a `download` / `denied` line carrying the
+#      block's reason (a plain install never asks — see the case);
+#   3. a credential no provider accepts falls back to anonymous — npm meets the
+#      closed registry's `403` — and leaves one `credential_rejected` line;
+#      twenty more in the same minute leave none, and the next row after the
+#      minute carries the count it held back;
+#   4. once the run's windows are sealed, `batlehub-cli admin audit verify`
+#      exits 0; one row altered with SQL makes it exit 1 naming the window
+#      that holds it, and putting the row back makes it pass again;
+#   5. a purge removes the access rows and nothing else — the purge's own row
+#      and the credential rows stay, a second purge does not remove the
+#      first's row — and, the windows being sealed, goes through `expire`
+#      records, so the trail still verifies;
+#   5b. a sealed row altered and its seal records deleted, so the sealer
+#      re-seals the window over the altered row: the chain verifies on its
+#      own — that is the attack — and fails against the head the SIEM last
+#      received (RFC 0036 §5.3);
+#   6. the recorded stream, replayed through the shipped Sigma rules, makes
+#      `credential_rejected_burst.yml`, `audit_purge.yml` and
+#      `audit_chain_gap.yml` fire and leaves `bulk_pull.yml` quiet.
+#
+# Case 3 uses a `bh_pat_` token that was never minted rather than a
+# revoked one: minting needs an OIDC session, which no heavy suite has, and the
+# path the middleware takes is the same — `token_revoke` itself is proven by
+# `crates/web/tests/tokens_and_pagination.rs`.
+
+# audit_lines — every audit line the server has written so far. `cargo run`
+# puts its own stderr in the same file, so only JSON lines are kept.
+audit_lines() {
+  grep -F '"event.dataset":"batlehub.audit"' "$HEAVY_WORK/server.log" || true
+  return 0
+}
+
+# audit_count <action> [key=value]... — how many stream lines carry that
+# action and every one of the given fields.
+audit_count() {
+  local action="$1"
+  shift
+  audit_lines | python3 -c '
+import json, sys
+action, wanted = sys.argv[1], dict(a.split("=", 1) for a in sys.argv[2:])
+n = 0
+for line in sys.stdin:
+    e = json.loads(line)
+    if e.get("event.action") == action and all(str(e.get(k)) == v for k, v in wanted.items()):
+        n += 1
+print(n)' "$action" "$@"
+  return 0
+}
+
+# audit_sql <python> [arg]... — run a snippet against the server's database,
+# with `db` an autocommit psycopg connection and `args` the arguments. The
+# tampering cases change rows behind the server's back, which is the point:
+# nothing but the database can do that, so nothing but SQL can test for it.
+audit_sql() {
+  local code="$1"
+  shift
+  uv run --quiet --with "psycopg[binary]==3.2.10" python -c "
+import sys, psycopg
+db = psycopg.connect(sys.argv[1], autocommit=True)
+args = sys.argv[2:]
+$code" "$DATABASE_URL" "$@"
+  return 0
+}
+
+# audit_wait_sealed <rfc3339> — wait until a window ending after that instant
+# is sealed. A window is sealed one window after it closes, so 5 s windows
+# take up to ~15 s; 60 s is a stalled sealer, not a slow one.
+audit_wait_sealed() {
+  local t="$1" i
+  for i in $(seq 1 60); do
+    if audit_lines | python3 -c '
+import json, sys
+from datetime import datetime
+t = datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+ends = [datetime.fromisoformat(json.loads(l)["batlehub.audit.seal.window_end"])
+        for l in sys.stdin if "\"event.action\":\"audit_seal\"" in l]
+sys.exit(0 if any(e > t for e in ends) else 1)' "$t"; then
+      return 0
+    fi
+    sleep 1
+  done
+  heavy_fail "no window ending after $t was sealed within 60 s — the sealer is not running"
+}
+
+# audit_verify <out> [flag]... — `batlehub-cli admin audit verify` over this
+# run's windows; returns the CLI's exit code, output in <out>.
+audit_verify() {
+  local out="$1"
+  shift
+  set +e
+  "$AUDIT_CLI" --json admin audit verify --from "$AUDIT_FROM" "$@" >"$out" 2>"$out.err"
+  local rc=$?
+  set -e
+  return $rc
+}
+
+phase_audit() {
+  heavy_need npm "nodejs"
+  heavy_need uv "uv"
+  heavy_log "npm $(npm --version)"
+  export NPM_CONFIG_FUND=false NPM_CONFIG_AUDIT=false NPM_CONFIG_UPDATE_NOTIFIER=false
+
+  local base="$HEAVY_TAP_BASE/proxy/$NPM/"
+  local host_key="//127.0.0.1:$HEAVY_TAP_PORT/proxy/$NPM/"
+  audit_npmrc() {  # token, suffix -> echoes the file path
+    local token="$1" suffix="$2"
+    local file="$HEAVY_WORK/npmrc-audit-$suffix"
+    printf 'registry=%s\n%s:_authToken=%s\n' "$base" "$host_key" "$token" > "$file"
+    echo "$file"
+    return 0
+  }
+  audit_pkg() {  # dir, version
+    local dir="$1" version="$2"
+    mkdir -p "$dir"
+    printf '{ "name": "%s", "version": "%s", "license": "MIT", "main": "index.js" }\n' \
+      "$PKG" "$version" > "$dir/package.json"
+    echo "module.exports = 1;" > "$dir/index.js"
+    return 0
+  }
+
+  [[ "$(audit_count download)" == 0 ]] \
+    || heavy_fail "the stream carried download lines before any download — the assertions below would count them"
+
+  # Cases 4 and 5 verify only this run's windows: a database an earlier run
+  # left behind holds windows this run did not write, and one of them may
+  # still carry case 4's alteration.
+  AUDIT_FROM="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  cargo build --quiet -p batlehub-cli >"$HEAVY_WORK/cli-build.txt" 2>&1 \
+    || { cat "$HEAVY_WORK/cli-build.txt" >&2; heavy_fail "the CLI did not build"; }
+  AUDIT_CLI="$(cargo metadata --format-version 1 --no-deps \
+    | python3 -c 'import json,sys;print(json.load(sys.stdin)["target_directory"])')/debug/batlehub-cli"
+  [[ -x "$AUDIT_CLI" ]] || heavy_fail "no batlehub-cli binary at $AUDIT_CLI"
+  export BATLEHUB_SERVER="$HEAVY_BASE" BATLEHUB_TOKEN="$T_ADMIN"
+
+  heavy_mark "audit-seed"
+  local v
+  for v in 1.0.0 1.0.1; do
+    audit_pkg "$HEAVY_WORK/audit-pkg-$v" "$v"
+    NPM_CONFIG_USERCONFIG="$(audit_npmrc "$T_ADMIN" admin)" \
+      NPM_CONFIG_CACHE="$HEAVY_WORK/npm-audit-seed-cache" \
+      bash -c "cd '$HEAVY_WORK/audit-pkg-$v' && npm publish --registry '$base'" \
+      >>"$HEAVY_WORK/npm-audit-seed.log" 2>&1 \
+      || { tail -20 "$HEAVY_WORK/npm-audit-seed.log" >&2; heavy_fail "seeding $PKG@$v failed"; }
+  done
+  # A project whose lockfile pins 1.0.1, resolved while it was still allowed —
+  # case 2's client. See there for why a lockfile and not a plain install.
+  NPM_CONFIG_USERCONFIG="$(audit_npmrc "$T_READER" locker)" \
+    NPM_CONFIG_CACHE="$HEAVY_WORK/npm-audit-lock-cache" \
+    npm install --prefix "$HEAVY_WORK/audit-locked" "$PKG@1.0.1" \
+    >"$HEAVY_WORK/npm-audit-lock.log" 2>&1 \
+    || { cat "$HEAVY_WORK/npm-audit-lock.log" >&2; heavy_fail "locking $PKG@1.0.1 before the block failed"; }
+  [[ -f "$HEAVY_WORK/audit-locked/package-lock.json" ]] || heavy_fail "npm wrote no lockfile"
+  heavy_block "$NPM" "$PKG" 1.0.1
+
+  # ── 1. an allowed install is one allowed download line ──
+  heavy_mark "audit-allowed"
+  NPM_CONFIG_USERCONFIG="$(audit_npmrc "$T_READER" reader)" \
+    NPM_CONFIG_CACHE="$HEAVY_WORK/npm-audit-allow-cache" \
+    npm install --prefix "$HEAVY_WORK/audit-allow" --no-save "$PKG@1.0.0" \
+    >"$HEAVY_WORK/npm-audit-allow.log" 2>&1 \
+    || { cat "$HEAVY_WORK/npm-audit-allow.log" >&2; heavy_fail "npm install failed for the reader — the positive control"; }
+  heavy_wire_re_after "audit-allowed" "GET /proxy/$NPM/.*/tarball -> 200" \
+    "npm succeeded without the tarball crossing the tap — the stream line below would not be about this install"
+  local n
+  n="$(audit_count download package.name="$PKG" package.version=1.0.0 \
+    event.outcome=allowed user.id=authz-reader)"
+  [[ "$n" == 1 ]] || heavy_fail "expected exactly one allowed download line for the reader's install, found $n"
+  audit_lines | python3 -c '
+import json, sys
+for line in sys.stdin:
+    e = json.loads(line)
+    if e.get("event.action") == "download" and e.get("event.outcome") == "allowed":
+        assert e.get("span", {}).get("request_id"), f"no request id on {line}"
+        assert e["event.category"] == "package" and e["event.kind"] == "event", line
+        assert e["batlehub.audit.persisted"] is True, line
+' || heavy_fail "an allowed download line is missing a field a SIEM keys on"
+
+  # ── 2. a blocked version is a denied line with its reason ──
+  #
+  # **Through a lockfile.** `npm install pkg@1.0.1` never asks for the tarball:
+  # RFC 0006 hides a blocked version from the packument, npm stops on ETARGET,
+  # and the only request is an allowed listing — no download, so no download
+  # row. The request that *does* reach the download gate, and that
+  # `blocked_package_pulled.yml` is about, is a lockfile still naming the
+  # version: `npm ci` goes straight to the tarball it resolved before the block.
+  heavy_mark "audit-blocked"
+  rm -rf "$HEAVY_WORK/audit-locked/node_modules"
+  set +e
+  NPM_CONFIG_USERCONFIG="$(audit_npmrc "$T_READER" reader2)" \
+    NPM_CONFIG_CACHE="$HEAVY_WORK/npm-audit-block-cache" \
+    npm ci --prefix "$HEAVY_WORK/audit-locked" \
+    >"$HEAVY_WORK/npm-audit-block.log" 2>&1
+  local rc=$?
+  set -e
+  [[ $rc -ne 0 ]] || heavy_fail "npm ci installed a blocked version from the lockfile"
+  heavy_wire_re_after "audit-blocked" "GET /proxy/$NPM/.*tarball -> 403" \
+    "npm ci failed without the tarball being refused — the denial below would not be about it"
+  n="$(audit_count download package.name="$PKG" package.version=1.0.1 event.outcome=denied)"
+  [[ "$n" -ge 1 ]] || heavy_fail "npm was refused the blocked version and the stream has no denied download line for it"
+  audit_lines | python3 -c '
+import json, sys
+reasons = [json.loads(l)["event.reason"] for l in sys.stdin
+           if "\"package.version\":\"1.0.1\"" in l and "\"event.outcome\":\"denied\"" in l]
+assert reasons and all(reasons), f"a denied line with no reason: {reasons}"
+' || heavy_fail "the denied download line does not say why"
+
+  # ── 3. a refused credential: one row a minute, the rest counted ──
+  heavy_mark "audit-rejected"
+  local bogus="bh_pat_0000000000000000000000000000000000000000000000000000000000000000"
+  set +e
+  NPM_CONFIG_USERCONFIG="$(audit_npmrc "$bogus" bogus)" \
+    NPM_CONFIG_CACHE="$HEAVY_WORK/npm-audit-bogus-cache" \
+    npm install --prefix "$HEAVY_WORK/audit-bogus" --no-save "$PKG@1.0.0" \
+    >"$HEAVY_WORK/npm-audit-bogus.log" 2>&1
+  rc=$?
+  set -e
+  [[ $rc -ne 0 ]] || heavy_fail "npm installed from a closed registry with a credential nobody accepts"
+  heavy_wire_after "audit-rejected" "$WIRE_403" \
+    "npm was stopped, but not by the closed registry's 403 — the fallback to anonymous is not what refused it"
+  local first_at
+  first_at="$(date +%s)"
+  n="$(audit_count credential_rejected)"
+  [[ "$n" == 1 ]] || heavy_fail "expected one credential_rejected line for the refused credential, found $n"
+
+  local i
+  for i in $(seq 1 20); do
+    curl -s -o /dev/null -H "Authorization: Bearer $bogus" "$HEAVY_TAP_BASE/proxy/$NPM/$PKG"
+  done
+  n="$(audit_count credential_rejected)"
+  [[ "$n" == 1 ]] || heavy_fail "twenty further attempts in the same minute wrote $((n - 1)) more rows — the throttle is not holding"
+
+  heavy_log "waiting out the throttle window"
+  sleep $(( 62 - ($(date +%s) - first_at) ))
+  curl -s -o /dev/null -H "Authorization: Bearer $bogus" "$HEAVY_TAP_BASE/proxy/$NPM/$PKG"
+  n="$(audit_count credential_rejected)"
+  [[ "$n" == 2 ]] || heavy_fail "after the window the next attempt should write the second row, found $n rows"
+  audit_lines | python3 -c '
+import json, sys
+rows = [json.loads(l) for l in sys.stdin if "\"event.action\":\"credential_rejected\"" in l]
+held = rows[-1]["batlehub.audit.throttled_count"]
+assert held >= 20, f"the row after the window carries {held}, not the twenty (and more) held back"
+' || heavy_fail "the attempts the throttle held back are not counted on the next row"
+
+  # The table says the same as the stream.
+  local table
+  table="$(curl -fsS "$HEAVY_BASE/api/v1/admin/audit-log?action=credential_rejected&per_page=10" \
+    -H "Authorization: Bearer $T_ADMIN" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["items"]))')"
+  [[ "$table" == 2 ]] || heavy_fail "the stream has two credential_rejected rows and the table has $table"
+
+  # ── 4. the sealed trail verifies, and an altered row breaks its window ──
+  heavy_mark "audit-verify"
+  audit_wait_sealed "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local vout="$HEAVY_WORK/audit-verify.json"
+  audit_verify "$vout" || { cat "$vout" >&2; heavy_fail "the run's own audit trail does not verify"; }
+  python3 -c '
+import json, sys
+r = json.load(open(sys.argv[1]))
+assert r["ok"] and r["windows_checked"] > 0, r
+' "$vout" || heavy_fail "verify passed without checking a single window — it proves nothing"
+
+  # The first credential_rejected row: security class, so case 5's purge
+  # leaves it, and sealed long ago (case 3 waited out a minute after it).
+  local tampered
+  tampered="$(audit_sql '
+row = db.execute("SELECT id, user_agent, created_at FROM access_events "
+                 "WHERE action = %s AND created_at >= %s ORDER BY created_at LIMIT 1",
+                 ("credential_rejected", args[0])).fetchone()
+assert row, "no credential_rejected row to alter"
+db.execute("UPDATE access_events SET user_agent = %s WHERE id = %s", ("tampered/1.0", row[0]))
+print(row[0], row[2].isoformat(), row[1] or "")' "$AUDIT_FROM")" \
+    || heavy_fail "could not alter a row for case 4"
+  local t_id t_at t_ua
+  read -r t_id t_at t_ua <<<"$tampered"
+  if audit_verify "$vout"; then
+    heavy_fail "a row was altered with SQL and verify still exits 0"
+  fi
+  python3 -c '
+import json, sys
+from datetime import datetime
+r = json.load(open(sys.argv[1]))
+at = datetime.fromisoformat(sys.argv[2])
+hit = [f for f in r["failures"] if f["window_start"]
+       and datetime.fromisoformat(f["window_start"].replace("Z", "+00:00")) <= at
+       < datetime.fromisoformat(f["window_end"].replace("Z", "+00:00"))]
+fails = r["failures"]
+assert hit, f"no failure names the window holding {at}: {fails}"
+' "$vout" "$t_at" || heavy_fail "verify failed, but not on the window holding the altered row"
+  audit_sql 'db.execute("UPDATE access_events SET user_agent = %s WHERE id = %s", (args[1] or None, args[0]))' \
+    "$t_id" "$t_ua"
+  audit_verify "$vout" || { cat "$vout" >&2; heavy_fail "the row was put back and verify still fails"; }
+
+  # ── 5. a purge removes access rows only, and keeps the chain whole ──
+  heavy_mark "audit-purge"
+  local purged
+  purged="$(curl -fsS -X DELETE \
+    "$HEAVY_BASE/api/v1/admin/audit-log?before=$(date -u -d '+1 second' +%Y-%m-%dT%H:%M:%SZ)" \
+    -H "Authorization: Bearer $T_ADMIN" | python3 -c 'import json,sys; print(json.load(sys.stdin)["deleted"])')" \
+    || heavy_fail "the audit purge request failed"
+  [[ "$purged" -ge 3 ]] || heavy_fail "the purge deleted $purged rows; the run wrote at least three downloads"
+  audit_rows() {  # action -> rows the table still lists
+    local action="$1"
+    curl -fsS "$HEAVY_BASE/api/v1/admin/audit-log?action=$action&per_page=100" \
+      -H "Authorization: Bearer $T_ADMIN" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["items"]))'
+    return $?
+  }
+  [[ "$(audit_rows download)" == 0 ]] || heavy_fail "download rows survived a purge past them"
+  [[ "$(audit_rows credential_rejected)" == 2 ]] \
+    || heavy_fail "the purge removed credential_rejected rows — security rows are not the purge's to remove"
+  [[ "$(audit_rows audit_purge)" -ge 1 ]] || heavy_fail "the purge left no row of itself"
+  local purges
+  purges="$(audit_rows audit_purge)"
+  curl -fsS -X DELETE -o /dev/null \
+    "$HEAVY_BASE/api/v1/admin/audit-log?before=$(date -u -d '+1 second' +%Y-%m-%dT%H:%M:%SZ)" \
+    -H "Authorization: Bearer $T_ADMIN" || heavy_fail "the second purge request failed"
+  [[ "$(audit_rows audit_purge)" == $((purges + 1)) ]] \
+    || heavy_fail "a second purge removed the first purge's row — a purge could erase the record of itself"
+  [[ "$(audit_count audit_seal batlehub.audit.seal.kind=expire)" -ge 1 ]] \
+    || heavy_fail "rows were deleted from sealed windows and the chain has no expire record of it"
+  audit_verify "$vout" || { cat "$vout" >&2; heavy_fail "a purge through the API broke the chain"; }
+
+  # ── 5b. a re-sealed alteration verifies alone and fails against the SIEM ──
+  #
+  # The attack §5.3 is written against: alter a sealed row, delete the seal
+  # records from its window on, and let the sealer extend the chain again over
+  # the altered row. Every record then chains and signs — the trail is
+  # self-consistent — and only the copy of the head that left the host says
+  # otherwise. A block makes the fresh row; any security row would.
+  heavy_mark "audit-truncate"
+  curl -fsS -X POST -o /dev/null "$HEAVY_BASE/api/v1/admin/ip-blocks" \
+    -H "Authorization: Bearer $T_ADMIN" -H 'Content-Type: application/json' \
+    -d '{"ip": "192.0.2.77", "reason": "heavy: audit truncation", "duration_secs": 60}' \
+    || heavy_fail "the block that makes case 5b's row failed"
+  audit_wait_sealed "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local siem_head
+  siem_head="$(audit_lines | python3 -c '
+import json, sys
+seals = [json.loads(l) for l in sys.stdin if "\"event.action\":\"audit_seal\"" in l]
+print(max(seals, key=lambda e: e["batlehub.audit.seal.seq"])["batlehub.audit.seal.digest"])')"
+  local cut
+  cut="$(audit_sql '
+row = db.execute("SELECT id, created_at FROM access_events WHERE action = %s "
+                 "ORDER BY created_at DESC LIMIT 1", ("block_ip",)).fetchone()
+db.execute("UPDATE access_events SET user_agent = %s WHERE id = %s", ("tampered/1.0", row[0]))
+seq = db.execute("SELECT min(seq) FROM audit_seals WHERE window_end > %s", (row[1],)).fetchone()[0]
+assert seq, "the block row is in no sealed window"
+db.execute("DELETE FROM audit_seals WHERE seq >= %s", (seq,))
+print(seq)')" || heavy_fail "could not truncate the chain for case 5b"
+  # Re-sealed when the stream carries the cut position a second time.
+  local i resealed=0
+  for i in $(seq 1 60); do
+    if [[ "$(audit_count audit_seal batlehub.audit.seal.seq="$cut")" -ge 2 ]]; then
+      resealed=1
+      break
+    fi
+    sleep 1
+  done
+  [[ "$resealed" == 1 ]] || heavy_fail "the sealer did not re-seal from record $cut within 60 s"
+  audit_verify "$vout" \
+    || { cat "$vout" >&2; heavy_fail "a re-sealed chain should verify on its own — the attack is that it does"; }
+  if audit_verify "$vout" --head "$siem_head"; then
+    heavy_fail "the chain was cut and re-sealed and verify accepts the head the SIEM holds"
+  fi
+  grep -q "truncated or rewritten" "$vout" \
+    || { cat "$vout" >&2; heavy_fail "verify failed against the SIEM's head, but not for the truncation"; }
+
+  # ── 6. the recorded stream through the shipped rules ──
+  heavy_mark "audit-replay"
+  [[ "$(audit_count audit_purge)" == 2 ]] || heavy_fail "the two purges left $(audit_count audit_purge) audit_purge lines in the stream"
+  # replay.py takes no paths: the stream on stdin, the expectations inline.
+  audit_lines | uv run --quiet --with pyyaml==6.0.3 python "$HEAVY_ROOT/deploy/siem/replay.py" --stdin \
+    --expect-json '{"audit_purge.yml": true, "credential_rejected_burst.yml": true, "audit_chain_gap.yml": true, "bulk_pull.yml": false}' \
+    || heavy_fail "the shipped rules do not fire on the stream this run recorded"
+
+  heavy_log "AUDIT-STREAM-OK ($(audit_lines | wc -l) audit lines)"
+  return 0
+}
+
 phase_reads() {
   heavy_log "The read boundary, on the kinds no client phase drives"
   heavy_mark "reads"
@@ -3597,6 +4017,7 @@ case "$TARGET" in
     heavy_done "AUTHZ-HEAVY-LIVE-${TARGET#live:}-OK"
     ;;
   npm)       phase_npm;       heavy_done "AUTHZ-HEAVY-NPM-OK" ;;
+  audit)     phase_audit;     heavy_done "AUTHZ-HEAVY-AUDIT-OK" ;;
   pypi)      phase_pypi;      heavy_done "AUTHZ-HEAVY-PYPI-OK" ;;
   nuget)     phase_nuget;     heavy_done "AUTHZ-HEAVY-NUGET-OK" ;;
   conda)     phase_conda;     heavy_done "AUTHZ-HEAVY-CONDA-OK" ;;
@@ -3606,7 +4027,7 @@ case "$TARGET" in
   composer)  phase_composer;  heavy_done "AUTHZ-HEAVY-COMPOSER-OK" ;;
   galaxy)    phase_galaxy;    heavy_done "AUTHZ-HEAVY-GALAXY-OK" ;;
   *)
-    heavy_fail "unknown target '$TARGET' — one of: matrix signing reads npm pypi nuget \
+    heavy_fail "unknown target '$TARGET' — one of: matrix signing reads audit npm pypi nuget \
 composer conda openvsx rubygems terraform maven cargo galaxy, or live:<kind> for one of: ${AUTHZ_LIVE_KINDS[*]}"
     ;;
 esac

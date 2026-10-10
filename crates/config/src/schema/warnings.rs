@@ -44,6 +44,15 @@ impl ConfigWarning {
 
 // ── Warning codes ─────────────────────────────────────────────────────────────
 
+/// No `[audit]` block: nothing in the audit trail ever expires (RFC 0036 §4.3).
+pub const AUDIT_NO_RETENTION: &str = "audit.no-retention";
+
+/// Access rows keep full IPs for more than 90 days, or forever.
+pub const AUDIT_FULL_IPS_KEPT: &str = "audit.full-ips-kept";
+
+/// Sealing on, stream off: no copy of the chain's head leaves the host.
+pub const AUDIT_SEALING_WITHOUT_STREAM: &str = "audit.sealing-without-stream";
+
 /// Both `[server].trusted_proxies` and the deprecated
 /// `[ip_blocking].trusted_proxies` carry a list; `[server]` wins.
 pub const PROXY_TRUST_SHADOWED_DEPRECATED_KEY: &str = "proxy-trust.shadowed-deprecated-key";
@@ -116,6 +125,15 @@ pub const SIGNED_URLS_ANONYMOUS_STILL_GRANTED: &str = "signed-urls.anonymous-sti
 /// versions its candidates API in the path; the URL is served as given, but a
 /// missing version segment is more likely a typo than a choice (RFC 0010 §4.5).
 pub const SDKMAN_UPSTREAM_WITHOUT_API_VERSION: &str = "sdkman.upstream-without-api-version";
+
+/// A `devfile` registry has no host binding. `registry-library` (and `odo`)
+/// build the OCI reference from the host alone, so a registry served under a
+/// path prefix answers the index and 404s every pull (RFC 0035 §5.3).
+pub const DEVFILE_WITHOUT_HOST: &str = "devfile.without-host";
+
+/// A `devfile` registry does not grant anonymous reads. Neither client sends a
+/// credential, so every read would be refused (RFC 0035 §4.5).
+pub const DEVFILE_NOT_ANONYMOUS: &str = "devfile.not-anonymous";
 
 /// `[server.signed_urls]` is configured and no registry sets
 /// `signed_downloads = true`, so the secret signs nothing. Harmless, and worth

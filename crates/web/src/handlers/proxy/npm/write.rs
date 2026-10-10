@@ -4,6 +4,7 @@ use actix_web::{put, web, HttpResponse, Responder};
 use base64::Engine as _;
 use bytes::Bytes;
 use sha2::{Digest, Sha256};
+use tracing::Instrument as _;
 
 use batlehub_core::{
     entities::NotificationEventType,
@@ -65,7 +66,9 @@ pub async fn npm_publish(
     require_npm(&registry, &map)?;
     require_local_mode(&registry, &mode_map)?;
 
-    let raw = collect_payload(payload).await?;
+    let raw = collect_payload(payload)
+        .instrument(batlehub_core::services::stage("publish_body"))
+        .await?;
 
     let body: serde_json::Value = serde_json::from_slice(&raw)
         .map_err(|e| AppError::bad_request(format!("invalid JSON: {e}")))?;
@@ -149,6 +152,7 @@ pub async fn npm_publish(
                 // otherwise, so there is nothing else to read it from.
                 batlehub_core::entities::ReadmeFormat::Markdown,
             )
+            .instrument(batlehub_core::services::stage("publish_readme"))
             .await;
     }
 

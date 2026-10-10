@@ -7,10 +7,13 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use batlehub_adapters::auth::{random_urlsafe, OidcSsoFlow, PkceChallenge};
+use batlehub_core::entities::{AccessAction, AccessEvent, AccessResult, CallerNet, Role};
 use batlehub_core::ports::{LoginState, LoginStateStore};
+use batlehub_core::services::AdminService;
 
 use super::{spa_error_redirect, url_encode, CallbackQuery, LoginQuery};
 use crate::error::AppError;
+use crate::extractors::caller_net;
 use crate::handlers::schemas::OkResponse;
 
 /// How long a started login stays redeemable.
@@ -236,13 +239,84 @@ pub async fn oidc_login(
 )]
 #[get("/api/v1/auth/oidc/callback")]
 pub async fn oidc_callback(
+    req: HttpRequest,
     flows: web::Data<Vec<OidcSsoFlow>>,
     login_states: web::Data<Arc<dyn LoginStateStore>>,
+    admin_svc: web::Data<Arc<AdminService>>,
     query: web::Query<CallbackQuery>,
 ) -> impl Responder {
+    let (response, outcome) = callback_response(&flows, &login_states, &query).await;
+    if let Some(event) = outcome.into_event(caller_net(&req)) {
+        admin_svc.record_event(event).await;
+    }
+    response
+}
+
+/// What a callback did, for its audit row (RFC 0036 §6.1).
+///
+/// A failure carries its *class* — never the code, the state or a token — and
+/// the provider when the callback got far enough to know it.
+enum SignInOutcome {
+    /// Nothing was attempted: SSO is not configured.
+    NotAttempted,
+    Failed {
+        class: &'static str,
+        provider: Option<String>,
+    },
+    Succeeded {
+        provider: String,
+        user_id: Option<String>,
+    },
+}
+
+impl SignInOutcome {
+    fn failed(class: &'static str, provider: Option<&str>) -> Self {
+        Self::Failed {
+            class,
+            provider: provider.map(str::to_owned),
+        }
+    }
+
+    fn into_event(self, net: CallerNet) -> Option<AccessEvent> {
+        let (action, user_id, result, provider) = match self {
+            Self::NotAttempted => return None,
+            Self::Failed { class, provider } => (
+                AccessAction::SignInFailed,
+                None,
+                AccessResult::Denied {
+                    reason: class.to_owned(),
+                },
+                provider,
+            ),
+            Self::Succeeded { provider, user_id } => (
+                AccessAction::SignIn,
+                user_id,
+                AccessResult::Allowed,
+                Some(provider),
+            ),
+        };
+        Some(AccessEvent::about_identity(
+            action,
+            user_id,
+            Role::Anonymous,
+            result,
+            net,
+            provider.map(|p| format!("provider={p}")),
+        ))
+    }
+}
+
+async fn callback_response(
+    flows: &[OidcSsoFlow],
+    login_states: &Arc<dyn LoginStateStore>,
+    query: &CallbackQuery,
+) -> (HttpResponse, SignInOutcome) {
     if flows.is_empty() {
-        return HttpResponse::ServiceUnavailable()
-            .json(serde_json::json!({ "error": "OIDC SSO is not configured on this server" }));
+        return (
+            HttpResponse::ServiceUnavailable()
+                .json(serde_json::json!({ "error": "OIDC SSO is not configured on this server" })),
+            SignInOutcome::NotAttempted,
+        );
     }
 
     // Use the first provider's frontend_url as fallback for error redirects.
@@ -251,13 +325,19 @@ pub async fn oidc_callback(
     // Provider-side error (e.g. user denied access).
     if let Some(ref err) = query.error {
         let desc = query.error_description.as_deref().unwrap_or(err.as_str());
-        return spa_error_redirect(&fallback_base, desc);
+        return (
+            spa_error_redirect(&fallback_base, desc),
+            SignInOutcome::failed("provider_error", None),
+        );
     }
 
     let code = match query.code.as_deref() {
         Some(c) => c.to_owned(),
         None => {
-            return spa_error_redirect(&fallback_base, "Authorization code missing from callback.")
+            return (
+                spa_error_redirect(&fallback_base, "Authorization code missing from callback."),
+                SignInOutcome::failed("code_missing", None),
+            )
         }
     };
 
@@ -266,22 +346,31 @@ pub async fn oidc_callback(
     // nothing the second time. A state this server never issued, or one that
     // expired, lands here too.
     let Some(raw_state) = query.state.as_deref().filter(|s| !s.is_empty()) else {
-        return spa_error_redirect(&fallback_base, "Sign-in state missing from callback.");
+        return (
+            spa_error_redirect(&fallback_base, "Sign-in state missing from callback."),
+            SignInOutcome::failed("state_missing", None),
+        );
     };
     let login = match login_states.take(raw_state).await {
         Ok(Some(login)) => login,
         Ok(None) => {
             tracing::warn!("OIDC callback with an unknown, expired or already-redeemed state");
-            return spa_error_redirect(
-                &fallback_base,
-                "This sign-in link has expired or was already used. Please sign in again.",
+            return (
+                spa_error_redirect(
+                    &fallback_base,
+                    "This sign-in link has expired or was already used. Please sign in again.",
+                ),
+                SignInOutcome::failed("state_mismatch", None),
             );
         }
         Err(e) => {
             tracing::warn!(error = %e, "reading OIDC login state failed");
-            return spa_error_redirect(
-                &fallback_base,
-                "Failed to complete sign-in. Please try again.",
+            return (
+                spa_error_redirect(
+                    &fallback_base,
+                    "Failed to complete sign-in. Please try again.",
+                ),
+                SignInOutcome::failed("state_unreadable", None),
             );
         }
     };
@@ -293,7 +382,10 @@ pub async fn oidc_callback(
             provider = %login.provider,
             "OIDC login state names a provider that is no longer configured"
         );
-        return spa_error_redirect(&fallback_base, "OIDC provider not found.");
+        return (
+            spa_error_redirect(&fallback_base, "OIDC provider not found."),
+            SignInOutcome::failed("provider_unknown", Some(&login.provider)),
+        );
     };
 
     let base = sso.frontend_url.trim_end_matches('/').to_owned();
@@ -305,7 +397,10 @@ pub async fn oidc_callback(
             // endpoint URL) server-side only; the browser-visible redirect gets a
             // generic message so it never leaks upstream connectivity details.
             tracing::warn!(error = %e, "OIDC token exchange failed");
-            return spa_error_redirect(&base, "Failed to complete sign-in. Please try again.");
+            return (
+                spa_error_redirect(&base, "Failed to complete sign-in. Please try again."),
+                SignInOutcome::failed("token_exchange", Some(&sso.name)),
+            );
         }
     };
 
@@ -328,10 +423,13 @@ pub async fn oidc_callback(
              batlehub authenticates JWTs, so this provider needs an `openid` scope \
              (or, on Auth0/Okta, an API audience that yields a JWT access token)"
         );
-        return spa_error_redirect(
-            &base,
-            "This identity provider is not returning a usable token. Ask an administrator \
-             to check the server log.",
+        return (
+            spa_error_redirect(
+                &base,
+                "This identity provider is not returning a usable token. Ask an administrator \
+                 to check the server log.",
+            ),
+            SignInOutcome::failed("claims", Some(&sso.name)),
         );
     }
 
@@ -351,7 +449,10 @@ pub async fn oidc_callback(
     if tokens.has_id_token {
         if let Err(e) = OidcSsoFlow::verify_nonce(&tokens.session_token, &login.nonce) {
             tracing::warn!(error = %e, provider = %login.provider, "OIDC nonce check failed");
-            return spa_error_redirect(&base, "Failed to complete sign-in. Please try again.");
+            return (
+                spa_error_redirect(&base, "Failed to complete sign-in. Please try again."),
+                SignInOutcome::failed("nonce", Some(&sso.name)),
+            );
         }
     }
 
@@ -381,11 +482,18 @@ pub async fn oidc_callback(
     if let Some(exp) = tokens.expires_in {
         location.push_str(&format!("&oidc_expires_in={exp}"));
     }
-    HttpResponse::Found()
-        .insert_header(("Location", location))
-        .insert_header(("Referrer-Policy", "no-referrer"))
-        .insert_header(("Cache-Control", "no-store"))
-        .finish()
+    let outcome = SignInOutcome::Succeeded {
+        provider: sso.name.clone(),
+        user_id: sso.session_subject(&tokens.session_token),
+    };
+    (
+        HttpResponse::Found()
+            .insert_header(("Location", location))
+            .insert_header(("Referrer-Policy", "no-referrer"))
+            .insert_header(("Cache-Control", "no-store"))
+            .finish(),
+        outcome,
+    )
 }
 
 // ── Refresh ────────────────────────────────────────────────────────────────────

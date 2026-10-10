@@ -1,9 +1,20 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 
 use crate::entities::{ArtifactSbom, SbomFormat};
 use crate::error::CoreError;
+
+/// What [`SbomRepository::sbom_facts_for_versions`] knows of one version.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SbomFacts {
+    /// The newest recorded licence; `None` is unknown, not unlicensed.
+    pub license: Option<String>,
+    /// The formats held, `spdx` before `cyclonedx`.
+    pub formats: Vec<SbomFormat>,
+}
 
 #[async_trait]
 pub trait SbomRepository: Send + Sync {
@@ -60,6 +71,37 @@ pub trait SbomRepository: Send + Sync {
             }
         }
         Ok(held)
+    }
+
+    /// [`Self::get_license_for_coordinate`] and
+    /// [`Self::sbom_formats_for_coordinate`] for every version of one package
+    /// at once, keyed by version; a version with neither is absent.
+    ///
+    /// The package page asks both questions of every row it draws, so a
+    /// per-version answer is two statements per row — fifty for a full page.
+    /// The default is that loop, correct everywhere; the Postgres repository
+    /// overrides it with one statement for the page.
+    async fn sbom_facts_for_versions(
+        &self,
+        registry: &str,
+        package_name: &str,
+        versions: &[String],
+    ) -> Result<HashMap<String, SbomFacts>, CoreError> {
+        let mut out = HashMap::new();
+        for version in versions {
+            let facts = SbomFacts {
+                license: self
+                    .get_license_for_coordinate(registry, package_name, version)
+                    .await?,
+                formats: self
+                    .sbom_formats_for_coordinate(registry, package_name, version)
+                    .await?,
+            };
+            if facts.license.is_some() || !facts.formats.is_empty() {
+                out.insert(version.clone(), facts);
+            }
+        }
+        Ok(out)
     }
 
     /// The licence recorded for a registry/package/version, if one is known.

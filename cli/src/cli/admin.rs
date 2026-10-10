@@ -185,6 +185,16 @@ pub enum AdminCommand {
         #[arg(long, conflicts_with_all = &["registry","package","action","user","from","to","denied_only"])]
         purge_before: Option<String>,
     },
+    /// Data-subject requests (RFC 0036): erase or export one person's records
+    Gdpr {
+        #[command(subcommand)]
+        cmd: GdprCommand,
+    },
+    /// The sealed audit trail (RFC 0036)
+    Audit {
+        #[command(subcommand)]
+        cmd: AuditTrailCommand,
+    },
     /// Show aggregate server statistics (cache hit rate, bytes served, …)
     Stats,
     /// Show per-registry and backend health status
@@ -298,6 +308,45 @@ pub enum AdminCommand {
         /// Write output to file instead of stdout
         #[arg(long, short = 'o')]
         output: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum GdprCommand {
+    /// Pseudonymise a subject in the audit trail, their tokens (revoked) and
+    /// their blocks. Publications and ownership are kept. Needs `gdpr:erase`
+    /// and `[audit] erasure_key`.
+    Erase {
+        /// The subject, exactly as the audit log names them
+        #[arg(long)]
+        user: String,
+        /// Erase even while an open decision names the subject
+        #[arg(long)]
+        force: bool,
+    },
+    /// Everything held about a subject, as JSON — an access request's answer
+    Export {
+        /// The subject, exactly as the audit log names them
+        #[arg(long)]
+        user: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AuditTrailCommand {
+    /// Replay the seal chain and every sealed window. Exits 1 naming the first
+    /// window that does not verify.
+    Verify {
+        /// Only windows ending after this RFC 3339 instant
+        #[arg(long)]
+        from: Option<String>,
+        /// Only windows starting before this RFC 3339 instant
+        #[arg(long)]
+        to: Option<String>,
+        /// The digest of the newest `audit_seal` line your SIEM holds; without
+        /// it a truncated tail is not detected
+        #[arg(long)]
+        head: Option<String>,
     },
 }
 
@@ -791,6 +840,8 @@ pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Resu
             )
             .await?
         }
+        AdminCommand::Gdpr { cmd } => handle_gdpr(cmd, client, json).await?,
+        AdminCommand::Audit { cmd } => handle_audit_trail(cmd, client, json).await?,
         AdminCommand::Stats => handle_stats(client, json).await?,
         AdminCommand::Health => handle_health(client, json).await?,
         AdminCommand::Visibility { cmd } => handle_visibility(cmd, client, json).await?,
@@ -893,6 +944,72 @@ struct AuditLogArgs {
     page: u64,
     per_page: u64,
     purge_before: Option<String>,
+}
+
+async fn handle_gdpr(cmd: GdprCommand, client: &BatleHubClient, json: bool) -> Result<()> {
+    match cmd {
+        GdprCommand::Erase { user, force } => {
+            let r = client.gdpr_erase(&user, force).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else {
+                println!(
+                    "Erased: now {} — {} audit row(s), {} token(s) revoked, {} block row(s)",
+                    r["pseudonym"].as_str().unwrap_or("?"),
+                    r["audit_rows"],
+                    r["tokens"],
+                    r["blocks"],
+                );
+            }
+        }
+        // Always JSON: the answer to an access request is a document.
+        GdprCommand::Export { user } => {
+            let r = client.gdpr_export(&user).await?;
+            println!("{}", serde_json::to_string_pretty(&r)?);
+        }
+    }
+    Ok(())
+}
+
+async fn handle_audit_trail(
+    cmd: AuditTrailCommand,
+    client: &BatleHubClient,
+    json: bool,
+) -> Result<()> {
+    let AuditTrailCommand::Verify { from, to, head } = cmd;
+    let r = client.audit_verify(from, to, head).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&r)?);
+    } else {
+        println!(
+            "{} record(s), {} window(s) checked, {} expired by retention",
+            r["records"], r["windows_checked"], r["windows_expired"]
+        );
+        if let Some(h) = r["head"].as_str() {
+            println!("head: {h}");
+        }
+        if r["truncation_checked"] != serde_json::Value::Bool(true) {
+            println!(
+                "truncation NOT checked — pass --head with the digest your SIEM last received"
+            );
+        }
+        for f in r["failures"].as_array().into_iter().flatten() {
+            println!(
+                "FAIL {} … {} (record {}): {}",
+                f["window_start"].as_str().unwrap_or("-"),
+                f["window_end"].as_str().unwrap_or("-"),
+                f["seq"],
+                f["reason"].as_str().unwrap_or("")
+            );
+        }
+    }
+    if r["ok"] != serde_json::Value::Bool(true) {
+        anyhow::bail!("the audit trail does not verify");
+    }
+    if !json {
+        println!("ok");
+    }
+    Ok(())
 }
 
 async fn handle_audit_log(client: &BatleHubClient, json: bool, args: AuditLogArgs) -> Result<()> {

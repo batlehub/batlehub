@@ -97,6 +97,8 @@ async fn record_download(
             timestamp: Utc::now() - ago,
             ip_address: None,
             user_agent: None,
+            throttled_count: None,
+            detail: None,
         })
         .await
         .unwrap();

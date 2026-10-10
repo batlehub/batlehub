@@ -159,3 +159,44 @@ async fn ip_blocks_list_returns_empty_initially() {
     let body: Value = read_body_json(resp).await;
     assert_eq!(body, serde_json::json!([]));
 }
+
+/// The trail names the IP: without `detail` it said an IP was blocked and
+/// unblocked, and not which one.
+#[actix_web::test]
+async fn ip_blocks_manual_block_and_unblock_name_the_ip_in_the_audit_trail() {
+    let store: Arc<dyn IpBlockStore> = Arc::new(InMemoryIpBlockStore::new());
+    let app = make_app_with_ip_store(store).await;
+
+    let req = TestRequest::post()
+        .uri("/api/v1/admin/ip-blocks")
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .set_json(serde_json::json!({"ip": "10.0.0.9", "reason": "spam"}))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 204);
+    let req = TestRequest::delete()
+        .uri("/api/v1/admin/ip-blocks/10.0.0.9")
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 204);
+
+    let req = TestRequest::get()
+        .uri("/api/v1/admin/audit-log?action=block_ip,unblock_ip")
+        .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = read_body_json(resp).await;
+    let details: Vec<&str> = body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["detail"].as_str().unwrap_or_default())
+        .collect();
+    assert!(
+        details
+            .iter()
+            .any(|d| d.starts_with("ip=10.0.0.9 until=") && d.ends_with("reason=spam")),
+        "{details:?}"
+    );
+    assert!(details.contains(&"ip=10.0.0.9"), "{details:?}");
+}

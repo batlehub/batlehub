@@ -11,7 +11,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::entities::{
-    AccessAction, AccessEvent, AccessResult, ArtifactVulnerability, Identity, PackageId,
+    AccessAction, AccessEvent, AccessResult, ArtifactVulnerability, CallerNet, Identity, PackageId,
 };
 use crate::error::CoreError;
 use crate::ports::{PackageRepository, VulnerabilityRepository};
@@ -204,8 +204,10 @@ impl AdminService {
         pkg: Option<PackageId>,
         action: AccessAction,
         by_identity: &Identity,
+        net: &CallerNet,
     ) {
-        self.record_admin_action(pkg, action, by_identity).await;
+        self.record_admin_action(pkg, action, by_identity, net)
+            .await;
     }
 
     /// Shared audit-write path for admin actions that don't otherwise touch
@@ -219,6 +221,22 @@ impl AdminService {
         package_id: Option<PackageId>,
         action: AccessAction,
         by_identity: &Identity,
+        net: &CallerNet,
+    ) {
+        self.record_admin_action_about(package_id, action, by_identity, net, None)
+            .await;
+    }
+
+    /// [`Self::record_admin_action`] with a `detail` saying what the action was
+    /// about beyond the coordinate — a grant's subject and verbs, which is what
+    /// a SIEM rule like `grant_to_anonymous` keys on (RFC 0036 §6.2).
+    pub async fn record_admin_action_about(
+        &self,
+        package_id: Option<PackageId>,
+        action: AccessAction,
+        by_identity: &Identity,
+        net: &CallerNet,
+        detail: Option<String>,
     ) {
         self.repo
             .record_access(AccessEvent {
@@ -229,11 +247,26 @@ impl AdminService {
                 action,
                 result: AccessResult::Allowed,
                 timestamp: chrono::Utc::now(),
-                ip_address: None,
-                user_agent: None,
+                // The caller as the proxy-trust rules resolved it (RFC 0036
+                // §13): who did it *and from where*, like the auth events.
+                ip_address: net.ip.clone(),
+                user_agent: net.user_agent.clone(),
+                throttled_count: None,
+                detail,
             })
             .await
             .unwrap_or_else(|e| tracing::warn!(error = %e, "failed to record admin action"));
+    }
+
+    /// Write one audit event, fail-open: a failed write is logged and never
+    /// fails the request that caused it — the same contract as
+    /// [`Self::record_admin_action`]. For the authentication events of
+    /// RFC 0036 §6.1, which the web layer builds itself.
+    pub async fn record_event(&self, event: AccessEvent) {
+        self.repo
+            .record_access(event)
+            .await
+            .unwrap_or_else(|e| tracing::warn!(error = %e, "failed to record audit event"));
     }
 
     /// Shared fan-out path for bulk admin actions: runs `op` over `items` with

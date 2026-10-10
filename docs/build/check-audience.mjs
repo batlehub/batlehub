@@ -83,13 +83,13 @@ const LOCALES = [
 /**
  * What the French navigation may point at outside `/fr/`, and why.
  *
- * The three spaces the project decided not to translate: `contributing/` and
- * `rfc/` are read by people changing the code, and the roadmap page is
+ * The spaces the project decided not to translate: `contributing/`, `rfc/`
+ * and `techdebt/` are read by people changing the code, and the roadmap page is
  * generated from `ROADMAP.md`, which is canonical and English. Linking them at
  * their English URL is the decided behaviour — see `nav/fr.ts`. Anything else
  * outside `/fr/` is a prefix someone forgot.
  */
-const UNTRANSLATED = [/^\/contributing\//, /^\/rfc\//, /^\/guide\/roadmap$/];
+const UNTRANSLATED = [/^\/contributing\//, /^\/rfc\//, /^\/techdebt\//, /^\/guide\/roadmap$/];
 
 const findings = [];
 const sizes = [];

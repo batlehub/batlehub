@@ -169,7 +169,7 @@ pub async fn jbm_plugins_list(
         ip_address: identity.1.ip.clone(),
         user_agent: identity.1.user_agent.clone(),
     };
-    match svc.resolve_metadata_for(&proxy_req).await {
+    match svc.resolve_listing_for(&proxy_req).await {
         Ok(meta) => {
             let extra = ExtraMeta::from_extra(&meta.extra);
             let entries: Vec<RenderEntry> = extra

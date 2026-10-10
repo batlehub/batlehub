@@ -28,7 +28,7 @@ are yours. Nobody is paged by this page.
 
 | Source | Alert | Where to check |
 |--------|-------|----------------|
-| Prometheus | `BatleHubDown`, `BatleHubHighErrorRate`, `BatleHubHighDenyRate` | `deploy/prometheus-alerts.yaml` |
+| Prometheus | `BatleHubDown`, `BatleHubHighErrorRate`, `BatleHubHighDeniedRequestRate` | `deploy/prometheus-alerts.yaml` |
 | Audit log | Spike in `denied` outcomes, unknown user IDs in `user_id` column | `GET /api/v1/admin/audit-log` |
 | Rate limiter | Sustained 429 responses from one IP | Audit log filter by IP |
 | Container scan | Trivy HIGH/CRITICAL finding in deployed image | `.github/workflows/image-scan.yaml` |
@@ -171,14 +171,77 @@ rather than from a blank page.
 
 ---
 
-## PII Handling
+## NIS2 reporting timeline {#nis2-reporting}
 
-Audit log entries contain user IDs and IP addresses. If a GDPR/CCPA deletion request arrives:
+An essential or important entity under NIS2 (Art. 23) owes its CSIRT or
+competent authority three reports about a significant incident. The reports
+are yours; BatleHub holds the evidence they are written from.
 
-1. Identify the user's ID from their account.
-2. Export their records: `export-audit-log | jq '[.[] | select(.user_id == "X")]'`
-3. Provide a copy to the user if required by your jurisdiction.
-4. To purge from the database, run the anonymization migration (planned feature) or a targeted `UPDATE access_events SET user_id = 'anonymized', ip_address = NULL WHERE user_id = 'X'` with DBA oversight.
+| Deadline | What NIS2 asks | Where the evidence lives |
+|----------|----------------|--------------------------|
+| **24 h** after becoming aware — early warning | Whether the incident is suspected to be malicious or to have a cross-border impact | The audit stream in your SIEM and the Sigma rule that fired ([SIEM integration](./siem.md)) |
+| **72 h** — incident notification | An initial assessment: severity, impact, indicators of compromise | The audit log for the window: `batlehub-cli admin export-audit-log --from <start> --to <end> --format json` |
+| **One month** — final report | Root cause, mitigation applied, cross-border impact | The post-mortem of Phase 5, the exported log, and a verified chain for the window |
+
+Before you quote the exported log, show it was not altered:
+
+```bash
+# <digest> is the newest audit_seal line your SIEM holds
+batlehub-cli admin audit verify --from <start> --to <end> --head <digest>
+```
+
+It exits `0` when every sealed window verifies and `1` naming the first that
+does not. Without `--head` it says that truncation was not checked — a chain
+whose tail was deleted together with its seal records still verifies, and only
+the copy outside the database can show it. The stream copy is that copy;
+`deploy/siem/sigma/audit_chain_gap.yml` fires when two consecutive
+`audit_seal` lines do not chain.
+
+What else NIS2 and DORA ask, and what is not built yet, is in
+[NIS2 and DORA](./compliance-nis2-dora.md).
+
+---
+
+## PII Handling {#pii-handling}
+
+Audit rows carry user ids, IP addresses and user agents; token rows and block
+rows carry user ids. Retention and pseudonymisation of the trail run on their
+own once `[audit]` is configured ([GDPR mapping](./compliance-gdpr.md)). A
+request from one data subject is answered with two commands.
+
+**Access request (GDPR Art. 15):**
+
+```bash
+batlehub-cli admin gdpr export --user <id>
+```
+
+It lists every row about the subject, including the publication and ownership
+rows an erasure keeps, and is recorded as a `gdpr_export` audit event. It
+needs the `audit:read` verb (`GET /api/v1/admin/gdpr/export?user_id=<id>`).
+
+**Erasure request (GDPR Art. 17):**
+
+```bash
+batlehub-cli admin gdpr erase --user <id>
+```
+
+It replaces the id with `erased:<hmac>` in `access_events`, token rows and
+block rows, so the subject's rows stay linkable to each other and to nobody.
+It needs the `gdpr:erase` verb — `audit:purge` does not imply it — and
+`[audit] erasure_key` set, an HMAC secret you keep outside the database. The
+erasure is itself a `gdpr_erase` security event naming who ran it.
+
+- **Publication and ownership rows are kept**, under legitimate interest: who
+  published a version stays answerable for every consumer of it. Tell the
+  subject so; the export lists them.
+- **A subject with an open quarantine or block decision is refused**, because
+  erasing them would erase the evidence of a live case. Close the case first,
+  or pass `--force` and record why.
+- **A copy already in your SIEM is not touched.** Erase it there by your
+  collector's own means, or let its retention expire it.
+
+Never edit `access_events` with SQL: a hand-written `UPDATE` breaks the seal
+chain, and `audit verify` will report the window as altered.
 
 ---
 

@@ -66,6 +66,9 @@ pub mod advisory;
 
 #[cfg(feature = "db-postgres")]
 pub mod air_gap;
+
+#[cfg(feature = "db-postgres")]
+pub mod housekeeping;
 pub mod release_import;
 
 // ── Domain subfolders, mirroring `batlehub_core::ports`'s auth/governance/ops/storage split ──
@@ -115,6 +118,9 @@ pub use ops::quota::PgQuotaRepository;
 
 #[cfg(feature = "db-postgres")]
 pub use packages::PgPackageRepository;
+
+#[cfg(feature = "db-postgres")]
+pub use packages::audit_trail::PgAdvisoryLeader;
 
 pub use ops::upstream_status::PgUpstreamStatusStore;
 #[cfg(feature = "db-postgres")]

@@ -409,6 +409,12 @@ fn listing_facts_from_bytes(
                 .map(|facts| serde_json::json!({ "terraform": facts }))
                 .unwrap_or(serde_json::Value::Null)
         }
+        // A devfile stack version is composed from two of its files: the
+        // manifest names the layers and their digests, the devfile its
+        // metadata and starter projects (RFC 0035 §6.8).
+        Some("devfile") => {
+            batlehub_core::services::devfile::import_facts(coordinate.artifact.as_deref(), bytes)
+        }
         _ => serde_json::Value::Null,
     }
 }

@@ -44,6 +44,10 @@ pub struct UserToken {
     /// recorded. Not the same as "never used" for a token that predates the
     /// column.
     pub last_used_at: Option<DateTime<Utc>>,
+    /// The source IP the token was last presented from, written with
+    /// `last_used_at`. `None` until its first use since this was recorded —
+    /// "unknown", which no `token_new_source` event is ever emitted against.
+    pub last_used_ip: Option<String>,
     /// The creator's groups, snapshotted at creation and capped to a subset of
     /// what they held (RFC 0011-bis §4.4).
     ///
@@ -84,11 +88,11 @@ pub trait UserTokenRepository: Send + Sync {
 
     async fn list_for_user(&self, owner: &TokenOwner) -> Result<Vec<UserToken>, CoreError>;
 
-    /// Record that `id` was just presented.
+    /// Record that `id` was just presented, and from where.
     ///
     /// Best-effort and off the critical path: a failure here must never turn a
     /// valid credential into a rejected one, so callers log and carry on.
-    async fn touch_last_used(&self, id: Uuid) -> Result<(), CoreError>;
+    async fn touch_last_used(&self, id: Uuid, source_ip: Option<&str>) -> Result<(), CoreError>;
 
     /// Soft-delete a token. Returns true if a row was revoked.
     ///

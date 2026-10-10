@@ -33,6 +33,10 @@ sbom = ["batlehub-adapters/sbom"]
 # concurrent load; disable with --no-default-features on platforms where
 # jemalloc doesn't build (e.g. some musl targets).
 jemalloc = ["tikv-jemallocator", "tikv-jemalloc-ctl"]
+# CPU sampling for `perf/scripts/profile.sh`: `GET /debug/pprof/folded` and
+# `/debug/routes` (src/profiling.rs). Never in a published image. It exists to
+# answer "which code costs what, per request path" on a release build.
+profiling = ["dep:pprof"]
 
 [dependencies]
 # `background_threads`, and it is the difference between "jemalloc can return
@@ -75,6 +79,13 @@ tikv-jemallocator = { version = "0.7", optional = true, features = [
 # allocator is a `#[global_allocator]` and this is a `mallctl` client; both are
 # gated on the `jemalloc` feature, so a system-allocator build carries neither.
 tikv-jemalloc-ctl = { version = "0.7", optional = true, features = ["stats"] }
+# The `profiling` feature's SIGPROF sampler. Default features off: `cpp` only
+# demangles C++, and this is a Rust process. `framehop-unwinder` unwinds from
+# the signal's registers with unwind tables loaded up front and no allocation,
+# so it is safe inside the handler; the default unwinder (libgcc, through
+# backtrace-rs) is not, and needed a blocklist that dropped every sample landing
+# in libc — memcpy, the allocator — to avoid deadlocking there.
+pprof = { version = "0.15", optional = true, default-features = false, features = ["framehop-unwinder"] }
 batlehub-core = { path = "../crates/core" }
 batlehub-config = { path = "../crates/config" }
 batlehub-adapters = { path = "../crates/adapters" }

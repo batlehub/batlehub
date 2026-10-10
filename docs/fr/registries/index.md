@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/index.md
-sourceHash: 43d224396747bb6e
+sourceHash: 9f42985c65b34ef7
 ---
 
 # Registres
@@ -93,6 +93,12 @@ cache — l'identité que le miroir générique ne sait pas donner aux mêmes oc
 | [SDKMAN](./sdkman) | `sdkman` | API des candidats et courtier de téléchargement (le JDK, Gradle, Maven, Kotlin, …) ; le 302 du courtier est suivi côté serveur | proxy seul | ❌ | `api.sdkman.io/2` et `broker.sdkman.io` |
 | [Chaîne d'outils Rust](./rustup) | `rustup` | Manifestes de canal (la liste filtrée), archives de composants par cible et leur `.sha256` ; le `.asc` est relayé octet pour octet | proxy seul | ❌ | `static.rust-lang.org` |
 
+### Environnements de développement <Badge type="tip" text="RFC 0035" />
+
+| Registre | `type` | Ce qu'il mandate | Modes | Publication | Amont par défaut |
+|----------|--------|------------------|-------|:-----------:|------------------|
+| [Registre devfile](./devfile) | `devfile` | Les index de piles (filtrés), le devfile, le manifeste OCI et les couches de chaque version de pile (vérifiés, octet pour octet) et les projets de démarrage — pour Eclipse Che et `registry-library`/`odo` ; demande un hôte dédié | proxy seul | ❌ | `registry.devfile.io` |
+
 ## Matrice des fonctionnalités
 
 Chaque registre, et la façon dont ses capacités se projettent sur les
@@ -136,6 +142,7 @@ l'explorateur de paquets. ✓ pris en charge · `—` sans objet · ⚠ partiel.
 | Generic ³ | — | — | — | — | ✓ | — | ✓ | — | — |
 | Distributions Node | ✓ | ✓ | ✓ | — | ✓ | ✓ ⁴ | ✓ | ✓ ⁵ | — |
 | SDKMAN | ✓ | — | ✓ | — | ✓ | ⚠ ⁴ | ✓ | ✓ ⁵ | — |
+| Registre devfile | ✓ | — | ✓ | — | — | ⚠ ⁴ | ✓ | ✓ | — |
 
 > ¹ Conda n'a pas d'API dédiée de liste de versions par paquet. BatleHub en
 > synthétise une en parcourant `repodata.json` sur `noarch`, `linux-64`,
@@ -159,7 +166,9 @@ l'explorateur de paquets. ✓ pris en charge · `—` sans objet · ⚠ partiel.
 > date de publication dans `index.tab`, donc les publications courantes sont
 > filtrées et une publication retirée du listing atteint le garde-fou sans date ;
 > `sdkman` ne publie aucune date, donc le garde-fou est entièrement décidé par
-> `deny_missing_timestamp`. Sur ces deux types, ce champ est **obligatoire** sur
+> `deny_missing_timestamp` ; `devfile` ne date rien non plus, car le
+> `lastModified` de l'amont est l'heure de la dernière reconstruction du registre
+> entier (RFC 0035 §6.7). Sur ces trois types, ce champ est **obligatoire** sur
 > une règle `release_age_gate`.
 >
 > ⁵ **Préchauffage par plateforme** : une publication Node et une version SDKMAN
@@ -245,6 +254,7 @@ bouton désactivé — voir
 | rustup | a toolchain release is a manifest and a set of tarballs; the dist tree carries no prose | — | versions only | no |
 | galaxy | a file inside the artifact | yes | versions only | yes |
 | nix | a store path is a NAR and its narinfo; the protocol carries no prose, and the NAR is a filesystem image rather than a package with a manifest | — | neither | no |
+| devfile | a devfile has no readme; its description is a field of the stack index | — | versions only | yes |
 <!-- END readme-coverage -->
 
 La table ci-dessus est générée depuis le code Rust et reste en anglais : ses

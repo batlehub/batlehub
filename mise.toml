@@ -1,11 +1,21 @@
 [tools]
 claude = "latest"
 cocogitto = "latest"
-go = "latest"
+# Pinned ahead of mise's index: Go 1.27.2 (2026-10-08) fixes CVE-2026-78667
+# and CVE-2026-97031, and was on go.dev before `mise ls-remote go` listed it, so
+# "latest" still resolved to 1.27.1 and the toolchain scan went over budget.
+# Back to "latest" once the index has caught up.
+go = "1.27.2"
 helm = "latest"
-helm-docs = "1.14.2" # generates helm/batlehub/README.md; pinned so CI and local agree
+# Generates helm/batlehub/README.md. Built from a pinned commit rather than the
+# last release: v1.14.2 (2024-07) was compiled with Go 1.22 against
+# x/crypto 0.21 and carried 42 of the toolchain scan's findings, and master has
+# moved its dependencies on without cutting a release. The same commit is
+# pinned in .github/workflows/helm-lint.yaml, so the drift gate and
+# `task helm:docs` produce the same file; a source build has no version, so the
+# README's version footer renders empty.
+"go:github.com/norwoodj/helm-docs/cmd/helm-docs" = "a5573af096a4b526dcbc3c896c220b1714a0765b"
 k6 = "latest"
-lazydocker = "latest"
 # The S3 client, for `task compose:s3:bucket:create` and `task perf:s3:infra:up`.
 # RustFS's `rc` rather than MinIO's `mc`, because `mc` can no longer be
 # installed at all: `aqua:minio/mc` resolves to
@@ -18,7 +28,7 @@ lazydocker = "latest"
 # `exe` is required: the repository is `rustfs/cli` and the binary inside the
 # release tarball is `rc`, which is not a name mise can guess.
 "github:rustfs/cli" = { version = "latest", exe = "rc" }
-node = "24"
+node = "26"
 rust = "latest"
 sonar-scanner-cli = "latest"
 task = "latest"
@@ -44,11 +54,11 @@ semgrep = "latest"                  # static analysis (Rust / TS / secrets rules
 # Dependency supply chain: source-repo reputation + vulns, from the lockfiles.
 # Pinned, not "latest": the same version is pinned in the CI action's `version`
 # input (.github/workflows/postmortem.yaml), so both run the identical gate.
-"github:mlab-sh/postmortem" = "2.4.0"
+"github:mlab-sh/postmortem" = "2.5.0"
 "github:mlab-sh/mlab-cli" = "1.0.4"
 uv = "latest"
 python = "latest"
-pnpm = "11" # package manager for ui/ and docs/ (settings in pnpm-workspace.yaml + packageManager field)
+pnpm = "12" # package manager for ui/ and docs/ (settings in pnpm-workspace.yaml + packageManager field)
 
 #"github:batleforc/batlehub" = { version = "latest", asset_pattern = "batlehub-cli-*" }
 

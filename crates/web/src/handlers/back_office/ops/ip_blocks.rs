@@ -123,8 +123,16 @@ pub async fn block_ip(
         .await
         .map_err(AppError::from)?;
 
+    // Which IP, until when and why: without it the trail says an IP was
+    // blocked and not which one.
     admin_svc
-        .record_account_action(AccessAction::BlockIp, &identity.0)
+        .record_admin_action_about(
+            None,
+            AccessAction::BlockIp,
+            &identity.0,
+            &identity.1,
+            Some(format!("ip={} until={unblock_at} reason={reason}", body.ip)),
+        )
         .await;
 
     Ok(HttpResponse::NoContent().finish())
@@ -163,7 +171,13 @@ pub async fn unblock_ip(
     store.unblock_ip(&ip).await.map_err(AppError::from)?;
 
     admin_svc
-        .record_account_action(AccessAction::UnblockIp, &identity.0)
+        .record_admin_action_about(
+            None,
+            AccessAction::UnblockIp,
+            &identity.0,
+            &identity.1,
+            Some(format!("ip={ip}")),
+        )
         .await;
 
     Ok(HttpResponse::NoContent().finish())

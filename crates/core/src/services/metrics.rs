@@ -27,7 +27,7 @@ pub struct RegistryCounters {
 }
 
 fn ema_update(current: &AtomicU64, sample: u64) {
-    let _ = current.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |old| {
+    let _ = current.try_update(Ordering::Relaxed, Ordering::Relaxed, |old| {
         let delta = (sample as i64 - old as i64) / EMA_SMOOTHING as i64;
         Some((old as i64 + delta) as u64)
     });

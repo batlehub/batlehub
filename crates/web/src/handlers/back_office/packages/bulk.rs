@@ -114,7 +114,9 @@ pub async fn bulk_block_packages(
         })
         .collect();
 
-    let result = admin_svc.bulk_block_packages(items, &identity.0).await;
+    let result = admin_svc
+        .bulk_block_packages(items, &identity.0, &identity.1)
+        .await;
 
     Ok(web::Json(BulkActionResponse {
         succeeded_count: result.succeeded.len(),
@@ -188,7 +190,9 @@ pub async fn bulk_unblock_packages(
         })
         .collect();
 
-    let result = admin_svc.bulk_unblock_packages(items, &identity.0).await;
+    let result = admin_svc
+        .bulk_unblock_packages(items, &identity.0, &identity.1)
+        .await;
 
     Ok(web::Json(BulkActionResponse {
         succeeded_count: result.succeeded.len(),
@@ -277,7 +281,9 @@ pub async fn bulk_delete_packages(
         })
         .collect();
 
-    let result = admin_svc.bulk_delete_packages(items, &identity.0).await;
+    let result = admin_svc
+        .bulk_delete_packages(items, &identity.0, &identity.1)
+        .await;
 
     // Best-effort: purge cached artifacts only for packages successfully removed from the DB.
     for pkg in &result.succeeded {

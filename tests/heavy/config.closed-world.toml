@@ -404,3 +404,20 @@ roles = "off"
 anonymous = ["releases:read", "releases:list"]
 user = ["releases:read", "releases:list"]
 admin = ["*"]
+
+# ── Devfile registry (RFC 0035) ──────────────────────────────────────────────
+#
+# Bound to `devfile.localhost`: `registry-library` asks for `/v2/…` at the host
+# root, dropping any path prefix, so a prefix-only registry answers its index
+# and 404s every pull (RFC 0035 §5.3). The name resolves to loopback in Go's
+# resolver, and no other phase uses it.
+[[registries]]
+type = "devfile"
+name = "devfile-${HEAVY_RUN}"
+mode = "proxy"
+hosts = ["devfile.localhost"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list"]
+admin = ["*"]

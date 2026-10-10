@@ -147,6 +147,34 @@ pub enum AccessAction {
     /// A cache-coherence sweep under `dry_run`, which deleted nothing and — the
     /// part that matters — did not advance any blob toward deletion either.
     CacheCoherenceDryRun,
+    /// An OIDC sign-in completed (RFC 0036 §6.1). The provider is the event's
+    /// reason; the code and the token are never recorded.
+    SignIn,
+    /// An OIDC sign-in failed; the reason is its class (state mismatch, token
+    /// exchange, claims), never the code or the token.
+    SignInFailed,
+    /// A personal access token was minted. Carries its id and name, never its
+    /// value or its hash.
+    TokenCreate,
+    /// A personal access token was revoked.
+    TokenRevoke,
+    /// A personal access token was accepted from a source IP other than the
+    /// one it was last used from. Emitted by the server because "first seen"
+    /// is stateful and a Sigma rule cannot express it (RFC 0036 §6.2).
+    TokenNewSource,
+    /// A credential was presented and no provider accepted it. The request
+    /// goes on as anonymous, so this is the only trace the refusal leaves.
+    /// Throttled per source IP; see [`AccessEvent::throttled_count`].
+    CredentialRejected,
+    /// A data subject's rows were pseudonymised on request (RFC 0036 §4.2).
+    /// The row names the operator and the subject's *pseudonym*, never the
+    /// identity it replaced.
+    GdprErase,
+    /// A data subject's records were exported, answering an access request.
+    GdprExport,
+    /// The audit lifecycle pseudonymised or expired rows (RFC 0036 §6.3); the
+    /// counts are its detail.
+    AuditLifecycleRun,
 }
 
 impl AccessAction {
@@ -192,6 +220,15 @@ impl AccessAction {
         Self::CacheEvictDryRun,
         Self::CacheCoherenceRun,
         Self::CacheCoherenceDryRun,
+        Self::SignIn,
+        Self::SignInFailed,
+        Self::TokenCreate,
+        Self::TokenRevoke,
+        Self::TokenNewSource,
+        Self::CredentialRejected,
+        Self::GdprErase,
+        Self::GdprExport,
+        Self::AuditLifecycleRun,
     ];
 
     /// The canonical wire name, snake_case.
@@ -240,6 +277,61 @@ impl AccessAction {
             Self::CacheEvictDryRun => "cache_evict_dry_run",
             Self::CacheCoherenceRun => "cache_coherence_run",
             Self::CacheCoherenceDryRun => "cache_coherence_dry_run",
+            Self::SignIn => "sign_in",
+            Self::SignInFailed => "sign_in_failed",
+            Self::TokenCreate => "token_create",
+            Self::TokenRevoke => "token_revoke",
+            Self::TokenNewSource => "token_new_source",
+            Self::CredentialRejected => "credential_rejected",
+            Self::GdprErase => "gdpr_erase",
+            Self::GdprExport => "gdpr_export",
+            Self::AuditLifecycleRun => "audit_lifecycle_run",
+        }
+    }
+
+    /// Whether this action is the high-volume **access** class (RFC 0036 §4.2).
+    ///
+    /// Fixed in code, and a list of the two rather than of the forty: a new
+    /// action is security class unless it is added here deliberately, so the
+    /// failure direction is keeping a row too long, never too short.
+    pub fn is_access_class(&self) -> bool {
+        matches!(self, Self::Download | Self::ViewMetadata)
+    }
+
+    /// The ECS `event.category` of the audit stream (RFC 0036 §6.2).
+    pub fn ecs_category(&self) -> &'static str {
+        match self {
+            Self::SignIn | Self::SignInFailed | Self::TokenNewSource | Self::CredentialRejected => {
+                "authentication"
+            }
+            Self::TokenCreate
+            | Self::TokenRevoke
+            | Self::AddOwner
+            | Self::RemoveOwner
+            | Self::BlockUser
+            | Self::UnblockUser
+            | Self::GrantWrite
+            | Self::GrantRevoke
+            | Self::AddBetaMember
+            | Self::RemoveBetaMember
+            | Self::ClaimNamespace
+            | Self::ReleaseNamespace
+            | Self::GdprErase
+            | Self::GdprExport => "iam",
+            Self::BlockIp
+            | Self::UnblockIp
+            | Self::AuditPurge
+            | Self::ResetQuota
+            | Self::TombstoneCompact
+            | Self::RetentionRun
+            | Self::RetentionDryRun
+            | Self::CacheClear
+            | Self::CacheEvictRun
+            | Self::CacheEvictDryRun
+            | Self::CacheCoherenceRun
+            | Self::CacheCoherenceDryRun
+            | Self::AuditLifecycleRun => "configuration",
+            _ => "package",
         }
     }
 
@@ -276,7 +368,7 @@ impl std::fmt::Display for AccessAction {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "outcome", rename_all = "lowercase")]
 pub enum AccessResult {
     Allowed,
@@ -326,7 +418,7 @@ impl CallerNet {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct AccessEvent {
     pub id: Uuid,
     pub user_id: Option<String>,
@@ -345,9 +437,45 @@ pub struct AccessEvent {
     /// HTTP User-Agent from the request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_agent: Option<String>,
+    /// How many further events of the same kind were suppressed before this
+    /// one was written — set by a throttled writer such as
+    /// [`AccessAction::CredentialRejected`]'s, `None` everywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub throttled_count: Option<u32>,
+    /// What an event that is not about a package is about — a token's id and
+    /// name, the provider of a sign-in. Never a secret: no token value, no
+    /// hash, no authorization code (RFC 0036 §6.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 impl AccessEvent {
+    /// An event about an identity or a credential rather than a package — the
+    /// authentication actions of RFC 0036 §6.1. `detail` names what it is
+    /// about and never carries a secret.
+    pub fn about_identity(
+        action: AccessAction,
+        user_id: Option<String>,
+        user_role: Role,
+        result: AccessResult,
+        net: CallerNet,
+        detail: Option<String>,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            user_id,
+            user_role,
+            package_id: None,
+            action,
+            result,
+            timestamp: Utc::now(),
+            ip_address: net.ip,
+            user_agent: net.user_agent,
+            throttled_count: None,
+            detail,
+        }
+    }
+
     pub fn allowed_download(
         package_id: PackageId,
         user_id: Option<String>,
@@ -363,6 +491,8 @@ impl AccessEvent {
             timestamp: Utc::now(),
             ip_address: None,
             user_agent: None,
+            throttled_count: None,
+            detail: None,
         }
     }
 
@@ -387,6 +517,8 @@ impl AccessEvent {
             timestamp: Utc::now(),
             ip_address: None,
             user_agent: None,
+            throttled_count: None,
+            detail: None,
         }
     }
 
@@ -422,6 +554,8 @@ impl AccessEvent {
             timestamp: Utc::now(),
             ip_address: None,
             user_agent: None,
+            throttled_count: None,
+            detail: None,
         }
     }
 
@@ -455,6 +589,8 @@ impl AccessEvent {
             timestamp: Utc::now(),
             ip_address: None,
             user_agent: None,
+            throttled_count: None,
+            detail: None,
         }
     }
 
@@ -474,6 +610,8 @@ impl AccessEvent {
             timestamp: Utc::now(),
             ip_address: None,
             user_agent: None,
+            throttled_count: None,
+            detail: None,
         }
     }
 
@@ -601,7 +739,7 @@ mod tests {
     fn all_lists_every_variant() {
         assert_eq!(
             AccessAction::ALL.len(),
-            37,
+            46,
             "a new AccessAction variant must be added to ALL (and this count bumped), \
              or ?action= cannot name it"
         );

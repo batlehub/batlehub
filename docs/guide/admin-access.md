@@ -101,7 +101,7 @@ listing and the export.
 | `cache_coherence_run` / `cache_coherence_dry_run` | a sweep collected blobs nothing references — [see below](/guide/admin-policies#cache-coherence) |
 | `tombstone_compact` | a registry's aged-out tombstone detail was stripped |
 | `audit_purge` | this trail itself was purged to a cutoff |
-| `block` / `unblock`, `block_user` / `unblock_user`, `block_ip` / `unblock_ip` | the corresponding admin action |
+| `block` / `unblock`, `block_user` / `unblock_user`, `block_ip` / `unblock_ip` | the corresponding admin action; `detail` names the IP for the last two. `block_ip` is also written by `system` for an automatic ban, with the violation count that tripped it |
 | `yank` / `unyank`, `deprecate` / `undeprecate`, `unlist` / `relist` | a lifecycle change on one version |
 | `add_owner` / `remove_owner`, `set_visibility`, `claim_namespace` / `release_namespace` | ownership and visibility |
 | `download` / `view_metadata` | a read, allowed or denied |

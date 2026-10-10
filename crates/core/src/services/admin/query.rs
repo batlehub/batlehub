@@ -2,8 +2,8 @@ use chrono::{DateTime, Utc};
 
 use super::AdminService;
 use crate::entities::{
-    AccessAction, AccessEvent, EventFilter, Identity, PackageFilter, PackageId, PackageStatus,
-    PackageSummary,
+    AccessAction, AccessEvent, CallerNet, EventFilter, Identity, PackageFilter, PackageId,
+    PackageStatus, PackageSummary,
 };
 use crate::error::CoreError;
 
@@ -34,10 +34,11 @@ impl AdminService {
         &self,
         before: DateTime<Utc>,
         by_identity: &Identity,
+        net: &CallerNet,
     ) -> Result<u64, CoreError> {
         let deleted = self.repo.purge_events_before(before).await?;
 
-        self.record_account_action(AccessAction::AuditPurge, by_identity)
+        self.record_account_action(AccessAction::AuditPurge, by_identity, net)
             .await;
 
         tracing::info!(

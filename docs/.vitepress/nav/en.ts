@@ -67,8 +67,9 @@ export const nav = [
       { text: "Roadmap", link: "/guide/roadmap" },
       { text: "Contributing", link: "/contributing/" },
       { text: "Design history", link: "/rfc/" },
+      { text: "Technical debt", link: "/techdebt/" },
     ],
-    activeMatch: "/(contributing|rfc)/",
+    activeMatch: "/(contributing|rfc|techdebt)/",
   },
 ];
 
@@ -138,6 +139,7 @@ export const sidebar = {
       items: [
         { text: "Node (nvm, fnm, n, mise)", link: "/registries/nodedist" },
         { text: "Rust toolchain (rustup)", link: "/registries/rustup" },
+        { text: "Devfile registry (Che, odo)", link: "/registries/devfile" },
         { text: "SDKMAN", link: "/registries/sdkman" },
       ],
     },
@@ -155,6 +157,10 @@ export const sidebar = {
         { text: "From source", link: "/guide/install/source" },
         { text: "Helm chart", link: "/guide/install/helm" },
       ],
+    },
+    {
+      text: "Migration",
+      items: [{ text: "Migrating from Nexus", link: "/guide/install/migrate-from-nexus" }],
     },
   ],
 
@@ -254,8 +260,14 @@ export const sidebar = {
     {
       text: "Compliance",
       items: [
+        { text: "Overview", link: "/operations/compliance" },
+        { text: "GDPR", link: "/operations/compliance-gdpr" },
+        { text: "ISO/IEC 27001", link: "/operations/compliance-iso27001" },
+        { text: "Cyber Resilience Act", link: "/operations/compliance-cra" },
+        { text: "NIS2 and DORA", link: "/operations/compliance-nis2-dora" },
         { text: "Change management", link: "/operations/change-management" },
         { text: "SOC 2 checklist", link: "/operations/soc2-checklist" },
+        { text: "SIEM integration", link: "/operations/siem" },
         { text: "MD5 and SHA-1", link: "/operations/weak-hashes" },
       ],
     },
@@ -280,6 +292,21 @@ export const sidebar = {
         {
           text: "Adding a vulnerability scanner",
           link: "/contributing/adding-a-vulnerability-scanner",
+        },
+      ],
+    },
+  ],
+
+  // What is known to be owed: measured, not yet decided. Beside the RFCs
+  // because an entry that needs a design becomes one.
+  "/techdebt/": [
+    {
+      text: "Technical debt",
+      items: [
+        { text: "What this is", link: "/techdebt/" },
+        {
+          text: "TD-0001 — The fixed cost of a request",
+          link: "/techdebt/0001-per-request-sql-and-profile-coverage",
         },
       ],
     },
@@ -469,6 +496,14 @@ export const sidebar = {
         {
           text: "0031 — Ansible Galaxy",
           link: "/rfc/0031-ansible-galaxy",
+        },
+        {
+          text: "0035 — Devfile registries",
+          link: "/rfc/0035-devfile-registry",
+        },
+        {
+          text: "0036 — Regulatory alignment",
+          link: "/rfc/0036-regulatory-alignment",
         },
       ],
     },

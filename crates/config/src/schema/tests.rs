@@ -419,8 +419,61 @@ fn an_empty_deprecated_list_is_not_a_policy_but_an_empty_server_list_is() {
 
 // ── Config warnings ───────────────────────────────────────────────────────────
 
+/// Every warning but RFC 0036's `audit.*`, which a config with no `[audit]`
+/// block always raises — these tests are about the other policies.
+fn other_warnings(cfg: &AppConfig) -> Vec<ConfigWarning> {
+    cfg.warnings()
+        .into_iter()
+        .filter(|w| !w.code.starts_with("audit."))
+        .collect()
+}
+
 fn warning_codes(cfg: &AppConfig) -> Vec<String> {
-    cfg.warnings().into_iter().map(|w| w.code).collect()
+    other_warnings(cfg).into_iter().map(|w| w.code).collect()
+}
+
+fn audit_warning_codes(extra: &str) -> Vec<String> {
+    parse_config(extra)
+        .warnings()
+        .into_iter()
+        .map(|w| w.code)
+        .filter(|c| c.starts_with("audit."))
+        .collect()
+}
+
+#[test]
+fn no_audit_block_warns_that_nothing_expires() {
+    assert_eq!(audit_warning_codes(""), vec![warnings::AUDIT_NO_RETENTION]);
+}
+
+#[test]
+fn audit_retention_with_pseudonymisation_is_quiet() {
+    assert!(audit_warning_codes(
+        "\n        [audit]\n        access_retention_days = 365\n        pseudonymise_after_days = 30"
+    )
+    .is_empty());
+}
+
+#[test]
+fn long_access_retention_without_pseudonymisation_warns() {
+    assert_eq!(
+        audit_warning_codes("\n        [audit]\n        access_retention_days = 365"),
+        vec![warnings::AUDIT_FULL_IPS_KEPT]
+    );
+}
+
+#[test]
+fn sealing_with_text_logs_warns_and_json_logs_do_not() {
+    let audit =
+        "\n        [audit]\n        access_retention_days = 30\n        seal_interval_secs = 3600";
+    assert_eq!(
+        audit_warning_codes(audit),
+        vec![warnings::AUDIT_SEALING_WITHOUT_STREAM]
+    );
+    assert!(audit_warning_codes(&format!(
+        "{audit}\n        [logging]\n        format = \"json\""
+    ))
+    .is_empty());
 }
 
 #[test]
@@ -430,21 +483,19 @@ fn a_config_with_no_proxy_trust_policy_warns_about_it() {
         warning_codes(&cfg),
         vec![warnings::PROXY_TRUST_UNCONFIGURED]
     );
-    assert_eq!(cfg.warnings()[0].path, "server.trusted_proxies");
+    assert_eq!(other_warnings(&cfg)[0].path, "server.trusted_proxies");
 }
 
 #[test]
 fn an_explicit_empty_server_list_is_a_policy_and_does_not_warn() {
-    assert!(parse_config("        trusted_proxies = []")
-        .warnings()
-        .is_empty());
+    assert!(other_warnings(&parse_config("        trusted_proxies = []")).is_empty());
 }
 
 #[test]
 fn a_configured_server_list_does_not_warn() {
-    assert!(parse_config(r#"        trusted_proxies = ["10.0.0.0/8"]"#)
-        .warnings()
-        .is_empty());
+    assert!(
+        other_warnings(&parse_config(r#"        trusted_proxies = ["10.0.0.0/8"]"#)).is_empty()
+    );
 }
 
 #[test]
@@ -748,7 +799,7 @@ fn a_non_dns_label_registry_name_warns_and_derives_no_wildcard() {
     cfg.validate()
         .expect("valid — this degrades, it does not fail");
 
-    let w = cfg.warnings();
+    let w = other_warnings(&cfg);
     assert_eq!(w.len(), 1);
     assert_eq!(w[0].code, warnings::SUBDOMAIN_INVALID_DNS_LABEL);
     assert_eq!(w[0].path, "registries[0].name");
@@ -3188,6 +3239,101 @@ fn an_sdkman_upstream_without_the_api_version_is_warned_not_refused() {
     );
 }
 
+// ── RFC 0035 §4.5: devfile registries ───────────────────────────────────────
+
+#[test]
+fn a_devfile_registry_with_one_root_upstream_validates() {
+    let cfg = host_routing_config(
+        r#"
+        [[registries]]
+        type = "devfile"
+        name = "devfile"
+        hosts = ["devfile.hub.example"]
+        [registries.rbac]
+        anonymous = ["releases:read", "releases:list"]
+        "#,
+    );
+    cfg.validate()
+        .expect("the default upstream is the registry root");
+    assert!(
+        !cfg.warnings()
+            .iter()
+            .any(|w| w.code.starts_with("devfile.")),
+        "{:?}",
+        cfg.warnings()
+    );
+}
+
+#[test]
+fn a_devfile_upstream_naming_the_index_is_refused_with_the_root() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "devfile"
+        name = "devfile"
+        upstreams = ["https://registry.devfile.io/v2index/"]
+        "#,
+        "the index is not the root",
+    );
+    assert!(err.contains("'https://registry.devfile.io'"), "{err}");
+    assert!(
+        err.contains("not its index —"),
+        "no stray line break: {err}"
+    );
+}
+
+#[test]
+fn a_devfile_registry_takes_one_upstream() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "devfile"
+        name = "devfile"
+        upstreams = ["https://registry.devfile.io", "https://devfiles.internal.example"]
+        "#,
+        "two indexes cannot be merged",
+    );
+    assert!(err.contains("one upstream"), "{err}");
+    assert!(
+        err.contains("configured — one"),
+        "no stray line break: {err}"
+    );
+}
+
+#[test]
+fn a_devfile_registry_cannot_be_local() {
+    validation_error(
+        r#"
+        [[registries]]
+        type = "devfile"
+        name = "devfile"
+        mode = "local"
+        "#,
+        "no publish protocol",
+    );
+}
+
+#[test]
+fn a_devfile_registry_without_a_host_or_anonymous_reads_is_warned() {
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "devfile"
+        name = "devfile"
+        "#,
+    );
+    cfg.validate().expect("served, with warnings");
+    let codes: Vec<String> = cfg.warnings().into_iter().map(|w| w.code).collect();
+    assert!(
+        codes.iter().any(|c| c == warnings::DEVFILE_WITHOUT_HOST),
+        "{codes:?}"
+    );
+    assert!(
+        codes.iter().any(|c| c == warnings::DEVFILE_NOT_ANONYMOUS),
+        "{codes:?}"
+    );
+}
+
 // ── RFC 0019 §4.3: [registries.refs] and the anonymous-forge warning ─────────
 
 #[test]
@@ -3398,7 +3544,7 @@ fn the_phase_3_scanners_load_when_declared() {
 }
 
 #[test]
-fn a_socket_scanner_without_a_key_and_a_bad_command_are_refused() {
+fn a_socket_scanner_without_a_key_is_refused_and_an_absent_command_loads() {
     let err = validation_error(
         r#"
         [scanners.socket]
@@ -3408,25 +3554,18 @@ fn a_socket_scanner_without_a_key_and_a_bad_command_are_refused() {
     );
     assert!(err.contains("api_key"), "{err}");
 
-    let err = validation_error(
+    // A command this process cannot run still loads: a proxy-only process
+    // validates the same config with no scanner on its image. The worker
+    // refuses it when it builds its scanners (`server/src/setup.rs`).
+    parse_config(
         r#"
         [scanners.pm]
         type = "postmortem"
         command = "/nonexistent/postmortem"
         "#,
-        "a missing command must not load",
-    );
-    assert!(err.contains("executable"), "{err}");
-
-    parse_config(
-        r#"
-        [scanners.pm]
-        type = "postmortem"
-        command = "/bin/sh"
-        "#,
     )
     .validate()
-    .expect("an executable command loads");
+    .expect("a command absent from this process loads");
 }
 
 #[test]
@@ -4654,4 +4793,46 @@ fn an_unsigned_gallery_target_warns() {
         codes.contains(&crate::schema::warnings::RELEASE_IMPORT_UNSIGNED_GALLERY),
         "{codes:?}"
     );
+}
+
+// ── [logging] (RFC 0036 §4.1) ─────────────────────────────────────────────────
+
+#[test]
+fn logging_format_defaults_to_text_and_reads_json() {
+    assert_eq!(parse_config("").logging.format, LogFormat::Text);
+    assert_eq!(
+        parse_config("[logging]\nformat = \"json\"\n")
+            .logging
+            .format,
+        LogFormat::Json
+    );
+}
+
+#[test]
+fn an_unknown_logging_format_or_key_is_refused() {
+    for bad in ["format = \"xml\"", "level = \"debug\""] {
+        assert!(
+            toml::from_str::<LoggingConfig>(bad).is_err(),
+            "accepted: {bad}"
+        );
+    }
+}
+
+/// Housekeeping prunes violation counters after 30 days; a longer window would
+/// lose its count before reaching the threshold and never ban.
+#[test]
+fn a_violation_window_past_the_counter_retention_refuses_to_start() {
+    let ok = parse_config(
+        r#"
+        [ip_blocking]
+        violation_window_secs = 2592000"#,
+    );
+    ok.validate().unwrap();
+    let cfg = parse_config(
+        r#"
+        [ip_blocking]
+        violation_window_secs = 2592001"#,
+    );
+    let err = cfg.validate().unwrap_err().to_string();
+    assert!(err.contains("violation_window_secs"), "{err}");
 }

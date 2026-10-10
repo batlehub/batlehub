@@ -47,6 +47,31 @@ pub trait PackageRepository: Send + Sync {
     /// Returns `PackageStatus::Available` if the package has never been seen.
     async fn get_status(&self, pkg: &PackageId) -> Result<PackageStatus, CoreError>;
 
+    /// The block that refuses a download of `pkg`: one on the coordinate
+    /// itself, else — when `pkg` names an artifact — one on its bare version.
+    ///
+    /// A download addresses a *file within* a version while an operator blocks
+    /// the version (`artifact = None`), so every download asks both. The
+    /// default is those two [`Self::get_status`] reads, in that order; the
+    /// Postgres repository answers in one, because this runs on every artifact
+    /// read.
+    async fn covering_block(&self, pkg: &PackageId) -> Result<Option<String>, CoreError> {
+        if let PackageStatus::Blocked { reason, .. } = self.get_status(pkg).await? {
+            return Ok(Some(reason));
+        }
+        if pkg.artifact.is_none() {
+            return Ok(None);
+        }
+        let version = PackageId {
+            artifact: None,
+            ..pkg.clone()
+        };
+        Ok(match self.get_status(&version).await? {
+            PackageStatus::Blocked { reason, .. } => Some(reason),
+            PackageStatus::Available => None,
+        })
+    }
+
     /// Every blocked version of one package, in no particular order.
     ///
     /// The bulk counterpart to [`Self::get_status`], for the version *listing*

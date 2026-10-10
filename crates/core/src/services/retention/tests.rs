@@ -85,6 +85,8 @@ impl EventRepo {
             timestamp: at,
             ip_address: None,
             user_agent: None,
+            throttled_count: None,
+            detail: None,
         });
     }
 
@@ -101,6 +103,8 @@ impl EventRepo {
             timestamp: at,
             ip_address: None,
             user_agent: None,
+            throttled_count: None,
+            detail: None,
         });
     }
 }

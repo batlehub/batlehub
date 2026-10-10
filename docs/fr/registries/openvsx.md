@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/openvsx.md
-sourceHash: dd06bd64d755398c
+sourceHash: 753fab8bebc35006
 ---
 
 # OpenVSX
@@ -224,11 +224,13 @@ Ce qui s'installe où, mesuré avec VS Code 1.136.1
 | `POST` | `/proxy/{registry}/api/-/namespace/create` | Claim an OpenVSX publisher namespace. |
 | `GET` | `/proxy/{registry}/api/-/public-key/{key_id}` | `GET /proxy/{registry}/api/-/public-key/{key_id}` — the key this |
 | `POST` | `/proxy/{registry}/api/-/publish` | `ovsx publish` — `POST /api/-/publish`. |
+| `GET` | `/proxy/{registry}/api/-/query` | Query the registry — `GET …/api/-/query`. |
 | `GET` | `/proxy/{registry}/api/-/search` | Search the registry — `GET …/api/-/search`. |
 | `GET` | `/proxy/{registry}/api/{namespace}` | `GET /api/{namespace}` — what a publisher has here. |
 | `GET` | `/proxy/{registry}/api/{namespace}/{extension}` | The newest version of one extension — `GET …/api/{namespace}/{extension}`. |
 | `GET` | `/proxy/{registry}/api/{namespace}/{extension}/{version}` | One specific version — `GET …/api/{namespace}/{extension}/{version}`. |
 | `GET` | `/proxy/{registry}/api/{namespace}/{extension}/{version}/file/{filename}` | One file out of an extension — `GET …/api/{ns}/{ext}/{version}/file/{name}`. |
+| `GET` | `/proxy/{registry}/api/v2/-/query` | Query the registry — `GET …/api/v2/-/query`, the version Theia prefers. |
 | `GET` | `/proxy/{registry}/api/version` | `GET /api/version` — the registry's own version document. |
 | `GET` | `/proxy/{registry}/vscode/asset/{publisher}/{name}/{version}/{asset_type}` | `GET …/vscode/asset/{publisher}/{name}/{version}/{asset_type}` |
 | `POST` | `/proxy/{registry}/vscode/gallery/extensionquery` | Query the extension gallery. |
@@ -335,7 +337,7 @@ script de démarrage d'espace de travail qui lance le proxy avec
   `GET …/vscode/item`, et
   `GET …/vscode/gallery/publishers/{publisher}/vsextensions/{name}/{version}/vspackage`.
 - Endpoints de l'API OpenVSX : `GET …/api/{namespace}/{extension}[/{version}]`,
-  `GET …/api/-/search`,
+  `GET …/api/-/search`, `GET …/api/-/query` (et `…/api/v2/-/query`),
   `GET …/api/{namespace}/{extension}/{version}/file/{filename}`.
 - Le manifeste, le README, le changelog, la licence et l'icône sont servis **à
   partir du VSIX en cache** : un seul artefact répond donc à toutes les requêtes
