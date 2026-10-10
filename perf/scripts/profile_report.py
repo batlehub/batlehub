@@ -33,7 +33,7 @@ REPO = Path(__file__).resolve().parents[2]
 ROUTES = REPO / "perf/profile_routes.txt"
 SPEC = REPO / "ui/openapi.json"
 
-OWN = re.compile(r"(?:^<?batlehub)|(?:\[(?:crates|server|cli)/)")
+OWN = re.compile(r"^<?batlehub|\[(?:crates|server|cli)/")
 HASH = re.compile(r"::h[0-9a-f]{16}$")
 METHODS = ("get", "put", "post", "delete", "patch", "head")
 
@@ -94,9 +94,12 @@ def crate_of(frame: str) -> str:
     """`tokio` for `tokio::x`, `<tokio::x as y>::z` or `poll [tokio-1.47.1/src/…]`."""
     if frame.startswith("<["):  # an impl on a slice or array: core's
         return "core"
-    tag = re.search(r"\[([A-Za-z0-9_\-]+?)-\d+\.\d+[^/\]]*/", frame)
-    if tag:
-        return tag.group(1).replace("-", "_")
+    # A `[name-1.2.3…/` source tag: the crate name ends at the first `-<digit>.<digit>`.
+    for tag in re.finditer(r"\[([^/\]]+)/", frame):
+        version = re.search(r"-\d+\.\d", tag.group(1))
+        name = tag.group(1)[:version.start()] if version else ""
+        if re.fullmatch(r"[A-Za-z0-9_-]+", name):
+            return name.replace("-", "_")
     path = re.match(r"^<*(\w+)::", frame)
     return path.group(1) if path else frame.split(" ")[0]
 
@@ -232,8 +235,7 @@ def pct(a: float, b: float) -> str:
     return f"{(a - b) / b * 100:+.0f} %" if b else "new"
 
 
-def render(arms: dict, args, coverage: dict, problems: list[str], baseline: dict) -> str:
-    order = sorted(arms, key=lambda op: arms[op]["cpu_ms_per_request"], reverse=True)
+def summary_table(arms: dict, order: list[str], args, coverage: dict, baseline: dict) -> list[str]:
     out = [
         "## CPU profile per request path",
         "",
@@ -252,26 +254,31 @@ def render(arms: dict, args, coverage: dict, problems: list[str], baseline: dict
         "| --- | ---: | ---: | ---: | --- | ---: |",
     ]
     for op in order:
-        a = arms[op]
-        top = a["top_own"][0] if a["top_own"] else ("—", 0)
-        share = f"{top[1] / a['samples'] * 100:.0f} %" if a["samples"] else "—"
-        base = baseline.get(op, {}).get("cpu_ms_per_request")
-        delta = pct(a["cpu_ms_per_request"], base) if base is not None else "—"
-        if base and a["cpu_ms_per_request"] > base * 1.2:
-            delta += " ⚠"
-        flag = " (dropped iterations)" if a["dropped_iterations"] else ""
-        p95 = f"{a['p95_ms']:.0f}" if a.get("p95_ms") is not None else "—"
-        out.append(f"| `{op}`{flag} | {a['cpu_ms_per_request']:.2f} | {p95} | {delta} | `{top[0][:140]}` | {share} |")
+        out.append(summary_row(op, arms[op], baseline.get(op, {}).get("cpu_ms_per_request")))
+    return out
 
-    out += ["", "### Where the wall time goes", "",
-            "Server-side, per request, in ms. A CPU profile sees only the first column; the others are "
-            "what it cannot: *blocked in a poll* is a future that held its thread without computing "
-            "(a `std` lock, synchronous I/O — blocking inside async code), *SQL* and *upstream* are "
-            "awaited I/O, and *other awaits* is the rest — tokio locks and semaphores, channels, "
-            "`spawn_blocking` (all of `tokio::fs`). Approximate: the parts overlap a little and are "
-            "clamped at zero.", "",
-            "| arm | wall | CPU | blocked in a poll | SQL (stmts) | upstream | other awaits |",
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
+
+def summary_row(op: str, a: dict, base: float | None) -> str:
+    top = a["top_own"][0] if a["top_own"] else ("—", 0)
+    share = f"{top[1] / a['samples'] * 100:.0f} %" if a["samples"] else "—"
+    delta = pct(a["cpu_ms_per_request"], base) if base is not None else "—"
+    if base and a["cpu_ms_per_request"] > base * 1.2:
+        delta += " ⚠"
+    flag = " (dropped iterations)" if a["dropped_iterations"] else ""
+    p95 = f"{a['p95_ms']:.0f}" if a.get("p95_ms") is not None else "—"
+    return f"| `{op}`{flag} | {a['cpu_ms_per_request']:.2f} | {p95} | {delta} | `{top[0][:140]}` | {share} |"
+
+
+def wall_table(arms: dict) -> list[str]:
+    out = ["", "### Where the wall time goes", "",
+           "Server-side, per request, in ms. A CPU profile sees only the first column; the others are "
+           "what it cannot: *blocked in a poll* is a future that held its thread without computing "
+           "(a `std` lock, synchronous I/O — blocking inside async code), *SQL* and *upstream* are "
+           "awaited I/O, and *other awaits* is the rest — tokio locks and semaphores, channels, "
+           "`spawn_blocking` (all of `tokio::fs`). Approximate: the parts overlap a little and are "
+           "clamped at zero.", "",
+           "| arm | wall | CPU | blocked in a poll | SQL (stmts) | upstream | other awaits |",
+           "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
     for op in sorted(arms, key=lambda o: (arms[o]["wall"] or {}).get("wall_ms", 0), reverse=True):
         w = arms[op]["wall"]
         if not w:
@@ -280,30 +287,41 @@ def render(arms: dict, args, coverage: dict, problems: list[str], baseline: dict
         out.append(f"| `{op}` | {w['wall_ms']:.2f} | {w['cpu_ms']:.2f} | {w['blocked_in_poll_ms']:.2f} | "
                    f"{w['sql_ms']:.2f} ({w['sql_statements']:.1f}) | {w['upstream_ms']:.2f} | "
                    f"{w['other_await_ms']:.2f} |")
+    return out
 
+
+def stages_section(arms: dict) -> list[str]:
     staged = [op for op in arms if arms[op].get("stages")]
-    if staged:
-        out += ["", "### Where the steps go", "",
-                "Per request, in ms, for the paths that mark their steps with a `batlehub::stage` span. "
-                "Steps can nest and can run outside the request's own time, so they need not sum to "
-                "its wall time; the largest is the one to read first.", ""]
-        for op in staged:
-            steps = sorted(arms[op]["stages"].items(), key=lambda kv: kv[1], reverse=True)
-            out.append(f"**`{op}`**: " + ", ".join(f"`{name}` {ms:.2f}" for name, ms in steps))
-            out.append("")
+    if not staged:
+        return []
+    out = ["", "### Where the steps go", "",
+           "Per request, in ms, for the paths that mark their steps with a `batlehub::stage` span. "
+           "Steps can nest and can run outside the request's own time, so they need not sum to "
+           "its wall time; the largest is the one to read first.", ""]
+    for op in staged:
+        steps = sorted(arms[op]["stages"].items(), key=lambda kv: kv[1], reverse=True)
+        out.append(f"**`{op}`**: " + ", ".join(f"`{name}` {ms:.2f}" for name, ms in steps))
+        out.append("")
+    return out
 
+
+def cpu_totals(arms: dict) -> list[str]:
     total = Counter()
     for a in arms.values():
         for fn, n in a["top_own"]:
             total[fn] += n
     all_samples = sum(a["samples"] for a in arms.values()) or 1
-    out += ["", "### Where the CPU goes, all paths", "",
-            "Each sample is credited to the nearest BatleHub frame on its stack, and to the dependency "
-            "below it when the CPU went further down (`→ sha2`). Every arm ran the same length at the "
-            "same rate, so the sum compares paths on equal terms.", "", "```"]
+    out = ["", "### Where the CPU goes, all paths", "",
+           "Each sample is credited to the nearest BatleHub frame on its stack, and to the dependency "
+           "below it when the CPU went further down (`→ sha2`). Every arm ran the same length at the "
+           "same rate, so the sum compares paths on equal terms.", "", "```"]
     for fn, n in total.most_common(15):
         out.append(f"{n / all_samples * 100:5.1f} %  {fn[:170]}")
-    out += ["```", "", "<details><summary>Per arm: leaf functions and routes</summary>", ""]
+    return out + ["```"]
+
+
+def per_arm_details(arms: dict, order: list[str]) -> list[str]:
+    out = ["", "<details><summary>Per arm: leaf functions and routes</summary>", ""]
     for op in order:
         a = arms[op]
         out.append(f"**`{op}`** — {a['samples']} samples")
@@ -314,6 +332,13 @@ def render(arms: dict, args, coverage: dict, problems: list[str], baseline: dict
             out.append(f"- route `{route}` × {n}")
         out.append("")
     out.append("</details>")
+    return out
+
+
+def render(arms: dict, args, coverage: dict, problems: list[str], baseline: dict) -> str:
+    order = sorted(arms, key=lambda op: arms[op]["cpu_ms_per_request"], reverse=True)
+    out = (summary_table(arms, order, args, coverage, baseline) + wall_table(arms)
+           + stages_section(arms) + cpu_totals(arms) + per_arm_details(arms, order))
     if problems:
         out += ["", "### ❌ Route inventory disagrees with this run", ""] + [f"- {p}" for p in problems]
     if coverage["outside_spec"]:

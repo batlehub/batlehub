@@ -80,9 +80,10 @@ OSV_PORT="${HEAVY_OSV_PORT:-8127}"
 SINK_PORT="${HEAVY_SINK_PORT:-8137}"
 export HEAVY_OSV_URL="http://127.0.0.1:$OSV_PORT"
 export HEAVY_WEBHOOK_URL="http://127.0.0.1:$SINK_PORT/hook"
-# Step 7's package: dependency-free and years old; the fake OSV is the only
-# database that ever judges it here.
-FLIP_PKG="left-pad"
+# Steps 6, 7, 8 and 9 share one package: dependency-free, years old, clean.
+TRIVIAL_PKG="left-pad"
+# Step 7's package: the fake OSV is the only database that ever judges it here.
+FLIP_PKG="$TRIVIAL_PKG"
 FLIP_VERSION="1.3.0"
 # No dependencies, years old, and OSV's answer for each is known: 1.2.8 is
 # clean, 1.2.5 carries GHSA-xvch-5gv4-984h (prototype pollution, critical —
@@ -93,7 +94,7 @@ CLEAN="1.2.8"
 VULN="1.2.5"
 ADVISORY="GHSA-xvch-5gv4-984h"
 # Step 6's package: also dependency-free and clean, on the egress registry.
-EGRESS_PKG="left-pad"
+EGRESS_PKG="$TRIVIAL_PKG"
 EGRESS_VERSION="1.3.0"
 
 SKIP_SANDBOX="${HEAVY_QUARANTINE_SKIP_SANDBOX:-0}"
@@ -590,7 +591,7 @@ heavy_log "FLIP-OK (scheduled rescan denied a served version; alert, pullers and
 # exists to answer: who already has the thing you just learned about.
 
 FLAGS_URL="$HEAVY_TAP_BASE/proxy/$FLAGS_REG/"
-FLAG_PKG="left-pad"
+FLAG_PKG="$TRIVIAL_PKG"
 FLAG_VERSION="1.3.0"
 FLAG_ID="BATLEHUB-HEAVY-SOC-$HEAVY_RUN"
 # `%{http_code}` is the whole of every status assertion in this step.
@@ -778,7 +779,7 @@ if [[ "$SKIP_SANDBOX" == "1" ]]; then
   heavy_log "YARA-UNMEASURED (HEAVY_QUARANTINE_SKIP_SANDBOX=1: yr runs under bwrap like every binary scanner)"
 else
   YARA_URL="$HEAVY_TAP_BASE/proxy/$YARA_REG/"
-  YARA_PKG="left-pad"
+  YARA_PKG="$TRIVIAL_PKG"
   YARA_VERSION="1.3.0"
   YARA_CONSUMER="$HEAVY_WORK/consumer-yara"
   new_consumer "$YARA_CONSUMER"
