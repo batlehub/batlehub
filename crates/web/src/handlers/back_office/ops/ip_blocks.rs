@@ -130,6 +130,7 @@ pub async fn block_ip(
             None,
             AccessAction::BlockIp,
             &identity.0,
+            &identity.1,
             Some(format!("ip={} until={unblock_at} reason={reason}", body.ip)),
         )
         .await;
@@ -174,6 +175,7 @@ pub async fn unblock_ip(
             None,
             AccessAction::UnblockIp,
             &identity.0,
+            &identity.1,
             Some(format!("ip={ip}")),
         )
         .await;

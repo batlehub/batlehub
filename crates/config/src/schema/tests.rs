@@ -3544,7 +3544,7 @@ fn the_phase_3_scanners_load_when_declared() {
 }
 
 #[test]
-fn a_socket_scanner_without_a_key_and_a_bad_command_are_refused() {
+fn a_socket_scanner_without_a_key_is_refused_and_an_absent_command_loads() {
     let err = validation_error(
         r#"
         [scanners.socket]
@@ -3554,25 +3554,18 @@ fn a_socket_scanner_without_a_key_and_a_bad_command_are_refused() {
     );
     assert!(err.contains("api_key"), "{err}");
 
-    let err = validation_error(
+    // A command this process cannot run still loads: a proxy-only process
+    // validates the same config with no scanner on its image. The worker
+    // refuses it when it builds its scanners (`server/src/setup.rs`).
+    parse_config(
         r#"
         [scanners.pm]
         type = "postmortem"
         command = "/nonexistent/postmortem"
         "#,
-        "a missing command must not load",
-    );
-    assert!(err.contains("executable"), "{err}");
-
-    parse_config(
-        r#"
-        [scanners.pm]
-        type = "postmortem"
-        command = "/bin/sh"
-        "#,
     )
     .validate()
-    .expect("an executable command loads");
+    .expect("a command absent from this process loads");
 }
 
 #[test]

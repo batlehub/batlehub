@@ -237,6 +237,7 @@ pub async fn put_grant(
             Some(audit_id(&target)),
             AccessAction::GrantWrite,
             &identity.0,
+            &identity.1,
             Some(grant_detail(&body.subject, &body.actions)),
         )
         .await;
@@ -305,6 +306,7 @@ pub async fn delete_grant(
             Some(audit_id(&target)),
             AccessAction::GrantRevoke,
             &identity.0,
+            &identity.1,
             Some(grant_detail(&body.subject, &[])),
         )
         .await;

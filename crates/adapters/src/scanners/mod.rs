@@ -3,7 +3,8 @@
 //! Phase 1 shipped `osv`. Phase 3 adds the archive scanners — `postmortem`,
 //! `guarddog`, `trivy` — behind the [`subprocess`] runner (`bwrap`) and the
 //! [`extract`] policy, and `sigstore` for provenance. The external services
-//! (`socket`, `mlab`) are phase 5.
+//! (`socket`, `mlab`) are phase 5. `yara` runs operator rules the same way
+//! (RFC 0036 §6.6).
 
 pub mod mlab;
 pub mod osv;
@@ -19,6 +20,8 @@ pub mod guarddog;
 pub mod postmortem;
 #[cfg(feature = "sbom")]
 pub mod trivy;
+#[cfg(feature = "sbom")]
+pub mod yara;
 
 pub use mlab::MlabEnricher;
 pub use osv::OsvArtifactScanner;
@@ -34,3 +37,5 @@ pub use guarddog::GuarddogScanner;
 pub use postmortem::PostmortemScanner;
 #[cfg(feature = "sbom")]
 pub use trivy::TrivyScanner;
+#[cfg(feature = "sbom")]
+pub use yara::YaraScanner;

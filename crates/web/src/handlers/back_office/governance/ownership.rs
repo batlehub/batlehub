@@ -155,7 +155,7 @@ pub async fn add_package_owner(
         artifact: None,
     };
     admin_svc
-        .record_package_action(&pkg, AccessAction::AddOwner, &identity.0)
+        .record_package_action(&pkg, AccessAction::AddOwner, &identity.0, &identity.1)
         .await;
 
     Ok(HttpResponse::NoContent().finish())
@@ -210,7 +210,7 @@ pub async fn remove_package_owner(
         artifact: None,
     };
     admin_svc
-        .record_package_action(&pkg, AccessAction::RemoveOwner, &identity.0)
+        .record_package_action(&pkg, AccessAction::RemoveOwner, &identity.0, &identity.1)
         .await;
 
     Ok(HttpResponse::NoContent().finish())

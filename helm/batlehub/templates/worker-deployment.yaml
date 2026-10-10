@@ -81,6 +81,13 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: {{ .Values.worker.scratch.sizeLimit }}
+        {{- with .Values.worker.yaraRules.configMap }}
+        # The operator's YARA rules (RFC 0036 §6.6), read by `yr` inside the
+        # sandbox through its read-only bind of the rootfs.
+        - name: yara-rules
+          configMap:
+            name: {{ . }}
+        {{- end }}
         {{- with (include "batlehub.credentialsSecretName" .) }}
         # Mounted as its own volume rather than a second key in the config one:
         # the two have different lifecycles, which is the whole reason the layer
@@ -156,6 +163,11 @@ spec:
             {{- end }}
             - name: scratch
               mountPath: /tmp/batlehub
+            {{- if .Values.worker.yaraRules.configMap }}
+            - name: yara-rules
+              mountPath: /etc/batlehub/yara
+              readOnly: true
+            {{- end }}
             {{- if eq .Values.config.storage.type "filesystem" }}
             - name: cache
               mountPath: {{ .Values.config.storage.path }}

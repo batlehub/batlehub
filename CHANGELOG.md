@@ -17,6 +17,18 @@ policy stops sending vulnerability reports to a public issue.
 
 ### Added
 
+- **Your own YARA rules over every artifact** (RFC 0036 phase 6).
+  `[scanners.yara]` runs yara-x's `yr` — now on the worker image, pinned and
+  checksum-verified — over the artifact as served and, when it is an archive,
+  its extracted contents, inside the same `bwrap` sandbox as the other binary
+  scanners and with no network. A match is a `MALWARE_SIGNAL` finding naming
+  the rule and the file; its severity is the rule's `severity` meta, `high`
+  when it has none, so an unannotated rule blocks under the default
+  `max_severity`. The chart mounts a ConfigMap of rules with
+  `worker.yaraRules.configMap`, and the worker refuses to start on a rules
+  directory with no rule in it, which would otherwise answer clean for
+  everything. RFC 0036 is now *Implemented*.
+
 - **Statements per request, in production.** `/metrics` carries
   `batlehub_db_statements_total{verb}`,
   `batlehub_db_statement_duration_seconds{verb}` and
@@ -119,6 +131,24 @@ policy stops sending vulnerability reports to a public issue.
   together.
 
 ### Fixed
+
+- **GDPR erasure left a subject's name in grants an admin wrote about them.**
+  A `grant_write` or `grant_revoke` row sits under the admin's id and names
+  the subject only as `subject=user:<id>` in its detail; erasure now renames
+  it too, matching the whole id so `alice` never touches `alice2`.
+
+- **Admin actions record where they came from.** A block, a grant, a purge,
+  an IP block and every other admin action now carries the caller's address
+  and user agent in the audit trail and on the SIEM stream, as sign-ins
+  already did.
+
+- **One spelling for "the process did it".** The audit lifecycle's own row
+  was written with no user; it is `system` now, like an automatic IP ban.
+
+- **A proxy-only pod refused a config naming `postmortem` or `guarddog`.**
+  Their `command` was checked by config validation, which every process runs,
+  and the proxy image carries no scanner. The worker checks it when it starts,
+  and now also requires the file to be executable.
 
 - **The incident playbook named an alert that does not exist.**
   `BatleHubHighDenyRate` is `BatleHubHighDeniedRequestRate` in

@@ -1,7 +1,7 @@
 ---
 title: Le worker d'analyse
 sourcePath: operations/scan-worker.md
-sourceHash: da2fc7131da0cde8
+sourceHash: 3404edf7adaae344
 ---
 
 # Le worker d'analyse
@@ -28,7 +28,7 @@ garder en tête quand quelque chose ne va pas : un worker mort ou saturé
 
 Séparer les rôles est ce que fait `worker.enabled` dans le chart, et cela vaut
 la peine pour deux raisons. Les outils d'analyse — bubblewrap, `postmortem`, le
-client Trivy, éventuellement GuardDog — ne vivent que dans l'image du worker, et
+client Trivy, `yr` de yara-x, éventuellement GuardDog — ne vivent que dans l'image du worker, et
 seul le worker a besoin de sortir vers les artefacts amont, le serveur Trivy et
 Rekor. Voir [le chart Helm](/fr/guide/install/helm) pour les valeurs du chart et
 [Ce qui sort de cette instance](/fr/operations/egress) pour les flux sortants.
@@ -114,7 +114,7 @@ lieu de faire comme si elle était passée.
 
 ## Ce sous quoi tournent les analyseurs
 
-Tout analyseur binaire — `postmortem`, `guarddog`, `trivy` — passe par un seul
+Tout analyseur binaire — `postmortem`, `guarddog`, `trivy`, `yara` — passe par un seul
 lanceur, et par `bwrap`. L'artefact est une entrée contrôlée par l'attaquant, et
 le worker est le seul processus qui l'ouvre tout en détenant les identifiants de
 la base et du stockage : le bac à sable est donc la frontière qui compte le plus
@@ -202,6 +202,14 @@ départ du chemin de [réponse à incident](/fr/operations/incident-response).
 `ghcr.io/batleforc/batlehub-worker-guarddog` est la même image avec GuardDog en
 plus, construite sur elle, et c'est ce que `worker.image.repository` doit viser
 quand un registre nomme `guarddog` dans ses analyseurs.
+
+`yr` est présent sur les deux, inactif tant que `[scanners.yara]` ne nomme pas
+de répertoire de règles. Les règles sont à fournir : placez-les dans une
+ConfigMap et donnez son nom à `worker.yaraRules.configMap`, qui la monte en
+lecture seule sur `/etc/batlehub/yara`. Une mise à jour de la ConfigMap atteint
+le pod sans redémarrage, et l'analyse suivante compile les nouvelles règles ;
+une règle qui ne compile plus fait de chaque analyse un `SCANNER_ERROR`, donc
+vérifiez une modification avec `yr check <dir>` avant de l'appliquer.
 
 Les deux sont analysées à chaque construction et lors d'une reconstruction
 quotidienne, et les analyseurs qu'elles embarquent sont eux-mêmes des binaires

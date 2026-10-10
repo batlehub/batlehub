@@ -2961,8 +2961,11 @@ impl AppConfig {
         }))
     }
 
-    /// `[scanners]`: the key an external scanner cannot run without, the
-    /// command a local one is, and the escalation rule's own arithmetic.
+    /// `[scanners]`: the key an external scanner cannot run without and the
+    /// escalation rule's own arithmetic. A local scanner's `command` is checked
+    /// by the worker when it builds its scanners (`server/src/setup.rs`), not
+    /// here: every process validates the config, and a proxy-only one runs an
+    /// image with no scanner on it (RFC 0036 §13).
     fn validate_scanners(&self) -> Result<()> {
         for (name, cfg) in &self.scanners {
             match cfg {
@@ -2974,16 +2977,6 @@ impl AppConfig {
                         "[scanners.{name}] type = \"{}\" needs an api_key; without one every \
                          call fails with a 401 nobody reads",
                         cfg.type_name()
-                    );
-                }
-                ScannerConfig::Postmortem { command, .. }
-                | ScannerConfig::Guarddog { command, .. }
-                    if !is_executable(command) =>
-                {
-                    bail!(
-                        "[scanners.{name}] command '{command}' does not exist or is not \
-                         executable; this is a scanner that opens untrusted archives, so it \
-                         is checked at startup rather than at the first job"
                     );
                 }
                 _ => {}
@@ -4500,12 +4493,3 @@ fn apply_proxy_env_overrides(
 
 #[cfg(test)]
 mod tests;
-
-/// Whether `path` names an existing file with an execute bit — the check
-/// RFC 0018 §4.3 asks for the subprocess scanners' `command`.
-fn is_executable(path: &str) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path)
-        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
-}

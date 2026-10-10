@@ -882,8 +882,9 @@ jobs:
           - suite: db_calls
           # RFC 0018 from the client side: npm against a `[registries.security]`
           # registry backed by npmjs.org and the real OSV, the worker embedded.
-          # Needs Node (installed below) and bubblewrap for the egress row —
-          # a scanner under the worker's sandbox trying to reach the tap.
+          # Needs Node (installed below), bubblewrap for the egress row —
+          # a scanner under the worker's sandbox trying to reach the tap — and
+          # yara-x's `yr` for the operator-rule row (RFC 0036 §6.6).
           - suite: quarantine
           # RFC 0014 from the receiving end: npm against a directory the
           # suite serves as a registry, a staged disappearance, and the
@@ -1047,6 +1048,22 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           bwrap --unshare-user --unshare-net --ro-bind / / --dev /dev /bin/true \
             || { echo "::error::bwrap cannot create a user namespace on this runner"; exit 1; }
+      - name: Install yara-x
+        if: matrix.suite == 'quarantine'
+        env:
+          # The version and digest Containerfile.worker pins, so step 9 runs
+          # the `yr` the worker image ships (RFC 0036 §6.6).
+          YARA_X_VERSION: "1.20.0"
+          YARA_X_SHA256: cabb8df46492fff59c51261302c71ed9cb2cef393d3f0ca560801a34a8e24cbe
+        run: |
+          set -euo pipefail
+          asset="yara-x-v${YARA_X_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL --proto '=https' --proto-redir '=https' -o "/tmp/$asset" \
+            "https://github.com/VirusTotal/yara-x/releases/download/v${YARA_X_VERSION}/$asset"
+          echo "${YARA_X_SHA256}  /tmp/$asset" | sha256sum -c -
+          tar -xzf "/tmp/$asset" -C /tmp yr
+          sudo install -m 0755 /tmp/yr /usr/local/bin/yr
+          yr --version
       - name: Check PHP and Composer
         if: matrix.suite == 'composer'
         run: |

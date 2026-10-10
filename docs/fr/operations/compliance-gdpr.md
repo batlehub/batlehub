@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/compliance-gdpr.md
-sourceHash: eb387d2b9c6d6d5b
+sourceHash: 333281e6c9024e19
 ---
 
 # RGPD — les contrôles de BatleHub
@@ -65,7 +65,7 @@ ou un mot de passe.
 | Article | Contrôle | Statut | Preuve |
 |---------|----------|--------|--------|
 | 15 – Droit d'accès | Exporte toutes les lignes concernant une personne, y compris les lignes de publication et de propriété que l'effacement conserve ; enregistré comme `gdpr_export` | ✅ Implémenté | `batlehub-cli admin gdpr export --user <id>`, `GET /api/v1/admin/gdpr/export?user_id=<id>` (verbe `audit:read`) |
-| 17 – Droit à l'effacement | Remplace l'identifiant de la personne par `erased:<hmac>` dans `access_events`, les lignes de tokens et les lignes de blocage ; les lignes d'une même personne restent liées entre elles et à personne d'autre | ✅ Implémenté | `batlehub-cli admin gdpr erase --user <id>`, `POST /api/v1/admin/gdpr/erase` (verbe `gdpr:erase`), `[audit] erasure_key` |
+| 17 – Droit à l'effacement | Remplace l'identifiant de la personne par `erased:<hmac>` dans `access_events` — comme auteur, et là où une ligne de grant ou d'export écrite par un administrateur la désigne comme sujet —, les lignes de tokens et les lignes de blocage ; les lignes d'une même personne restent liées entre elles et à personne d'autre | ✅ Implémenté | `batlehub-cli admin gdpr erase --user <id>`, `POST /api/v1/admin/gdpr/erase` (verbe `gdpr:erase`), `[audit] erasure_key` |
 | 17(3) – Exceptions | Les lignes de publication et de propriété sont conservées au titre de l'intérêt légitime : « qui a publié ceci » doit rester une question à laquelle chaque consommateur du paquet obtient une réponse | Documenté | [RFC 0036 §4.2](/rfc/0036-regulatory-alignment#_4-2-behaviour-rules) |
 | 17 – Effacement face à une décision ouverte | Refusé pour une personne visée par une quarantaine ou un blocage ouvert, sauf forçage | ✅ Implémenté | `batlehub-cli admin gdpr erase --user <id> --force` |
 | 17 – Qui peut effacer | `gdpr:erase` est un verbe à part ; `audit:purge` ne l'implique pas | ✅ Implémenté | [Contrôle d'accès § verbes](../guide/access-control.md#verbs) |
@@ -111,4 +111,3 @@ quoi le pseudonyme est réversible par quiconque lit la base.
 | Écart | Plan |
 |-------|------|
 | Une copie déjà expédiée vers un SIEM n'est ni pseudonymisée ni effacée | La conservation propre au collecteur la régit ; alignez-la sur `[audit]` |
-| `source.ip` n'est pas enregistré sur les actions d'administration (`grant_write`, `audit_purge`, …) | Suite prévue par la RFC 0036 §13 |

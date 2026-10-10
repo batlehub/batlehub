@@ -305,7 +305,7 @@ export const sidebar = {
       items: [
         { text: "What this is", link: "/techdebt/" },
         {
-          text: "TD-0001 — Per-request SQL, profile coverage",
+          text: "TD-0001 — The fixed cost of a request",
           link: "/techdebt/0001-per-request-sql-and-profile-coverage",
         },
       ],
@@ -371,10 +371,6 @@ export const sidebar = {
         {
           text: "0034 — full-ICU node",
           link: "/rfc/0034-full-icu-node",
-        },
-        {
-          text: "0036 — Regulatory alignment",
-          link: "/rfc/0036-regulatory-alignment",
         },
       ],
     },
@@ -504,6 +500,10 @@ export const sidebar = {
         {
           text: "0035 — Devfile registries",
           link: "/rfc/0035-devfile-registry",
+        },
+        {
+          text: "0036 — Regulatory alignment",
+          link: "/rfc/0036-regulatory-alignment",
         },
       ],
     },

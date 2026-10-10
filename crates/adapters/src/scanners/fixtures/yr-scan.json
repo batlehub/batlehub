@@ -1,0 +1,22 @@
+{
+  "version": "1.20.0",
+  "matches": [
+    {
+      "rule": "aws_secret",
+      "file": "/tmp/batlehub-yara-Ab12Cd/scan/tree/sub/a.py",
+      "meta": {},
+      "tags": []
+    },
+    {
+      "rule": "curl_pipe_sh",
+      "file": "/tmp/batlehub-yara-Ab12Cd/scan/tree/install.sh",
+      "meta": {
+        "severity": "high",
+        "description": "pipes a download into a shell"
+      },
+      "tags": [
+        "dropper"
+      ]
+    }
+  ]
+}

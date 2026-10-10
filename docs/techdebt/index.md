@@ -11,4 +11,4 @@ person to see the same symptom should find that it was already seen.
 
 | # | Debt | Found | Status |
 | --- | --- | --- | --- |
-| [TD-0001](/techdebt/0001-per-request-sql-and-profile-coverage) | Every request pays a fixed SQL cost, and 321 of 372 API operations have never been profiled | 2026-10-09 | Open |
+| [TD-0001](/techdebt/0001-per-request-sql-and-profile-coverage) | Every request pays for SQL, unattributed waits and routing that are not its own work, and 321 of 372 API operations have never been profiled | 2026-10-09 | Open |

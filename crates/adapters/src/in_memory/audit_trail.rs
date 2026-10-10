@@ -5,11 +5,12 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use batlehub_core::entities::audit_seal::rows_digest;
-use batlehub_core::entities::{AccessAction, AccessEvent, SealRecord};
+use batlehub_core::entities::{AccessEvent, SealRecord};
 use batlehub_core::error::CoreError;
 use batlehub_core::ports::{
     AuditTrailStore, CandidateQuery, ErasedElsewhere, LeaderLock, RowOp, TrailBatch,
 };
+use batlehub_core::services::audit_trail::detail_names_subject;
 
 use super::InMemoryPackageRepository;
 
@@ -49,8 +50,9 @@ fn matches(q: &CandidateQuery, e: &AccessEvent) -> bool {
         }
         CandidateQuery::Subject { user_id } => {
             e.user_id.as_deref() == Some(user_id.as_str())
-                || (e.action == AccessAction::GdprExport
-                    && e.detail.as_deref() == Some(format!("subject={user_id}").as_str()))
+                || e.detail
+                    .as_deref()
+                    .is_some_and(|d| detail_names_subject(e.action, d, user_id))
         }
     }
 }

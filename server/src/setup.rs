@@ -570,6 +570,30 @@ pub(super) fn build_scanners(config: &batlehub_config::schema::AppConfig) -> Res
                     }),
                 );
             }
+            ScannerConfig::Yara {
+                command, rules_dir, ..
+            } => {
+                let rules_dir = std::path::PathBuf::from(rules_dir);
+                // An empty directory compiles to no rules and every scan is
+                // clean: a typo in the path would read as "nothing found".
+                if !batlehub_adapters::scanners::YaraScanner::has_rules(&rules_dir) {
+                    anyhow::bail!(
+                        "[scanners.{name}] rules_dir '{}' holds no .yar or .yara file; \
+                         a YARA scanner with no rules answers clean for every artifact",
+                        rules_dir.display()
+                    );
+                }
+                out.insert(
+                    name.clone(),
+                    Arc::new(batlehub_adapters::scanners::YaraScanner {
+                        command: require_command(name, command)?,
+                        rules_dir,
+                        sandbox: sandbox.clone(),
+                        extract: extract.clone(),
+                        timeout: job_timeout,
+                    }),
+                );
+            }
             ScannerConfig::Trivy {
                 endpoint,
                 timeout_secs,
@@ -713,4 +737,57 @@ pub(super) fn build_audit_trail(
         )),
         policy,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(scanners: &str) -> batlehub_config::schema::AppConfig {
+        batlehub_config::load_from_str(&format!(
+            r#"
+            [database]
+            type = "postgresql"
+            url = "postgresql://localhost/test"
+
+            [storage]
+            type = "filesystem"
+            path = "/tmp/batlehub-test"
+
+            [server]
+            host = "127.0.0.1"
+            port = 8080
+            {scanners}
+            "#
+        ))
+        .expect("the config loads: a scanner's command is the worker's to check")
+    }
+
+    /// The checks config validation no longer makes (it runs on proxy-only
+    /// processes too) are the worker's, here, before any job is leased.
+    #[test]
+    fn the_worker_refuses_a_command_it_cannot_run_and_a_yara_dir_with_no_rules() {
+        let err = build_scanners(&config(
+            "[scanners.pm]\ntype = \"postmortem\"\ncommand = \"/nonexistent/postmortem\"",
+        ))
+        .err()
+        .expect("a missing postmortem must not start the worker")
+        .to_string();
+        assert!(err.contains("not an executable file"), "{err}");
+
+        let rules = tempfile::tempdir().unwrap();
+        let yara = format!(
+            "[scanners.y]\ntype = \"yara\"\ncommand = \"/bin/sh\"\nrules_dir = \"{}\"",
+            rules.path().display()
+        );
+        let err = build_scanners(&config(&yara))
+            .err()
+            .expect("an empty rules dir must not start the worker")
+            .to_string();
+        assert!(err.contains("holds no .yar"), "{err}");
+
+        std::fs::write(rules.path().join("r.yar"), "rule r { condition: true }").unwrap();
+        let built = build_scanners(&config(&yara)).expect("rules and a command: the worker starts");
+        assert!(built.scanners.contains_key("y"));
+    }
 }

@@ -1585,7 +1585,7 @@ on_webhook    = true
 | `min_age_secs` | u64 | `86400` | Below this age a version is held (`MIN_AGE_NOT_MET`) whatever the scanners say. Below `3600` is a config error: an hour is the point of the quarantine. |
 | `mature_age_secs` | u64 | `86400` | Above this age a version whose scan has not returned is served `warned` (`SCAN_PENDING`) and scanned behind the request. `0` never serves unscanned. Must be at least `min_age_secs`. With both at their defaults the scan-hold window is empty — the recommended production profile is 3 days / 30 days. |
 | `hold_missing_timestamp` | bool | `true` | Hold a version the upstream did not date (`TIMESTAMP_MISSING`, open-ended: no `available_at`, and the maturity bypass does not reach it). `false` skips the age gate for it, as `release_age_gate` does by default. On the path-proxy kinds (`deb`, `rpm`, `pacman`, `generic`, `jetbrains`) no version is dated, so `true` holds everything and raises `security.timestamp-hold-unavailable`. `apk` raises the same warning — it is path-addressed and the check keys on that — even though an `APKINDEX` does date every package it lists in `t:`. |
-| `scanners` | string[] | `["osv"]` | Which scanners the worker runs on this registry. Each name is a `[scanners.<name>]` entry; `osv` is implicit. Every type the RFC names is built: `osv`, `postmortem`, `guarddog`, `trivy`, `sigstore`, and the two external services `socket` (Socket.dev, one call per coordinate, needs `api_key`) and `mlab` (mlab.sh's CVE API, an *enrichment*: it attaches CVSS, EPSS and CISA KEV to the vulnerability findings the others produced and raises a KEV-listed CVE to `critical`; it never creates a finding, so listing it under `required_scanners` warns). A scanner answers under its config key, so a second `osv` pointed at another `api_url` is its own name. |
+| `scanners` | string[] | `["osv"]` | Which scanners the worker runs on this registry. Each name is a `[scanners.<name>]` entry; `osv` is implicit. Every type the RFC names is built: `osv`, `postmortem`, `guarddog`, `trivy`, `sigstore`, `yara` (RFC 0036), and the two external services `socket` (Socket.dev, one call per coordinate, needs `api_key`) and `mlab` (mlab.sh's CVE API, an *enrichment*: it attaches CVSS, EPSS and CISA KEV to the vulnerability findings the others produced and raises a KEV-listed CVE to `critical`; it never creates a finding, so listing it under `required_scanners` warns). A scanner answers under its config key, so a second `osv` pointed at another `api_url` is its own name. |
 | `required_scanners` | string[] | `["osv"]` | Must all have answered before the version is served. Must be a subset of `scanners`. Empty with `mode = "warn"` raises `security.unprotected`: nothing can ever hold a version. |
 | `max_severity` | string | `"high"` | `low`, `medium`, `high` or `critical`. A finding at or above it produces `denied` in `block` mode and `warned` in `warn` mode. |
 | `require_provenance` | bool | `false` | A version without a provenance attestation is `PROVENANCE_MISSING` (a finding at `high`). Only meaningful with a scanner that checks provenance (`sigstore`, phase 3). |
@@ -2773,6 +2773,11 @@ ecosystems = ["npm", "pypi"]
 type        = "sigstore"
 rekor_url   = "https://rekor.sigstore.dev"
 require_for = ["npm"]                # PROVENANCE_MISSING on these kinds; elsewhere absence is silent
+
+[scanners.yara]                      # your own YARA rules over every artifact (RFC 0036)
+type      = "yara"
+rules_dir = "/etc/batlehub/yara"     # *.yar / *.yara at any depth; the chart's worker.yaraRules mounts here
+# command = "/usr/local/bin/yr"      # yara-x's CLI, on the worker image
 ```
 
 | Scanner `type` | Ships in | Keys | Notes |
@@ -2782,6 +2787,7 @@ require_for = ["npm"]                # PROVENANCE_MISSING on these kinds; elsewh
 | `trivy` | now | `endpoint`, `timeout_secs` | The Trivy **client**, against the server at `endpoint` (the chart's `trivy.enabled` deploys one) or its own database when empty. Scans the CycloneDX SBOM this instance already recorded for the artifact, else the extracted archive. Findings: `VULNERABILITY` with the CVE as reference. |
 | `guarddog` | now | `command`, `ecosystems` | DataDog GuardDog on npm, PyPI and Go archives, under the same sandbox. Optional second opinion; not in the default profile, and the only scanner that is not on the worker image — it ships on the `-worker-guarddog` variant, which a deployment runs instead. The rule-to-finding mapping is by rule family and is *read, not observed* until that image runs it. |
 | `sigstore` | now | `rekor_url`, `require_for` | npm provenance: the attestations the packument announces for the version are fetched and every transparency-log entry they cite is looked up in Rekor. `PROVENANCE_MISSING` on the kinds in `require_for`, `PROVENANCE_INVALID` when a cited entry is not in the log. An existence-and-inclusion check, not a full Sigstore verification. |
+| `yara` | now | `rules_dir`, `command` | Your YARA rules, run by yara-x's `yr` under the same sandbox, with no network. Scans the artifact as served and, when it is an archive, its extracted contents, so a rule can match either. A match is `MALWARE_SIGNAL` with the rule name as reference and the matching file in the summary; its severity is the rule's `severity` meta (`low` … `critical`), `high` when it has none. Covers every kind. The worker refuses to start when `rules_dir` holds no `.yar`/`.yara` file, because an empty rule set answers clean for everything; a rule that does not compile fails each scan with `SCANNER_ERROR`. On the worker image. |
 | `socket`, `mlab` | RFC 0018 phase 5 | `api_key` for `socket` | `socket` is refused at load without one (a `401` nobody reads otherwise); `mlab`'s CVE API answers unauthenticated, so its key is a rate-limit courtesy rather than a requirement. `mlab` only enriches other findings and is refused in `required_scanners` (`security.enrichment-required`). |
 
 | `[worker]` field | Type | Default | Notes |
@@ -2795,7 +2801,7 @@ require_for = ["npm"]                # PROVENANCE_MISSING on these kinds; elsewh
 | `sandbox.max_extracted_mb`, `sandbox.max_entries` | u64 | `512`, `50000` | The extraction policy: an archive over either is **refused**, never truncated, as is one whose decompression ratio passes 100:1, an entry that escapes the root, a symlink, a hardlink, a device. Nested archives are written and not descended; execute bits are dropped. |
 
 **What a scan needs.** A scanner that reads bytes (`postmortem`, `guarddog`,
-`trivy` without an SBOM) has the worker fetch the version's primary
+`yara`, `trivy` without an SBOM) has the worker fetch the version's primary
 artifact — from the cache when it is there, else from upstream, not cached
 — so a profile of metadata-only scanners costs no egress. A kind whose
 version is a *set* of files (PyPI, Maven, conda, Terraform) has no single

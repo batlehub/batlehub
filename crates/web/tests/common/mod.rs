@@ -1233,7 +1233,7 @@ pub fn fixture_grants_with_explore(
     let expand = |v: &Vec<String>| {
         expand_patterns(v, WildcardScope::Legacy).expect("fixture patterns are valid")
     };
-    let get = |r: &Role| fixture.roles.get(r).map(&expand).unwrap_or_default();
+    let get = |r: &Role| fixture.roles.get(r).map(expand).unwrap_or_default();
 
     let snapshot = RbacSnapshot {
         anonymous: get(&Role::Anonymous),

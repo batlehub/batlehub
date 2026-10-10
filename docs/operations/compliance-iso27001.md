@@ -68,4 +68,3 @@ development and vulnerability process. The organisational controls (5.1–5.14,
 |-----|------|
 | MFA is not checked by BatleHub itself | RFC 0036 phase 7 — [NIS2 and DORA](./compliance-nis2-dora.md) |
 | Signing keys are files or environment variables, not KMS-held | RFC 0036 phase 7 |
-| `source.ip` is not recorded on admin actions | Follow-up in RFC 0036 §13 |

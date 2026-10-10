@@ -415,9 +415,11 @@ impl AuditTrailService {
                 .await?;
         }
         if report.expired + report.pseudonymised > 0 {
+            // `system`, as every other scheduled writer spells it, so one SIEM
+            // condition finds everything the process did on its own.
             self.record(AccessEvent::about_identity(
                 AccessAction::AuditLifecycleRun,
-                None,
+                Some(Identity::SYSTEM_USER_ID.to_owned()),
                 Role::Admin,
                 AccessResult::Allowed,
                 CallerNet::unknown(),
@@ -513,15 +515,15 @@ impl AuditTrailService {
                 )));
             }
         }
-        let subject_detail = format!("subject={user_id}");
-        let erased_detail = format!("subject={pseudonym}");
         let change = |r: &AccessEvent| {
             let mut row = r.clone();
             if row.user_id.as_deref() == Some(user_id) {
                 row.user_id = Some(pseudonym.clone());
             }
-            if row.detail.as_deref() == Some(subject_detail.as_str()) {
-                row.detail = Some(erased_detail.clone());
+            if let Some(detail) = row.detail.as_deref() {
+                if let Some(renamed) = rename_subject(row.action, detail, user_id, &pseudonym) {
+                    row.detail = Some(renamed);
+                }
             }
             (row != *r).then_some(RowOp::Replace(Box::new(row)))
         };
@@ -757,9 +759,100 @@ pub fn truncate_ip(ip: &str) -> String {
     }
 }
 
+/// The `detail` prefix that names `user_id` as the subject of a row written
+/// under *someone else's* `user_id`: the export a `gdpr_export` row was about
+/// (`subject=<id>`), and the grant an admin wrote or revoked for them
+/// (`subject=user:<id>`, then ` actions=…` on a write). Erasure renames both;
+/// the Postgres candidate query spells the same rule in SQL.
+fn subject_prefix(action: AccessAction, user_id: &str) -> Option<String> {
+    match action {
+        AccessAction::GdprExport => Some(format!("subject={user_id}")),
+        AccessAction::GrantWrite | AccessAction::GrantRevoke => {
+            Some(format!("subject=user:{user_id}"))
+        }
+        _ => None,
+    }
+}
+
+/// Whether `detail` names `user_id` as its subject — the whole token, so
+/// `alice` never matches `alice2`.
+pub fn detail_names_subject(action: AccessAction, detail: &str, user_id: &str) -> bool {
+    subject_prefix(action, user_id).is_some_and(|prefix| {
+        detail
+            .strip_prefix(prefix.as_str())
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
+    })
+}
+
+/// `detail` with the subject `user_id` replaced by `pseudonym`, or `None` when
+/// it does not name them.
+fn rename_subject(
+    action: AccessAction,
+    detail: &str,
+    user_id: &str,
+    pseudonym: &str,
+) -> Option<String> {
+    if !detail_names_subject(action, detail, user_id) {
+        return None;
+    }
+    let from = subject_prefix(action, user_id)?;
+    let to = subject_prefix(action, pseudonym)?;
+    Some(format!("{to}{}", &detail[from.len()..]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_subject_is_named_by_export_and_grant_rows_as_a_whole_token() {
+        use AccessAction::*;
+        assert!(detail_names_subject(GdprExport, "subject=alice", "alice"));
+        assert!(detail_names_subject(
+            GrantWrite,
+            "subject=user:alice actions=read",
+            "alice"
+        ));
+        assert!(detail_names_subject(
+            GrantRevoke,
+            "subject=user:alice",
+            "alice"
+        ));
+        assert!(!detail_names_subject(
+            GrantWrite,
+            "subject=user:alice2 actions=read",
+            "alice"
+        ));
+        assert!(!detail_names_subject(
+            GrantWrite,
+            "subject=group:*:alice actions=read",
+            "alice"
+        ));
+        assert!(!detail_names_subject(
+            GrantWrite,
+            "subject=alice actions=read",
+            "alice"
+        ));
+        assert!(!detail_names_subject(Download, "subject=alice", "alice"));
+        assert_eq!(
+            rename_subject(
+                GrantWrite,
+                "subject=user:alice actions=read,write",
+                "alice",
+                "erased:ab"
+            )
+            .as_deref(),
+            Some("subject=user:erased:ab actions=read,write")
+        );
+        assert_eq!(
+            rename_subject(GdprExport, "subject=alice", "alice", "erased:ab").as_deref(),
+            Some("subject=erased:ab")
+        );
+        assert_eq!(
+            rename_subject(GrantWrite, "subject=user:alicex", "alice", "e"),
+            None
+        );
+    }
 
     #[test]
     fn an_ip_is_cut_to_its_network_and_a_cut_one_stays_cut() {

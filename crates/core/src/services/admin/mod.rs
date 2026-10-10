@@ -11,7 +11,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::entities::{
-    AccessAction, AccessEvent, AccessResult, ArtifactVulnerability, Identity, PackageId,
+    AccessAction, AccessEvent, AccessResult, ArtifactVulnerability, CallerNet, Identity, PackageId,
 };
 use crate::error::CoreError;
 use crate::ports::{PackageRepository, VulnerabilityRepository};
@@ -204,8 +204,10 @@ impl AdminService {
         pkg: Option<PackageId>,
         action: AccessAction,
         by_identity: &Identity,
+        net: &CallerNet,
     ) {
-        self.record_admin_action(pkg, action, by_identity).await;
+        self.record_admin_action(pkg, action, by_identity, net)
+            .await;
     }
 
     /// Shared audit-write path for admin actions that don't otherwise touch
@@ -219,8 +221,9 @@ impl AdminService {
         package_id: Option<PackageId>,
         action: AccessAction,
         by_identity: &Identity,
+        net: &CallerNet,
     ) {
-        self.record_admin_action_about(package_id, action, by_identity, None)
+        self.record_admin_action_about(package_id, action, by_identity, net, None)
             .await;
     }
 
@@ -232,6 +235,7 @@ impl AdminService {
         package_id: Option<PackageId>,
         action: AccessAction,
         by_identity: &Identity,
+        net: &CallerNet,
         detail: Option<String>,
     ) {
         self.repo
@@ -243,8 +247,10 @@ impl AdminService {
                 action,
                 result: AccessResult::Allowed,
                 timestamp: chrono::Utc::now(),
-                ip_address: None,
-                user_agent: None,
+                // The caller as the proxy-trust rules resolved it (RFC 0036
+                // §13): who did it *and from where*, like the auth events.
+                ip_address: net.ip.clone(),
+                user_agent: net.user_agent.clone(),
                 throttled_count: None,
                 detail,
             })

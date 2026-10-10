@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/siem.md
-sourceHash: 0b20be180a3e0845
+sourceHash: ba19596c827f91e9
 ---
 
 # Intégration SIEM
@@ -45,7 +45,7 @@ téléchargement est du bruit dans un journal lu par un humain.
 | `event.outcome` | `denied` | `allowed`, `denied` ou `error` |
 | `event.reason` | `blocked: malware flagged by osv (…)` | La raison d'un refus ; vide quand la requête est autorisée |
 | `event.id` | UUID | L'identifiant de l'enregistrement dans `access_events` |
-| `user.id` | `alice` | Le principal, tel que le nomme le fournisseur qui l'a authentifié ; vide pour un anonyme |
+| `user.id` | `alice` | Le principal, tel que le nomme le fournisseur qui l'a authentifié ; vide pour un anonyme ; `system`, ou `system:<tâche>`, pour ce que le processus a fait de lui-même — un bannissement d'IP automatique, un passage du cycle de vie de l'audit, la vérification de cohérence du stockage planifiée sont `system`, un blocage posé par l'audit de disparition en amont est `system:upstream-audit`. Filtrez sur le préfixe `system` pour tous les trouver |
 | `user.roles` | `user` | `anonymous`, `user` ou `admin` |
 | `source.ip` | `203.0.113.9` | L'appelant, tel que les règles de confiance des proxys l'ont résolu — jamais un `X-Forwarded-For` brut |
 | `user_agent.original` | `npm/10.9.0` | Le `User-Agent` du client |

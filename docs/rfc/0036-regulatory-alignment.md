@@ -6,14 +6,14 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | In review                                                     |
+| Status      | Implemented                                                   |
 | Short       | Regulatory alignment                                          |
 | Settles     | Which regulatory frameworks BatleHub is built to support, and what the audit trail, personal data and vulnerability handling must do to meet them |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
 | Co-author   | Claude Opus 5.5 <noreply@anthropic.com>                       |
 | Created     | 2026-09-26                                                    |
 | Supersedes  | —                                                             |
-| Touches     | `crates/core` (`entities/access_log.rs`, `entities/audit_seal.rs`, `services/audit_trail.rs`, `services/audit_stream.rs`), `crates/adapters` (`db/packages/audit_trail.rs`, migrations 061–062), `crates/web` (`handlers/auth`, `handlers/back_office/audit.rs`, `handlers/back_office/gdpr.rs`, `middleware/auth.rs`, `middleware/ip_block.rs`), `crates/config` (`schema/audit.rs`), `cli` (`admin gdpr`, `admin audit verify`), `server` (`watcher.rs`), `deploy/siem/`, `tests/heavy/authz.sh`, `SECURITY.md`, `.github/`, docs |
+| Touches     | `crates/core` (`entities/access_log.rs`, `entities/audit_seal.rs`, `services/audit_trail.rs`, `services/audit_stream.rs`), `crates/adapters` (`db/packages/audit_trail.rs`, migrations 061–062), `crates/web` (`handlers/auth`, `handlers/back_office/audit.rs`, `handlers/back_office/gdpr.rs`, `middleware/auth.rs`, `middleware/ip_block.rs`), `crates/config` (`schema/audit.rs`), `cli` (`admin gdpr`, `admin audit verify`), `server` (`watcher.rs`, `setup.rs`), `crates/adapters` (`scanners/yara.rs`), `crates/config` (`schema/security.rs`), `Containerfile.worker`, `helm/batlehub` (`worker.yaraRules`), `deploy/siem/`, `tests/heavy/authz.sh`, `tests/heavy/quarantine.sh`, `SECURITY.md`, `.github/`, docs |
 
 ---
 
@@ -737,18 +737,19 @@ None. The questions numbered 1–4 of the first draft's open list are rows
 | 3 | **Sigma rules**, `task siem:check`, `docs/operations/siem.md`, and §6.7 cases 1–3 and 6 — **landed 2026-10-05**, without `audit_chain_gap.yml`, which needs phase 5's seals; see §13. |
 | 4 | **Retention classes, pseudonymisation, erasure** (§6.3) and §6.7 case 5 — **landed 2026-10-05**; see §13. |
 | 5 | **Seals and `audit verify`** (§6.4) and §6.7 case 4 — **landed 2026-10-05**, with `audit_chain_gap.yml` and a truncation case §6.7 did not list; see §13. |
-| 6 | **YARA scanner** (§6.6) with yara-x's `yr` in the worker image (§11 q6). |
+| 6 | **YARA scanner** (§6.6) with yara-x's `yr` in the worker image (§11 q6) — **landed 2026-10-09**; see §13. |
 | 7 | **NIS2 / DORA**, when a regulated operator needs them: MFA enforcement through the OIDC `acr`/`amr` claims; signing keys (publish, APK, VS Code, seal) held in a KMS with a rotation procedure; a restore test in CI with a stated RPO/RTO; incident classification fields on notifications; a DORA Art. 30 contract annex template for a hosted offer. |
 
 ---
 
 ## 13. Implementation notes
 
-Phases 2 and 3 landed 2026-10-05, and phases 4 and 5 the same day. What
+Phases 2 and 3 landed 2026-10-05, and phases 4 and 5 the same day; phase 6
+landed 2026-10-09, which is what moved the status to *Implemented*. What
 follows is where the design was wrong or under-specified, recorded because the
 next phase reads this document and not the diff. Rows 1–10 are phases 2–3's,
-rows 11–19 phases 4–5's. Phase 6 (YARA) is not built, which is why the status
-stays *In review*; phase 7 waits for a regulated operator, as §12 says.
+rows 11–19 phases 4–5's, rows 20–25 phase 6's. Phase 7 waits for a regulated
+operator, as §12 says, and is not a condition of the status.
 
 ### Corrections to the design
 
@@ -773,6 +774,12 @@ stays *In review*; phase 7 waits for a regulated operator, as §12 says.
 | 17 | §6.4 | `batlehub admin audit verify` | `batlehub-cli admin audit verify`, over `POST /api/v1/admin/audit/verify` behind `audit:read` — a body, because `--head` is a digest and `--from`/`--to` are instants — answering `501` on an unsealed trail. `--from`/`--to` select the windows whose rows are re-digested; the chain itself is always replayed whole. |
 | 18 | §6.7 | Case 4: alter a row, `verify` exits 1 | Built as written, then extended both ways. The row is **put back** and `verify` passes again, so the failure is shown to be that row and nothing else; and a case **5b** the list did not have: the attack §5.3 is written against — a sealed row altered, the seal records from its window on deleted, the sealer left to re-seal over it. Observed: the chain verifies on its own (*that is the attack*), and `--head` with the digest the stream last carried fails with *"the chain's newest record is not the head the SIEM last received: its tail was truncated or rewritten"*; the stream carries record 21 twice and the replay makes `audit_chain_gap.yml` fire. |
 | 19 | §6.7, §10 | Case 5 checks `token_revoke` survives the purge; §10 names `pg_audit_seal.rs` and unit tests in `services/audit_seal.rs` | No run mints a token (row 10), so case 5 checks the two `credential_rejected` rows survive instead — the same class. Observed: the purge deleted 3 `download` rows, written as one `expire` record; a second purge deleted 0 and left the first's row. The seal tests share `crates/adapters/tests/pg_audit_lifecycle.rs`, which makes a database of its own because the chain is one per database; the digest tests sit beside `entities/audit_seal.rs`. |
+| 20 | §6.6 | `[scanners.yara] rules_dir` | And `command`, defaulting to `/usr/local/bin/yr`, where `Containerfile.worker` installs it — the same shape as `postmortem` and `guarddog`, so a developer machine points it elsewhere. yara-x 1.20.0, pinned by version and by the release's own SHA-256 in the image and in the `quarantine` CI job. |
+| 21 | §6.6 | Unstated: what a YARA rule is run over | The artifact as served (`scan/artifact`) **and**, when it is an archive the extraction policy knows, its contents (`scan/tree/…`), in one `yr scan --recursive`. A rule written for a dropper matches a file inside a tarball; a rule written for the blob (a hash, a magic) matches the blob. A format the policy does not know (`.deb`, `.rpm`, a bare binary) is scanned as the blob alone rather than refused, because a byte rule still has something to read; an archive the policy *refuses* (a bomb, a traversal) is not scanned, as for every other tree scanner. |
+| 22 | §6.6 | *"A match is a finding with the rule name; the policy decides whether it blocks"* | The policy decides by **severity** (`max_severity`), so the finding needed one. It is the rule's `severity` meta when that parses (`low` … `critical`), else `high`: an operator's own signature matching is a positive signal, and under the default `max_severity = "high"` an unannotated rule blocks. A rule meant as a hint says `severity = "low"`. The rule name is the reference, the matching file — relative to the scan root, never the work directory's path — is in the summary, and the matched strings are not requested (`--print-strings` is off): they are attacker bytes. |
+| 23 | §6.6 | Unstated: an empty rule set | `yr` compiles an empty directory to nothing and answers every scan clean, exit 0 — observed, and indistinguishable from a real clean answer. The worker refuses to start when `rules_dir` holds no `.yar`/`.yara` at any depth (following the symlinks a ConfigMap mount is made of). The check is in `server/src/setup.rs`, which only the worker role runs, and not in config validation, which every process runs — a proxy-only pod sharing the config has neither `yr` nor the mount. |
+| 24 | §6.6 | Unstated: a rule that does not compile | `yr` exits 1 and the scan is `ScannerError::Crashed` with `yr`'s own diagnostic — under the default `scanner_error`, a hold. Rules are not compiled at startup: a ConfigMap update reaches the pod without a restart and the next scan reads it, so a startup check would vouch for rules that are no longer the ones running. `docs/operations/scan-worker.md` says to run `yr check <dir>` before applying a change. |
+| 25 | §10 | No YARA case in the test plan; §6.7 lists the `audit` phase only | `tests/heavy/quarantine.sh` step 9 (§4.2 of the RFC skill: a scan's suite is `quarantine.sh`), on a registry of its own as the egress row is. Below. Unit tests in `scanners/yara.rs`, one of which drives the real `yr` when it is on `PATH`. |
 
 ### What the RFC did not mention
 
@@ -807,20 +814,72 @@ stays *In review*; phase 7 waits for a regulated operator, as §12 says.
   `[ip_blocking].violation_window_secs` is refused above 30 days, the counters'
   retention, past which a window never reached its threshold.
 
+### Phase 6 on the wire
+
+`tests/heavy/quarantine.sh` step 9, run 2026-10-09 against npm 11.20.0 and
+`registry.npmjs.org`, with a rule matching `function leftPad (str, len, ch)` —
+line 22 of `left-pad@1.3.0`'s `index.js` — and no `severity` meta. The tap saw
+the packument served, then exactly two requests for the tarball, neither of
+them answered with bytes:
+
+```text
+GET /proxy/npm-yara-…/left-pad/1.3.0/tarball -> 403 | X-BatleHub-Verdict: quarantined ; X-BatleHub-Reason: SCAN_PENDING
+GET /proxy/npm-yara-…/left-pad/1.3.0/tarball -> 403 | X-BatleHub-Verdict: denied ; X-BatleHub-Reason: MALWARE_SIGNAL
+```
+
+The first is `npm install` meeting the hold; between them `batlehub wait`
+exited `1`, the verdict terminal; the second is `npm ci` from a lockfile, which
+exited non-zero with `MALWARE_SIGNAL` in its own output and left no
+`node_modules/left-pad`. `batlehub why` named `heavy_left_pad_canary` and
+`tree/package/index.js` — the match was inside the archive, not on the blob,
+which is row 21 observed. The finding's `high` came from the default of
+row 22, and `max_severity = "high"` denied it.
+
+That run was local, on a machine with no `bwrap`: a copy of the suite with
+`[worker.sandbox] runtime = "none"` and `BATLEHUB_UNSAFE_NO_SANDBOX=1`, steps
+1–5 and 7–9 green, step 6 unmeasured. Step 9 under `bwrap` is the CI
+`heavy-client` job's, which installs the same `yr` (row 20). The unit test
+that drives the real `yr` ran against yara-x 1.20.0 here and skips where `yr`
+is not on `PATH`.
+
+### Closed after the landing (2026-10-09)
+
+The four follow-ups this section listed when phase 5 landed — the last found
+while landing phase 6 — are closed, each with the test that would have caught
+it:
+
+- **`source.ip` on admin actions.** `AdminService::record_admin_action_about`
+  and the ten methods that reach it (`block_package`, `unblock_package`, the
+  three bulk forms, `delete_package`, `record_package_action`,
+  `record_account_action`, `record_cache_eviction`, `purge_events_before`) take
+  the caller's `CallerNet` beside the identity, and every admin handler passes
+  the one its `AuthIdentity` already carried. A `grant_write`, `audit_purge` or
+  manual `block_ip` row names who and from where, as the authentication events
+  do. The upstream-disappearance audit, which acts on its own, passes
+  `CallerNet::unknown()`. `admin::tests::block_package_records_audit_event`
+  asserts the address and the user agent on the row.
+- **Erasure renames a subject an admin's row names.** One rule,
+  `audit_trail::detail_names_subject`, says which `detail` names a subject: a
+  `gdpr_export` row's `subject=<id>`, a `grant_write` or `grant_revoke` row's
+  `subject=user:<id>`, each matched as a whole token so `alice` never takes
+  `alice2`'s rows. The in-memory store calls it and the Postgres candidate
+  query spells it in SQL; the rewrite keeps the rest of the detail
+  (`subject=user:erased:… actions=read,write`). Proven in both stores: a
+  sealed grant row renamed, the `alice2` row untouched, and the chain still
+  verifying.
+- **"The process did it" is spelled `system`.** The lifecycle's
+  `audit_lifecycle_run` row is written as `Identity::SYSTEM_USER_ID`, like an
+  automatic IP ban and the scheduled coherence check. The upstream-disappearance
+  audit keeps `system:upstream-audit`, the `blocked_by` RFC 0014 §6.5 chose;
+  `docs/operations/siem.md` now says to match the `system` prefix.
+- **A scanner's `command` is the worker's to check.** `validate_scanners` no
+  longer looks at `postmortem`'s or `guarddog`'s `command`; the worker refuses
+  one it cannot run when it builds its scanners, and `command_exists` there now
+  requires an execute bit, which the validation check had and it did not. A
+  proxy-only process loads the config its worker shares.
+  `setup::tests` covers the refusals, the YARA ones included.
+
 ### Still owed
 
-- **Phase 6**, the YARA scanner (§6.6).
-- `source.ip` on admin actions: `record_admin_action` has never carried the
-  caller's address, so a `grant_write`, `audit_purge` or manual `block_ip` line
-  names who but not from where. The web handlers have it (`AuthIdentity`
-  carries `CallerNet`); threading it through `AdminService` is a follow-up that
-  touches every admin handler.
-- **Erasure misses a subject named in another row's `detail`.** It rewrites
-  rows whose `user_id` is the subject, and the `gdpr_export` row whose `detail`
-  is exactly `subject=<id>`. A `grant_write` or `grant_revoke` an admin wrote
-  about the subject carries `subject=user:<id> actions=…` under the *admin's*
-  `user_id`, and keeps it. The candidate query and the rewrite both need the
-  grant spelling; a test that erases a user someone granted to is what proves it.
-- **"The process did it" has two spellings.** An automatic ban is written as
-  `user_id = "system"` (`Identity::system`), the lifecycle's `audit_lifecycle_run`
-  row as `user_id = NULL`. A SIEM rule keying on either misses the other.
+Nothing for phases 1–6. Phase 7 is the next work, when a regulated operator
+asks for it (§12).

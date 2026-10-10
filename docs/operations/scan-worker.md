@@ -25,7 +25,7 @@ covers, it does not fail them.
 
 Splitting the roles is what the chart's `worker.enabled` does, and it is worth
 doing for two reasons. The scanner toolchains — bubblewrap, `postmortem`, the
-Trivy client, optionally GuardDog — live only in the worker image, and only the
+Trivy client, yara-x's `yr`, optionally GuardDog — live only in the worker image, and only the
 worker needs egress to upstream artifacts, the Trivy server and Rekor. See
 [the Helm chart](/guide/install/helm) for the chart values and
 [What leaves this instance](/operations/egress) for the egress.
@@ -104,7 +104,7 @@ not happen instead of pretending it passed.
 
 ## What the scanners run under
 
-Every binary scanner — `postmortem`, `guarddog`, `trivy` — goes through one
+Every binary scanner — `postmortem`, `guarddog`, `trivy`, `yara` — goes through one
 runner, and through `bwrap`. The artifact is attacker-controlled input, and the
 worker is the one process that opens it while holding database and storage
 credentials, so the sandbox is the boundary that matters most in this
@@ -188,6 +188,13 @@ starting point of the [incident-response](/operations/incident-response) path.
 `ghcr.io/batleforc/batlehub-worker-guarddog` is the same image with GuardDog
 added, built on it, and is what `worker.image.repository` points at when a
 registry names `guarddog` in its scanners.
+
+`yr` is on both, idle until `[scanners.yara]` names a rules directory. Rules
+are yours to supply: put them in a ConfigMap and set `worker.yaraRules.configMap`
+to its name, which mounts it read-only at `/etc/batlehub/yara`. A ConfigMap
+update reaches the pod without a restart and the next scan compiles the new
+rules; a rule that no longer compiles turns every scan into `SCANNER_ERROR`, so
+check a change with `yr check <dir>` before applying it.
 
 Both are scanned on every build and on a daily rebuild, and the scanners they
 carry are themselves third-party binaries with their own dependencies — see

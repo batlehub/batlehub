@@ -126,6 +126,14 @@ async fn the_chain_survives_the_lifecycle_and_catches_an_sql_edit() {
     ] {
         repo.record_access(row(action, user, secs)).await.unwrap();
     }
+    // Grants an admin wrote about alice, and about someone whose id starts
+    // with hers: erasure must rename the first by its `detail` and leave the
+    // second (RFC 0036 §13). In alice's window, which nothing below edits.
+    for (subject, secs) in [("alice", 2 * STEP + 7), ("alice2", 2 * STEP + 8)] {
+        let mut e = row(AccessAction::GrantWrite, "admin", secs);
+        e.detail = Some(format!("subject=user:{subject} actions=read"));
+        repo.record_access(e).await.unwrap();
+    }
 
     // Seal: the first tick seals the newest closed window, the next ones the rest.
     let svc = service(&repo, sealing(), 0x0036_5ea1);
@@ -157,6 +165,19 @@ async fn the_chain_survives_the_lifecycle_and_catches_an_sql_edit() {
         .await
         .unwrap();
     assert!(erased.audit_rows >= 3);
+    let grant_details: Vec<String> = sqlx::query_scalar(
+        "SELECT detail FROM access_events WHERE action = 'grant_write' ORDER BY created_at",
+    )
+    .fetch_all(&repo.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        grant_details,
+        [
+            format!("subject=user:{} actions=read", erased.pseudonym),
+            "subject=user:alice2 actions=read".to_owned(),
+        ]
+    );
     svc.purge_access_before(at(3 * STEP), &admin(), CallerNet::unknown())
         .await
         .unwrap();

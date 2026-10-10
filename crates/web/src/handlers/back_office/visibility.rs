@@ -142,7 +142,7 @@ pub async fn set_package_visibility(
         artifact: None,
     };
     admin_svc
-        .record_package_action(&pkg, AccessAction::SetVisibility, &identity.0)
+        .record_package_action(&pkg, AccessAction::SetVisibility, &identity.0, &identity.1)
         .await;
 
     Ok(HttpResponse::NoContent().finish())

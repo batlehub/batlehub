@@ -475,7 +475,7 @@ pub async fn purge_audit_log(
                 .await?
         }
         None => admin_svc
-            .purge_events_before(query.before, &identity.0)
+            .purge_events_before(query.before, &identity.0, &identity.1)
             .await
             .map_err(AppError::from)?,
     };

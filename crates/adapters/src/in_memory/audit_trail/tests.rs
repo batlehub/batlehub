@@ -215,8 +215,9 @@ async fn pseudonymisation_takes_access_rows_only_and_keeps_the_chain_valid() {
     assert!(
         events
             .iter()
-            .any(|e| e.action == AccessAction::AuditLifecycleRun),
-        "a run that changed rows is itself an event"
+            .any(|e| e.action == AccessAction::AuditLifecycleRun
+                && e.user_id.as_deref() == Some(Identity::SYSTEM_USER_ID)),
+        "a run that changed rows is itself an event, written as `system`"
     );
 }
 
@@ -312,6 +313,79 @@ async fn erasure_renames_the_subject_everywhere_and_keeps_the_chain_valid() {
         .unwrap();
     assert_eq!(erase_row.user_id.as_deref(), Some("admin"));
     assert!(svc.verify(None, None, None).await.unwrap().ok);
+}
+
+fn grant(subject: &str, action: AccessAction, detail_tail: &str, secs: i64) -> AccessEvent {
+    let mut e = AccessEvent::about_identity(
+        action,
+        Some("admin".into()),
+        Role::Admin,
+        AccessResult::Allowed,
+        CallerNet::unknown(),
+        Some(format!("subject=user:{subject}{detail_tail}")),
+    );
+    e.timestamp = at(secs);
+    e
+}
+
+/// RFC 0036 §13 "Still owed": a grant an admin wrote *about* the subject sits
+/// under the admin's `user_id` and names the subject only in `detail`.
+#[tokio::test]
+async fn erasure_renames_a_subject_named_by_an_admins_grant_rows_and_nobody_else() {
+    let (repo, svc) = sealed_trail().await;
+    for e in [
+        grant(
+            "alice",
+            AccessAction::GrantWrite,
+            " actions=read,write",
+            2 * STEP + 1,
+        ),
+        grant("alice", AccessAction::GrantRevoke, "", 3 * STEP + 1),
+        grant(
+            "alice2",
+            AccessAction::GrantWrite,
+            " actions=read",
+            3 * STEP + 2,
+        ),
+    ] {
+        repo.record_access(e).await.unwrap();
+    }
+    svc.seal_tick(at(6 * STEP)).await.unwrap();
+
+    let report = svc
+        .erase("alice", false, &admin(), CallerNet::unknown())
+        .await
+        .unwrap();
+    let p = &report.pseudonym;
+    let details: Vec<String> = repo
+        .events
+        .read()
+        .await
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.action,
+                AccessAction::GrantWrite | AccessAction::GrantRevoke
+            )
+        })
+        .filter_map(|e| e.detail.clone())
+        .collect();
+    assert!(
+        details.contains(&format!("subject=user:{p} actions=read,write")),
+        "{details:?}"
+    );
+    assert!(
+        details.contains(&format!("subject=user:{p}")),
+        "{details:?}"
+    );
+    assert!(
+        details.contains(&"subject=user:alice2 actions=read".to_owned()),
+        "a longer id that starts with the subject's is someone else: {details:?}"
+    );
+    assert!(
+        svc.verify(None, None, None).await.unwrap().ok,
+        "renaming sealed rows amends the chain"
+    );
 }
 
 #[tokio::test]

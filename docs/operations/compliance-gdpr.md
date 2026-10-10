@@ -57,7 +57,7 @@ carries a token, a hash, an OIDC code or a password.
 | Article | Control | Status | Evidence |
 |---------|---------|--------|----------|
 | 15 – Right of access | Export every row about one subject, including the publication and ownership rows erasure keeps; recorded as `gdpr_export` | ✅ Implemented | `batlehub-cli admin gdpr export --user <id>`, `GET /api/v1/admin/gdpr/export?user_id=<id>` (verb `audit:read`) |
-| 17 – Right to erasure | Replaces the subject's id with `erased:<hmac>` in `access_events`, token rows and block rows; rows of one subject stay linkable to each other and to nobody | ✅ Implemented | `batlehub-cli admin gdpr erase --user <id>`, `POST /api/v1/admin/gdpr/erase` (verb `gdpr:erase`), `[audit] erasure_key` |
+| 17 – Right to erasure | Replaces the subject's id with `erased:<hmac>` in `access_events` — as the actor, and where an admin's grant or export row names them as its subject — token rows and block rows; rows of one subject stay linkable to each other and to nobody | ✅ Implemented | `batlehub-cli admin gdpr erase --user <id>`, `POST /api/v1/admin/gdpr/erase` (verb `gdpr:erase`), `[audit] erasure_key` |
 | 17(3) – Exemptions | Publication and ownership rows are retained under legitimate interest: "who published this" stays answerable for every consumer of the package | Documented | [RFC 0036 §4.2](../rfc/0036-regulatory-alignment.md#_4-2-behaviour-rules) |
 | 17 – Erasure against an open decision | Refused for a subject with an open quarantine or block decision unless forced | ✅ Implemented | `batlehub-cli admin gdpr erase --user <id> --force` |
 | 17 – Who may erase | `gdpr:erase` is its own verb; `audit:purge` does not imply it | ✅ Implemented | [Access control § verbs](../guide/access-control.md#verbs) |
@@ -103,4 +103,3 @@ whoever reads the database.
 | Gap | Plan |
 |-----|------|
 | A copy already shipped to a SIEM is not pseudonymised or erased | The collector's own retention governs it; set it to match `[audit]` |
-| `source.ip` is not recorded on admin actions (`grant_write`, `audit_purge`, …) | Follow-up in RFC 0036 §13 |

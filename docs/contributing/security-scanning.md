@@ -322,6 +322,13 @@ to apply**: on 2026-09-15 every one of `helm-docs`, `gitleaks`, `lazydocker`, `s
 for is noticing a tool that stopped being maintained, or a new one that arrived carrying a pile —
 not a weekly bump ritual.
 
+When a tool *has* stopped releasing, there are two levers left, and both have been pulled. Build
+it from a pinned commit through mise's `go:` backend, which compiles it with this repository's Go
+and the dependencies its source has moved to since. `helm-docs` is built this way, the same commit
+in `mise.toml` and in `helm-lint.yaml`, because its last release carried 42 findings. Or drop a
+tool nothing in the repository runs: `lazydocker` went for that reason, and anyone who wants it
+keeps it in `~/.config/mise`.
+
 It is a **budget**, not a zero, and that is a deliberate choice rather than leniency: none of this
 ships, a CVE in `k9s` reaches nothing this project publishes, and a gate that fails a pull request
 every time somebody else's tool has a bad week is a gate that gets switched off within the month.

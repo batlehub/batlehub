@@ -37,7 +37,7 @@ log a human reads.
 | `event.outcome` | `denied` | `allowed`, `denied` or `error` |
 | `event.reason` | `blocked: malware flagged by osv (…)` | Why a request was refused; empty when allowed |
 | `event.id` | UUID | The row's id in `access_events` |
-| `user.id` | `alice` | The principal, as the authenticating provider names it; empty for anonymous |
+| `user.id` | `alice` | The principal, as the authenticating provider names it; empty for anonymous; `system`, or `system:<task>`, for what the process did on its own — an automatic IP ban, an audit lifecycle run, the scheduled storage coherence check are `system`, a block the upstream-disappearance audit placed is `system:upstream-audit`. Match the `system` prefix to find them all |
 | `user.roles` | `user` | `anonymous`, `user` or `admin` |
 | `source.ip` | `203.0.113.9` | The caller, as the proxy-trust rules resolved it — never a raw `X-Forwarded-For` |
 | `user_agent.original` | `npm/10.9.0` | The client's `User-Agent` |

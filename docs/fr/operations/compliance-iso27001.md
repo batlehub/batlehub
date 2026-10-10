@@ -1,6 +1,6 @@
 ---
 sourcePath: operations/compliance-iso27001.md
-sourceHash: 81b8f5394445d94d
+sourceHash: 78d1b5e92e73863c
 ---
 
 # ISO/IEC 27001:2022 — les contrôles de BatleHub
@@ -74,4 +74,3 @@ et les contrôles physiques (7.x) vous appartiennent et ne sont pas listés.
 |-------|------|
 | La MFA n'est pas vérifiée par BatleHub lui-même | RFC 0036, phase 7 — [NIS2 et DORA](./compliance-nis2-dora.md) |
 | Les clés de signature sont des fichiers ou des variables d'environnement, pas des clés détenues par un KMS | RFC 0036, phase 7 |
-| `source.ip` n'est pas enregistré sur les actions d'administration | Suite prévue par la RFC 0036 §13 |

@@ -123,7 +123,16 @@ impl AuditTrailStore for PgPackageRepository {
                          OR (ip_address IS NOT NULL AND position('/' IN ip_address) = 0))
                 WHEN 2 THEN (action = ANY($3) AND created_at < $5)
                          OR (NOT action = ANY($3) AND created_at < $6)
-                ELSE user_id = $7 OR (action = 'gdpr_export' AND detail = 'subject=' || $7)
+                -- `detail_names_subject` in core, in SQL: the export a row was
+                -- about, and the grant an admin wrote for the subject, matched
+                -- as a whole token so `alice` never takes `alice2`'s rows.
+                ELSE user_id = $7
+                    OR (action = 'gdpr_export'
+                        AND (detail = 'subject=' || $7
+                             OR starts_with(detail, 'subject=' || $7 || ' ')))
+                    OR (action IN ('grant_write', 'grant_revoke')
+                        AND (detail = 'subject=user:' || $7
+                             OR starts_with(detail, 'subject=user:' || $7 || ' ')))
               END
             ORDER BY created_at
             LIMIT $8
