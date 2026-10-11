@@ -755,6 +755,10 @@ async fn a_failed_sign_in_is_recorded_by_class_without_the_code() {
 
     let req = TestRequest::get()
         .uri("/api/v1/auth/oidc/callback?code=secret-code&state=never-issued")
+        // The sign-in-failed throttle is a process-wide static keyed by IP: the
+        // other failed callbacks in this binary share the default peer, and the
+        // one that runs first takes the minute's only row.
+        .peer_addr("203.0.113.36:40000".parse().unwrap())
         .to_request();
     assert_eq!(call_service(&app, req).await.status(), 302);
 

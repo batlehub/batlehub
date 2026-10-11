@@ -71,7 +71,7 @@ fn make_vsix_version(version: &str, pre_release: bool) -> Vec<u8> {
     let mut buf = Vec::new();
     {
         let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-        let opts: zip::write::FileOptions<'_, ()> =
+        let opts: zip::write::SimpleFileOptions =
             zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
         for (name, body) in [
             ("extension/package.json", manifest.as_bytes()),
@@ -510,7 +510,7 @@ async fn an_asset_type_the_extension_does_not_ship_is_a_404() {
     let mut buf = Vec::new();
     {
         let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-        let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        let opts: zip::write::SimpleFileOptions = zip::write::FileOptions::default();
         w.start_file("extension/package.json", opts).unwrap();
         w.write_all(br#"{"publisher":"acme","name":"tool","version":"1.2.3"}"#)
             .unwrap();
@@ -547,7 +547,7 @@ fn vsix_with_svg_icon(svg: &[u8]) -> Vec<u8> {
     let mut buf = Vec::new();
     {
         let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-        let opts: zip::write::FileOptions<'_, ()> =
+        let opts: zip::write::SimpleFileOptions =
             zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
         for (name, body) in [
             ("extension/package.json", manifest.as_bytes()),

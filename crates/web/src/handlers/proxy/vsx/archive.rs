@@ -277,7 +277,13 @@ pub fn find_entry(bytes: &[u8], predicate: impl Fn(&str) -> bool) -> Option<Stri
     let cursor = std::io::Cursor::new(bytes);
     let mut zip = zip::ZipArchive::new(cursor).ok()?;
     let mut names: Vec<String> = (0..zip.len())
-        .filter_map(|i| zip.by_index(i).ok().map(|f| f.name().to_owned()))
+        .filter_map(|i| {
+            zip.by_index(i)
+                .ok()?
+                .name()
+                .ok()
+                .map(std::borrow::Cow::into_owned)
+        })
         .filter_map(|n| n.strip_prefix(EXTENSION_PREFIX).map(str::to_owned))
         // Top-level files only: a README nested in a subdirectory of the
         // extension is documentation *of* something inside it, not the
@@ -341,7 +347,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+            let opts: zip::write::SimpleFileOptions = zip::write::FileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored);
             for (name, body) in entries {
                 w.start_file(*name, opts).unwrap();

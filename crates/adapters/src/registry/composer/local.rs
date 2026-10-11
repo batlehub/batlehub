@@ -84,12 +84,13 @@ pub(super) fn find_composer_json(
     // archive is ambiguous and we reject it rather than silently picking a non-deterministic one.
     let candidates: Vec<String> = archive
         .file_names()
+        .filter_map(Result::ok)
         .filter(|n| {
             let mut parts = n.splitn(3, '/');
             parts.next(); // top-level dir
             parts.next() == Some("composer.json") && parts.next().is_none()
         })
-        .map(str::to_owned)
+        .map(std::borrow::Cow::into_owned)
         .collect();
 
     let nested = match candidates.len() {

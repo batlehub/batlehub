@@ -30,7 +30,7 @@ fn vsix(version: &str) -> Vec<u8> {
     let mut buf = Vec::new();
     {
         let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-        let opts: zip::write::FileOptions<'_, ()> =
+        let opts: zip::write::SimpleFileOptions =
             zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
         w.start_file("extension/package.json", opts).unwrap();
         w.write_all(manifest.as_bytes()).unwrap();

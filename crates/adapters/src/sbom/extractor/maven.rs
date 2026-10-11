@@ -20,7 +20,7 @@ pub(super) fn extract_maven_manifest(data: &Bytes) -> ExtractedManifest {
         .filter(|i| {
             archive
                 .by_index(*i)
-                .is_ok_and(|f| super::anchor::is_maven_manifest(f.name()))
+                .is_ok_and(|f| f.name().is_ok_and(|n| super::anchor::is_maven_manifest(&n)))
         })
         .collect();
     let Some(index) = super::anchor::sole(matches) else {

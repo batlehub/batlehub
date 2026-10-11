@@ -9,7 +9,7 @@ use anyhow::Result;
 use clap::Parser;
 
 use cli::{
-    admin, auth, authz, config_cmd, download, mise, owner, package, proxy, publish, registry,
+    admin, auth, authz, config_cmd, download, java, mise, owner, package, proxy, publish, registry,
     security, setup, version, vsx, Cli, Command,
 };
 use config::ConfigFile;
@@ -21,6 +21,10 @@ async fn main() -> Result<()> {
     // Commands that need neither config nor a server connection
     if let Command::Config { cmd } = cli.command {
         return config_cmd::run(cmd);
+    }
+    // The Java engine runs locally: no server, no token, no config.
+    if let Command::Java(args) = cli.command {
+        return java::run(args);
     }
     if let Command::Completion { shell } = cli.command {
         use clap::CommandFactory;
@@ -129,7 +133,10 @@ async fn main() -> Result<()> {
         }
         Command::Admin { cmd } => admin::run(cmd, &client, cli.json).await?,
         Command::Tui => tui::run(client).await?,
-        Command::Config { .. } | Command::Completion { .. } | Command::Setup { .. } => {
+        Command::Config { .. }
+        | Command::Completion { .. }
+        | Command::Setup { .. }
+        | Command::Java(_) => {
             unreachable!()
         }
     }

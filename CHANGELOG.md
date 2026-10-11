@@ -17,6 +17,16 @@ policy stops sending vulnerability reports to a public issue.
 
 ### Added
 
+- **`batlehub-cli java`: the Java support of the VS Code extensions, with no
+  editor** (batlehub-vsx RFC 0002 phase 6). `inspect` (text, JSON or SARIF,
+  `--fail-on`), `fix`, `generate`, `rename`, `config --print` and `mcp` run
+  over a real Java language server, reading only the repository's committed
+  `.batlehub/java/` files — a CI gate and an agent's tools. The engine is
+  batlehub-vsx's, built into the binary (`cli/assets/java-engine/`, refreshed
+  by that repository's `task engine:sync`) and written to the cache on first
+  use; it needs a `node` ≥ 22 on `PATH` and a JDK ≥ 21. Everything after
+  `java` is the engine's, its exit code included.
+
 - **Your own YARA rules over every artifact** (RFC 0036 phase 6).
   `[scanners.yara]` runs yara-x's `yr` — now on the worker image, pinned and
   checksum-verified — over the artifact as served and, when it is an archive,

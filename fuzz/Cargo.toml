@@ -20,7 +20,7 @@ batlehub-adapters = { path = "../crates/adapters", default-features = false, fea
 bytes = "1"
 tar = "0.4"
 flate2 = "1"
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 tempfile = "3"
 arbitrary = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt"] }

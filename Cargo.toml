@@ -174,7 +174,7 @@ form_urlencoded = "1"
 # CIDR prefix matching for `[server].trusted_proxies` (already in the tree via
 # the HTTP stack; declared here so config/web can depend on it directly).
 ipnet = "2"
-zip = "8"
+zip = "9"
 quick-xml = "0.42"
 # README rendering and sanitisation (RFC 0007 §7.1). `pulldown-cmark` is a
 # CommonMark pull parser with no HTML sanitisation of its own — it passes raw

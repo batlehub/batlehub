@@ -309,8 +309,9 @@ summary:focus-visible,
   opacity: 0.2;
 }
 
-@supports ((mask-image: url("/halftone-plate.png")) or
-  (-webkit-mask-image: url("/halftone-plate.png"))) {
+@supports (
+  (mask-image: url("/halftone-plate.png")) or (-webkit-mask-image: url("/halftone-plate.png"))
+) {
   .plate {
     background: var(--copper);
   }

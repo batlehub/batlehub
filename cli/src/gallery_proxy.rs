@@ -687,7 +687,7 @@ mod tests {
         let bytes = sign_in_vsix("http://bh.local/proxy/vsx").unwrap();
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         let names: Vec<String> = (0..zip.len())
-            .map(|i| zip.by_index(i).unwrap().name().to_owned())
+            .map(|i| zip.by_index(i).unwrap().name().unwrap().into_owned())
             .collect();
         for needed in [
             "extension.vsixmanifest",

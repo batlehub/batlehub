@@ -12,6 +12,7 @@
 //! Pure functions over bytes, as core requires: reading the archive is
 //! in-memory (`zip` over a cursor), and nothing here touches storage.
 
+use std::borrow::Cow;
 use std::io::{Cursor, Read, Write};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -52,7 +53,12 @@ pub fn signature_manifest(vsix: &[u8]) -> Result<String, CoreError> {
         if file.is_dir() {
             continue;
         }
-        let name = file.name().to_owned();
+        let name = file
+            .name()
+            .map_err(|e| {
+                CoreError::InvalidInput(format!("VSIX entry {i} has an unreadable name: {e}"))
+            })?
+            .into_owned();
         // The declared size comes out of the zip central directory, so it is
         // publisher-controlled: `Vec::with_capacity(file.size())` was an
         // allocation an attacker chose, and a 1 KB "VSIX" declaring 2^63 aborted
@@ -177,7 +183,11 @@ pub fn read_provided_archive(bytes: &[u8]) -> Result<ProvidedArchive, CoreError>
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| {
         CoreError::InvalidInput(format!("signature archive is not a zip archive: {e}"))
     })?;
-    let names: Vec<String> = archive.file_names().map(str::to_owned).collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|n| n.map(Cow::into_owned))
+        .collect::<Result<_, _>>()
+        .map_err(|e| CoreError::InvalidInput(format!("signature archive entry name: {e}")))?;
     let manifest = match archive.by_name(ENTRY_MANIFEST) {
         Ok(mut f) => {
             let mut v = Vec::new();
@@ -277,7 +287,7 @@ mod tests {
 
         let mut zip = zip::ZipArchive::new(Cursor::new(&archive)).unwrap();
         let names: Vec<String> = (0..zip.len())
-            .map(|i| zip.by_index(i).unwrap().name().to_owned())
+            .map(|i| zip.by_index(i).unwrap().name().unwrap().into_owned())
             .collect();
         assert_eq!(names, [ENTRY_SIG, ENTRY_MANIFEST, ENTRY_P7S]);
         assert_eq!(

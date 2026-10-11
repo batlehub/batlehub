@@ -1317,3 +1317,29 @@ backfills them — so a blank pair beside a non-zero `count` dates the row rathe
 than describing the caller.
 :::
 
+
+## 23. Commands — java {#commands-java}
+
+The Java engine of the BatleHub VS Code extensions: the inspections, fixes,
+generators and renames of their Java support, over a real Java language
+server and with no editor — for a CI gate and for agents. Everything after
+`java` is the engine's own, and so is the exit code:
+
+```
+$ batlehub-cli java inspect . --fail-on warning --format sarif > java.sarif
+$ batlehub-cli java fix src/main/java/com/acme/Greeter.java --write
+$ batlehub-cli java mcp          # the same verbs as MCP tools over stdio
+$ batlehub-cli java --help       # every verb, flag and exit code
+```
+
+It needs a `node` ≥ 22 on `PATH` (`mise use node@24`) and a JDK ≥ 21 its
+discovery can find. The engine is built into this binary and written under
+the cache directory (`~/.cache/batlehub/java-engine/<hash>/`) on first use;
+its first run also downloads the pinned Java language server once.
+`BATLEHUB_JAVA_ENGINE=<path to batlehub-java.mjs>` runs another build. No
+server, token or profile is read: `--profile` and `--json` after `java` are
+the engine's flags, not the CLI's.
+
+The verbs, the configuration they read (only the committed
+`.batlehub/java/` files) and the CI snippet are documented with the engine,
+in [the extensions' guide](https://github.com/batlehub/batlehub-vsx/blob/main/docs/guide/java/engine.md).

@@ -21,7 +21,7 @@ pub(super) fn extract_nuget_manifest(data: &Bytes) -> ExtractedManifest {
         .filter(|i| {
             archive
                 .by_index(*i)
-                .is_ok_and(|f| anchor::is_nuspec_manifest(f.name()))
+                .is_ok_and(|f| f.name().is_ok_and(|n| anchor::is_nuspec_manifest(&n)))
         })
         .collect();
     let Some(index) = anchor::sole(matches) else {

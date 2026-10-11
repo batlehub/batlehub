@@ -177,6 +177,9 @@ skip = [
     { name = "gimli", version = "0.31" },
     { name = "object", version = "0.29" },
     { name = "memmap2", version = "0.5" },
+    # …and pprof's `nix ^0.26` beside zip 9's `nix ^0.31`, which zip only
+    # takes on macOS and the BSDs (the CLI's macOS artefact).
+    { name = "nix", version = "0.26" },
 ]
 # Wildcards left as "allow": the workspace crates depend on each other via
 # versionless `{ path = … }`, which cargo-deny counts as wildcards for public

@@ -3,6 +3,7 @@ pub mod auth;
 pub mod authz;
 pub mod config_cmd;
 pub mod download;
+pub mod java;
 pub mod mise;
 pub mod owner;
 pub mod package;
@@ -130,6 +131,9 @@ pub enum Command {
         #[command(subcommand)]
         cmd: security::VerdictsCommand,
     },
+    /// The Java engine: inspect, fix, generate and rename Java over a real
+    /// language server, with no editor (`java --help` for its verbs)
+    Java(java::JavaArgs),
     /// Launch interactive TUI
     Tui,
     /// Print shell completion script to stdout

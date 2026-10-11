@@ -418,8 +418,11 @@ fn parse_conda_format(data: &[u8]) -> Result<CondaPackageInfo, CoreError> {
     // Find the info-*.tar.zst member (collect names first to avoid borrow issues)
     let mut info_entry_name: Option<String> = None;
     for i in 0..zip.len() {
-        if let Ok(f) = zip.by_index(i) {
-            let name = f.name().to_owned();
+        if let Some(name) = zip
+            .by_index(i)
+            .ok()
+            .and_then(|f| f.name().ok().map(std::borrow::Cow::into_owned))
+        {
             if name.starts_with("info-") && name.ends_with(".tar.zst") {
                 info_entry_name = Some(name);
                 break;

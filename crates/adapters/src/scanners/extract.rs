@@ -298,7 +298,10 @@ fn extract_zip(
         let mut file = archive
             .by_index(i)
             .map_err(|e| ExtractError::Malformed(e.to_string()))?;
-        let raw = file.name().to_owned();
+        let raw = file
+            .name()
+            .map_err(|e| ExtractError::Malformed(e.to_string()))?
+            .into_owned();
         let Some(rel) = safe_relative(&raw) else {
             return Err(ExtractError::Traversal(raw));
         };

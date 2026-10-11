@@ -46,7 +46,13 @@ fn from_conda_zip(data: &Bytes) -> Option<String> {
 
     let mut zip = ZipArchive::new(Cursor::new(data.as_ref())).ok()?;
     let member = (0..zip.len())
-        .filter_map(|i| zip.by_index(i).ok().map(|f| f.name().to_owned()))
+        .filter_map(|i| {
+            zip.by_index(i)
+                .ok()?
+                .name()
+                .ok()
+                .map(std::borrow::Cow::into_owned)
+        })
         .find(|name| name.starts_with("info-") && name.ends_with(".tar.zst"))?;
 
     // **Both** decompressions are bounded, and each one on its own output.

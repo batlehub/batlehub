@@ -23,6 +23,12 @@
 #     `--prod`, which filters it out, so pinning it here is belt-and-braces:
 #     it keeps `pnpm audit` (no flag) clean locally and means the `--prod`
 #     flag is not the only thing holding the job green.
+#
+# mermaid is on the 12 line although vitepress-plugin-mermaid 2.0.17 (its
+# latest) declares `mermaid: "10 || 11"`, so `pnpm peers check` reports it.
+# The plugin calls only initialize, render and registerExternalDiagrams, all
+# still exported by 12; verified 2026-10-11 by rendering the flowchart and
+# sequence diagrams of rfc/0003 and rfc/0014 in Chrome with no error diagram.
 overrides:
   vite: ^6.4.3
   postcss: ^8.5.25

@@ -143,7 +143,11 @@ pub(crate) fn extract_nuspec_from_nupkg(bytes: &[u8]) -> Result<Vec<u8>, AppErro
         let mut file = archive
             .by_index(i)
             .map_err(|e| AppError::unprocessable(format!("zip entry error: {e}")))?;
-        if file.name().ends_with(".nuspec") {
+        let is_nuspec = file
+            .name()
+            .map_err(|e| AppError::unprocessable(format!("zip entry name: {e}")))?
+            .ends_with(".nuspec");
+        if is_nuspec {
             let mut buf = Vec::new();
             use std::io::Read;
             file.read_to_end(&mut buf)

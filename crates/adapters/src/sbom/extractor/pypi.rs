@@ -29,7 +29,7 @@ fn extract_pypi_wheel(data: &Bytes) -> Option<ExtractedManifest> {
         .filter(|i| {
             archive
                 .by_index(*i)
-                .is_ok_and(|f| anchor::is_wheel_metadata(f.name()))
+                .is_ok_and(|f| f.name().is_ok_and(|n| anchor::is_wheel_metadata(&n)))
         })
         .collect();
     let index = anchor::sole(matches)?;

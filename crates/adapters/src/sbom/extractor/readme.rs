@@ -127,7 +127,14 @@ pub(super) fn readme_from_zip(
     // Two passes over the index rather than one, because `by_index` borrows the
     // archive mutably and the name has to outlive that borrow.
     let names: Vec<String> = (0..archive.len())
-        .filter_map(|i| archive.by_index(i).ok().map(|f| f.name().to_owned()))
+        .filter_map(|i| {
+            archive
+                .by_index(i)
+                .ok()?
+                .name()
+                .ok()
+                .map(std::borrow::Cow::into_owned)
+        })
         .collect();
     let wanted = names
         .into_iter()
@@ -204,7 +211,14 @@ fn zip_paths(data: &Bytes) -> Vec<String> {
         return Vec::new();
     };
     (0..archive.len())
-        .filter_map(|i| archive.by_index(i).ok().map(|f| f.name().to_owned()))
+        .filter_map(|i| {
+            archive
+                .by_index(i)
+                .ok()?
+                .name()
+                .ok()
+                .map(std::borrow::Cow::into_owned)
+        })
         .collect()
 }
 

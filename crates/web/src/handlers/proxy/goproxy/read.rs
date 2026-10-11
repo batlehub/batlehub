@@ -78,7 +78,9 @@ fn scan_zip_for_go_mod(zip_bytes: &[u8], mod_suffix: &str) -> Option<String> {
     let mut archive = zip::ZipArchive::new(cursor).ok()?;
     for i in 0..archive.len() {
         if let Ok(mut file) = archive.by_index(i) {
-            let name = file.name().to_owned();
+            let Ok(name) = file.name().map(std::borrow::Cow::into_owned) else {
+                continue;
+            };
             if name == mod_suffix || name.ends_with("/go.mod") {
                 let mut contents = String::new();
                 if file.read_to_string(&mut contents).is_ok() {

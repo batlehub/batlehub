@@ -56,7 +56,10 @@ pub fn extract_plugin_descriptor(bytes: &[u8]) -> Result<PluginDescriptor, AppEr
             let entry = archive
                 .by_index(i)
                 .map_err(|e| AppError::unprocessable(format!("zip entry error: {e}")))?;
-            entry.name().contains("/lib/") && entry.name().ends_with(".jar")
+            let name = entry
+                .name()
+                .map_err(|e| AppError::unprocessable(format!("zip entry name: {e}")))?;
+            name.contains("/lib/") && name.ends_with(".jar")
         };
         if !is_lib_jar {
             continue;
@@ -101,7 +104,7 @@ fn read_descriptor_entry<R: Read + std::io::Seek>(
     let Some(index) = (0..archive.len()).find(|&i| {
         archive
             .name_for_index(i)
-            .is_some_and(|n| n == "META-INF/plugin.xml")
+            .is_some_and(|n| n.is_ok_and(|n| n == "META-INF/plugin.xml"))
     }) else {
         return Ok(None);
     };
