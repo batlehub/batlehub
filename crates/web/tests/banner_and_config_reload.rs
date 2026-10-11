@@ -172,6 +172,7 @@ async fn build_reload_app(
         sumdb_map: batlehub_web::SumDbMap::default(),
         registry_host_map: batlehub_web::RegistryHostMap::default(),
         proxy_trust: batlehub_web::ProxyTrust::default(),
+        discovery: Default::default(),
         config_path: opts.config_path,
         config_overlays: opts.config_overlays,
         config_change_repo: None,

@@ -147,20 +147,20 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Pinned to the version in mise.toml, not "latest": the generated table
-      # carries the generator's own version in its footer, and two versions of
-      # helm-docs do not have to agree on the rest of it either. A drifting
-      # version here would fail the gate on a commit that changed nothing.
+      # Pinned to the commit in mise.toml, not "latest": two builds of
+      # helm-docs do not have to agree on the generated table, and a drifting
+      # one would fail the gate on a commit that changed nothing. Built from
+      # source because the last release (v1.14.2, 2024) carries a Go 1.22
+      # toolchain's worth of CVEs; see mise.toml. The runner's Go builds it, and
+      # fetches the toolchain the module asks for when its own is older.
       - name: Install helm-docs
         env:
-          HELM_DOCS_VERSION: "1.14.2"
+          HELM_DOCS_COMMIT: a5573af096a4b526dcbc3c896c220b1714a0765b
         run: |
           set -euo pipefail
-          curl -fsSL --proto '=https' --proto-redir '=https' -o /tmp/helm-docs.tar.gz \
-            "https://github.com/norwoodj/helm-docs/releases/download/v${HELM_DOCS_VERSION}/helm-docs_${HELM_DOCS_VERSION}_Linux_x86_64.tar.gz"
-          tar -xzf /tmp/helm-docs.tar.gz -C /tmp helm-docs
-          sudo install -m 0755 /tmp/helm-docs /usr/local/bin/helm-docs
-          helm-docs --version
+          GOBIN=/tmp/bin go install "github.com/norwoodj/helm-docs/cmd/helm-docs@${HELM_DOCS_COMMIT}"
+          sudo install -m 0755 /tmp/bin/helm-docs /usr/local/bin/helm-docs
+          go version -m /usr/local/bin/helm-docs | head -2
 
       # Regenerates and diffs. `helm/batlehub/README.md` is generated from
       # Chart.yaml and the `# --` comments in values.yaml, so a value added

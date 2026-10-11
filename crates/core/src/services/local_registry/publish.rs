@@ -3,6 +3,8 @@ use super::{
     CoreError, Identity, LocalRegistryService, PackageId, PublishRequest, PublishedPackage,
     QuotaCheck, StorageMeta, Visibility,
 };
+use crate::services::stage;
+use tracing::Instrument as _;
 
 /// Everything [`LocalRegistryService::enforce_publish_policy`] needs to know about
 /// the artifact being published, grouped so the function takes one parameter for
@@ -258,6 +260,18 @@ impl LocalRegistryService {
         req: &PublishPolicyRequest<'_>,
         publisher: &Identity,
     ) -> Result<(QuotaCheck, bool), CoreError> {
+        let (quota, is_new, _) = self.enforce_publish_policy_resolved(req, publisher).await?;
+        Ok((quota, is_new))
+    }
+
+    /// [`Self::enforce_publish_policy`], and the policy it resolved — which
+    /// [`Self::publish`] needs again for the visibility default, and would
+    /// otherwise read from the `policy` table a second time.
+    async fn enforce_publish_policy_resolved(
+        &self,
+        req: &PublishPolicyRequest<'_>,
+        publisher: &Identity,
+    ) -> Result<(QuotaCheck, bool, crate::entities::ResolvedPolicy), CoreError> {
         // Reject names/versions that could escape the storage root via path
         // traversal once interpolated into the storage key. Runs unconditionally,
         // independent of the optional versioning policy below.
@@ -415,7 +429,7 @@ impl LocalRegistryService {
             QuotaCheck::default()
         };
 
-        Ok((quota_check, is_new_package))
+        Ok((quota_check, is_new_package, resolved))
     }
 
     /// The versioning policy to enforce, when a tier deeper than the registry
@@ -666,8 +680,8 @@ impl LocalRegistryService {
     /// after the publish (useful for setting `X-Quota-*` response headers).
     /// Returns a zeroed `QuotaCheck` when no quota is configured.
     pub async fn publish(&self, req: PublishRequest) -> Result<QuotaCheck, CoreError> {
-        let (quota_check, is_new_package) = self
-            .enforce_publish_policy(
+        let (quota_check, is_new_package, resolved) = self
+            .enforce_publish_policy_resolved(
                 &PublishPolicyRequest {
                     registry: &req.registry,
                     name: &req.name,
@@ -679,6 +693,7 @@ impl LocalRegistryService {
                 },
                 &req.publisher,
             )
+            .instrument(stage("publish_policy"))
             .await?;
 
         // Inherit the existing package visibility so that publishing a new version
@@ -692,7 +707,11 @@ impl LocalRegistryService {
             // that revokes on rollback) would otherwise charge the publisher for
             // bytes that are never stored, so revoke the reservation before
             // propagating the error.
-            match ns_port.get_visibility(&req.registry, &req.name).await {
+            match ns_port
+                .get_visibility(&req.registry, &req.name)
+                .instrument(stage("publish_visibility"))
+                .await
+            {
                 Ok(v) => v,
                 Err(e) => {
                     self.revoke_quota(&req.publisher, &req.registry, req.artifact.len() as u64)
@@ -718,10 +737,6 @@ impl LocalRegistryService {
         // namespace it happens to sit under, because a per-package override
         // remains (RFC 0011-bis §4.3) and deepest wins.
         let visibility = if visibility == Visibility::Public {
-            let resolved = self
-                .resolve_policy(&req.registry, &req.name, Some(&req.version))
-                .await
-                .unwrap_or_default();
             if crate::services::version_order::is_prerelease(&req.version) {
                 resolved.prerelease_visibility
             } else {
@@ -768,23 +783,31 @@ impl LocalRegistryService {
         // — from the moment it is stored, and a `FirstSeen` job is queued, so
         // the seconds between publish and first pull are not a window in
         // which an unscanned version is listed.
-        self.first_sight_after_publish(&req).await;
+        self.first_sight_after_publish(&req)
+            .instrument(stage("publish_first_sight"))
+            .await;
 
         // Invalidate explore cache so the new version appears without waiting for TTL expiry.
         if let Some(ref cache) = self.explore_cache {
-            cache.invalidate(Some(&req.registry)).await;
+            cache
+                .invalidate(Some(&req.registry))
+                .instrument(stage("publish_explore_invalidate"))
+                .await;
         }
 
         // Step 4: generate SBOM. When `required` is true and generation fails,
         // roll back the publish (version row + bytes + quota) and return the
         // error. This runs *before* owner registration so a rejected publish
         // never leaves a dangling owner claim on a name with no versions.
-        self.run_publish_sbom(&req, &storage_key, bytes).await?;
+        self.run_publish_sbom(&req, &storage_key, bytes)
+            .instrument(stage("publish_sbom"))
+            .await?;
 
         // Step 5: on first publish, register the publisher as the package admin.
         // Last, and only once the publish is fully committed, so it is never
         // orphaned by a later rollback.
         self.register_initial_owner(is_new_package, &req.registry, &req.name, &req.publisher)
+            .instrument(stage("publish_owner"))
             .await;
 
         Ok(quota_check)
@@ -833,7 +856,12 @@ impl LocalRegistryService {
         let version = req.version.as_str();
 
         // Step 1: reserve the version (inserted as 'pending', invisible to readers).
-        if let Err(e) = self.backend.publish(pkg).await {
+        if let Err(e) = self
+            .backend
+            .publish(pkg)
+            .instrument(stage("publish_reserve"))
+            .await
+        {
             self.revoke_quota(publisher, registry, bytes).await;
             return Err(e);
         }
@@ -850,6 +878,7 @@ impl LocalRegistryService {
                     checksum: Some(req.checksum.clone()),
                 },
             )
+            .instrument(stage("publish_store"))
             .await
         {
             self.remove_pending(registry, name, version).await;
@@ -859,8 +888,15 @@ impl LocalRegistryService {
 
         // Step 3: promote the pending row to 'published'. On failure, undo both
         // the storage write and the pending row so the caller gets a clean error.
-        self.invalidate_documents(registry).await;
-        if let Err(e) = self.backend.commit_publish(registry, name, version).await {
+        self.invalidate_documents(registry)
+            .instrument(stage("publish_invalidate_documents"))
+            .await;
+        if let Err(e) = self
+            .backend
+            .commit_publish(registry, name, version)
+            .instrument(stage("publish_commit"))
+            .await
+        {
             self.remove_pending(registry, name, version).await;
             if let Err(err) = self.storage.delete(storage_key).await {
                 tracing::error!("storage cleanup after commit failure: {err}");

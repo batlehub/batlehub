@@ -50,7 +50,7 @@
 # Requires: DATABASE_URL, k6, cargo, curl, python3.
 # Thresholds (environment, all "fail above"):
 #   SOAK_MAX_RSS_GROWTH_PCT        default 10    idle RSS, final vs baseline
-#   SOAK_MAX_RSS_SLOPE_MIB_PER_MIN default 2.0   trend during the steady load
+#   SOAK_MAX_RSS_SLOPE_MIB_PER_MIN default 2.0   live-heap trend during the steady load
 #   SOAK_MAX_FD_GROWTH             default 16    open descriptors
 #   SOAK_MAX_THREAD_GROWTH         default 4     OS threads
 #   SOAK_MAX_POOL_GROWTH           default 2     database connections held

@@ -114,9 +114,9 @@ serde_json = "1"
 toml = "1"
 
 # OpenAPI
-utoipa = { version = "5", features = ["actix_extras", "chrono", "uuid"] }
-utoipa-actix-web = "0.1"
-utoipa-scalar = { version = "0.3", features = ["actix-web"] }
+utoipa = { version = "6", features = ["actix_extras", "chrono", "uuid"] }
+utoipa-actix-web = "0.2"
+utoipa-scalar = { version = "0.4", features = ["actix-web"] }
 
 # Metrics
 metrics = "0.24"
@@ -130,10 +130,10 @@ tracing-subscriber = { version = "0.3", features = [
     "json",
 ] }
 tracing-actix-web = { version = "0.7", default-features = false }
-tracing-opentelemetry = "0.33"
-opentelemetry = "0.32"
-opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic"] }
+tracing-opentelemetry = "0.34"
+opentelemetry = "0.33"
+opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.33", features = ["grpc-tonic"] }
 
 # Database — default-features = false to avoid sqlx-macros → sqlx-macros-core →
 # sqlx-mysql → rsa (RUSTSEC-2023-0071, no upstream fix available).

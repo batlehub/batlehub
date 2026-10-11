@@ -462,3 +462,91 @@ async fn delete_by_prefix_treats_percent_as_literal_not_wildcard() {
         "decoy key must survive an escaped prefix delete"
     );
 }
+
+fn byte_stream(data: Bytes) -> batlehub_core::ports::ByteStream {
+    Box::pin(futures::stream::iter([Ok(data)]))
+}
+
+async fn tracked_rows(pool: &PgPool, key: &str) -> i64 {
+    sqlx::query_scalar(
+        "SELECT (SELECT COUNT(*) FROM artifact_dedup_refs WHERE logical_key = $1) \
+              + (SELECT COUNT(*) FROM artifact_storage WHERE storage_key = $1)",
+    )
+    .bind(key)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// The proxy's verify-before-serve path: bytes are staged, checked, then
+/// promoted. A staging key never enters the dedup tables, and promotion moves
+/// the staged blob into place rather than writing the artifact a second time.
+#[tokio::test]
+async fn staged_bytes_stay_out_of_dedup_and_promote_by_rename() {
+    let Some(url) = db_url() else { return };
+    let fs = make_fs("staging").await;
+    let pool = pool(&url).await;
+    let router = single_backend_router(fs.clone(), pool.clone());
+
+    let data = upayload("staged-bytes");
+    let key = ukey("npm", "staged");
+    let staged = batlehub_core::ports::staging_key_for(&key);
+
+    let outcome = router
+        .store_streaming(&staged, byte_stream(data.clone()), StorageMeta::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        tracked_rows(&pool, &staged).await,
+        0,
+        "staging is not tracked"
+    );
+    assert!(
+        fs.exists(&staged).await.unwrap(),
+        "staged on the leaf as-is"
+    );
+    assert!(router.exists(&staged).await.unwrap());
+    assert!(
+        !router.exists(&key).await.unwrap(),
+        "not servable before promotion"
+    );
+
+    router.promote(&staged, &key, &outcome).await.unwrap();
+    assert!(
+        !fs.exists(&staged).await.unwrap(),
+        "renamed away, not left behind"
+    );
+    assert!(fs.exists(&content_key(&data)).await.unwrap());
+    assert_eq!(
+        tracked_rows(&pool, &key).await,
+        2,
+        "one ref, one storage row"
+    );
+    let artifact = router.retrieve(&key).await.unwrap().expect("promoted");
+    assert_eq!(collect(artifact).await, data.as_ref());
+
+    // Same bytes staged for a second key: a dedup hit, the staged copy dropped.
+    let second = ukey("npm", "staged-again");
+    let staged = batlehub_core::ports::staging_key_for(&second);
+    let outcome = router
+        .store_streaming(&staged, byte_stream(data.clone()), StorageMeta::default())
+        .await
+        .unwrap();
+    router.promote(&staged, &second, &outcome).await.unwrap();
+    assert!(!fs.exists(&staged).await.unwrap());
+    let artifact = router.retrieve(&second).await.unwrap().expect("promoted");
+    assert_eq!(collect(artifact).await, data.as_ref());
+
+    // A refused artifact is evicted by deleting its staging key: nothing tracked.
+    let refused = batlehub_core::ports::staging_key_for(&ukey("npm", "refused"));
+    router
+        .store_streaming(
+            &refused,
+            byte_stream(upayload("refused-bytes")),
+            StorageMeta::default(),
+        )
+        .await
+        .unwrap();
+    assert!(router.delete(&refused).await.unwrap());
+    assert!(!fs.exists(&refused).await.unwrap());
+}

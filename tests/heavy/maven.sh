@@ -24,7 +24,9 @@
 # Run via `task test:maven-heavy` or directly. Needs network: repo1.maven.org.
 # Environment knobs: DATABASE_URL (required), HEAVY_PORT (8104), HEAVY_TAP_PORT
 # (8114), COVERAGE, HEAVY_MAVEN_GROUP (org.apache.commons), HEAVY_MAVEN_ARTIFACT
-# (commons-lang3), HEAVY_MAVEN_BLOCKED (3.20.0, the newest), HEAVY_MAVEN_PREVIOUS (3.19.0).
+# (commons-lang3), HEAVY_MAVEN_BLOCKED and HEAVY_MAVEN_PREVIOUS (default: the
+# newest two versions in Central's maven-metadata.xml, read at start-up — a
+# hard-coded pair went red the day commons-lang3 3.21.0 shipped).
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
@@ -36,9 +38,15 @@ REG="mvn-$HEAVY_RUN"
 LOCAL="mvn-local-$HEAVY_RUN"
 GROUP="${HEAVY_MAVEN_GROUP:-org.apache.commons}"
 ARTIFACT="${HEAVY_MAVEN_ARTIFACT:-commons-lang3}"
-BLOCKED="${HEAVY_MAVEN_BLOCKED:-3.20.0}"
-PREVIOUS="${HEAVY_MAVEN_PREVIOUS:-3.19.0}"
 GROUP_PATH="${GROUP//.//}"
+if [[ -z "${HEAVY_MAVEN_BLOCKED:-}" || -z "${HEAVY_MAVEN_PREVIOUS:-}" ]]; then
+  NEWEST_TWO="$(curl -fsS "https://repo1.maven.org/maven2/$GROUP_PATH/$ARTIFACT/maven-metadata.xml" \
+    | sed -n 's:.*<version>\(.*\)</version>.*:\1:p' | tail -2)" \
+    || heavy_fail "could not read $GROUP:$ARTIFACT's maven-metadata.xml from Central"
+fi
+PREVIOUS="${HEAVY_MAVEN_PREVIOUS:-$(sed -n 1p <<<"$NEWEST_TWO")}"
+BLOCKED="${HEAVY_MAVEN_BLOCKED:-$(sed -n 2p <<<"$NEWEST_TWO")}"
+[[ -n "$PREVIOUS" && -n "$BLOCKED" ]] || heavy_fail "no two versions to block between for $GROUP:$ARTIFACT"
 
 heavy_start_server tests/heavy/config.maven.toml
 heavy_start_tap

@@ -199,6 +199,8 @@ async fn seed_download(
         timestamp: Utc::now() - Duration::seconds(ago_secs),
         ip_address: None,
         user_agent: None,
+        throttled_count: None,
+        detail: None,
     })
     .await
     .unwrap();
@@ -307,6 +309,8 @@ async fn my_downloads_excludes_denied_and_non_download_events() {
             timestamp: Utc::now(),
             ip_address: None,
             user_agent: None,
+            throttled_count: None,
+            detail: None,
         })
         .await
         .unwrap();
@@ -322,6 +326,8 @@ async fn my_downloads_excludes_denied_and_non_download_events() {
             timestamp: Utc::now(),
             ip_address: None,
             user_agent: None,
+            throttled_count: None,
+            detail: None,
         })
         .await
         .unwrap();

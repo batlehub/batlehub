@@ -182,6 +182,30 @@ pub(super) fn spawn_db_pool_gauge_sampler(pool: sqlx::PgPool) {
     });
 }
 
+/// How often `db::housekeeping::sweep` runs.
+const HOUSEKEEPING_INTERVAL_SECS: u64 = 3600;
+
+/// Periodically delete the operational rows nothing reads any more (expired
+/// metadata cache entries, finished scan jobs, …) — see
+/// `batlehub_adapters::db::housekeeping` for the list and each cutoff.
+pub(super) fn spawn_db_housekeeping(pool: sqlx::PgPool) {
+    tokio::spawn(async move {
+        let mut ticker =
+            tokio::time::interval(std::time::Duration::from_secs(HOUSEKEEPING_INTERVAL_SECS));
+        loop {
+            ticker.tick().await;
+            match batlehub_adapters::db::housekeeping::sweep(&pool).await {
+                Ok(deleted) => {
+                    for (table, n) in deleted.into_iter().filter(|(_, n)| *n > 0) {
+                        tracing::info!(table, deleted = n, "db housekeeping");
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "db housekeeping failed"),
+            }
+        }
+    });
+}
+
 /// Periodically delete expired `rate_limit_counters` rows in the background,
 /// instead of pruning inline on every `increment()` call. Mirrors the detached
 /// `tokio::spawn` + `tokio::time::interval` pattern used by

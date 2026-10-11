@@ -869,6 +869,43 @@ async fn openvsx_search_is_not_taken_for_a_namespace() {
     assert_eq!(doc["extensions"][0]["namespace"], "acme");
 }
 
+/// `api/-/query` and `api/v2/-/query` — what Theia resolves an extension by.
+/// Both must be registered ahead of `api/{namespace}/…`, or `-` and `v2` are
+/// taken for a publisher name.
+#[actix_web::test]
+async fn openvsx_query_resolves_by_id_and_by_namespace() {
+    let app = gallery_app().await;
+
+    for route in ["api/-/query", "api/v2/-/query"] {
+        let (status, doc) = api_get(
+            &app,
+            &format!("/proxy/local-vsx/{route}?extensionId=acme.tool"),
+        )
+        .await;
+        assert_eq!(status, 200, "{route}");
+        assert_eq!(doc["totalSize"], 1, "{route}");
+        assert_eq!(doc["extensions"][0]["namespace"], "acme");
+        assert_eq!(doc["extensions"][0]["version"], VERSION);
+        assert!(doc["extensions"][0]["files"]["download"].is_string());
+    }
+
+    let (status, doc) = api_get(&app, "/proxy/local-vsx/api/-/query?namespaceName=acme").await;
+    assert_eq!(status, 200);
+    assert_eq!(doc["extensions"][0]["name"], "tool");
+
+    let (_, doc) = api_get(&app, "/proxy/local-vsx/api/-/query?extensionId=acme.absent").await;
+    assert_eq!(doc["totalSize"], 0);
+    let (_, doc) = api_get(
+        &app,
+        "/proxy/local-vsx/api/-/query?extensionId=acme.tool&extensionVersion=9.9.9",
+    )
+    .await;
+    assert_eq!(doc["totalSize"], 0);
+
+    let (status, _) = api_get(&app, "/proxy/local-vsx/api/-/query").await;
+    assert_eq!(status, 400);
+}
+
 #[actix_web::test]
 async fn the_openvsx_api_serves_files_out_of_the_extension() {
     let app = gallery_app().await;

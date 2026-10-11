@@ -28,8 +28,8 @@ differently and a leak in one is invisible in the others:
   a connection and did not return it. Bounded by the pool, so it does not grow
   without limit: it stops at "every request now waits forever".
 
-A sixth signal is not a growth measurement at all: the **slope** of RSS during
-the sustained load. A leak that is slower than the run is long shows up as a
+A sixth signal is not a growth measurement at all: the **slope** of the live
+heap during the sustained load (of RSS when jemalloc stats are absent). A leak that is slower than the run is long shows up as a
 line that never flattens, hours before the idle windows differ enough to fail.
 
 Panics in the server log and a non-zero k6 exit are reported alongside, because
@@ -212,9 +212,20 @@ def median_of(samples: list[Sample], attr: str) -> float | None:
     return float(statistics.median(values))
 
 
-def slope_mib_per_min(samples: list[Sample]) -> tuple[float, float] | None:
-    """Least-squares slope of RSS over the trend part of the load, and its
+def slope_mib_per_min(
+    samples: list[Sample], attr: str = "rss_mib"
+) -> tuple[float, float] | None:
+    """Least-squares slope of `attr` over the trend part of the load, and its
     standard error. Both in MiB/minute.
+
+    **The caller fits the live heap when it has one, not RSS.** A leak is live
+    allocations; RSS adds the pages jemalloc retains, and those refill from the
+    idle purge for minutes into the load. PR 195's CI run: live heap flat from
+    180s, RSS still climbing to 300s, so the RSS fit over the last two thirds
+    read 3.88 ±0.54 MiB/min on a clean server while the heap fit read 0.73
+    ±0.14. The heap also scatters a quarter as much — planted on that run, a
+    +1.5 MiB/min heap leak fails the gate, where RSS let +2.5 through at every
+    skip that passed the clean run.
 
     Least squares rather than (last - first) / span: a soak's RSS sawtooths
     with every cache sweep, and two endpoints landing on different teeth is a
@@ -246,7 +257,7 @@ def slope_mib_per_min(samples: list[Sample]) -> tuple[float, float] | None:
         return None
     t0 = samples[0].epoch_s
     xs = [(s.epoch_s - t0) / 60.0 for s in samples]
-    ys = [s.rss_mib for s in samples]
+    ys = [getattr(s, attr) for s in samples]
     n = len(xs)
     mean_x = sum(xs) / n
     mean_y = sum(ys) / n
@@ -794,37 +805,38 @@ def costs_section(costs: list[RegistryCost]) -> list[str]:
     """Which registry cost the most, ranked by handling time. Empty without metrics."""
     if not costs:
         return []
-    lines: list[str] = []
     peak = costs[0].seconds or 1.0
     total = sum(c.seconds for c in costs) or 1.0
-    lines.append(f"### Worst consumer: `{costs[0].name}`")
-    lines.append("")
-    lines.append(
+    lines: list[str] = [
+        f"### Worst consumer: `{costs[0].name}`",
+        "",
         f"{costs[0].seconds / total * 100:.0f}% of all request-handling time "
         "during the load. Ranked by seconds spent inside the handler, which "
         "counts the upstream wait, the parse and the filter alike — the "
-        "closest thing the server knows to what a registry cost it."
-    )
-    lines.append("")
-    lines.append("```")
+        "closest thing the server knows to what a registry cost it.",
+        "",
+        "```",
+    ]
     for c in costs:
         lines.append(
             f"{c.name:<18} {bar(c.seconds, peak):<25} {c.seconds:7.1f}s"
             f"  {c.requests:6.0f} req"
             + (f"  {c.ms_per_request:6.1f} ms/req" if c.ms_per_request else "")
         )
-    lines.append("```")
-    lines.append("")
-    lines.append("| registry | handling time | requests | ms/req | pulled from upstream | artifact misses | document misses | resolved from cache |")
-    lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    lines.extend([
+        "```",
+        "",
+        "| registry | handling time | requests | ms/req | pulled from upstream | artifact misses | document misses | resolved from cache |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ])
     for c in costs:
         lines.append(
             f"| `{c.name}` | {c.seconds:.1f} s | {c.requests:.0f} | "
             f"{fmt(c.ms_per_request)} | {human_bytes(c.upstream_bytes)} | "
             f"{c.artifact_misses:.0f} | {c.metadata_misses:.0f} | {c.from_document:.0f} |"
         )
-    lines.append("")
-    lines.append(
+    lines.extend([
+        "",
         "<sub>*ms/req* is where the cost is, not the traffic: a registry "
         "that is dear because it misses is a caching problem, one that is "
         "dear per request is a document problem. *resolved from cache* "
@@ -835,9 +847,9 @@ def costs_section(costs: list[RegistryCost]) -> list[str]:
         "`batlehub_request_duration_seconds`. A **local** registry's own "
         "publishes and reads go through `LocalRegistryService`, which emits "
         "neither, so a local-mode registry is absent from this table rather "
-        "than cheap.</sub>"
-    )
-    lines.append("")
+        "than cheap.</sub>",
+        "",
+    ])
     return lines
 
 
@@ -908,8 +920,9 @@ def slope_row(
     slope_ok: bool,
     slope_judged: bool,
     steady_seconds: int,
+    label: str,
 ) -> str:
-    """The RSS-trend row, which only the caller knows whether to judge.
+    """The trend row, which only the caller knows whether to judge.
 
     The measured value carries its interval, because the interval is the
     difference between "this run trended upward" and "this run cannot tell":
@@ -926,7 +939,7 @@ def slope_row(
             f"{MIN_SLOPE_WINDOW_SECONDS}s a trend needs"
         )
     return (
-        f"| RSS trend under load | — | — | {fmt(slope, 2)}{interval} MiB/min | "
+        f"| {label} trend under load | — | — | {fmt(slope, 2)}{interval} MiB/min | "
         f"{slope_limit:.2f} MiB/min | {verdict} |"
     )
 
@@ -1005,7 +1018,8 @@ def main() -> int:
     steady_seconds = (
         steady_w[-1].epoch_s - steady_w[0].epoch_s if len(steady_w) > 1 else 0
     )
-    fitted = slope_mib_per_min(steady_w)
+    on_heap = bool(steady_w) and all(s.heap_mib is not None for s in steady_w)
+    fitted = slope_mib_per_min(steady_w, "heap_mib" if on_heap else "rss_mib")
     slope_limit = env_float("SOAK_MAX_RSS_SLOPE_MIB_PER_MIN", 2.0)
     slope_judged = steady_seconds >= MIN_SLOPE_WINDOW_SECONDS
     # The lower bound of the fit's 95 % interval, not the fit: see
@@ -1056,7 +1070,14 @@ def main() -> int:
 
     lines = header_lines(args.duration, args.rate, reqs, ok)
     lines.extend(checks_table(checks))
-    lines.append(slope_row(fitted, slope_limit, slope_ok, slope_judged, steady_seconds))
+    lines.append(slope_row(
+            fitted,
+            slope_limit,
+            slope_ok,
+            slope_judged,
+            steady_seconds,
+            "Live heap" if on_heap else "RSS",
+        ))
     lines.append("")
 
     # ── What consumed what, over time ────────────────────────────────────────

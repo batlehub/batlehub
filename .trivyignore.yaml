@@ -3,7 +3,7 @@
 # to. Every entry carries an expiry, so the gate reopens on its own and the
 # entry has to be re-justified rather than quietly outliving its reason.
 #
-# Both entries below are the same crate in the same file: `google.golang.org/grpc`
+# The first two entries below are the same crate in the same file: `google.golang.org/grpc`
 # v1.82.1, vendored inside the upstream Trivy release binary the worker image
 # carries (`/usr/local/bin/trivy`, Trivy v0.74.0, pinned by `TRIVY_VERSION` in
 # `Containerfile.worker`). They are not BatleHub's dependency and no `cargo` or
@@ -41,6 +41,30 @@ vulnerabilities:
     # server the chart deploys. Nothing in the worker image listens, and Trivy's
     # own server mode is plain gRPC rather than xDS, so the interceptor the
     # advisory describes is never installed.
+    paths:
+      - "usr/local/bin/trivy"
+    expired_at: 2026-12-01
+  # The two below are Go standard-library advisories (golang-announce,
+  # 2026-10-08), not grpc ones: the same binary, a different lever. Trivy
+  # v0.74.0 was built with Go 1.26.6 and v0.75.0, the latest, with 1.27.1; the
+  # fix is Go 1.26.9 / 1.27.2. Both go with the first Trivy release built on
+  # either — check the toolchain of the release binary before renewing:
+  #
+  #   go version -m /usr/local/bin/trivy | head -1
+  - id: CVE-2026-78667
+    # net/http: a Range header of many small ranges burns CPU in FileServer,
+    # ServeContent and ServeFile — a file-*serving* path. The worker runs this
+    # binary as a scanning client (`trivy rootfs|fs … [--server <endpoint>]`,
+    # `crates/adapters/src/scanners/trivy.rs`); it serves no file and listens
+    # on nothing.
+    paths:
+      - "usr/local/bin/trivy"
+    expired_at: 2026-12-01
+  - id: CVE-2026-97031
+    # crypto/tls: repeated ECH outer-extension references exhaust a TLS
+    # *server's* memory. The binary only dials out — to the chart's Trivy
+    # server, or to the database mirror when no endpoint is set — so it is
+    # never the TLS server a crafted ClientHello would reach.
     paths:
       - "usr/local/bin/trivy"
     expired_at: 2026-12-01

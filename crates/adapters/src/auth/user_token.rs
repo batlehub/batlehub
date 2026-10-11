@@ -8,9 +8,9 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use batlehub_core::{
-    entities::Identity,
+    entities::{AccessAction, AccessEvent, AccessResult, CallerNet, Identity},
     error::CoreError,
-    ports::{AuthProvider, RawAuthRequest, UserToken, UserTokenRepository},
+    ports::{AuthProvider, PackageRepository, RawAuthRequest, UserToken, UserTokenRepository},
 };
 
 /// Marks a string as a BatleHub personal access token.
@@ -61,6 +61,9 @@ pub struct UserTokenAuthProvider {
     /// the overlap a no-op. Bounded by the number of *live* tokens seen by this
     /// process, which is bounded by what the deployment has issued.
     last_recorded: Mutex<HashMap<Uuid, Instant>>,
+    /// Where `token_new_source` is written (RFC 0036 §6.1); `None` writes
+    /// nothing.
+    audit: Option<Arc<dyn PackageRepository>>,
 }
 
 impl UserTokenAuthProvider {
@@ -68,7 +71,40 @@ impl UserTokenAuthProvider {
         Self {
             repo,
             last_recorded: Mutex::new(HashMap::new()),
+            audit: None,
         }
+    }
+
+    /// Record a `token_new_source` event when a token is accepted from a
+    /// source IP other than the one it was last used from.
+    pub fn with_audit(mut self, audit: Arc<dyn PackageRepository>) -> Self {
+        self.audit = Some(audit);
+        self
+    }
+
+    /// The `token_new_source` event, when `tok` was last seen somewhere else.
+    ///
+    /// Compared only when the last-used slot is claimed — once a minute per
+    /// token — so this costs no read the bookkeeping does not already make,
+    /// and a token bouncing between two hosts is one row a minute, not one
+    /// per request. A token with no recorded source yet is not "new": there
+    /// is nothing to have moved from.
+    fn new_source_event(tok: &UserToken, source_ip: Option<&str>) -> Option<AccessEvent> {
+        let (previous, current) = (tok.last_used_ip.as_deref()?, source_ip?);
+        if previous == current {
+            return None;
+        }
+        Some(AccessEvent::about_identity(
+            AccessAction::TokenNewSource,
+            Some(tok.user_id.clone()),
+            tok.role.clone(),
+            AccessResult::Allowed,
+            CallerNet {
+                ip: Some(current.to_owned()),
+                user_agent: None,
+            },
+            Some(format!("token_id={} previous_ip={previous}", tok.id)),
+        ))
     }
 
     /// Whether enough time has passed to write `last_used_at` for `id` again.
@@ -111,7 +147,15 @@ impl AuthProvider for UserTokenAuthProvider {
                 // database applies back-pressure here instead of queueing an
                 // unbounded pile of writes behind the pool — the in-process
                 // throttle above is what keeps this off the hot path.
-                if let Err(e) = self.repo.touch_last_used(tok.id).await {
+                let source_ip = req.source_ip.as_deref();
+                if let (Some(audit), Some(event)) =
+                    (self.audit.as_ref(), Self::new_source_event(&tok, source_ip))
+                {
+                    if let Err(e) = audit.record_access(event).await {
+                        tracing::warn!(error = %e, "recording token_new_source failed");
+                    }
+                }
+                if let Err(e) = self.repo.touch_last_used(tok.id, source_ip).await {
                     tracing::debug!(error = %e, "recording token last-used failed");
                 }
                 Ok(Some(to_identity(tok)))
@@ -143,6 +187,43 @@ fn to_identity(tok: UserToken) -> Identity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── token_new_source (RFC 0036 §6.1) ─────────────────────────────────────
+
+    fn seen_from(ip: Option<&str>) -> UserToken {
+        UserToken {
+            last_used_ip: ip.map(str::to_owned),
+            ..stub_token()
+        }
+    }
+
+    #[test]
+    fn a_token_seen_from_a_new_address_is_an_event_naming_the_old_one() {
+        let tok = seen_from(Some("10.0.0.1"));
+        let event = UserTokenAuthProvider::new_source_event(&tok, Some("10.9.9.9"))
+            .expect("a move is an event");
+        assert_eq!(event.action, AccessAction::TokenNewSource);
+        assert_eq!(event.ip_address.as_deref(), Some("10.9.9.9"));
+        assert_eq!(event.user_id.as_deref(), Some("carol"));
+        let detail = event.detail.unwrap();
+        assert!(detail.contains("previous_ip=10.0.0.1") && detail.contains(&tok.id.to_string()));
+    }
+
+    #[test]
+    fn the_same_address_or_an_unknown_one_is_not_a_new_source() {
+        assert!(UserTokenAuthProvider::new_source_event(
+            &seen_from(Some("10.0.0.1")),
+            Some("10.0.0.1")
+        )
+        .is_none());
+        assert!(
+            UserTokenAuthProvider::new_source_event(&seen_from(None), Some("10.0.0.1")).is_none(),
+            "no recorded source yet: nothing to have moved from"
+        );
+        assert!(
+            UserTokenAuthProvider::new_source_event(&seen_from(Some("10.0.0.1")), None).is_none()
+        );
+    }
     use async_trait::async_trait;
     use batlehub_core::{
         entities::Role,
@@ -157,6 +238,7 @@ mod tests {
         RawAuthRequest {
             headers: HashMap::from([("authorization".to_owned(), auth.to_owned())]),
             query_params: HashMap::new(),
+            source_ip: None,
         }
     }
 
@@ -164,6 +246,7 @@ mod tests {
         RawAuthRequest {
             headers: HashMap::new(),
             query_params: HashMap::new(),
+            source_ip: None,
         }
     }
 
@@ -181,6 +264,7 @@ mod tests {
             revoked_at: None,
             last_used_at: None,
             groups: vec!["oidc1:eng".to_owned()],
+            last_used_ip: None,
         }
     }
 
@@ -210,12 +294,13 @@ mod tests {
                 revoked_at: t.revoked_at,
                 last_used_at: t.last_used_at,
                 groups: t.groups.clone(),
+                last_used_ip: t.last_used_ip.clone(),
             }))
         }
         async fn list_for_user(&self, _: &TokenOwner) -> Result<Vec<UserToken>, CoreError> {
             Ok(vec![])
         }
-        async fn touch_last_used(&self, _: uuid::Uuid) -> Result<(), CoreError> {
+        async fn touch_last_used(&self, _: uuid::Uuid, _: Option<&str>) -> Result<(), CoreError> {
             Ok(())
         }
         async fn revoke(&self, _: uuid::Uuid, _: &TokenOwner) -> Result<bool, CoreError> {
@@ -419,12 +504,13 @@ mod prefix_and_usage_tests {
                 revoked_at: None,
                 last_used_at: None,
                 groups: vec![],
+                last_used_ip: None,
             }))
         }
         async fn list_for_user(&self, _: &TokenOwner) -> Result<Vec<UserToken>, CoreError> {
             Ok(vec![])
         }
-        async fn touch_last_used(&self, _: uuid::Uuid) -> Result<(), CoreError> {
+        async fn touch_last_used(&self, _: uuid::Uuid, _: Option<&str>) -> Result<(), CoreError> {
             self.touches.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
@@ -437,6 +523,7 @@ mod prefix_and_usage_tests {
         RawAuthRequest {
             headers: Map::from([("authorization".to_owned(), auth.to_owned())]),
             query_params: Map::new(),
+            source_ip: None,
         }
     }
 
@@ -489,7 +576,11 @@ mod prefix_and_usage_tests {
             async fn list_for_user(&self, _: &TokenOwner) -> Result<Vec<UserToken>, CoreError> {
                 Ok(vec![])
             }
-            async fn touch_last_used(&self, _: uuid::Uuid) -> Result<(), CoreError> {
+            async fn touch_last_used(
+                &self,
+                _: uuid::Uuid,
+                _: Option<&str>,
+            ) -> Result<(), CoreError> {
                 Err(CoreError::Database("pool exhausted".into()))
             }
             async fn revoke(&self, _: uuid::Uuid, _: &TokenOwner) -> Result<bool, CoreError> {

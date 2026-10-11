@@ -25,7 +25,7 @@ covers, it does not fail them.
 
 Splitting the roles is what the chart's `worker.enabled` does, and it is worth
 doing for two reasons. The scanner toolchains — bubblewrap, `postmortem`, the
-Trivy client, optionally GuardDog — live only in the worker image, and only the
+Trivy client, yara-x's `yr`, optionally GuardDog — live only in the worker image, and only the
 worker needs egress to upstream artifacts, the Trivy server and Rekor. See
 [the Helm chart](/guide/install/helm) for the chart values and
 [What leaves this instance](/operations/egress) for the egress.
@@ -57,9 +57,9 @@ on a large registry from queueing the whole table.
 
 Jobs are **leased, not consumed**. One pass is:
 
-1. **Heartbeat and publish depths.** The worker writes to `worker_heartbeats`
-   and sets the queued-jobs gauge. Neither is load-bearing, so neither can fail
-   the pass.
+1. **Heartbeat and publish depths**, at most every 30 seconds. The worker
+   writes to `worker_heartbeats` and sets the queued-jobs gauge. Neither is
+   load-bearing, so neither can fail the pass.
 2. **Lease a batch** — at most `max_concurrent`, filtered to `[worker]
    registries` when that list is set, taken with `FOR UPDATE SKIP LOCKED` so
    any number of workers can share the queue.
@@ -70,10 +70,18 @@ Jobs are **leased, not consumed**. One pass is:
    the enrichers over what they found.
 5. **Record the verdict** and close the row.
 
-Between passes the loop sleeps `idle_poll` only when the queue was empty.
+Exhausted jobs are swept after a pass that ran jobs, and otherwise with the
+heartbeat.
+
+Between passes the loop waits only when the queue was empty, and the wait
+doubles from `idle_poll` up to 16 seconds while it stays empty: an idle worker
+runs about ten statements a minute, not the 150 a flat two-second poll cost. A
+job enqueued by the **same process** wakes the worker at once, so an embedded
+worker starts a scan sooner than the poll ever did; a worker in its own process
+(`--roles worker`) picks it up within 16 seconds at worst.
 
 The defaults are four concurrent jobs, a ten-minute `job_timeout`, three
-attempts and a two-second idle poll. They live in `[worker]`, documented in the
+attempts and an idle poll that starts at two seconds. They live in `[worker]`, documented in the
 [configuration reference](/guide/configuration#scanners-and-worker).
 
 ### When an attempt does not finish
@@ -96,7 +104,7 @@ not happen instead of pretending it passed.
 
 ## What the scanners run under
 
-Every binary scanner — `postmortem`, `guarddog`, `trivy` — goes through one
+Every binary scanner — `postmortem`, `guarddog`, `trivy`, `yara` — goes through one
 runner, and through `bwrap`. The artifact is attacker-controlled input, and the
 worker is the one process that opens it while holding database and storage
 credentials, so the sandbox is the boundary that matters most in this
@@ -180,6 +188,13 @@ starting point of the [incident-response](/operations/incident-response) path.
 `ghcr.io/batleforc/batlehub-worker-guarddog` is the same image with GuardDog
 added, built on it, and is what `worker.image.repository` points at when a
 registry names `guarddog` in its scanners.
+
+`yr` is on both, idle until `[scanners.yara]` names a rules directory. Rules
+are yours to supply: put them in a ConfigMap and set `worker.yaraRules.configMap`
+to its name, which mounts it read-only at `/etc/batlehub/yara`. A ConfigMap
+update reaches the pod without a restart and the next scan compiles the new
+rules; a rule that no longer compiles turns every scan into `SCANNER_ERROR`, so
+check a change with `yr check <dir>` before applying it.
 
 Both are scanned on every build and on a daily rebuild, and the scanners they
 carry are themselves third-party binaries with their own dependencies — see

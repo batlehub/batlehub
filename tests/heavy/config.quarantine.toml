@@ -193,3 +193,33 @@ name = "soc"
 secret = "heavy-soc-secret"
 max_effect = "hard_block"
 registries = ["npm-flags-${HEAVY_RUN}"]
+
+# ── The YARA registry: an operator's rule, in the sandbox ────────────────────
+#
+# Step 9 (RFC 0036 §6.6). The rules directory and `yr` are the suite's; the
+# rule carries no `severity` meta, so the finding's `high` is the scanner's
+# default, and `max_severity = "high"` is the threshold that denies it. Its
+# own registry, like the egress one, so steps 1–8 never wait on it.
+[[registries]]
+type = "npm"
+name = "npm-yara-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://registry.npmjs.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]
+
+[registries.security]
+mode = "block"
+min_age_secs = 3600
+mature_age_secs = 0
+scanners = ["osv", "yara"]
+required_scanners = ["osv", "yara"]
+max_severity = "high"
+
+[scanners.yara]
+type = "yara"
+command = "${HEAVY_YR}"
+rules_dir = "${HEAVY_YARA_RULES}"

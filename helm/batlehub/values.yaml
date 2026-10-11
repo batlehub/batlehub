@@ -462,6 +462,12 @@ worker:
   # `[worker.sandbox] max_extracted_mb` each.
   scratch:
     sizeLimit: 4Gi
+  # -- ConfigMap of YARA rules (`*.yar`, `*.yara`) mounted read-only at
+  # `/etc/batlehub/yara`, for `[scanners.yara] rules_dir = "/etc/batlehub/yara"`
+  # (RFC 0036 §6.6). Empty mounts nothing; the worker refuses a YARA scanner
+  # whose directory holds no rule file.
+  yaraRules:
+    configMap: ""
   # -- Resource requests and limits for the worker container.
   resources: {}
   #  limits:

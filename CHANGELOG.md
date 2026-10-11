@@ -8,7 +8,151 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Nothing yet.
+The database, measured. Every critical request path now has a statement budget
+checked against a real server, and the paths that spent the most were cut:
+a cached download costs 5 statements rather than 8, a cache miss 12 rather
+than 21 and one write of the artifact rather than two, and an idle scan worker
+11 statements a minute rather than 150. Beside it, the project's security
+policy stops sending vulnerability reports to a public issue.
+
+### Added
+
+- **Your own YARA rules over every artifact** (RFC 0036 phase 6).
+  `[scanners.yara]` runs yara-x's `yr` — now on the worker image, pinned and
+  checksum-verified — over the artifact as served and, when it is an archive,
+  its extracted contents, inside the same `bwrap` sandbox as the other binary
+  scanners and with no network. A match is a `MALWARE_SIGNAL` finding naming
+  the rule and the file; its severity is the rule's `severity` meta, `high`
+  when it has none, so an unannotated rule blocks under the default
+  `max_severity`. The chart mounts a ConfigMap of rules with
+  `worker.yaraRules.configMap`, and the worker refuses to start on a rules
+  directory with no rule in it, which would otherwise answer clean for
+  everything. RFC 0036 is now *Implemented*.
+
+- **Statements per request, in production.** `/metrics` carries
+  `batlehub_db_statements_total{verb}`,
+  `batlehub_db_statement_duration_seconds{verb}` and
+  `batlehub_db_statements_per_request{route}`, counted from the events sqlx
+  already emits for every statement — so every query is covered without one of
+  them being touched, and `RUST_LOG` cannot switch it off. `timed_query` keeps
+  timing the few call sites it named; this covers the other hundred-odd.
+
+- **A statement budget for the critical paths** (`tests/heavy/db_calls.sh`,
+  `task test:db-calls-heavy`, a row of the `heavy-client` matrix). A real
+  server on a real Postgres drives thirteen scenarios — proxy and local reads,
+  cache miss and hit, publish, static token, PAT, the console's explore pages —
+  three times each, and fails when one runs a statement its
+  `db_calls.budget.json` entry does not allow, naming the statement. It also
+  plans every statement it saw with `EXPLAIN (GENERIC_PLAN)` and
+  `enable_seqscan = off`, so a query with no usable index fails the run however
+  small the test tables are, and measures an idle scan worker against a
+  ceiling. `-- --update` rewrites the budget from what was measured.
+
+- **RFC 0036 — regulatory alignment** (Draft). GDPR, ISO 27001 and the Cyber
+  Resilience Act as the baseline, NIS2 and DORA as the next target: sign-ins
+  and token lifecycle as audit events, the audit trail as a JSON stream with
+  Sigma detection rules, retention classes and pseudonymisation for the
+  personal data in it, and a signed hash chain that makes an edit to it
+  detectable.
+
+### Changed
+
+- **The database stops growing where nothing reads.** An hourly sweep
+  (`batlehub_adapters::db::housekeeping`) deletes, in batches of 5 000, the
+  rows every reader already ignored: expired metadata-cache entries, scan jobs
+  finished over 7 days ago, inbound webhook events over 30 days, worker
+  heartbeats over 7 days, expired IP blocks and IP violation windows over 30
+  days. None of them was pruned before. The audit trail (`access_events`,
+  `config_changes`) is untouched: its retention is RFC 0036 phase 4's.
+
+- **Fewer indexes on the hot tables** (migration 060). Seven indexes that were
+  a leading prefix of another index or of the primary key are dropped — three
+  of them on `access_events`, which takes one insert per proxied read — and
+  autovacuum is tuned per table so the audit trail's visibility map stays
+  fresh for the index-only scans of migration 021 and the counter tables
+  reclaim their churn. The drops are instant; the one index it builds is on
+  `inbound_webhook_events` and takes that table's write lock for its build.
+
+- **A cached download runs 5 statements, not 8** — 7 rather than 10 with a
+  personal access token. The block check asks for the artifact and its bare
+  version in one query rather than two; the storage lookup runs once rather
+  than as an `exists` and then a `retrieve`, which also closes the window in
+  which an entry could vanish between the two; and the audit row and the
+  package's first-seen status row are written in one round trip.
+
+- **`last_accessed_at` is written at most once a minute per artifact.** Every
+  cache hit used to rewrite the row — a dead tuple and a WAL record per
+  download of a popular artifact, on an indexed column. Eviction's
+  least-recently-used order now has a one-minute grain.
+
+- **A cache miss runs 12 statements, not 21, and writes the artifact once.**
+  An artifact that is verified before it is served used to be staged under a
+  temporary key *through* the deduplication tables — three transactions for a
+  key that lived milliseconds — and then read back and written a second time
+  under its real key. Staging keys now bypass deduplication and land on the
+  backend their artifact will live on, and promoting one is a rename
+  (`StorageBackend::promote`).
+
+- **A package page runs the same number of statements at any length.** Its
+  vulnerabilities, licence and SBOM formats were read once per version shown —
+  three statements a row, about eighty for a full page. They are three reads
+  for the page now (`SbomRepository::sbom_facts_for_versions`, and the existing
+  batched vulnerability read).
+
+- **A publish runs 15 statements, not 18.** The versioning policy is resolved
+  once and reused for the visibility default, and the ownership check answers
+  "no owners yet, the caller, or one of their groups" in one query.
+
+- **An idle scan worker runs about 11 statements a minute, not 150.** Its
+  heartbeat and queue-depth gauge run every 30 seconds rather than every 2, the
+  exhausted-jobs sweep runs after a pass that did work, a drained queue is not
+  leased twice, and the wait between empty polls doubles from 2 to 16 seconds.
+  A job enqueued by the same process wakes the worker at once, so an embedded
+  worker starts a scan sooner than it did; a worker running alone
+  (`--roles worker`) now picks one up within 16 seconds rather than 2.
+
+- **Refused requests are in the access log.** The request span used to open
+  inside authentication, the user and IP blocks and the rate limiter, so a
+  `401`, `403` or `429` answered by one of them had no access-log line and no
+  trace, and the queries they ran belonged to no request. The span now wraps
+  them; expect more log lines, all of them for requests that were already
+  being refused.
+
+### Security
+
+- **Vulnerabilities are reported privately.** `SECURITY.md` asked reporters
+  not to open a public issue and then pointed them at a public issue template;
+  so did the console's *Report a security issue* link. Both now lead to
+  GitHub's private vulnerability reporting, the template is gone from both
+  forges, and the policy states response targets, a 90-day coordinated
+  disclosure, advisories published with a CVE, and what is in scope.
+  `docs/contributing/security-scanning.md` describes the release that carries
+  a fix: the advisory, a `### Security` entry here and a VEX statement,
+  together.
+
+### Fixed
+
+- **GDPR erasure left a subject's name in grants an admin wrote about them.**
+  A `grant_write` or `grant_revoke` row sits under the admin's id and names
+  the subject only as `subject=user:<id>` in its detail; erasure now renames
+  it too, matching the whole id so `alice` never touches `alice2`.
+
+- **Admin actions record where they came from.** A block, a grant, a purge,
+  an IP block and every other admin action now carries the caller's address
+  and user agent in the audit trail and on the SIEM stream, as sign-ins
+  already did.
+
+- **One spelling for "the process did it".** The audit lifecycle's own row
+  was written with no user; it is `system` now, like an automatic IP ban.
+
+- **A proxy-only pod refused a config naming `postmortem` or `guarddog`.**
+  Their `command` was checked by config validation, which every process runs,
+  and the proxy image carries no scanner. The worker checks it when it starts,
+  and now also requires the file to be executable.
+
+- **The incident playbook named an alert that does not exist.**
+  `BatleHubHighDenyRate` is `BatleHubHighDeniedRequestRate` in
+  `deploy/prometheus-alerts.yaml`, in the English and French pages alike.
 
 ---
 

@@ -1,0 +1,57 @@
+{
+  "healthz": {
+    "cold": 3,
+    "warm": 3
+  },
+  "proxy-packument-anon": {
+    "cold": 1,
+    "warm": 1
+  },
+  "proxy-tarball-anon": {
+    "cold": 12,
+    "warm": 5
+  },
+  "proxy-packument-static-token": {
+    "cold": 2,
+    "warm": 2
+  },
+  "proxy-packument-pat": {
+    "cold": 4,
+    "warm": 3
+  },
+  "proxy-tarball-pat": {
+    "cold": 7,
+    "warm": 7
+  },
+  "local-publish": {
+    "cold": 17,
+    "warm": 15
+  },
+  "local-packument": {
+    "cold": 6,
+    "warm": 6
+  },
+  "local-tarball": {
+    "cold": 7,
+    "warm": 7
+  },
+  "api-explore-list": {
+    "cold": 3,
+    "warm": 1
+  },
+  "api-explore-detail": {
+    "cold": 7,
+    "warm": 7
+  },
+  "api-packages-admin": {
+    "cold": 3,
+    "warm": 3
+  },
+  "api-me": {
+    "cold": 1,
+    "warm": 1
+  },
+  "seq_scans": {
+    "package_statuses": "the admin package list's total (GET /api/v1/packages): unfiltered it counts every row by definition, and its ILIKE '%\u2026%' name filter cannot use a b-tree \u2014 admin-only, not a client path"
+  }
+}

@@ -99,6 +99,22 @@ async fn make_sso_app(
     >,
     Arc<RecordingLoginStateStore>,
 ) {
+    let (app, states, _audit) = make_sso_app_audited(idp_url).await;
+    (app, states)
+}
+
+/// [`make_sso_app`] plus the audit trail the app writes to.
+async fn make_sso_app_audited(
+    idp_url: &str,
+) -> (
+    impl actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
+        Error = actix_web::Error,
+    >,
+    Arc<RecordingLoginStateStore>,
+    Arc<dyn batlehub_core::ports::PackageRepository>,
+) {
     let login_states = RecordingLoginStateStore::new();
     let flow = OidcSsoFlow::new(OidcSsoFlowParams {
         name: "authentik".to_owned(),
@@ -109,6 +125,7 @@ async fn make_sso_app(
         authorization_endpoint: format!("{idp_url}/authorize"),
         token_endpoint: format!("{idp_url}/token"),
         frontend_url: FRONTEND.to_owned(),
+        user_id_claim: "sub".to_owned(),
     });
 
     let parts = local_registry_app_parts(
@@ -117,6 +134,7 @@ async fn make_sso_app(
         batlehub_config::schema::RegistryMode::Proxy,
         None,
     );
+    let audit = Arc::clone(&parts.admin_svc.repo);
     let app = build_local_registry_app_with_defaults(
         parts,
         batlehub_web::CargoIndexMap::default(),
@@ -127,7 +145,7 @@ async fn make_sso_app(
         },
     )
     .await;
-    (app, login_states)
+    (app, login_states, audit)
 }
 
 fn location(resp: &actix_web::dev::ServiceResponse<actix_web::body::BoxBody>) -> String {
@@ -686,4 +704,70 @@ async fn provider_list_is_empty_when_no_sso_is_configured() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = actix_web::test::read_body_json(resp).await;
     assert_eq!(body, serde_json::json!([]));
+}
+
+// ── RFC 0036 §6.1: a sign-in is an audit event ────────────────────────────────
+
+async fn sign_in_rows(
+    audit: &Arc<dyn batlehub_core::ports::PackageRepository>,
+) -> Vec<batlehub_core::entities::AccessEvent> {
+    use batlehub_core::entities::{AccessAction, EventFilter};
+    audit
+        .list_events(EventFilter {
+            actions: vec![AccessAction::SignIn, AccessAction::SignInFailed],
+            ..EventFilter::new()
+        })
+        .await
+        .unwrap()
+}
+
+#[actix_web::test]
+async fn a_completed_sign_in_is_recorded_with_its_provider_and_user() {
+    use batlehub_core::entities::AccessAction;
+    let mut server = mockito::Server::new_async().await;
+    let (app, states, audit) = make_sso_app_audited(&server.url()).await;
+
+    let (state, _) = start_login(&app, "spa").await;
+    let _token = mock_token_endpoint(&mut server, &states.recorded(&state).nonce).await;
+    let req = TestRequest::get()
+        .uri(&format!(
+            "/api/v1/auth/oidc/callback?code=abc&state={state}"
+        ))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 302);
+
+    let rows = sign_in_rows(&audit).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].action, AccessAction::SignIn);
+    assert_eq!(
+        rows[0].user_id.as_deref(),
+        Some("alice"),
+        "the configured user-id claim"
+    );
+    assert_eq!(rows[0].detail.as_deref(), Some("provider=authentik"));
+}
+
+#[actix_web::test]
+async fn a_failed_sign_in_is_recorded_by_class_without_the_code() {
+    use batlehub_core::entities::{AccessAction, AccessResult};
+    let server = mockito::Server::new_async().await;
+    let (app, _states, audit) = make_sso_app_audited(&server.url()).await;
+
+    let req = TestRequest::get()
+        .uri("/api/v1/auth/oidc/callback?code=secret-code&state=never-issued")
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 302);
+
+    let rows = sign_in_rows(&audit).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].action, AccessAction::SignInFailed);
+    match &rows[0].result {
+        AccessResult::Denied { reason } => assert_eq!(reason, "state_mismatch"),
+        other => panic!("expected a denial, got {other:?}"),
+    }
+    let serialised = serde_json::to_string(&rows[0]).unwrap();
+    assert!(
+        !serialised.contains("secret-code"),
+        "the code never reaches the trail"
+    );
 }

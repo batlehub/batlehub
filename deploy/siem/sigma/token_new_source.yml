@@ -1,0 +1,23 @@
+title: BatleHub token used from a new source
+id: 4a691d79-8ab1-4b28-8898-dbc1e303987d
+status: experimental
+description: >-
+  A personal access token was accepted from a source IP other than the one it was last used from. The server emits the fact because first-seen detection is stateful and a Sigma rule cannot express it.
+references:
+  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+author: BatleHub
+date: 2026-10-05
+tags:
+  - attack.credential-access
+  - attack.t1528
+logsource:
+  product: batlehub
+  service: audit
+detection:
+  selection:
+    event.dataset: batlehub.audit
+    event.action: token_new_source
+  condition: selection
+falsepositives:
+  - A developer moving between office and home, or a CI runner pool with several egress IPs
+level: low

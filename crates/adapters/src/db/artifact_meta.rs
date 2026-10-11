@@ -55,9 +55,14 @@ impl ArtifactCacheMeta for PgArtifactMetaRepository {
         Ok(row.and_then(|(checksum,)| checksum))
     }
 
+    /// A stamp less than a minute old is left alone: every cache hit touches,
+    /// and a hot artifact rewrote its row — a dead tuple and a WAL record —
+    /// once per download for an LRU that needs no finer grain than that.
     async fn touch_artifact(&self, key: &str) -> Result<(), CoreError> {
         sqlx::query(
-            "UPDATE artifact_cache_meta SET last_accessed_at = NOW() WHERE artifact_key = $1",
+            "UPDATE artifact_cache_meta SET last_accessed_at = NOW() \
+             WHERE artifact_key = $1 \
+               AND last_accessed_at < NOW() - INTERVAL '1 minute'",
         )
         .bind(key)
         .execute(&self.pool)

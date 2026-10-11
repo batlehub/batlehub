@@ -19,6 +19,7 @@ use batlehub_core::{
     ports::{PackageRepository, RecentErrorRecord},
 };
 
+pub mod audit_trail;
 pub mod crud;
 pub mod explore;
 pub mod health;
@@ -351,11 +352,17 @@ impl PgPackageRepository {
 #[async_trait]
 impl PackageRepository for PgPackageRepository {
     async fn record_access(&self, event: AccessEvent) -> Result<(), CoreError> {
-        crud::record_access_impl(&self.pool, event).await
+        let result = crud::record_access_impl(&self.pool, &event).await;
+        batlehub_core::services::audit_stream::emit(&event, result.is_ok());
+        result
     }
 
     async fn get_status(&self, pkg: &PackageId) -> Result<PackageStatus, CoreError> {
         crud::get_status_impl(&self.pool, pkg).await
+    }
+
+    async fn covering_block(&self, pkg: &PackageId) -> Result<Option<String>, CoreError> {
+        crud::covering_block_impl(&self.pool, pkg).await
     }
 
     async fn blocked_versions(&self, registry: &str, name: &str) -> Result<Vec<String>, CoreError> {

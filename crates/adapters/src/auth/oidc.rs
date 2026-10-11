@@ -78,6 +78,10 @@ pub struct OidcSsoFlow {
     pub token_endpoint: String,
     /// Base URL of the SPA — used to build the post-callback redirect.
     pub frontend_url: String,
+    /// The claim `OidcAuthProvider` reads the user id from, so the sign-in's
+    /// audit row names the same principal every later request is attributed
+    /// to (RFC 0036 §6.1).
+    pub user_id_claim: String,
     http: reqwest::Client,
 }
 
@@ -128,6 +132,7 @@ pub struct OidcSsoFlowParams {
     pub authorization_endpoint: String,
     pub token_endpoint: String,
     pub frontend_url: String,
+    pub user_id_claim: String,
 }
 
 impl OidcSsoFlow {
@@ -148,6 +153,7 @@ impl OidcSsoFlow {
             authorization_endpoint: params.authorization_endpoint,
             token_endpoint: params.token_endpoint,
             frontend_url: params.frontend_url,
+            user_id_claim: params.user_id_claim,
             http: reqwest::Client::new(),
         }
     }
@@ -248,6 +254,24 @@ impl OidcSsoFlow {
             None => Err(anyhow::anyhow!(
                 "ID token carries no nonce, but one was sent with the authorization request"
             )),
+        }
+    }
+
+    /// The user id the session token names, for the sign-in's audit row.
+    ///
+    /// Read without verifying the signature, for the reason
+    /// [`Self::verify_nonce`] gives: the token came over TLS straight from the
+    /// token endpoint in answer to this server's own request. `None` when the
+    /// claim is absent or the token is not a JWT — the row is still written,
+    /// without a user.
+    pub fn session_subject(&self, session_token: &str) -> Option<String> {
+        let claims: serde_json::Map<String, serde_json::Value> =
+            jsonwebtoken::dangerous::insecure_decode(session_token)
+                .ok()?
+                .claims;
+        match claims.get(&self.user_id_claim)? {
+            serde_json::Value::String(s) => Some(s.clone()),
+            other => Some(other.to_string()),
         }
     }
 
@@ -408,6 +432,7 @@ impl OidcAuthProvider {
             authorization_endpoint: discovery.authorization_endpoint.clone(),
             token_endpoint: discovery.token_endpoint.clone(),
             frontend_url: cfg.frontend_url.clone(),
+            user_id_claim: cfg.user_id_claim.clone(),
             http: http.clone(),
         });
 
@@ -800,6 +825,7 @@ kHmPRiazukxPLb6ilpRAewjW8nihRANCAATDskChT+Altkm9X7MI69T3IUmrQU0L\n\
         RawAuthRequest {
             headers: [("authorization".to_owned(), format!("Bearer {token}"))].into(),
             query_params: Default::default(),
+            source_ip: None,
         }
     }
 
@@ -807,6 +833,7 @@ kHmPRiazukxPLb6ilpRAewjW8nihRANCAATDskChT+Altkm9X7MI69T3IUmrQU0L\n\
         RawAuthRequest {
             headers: Default::default(),
             query_params: Default::default(),
+            source_ip: None,
         }
     }
 
@@ -824,6 +851,7 @@ kHmPRiazukxPLb6ilpRAewjW8nihRANCAATDskChT+Altkm9X7MI69T3IUmrQU0L\n\
         let req = RawAuthRequest {
             headers: [("authorization".to_owned(), "Basic dXNlcjpwYXNz".to_owned())].into(),
             query_params: Default::default(),
+            source_ip: None,
         };
         assert!(p.authenticate(&req).await.unwrap().is_none());
     }
@@ -1364,6 +1392,7 @@ kHmPRiazukxPLb6ilpRAewjW8nihRANCAATDskChT+Altkm9X7MI69T3IUmrQU0L\n\
         let req = RawAuthRequest {
             headers: [("authorization".to_owned(), format!("bearer {token}"))].into(),
             query_params: Default::default(),
+            source_ip: None,
         };
         let id = p.authenticate(&req).await.unwrap().unwrap();
         assert_eq!(id.role, Role::Admin);
@@ -1381,6 +1410,7 @@ kHmPRiazukxPLb6ilpRAewjW8nihRANCAATDskChT+Altkm9X7MI69T3IUmrQU0L\n\
             authorization_endpoint: "https://idp.example.com/auth".to_owned(),
             token_endpoint: "https://idp.example.com/token".to_owned(),
             frontend_url: "https://app.example.com".to_owned(),
+            user_id_claim: "sub".to_owned(),
             http: reqwest::Client::new(),
         }
     }

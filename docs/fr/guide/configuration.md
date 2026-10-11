@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: e877c7981103a2b4
+sourceHash: 1d0d988b41c2c529
 ---
 
 # Référence de configuration
@@ -2036,7 +2036,7 @@ on_webhook    = true
 | `min_age_secs` | u64 | `86400` | En dessous de cet âge, une version est retenue (`MIN_AGE_NOT_MET`), quoi que disent les scanners. En dessous de `3600`, c'est une erreur de configuration : une heure est tout l'intérêt de la quarantaine. |
 | `mature_age_secs` | u64 | `86400` | Au-dessus de cet âge, une version dont l'analyse n'est pas revenue est servie `warned` (`SCAN_PENDING`) et analysée derrière la requête. `0` ne sert jamais rien de non analysé. Doit valoir au moins `min_age_secs`. Avec les deux à leur défaut, la fenêtre de retenue par analyse est vide — le profil de production recommandé est 3 jours / 30 jours. |
 | `hold_missing_timestamp` | booléen | `true` | Retient une version que l'amont n'a pas datée (`TIMESTAMP_MISSING`, sans terme : pas d'`available_at`, et le contournement par maturité ne l'atteint pas). `false` lui fait sauter le garde-fou d'âge, comme le fait `release_age_gate` par défaut. Sur les types proxifiés par chemin (`deb`, `rpm`, `pacman`, `generic`, `jetbrains`), aucune version n'est datée : `true` retient donc tout et lève `security.timestamp-hold-unavailable`. `apk` lève le même avertissement — il est adressé par chemin et le contrôle porte sur ce critère — alors même qu'un `APKINDEX` date dans `t:` chaque paquet qu'il liste. |
-| `scanners` | chaîne[] | `["osv"]` | Les scanners que le worker exécute sur ce registre. Chaque nom est une entrée `[scanners.<name>]` ; `osv` est implicite. Tous les types que la RFC nomme sont construits : `osv`, `postmortem`, `guarddog`, `trivy`, `sigstore`, et les deux services externes `socket` (Socket.dev, un appel par coordonnée, exige une `api_key`) et `mlab` (l'API CVE de mlab.sh, un *enrichissement* : elle attache CVSS, EPSS et CISA KEV aux constats de vulnérabilité produits par les autres et élève une CVE listée au KEV en `critical` ; elle ne crée jamais de constat, donc la lister sous `required_scanners` déclenche un avertissement). Un scanner répond sous sa clé de configuration : un second `osv` pointé vers une autre `api_url` est donc son propre nom. |
+| `scanners` | chaîne[] | `["osv"]` | Les scanners que le worker exécute sur ce registre. Chaque nom est une entrée `[scanners.<name>]` ; `osv` est implicite. Tous les types que la RFC nomme sont construits : `osv`, `postmortem`, `guarddog`, `trivy`, `sigstore`, `yara` (RFC 0036), et les deux services externes `socket` (Socket.dev, un appel par coordonnée, exige une `api_key`) et `mlab` (l'API CVE de mlab.sh, un *enrichissement* : elle attache CVSS, EPSS et CISA KEV aux constats de vulnérabilité produits par les autres et élève une CVE listée au KEV en `critical` ; elle ne crée jamais de constat, donc la lister sous `required_scanners` déclenche un avertissement). Un scanner répond sous sa clé de configuration : un second `osv` pointé vers une autre `api_url` est donc son propre nom. |
 | `required_scanners` | chaîne[] | `["osv"]` | Doivent tous avoir répondu avant que la version soit servie. Doit être un sous-ensemble de `scanners`. Vide avec `mode = "warn"` lève `security.unprotected` : rien ne peut plus jamais retenir une version. |
 | `max_severity` | chaîne | `"high"` | `low`, `medium`, `high` ou `critical`. Un constat à ce niveau ou au-dessus produit `denied` en mode `block` et `warned` en mode `warn`. |
 | `require_provenance` | booléen | `false` | Une version sans attestation de provenance vaut `PROVENANCE_MISSING` (un constat en `high`). N'a de sens qu'avec un scanner qui contrôle la provenance (`sigstore`, phase 3). |
@@ -2897,7 +2897,7 @@ trusted_proxies       = ["10.0.0.1"] # IP dont l'en-tête X-Forwarded-For est cr
 |---|---|---|---|
 | `enabled` | booléen | `false` | Activer ou désactiver le middleware |
 | `violation_threshold` | entier | `10` | Nombre de violations avant blocage automatique |
-| `violation_window_secs` | entier | `300` | Longueur de la fenêtre de comptage |
+| `violation_window_secs` | entier | `300` | Longueur de la fenêtre de comptage, au plus 2 592 000 (30 jours, la rétention des compteurs) |
 | `ban_duration_secs` | entier | `3600` | Durée d'un blocage automatique |
 | `trigger_on_status` | entier[] | `[429, 401]` | Les codes de statut comptés comme violations |
 | `trusted_proxies` | chaîne[] | `[]` | Les IP de proxys amont autorisées à poser `X-Forwarded-For` |
@@ -2937,6 +2937,97 @@ service_name = "batlehub"   # défaut
 Toute la section s'active sans modifier le fichier de configuration, en
 définissant `PROXY_CACHE__OTEL__ENDPOINT` — la section est créée automatiquement
 si la variable est présente.
+
+---
+
+### 3.7a `[logging]` (facultatif) {#logging}
+
+Le format des lignes de journal que le processus écrit sur la sortie standard.
+
+```toml
+[logging]
+format = "json"   # "text" (le défaut) ou "json"
+```
+
+| Champ | Type | Défaut | Notes |
+|---|---|---|---|
+| `format` | `"text"` \| `"json"` | `"text"` | `json` écrit un objet par ligne et active le **flux d'audit** |
+
+`text` est la sortie lisible que ce serveur a toujours écrite ; omettre la
+section ne change rien. `json` écrit un objet JSON par ligne, avec les champs
+de l'événement au premier niveau et le span de la requête à côté
+(`span.request_id`), et active le flux d'audit : chaque ligne que le journal
+d'audit enregistre devient aussi une ligne portant `event.dataset =
+"batlehub.audit"` et des noms de champs ECS — téléchargements, refus, actions
+d'administration, connexions, création et révocation de tokens, identifiants
+refusés et rechargements de configuration. Un collecteur la lit sur la sortie
+standard ; il n'y a pas d'écriture dans un fichier.
+
+La référence des champs, les règles Sigma livrées et les extraits de
+configuration des collecteurs sont dans [Intégration SIEM](../operations/siem.md).
+Le flux suit `RUST_LOG` comme toute autre ligne : un filtre qui écarte `info`
+pour la cible `batlehub::audit` écarte le flux.
+
+---
+
+### 3.7b `[audit]` (facultatif) {#audit}
+
+Le cycle de vie du journal d'audit (RFC 0036) : la durée de conservation de
+chaque classe de ligne, le moment où les lignes d'accès perdent leur précision,
+le scellement qui rend une modification détectable, et la clé qu'utilise
+l'effacement d'une personne concernée.
+
+```toml
+[audit]
+access_retention_days   = 365    # download, view_metadata
+security_retention_days = 1095   # toutes les autres actions, dont l'authentification
+pseudonymise_after_days = 30     # lignes d'accès : IP réduite à /24 ou /48, user agent supprimé
+seal_interval_secs      = 300    # 0 désactive le scellement
+seal_signing_key        = "${BATLEHUB_AUDIT_SEAL_KEY}"   # graine Ed25519, 64 hex
+erasure_key             = "${BATLEHUB_AUDIT_ERASURE_KEY}" # secret HMAC, 32 caractères ou plus
+```
+
+| Champ | Type | Défaut | Notes |
+|---|---|---|---|
+| `access_retention_days` | entier | `0` | Jours de conservation d'une ligne `download` / `view_metadata`. `0` ne l'expire jamais |
+| `security_retention_days` | entier | `0` | Jours de conservation de toutes les autres lignes. `0` ne les expire jamais |
+| `pseudonymise_after_days` | entier | `0` | Les lignes d'accès plus anciennes gardent leur utilisateur et perdent la précision de l'IP et le user agent. `0` désactive |
+| `seal_interval_secs` | entier | `0` | Durée d'une fenêtre de la chaîne de sceaux. `0` désactive le scellement |
+| `seal_signing_key` | chaîne | — | Requise pour sceller : une graine Ed25519 de 32 octets, en hexadécimal |
+| `erasure_key` | chaîne | — | Requise par `gdpr erase` ; 32 caractères au moins. À conserver hors de la base |
+
+**Omettre la section ne change rien** : aucune ligne n'expire, aucune n'est
+pseudonymisée, rien n'est scellé, et le serveur l'indique une fois
+(`audit.no-retention`). Les valeurs ci-dessus sont l'exemple documenté, pas un
+défaut. Le chargement refuse un intervalle de scellement sans clé, une clé qui
+n'est pas une graine, une pseudonymisation postérieure à la rétention des
+accès, et une rétention de sécurité plus courte que celle des accès.
+
+**Les classes.** `download` et `view_metadata` forment la classe d'accès ;
+toutes les autres actions — actions d'administration, connexions, événements
+de token, purges — forment la classe de sécurité, qui garde son IP complète
+pendant toute sa rétention, parce que la source d'une connexion *est* la
+preuve. Une nouvelle action est de classe sécurité, sauf ajout délibéré à la
+classe d'accès.
+
+**Le scellement.** Toutes les `seal_interval_secs`, le worker qui détient le
+verrou d'audit ferme la fenêtre terminée depuis au moins une fenêtre : ses
+lignes sont hachées, l'empreinte est chaînée à l'enregistrement précédent et
+signée. La pseudonymisation, la rétention, une purge et un effacement
+consignent chacun ce qu'ils ont modifié dans une fenêtre scellée par un `amend`
+ou un `expire` signé : `batlehub-cli admin audit verify` distingue ainsi les
+modifications du cycle de vie de toutes les autres. Associez le scellement à
+`[logging] format = "json"` : chaque enregistrement devient aussi une ligne
+`audit_seal`, et la copie que détient votre SIEM est ce qui détecte une queue
+tronquée ([Intégration SIEM](../operations/siem.md)).
+
+**La purge manuelle** (`DELETE /api/v1/admin/audit-log`) ne supprime que les
+lignes de la classe d'accès ; l'enregistrement d'une purge survit à toutes les
+purges suivantes. Les lignes déjà pseudonymisées ou supprimées ne se récupèrent
+pas — c'est l'objet du réglage.
+
+Les deux tâches tournent sur le rôle `worker`, un processus à la fois. La
+section est lue au démarrage ; une modification prend effet au redémarrage.
 
 ---
 
@@ -3431,6 +3522,11 @@ ecosystems = ["npm", "pypi"]
 type        = "sigstore"
 rekor_url   = "https://rekor.sigstore.dev"
 require_for = ["npm"]                # PROVENANCE_MISSING sur ces types ; ailleurs l'absence est muette
+
+[scanners.yara]                      # vos propres règles YARA sur chaque artefact (RFC 0036)
+type      = "yara"
+rules_dir = "/etc/batlehub/yara"     # *.yar / *.yara à toute profondeur ; worker.yaraRules du chart monte ici
+# command = "/usr/local/bin/yr"      # la CLI de yara-x, sur l'image du worker
 ```
 
 | `type` de scanner | Disponible | Clés | Notes |
@@ -3440,6 +3536,7 @@ require_for = ["npm"]                # PROVENANCE_MISSING sur ces types ; ailleu
 | `trivy` | maintenant | `endpoint`, `timeout_secs` | Le **client** Trivy, contre le serveur d'`endpoint` (le `trivy.enabled` du chart en déploie un) ou contre sa propre base quand il est vide. Analyse le SBOM CycloneDX que cette instance a déjà enregistré pour l'artefact, à défaut l'archive extraite. Constats : `VULNERABILITY`, avec la CVE en référence. |
 | `guarddog` | maintenant | `command`, `ecosystems` | GuardDog de DataDog sur les archives npm, PyPI et Go, sous le même bac à sable. Second avis facultatif ; absent du profil par défaut, et le seul scanner qui ne soit pas sur l'image du worker — il est livré sur la variante `-worker-guarddog`, qu'un déploiement emploie à la place. La correspondance règle → constat se fait par famille de règles et est *lue, non observée* tant que cette image ne l'a pas exécutée. |
 | `sigstore` | maintenant | `rekor_url`, `require_for` | La provenance npm : les attestations que le packument annonce pour la version sont récupérées, et chaque entrée de journal de transparence qu'elles citent est recherchée dans Rekor. `PROVENANCE_MISSING` sur les types de `require_for`, `PROVENANCE_INVALID` quand une entrée citée n'est pas dans le journal. Un contrôle d'existence et d'inclusion, pas une vérification Sigstore complète. |
+| `yara` | maintenant | `rules_dir`, `command` | Vos règles YARA, exécutées par `yr` de yara-x sous le même bac à sable, sans réseau. Analyse l'artefact tel que servi et, quand c'est une archive, son contenu extrait : une règle peut viser l'un ou l'autre. Une correspondance est un `MALWARE_SIGNAL` avec le nom de la règle en référence et le fichier concerné dans le résumé ; sa sévérité est la méta `severity` de la règle (`low` … `critical`), `high` à défaut. Couvre tous les types. Le worker refuse de démarrer quand `rules_dir` ne contient aucun fichier `.yar`/`.yara`, car un jeu de règles vide répond propre pour tout ; une règle qui ne compile pas fait échouer chaque analyse en `SCANNER_ERROR`. Sur l'image du worker. |
 | `socket`, `mlab` | phase 5 de la RFC 0018 | `api_key` pour `socket` | `socket` est refusé au chargement sans elle (un `401` que personne ne lirait autrement) ; l'API CVE de `mlab` répond sans authentification, sa clé est donc une politesse de limitation de débit plutôt qu'une exigence. `mlab` ne fait qu'enrichir les constats des autres et est refusé dans `required_scanners` (`security.enrichment-required`). |
 
 | Champ de `[worker]` | Type | Défaut | Notes |
@@ -3453,7 +3550,7 @@ require_for = ["npm"]                # PROVENANCE_MISSING sur ces types ; ailleu
 | `sandbox.max_extracted_mb`, `sandbox.max_entries` | u64 | `512`, `50000` | La politique d'extraction : une archive au-delà de l'un ou l'autre est **refusée**, jamais tronquée, tout comme une archive dont le taux de décompression dépasse 100:1, une entrée qui s'échappe de la racine, un lien symbolique, un lien physique, un périphérique. Les archives imbriquées sont écrites et non parcourues ; les bits d'exécution sont retirés. |
 
 **Ce qu'exige une analyse.** Un scanner qui lit des octets (`postmortem`,
-`guarddog`, `trivy` sans SBOM) fait récupérer par le worker l'artefact principal
+`guarddog`, `yara`, `trivy` sans SBOM) fait récupérer par le worker l'artefact principal
 de la version — depuis le cache quand il y est, sinon depuis l'amont, sans mise
 en cache — de sorte qu'un profil de scanners purement métadonnées ne coûte aucune
 sortie réseau. Un type dont une version est un *ensemble* de fichiers (PyPI,

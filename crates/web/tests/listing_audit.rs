@@ -153,3 +153,34 @@ async fn an_artifact_download_still_writes_its_own_row() {
     assert_eq!(rows[0]["result"]["outcome"], "allowed");
     assert_eq!(rows[0]["user_id"], "admin");
 }
+
+/// The marketplace documents render from metadata instead of going through
+/// `proxy_document`, and so moved no counter at all — `jbmarket` was absent
+/// from the per-registry cost ranking. Each one is a listing like any other.
+#[actix_web::test]
+async fn marketplace_listings_move_the_counter() {
+    for (kind, uri) in [
+        (
+            "jetbrains-marketplace",
+            "/proxy/market/api/plugins/org.example.plugin/updates",
+        ),
+        ("vscode-marketplace", "/proxy/market/api/example/ext"),
+    ] {
+        let parts = local_registry_app_parts("market", kind, RegistryMode::Proxy, None);
+        let metrics = Arc::clone(&parts.proxy_svc.metrics);
+        let app =
+            build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+
+        let req = TestRequest::get()
+            .uri(uri)
+            .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+            .to_request();
+        call_service(&app, req).await;
+
+        assert_eq!(
+            metrics.all().get("market").unwrap().listing_reads(),
+            1,
+            "{kind}: {uri} resolved a listing and counted nothing"
+        );
+    }
+}

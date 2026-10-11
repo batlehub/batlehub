@@ -721,6 +721,22 @@ admin = ["*"]
 [registries.grants]
 "user:authz-reader" = ["releases:read", "releases:list", "source:read"]
 
+# devfile (RFC 0035): proxy-only, pointed at a host that does not exist — the
+# boundary is crossed at the index listing, before anything is dialled.
+[[registries]]
+type = "devfile"
+name = "authz-devfile-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://example.invalid"]
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+
 # nix: a binary cache pointed at a host that does not exist, for the reason
 # every `example.invalid` row above has — the boundary is crossed before
 # anything is dialled. Two gates are crossed on the NAR route rather than one:

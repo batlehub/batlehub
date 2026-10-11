@@ -35,6 +35,7 @@ fn token_from_row(r: &sqlx::postgres::PgRow) -> Result<UserToken, CoreError> {
         created_at: r.get("created_at"),
         revoked_at: r.get("revoked_at"),
         last_used_at: r.get("last_used_at"),
+        last_used_ip: r.get("last_used_ip"),
         groups: r.get("groups"),
     })
 }
@@ -56,7 +57,7 @@ impl UserTokenRepository for PgPackageRepository {
             INSERT INTO user_tokens
                 (id, user_id, provider, name, token_hash, role, expires_at, created_at, groups)
             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)
-            RETURNING id, user_id, provider, name, role, expires_at, created_at, revoked_at, last_used_at, groups
+            RETURNING id, user_id, provider, name, role, expires_at, created_at, revoked_at, last_used_at, last_used_ip, groups
             "#,
         )
         .bind(id)
@@ -84,7 +85,7 @@ impl UserTokenRepository for PgPackageRepository {
     async fn find_by_hash(&self, token_hash: &str) -> Result<Option<UserToken>, CoreError> {
         let row = sqlx::query(
             r#"
-            SELECT id, user_id, provider, name, role, expires_at, created_at, revoked_at, last_used_at, groups
+            SELECT id, user_id, provider, name, role, expires_at, created_at, revoked_at, last_used_at, last_used_ip, groups
             FROM user_tokens
             WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > NOW()
             "#,
@@ -102,7 +103,7 @@ impl UserTokenRepository for PgPackageRepository {
     async fn list_for_user(&self, owner: &TokenOwner) -> Result<Vec<UserToken>, CoreError> {
         let rows = sqlx::query(
             r#"
-            SELECT id, user_id, provider, name, role, expires_at, created_at, revoked_at, last_used_at, groups
+            SELECT id, user_id, provider, name, role, expires_at, created_at, revoked_at, last_used_at, last_used_ip, groups
             FROM user_tokens
             WHERE user_id = $1 AND provider = $2
               AND revoked_at IS NULL AND expires_at > NOW()
@@ -121,16 +122,17 @@ impl UserTokenRepository for PgPackageRepository {
     /// Throttled in SQL as well as in the caller: `UserTokenAuthProvider` skips
     /// the call entirely for a minute after a hit, and this `WHERE` means two
     /// replicas that both decide to write still produce one update.
-    async fn touch_last_used(&self, id: Uuid) -> Result<(), CoreError> {
+    async fn touch_last_used(&self, id: Uuid, source_ip: Option<&str>) -> Result<(), CoreError> {
         sqlx::query(
             r#"
             UPDATE user_tokens
-            SET last_used_at = NOW()
+            SET last_used_at = NOW(), last_used_ip = COALESCE($2, last_used_ip)
             WHERE id = $1
               AND (last_used_at IS NULL OR last_used_at < NOW() - INTERVAL '1 minute')
             "#,
         )
         .bind(id)
+        .bind(source_ip)
         .execute(&self.pool)
         .await
         .db_err()?;

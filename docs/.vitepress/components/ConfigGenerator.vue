@@ -1454,6 +1454,7 @@ const composerAuthSnippet = `{
                 <option value="nodedist">Node.js distributions</option>
                 <option value="sdkman">SDKMAN</option>
                 <option value="rustup">Rust toolchain (rustup)</option>
+                <option value="devfile">Devfile registry (Che, odo)</option>
                 <option value="generic">Generic (raw file mirror)</option>
               </select>
             </label>
@@ -3204,6 +3205,7 @@ curl -X POST \
                 v-model.number="ipBlocking.violation_window_secs"
                 type="number"
                 min="1"
+                max="2592000"
             /></label>
           </div>
           <label

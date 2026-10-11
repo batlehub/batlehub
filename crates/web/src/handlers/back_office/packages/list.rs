@@ -203,7 +203,7 @@ pub async fn block_package(
     };
 
     admin_svc
-        .block_package(&pkg, body.reason.clone(), &identity.0)
+        .block_package(&pkg, body.reason.clone(), &identity.0, &identity.1)
         .await
         .map_err(AppError::from)?;
 
@@ -276,7 +276,7 @@ pub async fn unblock_package(
     };
 
     admin_svc
-        .unblock_package(&pkg, &identity.0)
+        .unblock_package(&pkg, &identity.0, &identity.1)
         .await
         .map_err(AppError::from)?;
 
@@ -358,7 +358,7 @@ pub async fn delete_package(
     };
 
     let deleted = admin_svc
-        .delete_package(&pkg, &identity.0)
+        .delete_package(&pkg, &identity.0, &identity.1)
         .await
         .map_err(AppError::from)?;
 
@@ -461,7 +461,12 @@ pub async fn invalidate_package(
     // the older spelling of the same operation, and two surfaces for one action
     // must not produce two different trails.
     admin_svc
-        .record_cache_eviction(Some(pkg.clone()), AccessAction::CacheEvict, &identity.0)
+        .record_cache_eviction(
+            Some(pkg.clone()),
+            AccessAction::CacheEvict,
+            &identity.0,
+            &identity.1,
+        )
         .await;
 
     Ok(web::Json(ActionResponse {

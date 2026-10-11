@@ -174,7 +174,7 @@ pub async fn reset_quota_for_user(
         .map_err(AppError::from)?;
 
     admin_svc
-        .record_account_action(AccessAction::ResetQuota, &identity.0)
+        .record_account_action(AccessAction::ResetQuota, &identity.0, &identity.1)
         .await;
 
     Ok(HttpResponse::Ok().json(OkResponse::new()))

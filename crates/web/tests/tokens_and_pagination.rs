@@ -84,6 +84,7 @@ impl UserTokenRepository for InMemoryTokenRepository {
             revoked_at: None,
             last_used_at: None,
             groups: groups.to_vec(),
+            last_used_ip: None,
         };
         tokens.push((token_hash.to_owned(), tok));
         Ok(tokens.last().unwrap().1.clone_token())
@@ -106,7 +107,7 @@ impl UserTokenRepository for InMemoryTokenRepository {
             .collect())
     }
 
-    async fn touch_last_used(&self, _id: Uuid) -> Result<(), CoreError> {
+    async fn touch_last_used(&self, _id: Uuid, _source_ip: Option<&str>) -> Result<(), CoreError> {
         Ok(())
     }
 
@@ -147,6 +148,7 @@ impl CloneToken for UserToken {
             revoked_at: self.revoked_at,
             last_used_at: self.last_used_at,
             groups: self.groups.clone(),
+            last_used_ip: None,
         }
     }
 }
@@ -991,4 +993,102 @@ async fn registries_endpoint_returns_200_for_admin() {
     let body: Value = read_body_json(resp).await;
     let registries = body.as_array().unwrap();
     assert!(registries.len() >= 3, "admin should see github, npm, cargo");
+}
+
+// ── RFC 0036 §6.1: authentication events in the audit trail ─────────────────
+
+/// Every audit row carrying `action`, newest first.
+async fn rows_for(
+    repo: &InMemoryRepo,
+    action: batlehub_core::entities::AccessAction,
+) -> Vec<AccessEvent> {
+    let filter = batlehub_core::entities::EventFilter {
+        actions: vec![action],
+        ..batlehub_core::entities::EventFilter::new()
+    };
+    repo.list_events(filter).await.unwrap()
+}
+
+#[actix_web::test]
+async fn minting_and_revoking_a_token_are_audit_events_without_the_secret() {
+    use batlehub_core::entities::AccessAction;
+    let repo = InMemoryRepo::new();
+    let app = make_app_with_tokens(Arc::clone(&repo), InMemoryTokenRepository::new()).await;
+
+    let req = TestRequest::post()
+        .uri("/api/v1/auth/tokens")
+        .insert_header(("Authorization", bearer(OIDC_USER_TOKEN)))
+        .set_json(serde_json::json!({"name": "ci-token", "expires_in_days": 30, "role": "user"}))
+        .to_request();
+    let body: Value = read_body_json(call_service(&app, req).await).await;
+    let (id, raw) = (
+        body["id"].as_str().unwrap(),
+        body["token"].as_str().unwrap(),
+    );
+
+    let created = rows_for(&repo, AccessAction::TokenCreate).await;
+    assert_eq!(created.len(), 1);
+    let detail = created[0].detail.as_deref().unwrap();
+    assert!(
+        detail.contains(id) && detail.contains("ci-token"),
+        "{detail}"
+    );
+    assert!(
+        !detail.contains(raw),
+        "the token value must never reach the trail"
+    );
+    assert_eq!(created[0].user_id.as_deref(), Some("oidc-user"));
+
+    let req = TestRequest::delete()
+        .uri(&format!("/api/v1/auth/tokens/{id}"))
+        .insert_header(("Authorization", bearer(OIDC_USER_TOKEN)))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 204);
+    let revoked = rows_for(&repo, AccessAction::TokenRevoke).await;
+    assert_eq!(revoked.len(), 1);
+    assert!(revoked[0].detail.as_deref().unwrap().contains(id));
+}
+
+/// A refused credential falls back to anonymous, so the middleware is the only
+/// place the refusal is visible — and a burst of them is one row, not twenty.
+#[actix_web::test]
+async fn a_rejected_credential_is_one_throttled_row_per_source() {
+    use batlehub_core::entities::AccessAction;
+    let repo = InMemoryRepo::new();
+    let app = make_app_with_tokens(Arc::clone(&repo), InMemoryTokenRepository::new()).await;
+
+    for _ in 0..21 {
+        let req = TestRequest::get()
+            .uri("/api/v1/registries")
+            .peer_addr("203.0.113.9:4000".parse().unwrap())
+            .insert_header(("Authorization", bearer("bh_pat_not-a-real-token")))
+            .to_request();
+        // The request itself goes on as anonymous.
+        assert_eq!(call_service(&app, req).await.status(), 200);
+    }
+    let rejected = rows_for(&repo, AccessAction::CredentialRejected).await;
+    assert_eq!(
+        rejected.len(),
+        1,
+        "the throttle holds a burst to one row a minute"
+    );
+    assert_eq!(rejected[0].ip_address.as_deref(), Some("203.0.113.9"));
+    assert!(rejected[0].result.is_denied());
+
+    // An accepted credential and no credential at all are not rejections.
+    for auth in [Some(bearer(ADMIN_TOKEN)), None] {
+        let mut req = TestRequest::get()
+            .uri("/api/v1/registries")
+            .peer_addr("198.51.100.7:4000".parse().unwrap());
+        if let Some(auth) = auth {
+            req = req.insert_header(("Authorization", auth));
+        }
+        call_service(&app, req.to_request()).await;
+    }
+    assert_eq!(
+        rows_for(&repo, AccessAction::CredentialRejected)
+            .await
+            .len(),
+        1
+    );
 }

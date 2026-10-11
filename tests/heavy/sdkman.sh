@@ -39,7 +39,7 @@
 # are api.sdkman.io, broker.sdkman.io and whichever CDN the broker names.
 # Environment knobs: DATABASE_URL (required), HEAVY_PORT (8106), HEAVY_TAP_PORT
 # (8116), COVERAGE, HEAVY_SDKMAN_VERSION (5.23.0, the sdkman-cli release),
-# HEAVY_SDKMAN_PROBE (the java version installed; default: the API's default),
+# HEAVY_SDKMAN_PROBE (the java version installed; default: the API's default when it is listed),
 # HEAVY_SDKMAN_BLOCKED (the java version blocked; default: another `-tem`
 # build), HEAVY_SDKMAN_GRID (maven — the candidate whose grid layout is
 # checked).
@@ -140,9 +140,20 @@ grep -qw "$GRID" "$DIR1/var/candidates" || heavy_fail "$GRID is not among the ca
 # The versions under test come from the API rather than from a pin: SDKMAN
 # removes older JDK builds as vendors retire them, so a pinned version would
 # make this suite fail on a calendar rather than on a regression.
-PROBE="${HEAVY_SDKMAN_PROBE:-$(curl -fsS "$API/candidates/default/java")}"
-[[ -n "$PROBE" ]] || heavy_fail "candidates/default/java answered nothing"
 ALL_JAVA="$(curl -fsS "$API/candidates/java/linuxx64/versions/all")"
+# The default is not always listed: in 2026-10 SDKMAN renamed its Temurin
+# builds (25.0.4-tem → 25.0.3.0+9-tem) and left `default/java` naming a version
+# its own list no longer shows. In that case, fall back to the listed Temurin
+# build of the same major version, then to the newest listed one.
+DEFAULT_JAVA="$(curl -fsS "$API/candidates/default/java")"
+TEM_JAVA="$(tr ',' '\n' <<<"$ALL_JAVA" | grep -- '-tem$' | sort -V)"
+if [[ -z "${HEAVY_SDKMAN_PROBE:-}" ]] && ! grep -qxF -- "$DEFAULT_JAVA" <<<"$TEM_JAVA"; then
+  HEAVY_SDKMAN_PROBE="$(grep -- "^${DEFAULT_JAVA%%.*}\." <<<"$TEM_JAVA" | tail -1)"
+  HEAVY_SDKMAN_PROBE="${HEAVY_SDKMAN_PROBE:-$(tail -1 <<<"$TEM_JAVA")}"
+  heavy_log "default/java ($DEFAULT_JAVA) is not in versions/all; probing $HEAVY_SDKMAN_PROBE instead"
+fi
+PROBE="${HEAVY_SDKMAN_PROBE:-$DEFAULT_JAVA}"
+[[ -n "$PROBE" ]] || heavy_fail "candidates/default/java answered nothing"
 BLOCKED="${HEAVY_SDKMAN_BLOCKED:-$(tr ',' '\n' <<<"$ALL_JAVA" | grep -- '-tem$' | grep -vx "$PROBE" | sort -V | tail -1)}"
 [[ -n "$BLOCKED" ]] || heavy_fail "no second Temurin build to block in versions/all"
 [[ "$PROBE" != "$BLOCKED" ]] || heavy_fail "HEAVY_SDKMAN_PROBE and HEAVY_SDKMAN_BLOCKED must differ"

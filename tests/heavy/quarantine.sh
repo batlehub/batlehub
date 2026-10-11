@@ -46,12 +46,21 @@
 #      pull came *before* the flag. The revoke lifts it and npm installs
 #      again — the lifecycle of §4.5, driven by npm rather than asserted.
 #
+#   9. **An operator's YARA rule refuses.** (RFC 0036 §6.6.) A rule the suite
+#      writes, matching a line of left-pad's own `index.js` and carrying no
+#      `severity` meta, run by the real `yr` under `bwrap`: the version is
+#      denied with `MALWARE_SIGNAL` — the unset severity defaulting to `high`,
+#      which `max_severity = "high"` blocks — npm's pinned install is refused
+#      on the wire, the tarball is never served, and `batlehub why` names the
+#      rule and the file inside the archive it matched.
+#
 # Run via `task test:quarantine-heavy` or directly. With `COVERAGE=1` the
 # server runs under `cargo llvm-cov run --no-report` (see lib.sh).
 #
 # Environment knobs: DATABASE_URL (required), HEAVY_PORT (8108),
 # HEAVY_TAP_PORT (8117), HEAVY_OSV_PORT (8127), HEAVY_SINK_PORT (8137),
-# HEAVY_QUARANTINE_SKIP_SANDBOX, COVERAGE. Needs network: registry.npmjs.org
+# HEAVY_QUARANTINE_SKIP_SANDBOX, COVERAGE. Needs yara-x's `yr` on PATH (the
+# server refuses a `[scanners.yara]` it cannot start, sandbox or not). Needs network: registry.npmjs.org
 # for the packages and api.osv.dev for the scanner — a fixture OSV would
 # prove the mapping, not the quarantine (step 7's fake OSV serves the one
 # registry whose point is a database that changes its mind).
@@ -66,13 +75,15 @@ REG="npm-quarantine-$HEAVY_RUN"
 EGRESS_REG="npm-egress-$HEAVY_RUN"
 RESCAN_REG="npm-rescan-$HEAVY_RUN"
 FLAGS_REG="npm-flags-$HEAVY_RUN"
+YARA_REG="npm-yara-$HEAVY_RUN"
 OSV_PORT="${HEAVY_OSV_PORT:-8127}"
 SINK_PORT="${HEAVY_SINK_PORT:-8137}"
 export HEAVY_OSV_URL="http://127.0.0.1:$OSV_PORT"
 export HEAVY_WEBHOOK_URL="http://127.0.0.1:$SINK_PORT/hook"
-# Step 7's package: dependency-free and years old; the fake OSV is the only
-# database that ever judges it here.
-FLIP_PKG="left-pad"
+# Steps 6, 7, 8 and 9 share one package: dependency-free, years old, clean.
+TRIVIAL_PKG="left-pad"
+# Step 7's package: the fake OSV is the only database that ever judges it here.
+FLIP_PKG="$TRIVIAL_PKG"
 FLIP_VERSION="1.3.0"
 # No dependencies, years old, and OSV's answer for each is known: 1.2.8 is
 # clean, 1.2.5 carries GHSA-xvch-5gv4-984h (prototype pollution, critical —
@@ -83,7 +94,7 @@ CLEAN="1.2.8"
 VULN="1.2.5"
 ADVISORY="GHSA-xvch-5gv4-984h"
 # Step 6's package: also dependency-free and clean, on the egress registry.
-EGRESS_PKG="left-pad"
+EGRESS_PKG="$TRIVIAL_PKG"
 EGRESS_VERSION="1.3.0"
 
 SKIP_SANDBOX="${HEAVY_QUARANTINE_SKIP_SANDBOX:-0}"
@@ -115,6 +126,21 @@ fi
 EOF
 chmod +x "$EGRESS_PROBE"
 export HEAVY_EGRESS_PROBE="$EGRESS_PROBE"
+
+# Step 9's rules: one rule, matching a line of the package's own source, and
+# no `severity` meta — the scanner's default is what is under test.
+heavy_need yr "yara-x's yr (mise install yara-x, or the release binary)"
+export HEAVY_YR="$(command -v yr)"
+export HEAVY_YARA_RULES="$HEAVY_WORK/yara"
+mkdir -p "$HEAVY_YARA_RULES"
+cat > "$HEAVY_YARA_RULES/heavy.yar" <<'EOF'
+rule heavy_left_pad_canary {
+  strings:
+    $a = "function leftPad (str, len, ch)"
+  condition:
+    $a
+}
+EOF
 
 # Step 7's two fixtures: an OSV that answers clean until `$OSV_FLAG` exists,
 # and the receiver the flip alert is asserted at.
@@ -166,6 +192,7 @@ registry=$REG_URL
 //127.0.0.1:$HEAVY_TAP_PORT/proxy/$EGRESS_REG/:_authToken=$ADMIN_TOKEN
 //127.0.0.1:$HEAVY_TAP_PORT/proxy/$RESCAN_REG/:_authToken=$ADMIN_TOKEN
 //127.0.0.1:$HEAVY_TAP_PORT/proxy/$FLAGS_REG/:_authToken=$ADMIN_TOKEN
+//127.0.0.1:$HEAVY_TAP_PORT/proxy/$YARA_REG/:_authToken=$ADMIN_TOKEN
 EOF
 export NPM_CONFIG_USERCONFIG="$NPMRC"
 export NPM_CONFIG_FUND=false NPM_CONFIG_AUDIT=false NPM_CONFIG_UPDATE_NOTIFIER=false
@@ -564,7 +591,7 @@ heavy_log "FLIP-OK (scheduled rescan denied a served version; alert, pullers and
 # exists to answer: who already has the thing you just learned about.
 
 FLAGS_URL="$HEAVY_TAP_BASE/proxy/$FLAGS_REG/"
-FLAG_PKG="left-pad"
+FLAG_PKG="$TRIVIAL_PKG"
 FLAG_VERSION="1.3.0"
 FLAG_ID="BATLEHUB-HEAVY-SOC-$HEAVY_RUN"
 # `%{http_code}` is the whole of every status assertion in this step.
@@ -745,5 +772,75 @@ export NPM_CONFIG_CACHE="$HEAVY_WORK/npm-cache-flags-after"
 [[ -f "$FLAG_PINNED/node_modules/$FLAG_PKG/package.json" ]] \
   || heavy_fail "$FLAG_PKG is not installed after the revoke — the same lockfile that was refused"
 heavy_log "FLAGS-OK (a signed hard_block refused npm, the report named the pull before it, the revoke lifted it)"
+
+# ── 9. An operator's YARA rule refuses (RFC 0036 §6.6) ────────────────────────
+
+if [[ "$SKIP_SANDBOX" == "1" ]]; then
+  heavy_log "YARA-UNMEASURED (HEAVY_QUARANTINE_SKIP_SANDBOX=1: yr runs under bwrap like every binary scanner)"
+else
+  YARA_URL="$HEAVY_TAP_BASE/proxy/$YARA_REG/"
+  YARA_PKG="$TRIVIAL_PKG"
+  YARA_VERSION="1.3.0"
+  YARA_CONSUMER="$HEAVY_WORK/consumer-yara"
+  new_consumer "$YARA_CONSUMER"
+  export NPM_CONFIG_CACHE="$HEAVY_WORK/npm-cache-yara"
+  heavy_mark "yara-first-contact"
+  heavy_log "npm install $YARA_PKG@$YARA_VERSION through $YARA_REG — first contact, then yr runs"
+  set +e
+  (cd "$YARA_CONSUMER" && npm install "$YARA_PKG@$YARA_VERSION" --registry "$YARA_URL") \
+    >"$HEAVY_WORK/install-15.out" 2>"$HEAVY_WORK/install-15.err"
+  RC=$?
+  set -e
+  [[ $RC -ne 0 ]] || heavy_fail "npm install through $YARA_REG succeeded on first contact"
+  set +e
+  "$CLI" wait "$YARA_REG:$YARA_PKG@$YARA_VERSION" --timeout 5m --interval 3s >"$HEAVY_WORK/wait-yara.out" 2>&1
+  RC=$?
+  set -e
+  # Exit 1 is "waiting cannot help": the verdict came back denied.
+  if [[ $RC -ne 1 ]]; then
+    cat "$HEAVY_WORK/wait-yara.out" >&2
+    "$CLI" why "$YARA_REG:$YARA_PKG@$YARA_VERSION" >&2 || true
+    heavy_fail "batlehub wait exited $RC on a version the YARA rule matches; expected 1 (denied)"
+  fi
+
+  # The pinned resolve, as step 3: the lockfile goes straight to the gate.
+  YARA_PINNED="$HEAVY_WORK/consumer-yara-pinned"
+  mkdir -p "$YARA_PINNED"
+  cat > "$YARA_PINNED/package.json" <<EOF
+{ "name": "consumer", "version": "1.0.0", "private": true, "dependencies": { "$YARA_PKG": "$YARA_VERSION" } }
+EOF
+  cat > "$YARA_PINNED/package-lock.json" <<EOF
+{
+  "name": "consumer", "version": "1.0.0", "lockfileVersion": 3, "requires": true,
+  "packages": {
+    "": { "name": "consumer", "version": "1.0.0", "dependencies": { "$YARA_PKG": "$YARA_VERSION" } },
+    "node_modules/$YARA_PKG": { "version": "$YARA_VERSION", "resolved": "$YARA_URL$YARA_PKG/$YARA_VERSION/tarball", "license": "WTFPL" }
+  }
+}
+EOF
+  export NPM_CONFIG_CACHE="$HEAVY_WORK/npm-cache-yara-pinned"
+  heavy_mark "yara-refused"
+  heavy_log "npm ci pinning $YARA_PKG@$YARA_VERSION — the download gate"
+  set +e
+  (cd "$YARA_PINNED" && npm ci --registry "$YARA_URL") \
+    >"$HEAVY_WORK/install-16.out" 2>"$HEAVY_WORK/install-16.err"
+  RC=$?
+  set -e
+  [[ $RC -ne 0 ]] || heavy_fail "npm ci installed $YARA_PKG@$YARA_VERSION over a YARA match"
+  heavy_wire_re_after "yara-refused" "GET /proxy/$YARA_REG/$YARA_PKG/$YARA_VERSION/tarball -> 403 .*X-BatleHub-Verdict: denied.*X-BatleHub-Reason: MALWARE_SIGNAL" \
+    "the pinned tarball was not refused as denied/MALWARE_SIGNAL on the wire"
+  grep -q "MALWARE_SIGNAL" "$HEAVY_WORK/install-16.err" \
+    || { cat "$HEAVY_WORK/install-16.err" >&2; heavy_fail "npm printed no MALWARE_SIGNAL reason code"; }
+  [[ "$(heavy_wire_count_after "yara-first-contact" "GET /proxy/$YARA_REG/$YARA_PKG/$YARA_VERSION/tarball -> 200")" == "0" ]] \
+    || heavy_fail "the tap saw the matched tarball served"
+  [[ ! -d "$YARA_PINNED/node_modules/$YARA_PKG" ]] \
+    || heavy_fail "npm ci left $YARA_PKG in node_modules after a refused tarball"
+
+  "$CLI" why "$YARA_REG:$YARA_PKG@$YARA_VERSION" >"$HEAVY_WORK/why-yara.out" 2>&1 || true
+  { grep -q "heavy_left_pad_canary" "$HEAVY_WORK/why-yara.out" \
+      && grep -q "tree/package/index.js" "$HEAVY_WORK/why-yara.out"; } \
+    || { cat "$HEAVY_WORK/why-yara.out" >&2; heavy_fail "batlehub why does not name the YARA rule and the file it matched"; }
+  heavy_log "YARA-OK (an operator rule with no severity meta denied the version under bwrap; npm was refused MALWARE_SIGNAL)"
+fi
 
 heavy_done QUARANTINE-HEAVY-OK

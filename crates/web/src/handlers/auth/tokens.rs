@@ -13,7 +13,8 @@ use batlehub_core::{
 };
 
 use super::OidcProviderNames;
-use batlehub_core::entities::Identity;
+use batlehub_core::entities::{AccessAction, AccessEvent, AccessResult, Identity};
+use batlehub_core::services::AdminService;
 
 use crate::{error::AppError, extractors::AuthIdentity};
 
@@ -70,6 +71,7 @@ pub struct CreateTokenResponse {
 pub async fn create_token(
     identity: AuthIdentity,
     repo: web::Data<Arc<dyn UserTokenRepository>>,
+    admin_svc: web::Data<Arc<AdminService>>,
     oidc_providers: web::Data<OidcProviderNames>,
     body: web::Json<CreateTokenRequest>,
 ) -> Result<impl Responder, AppError> {
@@ -140,6 +142,16 @@ pub async fn create_token(
         groups = %tok.groups.join(","),
         "personal access token created"
     );
+    admin_svc
+        .record_event(AccessEvent::about_identity(
+            AccessAction::TokenCreate,
+            identity.user_id.clone(),
+            identity.role.clone(),
+            AccessResult::Allowed,
+            identity.1.clone(),
+            Some(token_detail(tok.id, Some(&tok.name))),
+        ))
+        .await;
 
     Ok(HttpResponse::Created().json(CreateTokenResponse {
         id: tok.id,
@@ -227,6 +239,7 @@ pub async fn revoke_token(
     path: web::Path<Uuid>,
     identity: AuthIdentity,
     repo: web::Data<Arc<dyn UserTokenRepository>>,
+    admin_svc: web::Data<Arc<AdminService>>,
     oidc_providers: web::Data<OidcProviderNames>,
 ) -> Result<impl Responder, AppError> {
     let owner = oidc_session_owner(&identity, &oidc_providers)
@@ -242,6 +255,16 @@ pub async fn revoke_token(
             user_id = %owner.user_id,
             "personal access token revoked"
         );
+        admin_svc
+            .record_event(AccessEvent::about_identity(
+                AccessAction::TokenRevoke,
+                identity.user_id.clone(),
+                identity.role.clone(),
+                AccessResult::Allowed,
+                identity.1.clone(),
+                Some(token_detail(id, None)),
+            ))
+            .await;
         Ok(HttpResponse::NoContent().finish())
     } else {
         Err(AppError::not_found("token not found or not owned by you"))
@@ -277,6 +300,15 @@ fn oidc_session_owner(
     }
     let user_id = identity.user_id.as_deref()?;
     Some(TokenOwner::new(provider, user_id))
+}
+
+/// A token event's `detail`: its id, and its name when the caller has it.
+/// Never the value or the hash (RFC 0036 §6.1).
+fn token_detail(id: Uuid, name: Option<&str>) -> String {
+    match name {
+        Some(name) => format!("token_id={id} name={name:?}"),
+        None => format!("token_id={id}"),
+    }
 }
 
 fn parse_role(s: &str) -> Option<Role> {

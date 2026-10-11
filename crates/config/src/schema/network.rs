@@ -22,6 +22,11 @@ use serde::Deserialize;
 /// # the TCP peer address — required when the server is exposed directly.
 /// trusted_proxies       = ["10.0.0.1", "10.0.0.2"]
 /// ```
+/// The longest `violation_window_secs` accepted: housekeeping deletes counter
+/// rows older than 30 days (`crates/adapters/src/db/housekeeping.rs`), so a
+/// longer window would lose its count mid-window and never ban.
+pub const MAX_VIOLATION_WINDOW_SECS: u32 = 30 * 24 * 3600;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct IpBlockingConfig {
     /// Enable IP-based blocking.
@@ -30,7 +35,8 @@ pub struct IpBlockingConfig {
     /// Number of violations in the window before auto-blocking the IP.
     #[serde(default = "default_violation_threshold")]
     pub violation_threshold: u32,
-    /// Length of the violation counting window in seconds.
+    /// Length of the violation counting window in seconds, at most
+    /// [`MAX_VIOLATION_WINDOW_SECS`].
     #[serde(default = "default_violation_window")]
     pub violation_window_secs: u32,
     /// How long to keep a blocked IP banned, in seconds.

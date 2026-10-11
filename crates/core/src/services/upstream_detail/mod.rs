@@ -30,6 +30,7 @@ pub use coordinator::UpstreamDetailCoordinator;
 mod cargo;
 mod composer;
 pub mod coordinator;
+mod devfile;
 mod galaxy;
 mod goproxy;
 mod maven;
@@ -125,6 +126,7 @@ pub fn dispatch(kind: RegistryKind, doc: &VersionDocument) -> UpstreamDetail {
         RegistryKind::Sdkman => sdkman::read(doc),
         RegistryKind::Rustup => rustup::read(doc),
         RegistryKind::Galaxy => galaxy::read(doc),
+        RegistryKind::Devfile => devfile::read(doc),
         other => {
             // Reachable only through a bug: `RegistryKind::upstream_detail()`
             // answers `Document(_)` for exactly the kinds above, and the drift
@@ -183,7 +185,9 @@ pub fn listing_carries_readmes(kind: RegistryKind) -> bool {
         | RegistryKind::Galaxy
         // There is no README anywhere in the protocol — `readme_support()` is
         // `None` — so the listing cannot be where it lives (RFC 0028 §6.1).
-        | RegistryKind::Nix => false,
+        | RegistryKind::Nix
+        // A devfile has no README (RFC 0035 §6.1).
+        | RegistryKind::Devfile => false,
     }
 }
 
@@ -242,7 +246,10 @@ pub fn listing_carries_links(kind: RegistryKind) -> bool {
         | RegistryKind::Galaxy
         // A narinfo names hashes, a closure and a deriver — no URL that points
         // at where the software came from (RFC 0028 §5.1).
-        | RegistryKind::Nix => false,
+        | RegistryKind::Nix
+        // The index entry carries an icon URL and no repository link; the
+        // starter project's git remote is in the devfile itself.
+        | RegistryKind::Devfile => false,
     }
 }
 

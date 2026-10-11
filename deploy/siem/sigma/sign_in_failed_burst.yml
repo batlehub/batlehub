@@ -1,0 +1,45 @@
+title: BatleHub sign-in failures
+name: batlehub_sign_in_failed
+id: b9e3b4da-af50-43fa-bdb7-4a1b1814cdf6
+status: experimental
+description: >-
+  OIDC sign-in failures, one per callback.
+references:
+  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+author: BatleHub
+date: 2026-10-05
+logsource:
+  product: batlehub
+  service: audit
+detection:
+  selection:
+    event.dataset: batlehub.audit
+    event.action: sign_in_failed
+  condition: selection
+falsepositives:
+  - Expired sign-in links reopened from browser history
+level: informational
+---
+title: BatleHub sign-in failure burst from one source
+id: ed4b4fcd-6642-4709-b27c-fa160e9a84b0
+status: experimental
+description: >-
+  Repeated OIDC sign-in failures from one source IP in ten minutes: a replayed
+  or forged callback, or a misconfigured identity provider.
+references:
+  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+author: BatleHub
+date: 2026-10-05
+tags:
+  - attack.credential-access
+  - attack.t1110
+correlation:
+  type: event_count
+  rules:
+    - batlehub_sign_in_failed
+  group-by:
+    - source.ip
+  timespan: 10m
+  condition:
+    gte: 5
+level: medium

@@ -29,8 +29,8 @@ use chrono::{DateTime, Utc};
 use tokio::sync::{Mutex, Semaphore};
 
 use crate::entities::{
-    Identity, NotificationEvent, NotificationEventType, PackageId, PackageStatus, RegistryKind,
-    Role, ScanTrigger, UpstreamState, UpstreamStatus, UpstreamStatusFilter,
+    CallerNet, Identity, NotificationEvent, NotificationEventType, PackageId, PackageStatus,
+    RegistryKind, Role, ScanTrigger, UpstreamState, UpstreamStatus, UpstreamStatusFilter,
 };
 use crate::error::CoreError;
 use crate::ports::{
@@ -93,7 +93,10 @@ async fn block_confirmed(
     let mut all = true;
     for v in versions {
         let id = audit_coordinate(kind, registry, &row.package_name, v);
-        if let Err(e) = admin.block_package(&id, block_reason(row), identity).await {
+        if let Err(e) = admin
+            .block_package(&id, block_reason(row), identity, &CallerNet::unknown())
+            .await
+        {
             tracing::warn!(package = %id, error = %e, "upstream audit: block failed");
             all = false;
         }
@@ -114,7 +117,10 @@ async fn unblock_one(
 ) -> bool {
     match admin.repo.get_status(id).await {
         Ok(PackageStatus::Blocked { blocked_by, .. }) if blocked_by == SYSTEM_ACTOR => {
-            match admin.unblock_package(id, identity).await {
+            match admin
+                .unblock_package(id, identity, &CallerNet::unknown())
+                .await
+            {
                 Ok(()) => return true,
                 Err(e) => {
                     tracing::warn!(package = %id, error = %e, "upstream audit: unblock failed")
@@ -599,7 +605,12 @@ impl UpstreamAuditService {
                     Ok(_) => {
                         tracing::info!(package = %id, "upstream audit: confirmed and unblocked; reconciling");
                         if let Err(e) = admin
-                            .block_package(&id, block_reason(&row), &system_identity())
+                            .block_package(
+                                &id,
+                                block_reason(&row),
+                                &system_identity(),
+                                &CallerNet::unknown(),
+                            )
                             .await
                         {
                             tracing::warn!(package = %id, error = %e, "upstream audit: reconciliation block failed");

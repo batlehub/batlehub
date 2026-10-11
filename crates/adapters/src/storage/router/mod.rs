@@ -95,6 +95,17 @@ impl StorageRouter {
         routing::route_key_to_backend(key, &self.registry_assignments, &self.default_name)
     }
 
+    /// The leaf backend holding `key`, when `key` is a staging key.
+    ///
+    /// Staged bytes are unverified and live for one request, so they never
+    /// enter the dedup tables or `artifact_storage`: every operation on them
+    /// goes straight to the backend their destination routes to, and
+    /// [`promote`](StorageBackend::promote) is what gives them a logical key.
+    fn staging_leaf(&self, key: &str) -> Option<&Arc<dyn StorageBackend>> {
+        batlehub_core::ports::staged_destination(key)
+            .map(|_| self.resolve_backend(self.backend_name_for_key(key)))
+    }
+
     pub(super) fn resolve_backend(&self, name: &str) -> &Arc<dyn StorageBackend> {
         self.backends
             .get(name)
@@ -340,6 +351,9 @@ impl BlobSource {
 #[async_trait]
 impl StorageBackend for StorageRouter {
     async fn store(&self, key: &str, data: Bytes, meta: StorageMeta) -> Result<(), CoreError> {
+        if let Some(leaf) = self.staging_leaf(key) {
+            return leaf.store(key, data, meta).await;
+        }
         let content_hash = hex::encode(sha2::Sha256::digest(&data));
         let content_key = format!("blob/{content_hash}");
         let size = meta.size;
@@ -373,6 +387,9 @@ impl StorageBackend for StorageRouter {
         stream: ByteStream,
         meta: StorageMeta,
     ) -> Result<StoreOutcome, CoreError> {
+        if let Some(leaf) = self.staging_leaf(key) {
+            return leaf.store_streaming(key, stream, meta).await;
+        }
         let backend_name = self.backend_name_for_key(key).to_owned();
         let backend = self.resolve_backend(&backend_name).clone();
 
@@ -419,6 +436,45 @@ impl StorageBackend for StorageRouter {
         Ok(outcome)
     }
 
+    /// The staged bytes were hashed as they were written and sit on `key`'s
+    /// own backend (a staging key routes as its destination), so this is
+    /// exactly the second half of [`store_streaming`](Self::store_streaming):
+    /// one dedup transaction for `key`, and a rename of the staged blob to
+    /// `blob/<hash>` on first reference or its deletion on a dedup hit.
+    async fn promote(
+        &self,
+        staged: &str,
+        key: &str,
+        outcome: &StoreOutcome,
+    ) -> Result<(), CoreError> {
+        let backend_name = self.backend_name_for_key(key).to_owned();
+        let backend = self.resolve_backend(&backend_name).clone();
+        let content_key = format!("blob/{}", outcome.content_hash);
+        let target = DedupTarget {
+            key,
+            content_hash: &outcome.content_hash,
+            content_key: &content_key,
+            size: Some(outcome.size),
+        };
+        // `finalize_dedup` consumes the staged blob on its happy paths but not
+        // on an early database error; nothing else would ever delete it.
+        if let Err(e) = self
+            .finalize_dedup(
+                &target,
+                &backend_name,
+                &backend,
+                BlobSource::Staged(staged.to_owned()),
+            )
+            .await
+        {
+            if let Err(del) = backend.delete(staged).await {
+                tracing::warn!(key = %staged, error = %del, "failed to delete staged artifact after promotion error");
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
     /// Intentionally unsupported: a logical key here is a row in `artifact_dedup_refs`
     /// pointing at a shared content blob, not a movable physical object, so a
     /// logical-key move has no stable meaning (see the `move_key` note on the
@@ -431,6 +487,9 @@ impl StorageBackend for StorageRouter {
     }
 
     async fn retrieve(&self, key: &str) -> Result<Option<StoredArtifact>, CoreError> {
+        if let Some(leaf) = self.staging_leaf(key) {
+            return leaf.retrieve(key).await;
+        }
         // Dedup path: resolve logical key → physical content key.
         if let Some((content_key, backend)) = self.dedup_content_key(key).await? {
             let artifact = backend.retrieve(&content_key).await?;
@@ -452,6 +511,9 @@ impl StorageBackend for StorageRouter {
     }
 
     async fn exists(&self, key: &str) -> Result<bool, CoreError> {
+        if let Some(leaf) = self.staging_leaf(key) {
+            return leaf.exists(key).await;
+        }
         // Dedup path.
         if let Some((content_key, backend)) = self.dedup_content_key(key).await? {
             return backend.exists(&content_key).await;
@@ -462,6 +524,9 @@ impl StorageBackend for StorageRouter {
     }
 
     async fn delete(&self, key: &str) -> Result<bool, CoreError> {
+        if let Some(leaf) = self.staging_leaf(key) {
+            return leaf.delete(key).await;
+        }
         // ── Dedup path ────────────────────────────────────────────────────────
         // Delegates the heavy DB work to `delete_dedup_entry` in tracking.rs.
         let existed = if let Some((should_delete_blob, content_key, blob_backend_name)) =

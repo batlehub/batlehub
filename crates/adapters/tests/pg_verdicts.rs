@@ -340,6 +340,50 @@ async fn the_starvation_slot_lets_a_backfill_through_under_a_first_seen_flood() 
     assert!(more.iter().all(|j| j.trigger == ScanTrigger::FirstSeen));
 }
 
+/// An idle worker's wait ends when this process enqueues — the embedded
+/// worker starts a scan at once however far its backoff has grown — and runs
+/// its full length when nothing is enqueued. A duplicate enqueue creates no
+/// row and wakes nobody.
+#[tokio::test]
+async fn an_enqueue_wakes_the_idle_wait_and_a_duplicate_does_not() {
+    let Some(url) = db_url() else {
+        eprintln!("skipping: DATABASE_URL is not set");
+        return;
+    };
+    let (pool, reg) = fixture(&url).await;
+    let q = std::sync::Arc::new(PgScanQueue::new(pool.clone()));
+    let long = std::time::Duration::from_secs(10);
+    let short = std::time::Duration::from_millis(200);
+
+    let started = std::time::Instant::now();
+    q.wait_for_work(short).await;
+    assert!(started.elapsed() >= short, "no enqueue, the whole wait");
+
+    let waiter = {
+        let q = std::sync::Arc::clone(&q);
+        tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            q.wait_for_work(long).await;
+            started.elapsed()
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let pkg = PackageId::new(&reg, "wake", "1.0.0");
+    assert!(q.enqueue(&pkg, None, ScanTrigger::FirstSeen).await.unwrap());
+    assert!(
+        waiter.await.unwrap() < long / 2,
+        "the enqueue woke the wait"
+    );
+
+    assert!(!q.enqueue(&pkg, None, ScanTrigger::FirstSeen).await.unwrap());
+    let started = std::time::Instant::now();
+    q.wait_for_work(short).await;
+    assert!(
+        started.elapsed() >= short,
+        "a duplicate leaves no permit behind"
+    );
+}
+
 /// One rescan timer per estate: the advisory lock is held by the first
 /// queue that asks, refused to a second over another connection, and
 /// released when the holder is dropped.

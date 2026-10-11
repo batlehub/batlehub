@@ -203,6 +203,207 @@ pub struct SearchQuery {
     pub offset: Option<usize>,
 }
 
+/// Query the registry — `GET …/api/-/query`.
+///
+/// What Theia (and so Eclipse Che) resolves an extension through, by
+/// `extensionId` or `namespaceName` + `extensionName`, rather than by search.
+/// Each result is the full extension document `api/{ns}/{ext}/{v}` serves, one
+/// per version, built from the same filtered entry list — so a version hidden
+/// there is absent here.
+#[utoipa::path(
+    get,
+    path = "/proxy/{registry}/api/-/query",
+    tag = "proxy/openvsx",
+    params(("registry" = String, Path, description = "Registry name"), QueryParams),
+    responses(
+        (status = 200, description = "Query results", body = ProtocolDocument),
+        (status = 400, description = "No usable criterion"),
+        (status = 404, description = "Unknown registry or wrong type"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[allow(clippy::too_many_arguments)]
+#[get("/proxy/{registry}/api/-/query")]
+pub async fn openvsx_query(
+    req: HttpRequest,
+    path: web::Path<String>,
+    query: web::Query<QueryParams>,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
+    map: web::Data<RegistryMap>,
+    mode_map: web::Data<RegistryModeMap>,
+) -> Result<impl Responder, AppError> {
+    serve_query(
+        req,
+        path.into_inner(),
+        query.into_inner(),
+        identity,
+        svc,
+        local_svc,
+        map,
+        mode_map,
+    )
+    .await
+}
+
+/// Query the registry — `GET …/api/v2/-/query`, the version Theia prefers.
+///
+/// Same criteria and document as v1; `includeAllVersions=links` is read as
+/// "newest only", whose document already carries every version's link.
+#[utoipa::path(
+    get,
+    path = "/proxy/{registry}/api/v2/-/query",
+    tag = "proxy/openvsx",
+    params(("registry" = String, Path, description = "Registry name"), QueryParams),
+    responses(
+        (status = 200, description = "Query results", body = ProtocolDocument),
+        (status = 400, description = "No usable criterion"),
+        (status = 404, description = "Unknown registry or wrong type"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[allow(clippy::too_many_arguments)]
+#[get("/proxy/{registry}/api/v2/-/query")]
+pub async fn openvsx_query_v2(
+    req: HttpRequest,
+    path: web::Path<String>,
+    query: web::Query<QueryParams>,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
+    map: web::Data<RegistryMap>,
+    mode_map: web::Data<RegistryModeMap>,
+) -> Result<impl Responder, AppError> {
+    serve_query(
+        req,
+        path.into_inner(),
+        query.into_inner(),
+        identity,
+        svc,
+        local_svc,
+        map,
+        mode_map,
+    )
+    .await
+}
+
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct QueryParams {
+    /// `{namespace}.{extension}`; wins over the two fields below.
+    pub extension_id: Option<String>,
+    pub namespace_name: Option<String>,
+    pub extension_name: Option<String>,
+    pub extension_version: Option<String>,
+    /// `true` returns one document per version; anything else, the newest.
+    pub include_all_versions: Option<String>,
+    pub size: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn serve_query(
+    req: HttpRequest,
+    registry: String,
+    q: QueryParams,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
+    map: web::Data<RegistryMap>,
+    mode_map: web::Data<RegistryModeMap>,
+) -> Result<HttpResponse, AppError> {
+    require_vsx(&registry, &map)?;
+    let mode = mode_map.get(&registry);
+    let kind = vsx_kind(&registry, &map);
+
+    let (namespace, extension) = match (
+        q.extension_id.as_deref(),
+        q.namespace_name,
+        q.extension_name,
+    ) {
+        (Some(id), _, _) => {
+            let (ns, ext) = id.split_once('.').ok_or_else(|| {
+                AppError::bad_request(format!(
+                    "extensionId '{id}' is not '{{namespace}}.{{extension}}'"
+                ))
+            })?;
+            (ns.to_owned(), Some(ext.to_owned()))
+        }
+        (None, Some(ns), ext) => (ns, ext),
+        _ => {
+            return Err(AppError::bad_request(
+                "give 'extensionId', or 'namespaceName' with an optional 'extensionName'",
+            ))
+        }
+    };
+    require_single_segment("namespace", &namespace)?;
+
+    let entries = match extension {
+        Some(ext) => {
+            require_single_segment("extension name", &ext)?;
+            source::extension_entry(
+                &svc,
+                &local_svc,
+                mode,
+                &registry,
+                kind,
+                &format!("{namespace}.{ext}"),
+                &identity,
+            )
+            .await?
+            .into_iter()
+            .collect::<Vec<_>>()
+        }
+        // A namespace query is the namespace document's scan, see `openvsx_namespace`.
+        None => {
+            let scan = GalleryQuery {
+                search_text: Some(namespace.clone()),
+                page_size: 100,
+                ..Default::default()
+            };
+            let (entries, _) =
+                source::search_entries(&svc, &local_svc, mode, &registry, kind, &scan, &identity)
+                    .await?;
+            entries
+                .into_iter()
+                .filter(|e| e.publisher.eq_ignore_ascii_case(&namespace))
+                .collect()
+        }
+    };
+
+    // `versions` is newest-first and already filtered for this caller.
+    let all = q.include_all_versions.as_deref() == Some("true");
+    let hits: Vec<_> = entries
+        .iter()
+        .flat_map(|e| {
+            let picked: Vec<_> = match &q.extension_version {
+                Some(v) => e.versions.iter().filter(|x| &x.version == v).collect(),
+                None if all => e.versions.iter().collect(),
+                None => e.versions.first().into_iter().collect(),
+            };
+            picked.into_iter().map(move |v| (e, v))
+        })
+        .collect();
+
+    let size = q.size.unwrap_or(100).clamp(1, 200);
+    let offset = q.offset.unwrap_or(0);
+    let urls = GalleryUrls::new(&registry_public_base(&req, &registry));
+    Ok(HttpResponse::Ok()
+        .content_type("application/json")
+        .json(serde_json::json!({
+            "offset": offset,
+            "totalSize": hits.len(),
+            "extensions": hits
+                .iter()
+                .skip(offset)
+                .take(size)
+                .map(|(e, v)| openvsx_extension_json(e, v, &e.versions, &urls))
+                .collect::<Vec<_>>(),
+        })))
+}
+
 /// `GET /api/version` — the registry's own version document.
 ///
 /// `ovsx` and the Open VSX web UI read it to decide which API shape they are

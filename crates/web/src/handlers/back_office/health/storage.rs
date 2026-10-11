@@ -92,6 +92,7 @@ pub async fn clear_registry_cache(
             Some(batlehub_core::entities::PackageId::new(&registry, "", "")),
             AccessAction::CacheClear,
             &identity.0,
+            &identity.1,
         )
         .await;
 

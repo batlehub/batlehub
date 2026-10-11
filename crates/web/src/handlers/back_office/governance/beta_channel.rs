@@ -123,7 +123,7 @@ pub async fn add_beta_member(
         .map_err(AppError::from)?;
 
     admin_svc
-        .record_account_action(AccessAction::AddBetaMember, &identity.0)
+        .record_account_action(AccessAction::AddBetaMember, &identity.0, &identity.1)
         .await;
 
     Ok(HttpResponse::NoContent().finish())
@@ -167,7 +167,7 @@ pub async fn remove_beta_member(
         .map_err(AppError::from)?;
 
     admin_svc
-        .record_account_action(AccessAction::RemoveBetaMember, &identity.0)
+        .record_account_action(AccessAction::RemoveBetaMember, &identity.0, &identity.1)
         .await;
 
     Ok(HttpResponse::NoContent().finish())

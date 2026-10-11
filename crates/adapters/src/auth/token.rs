@@ -213,6 +213,7 @@ mod tests {
         RawAuthRequest {
             headers: HashMap::from([("authorization".to_owned(), auth.to_owned())]),
             query_params: HashMap::new(),
+            source_ip: None,
         }
     }
 
@@ -226,6 +227,7 @@ mod tests {
         let r = RawAuthRequest {
             headers: HashMap::new(),
             query_params: HashMap::new(),
+            source_ip: None,
         };
         assert!(p.authenticate(&r).await.unwrap().is_none());
     }

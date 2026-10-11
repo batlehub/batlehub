@@ -19,7 +19,7 @@
  * which is why the stamp is a separate, deliberate command rather than
  * something the check does for you.
  *
- * Scope is a decision, not an accident: `contributing/`, `rfc/` and the
+ * Scope is a decision, not an accident: `contributing/`, `rfc/`, `techdebt/` and the
  * generated `guide/roadmap.md` are not translated. `--status` reports them as
  * out of scope rather than as work outstanding, so the number that is left is
  * the number that means something.
@@ -53,13 +53,13 @@ const SKIP_DIRS = new Set([
 /**
  * Pages that stay in English, and why — the §7 of the plan, in code.
  *
- * `contributing/` and `rfc/` are read by people changing this codebase, which
+ * `contributing/`, `rfc/` and `techdebt/` are read by people changing this codebase, which
  * is 73% of the corpus written for the smallest and most English-reading
  * audience it has. `guide/roadmap.md` is generated from `ROADMAP.md`, which is
  * canonical: translating the output would create a second canonical roadmap
  * that no gate could keep true.
  */
-const OUT_OF_SCOPE = [/^contributing\//, /^rfc\//, /^guide\/roadmap\.md$/];
+const OUT_OF_SCOPE = [/^contributing\//, /^rfc\//, /^techdebt\//, /^guide\/roadmap\.md$/];
 
 /**
  * A redirect stub — a page that exists for an address rather than for a reader

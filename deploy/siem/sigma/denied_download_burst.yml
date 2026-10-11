@@ -1,0 +1,45 @@
+title: BatleHub denied downloads
+name: batlehub_denied_download
+id: 351750a3-2919-4316-b0bc-38661868a2da
+status: experimental
+description: >-
+  A download the server refused.
+references:
+  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+author: BatleHub
+date: 2026-10-05
+logsource:
+  product: batlehub
+  service: audit
+detection:
+  selection:
+    event.dataset: batlehub.audit
+    event.action: download
+    event.outcome: denied
+  condition: selection
+falsepositives:
+  - A build resolving a lockfile that pins a blocked version
+level: informational
+---
+title: BatleHub denied-download burst from one source
+id: b0c49ef9-3c76-4ac8-bd21-ca49dd0cb78f
+status: experimental
+description: >-
+  Many refused downloads from one source IP in five minutes: enumeration of a
+  closed registry, or a build hammering a blocked dependency.
+references:
+  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+author: BatleHub
+date: 2026-10-05
+tags:
+  - attack.discovery
+correlation:
+  type: event_count
+  rules:
+    - batlehub_denied_download
+  group-by:
+    - source.ip
+  timespan: 5m
+  condition:
+    gte: 50
+level: medium

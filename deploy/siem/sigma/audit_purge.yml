@@ -1,0 +1,22 @@
+title: BatleHub audit trail purged
+id: bfb72617-52ad-4c5d-a4d1-c113fba2ef78
+status: experimental
+description: >-
+  Someone deleted rows from the BatleHub audit trail. Always worth a human: a purge is how an intruder removes the record of what they did, and a legitimate one is rare and announced.
+references:
+  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+author: BatleHub
+date: 2026-10-05
+tags:
+  - attack.t1070
+logsource:
+  product: batlehub
+  service: audit
+detection:
+  selection:
+    event.dataset: batlehub.audit
+    event.action: audit_purge
+  condition: selection
+falsepositives:
+  - A scheduled or announced retention purge by an administrator
+level: high

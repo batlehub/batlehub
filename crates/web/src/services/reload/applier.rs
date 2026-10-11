@@ -107,8 +107,28 @@ impl ConfigReloadService {
             // differ from the last load attempt — nothing to rebuild.
             return Ok(ReloadDiff::default());
         }
-        let new_config = self.load_layers(&content).await?;
-        self.build_pending(new_config, source).await
+        let label = source.actor_label();
+        let result = match self.load_layers(&content).await {
+            Ok(new_config) => self.build_pending(new_config, source).await,
+            Err(e) => Err(e),
+        };
+        self.record_rejection(&result, label).await;
+        result
+    }
+
+    /// A candidate that did not parse, validate or build is a `rejected`
+    /// `config_changes` row — the status the table was created with and nothing
+    /// wrote until RFC 0036 §6.2 needed `config_rejected` in the stream.
+    async fn record_rejection<T>(&self, result: &Result<T, anyhow::Error>, triggered_by: &str) {
+        if let Err(e) = result {
+            self.persist_audit(
+                &ReloadDiff::default(),
+                triggered_by,
+                "rejected",
+                Some(&format!("{e:#}")),
+            )
+            .await;
+        }
     }
 
     /// Validates a config TOML string without storing a pending reload.
@@ -159,9 +179,18 @@ impl ConfigReloadService {
                 pending_created: false,
             });
         }
-        let new_config = self.load_layers(content).await?;
-        let warnings = new_config.warnings();
-        let diff = self.build_pending(new_config, source).await?;
+        let label = source.actor_label();
+        let loaded = match self.load_layers(content).await {
+            Ok(new_config) => {
+                let warnings = new_config.warnings();
+                self.build_pending(new_config, source)
+                    .await
+                    .map(|diff| (diff, warnings))
+            }
+            Err(e) => Err(e),
+        };
+        self.record_rejection(&loaded, label).await;
+        let (diff, warnings) = loaded?;
         // Store the raw content so apply() can persist it to disk.
         if let Some(ref mut p) = *self.pending.lock().expect("pending reload lock poisoned") {
             p.content = Some(content.to_owned());
@@ -325,6 +354,8 @@ impl ConfigReloadService {
         // Refresh (and re-log) the config warnings so the admin endpoint describes
         // the config that is now in force, not the one it replaced.
         self.config_warnings.replace(pending.warnings.clone());
+        // Upstream absences were observed under the old upstreams and credentials.
+        self.discovery.clear_absent();
 
         // Clear the in-progress banner on success.
         if let Some(ref banner) = self.banner {

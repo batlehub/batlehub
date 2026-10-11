@@ -613,6 +613,8 @@ impl LocalRegistryService {
             timestamp: chrono::Utc::now(),
             ip_address: None,
             user_agent: None,
+            throttled_count: None,
+            detail: None,
         };
         if let Err(e) = repo.record_access(event).await {
             tracing::warn!(error = %e, "audit log write failed for local registry lifecycle action");

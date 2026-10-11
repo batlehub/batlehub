@@ -35,6 +35,8 @@ async fn record_pull(repo: &Arc<InMemoryRepo>, user_id: &str) {
         result: AccessResult::Allowed,
         ip_address: None,
         user_agent: None,
+        throttled_count: None,
+        detail: None,
     })
     .await
     .unwrap();

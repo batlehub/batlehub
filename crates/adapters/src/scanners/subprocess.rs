@@ -292,15 +292,20 @@ pub fn work_dir(prefix: &str) -> Result<tempfile::TempDir, ScannerError> {
         .map_err(|e| ScannerError::Other(format!("creating a work directory: {e}")))
 }
 
-/// Whether `path` is a file this process could execute — what `[scanners]`
-/// validation and the startup check ask about a `command`.
+/// Whether `path` is a file this process could execute — what the worker's
+/// startup asks about a scanner's `command` (RFC 0018 §4.3). Config validation
+/// does not: it runs on proxy-only processes too, whose image has no scanner.
 pub fn command_exists(path: &Path) -> bool {
+    fn executable(p: &Path) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    }
     if path.components().count() == 1 {
         // A bare name: on PATH?
         return std::env::var_os("PATH")
-            .is_some_and(|p| std::env::split_paths(&p).any(|dir| dir.join(path).is_file()));
+            .is_some_and(|p| std::env::split_paths(&p).any(|dir| executable(&dir.join(path))));
     }
-    path.is_file()
+    executable(path)
 }
 
 #[cfg(test)]
@@ -428,6 +433,10 @@ mod tests {
     #[test]
     fn a_missing_command_is_reported_as_such() {
         assert!(!command_exists(Path::new("/nonexistent/postmortem")));
+        let dir = tempfile::tempdir().unwrap();
+        let plain = dir.path().join("not-a-binary");
+        std::fs::write(&plain, "x").unwrap();
+        assert!(!command_exists(&plain), "a file without an execute bit");
         assert!(command_exists(Path::new("sh")));
         assert!(command_exists(Path::new("/bin/sh")));
     }

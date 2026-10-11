@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/admin-access.md
-sourceHash: b4c121e82ebf3494
+sourceHash: c61923ccaf8ef61a
 ---
 
 # Accès et audit
@@ -116,7 +116,7 @@ comme sur l'export.
 | `cache_coherence_run` / `cache_coherence_dry_run` | une passe a ramassé des blobs que rien ne référence — [voir plus bas](/fr/guide/admin-policies#cache-coherence) |
 | `tombstone_compact` | le détail des pierres tombales périmées d'un registre a été retiré |
 | `audit_purge` | cette piste elle-même a été purgée jusqu'à une date de coupure |
-| `block` / `unblock`, `block_user` / `unblock_user`, `block_ip` / `unblock_ip` | l'action d'administration correspondante |
+| `block` / `unblock`, `block_user` / `unblock_user`, `block_ip` / `unblock_ip` | l'action d'administration correspondante ; `detail` nomme l'IP pour les deux dernières. `block_ip` est aussi écrit par `system` pour un blocage automatique, avec le nombre de violations qui l'a déclenché |
 | `yank` / `unyank`, `deprecate` / `undeprecate`, `unlist` / `relist` | un changement de cycle de vie sur une version |
 | `add_owner` / `remove_owner`, `set_visibility`, `claim_namespace` / `release_namespace` | propriété et visibilité |
 | `download` / `view_metadata` | une lecture, autorisée ou refusée |

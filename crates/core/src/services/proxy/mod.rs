@@ -316,6 +316,10 @@ pub(super) fn record_upstream_duration(
     )
     .record(elapsed.as_secs_f64());
     metrics_svc.record_upstream_latency(registry_label, elapsed.as_millis() as u64);
+    // For the server's `profiling` feature, which splits a request's wall time
+    // into CPU, SQL, upstream and the rest. TRACE under its own target: off
+    // unless a layer asks for it, and then a callsite check, not a format.
+    tracing::trace!(target: "batlehub::upstream", elapsed_secs = elapsed.as_secs_f64(), operation);
 }
 
 /// Times a call out to an upstream registry client and records it under

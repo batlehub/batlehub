@@ -200,6 +200,16 @@ pub enum ScannerConfig {
         #[serde(default)]
         escalation: Option<EscalationConfig>,
     },
+    /// Operator-supplied YARA rules, run by yara-x's `yr` in the sandbox
+    /// (RFC 0036 §6.6). The worker refuses to start without the binary or
+    /// without a rule file under `rules_dir`.
+    Yara {
+        #[serde(default = "default_yr_command")]
+        command: String,
+        rules_dir: String,
+        #[serde(default)]
+        escalation: Option<EscalationConfig>,
+    },
 }
 
 impl ScannerConfig {
@@ -212,6 +222,7 @@ impl ScannerConfig {
             Self::Mlab { .. } => "mlab",
             Self::Sigstore { .. } => "sigstore",
             Self::Socket { .. } => "socket",
+            Self::Yara { .. } => "yara",
         }
     }
 
@@ -223,13 +234,15 @@ impl ScannerConfig {
             | Self::Guarddog { escalation, .. }
             | Self::Mlab { escalation, .. }
             | Self::Sigstore { escalation, .. }
-            | Self::Socket { escalation, .. } => escalation.as_ref(),
+            | Self::Socket { escalation, .. }
+            | Self::Yara { escalation, .. } => escalation.as_ref(),
         }
     }
 
     /// Whether this build can run the scanner (RFC 0018 §12): `osv` in
     /// phase 1; `postmortem`, `trivy`, `sigstore`, `guarddog` in phase 3;
-    /// `socket`, `mlab` in phase 5. Every scanner the RFC names is built.
+    /// `socket`, `mlab` in phase 5; `yara` in RFC 0036 phase 6. Every
+    /// scanner the RFCs name is built.
     pub fn available(&self) -> bool {
         true
     }
@@ -252,6 +265,7 @@ impl ScannerConfig {
             | Self::Guarddog { .. }
             | Self::Sigstore { .. } => "RFC 0018 phase 3",
             Self::Mlab { .. } | Self::Socket { .. } => "RFC 0018 phase 5",
+            Self::Yara { .. } => "RFC 0036 phase 6",
         }
     }
 
@@ -366,6 +380,11 @@ fn default_scanner_error() -> ScannerErrorMode {
 fn default_pullers_window_days() -> u32 {
     30
 }
+/// Where the worker image installs yara-x's CLI.
+fn default_yr_command() -> String {
+    "/usr/local/bin/yr".to_owned()
+}
+
 fn default_scanner_timeout() -> u64 {
     60
 }

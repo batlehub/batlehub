@@ -1,4 +1,5 @@
 pub mod air_gap;
+pub mod audit;
 pub mod auth;
 pub mod flag_sources;
 pub mod forge;
@@ -14,6 +15,7 @@ pub mod storage;
 pub mod warnings;
 
 pub use air_gap::{valid_ed25519_hex_key, AirGapConfig};
+pub use audit::AuditConfig;
 pub use auth::{
     ActionsGroupRule, ActionsOidcAuthConfig, AuthConfig, Condition, ConditionMatchType,
     KubernetesAuthConfig, OidcAuthConfig, RuleMatch, TokenAuthConfig, TokenEntry,
@@ -62,7 +64,7 @@ pub use security::{
 };
 pub use server::{
     default_service_name, is_secure_issuer_url, parse_trusted_proxies, CacheConfig, DatabaseConfig,
-    OtelConfig, ServerConfig, SignedUrlsConfig,
+    LogFormat, LoggingConfig, OtelConfig, ServerConfig, SignedUrlsConfig,
 };
 pub use warnings::ConfigWarning;
 
@@ -115,6 +117,14 @@ pub struct AppConfig {
     pub grants: Option<std::collections::HashMap<String, Vec<String>>>,
     #[serde(default)]
     pub otel: Option<OtelConfig>,
+    /// `[logging]`: the log line format, and with `json` the audit stream
+    /// (RFC 0036 §4.1). Absent means `text`, byte-identical to before.
+    #[serde(default)]
+    pub logging: LoggingConfig,
+    /// `[audit]`: retention, pseudonymisation, sealing and erasure of the
+    /// audit trail (RFC 0036 §4.1). Absent changes nothing.
+    #[serde(default)]
+    pub audit: Option<AuditConfig>,
     #[serde(default)]
     pub limits: LimitsConfig,
     /// Optional global IP-based blocking (fail2ban) configuration.
@@ -709,9 +719,42 @@ impl AppConfig {
         self.dry_run_warnings(&mut out);
         self.coherence_warnings(&mut out);
         self.sdkman_warnings(&mut out);
+        self.devfile_warnings(&mut out);
         self.flag_source_warnings(&mut out);
         self.air_gap_warnings(&mut out);
+        self.audit_warnings(&mut out);
         out
+    }
+
+    /// RFC 0036 §4.3's warnings: the trail's lifecycle as configured, stated.
+    fn audit_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        let Some(audit) = &self.audit else {
+            out.push(ConfigWarning::new(
+                warnings::AUDIT_NO_RETENTION,
+                "audit",
+                "audit trail has no retention: personal data in access_events is kept \
+                 indefinitely. Add an [audit] block (RFC 0036) to expire and pseudonymise it",
+            ));
+            return;
+        };
+        let access = audit.access_retention_days;
+        if audit.pseudonymise_after_days == 0 && (access == 0 || access > 90) {
+            out.push(ConfigWarning::new(
+                warnings::AUDIT_FULL_IPS_KEPT,
+                "audit.pseudonymise_after_days",
+                "access rows keep their full IP and user agent for their whole retention; \
+                 set pseudonymise_after_days to truncate them sooner",
+            ));
+        }
+        if audit.sealing() && self.logging.format == LogFormat::Text {
+            out.push(ConfigWarning::new(
+                warnings::AUDIT_SEALING_WITHOUT_STREAM,
+                "audit.seal_interval_secs",
+                "the trail is sealed but [logging] format is text: the chain is verifiable, \
+                 but no copy of its head leaves the database, so a truncated tail cannot be \
+                 detected",
+            ));
+        }
     }
 
     /// RFC 0010 §4.5: SDKMAN versions its API in the path, so an `upstreams`
@@ -736,6 +779,53 @@ impl AppConfig {
                          SDKMAN's candidates API is versioned in the path \
                          (https://api.sdkman.io/2); the URL is served as given, so `sdk list` \
                          will answer 404 if this is a typo",
+                        reg.name
+                    ),
+                ));
+            }
+        }
+    }
+
+    /// RFC 0035 §4.5: the two ways a devfile registry can be configured and
+    /// still fail its clients, both of which read as an outage rather than a
+    /// setting unless something says so.
+    fn devfile_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        let bound: std::collections::HashSet<String> = self
+            .registry_host_bindings()
+            .into_iter()
+            .map(|b| b.registry)
+            .collect();
+        for (index, reg) in self.registries.iter().enumerate() {
+            if reg.registry_type != batlehub_core::entities::RegistryKind::Devfile.as_str() {
+                continue;
+            }
+            if !bound.contains(&reg.name) {
+                out.push(ConfigWarning::new(
+                    warnings::DEVFILE_WITHOUT_HOST,
+                    format!("registries[{index}].hosts"),
+                    format!(
+                        "registry '{}': a devfile registry with no host is served under \
+                         /proxy/{}/ only. Che works from there; registry-library and odo \
+                         resolve the index and then fail every pull, because they build the \
+                         OCI reference from the host alone and ask for /v2/… at its root",
+                        reg.name, reg.name
+                    ),
+                ));
+            }
+            let anonymous_reads = reg
+                .rbac
+                .anonymous
+                .iter()
+                .any(|p| p == "releases:read" || p == "*");
+            if !anonymous_reads {
+                out.push(ConfigWarning::new(
+                    warnings::DEVFILE_NOT_ANONYMOUS,
+                    format!("registries[{index}].rbac.anonymous"),
+                    format!(
+                        "registry '{}': neither Che's resolver nor registry-library sends a \
+                         credential, and 'anonymous' here does not hold 'releases:read' — \
+                         unless a grant elsewhere gives it, every tile and every pull will be \
+                         refused",
                         reg.name
                     ),
                 ));
@@ -2209,6 +2299,9 @@ impl AppConfig {
         self.validate_security_globals()?;
         self.validate_upstream_audit()?;
         self.validate_release_imports()?;
+        if let Some(audit) = &self.audit {
+            audit.validate()?;
+        }
         Ok(())
     }
 
@@ -2454,6 +2547,34 @@ impl AppConfig {
                 }
             }
         }
+        // A devfile upstream is the registry *root* — what Che and
+        // `registry-library` are both given — and there is one: the tags and
+        // digests of two registries cannot be merged into one index, and a
+        // second entry would otherwise be a fan-out nobody asked for
+        // (RFC 0035 §4.5).
+        if kind == batlehub_core::entities::RegistryKind::Devfile {
+            if registry.upstreams.len() > 1 {
+                bail!(
+                    "registry '{}': a devfile registry has one upstream, and {} are configured \
+                     — one registry's index says nothing about another's stacks",
+                    registry.name,
+                    registry.upstreams.len()
+                );
+            }
+            for upstream in &registry.upstreams {
+                let path = upstream.trim_end_matches('/');
+                for doc in ["/v2index", "/index"] {
+                    if path.ends_with(doc) {
+                        bail!(
+                            "registry '{}': a devfile upstream is the registry root, not its \
+                             index — use '{}' instead of '{upstream}'",
+                            registry.name,
+                            path.trim_end_matches(doc)
+                        );
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -2560,6 +2681,15 @@ impl AppConfig {
                 "a narinfo carries no date anywhere in the protocol, so every store path reaches \
                  the gate without one: 'true' refuses every substitution on this registry, \
                  'false' makes the gate inert"
+            }
+            // `lastModified` is the time upstream last rebuilt the whole
+            // registry — the same instant on every version — so the adapter
+            // dates nothing, and every stack version reaches the gate undated
+            // (RFC 0035 §6.7).
+            RegistryKind::Devfile => {
+                "a devfile registry's 'lastModified' is the time the whole registry was last \
+                 rebuilt, so no stack version is dated: 'true' refuses every download on this \
+                 registry, 'false' makes the gate inert"
             }
             _ => return Ok(()),
         };
@@ -2831,8 +2961,11 @@ impl AppConfig {
         }))
     }
 
-    /// `[scanners]`: the key an external scanner cannot run without, the
-    /// command a local one is, and the escalation rule's own arithmetic.
+    /// `[scanners]`: the key an external scanner cannot run without and the
+    /// escalation rule's own arithmetic. A local scanner's `command` is checked
+    /// by the worker when it builds its scanners (`server/src/setup.rs`), not
+    /// here: every process validates the config, and a proxy-only one runs an
+    /// image with no scanner on it (RFC 0036 §13).
     fn validate_scanners(&self) -> Result<()> {
         for (name, cfg) in &self.scanners {
             match cfg {
@@ -2844,16 +2977,6 @@ impl AppConfig {
                         "[scanners.{name}] type = \"{}\" needs an api_key; without one every \
                          call fails with a 401 nobody reads",
                         cfg.type_name()
-                    );
-                }
-                ScannerConfig::Postmortem { command, .. }
-                | ScannerConfig::Guarddog { command, .. }
-                    if !is_executable(command) =>
-                {
-                    bail!(
-                        "[scanners.{name}] command '{command}' does not exist or is not \
-                         executable; this is a scanner that opens untrusted archives, so it \
-                         is checked at startup rather than at the first job"
                     );
                 }
                 _ => {}
@@ -2931,6 +3054,17 @@ impl AppConfig {
         self.validate_flag_sources()?;
         self.validate_air_gap()?;
         self.validate_raw_ceilings()?;
+        if let Some(ip) = &self.ip_blocking {
+            if ip.violation_window_secs > network::MAX_VIOLATION_WINDOW_SECS {
+                bail!(
+                    "[ip_blocking].violation_window_secs = {} exceeds {} (30 days): violation \
+                     counters are pruned after 30 days, so a longer window would never reach \
+                     its threshold",
+                    ip.violation_window_secs,
+                    network::MAX_VIOLATION_WINDOW_SECS
+                );
+            }
+        }
         for name in &self.worker.registries {
             if !self.registries.iter().any(|r| &r.name == name) {
                 bail!("[worker] registries names '{name}', which is not a configured registry");
@@ -4359,12 +4493,3 @@ fn apply_proxy_env_overrides(
 
 #[cfg(test)]
 mod tests;
-
-/// Whether `path` names an existing file with an execute bit — the check
-/// RFC 0018 §4.3 asks for the subprocess scanners' `command`.
-fn is_executable(path: &str) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path)
-        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
-}

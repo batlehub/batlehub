@@ -120,6 +120,14 @@ pub enum Action {
     /// not expressible and the question did not arise. Decomposing it onto the
     /// read verb would have made it expressible and answered it wrongly.
     AuditPurge,
+    /// Pseudonymising a data subject across the audit trail, their tokens and
+    /// their blocks (RFC 0036 §6.3).
+    ///
+    /// Its own verb, not implied by `audit:purge`: a purge removes *traffic*,
+    /// an erasure rewrites *evidence* — who did what — and an estate that lets
+    /// a reviewer trim old downloads does not thereby let them rename the
+    /// author of a grant.
+    GdprErase,
 
     // ── control surfaces (RFC 0015 §4.2's deferred `require_admin` split) ────
     //
@@ -278,6 +286,7 @@ impl Action {
         Action::FindingsRead,
         Action::FlagsRead,
         Action::AuditPurge,
+        Action::GdprErase,
         Action::ConfigRead,
         Action::ConfigWrite,
         Action::SystemRead,
@@ -321,6 +330,7 @@ impl Action {
             Action::FindingsRead => "findings:read",
             Action::FlagsRead => "flags:read",
             Action::AuditPurge => "audit:purge",
+            Action::GdprErase => "gdpr:erase",
             Action::ConfigRead => "config:read",
             Action::ConfigWrite => "config:write",
             Action::SystemRead => "system:read",

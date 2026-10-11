@@ -400,7 +400,7 @@ fn go_list_meta() -> serde_json::Value {
 }
 
 fn matrix() -> Vec<Row> {
-    vec![
+    let mut rows = vec![
         // ── galaxy (RFC 0031) ────────────────────────────────────────────────
         // The package is `{namespace}.{name}` and the URL spells it
         // `{namespace}/{name}`, so every row carries the coordinate explicitly.
@@ -775,6 +775,14 @@ fn matrix() -> Vec<Row> {
         Row::new("openvsx", "/proxy/reg/api/acme/ext/9.8.7")
             .pkg("acme.ext")
             .meta(extension_meta),
+        // Theia's lookup (v2) and its v1 fallback: an extension document by id,
+        // so the same leak class as the two rows above with `-` in front.
+        Row::new("openvsx", "/proxy/reg/api/-/query?extensionId=acme.ext")
+            .pkg("acme.ext")
+            .meta(extension_meta),
+        Row::new("openvsx", "/proxy/reg/api/v2/-/query?extensionId=acme.ext")
+            .pkg("acme.ext")
+            .meta(extension_meta),
         Row::new("terraform", "/proxy/reg/v1/modules/acme/vpc/aws/9.8.7")
             .pkg("modules/acme/vpc/aws")
             .meta(terraform_module_version_meta)
@@ -807,7 +815,47 @@ fn matrix() -> Vec<Row> {
         // The fixture publishes no plugin *update* rows, which is what this
         // route answers from — a permitted caller gets `[]` too.
         .no_control(),
-    ]
+    ];
+    rows.extend(devfile_rows());
+    rows
+}
+
+/// The devfile rows, generated: two families of eight and seven routes that
+/// differ only by path.
+fn devfile_rows() -> Vec<Row> {
+    // Proxy-only, and every route that names a package reaches the gate
+    // through the index listing first — the REST devfile and the OCI routes
+    // resolve their version from the *filtered* v2 index — so the refusal
+    // is observable with no upstream at all. The positive control is not:
+    // there is no devfile index in this fixture for a permitted caller to
+    // read, which the in-process suite (`tests/devfile.rs`, against the
+    // real client and a mock upstream) and `tests/heavy/devfile.sh` cover.
+    const RESOLVED: Expect = Expect::NotChecked(
+        "proxy-only: the version is resolved from the filtered index and no local package is read",
+    );
+    let whole = [
+        "/proxy/reg/index",
+        "/proxy/reg/index/sample",
+        "/proxy/reg/index/stack",
+        "/proxy/reg/index/all",
+        "/proxy/reg/v2index",
+        "/proxy/reg/v2index/sample",
+        "/proxy/reg/v2index/stack",
+        "/proxy/reg/v2index/all",
+    ];
+    let resolved = [
+        "/proxy/reg/devfiles/pkg",
+        "/proxy/reg/devfiles/pkg/9.8.7",
+        "/proxy/reg/devfiles/pkg/starter-projects/pkg-starter",
+        "/proxy/reg/devfiles/pkg/9.8.7/starter-projects/pkg-starter",
+        "/proxy/reg/v2/devfile-catalog/pkg/manifests/9.8.7",
+        "/proxy/reg/v2/devfile-catalog/pkg/blobs/sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "/proxy/reg/v2/devfile-catalog/pkg/tags/list",
+    ];
+    let rows = whole.into_iter().map(|uri| (uri, WHOLE_REGISTRY));
+    rows.chain(resolved.into_iter().map(|uri| (uri, RESOLVED)))
+        .map(|(uri, vis)| Row::new("devfile", uri).vis(vis).no_control())
+        .collect()
 }
 
 /// The VS Code gallery query an editor sends to resolve one extension by name.
@@ -1018,6 +1066,8 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/{version}/", Coverage::Row),
     ("/proxy/{registry}/galaxy/api/v3/imports/collections/{task}/", Coverage::NoPackage("the import-task poll: a state document for a publish that has already finished, naming no package and carrying no content. The route the *client* builds — `_urljoin(api_server, v3, \"imports/collections\", task_id, \"/\")` — not the one RFC 0031 §4.4 specified")),
     ("/proxy/{registry}/api/-/search", Coverage::NoRow("package read, not yet exercised")),
+    ("/proxy/{registry}/api/-/query", Coverage::Row),
+    ("/proxy/{registry}/api/v2/-/query", Coverage::Row),
     ("/proxy/{registry}/api/-/public-key/{key_id}", Coverage::NoRow("anonymous by design (RFC 0020 §4.2): serves the registry's own VSIX signing public key, which names a key id and no coordinate — no package is read, and a public key is public. `vsx_signing.rs` asserts the anonymous `200` and the `404` for any other id")),
     ("/proxy/{registry}/api/packages/{path}", Coverage::NoRow("package read, not yet exercised")),
     ("/proxy/{registry}/api/plugins/{id}", Coverage::NoRow("package read, not yet exercised")),
@@ -1088,6 +1138,22 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/nix/realisations/{id}.doi", Coverage::NoPackage("a derivation-to-output mapping. The policy lives on the narinfo of the `outPath` it names, not here — refusing the mapping while serving the path would be the wrong half (RFC 0028 §4.4)")),
     ("/proxy/{registry}/nix/{hash}.ls", Coverage::NoRow("no local mode yet; see the note above")),
     ("/proxy/{registry}/nix/{hash}.narinfo", Coverage::NoRow("no local mode yet; see the note above. This is the chokepoint every substitution resolves through, so it is the first of these to earn a real row when publish lands")),
+    ("/proxy/{registry}/devfiles/{stack}", Coverage::Row),
+    ("/proxy/{registry}/devfiles/{stack}/starter-projects/{name}", Coverage::Row),
+    ("/proxy/{registry}/devfiles/{stack}/{version}", Coverage::Row),
+    ("/proxy/{registry}/devfiles/{stack}/{version}/starter-projects/{name}", Coverage::Row),
+    ("/proxy/{registry}/index", Coverage::Row),
+    ("/proxy/{registry}/index/all", Coverage::Row),
+    ("/proxy/{registry}/index/sample", Coverage::Row),
+    ("/proxy/{registry}/index/stack", Coverage::Row),
+    ("/proxy/{registry}/v2/{ns}/{stack}/blobs/{digest}", Coverage::Row),
+    ("/proxy/{registry}/v2/{ns}/{stack}/manifests/{reference}", Coverage::Row),
+    ("/proxy/{registry}/v2/{ns}/{stack}/tags/list", Coverage::Row),
+    ("/proxy/{registry}/v2index", Coverage::Row),
+    ("/proxy/{registry}/v2index/all", Coverage::Row),
+    ("/proxy/{registry}/v2index/sample", Coverage::Row),
+    ("/proxy/{registry}/v2index/stack", Coverage::Row),
+    ("/proxy/{registry}/v2/", Coverage::NoPackage("the OCI API version check; answers `{}` to everyone and names no repository")),
     ("/proxy/{registry}/nodedist/index.json", Coverage::Row),
     ("/proxy/{registry}/nodedist/index.tab", Coverage::Row),
     ("/proxy/{registry}/nodedist/{version}/{file}", Coverage::Row),
@@ -2532,55 +2598,9 @@ fn report_write_surface_coverage() {
 /// constraint and splices a `/` before the `@`. Same route, two spellings, so
 /// both sides are canonicalised before they are compared. Getting that wrong
 /// would report thirteen phantom mismatches, which is a gate nobody would keep.
-/// Consume one `{param:regex}` body, having already read the opening brace, and
-/// return just the parameter name.
 ///
-/// The scan is brace-balanced rather than a search for `}`: a constraint can
-/// contain braces of its own (`{filename:.+\.(?:tar\.bz2|conda)}` does not, but
-/// `{n:\d{1,3}}` would), and a naive split would truncate mid-pattern and
-/// silently invent a route.
-fn param_name(chars: &mut std::str::Chars<'_>) -> String {
-    let mut name = String::new();
-    let mut depth = 1usize;
-    let mut in_constraint = false;
-    for c in chars.by_ref() {
-        match c {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    break;
-                }
-            }
-            ':' if depth == 1 && !in_constraint => in_constraint = true,
-            _ if !in_constraint => name.push(c),
-            _ => {}
-        }
-    }
-    name
-}
-
-/// Drop `:regex` from every `{param:regex}`, then join `}/@` back to `}@`.
-///
-/// Both sides of the coverage comparison go through this: actix reports the
-/// pattern as registered, the inventory is written without the constraints, and
-/// comparing the two spellings directly would report thirteen phantom
-/// mismatches.
-fn canonical(pattern: &str) -> String {
-    let mut out = String::with_capacity(pattern.len());
-    let mut chars = pattern.chars();
-    while let Some(c) = chars.next() {
-        if c != '{' {
-            out.push(c);
-            continue;
-        }
-        out.push('{');
-        out.push_str(&param_name(&mut chars));
-        out.push('}');
-    }
-    out.replace("}/@", "}@")
-}
-
+/// `canonical` (and `param_name`) live in `common/mod.rs`, shared with
+/// `profile_route_coverage.rs`.
 #[actix_web::test]
 async fn coverage_claims_match_the_routes_rows_actually_reach() {
     use std::collections::BTreeSet;
@@ -2594,6 +2614,20 @@ async fn coverage_claims_match_the_routes_rows_actually_reach() {
     )
     .await;
     let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+    // The devfile routes carry a registry-type guard (RFC 0035): they match a
+    // devfile registry and nothing else, so on the npm app above their paths
+    // fall through to npm's wildcards — which is the guard working. Their rows
+    // are routed on a devfile app instead.
+    let devfile_parts = local_only_app_parts_with_policy(
+        "reg",
+        "devfile",
+        RegistryMode::Local,
+        true,
+        rbac_policy_deny_anonymous,
+    )
+    .await;
+    let devfile_app =
+        build_local_registry_app(devfile_parts, batlehub_web::CargoIndexMap::default(), None).await;
 
     let mut reached: BTreeSet<String> = BTreeSet::new();
     let mut unrouted: Vec<&str> = Vec::new();
@@ -2605,7 +2639,12 @@ async fn coverage_claims_match_the_routes_rows_actually_reach() {
         if row.post.is_some() {
             continue;
         }
-        let resp = call_service(&app, TestRequest::get().uri(row.uri).to_request()).await;
+        let req = TestRequest::get().uri(row.uri).to_request();
+        let resp = if row.kind == "devfile" {
+            call_service(&devfile_app, req).await
+        } else {
+            call_service(&app, req).await
+        };
         match resp.request().match_pattern() {
             Some(pattern) => {
                 reached.insert(canonical(&pattern));

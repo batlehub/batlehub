@@ -8,6 +8,9 @@ export const DOCS_URL: string =
 /** Pre-filled "report a bug" issue link, using the repo's bug issue template. */
 export const REPORT_BUG_URL = "https://github.com/batlehub/batlehub/issues/new?template=new-bug.md";
 
-/** Pre-filled "report a security issue" link, using the repo's security issue template. */
-export const REPORT_SECURITY_URL =
-  "https://github.com/batlehub/batlehub/issues/new?template=security-issue.md";
+/**
+ * "Report a security issue": GitHub's private vulnerability reporting form, so
+ * a report is readable only by the maintainers until a fix ships (SECURITY.md,
+ * RFC 0036 §6.5). Never an issue link — an issue is public the moment it is filed.
+ */
+export const REPORT_SECURITY_URL = "https://github.com/batlehub/batlehub/security/advisories/new";

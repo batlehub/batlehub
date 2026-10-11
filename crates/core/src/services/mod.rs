@@ -1,10 +1,13 @@
 pub mod admin;
 pub mod apk;
+pub mod audit_stream;
+pub mod audit_trail;
 pub mod authz;
 pub mod blocking;
 pub mod bundle;
 pub mod cache_control;
 pub mod csv;
+pub mod devfile;
 pub mod document_cache;
 pub mod escaping;
 pub mod eviction;
@@ -120,3 +123,12 @@ pub use verdict::{VerdictService, VERDICT_EXEMPTION_GATE};
 pub use version_order::newest_first;
 pub use vulnerability::{ScanReport, VulnerabilityScanService};
 pub use warming::{WarmFailure, WarmingReport, WarmingService};
+
+/// A named step of a request, for the profiler's wait report: the server's
+/// `profiling` build adds each stage span's open-to-close time to
+/// `stage.<name>_ns` in `/debug/wait`, which is how `perf:profile` splits a
+/// path's awaited time into the steps that spent it. Without that build it is
+/// an ordinary INFO span, visible in a trace like any other.
+pub fn stage(name: &'static str) -> tracing::Span {
+    tracing::info_span!(target: "batlehub::stage", "stage", stage = name)
+}

@@ -25,13 +25,14 @@ on:
       - "**/Cargo.lock"
       - ".github/workflows/test.yaml"
       - ".github/scripts/merge_coverage.py"
+      - "deploy/siem/**"
   pull_request:
     branches: ["main"]
-    # `labeled` on top of the three defaults: the `full-test` label below is a
-    # *condition*, and a condition nothing re-evaluates is a condition nobody can
-    # use — adding the label to an open dependabot pull request has to start a
-    # run, not wait for the next push that will never come.
-    types: [opened, synchronize, reopened, labeled]
+    # No `labeled`: GitHub shows the newest check of each name on a pull
+    # request, so a run started by *any* label — `profile`, `soak` — and
+    # skipped would mask the real run on the same commit, and count as passing.
+    # The `full-test` label is read on the next push instead; on a dependabot
+    # pull request, label it and comment `@dependabot recreate`.
     paths:
       - "crates/**"
       - "server/**"
@@ -43,6 +44,7 @@ on:
       - "**/Cargo.lock"
       - ".github/workflows/test.yaml"
       - ".github/scripts/merge_coverage.py"
+      - "deploy/siem/**"
   # Nightly as well as per-PR, for the heavy client jobs: what they drive is not
   # all in this repository. They install Bundler and npm from their own
   # registries, pinned IDE, Terraform, .NET and micromamba builds, and several
@@ -78,11 +80,6 @@ jobs:
   # run the full suite as before, because `github.head_ref` is empty outside a
   # pull request and the dependabot test is then false.
   #
-  # It also swallows the cost of the `labeled` trigger that makes the label
-  # usable: any label on any pull request now starts this workflow, so a label
-  # that is not `full-test` (`soak`, `breaking-point`, a triage label) stops
-  # here rather than re-running a suite that already ran on the push.
-  #
   # Every job in this file must declare `needs: gate` and the `if` below —
   # a job that forgets it is a job dependabot still pays for.
   gate:
@@ -94,16 +91,11 @@ jobs:
       - id: decide
         env:
           HEAD_REF: ${{ github.head_ref }}
-          ACTION: ${{ github.event.action }}
-          LABEL: ${{ github.event.label.name }}
           FULL_TEST: ${{ contains(github.event.pull_request.labels.*.name, 'full-test') }}
         run: |
           run=true
           why=""
-          if [[ "$ACTION" == "labeled" && "$LABEL" != "full-test" ]]; then
-            run=false
-            why="the \`$LABEL\` label is not \`full-test\` — the suite already ran on the push"
-          elif [[ "$HEAD_REF" == dependabot/* && "$FULL_TEST" != "true" ]]; then
+          if [[ "$HEAD_REF" == dependabot/* && "$FULL_TEST" != "true" ]]; then
             run=false
             why="\`$HEAD_REF\` is a dependabot branch and the pull request is not labelled \`full-test\`"
           fi
@@ -114,7 +106,7 @@ jobs:
               echo
               echo "Skipped because $why."
               echo
-              echo "Add the **\`full-test\`** label to the pull request to run it."
+              echo "Add the **\`full-test\`** label to the pull request, then comment \`@dependabot recreate\` to run it."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -137,6 +129,11 @@ jobs:
       # CI fails on any warning — clippy is denied, formatting must be clean.
       - name: clippy
         run: cargo clippy --workspace -- -D warnings
+      # The `profiling` feature (server/src/profiling.rs) is off in every other
+      # build, so without this its code is only compiled when someone adds the
+      # `profile` label — and rots in between.
+      - name: clippy (profiling feature)
+        run: cargo clippy -p batlehub-server --features profiling -- -D warnings
       - name: rustfmt
         run: cargo fmt --all --check
       # Which registries hide blocked versions from their listings is generated
@@ -163,6 +160,30 @@ jobs:
             git --no-pager diff -- "$page"
             exit 1
           fi
+
+  siem:
+    # RFC 0036 §6.2. `sigma check` proves the rules are well-formed; the replay
+    # proves they still read fields the audit stream emits and fire on a
+    # recorded stream — a renamed field in `audit_stream.rs` fails here instead
+    # of silently blinding a SOC. Mirrors `task siem:check`.
+    name: SIEM rules (sigma check + replay)
+    runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # A venv rather than `pip --user`: the runner's Python is externally
+      # managed (PEP 668) and refuses user installs.
+      - name: Install sigma-cli
+        run: |
+          python3 -m venv "$RUNNER_TEMP/siem"
+          "$RUNNER_TEMP/siem/bin/pip" install --quiet sigma-cli==3.1.0 pyyaml==6.0.3
+      - name: sigma check
+        run: >-
+          "$RUNNER_TEMP/siem/bin/sigma" check --fail-on-issues
+          --exclude escaped_wildcard deploy/siem/sigma
+      - name: Replay the recorded stream
+        run: '"$RUNNER_TEMP/siem/bin/python" deploy/siem/replay.py'
 
   fuzz:
     # `fuzz/**` has been in this workflow's path filters since the targets
@@ -855,10 +876,15 @@ jobs:
           # hybrid: npm and pip on a `mode = "hybrid"` registry over a served
           # directory; both clients are on the runner image.
           - suite: hybrid
+          # db_calls: statements per request on the critical paths, counted
+          # from sqlx's own log against tests/heavy/db_calls.budget.json. No
+          # client and no network — the npm upstream is a stdlib mock.
+          - suite: db_calls
           # RFC 0018 from the client side: npm against a `[registries.security]`
           # registry backed by npmjs.org and the real OSV, the worker embedded.
-          # Needs Node (installed below) and bubblewrap for the egress row —
-          # a scanner under the worker's sandbox trying to reach the tap.
+          # Needs Node (installed below), bubblewrap for the egress row —
+          # a scanner under the worker's sandbox trying to reach the tap — and
+          # yara-x's `yr` for the operator-rule row (RFC 0036 §6.6).
           - suite: quarantine
           # RFC 0014 from the receiving end: npm against a directory the
           # suite serves as a registry, a staged disappearance, and the
@@ -886,6 +912,11 @@ jobs:
           # exactly as `closed_world.sh`'s dnf and pacman phases do. Nothing is
           # installed on the runner.
           - suite: nix
+          # devfile: registry-library built from its source at a pinned commit
+          # (Go is on the runner), pulling stacks from registry.devfile.io
+          # through a registry bound to `devfile.localhost` — the client drops
+          # any path prefix for its OCI requests (RFC 0035 §5.3).
+          - suite: devfile
     services:
       postgres:
         image: postgres:17-alpine
@@ -963,7 +994,8 @@ jobs:
           sudo install -m 0755 /tmp/mise/bin/mise /usr/local/bin/mise
           mise --version
       - name: Install uv
-        if: matrix.suite == 'galaxy'
+        # db_calls: psycopg, to mint the PAT its token-auth scenarios present.
+        if: matrix.suite == 'galaxy' || matrix.suite == 'db_calls'
         run: |
           # From the release archive rather than the `curl | sh` installer:
           # one URL, one version, and nothing else enters the runner. The
@@ -1016,6 +1048,22 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           bwrap --unshare-user --unshare-net --ro-bind / / --dev /dev /bin/true \
             || { echo "::error::bwrap cannot create a user namespace on this runner"; exit 1; }
+      - name: Install yara-x
+        if: matrix.suite == 'quarantine'
+        env:
+          # The version and digest Containerfile.worker pins, so step 9 runs
+          # the `yr` the worker image ships (RFC 0036 §6.6).
+          YARA_X_VERSION: "1.20.0"
+          YARA_X_SHA256: cabb8df46492fff59c51261302c71ed9cb2cef393d3f0ca560801a34a8e24cbe
+        run: |
+          set -euo pipefail
+          asset="yara-x-v${YARA_X_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL --proto '=https' --proto-redir '=https' -o "/tmp/$asset" \
+            "https://github.com/VirusTotal/yara-x/releases/download/v${YARA_X_VERSION}/$asset"
+          echo "${YARA_X_SHA256}  /tmp/$asset" | sha256sum -c -
+          tar -xzf "/tmp/$asset" -C /tmp yr
+          sudo install -m 0755 /tmp/yr /usr/local/bin/yr
+          yr --version
       - name: Check PHP and Composer
         if: matrix.suite == 'composer'
         run: |
@@ -1033,7 +1081,7 @@ jobs:
         # `~` is expanded by the action; it is deliberately not passed to the
         # scripts as `HEAVY_CACHE`, where bash would take it literally and put
         # the downloads in a directory named `~`.
-        if: matrix.suite == 'conda' || matrix.suite == 'composer' || matrix.suite == 'nvm' || matrix.suite == 'sdkman' || matrix.suite == 'vscode_patch'
+        if: matrix.suite == 'conda' || matrix.suite == 'composer' || matrix.suite == 'nvm' || matrix.suite == 'sdkman' || matrix.suite == 'vscode_patch' || matrix.suite == 'devfile'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/batlehub-heavy
@@ -1093,6 +1141,9 @@ jobs:
           # client and no upstream: every registry it touches is local and
           # empty, which is exactly what makes the boundary observable.
           - target: reads
+          # RFC 0036 §6.7: the audit stream as npm produces it, replayed through
+          # the shipped Sigma rules.
+          - target: audit
           - target: npm
           - target: pypi
           - target: openvsx
@@ -1153,7 +1204,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
 
       - name: Set up Node (npm / Open VSX)
-        if: matrix.target == 'npm' || matrix.target == 'openvsx'
+        if: matrix.target == 'npm' || matrix.target == 'openvsx' || matrix.target == 'audit'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -1173,7 +1224,7 @@ jobs:
           sudo unzip -o -q /tmp/terraform.zip -d /usr/local/bin
           terraform version
       - name: Install uv
-        if: matrix.target == 'galaxy'
+        if: matrix.target == 'galaxy' || matrix.target == 'audit'
         run: |
           curl -fsSL --proto '=https' --proto-redir '=https' -o /tmp/uv.tar.gz \
             "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz"
@@ -1385,6 +1436,10 @@ jobs:
           # phase proves is the collection resolve and the module execution and
           # not pip's ability to reach PyPI.
           - phase: ansible
+          # registry-library, built from its source at a pinned commit by the
+          # phase itself (Go is on the runner), pulling a stack at the host
+          # root the registry is bound to (RFC 0035).
+          - phase: devfile
     services:
       postgres:
         image: postgres:17-alpine
@@ -1480,7 +1535,7 @@ jobs:
           echo "neither podman nor docker answered 'info' on this runner" >&2
           exit 1
       - name: Cache heavy client downloads
-        if: matrix.phase == 'conda' || matrix.phase == 'php' || matrix.phase == 'nvm' || matrix.phase == 'sdkman' || matrix.phase == 'vscode' || matrix.phase == 'jbplugin'
+        if: matrix.phase == 'conda' || matrix.phase == 'php' || matrix.phase == 'nvm' || matrix.phase == 'sdkman' || matrix.phase == 'vscode' || matrix.phase == 'jbplugin' || matrix.phase == 'devfile'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/batlehub-heavy

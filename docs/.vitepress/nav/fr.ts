@@ -68,8 +68,9 @@ export const nav = [
       { text: "Feuille de route (en)", link: "/guide/roadmap" },
       { text: "Contribuer (en)", link: "/contributing/" },
       { text: "Historique de conception (en)", link: "/rfc/" },
+      { text: "Dette technique (en)", link: "/techdebt/" },
     ],
-    activeMatch: "/(contributing|rfc)/",
+    activeMatch: "/(contributing|rfc|techdebt)/",
   },
 ];
 
@@ -142,6 +143,7 @@ export const sidebar = {
       items: [
         { text: "Node (nvm, fnm, n, mise)", link: "/fr/registries/nodedist" },
         { text: "Chaîne d'outils Rust (rustup)", link: "/fr/registries/rustup" },
+        { text: "Registre devfile (Che, odo)", link: "/fr/registries/devfile" },
         { text: "SDKMAN", link: "/fr/registries/sdkman" },
       ],
     },
@@ -158,6 +160,10 @@ export const sidebar = {
         { text: "Depuis les sources", link: "/fr/guide/install/source" },
         { text: "Chart Helm", link: "/fr/guide/install/helm" },
       ],
+    },
+    {
+      text: "Migration",
+      items: [{ text: "Migrer depuis Nexus", link: "/fr/guide/install/migrate-from-nexus" }],
     },
   ],
 
@@ -285,11 +291,17 @@ export const sidebar = {
     {
       text: "Conformité",
       items: [
+        { text: "Vue d'ensemble", link: "/fr/operations/compliance" },
+        { text: "RGPD", link: "/fr/operations/compliance-gdpr" },
+        { text: "ISO/IEC 27001", link: "/fr/operations/compliance-iso27001" },
+        { text: "Cyber Resilience Act", link: "/fr/operations/compliance-cra" },
+        { text: "NIS2 et DORA", link: "/fr/operations/compliance-nis2-dora" },
         {
           text: "Gestion du changement",
           link: "/fr/operations/change-management",
         },
         { text: "Checklist SOC 2", link: "/fr/operations/soc2-checklist" },
+        { text: "Intégration SIEM", link: "/fr/operations/siem" },
         { text: "MD5 et SHA-1", link: "/fr/operations/weak-hashes" },
       ],
     },

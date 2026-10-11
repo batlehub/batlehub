@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/access-control.md
-sourceHash: 949d02893b382a55
+sourceHash: 43b799e8a37951e0
 ---
 
 # Contrôle d'accès
@@ -73,6 +73,7 @@ pas une permission accordée à personne.
 | `stats:read` | lire les agrégats du tableau de bord |
 | `audit:read` | lire le journal d'audit |
 | `audit:purge` | supprimer les entrées d'audit antérieures à une coupure |
+| `gdpr:erase` | pseudonymiser une personne concernée dans la piste d'audit, ses jetons et ses blocages (RFC 0036) ; non impliqué par `audit:purge` |
 | `quarantine:read` | voir qu'une version est retenue ou refusée par la couche de chaîne d'approvisionnement, ses codes de motif et sa date de disponibilité ([RFC 0018](/rfc/0018-supply-chain-quarantine-and-verdicts)) |
 | `findings:read` | voir les constats derrière ces codes — identifiants CVE, sortie de scanner, texte SOC |
 | `flags:read` | lister les signalements de vulnérabilités poussés par `[[flag_sources]]` — quelle source a dit quoi sur quelle version ([RFC 0002](/rfc/0002-vulnerability-flags-and-exposure)) |
@@ -765,7 +766,7 @@ trigger_on_status     = [429, 401]
 |-------|---------|-------------|
 | `enabled` | `false` | Activer le blocage par IP |
 | `violation_threshold` | `10` | Violations dans la fenêtre avant blocage automatique |
-| `violation_window_secs` | `300` | Durée de la fenêtre, en secondes |
+| `violation_window_secs` | `300` | Durée de la fenêtre, en secondes, au plus 2 592 000 (30 jours) |
 | `ban_duration_secs` | `3600` | Durée d'un blocage automatique |
 | `trigger_on_status` | `[429, 401]` | Codes de statut HTTP comptés comme violations |
 

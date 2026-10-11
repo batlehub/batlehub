@@ -104,14 +104,13 @@ See [High Availability](/guide/high-availability) for replica-aware rollout stra
 
 ## Performance notes {#performance}
 
-The catalog queries run two CTEs that union `package_statuses` and `local_packages`, then join access-event counts. The following indexes (added in migration 017) keep these fast:
+The catalog queries run two CTEs that union `package_statuses` and `local_packages`, then join access-event counts. The following indexes (migrations 017, 021 and 060) keep these fast:
 
 | Index | Purpose |
 | --- | --- |
-| `idx_access_events_pkg` on `(registry, package_name, package_version)` | JOIN condition in the package list |
-| `idx_access_events_pkg_allowed_recent` on `(registry, package_name, package_version, outcome, created_at DESC)` | `last_accessed_by` correlated subquery |
-| `idx_access_events_registry_name` on `(registry, package_name)` | LATERAL access-event count in the explore catalog |
-| `idx_package_statuses_registry_name` on `(registry, package_name)` | Explorer GROUP BY aggregation |
+| `idx_access_events_pkg` on `(registry, package_name, package_version, created_at DESC)` | JOIN condition in the package list, and the per-package LATERAL count through its `(registry, package_name)` prefix |
+| `idx_access_events_pkg_allowed_recent` on `(registry, package_name, package_version, outcome, created_at DESC) INCLUDE (user_id)` | `last_accessed_by` correlated subquery |
+| `uq_package_status` on `(registry, package_name, package_version, …)` | Explorer GROUP BY aggregation, through its `(registry, package_name)` prefix |
 
 These indexes are created automatically when BatleHub starts and runs migrations. No manual action is required.
 

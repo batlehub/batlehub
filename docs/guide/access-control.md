@@ -67,6 +67,7 @@ granted to nobody.
 | `stats:read` | read the dashboard's aggregates |
 | `audit:read` | read the audit log |
 | `audit:purge` | delete audit-log entries older than a cutoff |
+| `gdpr:erase` | pseudonymise one data subject across the audit trail, their tokens and blocks (RFC 0036); not implied by `audit:purge` |
 | `quarantine:read` | see that a version is held or denied by the supply-chain layer, its reason codes and when it becomes available ([RFC 0018](/rfc/0018-supply-chain-quarantine-and-verdicts)) |
 | `findings:read` | see the findings behind those codes — CVE ids, scanner output, SOC text |
 | `flags:read` | list the vulnerability flags pushed by `[[flag_sources]]` — which source said what about which version ([RFC 0002](/rfc/0002-vulnerability-flags-and-exposure)) |
@@ -701,7 +702,7 @@ trigger_on_status     = [429, 401]
 |-------|---------|-------------|
 | `enabled` | `false` | Activate IP blocking |
 | `violation_threshold` | `10` | Violations in the window before auto-block |
-| `violation_window_secs` | `300` | Window duration in seconds |
+| `violation_window_secs` | `300` | Window duration in seconds, at most 2 592 000 (30 days) |
 | `ban_duration_secs` | `3600` | How long an auto-block lasts |
 | `trigger_on_status` | `[429, 401]` | HTTP status codes that count as violations |
 

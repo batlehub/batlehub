@@ -1,0 +1,20 @@
+title: BatleHub configuration reload rejected
+id: bbfcab99-6615-4d4d-b297-e5c8a1bbf581
+status: experimental
+description: >-
+  A configuration candidate — from the file watcher or the console editor — did not parse, validate or build, and was refused. Repeated rejections are someone editing the live config by trial and error.
+references:
+  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+author: BatleHub
+date: 2026-10-05
+logsource:
+  product: batlehub
+  service: audit
+detection:
+  selection:
+    event.dataset: batlehub.audit
+    event.action: config_rejected
+  condition: selection
+falsepositives:
+  - An operator fixing a typo
+level: low

@@ -170,7 +170,7 @@ pub async fn claim_namespace(
         .map_err(AppError::from)?;
 
     admin_svc
-        .record_account_action(AccessAction::ClaimNamespace, &identity.0)
+        .record_account_action(AccessAction::ClaimNamespace, &identity.0, &identity.1)
         .await;
 
     Ok(HttpResponse::NoContent().finish())
@@ -215,7 +215,7 @@ pub async fn release_namespace(
         .map_err(AppError::from)?;
 
     admin_svc
-        .record_account_action(AccessAction::ReleaseNamespace, &identity.0)
+        .record_account_action(AccessAction::ReleaseNamespace, &identity.0, &identity.1)
         .await;
 
     Ok(HttpResponse::NoContent().finish())

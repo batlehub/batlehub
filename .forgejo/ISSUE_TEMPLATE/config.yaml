@@ -1,0 +1,7 @@
+# A vulnerability is never an issue: an issue is public the moment it is filed.
+# Reports go to the private form on GitHub, the channel SECURITY.md names.
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/batlehub/batlehub/security/advisories/new
+    about: Readable only by the maintainers until a fix ships. See SECURITY.md.

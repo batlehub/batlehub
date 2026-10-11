@@ -343,7 +343,12 @@ pub async fn delete_cached_artifact(
         // and an event for it would put a drop in the trail that never
         // happened.
         admin_svc
-            .record_cache_eviction(Some(coordinate), AccessAction::CacheEvict, &identity.0)
+            .record_cache_eviction(
+                Some(coordinate),
+                AccessAction::CacheEvict,
+                &identity.0,
+                &identity.1,
+            )
             .await;
     }
 

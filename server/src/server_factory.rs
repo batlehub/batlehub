@@ -73,10 +73,11 @@ impl RootSpanBuilder for BatleHubSpanBuilder {
             .get("User-Agent")
             .map(|h| h.to_str().unwrap_or(""))
             .unwrap_or("");
-        let http_route: std::borrow::Cow<'static, str> = request
-            .match_pattern()
-            .map(Into::into)
-            .unwrap_or_else(|| "default".into());
+        // `http.route` and `otel.name` are recorded in `on_request_end`, not
+        // here: this runs before routing, and `match_pattern()` before routing
+        // tries every route's regex against the path — 12.8 % of the server's
+        // CPU in the first `perf:profile` run. After routing it is a lookup of
+        // the resource the router already chose.
         let http_method = http_method_str(request.method());
         let connection_info = request.connection_info();
         let request_id = get_request_id(request);
@@ -93,7 +94,7 @@ impl RootSpanBuilder for BatleHubSpanBuilder {
                     tracing::Level::INFO,
                     "HTTP request",
                     http.method = %http_method,
-                    http.route = %http_route,
+                    http.route = tracing::field::Empty,
                     http.flavor = %http_flavor(request.version()),
                     http.scheme = %http_scheme(connection_info.scheme()),
                     http.host = %connection_info.host(),
@@ -101,7 +102,7 @@ impl RootSpanBuilder for BatleHubSpanBuilder {
                     http.user_agent = %user_agent,
                     http.target = %http_target,
                     http.status_code = tracing::field::Empty,
-                    otel.name = %format!("{} {}", http_method, http_route),
+                    otel.name = tracing::field::Empty,
                     otel.kind = "server",
                     otel.status_code = tracing::field::Empty,
                     trace_id = $trace_id,
@@ -125,6 +126,13 @@ impl RootSpanBuilder for BatleHubSpanBuilder {
         span: tracing::Span,
         outcome: &anyhow::Result<actix_web::dev::ServiceResponse<B>, actix_web::Error>,
     ) {
+        if let Ok(resp) = outcome {
+            let route = resp.request().match_pattern();
+            let route = route.as_deref().unwrap_or("default");
+            let method = resp.request().method();
+            span.record("http.route", route);
+            span.record("otel.name", format!("{method} {route}"));
+        }
         let status = match outcome {
             Ok(resp) => resp.status(),
             Err(err) => err.as_response_error().status_code(),
@@ -151,6 +159,8 @@ pub(super) struct ServerParams {
     pub db_pool: sqlx::PgPool,
     pub proxy_svc: Arc<ProxyService>,
     pub admin_svc: Arc<AdminService>,
+    /// RFC 0036: purge, erase, export and verify go through it.
+    pub audit_trail: Arc<batlehub_core::services::audit_trail::AuditTrailService>,
     pub token_repo: Arc<dyn UserTokenRepository>,
     pub access_config: AccessConfigLock,
     /// `[search] readmes`, shared with the reload path so turning prose search
@@ -236,6 +246,7 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
         db_pool,
         proxy_svc,
         admin_svc,
+        audit_trail,
         token_repo,
         access_config,
         registry_map,
@@ -286,6 +297,8 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
     } = p;
 
     let notification_svc_for_shutdown = notification_svc.clone();
+    // Outside the factory: one throttle for the process, not one per worker.
+    let rejection_audit = batlehub_web::CredentialRejectionAudit::new(admin_svc.clone());
 
     HttpServer::new(move || {
         let configure = configure_app(
@@ -360,6 +373,13 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
             .service(prometheus_metrics)
             .service(healthz)
             .service(livez);
+        #[cfg(feature = "profiling")]
+        {
+            app = app
+                .service(crate::profiling::folded)
+                .service(crate::profiling::routes)
+                .service(crate::profiling::wait);
+        }
 
         if let Some(path) = cli_binary_path_inner {
             app = app.app_data(web::Data::new(CliBinaryPath(path)));
@@ -370,24 +390,33 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
             app = app.app_data(web::Data::new(Arc::clone(audit)));
         }
         app = app.app_data(web::Data::new(Arc::clone(&artifact_inventory)));
+        app = app.app_data(web::Data::new(Arc::clone(&audit_trail)));
 
         let cors = crate::watcher::build_cors(&cors_allowed_origins);
         let enabled = ip_blocking_cfg.as_ref().is_some_and(|c| c.enabled);
         let ip_block_cfg_for_mw = ip_blocking_cfg.clone().unwrap_or_default();
 
-        app.wrap(TracingLogger::<BatleHubSpanBuilder>::new())
+        let app = app
             .wrap(RateLimitMiddlewareFactory::new(rate_limit_svc.clone()))
             .wrap(UserBlockMiddlewareFactory::new(Arc::clone(
                 &user_block_repo,
             )))
-            .wrap(batlehub_web::AuthMiddlewareFactory::new(
-                auth_providers.clone(),
-            ))
+            .wrap(
+                batlehub_web::AuthMiddlewareFactory::new(auth_providers.clone())
+                    .with_audit(Arc::clone(&rejection_audit)),
+            )
             .wrap(cors)
             .wrap(actix_web::middleware::Condition::new(
                 enabled,
-                IpBlockMiddlewareFactory::new(Arc::clone(&ip_block_store), ip_block_cfg_for_mw),
+                IpBlockMiddlewareFactory::new(Arc::clone(&ip_block_store), ip_block_cfg_for_mw)
+                    .with_audit(admin_svc.clone()),
             ))
+            // Outside every layer that can answer or query the database — IP
+            // block, CORS, auth, user block, rate limit — so their refusals get
+            // an access-log line and their statements count against the request
+            // (`db_metrics`). Inside host routing, so the path it logs is the
+            // rewritten one the router matched.
+            .wrap(TracingLogger::<BatleHubSpanBuilder>::new())
             // Outside the IP-block layer so its 403 — and the rate limiter's 429,
             // and anything the static-file service returns — carry the baseline
             // headers too, not just handler responses.
@@ -399,49 +428,55 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
             // rewrite. See `protocol_document_csp`.
             .wrap(actix_web::middleware::from_fn(
                 batlehub_web::protocol_document_csp,
-            ))
-            // Outermost, so the URI rewrite lands before route matching and the
-            // proxy-trust verdict before anything that reads a forwarded header.
-            // `.wrap` builds inside-out, so this must stay the last call.
-            .wrap(HostRoutingMiddlewareFactory::new(
-                registry_host_map.clone(),
-                proxy_trust.clone(),
-            ))
-            // The API reference's bundle is part of the console's build output
-            // and is served from this origin, so which document `/scalar`
-            // answers with depends on whether that output is actually here. A
-            // server configured without `static_dir` gets the degraded page
-            // rather than a CDN fallback — see `batlehub_web::SCALAR_BUNDLE_PATH`.
-            .service(batlehub_web::scalar(
-                openapi,
-                static_dir_inner.as_deref().map(std::path::Path::new),
-            ))
-            .configure(move |cfg| {
-                if let Some(ref dir) = static_dir_inner {
-                    // Still no CSP *header* here, for the two reasons that have
-                    // not changed: it cannot be global — `/proxy/**`, `/scalar`
-                    // and the console each need a different policy, and the
-                    // first two now get theirs from the middleware wrapped
-                    // above — and the `actix_files::Files` service behind
-                    // `configure_spa` is not a `ServiceFactory`, so it
-                    // cannot be wrapped individually either. The SPA carries its own policy in a
-                    // `<meta http-equiv>` tag, generated at build time by
-                    // `ui/build/csp.ts` so `connect-src` can follow the configured
-                    // API origin. `frame-ancestors` is ignored in meta form, which
-                    // is why `security_headers()` sends `X-Frame-Options: DENY`.
-                    //
-                    // What *is* new: the document is served by `configure_spa`
-                    // rather than straight off disk, so the built policy can be
-                    // narrowed to the running config on the way out — see
-                    // `crates/web/src/spa.rs` for why that narrowing can only
-                    // ever subtract, and for the deep-link fallback that sits
-                    // behind the file service so `/packages/npm/chalk` resolves
-                    // to the console rather than to a 404.
-                    // Document, static files and the deep-link fallback, in the
-                    // one place that knows their order matters.
-                    batlehub_web::configure_spa(cfg, std::path::PathBuf::from(dir));
-                }
-            })
+            ));
+        // Just inside host routing, so it counts the pattern of the rewritten
+        // URI — the route that actually served the request.
+        #[cfg(feature = "profiling")]
+        let app = app.wrap(actix_web::middleware::from_fn(
+            crate::profiling::tally_route,
+        ));
+        // Outermost, so the URI rewrite lands before route matching and the
+        // proxy-trust verdict before anything that reads a forwarded header.
+        // `.wrap` builds inside-out, so this must stay the last call.
+        app.wrap(HostRoutingMiddlewareFactory::new(
+            registry_host_map.clone(),
+            proxy_trust.clone(),
+        ))
+        // The API reference's bundle is part of the console's build output
+        // and is served from this origin, so which document `/scalar`
+        // answers with depends on whether that output is actually here. A
+        // server configured without `static_dir` gets the degraded page
+        // rather than a CDN fallback — see `batlehub_web::SCALAR_BUNDLE_PATH`.
+        .service(batlehub_web::scalar(
+            openapi,
+            static_dir_inner.as_deref().map(std::path::Path::new),
+        ))
+        .configure(move |cfg| {
+            if let Some(ref dir) = static_dir_inner {
+                // Still no CSP *header* here, for the two reasons that have
+                // not changed: it cannot be global — `/proxy/**`, `/scalar`
+                // and the console each need a different policy, and the
+                // first two now get theirs from the middleware wrapped
+                // above — and the `actix_files::Files` service behind
+                // `configure_spa` is not a `ServiceFactory`, so it
+                // cannot be wrapped individually either. The SPA carries its own policy in a
+                // `<meta http-equiv>` tag, generated at build time by
+                // `ui/build/csp.ts` so `connect-src` can follow the configured
+                // API origin. `frame-ancestors` is ignored in meta form, which
+                // is why `security_headers()` sends `X-Frame-Options: DENY`.
+                //
+                // What *is* new: the document is served by `configure_spa`
+                // rather than straight off disk, so the built policy can be
+                // narrowed to the running config on the way out — see
+                // `crates/web/src/spa.rs` for why that narrowing can only
+                // ever subtract, and for the deep-link fallback that sits
+                // behind the file service so `/packages/npm/chalk` resolves
+                // to the console rather than to a 404.
+                // Document, static files and the deep-link fallback, in the
+                // one place that knows their order matters.
+                batlehub_web::configure_spa(cfg, std::path::PathBuf::from(dir));
+            }
+        })
     })
     .bind(&bind_addr)
     .with_context(|| format!("binding to {bind_addr}"))?
@@ -535,6 +570,15 @@ mod span_tests {
             );
             attrs.record(&mut Grab(Arc::clone(&self.0.values)));
         }
+
+        fn on_record(
+            &self,
+            _id: &tracing::span::Id,
+            values: &tracing::span::Record<'_>,
+            _ctx: Context<'_, S>,
+        ) {
+            values.record(&mut Grab(Arc::clone(&self.0.values)));
+        }
     }
 
     fn fields_for(uri: &str) -> Vec<(String, String)> {
@@ -568,6 +612,42 @@ mod span_tests {
             .find(|(k, _)| k == name)
             .map(|(_, v)| v.as_str())
             .unwrap_or_else(|| panic!("no field {name} in {fields:?}"))
+    }
+
+    /// The route is recorded once the router has matched, never before: a
+    /// pre-routing `match_pattern()` scans every route's regex (the first
+    /// `perf:profile` run's top BatleHub frame). Still recorded, and still
+    /// the pattern rather than the path.
+    #[actix_web::test]
+    async fn the_route_is_recorded_after_routing() {
+        let sink = Sink::default();
+        let _guard = tracing::subscriber::set_default(
+            tracing_subscriber::registry().with(Captured(sink.clone())),
+        );
+        let app = actix_web::test::init_service(
+            actix_web::App::new()
+                .wrap(tracing_actix_web::TracingLogger::<BatleHubSpanBuilder>::new())
+                .route(
+                    "/items/{id}",
+                    actix_web::web::get().to(actix_web::HttpResponse::Ok),
+                ),
+        )
+        .await;
+        let req = actix_web::test::TestRequest::get()
+            .uri("/items/42")
+            .to_request();
+        actix_web::test::call_service(&app, req).await;
+
+        let values = sink.values.lock().unwrap().clone();
+        let recorded = |name: &str| {
+            values
+                .iter()
+                .filter(|(k, _)| k == name)
+                .map(|(_, v)| v.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(recorded("http.route"), ["/items/{id}"]);
+        assert_eq!(recorded("otel.name"), ["GET /items/{id}"]);
     }
 
     /// RFC 0012 §7.1. The reason this builder is hand-written instead of

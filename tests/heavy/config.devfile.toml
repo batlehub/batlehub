@@ -1,0 +1,45 @@
+# Server configuration for the heavy devfile-registry test
+# (tests/heavy/devfile.sh, RFC 0035 §6.9). See tests/heavy/config.npm.toml for
+# the env-var conventions; `${HEAVY_RUN}` keeps each run's registries out of the
+# last one's.
+
+[server]
+host = "127.0.0.1"
+port = 8176
+# The registry is bound to a host (below), which makes the server route on the
+# forwarded-host headers; the tap is the only peer, on loopback.
+trusted_proxies = ["127.0.0.1/32"]
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-devfile-storage"
+
+# ── Proxy registry: registry.devfile.io ──────────────────────────────────────
+[[registries]]
+type = "devfile"
+name = "devfile-${HEAVY_RUN}"
+mode = "proxy"
+# `registry-library` builds the OCI reference and the starter-project URL from
+# the host alone, dropping any path prefix, so it only works against a registry
+# host (RFC 0035 §5.3). `devfile.localhost` resolves to loopback in Go's
+# resolver; the prefix root is still served, and Che's reads go through it.
+hosts = ["devfile.localhost"]
+
+[registries.rbac]
+# Neither client sends a credential (RFC 0035 §5.1).
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list"]
+admin = ["*"]

@@ -223,6 +223,27 @@ impl ProxyService {
         self.resolve_metadata_for_inner(req, true).await
     }
 
+    /// [`Self::resolve_metadata_for`] for a handler that answers a **listing**
+    /// from the metadata — the JetBrains Marketplace plugin documents and the
+    /// VS Code gallery entries — counted and timed as [`Self::timed_listing`]
+    /// counts every other listing.
+    ///
+    /// Those handlers render from `PackageMetadata.extra` rather than going
+    /// through `proxy_document`, so until this they recorded no
+    /// `batlehub_requests_total` at all and ranked as costing nothing. A path
+    /// that resolves metadata on its way to a download keeps
+    /// `resolve_metadata_for`: the download already counts itself.
+    pub async fn resolve_listing_for(
+        &self,
+        req: &ProxyRequest,
+    ) -> Result<crate::entities::PackageMetadata, CoreError> {
+        let meta = self
+            .timed_listing(&req.package_id.registry, self.resolve_metadata_for(req))
+            .await?;
+        self.metrics.record_listing_read(&req.package_id.registry);
+        Ok(meta)
+    }
+
     /// [`Self::resolve_metadata_for`] without the README capture.
     ///
     /// For the console: a **page view** must write nothing. `resolve_metadata_for`
@@ -530,24 +551,7 @@ impl ProxyService {
     /// Fails **open**, as the rule does: an unreadable store must not turn a
     /// miss into a refusal that names a block nobody wrote.
     async fn blocked_reason(&self, id: &crate::entities::PackageId) -> Option<String> {
-        use crate::entities::PackageStatus;
-        for candidate in [
-            Some(id.clone()),
-            id.artifact.as_ref().map(|_| crate::entities::PackageId {
-                artifact: None,
-                ..id.clone()
-            }),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if let Ok(PackageStatus::Blocked { reason, .. }) =
-                self.repo.get_status(&candidate).await
-            {
-                return Some(reason);
-            }
-        }
-        None
+        self.repo.covering_block(id).await.ok().flatten()
     }
 
     /// Resolve a forge coordinate's ref and rewrite the request onto the
@@ -864,18 +868,18 @@ impl ProxyService {
         // ── 4. Check artifact cache ────────────────────────────────────────────
         let artifact_key = super::proxy_artifact_key(&req.package_id);
         let artifact_ttl = policy.as_ref().and_then(|p| p.artifact_ttl);
-        let cached_artifact_is_fresh = self
-            .artifact_is_fresh(&artifact_key, artifact_ttl, registry_name)
+        let cached = self
+            .fresh_cached_artifact(&artifact_key, artifact_ttl, registry_name)
             .await?;
 
-        if cached_artifact_is_fresh {
+        if let Some(artifact) = cached {
             // ── 5a. Cache hit (see `cache::serve_cache_hit`) ──────────────────
             let timing = RequestTiming {
                 registry_label,
                 start,
             };
             return self
-                .serve_cache_hit(req, artifact_key, &integrity, &timing)
+                .serve_cache_hit(req, artifact_key, artifact, &integrity, &timing)
                 .await;
         }
 

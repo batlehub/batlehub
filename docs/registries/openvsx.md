@@ -185,11 +185,13 @@ What installs where, measured against VS Code 1.136.1 ([RFC 0020](/rfc/0020-sign
 | `POST` | `/proxy/{registry}/api/-/namespace/create` | Claim an OpenVSX publisher namespace. |
 | `GET` | `/proxy/{registry}/api/-/public-key/{key_id}` | `GET /proxy/{registry}/api/-/public-key/{key_id}` — the key this |
 | `POST` | `/proxy/{registry}/api/-/publish` | `ovsx publish` — `POST /api/-/publish`. |
+| `GET` | `/proxy/{registry}/api/-/query` | Query the registry — `GET …/api/-/query`. |
 | `GET` | `/proxy/{registry}/api/-/search` | Search the registry — `GET …/api/-/search`. |
 | `GET` | `/proxy/{registry}/api/{namespace}` | `GET /api/{namespace}` — what a publisher has here. |
 | `GET` | `/proxy/{registry}/api/{namespace}/{extension}` | The newest version of one extension — `GET …/api/{namespace}/{extension}`. |
 | `GET` | `/proxy/{registry}/api/{namespace}/{extension}/{version}` | One specific version — `GET …/api/{namespace}/{extension}/{version}`. |
 | `GET` | `/proxy/{registry}/api/{namespace}/{extension}/{version}/file/{filename}` | One file out of an extension — `GET …/api/{ns}/{ext}/{version}/file/{name}`. |
+| `GET` | `/proxy/{registry}/api/v2/-/query` | Query the registry — `GET …/api/v2/-/query`, the version Theia prefers. |
 | `GET` | `/proxy/{registry}/api/version` | `GET /api/version` — the registry's own version document. |
 | `GET` | `/proxy/{registry}/vscode/asset/{publisher}/{name}/{version}/{asset_type}` | `GET …/vscode/asset/{publisher}/{name}/{version}/{asset_type}` |
 | `POST` | `/proxy/{registry}/vscode/gallery/extensionquery` | Query the extension gallery. |
@@ -284,7 +286,7 @@ with `--print-gallery-url` and rewrites the file is the shape that lasts.
 
 - The direct VSIX route is `…/proxy/<registry>/{publisher}.{name}/{version}/vsix`.
 - Gallery endpoints: `POST …/vscode/gallery/extensionquery`, `GET …/vscode/asset/{publisher}/{name}/{version}/{assetType}`, `GET …/vscode/unpkg/{publisher}/{name}/{version}/{path}`, `GET …/vscode/item`, and `GET …/vscode/gallery/publishers/{publisher}/vsextensions/{name}/{version}/vspackage`.
-- OpenVSX API endpoints: `GET …/api/{namespace}/{extension}[/{version}]`, `GET …/api/-/search`, `GET …/api/{namespace}/{extension}/{version}/file/{filename}`.
+- OpenVSX API endpoints: `GET …/api/{namespace}/{extension}[/{version}]`, `GET …/api/-/search`, `GET …/api/-/query` (and `…/api/v2/-/query`), `GET …/api/{namespace}/{extension}/{version}/file/{filename}`.
 - The manifest, README, changelog, licence and icon are served **out of the cached VSIX**, so one artifact answers every asset request and a private extension behaves exactly like a proxied one. An extension that ships no changelog returns `404` for that asset, which the editor renders as an empty tab.
 - An extension's icon is never served as `image/svg+xml`. An SVG served with that type executes script in this origin, which is the same origin the admin console keeps its token in; SVG icons come back as an opaque download and the editor shows no icon.
 - For extensions published only to Microsoft's marketplace and not mirrored on open-vsx.org, use the [VS Code Marketplace](/registries/vscode-marketplace) type instead.

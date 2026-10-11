@@ -1,0 +1,13 @@
+{
+  "audit_chain_gap.yml": true,
+  "audit_purge.yml": true,
+  "blocked_package_pulled.yml": true,
+  "bulk_pull.yml": false,
+  "config_rejected.yml": true,
+  "credential_rejected_burst.yml": true,
+  "denied_download_burst.yml": false,
+  "grant_to_anonymous.yml": true,
+  "retention_or_cache_clear.yml": false,
+  "sign_in_failed_burst.yml": true,
+  "token_new_source.yml": true
+}

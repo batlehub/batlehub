@@ -465,7 +465,7 @@ pub const PACKAGE_HEADER: &str = "X-BatleHub-Package";
 pub const VERSION_HEADER: &str = "X-BatleHub-Version";
 
 /// The `(key, name, version)` triple a response reports about itself.
-fn served_identity(pkg: &PackageId) -> [(&'static str, String); 3] {
+pub(crate) fn served_identity(pkg: &PackageId) -> [(&'static str, String); 3] {
     [
         (STORAGE_KEY_HEADER, proxy_artifact_key(pkg)),
         (PACKAGE_HEADER, pkg.name.clone()),

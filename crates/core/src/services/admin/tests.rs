@@ -125,6 +125,7 @@ async fn block_package_sets_blocked_status() {
         &pkg,
         "supply chain risk".to_owned(),
         &admin_identity("alice"),
+        &CallerNet::unknown(),
     )
     .await
     .unwrap();
@@ -139,9 +140,14 @@ async fn block_package_uses_user_id_as_blocked_by() {
     let svc = AdminService::new(repo.clone());
     let pkg = PackageId::new("npm", "evil", "1.0.0");
 
-    svc.block_package(&pkg, "reason".to_owned(), &admin_identity("alice"))
-        .await
-        .unwrap();
+    svc.block_package(
+        &pkg,
+        "reason".to_owned(),
+        &admin_identity("alice"),
+        &CallerNet::unknown(),
+    )
+    .await
+    .unwrap();
 
     let status = repo.get_status(&pkg).await.unwrap();
     match status {
@@ -156,9 +162,14 @@ async fn block_package_falls_back_to_role_when_no_user_id() {
     let svc = AdminService::new(repo.clone());
     let pkg = PackageId::new("npm", "evil", "1.0.0");
 
-    svc.block_package(&pkg, "reason".to_owned(), &anon_identity())
-        .await
-        .unwrap();
+    svc.block_package(
+        &pkg,
+        "reason".to_owned(),
+        &anon_identity(),
+        &CallerNet::unknown(),
+    )
+    .await
+    .unwrap();
 
     let status = repo.get_status(&pkg).await.unwrap();
     match status {
@@ -173,13 +184,20 @@ async fn block_package_records_audit_event() {
     let svc = AdminService::new(repo.clone());
     let pkg = PackageId::new("npm", "evil", "1.0.0");
 
-    svc.block_package(&pkg, "reason".to_owned(), &admin_identity("alice"))
+    let net = CallerNet {
+        ip: Some("198.51.100.7".into()),
+        user_agent: Some("batlehub-cli/1.4.0".into()),
+    };
+    svc.block_package(&pkg, "reason".to_owned(), &admin_identity("alice"), &net)
         .await
         .unwrap();
 
     let events = repo.events();
     assert_eq!(events.len(), 1, "one event expected");
     assert!(matches!(events[0].result, AccessResult::Allowed));
+    // Who *and from where* (RFC 0036 §13): an admin action carries the caller.
+    assert_eq!(events[0].ip_address.as_deref(), Some("198.51.100.7"));
+    assert_eq!(events[0].user_agent.as_deref(), Some("batlehub-cli/1.4.0"));
 }
 
 #[tokio::test]
@@ -192,6 +210,7 @@ async fn record_package_action_records_package_scoped_event() {
         &pkg,
         crate::entities::AccessAction::AddOwner,
         &admin_identity("alice"),
+        &CallerNet::unknown(),
     )
     .await;
 
@@ -213,6 +232,7 @@ async fn record_account_action_records_event_with_no_package() {
     svc.record_account_action(
         crate::entities::AccessAction::BlockUser,
         &admin_identity("alice"),
+        &CallerNet::unknown(),
     )
     .await;
 
@@ -230,7 +250,7 @@ async fn purge_events_before_records_audit_purge_event() {
     let repo = MemRepo::new();
     let svc = AdminService::new(repo.clone());
 
-    svc.purge_events_before(Utc::now(), &admin_identity("alice"))
+    svc.purge_events_before(Utc::now(), &admin_identity("alice"), &CallerNet::unknown())
         .await
         .unwrap();
 
@@ -249,10 +269,15 @@ async fn unblock_package_sets_available_status() {
     let pkg = PackageId::new("npm", "evil", "1.0.0");
 
     // Block first, then unblock
-    svc.block_package(&pkg, "r".to_owned(), &admin_identity("a"))
-        .await
-        .unwrap();
-    svc.unblock_package(&pkg, &admin_identity("a"))
+    svc.block_package(
+        &pkg,
+        "r".to_owned(),
+        &admin_identity("a"),
+        &CallerNet::unknown(),
+    )
+    .await
+    .unwrap();
+    svc.unblock_package(&pkg, &admin_identity("a"), &CallerNet::unknown())
         .await
         .unwrap();
 
@@ -266,10 +291,15 @@ async fn unblock_package_records_audit_event() {
     let svc = AdminService::new(repo.clone());
     let pkg = PackageId::new("npm", "evil", "1.0.0");
 
-    svc.block_package(&pkg, "r".to_owned(), &admin_identity("a"))
-        .await
-        .unwrap();
-    svc.unblock_package(&pkg, &admin_identity("a"))
+    svc.block_package(
+        &pkg,
+        "r".to_owned(),
+        &admin_identity("a"),
+        &CallerNet::unknown(),
+    )
+    .await
+    .unwrap();
+    svc.unblock_package(&pkg, &admin_identity("a"), &CallerNet::unknown())
         .await
         .unwrap();
 
@@ -303,9 +333,14 @@ async fn list_events_returns_repo_results() {
     let svc = AdminService::new(repo.clone());
     let pkg = PackageId::new("npm", "pkg", "1.0.0");
 
-    svc.block_package(&pkg, "r".to_owned(), &admin_identity("a"))
-        .await
-        .unwrap();
+    svc.block_package(
+        &pkg,
+        "r".to_owned(),
+        &admin_identity("a"),
+        &CallerNet::unknown(),
+    )
+    .await
+    .unwrap();
 
     let events = svc.list_events(EventFilter::new()).await.unwrap();
     assert!(!events.is_empty());
@@ -326,7 +361,7 @@ async fn bulk_block_succeeds_for_all_valid_packages() {
         },
     ];
     let result = svc
-        .bulk_block_packages(items, &admin_identity("alice"))
+        .bulk_block_packages(items, &admin_identity("alice"), &CallerNet::unknown())
         .await;
     assert_eq!(result.succeeded.len(), 2);
     assert_eq!(result.failed.len(), 0);
@@ -348,14 +383,20 @@ async fn bulk_delete_reports_success_and_not_found() {
     let svc = AdminService::new(repo.clone());
     let pkg_a = PackageId::new("npm", "a", "1.0.0");
     let pkg_missing = PackageId::new("npm", "missing", "1.0.0");
-    svc.block_package(&pkg_a, "r".into(), &admin_identity("alice"))
-        .await
-        .unwrap();
+    svc.block_package(
+        &pkg_a,
+        "r".into(),
+        &admin_identity("alice"),
+        &CallerNet::unknown(),
+    )
+    .await
+    .unwrap();
 
     let result = svc
         .bulk_delete_packages(
             vec![pkg_a.clone(), pkg_missing.clone()],
             &admin_identity("alice"),
+            &CallerNet::unknown(),
         )
         .await;
     assert_eq!(result.succeeded, vec![pkg_a]);
@@ -379,7 +420,7 @@ async fn bulk_block_handles_more_items_than_the_concurrency_cap() {
         .collect();
 
     let result = svc
-        .bulk_block_packages(items, &admin_identity("alice"))
+        .bulk_block_packages(items, &admin_identity("alice"), &CallerNet::unknown())
         .await;
     assert_eq!(result.succeeded.len(), 40);
     assert_eq!(result.failed.len(), 0);
@@ -398,15 +439,29 @@ async fn bulk_unblock_succeeds_for_all_packages() {
     let svc = AdminService::new(repo.clone());
     let pkg_a = PackageId::new("npm", "a", "1.0.0");
     let pkg_b = PackageId::new("npm", "b", "2.0.0");
-    svc.block_package(&pkg_a, "r".into(), &admin_identity("alice"))
-        .await
-        .unwrap();
-    svc.block_package(&pkg_b, "r".into(), &admin_identity("alice"))
-        .await
-        .unwrap();
+    svc.block_package(
+        &pkg_a,
+        "r".into(),
+        &admin_identity("alice"),
+        &CallerNet::unknown(),
+    )
+    .await
+    .unwrap();
+    svc.block_package(
+        &pkg_b,
+        "r".into(),
+        &admin_identity("alice"),
+        &CallerNet::unknown(),
+    )
+    .await
+    .unwrap();
 
     let result = svc
-        .bulk_unblock_packages(vec![pkg_a.clone(), pkg_b.clone()], &admin_identity("alice"))
+        .bulk_unblock_packages(
+            vec![pkg_a.clone(), pkg_b.clone()],
+            &admin_identity("alice"),
+            &CallerNet::unknown(),
+        )
         .await;
     assert_eq!(result.succeeded.len(), 2);
     assert_eq!(result.failed.len(), 0);

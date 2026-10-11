@@ -54,6 +54,7 @@ fn bearer(token: &str) -> RawAuthRequest {
     RawAuthRequest {
         headers: [("authorization".to_owned(), format!("Bearer {token}"))].into(),
         query_params: Default::default(),
+        source_ip: None,
     }
 }
 
@@ -61,6 +62,7 @@ fn no_auth() -> RawAuthRequest {
     RawAuthRequest {
         headers: Default::default(),
         query_params: Default::default(),
+        source_ip: None,
     }
 }
 
@@ -313,6 +315,7 @@ async fn basic_auth_header_returns_none() {
     let req = RawAuthRequest {
         headers: [("authorization".to_owned(), "Basic dXNlcjpwYXNz".to_owned())].into(),
         query_params: Default::default(),
+        source_ip: None,
     };
     assert!(p.authenticate(&req).await.unwrap().is_none());
 }
@@ -538,6 +541,7 @@ async fn bearer_lowercase_prefix_accepted() {
     let req = RawAuthRequest {
         headers: [("authorization".to_owned(), format!("bearer {token}"))].into(),
         query_params: Default::default(),
+        source_ip: None,
     };
     let id = p.authenticate(&req).await.unwrap().unwrap();
     assert_eq!(id.user_id.as_deref(), Some("bot"));
@@ -553,6 +557,7 @@ async fn authorization_capitalized_header_accepted() {
     let req = RawAuthRequest {
         headers: [("Authorization".to_owned(), format!("Bearer {token}"))].into(),
         query_params: Default::default(),
+        source_ip: None,
     };
     let id = p.authenticate(&req).await.unwrap().unwrap();
     assert_eq!(id.user_id.as_deref(), Some("bot"));

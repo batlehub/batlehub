@@ -32,7 +32,8 @@ pub fn extract_registry_from_path(path: &str) -> Option<&str> {
     segments.next() // registry name
 }
 
-pub use auth::AuthMiddlewareFactory;
+pub(crate) use auth::RejectionThrottle;
+pub use auth::{AuthMiddlewareFactory, CredentialRejectionAudit};
 pub use host_routing::{HostRoutedRegistry, HostRoutingMiddlewareFactory};
 pub use ip_block::IpBlockMiddlewareFactory;
 pub use proxy_trust::{PeerTrust, ProxyTrust};

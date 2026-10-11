@@ -48,6 +48,25 @@ pub async fn collect_byte_stream(mut stream: ByteStream) -> Result<Bytes, CoreEr
     Ok(buf.freeze())
 }
 
+/// Prefix of a key holding bytes that are not yet verified and must not be
+/// served: the proxy streams an artifact it may still refuse under one, and
+/// [`StorageBackend::promote`]s it to the real key once the digest matches.
+pub const STAGING_PREFIX: &str = "staging:";
+
+/// A fresh staging key for `artifact_key`. The destination is carried in the
+/// key so a router places the staged bytes on the backend the artifact will
+/// live on, where promoting them is a rename rather than a copy.
+pub fn staging_key_for(artifact_key: &str) -> String {
+    format!("{STAGING_PREFIX}{}/{artifact_key}", uuid::Uuid::new_v4())
+}
+
+/// The artifact key a staging key was made for, or `None` for any other key.
+pub fn staged_destination(key: &str) -> Option<&str> {
+    key.strip_prefix(STAGING_PREFIX)?
+        .split_once('/')
+        .map(|(_, dest)| dest)
+}
+
 /// What a streaming store wrote: the bare SHA-256 hex of the persisted bytes and
 /// their total length. The digest is the same value [`crate::services::integrity::sha256_hex`]
 /// would compute over the full artifact, so it doubles as both the dedup content
@@ -112,6 +131,43 @@ pub trait StorageBackend: Send + Sync {
         let data = collect_byte_stream(artifact.stream).await?;
         self.store(to, data, artifact.meta).await?;
         self.delete(from).await?;
+        Ok(())
+    }
+
+    /// Make the bytes staged at `staged` — written by
+    /// [`store_streaming`](Self::store_streaming), which returned `outcome` —
+    /// the content of `key`, and remove `staged`.
+    ///
+    /// The default re-streams them and deletes the staging key, which is
+    /// correct for any backend. The deduplicating router overrides it: the
+    /// staged bytes are already hashed, so they become `blob/<hash>` with a
+    /// rename on first reference and are dropped on a dedup hit — no second
+    /// write of the artifact, and no dedup rows for a key that lived for
+    /// milliseconds.
+    async fn promote(
+        &self,
+        staged: &str,
+        key: &str,
+        outcome: &StoreOutcome,
+    ) -> Result<(), CoreError> {
+        let _ = outcome;
+        let artifact = self.retrieve(staged).await?.ok_or_else(|| {
+            CoreError::Registry(format!(
+                "staged artifact '{staged}' vanished before promotion"
+            ))
+        })?;
+        if let Err(e) = self
+            .store_streaming(key, artifact.stream, StorageMeta::default())
+            .await
+        {
+            if let Err(cleanup) = self.delete(staged).await {
+                tracing::warn!(key = %staged, error = %cleanup, "failed to delete staging artifact after promotion failure");
+            }
+            return Err(e);
+        }
+        if let Err(e) = self.delete(staged).await {
+            tracing::warn!(key = %staged, error = %e, "failed to delete staging artifact after promotion");
+        }
         Ok(())
     }
 

@@ -51,7 +51,7 @@ impl UserTokenRepository for NullUserTokenRepository {
         Ok(vec![])
     }
 
-    async fn touch_last_used(&self, _id: Uuid) -> Result<(), CoreError> {
+    async fn touch_last_used(&self, _id: Uuid, _source_ip: Option<&str>) -> Result<(), CoreError> {
         Ok(())
     }
 

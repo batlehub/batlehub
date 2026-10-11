@@ -1,0 +1,52 @@
+# Server configuration for the database-call budget suite (tests/heavy/db_calls.sh).
+#
+# One proxy and one local npm registry: the proxy's upstream is the stdlib mock
+# `db_calls.py mock` serves, so a cache miss costs no network and the numbers
+# are the server's alone. See tests/heavy/lib.sh for the `${HEAVY_RUN}` and
+# port/storage override conventions.
+
+[server]
+host = "127.0.0.1"
+port = 8122
+# No embedded scan worker: its idle poll (heartbeat, lease, exhausted — five
+# statements every two seconds) lands in whichever request window it likes,
+# and the budget is about what a request costs.
+roles = ["proxy"]
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-db-calls-storage"
+
+[[registries]]
+type = "npm"
+name = "npm-proxy-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["http://127.0.0.1:${DB_CALLS_MOCK_PORT}/npm"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]
+
+[[registries]]
+type = "npm"
+name = "npm-local-${HEAVY_RUN}"
+mode = "local"
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]

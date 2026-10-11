@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::entities::PackageStatus;
 use crate::ports::PackageRepository;
 use crate::rules::{Rule, RuleContext, RuleDecision};
 
@@ -15,29 +14,6 @@ impl BlockListRule {
     pub fn new(repo: Arc<dyn PackageRepository>) -> Self {
         Self { repo }
     }
-
-    /// `Some(Deny)` when `id` is blocked, `None` when it is not — so the caller
-    /// can go on to try a broader coordinate.
-    ///
-    /// A repository error also yields `None`. SECURITY: fail-open by design —
-    /// prefer availability over blocking. If the DB is unreachable we allow the
-    /// request through rather than turning the proxy into a brick wall. Accept
-    /// this trade-off only for self-hosted deployments where uptime matters more
-    /// than hard blocks.
-    async fn status_of(&self, id: &crate::entities::PackageId) -> Option<RuleDecision> {
-        match self.repo.get_status(id).await {
-            Ok(PackageStatus::Blocked { reason, .. }) => Some(RuleDecision::Deny { reason }),
-            Ok(PackageStatus::Available) => None,
-            Err(e) => {
-                tracing::warn!(
-                    package = %id,
-                    error = %e,
-                    "BlockListRule: failed to query package status, failing open"
-                );
-                None
-            }
-        }
-    }
 }
 
 #[async_trait]
@@ -46,34 +22,36 @@ impl Rule for BlockListRule {
         "block_list"
     }
 
+    /// Downloads address a *file within* a version — `…/1.1.0/tarball` for
+    /// npm, `dl` for cargo, a classifier for Maven — so the requested
+    /// coordinate carries an `artifact` the operator's block does not: blocking
+    /// a version records `artifact = None`, and `get_status` matches all four
+    /// fields. Without the widening in [`PackageRepository::covering_block`] a
+    /// blocked npm version stayed fully downloadable by anyone who knew its
+    /// number, while the admin UI showed it as blocked.
+    ///
+    /// A block on the bare version therefore covers every artifact of it. The
+    /// converse does not hold: blocking one artifact leaves the version's other
+    /// files alone, which is what makes per-artifact blocks useful.
+    ///
+    /// A repository error allows. SECURITY: fail-open by design — prefer
+    /// availability over blocking. If the DB is unreachable we allow the
+    /// request through rather than turning the proxy into a brick wall. Accept
+    /// this trade-off only for self-hosted deployments where uptime matters
+    /// more than hard blocks.
     async fn evaluate(&self, ctx: &RuleContext<'_>) -> RuleDecision {
-        // The requested coordinate, exactly as asked for.
-        if let Some(decision) = self.status_of(&ctx.package.id).await {
-            return decision;
-        }
-
-        // Downloads address a *file within* a version — `…/1.1.0/tarball` for
-        // npm, `dl` for cargo, a classifier for Maven — so the requested
-        // coordinate carries an `artifact` the operator's block does not:
-        // blocking a version records `artifact = None`, and `get_status` matches
-        // all four fields. Without this second look a blocked npm version stayed
-        // fully downloadable by anyone who knew its number, while the admin UI
-        // showed it as blocked.
-        //
-        // A block on the bare version therefore covers every artifact of it. The
-        // converse does not hold: blocking one artifact leaves the version's
-        // other files alone, which is what makes per-artifact blocks useful.
-        if ctx.package.id.artifact.is_some() {
-            let version_level = crate::entities::PackageId {
-                artifact: None,
-                ..ctx.package.id.clone()
-            };
-            if let Some(decision) = self.status_of(&version_level).await {
-                return decision;
+        match self.repo.covering_block(&ctx.package.id).await {
+            Ok(Some(reason)) => RuleDecision::Deny { reason },
+            Ok(None) => RuleDecision::Allow,
+            Err(e) => {
+                tracing::warn!(
+                    package = %ctx.package.id,
+                    error = %e,
+                    "BlockListRule: failed to query package status, failing open"
+                );
+                RuleDecision::Allow
             }
         }
-
-        RuleDecision::Allow
     }
 }
 

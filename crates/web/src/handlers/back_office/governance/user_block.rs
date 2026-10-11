@@ -112,7 +112,7 @@ pub async fn block_user(
         .map_err(AppError::from)?;
 
     admin_svc
-        .record_account_action(AccessAction::BlockUser, &identity.0)
+        .record_account_action(AccessAction::BlockUser, &identity.0, &identity.1)
         .await;
 
     Ok(HttpResponse::NoContent().finish())
@@ -153,7 +153,7 @@ pub async fn unblock_user(
     repo.unblock(&user_id).await.map_err(AppError::from)?;
 
     admin_svc
-        .record_account_action(AccessAction::UnblockUser, &identity.0)
+        .record_account_action(AccessAction::UnblockUser, &identity.0, &identity.1)
         .await;
 
     Ok(HttpResponse::NoContent().finish())
