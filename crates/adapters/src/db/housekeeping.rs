@@ -5,6 +5,11 @@
 //! changes no answer. Audit rows (`access_events`, `config_changes`) are not
 //! here on purpose: their retention is RFC 0036 §6.3's, and absent
 //! configuration keeps them.
+//!
+//! `metadata_cache` is not here either: an expired row is exactly what
+//! `CacheStore::get_stale` serves when the upstream is down
+//! (`serve_stale_metadata`), and refreshing a key upserts the same row, so the
+//! table is bounded by the packages ever resolved.
 
 use sqlx::PgPool;
 
@@ -17,8 +22,6 @@ const BATCH: i64 = 5_000;
 
 /// `(table, condition)`. The condition is trusted SQL — constants only.
 const SWEEPS: &[(&str, &str)] = &[
-    // `get` already ignores an expired entry.
-    ("metadata_cache", "expires_at < NOW()"),
     // Every reader asks for `completed_at IS NULL`.
     ("scan_jobs", "completed_at < NOW() - INTERVAL '7 days'"),
     // The console lists the newest hundred.

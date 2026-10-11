@@ -74,7 +74,7 @@ impl CredentialRejectionAudit {
 /// Per process, like the `last_used_at` throttle: *n* replicas write up to *n*
 /// rows a minute per IP, which the burst rule's threshold allows for.
 #[derive(Default)]
-struct RejectionThrottle {
+pub(crate) struct RejectionThrottle {
     /// Per source IP: when its last row was written, and how many attempts
     /// have been suppressed since.
     seen: Mutex<HashMap<String, (Instant, u32)>>,
@@ -88,7 +88,7 @@ impl RejectionThrottle {
     /// `Some(suppressed)` when a row is due for `ip` — `suppressed` being how
     /// many attempts were held back since its last one — or `None` when this
     /// attempt is itself held back.
-    fn admit(&self, ip: &str, now: Instant) -> Option<u32> {
+    pub(crate) fn admit(&self, ip: &str, now: Instant) -> Option<u32> {
         let mut seen = self
             .seen
             .lock()

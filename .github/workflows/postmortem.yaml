@@ -73,13 +73,22 @@ jobs:
       contents: read
       security-events: write # upload SARIF to the Security tab
       actions: read
+      issues: write # create-issue
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Pinned to the v2.0.1 commit. `version` (the scanner binary the composite
-      # action downloads from the release assets) is pinned separately and must
-      # stay at a tag that actually publishes binaries — v2.0.1 ships none, so
-      # it resolves to the v2.0.0 release, which is also the action's default.
-      # The same version is pinned in mise.toml, so local and CI gate alike.
+      # Pinned to an *untagged* main commit: `create-issue` landed there on
+      # 2026-10-11 and no release (v2.7.2 included) carries it yet. Move the pin
+      # to the first tag that does. `version` (the scanner binary the composite
+      # action downloads from the release assets) is pinned separately, to a tag
+      # that publishes binaries, and matches mise.toml so local and CI gate alike.
+      #
+      # create-issue: on push/schedule (never on a PR), a tripped gate opens one
+      # issue per branch, updates it on the next failure and closes it once the
+      # gate passes. The action finds that issue by label + branch only, so each
+      # blocking job gets its own label — a shared one would let a passing Rust
+      # run close the issue a failing UI run had just opened. The docs job is
+      # report-only and gets no issue: its known vitepress advisories would keep
+      # one open forever. `issues: write` is granted per job for this alone.
       #
       # soft-fail is on *by design*: the action's internal SARIF upload is the
       # step after the scan, so a hard failure there would skip it and the
@@ -100,10 +109,10 @@ jobs:
       # need a real baseline, not a guess. The scores still reach SARIF.
       - name: postmortem supply-chain scan (Rust)
         id: scan
-        uses: mlab-sh/postmortem@34f8f42b27cf80dba9e38c52c17f1cc82259fe61 # v2.4.0
+        uses: mlab-sh/postmortem@f32b60299e0be03bce9238c23399583c7e2c1d48 # main, 2026-10-11 (create-issue)
         with:
           path: "."
-          version: v2.4.0
+          version: v2.5.0
           online: "true" # source-repo reputation (uses github-token below)
           vulns: "true" # known advisories via vuln.mlab.sh
           fail-on-vuln: high
@@ -117,6 +126,8 @@ jobs:
           # secret still resolves to an empty string, i.e. anonymous, so nothing
           # breaks without it — it just gets throttled.
           vuln-token: ${{ secrets.VULN_MLAB_TOKEN }}
+          create-issue: "true"
+          issue-label: postmortem-rust
       # exit-code: 0 pass · 1 gate tripped · 2 misconfig / no ecosystem detected.
       # A 2 is a real failure here — every scanned path is known to hold a
       # lockfile, so "no ecosystem" means the scan silently covered nothing.
@@ -136,14 +147,15 @@ jobs:
       contents: read
       security-events: write
       actions: read
+      issues: write # create-issue
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: postmortem supply-chain scan (UI)
         id: scan
-        uses: mlab-sh/postmortem@34f8f42b27cf80dba9e38c52c17f1cc82259fe61 # v2.4.0
+        uses: mlab-sh/postmortem@f32b60299e0be03bce9238c23399583c7e2c1d48 # main, 2026-10-11 (create-issue)
         with:
           path: ui
-          version: v2.4.0
+          version: v2.5.0
           online: "true"
           vulns: "true"
           fail-on-vuln: high
@@ -151,6 +163,8 @@ jobs:
           soft-fail: "true"
           github-token: ${{ github.token }}
           vuln-token: ${{ secrets.VULN_MLAB_TOKEN }}
+          create-issue: "true"
+          issue-label: postmortem-ui
       - name: Gate
         env:
           CODE: ${{ steps.scan.outputs.exit-code }}
@@ -168,10 +182,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: postmortem supply-chain scan (Website)
         id: scan
-        uses: mlab-sh/postmortem@34f8f42b27cf80dba9e38c52c17f1cc82259fe61 # v2.4.0
+        uses: mlab-sh/postmortem@f32b60299e0be03bce9238c23399583c7e2c1d48 # main, 2026-10-11 (create-issue)
         with:
           path: docs
-          version: v2.4.0
+          version: v2.5.0
           online: "true"
           vulns: "true"
           fail-on-vuln: high

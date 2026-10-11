@@ -798,6 +798,20 @@ where
         .with_writer(writer)
 }
 
+/// `RUST_LOG`, plus the audit stream at INFO whatever `RUST_LOG` says: an
+/// operator quieting logs with `RUST_LOG=warn` must not silently cut the SIEM
+/// feed (RFC 0036 §6.2).
+fn json_filter<S>(env: EnvFilter) -> impl tracing_subscriber::layer::Filter<S>
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    use tracing_subscriber::filter::{FilterExt, Targets};
+    env.or(Targets::new().with_target(
+        batlehub_core::services::audit_stream::TARGET,
+        tracing::Level::INFO,
+    ))
+}
+
 pub(super) fn init_tracing(
     otel_cfg: Option<&OtelConfig>,
     format: batlehub_config::schema::LogFormat,
@@ -832,7 +846,8 @@ pub(super) fn init_tracing(
         batlehub_core::services::audit_stream::enable();
     }
     let text_layer = (!json).then(|| tracing_subscriber::fmt::layer().with_filter(env_filter()));
-    let json_layer = json.then(|| json_layer(std::io::stdout).with_filter(env_filter()));
+    let json_layer =
+        json.then(|| json_layer(std::io::stdout).with_filter(json_filter(env_filter())));
 
     let registry = tracing_subscriber::registry()
         .with(text_layer)
@@ -934,6 +949,39 @@ mod tests {
         assert_eq!(line["batlehub.audit.throttled_count"], 20);
         assert_eq!(line["target"], "batlehub::audit");
         assert_eq!(line["span"]["request_id"], "req-42");
+    }
+    /// `RUST_LOG=warn` quiets everything else but not the audit stream.
+    #[test]
+    fn the_audit_stream_survives_a_quiet_rust_log() {
+        use batlehub_core::entities::{AccessAction, AccessEvent, AccessResult, CallerNet, Role};
+        use batlehub_core::services::audit_stream;
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let out = Captured::default();
+        let sink = out.clone();
+        let subscriber = tracing_subscriber::registry().with(
+            json_layer(move || sink.clone()).with_filter(json_filter(EnvFilter::new("warn"))),
+        );
+        audit_stream::enable();
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!("noise");
+            let event = AccessEvent::about_identity(
+                AccessAction::CredentialRejected,
+                None,
+                Role::Anonymous,
+                AccessResult::Denied {
+                    reason: "no provider".to_owned(),
+                },
+                CallerNet::default(),
+                None,
+            );
+            audit_stream::emit(&event, false);
+        });
+
+        let text = String::from_utf8(out.0.lock().unwrap().clone()).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 1, "{text}");
+        assert!(lines[0].contains("batlehub.audit"), "{text}");
     }
     // `actix_web::test` is both a module and an attribute macro, so importing it
     // unqualified shadows the built-in `#[test]` attribute for this whole module

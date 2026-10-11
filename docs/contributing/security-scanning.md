@@ -67,6 +67,11 @@ Check `withdrawn` on the OSV record (`https://api.osv.dev/v1/vulns/<id>`) before
 allowlist them — the suppression stance below applies, and the count is harmless as long as the gate
 keys on severity.
 
+When a blocking gate (Rust, UI) trips on a push to `main` or the daily run, the action opens an issue
+labelled `postmortem-rust` / `postmortem-ui` listing the offending packages. Later failures on the same
+branch update that issue instead of opening another, and it closes itself once the gate passes. Pull
+requests never open one — the failed check is the report there.
+
 Two rate limits apply. Repository reputation is read from the GitHub API — CI passes `github.token`
 automatically; locally, export `GITHUB_TOKEN` or every dependency comes back `stats-failed`.
 

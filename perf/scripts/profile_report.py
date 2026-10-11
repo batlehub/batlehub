@@ -33,7 +33,7 @@ REPO = Path(__file__).resolve().parents[2]
 ROUTES = REPO / "perf/profile_routes.txt"
 SPEC = REPO / "ui/openapi.json"
 
-OWN = re.compile(r"^<?batlehub|\[(?:crates|server|cli)/")
+OWN = re.compile(r"(?:^<?batlehub)|(?:\[(?:crates|server|cli)/)")
 HASH = re.compile(r"::h[0-9a-f]{16}$")
 METHODS = ("get", "put", "post", "delete", "patch", "head")
 

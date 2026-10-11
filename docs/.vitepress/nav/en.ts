@@ -308,6 +308,10 @@ export const sidebar = {
           text: "TD-0001 — The fixed cost of a request",
           link: "/techdebt/0001-per-request-sql-and-profile-coverage",
         },
+        {
+          text: "TD-0002 — The feat/devfile review leftovers",
+          link: "/techdebt/0002-feat-devfile-review-leftovers",
+        },
       ],
     },
   ],

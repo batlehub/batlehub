@@ -3,15 +3,16 @@
 | | |
 | --- | --- |
 | **Status** | Open |
-| **Found** | 2026-10-09, `perf:profile` on PR #195 ([run 37909702910](https://github.com/batlehub/batlehub/actions/runs/37909702910); numbers below from [run 37924927391](https://github.com/batlehub/batlehub/actions/runs/37924927391), the first with a correct wait report) |
-| **Area** | request middleware, routing, filesystem storage, `perf/` |
+| **Found** | 2026-10-09, `perf:profile` on PR #195 ([run 37909702910](https://github.com/batlehub/batlehub/actions/runs/37909702910); numbers below from [run 37924927391](https://github.com/batlehub/batlehub/actions/runs/37924927391), the first with a correct wait report); re-measured 2026-10-10 at `e9ced0d` (§1, §5) |
+| **Area** | request middleware, routing, filesystem storage, database, `perf/` |
 
 The end goal is a request that pays only for its own work. On a warm cache a
 metadata read takes 1.7–3 ms on the server and a cached download 4.5–10 ms.
 Three costs make up most of that, and every path pays them: SQL that is not
 the request's (§1), unexplained waiting on the download paths (§2), and
 the router (§3). §4 is what keeps the answer honest: most paths have never
-been profiled.
+been profiled. §5 is the same costs seen from the throughput side: the server
+breaks while using about one core of four.
 
 ## 1. Every request runs SQL before it does its job
 
@@ -67,6 +68,30 @@ Bearer request, uncached, before the user-block middleware runs.
    log, download counters, cache bookkeeping. Each is a write per read. Decide
    which may be batched or made asynchronous without losing what the audit
    trail promises (RFC 0036).
+
+### Re-measured 2026-10-10
+
+[Profile run 38086662094](https://github.com/batlehub/batlehub/actions/runs/38086662094),
+at `e9ced0d`, gives the same statement counts with very different SQL times:
+
+| Path | Statements | SQL ms, 2026-10-09 | SQL ms, 2026-10-10 |
+| --- | ---: | ---: | ---: |
+| metadata reads (`pypi_simple`, `npm_packument`, `cargo_index`, …) | 3.0 | 0.8–0.9 | 0.5–0.7 |
+| cached artifact downloads | 6–8 | 2.0–3.2 | 2.2–18.4 |
+| `npm_publish` | 14.8 | 4.55 | 34.24 |
+
+The reads got no slower, at about 0.2 ms a statement. The download paths now
+range from 2.2 ms (`apk_package`, `openvsx_vsix`) to 14–18 ms
+(`devfile_devfile`, `github_asset`, `nix_narinfo`, `vscode_vspackage`) for the
+same 6–8 statements. That is up to 2 ms a statement. The statements a download
+runs on top of a metadata read are the writes (item 3 below), so this run
+points at **the writes, not the read floor**, as the larger share of §1's
+cost. One run cannot tell a regression from a noisy runner, since Postgres
+shares the runner's disk with k6 and the server. Re-run before acting. If the
+spread holds, item 3 comes before item 2.
+
+`npm_publish` went from 7.76 to 42.37 ms wall, and 23.29 ms of it is the
+`publish_policy` stage.
 
 **Paid when** a metadata read on a warm cache runs at most one statement, and
 the profile's SQL column shows it.
@@ -197,3 +222,52 @@ change without a number.
    triaged", and the goal is for no entry to say it.
 
 **Paid when** no line of `perf/profile_routes.txt` reads `no arm yet`.
+
+## 5. The server breaks at one core of four
+
+### What was measured
+
+[Breaking-point run 38086662147](https://github.com/batlehub/batlehub/actions/runs/38086662147),
+at `e9ced0d`, on a 4-core runner with the soak mix. The knee doubled since
+[run 36281269687](https://github.com/batlehub/batlehub/actions/runs/36281269687)
+(2026-09-27, `8846ef2`, 400/s on every arm):
+
+| Arm | Knee | Clean at | p95 at clean | Server CPU at knee | Pool free at knee | Postgres RSS at knee |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `fs-memory` | 1600/s | 800/s | 1221 ms | 107 % | 0/10 | 779 MiB |
+| `fs-redis` | 800/s | 400/s | 12 ms | 114 % | 0/10 | 595 MiB |
+| `s3-memory` | 800/s | 400/s | 11 ms | 112 % | 0/10 | 594 MiB |
+| `s3-redis` | 800/s | 400/s | 10 ms | 110 % | 0/10 | 592 MiB |
+| `s3-redis-pool50` | 800/s | 400/s | 19 ms | 113 % | 0/50 | 2638 MiB |
+
+Three readings:
+
+- **The pool is not the ceiling.** The report tells you to raise
+  `max_connections` and re-run. The 50-connection arm is that re-run, and its
+  knee did not move. It ran out of all 50 connections too, and its Postgres
+  grew from 480 MiB to 2 GiB at 400/s. A larger pool costs memory and buys no
+  throughput, which fits §1: each request holds a connection for 6–8
+  statements.
+- **The server does not use the machine.** Every arm breaks at 107–114 % of
+  one core, on four. The server is waiting, not computing, and §1 and §2 are
+  what it waits on. The Postgres process's CPU is not sampled, so this run
+  cannot say whether the database used the other cores.
+- **`fs-memory` does not fit the others.** It has the best knee (1600/s) but
+  the worst latency below it: p98 299 ms at 400/s against 20–30 ms on the
+  other arms, and p95 1221 ms at 800/s. That is either noise or contention in
+  the in-memory cache, and one run cannot say which.
+
+### What would retire it
+
+1. Sample the Postgres processes' CPU per step in
+   `perf/scripts/breaking_point*`, beside the server's. Until the database's
+   share is known, "waiting" cannot be split into "waiting on a busy database"
+   and "waiting on round trips".
+2. Re-run `fs-memory`. If the latency holds, profile it at 400/s to find the
+   contention.
+3. Change the report's pool advice. When the pool-50 arm breaks at the same
+   rate, the advice should say so rather than repeat "raise
+   `max_connections`" five times.
+
+**Paid when** the knee is limited by the server's CPU, meaning at least 300 %
+on a 4-core runner, rather than by waiting.

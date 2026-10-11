@@ -1,4 +1,5 @@
-//! The housekeeping sweep deletes past-cutoff rows and nothing else.
+//! The housekeeping sweep deletes past-cutoff rows and nothing else — and never
+//! expired `metadata_cache` rows, which `get_stale` serves.
 //!
 //!   DATABASE_URL=postgresql://… cargo test -p batlehub-adapters --test pg_housekeeping
 
@@ -75,7 +76,8 @@ async fn sweep_deletes_only_past_cutoff_rows() {
     let cache = "SELECT EXISTS (SELECT 1 FROM metadata_cache WHERE cache_key = $1)";
     let job = "SELECT EXISTS (SELECT 1 FROM scan_jobs WHERE package_name = $1)";
     let block = "SELECT EXISTS (SELECT 1 FROM ip_blocks WHERE ip = $1)";
-    assert!(!exists(&pool, cache, &old).await);
+    // Expired metadata is the stale-on-error fallback: never swept.
+    assert!(exists(&pool, cache, &old).await);
     assert!(exists(&pool, cache, &live).await);
     assert!(!exists(&pool, job, &old).await);
     assert!(exists(&pool, job, &live).await);

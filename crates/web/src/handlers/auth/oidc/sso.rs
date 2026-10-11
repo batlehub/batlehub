@@ -246,11 +246,27 @@ pub async fn oidc_callback(
     query: web::Query<CallbackQuery>,
 ) -> impl Responder {
     let (response, outcome) = callback_response(&flows, &login_states, &query).await;
-    if let Some(event) = outcome.into_event(caller_net(&req)) {
+    let failed = matches!(outcome, SignInOutcome::Failed { .. });
+    if let Some(mut event) = outcome.into_event(caller_net(&req)) {
+        // A failed callback is a 302, which `ip_block` never counts: without
+        // this, a client looping on a bogus callback writes one row per request.
+        // An event with no source IP has nothing to key on and is written as is.
+        if let (true, Some(ip)) = (failed, event.ip_address.as_deref()) {
+            match SIGN_IN_FAILED_THROTTLE.admit(ip, std::time::Instant::now()) {
+                None => return response,
+                Some(suppressed) => event.throttled_count = (suppressed > 0).then_some(suppressed),
+            }
+        }
         admin_svc.record_event(event).await;
     }
     response
 }
+
+/// One `sign_in_failed` row per source IP per minute, the rest counted on the
+/// next one — the `credential_rejected` throttle. A static, so it is one per
+/// process rather than one per actix worker.
+static SIGN_IN_FAILED_THROTTLE: std::sync::LazyLock<crate::middleware::RejectionThrottle> =
+    std::sync::LazyLock::new(Default::default);
 
 /// What a callback did, for its audit row (RFC 0036 §6.1).
 ///
