@@ -8,14 +8,77 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-The database, measured. Every critical request path now has a statement budget
-checked against a real server, and the paths that spent the most were cut:
-a cached download costs 5 statements rather than 8, a cache miss 12 rather
-than 21 and one write of the artifact rather than two, and an idle scan worker
-11 statements a minute rather than 150. Beside it, the project's security
-policy stops sending vulnerability reports to a public issue.
+Nothing yet.
+
+---
+
+## [1.5.0] - 2026-10-12
+
+A new registry kind, an audit trail an auditor can rely on, and the database,
+measured. `devfile` proxies the catalogue Eclipse Che starts a
+workspace from, so a stack version can be blocked. The audit trail now records
+sign-ins and token lifecycle, expires and pseudonymises what it holds, answers
+erasure and access requests, and is sealed in a signed hash chain — RFC 0036,
+*Implemented*. And every critical request path has a statement budget checked
+against a real server: a cached download costs 5 statements rather than 8, a
+cache miss 12 rather than 21 and one write of the artifact rather than two, an
+idle scan worker 11 statements a minute rather than 150.
 
 ### Added
+
+- **Devfile registries** (RFC 0035, *Implemented*). `type = "devfile"` proxies
+  `registry.devfile.io` — or any devfile registry — for Eclipse Che's *Get
+  Started* page and for `registry-library`, the library the
+  IDE plugins embed. The index documents are served with blocked stack versions
+  removed; each version's devfile, OCI manifest and layers, and the starter
+  projects, are relayed byte-exact and verified against their digest before a
+  byte is stored or served. Proxy-only. `registry-library` asks for `/v2/…` at
+  the root of the host it is given, so the registry wants a host of its own
+  (`hosts = [...]`); the server warns, and the console's registry card says
+  so, when it has none. Proven against real clients: `tests/heavy/devfile.sh`,
+  a closed-world phase against `registry.devfile.io`, an air-gap phase through
+  a signed bundle, and a Che dashboard backend. See
+  `docs/registries/devfile.md`.
+
+- **Open VSX: `GET …/api/-/query` and `…/api/v2/-/query`**, the routes Theia
+  and Eclipse Che resolve an extension through. They answer with the same
+  filtered document as `api/{ns}/{ext}/{v}`, so a version hidden there is
+  hidden here too.
+
+- **Sign-ins and tokens in the audit trail** (RFC 0036 phase 1, migration
+  061). Successful and failed sign-ins, token creation and revocation, a
+  rejected credential (one row per source IP per minute, with a count of what
+  was suppressed) and `token_new_source` — a personal access token presented
+  from an address it was never used from — are audit events. With
+  `[logging] format = "json"` they are also a JSON stream on stdout.
+
+- **Detection rules for the audit stream.** `deploy/siem/sigma/` carries
+  eleven Sigma rules — credential and sign-in bursts, a token from a new
+  source, a grant to anonymous, a blocked package pulled, an audit purge, a gap
+  in the seal chain… — each replayed against fixtures by `task siem:check`.
+  See `docs/operations/siem.md`.
+
+- **Retention, pseudonymisation and data-subject requests** (`[audit]`).
+  Download and metadata rows expire after `access_retention_days`, every other
+  row after `security_retention_days`; after `pseudonymise_after_days` an
+  access row's IP is truncated to /24 or /48 and its user agent dropped.
+  `POST /api/v1/admin/gdpr/erase` replaces a subject with an HMAC pseudonym
+  keyed by `erasure_key` — so their rows stay linkable to each other and to
+  nobody — and `GET /api/v1/admin/gdpr/export` returns everything held about
+  them; `batlehub-cli admin gdpr erase|export` drives both. With no `[audit]`
+  block, nothing expires.
+
+- **A sealed audit trail** (migration 062). Every `seal_interval_secs` the
+  window just closed is hashed into a chain signed with `seal_signing_key`
+  (Ed25519). `batlehub-cli admin audit verify` (`POST
+  /api/v1/admin/audit/verify`) replays the chain and exits 1 naming the first
+  window that does not verify; the `audit_chain_gap` Sigma rule catches a
+  missing one. An edit to the trail is now detectable.
+
+- **Compliance pages** for GDPR, ISO 27001, the Cyber Resilience Act and, as
+  the next target, NIS2 and DORA — `docs/operations/compliance*.md`, in
+  English and French: what the server does for each control, and what is left
+  to the operator.
 
 - **`batlehub-cli java`: the Java support of the VS Code extensions, with no
   editor** (batlehub-vsx RFC 0002 phase 6). `inspect` (text, JSON or SARIF,
@@ -58,12 +121,19 @@ policy stops sending vulnerability reports to a public issue.
   small the test tables are, and measures an idle scan worker against a
   ceiling. `-- --update` rewrites the budget from what was measured.
 
-- **RFC 0036 — regulatory alignment** (Draft). GDPR, ISO 27001 and the Cyber
-  Resilience Act as the baseline, NIS2 and DORA as the next target: sign-ins
-  and token lifecycle as audit events, the audit trail as a JSON stream with
-  Sigma detection rules, retention classes and pseudonymisation for the
-  personal data in it, and a signed hash chain that makes an edit to it
-  detectable.
+- **A CPU profile per request path.** The server's `profiling` feature (never
+  in a published image) samples its own CPU; `perf/scripts/profile.sh` drives
+  every soak arm alone under constant load and reports what one request costs
+  on each path and where it is spent, against the last profile of `main`. The
+  `Profile` workflow runs it on a `profile` label and is report-only;
+  `profile_route_coverage.rs` checks its route inventory on every PR.
+
+- **Migrating from Nexus** — `docs/guide/install/migrate-from-nexus.md`, in
+  English and French: Nexus concepts side by side with BatleHub's, and a
+  migration that keeps Nexus serving until the last client has moved.
+
+- **The documentation is also published on GitHub Pages**
+  (`docs-pages.yaml`).
 
 ### Changed
 
@@ -1452,7 +1522,8 @@ First stable release.
 
 ---
 
-[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.4.0...HEAD
+[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.5.0...HEAD
+[1.5.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.4.0...v1.5.0
 [1.4.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.3.0...v1.4.0
 [1.3.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.2.0...v1.3.0
 [1.2.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.1.0...v1.2.0
