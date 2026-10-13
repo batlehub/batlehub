@@ -25,6 +25,10 @@ describe("extractMessage", () => {
     expect(extractMessage({ error: "forbidden" })).toBe("forbidden");
   });
 
+  it("returns 'Unknown error' for an object with no message", () => {
+    expect(extractMessage({ status: 500 })).toBe("Unknown error");
+  });
+
   it("falls back to String(err) for other types", () => {
     expect(extractMessage(42)).toBe("42");
   });

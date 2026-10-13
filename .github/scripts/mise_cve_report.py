@@ -84,26 +84,31 @@ def collect(
     totals: Counter = Counter()
     skipped: Counter = Counter()
     root_path = Path(root) if root else None
+    for result, vuln in _vulns(report, only_fixable=only_fixable):
+        # `PkgPath` first: the language analysers name their target by
+        # ecosystem (`Node.js`, `Ruby`) and put the install it came from in
+        # the package path, so three node versions arrive as one row and
+        # the stale ones hide inside it.
+        tool = tool_of(vuln.get("PkgPath") or result.get("Target", "?"), root)
+        severity = vuln.get("Severity", "UNKNOWN")
+        if _excluded(tool, keep, root_path):
+            # Counted in the same unit as the verdict — fixable HIGH and
+            # CRITICAL — so "excluded" plus "counted" adds up to what a
+            # machine-wide scan reports, and the narrowing is checkable.
+            if severity in BLOCKING:
+                skipped[tool] += 1
+            continue
+        totals[severity] += 1
+        per_tool[tool].append(_finding(vuln, severity))
+    return per_tool, totals, skipped
+
+
+def _vulns(report: dict, *, only_fixable: bool):
+    """Every `(result, vulnerability)` pair of a Trivy report, fixable ones only if asked."""
     for result in report.get("Results") or []:
         for vuln in result.get("Vulnerabilities") or []:
-            if only_fixable and not vuln.get("FixedVersion"):
-                continue
-            # `PkgPath` first: the language analysers name their target by
-            # ecosystem (`Node.js`, `Ruby`) and put the install it came from in
-            # the package path, so three node versions arrive as one row and
-            # the stale ones hide inside it.
-            tool = tool_of(vuln.get("PkgPath") or result.get("Target", "?"), root)
-            severity = vuln.get("Severity", "UNKNOWN")
-            if _excluded(tool, keep, root_path):
-                # Counted in the same unit as the verdict — fixable HIGH and
-                # CRITICAL — so "excluded" plus "counted" adds up to what a
-                # machine-wide scan reports, and the narrowing is checkable.
-                if severity in BLOCKING:
-                    skipped[tool] += 1
-                continue
-            totals[severity] += 1
-            per_tool[tool].append(_finding(vuln, severity))
-    return per_tool, totals, skipped
+            if not only_fixable or vuln.get("FixedVersion"):
+                yield result, vuln
 
 
 def _excluded(tool: str, keep: set[str] | None, root_path: Path | None) -> bool:
@@ -167,28 +172,36 @@ def upstream_latest(wanted: set[str], timeout: float = 30.0) -> dict[str, str | 
     if not shutil.which("mise"):
         return {}
     env = {**os.environ, "MISE_GLOBAL_CONFIG_FILE": os.devnull}
-    listed = _mise(["ls", "--current", "--json"], timeout, env)
-    try:
-        listing = json.loads(listed) if listed is not None else None
-    except json.JSONDecodeError:
-        listing = None
-    if listing is None:
-        return {}
-
     out: dict[str, str | None] = {}
-    for key, entries in listing.items():
+    for key, entries in _mise_listing(timeout, env).items():
         for entry in entries or []:
             install_dir = _wanted_dir(entry, wanted, out)
             if install_dir is None:
                 continue
-            requested = entry.get("requested_version") or "latest"
-            spec = key if requested in ("latest", "") else f"{key}@{requested}"
             # An empty answer is "mise could not say", not "no newer release":
             # leaving the key out keeps the two apart in the report.
-            newest = (_mise(["latest", spec], timeout, env) or "").strip()
+            newest = _mise_latest(key, entry, timeout, env)
             if newest:
                 out[install_dir] = newest
     return out
+
+
+def _mise_listing(timeout: float, env: dict[str, str]) -> dict:
+    """`mise ls --current --json`, or `{}` when it failed or did not parse."""
+    listed = _mise(["ls", "--current", "--json"], timeout, env)
+    if listed is None:
+        return {}
+    try:
+        return json.loads(listed) or {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def _mise_latest(key: str, entry: dict, timeout: float, env: dict[str, str]) -> str:
+    """The newest release of `key` within the entry's pin, or `""` when mise could not say."""
+    requested = entry.get("requested_version") or "latest"
+    spec = key if requested == "latest" else f"{key}@{requested}"
+    return (_mise(["latest", spec], timeout, env) or "").strip()
 
 
 def _mise(args: list[str], timeout: float, env: dict[str, str]) -> str | None:

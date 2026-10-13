@@ -23,6 +23,8 @@ export function extractMessage(err: unknown): string {
     const e = err as Record<string, unknown>;
     if (typeof e["message"] === "string") return e["message"];
     if (typeof e["error"] === "string") return e["error"];
+    // `String(err)` would be "[object Object]", which tells the reader nothing.
+    return t("common.unknownError");
   }
   return String(err);
 }
