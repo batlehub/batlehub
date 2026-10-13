@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: 00dce8c11f03ea19
+sourceHash: 0c16007cee85361e
 ---
 
 # batlehub-cli
@@ -1410,3 +1410,29 @@ seconde moitié n'arrive n'ont ni l'une ni l'autre, et rien ne les complète
 rétroactivement — une paire vide à côté d'un `count` non nul date donc la ligne
 plutôt qu'elle ne décrit l'appelant.
 :::
+
+## 23. Commandes — java {#commands-java}
+
+Le moteur Java des extensions VS Code de BatleHub : les inspections, correctifs,
+générateurs et renommages de leur support Java, sur un vrai serveur de langage
+Java et sans éditeur — pour une porte de CI et pour des agents. Tout ce qui suit
+`java` appartient au moteur, code de sortie compris :
+
+```
+$ batlehub-cli java inspect . --fail-on warning --format sarif > java.sarif
+$ batlehub-cli java fix src/main/java/com/acme/Greeter.java --write
+$ batlehub-cli java mcp          # les mêmes verbes, en outils MCP sur stdio
+$ batlehub-cli java --help       # chaque verbe, option et code de sortie
+```
+
+Il lui faut un `node` ≥ 22 sur le `PATH` (`mise use node@24`) et un JDK ≥ 21
+que sa découverte sache trouver. Le moteur est intégré à ce binaire et écrit
+sous le répertoire de cache (`~/.cache/batlehub/java-engine/<hash>/`) à la
+première utilisation ; sa première exécution télécharge aussi, une seule fois,
+le serveur de langage Java épinglé. `BATLEHUB_JAVA_ENGINE=<chemin vers batlehub-java.mjs>`
+exécute un autre build. Aucun serveur, jeton ni profil n'est lu : `--profile` et
+`--json` après `java` sont des options du moteur, pas de la CLI.
+
+Les verbes, la configuration qu'ils lisent (uniquement les fichiers commités de
+`.batlehub/java/`) et l'extrait de CI sont documentés avec le moteur, dans
+[le guide des extensions](https://github.com/batlehub/batlehub-vsx/blob/main/docs/guide/java/engine.md).
