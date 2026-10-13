@@ -331,13 +331,14 @@ fn tar_of(entries: &[(&str, &[u8])]) -> Result<Vec<u8>, CoreError> {
         //
         // The mode is a *field of this tar header*, not a permission this
         // process asks a filesystem for: the archive is built in memory and
-        // served over HTTP, and nothing here ever unpacks it. 0o644 is what GNU
-        // tar writes for a regular file and what apk expects to read back, so
-        // it is an interop constant — narrowing it would only produce an index
-        // some client refuses.
+        // served over HTTP, and apk reads `APKINDEX`/`DESCRIPTION` by name and
+        // type without extracting them, so the permission bits are never used.
+        // 0o640 rather than GNU tar's 0o644 only because it grants nothing to
+        // "other"; the closed-world `apk` phase is what shows a real `apk
+        // update` accepts it.
         let mut header = tar::Header::new_ustar();
         header.set_size(content.len() as u64);
-        header.set_mode(0o644);
+        header.set_mode(0o640);
         header.set_uid(0);
         header.set_gid(0);
         header.set_mtime(0);

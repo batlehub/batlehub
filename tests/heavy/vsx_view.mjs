@@ -35,24 +35,14 @@
 // Browser: `--cdp` connects to a running Chrome (a workspace's sidecar); the
 // page lives in its own browser context, so nothing of the browser's other
 // tabs or storage is touched or seen. `--chrome` launches a headless one.
-// puppeteer-core is resolved from ui/node_modules, the one place this
-// repository already carries it.
 //
 // Selectors are the workbench's own class names, stable from 1.96 to 1.136:
 // `.extensions-viewlet`, `.extension-list-item` with `.name` and
 // `.publisher-name`, `.extension-action.install`, `.extension-editor`.
-import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { args, emit, need, openPage, poll, sleep } from "./browser.mjs";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const require = createRequire(path.join(here, "..", "..", "ui", "package.json"));
-const puppeteer = require("puppeteer-core");
-
-const args = {};
-for (let i = 2; i < process.argv.length; i += 2) args[process.argv[i].replace(/^--/, "")] = process.argv[i + 1];
-const need = (k) => { if (!args[k]) { console.error(`missing --${k}`); process.exit(2); } return args[k]; };
 const URL_ = need("url"), SHOTS = need("shots");
 const SEARCH = args.search ?? "weebo";
 // `--phase signed`: the sign-in already happened (a second look at the same
@@ -61,8 +51,6 @@ const PHASE = args.phase ?? "all";
 const REAL = args.real ?? "batleforc.weebo-bridge-notify";
 const SIGN_IN = "Sign in to BatleHub";
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const emit = (o) => console.log(JSON.stringify(o));
 let shot = 0;
 const snap = (page, name) => page.screenshot({ path: path.join(SHOTS, `${String(++shot).padStart(2, "0")}-${name}.png`) }).catch(() => {});
 
@@ -88,18 +76,7 @@ const listed = (page) => page.$$eval(".extensions-viewlet .extension-list-item",
     };
   }));
 
-// Poll the list until `ok` holds or the timeout passes; the last observation
-// either way, so the suite sees what the view showed rather than a timeout.
-async function settle(page, ok, timeout = 30000) {
-  const t0 = Date.now();
-  let rows = [];
-  while (Date.now() - t0 < timeout) {
-    rows = await listed(page);
-    if (ok(rows)) return rows;
-    await sleep(500);
-  }
-  return rows;
-}
+const settle = (page, ok, timeout) => poll(() => listed(page), ok, timeout);
 
 async function typeSearch(page, text) {
   const box = await page.waitForSelector(".extensions-viewlet textarea", { timeout: 30000 });
@@ -146,17 +123,35 @@ async function clickInstall(page, name) {
   }
 }
 
+// Click every button of an open workbench dialog whose label starts with
+// `label`, pausing `pause` ms after each. True when one was clicked.
+async function answerDialog(page, label, pause) {
+  let clicked = false;
+  for (const b of await page.$$(".monaco-dialog-box .dialog-buttons .monaco-button, .monaco-dialog-box .dialog-buttons a")) {
+    const t = (await b.evaluate((e) => e.textContent)).trim();
+    if (t.startsWith(label)) { await b.click(); clicked = true; await sleep(pause); }
+  }
+  return clicked;
+}
+
 // The editor's next gate after the signature (1.136): "Do you trust the
 // publisher?" — a modal that holds the install until answered. True when this
 // pass answered it.
-async function answerTrustPrompt(page) {
-  let trusted = false;
-  for (const b of await page.$$(".monaco-dialog-box .dialog-buttons .monaco-button, .monaco-dialog-box .dialog-buttons a")) {
-    const t = (await b.evaluate((e) => e.textContent)).trim();
-    if (t.startsWith("Trust Publisher")) { await b.click(); trusted = true; await sleep(500); }
-  }
-  return trusted;
+const answerTrustPrompt = (page) => answerDialog(page, "Trust Publisher", 500);
+
+// The view's Refresh: it answers a query from its own cache, so a search typed
+// after a change has to be refreshed to see it.
+async function refreshView(page) {
+  const refresh = await page.$('.sidebar [aria-label^="Refresh"], .sidebar .codicon-extensions-refresh');
+  if (refresh) await refresh.click();
+  emit({ phase: "refresh", clicked: !!refresh });
 }
+
+// `--real` listed, and the anonymous sign-in entry gone: the view is answering
+// as a signed-in reader.
+const [REAL_PUB, REAL_NAME] = REAL.split(".");
+const signedIn = (r) => r.length > 0 && !r.some((x) => x.name === SIGN_IN)
+  && r.some((x) => x.publisher.toLowerCase() === REAL_PUB.toLowerCase() || x.name.toLowerCase().includes(REAL_NAME.toLowerCase()));
 
 // Whatever the toasts say right now. An install the server's verifier refuses
 // lands in a notification toast, and the toast does not wait for the list.
@@ -198,12 +193,7 @@ async function install(page, name) {
   return { name, listed: true, enabled, actions: after?.actions ?? [], installed, trusted, notifications };
 }
 
-const browser = args.cdp
-  ? await puppeteer.connect({ browserURL: args.cdp })
-  : await puppeteer.launch({ executablePath: need("chrome"), headless: true, args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"] });
-const ctx = await browser.createBrowserContext();
-const page = await ctx.newPage();
-await page.setViewport({ width: 1280, height: 900 });
+const { page, close } = await openPage(1280);
 const csp = [];
 page.on("console", (m) => { if (m.type() === "error" && /Content Security Policy/.test(m.text())) csp.push(m.text().slice(0, 160)); });
 
@@ -230,10 +220,7 @@ try {
   await sleep(3000);
   // A folder would raise the workspace-trust dialog; the suite opens none.
   // Should one appear anyway, trust it — this is a throwaway data dir.
-  for (const b of await page.$$(".monaco-dialog-box .dialog-buttons .monaco-button, .monaco-dialog-box .dialog-buttons a")) {
-    const t = (await b.evaluate((e) => e.textContent)).trim();
-    if (t.startsWith("Yes")) { await b.click(); await sleep(1000); }
-  }
+  await answerDialog(page, "Yes", 1000);
   await (await page.waitForSelector('.activitybar [aria-label^="Extensions"]', { timeout: 30000 })).click();
   await page.waitForSelector(".extensions-viewlet", { timeout: 30000 });
 
@@ -246,9 +233,8 @@ try {
     // not the sign-in entry": the view answers a new query from its own cache
     // first, so the looser predicate was satisfied by the previous search's
     // rows and the phase measured the wrong extension's icon.
-    const [pub, name] = REAL.split(".");
-    const mine = (r) => r.some((x) => x.publisher.toLowerCase() === pub.toLowerCase()
-      || x.name.toLowerCase().replace(/[\s-]/g, "") === name.toLowerCase().replace(/[\s-]/g, ""));
+    const mine = (r) => r.some((x) => x.publisher.toLowerCase() === REAL_PUB.toLowerCase()
+      || x.name.toLowerCase().replace(/[\s-]/g, "") === REAL_NAME.toLowerCase().replace(/[\s-]/g, ""));
     // Refresh first, and it is not belt and braces. The view answers a query
     // from its own cache, and this editor has been running since before the
     // extension was published — so without it the search returns the rows of an
@@ -257,9 +243,7 @@ try {
     await typeSearch(page, SEARCH);
     let entries = await settle(page, (r) => r.length > 0 && !r.some((x) => x.name === SIGN_IN) && mine(r), 8000);
     if (!mine(entries)) {
-      const refresh = await page.$('.sidebar [aria-label^="Refresh"], .sidebar .codicon-extensions-refresh');
-      if (refresh) await refresh.click();
-      emit({ phase: "refresh", clicked: !!refresh });
+      await refreshView(page);
       await sleep(1500);
       await typeSearch(page, SEARCH);
       entries = await settle(page, (r) => r.length > 0 && !r.some((x) => x.name === SIGN_IN) && mine(r));
@@ -277,9 +261,7 @@ try {
     emit({ phase: "csp", refused: csp.length, sample: csp[0] ?? "" });
   } else if (PHASE === "signed") {
     await typeSearch(page, SEARCH);
-    const [pub, name] = REAL.split(".");
-    const search2 = await settle(page, (r) => r.length > 0 && !r.some((x) => x.name === SIGN_IN)
-      && r.some((x) => x.publisher.toLowerCase() === pub.toLowerCase() || x.name.toLowerCase().includes(name.toLowerCase())));
+    const search2 = await settle(page, signedIn);
     await snap(page, "signed-search");
     emit({ phase: "search2", entries: search2 });
     const realName = search2.find((x) => x.name !== SIGN_IN)?.name ?? "";
@@ -316,13 +298,8 @@ try {
 
   // The view answers the same text from its own cache; a user who just
   // signed in presses the view's Refresh, and so does the driver.
-  const [pub, name] = REAL.split(".");
-  const fresh = (r) => r.length > 0 && !r.some((x) => x.name === SIGN_IN)
-    && r.some((x) => x.publisher.toLowerCase() === pub.toLowerCase() || x.name.toLowerCase().includes(name.toLowerCase()));
-  const refresh = await page.$('.sidebar [aria-label^="Refresh"], .sidebar .codicon-extensions-refresh');
-  if (refresh) await refresh.click();
-  emit({ phase: "refresh", clicked: !!refresh });
-  const search2 = await settle(page, fresh);
+  await refreshView(page);
+  const search2 = await settle(page, signedIn);
   await snap(page, "search-signed-in");
   emit({ phase: "search2", entries: search2 });
 
@@ -338,6 +315,5 @@ try {
   }
 } finally {
   await snap(page, "final");
-  await ctx.close().catch(() => {});
-  if (args.cdp) await browser.disconnect(); else await browser.close();
+  await close();
 }

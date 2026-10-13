@@ -23,8 +23,8 @@ const MAX = 160;
 /** Inline markdown → the text a reader would see. */
 function plain(text) {
   return text
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, "") // images carry no prose
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1") // links keep their label
+    .replace(/!\[[^[\]]*\]\([^()]*\)/g, "") // images carry no prose
+    .replace(/\[([^[\]]+)\]\([^()]*\)/g, "$1") // links keep their label
     .replace(/<[^>]+>/g, "") // inline HTML
     .replace(/[`*_~]/g, "")
     .replace(/\\([\\`*_{}[\]()#+\-.!])/g, "$1")
@@ -77,12 +77,12 @@ export function extractDescription(src) {
       continue;
     }
     if (
-      /^#/.test(line) || // heading
+      line.startsWith("#") || // heading
       /^(-{3,}|\*{3,}|_{3,})$/.test(line) || // rule
-      /^:::/.test(line) || // container directive
-      /^(<!--|<)/.test(line) || // comment or block HTML
-      /^\|/.test(line) || // table row
-      /^>/.test(line) || // quote
+      line.startsWith(":::") || // container directive
+      line.startsWith("<") || // comment or block HTML
+      line.startsWith("|") || // table row
+      line.startsWith(">") || // quote
       /^([-*+]|\d+\.)\s/.test(line) // list item
     ) {
       if (para.length) break;

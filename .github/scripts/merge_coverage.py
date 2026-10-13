@@ -26,6 +26,15 @@ Lines = dict[str, dict[int, int]]
 Funcs = dict[str, dict[str, tuple[int, int]]]
 
 
+def _int_pair(body: str) -> tuple[int, str] | None:
+    """`<int>,<rest>` → `(int, rest)`, or `None` when the record is malformed."""
+    head, sep, rest = body.partition(",")
+    try:
+        return (int(head), rest) if sep else None
+    except ValueError:
+        return None
+
+
 def parse_lcov(path: Path) -> tuple[Lines, Funcs]:
     lines: Lines = defaultdict(dict)
     funcs: Funcs = defaultdict(dict)
@@ -38,32 +47,34 @@ def parse_lcov(path: Path) -> tuple[Lines, Funcs]:
             fn_lines = {}
         elif raw == "end_of_record":
             current = None
-        elif current is None:
-            continue
-        elif raw.startswith("DA:"):
-            try:
-                line_s, count_s = raw[3:].split(",", 1)
-                line, count = int(line_s), int(count_s.split(",")[0])
-            except ValueError:
-                continue
-            lines[current][line] = lines[current].get(line, 0) + count
-        elif raw.startswith("FN:"):
-            # FN:<line>,<name>  (llvm-cov emits one per function)
-            parts = raw[3:].split(",", 1)
-            if len(parts) == 2 and parts[0].isdigit():
-                fn_lines[parts[1]] = int(parts[0])
-        elif raw.startswith("FNDA:"):
-            parts = raw[5:].split(",", 1)
-            if len(parts) != 2:
-                continue
-            try:
-                count = int(parts[0])
-            except ValueError:
-                continue
-            name = parts[1]
-            prev = funcs[current].get(name, (fn_lines.get(name, 0), 0))
-            funcs[current][name] = (prev[0] or fn_lines.get(name, 0), prev[1] + count)
+        elif current is not None:
+            _record(raw, current, lines, funcs, fn_lines)
     return lines, funcs
+
+
+def _record(raw: str, current: str, lines: Lines, funcs: Funcs, fn_lines: dict[str, int]) -> None:
+    """Fold one record of the current `SF:` section into its file's tallies."""
+    if raw.startswith("DA:"):
+        pair = _int_pair(raw[3:])
+        if pair is None:
+            return
+        try:
+            count = int(pair[1].split(",")[0])
+        except ValueError:
+            return
+        lines[current][pair[0]] = lines[current].get(pair[0], 0) + count
+    elif raw.startswith("FN:"):
+        # FN:<line>,<name>  (llvm-cov emits one per function)
+        parts = raw[3:].split(",", 1)
+        if len(parts) == 2 and parts[0].isdigit():
+            fn_lines[parts[1]] = int(parts[0])
+    elif raw.startswith("FNDA:"):
+        pair = _int_pair(raw[5:])
+        if pair is None:
+            return
+        count, name = pair
+        prev = funcs[current].get(name, (fn_lines.get(name, 0), 0))
+        funcs[current][name] = (prev[0] or fn_lines.get(name, 0), prev[1] + count)
 
 
 def merge_into(dst_lines: Lines, dst_funcs: Funcs, src_lines: Lines, src_funcs: Funcs) -> None:

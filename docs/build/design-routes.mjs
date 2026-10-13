@@ -323,13 +323,23 @@ const OFFBOX = new Set();
 const failures = [];
 const surveyed = new Map();
 
-for (const plan of PLANS) {
+/**
+ * A page at the plan's size and in its theme, recording every off-box origin it
+ * asks for. `block` is a seed's list of requests to abort; arming interception
+ * has to happen before the navigation it affects, so a seeded route gets a page
+ * of its own.
+ */
+async function openPlanPage(plan, block = null) {
   const page = await browser.newPage();
   await page.setViewport({ width: plan.width, height: plan.height });
+  if (block) await page.setRequestInterception(true);
   page.on("request", (req) => {
     const u = new URL(req.url());
     if (u.protocol !== "data:" && u.hostname !== new URL(BASE).hostname)
       OFFBOX.add(u.origin);
+    if (!block) return;
+    if (block.some((p) => p.test(req.url()))) req.abort().catch(() => {});
+    else req.continue().catch(() => {});
   });
   // VitePress stores `system|light|dark` and resolves it before first paint;
   // the gate sets the stored preference rather than emulating the OS, so it
@@ -339,6 +349,19 @@ for (const plan of PLANS) {
     (t) => localStorage.setItem("vitepress-theme-appearance", t),
     plan.theme,
   );
+  return page;
+}
+
+/** A finding: counted under `--survey`, a failure otherwise. */
+function record(plan, route, f) {
+  if (SURVEY) {
+    const k = `${f.rule} ${f.detail}`;
+    surveyed.set(k, (surveyed.get(k) ?? 0) + 1);
+  } else failures.push({ plan: plan.name, route, ...f });
+}
+
+for (const plan of PLANS) {
+  const page = await openPlanPage(plan);
 
   for (const route of routes) {
     // Redirect stubs (RFC 0005-bis §6.5) carry a `meta refresh` and would be
@@ -347,26 +370,8 @@ for (const plan of PLANS) {
     // their target is in the sweep on its own account.
     if (STUBS.has(route)) continue;
 
-    // A seeded route gets its own page: request interception is per-page and
-    // has to be armed before the navigation it affects.
     const seed = SEEDS[route];
-    const view = seed ? await browser.newPage() : page;
-    if (seed) {
-      await view.setViewport({ width: plan.width, height: plan.height });
-      await view.setRequestInterception(true);
-      view.on("request", (req) => {
-        const u = new URL(req.url());
-        if (u.protocol !== "data:" && u.hostname !== new URL(BASE).hostname)
-          OFFBOX.add(u.origin);
-        if (seed.block.some((p) => p.test(req.url()))) req.abort().catch(() => {});
-        else req.continue().catch(() => {});
-      });
-      await view.goto(BASE + "/", { waitUntil: "domcontentloaded" });
-      await view.evaluate(
-        (t) => localStorage.setItem("vitepress-theme-appearance", t),
-        plan.theme,
-      );
-    }
+    const view = seed ? await openPlanPage(plan, seed.block) : page;
 
     await view.goto(BASE + route, { waitUntil: "networkidle0" });
 
@@ -402,22 +407,13 @@ for (const plan of PLANS) {
     );
     if (seed) await view.close();
 
-    for (const f of findings) {
-      if (SURVEY) {
-        const k = `${f.rule} ${f.detail}`;
-        surveyed.set(k, (surveyed.get(k) ?? 0) + 1);
-      } else failures.push({ plan: plan.name, route, ...f });
-    }
+    for (const f of findings) record(plan, route, f);
     for (const v of axe) {
       for (const n of v.nodes) {
-        const f = {
+        record(plan, route, {
           rule: `axe:${v.id}`,
           detail: `${n.target.join(" ")} — ${(n.failureSummary ?? v.help).replace(/\s+/g, " ").slice(0, 160)}`,
-        };
-        if (SURVEY) {
-          const k = `${f.rule} ${f.detail}`;
-          surveyed.set(k, (surveyed.get(k) ?? 0) + 1);
-        } else failures.push({ plan: plan.name, route, ...f });
+        });
       }
     }
   }

@@ -719,3 +719,9 @@
 .mermaid {
   overflow-x: auto;
 }
+
+/* The `K` of the search button's `Ctrl K` hint, drawn the way the theme draws
+   `Ctrl` — see `drawSearchKeyInCss` in `index.ts` for why it is not text. */
+.DocSearch-Button .DocSearch-Button-Key.bh-key-k::after {
+  content: "K";
+}

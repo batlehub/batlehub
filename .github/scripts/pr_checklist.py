@@ -304,15 +304,17 @@ def build(paths: list[str]) -> str:
 
     out = [MARKER, "## Before merging"]
     if not fired:
-        out.append("")
-        out.append(
-            f"Nothing in these {len(paths)} changed file(s) matches a rule with "
-            "obligations attached, so this is the floor:"
+        out.extend(
+            [
+                "",
+                f"Nothing in these {len(paths)} changed file(s) matches a rule with "
+                "obligations attached, so this is the floor:",
+                "",
+            ]
         )
-        out.append("")
         out.extend(FALLBACK)
         out.append("")
-        out.append(_footer(paths))
+        out.append(_footer())
         return "\n".join(out) + "\n"
 
     total = sum(len(r.items) for r in fired)
@@ -338,11 +340,11 @@ def build(paths: list[str]) -> str:
         out.extend(item.render(paths) for item in rule.items)
 
     out.append("")
-    out.append(_footer(paths))
+    out.append(_footer())
     return "\n".join(out) + "\n"
 
 
-def _footer(paths: list[str]) -> str:
+def _footer() -> str:
     return (
         "<sub>Advisory — this check never fails a build. The rules live in "
         "`.github/scripts/pr_checklist.py`; a wrong or missing one is a four-line "

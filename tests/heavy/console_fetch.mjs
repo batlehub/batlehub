@@ -25,17 +25,8 @@
 // rather than by a test id is deliberate: if the accessible name stops naming
 // the package, a screen-reader user loses the row's identity, and this run
 // should notice.
-import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
 import path from "node:path";
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-const require = createRequire(path.join(here, "..", "..", "ui", "package.json"));
-const puppeteer = require("puppeteer-core");
-
-const args = {};
-for (let i = 2; i < process.argv.length; i += 2) args[process.argv[i].replace(/^--/, "")] = process.argv[i + 1];
-const need = (k) => { if (!args[k]) { console.error(`missing --${k}`); process.exit(2); } return args[k]; };
+import { args, emit, need, openPage, poll, sleep } from "./browser.mjs";
 
 const BASE = need("base");
 // Empty rather than absent for the anonymous run: `--token ""` is a reader with
@@ -46,9 +37,6 @@ const TOKEN = args.token ?? "";
 const SEARCH = need("search");
 const SHOTS = args.shots ?? "";
 const TOKEN_KEY = "batlehub_access_token";
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const emit = (o) => console.log(JSON.stringify(o));
 
 async function snap(page, name) {
   if (!SHOTS) return;
@@ -102,28 +90,9 @@ const rows = (page) => page.$$eval("tbody tr", (trs) => {
   return out;
 });
 
-// Poll until `ok` holds, then return what was seen; on timeout return the last
-// observation anyway, so the suite reports what the page showed rather than
-// "timed out".
-async function settle(page, ok, timeout = 30000) {
-  const t0 = Date.now();
-  let seen = [];
-  while (Date.now() - t0 < timeout) {
-    seen = await rows(page);
-    if (ok(seen)) return seen;
-    await sleep(500);
-  }
-  return seen;
-}
+const settle = (page, ok, timeout) => poll(() => rows(page), ok, timeout);
 
-const browser = args.cdp
-  ? await puppeteer.connect({ browserURL: args.cdp })
-  : await puppeteer.launch({ executablePath: need("chrome"), headless: true, args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"] });
-// Its own context: on a workspace's shared sidecar this must not read or write
-// the profile the rest of the browser is using.
-const ctx = await browser.createBrowserContext();
-const page = await ctx.newPage();
-await page.setViewport({ width: 1440, height: 900 });
+const { page, close } = await openPage(1440);
 const errors = [];
 page.on("pageerror", (e) => errors.push(String(e.message).split("\n")[0].slice(0, 160)));
 page.on("console", (m) => { if (m.type() === "error") errors.push(m.text().slice(0, 160)); });
@@ -196,6 +165,5 @@ try {
   }
 } finally {
   await snap(page, "final");
-  await ctx.close().catch(() => {});
-  if (args.cdp) await browser.disconnect(); else await browser.close();
+  await close();
 }

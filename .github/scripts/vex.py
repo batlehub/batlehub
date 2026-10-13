@@ -104,50 +104,68 @@ def check(doc_path: Path, trivyignore: Path) -> int:
 
     seen: set[str] = set()
     for i, st in enumerate(statements):
-        where = f"statement {i}"
         vuln = (st.get("vulnerability") or {}).get("name")
-        if not vuln:
-            problems.append(f"{where}: no vulnerability name")
-        else:
-            where = f"{vuln}"
+        if vuln:
             seen.add(vuln)
-
-        status = st.get("status")
-        if status not in STATUSES:
-            problems.append(f"{where}: status {status!r} is not one of {sorted(STATUSES)}")
-
-        if not st.get("timestamp"):
-            problems.append(f"{where}: no timestamp — when was this decided?")
-
-        products = st.get("products") or []
-        if not products:
-            problems.append(f"{where}: names no product, so it applies to nothing")
-        for product in products:
-            if not product.get("@id"):
-                problems.append(f"{where}: a product has no @id")
-
-        if status == "not_affected":
-            justification = st.get("justification")
-            if justification not in JUSTIFICATIONS:
-                problems.append(
-                    f"{where}: justification {justification!r} is not one of "
-                    f"{sorted(JUSTIFICATIONS)} — a scanner ignores a statement it "
-                    "cannot read"
-                )
-            if not st.get("impact_statement"):
-                problems.append(
-                    f"{where}: not_affected with no impact_statement — the justification "
-                    "is for the scanner, the prose is for the person who has to believe it"
-                )
-        if status == "affected" and not st.get("action_statement"):
-            problems.append(f"{where}: affected with no action_statement")
+        problems.extend(statement_problems(st, vuln or f"statement {i}"))
 
     ignored = trivyignore_ids(trivyignore)
-    for cve in sorted(ignored - seen):
-        problems.append(
-            f"{cve} is suppressed in {trivyignore} but has no VEX statement — "
-            "the reason exists, it is just not in the form a consumer can read"
-        )
+    problems.extend(gate_problems(statements, seen, ignored, trivyignore))
+
+    if problems:
+        return fail(problems)
+    print(
+        f"✓ {doc_path}: {len(statements)} statement(s), "
+        f"{len(seen & ignored)} matched against {trivyignore}"
+    )
+    return 0
+
+
+def statement_problems(st: dict, where: str) -> list[str]:
+    """What is wrong with one statement; `where` names it in each message."""
+    problems: list[str] = []
+    if not (st.get("vulnerability") or {}).get("name"):
+        problems.append(f"{where}: no vulnerability name")
+
+    status = st.get("status")
+    if status not in STATUSES:
+        problems.append(f"{where}: status {status!r} is not one of {sorted(STATUSES)}")
+
+    if not st.get("timestamp"):
+        problems.append(f"{where}: no timestamp — when was this decided?")
+
+    products = st.get("products") or []
+    if not products:
+        problems.append(f"{where}: names no product, so it applies to nothing")
+    problems.extend(f"{where}: a product has no @id" for p in products if not p.get("@id"))
+
+    if status == "not_affected":
+        justification = st.get("justification")
+        if justification not in JUSTIFICATIONS:
+            problems.append(
+                f"{where}: justification {justification!r} is not one of "
+                f"{sorted(JUSTIFICATIONS)} — a scanner ignores a statement it "
+                "cannot read"
+            )
+        if not st.get("impact_statement"):
+            problems.append(
+                f"{where}: not_affected with no impact_statement — the justification "
+                "is for the scanner, the prose is for the person who has to believe it"
+            )
+    if status == "affected" and not st.get("action_statement"):
+        problems.append(f"{where}: affected with no action_statement")
+    return problems
+
+
+def gate_problems(
+    statements: list[dict], seen: set[str], ignored: set[str], trivyignore: Path
+) -> list[str]:
+    """Where the VEX document and `.trivyignore.yaml` disagree."""
+    problems = [
+        f"{cve} is suppressed in {trivyignore} but has no VEX statement — "
+        "the reason exists, it is just not in the form a consumer can read"
+        for cve in sorted(ignored - seen)
+    ]
     for cve in sorted(seen - ignored):
         st = next(s for s in statements if (s.get("vulnerability") or {}).get("name") == cve)
         # `fixed` and `under_investigation` say nothing about the gate, so they
@@ -158,14 +176,7 @@ def check(doc_path: Path, trivyignore: Path) -> int:
                 f"{cve} is stated not_affected but {trivyignore} does not ignore it — "
                 "either the gate is still failing on it, or the statement outlived its reason"
             )
-
-    if problems:
-        return fail(problems)
-    print(
-        f"✓ {doc_path}: {len(statements)} statement(s), "
-        f"{len(seen & ignored)} matched against {trivyignore}"
-    )
-    return 0
+    return problems
 
 
 def render(doc_path: Path, version: str, images: list[str], out: Path) -> int:

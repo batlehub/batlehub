@@ -33,7 +33,12 @@ REPO = Path(__file__).resolve().parents[2]
 ROUTES = REPO / "perf/profile_routes.txt"
 SPEC = REPO / "ui/openapi.json"
 
-OWN = re.compile(r"(?:^<?batlehub)|(?:\[(?:crates|server|cli)/)")
+# A frame is ours when it starts with our crate name (`<batlehub…` for a trait
+# impl) or carries one of our source paths. The prefix is a `startswith` rather
+# than an anchored alternative: S5850 wants that anchor grouped, S6395 wants the
+# group gone, and the plain string test satisfies both.
+OWN_PREFIX = ("batlehub", "<batlehub")
+OWN_PATH = re.compile(r"\[(?:crates|server|cli)/")
 HASH = re.compile(r"::h[0-9a-f]{16}$")
 METHODS = ("get", "put", "post", "delete", "patch", "head")
 
@@ -120,7 +125,7 @@ def nearest_own(frames: list[str]) -> str:
     Without the arrow, time spent routing under a middleware would read as the
     middleware being hot."""
     for i in range(len(frames) - 1, -1, -1):
-        if OWN.search(frames[i]):
+        if frames[i].startswith(OWN_PREFIX) or OWN_PATH.search(frames[i]):
             below = leaf_crate(frames[i + 1:])
             return f"{frames[i]} → {below}" if below else frames[i]
     crate = leaf_crate(frames)

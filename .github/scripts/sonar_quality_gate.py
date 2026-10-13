@@ -141,7 +141,7 @@ def count(sonar: Sonar, url: str, params: dict[str, str]) -> int | None:
     """
     try:
         payload = sonar.get(url, params)
-    except (urllib.error.URLError, OSError, ValueError, KeyError):
+    except (OSError, ValueError, KeyError):  # URLError is an OSError
         return None
     return payload.get("total") or payload.get("paging", {}).get("total")
 

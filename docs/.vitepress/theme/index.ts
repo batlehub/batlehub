@@ -27,6 +27,23 @@ function makeCodeBlocksFocusable() {
   }
 }
 
+/**
+ * The search button's accessible name has to contain its visible text (WCAG
+ * 2.5.3). The theme labels it "Search" and then prints the `K` of its
+ * `Ctrl K` hint as a text node beside it, so axe reads the visible text as
+ * "SearchK" and reports `label-content-name-mismatch` on every page. The theme
+ * already draws `Ctrl` with CSS on an empty `<kbd>`; `custom.css` draws the `K`
+ * the same way once this has emptied its `<kbd>`. A longer label does not help:
+ * the button hides its text on a phone, and "Search" is the name it keeps there.
+ */
+function drawSearchKeyInCss() {
+  const key = document.querySelector('.DocSearch-Button-Key:last-child')
+  if (key?.textContent) {
+    key.textContent = ''
+    key.classList.add('bh-key-k')
+  }
+}
+
 export default {
   extends: DefaultTheme,
   Layout,
@@ -36,7 +53,11 @@ export default {
       // Once for the server-rendered page, then after every client navigation.
       // `requestAnimationFrame` waits for the new page's DOM rather than the
       // outgoing one's.
-      const run = () => requestAnimationFrame(makeCodeBlocksFocusable)
+      const run = () =>
+        requestAnimationFrame(() => {
+          makeCodeBlocksFocusable()
+          drawSearchKeyInCss()
+        })
       router.onAfterRouteChange = run
       run()
     }

@@ -42,6 +42,7 @@ from pathlib import Path
 
 SEVERITY_ORDER = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]
 BLOCKING = ("CRITICAL", "HIGH")
+INSTALLS = "installs/"
 
 
 def tool_of(target: str, root: str) -> str:
@@ -57,14 +58,15 @@ def tool_of(target: str, root: str) -> str:
     what someone has to edit. The version stays out of the label deliberately:
     two installed versions of one tool are one row to act on, not two.
     """
-    rest = target
-    if root and rest.startswith(root):
-        rest = rest[len(root) :]
-    marker = "installs/"
-    if marker in rest:
-        rest = rest.split(marker, 1)[1]
-    rest = rest.lstrip("/")
-    return rest.split("/", 1)[0] or target
+    return _install_relative(target, root).split("/", 1)[0] or target
+
+
+def _install_relative(target: str, root: str) -> str:
+    """`target` with the scanned root and anything up to `installs/` removed."""
+    rest = target[len(root) :] if root and target.startswith(root) else target
+    if INSTALLS in rest:
+        rest = rest.split(INSTALLS, 1)[1]
+    return rest.lstrip("/")
 
 
 def collect(
@@ -92,12 +94,7 @@ def collect(
             # the stale ones hide inside it.
             tool = tool_of(vuln.get("PkgPath") or result.get("Target", "?"), root)
             severity = vuln.get("Severity", "UNKNOWN")
-            if (
-                keep is not None
-                and tool not in keep
-                and root_path is not None
-                and (root_path / tool).is_dir()
-            ):
+            if _excluded(tool, keep, root_path):
                 # Counted in the same unit as the verdict — fixable HIGH and
                 # CRITICAL — so "excluded" plus "counted" adds up to what a
                 # machine-wide scan reports, and the narrowing is checkable.
@@ -105,17 +102,29 @@ def collect(
                     skipped[tool] += 1
                 continue
             totals[severity] += 1
-            per_tool[tool].append(
-                {
-                    "id": vuln.get("VulnerabilityID"),
-                    "severity": severity,
-                    "package": vuln.get("PkgName"),
-                    "installed": vuln.get("InstalledVersion"),
-                    "fixed": vuln.get("FixedVersion"),
-                    "title": (vuln.get("Title") or "").strip(),
-                }
-            )
+            per_tool[tool].append(_finding(vuln, severity))
     return per_tool, totals, skipped
+
+
+def _excluded(tool: str, keep: set[str] | None, root_path: Path | None) -> bool:
+    """Attributable to an install directory this repository does not ask for."""
+    return (
+        keep is not None
+        and tool not in keep
+        and root_path is not None
+        and (root_path / tool).is_dir()
+    )
+
+
+def _finding(vuln: dict, severity: str) -> dict:
+    return {
+        "id": vuln.get("VulnerabilityID"),
+        "severity": severity,
+        "package": vuln.get("PkgName"),
+        "installed": vuln.get("InstalledVersion"),
+        "fixed": vuln.get("FixedVersion"),
+        "title": (vuln.get("Title") or "").strip(),
+    }
 
 
 def upstream_latest(wanted: set[str], timeout: float = 30.0) -> dict[str, str | None]:
@@ -158,47 +167,47 @@ def upstream_latest(wanted: set[str], timeout: float = 30.0) -> dict[str, str | 
     if not shutil.which("mise"):
         return {}
     env = {**os.environ, "MISE_GLOBAL_CONFIG_FILE": os.devnull}
+    listed = _mise(["ls", "--current", "--json"], timeout, env)
     try:
-        listing = json.loads(
-            subprocess.run(
-                ["mise", "ls", "--current", "--json"],
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=timeout,
-                env=env,
-            ).stdout
-        )
-    except (subprocess.SubprocessError, json.JSONDecodeError, OSError):
+        listing = json.loads(listed) if listed is not None else None
+    except json.JSONDecodeError:
+        listing = None
+    if listing is None:
         return {}
 
     out: dict[str, str | None] = {}
     for key, entries in listing.items():
         for entry in entries or []:
-            path = entry.get("install_path")
-            if not path:
-                continue
-            install_dir = os.path.basename(os.path.dirname(path))
-            if install_dir not in wanted or install_dir in out:
+            install_dir = _wanted_dir(entry, wanted, out)
+            if install_dir is None:
                 continue
             requested = entry.get("requested_version") or "latest"
             spec = key if requested in ("latest", "") else f"{key}@{requested}"
-            try:
-                newest = subprocess.run(
-                    ["mise", "latest", spec],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    timeout=timeout,
-                    env=env,
-                ).stdout.strip()
-            except (subprocess.SubprocessError, OSError):
-                continue
             # An empty answer is "mise could not say", not "no newer release":
             # leaving the key out keeps the two apart in the report.
+            newest = (_mise(["latest", spec], timeout, env) or "").strip()
             if newest:
                 out[install_dir] = newest
     return out
+
+
+def _mise(args: list[str], timeout: float, env: dict[str, str]) -> str | None:
+    """`mise <args>`'s stdout, or `None` when it failed to run or exited non-zero."""
+    try:
+        return subprocess.run(
+            ["mise", *args], capture_output=True, text=True, check=True, timeout=timeout, env=env
+        ).stdout
+    except (subprocess.SubprocessError, OSError):
+        return None
+
+
+def _wanted_dir(entry: dict, wanted: set[str], done: dict) -> str | None:
+    """The install directory of a `mise ls` entry, if it still needs asking about."""
+    path = entry.get("install_path")
+    if not path:
+        return None
+    install_dir = os.path.basename(os.path.dirname(path))
+    return install_dir if install_dir in wanted and install_dir not in done else None
 
 
 def installed_versions(report: dict, root: str) -> dict[str, set[str]]:
@@ -212,10 +221,7 @@ def installed_versions(report: dict, root: str) -> dict[str, set[str]]:
     for result in report.get("Results") or []:
         for vuln in result.get("Vulnerabilities") or []:
             target = vuln.get("PkgPath") or result.get("Target", "")
-            rest = target[len(root) :] if root and target.startswith(root) else target
-            if "installs/" in rest:
-                rest = rest.split("installs/", 1)[1]
-            parts = rest.lstrip("/").split("/")
+            parts = _install_relative(target, root).split("/")
             if len(parts) >= 2 and parts[1]:
                 seen[parts[0]].add(parts[1])
     return seen
@@ -264,29 +270,64 @@ def render(
     installed: dict[str, set[str]] | None = None,
 ) -> str:
     blocking = sum(totals[s] for s in BLOCKING)
-    lines: list[str] = []
-    lines.append("<!-- mise-cve -->")
-    lines.append("### 🧰 Development toolchain CVEs — `mise.toml`")
+    counts = " · ".join(f"{s.title()} {totals[s]}" for s in SEVERITY_ORDER if totals[s])
+    lines: list[str] = [
+        "<!-- mise-cve -->",
+        "### 🧰 Development toolchain CVEs — `mise.toml`",
+        "",
+        _verdict(blocking, budget, over, budget_recorded),
+        "",
+        f"{sum(totals.values())} finding(s) in total — {counts or 'none'}.",
+    ]
+    newest = newest or {}
+    installed = installed or {}
+    if only_fixable:
+        lines.extend(_fixable_note(per_tool, blocking, newest, installed))
+    if skipped:
+        lines.extend(_skipped_note(skipped))
     lines.append("")
+    lines.extend(_tables(per_tool, newest, installed))
+    lines.extend(
+        [
+            "",
+            "*The toolchain is not the product — none of this ships. What a growing number "
+            "means is that the tools this repository builds and scans with are themselves "
+            "going stale, which is why this is a budget rather than a zero.*",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _verdict(blocking: int, budget: int, over: bool, budget_recorded: bool) -> str:
     if not budget_recorded:
         # Saying "within budget" when no budget was ever set would be a green
         # tick for a check that cannot fail — the failure mode this whole
         # workflow exists to remove.
-        verdict = (
+        return (
             f"⚪ **{blocking} fixable HIGH/CRITICAL** — no budget recorded yet, so this "
             "run reports and cannot fail. Record the current number with "
             "`task mise:cve:budget` to make it a gate."
         )
-    elif over:
-        verdict = f"🔴 **{blocking} fixable HIGH/CRITICAL**, over the budget of **{budget}**"
-    else:
-        verdict = f"🟢 **{blocking} fixable HIGH/CRITICAL**, within the budget of **{budget}**"
-    lines.append(verdict)
-    lines.append("")
-    counts = " · ".join(f"{s.title()} {totals[s]}" for s in SEVERITY_ORDER if totals[s])
-    lines.append(f"{sum(totals.values())} finding(s) in total — {counts or 'none'}.")
-    newest = newest or {}
-    installed = installed or {}
+    if over:
+        return f"🔴 **{blocking} fixable HIGH/CRITICAL**, over the budget of **{budget}**"
+    return f"🟢 **{blocking} fixable HIGH/CRITICAL**, within the budget of **{budget}**"
+
+
+def _fixable_note(
+    per_tool: dict,
+    blocking: int,
+    newest: dict[str, str | None],
+    installed: dict[str, set[str]],
+) -> list[str]:
+    lines = [
+        "",
+        "*Counted findings all have a fixed version in the vulnerable **package**. "
+        "That is not the same as a fix this repository can take: a Go binary vendors "
+        "its modules, so the only lever is the tool's own release.*",
+    ]
+    if not newest:
+        return lines
     # Which of the counted findings a `mise.toml` edit could actually reach.
     # Computed before the sentence below is written, because that sentence used
     # to claim all of them and the number is usually a fraction — see
@@ -301,85 +342,78 @@ def render(
             reachable += blocking_here
         else:
             stuck.append((tool, blocking_here))
-    if only_fixable:
-        lines.append("")
-        lines.append(
-            "*Counted findings all have a fixed version in the vulnerable **package**. "
-            "That is not the same as a fix this repository can take: a Go binary vendors "
-            "its modules, so the only lever is the tool's own release.*"
-        )
-        if newest:
-            lines.append("")
-            if stuck:
-                worst_stuck = ", ".join(
-                    f"`{t}` ({n})" for t, n in sorted(stuck, key=lambda kv: -kv[1])[:4]
-                )
-                lines.append(
-                    f"**{reachable} of {blocking} are reachable by a version bump.** The other "
-                    f"{blocking - reachable} are in tools already at their newest release — "
-                    f"{worst_stuck}{', …' if len(stuck) > 4 else ''} — where there is nothing to "
-                    "bump to and the only levers left are dropping the tool or living with it."
-                )
-            else:
-                lines.append(
-                    f"**All {reachable} are reachable by a version bump** — every tool below has "
-                    "a newer release than the one installed."
-                )
-    if skipped:
-        # Printed, not assumed: a narrowed scope that goes unmentioned is a
-        # number that looks like an improvement.
-        biggest = ", ".join(f"`{t}` ({n})" for t, n in skipped.most_common(4))
-        lines.append("")
-        lines.append(
-            f"*{sum(skipped.values())} fixable HIGH/CRITICAL in {len(skipped)} install "
-            f"director(ies) this "
-            f"repository does not ask for are **not** counted — {biggest}"
-            f"{', …' if len(skipped) > 4 else ''}. They belong to another project's "
-            "`mise.toml` or to the global config, and a clean CI runner never installs "
-            "them, which is what makes this number comparable with CI's.*"
-        )
     lines.append("")
-
-    if per_tool:
-        lines.append("| Tool | Worst | Findings | Vulnerable packages | What to bump to |")
-        lines.append("|---|---|---|---|---|")
-        ranked = sorted(
-            per_tool.items(),
-            key=lambda kv: (SEVERITY_ORDER.index(worst(kv[1])), -len(kv[1])),
+    if not stuck:
+        lines.append(
+            f"**All {reachable} are reachable by a version bump** — every tool below has "
+            "a newer release than the one installed."
         )
-        for tool, findings in ranked:
-            # The packages name *what* is vulnerable; the target says whether
-            # anything can be done about it. Both are needed: "(fix available)"
-            # alone read as actionable for 195 findings that were not.
-            packages = sorted({f["package"] for f in findings if f["package"]})[:3]
-            hint = ", ".join(packages) + ("…" if len(packages) == 3 else "")
-            target, _ = bump_target(tool, findings, newest, installed)
-            lines.append(
-                f"| `{tool}` | {worst(findings)} | {len(findings)} | {hint or '—'} | {target} |"
-            )
-        lines.append("")
-        lines.append("<details><summary>Every finding</summary>")
-        lines.append("")
-        lines.append("| Tool | CVE | Severity | Package | Installed | Fixed in |")
-        lines.append("|---|---|---|---|---|---|")
-        for tool, findings in ranked:
-            for f in sorted(findings, key=lambda f: SEVERITY_ORDER.index(f["severity"])):
-                lines.append(
-                    f"| `{tool}` | {f['id']} | {f['severity']} | {f['package']} | "
-                    f"{f['installed']} | {f['fixed'] or '—'} |"
-                )
-        lines.append("")
-        lines.append("</details>")
-    else:
-        lines.append("No findings. 🎉")
-    lines.append("")
+        return lines
+    worst_stuck = ", ".join(f"`{t}` ({n})" for t, n in sorted(stuck, key=lambda kv: -kv[1])[:4])
     lines.append(
-        "*The toolchain is not the product — none of this ships. What a growing number "
-        "means is that the tools this repository builds and scans with are themselves "
-        "going stale, which is why this is a budget rather than a zero.*"
+        f"**{reachable} of {blocking} are reachable by a version bump.** The other "
+        f"{blocking - reachable} are in tools already at their newest release — "
+        f"{worst_stuck}{', …' if len(stuck) > 4 else ''} — where there is nothing to "
+        "bump to and the only levers left are dropping the tool or living with it."
     )
-    lines.append("")
-    return "\n".join(lines)
+    return lines
+
+
+def _skipped_note(skipped: Counter) -> list[str]:
+    # Printed, not assumed: a narrowed scope that goes unmentioned is a
+    # number that looks like an improvement.
+    biggest = ", ".join(f"`{t}` ({n})" for t, n in skipped.most_common(4))
+    return [
+        "",
+        f"*{sum(skipped.values())} fixable HIGH/CRITICAL in {len(skipped)} install "
+        f"director(ies) this "
+        f"repository does not ask for are **not** counted — {biggest}"
+        f"{', …' if len(skipped) > 4 else ''}. They belong to another project's "
+        "`mise.toml` or to the global config, and a clean CI runner never installs "
+        "them, which is what makes this number comparable with CI's.*",
+    ]
+
+
+def _tables(
+    per_tool: dict, newest: dict[str, str | None], installed: dict[str, set[str]]
+) -> list[str]:
+    if not per_tool:
+        return ["No findings. 🎉"]
+    lines = [
+        "| Tool | Worst | Findings | Vulnerable packages | What to bump to |",
+        "|---|---|---|---|---|",
+    ]
+    ranked = sorted(
+        per_tool.items(),
+        key=lambda kv: (SEVERITY_ORDER.index(worst(kv[1])), -len(kv[1])),
+    )
+    for tool, findings in ranked:
+        # The packages name *what* is vulnerable; the target says whether
+        # anything can be done about it. Both are needed: "(fix available)"
+        # alone read as actionable for 195 findings that were not.
+        packages = sorted({f["package"] for f in findings if f["package"]})[:3]
+        hint = ", ".join(packages) + ("…" if len(packages) == 3 else "")
+        target, _ = bump_target(tool, findings, newest, installed)
+        lines.append(
+            f"| `{tool}` | {worst(findings)} | {len(findings)} | {hint or '—'} | {target} |"
+        )
+    lines.extend(
+        [
+            "",
+            "<details><summary>Every finding</summary>",
+            "",
+            "| Tool | CVE | Severity | Package | Installed | Fixed in |",
+            "|---|---|---|---|---|---|",
+        ]
+    )
+    for tool, findings in ranked:
+        for f in sorted(findings, key=lambda f: SEVERITY_ORDER.index(f["severity"])):
+            lines.append(
+                f"| `{tool}` | {f['id']} | {f['severity']} | {f['package']} | "
+                f"{f['installed']} | {f['fixed'] or '—'} |"
+            )
+    lines.extend(["", "</details>"])
+    return lines
 
 
 def main() -> int:
