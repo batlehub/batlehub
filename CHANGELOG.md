@@ -12,7 +12,7 @@ Nothing yet.
 
 ---
 
-## [1.5.0] - 2026-10-12
+## [1.5.0] - 2026-10-13
 
 A new registry kind, an audit trail an auditor can rely on, and the database,
 measured. `devfile` proxies the catalogue Eclipse Che starts a
