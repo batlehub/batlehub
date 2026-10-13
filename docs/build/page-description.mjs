@@ -25,7 +25,7 @@ function plain(text) {
   return text
     .replace(/!\[[^[\]]*\]\([^()]*\)/g, "") // images carry no prose
     .replace(/\[([^[\]]+)\]\([^()]*\)/g, "$1") // links keep their label
-    .replace(/<[^>]+>/g, "") // inline HTML
+    .replace(/<[^<>]+>/g, "") // inline HTML
     .replace(/[`*_~]/g, "")
     .replace(/\\([\\`*_{}[\]()#+\-.!])/g, "$1")
     .replace(/\s+/g, " ")

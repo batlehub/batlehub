@@ -54,3 +54,9 @@ test("clamps on a sentence, else on a word", () => {
 test("no prose at all is empty, not garbage", () => {
   assert.equal(extractDescription("---\nlayout: home\nhero:\n  name: X\n---\n"), "");
 });
+
+test("an unclosed `<` run strips in linear time", () => {
+  const t = Date.now();
+  extractDescription(`${"<".repeat(50_000)} text`);
+  assert.ok(Date.now() - t < 200);
+});
