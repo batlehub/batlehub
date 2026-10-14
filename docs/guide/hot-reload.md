@@ -1,21 +1,88 @@
 # Hot reload and dynamic config
 
-BatleHub can reload its configuration at runtime without restarting the process. The following components are hot-swappable:
+BatleHub can reload its configuration at runtime without restarting the
+process — but not all of it. Every key falls in one of three tiers:
 
-- Registry list (add, remove, or update a registry)
-- Per-registry RBAC (`anonymous`, `user`, `admin`, group-based access)
-- Per-registry policy rules (age gate, deny latest)
-- Per-registry versioning, signing, and beta-channel configuration
-- Artifact size limit
-- Host-based routing (`hosts`, `path_routing`, `[subdomain_routing]`) and the
-  `trusted_proxies` policy that governs it — the two swap together, so a reload
-  that turns host routing on never runs under the old trust policy
+- **hot** — every reader sees the new value once the reload is applied;
+- **partial** — every request sees it, while a component built once at startup
+  (warming, release imports, the scan worker) keeps the old value until a
+  restart. A rotated upstream credential is the case that matters: installs use
+  the new one at once, warming keeps calling with the old one;
+- **restart** — nothing reads it again before a restart.
 
-The following components **require a process restart**:
-- Server host / port
-- Database URL or connection pool size
-- Auth providers (`[[auth]]`)
-- Storage backends
+A key no row below names is **restart**: a section added to the configuration
+later is restart-only until someone shows a reader for it, because a needless
+restart costs seconds and a reload that silently does nothing costs an
+incident. The most specific row wins, so
+`registries[npm].cache.metadata_ttl_secs` is partial while
+`registries[npm].cache.idle_days` is restart.
+
+<!-- reload-keys -->
+| Key | Tier | Read by |
+| --- | --- | --- |
+| `grants` | hot | the instance-tier grants |
+| `ip_blocking.trusted_proxies` | hot | the proxy-trust policy, as the deprecated fallback of `server.trusted_proxies` |
+| `limits.packages_per_page` | hot | listing pagination |
+| `limits.versions_per_page` | hot | listing pagination |
+| `registries[*].cache.serve_stale` | hot | the registry's metadata policy |
+| `registries[*].grants` | hot | the registry's grant hierarchy |
+| `registries[*].hosts` | hot | the host → registry routing table |
+| `registries[*].path_routing` | hot | the host → registry routing table |
+| `registries[*].rbac` | hot | the registry's grant hierarchy |
+| `registries[*].rules` | hot | the registry's rule chain |
+| `scanners.*.escalation` | hot | each registry's security policy |
+| `search.readmes` | hot | the prose-search switch |
+| `server.signed_urls` | hot | the download URL signer |
+| `server.trusted_proxies` | hot | the proxy-trust policy, swapped together with the host routing table |
+| `subdomain_routing` | hot | the host → registry routing table |
+| `air_gap` | partial | the registry clients' air-gap wrapper; warming and release imports keep the startup clients |
+| `limits.max_artifact_size_bytes` | partial | the request path; the scan worker keeps the startup limit |
+| `proxy` | partial | the registry clients and cargo index; the README fetcher and warming keep the startup proxy |
+| `registries[*]` | partial | the registry clients, policies and maps; warming and release imports keep the startup client |
+| `registries[*].cache.artifact_ttl_secs` | partial | the registry's download policy; eviction keeps the startup TTL |
+| `registries[*].cache.metadata_ttl_secs` | partial | the registry's metadata policy; warming keeps the startup client |
+| `registries[*].cache` | restart | the warming and eviction services, built once |
+| `registries[*].quota` | restart | the quota service, built once |
+| `registries[*].rate_limit` | restart | the rate limiter, built once |
+| `registries[*].security.rescan` | restart | the rescan scheduler, started at startup only when a registry already had one |
+| `registries[*].storage` | restart | the storage router, built once |
+| everything else | restart | read once at startup |
+<!-- /reload-keys -->
+
+Adding or removing a whole registry is **partial**: the request path serves it
+at once; warming, eviction, rate limits, quota and the metric labels keep the
+startup list, so the restart-only keys an added registry carries —
+`rate_limit`, `quota`, `storage`, `cache.idle_days` — are listed under
+`restart_required` beside it.
+
+On an instance started with `BATLEHUB_DISABLE_HOT_RELOAD=1`, every change is a
+restart, whatever the table says.
+
+### What a reload reports
+
+Every diff — the pending reload, `POST /api/v1/admin/config/validate`, the
+immediate reload — carries three lists of dotted paths, an array entry named by
+its `name` (or `type`): `registries[npm].upstreams`.
+
+| Field | Contains | Compared against |
+| --- | --- | --- |
+| `applied` | hot keys this candidate changes | the config in force |
+| `partially_applied` | partial keys this candidate changes | the config in force |
+| `restart_required` | every restart key the running process does not have | the config the process **started** on |
+
+`restart_required` is compared against startup on purpose: a `database.url`
+change applied an hour ago is still listed on every later reload, until the
+restart that makes it true. The file watcher logs it at `WARN`, and the Config
+Reload page shows the three lists.
+
+`restart_required` is `["*"]`, with the reason in `restart_reason`, when the
+configuration places a `${VAR}` where the diff cannot keep it as text — outside
+a one-line string value, in a key, or in the `name` or `type` of any `[[…]]`
+entry — `[[registries]]`, `[[auth]]` and the rest (see
+[Inline substitution](/guide/configuration#env-inline)). `restart_reason` names
+the side that could not be compared: the candidate, the config in force, or the
+startup config. Only that comparison is unknown, and unknown is a restart; the
+other lists are still filled, and the reload itself goes on as before.
 
 ## 9.1 File Watcher
 

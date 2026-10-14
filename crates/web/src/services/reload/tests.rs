@@ -62,6 +62,7 @@ fn built_hot_state(hot: batlehub_core::services::HotConfig) -> BuiltHotState {
         vuln_db_map: crate::VulnDbMap::default(),
         sumdb_map: crate::SumDbMap::default(),
         registry_host_map: crate::RegistryHostMap::default(),
+        text_config_owed: false,
     }
 }
 
@@ -89,6 +90,7 @@ fn reload_params(
         discovery: Default::default(),
         config_path,
         config_overlays: Vec::new(),
+        startup_layers: Vec::new(),
         config_change_repo: None,
         hot_reload_enabled,
         builder,
@@ -106,6 +108,7 @@ fn empty_pending() -> PendingReload {
         source: ReloadSource::AdminRequest,
         diff: ReloadDiff::default(),
         content: None,
+        layers: Vec::new(),
         new_hot: batlehub_core::services::HotConfig::default(),
         new_access: empty_access_config(),
         new_search_readmes: false,
@@ -135,9 +138,10 @@ async fn make_svc_with_file_and_builder(
     tmp.write_all(initial_content.as_bytes()).expect("write");
     let path = tmp.path().to_str().unwrap().to_owned();
 
-    let svc = Arc::new(ConfigReloadService::new(reload_params(
-        path, enabled, builder,
-    )));
+    let svc = Arc::new(ConfigReloadService::new(ConfigReloadParams {
+        startup_layers: vec![initial_content.to_owned()],
+        ..reload_params(path, enabled, builder)
+    }));
     (svc, tmp)
 }
 
@@ -252,6 +256,7 @@ async fn apply_success_swaps_hot_config() {
             ..Default::default()
         },
         content: None,
+        layers: Vec::new(),
         new_hot,
         new_access,
         new_search_readmes: false,
@@ -769,6 +774,7 @@ async fn make_svc_with_layers(
 
     let mut params = reload_params(primary.path().to_str().unwrap().to_owned(), true, builder);
     params.config_overlays = vec![overlay.path().to_str().unwrap().to_owned()];
+    params.startup_layers = vec![primary_content.to_owned(), overlay_content.to_owned()];
     (Arc::new(ConfigReloadService::new(params)), primary, overlay)
 }
 
@@ -961,4 +967,217 @@ async fn a_deleted_overlay_is_not_mistaken_for_an_empty_one() {
         format!("{err:#}").contains(&overlay_path.to_string_lossy().to_string()),
         "the error does not name the deleted overlay: {err:#}"
     );
+}
+
+// ── RFC 0037 §6.5: what a reload applies, partly applies, or leaves owed ─────
+
+/// `MINIMAL_CONFIG` with `extra` appended and `database.url` pointed at `db`.
+fn minimal_with(db: &str, extra: &str) -> String {
+    MINIMAL_CONFIG.replace("localhost/db", db) + extra
+}
+
+const NPM: &str =
+    "\n[[registries]]\ntype = \"npm\"\nname = \"npm\"\nupstreams = [\"https://one.example\"]\n";
+
+async fn stage(svc: &ConfigReloadService, content: &str) -> ReloadDiff {
+    svc.load_pending_from_content(content, ReloadSource::AdminRequest)
+        .await
+        .expect("candidate accepted")
+        .diff
+}
+
+#[tokio::test]
+async fn a_database_url_change_is_reported_as_owed_and_is_not_a_noop() {
+    let (svc, _tmp) = make_svc_with_file_and_builder(true, MINIMAL_CONFIG, noop_builder()).await;
+    let diff = stage(&svc, &minimal_with("elsewhere/db", "")).await;
+    assert_eq!(diff.restart_required, ["database.url"]);
+    assert!(diff.applied.is_empty() && diff.partially_applied.is_empty());
+    assert!(!diff.is_noop(), "a restart-only change is still a change");
+}
+
+/// The case `applied_layers` alone would forget: once the `database.url`
+/// change is applied, the next diff compares against it, and only
+/// `startup_document` still knows the process talks to the old database.
+#[tokio::test]
+async fn a_restart_owed_survives_the_next_reload() {
+    let (svc, _tmp) = make_svc_with_file_and_builder(true, MINIMAL_CONFIG, noop_builder()).await;
+    let moved = minimal_with("elsewhere/db", "");
+    stage(&svc, &moved).await;
+    svc.apply("test").await.expect("apply");
+    assert_eq!(
+        *svc.applied_layers.lock().unwrap(),
+        std::slice::from_ref(&moved)
+    );
+    assert_eq!(
+        svc.startup_document.as_deref(),
+        Ok(batlehub_config::merge_layers(&[MINIMAL_CONFIG])
+            .unwrap()
+            .as_str())
+    );
+
+    let readmes = format!("{moved}\n[search]\nreadmes = true\n");
+    let diff = stage(&svc, &readmes).await;
+    assert_eq!(diff.applied, ["search.readmes"]);
+    assert_eq!(diff.restart_required, ["database.url"]);
+
+    // The same text again, reordered so the dedup does not short-circuit it:
+    // nothing changes against the config in force, so it is a no-op even
+    // though a restart is still owed.
+    svc.apply("test").await.expect("apply");
+    let reordered = format!("[search]\nreadmes = true\n{moved}");
+    let diff = stage(&svc, &reordered).await;
+    assert_eq!(diff.restart_required, ["database.url"]);
+    assert!(diff.is_noop(), "{diff:?}");
+}
+
+#[tokio::test]
+async fn a_rejected_or_pending_candidate_leaves_the_layers_in_force() {
+    let (svc, _tmp) = make_svc_with_file_and_builder(true, MINIMAL_CONFIG, noop_builder()).await;
+    assert!(svc
+        .load_pending_from_content("not toml [", ReloadSource::AdminRequest)
+        .await
+        .is_err());
+    stage(&svc, &minimal_with("elsewhere/db", "")).await;
+    assert_eq!(*svc.applied_layers.lock().unwrap(), [MINIMAL_CONFIG]);
+    svc.validate_content(&minimal_with("third/db", ""))
+        .await
+        .expect("validate");
+    assert_eq!(*svc.applied_layers.lock().unwrap(), [MINIMAL_CONFIG]);
+}
+
+#[tokio::test]
+async fn a_changed_registry_upstream_fills_changed_registries() {
+    let start = minimal_with("localhost/db", NPM);
+    let (svc, _tmp) = make_svc_with_file_and_builder(true, &start, noop_builder()).await;
+    let diff = stage(&svc, &start.replace("one.example", "two.example")).await;
+    assert_eq!(diff.partially_applied, ["registries[npm].upstreams"]);
+    assert_eq!(diff.changed_registries.len(), 1);
+    assert_eq!(diff.changed_registries[0].name, "npm");
+    assert_eq!(diff.changed_registries[0].fields, ["upstreams"]);
+    assert!(diff.restart_required.is_empty());
+}
+
+#[tokio::test]
+async fn a_registry_added_whole_is_partial_and_not_a_changed_registry() {
+    let (svc, _tmp) = make_svc_with_file_and_builder(true, MINIMAL_CONFIG, noop_builder()).await;
+    let diff = stage(&svc, &minimal_with("localhost/db", NPM)).await;
+    assert_eq!(diff.partially_applied, ["registries[npm]"]);
+    assert!(diff.changed_registries.is_empty());
+}
+
+/// A config the server runs and `merge_layers` refuses: the reload goes on as
+/// before, and the verdict is unknown, which is a restart.
+#[tokio::test]
+async fn a_config_merge_layers_refuses_reloads_and_reports_a_star() {
+    let (svc, _tmp) = make_svc_with_file_and_builder(true, MINIMAL_CONFIG, noop_builder()).await;
+    // `PATH` is set in any test process; a placeholder in a multi-line string
+    // is one of RFC 0037 §4.5's refusals.
+    let candidate = minimal_with(
+        "localhost/db",
+        "\n[search]\ntext_config = \"\"\"x${PATH}\"\"\"\n",
+    );
+    let outcome = svc
+        .load_pending_from_content(&candidate, ReloadSource::AdminRequest)
+        .await
+        .expect("the server still accepts it");
+    assert!(outcome.pending_created);
+    assert_eq!(outcome.diff.restart_required, ["*"]);
+    let reason = outcome.diff.restart_reason.as_deref().unwrap_or_default();
+    assert!(reason.contains("multi-line"), "{reason}");
+    assert!(!outcome.diff.is_noop());
+}
+
+#[tokio::test]
+async fn the_new_lists_reach_the_pending_snapshot() {
+    let (svc, _tmp) = make_svc_with_file_and_builder(true, MINIMAL_CONFIG, noop_builder()).await;
+    stage(&svc, &minimal_with("elsewhere/db", "")).await;
+    let json = serde_json::to_value(svc.pending_snapshot().unwrap()).unwrap();
+    assert_eq!(json["diff"]["restart_required"][0], "database.url");
+    assert!(json["diff"].get("restart_changed").is_none());
+}
+
+/// The watcher staged these bytes first, so `load_pending` dedups to an empty
+/// diff; the immediate reload must answer with the one it applied.
+#[tokio::test]
+async fn an_immediate_reload_after_the_watcher_reports_what_it_applied() {
+    use std::io::Write as _;
+    let (svc, mut tmp) = make_svc_with_file_and_builder(true, MINIMAL_CONFIG, noop_builder()).await;
+    let moved = minimal_with("elsewhere/db", "");
+    tmp.as_file_mut().set_len(0).unwrap();
+    std::fs::write(tmp.path(), &moved).unwrap();
+    tmp.flush().unwrap();
+    svc.load_pending(ReloadSource::FileWatcher)
+        .await
+        .expect("staged");
+    let diff = svc.reload_immediate("test").await.expect("applied");
+    assert_eq!(diff.restart_required, ["database.url"]);
+}
+
+/// The rate limiter is built at startup, so a registry added since never
+/// gets its limit, and a later change to it is still owed.
+#[tokio::test]
+async fn a_registry_added_since_startup_owes_its_restart_only_keys() {
+    let (svc, _tmp) = make_svc_with_file_and_builder(true, MINIMAL_CONFIG, noop_builder()).await;
+    let added = minimal_with("localhost/db", NPM);
+    stage(&svc, &added).await;
+    svc.apply("test").await.expect("apply");
+    let limited =
+        format!("{added}[registries.rate_limit]\nrequests_per_window = 5\nwindow_secs = 1\n");
+    let diff = stage(&svc, &limited).await;
+    assert_eq!(
+        diff.restart_required,
+        [
+            "registries[npm].rate_limit.requests_per_window",
+            "registries[npm].rate_limit.window_secs"
+        ]
+    );
+    assert!(!diff.is_noop());
+}
+
+/// A startup config `merge_layers` refuses leaves only `restart_required`
+/// unknown: the in-force comparison still fills the other lists, and an
+/// unchanged candidate is still a no-op.
+#[tokio::test]
+async fn an_unmergeable_startup_config_leaves_the_applied_lists_alone() {
+    let start = minimal_with(
+        "localhost/db",
+        "\n[search]\ntext_config = \"\"\"x${PATH}\"\"\"\n",
+    );
+    let (svc, _tmp) = make_svc_with_file_and_builder(true, &start, noop_builder()).await;
+    let fixed = minimal_with("localhost/db", "");
+    stage(&svc, &fixed).await;
+    svc.apply("test").await.expect("apply");
+
+    let diff = stage(&svc, &format!("{fixed}\n[search]\nreadmes = true\n")).await;
+    assert_eq!(diff.applied, ["search.readmes"]);
+    assert_eq!(diff.restart_required, ["*"]);
+    let reason = diff.restart_reason.as_deref().unwrap_or_default();
+    assert!(reason.starts_with("the startup config"), "{reason}");
+
+    svc.apply("test").await.expect("apply");
+    let diff = stage(&svc, &format!("[search]\nreadmes = true\n{fixed}")).await;
+    assert!(diff.is_noop(), "{diff:?}");
+}
+
+/// What the column was built with decides `search.text_config`, not the
+/// startup document: a mismatch the process booted with is still owed, and
+/// setting it back to the column's own value owes nothing.
+#[tokio::test]
+async fn text_config_is_owed_against_the_column_not_the_startup_document() {
+    let column_is_english: HotConfigBuilder = Arc::new(|cfg| {
+        Ok(BuiltHotState {
+            text_config_owed: cfg.search.text_config != "english",
+            ..built_hot_state(batlehub_core::services::HotConfig::default())
+        })
+    });
+    let start = minimal_with("localhost/db", "\n[search]\ntext_config = \"french\"\n");
+    let (svc, _tmp) = make_svc_with_file_and_builder(true, &start, column_is_english).await;
+
+    let diff = stage(&svc, &format!("{start}readmes = true\n")).await;
+    assert_eq!(diff.applied, ["search.readmes"]);
+    assert_eq!(diff.restart_required, ["search.text_config"]);
+
+    let back = minimal_with("localhost/db", "\n[search]\ntext_config = \"english\"\n");
+    let diff = stage(&svc, &back).await;
+    assert!(diff.restart_required.is_empty(), "{diff:?}");
 }

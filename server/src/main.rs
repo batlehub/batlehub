@@ -572,7 +572,9 @@ async fn main() -> Result<()> {
     }
 
     let config_paths = config_paths(&cli);
-    let mut config = batlehub_config::load_layered(&config_paths)
+    // `startup_layers` is the text `restart_required` is diffed against (RFC
+    // 0037 §6.5), from the same single read the config was built from.
+    let (mut config, startup_layers) = batlehub_config::load_layered_text(&config_paths)
         .with_context(|| format!("loading config from {}", config_paths.join(", ")))?;
     // The first layer is the one the config editor reads and rewrites; the rest
     // are merged over it and never leave the process.
@@ -945,6 +947,7 @@ async fn main() -> Result<()> {
         discovery: Arc::clone(&proxy_svc.discovery),
         config_path: config_path.clone(),
         config_overlays: config_overlays.clone(),
+        startup_layers,
         config_change_repo: Some(Arc::clone(&config_change_repo)),
         hot_reload_enabled,
         builder: hot_builder,

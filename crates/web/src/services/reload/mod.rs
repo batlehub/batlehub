@@ -36,6 +36,31 @@ pub struct ReloadDiff {
     pub changed_registries: Vec<ChangedRegistry>,
     pub access_config_changed: bool,
     pub limits_changed: bool,
+    /// Keys this candidate changes that every reader sees once it is applied
+    /// (RFC 0037 §4.3, tier *hot*), against the config in force.
+    #[serde(default)]
+    pub applied: Vec<String>,
+    /// Keys this candidate changes that every request sees once it is
+    /// applied, while a component built at startup — warming, release
+    /// imports, the scan worker — keeps the old value until a restart.
+    #[serde(default)]
+    pub partially_applied: Vec<String>,
+    /// Every restart-only key the running process does not have, against the
+    /// config it **started** on: a key an earlier reload applied stays listed
+    /// until the restart that makes it true. `["*"]` when the documents could
+    /// not be compared, with the reason in `restart_reason` — any
+    /// `[[...]]` entry whose `name` or `type` is a placeholder does that.
+    #[serde(default)]
+    pub restart_required: Vec<String>,
+    /// Why `restart_required` is `["*"]`: the config uses a placeholder where
+    /// `batlehub_config::merge_layers` cannot keep it (RFC 0037 §4.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_reason: Option<String>,
+    /// Whether this candidate changes a restart-only key *against the config in
+    /// force*. `restart_required` compares against startup instead, so it is
+    /// the wrong question for [`Self::is_noop`].
+    #[serde(skip)]
+    restart_changed: bool,
 }
 
 impl ReloadDiff {
@@ -48,6 +73,105 @@ impl ReloadDiff {
             && self.changed_registries.is_empty()
             && !self.access_config_changed
             && !self.limits_changed
+            && self.applied.is_empty()
+            && self.partially_applied.is_empty()
+            && !self.restart_changed
+    }
+
+    /// Fill the RFC 0037 lists: `applied` and `partially_applied` from
+    /// `in_force → candidate`, `restart_required` from `startup → candidate`.
+    ///
+    /// A side `merge_layers` refuses leaves that comparison unknown, and
+    /// unknown is a restart; the other comparison still stands, and the reload
+    /// itself goes on exactly as before, since the server runs configurations
+    /// `merge_layers` cannot render. `startup` comes merged already: it never
+    /// changes, so [`ConfigReloadService::new`] merges it once.
+    fn classify(
+        &mut self,
+        startup: &Result<String, String>,
+        in_force: &[String],
+        candidate: &[String],
+    ) {
+        use batlehub_config::{merge_layers, reload_keys::classify};
+        let unknown = |side: &str, e: &dyn std::fmt::Display| format!("{side}: {e:#}");
+        let after = match merge_layers(candidate) {
+            Ok(after) => after,
+            Err(e) => {
+                self.restart_changed = true;
+                self.restart_required = vec!["*".to_owned()];
+                self.restart_reason = Some(unknown("the candidate config", &e));
+                return;
+            }
+        };
+        let changed = merge_layers(in_force)
+            .map_err(|e| unknown("the config in force", &e))
+            .and_then(|before| classify(&before, &after).map_err(|e| format!("{e:#}")));
+        let owed = startup
+            .as_ref()
+            .map_err(|e| format!("the startup config: {e}"))
+            .and_then(|before| classify(before, &after).map_err(|e| format!("{e:#}")));
+        match owed {
+            Ok(owed) => self.restart_required = owed.restart,
+            Err(reason) => {
+                self.restart_required = vec!["*".to_owned()];
+                self.restart_reason = Some(reason);
+            }
+        }
+        let changed = match changed {
+            Ok(changed) => changed,
+            Err(reason) => {
+                self.restart_changed = true;
+                self.restart_required = vec!["*".to_owned()];
+                self.restart_reason = Some(reason);
+                return;
+            }
+        };
+        let mut by_name: Vec<ChangedRegistry> = Vec::new();
+        for path in changed
+            .hot
+            .iter()
+            .chain(&changed.partial)
+            .chain(&changed.restart)
+        {
+            let Some((name, field)) = path
+                .strip_prefix("registries[")
+                .and_then(|rest| rest.split_once("]."))
+            else {
+                continue; // not a registry, or one added or removed whole
+            };
+            if self.added_registries.iter().any(|a| a == name) {
+                continue; // the restart-only keys an added registry carries
+            }
+            match by_name.iter_mut().find(|c| c.name == name) {
+                Some(c) => c.fields.push(field.to_owned()),
+                None => by_name.push(ChangedRegistry {
+                    name: name.to_owned(),
+                    fields: vec![field.to_owned()],
+                }),
+            }
+        }
+        by_name.sort_by(|a, b| a.name.cmp(&b.name));
+        for c in &mut by_name {
+            c.fields.sort();
+        }
+        self.changed_registries = by_name;
+        self.restart_changed = !changed.restart.is_empty();
+        self.applied = changed.hot;
+        self.partially_applied = changed.partial;
+    }
+
+    /// Set `search.text_config` in `restart_required` from what the column
+    /// was built with rather than from the startup document.
+    pub(super) fn settle_text_config(&mut self, owed: bool) {
+        const KEY: &str = "search.text_config";
+        if self.restart_required == ["*"] {
+            return;
+        }
+        self.restart_required.retain(|k| k != KEY);
+        if owed {
+            self.restart_required.push(KEY.to_owned());
+            self.restart_required.sort();
+        }
     }
 }
 
@@ -125,6 +249,9 @@ pub struct PendingReload {
     /// reloads (the file is already on disk). `apply()` writes this back to disk so
     /// editor changes survive a server restart.
     pub content: Option<String>,
+    /// The raw layers of the candidate, which become
+    /// [`ConfigReloadService::applied_layers`] when it is applied.
+    pub layers: Vec<String>,
     /// Pre-built, ready to swap in — no async work required during apply.
     pub new_hot: HotConfig,
     pub new_access: AccessConfig,
@@ -191,6 +318,11 @@ pub struct BuiltHotState {
     /// "restart the server to stop searching prose" is not an answer an operator
     /// should have to accept.
     pub search_readmes: bool,
+    /// The candidate's `[search] text_config` is not the one the README
+    /// full-text column was built with, so it waits for the rebuild a restart
+    /// does. The column, not the startup document, is what is in force: the
+    /// two differ when the process booted on a config the column did not match.
+    pub text_config_owed: bool,
 }
 
 /// Builds a new hot-reloadable bundle from an `AppConfig`.
@@ -262,6 +394,16 @@ pub struct ConfigReloadService {
     /// an existing registry's fields (see `compute_diff`) and would otherwise treat
     /// such a change as a no-op too.
     pub(super) last_content: Mutex<Option<String>>,
+    /// The raw layers of the config **in force**: those the process started on,
+    /// then those of each applied reload. Not [`Self::last_content`], which is
+    /// the last load *attempt*. What `applied` and `partially_applied` are
+    /// diffed against (RFC 0037 §6.5).
+    pub(super) applied_layers: Mutex<Vec<String>>,
+    /// The layers the process started on, through `merge_layers` once: for a
+    /// restart-only key that is what is in force, whatever was applied since,
+    /// and what every `restart_required` is diffed against. The error as text
+    /// when `merge_layers` refuses them.
+    pub(super) startup_document: Result<String, String>,
 }
 
 /// Everything [`ConfigReloadService::new`] needs, as named fields.
@@ -315,6 +457,9 @@ pub struct ConfigReloadParams {
     /// source. Empty for the single-file case, which is every deployment that
     /// has not asked for layering.
     pub config_overlays: Vec<String>,
+    /// The text of `config_path` then each overlay, as the process loaded them
+    /// at startup — the baseline `restart_required` is computed against.
+    pub startup_layers: Vec<String>,
     pub config_change_repo: Option<Arc<dyn ConfigChangeRepository>>,
     pub hot_reload_enabled: bool,
     pub builder: HotConfigBuilder,
@@ -340,6 +485,7 @@ impl ConfigReloadService {
             discovery,
             config_path,
             config_overlays,
+            startup_layers,
             config_change_repo,
             hot_reload_enabled,
             builder,
@@ -376,6 +522,9 @@ impl ConfigReloadService {
             banner,
             config_warnings: ConfigWarnings::default(),
             last_content: Mutex::new(None),
+            applied_layers: Mutex::new(startup_layers.clone()),
+            startup_document: batlehub_config::merge_layers(&startup_layers)
+                .map_err(|e| format!("{e:#}")),
         }
     }
 
@@ -427,10 +576,12 @@ impl ConfigReloadService {
     }
 
     /// Convenience: `load_pending` + `apply` atomically (for the immediate reload endpoint).
+    ///
+    /// Answers with the diff `apply` returns, the one of the reload it applied:
+    /// `load_pending`'s is empty when the watcher already staged these bytes.
     pub async fn reload_immediate(&self, triggered_by: &str) -> Result<ReloadDiff, anyhow::Error> {
-        let diff = self.load_pending(ReloadSource::AdminRequest).await?;
-        self.apply(triggered_by).await?;
-        Ok(diff)
+        self.load_pending(ReloadSource::AdminRequest).await?;
+        self.apply(triggered_by).await
     }
 }
 

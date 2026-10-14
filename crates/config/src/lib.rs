@@ -1,3 +1,5 @@
+pub mod reload_keys;
+mod render;
 pub mod schema;
 
 pub use schema::AppConfig;
@@ -16,10 +18,33 @@ pub fn load(path: impl AsRef<Path>) -> Result<AppConfig> {
 /// Identical to `load` but takes the raw content directly instead of reading from disk.
 /// Environment variable placeholders (`${VAR}`) are still expanded.
 pub fn load_from_str(raw: &str) -> Result<AppConfig> {
-    let expanded = expand_env_vars(raw)?;
+    load_layers_with(&[raw], &process_env)
+}
+
+/// An environment as the loaders read it. A `Result` rather than the
+/// `Option` [`validate_layers`] takes so the process environment keeps
+/// `VarError`'s "not valid unicode" apart from "not set".
+type Env<'a> = &'a dyn Fn(&str) -> Result<String, std::env::VarError>;
+
+/// The environment of the process this code runs in — what every loader
+/// reads unless a caller hands [`validate_layers`] another one.
+fn process_env(name: &str) -> Result<String, std::env::VarError> {
+    std::env::var(name)
+}
+
+/// Deserialize-time readers of `env` (the overrides, the sandbox opt-out)
+/// only ask "set or not".
+fn env_or_none(env: Env<'_>) -> impl Fn(&str) -> Option<String> + '_ {
+    move |name| env(name).ok()
+}
+
+/// The single-layer tail: parsed straight into `AppConfig` so a syntax error
+/// keeps its line and column, which the `toml::Value` merge path loses.
+fn config_from_str(raw: &str, env: Env<'_>) -> Result<AppConfig> {
+    let expanded = expand_env_vars_with(raw, env)?;
     let mut config: AppConfig = toml::from_str(&expanded).with_context(|| "parsing config TOML")?;
-    config.apply_env_overrides();
-    config.validate()?;
+    config.apply_env_overrides_from(&env_or_none(env));
+    config.validate_with(&env_or_none(env))?;
     Ok(config)
 }
 
@@ -60,6 +85,12 @@ fn array_identity_key(base: &[toml::Value], overlay: &[toml::Value]) -> Option<&
     if base.is_empty() || overlay.is_empty() {
         return None;
     }
+    identity_key(base, overlay)
+}
+
+/// [`array_identity_key`] without its empty-side rule, which is the merge's
+/// own: the reload diff walks an array one side of which is empty.
+fn identity_key(base: &[toml::Value], overlay: &[toml::Value]) -> Option<&'static str> {
     IDENTITY_KEYS.into_iter().find(|key| {
         [base, overlay].into_iter().all(|side| {
             let mut seen = std::collections::HashSet::new();
@@ -123,7 +154,7 @@ fn merge_value(base: &mut toml::Value, overlay: toml::Value) {
     }
 }
 
-/// Read one layer: the file's bytes, with `${VAR}` placeholders expanded.
+/// Read one layer: the file's bytes, placeholders still in place.
 fn read_layer(path: &Path) -> Result<String> {
     std::fs::read_to_string(path)
         .with_context(|| format!("reading config file: {}", path.display()))
@@ -136,30 +167,43 @@ fn read_layer(path: &Path) -> Result<String> {
 /// a direct `toml::from_str::<AppConfig>` reports, and the single-file case is
 /// the one almost every deployment is in.
 pub fn load_layered(paths: &[impl AsRef<Path>]) -> Result<AppConfig> {
-    match paths {
-        [] => bail!("no config file given"),
-        [only] => load(only),
+    load_layered_text(paths).map(|(config, _)| config)
+}
+
+/// [`load_layered`], plus the text of each layer as it was read.
+///
+/// Each file is opened once, so the text is exactly what the config was
+/// built from — a FIFO or a `<(…)` process substitution has nothing left to
+/// give a second read, and a second open of a FIFO blocks forever.
+pub fn load_layered_text(paths: &[impl AsRef<Path>]) -> Result<(AppConfig, Vec<String>)> {
+    if paths.is_empty() {
+        bail!("no config file given");
+    }
+    let layers = paths
+        .iter()
+        .map(|p| read_layer(p.as_ref()))
+        .collect::<Result<Vec<_>>>()?;
+    let config = match layers.as_slice() {
+        [only] => load_from_str(only)?,
         _ => {
-            let mut layers = paths.iter().map(|p| {
-                let path = p.as_ref();
-                read_layer(path).and_then(|raw| {
-                    merged_layer_value(&raw)
-                        .with_context(|| format!("parsing config file: {}", path.display()))
-                })
+            let mut values = paths.iter().zip(&layers).map(|(p, raw)| {
+                merged_layer_value(raw, &process_env)
+                    .with_context(|| format!("parsing config file: {}", p.as_ref().display()))
             });
             // `paths` has at least two entries here, so the first is present.
-            let mut merged = layers.next().expect("at least two layers")?;
-            for layer in layers {
-                merge_value(&mut merged, layer?);
+            let mut merged = values.next().expect("at least two layers")?;
+            for value in values {
+                merge_value(&mut merged, value?);
             }
-            config_from_value(merged)
+            config_from_value(merged, &process_env)?
         }
-    }
+    };
+    Ok((config, layers))
 }
 
 /// One layer as a TOML document, with its env placeholders already expanded.
-fn merged_layer_value(raw: &str) -> Result<toml::Value> {
-    let expanded = expand_env_vars(raw)?;
+fn merged_layer_value(raw: &str, env: Env<'_>) -> Result<toml::Value> {
+    let expanded = expand_env_vars_with(raw, env)?;
     let value: toml::Value = toml::from_str(&expanded)?;
     Ok(value)
 }
@@ -167,12 +211,12 @@ fn merged_layer_value(raw: &str) -> Result<toml::Value> {
 /// Deserialize, apply env overrides and validate — the tail of [`load_from_str`],
 /// shared so a layered config goes through exactly the same checks as a single
 /// file rather than a parallel set that could drift.
-fn config_from_value(value: toml::Value) -> Result<AppConfig> {
+fn config_from_value(value: toml::Value, env: Env<'_>) -> Result<AppConfig> {
     let mut config: AppConfig = value
         .try_into()
         .with_context(|| "parsing merged config TOML")?;
-    config.apply_env_overrides();
-    config.validate()?;
+    config.apply_env_overrides_from(&env_or_none(env));
+    config.validate_with(&env_or_none(env))?;
     Ok(config)
 }
 
@@ -180,25 +224,330 @@ fn config_from_value(value: toml::Value) -> Result<AppConfig> {
 /// [`load_layered`], for the hot-reload path, which holds the primary layer's
 /// text (from the file watcher or the config editor) and re-reads the rest.
 pub fn load_layered_from_str(layers: &[impl AsRef<str>]) -> Result<AppConfig> {
+    load_layers_with(layers, &process_env)
+}
+
+/// Load already-read layers against an environment the caller supplies.
+///
+/// Exactly [`load_layered_from_str`], with `env` in place of the process
+/// environment at both places it is read: `${VAR}` expansion and the
+/// `PROXY_CACHE__*` overrides. For a tool that prepares a configuration for
+/// *another* BatleHub process (RFC 0037 §4.2): validating against its own
+/// environment would refuse a `${VAR}` set only in the target and accept an
+/// override set only in the tool. Read [`AppConfig::warnings`] on the result
+/// for the advisories the server would log at startup.
+///
+/// `env` returning `None` for a `${VAR}` is the "is not set" error; for an
+/// override, or `BATLEHUB_UNSAFE_NO_SANDBOX`, it means "not set". Never
+/// reads `std::env`.
+pub fn validate_layers(
+    layers: &[impl AsRef<str>],
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<AppConfig> {
+    load_layers_with(layers, &|name| {
+        env(name).ok_or(std::env::VarError::NotPresent)
+    })
+}
+
+fn load_layers_with(layers: &[impl AsRef<str>], env: Env<'_>) -> Result<AppConfig> {
     match layers {
         [] => bail!("no config content given"),
-        [only] => load_from_str(only.as_ref()),
+        [only] => config_from_str(only.as_ref(), env),
         _ => {
-            let mut values = layers.iter().map(|l| merged_layer_value(l.as_ref()));
+            let mut values = layers.iter().map(|l| merged_layer_value(l.as_ref(), env));
             let mut merged = values.next().expect("at least two layers")?;
             for value in values {
                 merge_value(&mut merged, value?);
             }
-            config_from_value(merged)
+            config_from_value(merged, env)
         }
     }
+}
+
+// ── Merging for another process ───────────────────────────────────────────────
+//
+// RFC 0037 §5.2. Each layer is expanded with a *marking* environment that
+// answers `${NAME}` with `MARK_OPEN NAME MARK_CLOSE`, parsed, and merged with
+// `merge_value`; `render` turns each marker back into `${NAME}` and writes
+// every other `$` as `\u0024`. So a placeholder stays a placeholder, a literal
+// stays a literal, and no value is ever read.
+
+/// Merge layers with the server's own rules and render one TOML document with
+/// every `${NAME}` placeholder kept (RFC 0037 §4.1).
+///
+/// The output is canonical: sorted keys, every string a one-line basic string,
+/// every literal `$` written `\u0024`. Two inputs that mean the same thing give
+/// the same bytes, so a hash of it moves only when the configuration does.
+///
+/// Expanding the output under an environment gives the same value as expanding
+/// each layer under it and merging — whenever the latter succeeds, and for
+/// values that carry no `"`, `\` or control character, which would change the
+/// TOML they are pasted into on either path — nor a `'` when the layer wrote
+/// the placeholder in a single-quoted string, where the server's own read
+/// fails. To hold that, it refuses what the
+/// server's own loading accepts and the two paths would read differently: a
+/// placeholder outside a string, inside a multi-line string, in a key, or in
+/// the `name`/`type` of an array-of-tables entry; a variable name outside
+/// `[A-Za-z_][A-Za-z0-9_]*`; and a layer carrying a marker character. Never
+/// reads `std::env`.
+pub fn merge_layers(layers: &[impl AsRef<str>]) -> Result<String> {
+    let mut merged: Option<toml::Value> = None;
+    for (i, layer) in layers.iter().enumerate() {
+        let value = marked_layer_value(layer.as_ref())
+            .with_context(|| format!("config layer {}", i + 1))?;
+        match merged.as_mut() {
+            Some(base) => merge_value(base, value),
+            None => merged = Some(value),
+        }
+    }
+    let Some(merged) = merged else {
+        bail!("no config content given")
+    };
+    Ok(render::render(&merged))
+}
+
+/// One layer as a TOML document, each placeholder replaced by its marker.
+fn marked_layer_value(raw: &str) -> Result<toml::Value> {
+    check_placeholder_positions(raw)?;
+
+    // A marker the layer carries itself would render back as a placeholder.
+    // Checked on the parsed value, so `"\uE000"` is seen as well as the raw
+    // character; the empty answer keeps the layer's own text apart from ours.
+    let plain = expand_env_vars_with(raw, &|_| Ok(String::new()))?;
+    let plain: toml::Value = toml::from_str(&plain).context("parsing config TOML")?;
+    let mut carries_marker = false;
+    for_each_text(&plain, &mut |text, _| {
+        carries_marker |= text.contains([render::MARK_OPEN, render::MARK_CLOSE]);
+    });
+    if carries_marker {
+        bail!("the layer contains U+E000 or U+E001, which merging reserves for placeholders");
+    }
+
+    let bad_name = std::cell::RefCell::new(None::<String>);
+    let marking = |name: &str| {
+        if !is_placeholder_name(name) {
+            bad_name.borrow_mut().get_or_insert_with(|| name.to_owned());
+        }
+        Ok(format!("{}{name}{}", render::MARK_OPEN, render::MARK_CLOSE))
+    };
+    let marked = expand_env_vars_with(raw, &marking)?;
+    if let Some(name) = bad_name.into_inner() {
+        bail!(
+            "placeholder '{}': a variable name to merge must match \
+             [A-Za-z_][A-Za-z0-9_]*",
+            shown_placeholder(&format!("{name}}}"))
+        );
+    }
+    let value: toml::Value = toml::from_str(&marked).context("parsing config TOML")?;
+    check_marker_positions(&value)?;
+    Ok(value)
+}
+
+/// `${NAME}` for an error message, `after_open` being the text after the
+/// `${`. The name is cut at the first character a variable name cannot hold:
+/// the server's scanner reads a placeholder through the next `}`, however far
+/// down the layer, and an error message carrying that text ends up in logs,
+/// the console and the audit table — with whatever credential sat in between.
+fn shown_placeholder(after_open: &str) -> String {
+    let name: String = after_open
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .take(64)
+        .collect();
+    let end = if after_open[name.len()..].starts_with('}') {
+        "}"
+    } else {
+        "…"
+    };
+    format!("${{{name}{end}")
+}
+
+/// Whether `expand_env_vars` expands a `${` that follows `line`, the text
+/// since the last newline. Its scanner resets on every newline, so a `#` on a
+/// line inside a multi-line string reads to it as a comment, and a `$$` is
+/// its escape wherever it stands.
+fn server_expands(line: &[u8]) -> bool {
+    let (mut dquote, mut squote) = (false, false);
+    let mut i = 0;
+    while i < line.len() {
+        match line[i] {
+            b'"' if !squote => dquote = !dquote,
+            b'\\' if dquote => i += 1,
+            b'\'' if !dquote => squote = !squote,
+            b'#' if !dquote && !squote => return false,
+            b'$' if line.get(i + 1) == Some(&b'$') => i += 1,
+            b'$' if line.get(i + 1) == Some(&b'{') => {
+                match line[i..].iter().position(|&b| b == b'}') {
+                    Some(end) => i += end,
+                    None => return true,
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    true
+}
+
+fn is_placeholder_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Every key (`true`) and string (`false`) in `value`, depth first.
+fn for_each_text(value: &toml::Value, f: &mut dyn FnMut(&str, bool)) {
+    match value {
+        toml::Value::String(s) => f(s, false),
+        toml::Value::Array(items) => items.iter().for_each(|v| for_each_text(v, f)),
+        toml::Value::Table(table) => {
+            for (k, v) in table {
+                f(k, true);
+                for_each_text(v, f);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `MARK_OPEN NAME MARK_CLOSE` back to `${NAME}`, for an error message.
+fn unmark(text: &str) -> String {
+    text.replace(render::MARK_OPEN, "${")
+        .replace(render::MARK_CLOSE, "}")
+}
+
+/// Refuse a marker where the merge compares text: a key, and the `name` or
+/// `type` an array-of-tables entry is merged on. `name = "${REG}"` beside
+/// `name = "npm"` is two entries as markers and one on a server with
+/// `REG=npm` (RFC 0037 §4.1).
+fn check_marker_positions(value: &toml::Value) -> Result<()> {
+    let marked = |s: &str| s.contains(render::MARK_OPEN);
+    match value {
+        toml::Value::Table(table) => {
+            for (k, v) in table {
+                if marked(k) {
+                    bail!(
+                        "placeholder in the key '{}': merging compares keys as text",
+                        unmark(k)
+                    );
+                }
+                if let toml::Value::Array(items) = v {
+                    for entry in items.iter().filter_map(toml::Value::as_table) {
+                        for id in IDENTITY_KEYS {
+                            if let Some(s) = entry.get(id).and_then(toml::Value::as_str) {
+                                if marked(s) {
+                                    bail!(
+                                        "placeholder in `{k}` entry's `{id} = \"{}\"`: merging \
+                                         matches entries on it as text",
+                                        unmark(s)
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                check_marker_positions(v)?;
+            }
+        }
+        toml::Value::Array(items) => items.iter().try_for_each(check_marker_positions)?,
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Refuse a `${` the merge cannot keep as a placeholder: outside any string,
+/// where TOML would refuse its marker, and inside a multi-line string, where
+/// the server expands it in a different string context from the one-line
+/// basic string it is rendered into (RFC 0037 §4.1). `expand_env_vars`'s own
+/// scanner resets on every newline and so cannot tell; this one tracks the
+/// multi-line delimiters, and is used here only.
+fn check_placeholder_positions(raw: &str) -> Result<()> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum At {
+        Code,
+        Basic,
+        Literal,
+        MultiBasic,
+        MultiLiteral,
+        Comment,
+    }
+    let bytes = raw.as_bytes();
+    let name_at = |i: usize| shown_placeholder(&raw[i + 2..]);
+    let run_of = |i: usize, quote: u8| bytes[i..].iter().take_while(|&&b| b == quote).count();
+    let mut at = At::Code;
+    let mut i = 0;
+    while i < bytes.len() {
+        // `$$` is the escape for a literal `$` in every context the server
+        // expands in, so its second `$` never opens a placeholder.
+        if at != At::Comment && bytes[i..].starts_with(b"$$") {
+            i += 2;
+            continue;
+        }
+        let placeholder = bytes[i..].starts_with(b"${") && {
+            let line_start = raw[..i].rfind('\n').map_or(0, |n| n + 1);
+            server_expands(&bytes[line_start..i])
+        };
+        match (at, bytes[i]) {
+            (At::Code, b'"' | b'\'') => {
+                let quote = bytes[i];
+                let multi = bytes[i..].starts_with(&[quote; 3]);
+                at = match (quote, multi) {
+                    (b'"', true) => At::MultiBasic,
+                    (b'"', false) => At::Basic,
+                    (_, true) => At::MultiLiteral,
+                    (_, false) => At::Literal,
+                };
+                i += if multi { 3 } else { 1 };
+                continue;
+            }
+            (At::Code, b'#') => at = At::Comment,
+            (At::Code, _) if placeholder => bail!(
+                "placeholder '{}' outside a string value: merging can keep a placeholder \
+                 only inside a string",
+                name_at(i)
+            ),
+            (At::Basic | At::MultiBasic, b'\\') => {
+                i += 2;
+                continue;
+            }
+            (At::Basic, b'"') | (At::Literal, b'\'') => at = At::Code,
+            (At::MultiBasic, b'"') | (At::MultiLiteral, b'\'') => {
+                let run = run_of(i, bytes[i]);
+                if run >= 3 {
+                    at = At::Code;
+                }
+                i += run;
+                continue;
+            }
+            (At::MultiBasic | At::MultiLiteral, _) if placeholder => bail!(
+                "placeholder '{}' inside a multi-line string: write the value as a \
+                 one-line string to merge it",
+                name_at(i)
+            ),
+            // The server's scanner reads a placeholder through its `}`, quote
+            // or not; follow it so `${A"B}` reaches the name check.
+            (At::Basic, _) if placeholder => {
+                match bytes[i..].iter().position(|&b| b == b'}') {
+                    Some(end) => i += end + 1,
+                    None => return Ok(()), // the expansion reports it unclosed
+                }
+                continue;
+            }
+            (At::Basic | At::Literal | At::Comment, b'\n') => at = At::Code,
+            _ => {}
+        }
+        i += 1;
+    }
+    Ok(())
 }
 
 /// Expand `${VAR_NAME}` placeholders in a raw config string with their
 /// environment variable values.
 ///
 /// Rules:
-/// - `${VAR_NAME}` is replaced with `std::env::var("VAR_NAME")`.
+/// - `${VAR_NAME}` is replaced with `env("VAR_NAME")`.
 ///   Returns an error if the variable is not set.
 /// - `$${VAR_NAME}` is an escape sequence that produces the literal string
 ///   `${VAR_NAME}` without any variable lookup.
@@ -208,8 +557,11 @@ pub fn load_layered_from_str(layers: &[impl AsRef<str>]) -> Result<AppConfig> {
 ///   require the referenced variable to be set.
 ///
 /// Read `${VAR_NAME}` from `chars` (the `$` and `{` have already been consumed),
-/// look up the variable in the environment, and return its value.
-fn expand_braced_var(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Result<String> {
+/// look up the variable in `env`, and return its value.
+fn expand_braced_var(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    env: Env<'_>,
+) -> Result<String> {
     let mut var_name = String::new();
     loop {
         match chars.next() {
@@ -221,12 +573,15 @@ fn expand_braced_var(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Re
     if var_name.is_empty() {
         bail!("empty variable name in '${{}}' placeholder in config file");
     }
-    std::env::var(&var_name)
+    env(&var_name)
         .with_context(|| format!("config references env var '${{{var_name}}}' but it is not set"))
 }
 
-/// Tracks TOML string/comment context while scanning so `$` expansion only fires
-/// in code positions (not inside `'single'` strings or `#` comments).
+/// Tracks TOML string/comment context while scanning, so a `#` inside a string
+/// is not taken for a comment and a placeholder in a `#` comment is left alone.
+/// A placeholder in a `'single'`-quoted string *is* expanded, as the
+/// configuration guide promises for any string value; `in_squote` only stops
+/// a `"` or `#` inside one from changing the state.
 #[derive(Default)]
 struct QuoteScan {
     in_dquote: bool,
@@ -280,7 +635,13 @@ impl QuoteScan {
     }
 }
 
+/// [`expand_env_vars_with`] against the process environment.
+#[cfg(test)]
 fn expand_env_vars(raw: &str) -> Result<String> {
+    expand_env_vars_with(raw, &process_env)
+}
+
+fn expand_env_vars_with(raw: &str, env: Env<'_>) -> Result<String> {
     let mut out = String::with_capacity(raw.len());
     let mut chars = raw.chars().peekable();
     let mut scan = QuoteScan::default();
@@ -306,7 +667,7 @@ fn expand_env_vars(raw: &str) -> Result<String> {
             }
             Some('{') => {
                 chars.next(); // consume '{'
-                out.push_str(&expand_braced_var(&mut chars)?);
+                out.push_str(&expand_braced_var(&mut chars, env)?);
             }
             _ => out.push('$'),
         }
@@ -1382,6 +1743,525 @@ mod tests {
             assert_eq!(m.backends.len(), 2);
             assert_eq!(m.backends[0].name, "primary");
             assert_eq!(m.backends[1].name, "secondary");
+        }
+    }
+
+    // ── RFC 0037: merge_layers ───────────────────────────────────────────────
+
+    fn merge_err(layers: &[&str]) -> String {
+        format!("{:#}", crate::merge_layers(layers).unwrap_err())
+    }
+
+    #[test]
+    fn merge_layers_keeps_placeholders_and_literals_apart() {
+        let merged = crate::merge_layers(&[
+            "[database]\nurl = \"postgresql://${DB_USER}@h/d\"\n",
+            "[x]\nliteral = \"$${KEEP} costs $5\"\nsingle = '${TOKEN}'\nescaped = \"\\u0024{X}\"\n",
+        ])
+        .unwrap();
+        assert_eq!(
+            merged,
+            "[database]\nurl = \"postgresql://${DB_USER}@h/d\"\n\n\
+             [x]\nescaped = \"\\u0024{X}\"\n\
+             literal = \"\\u0024{KEEP} costs \\u00245\"\n\
+             single = \"${TOKEN}\"\n"
+        );
+        // In the pod: the two placeholders resolve, nothing else does. A
+        // single-quoted string is expanded too, as on the server.
+        let expanded =
+            crate::expand_env_vars_with(&merged, &var_env_of(&[("DB_USER", "u"), ("TOKEN", "t")]))
+                .unwrap();
+        let value: toml::Value = toml::from_str(&expanded).unwrap();
+        assert_eq!(
+            value["database"]["url"].as_str(),
+            Some("postgresql://u@h/d")
+        );
+        assert_eq!(value["x"]["literal"].as_str(), Some("${KEEP} costs $5"));
+        assert_eq!(value["x"]["single"].as_str(), Some("t"));
+        assert_eq!(value["x"]["escaped"].as_str(), Some("${X}"));
+    }
+
+    #[test]
+    fn merge_layers_uses_the_server_merge_rules() {
+        let merged = crate::merge_layers(&[
+            two_registries().as_str(),
+            "[[registries]]\nname = \"crates\"\nupstream_auth = { token = \"${PYPI_TOKEN}\" }\n",
+        ])
+        .unwrap();
+        let value: toml::Value = toml::from_str(
+            &crate::expand_env_vars_with(&merged, &var_env_of(&[("PYPI_TOKEN", "t")])).unwrap(),
+        )
+        .unwrap();
+        let regs = value["registries"].as_array().unwrap();
+        assert_eq!(regs.len(), 2, "completed in place, not appended");
+        assert_eq!(regs[1]["upstream_auth"]["token"].as_str(), Some("t"));
+    }
+
+    #[test]
+    fn merge_layers_output_is_canonical() {
+        let a = crate::merge_layers(&["b = 1 # comment\na = \"x\"\n"]).unwrap();
+        let b = crate::merge_layers(&["a = 'x'\n\n\nb = 1\n"]).unwrap();
+        assert_eq!(a, b);
+        assert_eq!(crate::merge_layers(&[&a]).unwrap(), a, "a fixed point");
+    }
+
+    #[test]
+    fn merge_layers_with_no_layers_is_an_error() {
+        let none: [&str; 0] = [];
+        assert!(crate::merge_layers(&none).is_err());
+    }
+
+    #[test]
+    fn merge_layers_refuses_what_the_two_paths_would_read_differently() {
+        let cases: &[(&str, &str)] = &[
+            ("a = \"unclosed\n", "parsing config TOML"),
+            ("port = ${PORT}\n", "'${PORT}' outside a string value"),
+            ("x = \"${}\"\n", "empty variable name"),
+            ("x = \"${OPEN\n", "unclosed"),
+            ("\"${K}\" = 1\n", "in the key '${K}'"),
+            ("[[registries]]\nname = \"${REG}\"\n", "`name = \"${REG}\"`"),
+            ("[[auth]]\ntype = \"${T}\"\n", "`type = \"${T}\"`"),
+            ("x = \"${A\"B}\"\n", "'${A…'"),
+            // A `$$` escape does not hide the placeholder after it.
+            (
+                "p = \"$${\"\nx = \"\"\"${PEM}\"\"\"\n",
+                "'${PEM}' inside a multi-line string",
+            ),
+            ("x = \"${1X}\"\n", "'${1X}'"),
+            ("x = '''\nline ${X}'''\n", "inside a multi-line string"),
+            (
+                "x = \"\"\"\nline ${X}\"\"\"\n",
+                "inside a multi-line string",
+            ),
+            ("x = '''${X}'''\n", "inside a multi-line string"),
+            ("x = \"\\uE000X\\uE001\"\n", "U+E000 or U+E001"),
+            ("x = \"\u{E000}X\u{E001}\"\n", "U+E000 or U+E001"),
+            ("\"\\uE000\" = 1\n", "U+E000 or U+E001"),
+        ];
+        for (layer, expected) in cases {
+            let err = merge_err(&["a = 1\n", layer]);
+            assert!(err.contains("config layer 2"), "{layer:?}: {err}");
+            assert!(err.contains(expected), "{layer:?}: {err}");
+        }
+    }
+
+    /// The server reads a placeholder through the next `}`, however far; a
+    /// refusal quoting that text would carry a password into the logs, the
+    /// console and the audit table.
+    #[test]
+    fn a_refusal_never_quotes_past_the_placeholder_name() {
+        let layer = "x = '''\nopen ${ here\n'''\n\
+                     [database]\nurl = \"postgresql://u:hunter2@db/x\"\n# }\n";
+        let err = merge_err(&[layer]);
+        assert!(err.contains("'${…'"), "{err}");
+        assert!(!err.contains("hunter2"), "{err}");
+        let layer = "x = \"${A\nurl = \"postgresql://u:hunter2@db/x\"}\"\n";
+        let err = merge_err(&[layer]);
+        assert!(!err.contains("hunter2"), "{err}");
+    }
+
+    #[test]
+    fn merge_layers_accepts_what_only_looks_like_a_placeholder() {
+        for layer in [
+            "x = \"$${X}\"\n",
+            "x = '${X}'\n",
+            "# ${X} in a comment\nx = 1\n",
+            "x = \"a\" # ${X}\n",
+            "x = '''\nno placeholder, a \" quote and a $\n'''\n",
+            "x = \"\"\"\nescaped \\\"\"\" quote\"\"\"\n",
+            "[[registries]]\nname = \"npm\"\nupstreams = [\"${NPM_URL}\"]\n",
+            // A line the server's scanner reads as a comment, and an escape.
+            "x = '''\n# Use ${ to open a template\n'''\n",
+            "x = \"\"\"\n$${X}\"\"\"\n",
+        ] {
+            crate::merge_layers(&[layer]).unwrap_or_else(|e| panic!("{layer:?}: {e:#}"));
+        }
+    }
+
+    /// A seeded xorshift, so the property test needs no dependency and a
+    /// failure names the seed that reproduces it.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+        fn pick<'a>(&mut self, items: &[&'a str]) -> &'a str {
+            items[self.below(items.len())]
+        }
+    }
+
+    fn gen_string(rng: &mut Rng) -> String {
+        // Multi-line strings carry no placeholder (merging refuses one), but
+        // their quotes and `#` must not throw the position check off.
+        if rng.below(8) == 0 {
+            let parts = ["text", "\"", "'", "#", "$", "\n", "$5"];
+            let body: String = (0..rng.below(5)).map(|_| rng.pick(&parts)).collect();
+            return match rng.below(2) {
+                0 => format!("'''\n{body}'''"),
+                _ => format!("\"\"\"\n{}\"\"\"", body.replace('"', "\\\"")),
+            };
+        }
+        if rng.below(4) == 0 {
+            let parts = ["text", "${V1}", "$", "\"", "#", "$${V2}"];
+            let body: String = (0..rng.below(4)).map(|_| rng.pick(&parts)).collect();
+            return format!("'{body}'");
+        }
+        let parts = [
+            "text",
+            "${V1}",
+            "${V2}",
+            "${V3}",
+            "$",
+            "$5",
+            "$${V1}",
+            "$$",
+            "\\\"",
+            "\\\\",
+            "\\u0024",
+            "\\u0024{V1}",
+            "#",
+            "'",
+            "\\n",
+            "é",
+        ];
+        let body: String = (0..rng.below(5)).map(|_| rng.pick(&parts)).collect();
+        format!("\"{body}\"")
+    }
+
+    fn gen_value(rng: &mut Rng) -> String {
+        match rng.below(5) {
+            0 => rng.below(100).to_string(),
+            1 => "true".to_owned(),
+            2 => {
+                let items: Vec<String> = (0..rng.below(3)).map(|_| gen_string(rng)).collect();
+                format!("[{}]", items.join(", "))
+            }
+            _ => gen_string(rng),
+        }
+    }
+
+    fn gen_pairs(rng: &mut Rng, out: &mut String) {
+        for key in ["a", "b", "\"q$k\"", "c"] {
+            if rng.below(2) == 0 {
+                out.push_str(&format!("{key} = {}\n", gen_value(rng)));
+            }
+        }
+    }
+
+    fn gen_layer(rng: &mut Rng) -> String {
+        let mut out = String::new();
+        gen_pairs(rng, &mut out);
+        if rng.below(2) == 0 {
+            out.push_str("[t]\n");
+            gen_pairs(rng, &mut out);
+        }
+        for _ in 0..rng.below(4) {
+            out.push_str("[[r]]\n");
+            match rng.below(3) {
+                0 => out.push_str(&format!("type = \"{}\"\n", rng.pick(&["x", "y"]))),
+                _ => out.push_str(&format!("name = \"{}\"\n", rng.pick(&["x", "y", "z"]))),
+            }
+            gen_pairs(rng, &mut out);
+            if rng.below(3) == 0 {
+                out.push_str("[r.s]\n");
+                gen_pairs(rng, &mut out);
+            }
+        }
+        out
+    }
+
+    /// RFC 0037 §4.1: expanding `merge_layers(L)` under `E` gives what the
+    /// server gets by expanding each layer under `E` and merging, whenever the
+    /// latter succeeds — for values with no `"`, `\` or control character.
+    #[test]
+    fn merging_before_expanding_matches_the_server() {
+        let values = [
+            "", "plain", "${V2}", "$", "$$", "{}", "#hash", "it's", "é/ü:1",
+        ];
+        let mut skipped = 0;
+        for seed in 1..=3000u64 {
+            let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let layers: Vec<String> = (0..1 + rng.below(3)).map(|_| gen_layer(&mut rng)).collect();
+            let pairs: Vec<(&str, &str)> = ["V1", "V2", "V3"]
+                .into_iter()
+                .map(|name| (name, rng.pick(&values)))
+                .collect();
+            let env = var_env_of(&pairs);
+
+            // The server path can fail where the merged one does not — a `'`
+            // pasted into a single-quoted string — and the invariant is
+            // claimed only where it succeeds.
+            let mut server = None::<toml::Value>;
+            let mut failed = false;
+            for layer in &layers {
+                let Ok(value) = crate::merged_layer_value(layer, &env) else {
+                    failed = true;
+                    break;
+                };
+                match server.as_mut() {
+                    Some(base) => crate::merge_value(base, value),
+                    None => server = Some(value),
+                }
+            }
+            if failed {
+                skipped += 1;
+                continue;
+            }
+
+            let merged = crate::merge_layers(&layers)
+                .unwrap_or_else(|e| panic!("seed {seed}: {e:#}\n{layers:#?}"));
+            let pod: toml::Value =
+                toml::from_str(&crate::expand_env_vars_with(&merged, &env).unwrap())
+                    .unwrap_or_else(|e| panic!("seed {seed}: {e}\n{merged}"));
+            assert_eq!(Some(pod), server, "seed {seed}\n{layers:#?}\n{merged}");
+            assert_eq!(
+                crate::merge_layers(&[&merged]).unwrap(),
+                merged,
+                "seed {seed}"
+            );
+        }
+        assert!(
+            skipped < 1000,
+            "{skipped} of 3000 seeds never reached the comparison"
+        );
+    }
+
+    // ── RFC 0037: an environment supplied by the caller ─────────────────────
+
+    /// One environment with the given pairs and nothing else.
+    fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let map: std::collections::HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        move |name| map.get(name).cloned()
+    }
+
+    /// [`env_of`] as the internal loaders read an environment.
+    fn var_env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Result<String, std::env::VarError> {
+        let env = env_of(pairs);
+        move |name| env(name).ok_or(std::env::VarError::NotPresent)
+    }
+
+    #[test]
+    fn validate_layers_expands_placeholders_from_the_given_env_only() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let raw = minimal().replace(
+            "postgresql://user:pass@localhost/db",
+            "postgresql://${BATLEHUB_TEST_0037_DB}/db",
+        );
+        // Set in this process, absent from the injected env: refused.
+        unsafe { std::env::set_var("BATLEHUB_TEST_0037_DB", "from-the-process") };
+        let refused = crate::validate_layers(&[&raw], &env_of(&[]));
+        let given = crate::validate_layers(
+            &[&raw],
+            &env_of(&[("BATLEHUB_TEST_0037_DB", "from-the-target")]),
+        );
+        unsafe { std::env::remove_var("BATLEHUB_TEST_0037_DB") };
+
+        let err = format!("{:#}", refused.unwrap_err());
+        assert!(
+            err.contains("BATLEHUB_TEST_0037_DB") && err.contains("not set"),
+            "{err}"
+        );
+        assert_eq!(
+            given.unwrap().database.url,
+            "postgresql://from-the-target/db"
+        );
+    }
+
+    #[test]
+    fn validate_layers_applies_overrides_from_the_given_env_only() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("PROXY_CACHE__SERVER__PORT", "1111") };
+        let ignored = crate::validate_layers(&[minimal()], &env_of(&[]));
+        let applied = crate::validate_layers(
+            &[minimal(), "[server]\nhost = \"0.0.0.0\"\n"],
+            &env_of(&[("PROXY_CACHE__SERVER__PORT", "2222")]),
+        );
+        unsafe { std::env::remove_var("PROXY_CACHE__SERVER__PORT") };
+
+        assert_eq!(ignored.unwrap().server.port, 8080);
+        let applied = applied.unwrap();
+        assert_eq!(applied.server.port, 2222);
+        assert_eq!(
+            applied.server.host, "0.0.0.0",
+            "the second layer was merged"
+        );
+    }
+
+    #[test]
+    fn validate_layers_with_no_layers_is_an_error() {
+        let none: [&str; 0] = [];
+        assert!(crate::validate_layers(&none, &env_of(&[])).is_err());
+    }
+
+    /// Every `PROXY_CACHE__*` override reads the injected env, one at a time,
+    /// so a helper that went back to `std::env` fails here by name.
+    #[test]
+    fn every_env_override_reads_the_given_env() {
+        let s3 = r#"
+        [server]
+        host = "127.0.0.1"
+        [database]
+        type = "postgresql"
+        url = "postgresql://u:p@h/d"
+        [storage]
+        type = "s3"
+        bucket = "b"
+        region = "r"
+        "#;
+        let fs_path = |c: &AppConfig| match &c.storage {
+            StoragesConfig::Single(StorageBackendConfig::Filesystem(fs)) => fs.path.clone(),
+            _ => panic!("expected filesystem storage"),
+        };
+        let s3_field =
+            |c: &AppConfig, f: fn(&crate::schema::S3StorageConfig) -> String| match &c.storage {
+                StoragesConfig::Single(StorageBackendConfig::S3(s3)) => f(s3),
+                _ => panic!("expected s3 storage"),
+            };
+        fn proxy(c: &AppConfig) -> &crate::schema::UpstreamProxyConfig {
+            c.proxy.as_ref().expect("proxy section")
+        }
+        type Read = Box<dyn Fn(&AppConfig) -> String>;
+        /// The variable, its value, the base document, the other variables it
+        /// needs set beside it, and where its value lands.
+        type Case<'a> = (&'a str, &'a str, &'a str, &'a [(&'a str, &'a str)], Read);
+        let with_proxy = [("PROXY_CACHE__PROXY__URL", "http://p:3128")];
+        let cases: Vec<Case> = vec![
+            (
+                "PROXY_CACHE__SERVER__HOST",
+                "h",
+                minimal(),
+                &[],
+                Box::new(|c| c.server.host.clone()),
+            ),
+            (
+                "PROXY_CACHE__SERVER__PORT",
+                "9",
+                minimal(),
+                &[],
+                Box::new(|c| c.server.port.to_string()),
+            ),
+            (
+                "PROXY_CACHE__SERVER__STATIC_DIR",
+                "/s",
+                minimal(),
+                &[],
+                Box::new(|c| c.server.static_dir.clone().unwrap()),
+            ),
+            (
+                "PROXY_CACHE__DATABASE__URL",
+                "postgresql://x/y",
+                minimal(),
+                &[],
+                Box::new(|c| c.database.url.clone()),
+            ),
+            (
+                "PROXY_CACHE__DATABASE__MAX_CONNECTIONS",
+                "7",
+                minimal(),
+                &[],
+                Box::new(|c| c.database.max_connections.to_string()),
+            ),
+            (
+                "PROXY_CACHE__DATABASE__MIN_CONNECTIONS",
+                "3",
+                minimal(),
+                &[],
+                Box::new(|c| c.database.min_connections.to_string()),
+            ),
+            (
+                "PROXY_CACHE__DATABASE__ACQUIRE_TIMEOUT_SECS",
+                "11",
+                minimal(),
+                &[],
+                Box::new(|c| c.database.acquire_timeout_secs.to_string()),
+            ),
+            (
+                "PROXY_CACHE__STORAGE__PATH",
+                "/p",
+                minimal(),
+                &[],
+                Box::new(fs_path),
+            ),
+            (
+                "PROXY_CACHE__STORAGE__BUCKET",
+                "nb",
+                s3,
+                &[],
+                Box::new(move |c| s3_field(c, |s| s.bucket.clone())),
+            ),
+            (
+                "PROXY_CACHE__STORAGE__REGION",
+                "nr",
+                s3,
+                &[],
+                Box::new(move |c| s3_field(c, |s| s.region.clone())),
+            ),
+            (
+                "PROXY_CACHE__STORAGE__ENDPOINT_URL",
+                "http://e",
+                s3,
+                &[],
+                Box::new(move |c| s3_field(c, |s| s.endpoint_url.clone().unwrap())),
+            ),
+            (
+                "PROXY_CACHE__OTEL__ENDPOINT",
+                "http://o",
+                minimal(),
+                &[],
+                Box::new(|c| c.otel.as_ref().unwrap().endpoint.clone()),
+            ),
+            (
+                "PROXY_CACHE__OTEL__SERVICE_NAME",
+                "n",
+                minimal(),
+                &[("PROXY_CACHE__OTEL__ENDPOINT", "http://o")],
+                Box::new(|c| c.otel.as_ref().unwrap().service_name.clone()),
+            ),
+            (
+                "PROXY_CACHE__PROXY__URL",
+                "http://p:3128",
+                minimal(),
+                &[],
+                Box::new(move |c| proxy(c).url.clone()),
+            ),
+            (
+                "PROXY_CACHE__PROXY__USERNAME",
+                "u",
+                minimal(),
+                &with_proxy,
+                Box::new(move |c| proxy(c).username.clone().unwrap()),
+            ),
+            (
+                "PROXY_CACHE__PROXY__PASSWORD",
+                "pw",
+                minimal(),
+                &with_proxy,
+                Box::new(move |c| proxy(c).password.clone().unwrap()),
+            ),
+            (
+                "PROXY_CACHE__PROXY__NO_PROXY",
+                "localhost",
+                minimal(),
+                &with_proxy,
+                Box::new(move |c| proxy(c).no_proxy.clone().unwrap()),
+            ),
+        ];
+        assert_eq!(cases.len(), 17, "one case per override (RFC 0037 §10)");
+        for (var, value, base, extra, read) in cases {
+            let mut pairs = extra.to_vec();
+            pairs.push((var, value));
+            let mut cfg: AppConfig = toml::from_str(base).unwrap();
+            cfg.apply_env_overrides_from(&env_of(&pairs));
+            assert_eq!(read(&cfg), value, "{var} did not reach its field");
         }
     }
 

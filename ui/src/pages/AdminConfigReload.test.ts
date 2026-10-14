@@ -276,6 +276,33 @@ describe("AdminConfigReload", () => {
     expect(text).toMatch(/limits changed/i);
   });
 
+  /** RFC 0037 §6.5: a restart-only change used to stage with an empty diff. */
+  it("lists what applies, what applies partly, and what needs a restart", async () => {
+    routes(
+      pending({
+        diff: {
+          added_registries: [],
+          removed_registries: [],
+          changed_registries: [],
+          access_config_changed: false,
+          limits_changed: false,
+          applied: ["search.readmes"],
+          partially_applied: ["registries[npm].upstreams"],
+          restart_required: ["database.url"],
+        },
+      }),
+    );
+    const wrapper = await mountPage();
+    const text = wrapper.text();
+
+    expect(text).toMatch(/Applied everywhere\s*search\.readmes/);
+    expect(text).toContain("registries[npm].upstreams");
+    expect(text).toMatch(/Needs a restart\s*database\.url/);
+    // A restart-only change is still a change to confirm.
+    await applyButton(wrapper)!.trigger("click");
+    expect(dialogFor(wrapper, "Apply").props("count")).toBe(3);
+  });
+
   // ── Applying, discarding, forcing ───────────────────────────────────────────
 
   /**

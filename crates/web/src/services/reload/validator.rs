@@ -10,6 +10,8 @@ impl ConfigReloadService {
         &self,
         new_hot: &HotConfig,
         new_access: &AccessConfig,
+        text_config_owed: bool,
+        layers: &[String],
     ) -> ReloadDiff {
         let old_hot = self.hot.read().await;
         let old_names: std::collections::HashSet<&str> =
@@ -26,6 +28,15 @@ impl ConfigReloadService {
             .map(|s| s.to_string())
             .collect();
         let limits_changed = old_hot.max_artifact_size_bytes != new_hot.max_artifact_size_bytes;
+        // Read under the `hot` guard: `apply` replaces both under its write
+        // guard, so the two describe the same config. Released before the
+        // classification, which is the slow part.
+        let in_force = self
+            .applied_layers
+            .lock()
+            .expect("applied_layers lock poisoned")
+            .clone();
+        drop(old_hot);
 
         // AccessConfig doesn't implement PartialEq (HashSet comparison is cheap but
         // we don't want to derive it on a potentially large struct). Mark as changed
@@ -37,13 +48,16 @@ impl ConfigReloadService {
                 || old_access.admin != new_access.admin
         };
 
-        ReloadDiff {
+        let mut diff = ReloadDiff {
             added_registries: added,
             removed_registries: removed,
-            changed_registries: vec![],
             access_config_changed,
             limits_changed,
-        }
+            ..ReloadDiff::default()
+        };
+        diff.classify(&self.startup_document, &in_force, layers);
+        diff.settle_text_config(text_config_owed);
+        diff
     }
 
     pub(super) async fn persist_audit(

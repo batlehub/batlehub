@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "1.5.0"
+    "version": "1.6.0"
   },
   "paths": {
     "/.well-known/terraform.json": {
@@ -26906,6 +26906,13 @@
               "type": "string"
             }
           },
+          "applied": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Keys this candidate changes that every reader sees once it is applied\n(RFC 0037 §4.3, tier *hot*), against the config in force."
+          },
           "changed_registries": {
             "type": "array",
             "items": {
@@ -26915,11 +26922,32 @@
           "limits_changed": {
             "type": "boolean"
           },
+          "partially_applied": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Keys this candidate changes that every request sees once it is\napplied, while a component built at startup — warming, release\nimports, the scan worker — keeps the old value until a restart."
+          },
           "removed_registries": {
             "type": "array",
             "items": {
               "type": "string"
             }
+          },
+          "restart_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why `restart_required` is `[\"*\"]`: the config uses a placeholder where\n`batlehub_config::merge_layers` cannot keep it (RFC 0037 §4.5)."
+          },
+          "restart_required": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every restart-only key the running process does not have, against the\nconfig it **started** on: a key an earlier reload applied stays listed\nuntil the restart that makes it true. `[\"*\"]` when the documents could\nnot be compared, with the reason in `restart_reason`."
           }
         }
       },

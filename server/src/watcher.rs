@@ -550,6 +550,19 @@ fn is_relevant(
     names: &std::collections::HashSet<std::ffi::OsString>,
 ) -> bool {
     match event {
+        // notify's inotify backend subscribes to `IN_OPEN`, so a mere *read*
+        // of the config is an event — the reload's own read included. Counted,
+        // one reload fed the next until the limiter disabled the watcher.
+        // `Close(Write)` is `IN_CLOSE_WRITE`, a write, and stays relevant.
+        Ok(notify::Event {
+            kind:
+                notify::EventKind::Access(
+                    notify::event::AccessKind::Open(_)
+                    | notify::event::AccessKind::Read
+                    | notify::event::AccessKind::Close(notify::event::AccessMode::Read),
+                ),
+            ..
+        }) => false,
         Ok(event) => event
             .paths
             .iter()
@@ -752,11 +765,24 @@ async fn run_reload_task(
             Ok(diff) if diff.is_noop() => {
                 tracing::debug!("config file event produced no change, nothing pending")
             }
-            Ok(diff) => tracing::info!(
-                added = diff.added_registries.len(),
-                removed = diff.removed_registries.len(),
-                "pending reload ready — confirm at POST /api/v1/admin/config/pending/apply"
-            ),
+            Ok(diff) => {
+                // At warn: a reload that cannot apply a key is the one thing an
+                // operator watching the log must not miss (RFC 0037 §6.5).
+                if !diff.restart_required.is_empty() {
+                    tracing::warn!(
+                        paths = %diff.restart_required.join(", "),
+                        reason = diff.restart_reason.as_deref().unwrap_or(""),
+                        "config change needs a restart to take effect"
+                    );
+                }
+                tracing::info!(
+                    added = diff.added_registries.len(),
+                    removed = diff.removed_registries.len(),
+                    applied = %diff.applied.join(", "),
+                    partially_applied = %diff.partially_applied.join(", "),
+                    "pending reload ready — confirm at POST /api/v1/admin/config/pending/apply"
+                )
+            }
             Err(e) => tracing::warn!(error = %e, "config file reload validation failed"),
         }
     }
@@ -1035,6 +1061,29 @@ mod tests {
     fn the_kubernetes_data_symlink_swap_is_relevant() {
         let names = watched_names(&["/etc/batlehub/config.toml".to_owned()]);
         assert!(is_relevant(&event_for(&["/etc/batlehub/..data"]), &names));
+    }
+
+    /// Reading the file is not changing it. Every reload reads the config, so
+    /// an open counted as a change made each reload trigger the next until the
+    /// event limiter switched the watcher off (found by tests/heavy/reload.sh).
+    #[test]
+    fn opening_or_reading_the_config_is_not_a_change() {
+        use notify::event::{AccessKind, AccessMode, EventKind};
+        let names = watched_names(&["/etc/batlehub/config.toml".to_owned()]);
+        for kind in [
+            AccessKind::Open(AccessMode::Any),
+            AccessKind::Close(AccessMode::Read),
+        ] {
+            let mut event = event_for(&["/etc/batlehub/config.toml"]).unwrap();
+            event.kind = EventKind::Access(kind);
+            assert!(!is_relevant(&Ok(event), &names), "{kind:?}");
+        }
+        let mut written = event_for(&["/etc/batlehub/config.toml"]).unwrap();
+        written.kind = EventKind::Access(AccessKind::Close(AccessMode::Write));
+        assert!(
+            is_relevant(&Ok(written), &names),
+            "IN_CLOSE_WRITE is a write"
+        );
     }
 
     /// The reason the filter exists. A directory watch on a development

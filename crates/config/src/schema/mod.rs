@@ -2272,6 +2272,14 @@ impl AppConfig {
     /// the order an operator meets the errors in. Adding a check means adding a
     /// method and a line, not another branch in a function nobody can hold.
     pub fn validate(&self) -> Result<()> {
+        self.validate_with(&|key| std::env::var(key).ok())
+    }
+
+    /// [`validate`](Self::validate) against an environment the caller
+    /// supplies, for the one check that reads one
+    /// (`BATLEHUB_UNSAFE_NO_SANDBOX`): a tool validating for another process
+    /// must answer with that process's environment, not its own (RFC 0037 §4.2).
+    pub fn validate_with(&self, env: &dyn Fn(&str) -> Option<String>) -> Result<()> {
         self.validate_config_version()?;
         // Reject malformed proxy-trust entries up front: a typo here silently
         // widens or narrows which peers may set `X-Forwarded-*`, and the
@@ -2296,7 +2304,7 @@ impl AppConfig {
         self.validate_page_sizes()?;
         self.validate_search()?;
         self.validate_registries()?;
-        self.validate_security_globals()?;
+        self.validate_security_globals(env)?;
         self.validate_upstream_audit()?;
         self.validate_release_imports()?;
         if let Some(audit) = &self.audit {
@@ -3017,7 +3025,7 @@ impl AppConfig {
 
     /// What a registry with `[registries.security]` requires of the rest of
     /// the config: signed inbound webhooks, and a real sandbox.
-    fn validate_security_prerequisites(&self) -> Result<()> {
+    fn validate_security_prerequisites(&self, env: &dyn Fn(&str) -> Option<String>) -> Result<()> {
         if !self.registries.iter().any(|r| r.security.is_some()) {
             return Ok(());
         }
@@ -3032,7 +3040,7 @@ impl AppConfig {
             }
         }
         if self.worker.sandbox.runtime == "none"
-            && std::env::var("BATLEHUB_UNSAFE_NO_SANDBOX").as_deref() != Ok("1")
+            && env("BATLEHUB_UNSAFE_NO_SANDBOX").as_deref() != Some("1")
         {
             bail!(
                 "[worker.sandbox] runtime = \"none\" is refused outside tests unless \
@@ -3044,7 +3052,7 @@ impl AppConfig {
 
     /// `[scanners]`, `[server].roles`, `[worker]` and the webhook secret
     /// (RFC 0018 §4.3): the rows that are about the whole config.
-    fn validate_security_globals(&self) -> Result<()> {
+    fn validate_security_globals(&self, env: &dyn Fn(&str) -> Option<String>) -> Result<()> {
         self.validate_scanners()?;
         if self.server.roles.is_empty() {
             bail!(
@@ -3070,7 +3078,7 @@ impl AppConfig {
                 bail!("[worker] registries names '{name}', which is not a configured registry");
             }
         }
-        self.validate_security_prerequisites()
+        self.validate_security_prerequisites(env)
     }
 
     /// RFC 0018 §4.3's warnings.
@@ -4348,8 +4356,13 @@ impl AppConfig {
     /// | `PROXY_CACHE__OTEL__ENDPOINT`         | `otel.endpoint`              |
     /// | `PROXY_CACHE__OTEL__SERVICE_NAME`     | `otel.service_name`          |
     pub fn apply_env_overrides(&mut self) {
-        let env = |key: &str| std::env::var(key).ok();
+        self.apply_env_overrides_from(&|key| std::env::var(key).ok());
+    }
 
+    /// [`apply_env_overrides`](Self::apply_env_overrides) against an
+    /// environment the caller supplies — the target process's, for a tool that
+    /// validates a configuration on its behalf (RFC 0037 §6.3).
+    pub fn apply_env_overrides_from(&mut self, env: &dyn Fn(&str) -> Option<String>) {
         fn parse_env_or_warn<T: std::str::FromStr>(key: &str, v: &str) -> Option<T> {
             match v.parse() {
                 Ok(parsed) => Some(parsed),
@@ -4382,7 +4395,7 @@ impl AppConfig {
         if let Some(v) = env("PROXY_CACHE__SERVER__HOST") {
             self.server.host = v;
         }
-        set_parsed(&env, "PROXY_CACHE__SERVER__PORT", &mut self.server.port);
+        set_parsed(env, "PROXY_CACHE__SERVER__PORT", &mut self.server.port);
         if let Some(v) = env("PROXY_CACHE__SERVER__STATIC_DIR") {
             self.server.static_dir = Some(v);
         }
@@ -4390,24 +4403,24 @@ impl AppConfig {
             self.database.url = v;
         }
         set_parsed(
-            &env,
+            env,
             "PROXY_CACHE__DATABASE__MAX_CONNECTIONS",
             &mut self.database.max_connections,
         );
         set_parsed(
-            &env,
+            env,
             "PROXY_CACHE__DATABASE__MIN_CONNECTIONS",
             &mut self.database.min_connections,
         );
         set_parsed(
-            &env,
+            env,
             "PROXY_CACHE__DATABASE__ACQUIRE_TIMEOUT_SECS",
             &mut self.database.acquire_timeout_secs,
         );
 
-        apply_storage_env_overrides(&mut self.storage, &env);
-        apply_otel_env_overrides(&mut self.otel, &env);
-        apply_proxy_env_overrides(&mut self.proxy, &env);
+        apply_storage_env_overrides(&mut self.storage, env);
+        apply_otel_env_overrides(&mut self.otel, env);
+        apply_proxy_env_overrides(&mut self.proxy, env);
     }
 }
 

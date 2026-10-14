@@ -733,17 +733,10 @@ Pending reloads expire after **10 minutes** if not applied or discarded.
 
 ### What can be hot-reloaded
 
-| Component | Hot-reloadable |
-|-----------|---------------|
-| Registry list (add / remove / update) | ✅ |
-| Per-registry RBAC (`anonymous`, `user`, `admin`, groups) | ✅ |
-| Per-registry rules (age gate, deny latest) | ✅ |
-| Per-registry versioning / signing / beta-channel | ✅ |
-| Artifact size limit | ✅ |
-| Server host / port | ❌ requires restart |
-| Database URL | ❌ requires restart |
-| Auth providers | ❌ requires restart |
-| Storage backends | ❌ requires restart |
+Which keys a reload applies everywhere, which only to requests, and which wait
+for a restart is one table, generated from the code:
+[Hot reload](/guide/hot-reload).
+Every diff names the keys of each kind it changes.
 
 ### Config warnings {#config-warnings}
 

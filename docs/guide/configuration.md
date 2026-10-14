@@ -3094,6 +3094,18 @@ Write `${VAR_NAME}` anywhere inside a TOML **string value**. BatleHub replaces e
 
 > If a referenced variable is not set, BatleHub exits immediately with a clear error message naming the missing variable. There is no silent fallback or empty-string default — this is intentional to prevent misconfigured deployments from starting.
 
+**Keep placeholders in one-line string values.** The expansion is textual, so
+the server also accepts `port = ${PORT}`, a `${VAR}` in a key, inside a
+`"""…"""` or `'''…'''` string, or as the `name` or `type` of any `[[…]]`
+entry — `[[registries]]`, `[[auth]]`.
+The reload diff cannot: it compares configurations with the placeholders still
+in them (`batlehub_config::merge_layers`), and refuses each of those shapes, so
+such a configuration reloads as before but every diff reports
+`restart_required: ["*"]` ([Hot reload](/guide/hot-reload#what-a-reload-reports)).
+The same holds for a variable name outside `[A-Za-z_][A-Za-z0-9_]*`. For a
+number, use the matching [named override](#env-named) instead —
+`PROXY_CACHE__SERVER__PORT`.
+
 **OIDC client secret:**
 
 ```toml

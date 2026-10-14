@@ -371,11 +371,24 @@ pub struct ReloadDiff {
     pub changed_registries: Vec<ChangedRegistryEntry>,
     pub access_config_changed: bool,
     pub limits_changed: bool,
+    /// RFC 0037 §6.5. `serde(default)` so an older server still parses.
+    #[serde(default)]
+    pub applied: Vec<String>,
+    #[serde(default)]
+    pub partially_applied: Vec<String>,
+    #[serde(default)]
+    pub restart_required: Vec<String>,
+    #[serde(default)]
+    pub restart_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReloadResponse {
     pub diff: ReloadDiff,
+    /// Whether `from-content` left a reload staged for approval. Absent from
+    /// `validate`, which never stages, and from an older server.
+    #[serde(default)]
+    pub pending_created: bool,
 }
 
 // ── Access check ──────────────────────────────────────────────────────────────

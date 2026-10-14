@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: 1d0d988b41c2c529
+sourceHash: b7b590a0fbbab0e5
 ---
 
 # Référence de configuration
@@ -3868,6 +3868,18 @@ client OIDC, tokens d'authentification amont, mots de passe.
 > avec un message d'erreur clair qui la nomme. Il n'y a ni repli silencieux ni
 > défaut à la chaîne vide — c'est délibéré, pour empêcher un déploiement mal
 > configuré de démarrer.
+
+**Gardez les marqueurs dans des valeurs chaîne sur une ligne.** L'expansion est
+textuelle : le serveur accepte donc aussi `port = ${PORT}`, un `${VAR}` dans une
+clé, dans une chaîne `"""…"""` ou `'''…'''`, ou comme `name` ou `type`
+d'une entrée `[[…]]` — `[[registries]]`, `[[auth]]`. Le diff de rechargement, lui, ne le peut pas : il compare les
+configurations avec leurs marqueurs (`batlehub_config::merge_layers`) et refuse
+chacune de ces formes ; une telle configuration se recharge comme avant, mais
+chaque diff rapporte `restart_required: ["*"]`
+([Rechargement à chaud](/fr/guide/hot-reload#ce-que-rapporte-un-rechargement)).
+Il en va de même d'un nom de variable hors de `[A-Za-z_][A-Za-z0-9_]*`. Pour un
+nombre, utilisez plutôt la [surcharge nommée](#env-named) correspondante —
+`PROXY_CACHE__SERVER__PORT`.
 
 **Le secret client OIDC :**
 

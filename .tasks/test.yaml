@@ -290,6 +290,11 @@ tasks:
     cmds:
       - bash tests/heavy/npm.sh
 
+  test:reload-heavy:
+    desc: "Heavy hot reload (RFC 0037 §6.6): a restart owed is reported, a partial key reaches requests and not warming, a hot key applies (needs DATABASE_URL + npm; no network)"
+    cmds:
+      - bash tests/heavy/reload.sh
+
   test:db-calls-heavy:
     desc: "Heavy DB-call budget: statements per request on the critical paths (artifact reads, publish, auth, explore) against tests/heavy/db_calls.budget.json (needs DATABASE_URL + uv; no network). `-- --update` rewrites the budget"
     cmds:

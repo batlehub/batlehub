@@ -308,6 +308,7 @@ impl TestServer {
             discovery: Default::default(),
             config_path: "config.toml".to_owned(),
             config_overlays: Vec::new(),
+            startup_layers: Vec::new(),
             config_change_repo: None,
             hot_reload_enabled: false,
             builder: reload_builder,

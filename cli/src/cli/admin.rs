@@ -1157,6 +1157,7 @@ async fn handle_config_admin(
                 println!("{}", serde_json::to_string_pretty(&resp)?);
             } else {
                 println!("{file}: valid");
+                print_reload_lists(&resp.diff);
             }
         }
         ConfigAdminCommand::FromFile { file } => {
@@ -1167,11 +1168,41 @@ async fn handle_config_admin(
             if json {
                 println!("{}", serde_json::to_string_pretty(&resp)?);
             } else {
-                println!("Config applied from {file}");
+                // Staged, not applied: the server waits for an approval this
+                // command does not give, and drops the reload after 10 minutes.
+                if resp.pending_created {
+                    println!(
+                        "Config staged from {file}: apply it within 10 minutes from the \
+                         console's config reload page or POST /api/v1/admin/config/pending/apply"
+                    );
+                } else {
+                    println!("{file}: unchanged since the last load, nothing staged");
+                }
+                print_reload_lists(&resp.diff);
             }
         }
     }
     Ok(())
+}
+
+/// What a reload applies once it is applied, and what it leaves for a
+/// restart (RFC 0037 §6.5). Worded for a dry run and a staged reload alike.
+fn print_reload_lists(diff: &crate::api::admin::ReloadDiff) {
+    for (label, paths) in [
+        ("takes effect", &diff.applied),
+        (
+            "takes effect for requests; background jobs keep the old value until a restart",
+            &diff.partially_applied,
+        ),
+        ("needs a restart", &diff.restart_required),
+    ] {
+        if !paths.is_empty() {
+            println!("{label}: {}", paths.join(", "));
+        }
+    }
+    if let Some(reason) = &diff.restart_reason {
+        println!("  ({reason})");
+    }
 }
 
 fn print_config_changes_table(changes: &[crate::api::admin::ConfigChangeEntry]) {

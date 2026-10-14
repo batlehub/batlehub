@@ -939,12 +939,12 @@ impl SettledTextConfig {
     }
 
     /// Refuse a candidate config whose `[search] text_config` this Postgres has
-    /// never heard of; warn when it names a real configuration that is not the
-    /// one in force.
+    /// never heard of.
     ///
-    /// A warning rather than a refusal for the second case: the change is
-    /// legitimate, it simply cannot take effect without the rebuild a restart
-    /// does, and refusing would leave an operator who set it before enabling
+    /// A real configuration that is not the one in force goes through: the
+    /// change is legitimate and needs the rebuild a restart does, and the
+    /// builder reports it as `text_config_owed`, which the reload diff lists
+    /// under `restart_required` (RFC 0037 §6.5). Refusing it would leave an operator who set it before enabling
     /// search unable to reload *anything* until they restarted.
     fn check(&self, search: &batlehub_config::schema::SearchConfig) -> anyhow::Result<()> {
         if !self.known.contains(&search.text_config) {
@@ -956,15 +956,6 @@ impl SettledTextConfig {
                  only fail on the next restart",
                 search.text_config,
                 known.join(", ")
-            );
-        }
-        if search.text_config != self.in_force {
-            tracing::warn!(
-                configured = %search.text_config,
-                in_force = %self.in_force,
-                "search: [search] text_config changed, and changing it rebuilds the README \
-                 full-text column — queries keep using the configuration the column was built \
-                 with until this server is restarted"
             );
         }
         Ok(())
@@ -1085,6 +1076,7 @@ pub(super) fn make_hot_builder(
             vuln_db_map: vuln_db,
             sumdb_map: sumdb,
             registry_host_map: RegistryHostMap::from_app_config(cfg),
+            text_config_owed: cfg.search.text_config != text_config.in_force(),
         })
     })
 }
@@ -1495,5 +1487,219 @@ mod tests {
         assert!(access
             .explore_accessible_registries_for(&outsider)
             .is_empty());
+    }
+
+    /// RFC 0037 §10: every *hot* and *partial* row of `RELOAD_KEYS` is a
+    /// claim that the reload builder reads the key. Each case builds the
+    /// bundle twice with the real builder and observes the difference, and a
+    /// row with neither a case here nor a named reader elsewhere fails — a row
+    /// nobody checked is how the table goes wrong.
+    #[test]
+    fn every_hot_and_partial_row_is_read_by_the_reload_builder() {
+        use batlehub_adapters::in_memory::{
+            InMemoryPackageRepository, InMemoryScanQueue, InMemoryVerdictRepository,
+            InMemoryVulnerabilityRepository, InMemoryWorkerRegistry, NoopSbomRepository,
+        };
+        use batlehub_config::reload_keys::{classify, Tier, RELOAD_KEYS};
+        use batlehub_web::services::BuiltHotState;
+
+        type Observe = fn(&BuiltHotState) -> String;
+        const BASE: &str = r#"
+[server]
+host = "127.0.0.1"
+port = 8080
+trusted_proxies = []
+[database]
+type = "postgresql"
+url = "postgresql://u:p@localhost/db"
+[storage]
+type = "filesystem"
+path = "./tmp"
+[scanners.osv]
+type = "osv"
+[[registries]]
+type = "npm"
+name = "npm"
+upstreams = ["https://one.example"]
+[registries.security]
+scanners = ["osv"]
+"#;
+        // (row, text appended before, text appended after, what differs)
+        let cases: &[(&str, &str, &str, Observe)] = &[
+            (
+                "server.signed_urls",
+                "",
+                "[server.signed_urls]\nsecret = \"0123456789abcdef0123456789abcdef\"\n",
+                |b| b.hot.signed_url.is_some().to_string(),
+            ),
+            (
+                "grants",
+                "",
+                "[grants]\n\"role:user\" = [\"config:read\"]\n",
+                |b| format!("{:?}", b.hot.instance),
+            ),
+            (
+                "limits.versions_per_page",
+                "",
+                "[limits]\nversions_per_page = 7\n",
+                |b| b.hot.versions_per_page.to_string(),
+            ),
+            (
+                "limits.packages_per_page",
+                "",
+                "[limits]\npackages_per_page = 7\n",
+                |b| b.hot.packages_per_page.to_string(),
+            ),
+            (
+                "limits.max_artifact_size_bytes",
+                "",
+                "[limits]\nmax_artifact_size_bytes = 7\n",
+                |b| format!("{:?}", b.hot.max_artifact_size_bytes),
+            ),
+            (
+                "subdomain_routing",
+                "",
+                "[subdomain_routing]\nenabled = true\nbase_domain = \"pkg.example\"\n",
+                |b| format!("{:?}", b.registry_host_map.public_url_for("npm")),
+            ),
+            (
+                "search.readmes",
+                "",
+                "[search]\nreadmes = true\n",
+                |b| b.search_readmes.to_string(),
+            ),
+            (
+                "scanners.*.escalation",
+                "",
+                "[scanners.osv.escalation]\nkinds = [\"vulnerability\"]\ncount = 2\nfrom = \"low\"\nto = \"high\"\n",
+                |b| format!("{:?}", b.hot.security["npm"].escalation),
+            ),
+            (
+                "air_gap",
+                "",
+                "[air_gap]\nenabled = true\nbundle_trusted_keys = [\"0000000000000000000000000000000000000000000000000000000000000000\"]\n",
+                |b| format!("{:?}", b.hot.air_gap),
+            ),
+            (
+                "registries[*]",
+                "",
+                "", // the upstream is swapped in BASE itself, below
+                |b| format!("{:?}", b.upstream_map.upstream_for("npm")),
+            ),
+            (
+                "registries[*].rbac",
+                "",
+                "[registries.rbac]\nanonymous = []\nuser = []\nadmin = [\"*\"]\n",
+                |b| format!("{:?}", b.hot.grants["npm"]),
+            ),
+            (
+                "registries[*].grants",
+                "",
+                "[registries.grants]\n\"user:alice\" = [\"source:read\"]\n",
+                |b| format!("{:?}", b.hot.grants["npm"]),
+            ),
+            (
+                "registries[*].rules",
+                "",
+                "[[registries.rules]]\nkind = \"deny_latest\"\n",
+                |b| b.hot.policies["npm"].rules.len().to_string(),
+            ),
+            (
+                "registries[*].hosts",
+                "",
+                "+hosts = [\"npm.pkg.example\"]\n",
+                |b| format!("{:?}", b.registry_host_map.registry_for("npm.pkg.example")),
+            ),
+            (
+                "registries[*].path_routing",
+                "+hosts = [\"npm.pkg.example\"]\n",
+                "+hosts = [\"npm.pkg.example\"]\npath_routing = false\n",
+                |b| b.registry_host_map.is_host_only("npm").to_string(),
+            ),
+            (
+                "registries[*].cache.serve_stale",
+                "",
+                "[registries.cache]\nserve_stale = false\n",
+                |b| b.hot.policies["npm"].serve_stale_metadata.to_string(),
+            ),
+            (
+                "registries[*].cache.artifact_ttl_secs",
+                "",
+                "[registries.cache]\nartifact_ttl_secs = 7\n",
+                |b| format!("{:?}", b.hot.policies["npm"].artifact_ttl),
+            ),
+            (
+                "registries[*].cache.metadata_ttl_secs",
+                "",
+                "[registries.cache]\nmetadata_ttl_secs = 7\n",
+                |b| format!("{:?}", b.hot.policies["npm"].metadata_ttl),
+            ),
+        ];
+        // Read by `build_pending`, not the builder, and observed swapped by
+        // `apply_success_swaps_hot_config` in `batlehub-web`.
+        let elsewhere = ["server.trusted_proxies", "ip_blocking.trusted_proxies"];
+        // ponytail: read by the builder into opaque values — the clients'
+        // proxy settings and the internal scanners — so no field shows them;
+        // the heavy suite (RFC 0037 §6.6) is their observation.
+        let opaque = ["proxy"];
+
+        let builder = make_hot_builder(
+            InMemoryBetaChannelStore::new(),
+            InMemoryPackageRepository::new(),
+            Arc::new(InMemoryVulnerabilityRepository::new()),
+            Arc::new(NoopSbomRepository),
+            None,
+            None,
+            None,
+            ForgeStores::default(),
+            SecurityStores {
+                verdicts: Some(InMemoryVerdictRepository::new()),
+                queue: Some(InMemoryScanQueue::new()),
+                workers: Some(InMemoryWorkerRegistry::new()),
+                ..Default::default()
+            },
+            AirGapStores::default(),
+            settled("english", &["english"]),
+        );
+        let build = |toml: &str| {
+            let cfg =
+                batlehub_config::load_from_str(toml).unwrap_or_else(|e| panic!("{e:#}\n{toml}"));
+            builder(&cfg).unwrap_or_else(|e| panic!("{e:#}\n{toml}"))
+        };
+
+        for (row, tier, _) in RELOAD_KEYS {
+            if *tier == Tier::Restart || elsewhere.contains(row) || opaque.contains(row) {
+                continue;
+            }
+            let (_, before, after, observe) = cases
+                .iter()
+                .find(|c| c.0 == *row)
+                .unwrap_or_else(|| panic!("`{row}` is {tier:?} and nothing here observes it"));
+            // A leading `+` is a key of the registry itself, spliced into
+            // its table rather than appended after the sub-tables.
+            let with = |extra: &str| match extra.strip_prefix('+') {
+                Some(key) => BASE.replace("name = \"npm\"\n", &format!("name = \"npm\"\n{key}")),
+                None => format!("{BASE}{extra}"),
+            };
+            let before = with(before);
+            let mut after = with(after);
+            if *row == "registries[*]" {
+                after = after.replace("one.example", "two.example");
+            }
+            let verdict = classify(&before, &after).unwrap();
+            let listed = match tier {
+                Tier::Hot => &verdict.hot,
+                _ => &verdict.partial,
+            };
+            assert!(
+                !listed.is_empty() && verdict.restart.is_empty(),
+                "{row}: {verdict:?}"
+            );
+            assert_ne!(
+                observe(&build(&before)),
+                observe(&build(&after)),
+                "`{row}` changed and the reload builder did not see it"
+            );
+        }
     }
 }

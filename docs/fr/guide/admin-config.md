@@ -6,7 +6,7 @@
 # un plafond, une phrase que quelqu'un a dû écrire (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/admin-config.md
-sourceHash: b5186be74a5d8ade
+sourceHash: de192053b412ad03
 ---
 
 # Configuration du serveur
@@ -804,17 +804,11 @@ appliqué ni abandonné.
 
 ### Ce qui se recharge à chaud
 
-| Composant | Rechargeable à chaud |
-|-----------|---------------|
-| Liste des registres (ajout, retrait, modification) | ✅ |
-| RBAC par registre (`anonymous`, `user`, `admin`, groupes) | ✅ |
-| Règles par registre (garde-fou d'âge, refus de `latest`) | ✅ |
-| Versionnage, signature et canal bêta par registre | ✅ |
-| Limite de taille des artefacts | ✅ |
-| Hôte et port du serveur | ❌ exige un redémarrage |
-| URL de la base | ❌ exige un redémarrage |
-| Fournisseurs d'authentification | ❌ exige un redémarrage |
-| Backends de stockage | ❌ exige un redémarrage |
+Les clés qu'un rechargement applique partout, celles qu'il n'applique qu'aux
+requêtes et celles qui attendent un redémarrage tiennent dans une seule table,
+générée depuis le code :
+[Rechargement à chaud](/fr/guide/hot-reload). Chaque diff nomme les clés de
+chaque sorte qu'il modifie.
 
 ### Les avertissements de configuration {#config-warnings}
 

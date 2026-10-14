@@ -1,28 +1,98 @@
 ---
 sourcePath: guide/hot-reload.md
-sourceHash: 932303548bcac9b9
+sourceHash: 9e8ff267c2df7cfd
 ---
 
 # Rechargement à chaud et configuration dynamique
 
 BatleHub sait recharger sa configuration à l'exécution, sans redémarrer le
-processus. Les composants suivants se remplacent à chaud :
+processus — mais pas toute. Chaque clé relève de l'un de trois niveaux :
 
-- la liste des registres (ajout, retrait, modification d'un registre) ;
-- le RBAC par registre (`anonymous`, `user`, `admin`, accès par groupe) ;
-- les règles de politique par registre (garde-fou d'âge, refus de `latest`) ;
-- la configuration de versionnage, de signature et de canal bêta par registre ;
-- la limite de taille des artefacts ;
-- le routage par hôte (`hosts`, `path_routing`, `[subdomain_routing]`) et la
-  politique `trusted_proxies` qui le gouverne — les deux basculent ensemble, de
-  sorte qu'un rechargement qui active le routage par hôte ne tourne jamais sous
-  l'ancienne politique de confiance.
+- **hot** — tous ses lecteurs voient la nouvelle valeur dès que le
+  rechargement est appliqué ;
+- **partial** — toutes les requêtes la voient, mais un composant construit une
+  fois au démarrage (préchauffage, imports de versions, worker d'analyse) garde
+  l'ancienne valeur jusqu'au redémarrage. Le cas qui compte est la rotation d'un
+  identifiant amont : les installations utilisent aussitôt le nouveau, le
+  préchauffage continue avec l'ancien ;
+- **restart** — rien ne la relit avant un redémarrage.
 
-Les composants suivants **exigent un redémarrage du processus** :
-- l'hôte et le port du serveur ;
-- l'URL de la base ou la taille du pool de connexions ;
-- les fournisseurs d'authentification (`[[auth]]`) ;
-- les backends de stockage.
+Une clé qu'aucune ligne ci-dessous ne nomme relève de **restart** : une section
+ajoutée plus tard à la configuration exige un redémarrage tant que personne n'a
+montré qui la relit, car un redémarrage inutile coûte quelques secondes, et un
+rechargement qui ne fait rien en silence coûte un incident. La ligne la plus
+précise l'emporte : `registries[npm].cache.metadata_ttl_secs` relève de
+*partial*, `registries[npm].cache.idle_days` de *restart*.
+
+| Clé | Niveau | Lue par |
+| --- | --- | --- |
+| `grants` | hot | les droits de niveau instance |
+| `ip_blocking.trusted_proxies` | hot | la politique de confiance des proxys, comme repli déprécié de `server.trusted_proxies` |
+| `limits.packages_per_page` | hot | la pagination des listes |
+| `limits.versions_per_page` | hot | la pagination des listes |
+| `registries[*].cache.serve_stale` | hot | la politique de métadonnées du registre |
+| `registries[*].grants` | hot | la hiérarchie de droits du registre |
+| `registries[*].hosts` | hot | la table de routage hôte → registre |
+| `registries[*].path_routing` | hot | la table de routage hôte → registre |
+| `registries[*].rbac` | hot | la hiérarchie de droits du registre |
+| `registries[*].rules` | hot | la chaîne de règles du registre |
+| `scanners.*.escalation` | hot | la politique de sécurité de chaque registre |
+| `search.readmes` | hot | l'interrupteur de recherche dans les README |
+| `server.signed_urls` | hot | le signataire des URL de téléchargement |
+| `server.trusted_proxies` | hot | la politique de confiance des proxys, basculée avec la table de routage par hôte |
+| `subdomain_routing` | hot | la table de routage hôte → registre |
+| `air_gap` | partial | l'enveloppe air-gap des clients de registre ; le préchauffage et les imports gardent les clients du démarrage |
+| `limits.max_artifact_size_bytes` | partial | le chemin des requêtes ; le worker d'analyse garde la limite du démarrage |
+| `proxy` | partial | les clients de registre et l'index cargo ; le récupérateur de README et le préchauffage gardent le proxy du démarrage |
+| `registries[*]` | partial | les clients, politiques et tables des registres ; le préchauffage et les imports gardent le client du démarrage |
+| `registries[*].cache.artifact_ttl_secs` | partial | la politique de téléchargement du registre ; l'éviction garde la durée du démarrage |
+| `registries[*].cache.metadata_ttl_secs` | partial | la politique de métadonnées du registre ; le préchauffage garde le client du démarrage |
+| `registries[*].cache` | restart | les services de préchauffage et d'éviction, construits une fois |
+| `registries[*].quota` | restart | le service de quotas, construit une fois |
+| `registries[*].rate_limit` | restart | le limiteur de débit, construit une fois |
+| `registries[*].security.rescan` | restart | le planificateur de réanalyse, démarré au démarrage seulement si un registre en avait déjà un |
+| `registries[*].storage` | restart | le routeur de stockage, construit une fois |
+| tout le reste | restart | lu une fois au démarrage |
+
+Ajouter ou retirer un registre entier relève de *partial* : le chemin des
+requêtes le sert aussitôt ; le préchauffage, l'éviction, les limites de débit,
+les quotas et les libellés de métriques gardent la liste du démarrage ; les
+clés à redémarrage que porte un registre ajouté — `rate_limit`, `quota`,
+`storage`, `cache.idle_days` — figurent donc à côté de lui dans
+`restart_required`.
+
+Sur une instance démarrée avec `BATLEHUB_DISABLE_HOT_RELOAD=1`, tout changement
+exige un redémarrage, quoi qu'en dise la table.
+
+### Ce que rapporte un rechargement
+
+Chaque diff — le rechargement en attente, `POST /api/v1/admin/config/validate`,
+le rechargement immédiat — porte trois listes de chemins pointés, une entrée de
+tableau étant nommée par son `name` (ou son `type`) :
+`registries[npm].upstreams`.
+
+| Champ | Contient | Comparé à |
+| --- | --- | --- |
+| `applied` | les clés *hot* que ce candidat modifie | la configuration en vigueur |
+| `partially_applied` | les clés *partial* que ce candidat modifie | la configuration en vigueur |
+| `restart_required` | toute clé *restart* que le processus n'a pas | la configuration de **démarrage** |
+
+`restart_required` est comparé au démarrage à dessein : un changement de
+`database.url` appliqué il y a une heure reste listé à chaque rechargement
+suivant, jusqu'au redémarrage qui le rend vrai. Le surveillant de fichiers le
+journalise au niveau `WARN`, et la page de rechargement de la console affiche
+les trois listes.
+
+`restart_required` vaut `["*"]`, avec la raison dans `restart_reason`, quand la
+configuration place un `${VAR}` là où le diff ne peut pas le garder comme
+texte — hors d'une valeur chaîne sur une ligne, dans une clé, ou dans le `name`
+ou le `type` de n'importe quelle entrée `[[…]]` — `[[registries]]`, `[[auth]]`
+et les autres (voir
+[Substitution en ligne](/fr/guide/configuration#env-inline)). `restart_reason`
+nomme le côté qui n'a pas pu être comparé : la candidate, la configuration en
+vigueur ou celle du démarrage. Seule cette comparaison est inconnue, et inconnu
+signifie redémarrage ; les autres listes restent remplies, et le rechargement
+lui-même se déroule comme avant.
 
 ## 9.1 Le surveillant de fichiers
 

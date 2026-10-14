@@ -56,10 +56,20 @@ const pendingExpired = computed(() =>
   pendingReload.value?.expires_at ? new Date(pendingReload.value.expires_at) <= new Date() : false,
 );
 
-/** How many things the pending diff actually changes, for the dialog's count. */
+/**
+ * How many things the pending diff actually changes, for the dialog's count.
+ * RFC 0037's three lists name every changed key — a restart-only one
+ * included, which the older fields never saw — so they win when present;
+ * `restart_required` may also carry a key an earlier reload left owed.
+ */
 const pendingChangeCount = computed(() => {
   const d = pendingReload.value?.diff;
   if (!d) return 0;
+  const keys =
+    (d.applied?.length ?? 0) +
+    (d.partially_applied?.length ?? 0) +
+    (d.restart_required?.length ?? 0);
+  if (keys > 0) return keys;
   return (
     (d.added_registries?.length ?? 0) +
     (d.removed_registries?.length ?? 0) +
@@ -67,6 +77,23 @@ const pendingChangeCount = computed(() => {
     (d.access_config_changed ? 1 : 0) +
     (d.limits_changed ? 1 : 0)
   );
+});
+/** RFC 0037 §6.5's three lists, in the order an operator acts on them. */
+const reloadLists = computed(() => {
+  const d = pendingReload.value?.diff;
+  return [
+    { key: "adminConfigReload.reloadApplied", paths: d?.applied ?? [], restart: false },
+    {
+      key: "adminConfigReload.reloadPartiallyApplied",
+      paths: d?.partially_applied ?? [],
+      restart: false,
+    },
+    {
+      key: "adminConfigReload.reloadRestartRequired",
+      paths: d?.restart_required ?? [],
+      restart: true,
+    },
+  ];
 });
 const loadingApply = ref(false);
 const loadingDiscard = ref(false);
@@ -495,6 +522,32 @@ onUnmounted(() => {
               t("adminConfigReload.limitsChanged")
             }}</Badge>
           </div>
+          <!--
+            Which keys this reload actually applies (RFC 0037 §6.5). Before
+            these lists, a change to `database.url` staged, applied, and showed
+            an empty diff: the one change that does nothing until a restart was
+            the one the page could not show.
+          -->
+          <dl class="space-y-1 text-xs">
+            <template v-for="row in reloadLists" :key="row.key">
+              <div v-if="row.paths.length">
+                <dt :class="row.restart ? 'font-medium text-copper' : 'font-medium'">
+                  {{ t(row.key) }}
+                </dt>
+                <dd class="flex flex-wrap gap-1">
+                  <code
+                    v-for="p in row.paths"
+                    :key="p"
+                    class="font-mono bg-muted px-1 rounded-sm break-all"
+                    >{{ p }}</code
+                  >
+                  <span v-if="row.restart && pendingReload.diff.restart_reason">
+                    — {{ pendingReload.diff.restart_reason }}</span
+                  >
+                </dd>
+              </div>
+            </template>
+          </dl>
           <div class="flex gap-2">
             <Button
               size="sm"

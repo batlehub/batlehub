@@ -235,6 +235,23 @@ Short version:
   appear **before** `DELETE /quota/{reg}`)
 - [ ] Add `pub mod <feature>;` to `crates/web/src/handlers/back_office/mod.rs`
 
+### New config key or section
+
+A key no row of `RELOAD_KEYS` (`crates/config/src/reload_keys.rs`) matches is
+classified **restart**, and every reload diff will say so — the safe default,
+and the right one for anything read once at startup. Add a row only when the
+key has a reader on the reload path (`make_hot_builder` / `build_hot_bundle` in
+`server/src/hot_config.rs`, or `build_pending`), and say which: *hot* when every
+reader follows the reload, *partial* when a component built at startup keeps the
+old value (RFC 0037 §4.3).
+
+- [ ] The row, with its reader in the third column
+- [ ] A case for it in `every_hot_and_partial_row_is_read_by_the_reload_builder`
+  (`server/src/hot_config.rs`) — the test fails for a hot or partial row nothing
+  observes
+- [ ] `BLESS=1 cargo test -p batlehub-config docs_table` to regenerate the table
+  in `docs/guide/hot-reload.md`, then the French page by hand
+
 ---
 
 ## 7. Running tests

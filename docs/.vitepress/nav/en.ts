@@ -509,6 +509,10 @@ export const sidebar = {
           text: "0036 — Regulatory alignment",
           link: "/rfc/0036-regulatory-alignment",
         },
+        {
+          text: "0037 — Config validation for another process",
+          link: "/rfc/0037-config-validation-for-another-process",
+        },
       ],
     },
     // END rfc-sidebar

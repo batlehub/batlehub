@@ -46,13 +46,14 @@ impl ConfigReloadService {
     /// still produces a new config.
     ///
     /// With no overlays this is `load_from_str`, span-carrying error messages
-    /// included.
+    /// included. Returns the raw layers beside the config, for the RFC 0037
+    /// diff.
     async fn load_layers(
         &self,
         primary: &str,
-    ) -> Result<batlehub_config::AppConfig, anyhow::Error> {
+    ) -> Result<(batlehub_config::AppConfig, Vec<String>), anyhow::Error> {
         if self.config_overlays.is_empty() {
-            return load_from_str(primary);
+            return Ok((load_from_str(primary)?, vec![primary.to_owned()]));
         }
         let mut layers = Vec::with_capacity(self.config_overlays.len() + 1);
         layers.push(primary.to_owned());
@@ -64,7 +65,7 @@ impl ConfigReloadService {
                     .map_err(|e| anyhow::anyhow!("reading config overlay '{overlay}': {e}"))?,
             );
         }
-        load_layered_from_str(&layers)
+        Ok((load_layered_from_str(&layers)?, layers))
     }
 
     /// A fingerprint of every layer, for the byte-identical-rewrite dedup.
@@ -109,7 +110,7 @@ impl ConfigReloadService {
         }
         let label = source.actor_label();
         let result = match self.load_layers(&content).await {
-            Ok(new_config) => self.build_pending(new_config, source).await,
+            Ok((new_config, layers)) => self.build_pending(new_config, layers, source).await,
             Err(e) => Err(e),
         };
         self.record_rejection(&result, label).await;
@@ -138,10 +139,12 @@ impl ConfigReloadService {
         if !self.hot_reload_enabled {
             anyhow::bail!("hot reload is disabled (BATLEHUB_DISABLE_HOT_RELOAD=1)");
         }
-        let new_config = self.load_layers(content).await?;
+        let (new_config, layers) = self.load_layers(content).await?;
         let built = (self.builder)(&new_config)?;
         Ok(ReloadOutcome {
-            diff: self.compute_diff(&built.hot, &built.access).await,
+            diff: self
+                .compute_diff(&built.hot, &built.access, built.text_config_owed, &layers)
+                .await,
             warnings: new_config.warnings(),
             // A dry run by contract: this endpoint answers "would this config be
             // accepted", and never stages anything to apply.
@@ -175,15 +178,15 @@ impl ConfigReloadService {
             // pressing a button is never a spurious event and deserves to be told.
             return Ok(ReloadOutcome {
                 diff: ReloadDiff::default(),
-                warnings: self.load_layers(content).await?.warnings(),
+                warnings: self.load_layers(content).await?.0.warnings(),
                 pending_created: false,
             });
         }
         let label = source.actor_label();
         let loaded = match self.load_layers(content).await {
-            Ok(new_config) => {
+            Ok((new_config, layers)) => {
                 let warnings = new_config.warnings();
-                self.build_pending(new_config, source)
+                self.build_pending(new_config, layers, source)
                     .await
                     .map(|diff| (diff, warnings))
             }
@@ -226,10 +229,13 @@ impl ConfigReloadService {
     async fn build_pending(
         &self,
         new_config: batlehub_config::AppConfig,
+        layers: Vec<String>,
         source: ReloadSource,
     ) -> Result<ReloadDiff, anyhow::Error> {
         let built = (self.builder)(&new_config)?;
-        let diff = self.compute_diff(&built.hot, &built.access).await;
+        let diff = self
+            .compute_diff(&built.hot, &built.access, built.text_config_owed, &layers)
+            .await;
         let warnings = new_config.warnings();
         let now = Utc::now();
         let pending = PendingReload {
@@ -239,6 +245,7 @@ impl ConfigReloadService {
             source,
             diff: diff.clone(),
             content: None, // set by load_pending_from_content when originating from the editor
+            layers,
             new_hot: built.hot,
             new_access: built.access,
             new_search_readmes: built.search_readmes,
@@ -303,6 +310,13 @@ impl ConfigReloadService {
         {
             let mut hot = self.hot.write().await;
             *hot = pending.new_hot;
+            // What the next diff's `applied` and `partially_applied` start
+            // from, set under the same guard so `compute_diff` never pairs the
+            // new hot config with the old layers.
+            *self
+                .applied_layers
+                .lock()
+                .expect("applied_layers lock poisoned") = pending.layers.clone();
         }
         {
             let mut access = self.access.write().await;

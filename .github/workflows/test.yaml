@@ -21,6 +21,7 @@ on:
       - "fuzz/**"
       - "tests/heavy/**"
       - "docs/guide/admin-policies.md"
+      - "docs/guide/hot-reload.md"
       - "**/Cargo.toml"
       - "**/Cargo.lock"
       - ".github/workflows/test.yaml"
@@ -40,6 +41,7 @@ on:
       - "fuzz/**"
       - "tests/heavy/**"
       - "docs/guide/admin-policies.md"
+      - "docs/guide/hot-reload.md"
       - "**/Cargo.toml"
       - "**/Cargo.lock"
       - ".github/workflows/test.yaml"
@@ -301,6 +303,11 @@ jobs:
       # llvm-cov cannot instrument doctests on stable — run them uninstrumented.
       - name: Doc tests
         run: cargo test --workspace --doc
+      # `merge_layers` sorts keys itself so its output (and a consumer's hash
+      # of it) holds when a consumer's graph turns `toml::Table` into an
+      # insertion-ordered map (RFC 0037 §6.2). Nothing here enables it.
+      - name: Config tests with toml/preserve_order
+        run: cargo test -p batlehub-config --lib --features toml/preserve_order
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-unit
@@ -880,6 +887,10 @@ jobs:
           # from sqlx's own log against tests/heavy/db_calls.budget.json. No
           # client and no network — the npm upstream is a stdlib mock.
           - suite: db_calls
+          # RFC 0037 §6.6: hot reload against a running server — a restart
+          # owed, a partial key requests follow and warming does not, a hot
+          # key. npm through two taps in front of a stdlib mock; no network.
+          - suite: reload
           # RFC 0018 from the client side: npm against a `[registries.security]`
           # registry backed by npmjs.org and the real OSV, the worker embedded.
           # Needs Node (installed below), bubblewrap for the egress row —
@@ -959,8 +970,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
 
       # ── Per-ecosystem client setup ──────────────────────────────────────────
-      - name: Set up Node (npm / Open VSX / quarantine / upstream_audit / airgap)
-        if: matrix.suite == 'npm' || matrix.suite == 'openvsx' || matrix.suite == 'quarantine' || matrix.suite == 'upstream_audit' || matrix.suite == 'airgap' || matrix.suite == 'hybrid'
+      - name: Set up Node (npm / Open VSX / quarantine / upstream_audit / airgap / reload)
+        if: matrix.suite == 'npm' || matrix.suite == 'openvsx' || matrix.suite == 'quarantine' || matrix.suite == 'upstream_audit' || matrix.suite == 'airgap' || matrix.suite == 'hybrid' || matrix.suite == 'reload'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}

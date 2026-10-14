@@ -12,6 +12,80 @@ Nothing yet.
 
 ---
 
+## [1.6.0] - 2026-10-14
+
+A reload now says what it did. Every key of the configuration is *hot*,
+*partial* or *restart*, and the reload diff lists the keys a candidate changes
+in each — so a `database.url` change no longer stages, applies and reports
+nothing, and a rotated upstream credential says that warming still uses the old
+one. The library half lets a tool outside the server merge, validate and
+classify a BatleHub configuration against the environment of the process that
+will run it, not its own — RFC 0037, *Implemented*.
+
+### Added
+
+- **`applied`, `partially_applied` and `restart_required` on every reload
+  diff** (RFC 0037 §6.5) — the pending reload, `config/validate`,
+  `config/from-content` and the immediate reload. `restart_required` is
+  compared with the configuration the process *started* on, so a restart owed
+  by an earlier reload stays listed until the restart. The file watcher logs it
+  at `WARN`, the Config Reload page shows the three lists and counts them in
+  its Apply dialog, and `batlehub-cli admin config validate` and `from-file`
+  print them. `changed_registries`, empty
+  since it was added, now names each changed registry and its fields. The
+  tiers and who reads each key: `docs/guide/hot-reload.md`, generated from
+  `RELOAD_KEYS` and checked by `cargo test`.
+
+- **`batlehub_config::validate_layers(layers, env)`**, `merge_layers(layers)`
+  and `reload_keys::classify(before, after)`, for a tool that prepares a
+  configuration for another BatleHub process. `validate_layers` reads `${VAR}`
+  and the `PROXY_CACHE__*` overrides from the environment it is given and never
+  from its own; `merge_layers` merges the layers with the server's own rules
+  and keeps every `${VAR}` as written; `classify` sorts what changed between
+  two merged documents into the three tiers.
+
+- **`tests/heavy/reload.sh`** (`task test:reload-heavy`): a restart owed, a
+  partial key that a cold `npm install` follows and warming does not, and a hot
+  key, on a running server.
+
+### Changed
+
+- **A configuration whose `${VAR}` sits where the diff cannot keep it** —
+  outside a one-line string value, in a key, in the `name` or `type` of a
+  `[[…]]` entry — reloads exactly as before, and its diff reports
+  `restart_required: ["*"]` with the reason, naming the side that could not be
+  compared, in `restart_reason`. See `docs/guide/configuration.md` §5.1.
+
+- The `[search] text_config` "applies after a restart" warning is gone: the
+  diff lists `search.text_config` under `restart_required` instead, whenever it
+  differs from the configuration the README column was built with.
+
+- `batlehub-cli admin config from-file` says the config was *staged*, and how
+  to apply it, instead of *"Config applied"*: it only ever staged a pending
+  reload, which expires after 10 minutes.
+
+- The immediate reload (`POST /api/v1/admin/config/reload`) answers with the
+  diff of the reload it applied, not an empty one when the file watcher had
+  already staged the same bytes.
+
+- The server reads each `--config` file once at startup, so a FIFO or a
+  `<(…)` process substitution works as a config source.
+
+### Fixed
+
+- **The config file watcher switched itself off after the first reload.**
+  notify reports opening a file as an event, and the watcher counted it as a
+  change — the reload's own read of the config included. Each reload triggered
+  the next until the event limiter disabled automatic reload detection, logging
+  *"too many reload events in a short time"*. Opening and reading the file are
+  no longer changes; a write still is. Found by `tests/heavy/reload.sh`.
+
+- The file watcher no longer logs *"config file event produced no change,
+  nothing pending"* for a change that only a restart applies; it had staged a
+  pending reload all along.
+
+---
+
 ## [1.5.0] - 2026-10-13
 
 A new registry kind, an audit trail an auditor can rely on, and the database,
@@ -1522,7 +1596,8 @@ First stable release.
 
 ---
 
-[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.5.0...HEAD
+[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.6.0...HEAD
+[1.6.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.5.0...v1.6.0
 [1.5.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.4.0...v1.5.0
 [1.4.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.3.0...v1.4.0
 [1.3.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.2.0...v1.3.0

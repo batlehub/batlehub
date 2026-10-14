@@ -108,6 +108,7 @@ fn accepting_builder() -> HotConfigBuilder {
             vuln_db_map: batlehub_web::VulnDbMap::default(),
             sumdb_map: batlehub_web::SumDbMap::default(),
             registry_host_map: batlehub_web::RegistryHostMap::default(),
+            text_config_owed: false,
             search_readmes: false,
         })
     })
@@ -173,6 +174,11 @@ async fn build_reload_app(
         registry_host_map: batlehub_web::RegistryHostMap::default(),
         proxy_trust: batlehub_web::ProxyTrust::default(),
         discovery: Default::default(),
+        // Whatever the fixture wrote, as `main` reads it at startup.
+        startup_layers: std::iter::once(&opts.config_path)
+            .chain(&opts.config_overlays)
+            .filter_map(|p| std::fs::read_to_string(p).ok())
+            .collect(),
         config_path: opts.config_path,
         config_overlays: opts.config_overlays,
         config_change_repo: None,

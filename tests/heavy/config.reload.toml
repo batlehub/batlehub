@@ -1,0 +1,41 @@
+# Server configuration for the hot-reload heavy test (tests/heavy/reload.sh).
+#
+# The suite copies this file into its work directory and edits the copy while
+# the server watches it: the edits are the test. `${RELOAD_UPSTREAM_PORT}` is
+# what step 2 rewrites — the two upstream ports are two taps in front of one
+# mock, so the transcripts show which upstream a request reached.
+
+[server]
+host = "127.0.0.1"
+port = 8190
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-reload-storage"
+
+[search]
+readmes = false
+
+[[registries]]
+type = "npm"
+name = "npm-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["http://127.0.0.1:${RELOAD_UPSTREAM_PORT}/npm"]
+
+[registries.rbac]
+anonymous = ["releases:read", "source:read"]
+user = ["releases:read", "source:read"]
+admin = ["*"]
