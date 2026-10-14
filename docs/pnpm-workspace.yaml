@@ -29,10 +29,20 @@
 # The plugin calls only initialize, render and registerExternalDiagrams, all
 # still exported by 12; verified 2026-10-11 by rendering the flowchart and
 # sequence diagrams of rfc/0003 and rfc/0014 in Chrome with no error diagram.
+#
+# katex is forced onto 0.18 although mermaid 12 declares `katex: ^0.16.47`:
+# GHSA (low) — katex < 0.18.2 lets existing prototype pollution bypass its
+# `trust` restrictions, and there is no 0.16 backport. mermaid's whole use of it
+# is one lazy `katex.renderToString(c, {throwOnError, displayMode, output})`
+# for `$$…$$` labels, an API 0.18 keeps. Verified 2026-10-14 in Chrome: every
+# mermaid page of the built site renders with no error diagram, and a
+# flowchart with `$$x^2$$` labels renders KaTeX through the bundled 0.18.
+# Drop it once mermaid's own range reaches 0.18.
 overrides:
   vite: ^6.4.3
   postcss: ^8.5.25
   nanoid: ^3.3.17
+  katex: ^0.18.2
 
 # Install-time lifecycle scripts are denied by default (supply-chain hardening).
 # Packages are opted in here one by one, with a reason.
