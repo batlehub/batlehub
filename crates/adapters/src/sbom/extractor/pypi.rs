@@ -34,8 +34,12 @@ fn extract_pypi_wheel(data: &Bytes) -> Option<ExtractedManifest> {
         .collect();
     let index = anchor::sole(matches)?;
 
-    let Ok(mut file) = archive.by_index(index) else {
-        return None;
+    let mut file = match archive.by_index(index) {
+        Ok(file) => file,
+        Err(e) => {
+            tracing::warn!(error = %e, "sbom: failed to read pypi wheel manifest, treating as no dependencies");
+            return None;
+        }
     };
     let mut content = String::new();
     if file.read_to_string(&mut content).is_err() {

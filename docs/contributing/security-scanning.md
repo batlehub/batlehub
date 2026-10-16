@@ -33,6 +33,13 @@ The **daily** schedules are what turn this from a build-time snapshot into *futu
 CVE disclosed against a pinned dependency or a base-image layer **after** the last commit still trips
 CI the next morning, with nothing in the repo having changed.
 
+Dependabot waits seven days (`cooldown`) before it proposes a version bump. Security updates
+don't wait. One pin is invisible to it: the `rustfs/rustfs` test image. The `github-actions`
+ecosystem only reads `uses:`, and the `docker` ecosystem doesn't read workflow files. So the
+`services:` image in `breaking-point.yaml`, `sonar.yaml` and `test.yaml` (×2) and the `podman run`
+in `.tasks/test.yaml` and `.tasks/coverage.yaml` are bumped by hand, all six together
+(`grep -rn rustfs/rustfs .github .tasks`).
+
 ### postmortem (dependency supply chain)
 
 `cargo audit` and `pnpm audit` only know about *published advisories*. postmortem covers the other

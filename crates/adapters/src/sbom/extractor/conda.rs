@@ -70,6 +70,7 @@ fn from_conda_zip(data: &Bytes) -> Option<String> {
     // which is the number that matters.
     let mut compressed = Vec::new();
     zip.by_name(&member)
+        .inspect_err(|e| tracing::warn!(error = %e, member = %member, "sbom: failed to read conda info member, no README"))
         .ok()?
         .take(README_EXTRACT_CEILING as u64)
         .read_to_end(&mut compressed)

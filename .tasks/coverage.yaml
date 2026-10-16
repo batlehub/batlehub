@@ -35,7 +35,7 @@ tasks:
       - printf '[network]\ndefault_rootless_network_cmd = "pasta"\n' > {{.CONF_OVERRIDE}}
       - defer: podman rm -f {{.PG_CONTAINER}} {{.RUSTFS_CONTAINER}} {{.REDIS_CONTAINER}} 2>/dev/null || true
       - podman run -d --user postgres --name {{.PG_CONTAINER}} -p {{.PG_PORT}}:5432 -e POSTGRES_PASSWORD={{.PG_PASSWORD}} postgres:17-alpine
-      - podman run -d --name {{.RUSTFS_CONTAINER}} -p {{.RUSTFS_PORT}}:9000 -e RUSTFS_ROOT_USER=rustfsadmin -e RUSTFS_ROOT_PASSWORD=rustfsadmin rustfs/rustfs
+      - podman run -d --name {{.RUSTFS_CONTAINER}} -p {{.RUSTFS_PORT}}:9000 -e RUSTFS_ROOT_USER=rustfsadmin -e RUSTFS_ROOT_PASSWORD=rustfsadmin rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c
       - podman run -d --name {{.REDIS_CONTAINER}} -p {{.REDIS_PORT}}:6379 redis:7-alpine redis-server --save "" --appendonly no
       - until podman exec {{.PG_CONTAINER}} pg_isready -U postgres; do sleep 1; done
       - until curl -sf http://127.0.0.1:{{.RUSTFS_PORT}}/minio/health/live; do sleep 1; done

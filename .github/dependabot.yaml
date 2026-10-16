@@ -4,15 +4,23 @@ updates:
     directory: "/ui" # Location of package manifests
     schedule:
       interval: "daily"
+    cooldown:
+      default-days: 7
   - package-ecosystem: "npm" # See documentation for possible values
     directory: "/docs" # Location of package manifests
     schedule:
       interval: "daily"
+    cooldown:
+      default-days: 7
   - package-ecosystem: "cargo" # See documentation for possible values
     directory: "/" # Location of package manifests
     schedule:
       interval: "daily"
+    cooldown:
+      default-days: 7
   - package-ecosystem: "github-actions" # See documentation for possible values
     directory: "/" # Location of package manifests
     schedule:
       interval: "daily"
+    cooldown:
+      default-days: 7

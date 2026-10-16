@@ -174,7 +174,11 @@ form_urlencoded = "1"
 # CIDR prefix matching for `[server].trusted_proxies` (already in the tree via
 # the HTTP stack; declared here so config/web can depend on it directly).
 ipnet = "2"
-zip = "9"
+# Every default feature but `zstd`: 9.0.2+ moved it to zstd 0.14 while
+# actix-http still holds ^0.13, so leaving it on means building zstd-sys twice.
+# A zstd-method (93) entry is then unreadable, which the scanner reports as an
+# error and does not pass. Put `zstd` back once actix-http is on 0.14.
+zip = { version = "9.0.3", default-features = false, features = ["aes-crypto", "bzip2", "deflate64", "deflate", "lzma", "ppmd", "time", "xz"] }
 quick-xml = "0.42"
 # README rendering and sanitisation (RFC 0007 §7.1). `pulldown-cmark` is a
 # CommonMark pull parser with no HTML sanitisation of its own — it passes raw

@@ -19,6 +19,9 @@ runs:
   using: composite
   steps:
     - shell: bash
+      env:
+        PORT: ${{ inputs.port }}
+        TIMEOUT: ${{ inputs.timeout }}
       run: |
         set -euo pipefail
 
@@ -52,7 +55,7 @@ runs:
           --disable-sync --disable-extensions --disable-default-apps \
           --disable-client-side-phishing-detection --metrics-recording-only \
           --remote-debugging-address=127.0.0.1 \
-          --remote-debugging-port='${{ inputs.port }}' >/tmp/chrome.log 2>&1 &
+          --remote-debugging-port="$PORT" >/tmp/chrome.log 2>&1 &
         chrome_pid=$!
 
         report_and_die() {
@@ -62,7 +65,7 @@ runs:
           echo "--- DevToolsActivePort ---"
           cat "$profile/DevToolsActivePort" 2>/dev/null || echo "(absent — Chrome never published a port)"
           echo "--- what the HTTP endpoint says ---"
-          curl -sS -m 5 -i "http://127.0.0.1:${{ inputs.port }}/json/version" || true
+          curl -sS -m 5 -i "http://127.0.0.1:${PORT}/json/version" || true
           # Leave nothing listening. A self-hosted runner reuses the machine, and
           # a stale browser makes the *next* run's wait succeed against a dead
           # page — a green gate measuring nothing.
@@ -82,8 +85,8 @@ runs:
         # Not `DevToolsActivePort` either: `--headless=new` does not write it,
         # so keying on the file swapped one wrong answer for another.
         version=""
-        for _ in $(seq 1 '${{ inputs.timeout }}'); do
-          version="$(curl -sS -m 2 "http://127.0.0.1:${{ inputs.port }}/json/version" 2>/dev/null || true)"
+        for _ in $(seq 1 "$TIMEOUT"); do
+          version="$(curl -sS -m 2 "http://127.0.0.1:${PORT}/json/version" 2>/dev/null || true)"
           case "$version" in *webSocketDebuggerUrl*) break ;; esac
           version=""
           kill -0 "$chrome_pid" 2>/dev/null || report_and_die "Chrome exited during startup"

@@ -231,7 +231,7 @@ tasks:
     cmds:
       - printf '[network]\ndefault_rootless_network_cmd = "pasta"\n' > {{.CONF_OVERRIDE}}
       - defer: podman rm -f {{.RUSTFS_CONTAINER}} 2>/dev/null || true
-      - podman run -d --name {{.RUSTFS_CONTAINER}} -p {{.RUSTFS_PORT}}:9000 -e RUSTFS_ROOT_USER=rustfsadmin -e RUSTFS_ROOT_PASSWORD=rustfsadmin rustfs/rustfs
+      - podman run -d --name {{.RUSTFS_CONTAINER}} -p {{.RUSTFS_PORT}}:9000 -e RUSTFS_ROOT_USER=rustfsadmin -e RUSTFS_ROOT_PASSWORD=rustfsadmin rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c
       - until curl -sf http://127.0.0.1:{{.RUSTFS_PORT}}/minio/health/live; do sleep 1; done
       - cargo test -p batlehub-adapters --features storage-s3 --test s3_storage -- --nocapture
 

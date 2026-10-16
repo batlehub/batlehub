@@ -96,7 +96,8 @@ jobs:
       # this job nothing. The same image and the same two variables `test.yaml`
       # already runs its S3 suite against.
       rustfs:
-        image: rustfs/rustfs:latest
+        # Bumped by hand: see docs/contributing/security-scanning.md § Layers.
+        image: rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c
         env:
           RUSTFS_ROOT_USER: rustfsadmin
           RUSTFS_ROOT_PASSWORD: rustfsadmin
@@ -173,12 +174,17 @@ jobs:
             } >> "$GITHUB_ENV"
           fi
       - name: Escalate
+        env:
+          LABEL: ${{ matrix.label }}
+          BUDGET: ${{ inputs.budget || '1200' }}
+          STEP: ${{ inputs.step || '60' }}
+          START_RATE: ${{ inputs.start_rate || '100' }}
         run: |
           bash perf/scripts/breaking_point.sh \
-            --label "${{ matrix.label }}" \
-            --budget "${{ inputs.budget || '1200' }}" \
-            --step "${{ inputs.step || '60' }}" \
-            --start-rate "${{ inputs.start_rate || '100' }}"
+            --label "$LABEL" \
+            --budget "$BUDGET" \
+            --step "$STEP" \
+            --start-rate "$START_RATE"
       - name: Job summary
         if: always()
         run: |

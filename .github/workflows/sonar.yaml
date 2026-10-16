@@ -69,7 +69,8 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
       rustfs:
-        image: rustfs/rustfs:latest
+        # Bumped by hand: see docs/contributing/security-scanning.md § Layers.
+        image: rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c
         env:
           RUSTFS_ROOT_USER: rustfsadmin
           RUSTFS_ROOT_PASSWORD: rustfsadmin

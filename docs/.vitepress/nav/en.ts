@@ -312,6 +312,10 @@ export const sidebar = {
           text: "TD-0002 — The feat/devfile review leftovers",
           link: "/techdebt/0002-feat-devfile-review-leftovers",
         },
+        {
+          text: "TD-0003 — The container build time",
+          link: "/techdebt/0003-container-build-time",
+        },
       ],
     },
   ],

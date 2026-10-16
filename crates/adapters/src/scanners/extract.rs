@@ -442,6 +442,21 @@ mod tests {
         w.finish().unwrap().into_inner()
     }
 
+    /// The workspace builds `zip` without its `zstd` feature (see the root
+    /// `Cargo.toml`). An entry in a method this build can't decode has to be an
+    /// error, so it can't be read as an archive with nothing in it.
+    #[test]
+    fn an_entry_in_an_unsupported_method_is_an_error() {
+        let mut data = zipfile(&[("a.txt", b"hello")]);
+        // Set the method to 93 (zstd) in the local header and in the central one.
+        let central = data.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+        data[8..10].copy_from_slice(&93u16.to_le_bytes());
+        data[central + 10..central + 12].copy_from_slice(&93u16.to_le_bytes());
+        let dir = tempfile::tempdir().unwrap();
+        let err = extract_to(&data, dir.path(), &ExtractPolicy::default()).unwrap_err();
+        assert!(matches!(err, ExtractError::Malformed(_)), "{err}");
+    }
+
     #[test]
     fn formats_are_sniffed_from_bytes_not_names() {
         assert_eq!(sniff(&targz(&[("a", b"x")])), Some(ArchiveKind::TarGz));

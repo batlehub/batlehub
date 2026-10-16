@@ -27,8 +27,12 @@ pub(super) fn extract_maven_manifest(data: &Bytes) -> ExtractedManifest {
         return ExtractedManifest::default();
     };
 
-    let Ok(mut file) = archive.by_index(index) else {
-        return ExtractedManifest::default();
+    let mut file = match archive.by_index(index) {
+        Ok(file) => file,
+        Err(e) => {
+            tracing::warn!(error = %e, "sbom: failed to read maven manifest, treating as no dependencies");
+            return ExtractedManifest::default();
+        }
     };
     let mut content = String::new();
     if file.read_to_string(&mut content).is_err() {
