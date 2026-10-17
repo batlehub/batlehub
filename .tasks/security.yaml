@@ -152,7 +152,7 @@ tasks:
       # Run in isolation, not from ui/package.json: spectral-cli's tree carries
       # high advisories (braces via fast-glob) that would fail `task ui:audit`.
       # Build-time only, and it reads nothing but our own spec.
-      - npx --yes @stoplight/spectral-cli@6.17.0 lint ui/openapi.json --fail-severity=warn {{.CLI_ARGS}}
+      - npx --yes --ignore-scripts @stoplight/spectral-cli@6.17.0 lint ui/openapi.json --fail-severity=warn {{.CLI_ARGS}}
 
   security:
     desc: "Run the full local security gate — Rust advisories + bans, frontend audits, dependency supply chain, and Rust SBOM. Trivy/gitleaks/semgrep run in CI (see .github/workflows)"

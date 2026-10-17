@@ -30,4 +30,4 @@ jobs:
       # Same command as `task openapi:lint` (see the note there on why it is not
       # a ui/ devDependency). Fails on any warning: the spec is kept at zero.
       - name: Spectral lint
-        run: npx --yes @stoplight/spectral-cli@6.17.0 lint ui/openapi.json --fail-severity=warn
+        run: npx --yes --ignore-scripts @stoplight/spectral-cli@6.17.0 lint ui/openapi.json --fail-severity=warn
