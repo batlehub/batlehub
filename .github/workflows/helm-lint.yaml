@@ -165,7 +165,7 @@ jobs:
 
       - name: The writable config is absent by default
         run: |
-          if grep -qE 'seed-config|batlehub-config$|/etc/batlehub-seed' /tmp/default.yaml; then
+          if grep -qE 'seed-config|writable-config|/etc/batlehub-seed' /tmp/default.yaml; then
             echo "::error::writableConfig renders with writableConfig.enabled=false"
             exit 1
           fi
