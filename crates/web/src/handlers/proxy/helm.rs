@@ -381,8 +381,13 @@ pub async fn helm_publish(
 
     // Name and version come from inside the archive and are validated before
     // either reaches a storage key (§6.5).
-    let chart = batlehub_adapters::registry::helm::chart_yaml_from_archive(&upload.chart)
-        .map_err(AppError::from)?;
+    // Decompression is CPU work bounded at 100 MiB, so off the worker thread.
+    let archive = upload.chart.clone();
+    let chart =
+        web::block(move || batlehub_adapters::registry::helm::chart_yaml_from_archive(&archive))
+            .await
+            .map_err(|e| AppError::internal(format!("reading the chart archive: {e}")))?
+            .map_err(AppError::from)?;
     let name = chart
         .get("name")
         .and_then(Value::as_str)

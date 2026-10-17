@@ -196,10 +196,9 @@ async fn an_absolute_url_naming_a_private_host_is_refused() {
         .await;
     let c = client(&server);
     let pkg = PackageId::new("h", "x", "1.0.0").with_artifact("chart");
-    assert!(
-        body(&c, &pkg).await.is_err(),
-        "the SSRF guard must refuse a link-local host"
-    );
+    // The refusal itself, not any error: an unroutable host errors too.
+    let err = body(&c, &pkg).await.unwrap_err().to_string();
+    assert!(err.contains("SSRF guard"), "{err}");
 }
 
 fn chart_archive(files: &[(&str, &str)]) -> Vec<u8> {
@@ -239,6 +238,38 @@ fn chart_yaml_is_read_from_the_root_only() {
     let none = chart_archive(&[("mychart/values.yaml", "a: 1\n")]);
     assert!(chart_yaml_from_archive(&none).is_err());
     assert!(chart_yaml_from_archive(b"not gzip").is_err());
+}
+
+#[test]
+fn a_dot_slash_archive_is_read_as_helm_reads_it() {
+    let bytes = chart_archive(&[("./mychart/Chart.yaml", "name: mychart\nversion: 0.1.0\n")]);
+    assert_eq!(chart_yaml_from_archive(&bytes).unwrap()["name"], "mychart");
+}
+
+#[test]
+fn decompression_stops_at_helms_chart_size_limit() {
+    // 101 MiB of zeros ahead of Chart.yaml: a few hundred KB on the wire.
+    let mut tar = tar::Builder::new(Vec::new());
+    let mut header = tar::Header::new_gnu();
+    header.set_size(101 * 1024 * 1024);
+    header.set_mode(0o644);
+    header.set_cksum();
+    tar.append_data(
+        &mut header,
+        "mychart/big",
+        std::io::Read::take(std::io::repeat(0), 101 * 1024 * 1024),
+    )
+    .unwrap();
+    let body = "name: mychart\nversion: 0.1.0\n";
+    let mut header = tar::Header::new_gnu();
+    header.set_size(body.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    tar.append_data(&mut header, "mychart/Chart.yaml", body.as_bytes())
+        .unwrap();
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    std::io::Write::write_all(&mut gz, &tar.into_inner().unwrap()).unwrap();
+    assert!(chart_yaml_from_archive(&gz.finish().unwrap()).is_err());
 }
 
 #[test]

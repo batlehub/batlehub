@@ -1036,3 +1036,43 @@ would have outlived any amount of in-process testing:
   blocked-set snapshot, so case 4 met a `403` instead of Helm's not-found; the
   same pattern after the `DELETE` in case 7 could never have failed. Both now
   capture the document before matching.
+
+### Second review (2026-10-17)
+
+A full review of the branch before merge found three defects in the server,
+none of which any test above could see:
+
+- **The YAML crate's default budget refused the repositories this RFC is
+  for.** `serde-saphyr` caps a document at 250 000 nodes; the
+  prometheus-community index (6.5 MB) is 316 644 and Bitnami's about four
+  times that, so `helm repo add` against either answered `502`. jetstack and
+  ingress-nginx, the two the heavy suite drives, are small enough to pass. The
+  index is now parsed with node, event and scalar budgets scaled to its size —
+  it is already capped at 128 MB — and off the async runtime; the alias and
+  depth limits that stop an expansion bomb stay at their defaults. `Chart.yaml`
+  keeps the defaults.
+- **`is_oci` sliced a URL at byte 6**, which panics when that byte falls inside
+  a multi-byte character: one such `urls` entry upstream would have panicked
+  every index request until it changed.
+- **A publish decompressed the upload unbounded, on the worker thread.** The
+  per-document and entry-count limits did not cover `tar`'s own reads of a GNU
+  long-name or pax entry, which it buffers whole. The archive reader now stops
+  at helm's own `MaxDecompressedChartSize` (100 MiB) and runs in `web::block`.
+
+Smaller: an `oci://` or other non-http(s) upstream is now a load error rather
+than a server that 404s every request; `./chart/Chart.yaml` archives are read
+as helm reads them; `registry suggest` no longer folds `http://x` and
+`https://x` into one registry with two upstreams, which validation refuses.
+
+Not built from §6.5, and not listed among the deltas above: `POST api/prov`
+and the `HEAD` variants of `api/charts/{name}[/{version}]`. A `.prov` is
+published with its chart in the multipart upload, which is what `helm
+cm-push` sends; neither route is called by a client this RFC names.
+
+Known and left: a chart named `a-1.0.0` at `1.0.0` and a chart `a` at
+`1.0.0-1.0.0` share an archive file name, and `coordinate_of` resolves it to
+the second — helm's digest check refuses the swap. The closed-world phase pulls
+from jetstack, whose relative `urls` resolve to the tap with or without the
+rewrite, so only `helm.sh` phases 1 and 3 (absolute URLs) would see a rewrite
+regression; and neither real upstream publishes an `oci://` entry, so the
+`drop` default is proven in-process only.

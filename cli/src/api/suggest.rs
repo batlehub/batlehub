@@ -659,8 +659,25 @@ fn collect_from_helm_chart(root: &Path, acc: &mut Accumulator) {
         )
     });
     for (repo, pins) in repos {
+        // `http://x` and `https://x`, or `…/a-b` and `…/a/b`, fold to one name;
+        // a helm registry takes one upstream, so the second gets a suffix.
+        let base = helm_registry_name(&repo);
+        let name = (1..)
+            .map(|n| {
+                if n == 1 {
+                    base.clone()
+                } else {
+                    format!("{base}-{n}")
+                }
+            })
+            .find(|n| {
+                acc.by_name
+                    .get(n)
+                    .is_none_or(|r| r.upstreams == [repo.clone()])
+            })
+            .expect("an unused name");
         acc.add(SuggestedRegistry {
-            name: helm_registry_name(&repo),
+            name,
             registry_type: "helm".to_owned(),
             upstreams: vec![repo],
             path_allow: Vec::new(),
@@ -1964,6 +1981,23 @@ mod tests {
         for skipped in ["valkey (oci://", "common (@bitnami)", "local (file://"] {
             assert!(note.contains(skipped), "{skipped} missing from {note}");
         }
+    }
+
+    #[test]
+    fn two_repositories_folding_to_one_name_get_two_registries() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("Chart.yaml"),
+            "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n\
+             \x20 - name: a\n    version: 1.0.0\n    repository: https://charts.example.com\n\
+             \x20 - name: b\n    version: 1.0.0\n    repository: http://charts.example.com\n",
+        )
+        .unwrap();
+        let regs = suggest_registries(dir.path(), 0);
+        let helm: Vec<_> = regs.iter().filter(|r| r.registry_type == "helm").collect();
+        assert_eq!(helm.len(), 2, "{helm:?}");
+        assert!(helm.iter().all(|r| r.upstreams.len() == 1), "{helm:?}");
+        find(&regs, "helm-charts-example-com-2");
     }
 
     #[test]

@@ -3239,6 +3239,30 @@ fn an_sdkman_upstream_without_the_api_version_is_warned_not_refused() {
     );
 }
 
+// ── RFC 0029: helm registries ───────────────────────────────────────────────
+
+#[test]
+fn a_helm_upstream_that_is_not_http_is_refused() {
+    for upstream in [
+        "oci://registry-1.docker.io/bitnamicharts",
+        "file:///srv/charts",
+    ] {
+        let err = validation_error(
+            &format!(
+                r#"
+        [[registries]]
+        type = "helm"
+        name = "charts"
+        upstreams = ["{upstream}"]
+        "#
+            ),
+            "only an http(s) chart repository can be proxied",
+        );
+        assert!(err.contains("http(s) chart repository"), "{err}");
+        assert!(err.contains("and '"), "no stray line break: {err}");
+    }
+}
+
 // ── RFC 0035 §4.5: devfile registries ───────────────────────────────────────
 
 #[test]

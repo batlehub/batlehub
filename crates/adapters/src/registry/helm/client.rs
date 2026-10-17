@@ -128,7 +128,7 @@ impl HelmRegistryClient {
     }
 
     /// Upstream's index, parsed.
-    async fn fetch_index(&self) -> Result<Value, CoreError> {
+    async fn fetch_index(&self) -> Result<Arc<Value>, CoreError> {
         let mut resp = self.get(self.index_url()).await?;
         if resp
             .content_length()
@@ -149,10 +149,15 @@ impl HelmRegistryClient {
         }
         let text = String::from_utf8(body)
             .map_err(|_| CoreError::Registry("helm: index.yaml is not UTF-8".to_owned()))?;
-        let value = parse_index(&text)?;
+        // A large index (Bitnami's is 27 MB) takes seconds to parse; off the
+        // runtime so it does not stall every other request on this worker.
+        let value = tokio::task::spawn_blocking(move || parse_index(&text))
+            .await
+            .map_err(|e| CoreError::Registry(format!("helm: parsing index.yaml: {e}")))?
+            .map(Arc::new)?;
         *self.index.lock().expect("index lock") = Some(CachedIndex {
             fetched_at: Instant::now(),
-            value: Arc::new(value.clone()),
+            value: Arc::clone(&value),
         });
         Ok(value)
     }
@@ -164,7 +169,7 @@ impl HelmRegistryClient {
                 return Ok(Arc::clone(&cached.value));
             }
         }
-        self.fetch_index().await.map(Arc::new)
+        self.fetch_index().await
     }
 }
 
@@ -289,7 +294,9 @@ impl RegistryClient for HelmRegistryClient {
             )));
         }
         if package == INDEX_ADDRESS {
-            return Ok(VersionDocument::json(self.fetch_index().await?));
+            return Ok(VersionDocument::json(Arc::unwrap_or_clone(
+                self.fetch_index().await?,
+            )));
         }
         validate_chart_name(package)?;
         let index = self.index().await?;

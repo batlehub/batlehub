@@ -144,12 +144,28 @@ pub fn parse_yaml(text: &str) -> Result<Value, String> {
     serde_saphyr::from_str(text).map_err(|e| e.to_string())
 }
 
+/// `parse_yaml` with the node, event and scalar budgets scaled to the input.
+/// The crate's defaults (250 000 nodes) are sized for a config file: the
+/// prometheus-community index (6.5 MB) is 316 644 nodes and Bitnami's about
+/// four times that, so the defaults refuse the repositories RFC 0029 is for.
+/// The input is already capped by the caller's byte limit; the alias and depth
+/// limits that stop an expansion bomb stay at their defaults.
+fn parse_large_yaml(text: &str) -> Result<Value, String> {
+    let mut budget = serde_saphyr::Budget::default();
+    budget.max_nodes = budget.max_nodes.max(text.len() / 4);
+    budget.max_events = budget.max_events.max(text.len() / 4);
+    budget.max_total_scalar_bytes = budget.max_total_scalar_bytes.max(text.len());
+    let mut options = serde_saphyr::Options::default();
+    options.budget = Some(budget);
+    serde_saphyr::from_str_with_options(text, options).map_err(|e| e.to_string())
+}
+
 /// Upstream's `index.yaml`, as the value every later step reads.
 ///
 /// Entries with no string `version` are dropped, as helm's `loadIndex` drops
 /// them; a document with no `entries` map is an empty repository.
 pub fn parse_index(text: &str) -> Result<Value, CoreError> {
-    let mut doc = parse_yaml(text)
+    let mut doc = parse_large_yaml(text)
         .map_err(|e| CoreError::Registry(format!("index.yaml is not YAML: {e}")))?;
     let obj = doc
         .as_object_mut()
@@ -219,7 +235,11 @@ pub fn first_url(entry: &Value) -> Option<&str> {
 
 /// Whether an entry is a pointer into an OCI registry.
 pub fn is_oci(entry: &Value) -> bool {
-    first_url(entry).is_some_and(|u| u.len() >= 6 && u[..6].eq_ignore_ascii_case("oci://"))
+    first_url(entry).is_some_and(|u| {
+        u.as_bytes()
+            .get(..6)
+            .is_some_and(|p| p.eq_ignore_ascii_case(b"oci://"))
+    })
 }
 
 /// The registry-wide blocked set applied: blocked versions removed, a chart
@@ -570,5 +590,29 @@ generated: "2026-09-11T12:40:00Z"
             index_metadata_from_chart_yaml(&chart),
             serde_json::json!({"apiVersion": "v2", "name": "x", "version": "1.0.0", "appVersion": "2"})
         );
+    }
+
+    #[test]
+    fn an_index_past_the_yaml_crates_default_node_budget_parses() {
+        // 30 000 versions × 10 nodes is past serde-saphyr's 250 000-node
+        // default — the size of the prometheus-community index.
+        let mut text = String::from("apiVersion: v1\nentries:\n  big:\n");
+        for i in 0..30_000 {
+            text.push_str(&format!(
+                "  - name: big\n    version: 0.0.{i}\n    digest: d{i}\n    urls:\n    - big-0.0.{i}.tgz\n"
+            ));
+        }
+        assert_eq!(
+            versions_of(&parse_index(&text).unwrap(), "big").len(),
+            30_000
+        );
+    }
+
+    #[test]
+    fn is_oci_does_not_slice_inside_a_character() {
+        for url in ["ñandú-1.0.0.tgz", "oci:/ñ", "oci", ""] {
+            assert!(!is_oci(&serde_json::json!({ "urls": [url] })), "{url}");
+        }
+        assert!(is_oci(&serde_json::json!({ "urls": ["OCI://r/c"] })));
     }
 }

@@ -2599,6 +2599,17 @@ impl AppConfig {
                 );
             }
             for upstream in &registry.upstreams {
+                // `oci://` is the likeliest mistake: an OCI chart registry is
+                // not a chart repository, and the client could only 404 it.
+                let lower = upstream.to_ascii_lowercase();
+                if !lower.starts_with("http://") && !lower.starts_with("https://") {
+                    bail!(
+                        "registry '{}': a helm upstream is an http(s) chart repository, and \
+                         '{upstream}' is not — an oci:// chart registry is pulled with `helm \
+                         pull oci://…` directly, not through a helm registry",
+                        registry.name
+                    );
+                }
                 let path = upstream.split(['?', '#']).next().unwrap_or(upstream);
                 let path = path.trim_end_matches('/');
                 if path.ends_with("/index.yaml") {

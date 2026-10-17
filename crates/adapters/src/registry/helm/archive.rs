@@ -17,10 +17,17 @@ use serde_json::Value;
 const MAX_ENTRIES: usize = 4_096;
 /// The largest `Chart.yaml` read.
 const MAX_DOCUMENT_BYTES: u64 = 4 * 1024 * 1024;
+/// Decompressed bytes read before giving up — helm's own default chart limit
+/// (`MaxDecompressedChartSize`). It also bounds what `tar` buffers for a GNU
+/// long-name or pax entry, which it reads whole whatever its header claims.
+const MAX_DECOMPRESSED_BYTES: u64 = 100 * 1024 * 1024;
 
 /// The first `{root}/{file}` of the archive, with `{root}` a single segment.
 fn root_file(bytes: &[u8], wanted: &[&str]) -> Result<Option<(String, Vec<u8>)>, CoreError> {
-    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(bytes));
+    let mut archive = tar::Archive::new(Read::take(
+        flate2::read::GzDecoder::new(bytes),
+        MAX_DECOMPRESSED_BYTES,
+    ));
     let entries = archive
         .entries()
         .map_err(|e| CoreError::InvalidInput(format!("helm: not a chart archive: {e}")))?;
@@ -32,7 +39,9 @@ fn root_file(bytes: &[u8], wanted: &[&str]) -> Result<Option<(String, Vec<u8>)>,
             .map_err(|e| CoreError::InvalidInput(format!("helm: tar entry path: {e}")))?
             .to_string_lossy()
             .into_owned();
-        let mut parts = path.split('/');
+        // `tar czf x.tgz ./mychart` writes `./mychart/Chart.yaml`; helm's
+        // loader cleans the path first, so this reader does too.
+        let mut parts = path.trim_start_matches("./").split('/');
         let (Some(_root), Some(file), None) = (parts.next(), parts.next(), parts.next()) else {
             continue;
         };

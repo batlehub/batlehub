@@ -353,17 +353,28 @@ async fn delete_removes_the_version_from_the_next_index() {
         .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
         .to_request();
     assert_eq!(call_service(&app, req).await.status(), 404);
+
+    // The coordinate is validated at the edge, not left to the storage guard.
+    for bad in ["mine/..", "..%2Fetc/0.2.0", "mine/..%2F..%2Fx", "mine/1.0"] {
+        let req = TestRequest::delete()
+            .uri(&url(&format!("api/charts/{bad}")))
+            .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+            .to_request();
+        assert_eq!(call_service(&app, req).await.status(), 400, "{bad}");
+    }
+    assert_eq!(versions_of(&index_of(&app).await, "mine"), ["0.2.0"]);
 }
 
 #[actix_web::test]
 async fn a_blocked_local_version_is_absent_from_the_index() {
     let app = registry_app(REG, "helm", RegistryMode::Local).await;
     for v in ["0.1.0", "0.2.0"] {
-        call_service(
+        let resp = call_service(
             &app,
             publish_raw(chart_tgz("mine", v), "", Some(ADMIN_TOKEN)),
         )
         .await;
+        assert_eq!(resp.status(), 201, "{v}");
     }
     block_version(&app, REG, "mine", "0.2.0").await;
     assert_eq!(versions_of(&index_of(&app).await, "mine"), ["0.1.0"]);
