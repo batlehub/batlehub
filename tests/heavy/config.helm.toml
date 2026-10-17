@@ -1,0 +1,70 @@
+# Server configuration for the heavy Helm test (tests/heavy/helm.sh,
+# RFC 0029 §6.10). See tests/heavy/config.npm.toml for the env-var conventions.
+#
+# Three registries, because the suite proves three things one registry cannot:
+# `jet-…` proxies a repository whose chart URLs are relative and which publishes
+# `.prov` files (charts.jetstack.io); `nginx-…` one whose chart URLs are absolute
+# GitHub release assets (kubernetes.github.io/ingress-nginx); `local-…` is a
+# ChartMuseum the suite publishes to.
+
+[server]
+host = "127.0.0.1"
+port = 8195
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 5
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[[auth.tokens]]
+value = "heavy-reader-token"
+role = "user"
+user_id = "ci-reader"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-helm-storage"
+
+# ── Proxy: relative URLs and provenance ──────────────────────────────────────
+[[registries]]
+type = "helm"
+name = "jet-${HEAVY_RUN}"
+upstreams = ["https://charts.jetstack.io"]
+
+# Closed to anonymous callers, so every fetch the suite asserts was made *with*
+# the repository's basic auth — the host rule `httpgetter.go` applies is the
+# reason the rewrite exists (RFC 0029 §2.2).
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list"]
+admin = ["*"]
+
+# ── Proxy: absolute URLs on another host ─────────────────────────────────────
+[[registries]]
+type = "helm"
+name = "nginx-${HEAVY_RUN}"
+upstreams = ["https://kubernetes.github.io/ingress-nginx"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list"]
+admin = ["*"]
+
+# ── Local: ChartMuseum's API ─────────────────────────────────────────────────
+[[registries]]
+type = "helm"
+name = "local-${HEAVY_RUN}"
+mode = "local"
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list"]
+admin = ["*"]

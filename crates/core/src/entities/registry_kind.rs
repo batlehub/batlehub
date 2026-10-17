@@ -253,6 +253,14 @@ pub enum RegistryKind {
     /// registry, so they filter through `dispatch_multi` as conda's
     /// `repodata.json` does (RFC 0035).
     Devfile,
+    /// A classic Helm chart repository — one `index.yaml` and a `.tgz` per
+    /// chart version (RFC 0029). The package is a chart, the version an index
+    /// entry. The index is the enforcement chokepoint: `helm` resolves every
+    /// `repo/chart` reference through its cached copy, so a version absent from
+    /// it fails on helm's own *"no chart version found"*. Every `urls` entry in
+    /// the served index is rewritten to this instance, which also puts the chart
+    /// on the host `helm` sends the repository's credentials to.
+    Helm,
 }
 
 impl RegistryKind {
@@ -287,6 +295,7 @@ impl RegistryKind {
         Self::Galaxy,
         Self::Nix,
         Self::Devfile,
+        Self::Helm,
     ];
 
     /// The kebab-case wire string for this kind (matches TOML `type = "..."`).
@@ -320,6 +329,7 @@ impl RegistryKind {
             Self::Galaxy => "galaxy",
             Self::Nix => "nix",
             Self::Devfile => "devfile",
+            Self::Helm => "helm",
         }
     }
 
@@ -386,7 +396,13 @@ impl RegistryKind {
         // `apk` joins deb and rpm for their reason: Alpine's CDN is one mirror
         // of many, and a default would put a hostname nobody chose in front of
         // every `apk update` in the estate (RFC 0026 §4.1).
-        matches!(self, Self::Deb | Self::Rpm | Self::Apk | Self::Generic)
+        //
+        // `helm` for `generic`'s reason: there is no default chart repository,
+        // only the one an operator chose (RFC 0029 §4.1).
+        matches!(
+            self,
+            Self::Deb | Self::Rpm | Self::Apk | Self::Generic | Self::Helm
+        )
     }
 
     /// Whether this kind is a git forge — GitHub, GitLab, Forgejo — and so
@@ -606,6 +622,22 @@ impl RegistryKind {
             ),
         ];
 
+        // `index.yaml` describes the whole repository, so it filters through
+        // `dispatch_multi` against the registry-wide blocked set, with the
+        // snapshot's lag, as conda's `repodata.json` does. The ChartMuseum JSON
+        // listings are composed from local rows that already exclude blocked
+        // versions, so they never travel through `strip` (RFC 0029 §6.2).
+        const HELM: &[ListingDocument] = &[
+            ListingDocument::qualified(
+                "`index.yaml`",
+                "the index describes the whole repository, so a new block reaches it within the \
+                 blocked-set snapshot's 30-second TTL; and `helm` reads its own cached copy until \
+                 the next `helm repo update`, so until then the archive download is what refuses",
+                &["versions"],
+            ),
+            ListingDocument::filtered("ChartMuseum `api/charts` listings", &[]),
+        ];
+
         match self {
             Self::Npm => NPM,
             Self::Nuget => NUGET,
@@ -627,6 +659,7 @@ impl RegistryKind {
             Self::Galaxy => GALAXY,
             Self::Nix => NIX,
             Self::Devfile => DEVFILE,
+            Self::Helm => HELM,
             // `generic` and `jetbrains` mirror an arbitrary file tree by path —
             // there is no listing document in the protocol at all, so there is
             // nothing to say beyond that. (JetBrains *plugins* are the separate
@@ -724,6 +757,9 @@ impl RegistryKind {
             Self::Devfile => ReadmeSupport::None(
                 "a devfile has no readme; its description is a field of the stack index",
             ),
+            // `README.md` at the chart root — the file `helm show readme` prints.
+            // The index carries a one-line `description`, not prose.
+            Self::Helm => ReadmeSupport::Archive,
             Self::Nix => ReadmeSupport::None(
                 "a store path is a NAR and its narinfo; the protocol carries no prose, and the \
                  NAR is a filesystem image rather than a package with a manifest",
@@ -807,6 +843,9 @@ impl RegistryKind {
             // The v2 index entry of the stack: every version with its
             // description, schemaVersion and tags (RFC 0035 §6.1).
             Self::Devfile => UpstreamDetailSupport::Document("versions"),
+            // The chart's entries of `index.yaml`, each with `created`,
+            // `appVersion`, `description` and `deprecated` (RFC 0029 §6.1).
+            Self::Helm => UpstreamDetailSupport::Document("versions"),
             Self::Nix => UpstreamDetailSupport::None(
                 "a binary cache has no index: it answers one store path at a time, and the path \
                  is computed by the client rather than listed by the cache",
@@ -933,6 +972,8 @@ impl RegistryKind {
             // One devfile per version, the OCI layer titled `devfile.yaml` —
             // the file every client reads first, and the one Che links to.
             Self::Devfile => FetchSupport::ByVersion(FetchArtifact::Fixed("layer/devfile.yaml")),
+            // One archive per version, `charts/{name}-{version}.tgz`.
+            Self::Helm => FetchSupport::ByVersion(FetchArtifact::Fixed("chart")),
             Self::Nix => FetchSupport::None(
                 "a version is one or more store paths, each a separate build with its own \
                  32-character hash, and the hash is not derivable from the version",

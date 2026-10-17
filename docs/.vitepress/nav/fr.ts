@@ -147,6 +147,10 @@ export const sidebar = {
         { text: "SDKMAN", link: "/fr/registries/sdkman" },
       ],
     },
+    {
+      text: "Kubernetes",
+      items: [{ text: "Helm", link: "/fr/registries/helm" }],
+    },
   ],
 
   // J'exploite ce serveur.

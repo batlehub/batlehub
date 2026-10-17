@@ -12106,6 +12106,421 @@
         ]
       }
     },
+    "/proxy/{registry}/helm/api/charts": {
+      "get": {
+        "tags": [
+          "proxy/helm"
+        ],
+        "summary": "Every chart published here and its versions — ChartMuseum's listing, paged by chart with `offset`/`limit`.",
+        "operationId": "helm_api_list",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Charts to skip",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Charts to return",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Chart name → its versions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry, or mode = proxy"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "proxy/helm"
+        ],
+        "summary": "Publish a packaged chart — ChartMuseum's upload, the call `helm cm-push` makes.",
+        "operationId": "helm_publish",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "description": "Replace an existing version (needs releases:overwrite)",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The .tgz as the body, or multipart/form-data with `chart` and optional `prov`",
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HelmSaved"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a packaged chart, or its Chart.yaml names no valid name or version"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry, or mode = proxy"
+          },
+          "409": {
+            "description": "That version is already published"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/helm/api/charts/{name}": {
+      "get": {
+        "tags": [
+          "proxy/helm"
+        ],
+        "summary": "One chart's versions as ChartMuseum lists them.",
+        "operationId": "helm_api_chart",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Chart name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The chart's versions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UpstreamDocument"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a chart name"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "No such chart, unknown registry, or mode = proxy"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/helm/api/charts/{name}/{version}": {
+      "get": {
+        "tags": [
+          "proxy/helm"
+        ],
+        "summary": "One chart version as ChartMuseum describes it.",
+        "operationId": "helm_api_version",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Chart name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "Chart version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The chart version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpstreamDocument"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a chart coordinate"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Not published here, unknown registry, or mode = proxy"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "proxy/helm"
+        ],
+        "summary": "Delete a published chart version (`releases:delete`); it leaves the next index.",
+        "operationId": "helm_delete",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Chart name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "Chart version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HelmDeleted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a chart coordinate"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Not published here, unknown registry, or mode = proxy"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/helm/charts/{file}": {
+      "get": {
+        "tags": [
+          "proxy/helm"
+        ],
+        "summary": "A chart archive, or with `.prov` appended its provenance file — byte-exact, fetched from the URL the upstream index names.",
+        "operationId": "helm_chart",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "description": "{name}-{version}.tgz or {name}-{version}.tgz.prov",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The archive or its provenance file",
+            "content": {
+              "application/gzip": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactBytes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a chart file name"
+          },
+          "403": {
+            "description": "Blocked version or access denied"
+          },
+          "404": {
+            "description": "Not in the index, no provenance, or unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/helm/index.yaml": {
+      "get": {
+        "tags": [
+          "proxy/helm"
+        ],
+        "summary": "The repository index `helm repo add` and `helm repo update` fetch — blocked versions removed, every chart URL on this host.",
+        "operationId": "helm_index",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "index.yaml, filtered and rewritten",
+            "content": {
+              "text/yaml": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDocument"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Unknown registry"
+          },
+          "502": {
+            "description": "The upstream index could not be read"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/proxy/{registry}/index": {
       "get": {
         "tags": [
@@ -24421,6 +24836,30 @@
           }
         }
       },
+      "HelmDeleted": {
+        "type": "object",
+        "description": "`DELETE api/charts/{name}/{version}`.",
+        "required": [
+          "deleted"
+        ],
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          }
+        }
+      },
+      "HelmSaved": {
+        "type": "object",
+        "description": "`POST api/charts` — what ChartMuseum answers and `helm cm-push` reads the status of.",
+        "required": [
+          "saved"
+        ],
+        "properties": {
+          "saved": {
+            "type": "boolean"
+          }
+        }
+      },
       "Immutable": {
         "type": "string",
         "description": "Whether published bytes may be replaced — RFC 0015 §4.5.\n\n# Why this is not a verb\n\n**Immutability is a property of the resource, the verb is a property of the\nsubject, and a replace needs both.** That split is what lets a namespace be\nappend-only for *everyone, including admins*, which no role-based model can\nsay. Adding a `releases:overwrite`-style exception here would make it a rule\nan admin can step over, and a rule an admin can step over is not an\ninvariant.",
@@ -28779,6 +29218,10 @@
     {
       "name": "proxy/devfile",
       "description": "Devfile registries (Eclipse Che, registry-library, odo) — the stack catalogue as a registry kind: the legacy and v2 indexes filtered registry-wide, each stack version's devfile, OCI manifest and layers relayed byte-exact and verified, a digest served only when an allowed version names it"
+    },
+    {
+      "name": "proxy/helm",
+      "description": "Helm chart repositories (classic index.yaml) — the index filtered registry-wide with every chart URL rewritten to this instance, archives and .prov files relayed byte-exact from the URL the upstream index names, and ChartMuseum's upload API and listings in local mode"
     },
     {
       "name": "proxy/galaxy",

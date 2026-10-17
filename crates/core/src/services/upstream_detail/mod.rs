@@ -33,6 +33,7 @@ pub mod coordinator;
 mod devfile;
 mod galaxy;
 mod goproxy;
+mod helm;
 mod maven;
 mod nodedist;
 mod npm;
@@ -127,6 +128,7 @@ pub fn dispatch(kind: RegistryKind, doc: &VersionDocument) -> UpstreamDetail {
         RegistryKind::Rustup => rustup::read(doc),
         RegistryKind::Galaxy => galaxy::read(doc),
         RegistryKind::Devfile => devfile::read(doc),
+        RegistryKind::Helm => helm::read(doc),
         other => {
             // Reachable only through a bug: `RegistryKind::upstream_detail()`
             // answers `Document(_)` for exactly the kinds above, and the drift
@@ -187,7 +189,9 @@ pub fn listing_carries_readmes(kind: RegistryKind) -> bool {
         // `None` — so the listing cannot be where it lives (RFC 0028 §6.1).
         | RegistryKind::Nix
         // A devfile has no README (RFC 0035 §6.1).
-        | RegistryKind::Devfile => false,
+        | RegistryKind::Devfile
+        // `description` is one line; the README is in the archive.
+        | RegistryKind::Helm => false,
     }
 }
 
@@ -249,7 +253,10 @@ pub fn listing_carries_links(kind: RegistryKind) -> bool {
         | RegistryKind::Nix
         // The index entry carries an icon URL and no repository link; the
         // starter project's git remote is in the devfile itself.
-        | RegistryKind::Devfile => false,
+        | RegistryKind::Devfile
+        // `home` and `sources` are in the entry, but the page's links are read
+        // from the version's resolve, which carries the same entry.
+        | RegistryKind::Helm => false,
     }
 }
 

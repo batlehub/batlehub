@@ -958,6 +958,10 @@ jobs:
           # (~1 MB), publishes one it builds itself, and installs one role
           # from github.com — the egress `roles = "proxy"` implies.
           - suite: galaxy
+          # helm: the runner image's own helm against charts.jetstack.io and
+          # kubernetes.github.io/ingress-nginx through the proxy, and a
+          # ChartMuseum publish it packages itself (RFC 0029 §6.10).
+          - suite: helm
           # nix: the real Nix client substituting from cache.nixos.org through
           # the proxy, and publishing back to it. The client runs in its own
           # `nixos/nix` image — a `nix` binary is dynamically linked into
@@ -1220,6 +1224,11 @@ jobs:
           # identity the client presented. Hermetic: the run publishes its own
           # collection and installs it back.
           - target: galaxy
+          # `helm` sends basic auth proactively to the repository's host, and
+          # the served index puts every chart URL there — so the index and the
+          # archive are both read as the client's identity. Hermetic: the run
+          # publishes its own chart and pulls it back (RFC 0029).
+          - target: helm
     services:
       postgres:
         image: postgres:17-alpine

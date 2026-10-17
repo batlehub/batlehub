@@ -326,6 +326,20 @@ anonymous = ["releases:read", "releases:list", "source:read"]
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
 
+# ── helm: a chart repository, driven by the binary the block above serves ───
+#
+# jetstack, because its chart URLs are relative: a fetch that escaped the
+# rewrite would have nowhere to go but the tap (RFC 0029 §6.10).
+[[registries]]
+type = "helm"
+name = "charts-${HEAVY_RUN}"
+upstreams = ["https://charts.jetstack.io"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list"]
+admin = ["*"]
+
 # ── deb: the Ubuntu archive, driven by a real unprivileged `apt` ────────────
 #
 # archive.ubuntu.com rather than the kind's `deb.debian.org` default: the

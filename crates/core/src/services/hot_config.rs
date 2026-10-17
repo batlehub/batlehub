@@ -385,6 +385,10 @@ pub struct HotConfig {
     /// documented default, and config validation refuses the option on any
     /// other kind.
     pub galaxy_roles: HashMap<String, crate::services::galaxy::GalaxyRoleMode>,
+    /// helm only: what an `oci://` index entry becomes in the served index
+    /// (RFC 0029 §4.4). Here for `galaxy_roles`' reason — read on every index
+    /// request. Absent means `drop`.
+    pub helm_oci_entries: HashMap<String, crate::services::helm::OciEntries>,
     /// nix only: the registries that refuse to relay an unsigned narinfo
     /// (RFC 0028 §4.1).
     ///
@@ -652,6 +656,7 @@ impl Default for HotConfig {
             policies: HashMap::new(),
             deny_components: HashMap::new(),
             galaxy_roles: HashMap::new(),
+            helm_oci_entries: HashMap::new(),
             nix_require_upstream_sigs: std::collections::HashSet::new(),
             nix_staging: HashMap::new(),
             namespace_policies: HashMap::new(),

@@ -134,6 +134,8 @@ GITLAB_TOOL="${HEAVY_CW_GITLAB_TOOL:-gitlab-org/cli}"
 GITLAB_TOOL_VERSION="${HEAVY_CW_GITLAB_TOOL_VERSION:-1.117.0}"
 GITLAB_TOOL_BIN="${HEAVY_CW_GITLAB_TOOL_BIN:-glab}"
 HELM_VERSION="${HEAVY_CW_HELM:-3.16.4}"
+# The chart the `helm` kind's half of the phase pulls through a helm registry.
+HELM_CW_CHART="${HEAVY_CW_HELM_CHART:-v1.21.2}"
 # The three OS package managers: the package, the path its binary lands on once
 # the archive is unpacked, and the first thing that binary prints — which is
 # what `cw_ran` matches, so it is declared beside the package rather than
@@ -181,6 +183,7 @@ JB_REG="jb-$HEAVY_RUN"
 FORGEJO_REG="forgejo-$HEAVY_RUN"
 GITLAB_REG="gitlab-$HEAVY_RUN"
 HELM_REG="helm-$HEAVY_RUN"
+HELM_CHARTS_REG="charts-$HEAVY_RUN"
 DEB_REG="deb-$HEAVY_RUN"
 RPM_REG="rpm-$HEAVY_RUN"
 PACMAN_REG="pacman-$HEAVY_RUN"
@@ -1803,7 +1806,32 @@ EOF
   cw_step "$out" "$dir" "${DENY[@]}" "$helm_bin" template closedworld ./chart \
     || { cat "$out" >&2; heavy_fail "helm: the binary this instance served did not render the chart"; }
   cw_ran helm "$out" "42"
-  heavy_log "CLOSED-WORLD-HELM-OK (helm v$HELM_VERSION fetched by path and rendered a chart)"
+
+  # The `helm` kind (RFC 0029): the same binary adds a chart repository behind
+  # this instance and installs-by-rendering a chart out of it, egress denied.
+  # jetstack's URLs are relative, so a chart fetch that left the instance would
+  # have to resolve against the tap and could not reach charts.jetstack.io.
+  local home="$dir/home" charts="$HEAVY_TAP_BASE/proxy/$HELM_CHARTS_REG/helm"
+  local -a helm_env=(HELM_CONFIG_HOME="$home/config" HELM_CACHE_HOME="$home/cache"
+                     HELM_DATA_HOME="$home/data")
+  # `helm pull -d` writes a temp file inside its destination and never creates it.
+  mkdir -p "$dir/pulled"
+  heavy_mark helm-charts
+  cw_step "$out" "$dir" "${DENY[@]}" "${helm_env[@]}" "$helm_bin" repo add cw "$charts" \
+    || { cat "$out" >&2; heavy_fail "helm: repo add of a helm registry failed inside the closed world"; }
+  cw_step "$out" "$dir" "${DENY[@]}" "${helm_env[@]}" "$helm_bin" pull cw/cert-manager \
+    --version "$HELM_CW_CHART" -d "$dir/pulled" \
+    || { cat "$out" >&2; heavy_fail "helm: pulling a chart through the helm registry failed"; }
+  heavy_wire_re_after helm-charts \
+    "GET /proxy/$HELM_CHARTS_REG/helm/charts/cert-manager-${HELM_CW_CHART//./[.]}[.]tgz -> 200" \
+    "helm: the chart archive did not come from this instance"
+  cw_step "$out" "$dir" "${DENY[@]}" "${helm_env[@]}" "$helm_bin" template cm \
+    "$dir/pulled/cert-manager-$HELM_CW_CHART.tgz" \
+    || { cat "$out" >&2; heavy_fail "helm: the chart this instance served did not render"; }
+  grep -q "name: cm-cert-manager" "$out" \
+    || { tail -n 20 "$out" >&2; heavy_fail "helm: the rendered chart is not cert-manager's"; }
+  heavy_log "CLOSED-WORLD-HELM-OK (helm v$HELM_VERSION fetched by path, rendered a chart, and \
+pulled cert-manager $HELM_CW_CHART through a helm registry)"
 }
 
 # ── The three OS package managers ────────────────────────────────────────────

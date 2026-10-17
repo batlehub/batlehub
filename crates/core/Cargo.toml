@@ -50,6 +50,12 @@ ed25519-dalek = "3"
 # here is what lets the CLI (export) and the server (import) share one
 # definition of the layout rather than two that must agree.
 tar = "0.4"
+# RFC 0029 — `index.yaml` is parsed once on fetch and re-emitted on the way
+# out. Not `serde_yaml`: it and its fork `serde_yaml_ng` both pull
+# `unsafe-libyaml`, unmaintained since 2024 (RUSTSEC-2024-0449), which
+# `cargo deny` refuses under this repository's no-suppressions stance.
+# `serde-saphyr` is safe Rust over `saphyr-parser`.
+serde-saphyr = { version = "1.3", default-features = false, features = ["serialize", "deserialize"] }
 
 [dev-dependencies]
 # Only in tests, and only to assert that a *filtered* channel manifest still

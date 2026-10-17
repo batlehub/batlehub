@@ -2966,3 +2966,54 @@ async fn a_blocked_held_devfile_version_leaves_the_composed_index() {
         "the default moves with it"
     );
 }
+
+// ── helm (RFC 0029 §6.11) ───────────────────────────────────────────────────
+
+/// A disconnected helm registry holding `demo@1.1.0` and `@1.0.0` — each as its
+/// archive with the index entry its `meta:` entry carries — and `demo@1.0.0`'s
+/// `.prov`, which is a file of the version rather than another one.
+async fn helm_lab() -> (impl TestService, Lab) {
+    let facts = |v: &str| {
+        serde_json::json!({"helm": {
+            "apiVersion": "v2", "name": "demo", "version": v, "appVersion": "2.0",
+            "description": "a held chart", "created": "2026-09-01T00:00:00Z"
+        }})
+    };
+    holding_lab_extra(
+        "helm",
+        true,
+        &[
+            ("demo", "1.1.0", Some("chart"), facts("1.1.0")),
+            ("demo", "1.0.0", Some("chart"), facts("1.0.0")),
+            ("demo", "1.0.0", Some("prov"), serde_json::Value::Null),
+        ],
+    )
+    .await
+}
+
+#[actix_web::test]
+async fn a_held_chart_gets_its_index_composed_from_what_is_held() {
+    let (app, _lab) = helm_lab().await;
+    let resp = get(&app, &format!("/proxy/{REG}/helm/index.yaml")).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(header(&resp, "X-BatleHub-Listing"), Some("synthesised"));
+    let text = String::from_utf8(actix_web::test::read_body(resp).await.to_vec()).unwrap();
+    let index = batlehub_core::services::helm::parse_index(&text).unwrap();
+    assert_eq!(
+        batlehub_core::services::helm::versions_of(&index, "demo"),
+        ["1.1.0", "1.0.0"],
+        "one entry per held archive, the .prov is not a version"
+    );
+    let entry = &index["entries"]["demo"][0];
+    assert_eq!(entry["description"], "a held chart");
+    assert_eq!(entry["digest"].as_str().map(str::len), Some(64));
+    assert_eq!(
+        entry["urls"][0],
+        format!("http://localhost:8080/proxy/{REG}/helm/charts/demo-1.1.0.tgz")
+    );
+
+    for file in ["demo-1.1.0.tgz", "demo-1.0.0.tgz", "demo-1.0.0.tgz.prov"] {
+        let resp = get(&app, &format!("/proxy/{REG}/helm/charts/{file}")).await;
+        assert_eq!(resp.status(), 200, "{file} is held and named by the index");
+    }
+}

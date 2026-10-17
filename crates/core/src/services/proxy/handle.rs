@@ -1387,6 +1387,19 @@ impl ProxyService {
             .unwrap_or_default()
     }
 
+    /// What an `oci://` entry of this `helm` registry's index becomes
+    /// (RFC 0029 §4.4) — `galaxy_roles`' rule: read per request, `drop` when
+    /// unset.
+    pub async fn helm_oci_entries(&self, registry: &str) -> crate::services::helm::OciEntries {
+        self.hot
+            .read()
+            .await
+            .helm_oci_entries
+            .get(registry)
+            .copied()
+            .unwrap_or_default()
+    }
+
     /// This `nix` registry's narinfo signing key, if it has one.
     ///
     /// Read from `HotConfig` on each use rather than held, so a rotated key

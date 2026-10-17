@@ -47,6 +47,7 @@ import {
   DEVFILE_REGISTRY,
   FORGEJO_REGISTRY,
   GALAXY_REGISTRY,
+  HELM_REGISTRY,
   GEMS_REGISTRY,
   GENERIC_REGISTRY,
   GITHUB_REGISTRY,
@@ -645,6 +646,32 @@ export const ARMS = [
     doc: "a stack version's devfile.yaml — the layer, found through the manifest",
     request: (n) => ({
       url: p(`/proxy/${DEVFILE_REGISTRY}/devfiles/acme${n % 4}/1.${Math.floor(n / 4)}.0`),
+    }),
+  },
+
+  // ── Helm chart repositories ───────────────────────────────────────────────
+  // The index is parsed, filtered, rewritten and re-rendered as YAML on every
+  // read; the archive is resolved from it. `space: 32` is the mock's eight
+  // charts of four versions (`protocols/helm.rs`).
+  {
+    op: "helm_index",
+    kind: "helm",
+    registry: HELM_REGISTRY,
+    weight: 2,
+    expect: [200],
+    doc: "index.yaml, filtered registry-wide and every URL rewritten here",
+    request: () => ({ url: p(`/proxy/${HELM_REGISTRY}/helm/index.yaml`) }),
+  },
+  {
+    op: "helm_chart",
+    kind: "helm",
+    registry: HELM_REGISTRY,
+    weight: 2,
+    expect: [200],
+    space: 32,
+    doc: "a chart archive, resolved through the upstream index",
+    request: (n) => ({
+      url: p(`/proxy/${HELM_REGISTRY}/helm/charts/chart${n % 8}-1.${Math.floor(n / 8)}.0.tgz`),
     }),
   },
 

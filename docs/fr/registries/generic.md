@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/generic.md
-sourceHash: 695d0dd262c4b728
+sourceHash: b66c2c3365129779
 ---
 
 # Miroir générique
@@ -120,4 +120,5 @@ diagnostics du genre `mise doctor` — préférez `~/.netrc`.
 ## Voir aussi
 
 - [Utiliser BatleHub](/fr/use/) — tokens, prérequis de publication, la CLI
+- [Helm](/fr/registries/helm) — l'`index.yaml` d'un dépôt de charts mis en miroir ici est mis en cache mais ne peut pas être bloqué, et ses URL de chart absolues contournent le cache ; le type `helm` le réécrit et le filtre
 - [Vue d'ensemble des registres](/fr/registries/) · [Mise en cache](/fr/guide/caching) · [Contrôle d'accès](/fr/guide/access-control)

@@ -5,7 +5,7 @@
 # plafond, une déclaration que quelqu'un a dû écrire (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/admin-policies.md
-sourceHash: dbc4b7cf76dcedab
+sourceHash: 1f5e9ee0c2770140
 ---
 
 # Politiques et paquets
@@ -343,6 +343,8 @@ sans danger :
 | nix | narinfo | yes |
 | devfile | stack index (`/v2index`, with `/sample` and `/all`) | yes — the index describes the whole registry, so a new block reaches it within the blocked-set snapshot's 30-second TTL rather than instantly; a blocked default version moves `default` to the highest version left |
 | devfile | legacy stack index (`/index`, with `/sample` and `/all`) | yes — a legacy entry names one version, the default, so blocking it removes the stack from this index rather than substituting another version |
+| helm | `index.yaml` | yes — the index describes the whole repository, so a new block reaches it within the blocked-set snapshot's 30-second TTL; and `helm` reads its own cached copy until the next `helm repo update`, so until then the archive download is what refuses |
+| helm | ChartMuseum `api/charts` listings | yes |
 <!-- END listing-coverage -->
 
 La table ci-dessus est générée depuis le code Rust et reste en anglais : ses
