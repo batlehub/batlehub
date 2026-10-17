@@ -148,7 +148,7 @@ phase_repo_add() {
 
 phase_verify() {
   heavy_log "2. helm pull --verify fetches the archive and its .prov here, both byte-exact"
-  curl -fsSL -o "$HEAVY_WORK/cert-manager-keyring.gpg" "$KEYRING_URL" \
+  curl -fsSL --proto "=https" --proto-redir "=https" -o "$HEAVY_WORK/cert-manager-keyring.gpg" "$KEYRING_URL" \
     || heavy_fail "could not fetch cert-manager's keyring"
   repo_add verify jet "$JET" "$READER"
   heavy_mark verify
@@ -176,9 +176,12 @@ phase_absolute() {
     "GET /proxy/$NGINX/helm/charts/ingress-nginx-$(re "$NGINX_PULL")[.]tgz -> 200" \
     "the archive was not fetched from this instance"
   # The digest upstream published is the digest of what was served.
-  local want got
-  want="$(served_index "$NGINX" | awk -v v="$NGINX_PULL" '
-    /^    digest:/ { d = $2 } /^    version:/ { gsub(/"/, "", $2); if ($2 == v) { print d; exit } }')"
+  # Captured first: `awk … exit` stops reading, and under pipefail the curl
+  # it leaves writing fails the suite with a (23).
+  local want got index
+  index="$(served_index "$NGINX")"
+  want="$(awk -v v="$NGINX_PULL" '
+    /^    digest:/ { d = $2 } /^    version:/ { gsub(/"/, "", $2); if ($2 == v) { print d; exit } }' <<< "$index")"
   got="$(sha256sum "$HEAVY_WORK/absolute/ingress-nginx-$NGINX_PULL.tgz" | cut -d' ' -f1)"
   [[ -n "$want" && "$want" == "$got" ]] \
     || heavy_fail "the archive's sha256 ($got) is not the index digest ($want)"

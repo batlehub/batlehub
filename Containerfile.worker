@@ -21,7 +21,7 @@
 #   podman run --rm -v ./config.toml:/etc/batlehub/config.toml:ro batlehub-worker
 
 ARG POSTMORTEM_VERSION=2.4.0
-ARG TRIVY_VERSION=0.74.0
+ARG TRIVY_VERSION=0.76.0
 ARG YARA_X_VERSION=1.20.0
 # The release's own asset digest (GitHub's `digest` field); the binary runs
 # operator rules over hostile bytes, so it is checked, not only fetched.

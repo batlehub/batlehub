@@ -3,68 +3,15 @@
 # to. Every entry carries an expiry, so the gate reopens on its own and the
 # entry has to be re-justified rather than quietly outliving its reason.
 #
-# The first two entries below are the same crate in the same file: `google.golang.org/grpc`
-# v1.82.1, vendored inside the upstream Trivy release binary the worker image
-# carries (`/usr/local/bin/trivy`, Trivy v0.74.0, pinned by `TRIVY_VERSION` in
-# `Containerfile.worker`). They are not BatleHub's dependency and no `cargo` or
-# `pip` change reaches them — the only lever is the Trivy version, and v0.74.0
-# (2026-08-14) is still the latest release.
+# Empty since Trivy v0.76.0 (2026-10-14). The four entries this file carried
+# were all advisories against the Trivy release binary the worker image ships
+# (`/usr/local/bin/trivy`, pinned by `TRIVY_VERSION` in `Containerfile.worker`):
+# grpc-go CVE-2026-84304 and CVE-2026-84445, and Go standard-library
+# CVE-2026-78667 and CVE-2026-97031. v0.76.0 is built with Go 1.27.2 against
+# grpc v1.84.0, `x/net` v0.60.0 and containerd v2.4.1, and `trivy rootfs` finds
+# no fixable HIGH/CRITICAL in it. Before adding an entry for that binary again,
+# check the next release's toolchain and `go.mod`:
 #
-# **One release closes both.** Trivy's `main` has moved to grpc v1.83.2, which
-# carries the fix for each. Whichever release ships that, both entries go —
-# check `go.mod` at the tag before renewing either:
-#
-#   curl -s https://raw.githubusercontent.com/aquasecurity/trivy/v<version>/go.mod \
-#     | grep '^\s*google.golang.org/grpc '
-#
-# A third advisory against the same version, CVE-2026-84303 (xDS RBAC header
-# matching), is MODERATE and so does not reach the gate's fixable HIGH/CRITICAL
-# bar. It is listed here because it disappears with the same bump — not as an
-# entry, because nothing is suppressed until the gate actually reports it.
-vulnerabilities:
-  - id: CVE-2026-84304
-    # Heap memory exhaustion (OOM) via HTTP/2 DATA frame fragmentation. Fixed in
-    # grpc-go 1.83.1, but no Trivy release ships it yet. The binary is only ever
-    # run by the worker as a client against the Trivy server the chart deploys;
-    # it terminates no connection of its own.
-    paths:
-      - "usr/local/bin/trivy"
-    expired_at: 2026-12-01
-  - id: CVE-2026-84445
-    # xDS server DoS: a request carrying neither `:authority` nor `Host` panics
-    # the xDS routing interceptor, and the per-RPC goroutine does not recover.
-    # Fixed in grpc-go 1.82.2 and 1.83.2; no Trivy release ships either.
-    #
-    # The vulnerable path is a *server* built with `xds.NewGRPCServer()`, and
-    # this binary never builds one. `crates/adapters/src/scanners/trivy.rs` runs
-    # it as `trivy … --server <endpoint>` — the client half, dialling the Trivy
-    # server the chart deploys. Nothing in the worker image listens, and Trivy's
-    # own server mode is plain gRPC rather than xDS, so the interceptor the
-    # advisory describes is never installed.
-    paths:
-      - "usr/local/bin/trivy"
-    expired_at: 2026-12-01
-  # The two below are Go standard-library advisories (golang-announce,
-  # 2026-10-08), not grpc ones: the same binary, a different lever. Trivy
-  # v0.74.0 was built with Go 1.26.6 and v0.75.0, the latest, with 1.27.1; the
-  # fix is Go 1.26.9 / 1.27.2. Both go with the first Trivy release built on
-  # either — check the toolchain of the release binary before renewing:
-  #
-  #   go version -m /usr/local/bin/trivy | head -1
-  - id: CVE-2026-78667
-    # net/http: a Range header of many small ranges burns CPU in FileServer,
-    # ServeContent and ServeFile — a file-*serving* path. The worker runs this
-    # binary as a scanning client (`trivy rootfs|fs … [--server <endpoint>]`,
-    # `crates/adapters/src/scanners/trivy.rs`); it serves no file and listens
-    # on nothing.
-    paths:
-      - "usr/local/bin/trivy"
-    expired_at: 2026-12-01
-  - id: CVE-2026-97031
-    # crypto/tls: repeated ECH outer-extension references exhaust a TLS
-    # *server's* memory. The binary only dials out — to the chart's Trivy
-    # server, or to the database mirror when no endpoint is set — so it is
-    # never the TLS server a crafted ClientHello would reach.
-    paths:
-      - "usr/local/bin/trivy"
-    expired_at: 2026-12-01
+#   go version -m /usr/local/bin/trivy | head -1
+#   curl -s https://raw.githubusercontent.com/aquasecurity/trivy/v<version>/go.mod
+vulnerabilities: []

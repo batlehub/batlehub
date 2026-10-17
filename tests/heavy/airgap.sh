@@ -434,7 +434,7 @@ BLOBS="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["blobs"]
 [[ "$BLOBS" -eq 19 ]] || { cat "$HEAVY_WORK/export.json" "$HEAVY_WORK/export.err" >&2; heavy_fail "the bundle carried $BLOBS blob(s), expected 19 (asset, tarball, wheel, crate, zip, mod, jar, pom, nupkg, gem, conda package, provider archive, its checksum list and signature, the .apk, a devfile stack's manifest and devfile, and a chart archive and its .prov)"; }
 # The keyring `helm pull --verify` checks the carried .prov against, fetched
 # while there is still a network to fetch it from.
-curl -fsSL -o "$HEAVY_WORK/helm-keyring.gpg" "$HELM_KEYRING_URL" \
+curl -fsSL --proto "=https" --proto-redir "=https" -o "$HEAVY_WORK/helm-keyring.gpg" "$HELM_KEYRING_URL" \
   || heavy_fail "could not fetch cert-manager's keyring"
 # The export read the provider's download document and carried its facts.
 python3 - "$HEAVY_WORK/estate.bhub" "$TF_REG" <<'PY' || heavy_fail "the manifest does not carry the provider's signing keys (0008-bis §13.7)"
