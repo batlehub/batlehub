@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: b7b590a0fbbab0e5
+sourceHash: 29dbd192614c76cb
 ---
 
 # Référence de configuration
@@ -2421,7 +2421,7 @@ verify_on_serve = false   # re-hacher les octets stockés à chaque service, pas
 |---|---|---|---|
 | `enabled` | booléen | `true` | L'interrupteur principal. À `false`, aucune vérification n'est faite. |
 | `block_on_mismatch` | booléen | `true` | Faire échouer le téléchargement (et sauter la mise en cache) quand l'empreinte calculée ne correspond pas à celle annoncée. Une non-correspondance n'est jamais contournable. |
-| `require_metadata` | booléen | `false` | Refuser les téléchargements pour lesquels l'amont n'annonce aucune somme utilisable, sauf si l'appelant détient l'un des `bypass_roles`. Simple avertissement par défaut. |
+| `require_metadata` | booléen | `false` | Refuser les téléchargements pour lesquels l'amont n'annonce aucune somme utilisable, sauf si le rôle de l'appelant atteint le plancher de `bypass_roles`. Simple avertissement par défaut. |
 | `bypass_roles` | chaîne[] | `[]` | Les rôles autorisés à contourner le garde-fou `require_metadata`. Quand plusieurs rôles sont listés, le moins privilégié fixe le plancher d'accès. |
 | `verify_on_serve` | booléen | `false` | Revérifier les octets en cache ou stockés contre un SHA-256 **calculé par nous** (enregistré à la première mise en cache) à chaque service — les hits de cache du chemin proxy et les lectures du registre local — et pas seulement à la première récupération. Attrape une corruption de stockage ou l'altération d'artefacts déjà en cache. Une non-correspondance fait échouer le téléchargement (`502`) et évince la mauvaise entrée, de sorte qu'une requête ultérieure récupère des octets sains. Désactivé par défaut parce qu'il lit et hache les octets à chaque service (le chemin proxy les diffuse à travers le hachage, la mémoire reste donc bornée, puis rouvre l'entrée pour la servir). Les lignes de cache préexistantes n'ont pas de somme stockée et sont traitées comme « à ne pas revérifier » jusqu'à leur prochain rafraîchissement. |
 

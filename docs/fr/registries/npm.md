@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/npm.md
-sourceHash: 5c56255ed77c3c15
+sourceHash: d410201111a4c812
 ---
 
 # npm

@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/jetbrains-marketplace.md
-sourceHash: 1a9e89cb267620de
+sourceHash: 1ca357e8f430afc3
 ---
 
 # Place de marché JetBrains
