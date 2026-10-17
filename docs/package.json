@@ -1,6 +1,6 @@
 {
   "name": "batlehub-docs",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.26.0",
