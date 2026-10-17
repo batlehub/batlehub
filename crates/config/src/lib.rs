@@ -688,6 +688,12 @@ mod tests {
     /// `std::env::set_var`/`remove_var` mutate the single process-wide
     /// environment table. Every test below that touches env vars acquires this
     /// lock first so their set/read/remove sequences never interleave.
+    ///
+    /// That includes every test that only *loads* a config: the loaders apply
+    /// `PROXY_CACHE__*` overrides from the process env, so a test setting one
+    /// leaks into any load running beside it (a `port = 9090` once read 1111).
+    /// Testing an override goes through `apply_env_overrides_from(&env_of(..))`
+    /// instead, which needs neither the lock nor the process env.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn parse(toml: &str) -> AppConfig {
@@ -739,6 +745,7 @@ mod tests {
 
     #[test]
     fn a_later_layer_completes_a_registry_without_restating_the_others() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = crate::load_layered_from_str(&[
             two_registries(),
             r#"
@@ -772,6 +779,7 @@ mod tests {
 
     #[test]
     fn a_later_layer_appends_a_registry_the_base_does_not_have() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = crate::load_layered_from_str(&[
             two_registries(),
             r#"
@@ -789,6 +797,7 @@ mod tests {
 
     #[test]
     fn a_later_layer_wins_on_a_scalar() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = crate::load_layered_from_str(&[
             minimal().to_owned(),
             r#"
@@ -809,6 +818,7 @@ mod tests {
     /// restated it, which is not what writing a list means.
     #[test]
     fn a_scalar_array_is_replaced_not_appended() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = crate::load_layered_from_str(&[
             two_registries(),
             r#"
@@ -832,6 +842,7 @@ mod tests {
     /// `[[auth]]` block and the base carries none.
     #[test]
     fn the_credentials_layer_can_carry_the_whole_auth_block() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = crate::load_layered_from_str(&[
             minimal().to_owned(),
             r#"
@@ -855,6 +866,7 @@ mod tests {
     /// `type`.
     #[test]
     fn two_named_auth_providers_do_not_collapse_onto_their_type() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = crate::load_layered_from_str(&[
             format!(
                 "{}\n{}",
@@ -889,6 +901,7 @@ mod tests {
     /// to merge" would make a deliberate `registries = []` unwritable.
     #[test]
     fn an_empty_array_in_a_later_layer_clears_the_list() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = crate::load_layered_from_str(&[two_registries(), "registries = []\n".to_owned()])
             .expect("layered load failed");
 
@@ -900,6 +913,7 @@ mod tests {
     /// outright. Two `type = "token"` blocks are the realistic way to get here.
     #[test]
     fn an_array_with_a_repeated_identity_is_replaced_not_merged() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let cfg = crate::load_layered_from_str(&[
             format!(
                 "{}\n{}",
@@ -959,6 +973,7 @@ mod tests {
     /// hold together.
     #[test]
     fn validation_runs_on_the_merged_document() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The overlay alone has no [server]/[database]/[storage] and would never
         // deserialize; merged, it is a valid config.
         let cfg = crate::load_layered_from_str(&[
@@ -990,6 +1005,7 @@ mod tests {
     /// single-file case must not take it.
     #[test]
     fn a_single_layer_takes_the_unlayered_path() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let one = crate::load_layered_from_str(&[minimal()]).expect("single layer failed");
         let direct = crate::load_from_str(minimal()).expect("direct load failed");
         assert_eq!(one.server.port, direct.server.port);
@@ -1011,6 +1027,7 @@ mod tests {
 
     #[test]
     fn load_layered_merges_two_files_on_disk() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().expect("tempdir");
         let base = layer_file(dir.path(), "config.toml", minimal());
         let creds = layer_file(
@@ -1032,6 +1049,7 @@ mod tests {
     /// is a normal deployment mistake and the message has to say which.
     #[test]
     fn load_layered_names_the_file_it_could_not_read() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().expect("tempdir");
         let base = layer_file(dir.path(), "config.toml", minimal());
         let missing = dir.path().join("credentials.toml");
@@ -1049,6 +1067,7 @@ mod tests {
     /// reporting a parse error against a merged document no file contains.
     #[test]
     fn load_layered_names_the_file_that_would_not_parse() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().expect("tempdir");
         let base = layer_file(dir.path(), "config.toml", minimal());
         let broken = layer_file(dir.path(), "credentials.toml", "this is not = = toml\n");
@@ -1065,6 +1084,7 @@ mod tests {
     /// column in the parse error for the case almost every deployment is in.
     #[test]
     fn load_layered_with_one_path_reports_the_position_of_a_syntax_error() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().expect("tempdir");
         let broken = layer_file(dir.path(), "config.toml", "[server]\nport = = 8080\n");
 
@@ -1079,6 +1099,7 @@ mod tests {
 
     #[test]
     fn load_layered_with_no_paths_is_an_error_rather_than_a_default() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `impl Trait` cannot be turbofished, so the empty slice needs a type
         // from somewhere: an empty `Vec<String>` gives it one.
         let none: Vec<String> = Vec::new();
@@ -1587,21 +1608,18 @@ mod tests {
 
     #[test]
     fn env_override_replaces_database_url() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let mut cfg: AppConfig = toml::from_str(minimal()).unwrap();
-        std::env::set_var("PROXY_CACHE__DATABASE__URL", "postgresql://env-host/env-db");
-        cfg.apply_env_overrides();
-        std::env::remove_var("PROXY_CACHE__DATABASE__URL");
+        cfg.apply_env_overrides_from(&env_of(&[(
+            "PROXY_CACHE__DATABASE__URL",
+            "postgresql://env-host/env-db",
+        )]));
         assert_eq!(cfg.database.url, "postgresql://env-host/env-db");
     }
 
     #[test]
     fn env_override_replaces_server_port() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let mut cfg: AppConfig = toml::from_str(minimal()).unwrap();
-        std::env::set_var("PROXY_CACHE__SERVER__PORT", "9090");
-        cfg.apply_env_overrides();
-        std::env::remove_var("PROXY_CACHE__SERVER__PORT");
+        cfg.apply_env_overrides_from(&env_of(&[("PROXY_CACHE__SERVER__PORT", "9090")]));
         assert_eq!(cfg.server.port, 9090);
     }
 
@@ -2098,6 +2116,7 @@ mod tests {
 
     #[test]
     fn validate_layers_with_no_layers_is_an_error() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let none: [&str; 0] = [];
         assert!(crate::validate_layers(&none, &env_of(&[])).is_err());
     }
@@ -2267,11 +2286,8 @@ mod tests {
 
     #[test]
     fn env_override_filesystem_storage_path() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let mut cfg: AppConfig = toml::from_str(minimal()).unwrap();
-        std::env::set_var("PROXY_CACHE__STORAGE__PATH", "/new/path");
-        cfg.apply_env_overrides();
-        std::env::remove_var("PROXY_CACHE__STORAGE__PATH");
+        cfg.apply_env_overrides_from(&env_of(&[("PROXY_CACHE__STORAGE__PATH", "/new/path")]));
         if let StoragesConfig::Single(StorageBackendConfig::Filesystem(fs)) = &cfg.storage {
             assert_eq!(fs.path, "/new/path");
         } else {
@@ -2281,7 +2297,6 @@ mod tests {
 
     #[test]
     fn env_override_s3_storage_fields() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let toml = r#"
         [server]
         host = "0.0.0.0"
@@ -2297,13 +2312,11 @@ mod tests {
         region = "eu-west-1"
         "#;
         let mut cfg: AppConfig = toml::from_str(toml).unwrap();
-        std::env::set_var("PROXY_CACHE__STORAGE__BUCKET", "new-bucket");
-        std::env::set_var("PROXY_CACHE__STORAGE__REGION", "us-east-1");
-        std::env::set_var("PROXY_CACHE__STORAGE__ENDPOINT_URL", "http://rustfs:9000");
-        cfg.apply_env_overrides();
-        std::env::remove_var("PROXY_CACHE__STORAGE__BUCKET");
-        std::env::remove_var("PROXY_CACHE__STORAGE__REGION");
-        std::env::remove_var("PROXY_CACHE__STORAGE__ENDPOINT_URL");
+        cfg.apply_env_overrides_from(&env_of(&[
+            ("PROXY_CACHE__STORAGE__BUCKET", "new-bucket"),
+            ("PROXY_CACHE__STORAGE__REGION", "us-east-1"),
+            ("PROXY_CACHE__STORAGE__ENDPOINT_URL", "http://rustfs:9000"),
+        ]));
         if let StoragesConfig::Single(StorageBackendConfig::S3(s3)) = &cfg.storage {
             assert_eq!(s3.bucket, "new-bucket");
             assert_eq!(s3.region, "us-east-1");
@@ -2315,19 +2328,18 @@ mod tests {
 
     #[test]
     fn env_override_otel_creates_section_when_absent() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let mut cfg: AppConfig = toml::from_str(minimal()).unwrap();
         assert!(cfg.otel.is_none());
-        std::env::set_var("PROXY_CACHE__OTEL__ENDPOINT", "http://otel:4317");
-        cfg.apply_env_overrides();
-        std::env::remove_var("PROXY_CACHE__OTEL__ENDPOINT");
+        cfg.apply_env_overrides_from(&env_of(&[(
+            "PROXY_CACHE__OTEL__ENDPOINT",
+            "http://otel:4317",
+        )]));
         assert_eq!(cfg.otel.as_ref().unwrap().endpoint, "http://otel:4317");
         assert_eq!(cfg.otel.as_ref().unwrap().service_name, "batlehub");
     }
 
     #[test]
     fn env_override_otel_service_name_when_section_present() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let toml = format!(
             "{}\n{}",
             minimal(),
@@ -2338,29 +2350,21 @@ mod tests {
         "#
         );
         let mut cfg: AppConfig = toml::from_str(&toml).unwrap();
-        std::env::set_var("PROXY_CACHE__OTEL__SERVICE_NAME", "new-name");
-        cfg.apply_env_overrides();
-        std::env::remove_var("PROXY_CACHE__OTEL__SERVICE_NAME");
+        cfg.apply_env_overrides_from(&env_of(&[("PROXY_CACHE__OTEL__SERVICE_NAME", "new-name")]));
         assert_eq!(cfg.otel.as_ref().unwrap().service_name, "new-name");
     }
 
     #[test]
     fn env_override_static_dir() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let mut cfg: AppConfig = toml::from_str(minimal()).unwrap();
-        std::env::set_var("PROXY_CACHE__SERVER__STATIC_DIR", "/var/www");
-        cfg.apply_env_overrides();
-        std::env::remove_var("PROXY_CACHE__SERVER__STATIC_DIR");
+        cfg.apply_env_overrides_from(&env_of(&[("PROXY_CACHE__SERVER__STATIC_DIR", "/var/www")]));
         assert_eq!(cfg.server.static_dir.as_deref(), Some("/var/www"));
     }
 
     #[test]
     fn env_override_database_max_connections() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let mut cfg: AppConfig = toml::from_str(minimal()).unwrap();
-        std::env::set_var("PROXY_CACHE__DATABASE__MAX_CONNECTIONS", "25");
-        cfg.apply_env_overrides();
-        std::env::remove_var("PROXY_CACHE__DATABASE__MAX_CONNECTIONS");
+        cfg.apply_env_overrides_from(&env_of(&[("PROXY_CACHE__DATABASE__MAX_CONNECTIONS", "25")]));
         assert_eq!(cfg.database.max_connections, 25);
     }
 
@@ -2373,21 +2377,18 @@ mod tests {
 
     #[test]
     fn env_override_database_min_connections() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let mut cfg: AppConfig = toml::from_str(minimal()).unwrap();
-        std::env::set_var("PROXY_CACHE__DATABASE__MIN_CONNECTIONS", "3");
-        cfg.apply_env_overrides();
-        std::env::remove_var("PROXY_CACHE__DATABASE__MIN_CONNECTIONS");
+        cfg.apply_env_overrides_from(&env_of(&[("PROXY_CACHE__DATABASE__MIN_CONNECTIONS", "3")]));
         assert_eq!(cfg.database.min_connections, 3);
     }
 
     #[test]
     fn env_override_database_acquire_timeout_secs() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let mut cfg: AppConfig = toml::from_str(minimal()).unwrap();
-        std::env::set_var("PROXY_CACHE__DATABASE__ACQUIRE_TIMEOUT_SECS", "5");
-        cfg.apply_env_overrides();
-        std::env::remove_var("PROXY_CACHE__DATABASE__ACQUIRE_TIMEOUT_SECS");
+        cfg.apply_env_overrides_from(&env_of(&[(
+            "PROXY_CACHE__DATABASE__ACQUIRE_TIMEOUT_SECS",
+            "5",
+        )]));
         assert_eq!(cfg.database.acquire_timeout_secs, 5);
     }
 
@@ -2749,6 +2750,7 @@ path = "./tmp"
 
     #[test]
     fn parse_config_firewall_only() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let toml = format!(
             "{}\n{}",
             minimal(),
@@ -2769,6 +2771,7 @@ path = "./tmp"
     /// self-contained (no `${VAR}` env placeholders) so it loads with no setup.
     #[test]
     fn example_s3_config_loads_and_validates() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../config.example-s3.toml");
         let cfg = load(path).expect("config.example-s3.toml must load and validate");
         let types: std::collections::HashSet<&str> = cfg
