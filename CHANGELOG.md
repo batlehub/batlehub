@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Helm: `writableConfig`.** The first `--config` file can live on a claim of
+  its own (`<fullname>-writable-config`, kept on uninstall), seeded from the
+  chart's `config` by a `seed-config` init container, so the config editor,
+  `config/from-content` and an operator pushing its rendered configuration
+  (weebo-batlehub's `manageConfig`) can rewrite it, and what they wrote
+  survives a restart. `seed: IfNotPresent` (the default) seeds it once;
+  `Always` puts the chart's copy back at every pod start. Off by default; the
+  credentials layer and the worker keep their read-only config.
+
 ### Changed
 
 - **`bypass_roles` means "this role or higher", on every gate.**

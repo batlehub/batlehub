@@ -459,6 +459,8 @@ and kept in step with it by a drift gate. This is the shortlist.
 | `credentials.enabled` | `false` | Mount a second config file, merged over `config`, from its own Secret |
 | `credentials.existingSecret` | `""` | Use a Secret managed elsewhere instead of one this chart renders |
 | `credentials.config` | `{}` | The contents of that second file, same shape as `config` |
+| `writableConfig.enabled` | `false` | Keep the first config file on its own claim, seeded from `config` by an init container, so the config editor and an operator's pushed config can rewrite it and survive restarts |
+| `writableConfig.seed` | `IfNotPresent` | `IfNotPresent`: `config` seeds the file once, later edits of `config` do not reach it. `Always`: reseeded at every pod start |
 | `ingress.enabled` | `false` | Create an Ingress resource |
 | `persistence.enabled` | `true` | Create a PVC for cache |
 | `persistence.size` | `10Gi` | PVC capacity |
