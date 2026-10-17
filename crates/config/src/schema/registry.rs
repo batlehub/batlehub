@@ -271,6 +271,19 @@ pub struct RegistryConfig {
     /// nobody sees.
     #[serde(default)]
     pub roles: Option<GalaxyRoleMode>,
+    /// helm only: what an `index.yaml` entry whose `urls[0]` is `oci://`
+    /// becomes in the served index (RFC 0029 §4.4).
+    ///
+    /// - `drop` (the default when absent) — the entry is omitted, so the chart
+    ///   version is not installable through this registry: an entry the proxy
+    ///   cannot serve is one its policy cannot reach.
+    /// - `relay` — the entry is served as upstream wrote it, and `helm` pulls it
+    ///   from the OCI registry directly, **past this instance** — uncached and
+    ///   ungated. Warned at every reload.
+    ///
+    /// Rejected on any other type, for the reason `roles` is.
+    #[serde(default)]
+    pub oci_entries: Option<HelmOciEntries>,
     #[serde(default)]
     pub cache: CachePolicy,
     #[serde(default)]
@@ -1305,3 +1318,4 @@ impl Default for CachePolicy {
 /// Re-exported from `batlehub_core`: the value lives on `HotConfig`, which is
 /// core's, so the type has to be too (RFC 0031 §6.3).
 pub use batlehub_core::services::galaxy::GalaxyRoleMode;
+pub use batlehub_core::services::helm::OciEntries as HelmOciEntries;

@@ -923,6 +923,67 @@ const NIX: &[Conformance] = &[
     ),
 ];
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Helm (RFC 0029)
+//
+// Every client line was **observed on the wire**: `tests/heavy/helm.sh` drives
+// helm v4.3.0 through a logging tap, and the closed-world phase drives v3.16.4.
+// `helm repo add`/`update` read `index.yaml` relative to the repository URL;
+// `helm pull` then asks for whatever the served index's `urls[0]` names, and
+// this instance rewrites every one to `charts/{file}`, so those are the only
+// two read paths a client sends. `--verify` appends `.prov` to the same URL.
+//
+// The hazard is the npm catch-all: `/proxy/{r}/helm/index.yaml` is also npm
+// package `helm` at version `index.yaml`. Every helm route carries the
+// `is_helm` guard, and this is where it is checked.
+//
+// The ChartMuseum lines are the API `helm cm-push` and `curl` speak; in this
+// proxy-mode fixture they answer a refusal, which is still their own handler.
+// ─────────────────────────────────────────────────────────────────────────────
+const HELM: &[Conformance] = &[
+    Conformance::get(
+        "/proxy/helm/helm/index.yaml",
+        "/proxy/{registry}/helm/index.yaml",
+        "helm v4.3.0, observed: `helm repo add` / `helm repo update` through the tap",
+    )
+    .must_find("demo"),
+    Conformance::get(
+        "/proxy/helm/helm/charts/demo-1.1.0.tgz",
+        "/proxy/{registry}/helm/charts/{file}",
+        "helm v4.3.0, observed: `helm pull` — the rewritten `urls[0]` of the served index",
+    ),
+    Conformance::get(
+        "/proxy/helm/helm/charts/demo-1.1.0.tgz.prov",
+        "/proxy/{registry}/helm/charts/{file}",
+        "helm v4.3.0, observed: `helm pull --verify` — `.prov` appended to the archive URL",
+    ),
+    Conformance::post(
+        "/proxy/helm/helm/api/charts",
+        "/proxy/{registry}/helm/api/charts",
+        "ChartMuseum's upload, observed: `curl --data-binary` in tests/heavy/helm.sh",
+    ),
+    Conformance::get(
+        "/proxy/helm/helm/api/charts",
+        "/proxy/{registry}/helm/api/charts",
+        "ChartMuseum `GET /api/charts` — the listing",
+    ),
+    Conformance::get(
+        "/proxy/helm/helm/api/charts/demo",
+        "/proxy/{registry}/helm/api/charts/{name}",
+        "ChartMuseum `GET /api/charts/{name}`",
+    ),
+    Conformance::get(
+        "/proxy/helm/helm/api/charts/demo/1.1.0",
+        "/proxy/{registry}/helm/api/charts/{name}/{version}",
+        "ChartMuseum `GET /api/charts/{name}/{version}`",
+    ),
+    Conformance::delete(
+        "/proxy/helm/helm/api/charts/demo/1.1.0",
+        "/proxy/{registry}/helm/api/charts/{name}/{version}",
+        "ChartMuseum's delete, observed: `curl -X DELETE` in tests/heavy/helm.sh",
+    ),
+];
+
 const SUITES: &[(&str, &[Conformance])] = &[
     ("npm", NPM),
     ("rubygems", RUBYGEMS),
@@ -936,6 +997,7 @@ const SUITES: &[(&str, &[Conformance])] = &[
     ("galaxy", GALAXY),
     ("nix", NIX),
     ("apk", APK),
+    ("helm", HELM),
     ("others", OTHERS),
     ("long-tail", LONG_TAIL),
 ];

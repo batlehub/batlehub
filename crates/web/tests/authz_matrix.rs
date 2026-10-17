@@ -419,6 +419,18 @@ fn matrix() -> Vec<Row> {
             "/proxy/reg/galaxy/api/v3/artifacts/collections/acme-util-9.8.7.tar.gz",
         )
         .coord("acme.util", "9.8.7"),
+        // ── helm (RFC 0029) ──────────────────────────────────────────────────
+        // The archive is addressed by *filename*, parsed back into its
+        // coordinate before it becomes a key — the galaxy tarball's shape.
+        Row::new("helm", "/proxy/reg/helm/index.yaml"),
+        Row::new("helm", "/proxy/reg/helm/charts/pkg-9.8.7.tgz"),
+        // The fixture publishes no `.prov`, so a permitted caller is answered
+        // `404` too; the archive read that authorizes the `.prov` runs first,
+        // which is what the two denial axes still prove.
+        Row::new("helm", "/proxy/reg/helm/charts/pkg-9.8.7.tgz.prov").no_control(),
+        Row::new("helm", "/proxy/reg/helm/api/charts"),
+        Row::new("helm", "/proxy/reg/helm/api/charts/pkg"),
+        Row::new("helm", "/proxy/reg/helm/api/charts/pkg/9.8.7"),
         // ── cargo ────────────────────────────────────────────────────────────
         Row::new("cargo", "/proxy/reg/pkg/9.8.7/download").meta(cargo_index_meta),
         // ── npm ──────────────────────────────────────────────────────────────
@@ -1056,6 +1068,11 @@ const ROUTE_INVENTORY: &[(&str, Coverage)] = &[
     ("/proxy/{registry}/-/v1/search", Coverage::Row),
     ("/proxy/{registry}/-/whoami", Coverage::NoPackage("echoes the caller's own identity, never a package")),
     ("/proxy/{registry}/.well-known/terraform.json", Coverage::NoPackage("Terraform service discovery; static endpoint map")),
+    ("/proxy/{registry}/helm/api/charts", Coverage::Row),
+    ("/proxy/{registry}/helm/api/charts/{name}", Coverage::Row),
+    ("/proxy/{registry}/helm/api/charts/{name}/{version}", Coverage::Row),
+    ("/proxy/{registry}/helm/charts/{file}", Coverage::Row),
+    ("/proxy/{registry}/helm/index.yaml", Coverage::Row),
     ("/proxy/{registry}/galaxy/api/", Coverage::NoPackage("the discovery document: the API versions this registry serves, composed here and naming no package")),
     ("/proxy/{registry}/galaxy/api/v1/roles/", Coverage::NoRow("the v1 role surface has no local mode — there is no publish protocol for roles — so this local-registry matrix cannot seed one. `tests/heavy/authz.sh`'s galaxy phase drives the collections boundary with a real client, and `closed_world.sh`'s ansible phase drives the role reads")),
     ("/proxy/{registry}/galaxy/api/v1/roles/{id}/download/{filename}", Coverage::NoRow("no local mode for roles; see the note on `v1/roles/` above")),
@@ -1790,6 +1807,23 @@ fn nuget_publish_body() -> (Vec<u8>, &'static str) {
     (body, "multipart/form-data; boundary=matrixboundary")
 }
 
+/// A packaged chart as the raw body, ChartMuseum's `--data-binary` shape. Real,
+/// because the handler reads `Chart.yaml` out of it before the gate.
+fn helm_publish_body() -> (Vec<u8>, &'static str) {
+    use std::io::Write as _;
+    let chart = b"apiVersion: v2\nname: pkg\nversion: 9.8.7\n";
+    let mut tar = tar::Builder::new(Vec::new());
+    let mut header = tar::Header::new_gnu();
+    header.set_size(chart.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    tar.append_data(&mut header, "pkg/Chart.yaml", chart.as_slice())
+        .unwrap();
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    gz.write_all(&tar.into_inner().unwrap()).unwrap();
+    (gz.finish().unwrap(), "application/octet-stream")
+}
+
 /// The `ansible-galaxy collection publish` envelope: `sha256` and `file`.
 ///
 /// A real collection tarball, because the publish handler reads `MANIFEST.json`
@@ -1967,6 +2001,21 @@ fn write_matrix() -> Vec<WriteRow> {
         // probe has to look under the name the tarball actually declares, or
         // the positive control sees no change and reports the route broken.
         .coord("acme.util", "9.8.7"),
+        // ── helm ─────────────────────────────────────────────────────────────
+        // The coordinate is inside `Chart.yaml`, read before the gate.
+        WriteRow::new(
+            "helm",
+            Verb::Post,
+            "/proxy/reg/helm/api/charts",
+            helm_publish_body,
+        ),
+        WriteRow::new(
+            "helm",
+            Verb::Delete,
+            "/proxy/reg/helm/api/charts/pkg/9.8.7",
+            empty_body,
+        )
+        .seeded(),
         // ── cargo ────────────────────────────────────────────────────────────
         WriteRow::new(
             "cargo",
@@ -2370,6 +2419,9 @@ const WRITE_ROUTE_INVENTORY: &[(&str, &str, WriteCoverage)] = &[
     ("POST", "/proxy/{registry}/-/npm/v1/security/advisories/bulk", WriteCoverage::NoWrite("npm advisories, bulk form; same shape")),
     // ── galaxy ───────────────────────────────────────────────────────────────
     ("POST", "/proxy/{registry}/galaxy/api/v3/artifacts/collections/", WriteCoverage::Row),
+    // ── helm ─────────────────────────────────────────────────────────────────
+    ("POST", "/proxy/{registry}/helm/api/charts", WriteCoverage::Row),
+    ("DELETE", "/proxy/{registry}/helm/api/charts/{name}/{version}", WriteCoverage::Row),
     // ── cargo ────────────────────────────────────────────────────────────────
     ("PUT", "/proxy/{registry}/api/v1/crates/new", WriteCoverage::Row),
     ("DELETE", "/proxy/{registry}/api/v1/crates/{name}/{version}/yank", WriteCoverage::Row),
@@ -2628,6 +2680,18 @@ async fn coverage_claims_match_the_routes_rows_actually_reach() {
     .await;
     let devfile_app =
         build_local_registry_app(devfile_parts, batlehub_web::CargoIndexMap::default(), None).await;
+    // The helm routes carry the same kind of guard (RFC 0029), for the same
+    // reason: `…/helm/index.yaml` is an npm version route on the app above.
+    let helm_parts = local_only_app_parts_with_policy(
+        "reg",
+        "helm",
+        RegistryMode::Local,
+        true,
+        rbac_policy_deny_anonymous,
+    )
+    .await;
+    let helm_app =
+        build_local_registry_app(helm_parts, batlehub_web::CargoIndexMap::default(), None).await;
 
     let mut reached: BTreeSet<String> = BTreeSet::new();
     let mut unrouted: Vec<&str> = Vec::new();
@@ -2642,6 +2706,8 @@ async fn coverage_claims_match_the_routes_rows_actually_reach() {
         let req = TestRequest::get().uri(row.uri).to_request();
         let resp = if row.kind == "devfile" {
             call_service(&devfile_app, req).await
+        } else if row.kind == "helm" {
+            call_service(&helm_app, req).await
         } else {
             call_service(&app, req).await
         };

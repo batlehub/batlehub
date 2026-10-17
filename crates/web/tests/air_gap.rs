@@ -778,6 +778,83 @@ mod bundle {
 
     /// An entry naming a registry this instance does not have is rejected
     /// per entry, and the rest of the bundle still lands.
+    /// RFC 0029 §6.11 through the real door: a chart archive and its `.prov`
+    /// carried with no facts, so the index entry can only come from the
+    /// archive's own `Chart.yaml`, read at import. Without it the entry has
+    /// no `apiVersion`, and `helm` drops it from the index as invalid.
+    #[actix_web::test]
+    async fn an_imported_chart_gets_an_index_entry_from_its_own_chart_yaml() {
+        let (signing, public) = key();
+        let app = signed_lab_of(&public, "helm").await;
+        let chart = {
+            let yaml = "apiVersion: v2\nname: demo\nversion: 1.2.0\nappVersion: \"2.0\"\n\
+                        description: a carried chart\ntype: application\n";
+            let mut tar = tar::Builder::new(Vec::new());
+            for (path, body) in [("demo/Chart.yaml", yaml), ("demo/values.yaml", "a: 1\n")] {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(body.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                tar.append_data(&mut header, path, body.as_bytes()).unwrap();
+            }
+            let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            std::io::Write::write_all(&mut gz, &tar.into_inner().unwrap()).unwrap();
+            gz.finish().unwrap()
+        };
+        let prov = b"-----BEGIN PGP SIGNED MESSAGE-----\n".to_vec();
+        let file = |key: &str, bytes: &[u8]| BundleEntry {
+            package_name: Some("demo".into()),
+            version: Some("1.2.0".into()),
+            ..entry(key, bytes)
+        };
+        let body = build(
+            &signing,
+            vec![
+                file(&format!("{REG}/demo/1.2.0/chart"), &chart),
+                file(&format!("{REG}/demo/1.2.0/prov"), &prov),
+            ],
+            vec![chart.clone(), prov.clone()],
+        );
+        let resp = post(&app, body).await;
+        assert_eq!(resp.status(), 200);
+        let v: serde_json::Value = actix_web::test::read_body_json(resp).await;
+        assert_eq!(v["imported"], 2, "{v}");
+
+        let resp = get(&app, &format!("/proxy/{REG}/helm/index.yaml")).await;
+        assert_eq!(resp.status(), 200);
+        assert_eq!(header(&resp, "X-BatleHub-Listing"), Some("synthesised"));
+        let text = String::from_utf8(actix_web::test::read_body(resp).await.to_vec()).unwrap();
+        let index = batlehub_core::services::helm::parse_index(&text).unwrap();
+        let entries = index["entries"]["demo"].as_array().expect("demo is listed");
+        assert_eq!(
+            entries.len(),
+            1,
+            "the .prov is a file of 1.2.0, not a version: {text}"
+        );
+        let e = &entries[0];
+        assert_eq!(
+            e["apiVersion"], "v2",
+            "helm skips an entry without it: {text}"
+        );
+        assert_eq!(e["appVersion"], "2.0");
+        assert_eq!(e["description"], "a carried chart");
+        assert_eq!(e["type"], "application");
+        assert_eq!(
+            e["digest"],
+            batlehub_core::services::integrity::sha256_hex(&chart)
+        );
+
+        for (file, bytes) in [("demo-1.2.0.tgz", &chart), ("demo-1.2.0.tgz.prov", &prov)] {
+            let resp = get(&app, &format!("/proxy/{REG}/helm/charts/{file}")).await;
+            assert_eq!(resp.status(), 200, "{file}");
+            assert_eq!(
+                &actix_web::test::read_body(resp).await[..],
+                &bytes[..],
+                "{file}"
+            );
+        }
+    }
+
     #[actix_web::test]
     async fn an_entry_for_an_unknown_registry_is_rejected_without_failing_the_import() {
         let (signing, public) = key();
@@ -2965,4 +3042,55 @@ async fn a_blocked_held_devfile_version_leaves_the_composed_index() {
         node["versions"][0]["default"], true,
         "the default moves with it"
     );
+}
+
+// ── helm (RFC 0029 §6.11) ───────────────────────────────────────────────────
+
+/// A disconnected helm registry holding `demo@1.1.0` and `@1.0.0` — each as its
+/// archive with the index entry its `meta:` entry carries — and `demo@1.0.0`'s
+/// `.prov`, which is a file of the version rather than another one.
+async fn helm_lab() -> (impl TestService, Lab) {
+    let facts = |v: &str| {
+        serde_json::json!({"helm": {
+            "apiVersion": "v2", "name": "demo", "version": v, "appVersion": "2.0",
+            "description": "a held chart", "created": "2026-09-01T00:00:00Z"
+        }})
+    };
+    holding_lab_extra(
+        "helm",
+        true,
+        &[
+            ("demo", "1.1.0", Some("chart"), facts("1.1.0")),
+            ("demo", "1.0.0", Some("chart"), facts("1.0.0")),
+            ("demo", "1.0.0", Some("prov"), serde_json::Value::Null),
+        ],
+    )
+    .await
+}
+
+#[actix_web::test]
+async fn a_held_chart_gets_its_index_composed_from_what_is_held() {
+    let (app, _lab) = helm_lab().await;
+    let resp = get(&app, &format!("/proxy/{REG}/helm/index.yaml")).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(header(&resp, "X-BatleHub-Listing"), Some("synthesised"));
+    let text = String::from_utf8(actix_web::test::read_body(resp).await.to_vec()).unwrap();
+    let index = batlehub_core::services::helm::parse_index(&text).unwrap();
+    assert_eq!(
+        batlehub_core::services::helm::versions_of(&index, "demo"),
+        ["1.1.0", "1.0.0"],
+        "one entry per held archive, the .prov is not a version"
+    );
+    let entry = &index["entries"]["demo"][0];
+    assert_eq!(entry["description"], "a held chart");
+    assert_eq!(entry["digest"].as_str().map(str::len), Some(64));
+    assert_eq!(
+        entry["urls"][0],
+        format!("http://localhost:8080/proxy/{REG}/helm/charts/demo-1.1.0.tgz")
+    );
+
+    for file in ["demo-1.1.0.tgz", "demo-1.0.0.tgz", "demo-1.0.0.tgz.prov"] {
+        let resp = get(&app, &format!("/proxy/{REG}/helm/charts/{file}")).await;
+        assert_eq!(resp.status(), 200, "{file} is held and named by the index");
+    }
 }

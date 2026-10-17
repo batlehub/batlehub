@@ -1455,6 +1455,7 @@ const composerAuthSnippet = `{
                 <option value="sdkman">SDKMAN</option>
                 <option value="rustup">Rust toolchain (rustup)</option>
                 <option value="devfile">Devfile registry (Che, odo)</option>
+                <option value="helm">Helm chart repository</option>
                 <option value="generic">Generic (raw file mirror)</option>
               </select>
             </label>

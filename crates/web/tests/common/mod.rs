@@ -339,6 +339,33 @@ impl RegistryClient for FixedRegistry {
                 })))
             }
 
+            // A Helm `index.yaml`, already parsed — the adapter hands the
+            // proxy JSON. `demo`'s URLs are absolute on another host, the shape
+            // GitHub-hosted repositories publish; `ocichart` is Bitnami's
+            // shape, a pointer into an OCI registry (RFC 0029 §2.5).
+            ("helm", DocumentKind::Versions) => {
+                let entry = |v: &str| {
+                    serde_json::json!({
+                        "apiVersion": "v2", "name": "demo", "version": v,
+                        "appVersion": "1.10", "created": "2020-01-02T00:00:00Z",
+                        "digest": "0000000000000000000000000000000000000000000000000000000000000000",
+                        "annotations": {"artifacthub.io/license": "MIT"},
+                        "urls": [format!("https://github.invalid/releases/download/demo-{v}/demo-{v}.tgz")]
+                    })
+                };
+                Ok(VersionDocument::json(serde_json::json!({
+                    "apiVersion": "v1",
+                    "entries": {
+                        "demo": [entry("2.0.0-beta.1"), entry("1.1.0"), entry("1.0.0")],
+                        "ocichart": [{
+                            "name": "ocichart", "version": "1.0.0",
+                            "urls": ["oci://registry.invalid/charts/ocichart"]
+                        }]
+                    },
+                    "generated": "2020-03-01T00:00:00Z"
+                })))
+            }
+
             ("nuget", DocumentKind::Versions) => Ok(VersionDocument::json(serde_json::json!({
                 "versions": ["1.0.0", "1.1.0", "2.0.0-beta.1"]
             }))),
@@ -1871,6 +1898,13 @@ pub async fn make_app_with_defaults_and_access(
             "nix".to_owned(),
             FixedRegistry::new("nix") as Arc<dyn RegistryClient>,
         ),
+        // RFC 0029: `…/helm/index.yaml` is also an npm package `helm` at
+        // version `index.yaml` — the conformance fixture asserts the `is_helm`
+        // guard wins.
+        (
+            "helm".to_owned(),
+            FixedRegistry::new("helm") as Arc<dyn RegistryClient>,
+        ),
     ]
     .into();
 
@@ -1922,6 +1956,7 @@ pub async fn make_app_with_defaults_and_access(
             Arc::new(rbac_policy(repo_dyn.clone()).0),
         ),
         ("nix".to_owned(), Arc::new(rbac_policy(repo_dyn.clone()).0)),
+        ("helm".to_owned(), Arc::new(rbac_policy(repo_dyn.clone()).0)),
     ]
     .into();
     // Every fixture registry gets a hierarchy, derived from the same
@@ -1998,6 +2033,7 @@ pub async fn make_app_with_defaults_and_access(
         ("rustup", "rustup"),
         ("galaxy", "galaxy"),
         ("nix", "nix"),
+        ("helm", "helm"),
     ]);
     let cargo_indexes = batlehub_web::CargoIndexMap::default();
     finish_test_app(

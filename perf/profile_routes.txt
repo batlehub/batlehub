@@ -238,6 +238,13 @@ GET /proxy/{registry}/galaxy/api/v3/collections/{namespace}/{name}/versions/{ver
 GET /proxy/{registry}/galaxy/api/v3/imports/collections/{task}/	skip: no arm yet
 GET /proxy/{registry}/gems/{filename}	skip: no arm yet
 GET /proxy/{registry}/generic/{path}	profiled
+POST /proxy/{registry}/helm/api/charts	skip: no arm yet
+GET /proxy/{registry}/helm/api/charts	skip: no arm yet
+GET /proxy/{registry}/helm/api/charts/{name}	skip: no arm yet
+GET /proxy/{registry}/helm/api/charts/{name}/{version}	skip: no arm yet
+DELETE /proxy/{registry}/helm/api/charts/{name}/{version}	skip: no arm yet
+GET /proxy/{registry}/helm/charts/{file}	profiled
+GET /proxy/{registry}/helm/index.yaml	profiled
 GET /proxy/{registry}/index	skip: no arm yet
 GET /proxy/{registry}/index/all	skip: no arm yet
 GET /proxy/{registry}/index/sample	skip: no arm yet

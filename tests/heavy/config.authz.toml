@@ -843,3 +843,23 @@ admin = ["*"]
 [registries.grants]
 "user:authz-reader" = ["releases:read", "releases:list", "source:read"]
 "user:authz-lister" = ["releases:list"]
+
+# ── helm (RFC 0029) ──────────────────────────────────────────────────────────
+#
+# Local, so the phase publishes its own chart and reads it back. `helm` sends
+# basic auth proactively on every request to the repository's host — no `401`
+# challenge needed — and the served index puts every chart URL on that host, so
+# the index and the archive are both read as the identity the client presented.
+[[registries]]
+type = "helm"
+name = "authz-helm-${HEAVY_RUN}"
+mode = "local"
+
+[registries.rbac]
+anonymous = []
+user = []
+admin = ["*"]
+
+[registries.grants]
+"user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+"user:authz-lister" = ["releases:list"]

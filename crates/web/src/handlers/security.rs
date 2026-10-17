@@ -163,7 +163,11 @@ pub fn native_body(kind: RegistryKind, message: &str) -> (&'static str, String) 
         // to the next substituter or builds, in its own words. So the body is
         // only ever read by a person with `curl`, and text is the honest
         // shape (RFC 0028 §2).
-        | RegistryKind::Nix => (TEXT, format!("{message}\n")),
+        | RegistryKind::Nix
+        // helm prints `failed to fetch … : 403 Forbidden` from the status; the
+        // ChartMuseum API's own errors are `{"error": …}`, but a refused
+        // archive is not one of them.
+        | RegistryKind::Helm => (TEXT, format!("{message}\n")),
     }
 }
 

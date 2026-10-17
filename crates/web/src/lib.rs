@@ -514,6 +514,7 @@ pub use spa::{configure_spa, narrow_csp, SpaDir};
         (name = "proxy/nodedist",   description = "Node distributions (nvm, fnm, n, mise) — the nodejs.org/dist tree as a typed registry: filtered index.tab/index.json listings, per-release tarballs and SHASUMS256.txt byte-exact"),
         (name = "proxy/nix",        description = "Nix binary cache (nix, cachix-style substituters) — the substituter protocol as a registry kind: narinfos relayed with only `URL:` rewritten so every `Sig:` still verifies, a blocked store path absent as the protocol's own 404, NARs cached under a coordinate, and stale upstream-shaped NAR URLs resolved through a reverse index"),
         (name = "proxy/devfile",    description = "Devfile registries (Eclipse Che, registry-library, odo) — the stack catalogue as a registry kind: the legacy and v2 indexes filtered registry-wide, each stack version's devfile, OCI manifest and layers relayed byte-exact and verified, a digest served only when an allowed version names it"),
+        (name = "proxy/helm",       description = "Helm chart repositories (classic index.yaml) — the index filtered registry-wide with every chart URL rewritten to this instance, archives and .prov files relayed byte-exact from the URL the upstream index names, and ChartMuseum's upload API and listings in local mode"),
         (name = "proxy/galaxy",     description = "Ansible Galaxy — the collections API v3 as a registry kind: the versions list filtered and served as one page, download_url rewritten to this instance, collection publish with its import-task poll, and the v1 role surface behind `roles`"),
         (name = "proxy/rustup",     description = "Rust toolchains (rustup, mise) — the static.rust-lang.org tree as a typed registry: channel manifests filtered and their .sha256 recomputed, blocked releases refused or repaired, component archives cached per release"),
         (name = "proxy/sdkman",     description = "SDKMAN — the candidates API and the download broker as one registry: filtered versions/all, candidates/default and the rendered sdk list table, a blocked version answered `invalid` at candidates/validate, hook scripts relayed byte-exact, the broker's 302 followed server-side and cached"),
@@ -688,6 +689,10 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 goproxy_file, goproxy_latest, goproxy_list, goproxy_publish, goproxy_sumdb,
                 goproxy_vuln_entry, goproxy_vuln_index, goproxy_vuln_query,
             },
+            helm::{
+                helm_api_chart, helm_api_list, helm_api_version, helm_chart, helm_delete,
+                helm_index, helm_publish,
+            },
             jetbrains::jetbrains_get,
             jetbrains_marketplace::{
                 jbm_aggregation, jbm_broken_plugins, jbm_comments, jbm_compatible_updates,
@@ -788,6 +793,17 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(devfile_oci_manifest); // GET|HEAD …/v2/{ns}/{stack}/manifests/{reference}
     cfg.service(devfile_oci_blob); // GET|HEAD …/v2/{ns}/{stack}/blobs/{digest}
     cfg.service(devfile_oci_tags); // GET …/v2/{ns}/{stack}/tags/list
+                                   // Helm chart repositories (RFC 0029), guarded by `is_helm` for devfile's
+                                   // reason: `…/helm/index.yaml` is otherwise an npm package `helm` at a
+                                   // version called `index.yaml`. `api/charts/{name}/{version}` before
+                                   // `api/charts/{name}` before `api/charts`.
+    cfg.service(helm_index); // GET|HEAD …/helm/index.yaml       (filtered, rewritten)
+    cfg.service(helm_chart); // GET|HEAD …/helm/charts/{file}    (.tgz / .tgz.prov)
+    cfg.service(helm_publish); // POST     …/helm/api/charts
+    cfg.service(helm_delete); // DELETE   …/helm/api/charts/{name}/{version}
+    cfg.service(helm_api_version); // GET|HEAD …/helm/api/charts/{name}/{version}
+    cfg.service(helm_api_chart); // GET|HEAD …/helm/api/charts/{name}
+    cfg.service(helm_api_list); // GET|HEAD …/helm/api/charts
 
     // Cargo publish API (literal "api/v1" sub-path — most specific, must precede download)
     //

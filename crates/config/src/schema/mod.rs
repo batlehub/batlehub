@@ -44,9 +44,9 @@ pub use notifications::{
 };
 pub use registry::{
     default_true, BetaChannelConfig, CachePolicy, FeatureFlagsConfig, GalaxyRoleMode,
-    GrantsShadowConfig, Immutable, IntegrityConfig, NamespaceConfig, QuotaConfig, QuotaEnforcement,
-    ReadmeConfig, RegistryConfig, RegistryMode, RepoSigningConfig, RetentionConfig, SbomConfig,
-    SigningConfig, UpstreamDetailConfig, VersioningPolicy,
+    GrantsShadowConfig, HelmOciEntries, Immutable, IntegrityConfig, NamespaceConfig, QuotaConfig,
+    QuotaEnforcement, ReadmeConfig, RegistryConfig, RegistryMode, RepoSigningConfig,
+    RetentionConfig, SbomConfig, SigningConfig, UpstreamDetailConfig, VersioningPolicy,
 };
 pub use release_imports::{ImportPrincipalConfig, ReleaseImportConfig, MIN_IMPORT_INTERVAL_SECS};
 pub use routing::{
@@ -710,6 +710,7 @@ impl AppConfig {
         self.signed_url_warnings(&mut out);
         self.require_signed_release_warnings(&mut out);
         self.vsx_signing_warnings(&mut out);
+        self.helm_oci_relay_warnings(&mut out);
         self.nix_signing_warnings(&mut out);
         self.release_import_warnings(&mut out);
         self.forge_warnings(&mut out);
@@ -1194,6 +1195,27 @@ impl AppConfig {
                         "registry '{}' is in proxy mode with a [registries.vsx_signing] key: \
                          nothing is published there, so the key signs nothing. An upstream's \
                          signature is relayed whether or not a key is configured.",
+                        registry.name
+                    ),
+                ));
+            }
+        }
+    }
+
+    /// RFC 0029 §4.5: `oci_entries = "relay"` is a documented bypass — the
+    /// registry hands out entries `helm` installs from an OCI registry, past
+    /// this instance. Said at every reload, and on the console's registry card.
+    fn helm_oci_relay_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        for (index, registry) in self.registries.iter().enumerate() {
+            if registry.oci_entries == Some(HelmOciEntries::Relay) {
+                out.push(ConfigWarning::new(
+                    warnings::HELM_OCI_RELAY,
+                    format!("registries[{index}].oci_entries"),
+                    format!(
+                        "registry '{}' relays oci:// entries of its index.yaml: helm installs \
+                         those chart versions straight from the OCI registry, past this \
+                         instance — uncached, unblockable and outside its audit trail. Use \
+                         oci_entries = \"drop\" to keep every listed chart behind the proxy.",
                         registry.name
                     ),
                 ));
@@ -2440,6 +2462,7 @@ impl AppConfig {
             Self::validate_registry_broker_url(registry, kind)?;
             Self::validate_registry_deny_components(registry, kind)?;
             Self::validate_registry_roles(registry, kind)?;
+            Self::validate_registry_oci_entries(registry, kind)?;
             Self::validate_registry_warm_platforms(registry, kind)?;
             Self::validate_registry_refs(registry, kind)?;
             // Beside `refs`, not inside it: `[registries.raw]` and
@@ -2551,6 +2574,39 @@ impl AppConfig {
                          registry also serves 'rustup/' and 'manifests.txt' from the root",
                         registry.name,
                         path.trim_end_matches("/dist")
+                    );
+                }
+            }
+        }
+        // A helm upstream is the repository *directory* — what `helm repo add`
+        // takes — and there is one: a registry is one repository, and a second
+        // one is a second registry block (RFC 0029 §3, §4.5). `hybrid` needs it
+        // too, since there is no default chart repository to fall back to.
+        if kind == batlehub_core::entities::RegistryKind::Helm {
+            if registry.mode == RegistryMode::Hybrid && registry.upstreams.is_empty() {
+                bail!(
+                    "registry '{}': helm hybrid mode requires an upstream chart repository (no \
+                     default exists)",
+                    registry.name
+                );
+            }
+            if registry.upstreams.len() > 1 {
+                bail!(
+                    "registry '{}': a helm registry serves one chart repository, and {} are \
+                     configured — add a second registry block for the second repository",
+                    registry.name,
+                    registry.upstreams.len()
+                );
+            }
+            for upstream in &registry.upstreams {
+                let path = upstream.split(['?', '#']).next().unwrap_or(upstream);
+                let path = path.trim_end_matches('/');
+                if path.ends_with("/index.yaml") {
+                    bail!(
+                        "registry '{}': a helm upstream is the repository directory, not its \
+                         index — use '{}' instead of '{upstream}' (what `helm repo add` takes)",
+                        registry.name,
+                        path.trim_end_matches("/index.yaml")
                     );
                 }
             }
@@ -2869,6 +2925,23 @@ impl AppConfig {
             );
         }
         let _ = roles;
+        Ok(())
+    }
+
+    /// RFC 0029 §4.5: `oci_entries` is helm's and nobody else's — the `roles`
+    /// rule. The vocabulary is closed by the enum at deserialisation.
+    fn validate_registry_oci_entries(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+    ) -> Result<()> {
+        if registry.oci_entries.is_some() && kind != batlehub_core::entities::RegistryKind::Helm {
+            bail!(
+                "registry '{}': 'oci_entries' is only meaningful on a helm registry (it decides \
+                 what an oci:// entry of index.yaml becomes), not {}",
+                registry.name,
+                kind
+            );
+        }
         Ok(())
     }
 

@@ -6,14 +6,14 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Draft                                                         |
+| Status      | **Implemented** — all six phases landed 2026-10-17; `tests/heavy/helm.sh`, the closed-world `helm` phase, `authz.sh helm` and `airgap.sh` §7g pass against a real `helm`, and §13 records what the build changed |
 | Short       | Helm charts                                                   |
 | Settles     | The classic index.yaml chart repository as a registry kind: URL rewriting in the served index, chart archives as artifacts, and index regeneration for local publishing |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
 | Co-author   | Claude Fable 5.1 <noreply@anthropic.com>                      |
 | Created     | 2026-09-11                                                    |
 | Supersedes  | —                                                             |
-| Touches     | `crates/core`, `crates/config`, `crates/adapters`, `crates/web`, `server`, `cli`, `ui`, `docs` |
+| Touches     | `crates/core`, `crates/config`, `crates/adapters`, `crates/web`, `server`, `cli`, `ui`, `docs`, `tests/heavy`, `perf` |
 
 ---
 
@@ -928,3 +928,111 @@ Nothing. The one question this draft opened is row 1 above.
 | 4 | Local/hybrid: `chart_yaml_from_archive`, the ChartMuseum routes, `eco_helm.rs` composing the index and the JSON listings, the heavy suite's local half. |
 | 5 | `cli`: `Chart.yaml` / `Chart.lock` in `registry suggest`; `ui` entry; `docs/registries/helm.md`; sidebar; `generic.md` pointer; `ROADMAP.md` correction and tick; the §13 note. |
 | 6 | Air gap: the composed index from held archives and the RFC 0008-bis table row, proven in `tests/heavy/airgap.sh`. Ships on its own. |
+
+---
+
+## 13. Revision against the tree (2026-10-17)
+
+All six phases shipped. Phases 1–4, 6 and most of 5 landed first; the `cli`
+half of phase 5, the conformance fixture of phase 2 and the `airgap.sh` phase of
+phase 6 followed the same day, and are recorded under *Completed in a second
+pass* below.
+
+`tests/heavy/helm.sh` passes all seven cases of §6.10 against
+`charts.jetstack.io` and `kubernetes.github.io/ingress-nginx` with Helm
+v4.3.0, the closed-world `helm` phase passes with Helm v3.16.4 under denied
+egress, `authz.sh helm` passes with the reader at `200` and the denied
+and anonymous clients at `403` on `index.yaml`, and `airgap.sh` §7g pulls and
+verifies a chart through an index composed from a bundle. What the build
+changed:
+
+**The YAML crate is `serde-saphyr`, not `serde_yaml`.** §11 row 1 chose the
+archived crate on the grounds that no advisory named it yet; the
+implementation took the maintained one rather than leave the no-suppressions
+stance one advisory from a red CI. Its serializer folds any string over 80
+characters into a `>-` block by default, which every YAML reader accepts and
+no person reading `urls:` expects, so `render_index` turns block scalars off.
+A long chart URL now stays on one line, and a unit test pins it.
+
+**Hybrid wins per version, and that is not "the rule every other hybrid kind
+applies".** §4.1 and §5 say it is. The other kinds serve a package either
+from here or from upstream, whole: Galaxy's page says so in as many words.
+`merge` keeps the per-version rule this document designed, because an index
+is one document whose entries are independent, and `docs/registries/helm.md`
+states the difference rather than the claim.
+
+**No `blocking/helm.rs`, no `handlers/proxy/helm/` directory.** `strip` and
+`rewrite` live in `services/helm.rs` beside the index model they edit, and
+the handlers are one file, `handlers/proxy/helm.rs`. A directory for one file
+is a directory nobody needs.
+
+**Completed in a second pass** (2026-10-17), each one first listed here as
+not built:
+
+- `cli` — `registry suggest` reads `Chart.lock`, else `Chart.yaml` (§6.9):
+  one `helm` registry per `https://` repository, named after it
+  (`helm-charts-jetstack-io`) because a registry serves one repository; exact
+  versions (`1.2.3`, `v1.21.2`) go to `warm_packages` and ranges do not; an
+  `oci://`, `@alias` or `file://` dependency is named in a comment rather
+  than dropped. The YAML is read through `services::helm::parse_yaml`, so the
+  CLI names no YAML crate of its own.
+- `protocol_conformance.rs` — the two read lines `helm` sends and the five
+  ChartMuseum lines. Writing it found that the shared test app registered no
+  `helm` registry, so the `is_helm` guard had never been exercised against
+  the npm catch-all there: `…/helm/index.yaml` matched
+  `/proxy/{registry}/{package}/{version}`. The guard was right; the fixture
+  could not see it.
+- `tests/heavy/airgap.sh` §7g — the real `helm`, egress denied, against the
+  disconnected instance holding `cert-manager v1.21.2` and its `.prov`:
+  `index.yaml` answered `synthesised`, `helm pull --verify` reported the
+  signature good, `v1.20.0` failed on helm's own not-found with no request
+  under `charts/`, and the miss log stayed empty for the registry.
+
+**A sixth gate.** `crates/web/tests/profile_route_coverage.rs` fails on any
+route missing from `perf/profile_routes.txt`, and it is not among the five a
+new kind is told about: the first landing left it red. `index.yaml` and
+`charts/{file}` are `profiled` (the `helm_index` and `helm_chart` soak arms
+reach them); the five ChartMuseum routes are `skip: no arm yet`.
+
+**A defect only the bundle path could show.** §6.11 says each composed entry is
+"its own `Chart.yaml` read at import". The import did not read it: the
+per-kind fact extraction in `handlers/air_gap.rs` had no `helm` arm, so an
+imported archive carried no facts and its entry had no `apiVersion` — an entry
+`helm` drops as invalid. `air_gap.rs` passed throughout because it seeds the
+facts itself. A bundle-import test (`an_imported_chart_gets_an_index_entry_
+from_its_own_chart_yaml`) now goes through the real door and fails on
+`apiVersion` without the fix; the `airgap.sh` pull is the client-side proof.
+
+**What the heavy suite observed**, against §6.10's predictions:
+
+1. `helm repo add` sent `Authorization: Basic` on every request; the served
+   jetstack index was 474 968 bytes, every `urls` entry on the tap's host.
+2. `--verify` fetched `cert-manager-v1.21.2.tgz` (153 322 B) and its `.prov`
+   (1 840 B) from this instance, and Helm reported the signature verified.
+3. `ingress-nginx-4.15.1.tgz` came from this instance; the GitHub `302` chain
+   was followed server-side and the client made no request off the tap.
+4. After a block and `helm repo update`, the served index fell from 180 008
+   to 179 061 bytes, the pull failed on Helm's own not-found path, and the
+   wire shows `index.yaml` and nothing under `charts/`. The text is the form
+   Helm's own tests pin: *chart "…" matching … not found in … index. (try
+   'helm repo update'): no chart version found for …*.
+5. Without a `repo update`, the pull of `4.14.5` was refused at the archive:
+   `charts/ingress-nginx-4.14.5.tgz -> 403`.
+6. A pull from a fresh client cache was served from the server cache.
+7. `POST api/charts` answered `201`, the chart pulled back byte-identical,
+   the second `POST` `409`, and `DELETE` `200`, after which the index no
+   longer named it.
+
+Two defects the first runs found were in the suites, not the server, and both
+would have outlived any amount of in-process testing:
+
+- **`helm pull -d DIR` never creates DIR.** It writes a temp file inside it
+  and fails with *no such file or directory*. That broke cases 2 and the
+  closed-world pull, and in `authz.sh` it was worse: every *denied* arm would
+  have passed on the missing directory rather than on the `403`.
+- **`curl … | grep -q` under `pipefail` is non-zero on a match.** `grep`
+  exits at the first hit and `curl` fails writing the rest (`curl: (23)`).
+  `await_absent` read that as "the version is gone" and never waited for the
+  blocked-set snapshot, so case 4 met a `403` instead of Helm's not-found; the
+  same pattern after the `DELETE` in case 7 could never have failed. Both now
+  capture the document before matching.

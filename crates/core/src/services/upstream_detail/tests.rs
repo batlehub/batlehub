@@ -86,6 +86,7 @@ fn every_advertised_document_reaches_a_reader() {
                     | RegistryKind::Rustup
                     | RegistryKind::Galaxy
                     | RegistryKind::Devfile
+                    | RegistryKind::Helm
             ),
             "{kind} advertises a document but `dispatch` has no arm for it"
         );
@@ -108,6 +109,7 @@ fn every_reader_belongs_to_a_kind_that_advertises_a_document() {
         RegistryKind::Terraform,
         RegistryKind::Nodedist,
         RegistryKind::Sdkman,
+        RegistryKind::Helm,
     ] {
         assert!(
             matches!(kind.upstream_detail(), UpstreamDetailSupport::Document(_)),

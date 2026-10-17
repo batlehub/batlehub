@@ -69,4 +69,5 @@ Embedding HTTP Basic credentials in the mirror URL works as a fallback, but the 
 ## See also
 
 - [Using BatleHub](/use/) — tokens, publishing prerequisites, the CLI
+- [Helm](/registries/helm) — a chart repository's `index.yaml` mirrored here is cached but unblockable, and its absolute chart URLs bypass the cache; the `helm` kind rewrites and filters it
 - [Registries overview](/registries/) · [Caching](/guide/caching) · [Access Control](/guide/access-control)

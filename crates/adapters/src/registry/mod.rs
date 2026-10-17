@@ -68,6 +68,11 @@ pub mod devfile;
 #[cfg(feature = "registry-devfile")]
 pub use devfile::DevfileRegistryClient;
 
+#[cfg(feature = "registry-helm")]
+pub mod helm;
+#[cfg(feature = "registry-helm")]
+pub use helm::HelmRegistryClient;
+
 #[cfg(feature = "registry-galaxy")]
 pub mod galaxy;
 #[cfg(feature = "registry-galaxy")]
