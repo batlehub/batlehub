@@ -6,14 +6,14 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | **Implemented** — phases 1–4 and 6 landed 2026-10-17 with phase 5 but for its `cli` half; `tests/heavy/helm.sh`, the closed-world `helm` phase and `authz.sh helm` pass against real clients, and §13 records what the build changed |
+| Status      | **Implemented** — all six phases landed 2026-10-17; `tests/heavy/helm.sh`, the closed-world `helm` phase, `authz.sh helm` and `airgap.sh` §7g pass against a real `helm`, and §13 records what the build changed |
 | Short       | Helm charts                                                   |
 | Settles     | The classic index.yaml chart repository as a registry kind: URL rewriting in the served index, chart archives as artifacts, and index regeneration for local publishing |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
 | Co-author   | Claude Fable 5.1 <noreply@anthropic.com>                      |
 | Created     | 2026-09-11                                                    |
 | Supersedes  | —                                                             |
-| Touches     | `crates/core`, `crates/config`, `crates/adapters`, `crates/web`, `server`, `ui`, `docs`, `tests/heavy`, `perf` |
+| Touches     | `crates/core`, `crates/config`, `crates/adapters`, `crates/web`, `server`, `cli`, `ui`, `docs`, `tests/heavy`, `perf` |
 
 ---
 
@@ -933,12 +933,18 @@ Nothing. The one question this draft opened is row 1 above.
 
 ## 13. Revision against the tree (2026-10-17)
 
-Phases 1, 2, 3, 4 and 6 shipped together, with phase 5 except its `cli` half.
+All six phases shipped. Phases 1–4, 6 and most of 5 landed first; the `cli`
+half of phase 5, the conformance fixture of phase 2 and the `airgap.sh` phase of
+phase 6 followed the same day, and are recorded under *Completed in a second
+pass* below.
+
 `tests/heavy/helm.sh` passes all seven cases of §6.10 against
 `charts.jetstack.io` and `kubernetes.github.io/ingress-nginx` with Helm
 v4.3.0, the closed-world `helm` phase passes with Helm v3.16.4 under denied
-egress, and `authz.sh helm` passes with the reader at `200` and the denied
-and anonymous clients at `403` on `index.yaml`. What the build changed:
+egress, `authz.sh helm` passes with the reader at `200` and the denied
+and anonymous clients at `403` on `index.yaml`, and `airgap.sh` §7g pulls and
+verifies a chart through an index composed from a bundle. What the build
+changed:
 
 **The YAML crate is `serde-saphyr`, not `serde_yaml`.** §11 row 1 chose the
 archived crate on the grounds that no advisory named it yet; the
@@ -960,16 +966,42 @@ states the difference rather than the claim.
 the handlers are one file, `handlers/proxy/helm.rs`. A directory for one file
 is a directory nobody needs.
 
-**Not built:**
+**Completed in a second pass** (2026-10-17), each one first listed here as
+not built:
 
-- `cli` — `Chart.yaml` / `Chart.lock` in `registry suggest` (§6.9). The kind
-  is complete without it; it remains phase 5's open half, and `Touches` no
-  longer names `cli`.
-- No `protocol_conformance.rs` fixture for `helm` (phase 2). The heavy suite
-  and `local_helm_registry.rs` carry the regression signal.
-- No `tests/heavy/airgap.sh` phase (phase 6). The air gap is proven in
-  process by `crates/web/tests/air_gap.rs`: the index composed from two held
-  archives, the `.prov` served as a file of its version and not listed as one.
+- `cli` — `registry suggest` reads `Chart.lock`, else `Chart.yaml` (§6.9):
+  one `helm` registry per `https://` repository, named after it
+  (`helm-charts-jetstack-io`) because a registry serves one repository; exact
+  versions (`1.2.3`, `v1.21.2`) go to `warm_packages` and ranges do not; an
+  `oci://`, `@alias` or `file://` dependency is named in a comment rather
+  than dropped. The YAML is read through `services::helm::parse_yaml`, so the
+  CLI names no YAML crate of its own.
+- `protocol_conformance.rs` — the two read lines `helm` sends and the five
+  ChartMuseum lines. Writing it found that the shared test app registered no
+  `helm` registry, so the `is_helm` guard had never been exercised against
+  the npm catch-all there: `…/helm/index.yaml` matched
+  `/proxy/{registry}/{package}/{version}`. The guard was right; the fixture
+  could not see it.
+- `tests/heavy/airgap.sh` §7g — the real `helm`, egress denied, against the
+  disconnected instance holding `cert-manager v1.21.2` and its `.prov`:
+  `index.yaml` answered `synthesised`, `helm pull --verify` reported the
+  signature good, `v1.20.0` failed on helm's own not-found with no request
+  under `charts/`, and the miss log stayed empty for the registry.
+
+**A sixth gate.** `crates/web/tests/profile_route_coverage.rs` fails on any
+route missing from `perf/profile_routes.txt`, and it is not among the five a
+new kind is told about: the first landing left it red. `index.yaml` and
+`charts/{file}` are `profiled` (the `helm_index` and `helm_chart` soak arms
+reach them); the five ChartMuseum routes are `skip: no arm yet`.
+
+**A defect only the bundle path could show.** §6.11 says each composed entry is
+"its own `Chart.yaml` read at import". The import did not read it: the
+per-kind fact extraction in `handlers/air_gap.rs` had no `helm` arm, so an
+imported archive carried no facts and its entry had no `apiVersion` — an entry
+`helm` drops as invalid. `air_gap.rs` passed throughout because it seeds the
+facts itself. A bundle-import test (`an_imported_chart_gets_an_index_entry_
+from_its_own_chart_yaml`) now goes through the real door and fails on
+`apiVersion` without the fix; the `airgap.sh` pull is the client-side proof.
 
 **What the heavy suite observed**, against §6.10's predictions:
 

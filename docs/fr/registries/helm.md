@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/helm.md
-sourceHash: be67779afba05d7e
+sourceHash: 33907156f5632e42
 ---
 
 # Helm
@@ -53,6 +53,8 @@ anonymous = ["releases:read", "releases:list"]
 user      = ["releases:read", "releases:list", "releases:publish"]
 admin     = ["*"]
 ```
+
+`batlehub-cli registry suggest` lit le `Chart.lock` d'un chart (ou son `Chart.yaml` en l'absence de verrou) et écrit un tel bloc par dépôt `https://` de ses `dependencies`, avec chaque version exacte dans `warm_packages` ; une dépendance `oci://`, `@alias` ou `file://` est nommée en commentaire à la place.
 
 Un registre helm a **exactement un** amont : un second dépôt de charts est un second bloc de registre, ajouté sous un second nom par `helm repo add`. L'amont est le répertoire que prend `helm repo add` ; le chargeur refuse un amont qui se termine par `/index.yaml`, et refuse `hybrid` sans aucun amont.
 

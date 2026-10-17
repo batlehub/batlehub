@@ -1898,6 +1898,13 @@ pub async fn make_app_with_defaults_and_access(
             "nix".to_owned(),
             FixedRegistry::new("nix") as Arc<dyn RegistryClient>,
         ),
+        // RFC 0029: `…/helm/index.yaml` is also an npm package `helm` at
+        // version `index.yaml` — the conformance fixture asserts the `is_helm`
+        // guard wins.
+        (
+            "helm".to_owned(),
+            FixedRegistry::new("helm") as Arc<dyn RegistryClient>,
+        ),
     ]
     .into();
 
@@ -1949,6 +1956,7 @@ pub async fn make_app_with_defaults_and_access(
             Arc::new(rbac_policy(repo_dyn.clone()).0),
         ),
         ("nix".to_owned(), Arc::new(rbac_policy(repo_dyn.clone()).0)),
+        ("helm".to_owned(), Arc::new(rbac_policy(repo_dyn.clone()).0)),
     ]
     .into();
     // Every fixture registry gets a hierarchy, derived from the same
@@ -2025,6 +2033,7 @@ pub async fn make_app_with_defaults_and_access(
         ("rustup", "rustup"),
         ("galaxy", "galaxy"),
         ("nix", "nix"),
+        ("helm", "helm"),
     ]);
     let cargo_indexes = batlehub_web::CargoIndexMap::default();
     finish_test_app(

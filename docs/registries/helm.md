@@ -49,6 +49,8 @@ user      = ["releases:read", "releases:list", "releases:publish"]
 admin     = ["*"]
 ```
 
+`batlehub-cli registry suggest` reads a chart's `Chart.lock` (or `Chart.yaml` when there is no lock) and writes one such block per `https://` repository in its `dependencies`, with each exact version in `warm_packages`; an `oci://`, `@alias` or `file://` dependency is named in a comment instead.
+
 A helm registry has **exactly one** upstream: a second chart repository is a second registry block, and `helm repo add`s a second name. The upstream is the directory `helm repo add` takes; the loader refuses one ending in `/index.yaml`, and refuses `hybrid` with no upstream at all.
 
 ## Authentication

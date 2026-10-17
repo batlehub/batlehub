@@ -193,3 +193,15 @@ hosts = ["devfile.localhost"]
 anonymous = ["releases:read", "releases:list", "source:read"]
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
+
+# ── helm (RFC 0029 §6.11) ────────────────────────────────────────────────────
+[[registries]]
+type = "helm"
+name = "helm-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://charts.jetstack.io"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

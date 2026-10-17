@@ -230,7 +230,7 @@ fn print_human(
         println!(
             "Looked at: mise.lock, mise.toml, .nvmrc, .sdkmanrc, Cargo.toml, go.mod, \
              package.json, pyproject.toml, pom.xml, composer.json, *.gemspec, *.nuspec, \
-             *.csproj, *.tf, environment.yml"
+             *.csproj, *.tf, environment.yml, Chart.lock, Chart.yaml"
         );
         return;
     }

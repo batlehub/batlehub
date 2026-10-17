@@ -415,6 +415,18 @@ fn listing_facts_from_bytes(
         Some("devfile") => {
             batlehub_core::services::devfile::import_facts(coordinate.artifact.as_deref(), bytes)
         }
+        // An `index.yaml` entry is the archive's own `Chart.yaml` — the same
+        // fields a publish stores (RFC 0029 §6.11). Without them the composed
+        // entry has no `apiVersion`, and `helm` skips it as invalid. The
+        // coordinate carries no artifact here, so the bytes decide: a `.prov`
+        // is not a gzip'd tar and reads as no facts.
+        Some("helm") => batlehub_adapters::registry::helm::chart_yaml_from_archive(bytes)
+            .map(|chart| {
+                serde_json::json!({
+                    "helm": batlehub_core::services::helm::index_metadata_from_chart_yaml(&chart)
+                })
+            })
+            .unwrap_or(serde_json::Value::Null),
         _ => serde_json::Value::Null,
     }
 }

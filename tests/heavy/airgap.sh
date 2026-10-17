@@ -211,6 +211,17 @@ DEVFILE_REG="devfile-$HEAVY_RUN"
 DEVFILE_STACK="${HEAVY_DEVFILE_STACK:-nodejs}"
 DEVFILE_VERSION="${HEAVY_DEVFILE_VERSION:-2.2.1}"
 
+# helm (RFC 0029 §6.11): one chart version, carried as its archive and its
+# `.prov`, and pulled on the far side by the real `helm` through an
+# `index.yaml` composed from the archive's own `Chart.yaml` — `--verify`
+# included, so the provenance file is proven byte-exact across the gap.
+HELM_REG="helm-$HEAVY_RUN"
+HELM_CHART="${HEAVY_HELM_CHART:-cert-manager}"
+HELM_VERSION="${HEAVY_HELM_VERSION:-v1.21.2}"
+# A version upstream has and the bundle does not: what the index must not name.
+HELM_UNHELD="${HEAVY_HELM_UNHELD:-v1.20.0}"
+HELM_KEYRING_URL="https://cert-manager.io/public-keys/cert-manager-keyring-2021-09-20-1020CF3C033D4F35BAE1C19E1226061C665DF13E.gpg"
+
 # The estate's own index-signing key, generated per run. `\n` escapes rather
 # than newlines: the loader expands `${VAR}` into the TOML *source*, where a
 # raw newline inside a basic string is a parse error.
@@ -392,6 +403,22 @@ plan["entries"] += [
 ]
 json.dump(plan, open(path, "w"), indent=2)
 PY
+# The chart archive and its provenance file: two artifacts of one version.
+HELM_REG="$HELM_REG" HELM_CHART="$HELM_CHART" HELM_VERSION="$HELM_VERSION" \
+  python3 - "$HEAVY_WORK/plan.json" <<'PY' || heavy_fail "could not add the helm entries to the plan"
+import json, os, sys
+path = sys.argv[1]
+reg, chart, v = os.environ["HELM_REG"], os.environ["HELM_CHART"], os.environ["HELM_VERSION"]
+plan = json.load(open(path))
+for artifact, suffix in (("chart", ""), ("prov", ".prov")):
+    plan["entries"].append({
+        "tool": f"helm:{chart}{' (prov)' if suffix else ''}", "version": v, "platform": "any",
+        "url": f"https://charts.jetstack.io/charts/{chart}-{v}.tgz{suffix}",
+        "registry": {"name": reg, "type": "helm"}, "key": f"{reg}/{chart}/{v}/{artifact}",
+        "proxy_path": f"/proxy/{reg}/helm/charts/{chart}-{v}.tgz{suffix}",
+    })
+json.dump(plan, open(path, "w"), indent=2)
+PY
 heavy_log "AIRGAP-PLAN-OK ($(grep -c '"proxy_path"' "$HEAVY_WORK/plan.json") planned paths)"
 
 "$CLI" mise seed --plan "$HEAVY_WORK/plan.json" >"$HEAVY_WORK/seed.txt" 2>"$HEAVY_WORK/seed.err" \
@@ -404,7 +431,11 @@ head -c 32 /dev/urandom | od -An -tx1 | tr -d " \n" > "$HEAVY_WORK/estate.key"
   --bundle-id "heavy-airgap-$HEAVY_RUN" >"$HEAVY_WORK/export.json" 2>"$HEAVY_WORK/export.err" \
   || { cat "$HEAVY_WORK/export.json" "$HEAVY_WORK/export.err" >&2; heavy_fail "mise export failed"; }
 BLOBS="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["blobs"])' "$HEAVY_WORK/export.json")"
-[[ "$BLOBS" -eq 17 ]] || { cat "$HEAVY_WORK/export.json" "$HEAVY_WORK/export.err" >&2; heavy_fail "the bundle carried $BLOBS blob(s), expected 17 (asset, tarball, wheel, crate, zip, mod, jar, pom, nupkg, gem, conda package, provider archive, its checksum list and signature, the .apk, and a devfile stack's manifest and devfile)"; }
+[[ "$BLOBS" -eq 19 ]] || { cat "$HEAVY_WORK/export.json" "$HEAVY_WORK/export.err" >&2; heavy_fail "the bundle carried $BLOBS blob(s), expected 19 (asset, tarball, wheel, crate, zip, mod, jar, pom, nupkg, gem, conda package, provider archive, its checksum list and signature, the .apk, a devfile stack's manifest and devfile, and a chart archive and its .prov)"; }
+# The keyring `helm pull --verify` checks the carried .prov against, fetched
+# while there is still a network to fetch it from.
+curl -fsSL -o "$HEAVY_WORK/helm-keyring.gpg" "$HELM_KEYRING_URL" \
+  || heavy_fail "could not fetch cert-manager's keyring"
 # The export read the provider's download document and carried its facts.
 python3 - "$HEAVY_WORK/estate.bhub" "$TF_REG" <<'PY' || heavy_fail "the manifest does not carry the provider's signing keys (0008-bis §13.7)"
 import json, sys, tarfile
@@ -798,7 +829,7 @@ heavy_log "APK-REFUSED-OK (no listing, so the client never names a package)"
 
 # `before` is required for a purge that means "everything": without it the
 # endpoint forgets only rows older than the retention, which is nothing.
-for r in "$NPM_REG" "$PIP_REG" "$GH_REG" "$CARGO_REG" "$GO_REG" "$MVN_REG" "$NUGET_REG" "$GEMS_REG" "$CONDA_REG" "$TF_REG" "$APK_REG" "$DEVFILE_REG"; do
+for r in "$NPM_REG" "$PIP_REG" "$GH_REG" "$CARGO_REG" "$GO_REG" "$MVN_REG" "$NUGET_REG" "$GEMS_REG" "$CONDA_REG" "$TF_REG" "$APK_REG" "$DEVFILE_REG" "$HELM_REG"; do
   curl -fsS -o /dev/null -X DELETE -H "Authorization: Bearer $ADMIN_TOKEN" \
     "$AG_BASE/api/v1/admin/air-gap/missing?registry=$r&before=2099-01-01T00:00:00Z" \
     || heavy_fail "could not purge the miss log for $r"
@@ -1262,6 +1293,59 @@ GOT="sha256:$(sha256sum "$DEVFILE_OUT/ctx/devfile.yaml" | cut -d' ' -f1)"
 [[ "$GOT" == "$WANT" ]] || heavy_fail "the devfile pulled from the air gap ($GOT) is not the layer its manifest names ($WANT)"
 measure "devfile | registry-library pull $DEVFILE_STACK:$DEVFILE_VERSION | composed v2 index, held manifest and layer | pulled, digest verified"
 heavy_log "DEVFILE-SYNTH-OK (a stack pulled through indexes composed from the held facts)"
+
+# ── 7g. helm: index.yaml composed over the held chart (RFC 0029 §6.11) ──────
+#
+# The real `helm`, egress denied, against a disconnected instance that holds
+# one chart archive and its `.prov`. `helm repo add` reads an index composed
+# from the archive's own `Chart.yaml` — an entry without `apiVersion` is one
+# helm drops as invalid, so the pull below is also the proof the import read
+# it. `--verify` checks the carried `.prov` against cert-manager's key, and a
+# version the bundle does not carry fails on helm's own not-found with no
+# archive requested.
+heavy_need helm "helm (https://helm.sh)"
+HELM_HOME="$HEAVY_WORK/helm-airgap"
+mkdir -p "$HELM_HOME/pulled" "$HELM_HOME/unheld"
+HELM_ENV=(HELM_CONFIG_HOME="$HELM_HOME/config" HELM_CACHE_HOME="$HELM_HOME/cache"
+          HELM_DATA_HOME="$HELM_HOME/data")
+HELM_MARK="helm-synth"
+heavy_mark "$HELM_MARK"
+"${DENY[@]}" "${HELM_ENV[@]}" helm repo add airgap "$HEAVY_TAP_BASE/proxy/$HELM_REG/helm" \
+  >"$HEAVY_WORK/$HELM_MARK-add.txt" 2>&1 \
+  || { cat "$HEAVY_WORK/$HELM_MARK-add.txt" >&2; heavy_fail "helm repo add failed against the disconnected instance"; }
+"${DENY[@]}" "${HELM_ENV[@]}" helm pull "airgap/$HELM_CHART" --version "$HELM_VERSION" \
+  --verify --keyring "$HEAVY_WORK/helm-keyring.gpg" -d "$HELM_HOME/pulled" \
+  >"$HEAVY_WORK/$HELM_MARK.txt" 2>&1 \
+  || { cat "$HEAVY_WORK/$HELM_MARK.txt" >&2; heavy_fail "helm pull --verify of the held chart failed against the disconnected instance"; }
+grep -qE "Signed by|Using Key|Chart Hash Verified" "$HEAVY_WORK/$HELM_MARK.txt" \
+  || { cat "$HEAVY_WORK/$HELM_MARK.txt" >&2; heavy_fail "helm did not report the carried .prov verified"; }
+heavy_wire_re_after "$HELM_MARK" "^GET /proxy/$HELM_REG/helm/index.yaml -> 200" \
+  "the composed index did not answer"
+heavy_wire_re_after "$HELM_MARK" "^GET /proxy/$HELM_REG/helm/charts/$HELM_CHART-$HELM_VERSION[.]tgz -> 200" \
+  "the held archive did not answer"
+heavy_wire_re_after "$HELM_MARK" "^GET /proxy/$HELM_REG/helm/charts/$HELM_CHART-$HELM_VERSION[.]tgz[.]prov -> 200" \
+  "the held .prov did not answer"
+HELM_SYNTH="$(curl -fsS -o /dev/null -D - "$AG_BASE/proxy/$HELM_REG/helm/index.yaml" | tr -d '\r' \
+  | awk -F': ' 'tolower($1) == "x-batlehub-listing" { print $2 }')"
+[[ "$HELM_SYNTH" == synthesised ]] || heavy_fail "index.yaml was not synthesised (X-BatleHub-Listing: '$HELM_SYNTH')"
+
+HELM_UNHELD_MARK="helm-unheld"
+heavy_mark "$HELM_UNHELD_MARK"
+if "${DENY[@]}" "${HELM_ENV[@]}" helm pull "airgap/$HELM_CHART" --version "$HELM_UNHELD" \
+    -d "$HELM_HOME/unheld" >"$HEAVY_WORK/$HELM_UNHELD_MARK.txt" 2>&1; then
+  heavy_fail "helm pulled $HELM_CHART $HELM_UNHELD, a version the bundle does not carry"
+fi
+grep -qE "not found|no chart version found" "$HEAVY_WORK/$HELM_UNHELD_MARK.txt" \
+  || { cat "$HEAVY_WORK/$HELM_UNHELD_MARK.txt" >&2; heavy_fail "helm did not fail on its own not-found path for an unheld version"; }
+HELM_UNHELD_HITS="$(heavy_wire_count_after "$HELM_UNHELD_MARK" "/proxy/$HELM_REG/helm/charts/")"
+[[ "$HELM_UNHELD_HITS" == 0 ]] || heavy_fail "an unheld chart version still caused $HELM_UNHELD_HITS archive request(s)"
+# The index was composed, not missed, and the unheld version asked for nothing.
+HELM_MISSES="$(curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "$AG_BASE/api/v1/admin/air-gap/missing?registry=$HELM_REG&per_page=100")"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert not d["items"], d["items"]' "$HELM_MISSES" \
+  || heavy_fail "the helm registry recorded a miss: $HELM_MISSES"
+measure "helm | pull $HELM_CHART $HELM_VERSION --verify | composed index.yaml, held .tgz and .prov | pulled, signature verified; $HELM_UNHELD not in the index, no archive asked"
+heavy_log "HELM-SYNTH-OK (a chart pulled and verified through an index composed from its own Chart.yaml)"
 
 # ── 8. The miss log, after the second half ──────────────────────────────────
 #
