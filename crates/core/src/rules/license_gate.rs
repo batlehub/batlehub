@@ -79,7 +79,7 @@ impl Rule for LicenseGateRule {
         if !self.block {
             return RuleDecision::Allow;
         }
-        if self.bypass_roles.contains(&ctx.identity.role) {
+        if ctx.identity.role.clears_bypass(&self.bypass_roles) {
             return RuleDecision::Allow;
         }
 

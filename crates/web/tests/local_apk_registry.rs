@@ -627,3 +627,128 @@ fn gzip_member_plaintexts(file: &[u8]) -> Vec<Vec<u8>> {
     }
     out
 }
+
+// ── Ownership (path-addressed publishers bypass `publish()`) ─────────────────
+
+/// `apk_app` with an ownership store and two distinct `User` identities.
+///
+/// The ownership port is the fixture: with it absent the gate is a no-op and
+/// the overwrite test below would pass without checking anything.
+async fn apk_ownership_app(
+    registry: &str,
+) -> impl actix_web::dev::Service<
+    actix_http::Request,
+    Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
+    Error = actix_web::Error,
+> {
+    let parts = local_registry_app_parts(registry, "apk", RegistryMode::Local, None);
+    let LocalRegistryAppParts {
+        proxy_svc,
+        admin_svc,
+        token_repo,
+        access_config,
+        registry_map,
+        local_svc: cur,
+        mode_map,
+    } = parts;
+    let ownership = batlehub_adapters::in_memory::InMemoryOwnershipStore::new();
+    let grant_repo = batlehub_adapters::in_memory::InMemoryGrantRepository::new();
+    let owner_port = batlehub_core::services::ownership_grants::OwnershipGrants::wrap(
+        ownership as Arc<dyn batlehub_core::ports::OwnershipPort>,
+        grant_repo as Arc<dyn batlehub_core::ports::GrantRepository>,
+    );
+    let local_svc = Arc::new(batlehub_core::services::LocalRegistryService {
+        backend: cur.backend.clone(),
+        storage: cur.storage.clone(),
+        hot: cur.hot.clone(),
+        quota: cur.quota.clone(),
+        ownership: Some(owner_port),
+        team_namespace: cur.team_namespace.clone(),
+        sbom: cur.sbom.clone(),
+        explore_cache: cur.explore_cache.clone(),
+        package_repo: cur.package_repo.clone(),
+        readme: cur.readme.clone(),
+    });
+
+    finish_test_app_with_extra(
+        proxy_svc,
+        admin_svc,
+        token_repo,
+        access_config,
+        registry_map,
+        local_svc,
+        mode_map,
+        batlehub_web::CargoIndexMap::default(),
+        ConfigureAppDefaults::default(),
+        ApkSignerMap::default(),
+        team_ns_auth_providers(),
+    )
+    .await
+}
+
+async fn publish_as(
+    app: &impl actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
+        Error = actix_web::Error,
+    >,
+    registry: &str,
+    token: &str,
+    apk: Vec<u8>,
+) -> u16 {
+    call_service(
+        app,
+        TestRequest::put()
+            .uri(&format!("/proxy/{registry}/apk/upload"))
+            .insert_header(("Authorization", bearer(token)))
+            .set_payload(apk)
+            .to_request(),
+    )
+    .await
+    .status()
+    .as_u16()
+}
+
+/// The apk publisher writes no version row, so the ownership gate (which only
+/// fired on a package with one) never ran: any user could replace another's
+/// package byte for byte and the server re-signed the index over it.
+#[actix_web::test]
+async fn apk_publish_cannot_replace_another_users_package() {
+    let app = apk_ownership_app("alpine").await;
+    let original = make_test_apk(PKGINFO);
+    assert_eq!(
+        publish_as(&app, "alpine", NS_PLAIN_USER_TOKEN, original.clone()).await,
+        201
+    );
+
+    let hostile = make_test_apk(&PKGINFO.replace("a greeting", "a backdoor"));
+    assert_eq!(
+        publish_as(&app, "alpine", NS_MEMBER_TOKEN, hostile).await,
+        403,
+        "a user who does not own `hello` must not overwrite it"
+    );
+
+    let resp = call_service(
+        &app,
+        TestRequest::get()
+            .uri("/proxy/alpine/apk/x86_64/hello-1.0-r0.apk")
+            .insert_header(("Authorization", bearer(NS_PLAIN_USER_TOKEN)))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        read_body(resp).await.to_vec(),
+        original,
+        "the owner's bytes survive"
+    );
+}
+
+/// The download route takes the file name as one segment, so a `/` in the name
+/// stored a package nothing could fetch, in a directory another name shares.
+#[actix_web::test]
+async fn apk_publish_refuses_a_slash_in_the_name() {
+    let app = apk_app("alpine", RegistryMode::Local, false).await;
+    let nested = "pkgname = a/hello\npkgver = 1.0-r0\narch = x86_64\n";
+    assert_eq!(publish(&app, "alpine", nested).await, 400);
+}

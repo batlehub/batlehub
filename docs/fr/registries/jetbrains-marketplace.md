@@ -145,7 +145,7 @@ curl -s -H "Authorization: Bearer <your-token>" \
 | `GET` | `/proxy/{registry}/api/search/updates/compatible` | `GET /api/search/updates/compatible` — the compatible-updates question in |
 | `POST` | `/proxy/{registry}/api/search/updates/compatible` | `POST /api/search/updates/compatible` — newest compatible update per |
 | `GET` | `/proxy/{registry}/api/searchPlugins` | `/api/searchPlugins?search=&max=` — `{plugins, total}` shape. |
-| `POST` | `/proxy/{registry}/api/updates/upload` |  |
+| `POST` | `/proxy/{registry}/api/updates/upload` | Publish a plugin version (the marketplace `updates/upload` API). |
 | `GET` | `/proxy/{registry}/feature/getImplementations` | `/feature/getImplementations` — feature-implementation lookup. |
 | `GET` | `/proxy/{registry}/files/{plugin}/{update}/{file_name}` | `files/{plugin}/{update}/{fileName}` — the IDE `/files/` artifact |
 | `GET` | `/proxy/{registry}/files/{plugin}/{update}/meta.json` | `files/{plugin}/{update}/meta.json` — update-level metadata blob. |

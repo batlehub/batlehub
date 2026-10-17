@@ -223,6 +223,7 @@ pub async fn download_asset_by_name(
 #[utoipa::path(
     get,
     path = "/proxy/{registry}/{owner}/{repo}/tarball/{tag}",
+    operation_id = "github_download_tarball",
     tag = "proxy/github",
     params(
         ("registry" = String, Path, description = "Registry name"),

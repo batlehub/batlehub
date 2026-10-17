@@ -69,8 +69,8 @@ impl VersionGateRule {
         }
     }
 
-    /// Turn a gate violation into a verdict, admitting a caller who holds one of
-    /// the configured bypass roles.
+    /// Turn a gate violation into a verdict, admitting a caller at or above the
+    /// least-privileged configured bypass role.
     ///
     /// The least-privileged bypass role is the bar, mirroring `DenyLatestRule`.
     /// The comparison happens here rather than being handed back as a

@@ -125,15 +125,40 @@ pub fn image_host_allowed(url: &str, allowed: &[String]) -> bool {
     let Some(host) = super::render::url_host(url) else {
         return false;
     };
-    let host = host
-        .split(':')
-        .next()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+    // Only a trailing all-digit `:port` is cut: an IPv6 literal is full of
+    // colons (`[2001:db8::1]` cut at the first one was `[`, matching nothing).
+    let host = match host.rsplit_once(':') {
+        Some((h, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => h,
+        _ => host.as_str(),
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
     allowed.iter().any(|entry| {
-        let entry = entry.trim().trim_start_matches('.').to_ascii_lowercase();
+        let entry = normalise_entry(entry);
         !entry.is_empty() && (host == entry || host.ends_with(&format!(".{entry}")))
     })
+}
+
+/// An allow-list entry read the way the URL's host was: lowercased and, for
+/// an international name, in its punycode form — `url_host` converts the
+/// URL's, so a `bücher.example` entry would otherwise never match.
+fn normalise_entry(entry: &str) -> String {
+    let entry = entry.trim().trim_start_matches('.');
+    let bare = entry.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = bare.parse::<std::net::Ipv6Addr>() {
+        return ip.to_string();
+    }
+    let lower = entry.to_ascii_lowercase();
+    match ammonia::Url::parse(&format!("http://{entry}/"))
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+    {
+        // An entry the parser reads as a legacy IPv4 spelling (`5.`, `0x7f.1`)
+        // stays the name the operator wrote: it must not quietly become an
+        // address allow-listed by accident.
+        Some(h) if h.parse::<std::net::Ipv4Addr>().is_ok() && h != lower => lower,
+        Some(h) => h,
+        None => lower,
+    }
 }
 
 #[cfg(test)]
@@ -142,6 +167,16 @@ mod host_tests {
 
     fn list(entries: &[&str]) -> Vec<String> {
         entries.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn an_ipv6_or_international_entry_matches_its_host() {
+        let v6 = list(&["2001:db8::1"]);
+        assert!(image_host_allowed("https://[2001:db8::1]:8443/x.png", &v6));
+        assert!(image_host_allowed("https://[2001:0db8::1]/x.png", &v6));
+        assert!(!image_host_allowed("https://[2001:db8::2]/x.png", &v6));
+        let idn = list(&["bücher.example"]);
+        assert!(image_host_allowed("https://img.bücher.example/x.png", &idn));
     }
 
     #[test]

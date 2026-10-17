@@ -118,16 +118,17 @@ pub fn repair_gem(doc: &mut Value, available: &[String]) -> Option<String> {
 pub fn strip_compact_info(text: &mut String, blocked: &BlockedVersions) -> Vec<String> {
     let mut removed = Vec::new();
     let mut out = String::with_capacity(text.len());
-    for line in text.lines() {
-        match compact_info_version(line) {
+    // Each kept line verbatim, terminator included — see
+    // `strip_compact_versions` for what `lines()` + `push('\n')` broke.
+    for segment in text.split_inclusive('\n') {
+        match compact_info_version(segment) {
             Some(v) if blocked.contains(v) => {
                 removed.push(v.to_owned());
                 continue;
             }
             _ => {}
         }
-        out.push_str(line);
-        out.push('\n');
+        out.push_str(segment);
     }
     *text = out;
     removed
@@ -172,10 +173,19 @@ pub fn strip_compact_versions(text: &mut String, blocked: &MultiPackageBlocks) -
     let mut removed = Vec::new();
     let mut out = String::with_capacity(text.len());
 
-    for line in text.lines() {
+    // `split_inclusive` rather than `lines()`: each line keeps its own
+    // terminator, so a CRLF or unterminated last line comes back as it came
+    // in. `lines()` dropped the `\r` of a CRLF and added a `\n` to an
+    // unterminated line, so the "untouched" path was not byte-identical and a
+    // second pass rewrote the first pass's output (found by
+    // `fuzz_listing_filter`).
+    for segment in text.split_inclusive('\n') {
+        let line = segment
+            .strip_suffix('\n')
+            .map_or(segment, |l| l.strip_suffix('\r').unwrap_or(l));
+        let ending = &segment[line.len()..];
         let Some((name, versions, checksum)) = split_compact_versions_line(line) else {
-            out.push_str(line);
-            out.push('\n');
+            out.push_str(segment);
             continue;
         };
 
@@ -194,8 +204,7 @@ pub fn strip_compact_versions(text: &mut String, blocked: &MultiPackageBlocks) -
 
         if kept.len() == versions.split(',').count() {
             // Untouched: emit the upstream bytes exactly.
-            out.push_str(line);
-            out.push('\n');
+            out.push_str(segment);
             continue;
         }
         if kept.is_empty() {
@@ -208,7 +217,7 @@ pub fn strip_compact_versions(text: &mut String, blocked: &MultiPackageBlocks) -
         out.push_str(&kept.join(","));
         out.push(' ');
         out.push_str(&rewritten_info_checksum(checksum, &kept));
-        out.push('\n');
+        out.push_str(ending);
     }
 
     *text = out;
@@ -508,5 +517,32 @@ mod compact_index_tests {
         let before = text.clone();
         strip_compact_versions(&mut text, &blocked_pairs(&[("rack", "1.0.0")]));
         assert_eq!(text, before);
+    }
+
+    /// Line endings survive a filter, so a second pass over the output is a
+    /// no-op: a CRLF line keeps its `\r`, an unterminated last line gains no
+    /// `\n`, and a document with no hit is byte-identical.
+    #[test]
+    fn compact_versions_keeps_each_line_s_own_ending() {
+        let blocks = blocked_pairs(&[("rack", "1.0.0")]);
+        let mut text = "---\r\nrack 1.0.0,1.1.0 abc\r\nrails 7.0.0 def".to_owned();
+        strip_compact_versions(&mut text, &blocks);
+        assert!(text.starts_with("---\r\nrack 1.1.0 "), "{text:?}");
+        assert!(text.ends_with("\r\nrails 7.0.0 def"), "{text:?}");
+        let once = text.clone();
+        assert!(strip_compact_versions(&mut text, &blocks).is_empty());
+        assert_eq!(text, once);
+
+        let mut untouched = "rails 7.0.0 def\r".to_owned();
+        strip_compact_versions(&mut untouched, &blocks);
+        assert_eq!(untouched, "rails 7.0.0 def\r");
+
+        // `/info/{gem}` too.
+        let mut info = "---\r\n1.0.0 |checksum:a\r\n1.1.0 |checksum:b".to_owned();
+        strip_compact_info(&mut info, &blocked_versions(&["1.0.0"]));
+        assert_eq!(info, "---\r\n1.1.0 |checksum:b");
+        let mut untouched = "---\r\n1.1.0 |checksum:b\r".to_owned();
+        strip_compact_info(&mut untouched, &blocked_versions(&["1.0.0"]));
+        assert_eq!(untouched, "---\r\n1.1.0 |checksum:b\r");
     }
 }

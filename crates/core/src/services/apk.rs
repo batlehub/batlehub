@@ -60,6 +60,40 @@ pub fn apk_coordinate(file_name: &str) -> Option<(&str, &str)> {
     Some((name, &stem[name.len() + 1..]))
 }
 
+/// The publish-time edge checks on an apk coordinate, returning the file name
+/// it is stored under (`{name}-{version}.apk`, beside `{arch}/`).
+///
+/// - Name and architecture are single segments. The download route takes the
+///   file name as one segment, so a `/` in the name stored a package nothing
+///   could fetch, under a directory another name's packages share.
+/// - **The file name has to parse back to the coordinate it was stored for.**
+///   [`apk_coordinate`] splits from the right and requires a `-r<digits>`
+///   release, and nothing else guarantees `{name}-{version}` survives that:
+///   `pkgver = 1.0` has no release suffix, so its download is a 400 forever,
+///   and `1.0-beta-r0` splits back as `("foo-1.0", "beta-r0")`, so the index
+///   carries one coordinate and the download gate authorises, blocks and
+///   age-gates another. Checked by *doing* the round trip rather than by
+///   re-deriving the rule, so it cannot drift from [`apk_coordinate`].
+pub fn check_publish_coordinate(
+    name: &str,
+    version: &str,
+    arch: &str,
+) -> Result<String, crate::error::CoreError> {
+    use crate::services::{validate_coordinate, validate_path_segment};
+    validate_coordinate(name, version, None)?;
+    validate_path_segment("package name", name)?;
+    validate_path_segment("architecture", arch)?;
+    let filename = format!("{name}-{version}.apk");
+    match apk_coordinate(&filename) {
+        Some((n, v)) if n == name && v == version => Ok(filename),
+        _ => Err(crate::error::CoreError::InvalidInput(format!(
+            "'{name}' version '{version}' would be stored as '{filename}', which apk reads \
+             back as a different package. An apk version must end in a '-r<number>' release \
+             suffix and neither the name nor the version before it may contain one"
+        ))),
+    }
+}
+
 /// The `.PKGINFO` control file: ordered `key = value` lines, keys repeatable.
 ///
 /// Ordered and repeat-preserving for the same reason `PacmanPackage::fields` is:
@@ -255,6 +289,25 @@ impl ApkIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn publish_coordinate_is_one_segment_that_round_trips() {
+        assert_eq!(
+            check_publish_coordinate("py3-a", "1.0-r0", "x86_64").unwrap(),
+            "py3-a-1.0-r0.apk"
+        );
+        for (name, version, arch) in [
+            ("a/b", "1.0-r0", "x86_64"),
+            ("a", "1.0-r0", "x86/64"),
+            ("a", "1.0", "x86_64"),
+            ("a", "1.0-beta-r0", "x86_64"),
+        ] {
+            assert!(
+                check_publish_coordinate(name, version, arch).is_err(),
+                "{name} {version}"
+            );
+        }
+    }
 
     #[test]
     fn coordinate_splits_a_plain_name() {

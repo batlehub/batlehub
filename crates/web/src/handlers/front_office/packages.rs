@@ -57,6 +57,7 @@ pub enum PackageStatusDto {
 #[utoipa::path(
     get,
     path = "/api/v1/packages",
+    operation_id = "list_visible_packages",
     tag = "front-office",
     params(PackageQuery),
     responses(
@@ -110,6 +111,12 @@ pub async fn list_packages(
         vec![]
     };
 
+    // Registry access is the coarse gate; this is the per-package one. A local
+    // download writes a `package_statuses` row, so without it a `team`/`internal`
+    // package's name and version are listed to callers its download refuses —
+    // the same leak `explore/list.rs` closes with the same viewer.
+    let viewer = Some(crate::handlers::explore_viewer_for(&identity));
+
     let (page, per_page) = crate::handlers::clamp_pagination(query.page, query.per_page);
     let filter = PackageFilter {
         registry: query.registry.clone(),
@@ -119,6 +126,7 @@ pub async fn list_packages(
         blocked_only: false,
         limit: per_page,
         offset: page * per_page,
+        viewer: viewer.clone(),
     };
 
     let count_filter = PackageFilter {
@@ -129,6 +137,7 @@ pub async fn list_packages(
         blocked_only: false,
         limit: 0,
         offset: 0,
+        viewer,
     };
 
     let (packages, total) = tokio::try_join!(

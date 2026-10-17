@@ -85,8 +85,8 @@ impl TrustedPublisherRule {
         }
     }
 
-    /// Turn a gate violation into a verdict, admitting a caller who holds one of
-    /// the configured bypass roles (mirrors `VersionGateRule::gate`).
+    /// Turn a gate violation into a verdict, admitting a caller at or above the
+    /// least-privileged configured bypass role (mirrors `VersionGateRule::gate`).
     ///
     /// The comparison happens here rather than being handed back as a
     /// `RequireRole` for the caller to resolve — that variant is deleted, and

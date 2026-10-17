@@ -54,6 +54,28 @@ impl OwnershipPort for InMemoryOwnershipStore {
         Ok(())
     }
 
+    async fn claim_if_unowned(
+        &self,
+        registry: &str,
+        package: &str,
+        user_id: &str,
+    ) -> Result<bool, CoreError> {
+        let mut map = self.data.write().await;
+        let owners = map
+            .entry((registry.to_owned(), package.to_owned()))
+            .or_default();
+        if !owners.is_empty() {
+            return Ok(false);
+        }
+        owners.push(OwnerEntry {
+            principal_type: "user".to_owned(),
+            principal_id: user_id.to_owned(),
+            role: "admin".to_owned(),
+            granted_by: None,
+        });
+        Ok(true)
+    }
+
     async fn can_publish(
         &self,
         registry: &str,
@@ -192,6 +214,19 @@ mod tests {
         assert_eq!(owners.len(), 1);
         assert_eq!(owners[0].principal_id, "alice");
         assert_eq!(owners[0].role, "admin");
+    }
+
+    #[tokio::test]
+    async fn only_the_first_claimant_owns_an_unowned_package() {
+        let store = InMemoryOwnershipStore::new();
+        assert!(store.claim_if_unowned("reg", "pkg", "alice").await.unwrap());
+        assert!(!store
+            .claim_if_unowned("reg", "pkg", "mallory")
+            .await
+            .unwrap());
+        let owners = store.list_owners("reg", "pkg").await.unwrap();
+        assert_eq!(owners.len(), 1);
+        assert_eq!(owners[0].principal_id, "alice");
     }
 
     #[tokio::test]

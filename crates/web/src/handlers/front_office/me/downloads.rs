@@ -113,6 +113,7 @@ pub async fn my_downloads(
             blocked_only: true,
             limit: MAX_BLOCKED_SCAN,
             offset: 0,
+            viewer: None,
         })
         .await
         .unwrap_or_default()

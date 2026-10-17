@@ -3,7 +3,7 @@
 //! manifest, a licence and a README out of a published archive: cargo's
 //! `.crate`, npm's tarball, a wheel or sdist, a `.nupkg`, a Maven jar and its
 //! `pom.xml`, a gem, a conda package, a Go module zip, a Composer zip, a
-//! Terraform module.
+//! Terraform module, an Ansible Galaxy collection.
 //!
 //! Every one of them takes bytes a publisher chose and answers on the
 //! package page and in the licence gate. The contract is small and the same
@@ -11,14 +11,21 @@
 //! members, a zip inside a tar — the call returns an `ExtractedManifest`,
 //! never panics, and what it reports is bounded: no dependency name or
 //! licence longer than an archive could plausibly carry, and the same input
-//! answered the same way twice (the extractors are pure).
+//! answered the same way twice (the extractors are pure), and no README longer
+//! than `README_EXTRACT_CEILING`, the cap every extractor reads under.
+//!
+//! `KINDS` mirrors the dispatch in `sbom/extractor/mod.rs`; a kind missing
+//! here is a parser this target never reaches (`galaxy` was, until added).
+//! Tar members are written with their names raw in the header, so `..`,
+//! absolute and NUL-bearing names — which `set_path` refuses — reach the
+//! parsers that have to ignore them (`readme::is_inside_root`).
 
 use std::io::Write;
 
 use libfuzzer_sys::fuzz_target;
 
 use batlehub_adapters::sbom::extractor::ArchiveSbomExtractor;
-use batlehub_core::ports::SbomExtractor;
+use batlehub_core::ports::{SbomExtractor, README_EXTRACT_CEILING};
 
 const KINDS: &[&str] = &[
     "cargo",
@@ -31,6 +38,7 @@ const KINDS: &[&str] = &[
     "terraform",
     "conda",
     "rubygems",
+    "galaxy",
     "generic",
 ];
 
@@ -59,6 +67,11 @@ const NAMES: &[&str] = &[
     "go.mod",
     "composer.json",
     "main.tf",
+    "MANIFEST.json",
+    "./MANIFEST.json",
+    "../README.md",
+    "/README.md",
+    "galaxy.yml",
     "README.md",
     "readme.rst",
     "LICENSE",
@@ -75,6 +88,7 @@ const BODIES: &[&str] = &[
     "module x\n\ngo 1.22\n\nrequire y v1.0.0\n",
     "{\"name\":\"v/x\",\"license\":\"MIT\",\"require\":{\"v/y\":\"^1\"}}",
     "{\"name\":\"x\",\"version\":\"1.0.0\",\"license\":\"MIT\",\"depends\":[\"y >=1\"]}",
+    r#"{"collection_info":{"namespace":"acme","name":"util","version":"1.0.0","readme":"README.md","license":["MIT"],"dependencies":{"acme.base":">=1"}}}"#,
     "# Title\n\nsome readme\n",
     "MIT License\n",
     "",
@@ -112,13 +126,16 @@ fn tar_gz(members: &[(String, Vec<u8>)]) -> Vec<u8> {
     let mut b = tar::Builder::new(Vec::new());
     for (name, data) in members {
         let mut h = tar::Header::new_gnu();
+        // Raw into the header field: `set_path` would refuse the hostile names.
+        let field = &mut h.as_old_mut().name;
+        let n = name.len().min(field.len());
+        field[..n].copy_from_slice(&name.as_bytes()[..n]);
+        h.set_entry_type(tar::EntryType::Regular);
         h.set_size(data.len() as u64);
         h.set_mode(0o644);
         h.set_mtime(0);
-        if h.set_path(name).is_ok() {
-            h.set_cksum();
-            let _ = b.append_data(&mut h, name, data.as_slice());
-        }
+        h.set_cksum();
+        let _ = b.append(&h, data.as_slice());
     }
     let raw = b.into_inner().unwrap_or_default();
     let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -198,6 +215,13 @@ fuzz_target!(|data: &[u8]| {
             license.len() <= 4096,
             "{kind}: a licence of {} bytes",
             license.len()
+        );
+    }
+    if let Some(readme) = &first.readme {
+        assert!(
+            readme.content.len() <= README_EXTRACT_CEILING,
+            "{kind}: a README of {} bytes over the {README_EXTRACT_CEILING} ceiling",
+            readme.content.len()
         );
     }
 });

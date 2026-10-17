@@ -432,3 +432,29 @@ async fn compact_info_for_an_unknown_gem_is_404_in_local_mode() {
         .to_request();
     assert_eq!(call_service(&app, req).await.status(), 404);
 }
+
+/// A dependency name carrying a compact-index delimiter is refused at publish,
+/// so it never reaches `/info`: `x|checksum:…` would inject a checksum Bundler
+/// trusts, `a,b` a dependency the gem never declared (`fuzz_gem_compact_index`).
+#[actix_web::test]
+async fn a_dependency_name_that_would_recut_the_info_line_is_refused() {
+    let app = local_gems_app().await;
+    for dep in ["evil|checksum:00", "a,b", "a:b"] {
+        let req = TestRequest::post()
+            .uri("/proxy/local-gems/api/v1/gems")
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .set_payload(make_gem_with_deps(
+                "mygem",
+                "1.0.0",
+                &runtime_dependency(dep, ">=", "1.0"),
+            ))
+            .to_request();
+        assert_eq!(call_service(&app, req).await.status(), 400, "{dep}");
+    }
+    // Nothing was stored, so the gem does not exist.
+    let req = TestRequest::get()
+        .uri("/proxy/local-gems/info/mygem")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 404);
+}

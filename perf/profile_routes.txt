@@ -354,7 +354,7 @@ GET /proxy/{registry}/{module}@latest	skip: no arm yet
 GET /proxy/{registry}/{module}@v/list	profiled
 GET /proxy/{registry}/{module}@v/{filename}	profiled
 PUT /proxy/{registry}/{module}@v/{filename}	skip: no arm yet
-PUT /proxy/{registry}/{name}	profiled
+PUT /proxy/{registry}/{package}	profiled
 GET /proxy/{registry}/{name}/{version}/download	profiled
 GET /proxy/{registry}/{owner}/{repo}/branches/{branch}	skip: no arm yet
 GET /proxy/{registry}/{owner}/{repo}/commits/{sha}	skip: no arm yet

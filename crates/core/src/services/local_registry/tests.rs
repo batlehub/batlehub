@@ -4454,3 +4454,138 @@ mod nix_staging {
         }
     }
 }
+
+// ── Storage-key injectivity (found by `fuzz_storage_keys`) ───────────────────
+mod storage_key_collisions {
+    use super::*;
+    use crate::entities::{PackageMetadata, RegistryKind};
+    use crate::ports::FetchedArtifact;
+
+    struct KindClient(&'static str);
+
+    #[async_trait]
+    impl crate::ports::RegistryClient for KindClient {
+        fn registry_type(&self) -> &str {
+            self.0
+        }
+        async fn resolve_metadata(&self, _: &PackageId) -> Result<PackageMetadata, CoreError> {
+            Err(CoreError::NotFound("stub".into()))
+        }
+        async fn fetch_artifact(&self, _: &PackageId) -> Result<FetchedArtifact, CoreError> {
+            Err(CoreError::NotFound("stub".into()))
+        }
+    }
+
+    /// A `registry` of `kind`, over storage that really deletes.
+    fn svc_for(
+        registry: &str,
+        kind: RegistryKind,
+        backend: Arc<InMemBackend>,
+        storage: Arc<MemStore>,
+    ) -> LocalRegistryService {
+        let mut hot = HotConfig::default();
+        hot.registries
+            .insert(registry.to_owned(), Arc::new(KindClient(kind.as_str())));
+        LocalRegistryService {
+            backend,
+            storage,
+            hot: new_hot_lock(hot),
+            quota: None,
+            ownership: None,
+            team_namespace: None,
+            sbom: None,
+            explore_cache: None,
+            package_repo: None,
+            readme: None,
+        }
+    }
+
+    /// `local:r/@corp/lib/` is both `@corp@lib`'s version directory and
+    /// `@corp/lib`'s name directory. Deleting the first — by hand, or by a
+    /// retention run — used to prefix-delete every version of the second.
+    #[tokio::test]
+    async fn deleting_a_version_leaves_a_package_whose_name_continues_its_path() {
+        let backend = InMemBackend::arc();
+        let storage = MemStore::arc();
+        let victim = artifact_storage_key("npm", "@corp/lib", "1.0.0");
+        storage.put(
+            &artifact_storage_key("npm", "@corp", "lib"),
+            Bytes::from_static(b"x"),
+        );
+        storage.put(&victim, Bytes::from_static(b"victim"));
+
+        let s = svc_for("npm", RegistryKind::Npm, backend, Arc::clone(&storage));
+        // Bytes only: this backend double cannot tombstone, and the row is
+        // not what is under test.
+        s.drop_version_bytes("npm", "@corp", "lib").await;
+
+        assert!(
+            storage.exists(&victim).await.unwrap(),
+            "@corp/lib@1.0.0 was deleted"
+        );
+        assert!(!storage
+            .exists(&artifact_storage_key("npm", "@corp", "lib"))
+            .await
+            .unwrap());
+    }
+
+    /// The positive control: a kind that stores files under a version still
+    /// has them deleted with it.
+    #[tokio::test]
+    async fn a_multi_file_kind_still_drops_the_files_under_its_version() {
+        let backend = InMemBackend::arc();
+        let storage = MemStore::arc();
+        let jar = maven_artifact_storage_key("mvn", "g:a", "1.0", "a-1.0.jar");
+        storage.put(
+            &artifact_storage_key("mvn", "g:a", "1.0"),
+            Bytes::from_static(b"pom"),
+        );
+        storage.put(&jar, Bytes::from_static(b"jar"));
+
+        let s = svc_for("mvn", RegistryKind::Maven, backend, Arc::clone(&storage));
+        s.drop_version_bytes("mvn", "g:a", "1.0").await;
+        assert!(
+            !storage.exists(&jar).await.unwrap(),
+            "the jar outlived its version"
+        );
+    }
+
+    /// `a@1.0.sigzip` is stored where `a@1.0`'s signature goes, so deleting
+    /// `1.0` destroyed it. Valid semver (`1.0.0-rc.sigzip`) does not stop it.
+    #[test]
+    fn a_version_cannot_end_in_a_signature_sibling_suffix() {
+        for version in [
+            "1.0.sigzip",
+            "1.0.0-rc.sigzip",
+            "1.0.sigzip.upstream",
+            "1.0.SIGZIP",
+        ] {
+            assert!(
+                validate_publish_coordinate("a", version).is_err(),
+                "{version}"
+            );
+        }
+        assert!(validate_publish_coordinate("a", "1.0.0-sigzip").is_ok());
+        assert!(validate_publish_coordinate("@scope/a", "1.0.0").is_ok());
+    }
+
+    #[test]
+    fn a_terraform_os_has_no_dash_so_os_arch_splits_back() {
+        assert_eq!(
+            terraform_provider_binary_storage_key("r", "n", "t", "1", "linux-amd64", "x"),
+            terraform_provider_binary_storage_key("r", "n", "t", "1", "linux", "amd64-x"),
+            "the collision this guards against"
+        );
+        assert!(validate_terraform_platform("linux-amd64", "x").is_err());
+        assert!(validate_terraform_platform("linux", "amd64-x").is_ok());
+        assert!(validate_terraform_platform("linux", "a/b").is_err());
+    }
+
+    #[test]
+    fn a_path_segment_is_path_safe_and_has_no_slash() {
+        assert!(validate_path_segment("x", "aws").is_ok());
+        for bad in ["a/b", "..", "", "a\\b"] {
+            assert!(validate_path_segment("x", bad).is_err(), "{bad:?}");
+        }
+    }
+}

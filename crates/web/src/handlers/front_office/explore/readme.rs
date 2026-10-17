@@ -446,6 +446,7 @@ async fn blocked_versions(
         blocked_only: true,
         limit: 500,
         offset: 0,
+        viewer: None,
     };
     admin_svc
         .list_packages(filter)

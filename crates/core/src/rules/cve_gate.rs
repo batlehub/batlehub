@@ -12,7 +12,7 @@ use crate::rules::{Rule, RuleContext, RuleDecision};
 /// Findings are produced out-of-band by the periodic SBOM re-scan
 /// (`VulnerabilityScanService`). When `block` is `false` the rule never denies —
 /// the finding is surfaced in the UI but downloads proceed (warn-only). When
-/// `block` is `true`, callers holding one of `bypass_roles` are still allowed.
+/// `block` is `true`, callers who clear `bypass_roles` (`Role::clears_bypass`) are still allowed.
 pub struct CveGateRule {
     pub repo: Arc<dyn VulnerabilityRepository>,
     pub min_severity: Severity,
@@ -47,7 +47,7 @@ impl Rule for CveGateRule {
         if !self.block {
             return RuleDecision::Allow;
         }
-        if self.bypass_roles.contains(&ctx.identity.role) {
+        if ctx.identity.role.clears_bypass(&self.bypass_roles) {
             return RuleDecision::Allow;
         }
 

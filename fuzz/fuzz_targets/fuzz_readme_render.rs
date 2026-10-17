@@ -29,6 +29,104 @@ use batlehub_core::{
 /// still resolve. Checked case-insensitively.
 const FORBIDDEN_SCHEMES: &[&str] = &["javascript:", "vbscript:", "data:", "file:", "blob:"];
 
+/// Every attribute value in `html`, as written between its quotes.
+///
+/// A tag is walked quote-aware rather than cut at the next `>`: the serialiser
+/// escapes `"` and `&` in a value but not `>`, so `title="a>b"` is one tag.
+fn attribute_values(html: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let bytes = html.as_bytes();
+    let mut i = 0;
+    let mut in_tag = false;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'<' if !in_tag => in_tag = true,
+            b'>' if in_tag => in_tag = false,
+            q @ (b'"' | b'\'') if in_tag && i > 0 && bytes[i - 1] == b'=' => {
+                let start = i + 1;
+                let len = html[start..].find(q as char).unwrap_or(html.len() - start);
+                out.push(&html[start..start + len]);
+                i = start + len;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out
+}
+
+/// An attribute value as a browser's URL parser receives it: character
+/// references decoded (numeric with or without the `;`, and the named ones
+/// that spell a scheme's punctuation or whitespace), then ASCII tab, LF and
+/// CR removed *anywhere* and C0 controls and spaces trimmed from the ends —
+/// WHATWG URL's own preprocessing. Every other C0 control is removed too,
+/// which is stricter than a browser and therefore a sound over-approximation.
+fn as_browser_reads(value: &str) -> String {
+    let mut decoded = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(amp) = rest.find('&') {
+        decoded.push_str(&rest[..amp]);
+        rest = &rest[amp..];
+        let named = [
+            ("&amp;", '&'),
+            ("&quot;", '"'),
+            ("&apos;", '\''),
+            ("&lt;", '<'),
+            ("&gt;", '>'),
+            ("&colon;", ':'),
+            ("&tab;", '\t'),
+            ("&newline;", '\n'),
+            ("&nbsp;", '\u{a0}'),
+        ];
+        let lower = rest.get(..10).unwrap_or(rest).to_ascii_lowercase();
+        if let Some((ent, c)) = named.iter().find(|(e, _)| lower.starts_with(e)) {
+            decoded.push(*c);
+            rest = &rest[ent.len()..];
+            continue;
+        }
+        let (radix, digits_at) = match rest.as_bytes().get(1..3) {
+            Some([b'#', b'x' | b'X']) => (16, 3),
+            Some([b'#', _]) => (10, 2),
+            _ => (0, 0),
+        };
+        let digits = rest
+            .get(digits_at..)
+            .map(|d| {
+                d.len()
+                    - d.trim_start_matches(|c: char| c.is_digit(radix.max(2)))
+                        .len()
+            })
+            .unwrap_or(0);
+        if radix == 0 || digits == 0 {
+            decoded.push('&');
+            rest = &rest[1..];
+            continue;
+        }
+        let num = u32::from_str_radix(
+            // Browsers accept any run of leading zeros: `&#x000000006a;` is `j`.
+            &rest[digits_at..digits_at + digits]
+                .trim_start_matches('0')
+                .chars()
+                .take(8)
+                .collect::<String>(),
+            radix,
+        )
+        .ok()
+        .and_then(char::from_u32)
+        .unwrap_or('\u{fffd}');
+        decoded.push(num);
+        rest = &rest[digits_at + digits..];
+        rest = rest.strip_prefix(';').unwrap_or(rest);
+    }
+    decoded.push_str(rest);
+    decoded
+        .chars()
+        .filter(|c| !c.is_ascii_control())
+        .collect::<String>()
+        .trim_matches(|c: char| c == ' ')
+        .to_ascii_lowercase()
+}
+
 fuzz_target!(|data: &[u8]| {
     let mut u = arbitrary::Unstructured::new(data);
 
@@ -124,6 +222,21 @@ fuzz_target!(|data: &[u8]| {
             assert!(
                 !inside_tag(idx),
                 "{scheme} survived inside a tag: {out:?} (from {source:?})"
+            );
+        }
+    }
+
+    // The same check, on attribute values *as the browser reads them*. The
+    // loop above reads raw text, so `href="jav&#x61;script:"` or
+    // `java&#9;script:` — which a browser decodes, strips, and runs — would pass
+    // it. Decoding first closes that gap whatever the sanitiser's serialiser
+    // happens to escape today.
+    for value in attribute_values(&out) {
+        let read = as_browser_reads(value);
+        for scheme in FORBIDDEN_SCHEMES {
+            assert!(
+                !read.contains(scheme),
+                "{scheme} survives in attribute {value:?} once decoded ({read:?}): {out:?} (from {source:?})"
             );
         }
     }

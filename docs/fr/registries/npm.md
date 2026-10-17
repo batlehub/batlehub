@@ -121,8 +121,8 @@ npm install @myorg/my-package
 | `GET` | `/proxy/{registry}/-/ping` | `npm ping`. |
 | `GET` | `/proxy/{registry}/-/v1/search` | `npm search` / `npm search --json`. |
 | `GET` | `/proxy/{registry}/-/whoami` | `npm whoami`. |
-| `PUT` | `/proxy/{registry}/{name}` | Publish a new npm package version (`npm publish`). |
 | `GET` | `/proxy/{registry}/{package}` | Fetch package metadata (all versions / packument). |
+| `PUT` | `/proxy/{registry}/{package}` | Publish a new npm package version (`npm publish`). |
 | `GET` | `/proxy/{registry}/{package}/{version}` | Fetch package version metadata. |
 | `GET` | `/proxy/{registry}/{package}/{version}/tarball` | Download npm package tarball for a specific version. |
 <!-- END endpoints -->

@@ -52,7 +52,7 @@ impl PypiRegistryClient {
         };
         let dl_credentialed =
             apply_upstream_options(no_redirect(), opts).map_err(CoreError::Other)?;
-        let dl_plain = apply_upstream_tls(no_redirect(), opts)
+        let dl_plain = apply_upstream_tls(super::ssrf::public_only_dns(no_redirect(), opts), opts)
             .map_err(CoreError::Other)?
             .build()
             .map_err(|e| CoreError::Other(e.into()))?;

@@ -10,6 +10,10 @@
 //!
 //! - **Constructive:** for every convention, `parse(format(name, version))`
 //!   is `(kind, name, version)`, with the wheel's `_`→`-` fold applied.
+//!   That includes Alpine's `{name}-{pkgver}-r{N}.apk`, which the parser asks
+//!   before any extension match, and its adversarial shape: a *name* that itself
+//!   ends in `-r<digits>` (`linux-firmware-r128`), which only a right-anchored
+//!   split of exactly two tokens reads correctly.
 //! - **Arbitrary:** any string parses without panicking, and whatever comes
 //!   out names a `RegistryKind` this build has.
 
@@ -63,7 +67,7 @@ fuzz_target!(|data: &[u8]| {
     }
 
     // Constructive: format per convention, parse, compare.
-    let Ok(convention) = u.int_in_range(0..=9u8) else {
+    let Ok(convention) = u.int_in_range(0..=10u8) else {
         return;
     };
     let (file_name, kind, name, version) = match convention {
@@ -156,6 +160,28 @@ fuzz_target!(|data: &[u8]| {
                 ".tar.bz2"
             };
             (format!("{name}-{ver}-{build}{ext}"), "conda", name, ver)
+        }
+        10 => {
+            // `<name>-<pkgver>-r<N>.apk` — `pkgver` carries no dash (measured
+            // over all of `v3.22/main`), the name may, and may even end in a
+            // token that looks exactly like a release suffix.
+            let Ok(mut name) = word(&mut u, ALNUM_DASH) else {
+                return;
+            };
+            if u.arbitrary::<bool>().unwrap_or(false) {
+                let Ok(fake) = word(&mut u, b"0123456789") else {
+                    return;
+                };
+                name.push_str(&format!("-r{fake}"));
+            }
+            let Ok(pkgver) = word(&mut u, ALNUM_DOT_UNDERSCORE) else {
+                return;
+            };
+            let Ok(release) = word(&mut u, b"0123456789") else {
+                return;
+            };
+            let ver = format!("{pkgver}-r{release}");
+            (format!("{name}-{ver}.apk"), "apk", name, ver)
         }
         _ => {
             // `.deb` / `.rpm`: the server reads the real coordinate from the

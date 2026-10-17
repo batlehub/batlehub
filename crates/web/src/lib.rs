@@ -489,6 +489,10 @@ pub use spa::{configure_spa, narrow_csp, SpaDir};
 
 #[derive(OpenApi)]
 #[openapi(
+    info(
+        description = "BatleHub — a caching proxy and private registry for package managers. `/proxy/{registry}/…` speaks each client's own protocol; `/api/v1/…` is the console and admin API.",
+        contact(name = "BatleHub", url = "https://github.com/batlehub/batlehub"),
+    ),
     tags(
         (name = "proxy/github",   description = "GitHub proxy — releases, assets, tarballs, raw files (also serves Forgejo/Gitea registries, which share this URL scheme)"),
         (name = "proxy/gitlab",   description = "GitLab proxy — releases, release link assets, and source archives"),
@@ -519,6 +523,12 @@ pub use spa::{configure_spa, narrow_csp, SpaDir};
         (name = "explore",          description = "Package explorer — browse and search across registries"),
         (name = "back-office",    description = "Admin management (requires Admin role)"),
         (name = "notifications",  description = "Inbound webhook receiver — accepts events from external systems"),
+        (name = "proxy/maven",    description = "Maven repository — proxy and local hosting under `maven2/`, artifact upload"),
+        (name = "proxy/composer", description = "Composer (Packagist) — packages.json, p2 metadata, dist ZIPs, security advisories, private package upload and yank"),
+        (name = "proxy/forgejo",  description = "Forgejo/Gitea — the package-registry API and release assets by attachment uuid"),
+        (name = "proxy/jetbrains", description = "JetBrains IDE archives — the download CDN as a path-addressed proxy cache, no local hosting"),
+        (name = "air-gap",        description = "Air-gap sink (RFC 0008) — where a rewrite rule sends a host no mirror covers; never fetches, answers 501 and records the host"),
+        (name = "banner",         description = "The global admin banner, readable without a token"),
     ),
     modifiers(&SecurityAddon),
 )]

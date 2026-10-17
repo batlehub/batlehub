@@ -56,10 +56,22 @@ fuzz_target!(|data: &[u8]| {
     // Cap at one year to keep durations meaningful.
     let min_age = Duration::from_secs(min_age_secs.min(365 * 24 * 3600));
 
-    let rule = ReleaseAgeGateRule::new(min_age, vec![Role::Admin])
-        .with_deny_missing_timestamp(deny_missing);
+    // An arbitrary subset of the roles, empty included. As in `DenyLatestRule`,
+    // the least-privileged listed role is the bar: listing `User` alone lets an
+    // `Admin` through too.
+    let Ok(bypass_bits): arbitrary::Result<u8> = u.arbitrary() else {
+        return;
+    };
+    let bypass: Vec<Role> = [Role::Anonymous, Role::User, Role::Admin]
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| bypass_bits & (1 << i) != 0)
+        .map(|(_, r)| r)
+        .collect();
+    // Stated independently of the rule's `min()`: some listed role is at or below.
+    let bypassed = bypass.iter().any(|b| role >= *b);
+    let rule = ReleaseAgeGateRule::new(min_age, bypass).with_deny_missing_timestamp(deny_missing);
 
-    let bypassed = role == Role::Admin;
     let identity = Identity {
         user_id: None,
         role: role.clone(),
@@ -115,7 +127,7 @@ fuzz_target!(|data: &[u8]| {
         }
         (Some(lo), Some(hi)) => {
             if bypassed {
-                assert!(is_allow, "Admin is in the bypass list and was denied");
+                assert!(is_allow, "{role:?} is in the bypass list and was denied");
             } else if lo >= min_age {
                 assert!(
                     is_allow,

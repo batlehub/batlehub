@@ -129,8 +129,9 @@ impl OpenVsxExtensionVersion {
 /// verify-or-rebuild of the latter never touches it.
 pub fn provided_vsix_signature_key(registry: &str, name: &str, version: &str) -> String {
     format!(
-        "{}.sigzip.upstream",
-        artifact_storage_key(registry, name, version)
+        "{}{}",
+        artifact_storage_key(registry, name, version),
+        super::PROVIDED_SIGNATURE_SUFFIX
     )
 }
 

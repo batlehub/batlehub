@@ -30,8 +30,25 @@ fuzz_target!(|data: &[u8]| {
         _ => Role::Admin,
     };
 
-    // Bypass list includes Admin to exercise the bypass-role comparison.
-    let rule = DenyLatestRule::new(vec![Role::Admin]);
+    // The bypass list is an arbitrary subset of the roles — empty included,
+    // which is its own branch (nobody bypasses) — so the "least-privileged
+    // listed role is the bar" comparison is exercised from every side, not
+    // only from `[Admin]`.
+    let Ok(bypass_bits): arbitrary::Result<u8> = u.arbitrary() else {
+        return;
+    };
+    let bypass: Vec<Role> = [Role::Anonymous, Role::User, Role::Admin]
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| bypass_bits & (1 << i) != 0)
+        .map(|(_, r)| r)
+        .collect();
+    let rule = DenyLatestRule::new(bypass.clone());
+    // A request with no version at all (a listing, a name-only lookup) is not a
+    // request for "latest", whatever the package's own version string says.
+    let Ok(has_requested): arbitrary::Result<bool> = u.arbitrary() else {
+        return;
+    };
 
     let identity = Identity {
         user_id: None,
@@ -59,7 +76,7 @@ fuzz_target!(|data: &[u8]| {
         package: &meta,
         action: Action::ReleasesRead,
         cache_entry: None,
-        requested_version: Some(&version_str),
+        requested_version: has_requested.then_some(version_str.as_str()),
     };
 
     let decision = rt.block_on(rule.evaluate(&ctx));
@@ -73,24 +90,30 @@ fuzz_target!(|data: &[u8]| {
     // admin asking for "latest" is *allowed*, that is what the list is for.
     // The first input libFuzzer ever ran through this target in CI decoded to
     // exactly that case and was reported as a finding.
-    if version_str == "latest" {
-        if identity.has_role_at_least(&Role::Admin) {
+    //
+    // Restated as "at or above *some* listed role" rather than the rule's
+    // "at or above the minimum", so the two are independent spellings of RFC
+    // 0015 §5.1's bar.
+    if has_requested && version_str == "latest" {
+        let bypassed = bypass.iter().any(|b| identity.has_role_at_least(b));
+        if bypassed {
             assert!(
                 matches!(decision, RuleDecision::Allow),
-                "an admin is in the bypass list and must be allowed \"latest\""
+                "{:?} is at or above a bypass role in {bypass:?} and must be allowed \"latest\"",
+                identity.role
             );
         } else {
             assert!(
                 decision.is_deny(),
-                "\"latest\" must be blocked for {:?}, who is below the bypass role",
+                "\"latest\" must be blocked for {:?}, below every bypass role in {bypass:?}",
                 identity.role
             );
         }
     } else {
         assert!(
             matches!(decision, RuleDecision::Allow),
-            "non-\"latest\" version {:?} must always be allowed",
-            version_str
+            "non-\"latest\" request {:?} must always be allowed",
+            has_requested.then_some(&version_str)
         );
     }
 });

@@ -10,7 +10,7 @@
 //! ones with a seal in an unexpected place, a subject matched at two tiers, or a
 //! path with no grants at all.
 //!
-//! Four properties, all from §11.2, all checked on every input:
+//! Six properties, all from §11.2, all checked on every input:
 //!
 //! 1. **Empty is not all.** A subject matched by no grant resolves to the empty
 //!    set. This is survey finding 2 as an invariant: it shipped because an empty
@@ -25,6 +25,16 @@
 //! 4. **The administrative floor.** Below a seal, a subject resolves at most the
 //!    three administrative verbs it already held at registry tier, and never a
 //!    usage verb.
+//! 5. **An inheriting node is invisible** (asserted as check 4 below).
+//!
+//! Properties 2 and 3 are stated against `resolve`'s exact shape, because both
+//! have a precise boundary: the floor reads `path[0]`, and the deepest seal
+//! decides where contribution starts. So "order" means the order of the nodes
+//! *below the deepest seal* (permuting across a seal moves the seal, and moving
+//! `path[0]` moves the floor — both are meant to change the answer), and
+//! "deeper" means *appended after every existing node* with a non-sealed map.
+
+use std::collections::BTreeSet;
 
 use libfuzzer_sys::fuzz_target;
 
@@ -200,5 +210,39 @@ fuzz_target!(|data: &[u8]| {
         resolved.actions().collect::<Vec<_>>(),
         after.actions().collect::<Vec<_>>(),
         "a node that declares nothing must contribute nothing"
+    );
+
+    // ── 5. Order independence below the deepest seal ────────────────────────
+    //
+    // Reverse the contributing suffix `path[start..]`. It holds no seal (the
+    // seal is the deepest one), and `path[0]` only moves when `start == 0`, in
+    // which case there is no seal and the floor is not consulted.
+    let as_set = |s: &batlehub_core::entities::GrantSet| s.actions().collect::<BTreeSet<_>>();
+    let before = as_set(&resolved);
+    let mut reordered = path.clone();
+    reordered[start..].reverse();
+    assert_eq!(
+        before,
+        as_set(&resolve(&reordered, &subject)),
+        "reordering the nodes below the deepest seal changed the result"
+    );
+
+    // ── 6. A deeper node never narrows ───────────────────────────────────────
+    //
+    // Append one random *non-sealed* node: it cannot move the seal or `path[0]`,
+    // so the resolved set may only grow. A generated map that came out sealed is
+    // the one construct allowed to narrow, so it is not what is being tested.
+    let Ok(extra) = grant_map(&mut u) else {
+        return;
+    };
+    if extra.is_sealed() {
+        return;
+    }
+    let mut deeper = path.clone();
+    deeper.push(Node::new(Tier::Version, "deeper", Some(extra)));
+    let grown = as_set(&resolve(&deeper, &subject));
+    assert!(
+        grown.is_superset(&before),
+        "a deeper non-sealed node narrowed {before:?} to {grown:?}"
     );
 });

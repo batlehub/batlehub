@@ -28,6 +28,16 @@
 //!    trailing-newline normalisation that never settles.
 //! 5. **Go's `@v/list` is clean.** The one format simple enough to state the
 //!    end result directly: no surviving line is a blocked version.
+//! 6. **npm, cargo and Maven are clean too**, on documents that are
+//!    well-formed by construction: no blocked key survives in a packument's
+//!    `versions` and no `dist-tags` entry names one; every sparse-index line
+//!    whose `vers` is blocked is `yanked`; no `<version>`, `<latest>` or
+//!    `<release>` of a `maven-metadata.xml` names one. Token soup almost never
+//!    parses as these formats, so without a generator that builds the real
+//!    shape the end-state of the three busiest protocols went unasserted.
+//!
+//! The document kind is drawn from `DocumentKind::ALL`, so a kind added in core
+//! is fuzzed the day it lands rather than the day someone edits this list.
 //!
 //! `dispatch_multi` — conda's `repodata.json` and RubyGems' `/versions`, where
 //! the blocked set is a registry's worth of `(package, version)` pairs — is
@@ -41,26 +51,6 @@ use batlehub_core::ports::{DocumentBody, DocumentKind, VersionDocument};
 use batlehub_core::services::blocking::{
     dispatch, dispatch_multi, BlockedVersions, ListingContext, MultiPackageBlocks,
 };
-
-/// Every `DocumentKind` a filter can be asked for. Mismatched pairs (a NuGet
-/// kind with a conda document) exercise the pass-through arms, which must
-/// hold the same properties.
-const DOCUMENTS: &[DocumentKind] = &[
-    DocumentKind::Versions,
-    DocumentKind::REGISTRATION,
-    DocumentKind::GEM,
-    DocumentKind::LATEST,
-    DocumentKind::CURRENT_REPODATA,
-    DocumentKind::P2_DEV,
-    DocumentKind::SIMPLE_JSON,
-    DocumentKind::COMPACT_VERSIONS,
-    DocumentKind::COMPACT_INFO,
-    DocumentKind::CHANNELDATA,
-    DocumentKind::COMPACT_NAMES,
-    DocumentKind::PROVIDER_DOWNLOAD,
-    DocumentKind::INDEX_JSON,
-    DocumentKind::SDKMAN_DEFAULT,
-];
 
 /// Field names the filters look for, so a random object has a chance of being
 /// read as a listing rather than skipped as noise.
@@ -269,6 +259,161 @@ fn text(u: &mut arbitrary::Unstructured<'_>, pool: &[String]) -> arbitrary::Resu
     Ok(out)
 }
 
+/// A version a well-formed document can carry verbatim: XML text needs no
+/// escaping and nothing trims it, so the oracle can read it back by slicing.
+fn plain(v: &str) -> bool {
+    !v.is_empty()
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+' | '_'))
+}
+
+/// A packument, sparse index or `maven-metadata.xml` built from the pool, for
+/// the three kinds property 6 states an end result for. `None` for every
+/// other kind.
+fn well_formed(
+    u: &mut arbitrary::Unstructured<'_>,
+    kind: RegistryKind,
+    pool: &[String],
+) -> arbitrary::Result<Option<VersionDocument>> {
+    let listed: Vec<&String> = pool.iter().filter(|v| plain(v)).collect();
+    Ok(Some(match kind {
+        RegistryKind::Npm => {
+            let mut versions = Map::new();
+            let mut time = Map::new();
+            for v in &listed {
+                if u.arbitrary()? {
+                    versions.insert(
+                        (*v).clone(),
+                        serde_json::json!({ "version": v, "dist": { "tarball": format!("https://r.invalid/pkg/-/pkg-{v}.tgz") } }),
+                    );
+                    time.insert((*v).clone(), Value::from("2024-01-01T00:00:00.000Z"));
+                }
+            }
+            let keys: Vec<String> = versions.keys().cloned().collect();
+            let mut tags = Map::new();
+            if !keys.is_empty() {
+                for tag in ["latest", "next", "beta"] {
+                    if u.arbitrary()? {
+                        tags.insert(tag.to_owned(), Value::from(pick(u, &keys)?.clone()));
+                    }
+                }
+            }
+            VersionDocument::json(serde_json::json!({
+                "name": "pkg",
+                "dist-tags": tags,
+                "versions": versions,
+                "time": time,
+            }))
+        }
+        RegistryKind::Cargo => {
+            let mut body = String::new();
+            for _ in 0..u.int_in_range(0..=8u8)? {
+                if listed.is_empty() {
+                    break;
+                }
+                let line = serde_json::json!({
+                    "name": "pkg",
+                    "vers": pick(u, &listed)?,
+                    "deps": [],
+                    "cksum": "00",
+                    "yanked": u.arbitrary::<bool>()?,
+                });
+                body.push_str(&line.to_string());
+                body.push('\n');
+            }
+            VersionDocument::text("text/plain", body)
+        }
+        RegistryKind::Maven => {
+            let mut xml = String::from(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<metadata>\n  \
+                 <groupId>g</groupId>\n  <artifactId>pkg</artifactId>\n  <versioning>\n",
+            );
+            // `<latest>`/`<release>` may name a version `<versions>` does not
+            // list: Maven follows the pointer alone, so the filter has to
+            // repair a blocked one either way (the first finding here).
+            let mut kept = Vec::new();
+            for v in &listed {
+                if u.arbitrary()? {
+                    kept.push(*v);
+                }
+            }
+            if !listed.is_empty() {
+                for el in ["latest", "release"] {
+                    if u.arbitrary()? {
+                        let v = pick(u, &listed)?;
+                        xml.push_str(&format!("    <{el}>{v}</{el}>\n"));
+                    }
+                }
+            }
+            xml.push_str("    <versions>\n");
+            for v in &kept {
+                xml.push_str(&format!("      <version>{v}</version>\n"));
+            }
+            xml.push_str(
+                "    </versions>\n    <lastUpdated>20240101000000</lastUpdated>\n  \
+                 </versioning>\n</metadata>\n",
+            );
+            VersionDocument::text("text/xml", xml)
+        }
+        _ => return Ok(None),
+    }))
+}
+
+/// Property 6: the end state of a filtered npm, cargo or Maven document names
+/// no blocked version where a client would select it.
+fn assert_clean(kind: RegistryKind, doc: &VersionDocument, blocked: &BlockedVersions) {
+    match (kind, &doc.body) {
+        (RegistryKind::Npm, DocumentBody::Json(v)) => {
+            if let Some(versions) = v.get("versions").and_then(Value::as_object) {
+                for key in versions.keys() {
+                    assert!(
+                        !blocked.contains(key),
+                        "packument still lists blocked {key:?}"
+                    );
+                }
+            }
+            if let Some(tags) = v.get("dist-tags").and_then(Value::as_object) {
+                for (tag, target) in tags {
+                    let t = target.as_str().unwrap_or_default();
+                    assert!(
+                        !blocked.contains(t),
+                        "dist-tag {tag:?} still names blocked {t:?}"
+                    );
+                }
+            }
+        }
+        (RegistryKind::Cargo, DocumentBody::Text(body)) => {
+            for line in body.lines() {
+                let Ok(v) = serde_json::from_str::<Value>(line) else {
+                    panic!("the sparse index gained an unparseable line {line:?}");
+                };
+                let vers = v["vers"].as_str().unwrap_or_default();
+                if blocked.contains(vers) {
+                    assert_eq!(
+                        v["yanked"],
+                        Value::Bool(true),
+                        "blocked {vers:?} is not yanked: {line}"
+                    );
+                }
+            }
+        }
+        (RegistryKind::Maven, DocumentBody::Text(xml)) => {
+            for el in ["version", "latest", "release"] {
+                let (open, close) = (format!("<{el}>"), format!("</{el}>"));
+                for (idx, _) in xml.match_indices(&open) {
+                    let rest = &xml[idx + open.len()..];
+                    let v = rest[..rest.find(&close).expect("unclosed element")].trim();
+                    assert!(
+                        v.is_empty() || !blocked.contains(v),
+                        "<{el}> still names blocked {v:?} in {xml}"
+                    );
+                }
+            }
+        }
+        _ => panic!("{kind}: the well-formed document changed representation"),
+    }
+}
+
 fn same_shape(before: &VersionDocument, after: &VersionDocument) -> bool {
     before.content_type == after.content_type
         && before.synthesised == after.synthesised
@@ -286,7 +431,10 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     let kind = *kind;
-    let Ok(document) = pick(&mut u, DOCUMENTS) else {
+    // Every kind, including mismatched pairs (a NuGet kind with a conda
+    // document): those exercise the pass-through arms, which must hold the same
+    // properties.
+    let Ok(document) = pick(&mut u, DocumentKind::ALL) else {
         return;
     };
     let document = *document;
@@ -300,10 +448,20 @@ fuzz_target!(|data: &[u8]| {
         pool.push(v);
     }
 
-    let Ok(is_json) = u.arbitrary::<bool>() else {
+    let Ok(mode) = u.int_in_range(0..=2u8) else {
         return;
     };
-    let doc = if is_json {
+    let mut well_formed_doc = None;
+    if mode == 2 {
+        match well_formed(&mut u, kind, &pool) {
+            Ok(d) => well_formed_doc = d,
+            Err(_) => return,
+        }
+    }
+    let is_json = mode == 0;
+    let doc = if let Some(d) = well_formed_doc.clone() {
+        d
+    } else if is_json {
         let Ok(value) = json(&mut u, 4, &pool) else {
             return;
         };
@@ -377,7 +535,7 @@ fuzz_target!(|data: &[u8]| {
     assert!(
         removed_again.is_empty(),
         "{kind}/{document}: a second pass removed {removed_again:?} the first pass left behind \
-         (first pass removed {removed:?})"
+         (first pass removed {removed:?}) from {doc:?}, leaving {once:?}"
     );
     assert_eq!(
         twice, once,
@@ -395,6 +553,12 @@ fuzz_target!(|data: &[u8]| {
                 );
             }
         }
+    }
+
+    // 6. npm, cargo and Maven: no blocked version survives where a client
+    // would select it.
+    if well_formed_doc.is_some() {
+        assert_clean(kind, &once, &blocked);
     }
 
     // The multi-package entry point, for the kinds that have one.

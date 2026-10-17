@@ -29,7 +29,7 @@ use batlehub_core::services::{LocalRegistryService, ProxyService};
 
 use super::require_npm;
 use crate::handlers::proxy::common::{local_or_proxy_document_value, registry_public_base};
-use crate::handlers::schemas::{MessageResponse, ProtocolDocument};
+use crate::handlers::schemas::ProtocolDocument;
 use crate::{error::AppError, extractors::AuthIdentity, RegistryMap, RegistryModeMap};
 use batlehub_core::entities::Action;
 
@@ -195,9 +195,7 @@ pub async fn npm_dist_tags(
     ),
     request_body(content_type = "application/json", description = "The version to tag, as a JSON string"),
     responses(
-        (status = 200, description = "Tag set", body = MessageResponse),
-        (status = 403, description = "Access denied"),
-        (status = 404, description = "Unknown registry, or not in local/hybrid mode"),
+        (status = 404, description = "Unknown registry"),
         (status = 501, description = "Tag writes are not implemented for this registry"),
     ),
     security(("bearer_token" = [])),

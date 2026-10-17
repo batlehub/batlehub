@@ -296,7 +296,8 @@ pub(super) async fn list_packages_impl(
     // execute against the `limit` rows actually returned — not every row
     // matching the WHERE clause. Safe because ORDER BY only references `page`
     // (i.e. `ps`) columns, never the joined access_events aggregates.
-    let rows = sqlx::query(
+    let visibility = viewer_predicate("$8", "$9", "$10");
+    let sql = format!(
         r#"
         WITH page AS (
             SELECT
@@ -315,6 +316,7 @@ pub(super) async fn list_packages_impl(
               AND ($3::boolean = false OR ps.status = 'blocked')
               AND ($6::text IS NULL OR ps.package_name = $6)
               AND ($7::text[] IS NULL OR ps.registry = ANY($7::text[]))
+              {visibility}
             ORDER BY ps.registry, ps.package_name, ps.package_version
             LIMIT $4 OFFSET $5
         )
@@ -350,18 +352,23 @@ pub(super) async fn list_packages_impl(
             LIMIT 1
         ) ae_user ON true
         ORDER BY page.registry, page.package_name, page.package_version
-        "#,
-    )
-    .bind(&filter.registry)
-    .bind(&filter.name_contains)
-    .bind(filter.blocked_only)
-    .bind(filter.limit as i64)
-    .bind(filter.offset as i64)
-    .bind(&filter.name_exact)
-    .bind(prepare_registries_param(&filter.registries))
-    .fetch_all(pool)
-    .await
-    .db_err()?;
+        "#
+    );
+    let (admin, authed, groups) = viewer_params(filter.viewer.as_ref());
+    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(&filter.registry)
+        .bind(&filter.name_contains)
+        .bind(filter.blocked_only)
+        .bind(filter.limit as i64)
+        .bind(filter.offset as i64)
+        .bind(&filter.name_exact)
+        .bind(prepare_registries_param(&filter.registries))
+        .bind(admin)
+        .bind(authed)
+        .bind(&groups)
+        .fetch_all(pool)
+        .await
+        .db_err()?;
 
     Ok(rows.into_iter().map(map_package_summary).collect())
 }
@@ -370,7 +377,8 @@ pub(super) async fn count_packages_impl(
     pool: &PgPool,
     filter: PackageFilter,
 ) -> Result<u64, CoreError> {
-    let row = sqlx::query(
+    let visibility = viewer_predicate("$6", "$7", "$8");
+    let sql = format!(
         r#"
         SELECT COUNT(*) AS total
         FROM package_statuses ps
@@ -379,21 +387,46 @@ pub(super) async fn count_packages_impl(
           AND ($3::boolean = false OR ps.status = 'blocked')
           AND ($4::text IS NULL OR ps.package_name = $4)
           AND ($5::text[] IS NULL OR ps.registry = ANY($5::text[]))
-        "#,
-    )
-    .bind(&filter.registry)
-    .bind(&filter.name_contains)
-    .bind(filter.blocked_only)
-    .bind(&filter.name_exact)
-    .bind(if filter.registries.is_empty() {
-        None
-    } else {
-        Some(filter.registries)
-    })
-    .fetch_one(pool)
-    .await
-    .db_err()?;
+          {visibility}
+        "#
+    );
+    let (admin, authed, groups) = viewer_params(filter.viewer.as_ref());
+    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+        .bind(&filter.registry)
+        .bind(&filter.name_contains)
+        .bind(filter.blocked_only)
+        .bind(&filter.name_exact)
+        .bind(if filter.registries.is_empty() {
+            None
+        } else {
+            Some(filter.registries)
+        })
+        .bind(admin)
+        .bind(authed)
+        .bind(&groups)
+        .fetch_one(pool)
+        .await
+        .db_err()?;
 
     let count: i64 = row.try_get("total").unwrap_or(0);
     Ok(count as u64)
+}
+
+/// The package-visibility gate for a `package_statuses` listing, at the given
+/// placeholders. Spliced SQL is static: only placeholder names go in.
+fn viewer_predicate(admin: &str, authed: &str, groups: &str) -> String {
+    super::proxied_visibility_predicate(&super::local_visibility_predicate_at(
+        admin, authed, groups,
+    ))
+}
+
+/// Bind values for [`viewer_predicate`]. No viewer is no gate, which the
+/// predicate spells as an admin.
+fn viewer_params(
+    viewer: Option<&batlehub_core::entities::ExploreViewer>,
+) -> (bool, bool, Vec<String>) {
+    match viewer {
+        None => (true, true, vec![]),
+        Some(v) => (v.is_admin, v.is_authenticated, v.normalised_groups()),
+    }
 }

@@ -16,7 +16,23 @@ batlehub-core = { path = "../crates/core" }
 # (`scanners::extract`, behind `vuln-scan`) and what the SBOM extractors read
 # a manifest out of (`sbom`). No registry client, no database driver: the
 # fuzz build carries the parsers and nothing that would need a network.
-batlehub-adapters = { path = "../crates/adapters", default-features = false, features = ["sbom", "vuln-scan"] }
+#
+# The `registry-*` and `local-registry` features add the system-package
+# parsers and index renderers (`repo::*`), the publish-time metadata readers
+# and the SSRF guard — still parsers, still no network.
+batlehub-adapters = { path = "../crates/adapters", default-features = false, features = [
+    "sbom",
+    "vuln-scan",
+    "local-registry",
+    "registry-deb",
+    "registry-rpm",
+    "registry-pacman",
+    "registry-apk",
+    "registry-galaxy",
+    "registry-rubygems",
+    "registry-conda",
+    "registry-composer",
+] }
 bytes = "1"
 tar = "0.4"
 flate2 = "1"
@@ -26,6 +42,11 @@ arbitrary = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt"] }
 chrono = "0.4"
 serde_json = "1"
+# `fuzz_image_host` compares the hand-written host extractor with the parser
+# the fetch actually uses; `fuzz_repo_index_render` parses rendered rpm XML.
+url = "2"
+http = "1"
+quick-xml = "0.42"
 # Only the re-encoding side of `fuzz_integrity_parse`; the versions are the
 # workspace's, so the lockfile resolves them to the crates core already uses.
 hex = "0.4"
@@ -37,12 +58,6 @@ semver = "1"
 [[bin]]
 name = "fuzz_rbac_evaluate"
 path = "fuzz_targets/fuzz_rbac_evaluate.rs"
-test = false
-doc = false
-
-[[bin]]
-name = "fuzz_package_id_cache_key"
-path = "fuzz_targets/fuzz_package_id_cache_key.rs"
 test = false
 doc = false
 
@@ -147,3 +162,45 @@ name = "fuzz_sbom_extract"
 path = "fuzz_targets/fuzz_sbom_extract.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "fuzz_storage_keys"
+path = "fuzz_targets/fuzz_storage_keys.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_repo_publish"
+path = "fuzz_targets/fuzz_repo_publish.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_repo_index_render"
+path = "fuzz_targets/fuzz_repo_index_render.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_ssrf_ip"
+path = "fuzz_targets/fuzz_ssrf_ip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_gem_compact_index"
+path = "fuzz_targets/fuzz_gem_compact_index.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_narinfo"
+path = "fuzz_targets/fuzz_narinfo.rs"
+test = false
+doc = false
+bench = false

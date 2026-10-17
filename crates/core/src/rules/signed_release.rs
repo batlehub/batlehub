@@ -4,7 +4,7 @@ use crate::entities::Role;
 use crate::rules::{Rule, RuleContext, RuleDecision};
 
 /// Blocks access to a release that the upstream registry reports as
-/// unsigned, unless the caller holds one of the `bypass_roles`.
+/// unsigned, unless the caller clears `bypass_roles` (`Role::clears_bypass`).
 ///
 /// This checks `PackageMetadata::is_signed`, which registry adapters populate
 /// with a best-effort signal (e.g. presence of a `.asc`/`.sig` release asset
@@ -44,7 +44,7 @@ impl Rule for RequireSignedReleaseRule {
     }
 
     async fn evaluate(&self, ctx: &RuleContext<'_>) -> RuleDecision {
-        let bypassed = self.bypass_roles.contains(&ctx.identity.role);
+        let bypassed = ctx.identity.role.clears_bypass(&self.bypass_roles);
 
         let signed = match ctx.package.is_signed {
             Some(signed) => signed,

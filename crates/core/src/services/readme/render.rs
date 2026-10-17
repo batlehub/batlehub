@@ -582,34 +582,29 @@ fn decode_basic_entities(raw: &str) -> String {
 ///   call this.
 /// - ASCII tab, LF and CR are removed from the URL entirely before parsing, so
 ///   they cannot be used to hide the difference either.
+/// - The host is the *serialised* one: `http://5.\` dials `0.0.0.5`, and
+///   `http://0x7f.1` dials `127.0.0.1`, because WHATWG reads a host whose last
+///   label is numeric as an IPv4 address in any of its legacy spellings. A
+///   hand-rolled split saw `5.` and `0x7f.1`, so an allow-list entry naming one
+///   spelling admitted a fetch to another (found by `fuzz_image_host`'s
+///   differential). Percent-escapes and IDNA mapping change the host the same
+///   way.
+///
+/// All of which is one rule: read the URL with the parser the fetch uses
+/// (`reqwest::Url` *is* `url::Url`, which `ammonia` re-exports), and there is
+/// nothing left to agree on.
 pub(super) fn url_host(url: &str) -> Option<String> {
-    let url: String = url
-        .chars()
-        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
-        .collect();
-    // A scheme is ASCII case-insensitive (RFC 3986 §3.1) and surrounding
-    // whitespace is stripped before a browser resolves the reference. Compared
-    // byte-exactly, `HTTPS://cdn.example/logo.png` and `" https://…"` had no
-    // host at all — so the allow-list refused them and the proxy rewrite
-    // dropped their `src`, and the image vanished with nothing said. Read the
-    // URL the way the thing that will fetch it reads it.
-    let url = url.trim();
-    let lower = url.to_ascii_lowercase();
-    let scheme_len = if lower.starts_with("https://") {
-        "https://".len()
-    } else if lower.starts_with("http://") {
-        "http://".len()
-    } else {
+    let parsed = ammonia::Url::parse(url).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
         return None;
-    };
-    let rest = &url[scheme_len..];
-    let host = rest
-        .split(['/', '\\', '?', '#'])
-        .next()?
-        .split('@')
-        .next_back()?
-        .trim();
-    (!host.is_empty()).then(|| host.to_owned())
+    }
+    let host = parsed.host_str().filter(|h| !h.is_empty())?;
+    // The port only when it is not the scheme's default — which `port()`
+    // already omits — because the chip names what the reader would type.
+    Some(match parsed.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_owned(),
+    })
 }
 
 /// The chip's markup.
@@ -1158,6 +1153,23 @@ mod tests {
             url_host("https://ev\nil.test/x.svg").as_deref(),
             Some("evil.test")
         );
+    }
+
+    /// A host spelled as a legacy IPv4 literal is the address it parses to,
+    /// which is what the fetch dials — not the spelling the README wrote.
+    #[test]
+    fn a_legacy_ipv4_spelling_is_read_as_the_address_it_dials() {
+        assert_eq!(url_host(r"http://5.\").as_deref(), Some("0.0.0.5"));
+        assert_eq!(
+            url_host("http://0x7f.1/x.png").as_deref(),
+            Some("127.0.0.1")
+        );
+        // So an entry naming the spelling no longer admits the address.
+        assert!(!image_host_allowed(r"http://5.\", &["5.".to_owned()]));
+        assert!(!image_host_allowed(
+            "http://0x7f.1/x.png",
+            &["0x7f.1".to_owned()]
+        ));
     }
 
     /// The allow-list itself, on the same inputs: the point of the fix.

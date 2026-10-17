@@ -29,8 +29,9 @@ use crate::error::AppError;
 /// The sibling key the archive is kept under.
 pub(crate) fn signature_storage_key(registry: &str, extension_id: &str, version: &str) -> String {
     format!(
-        "{}.sigzip",
-        artifact_storage_key(registry, extension_id, version)
+        "{}{}",
+        artifact_storage_key(registry, extension_id, version),
+        batlehub_core::services::SIGNATURE_SUFFIX
     )
 }
 

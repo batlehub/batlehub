@@ -26,14 +26,22 @@ use super::BlockedVersions;
 /// A document that does not parse is **left exactly as it was** and the caller
 /// warned: over-listing is the safe direction, and half-rewritten XML is worse
 /// than unfiltered XML.
+///
+/// A `<latest>` or `<release>` naming a blocked version is repaired even when
+/// `<versions>` never listed it: Maven resolves `LATEST`/`RELEASE` from those
+/// two elements alone, so a stale pointer kept advertising the blocked version
+/// to every client that asked for one (found by `fuzz_listing_filter`).
 pub fn strip_metadata(xml: &mut String, blocked: &BlockedVersions) -> Vec<String> {
-    let listed = versions_in(xml);
+    let listed = texts_of(xml, "version");
     let removed: Vec<String> = listed
         .iter()
         .filter(|v| blocked.contains(v))
         .cloned()
         .collect();
-    if removed.is_empty() {
+    let stale_pointer = ["latest", "release"]
+        .iter()
+        .any(|el| texts_of(xml, el).iter().any(|v| blocked.contains(v)));
+    if removed.is_empty() && !stale_pointer {
         return removed;
     }
 
@@ -55,31 +63,43 @@ pub fn strip_metadata(xml: &mut String, blocked: &BlockedVersions) -> Vec<String
             .collect::<Vec<_>>(),
     );
 
+    // The rewrite is checked by the same reader that decided what to remove.
+    // A `<version>` nested in a `<version>` is read as blocked by `texts_of`
+    // but survives the streaming rewrite, which keeps only one pending element
+    // — so without this check the first pass reported a removal it had not
+    // made, and a second pass "removed" it again (found by
+    // `fuzz_listing_filter`). Such a document is malformed metadata, and gets
+    // the malformed-document answer.
+    let clean = |out: &str| {
+        ["version", "latest", "release"]
+            .iter()
+            .all(|el| texts_of(out, el).iter().all(|v| !blocked.contains(v)))
+    };
     match rewrite(xml, blocked, latest.as_deref(), release.as_deref()) {
-        Some(out) => {
+        Some(out) if clean(&out) => {
             *xml = out;
             removed
         }
-        None => {
+        _ => {
             tracing::warn!(
-                "maven-metadata.xml did not parse; serving it unfiltered rather than \
-                 half-rewritten"
+                "maven-metadata.xml did not parse, or did not filter cleanly; serving it \
+                 unfiltered rather than half-rewritten"
             );
             Vec::new()
         }
     }
 }
 
-/// Every `<version>` in the document, in document order.
-fn versions_in(xml: &str) -> Vec<String> {
+/// The text of every `<{name}>` in the document, in document order.
+fn texts_of(xml: &str, name: &str) -> Vec<String> {
     let mut reader = Reader::from_str(xml);
     let mut out = Vec::new();
-    let mut in_version = false;
+    let mut inside = false;
     loop {
         match reader.read_event() {
-            Ok(Event::Start(e)) if e.name().as_ref() == "version" => in_version = true,
-            Ok(Event::End(e)) if e.name().as_ref() == "version" => in_version = false,
-            Ok(Event::Text(t)) if in_version => {
+            Ok(Event::Start(e)) if e.name().as_ref() == name => inside = true,
+            Ok(Event::End(e)) if e.name().as_ref() == name => inside = false,
+            Ok(Event::Text(t)) if inside => {
                 let s = t.trim();
                 if !s.is_empty() {
                     out.push(s.to_owned());
@@ -345,6 +365,22 @@ mod tests {
         );
     }
 
+    /// A pointer at a version `<versions>` never listed is still a pointer
+    /// Maven follows for `LATEST`/`RELEASE`, so a blocked one is repaired.
+    #[test]
+    fn a_pointer_at_an_unlisted_blocked_version_is_repaired() {
+        let mut xml =
+            metadata().replace("<latest>2.0.0-SNAPSHOT</latest>", "<latest>9.9.9</latest>");
+        let removed = strip_metadata(&mut xml, &blocked(&["9.9.9"]));
+        assert!(removed.is_empty(), "nothing was listed to remove");
+        assert!(xml.contains("<latest>2.0.0-SNAPSHOT</latest>"), "{xml}");
+        assert!(xml.contains("<version>1.0.0</version>"), "{xml}");
+        // And a second pass finds nothing left to do.
+        let before = xml.clone();
+        strip_metadata(&mut xml, &blocked(&["9.9.9"]));
+        assert_eq!(xml, before);
+    }
+
     #[test]
     fn blocking_an_absent_version_leaves_the_document_byte_identical() {
         let mut xml = metadata();
@@ -380,5 +416,16 @@ mod tests {
         assert!(is_qualified("1.0-alpha"));
         assert!(is_qualified("1.0.0-rc1"));
         assert!(!is_qualified("1.2.0"));
+    }
+
+    /// A rewrite that leaves a blocked version behind is not served: a nested
+    /// `<version>` is read by one pass and kept by the other, and the
+    /// document is malformed either way.
+    #[test]
+    fn a_nested_version_is_served_unchanged_rather_than_half_filtered() {
+        let mut xml = "<version><version>x<u>2</u>1.0</version>".to_owned();
+        let before = xml.clone();
+        assert!(strip_metadata(&mut xml, &blocked(&["1.0"])).is_empty());
+        assert_eq!(xml, before);
     }
 }

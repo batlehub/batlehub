@@ -150,7 +150,30 @@ fn parse_control_stanza(bytes: &[u8]) -> Result<Vec<(String, String)>, CoreError
             continue;
         }
         if let Some((k, v)) = line.split_once(':') {
-            fields.push((k.trim().to_string(), v.trim().to_string()));
+            let k = k.trim();
+            // deb822 §"Syntax": a field name is printable US-ASCII without
+            // space or colon, and starts with neither `#` nor `-`. Anything
+            // else re-renders into the `Packages` index as a line apt cannot
+            // read — `": x"` became an empty-named field — so it is refused
+            // here, at publish, rather than shipped to every client.
+            if k.is_empty()
+                || k.starts_with(['#', '-'])
+                || !k.bytes().all(|b| (0x21..=0x7e).contains(&b))
+            {
+                return Err(CoreError::InvalidInput(format!(
+                    "control field name {k:?} is not a valid deb822 field name"
+                )));
+            }
+            // A repeated field is ambiguous: `name()` reads the first `Package`
+            // and authorizes the publish against it, while the index carries
+            // both and a client may honour the other — publishing under a name
+            // one owns while the index advertises someone else's.
+            if fields.iter().any(|(seen, _)| seen.eq_ignore_ascii_case(k)) {
+                return Err(CoreError::InvalidInput(format!(
+                    "control field '{k}' appears more than once"
+                )));
+            }
+            fields.push((k.to_string(), v.trim().to_string()));
         }
     }
     if fields.is_empty() {
@@ -172,11 +195,71 @@ pub fn pool_path(component: &str, pkg: &DebPackage) -> Result<String, CoreError>
     // Debian groups by first letter (or `libX` prefix); a single letter is enough
     // for a functional pool layout.
     let prefix = name.chars().next().unwrap_or('_');
-    // Strip an epoch (`1:2.3`) from the filename version, matching dpkg behaviour.
-    let file_version = version.split_once(':').map(|(_, v)| v).unwrap_or(version);
+    let file_version = file_version(version);
     Ok(format!(
         "pool/{component}/{prefix}/{name}/{name}_{file_version}_{arch}.deb"
     ))
+}
+
+/// The version as it appears in a pool file name: the epoch (`1:2.3`) stripped,
+/// as dpkg and the Debian archive do.
+///
+/// So `1:2.3` and `2.3` of one package share a pool file, and the handler
+/// refuses the second of them (`deb_publish`) the way the archive does,
+/// rather than letting two index entries name one file with two checksums.
+pub fn file_version(version: &str) -> &str {
+    version.split_once(':').map(|(_, v)| v).unwrap_or(version)
+}
+
+/// The publish-time edge checks for a `.deb` going into `{distribution}/
+/// {component}`, beyond the parse itself.
+///
+/// - `distribution` and `component` are single segments: the sidecar key is
+///   `_index/deb/{distribution}/{component}/{arch}/…` and `regenerate_deb`
+///   cuts it on `/`, so a `/` in either re-groups other suites' packages.
+/// - The name is a single segment too, and name, version and architecture
+///   carry no `_`: Debian forbids it in all three, and the pool file is
+///   `{name}_{version}_{arch}.deb` — `(a, 1_x, y)` and `(a, 1, x_y)` were one
+///   file, and the sidecar `{name}_{version}` made `(a_1, 2)` and `(a, 1_2)`
+///   one entry across two owners.
+pub fn check_coordinate(
+    distribution: &str,
+    component: &str,
+    pkg: &DebPackage,
+) -> Result<(), CoreError> {
+    use batlehub_core::services::{validate_coordinate, validate_path_segment};
+    validate_path_segment("distribution", distribution)?;
+    validate_path_segment("component", component)?;
+    let name = pkg
+        .name()
+        .ok_or_else(|| CoreError::InvalidInput("control is missing Package".into()))?;
+    let version = pkg
+        .version()
+        .ok_or_else(|| CoreError::InvalidInput("control is missing Version".into()))?;
+    let arch = pkg.architecture().unwrap_or("all");
+    validate_coordinate(name, version, None)?;
+    validate_path_segment("package name", name)?;
+    validate_path_segment("architecture", arch)?;
+    // Policy §5.6.1: a name starts with an alphanumeric. Its first character
+    // is a pool directory of its own, so `.a` put a `.` segment in the pool
+    // path, which the storage guard refuses only after the policy gate ran.
+    if !name.starts_with(|c: char| c.is_ascii_alphanumeric()) {
+        return Err(CoreError::InvalidInput(format!(
+            "package name '{name}' must start with a letter or digit"
+        )));
+    }
+    for (kind, value) in [
+        ("package name", name),
+        ("version", version),
+        ("architecture", arch),
+    ] {
+        if value.contains('_') {
+            return Err(CoreError::InvalidInput(format!(
+                "{kind} '{value}' must not contain '_'"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Render one `Packages` stanza for a package stored at `filename` (pool path).
@@ -335,6 +418,45 @@ mod tests {
         assert!(stanza.contains("Filename: pool/main/h/hello/hello_1.0-1_amd64.deb"));
         assert!(stanza.contains(&format!("SHA256: {}", pkg.sha256)));
         assert!(stanza.contains(&format!("Size: {}", pkg.size)));
+    }
+
+    #[test]
+    fn control_field_names_must_be_deb822() {
+        for control in [
+            "Package: a\n: x\nVersion: 1\n",
+            "Package: a\nVersion: 1\n#X: y\n",
+            "Package: a\nVersion: 1\nBad Key: y\n",
+            "Package: a\nVersion: 1\nX\u{1}: y\n",
+        ] {
+            assert!(parse_deb(&make_deb(control)).is_err(), "{control:?}");
+        }
+    }
+
+    #[test]
+    fn a_repeated_control_field_is_refused() {
+        let control = "Package: mine\nVersion: 1\npackage: theirs\n";
+        assert!(parse_deb(&make_deb(control)).is_err());
+    }
+
+    #[test]
+    fn coordinate_rejects_separators_that_recut_the_pool_or_sidecar() {
+        let pkg = |c: &str| parse_deb(&make_deb(c)).unwrap();
+        let ok = pkg("Package: a\nVersion: 1:1.0\nArchitecture: amd64\n");
+        assert!(check_coordinate("stable", "main", &ok).is_ok());
+        assert!(check_coordinate("stable", "main/x", &ok).is_err());
+        assert!(check_coordinate("a/b", "main", &ok).is_err());
+        for bad in [
+            "Package: x/x\nVersion: 1\n",
+            "Package: .a\nVersion: 1\n",
+            "Package: a_1\nVersion: 2\n",
+            "Package: a\nVersion: 1_2\n",
+            "Package: a\nVersion: 1\nArchitecture: x_y\n",
+        ] {
+            assert!(
+                check_coordinate("stable", "main", &pkg(bad)).is_err(),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]

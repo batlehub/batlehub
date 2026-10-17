@@ -1,8 +1,9 @@
 use super::{
     collect_payload, delete, extract_signature_headers, post, require_local_mode,
-    require_registry_type, terraform_set_yanked, web, AppError, Arc, ArtifactSignature,
-    AuthIdentity, Digest, HttpRequest, LocalRegistryService, NotificationService, PublishRequest,
-    RegistryMap, RegistryModeMap, Responder, Sha256, TerraformYankRequest,
+    require_registry_type, require_segments, terraform_set_yanked, web, AppError, Arc,
+    ArtifactSignature, AuthIdentity, Digest, HttpRequest, LocalRegistryService,
+    NotificationService, PublishRequest, RegistryMap, RegistryModeMap, Responder, Sha256,
+    TerraformYankRequest,
 };
 use crate::handlers::schemas::MessageResponse;
 
@@ -48,6 +49,12 @@ pub async fn terraform_module_upload(
     let (registry, namespace, name, provider, version) = path.into_inner();
     require_registry_type(&registry, "terraform", &map)?;
     require_local_mode(&registry, &mode_map)?;
+    require_segments(&[
+        ("namespace", &namespace),
+        ("name", &name),
+        ("provider", &provider),
+        ("version", &version),
+    ])?;
 
     let bytes = collect_payload(payload).await?;
     let checksum = hex::encode(Sha256::digest(&bytes));

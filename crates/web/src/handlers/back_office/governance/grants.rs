@@ -141,6 +141,7 @@ pub struct GrantQuery {
     pub version: Option<String>,
 }
 
+/// List the grants on a package, or on one of its versions.
 #[utoipa::path(
     get,
     path = "/api/v1/admin/registries/{registry}/grants",
@@ -186,6 +187,7 @@ pub async fn list_grants(
 
 // ── Write ─────────────────────────────────────────────────────────────────────
 
+/// Write a grant: a subject's verbs on a package or version node.
 #[utoipa::path(
     put,
     path = "/api/v1/admin/registries/{registry}/grants",
@@ -257,6 +259,7 @@ pub async fn put_grant(
 
 // ── Remove ────────────────────────────────────────────────────────────────────
 
+/// Remove a grant. Removing one that is already absent succeeds.
 #[utoipa::path(
     delete,
     path = "/api/v1/admin/registries/{registry}/grants",

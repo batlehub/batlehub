@@ -41,6 +41,42 @@ impl OwnershipPort for PgOwnershipStore {
         Ok(())
     }
 
+    async fn claim_if_unowned(
+        &self,
+        registry: &str,
+        package: &str,
+        user_id: &str,
+    ) -> Result<bool, CoreError> {
+        // `NOT EXISTS` alone does not serialise two claimants under READ
+        // COMMITTED (each sees the other's row as absent and the rows differ by
+        // principal, so no conflict fires). A transaction-scoped advisory lock
+        // on the package does.
+        let mut tx = self.pool.begin().await.db_err()?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1 || '/' || $2, 0))")
+            .bind(registry)
+            .bind(package)
+            .execute(&mut *tx)
+            .await
+            .db_err()?;
+        let inserted = sqlx::query(
+            "INSERT INTO package_owners \
+                (registry, package_name, principal_type, principal_id, role) \
+             SELECT $1, $2, 'user', $3, 'admin' \
+             WHERE NOT EXISTS ( \
+                 SELECT 1 FROM package_owners WHERE registry = $1 AND package_name = $2)",
+        )
+        .bind(registry)
+        .bind(package)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .db_err()?
+        .rows_affected()
+            == 1;
+        tx.commit().await.db_err()?;
+        Ok(inserted)
+    }
+
     async fn can_publish(
         &self,
         registry: &str,

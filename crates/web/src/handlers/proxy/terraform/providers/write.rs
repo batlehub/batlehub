@@ -1,6 +1,6 @@
 use super::{
     collect_payload, delete, extract_signature_headers, off_origin_checksum_urls, post, put,
-    registry_public_base, require_local_mode, require_registry_type,
+    registry_public_base, require_local_mode, require_registry_type, require_segments,
     terraform_provider_binary_storage_key, terraform_set_yanked, web, AppError, Arc,
     ArtifactSignature, AuthIdentity, Digest, HttpRequest, HttpResponse, LocalRegistryService,
     NotificationService, PublishPolicyRequest, PublishRequest, RegistryMap, RegistryModeMap,
@@ -59,6 +59,11 @@ pub async fn terraform_provider_upload(
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::bad_request("manifest missing 'version' field"))?
         .to_owned();
+    require_segments(&[
+        ("namespace", &namespace),
+        ("provider type", &ptype),
+        ("version", &version),
+    ])?;
 
     let checksum = hex::encode(Sha256::digest(&bytes));
     let mut index_metadata = manifest.clone();
@@ -165,15 +170,12 @@ pub async fn terraform_provider_binary_upload(
 
     // Edge chokepoint: this handler builds a storage key directly from the path
     // components, so reject any traversal attempt with a clean 400 first.
-    for (kind, value) in [
+    require_segments(&[
         ("namespace", &namespace),
         ("provider type", &ptype),
         ("version", &version),
-        ("os", &os),
-        ("arch", &arch),
-    ] {
-        batlehub_core::services::validate_path_safe(kind, value).map_err(AppError::from)?;
-    }
+    ])?;
+    batlehub_core::services::validate_terraform_platform(&os, &arch).map_err(AppError::from)?;
 
     let bytes = collect_payload(payload).await?;
 

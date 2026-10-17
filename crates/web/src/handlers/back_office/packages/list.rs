@@ -71,6 +71,7 @@ pub async fn list_packages(
         blocked_only: query.blocked_only,
         limit: per_page,
         offset: page * per_page,
+        viewer: None,
     };
     let count_filter = PackageFilter {
         registry: query.registry.clone(),
@@ -80,6 +81,7 @@ pub async fn list_packages(
         blocked_only: query.blocked_only,
         limit: 0,
         offset: 0,
+        viewer: None,
     };
 
     let (items, total) = tokio::try_join!(

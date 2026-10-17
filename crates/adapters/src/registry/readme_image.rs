@@ -42,7 +42,10 @@ impl HttpReadmeImageFetcher {
             ..Default::default()
         };
         let client = apply_upstream_tls(
-            reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()),
+            super::ssrf::public_only_dns(
+                reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()),
+                &proxy_only,
+            ),
             &proxy_only,
         )?
         .build()?;

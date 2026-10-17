@@ -438,3 +438,18 @@ async fn npm_packument_does_not_amplify_an_over_long_forwarded_host() {
         "the over-long host must not reach the generated URL"
     );
 }
+
+/// `a@1.0.0-rc.sigzip` (valid semver) is stored where `a@1.0.0-rc`'s signature
+/// goes, so deleting `1.0.0-rc` destroyed it. Found by `fuzz_storage_keys`.
+#[actix_web::test]
+async fn npm_publish_refuses_a_version_ending_in_a_signature_suffix() {
+    let app = make_local_npm_app(RegistryMode::Local).await;
+    for version in ["1.0.0-rc.sigzip", "1.0.0-rc.sigzip.upstream"] {
+        let req = TestRequest::put()
+            .uri("/proxy/local-npm/legit-pkg")
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .set_json(make_npm_publish_payload("legit-pkg", version))
+            .to_request();
+        assert_eq!(call_service(&app, req).await.status(), 400, "{version}");
+    }
+}

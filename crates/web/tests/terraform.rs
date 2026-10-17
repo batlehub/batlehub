@@ -283,6 +283,27 @@ async fn terraform_provider_binary_upload_returns_200() {
     assert_eq!(resp.status(), 200);
 }
 
+/// The binary key joins OS and arch with `-`, so `(linux-amd64, x)` and
+/// `(linux, amd64-x)` were one key and either upload replaced the other.
+#[actix_web::test]
+async fn terraform_provider_binary_upload_refuses_a_dash_in_the_os() {
+    let app = make_local_terraform_app(RegistryMode::Local).await;
+    let req = TestRequest::post()
+        .uri("/proxy/local-tf/v1/providers/hashicorp/aws/versions")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .insert_header(("Content-Type", "application/json"))
+        .set_payload(PROVIDER_MANIFEST)
+        .to_request();
+    call_service(&app, req).await;
+
+    let req = TestRequest::put()
+        .uri("/proxy/local-tf/v1/providers/hashicorp/aws/5.0.0/artifact/linux-amd64/x")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_payload(b"fake-zip-bytes".as_slice())
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 400);
+}
+
 #[actix_web::test]
 async fn terraform_provider_binary_upload_anonymous_returns_403() {
     let app = make_local_terraform_app(RegistryMode::Local).await;
@@ -2001,4 +2022,48 @@ async fn terraform_signing_key_that_verifies_nothing_returns_400() {
         .await
         .expect("list")
         .is_empty());
+}
+
+/// `web::Path` decodes `%2F`, so a namespace of `hashicorp%2Faws` made the
+/// provider name `providers/hashicorp/aws/5.0.0` and a body version of
+/// `linux-amd64` gave its manifest the storage key of `hashicorp/aws` 5.0.0's
+/// linux/amd64 binary — which the manifest write then overwrote.
+#[actix_web::test]
+async fn terraform_provider_upload_rejects_a_slash_in_a_coordinate_part() {
+    let app = make_local_terraform_app(RegistryMode::Local).await;
+
+    let req = TestRequest::post()
+        .uri("/proxy/local-tf/v1/providers/hashicorp/aws/versions")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .insert_header(("Content-Type", "application/json"))
+        .set_payload(PROVIDER_MANIFEST)
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 201);
+    let binary = "/proxy/local-tf/v1/providers/hashicorp/aws/5.0.0/artifact/linux/amd64";
+    let req = TestRequest::put()
+        .uri(binary)
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_payload(b"victim-zip-bytes".as_slice())
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 200);
+
+    let req = TestRequest::post()
+        .uri("/proxy/local-tf/v1/providers/hashicorp%2Faws/5.0.0/versions")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .insert_header(("Content-Type", "application/json"))
+        .set_payload(r#"{"version":"linux-amd64"}"#)
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 400);
+
+    let req = TestRequest::get()
+        .uri(binary)
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        actix_web::test::read_body(resp).await.as_ref(),
+        b"victim-zip-bytes",
+        "the victim's binary is untouched"
+    );
 }

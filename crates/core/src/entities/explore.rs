@@ -218,7 +218,7 @@ fn is_quarantined(
     viewer: &Role,
     now: DateTime<Utc>,
 ) -> bool {
-    if gate.bypass_roles.contains(viewer) {
+    if viewer.clears_bypass(&gate.bypass_roles) {
         return false;
     }
     match published_at {

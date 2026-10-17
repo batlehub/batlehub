@@ -92,7 +92,14 @@ impl LocalRegistryService {
         Ok(Self::render_compact_info(&versions))
     }
 
-    fn render_compact_info(versions: &[crate::entities::PublishedPackage]) -> String {
+    /// The pure rendering behind [`Self::get_rubygems_compact_info`]: one
+    /// `{version} {deps}|checksum:{sha}` line per non-yanked version.
+    ///
+    /// It writes stored fields verbatim, so it is only as safe as the publish
+    /// that stored them — `parse_gem_bytes` refuses any field carrying a
+    /// delimiter. Public for `fuzz_gem_compact_index`, which re-reads this
+    /// output with an independent reader.
+    pub fn render_compact_info(versions: &[crate::entities::PublishedPackage]) -> String {
         let mut out = String::from("---\n");
         for pkg in versions.iter().filter(|p| !p.yanked) {
             let meta = &pkg.index_metadata;

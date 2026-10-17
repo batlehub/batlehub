@@ -702,11 +702,13 @@ pub struct IntegrityConfig {
     #[serde(default = "default_true")]
     pub block_on_mismatch: bool,
     /// Block downloads for which the upstream advertises no usable checksum,
-    /// unless the caller holds one of `bypass_roles`. Defaults to `false`
+    /// unless the caller clears `bypass_roles` (the least-privileged listed
+    /// role is the floor). Defaults to `false`
     /// (missing checksums are only warned about).
     #[serde(default)]
     pub require_metadata: bool,
     /// Roles allowed to bypass the `require_metadata` gate.
+    /// The least-privileged listed role is the floor: a higher role bypasses too.
     #[serde(default)]
     pub bypass_roles: Vec<String>,
     /// Re-verify cached/stored bytes against a self-computed SHA-256 on **every**

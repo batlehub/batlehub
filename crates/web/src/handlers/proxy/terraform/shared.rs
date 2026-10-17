@@ -438,6 +438,17 @@ pub async fn terraform_versions_response(
     .await
 }
 
+/// Each Terraform coordinate part is one path segment of the package name and
+/// storage key. `web::Path` decodes `%2F`, and `validate_path_safe` allows an
+/// interior `/`, so without this a `namespace` of `hashicorp%2Faws` re-cuts the
+/// name into one whose manifest key equals another provider's binary key.
+pub fn require_segments(parts: &[(&str, &str)]) -> Result<(), AppError> {
+    for (kind, value) in parts {
+        batlehub_core::services::validate_path_segment(kind, value).map_err(AppError::from)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod origin_tests {
     use super::is_on_origin;

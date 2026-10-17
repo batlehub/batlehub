@@ -1,7 +1,7 @@
 use super::{
-    artifact_storage_key, validate_package_name, validate_path_safe, validate_version, Action,
-    CoreError, Identity, LocalRegistryService, PackageId, PublishRequest, PublishedPackage,
-    QuotaCheck, StorageMeta, Visibility,
+    artifact_storage_key, validate_publish_coordinate, validate_version, Action, CoreError,
+    Identity, LocalRegistryService, PackageId, PublishRequest, PublishedPackage, QuotaCheck,
+    StorageMeta, Visibility,
 };
 use crate::services::stage;
 use tracing::Instrument as _;
@@ -168,7 +168,7 @@ impl LocalRegistryService {
     /// `LocalRegistryBackend::publish` refuses every republish unconditionally
     /// before any policy is consulted, so on the row-based path there is no
     /// replacement to authorize. What *can* overwrite is the path-addressed
-    /// publishers — Maven's non-POM artifacts, deb, rpm — which name their storage
+    /// publishers — Maven's non-POM artifacts, deb, rpm, pacman, apk — which name their storage
     /// key and write to it directly, and a re-PUT of that key replaces the bytes.
     ///
     /// Asking about the key rather than about the version row is what keeps a
@@ -211,7 +211,11 @@ impl LocalRegistryService {
             return Ok(false);
         };
         let package_exists = self.backend.exists(registry, name).await?;
-        if package_exists && !ownership.can_publish(registry, name, publisher).await? {
+        // Asked even of a package with no version row: the path-addressed
+        // publishers (deb/rpm/pacman/apk) never write one, so gating on
+        // `package_exists` left their owners unenforced. `can_publish` is
+        // `true` for a package nobody owns, so a genuinely new one still passes.
+        if !ownership.can_publish(registry, name, publisher).await? {
             return Err(CoreError::AccessDenied(format!(
                 "you are not an owner of '{name}' in registry '{registry}'"
             )));
@@ -275,8 +279,7 @@ impl LocalRegistryService {
         // Reject names/versions that could escape the storage root via path
         // traversal once interpolated into the storage key. Runs unconditionally,
         // independent of the optional versioning policy below.
-        validate_package_name(req.name)?;
-        validate_path_safe("version", req.version)?;
+        validate_publish_coordinate(req.name, req.version)?;
 
         // ── RFC 0015 §5.1: may this caller write here? ───────────────────────
         //
@@ -906,6 +909,31 @@ impl LocalRegistryService {
         }
 
         Ok(())
+    }
+
+    /// Record `publisher` as the owner of a package that has none, for the
+    /// path-addressed publishers that bypass [`Self::publish`] and so never
+    /// reach [`Self::register_initial_owner`]. Call it after the policy gate
+    /// and **before** writing: two first publishers both pass `can_publish`
+    /// on an unowned package, and the claim is what decides between them — the
+    /// one that loses it is refused here instead of overwriting the winner.
+    pub async fn claim_unowned_package(
+        &self,
+        registry: &str,
+        name: &str,
+        publisher: &Identity,
+    ) -> Result<(), CoreError> {
+        let (Some(ownership), Some(uid)) = (&self.ownership, &publisher.user_id) else {
+            return Ok(());
+        };
+        if ownership.claim_if_unowned(registry, name, uid).await?
+            || ownership.can_publish(registry, name, publisher).await?
+        {
+            return Ok(());
+        }
+        Err(CoreError::AccessDenied(format!(
+            "'{name}' is owned by another publisher"
+        )))
     }
 
     /// Step 4 of publish: register the publisher as package admin on first publish (non-fatal).

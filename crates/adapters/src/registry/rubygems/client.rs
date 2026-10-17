@@ -159,14 +159,72 @@ pub(super) fn parse_gem_yaml(yaml: &str) -> Result<GemMetadata, CoreError> {
         }
     }
 
-    Ok(models::GemMetadata {
+    let meta = models::GemMetadata {
         name,
         version,
         platform,
         summary,
         authors,
         dependencies: parse_gem_dependencies(yaml),
-    })
+    };
+    validate_compact_index_fields(&meta)?;
+    Ok(meta)
+}
+
+/// RubyGems' own grammar for every field the compact index writes inline.
+///
+/// `/info/{gem}` is `{version} {dep}:{req}&{req},{dep}:{req}|checksum:{sha}`,
+/// one line per version, and Bundler splits it on exactly those delimiters. A
+/// field carrying a space, `,`, `:`, `|`, `&` or a newline re-cuts the line: a
+/// dependency named `x:>= 0|checksum:<other sha>` injects a checksum, and one
+/// named `a,evil` a dependency the gem never declared. The gemspec is
+/// publisher-supplied and scanned line-wise, so nothing upstream of here
+/// enforces the grammar — `gem build` does, but `gem push` of a hand-made
+/// archive does not have to come from it.
+///
+/// - names: `Gem::Specification::VALID_NAME_PATTERN`, `[A-Za-z0-9._-]+`;
+/// - versions: `Gem::Version`'s pattern, reduced to its alphabet — a digit
+///   first, then `[0-9A-Za-z.-]`;
+/// - constraints: one of `Gem::Requirement::OPS` and a version.
+fn validate_compact_index_fields(meta: &GemMetadata) -> Result<(), CoreError> {
+    fn bad(what: &str, value: &str) -> CoreError {
+        CoreError::InvalidInput(format!(
+            "rubygems: {what} '{}' is not valid in a gemspec",
+            value.escape_debug()
+        ))
+    }
+    if !is_gem_name(&meta.name) {
+        return Err(bad("gem name", &meta.name));
+    }
+    if !is_gem_version(&meta.version) {
+        return Err(bad("version", &meta.version));
+    }
+    for dep in &meta.dependencies {
+        if !is_gem_name(&dep.name) {
+            return Err(bad("dependency name", &dep.name));
+        }
+        for constraint in dep.requirement.split('&').filter(|c| !c.is_empty()) {
+            let ok = constraint.split_once(' ').is_some_and(|(op, v)| {
+                matches!(op, "=" | "!=" | ">" | "<" | ">=" | "<=" | "~>") && is_gem_version(v)
+            });
+            if !ok {
+                return Err(bad("dependency requirement", constraint));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_gem_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+}
+
+fn is_gem_version(s: &str) -> bool {
+    s.bytes().next().is_some_and(|b| b.is_ascii_digit())
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-'))
 }
 
 /// Extract runtime dependencies from a gemspec's YAML.

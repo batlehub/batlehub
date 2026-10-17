@@ -102,6 +102,36 @@ impl LocalRegistryService {
         Ok(versions)
     }
 
+    /// The xmlId of every plugin in `registry` this caller may see — the
+    /// `files/pluginsXMLIds.json` document.
+    ///
+    /// The same two gates as [`Self::get_jetbrains_plugins`], since both
+    /// documents name every plugin (RFC 0015 §4.4): the read grant, then a
+    /// plugin with no version left after visibility and grants is not listed.
+    pub async fn get_jetbrains_plugin_ids(
+        &self,
+        registry: &str,
+        identity: &Identity,
+    ) -> Result<Vec<String>, CoreError> {
+        let names = self.backend.list_package_names(registry).await?;
+        let (readable, grant_rows) = self.readable_packages(registry, identity).await?;
+        let mut ids = Vec::new();
+        for name in names {
+            if !readable.contains(&name) {
+                continue;
+            }
+            match self
+                .load_visible_versions_in(registry, &name, identity, Some(&grant_rows))
+                .await
+            {
+                Ok(v) if !v.is_empty() => ids.push(name),
+                Ok(_) | Err(CoreError::AccessDenied(_)) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(ids)
+    }
+
     /// Newest build-compatible version of every visible plugin in `registry`,
     /// on `channel` (empty string = Stable). `build = None` skips the
     /// compatibility filter (plain listings without a `build` parameter).

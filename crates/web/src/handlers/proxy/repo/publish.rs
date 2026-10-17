@@ -54,14 +54,28 @@ async fn read_opt(storage: &dyn StorageBackend, key: &str) -> Result<Option<Vec<
 /// recorded — so a transient write error doesn't permanently charge the
 /// publisher for an artifact that never landed. Shared by deb/rpm/pacman's
 /// publish handlers, which otherwise each repeat this exact wrapper.
+///
+/// Before `op` it claims the package for the publisher when it has no owner.
+/// These publishers write no version row, so `publish()`'s owner registration
+/// never runs for them and any user could replace another's package (the
+/// ownership gate only fires on an owned package). Claiming first, atomically,
+/// is what refuses the second of two concurrent first publishers.
 async fn publish_with_quota_rollback<T>(
     local_svc: &LocalRegistryService,
     identity: &batlehub_core::entities::Identity,
     registry: &str,
+    name: &str,
     artifact_len: u64,
     op: impl std::future::Future<Output = Result<T, AppError>>,
 ) -> Result<T, AppError> {
-    match op.await {
+    let result = match local_svc
+        .claim_unowned_package(registry, name, identity)
+        .await
+    {
+        Ok(()) => op.await,
+        Err(e) => Err(AppError::from(e)),
+    };
+    match result {
         Ok(v) => Ok(v),
         Err(e) => {
             local_svc
@@ -132,9 +146,6 @@ pub async fn deb_publish(
     require_registry_type(&registry, "deb", &map)?;
     super::super::common::require_local_mode(&registry, &mode_map)?;
     require_authenticated(&identity)?;
-    for (kind, v) in [("distribution", &distribution), ("component", &component)] {
-        batlehub_core::services::validate_path_safe(kind, v).map_err(AppError::from)?;
-    }
 
     let bytes = collect_payload(payload).await?;
     let pkg = deb::parse_deb(&bytes).map_err(AppError::from)?;
@@ -146,26 +157,24 @@ pub async fn deb_publish(
         .version()
         .ok_or_else(|| AppError::bad_request("control is missing Version".to_owned()))?
         .to_owned();
-    batlehub_core::services::validate_coordinate(&name, &version, None).map_err(AppError::from)?;
     let arch = pkg.architecture().unwrap_or("all").to_owned();
-    // Edge validation: `arch` comes from the uploaded control file and flows into
-    // the pool path and sidecar storage key, so reject traversal/separators here
-    // for a clean 400 rather than relying on the storage backend's deeper guard.
-    // `validate_path_safe` permits interior '/', but `arch` is a single path
-    // segment in the sidecar key that `regenerate_deb` splits on — a '/' would
-    // shift the (component, arch) grouping — so reject it explicitly.
-    batlehub_core::services::validate_path_safe("architecture", &arch).map_err(AppError::from)?;
-    if arch.contains('/') {
-        return Err(AppError::bad_request(
-            "architecture must not contain '/'".to_owned(),
-        ));
-    }
+    // Edge validation: every one of these flows into the pool path or the
+    // sidecar key, and `regenerate_deb` re-cuts the sidecar key on `/` — so a
+    // separator in any of them is a clean 400 here (see `check_coordinate`).
+    deb::check_coordinate(&distribution, &component, &pkg).map_err(AppError::from)?;
 
     // Enforce the shared publish policy (role >= User, versioning, signing,
     // namespace, ownership, configured size limit, and quota) before writing to
     // the repo layout — deb/rpm host their files outside the standard
     // package-version model, so they call this directly instead of `publish()`.
     let artifact_len = bytes.len() as u64;
+    let pool = deb::pool_path(&component, &pkg).map_err(AppError::from)?;
+    let pool_key = repo_storage_key(&registry, &pool);
+    // The pool is shared by every suite, so sending the very same `.deb` to a
+    // second suite (a promotion) writes nothing new: it is not a replace.
+    let same_bytes = read_opt(local_svc.storage.as_ref(), &pool_key)
+        .await?
+        .is_some_and(|stored| stored == bytes.as_ref());
     local_svc
         .enforce_publish_policy(
             &PublishPolicyRequest {
@@ -175,31 +184,81 @@ pub async fn deb_publish(
                 artifact_len,
                 signature_bytes: None,
                 signature_type: None,
-                artifact_key: None,
+                // Named so a re-PUT of other bytes is a replace: it needs
+                // `releases:overwrite` and an `immutable` setting that allows it.
+                artifact_key: (!same_bytes).then_some(pool_key.as_str()),
             },
             &identity.0,
         )
         .await
         .map_err(AppError::from)?;
 
-    publish_with_quota_rollback(&local_svc, &identity.0, &registry, artifact_len, async {
-        let storage = local_svc.storage.as_ref();
-        let pool = deb::pool_path(&component, &pkg).map_err(AppError::from)?;
+    publish_with_quota_rollback(
+        &local_svc,
+        &identity.0,
+        &registry,
+        &name,
+        artifact_len,
+        async {
+            let storage = local_svc.storage.as_ref();
+            // 0. Asked after the policy gate, so only a caller who may publish
+            //    here learns which versions exist.
+            if let Some(held_by) = deb_pool_file_holder(
+                storage,
+                &registry,
+                &component,
+                &arch,
+                &name,
+                &version,
+            )
+            .await?
+            {
+                return Err(AppError::conflict(format!(
+                    "{name} {version} ({arch}) would be stored as the pool file {name} {held_by} already \
+                     occupies: Debian drops the epoch from pool file names, so two versions that differ \
+                     only in their epoch cannot both be published"
+                )));
+            }
 
-        // 1. Store the .deb in the pool (`Bytes` clone is a cheap refcount bump).
-        store_bytes(storage, &repo_storage_key(&registry, &pool), bytes.clone()).await?;
+            // 0b. The pool is shared by every suite, and each suite's stanza
+            //     records the file's checksum. Replacing the file with other
+            //     bytes would leave the other suites' indexes naming a checksum
+            //     apt then refuses; only the suite being published is rebuilt.
+            if deb_pool_file_in_other_suite(
+                storage,
+                &registry,
+                &distribution,
+                &component,
+                &arch,
+                &name,
+                &version,
+            )
+            .await?
+                && read_opt(storage, &pool_key)
+                    .await?
+                    .is_some_and(|stored| stored != bytes.as_ref())
+            {
+                return Err(AppError::conflict(format!(
+                    "{name} {version} ({arch}) is already published to another suite with different \
+                     bytes; the pool file is shared, so replacing it would break that suite's index"
+                )));
+            }
 
-        // 2. Record the Packages stanza as a sidecar keyed by suite/component/arch.
-        let stanza = deb::packages_stanza(&pkg, &pool);
-        let sidecar = format!(
+            // 1. Store the .deb in the pool (`Bytes` clone is a cheap refcount bump).
+            store_bytes(storage, &pool_key, bytes.clone()).await?;
+
+            // 2. Record the Packages stanza as a sidecar keyed by suite/component/arch.
+            let stanza = deb::packages_stanza(&pkg, &pool);
+            let sidecar = format!(
             "local:{registry}/_index/deb/{distribution}/{component}/{arch}/{name}_{version}.stanza"
         );
-        store_bytes(storage, &sidecar, stanza.into_bytes()).await?;
+            store_bytes(storage, &sidecar, stanza.into_bytes()).await?;
 
-        // 3. Regenerate the suite indexes (Packages per component/arch + Release).
-        let signer = signers.get(&registry);
-        regenerate_deb(storage, &registry, &distribution, signer.as_deref()).await
-    })
+            // 3. Regenerate the suite indexes (Packages per component/arch + Release).
+            let signer = signers.get(&registry);
+            regenerate_deb(storage, &registry, &distribution, signer.as_deref()).await
+        },
+    )
     .await?;
 
     dispatch_notification(
@@ -212,6 +271,64 @@ pub async fn deb_publish(
     );
 
     Ok(HttpResponse::Created().body(format!("published {name} {version} ({arch})")))
+}
+
+/// Another version of `name` whose pool file is the one `version` would write.
+///
+/// The pool path is `pool/{component}/…/{name}_{file_version}_{arch}.deb` in
+/// every suite, and `file_version` drops the epoch — so `1:2.3` and `2.3`
+/// share a file while each keeps its own sidecar, and the index ends up with two
+/// entries naming one file under two checksums, one of which apt refuses. The
+/// archive's answer is to refuse the second upload, and so is this one: the
+/// sidecars are `…/{suite}/{component}/{arch}/{name}_{version}.stanza`, and
+/// `check_coordinate` keeps `_` out of the name, so the version is the rest of
+/// the file name.
+async fn deb_pool_file_holder(
+    storage: &dyn StorageBackend,
+    registry: &str,
+    component: &str,
+    arch: &str,
+    name: &str,
+    version: &str,
+) -> Result<Option<String>, AppError> {
+    let prefix = format!("local:{registry}/_index/deb/");
+    let keys = storage.list_keys(&prefix).await.map_err(AppError::from)?;
+    let file_prefix = format!("{name}_");
+    Ok(keys.iter().find_map(|key| {
+        let parts: Vec<&str> = key.strip_prefix(&prefix)?.split('/').collect();
+        let [_suite, comp, a, file] = parts.as_slice() else {
+            return None;
+        };
+        if *comp != component || *a != arch {
+            return None;
+        }
+        let other = file.strip_suffix(".stanza")?.strip_prefix(&file_prefix)?;
+        (other != version && deb::file_version(other) == deb::file_version(version))
+            .then(|| other.to_owned())
+    }))
+}
+
+/// Whether a suite other than `suite` lists `name` `version` for this
+/// component and arch — i.e. already points at the pool file this upload writes.
+async fn deb_pool_file_in_other_suite(
+    storage: &dyn StorageBackend,
+    registry: &str,
+    suite: &str,
+    component: &str,
+    arch: &str,
+    name: &str,
+    version: &str,
+) -> Result<bool, AppError> {
+    let prefix = format!("local:{registry}/_index/deb/");
+    let file = format!("{name}_{version}.stanza");
+    let keys = storage.list_keys(&prefix).await.map_err(AppError::from)?;
+    Ok(keys.iter().any(|key| {
+        let parts: Vec<&str> = key
+            .strip_prefix(&prefix)
+            .map(|r| r.split('/').collect())
+            .unwrap_or_default();
+        matches!(parts.as_slice(), [s, c, a, f] if *s != suite && *c == component && *a == arch && *f == file)
+    }))
 }
 
 /// Rebuild every `Packages`/`Packages.gz` under `dists/{suite}/` from the stored
@@ -375,6 +492,7 @@ pub async fn rpm_publish(
             "rpm header is missing name/version/release/arch".to_owned(),
         ));
     }
+    rpm::check_coordinate(&pkg).map_err(AppError::from)?;
     // Epoch-aware id so two builds differing only in Epoch don't overwrite.
     let id = pkg.storage_id();
     batlehub_core::services::validate_path_safe("package", &id).map_err(AppError::from)?;
@@ -384,6 +502,7 @@ pub async fn rpm_publish(
     // Enforce the shared publish policy before writing to the repo layout
     // (see the matching call in `deb_publish`).
     let artifact_len = bytes.len() as u64;
+    let rpm_key = repo_storage_key(&registry, &location);
     local_svc
         .enforce_publish_policy(
             &PublishPolicyRequest {
@@ -393,7 +512,7 @@ pub async fn rpm_publish(
                 artifact_len,
                 signature_bytes: None,
                 signature_type: None,
-                artifact_key: None,
+                artifact_key: Some(&rpm_key),
             },
             &identity.0,
         )
@@ -401,23 +520,50 @@ pub async fn rpm_publish(
         .map_err(AppError::from)?;
 
     // Revoke the quota recorded above if any storage step fails (see `deb_publish`).
-    publish_with_quota_rollback(&local_svc, &identity.0, &registry, artifact_len, async {
-        let storage = local_svc.storage.as_ref();
-        // 1. Store the .rpm (`Bytes` clone is a cheap refcount bump).
-        store_bytes(
-            storage,
-            &repo_storage_key(&registry, &location),
-            bytes.clone(),
-        )
-        .await?;
-        // 2. Record a JSON sidecar for repodata regeneration.
-        let sidecar = format!("local:{registry}/_index/rpm/{id}.json");
-        let json = serde_json::to_vec(&pkg).map_err(|e| CoreError::Other(anyhow::anyhow!(e)))?;
-        store_bytes(storage, &sidecar, json).await?;
-        // 3. Regenerate repodata.
-        let signer = signers.get(&registry);
-        regenerate_rpm(storage, &registry, signer.as_deref()).await
-    })
+    publish_with_quota_rollback(
+        &local_svc,
+        &identity.0,
+        &registry,
+        &pkg.name,
+        artifact_len,
+        async {
+            let storage = local_svc.storage.as_ref();
+            let sidecar = format!("local:{registry}/_index/rpm/{id}.json");
+            // 0. The file this would write must not be another NEVRA's.
+            //    `storage_id` prefixes a non-zero epoch, so `(389, ds-base)` and
+            //    `(0, 389-ds-base)` are one id; the sidecar says whose it is.
+            //    After the policy gate, so only a publisher learns it exists.
+            //    ponytail: first come wins the id — `ds-base` at epoch 389 can
+            //    hold `389-ds-base`'s file. Closing that needs an epoch
+            //    separator no name can contain, i.e. a storage-key migration.
+            if let Some(held) = read_opt(storage, &sidecar).await? {
+                if let Ok(held) = serde_json::from_slice::<rpm::RpmPackage>(&held) {
+                    fn nevra(p: &rpm::RpmPackage) -> (&str, u32, &str, &str, &str) {
+                        (&p.name, p.epoch, &p.version, &p.release, &p.arch)
+                    }
+                    if nevra(&held) != nevra(&pkg) {
+                        return Err(AppError::conflict(format!(
+                            "{} (epoch {}) would be stored as '{id}.rpm', which already holds {} \
+                             (epoch {})",
+                            pkg.nevra(),
+                            pkg.epoch,
+                            held.nevra(),
+                            held.epoch
+                        )));
+                    }
+                }
+            }
+            // 1. Store the .rpm (`Bytes` clone is a cheap refcount bump).
+            store_bytes(storage, &rpm_key, bytes.clone()).await?;
+            // 2. Record a JSON sidecar for repodata regeneration.
+            let json =
+                serde_json::to_vec(&pkg).map_err(|e| CoreError::Other(anyhow::anyhow!(e)))?;
+            store_bytes(storage, &sidecar, json).await?;
+            // 3. Regenerate repodata.
+            let signer = signers.get(&registry);
+            regenerate_rpm(storage, &registry, signer.as_deref()).await
+        },
+    )
     .await?;
 
     dispatch_notification(
@@ -542,22 +688,18 @@ pub async fn pacman_publish(
         .arch()
         .ok_or_else(|| AppError::bad_request(".PKGINFO is missing arch".to_owned()))?
         .to_owned();
-    batlehub_core::services::validate_coordinate(&name, &version, None).map_err(AppError::from)?;
     // `arch` is a single path segment in both the package key (`{arch}/{file}`)
-    // and the sidecar key that `regenerate_pacman` groups on, so reject traversal
-    // and any '/' for a clean 400 rather than relying on the storage guard.
-    batlehub_core::services::validate_path_safe("architecture", &arch).map_err(AppError::from)?;
-    if arch.contains('/') {
-        return Err(AppError::bad_request(
-            "architecture must not contain '/'".to_owned(),
-        ));
-    }
+    // and the sidecar key that `regenerate_pacman` groups on, and the file name
+    // has to split back into exactly this coordinate (see `check_coordinate`).
+    pacman::check_coordinate(&name, &version, &arch).map_err(AppError::from)?;
     let filename = format!("{name}-{version}-{arch}{}", pacman::download_suffix(&bytes));
     pkg.filename = filename.clone();
 
     // Enforce the shared publish policy before writing to the repo layout
     // (see the matching call in `deb_publish`).
     let artifact_len = bytes.len() as u64;
+    let pkg_path = format!("{arch}/{filename}");
+    let pkg_key = repo_storage_key(&registry, &pkg_path);
     local_svc
         .enforce_publish_policy(
             &PublishPolicyRequest {
@@ -567,7 +709,7 @@ pub async fn pacman_publish(
                 artifact_len,
                 signature_bytes: None,
                 signature_type: None,
-                artifact_key: None,
+                artifact_key: Some(&pkg_key),
             },
             &identity.0,
         )
@@ -575,41 +717,43 @@ pub async fn pacman_publish(
         .map_err(AppError::from)?;
 
     // Revoke the quota recorded above if any storage step fails (see `deb_publish`).
-    publish_with_quota_rollback(&local_svc, &identity.0, &registry, artifact_len, async {
-        let storage = local_svc.storage.as_ref();
-        let signer = signers.get(&registry);
-        let pkg_path = format!("{arch}/{filename}");
+    publish_with_quota_rollback(
+        &local_svc,
+        &identity.0,
+        &registry,
+        &name,
+        artifact_len,
+        async {
+            let storage = local_svc.storage.as_ref();
+            let signer = signers.get(&registry);
 
-        // 1. Store the package (`Bytes` clone is a cheap refcount bump).
-        store_bytes(
-            storage,
-            &repo_storage_key(&registry, &pkg_path),
-            bytes.clone(),
-        )
-        .await?;
+            // 1. Store the package (`Bytes` clone is a cheap refcount bump).
+            store_bytes(storage, &pkg_key, bytes.clone()).await?;
 
-        // 2. When signing, emit the detached `.sig` next to the package and embed
-        //    the same signature (base64) in the DB `%PGPSIG%` field.
-        if let Some(signer) = signer.as_deref() {
-            let sig = signer.detached_sign_binary(&bytes);
-            store_bytes(
-                storage,
-                &repo_storage_key(&registry, &format!("{pkg_path}.sig")),
-                sig.clone(),
-            )
-            .await?;
-            use base64::Engine;
-            pkg.pgpsig = Some(base64::engine::general_purpose::STANDARD.encode(&sig));
-        }
+            // 2. When signing, emit the detached `.sig` next to the package and embed
+            //    the same signature (base64) in the DB `%PGPSIG%` field.
+            if let Some(signer) = signer.as_deref() {
+                let sig = signer.detached_sign_binary(&bytes);
+                store_bytes(
+                    storage,
+                    &repo_storage_key(&registry, &format!("{pkg_path}.sig")),
+                    sig.clone(),
+                )
+                .await?;
+                use base64::Engine;
+                pkg.pgpsig = Some(base64::engine::general_purpose::STANDARD.encode(&sig));
+            }
 
-        // 3. Record a JSON sidecar, keyed by arch, for DB regeneration.
-        let sidecar = format!("local:{registry}/_index/pacman/{arch}/{filename}.json");
-        let json = serde_json::to_vec(&pkg).map_err(|e| CoreError::Other(anyhow::anyhow!(e)))?;
-        store_bytes(storage, &sidecar, json).await?;
+            // 3. Record a JSON sidecar, keyed by arch, for DB regeneration.
+            let sidecar = format!("local:{registry}/_index/pacman/{arch}/{filename}.json");
+            let json =
+                serde_json::to_vec(&pkg).map_err(|e| CoreError::Other(anyhow::anyhow!(e)))?;
+            store_bytes(storage, &sidecar, json).await?;
 
-        // 4. Regenerate the per-arch database.
-        regenerate_pacman(storage, &registry, &arch, signer.as_deref()).await
-    })
+            // 4. Regenerate the per-arch database.
+            regenerate_pacman(storage, &registry, &arch, signer.as_deref()).await
+        },
+    )
     .await?;
 
     dispatch_notification(
@@ -756,15 +900,11 @@ pub async fn apk_publish(
         .ok_or_else(|| AppError::bad_request(".PKGINFO is missing arch".to_owned()))?
         .to_owned();
 
-    batlehub_core::services::validate_coordinate(&name, &version, None).map_err(AppError::from)?;
     // `arch` is a path segment of both the package key (`{arch}/{file}`) and the
-    // sidecar key `regenerate_apk` groups on.
-    batlehub_core::services::validate_path_safe("architecture", &arch).map_err(AppError::from)?;
-    if arch.contains('/') {
-        return Err(AppError::bad_request(
-            "architecture must not contain '/'".to_owned(),
-        ));
-    }
+    // sidecar key `regenerate_apk` groups on; the file name has to read back as
+    // this coordinate (see `check_publish_coordinate`).
+    let filename = batlehub_core::services::apk::check_publish_coordinate(&name, &version, &arch)
+        .map_err(AppError::from)?;
     // A newline in any `.PKGINFO` value would inject a line into the index,
     // which is a line apk parses as a field of *this* package. Rejected for
     // every field, not only the three above, because `index_entry` renders more
@@ -778,35 +918,8 @@ pub async fn apk_publish(
         }
     }
 
-    let filename = format!("{name}-{version}.apk");
-
-    // **The name this is stored under has to parse back to the coordinate it
-    // was stored for.** `apk_coordinate` splits a file name from the right and
-    // requires a `-r<digits>` release suffix, and nothing above guarantees
-    // `{name}-{version}` survives that round trip:
-    //
-    //   * `pkgver = 1.0` has no release suffix, so the publish returns 201 and
-    //     every download of it is a 400 — the bytes are unreachable for good.
-    //   * `pkgver = 1.0-beta-r0` splits back as `("foo-1.0", "beta-r0")`, so
-    //     the index carries one coordinate and the download gate authorises,
-    //     blocks and age-gates a different one. A block then removes the index
-    //     entry without refusing the direct path fetch.
-    //
-    // Checked by *doing* the round trip rather than by re-deriving the rule, so
-    // this cannot drift from `apk_coordinate` itself.
-    match batlehub_core::services::apk::apk_coordinate(&filename) {
-        Some((parsed_name, parsed_version)) if parsed_name == name && parsed_version == version => {
-        }
-        _ => {
-            return Err(AppError::bad_request(format!(
-                "'{name}' version '{version}' would be stored as '{filename}', which apk reads \
-                 back as a different package. An apk version must end in a '-r<number>' release \
-                 suffix and neither the name nor the version before it may contain one"
-            )))
-        }
-    }
-
     let artifact_len = bytes.len() as u64;
+    let apk_key = repo_storage_key(&registry, &format!("{arch}/{filename}"));
     local_svc
         .enforce_publish_policy(
             &PublishPolicyRequest {
@@ -816,58 +929,60 @@ pub async fn apk_publish(
                 artifact_len,
                 signature_bytes: None,
                 signature_type: None,
-                artifact_key: None,
+                artifact_key: Some(&apk_key),
             },
             &identity.0,
         )
         .await
         .map_err(AppError::from)?;
 
-    publish_with_quota_rollback(&local_svc, &identity.0, &registry, artifact_len, async {
-        let storage = local_svc.storage.as_ref();
+    publish_with_quota_rollback(
+        &local_svc,
+        &identity.0,
+        &registry,
+        &name,
+        artifact_len,
+        async {
+            let storage = local_svc.storage.as_ref();
 
-        // 1. The package, byte-exact. A signature member from `abuild` is kept
-        //    as uploaded and one from `apk mkpkg` is absent — both install,
-        //    because the install path checks the index's `C:` (RFC 0026 §2.5).
-        store_bytes(
-            storage,
-            &repo_storage_key(&registry, &format!("{arch}/{filename}")),
-            bytes.clone(),
-        )
-        .await?;
+            // 1. The package, byte-exact. A signature member from `abuild` is kept
+            //    as uploaded and one from `apk mkpkg` is absent — both install,
+            //    because the install path checks the index's `C:` (RFC 0026 §2.5).
+            store_bytes(storage, &apk_key, bytes.clone()).await?;
 
-        // 2. The sidecar: the rendered index entry, keyed by arch. Rendering at
-        //    publish time rather than at regeneration means a rebuild re-reads
-        //    small text files instead of re-parsing every `.apk` in the
-        //    repository — which is what makes the block hook affordable.
-        let sidecar = ApkSidecar {
-            name: name.clone(),
-            version: version.clone(),
-            entry: batlehub_core::services::apk::index_entry(
-                &parsed.info,
-                &parsed.identity,
-                parsed.size,
-            ),
-        };
-        let json =
-            serde_json::to_vec(&sidecar).map_err(|e| CoreError::Other(anyhow::anyhow!(e)))?;
-        store_bytes(
-            storage,
-            &format!("local:{registry}/_index/apk/{arch}/{filename}.json"),
-            json,
-        )
-        .await?;
+            // 2. The sidecar: the rendered index entry, keyed by arch. Rendering at
+            //    publish time rather than at regeneration means a rebuild re-reads
+            //    small text files instead of re-parsing every `.apk` in the
+            //    repository — which is what makes the block hook affordable.
+            let sidecar = ApkSidecar {
+                name: name.clone(),
+                version: version.clone(),
+                entry: batlehub_core::services::apk::index_entry(
+                    &parsed.info,
+                    &parsed.identity,
+                    parsed.size,
+                ),
+            };
+            let json =
+                serde_json::to_vec(&sidecar).map_err(|e| CoreError::Other(anyhow::anyhow!(e)))?;
+            store_bytes(
+                storage,
+                &format!("local:{registry}/_index/apk/{arch}/{filename}.json"),
+                json,
+            )
+            .await?;
 
-        // 3. The index, filtered and signed.
-        regenerate_apk(
-            storage,
-            admin_svc.repo.as_ref(),
-            &registry,
-            &arch,
-            signers.get(&registry).as_deref(),
-        )
-        .await
-    })
+            // 3. The index, filtered and signed.
+            regenerate_apk(
+                storage,
+                admin_svc.repo.as_ref(),
+                &registry,
+                &arch,
+                signers.get(&registry).as_deref(),
+            )
+            .await
+        },
+    )
     .await?;
 
     dispatch_notification(

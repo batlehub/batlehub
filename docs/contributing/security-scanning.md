@@ -26,6 +26,7 @@ you have already deployed.
 | Container / OS layers | Trivy | `image-scan.yaml` (PR + daily, GitHub) runs Trivy directly on the proxy image (`Containerfile`), the worker image (`Containerfile.worker`, RFC 0018 — the one that carries bubblewrap, postmortem and the Trivy client) and the GuardDog variant of the worker image (`Containerfile.worker-guarddog`, which adds the optional Python scanner and is gated separately, so its toolchain answers for its own CVEs); `.forgejo/workflows/build.yaml` (the proxy and hardened images, the two it builds) polls Harbor's own scan-on-push report instead | block on fixable HIGH/CRITICAL |
 | Development toolchain | Trivy (`rootfs` over the installed tools) | `mise-scan.yaml` (PR touching `mise.toml`/`mise.lock`, weekly) | budget on fixable HIGH/CRITICAL — see below |
 | Static analysis | CodeQL + Semgrep | `codeql.yaml`, `semgrep.yaml` | CodeQL report / Semgrep block on ERROR |
+| API surface (OAS + OWASP API Top 10 auth rules) | Spectral (`.spectral.yaml`) | `openapi-lint.yaml` (PR touching `ui/openapi.json` or the ruleset) | block on error |
 | Secrets | gitleaks | `secret-scan.yaml` (PR + push) | block |
 | Lint / unsafe hygiene | clippy `-D warnings` | `test.yaml` `lint` job | block |
 
@@ -165,6 +166,7 @@ trivy image --severity HIGH,CRITICAL --ignore-unfixed batlehub:scan
 
 gitleaks detect --config gitleaks.toml          # secret scan
 semgrep scan --config p/rust --config p/typescript
+task openapi:lint                               # Spectral over ui/openapi.json
 ```
 
 ## SBOMs — matching a *future* CVE against a shipped build

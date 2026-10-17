@@ -55,6 +55,7 @@ pub struct CreateTokenResponse {
     pub groups: Vec<String>,
 }
 
+/// Create a personal API token. Only an OIDC session can mint one.
 #[utoipa::path(
     post,
     path = "/api/v1/auth/tokens",
@@ -183,6 +184,7 @@ pub struct TokenListItem {
     pub groups: Vec<String>,
 }
 
+/// List the caller's active API tokens.
 #[utoipa::path(
     get,
     path = "/api/v1/auth/tokens",
@@ -222,6 +224,7 @@ pub async fn list_tokens(
 
 // ── Revoke token ──────────────────────────────────────────────────────────────
 
+/// Revoke one of the caller's API tokens.
 #[utoipa::path(
     delete,
     path = "/api/v1/auth/tokens/{id}",

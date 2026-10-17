@@ -47,4 +47,6 @@ use shared::{
     identity_for_artifact, mark_uncacheable_if_signed, off_origin_checksum_urls,
     sign_download_document, DownloadCoords,
 };
-pub(super) use shared::{terraform_set_yanked, terraform_versions_response, TerraformYankRequest};
+pub(super) use shared::{
+    require_segments, terraform_set_yanked, terraform_versions_response, TerraformYankRequest,
+};

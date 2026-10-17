@@ -247,6 +247,21 @@ jobs:
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         with:
           tool: cargo-fuzz
+      # The corpus is what a nightly run leaves the next one: without it every
+      # run restarts from the empty input and spends its minute rediscovering
+      # yesterday's coverage. One cache entry holds every target's
+      # `fuzz/corpus/<target>/` — a per-target key would need a matrix, and
+      # each matrix leg would pay the sanitiser build again. Saved under a
+      # fresh key each run (a cache key is immutable) and restored from the
+      # newest by prefix; saved even when a target failed, since the corpus
+      # that found the crash is the one worth keeping.
+      - name: Restore fuzz corpora
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: fuzz-corpus-${{ runner.os }}-
       - name: Fuzz each target
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         working-directory: fuzz
@@ -261,11 +276,37 @@ jobs:
           host=$(rustc +nightly -vV | sed -n 's/^host: //p')
           echo "targets: $targets"
           echo "target triple: $host"
+          # Every target runs whatever an earlier one found: the first crash
+          # used to end the loop under `set -e`, so one finding hid every
+          # target after it in the list. Failures are collected and the step
+          # fails once, naming them all.
+          failed=()
           for t in $targets; do
             echo "::group::$t"
-            cargo +nightly fuzz run --target "$host" "$t" -- -max_total_time=60
+            # `fuzz/dicts/<target>.dict` is that target's libFuzzer dictionary.
+            dict=()
+            if [ -f "dicts/$t.dict" ]; then dict=("-dict=$PWD/dicts/$t.dict"); fi
+            if ! cargo +nightly fuzz run --target "$host" "$t" -- -max_total_time=60 "${dict[@]}"; then
+              failed+=("$t")
+              echo "::error title=fuzz::$t failed — its input is in the fuzz-artifacts upload"
+            else
+              # Minimised before it is cached: the corpus otherwise grows every
+              # night, and loading it counts against `-max_total_time`.
+              cargo +nightly fuzz cmin --target "$host" "$t" \
+                || echo "::warning title=fuzz::cmin failed for $t; keeping its corpus as is"
+            fi
             echo "::endgroup::"
           done
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "failed targets: ${failed[*]}"
+            exit 1
+          fi
+      - name: Save fuzz corpora
+        if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
       # The input that broke it is the whole value of a fuzz failure, and it is
       # written to a file the job would otherwise throw away.
       - name: Upload crash artefacts

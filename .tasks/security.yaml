@@ -146,6 +146,14 @@ tasks:
       # fires — or stays quiet — on the recorded stream as `expected.json` says.
       - uv run --quiet --with pyyaml==6.0.3 python deploy/siem/replay.py
 
+  openapi:lint:
+    desc: "Lint ui/openapi.json with Spectral (OAS + OWASP API Top 10, ruleset in .spectral.yaml); fails on any warning"
+    cmds:
+      # Run in isolation, not from ui/package.json: spectral-cli's tree carries
+      # high advisories (braces via fast-glob) that would fail `task ui:audit`.
+      # Build-time only, and it reads nothing but our own spec.
+      - npx --yes @stoplight/spectral-cli@6.17.0 lint ui/openapi.json --fail-severity=warn {{.CLI_ARGS}}
+
   security:
     desc: "Run the full local security gate — Rust advisories + bans, frontend audits, dependency supply chain, and Rust SBOM. Trivy/gitleaks/semgrep run in CI (see .github/workflows)"
     cmds:
@@ -158,5 +166,6 @@ tasks:
       - task: postmortem
       - task: vex
       - task: sbom:rust
+      - task: openapi:lint
       - echo "Local gate passed. Image scanning (Trivy) and secret/SAST (gitleaks, semgrep) run in CI."
 

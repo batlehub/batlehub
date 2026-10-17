@@ -18,6 +18,7 @@ mod read;
 pub use eco_composer::COMPOSER_DIST_SHA1;
 pub use eco_jetbrains::{build_in_range, JetbrainsPluginVersion};
 pub use eco_openvsx::OpenVsxExtensionVersion;
+pub use lifecycle::stores_files_under_version;
 pub use publish::PublishPolicyRequest;
 
 use std::sync::Arc;
@@ -233,6 +234,60 @@ fn percent_decode_round(value: &str) -> Option<String> {
     decoded_any.then(|| String::from_utf8_lossy(&out).into_owned())
 }
 
+/// [`validate_path_safe`] for a value that is exactly **one** path segment of a
+/// storage key: a Terraform namespace, a Debian component, a package
+/// architecture.
+///
+/// `validate_path_safe` admits an interior `/` because package names carry
+/// one, but a segment that does cuts the key in a different place: `web::Path`
+/// decodes `%2F`, so a provider type of `aws/5.0.0` produced the same key as
+/// provider `aws` at version `5.0.0`. Every handler that interpolates a value
+/// as a single segment calls this, so the rule and its message live once.
+pub fn validate_path_segment(kind: &str, value: &str) -> Result<(), CoreError> {
+    validate_path_safe(kind, value)?;
+    if value.contains('/') {
+        return Err(CoreError::InvalidInput(format!(
+            "{kind} must not contain '/'"
+        )));
+    }
+    Ok(())
+}
+
+/// Suffixes the lifecycle stores *beside* a version's artifact key (RFC 0020's
+/// VSX signature archives, see `drop_version_bytes`).
+///
+/// A version ending in one of them would have its artifact key equal to another
+/// version's sibling: `a@1.0.sigzip` is stored at `local:r/a/1.0.sigzip`,
+/// which is where `a@1.0`'s signature goes — so deleting `1.0` destroyed
+/// `1.0.sigzip`, and signing `1.0` overwrote it. `1.0.0-rc.sigzip` is valid
+/// semver, so no versioning policy stops it.
+pub const VERSION_SIBLING_SUFFIXES: [&str; 2] = [SIGNATURE_SUFFIX, PROVIDED_SIGNATURE_SUFFIX];
+
+/// The registry-signed VSX signature archive, beside the artifact key.
+pub const SIGNATURE_SUFFIX: &str = ".sigzip";
+
+/// An upstream-provided VSX signature archive (RFC 0020 §13.6).
+pub const PROVIDED_SIGNATURE_SUFFIX: &str = ".sigzip.upstream";
+
+/// The coordinate checks every local publish runs before any policy: the
+/// storage-key safety of name and version, and a version that cannot collide
+/// with another version's [`VERSION_SIBLING_SUFFIXES`] key.
+pub fn validate_publish_coordinate(name: &str, version: &str) -> Result<(), CoreError> {
+    validate_package_name(name)?;
+    validate_path_safe("version", version)?;
+    let lower = version.to_ascii_lowercase();
+    if let Some(suffix) = VERSION_SIBLING_SUFFIXES
+        .iter()
+        .find(|s| lower.ends_with(*s))
+    {
+        return Err(CoreError::InvalidInput(format!(
+            "version '{version}' must not end in '{suffix}': that suffix names the signature \
+             stored beside another version"
+        )));
+    }
+    Ok(())
+}
+
 /// Validate a package name is safe to use as a storage-key component.
 /// Reusable by registry adapters that accept a package name from the request.
 pub fn validate_package_name(name: &str) -> Result<(), CoreError> {
@@ -412,6 +467,24 @@ pub fn nix_narinfo_storage_key(
     store_hash: &str,
 ) -> String {
     format!("local:{registry}/{name}/{version}/{store_hash}.narinfo")
+}
+
+/// Edge validation for the `(os, arch)` of a provider binary, the last segment
+/// of [`terraform_provider_binary_storage_key`].
+///
+/// Both are single segments, and the OS carries no `-`: the key joins the two
+/// with one, so `(linux-amd64, x)` and `(linux, amd64-x)` were the same key and
+/// either upload replaced the other platform's binary. Terraform's OS names are
+/// Go's `GOOS` values, none of which has a dash; architectures keep theirs.
+pub fn validate_terraform_platform(os: &str, arch: &str) -> Result<(), CoreError> {
+    validate_path_segment("os", os)?;
+    validate_path_segment("arch", arch)?;
+    if os.contains('-') {
+        return Err(CoreError::InvalidInput(format!(
+            "os '{os}' must not contain '-': the binary is stored as '{{os}}-{{arch}}'"
+        )));
+    }
+    Ok(())
 }
 
 /// Storage key for a Terraform provider platform binary.

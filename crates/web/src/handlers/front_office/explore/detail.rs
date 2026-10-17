@@ -459,6 +459,7 @@ pub async fn explore_package_detail(
         blocked_only: false,
         limit: 500,
         offset: 0,
+        viewer: None,
     };
     let (proxied_summaries, upstream_unavailable) =
         match admin_svc.list_packages(proxied_filter).await {
@@ -727,6 +728,7 @@ async fn blocked_version_map(
             blocked_only: true,
             limit: 500,
             offset: 0,
+            viewer: None,
         })
         .await
         .unwrap_or_default()

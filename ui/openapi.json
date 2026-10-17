@@ -2,7 +2,11 @@
   "openapi": "3.1.0",
   "info": {
     "title": "batlehub-web",
-    "description": "",
+    "description": "BatleHub — a caching proxy and private registry for package managers. `/proxy/{registry}/…` speaks each client's own protocol; `/api/v1/…` is the console and admin API.",
+    "contact": {
+      "name": "BatleHub",
+      "url": "https://github.com/batlehub/batlehub"
+    },
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
@@ -3354,6 +3358,7 @@
         "tags": [
           "back-office"
         ],
+        "summary": "List the grants on a package, or on one of its versions.",
         "operationId": "list_grants",
         "parameters": [
           {
@@ -3415,6 +3420,7 @@
         "tags": [
           "back-office"
         ],
+        "summary": "Write a grant: a subject's verbs on a package or version node.",
         "operationId": "put_grant",
         "parameters": [
           {
@@ -3471,6 +3477,7 @@
         "tags": [
           "back-office"
         ],
+        "summary": "Remove a grant. Removing one that is already absent succeeds.",
         "operationId": "delete_grant",
         "parameters": [
           {
@@ -5988,6 +5995,7 @@
         "tags": [
           "front-office"
         ],
+        "summary": "List the caller's active API tokens.",
         "operationId": "list_tokens",
         "responses": {
           "200": {
@@ -6017,6 +6025,7 @@
         "tags": [
           "front-office"
         ],
+        "summary": "Create a personal API token. Only an OIDC session can mint one.",
         "operationId": "create_token",
         "requestBody": {
           "content": {
@@ -6058,6 +6067,7 @@
         "tags": [
           "front-office"
         ],
+        "summary": "Revoke one of the caller's API tokens.",
         "operationId": "revoke_token",
         "parameters": [
           {
@@ -7097,7 +7107,7 @@
         ],
         "summary": "List packages visible to the current user.",
         "description": "Only packages from registries the caller's role can access are returned.\nBlocked packages are shown with their block reason.",
-        "operationId": "list_packages",
+        "operationId": "list_visible_packages",
         "parameters": [
           {
             "name": "registry",
@@ -7397,7 +7407,7 @@
             "description": "Authentication required"
           },
           "404": {
-            "description": "No SBOM found for this artifact"
+            "description": "No SBOM found for this artifact, or the caller cannot read it"
           }
         },
         "security": [
@@ -7951,21 +7961,8 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "Tag set",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MessageResponse"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Access denied"
-          },
           "404": {
-            "description": "Unknown registry, or not in local/hybrid mode"
+            "description": "Unknown registry"
           },
           "501": {
             "description": "Tag writes are not implemented for this registry"
@@ -9155,6 +9152,7 @@
         "tags": [
           "proxy/jetbrains-marketplace"
         ],
+        "summary": "Publish a plugin version (the marketplace `updates/upload` API).",
         "operationId": "jbm_upload",
         "parameters": [
           {
@@ -9693,7 +9691,7 @@
             }
           },
           "400": {
-            "description": "Malformed signature headers"
+            "description": "Malformed signature headers, or a gemspec field outside its grammar"
           },
           "403": {
             "description": "Access denied or quota exceeded"
@@ -12533,7 +12531,7 @@
         "tags": [
           "proxy/jetbrains"
         ],
-        "summary": "Serve a file from a JetBrains download repository\n(`GET /proxy/{registry}/jetbrains/{path}`).",
+        "summary": "Serve a file from a JetBrains download repository.",
         "operationId": "jetbrains_get",
         "parameters": [
           {
@@ -19259,68 +19257,6 @@
         ]
       }
     },
-    "/proxy/{registry}/{name}": {
-      "put": {
-        "tags": [
-          "proxy/npm"
-        ],
-        "summary": "Publish a new npm package version (`npm publish`).",
-        "description": "Accepts the standard npm publish wire format: a JSON body containing the\npackage metadata under `versions` and the base64-encoded tarball under\n`_attachments`.",
-        "operationId": "npm_publish",
-        "parameters": [
-          {
-            "name": "registry",
-            "in": "path",
-            "description": "Registry name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "name",
-            "in": "path",
-            "description": "Package name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "description": "npm publish payload",
-          "content": {
-            "application/json": {}
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Package published",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NpmPublishResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid payload"
-          },
-          "403": {
-            "description": "Access denied"
-          },
-          "409": {
-            "description": "Version already published"
-          }
-        },
-        "security": [
-          {
-            "bearer_token": []
-          }
-        ]
-      }
-    },
     "/proxy/{registry}/{name}/{version}/download": {
       "get": {
         "tags": [
@@ -19954,7 +19890,7 @@
           "proxy/github"
         ],
         "summary": "Download a GitHub source tarball.",
-        "operationId": "download_tarball",
+        "operationId": "github_download_tarball",
         "parameters": [
           {
             "name": "registry",
@@ -20131,6 +20067,66 @@
           },
           "404": {
             "description": "Unknown registry"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "proxy/npm"
+        ],
+        "summary": "Publish a new npm package version (`npm publish`).",
+        "description": "Accepts the standard npm publish wire format: a JSON body containing the\npackage metadata under `versions` and the base64-encoded tarball under\n`_attachments`.",
+        "operationId": "npm_publish",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "package",
+            "in": "path",
+            "description": "Package name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "npm publish payload",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Package published",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NpmPublishResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "409": {
+            "description": "Version already published"
           }
         },
         "security": [
@@ -26947,7 +26943,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Every restart-only key the running process does not have, against the\nconfig it **started** on: a key an earlier reload applied stays listed\nuntil the restart that makes it true. `[\"*\"]` when the documents could\nnot be compared, with the reason in `restart_reason`."
+            "description": "Every restart-only key the running process does not have, against the\nconfig it **started** on: a key an earlier reload applied stays listed\nuntil the restart that makes it true. `[\"*\"]` when the documents could\nnot be compared, with the reason in `restart_reason` — any\n`[[...]]` entry whose `name` or `type` is a placeholder does that."
           }
         }
       },
@@ -28819,6 +28815,30 @@
     {
       "name": "notifications",
       "description": "Inbound webhook receiver — accepts events from external systems"
+    },
+    {
+      "name": "proxy/maven",
+      "description": "Maven repository — proxy and local hosting under `maven2/`, artifact upload"
+    },
+    {
+      "name": "proxy/composer",
+      "description": "Composer (Packagist) — packages.json, p2 metadata, dist ZIPs, security advisories, private package upload and yank"
+    },
+    {
+      "name": "proxy/forgejo",
+      "description": "Forgejo/Gitea — the package-registry API and release assets by attachment uuid"
+    },
+    {
+      "name": "proxy/jetbrains",
+      "description": "JetBrains IDE archives — the download CDN as a path-addressed proxy cache, no local hosting"
+    },
+    {
+      "name": "air-gap",
+      "description": "Air-gap sink (RFC 0008) — where a rewrite rule sends a host no mirror covers; never fetches, answers 501 and records the host"
+    },
+    {
+      "name": "banner",
+      "description": "The global admin banner, readable without a token"
     }
   ]
 }

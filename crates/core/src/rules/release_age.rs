@@ -7,7 +7,8 @@ use crate::entities::Role;
 use crate::rules::{Rule, RuleContext, RuleDecision};
 
 /// Blocks access to a release that was published less than `min_age` ago,
-/// unless the caller holds one of the `bypass_roles`.
+/// unless the caller holds the least-privileged of the `bypass_roles` or a
+/// higher one.
 ///
 /// Useful for preventing immediate mirroring of brand-new releases that might
 /// be yanked or recalled within a short window (supply-chain hygiene).
@@ -42,7 +43,7 @@ impl Rule for ReleaseAgeGateRule {
     }
 
     async fn evaluate(&self, ctx: &RuleContext<'_>) -> RuleDecision {
-        let bypassed = self.bypass_roles.contains(&ctx.identity.role);
+        let bypassed = ctx.identity.role.clears_bypass(&self.bypass_roles);
 
         let Some(published_at) = ctx.package.published_at else {
             if !self.deny_missing_timestamp {
@@ -206,6 +207,22 @@ mod tests {
         // A bypass role allows the download even when deny_missing_timestamp is set,
         // consistent with how bypass_roles work for the age check itself.
         let rule = ReleaseAgeGateRule::new(Duration::from_secs(3600), vec![Role::Admin])
+            .with_deny_missing_timestamp(true);
+        let meta = make_meta_no_timestamp();
+        let identity = make_identity(Role::Admin);
+        let ctx = RuleContext {
+            identity: &identity,
+            package: &meta,
+            action: Action::ReleasesRead,
+            cache_entry: None,
+            requested_version: None,
+        };
+        assert!(matches!(rule.evaluate(&ctx).await, RuleDecision::Allow));
+    }
+
+    #[tokio::test]
+    async fn a_role_above_the_listed_bypass_role_bypasses_too() {
+        let rule = ReleaseAgeGateRule::new(Duration::from_secs(3600), vec![Role::User])
             .with_deny_missing_timestamp(true);
         let meta = make_meta_no_timestamp();
         let identity = make_identity(Role::Admin);

@@ -1142,7 +1142,7 @@ depuis le `user_id` de l'utilisateur authentifié.
 `config.json`, de sorte que Cargo la découvre automatiquement.
 
 **npm** — les modes `local` et `hybrid` acceptent les charges de `npm publish`
-(`PUT /proxy/{registry}/{name}`) et servent packuments et tarballs depuis le
+(`PUT /proxy/{registry}/{package}`) et servent packuments et tarballs depuis le
 stockage local.
 
 **openvsx / vscode-marketplace** — les modes `local` et `hybrid` acceptent des
@@ -2080,7 +2080,7 @@ on_webhook    = true
 |---|---|---|---|
 | `kind` | chaîne | — | Doit valoir `"release_age_gate"` |
 | `min_age_secs` | u64 | `3600` | Les publications plus jeunes sont refusées. |
-| `bypass_roles` | chaîne[] | `[]` | Les rôles qui sautent entièrement le garde-fou, contrôle d'horodatage manquant compris (par exemple `["admin"]`). |
+| `bypass_roles` | chaîne[] | `[]` | Les rôles qui sautent entièrement le garde-fou, contrôle d'horodatage manquant compris (par exemple `["admin"]`). Quand plusieurs rôles sont listés, le moins privilégié fixe le plancher d'accès. |
 | `deny_missing_timestamp` | booléen | `false` | À `true`, refuse le téléchargement des paquets dont l'amont ne fournit pas d'horodatage de publication, plutôt que de sauter le contrôle et d'autoriser. Utile pour des registres comme conda, où le champ d'horodatage est facultatif — le mettre à `true` garantit que chaque paquet porte un âge vérifiable. |
 
 > **La prise en charge des horodatages par type de registre :** le garde-fou ne
@@ -2144,7 +2144,7 @@ on_webhook    = true
 |---|---|---|---|
 | `kind` | chaîne | — | Doit valoir `"require_signed_release"` |
 | `enabled` | booléen | `false` | À `true`, refuse les publications sans signal de signature (sous réserve de `deny_missing_signature` ci-dessous) |
-| `bypass_roles` | chaîne[] | `[]` | Les rôles qui sautent entièrement le garde-fou (par exemple `["admin"]`). |
+| `bypass_roles` | chaîne[] | `[]` | Les rôles qui sautent entièrement le garde-fou (par exemple `["admin"]`). Quand plusieurs rôles sont listés, le moins privilégié fixe le plancher d'accès. |
 | `deny_missing_signature` | booléen | `false` | À `true`, refuse les publications des registres qui ne rapportent aucun signal de signature, plutôt que de sauter le contrôle et d'autoriser. |
 
 > Cette règle contrôle `PackageMetadata.is_signed`, un signal au mieux, renseigné
@@ -2247,7 +2247,7 @@ bypass_roles = ["admin"]
 |---|---|---|---|
 | `kind` | chaîne | — | Doit valoir `"cve_gate"` |
 | `min_severity` | chaîne | `"high"` | La gravité minimale qui déclenche un blocage : `"low"`, `"medium"`, `"high"` ou `"critical"`. |
-| `bypass_roles` | chaîne[] | `[]` | Les rôles exemptés du garde-fou. |
+| `bypass_roles` | chaîne[] | `[]` | Les rôles exemptés du garde-fou. Quand plusieurs rôles sont listés, le moins privilégié fixe le plancher d'accès. |
 
 **`[[registries.rules]]` — le garde-fou de licence :**
 
@@ -2273,7 +2273,7 @@ bypass_roles  = ["admin"]
 | `deny` | chaîne[] | `[]` | Les licences refusées. Contrôlée avant `allow` : une licence présente dans les deux est donc refusée. |
 | `allow_unknown` | booléen | `true` | Le traitement d'une version dont la licence est inconnue. `true` la laisse passer ; `false` la refuse. |
 | `block` | booléen | `false` | `false` = simple avertissement : la licence est affichée dans la console et rien n'est jamais refusé. |
-| `bypass_roles` | chaîne[] | `[]` | Les rôles exemptés du garde-fou. |
+| `bypass_roles` | chaîne[] | `[]` | Les rôles exemptés du garde-fou. Quand plusieurs rôles sont listés, le moins privilégié fixe le plancher d'accès. |
 
 > **Cette règle exige `[registries.sbom]` avec `enabled = true` sur le même
 > registre.** La licence est lue dans l'archive au cours de la génération du
@@ -2332,7 +2332,7 @@ bypass_roles = ["admin"]
 |---|---|---|---|
 | `kind` | chaîne | — | Doit valoir `"trusted_publisher"` |
 | `allow` | chaîne[] | `[]` | Les identifiants de publieur autorisés. Non vide, un paquet dont le publieur dérivé n'y figure pas est rejeté. Vide, la règle autorise tout. |
-| `bypass_roles` | chaîne[] | `[]` | Les rôles qui peuvent contourner le garde-fou (par exemple `["admin"]`). |
+| `bypass_roles` | chaîne[] | `[]` | Les rôles qui peuvent contourner le garde-fou (par exemple `["admin"]`). Quand plusieurs rôles sont listés, le moins privilégié fixe le plancher d'accès. |
 
 > **La prise en charge du publieur par type de registre :** la comparaison est
 > insensible à la casse.
@@ -2422,7 +2422,7 @@ verify_on_serve = false   # re-hacher les octets stockés à chaque service, pas
 | `enabled` | booléen | `true` | L'interrupteur principal. À `false`, aucune vérification n'est faite. |
 | `block_on_mismatch` | booléen | `true` | Faire échouer le téléchargement (et sauter la mise en cache) quand l'empreinte calculée ne correspond pas à celle annoncée. Une non-correspondance n'est jamais contournable. |
 | `require_metadata` | booléen | `false` | Refuser les téléchargements pour lesquels l'amont n'annonce aucune somme utilisable, sauf si l'appelant détient l'un des `bypass_roles`. Simple avertissement par défaut. |
-| `bypass_roles` | chaîne[] | `[]` | Les rôles autorisés à contourner le garde-fou `require_metadata`. |
+| `bypass_roles` | chaîne[] | `[]` | Les rôles autorisés à contourner le garde-fou `require_metadata`. Quand plusieurs rôles sont listés, le moins privilégié fixe le plancher d'accès. |
 | `verify_on_serve` | booléen | `false` | Revérifier les octets en cache ou stockés contre un SHA-256 **calculé par nous** (enregistré à la première mise en cache) à chaque service — les hits de cache du chemin proxy et les lectures du registre local — et pas seulement à la première récupération. Attrape une corruption de stockage ou l'altération d'artefacts déjà en cache. Une non-correspondance fait échouer le téléchargement (`502`) et évince la mauvaise entrée, de sorte qu'une requête ultérieure récupère des octets sains. Désactivé par défaut parce qu'il lit et hache les octets à chaque service (le chemin proxy les diffuse à travers le hachage, la mémoire reste donc bornée, puis rouvre l'entrée pour la servir). Les lignes de cache préexistantes n'ont pas de somme stockée et sont traitées comme « à ne pas revérifier » jusqu'à leur prochain rafraîchissement. |
 
 #### `[registries.signing]` {#signing}

@@ -9,6 +9,15 @@ pub enum Role {
     Admin,
 }
 
+impl Role {
+    /// Whether this role clears a gate's `bypass_roles`: the least-privileged
+    /// listed role is the floor, so listing `user` lets an admin through too.
+    /// An empty list bypasses nobody. Every gate reads its list this way.
+    pub fn clears_bypass(&self, bypass_roles: &[Role]) -> bool {
+        bypass_roles.iter().min().is_some_and(|floor| self >= floor)
+    }
+}
+
 impl std::fmt::Display for Role {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -141,6 +150,15 @@ mod tests {
         }
         .is_admin());
         assert!(!Identity::anonymous().is_admin());
+    }
+
+    #[test]
+    fn the_least_privileged_bypass_role_is_the_floor() {
+        assert!(!Role::Admin.clears_bypass(&[]));
+        assert!(Role::Admin.clears_bypass(&[Role::User]));
+        assert!(Role::User.clears_bypass(&[Role::Admin, Role::User]));
+        assert!(!Role::Anonymous.clears_bypass(&[Role::User]));
+        assert!(!Role::User.clears_bypass(&[Role::Admin]));
     }
 
     #[test]

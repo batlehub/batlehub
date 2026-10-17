@@ -3,6 +3,7 @@ use super::{
     HttpResponse, LocalRegistryService, RegistryMap, RegistryModeMap, Responder,
 };
 use batlehub_core::entities::{Identity, Role};
+use batlehub_core::error::CoreError;
 
 /// `cargo owner --list`'s response, in the shape crates.io defines.
 #[derive(serde::Serialize, utoipa::ToSchema)]
@@ -39,9 +40,12 @@ pub async fn cargo_owners(
     path: web::Path<(String, String)>,
     map: web::Data<RegistryMap>,
     local_svc: web::Data<Arc<LocalRegistryService>>,
+    identity: AuthIdentity,
 ) -> Result<impl Responder, AppError> {
     let (registry, name) = path.into_inner();
     require_cargo(&registry, &map)?;
+
+    require_readable_crate(&local_svc, &registry, &name, &identity).await?;
 
     if let Some(ref ownership) = local_svc.ownership {
         let entries = ownership
@@ -126,6 +130,25 @@ pub struct CargoOwnersChanged {
 /// anonymously, or before ownership existed, has no owners and stays that way
 /// until an admin sets one through `/api/v1/admin/.../owners` — that path is
 /// `require_admin`-gated and is the intended recovery route.
+/// Owners are package data: only a caller who can read the crate's index
+/// learns them, or that the crate exists. A refusal is the missing crate's
+/// 404, on the read and the write routes alike; any other failure (the
+/// database being down) stays what it is.
+async fn require_readable_crate(
+    local_svc: &LocalRegistryService,
+    registry: &str,
+    name: &str,
+    identity: &Identity,
+) -> Result<(), AppError> {
+    match local_svc.get_index(registry, name, identity).await {
+        Ok(_) => Ok(()),
+        Err(
+            CoreError::NotFound(_) | CoreError::NotFoundWithheld(_) | CoreError::AccessDenied(_),
+        ) => Err(AppError::not_found(format!("crate '{name}' not found"))),
+        Err(e) => Err(e.into()),
+    }
+}
+
 async fn require_owner_mutation(
     local_svc: &LocalRegistryService,
     registry: &str,
@@ -147,6 +170,8 @@ async fn require_owner_mutation(
             "changing crate owners requires an authenticated user".to_owned(),
         ));
     }
+
+    require_readable_crate(local_svc, registry, name, identity).await?;
 
     let owners = ownership
         .list_owners(registry, name)

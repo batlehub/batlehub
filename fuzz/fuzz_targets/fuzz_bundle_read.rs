@@ -21,6 +21,14 @@
 //! 4. **Round trip.** `write_bundle` then `read_bundle` returns the same
 //!    manifest and signature, exactly the blobs that were supplied, and
 //!    rejects nothing.
+//! 5. **A second manifest is refused.** The shipped bypass needed a *whole*
+//!    second `manifest.json` member, which no byte flip ever builds. So on a
+//!    fuzz bit one is appended to the written archive, before its end-of-archive
+//!    blocks — a fuzzed name (the exact one, a `./` spelling, or `manifest.sig`)
+//!    written raw into the header so tar's path cleaning cannot tidy it, and
+//!    fuzzed contents (raw bytes, or a *valid* manifest that differs from the
+//!    signed one: the attack itself). An exact duplicate must be refused, and
+//!    whatever is accepted must still pass property 1.
 
 use chrono::{DateTime, Utc};
 use libfuzzer_sys::fuzz_target;
@@ -237,6 +245,50 @@ fuzz_target!(|data: &[u8]| {
             .to_signed_bytes()
             .expect("serialising the manifest")
     );
+
+    // 5. A second `manifest.json` (or `manifest.sig`), appended.
+    if u.arbitrary::<bool>().unwrap_or(false) {
+        let names: [&[u8]; 4] = [
+            b"manifest.json",
+            b"manifest.sig",
+            b"./manifest.json",
+            b"manifest.json/",
+        ];
+        let Ok(name) = u.choose(&names) else { return };
+        let body = if u.arbitrary::<bool>().unwrap_or(false) {
+            let mut forged = manifest.clone();
+            forged.bundle_id.push('!');
+            serde_json::to_vec(&forged).expect("serialising the forged manifest")
+        } else {
+            let Ok(raw): arbitrary::Result<Vec<u8>> = u.arbitrary() else {
+                return;
+            };
+            raw
+        };
+        let end = archive.len() - 1024;
+        assert!(
+            archive[end..].iter().all(|&b| b == 0),
+            "write_bundle no longer ends in two zero blocks"
+        );
+        let mut header = tar::Header::new_gnu();
+        header.as_old_mut().name[..name.len()].copy_from_slice(name);
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_mode(0o644);
+        header.set_size(body.len() as u64);
+        header.set_cksum();
+        let mut tail = tar::Builder::new(Vec::new());
+        tail.append(&header, &body[..]).expect("appending to a Vec");
+        let mut forged = archive[..end].to_vec();
+        forged.extend(tail.into_inner().expect("finishing a Vec"));
+        if matches!(*name, b"manifest.json" | b"manifest.sig") {
+            assert!(
+                read_bundle(&forged[..]).is_err(),
+                "accepted a bundle carrying two {:?} members",
+                String::from_utf8_lossy(name)
+            );
+        }
+        check_accepted(&forged);
+    }
 
     // 1–3. The written archive, damaged: still no panic, still honest.
     let Ok(edits) = u.int_in_range(0..=3u8) else {

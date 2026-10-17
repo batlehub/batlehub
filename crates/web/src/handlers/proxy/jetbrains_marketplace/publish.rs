@@ -44,6 +44,7 @@ pub struct PluginPublishResponse {
     pub channel: String,
 }
 
+/// Publish a plugin version (the marketplace `updates/upload` API).
 #[utoipa::path(
     post,
     path = "/proxy/{registry}/api/updates/upload",

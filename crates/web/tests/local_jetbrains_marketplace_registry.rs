@@ -1064,3 +1064,71 @@ async fn jbm_channel_assign_is_refused_for_a_user_and_moves_nothing() {
     );
     assert!(!channel_ids(&app, "eap").await.contains("org.demo.chan"));
 }
+
+// ── Visibility of the plugin ID index ────────────────────────────────────────
+
+/// `files/pluginsXMLIds.json` read the local names with no identity, so a
+/// team-visible plugin's xmlId went to every caller while `searchPlugins`,
+/// built from the same names, filtered it.
+#[actix_web::test]
+async fn jbm_xml_ids_omit_a_team_visible_plugin() {
+    use batlehub_adapters::in_memory::InMemoryTeamNamespaceStore;
+    use batlehub_core::entities::{TeamNamespace, Visibility};
+    use batlehub_core::ports::TeamNamespacePort;
+
+    let ns_store = InMemoryTeamNamespaceStore::new();
+    let mut parts = local_registry_app_parts(
+        "local-jbm",
+        "jetbrains-marketplace",
+        RegistryMode::Local,
+        None,
+    );
+    let cur = parts.local_svc.clone();
+    parts.local_svc = Arc::new(batlehub_core::services::LocalRegistryService {
+        backend: cur.backend.clone(),
+        storage: cur.storage.clone(),
+        hot: cur.hot.clone(),
+        quota: cur.quota.clone(),
+        ownership: cur.ownership.clone(),
+        team_namespace: Some(ns_store.clone() as Arc<dyn TeamNamespacePort>),
+        sbom: cur.sbom.clone(),
+        explore_cache: cur.explore_cache.clone(),
+        package_repo: cur.package_repo.clone(),
+        readme: cur.readme.clone(),
+    });
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+
+    for id in ["org.demo.public", "org.demo.secret"] {
+        let jar = make_plugin_jar(&plugin_xml(id, "1.0.0", "233.0", "241.*"));
+        assert_eq!(publish_plugin(&app, &jar, None, false).await.status(), 201);
+    }
+
+    ns_store
+        .claim_namespace(TeamNamespace {
+            registry: "local-jbm".to_owned(),
+            prefix: "org.demo.secret".to_owned(),
+            group_id: "team-nobody".to_owned(),
+            claimed_by: Some("admin".to_owned()),
+            separator: '/',
+        })
+        .await
+        .unwrap();
+    ns_store
+        .set_visibility("local-jbm", "org.demo.secret", Visibility::Team)
+        .await
+        .unwrap();
+
+    let ids = |token: &'static str| {
+        TestRequest::get()
+            .uri("/proxy/local-jbm/files/pluginsXMLIds.json")
+            .insert_header(("Authorization", bearer(token)))
+            .to_request()
+    };
+    let body: Value = read_body_json(call_service(&app, ids(USER_TOKEN)).await).await;
+    assert_eq!(body, serde_json::json!(["org.demo.public"]));
+    let body: Value = read_body_json(call_service(&app, ids(ADMIN_TOKEN)).await).await;
+    assert_eq!(
+        body,
+        serde_json::json!(["org.demo.public", "org.demo.secret"])
+    );
+}

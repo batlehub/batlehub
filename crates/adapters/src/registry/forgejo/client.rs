@@ -80,6 +80,9 @@ impl ForgejoRegistryClient {
             }
             if with_auth {
                 b = b.default_headers(headers.clone());
+            } else if no_redirect {
+                // The download `plain` client: only ever off-origin hops.
+                b = super::super::ssrf::public_only_dns(b, opts);
             }
             apply_upstream_tls(b, opts)
                 .map_err(CoreError::Other)?

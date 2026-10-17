@@ -266,6 +266,7 @@ pub async fn package_detail(
         blocked_only: false,
         limit: 200,
         offset: 0,
+        viewer: None,
     };
     let summaries = admin_svc
         .list_packages(filter)

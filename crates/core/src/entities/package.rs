@@ -196,6 +196,10 @@ pub struct PackageFilter {
     pub blocked_only: bool,
     pub limit: u64,
     pub offset: u64,
+    /// Package-level visibility gate, for a listing a non-admin caller reads.
+    /// `None` is no gate — the back-office listings, which are already behind
+    /// `packages:read`. See [`ExploreViewer`](crate::entities::ExploreViewer).
+    pub viewer: Option<crate::entities::ExploreViewer>,
 }
 
 impl PackageFilter {

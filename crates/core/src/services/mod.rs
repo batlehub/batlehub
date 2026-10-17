@@ -75,10 +75,12 @@ pub use hot_config::{
 pub use integrity::{sha1_hex, verify as verify_checksum, ChecksumAlgo, IntegrityOutcome};
 pub use local_registry::{
     artifact_storage_key, build_in_range, has_traversal_after_decoding, maven_artifact_storage_key,
-    nix_nar_storage_key, nix_narinfo_storage_key, terraform_provider_binary_storage_key,
-    validate_coordinate, validate_package_name, validate_path_safe, JetbrainsPluginVersion,
-    LocalRegistryService, NixPublishRequest, OpenVsxExtensionVersion, PublishPolicyRequest,
-    PublishRequest, TerraformPlatform, COMPOSER_DIST_SHA1,
+    nix_nar_storage_key, nix_narinfo_storage_key, stores_files_under_version,
+    terraform_provider_binary_storage_key, validate_coordinate, validate_package_name,
+    validate_path_safe, validate_path_segment, validate_publish_coordinate,
+    validate_terraform_platform, JetbrainsPluginVersion, LocalRegistryService, NixPublishRequest,
+    OpenVsxExtensionVersion, PublishPolicyRequest, PublishRequest, TerraformPlatform,
+    COMPOSER_DIST_SHA1, SIGNATURE_SUFFIX, VERSION_SIBLING_SUFFIXES,
 };
 pub use metrics::ProxyMetrics;
 pub use proxy::{ProxyRequest, ProxyResponse, ProxyService, StreamedIndex};

@@ -68,6 +68,7 @@ pub async fn jbm_plugins_xml_ids(
     mode_map: web::Data<RegistryModeMap>,
     upstream_map: web::Data<UpstreamMap>,
     client: web::Data<reqwest::Client>,
+    identity: AuthIdentity,
 ) -> Result<impl Responder, AppError> {
     let registry = path.into_inner();
     require_jbm(&registry, &map)?;
@@ -87,9 +88,10 @@ pub async fn jbm_plugins_xml_ids(
         .await;
     }
 
+    // Only the plugins this caller may read: the local half names private
+    // plugins, which the upstream half never does.
     let mut ids: Vec<String> = local_svc
-        .backend
-        .list_package_names(&registry)
+        .get_jetbrains_plugin_ids(&registry, &identity)
         .await
         .map_err(AppError::from)?;
 

@@ -217,6 +217,32 @@ impl OwnershipGrants {
 
 #[async_trait]
 impl OwnershipPort for OwnershipGrants {
+    async fn claim_if_unowned(
+        &self,
+        registry: &str,
+        package: &str,
+        user_id: &str,
+    ) -> Result<bool, CoreError> {
+        let claimed = self
+            .inner
+            .claim_if_unowned(registry, package, user_id)
+            .await?;
+        if claimed {
+            if let Err(e) = self
+                .project_add(
+                    registry,
+                    package,
+                    SubjectMatcher::User(user_id.to_owned()),
+                    Some(user_id.to_owned()),
+                )
+                .await
+            {
+                Self::warn("claim_if_unowned", registry, package, &e);
+            }
+        }
+        Ok(claimed)
+    }
+
     async fn initialize_owner(
         &self,
         registry: &str,

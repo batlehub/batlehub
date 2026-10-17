@@ -16,7 +16,7 @@
 //!   URL stays on the configured instance origin (blocks credential exfiltration
 //!   across redirects).
 
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use batlehub_core::error::CoreError;
 use reqwest::header::LOCATION;
@@ -27,38 +27,84 @@ use super::http_client::same_origin;
 const MAX_REDIRECTS: usize = 5;
 
 /// Is `v4` in a range an upstream-supplied URL must never be allowed to target?
+///
+/// Everything IANA's special-purpose registry marks as not globally reachable,
+/// plus multicast. `fuzz/fuzz_targets/fuzz_ssrf_ip.rs` holds an independent
+/// CIDR table and checks this function against it in both directions.
 fn is_blocked_v4(v4: Ipv4Addr) -> bool {
     let o = v4.octets();
     v4.is_loopback()            // 127.0.0.0/8
         || v4.is_private()      // 10/8, 172.16/12, 192.168/16
         || v4.is_link_local()   // 169.254.0.0/16 (incl. cloud metadata)
-        || v4.is_broadcast()    // 255.255.255.255
-        || v4.is_unspecified()  // 0.0.0.0
-        || v4.is_documentation()
+        || v4.is_documentation() // 192.0.2/24, 198.51.100/24, 203.0.113/24
         || o[0] == 0                                   // 0.0.0.0/8 "this network"
         || (o[0] == 100 && (o[1] & 0xc0) == 64)        // CGNAT 100.64.0.0/10
+        || (o[0] == 192 && o[1] == 0 && o[2] == 0)     // IETF protocol assignments 192.0.0.0/24
+        || (o[0] == 192 && o[1] == 88 && o[2] == 99)   // 6to4 relay anycast 192.88.99.0/24
         || (o[0] == 198 && (o[1] & 0xfe) == 18)        // benchmarking 198.18.0.0/15
-        || o[0] >= 240 // reserved 240.0.0.0/4
+        || o[0] >= 224 // multicast 224/4, reserved 240/4, broadcast
+}
+
+/// The IPv4 address embedded in `v6`, when `v6` is a form that some stack on
+/// the path would turn into a packet to that IPv4 host.
+///
+/// - `::ffff:a.b.c.d` (mapped) and `::a.b.c.d` (compatible, which also covers
+///   `::` and `::1`) — the host's own stack;
+/// - `64:ff9b::a.b.c.d` — the well-known NAT64 prefix (RFC 6052): any network
+///   with a NAT64 gateway delivers it to the v4 host;
+/// - `2002:aabb:ccdd::/48` — 6to4 (RFC 3056), the v4 address in bits 16..48.
+fn embedded_v4(v6: Ipv6Addr) -> Option<Ipv4Addr> {
+    let seg = v6.segments();
+    let low32 = || {
+        Ipv4Addr::new(
+            (seg[6] >> 8) as u8,
+            seg[6] as u8,
+            (seg[7] >> 8) as u8,
+            seg[7] as u8,
+        )
+    };
+    if let Some(v4) = v6.to_ipv4() {
+        return Some(v4);
+    }
+    if seg[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
+        return Some(low32());
+    }
+    if seg[0] == 0x2002 {
+        return Some(Ipv4Addr::new(
+            (seg[1] >> 8) as u8,
+            seg[1] as u8,
+            (seg[2] >> 8) as u8,
+            seg[2] as u8,
+        ));
+    }
+    None
 }
 
 /// Is `ip` an address an upstream-supplied URL must never be allowed to target?
-fn is_blocked_ip(ip: IpAddr) -> bool {
+///
+/// The one rule: IP literals in a URL and every address DNS returns for a host
+/// both go through it (see [`ensure_public_url`]).
+pub fn is_blocked_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => is_blocked_v4(v4),
         IpAddr::V6(v6) => {
-            // An IPv4-mapped (`::ffff:a.b.c.d`) or IPv4-compatible (`::a.b.c.d`)
-            // address is really the v4 host — check it as such so neither
-            // `::ffff:169.254.169.254` nor `::169.254.169.254` can slip through.
-            // `to_ipv4()` covers both forms (it is broader than
-            // `to_ipv4_mapped()`); native IPv6 addresses fall through unchanged.
-            if let Some(v4) = v6.to_ipv4() {
+            // A form that reaches an IPv4 host is that host: neither
+            // `::ffff:169.254.169.254` nor `64:ff9b::a9fe:a9fe` may slip through.
+            if let Some(v4) = embedded_v4(v6) {
                 return is_blocked_v4(v4);
             }
             let seg = v6.segments();
-            v6.is_loopback()                       // ::1
-                || v6.is_unspecified()             // ::
-                || (seg[0] & 0xfe00) == 0xfc00     // unique-local fc00::/7
-                || (seg[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
+            (seg[0] & 0xfe00) == 0xfc00                 // unique-local fc00::/7
+                || (seg[0] & 0xffc0) == 0xfe80          // link-local fe80::/10
+                || (seg[0] & 0xffc0) == 0xfec0          // site-local fec0::/10 (deprecated)
+                || (seg[0] & 0xff00) == 0xff00          // multicast ff00::/8
+                || seg[..4] == [0x100, 0, 0, 0]         // discard-only 100::/64
+                || (seg[0] == 0x64 && seg[1] == 0xff9b && seg[2] == 1) // local-use NAT64 64:ff9b:1::/48
+                || (seg[0] == 0x2001 && seg[1] < 0x200) // IETF protocol assignments 2001::/23 (Teredo, ORCHID, benchmarking…)
+                || (seg[0] == 0x2001 && seg[1] == 0xdb8) // documentation 2001:db8::/32
+                || (seg[0] == 0x3fff && seg[1] < 0x1000) // documentation 3fff::/20
+                || seg[0] == 0x5f00                     // SRv6 SIDs 5f00::/16
+                || seg[0] < 0x100 // reserved ::/8 beyond the v4 forms above
         }
     }
 }
@@ -78,8 +124,14 @@ pub async fn ensure_public_url(url: &reqwest::Url) -> Result<(), CoreError> {
         CoreError::Registry(format!("refusing to fetch upstream URL '{url}': no host"))
     })?;
 
-    // IP literal: check directly, no DNS.
-    if let Ok(ip) = host.parse::<IpAddr>() {
+    // IP literal: check directly, no DNS. `host_str()` spells an IPv6 literal
+    // with its brackets, which `IpAddr` does not parse — without the strip,
+    // `[::1]` fell through to a DNS lookup instead of this check.
+    let literal = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    if let Ok(ip) = literal.parse::<IpAddr>() {
         return if is_blocked_ip(ip) {
             Err(blocked_error(url))
         } else {
@@ -107,6 +159,60 @@ pub async fn ensure_public_url(url: &reqwest::Url) -> Result<(), CoreError> {
         )));
     }
     Ok(())
+}
+
+/// A resolver that only ever hands the connector public addresses.
+///
+/// [`ensure_public_url`] resolves the host to decide, and reqwest resolves it
+/// *again* to connect: a TTL-0 record can answer public to the first lookup and
+/// `169.254.169.254` to the second (DNS rebinding). With this resolver on the
+/// client, the second lookup is filtered by the same [`is_blocked_ip`], so what
+/// is dialled is what was checked. IP-literal hosts never reach a resolver and
+/// are decided by `ensure_public_url` alone, which cannot be rebound.
+struct PublicOnlyResolver;
+
+impl reqwest::dns::Resolve for PublicOnlyResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            let host = name.as_str().to_owned();
+            let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
+                .await?
+                .filter(|a| !is_blocked_ip(a.ip()))
+                .collect();
+            if addrs.is_empty() {
+                return Err(format!("'{host}' resolves to no public address (SSRF guard)").into());
+            }
+            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+/// Mount [`PublicOnlyResolver`] on a client that only ever dials
+/// upstream-supplied, off-origin URLs — the `plain` half of a redirect-walking
+/// pair. Never on a client that also talks to the configured upstream: a
+/// private upstream is a legitimate deployment.
+///
+/// Skipped when an egress proxy is in play (configured, or from the
+/// environment, which reqwest reads by default): the connector then resolves
+/// the proxy, not the target, and an internal proxy is the normal case.
+pub fn public_only_dns(
+    builder: reqwest::ClientBuilder,
+    opts: &super::http_client::UpstreamHttpOptions,
+) -> reqwest::ClientBuilder {
+    let env_proxy = [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ]
+    .iter()
+    .any(|v| std::env::var_os(v).is_some_and(|x| !x.is_empty()));
+    if opts.proxy_url.is_some() || env_proxy {
+        return builder;
+    }
+    builder.dns_resolver(std::sync::Arc::new(PublicOnlyResolver))
 }
 
 /// Fetch `start` with `credentialed` client, following up to [`MAX_REDIRECTS`]
@@ -218,6 +324,16 @@ pub async fn fetch_following_redirects_trusting(
 mod tests {
     use super::*;
 
+    /// The connect-time lookup is filtered too, so a name that resolves
+    /// internally is refused however it answered the check before it.
+    #[tokio::test]
+    async fn the_connect_time_resolver_hands_out_no_internal_address() {
+        use reqwest::dns::Resolve;
+        use std::str::FromStr;
+        let name = reqwest::dns::Name::from_str("localhost").unwrap();
+        assert!(PublicOnlyResolver.resolve(name).await.is_err());
+    }
+
     #[test]
     fn blocks_ipv4_private_reserved_and_metadata() {
         for ip in [
@@ -261,6 +377,87 @@ mod tests {
             assert!(is_blocked_ip(ip.parse().unwrap()), "{ip} must be blocked");
         }
         assert!(!is_blocked_ip("2606:4700:4700::1111".parse().unwrap()));
+    }
+
+    #[test]
+    fn blocks_the_v4_ranges_the_first_table_missed() {
+        for ip in [
+            "224.0.0.1",       // multicast
+            "239.255.255.250", // SSDP multicast
+            "192.0.0.170",     // IETF protocol assignments 192.0.0.0/24
+            "192.88.99.1",     // 6to4 relay anycast
+            "198.51.100.7",    // TEST-NET-2
+            "203.0.113.9",     // TEST-NET-3
+        ] {
+            assert!(is_blocked_ip(ip.parse().unwrap()), "{ip} must be blocked");
+        }
+        for ip in ["223.255.255.255", "192.0.1.1", "192.88.98.1", "198.20.0.1"] {
+            assert!(!is_blocked_ip(ip.parse().unwrap()), "{ip} must be allowed");
+        }
+    }
+
+    #[test]
+    fn nat64_and_6to4_are_classified_by_the_v4_host_they_reach() {
+        for ip in [
+            "64:ff9b::a9fe:a9fe", // NAT64 → 169.254.169.254
+            "64:ff9b::7f00:1",    // NAT64 → 127.0.0.1
+            "64:ff9b:1::808:808", // local-use NAT64 prefix, blocked whole
+            "2002:a9fe:a9fe::1",  // 6to4 → 169.254.169.254
+            "2002:0a00:0001::",   // 6to4 → 10.0.0.1
+        ] {
+            assert!(is_blocked_ip(ip.parse().unwrap()), "{ip} must be blocked");
+        }
+        for ip in ["64:ff9b::808:808", "2002:808:808::1"] {
+            assert!(
+                !is_blocked_ip(ip.parse().unwrap()),
+                "{ip} reaches 8.8.8.8, allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn blocks_the_non_global_v6_ranges() {
+        for ip in [
+            "fec0::1", // site-local
+            "ff02::1", // multicast
+            "ff0e::1",
+            "100::1",             // discard-only
+            "2001::1",            // Teredo
+            "2001:0:4136:e378::", // Teredo
+            "2001:2::1",          // benchmarking
+            "2001:db8::1",        // documentation
+            "3fff::1",            // documentation (RFC 9637)
+            "5f00::1",            // SRv6
+            "::1:0:0:1",          // reserved ::/8
+        ] {
+            assert!(is_blocked_ip(ip.parse().unwrap()), "{ip} must be blocked");
+        }
+        for ip in [
+            "2001:200::1",
+            "2a00:1450::1",
+            "100:0:0:1::1",
+            "3ff0::102a",
+            "3fff:1000::1",
+        ] {
+            assert!(!is_blocked_ip(ip.parse().unwrap()), "{ip} must be allowed");
+        }
+    }
+
+    #[tokio::test]
+    async fn ensure_public_url_checks_a_bracketed_ipv6_literal_without_dns() {
+        for url in [
+            "http://[::1]/",
+            "http://[fd00::1]:8080/x",
+            "http://[::ffff:a9fe:a9fe]/",
+        ] {
+            let err = ensure_public_url(&reqwest::Url::parse(url).unwrap())
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("SSRF guard"), "{url}: {err}");
+        }
+        let public = reqwest::Url::parse("http://[2606:4700:4700::1111]/").unwrap();
+        assert!(ensure_public_url(&public).await.is_ok());
     }
 
     #[tokio::test]

@@ -1069,8 +1069,9 @@ detection with depth / monorepo / hidden-dir handling), `setup ide`, and
 
 ## 10. Fuzz targets
 
-`fuzz/fuzz_targets/` (libfuzzer, `task fuzz`) — all fuzz `batlehub-core` domain
-logic:
+`fuzz/fuzz_targets/` (libfuzzer, `task fuzz`) — `batlehub-core` domain logic,
+and the `batlehub-adapters` parsers that read untrusted bytes (repo packages,
+gems, archives, SSRF ranges):
 
 - `fuzz_rbac_evaluate.rs` — `RbacRule` against a reference model built from
   `expand_patterns`: the decision matches the model for all three roles at
@@ -1078,13 +1079,18 @@ logic:
   never revokes one.
 - `fuzz_deny_latest.rs` — `DenyLatestRule`; asserts only the exact string
   `"latest"` denies (unicode homoglyphs / whitespace must neither bypass nor
-  over-block), and that a role in the bypass list is let through.
+  over-block), and that a role at or above any listed bypass role is let through.
 - `fuzz_release_age.rs` — `ReleaseAgeGateRule` (durations capped at one year),
   with and without a publish date and under both `deny_missing_timestamp`
-  settings. The rule reads the clock itself, so the oracle brackets the call
+  settings, with any subset of bypass roles (at or above one is let through).
+  The rule reads the clock itself, so the oracle brackets the call
   with two readings and only decides when both agree.
-- `fuzz_package_id_cache_key.rs` — `PackageId` cache-key generation is
-  deterministic and always contains the registry component.
+- `fuzz_storage_keys.rs` — every storage-key family (npm/openvsx rows, Maven
+  POM and file, Terraform module/provider/binary, Nix row/NAR/narinfo), each
+  coordinate passed through its own edge validation: equal keys mean the same
+  coordinate, no key equals another's `.sigzip` sibling, and a version's
+  delete prefix covers only that version. Also `PackageId::cache_key`
+  (deterministic, carries its registry, injective at equal segment counts).
 - `fuzz_path_safe.rs` — the traversal guard every storage key goes through
   (`validate_coordinate`, `validate_package_name`): whatever it accepts builds a
   key with no `..` segment at any percent-decoding depth, no NUL, no backslash,
@@ -1105,7 +1111,7 @@ logic:
   a canary directory beside it, the bytes and entries on disk never exceed
   the policy, the report matches the disk, and a refusal leaves the tree
   within budget too.
-- `fuzz_sbom_extract.rs` — the ten SBOM extractors (RFC 0007 §5.2) over
+- `fuzz_sbom_extract.rs` — the eleven SBOM extractors (RFC 0007 §5.2) over
   archives whose members carry the manifest names and bodies each parser
   looks for, cut and corrupted, plus a gem's tar-in-tar: for every registry
   kind the call returns a manifest, never panics, answers the same input the
@@ -1153,7 +1159,23 @@ logic:
 - `fuzz_image_host.rs` — `image_host_allowed`, the README image allow-list that
   gates an outbound fetch: the URL is built *from* a chosen host (user-info,
   port, path, query, fragment, case-shuffled scheme, embedded tabs) and the
-  answer must match the rule restated over that host.
+  answer must match the rule restated over that host, plus a differential:
+  whatever it admits, the host hyper dials (the `http::Uri` reqwest hands the
+  connector) satisfies the same rule.
+- `fuzz_repo_publish.rs` — deb/pacman/apk/rpm upload parsing through each
+  handler's own coordinate check: the pool path and file names stay single
+  segments, the file layout is injective, the apk name round-trips.
+- `fuzz_repo_index_render.rs` — rpm `primary`/`filelists`/`other.xml` parse as
+  XML 1.0 and return the fields; deb `Packages` stanzas and pacman `desc`
+  entries read back field for field.
+- `fuzz_ssrf_ip.rs` — `is_blocked_ip` against an independent CIDR table, both
+  ways, with NAT64/6to4/mapped/compatible IPv6 judged by the IPv4 they carry.
+- `fuzz_gem_compact_index.rs` — a real `.gem` built from fuzzed fields, stored
+  as publish does, read back from `/info`: one line per version, fields
+  intact, no field carrying a delimiter.
+- `fuzz_narinfo.rs` — narinfo round-trips, the fingerprint decodes back to
+  exactly what the narinfo claims, re-signing leaves one valid `Sig`, and
+  `rewrite_url` never moves the fingerprint.
 
 **A target is only as good as its oracle.** The nightly job that runs these had
 never got past cargo-fuzz's default build target until 2026-09-10 (see the
@@ -1177,8 +1199,15 @@ seconds on the nightly schedule and uploads any crash artefact.
 
 Running one locally needs the nightly toolchain and `cargo-fuzz`. If a run
 produces a **0-byte** `crash-da39a3ee…` artefact, that is LeakSanitizer failing
-to start under a restricted `ptrace_scope`, not a finding — re-run with
-`ASAN_OPTIONS=detect_leaks=0`.
+to start under a restricted `ptrace_scope`, not a finding — `task fuzz` sets
+`ASAN_OPTIONS=detect_leaks=0` for that reason; set it yourself when calling
+`cargo fuzz` directly.
+
+`fuzz/dicts/<target>.dict`, when it exists, is that target's libFuzzer
+dictionary; `task fuzz` and the nightly job both pass it. The nightly job also
+keeps `fuzz/corpus/` between runs (one `actions/cache` entry, minimised with
+`cargo fuzz cmin` before it is saved), so each night starts where the last one
+stopped.
 
 ---
 

@@ -163,8 +163,13 @@ impl StorageBackend for MemStore {
     async fn delete(&self, key: &str) -> Result<bool, CoreError> {
         Ok(self.data.lock().unwrap().remove(key).is_some())
     }
-    async fn delete_by_prefix(&self, _: &str) -> Result<usize, CoreError> {
-        Ok(0)
+    /// Really deletes, for the same reason `list_keys` really lists: the
+    /// lifecycle's prefix delete is what a version delete is tested on.
+    async fn delete_by_prefix(&self, prefix: &str) -> Result<usize, CoreError> {
+        let mut data = self.data.lock().unwrap();
+        let before = data.len();
+        data.retain(|k, _| !k.starts_with(prefix));
+        Ok(before - data.len())
     }
     async fn stat_by_prefix(&self, _: &str) -> Result<(u64, u64), CoreError> {
         Ok((0, 0))

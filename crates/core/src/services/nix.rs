@@ -344,9 +344,17 @@ impl NarInfo {
     /// value starts **two** characters later — it does not trim, so the single
     /// space after the colon is part of the grammar and not whitespace to be
     /// tolerant about. A line without a colon is a hard error there and here.
+    ///
+    /// Lines are cut on `\n` alone, as Nix cuts them: a `\r` stays in the value
+    /// (and fails the field checks below where it matters) rather than being
+    /// eaten on read and lost on [`Self::to_wire`].
+    ///
+    /// The fields [`fingerprint`] covers are checked against Nix's own grammar
+    /// — see [`check_fingerprint_fields`] — because the fingerprint joins them
+    /// with `;` and `,` and a value carrying either re-cuts it.
     pub fn parse(text: &str) -> Result<Self, CoreError> {
         let mut lines = Vec::new();
-        for raw in text.lines() {
+        for raw in text.split('\n') {
             if raw.is_empty() {
                 continue;
             }
@@ -368,7 +376,9 @@ impl NarInfo {
             };
             lines.push((raw[..colon].to_owned(), value.to_owned()));
         }
-        Ok(Self { lines })
+        let info = Self { lines };
+        check_fingerprint_fields(&info)?;
+        Ok(info)
     }
 
     /// The first value for `name`, if the document has one.
@@ -484,6 +494,63 @@ impl NarInfo {
     }
 }
 
+/// Refuse a narinfo whose fingerprinted fields are outside Nix's grammar.
+///
+/// [`fingerprint`] is `1;{StorePath};{NarHash};{NarSize};{refs joined by ,}`,
+/// so it is injective only while no field can carry `;` and no reference `,`.
+/// Nix guarantees that on its side by parsing each field (`parseStorePath`,
+/// `Hash::parseAnyPrefixed`) before printing it; this did not, and copied the
+/// store directory, `NarHash` and every `References:` token verbatim — so two
+/// different narinfos could share one fingerprint, and a `Sig:` over one would
+/// verify the other. Every rule here is one Nix already enforces, so nothing a
+/// Nix client would accept is refused:
+///
+/// - `StorePath:` — [`StorePath::parse`], and its store directory absolute and
+///   made of path characters;
+/// - each `References:` token — a bare `{hash}-{name}`;
+/// - `NarHash:` — `{algo}:{digest}` or SRI `{algo}-{digest}`, the digest in
+///   the Nix32/hex/base64 alphabets.
+fn check_fingerprint_fields(info: &NarInfo) -> Result<(), CoreError> {
+    let bad = |field: &str, value: &str| {
+        CoreError::InvalidInput(format!(
+            "corrupt NAR info file: '{field}' is '{}', which Nix would not parse",
+            value.escape_debug()
+        ))
+    };
+    if let Some(raw) = info.get("StorePath") {
+        let path = StorePath::parse(raw)?;
+        if let Some(dir) = &path.store_dir {
+            let ok = dir.starts_with('/')
+                && dir.bytes().all(|b| {
+                    b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'+' | b'-')
+                });
+            if !ok {
+                return Err(bad("StorePath", raw));
+            }
+        }
+    }
+    for line in info.get_all("References") {
+        for base in line.split_whitespace() {
+            if base.contains('/') || StorePath::parse(base).is_err() {
+                return Err(bad("References", base));
+            }
+        }
+    }
+    if let Some(hash) = info.get("NarHash") {
+        let ok = hash.split_once([':', '-']).is_some_and(|(algo, digest)| {
+            matches!(algo, "md5" | "sha1" | "sha256" | "sha512")
+                && !digest.is_empty()
+                && digest
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='))
+        });
+        if !ok {
+            return Err(bad("NarHash", hash));
+        }
+    }
+    Ok(())
+}
+
 /// Rewrite `URL:` so the NAR request carries the store hash its coordinate is
 /// derived from, keeping upstream's file name and extension.
 ///
@@ -544,11 +611,13 @@ pub fn fingerprint(info: &NarInfo) -> Result<String, CoreError> {
         .unwrap_or_else(|| DEFAULT_STORE_DIR.to_owned());
     let nar_hash = info.get("NarHash").unwrap_or_default();
     let nar_size = info.get("NarSize").unwrap_or_default();
-    if nar_size.parse::<u64>().is_err() {
-        return Err(CoreError::InvalidInput(format!(
+    // Printed back from the number, as Nix's `std::to_string(narSize)` does:
+    // `0226848` and `+226848` parse to the size the signer printed as `226848`.
+    let nar_size = nar_size.parse::<u64>().map_err(|_| {
+        CoreError::InvalidInput(format!(
             "corrupt NAR info file: 'NarSize' is '{nar_size}', not a number"
-        )));
-    }
+        ))
+    })?;
 
     let mut refs: Vec<String> = info
         .get_all("References")
@@ -1090,5 +1159,60 @@ NarSize: 10
         // And with a store directory in front, which is the spelling a narinfo
         // carries.
         assert!(StorePath::parse(&format!("/nix/store/{base}")).is_err());
+    }
+
+    /// Two narinfos that differ in what they claim must not share a
+    /// fingerprint. Before the field checks, `;` in `NarHash` and in a
+    /// reference moved the field boundaries: these two printed the same
+    /// `1;…;sha256:h;5;/nix/store/x;6;` and a `Sig:` over one verified the
+    /// other (found by `fuzz_narinfo`).
+    #[test]
+    fn a_delimiter_in_a_fingerprinted_field_is_refused_at_parse() {
+        let head = "StorePath: /nix/store/0001npbf2n4z3pjy6vm2mw8ywkqixxs6-hello-1.0\nURL: nar/x\n";
+        for doc in [
+            // `;` inside NarHash
+            format!("{head}NarHash: sha256:h;5;/nix/store/x\nNarSize: 6\n"),
+            // `;` inside a reference
+            format!("{head}NarHash: sha256:h\nNarSize: 5\nReferences: x;6;\n"),
+            // `,` + a path inside one reference: one token reading as two
+            format!(
+                "{head}NarHash: sha256:h\nNarSize: 5\nReferences: \
+                 aaa1npbf2n4z3pjy6vm2mw8ywkqixxs6-a,/nix/store/zzz1npbf2n4z3pjy6vm2mw8ywkqixxs6-b\n"
+            ),
+            // a NarHash with no algorithm
+            format!(
+                "{head}NarHash: 075lhsj33mkk02xn3lf59xn9glvh02wkw9xislbcj1jgjlpcn79x\nNarSize: 5\n"
+            ),
+        ] {
+            assert!(NarInfo::parse(&doc).is_err(), "must be refused:\n{doc}");
+        }
+        // `;` in the store directory
+        let doc = "StorePath: /nix/a;b/0001npbf2n4z3pjy6vm2mw8ywkqixxs6-hello-1.0\n";
+        assert!(NarInfo::parse(doc).is_err());
+        // The fixtures Nix itself writes still parse.
+        assert!(NarInfo::parse(REAL_NARINFO).is_ok());
+    }
+
+    /// `NarSize` enters the fingerprint as the number, the way Nix prints it.
+    #[test]
+    fn nar_size_is_fingerprinted_as_the_number() {
+        let doc = |size: &str| {
+            format!(
+                "StorePath: /nix/store/0001npbf2n4z3pjy6vm2mw8ywkqixxs6-hello-1.0\nURL: nar/x\n\
+                 NarHash: sha256:075lhsj33mkk02xn3lf59xn9glvh02wkw9xislbcj1jgjlpcn79x\nNarSize: {size}\n"
+            )
+        };
+        let fp = |size| fingerprint(&NarInfo::parse(&doc(size)).unwrap()).unwrap();
+        assert_eq!(fp("010"), fp("10"));
+        assert!(fp("10").ends_with(";10;"));
+    }
+
+    /// A `\r` is part of the value, as in Nix, so it survives a round trip
+    /// instead of being stripped on the second read.
+    #[test]
+    fn a_carriage_return_survives_the_round_trip() {
+        let info = NarInfo::parse("Comment: a\r").unwrap();
+        assert_eq!(info.get("Comment"), Some("a\r"));
+        assert_eq!(NarInfo::parse(&info.to_wire()).unwrap(), info);
     }
 }

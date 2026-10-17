@@ -370,6 +370,43 @@ impl DocumentKind {
     /// version's for 9 of 31 stacks on `registry.devfile.io` (RFC 0035 §8).
     pub const LEGACY_INDEX: Self = Self::Secondary("legacy-index");
 
+    /// Every kind, [`Self::Versions`] first. For exhaustive consumers — the
+    /// listing-filter fuzz target drives every `(RegistryKind, DocumentKind)`
+    /// pair from it — so a new constant cannot be silently left out; the unit
+    /// test `all_lists_every_document_kind` reads this file to hold that.
+    pub const ALL: &'static [Self] = &[
+        Self::Versions,
+        Self::REGISTRATION,
+        Self::GEM,
+        Self::LATEST,
+        Self::REPODATA_SHARDS,
+        Self::CURRENT_REPODATA,
+        Self::P2_DEV,
+        Self::SIMPLE_JSON,
+        Self::COMPACT_VERSIONS,
+        Self::COMPACT_INFO,
+        Self::CHANNELDATA,
+        Self::COMPACT_NAMES,
+        Self::PROVIDER_DOWNLOAD,
+        Self::INDEX_JSON,
+        Self::SDKMAN_DEFAULT,
+        Self::SDKMAN_VERSIONS_LIST,
+        Self::MANIFEST,
+        Self::MANIFEST_ASC,
+        Self::STABLE_DATE,
+        Self::RUSTUP_RELEASE,
+        Self::COLLECTION,
+        Self::VERSION_DETAIL,
+        Self::ROLE_VERSIONS,
+        Self::ROLE,
+        Self::NARINFO,
+        Self::CACHE_INFO,
+        Self::REALISATION,
+        Self::BUILD_LOG,
+        Self::RELAYED,
+        Self::LEGACY_INDEX,
+    ];
+
     /// The cache-key and log discriminant.
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -672,6 +709,27 @@ pub trait RegistryClient: Send + Sync {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+
+    /// `DocumentKind::ALL` names every constant declared in this file, and no
+    /// two kinds share a discriminant — the discriminant is the cache key, so
+    /// a collision would serve one document under the other's URL.
+    #[test]
+    fn all_lists_every_document_kind() {
+        let declared: Vec<&str> = include_str!("client.rs")
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("pub const "))
+            .filter_map(|l| l.split_once(": Self = Self::Secondary(\""))
+            .map(|(_, rest)| rest.split('"').next().unwrap())
+            .collect();
+        assert!(declared.len() > 20, "the source scan found {declared:?}");
+        let all: Vec<&str> = DocumentKind::ALL.iter().map(DocumentKind::as_str).collect();
+        for d in &declared {
+            assert!(all.contains(d), "DocumentKind::ALL is missing {d:?}");
+        }
+        assert_eq!(all.len(), declared.len() + 1, "ALL is {all:?}");
+        let unique: std::collections::HashSet<_> = all.iter().collect();
+        assert_eq!(unique.len(), all.len(), "duplicate discriminant in {all:?}");
+    }
 
     struct MinimalClient;
 

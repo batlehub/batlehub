@@ -268,3 +268,34 @@ summary: s
     assert_eq!(meta.dependencies[0].name, "thor");
     assert_eq!(meta.dependencies[0].requirement, "");
 }
+
+/// A gemspec field that would re-cut a compact-index line is refused at parse
+/// time, before anything is stored (found by `fuzz_gem_compact_index`).
+#[cfg(feature = "local-registry")]
+#[test]
+fn a_field_carrying_a_compact_index_delimiter_is_refused() {
+    let gem = |name: &str, version: &str, dep: &str, op: &str, req: &str| {
+        format!(
+            "--- !ruby/object:Gem::Specification\nname: {name}\nversion: !ruby/object:Gem::Version\n  version: {version}\nplatform: ruby\ndependencies:\n- !ruby/object:Gem::Dependency\n  name: {dep}\n  requirement: !ruby/object:Gem::Requirement\n    requirements:\n    - - \"{op}\"\n      - !ruby/object:Gem::Version\n        version: '{req}'\n  type: :runtime\n"
+        )
+    };
+    assert!(parse_gem_yaml(&gem("ok", "1.0.0", "rake", "~>", "13.0")).is_ok());
+    for (name, version, dep, op, req) in [
+        ("ok", "1.0.0", "x|checksum:00", "~>", "13.0"),
+        ("ok", "1.0.0", "a,evil", "~>", "13.0"),
+        ("ok", "1.0.0", "a:b", "~>", "13.0"),
+        ("ok", "1.0.0", "a b", "~>", "13.0"),
+        ("ok", "1.0.0", "rake", "~>", "13.0|checksum:00"),
+        ("ok", "1.0.0", "rake", "~>", "1,evil:0"),
+        ("ok", "1.0.0", "rake", "~> 1&", "0"),
+        ("ok", "1.0.0", "rake", "=~", "1"),
+        ("ok", "1.0 x", "rake", "~>", "13.0"),
+        ("ok", "1.0|x", "rake", "~>", "13.0"),
+        ("o|k", "1.0.0", "rake", "~>", "13.0"),
+    ] {
+        assert!(
+            parse_gem_yaml(&gem(name, version, dep, op, req)).is_err(),
+            "{name} {version} {dep} {op} {req} must be refused"
+        );
+    }
+}

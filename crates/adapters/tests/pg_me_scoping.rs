@@ -339,3 +339,33 @@ async fn list_owned_by_is_empty_for_an_anonymous_caller() {
         .unwrap()
         .is_empty());
 }
+
+/// Two first publishers racing for one unowned package: exactly one claim
+/// lands, whatever the interleaving (the advisory lock is what makes the
+/// `NOT EXISTS` hold under READ COMMITTED).
+#[tokio::test]
+async fn concurrent_claims_on_an_unowned_package_leave_one_owner() {
+    let Some(url) = db_url() else {
+        eprintln!("skipping: DATABASE_URL not set");
+        return;
+    };
+    let ctx = make_ctx(&url).await;
+    let reg = ctx.reg();
+    let users: Vec<String> = (0..8).map(|i| ctx.user(&format!("racer{i}"))).collect();
+    let claims = futures::future::join_all(
+        users
+            .iter()
+            .map(|u| ctx.ownership.claim_if_unowned(&reg, "contested", u)),
+    )
+    .await;
+    let won = claims.into_iter().filter(|r| *r.as_ref().unwrap()).count();
+    assert_eq!(won, 1);
+    assert_eq!(
+        ctx.ownership
+            .list_owners(&reg, "contested")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}

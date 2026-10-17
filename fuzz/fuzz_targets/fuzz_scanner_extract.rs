@@ -22,6 +22,13 @@
 //! rarely hit by chance, but a truncated or corrupt member is), half are tar,
 //! tar.gz and zip archives assembled from fuzzed entries, which is what
 //! reaches the interesting branches.
+//!
+//! A tar is built one of two ways, chosen per input. The tidy way goes through
+//! `Header::set_path` and `append_data`, which *refuse* a `..` component or an
+//! absolute path — so every hostile name in `name()` used to be dropped before
+//! the reader ever saw it, and property 1 held vacuously for tar. The raw way
+//! writes the name and link-name bytes straight into the header fields and
+//! appends with `append`, which is what a hostile publisher's own tool does.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -77,9 +84,44 @@ fn entries(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Vec<Entry>>
     Ok(out)
 }
 
-fn tar_bytes(entries: &[Entry], gz: bool) -> Vec<u8> {
+/// Append one entry with `name` and `link` written raw into the old-style
+/// header fields, so nothing cleans or refuses them on the way in. Bytes past
+/// a field's 100 are dropped, and a NUL ends the name where the reader will
+/// end it.
+fn append_raw(
+    builder: &mut tar::Builder<Vec<u8>>,
+    kind: tar::EntryType,
+    name: &str,
+    link: &str,
+    data: &[u8],
+) {
+    let mut h = tar::Header::new_gnu();
+    let old = h.as_old_mut();
+    let n = name.len().min(old.name.len());
+    old.name[..n].copy_from_slice(&name.as_bytes()[..n]);
+    let l = link.len().min(old.linkname.len());
+    old.linkname[..l].copy_from_slice(&link.as_bytes()[..l]);
+    h.set_entry_type(kind);
+    h.set_mode(0o644);
+    h.set_mtime(0);
+    h.set_size(data.len() as u64);
+    h.set_cksum();
+    let _ = builder.append(&h, data);
+}
+
+fn tar_bytes(entries: &[Entry], gz: bool, raw: bool) -> Vec<u8> {
     let mut builder = tar::Builder::new(Vec::new());
     for e in entries {
+        if raw {
+            let (kind, name, link, data): (_, &str, &str, &[u8]) = match e {
+                Entry::File { name, data } => (tar::EntryType::Regular, name, "", data),
+                Entry::Dir { name } => (tar::EntryType::Directory, name, "", &[]),
+                Entry::Symlink { name, target } => (tar::EntryType::Symlink, name, target, &[]),
+                Entry::HardLink { name, target } => (tar::EntryType::Link, name, target, &[]),
+            };
+            append_raw(&mut builder, kind, name, link, data);
+            continue;
+        }
         let mut h = tar::Header::new_gnu();
         h.set_mode(0o644);
         h.set_mtime(0);
@@ -153,6 +195,42 @@ fn zip_bytes(entries: &[Entry]) -> Vec<u8> {
     w.finish().map(|c| c.into_inner()).unwrap_or_default()
 }
 
+/// The regular members of a tar or tar.gz, as normalised paths — `None` when
+/// the bytes are not a tar this can list.
+///
+/// Normalised the way any extractor must (`\\` as `/`, `.` dropped), so two
+/// members that land on one file read as one path. A later member then
+/// *overwrites* the earlier: the report has counted both writes and the disk
+/// holds one file. That is what the fuzzer found first once raw names reached
+/// the reader — two `deep/x/x/…` names that became identical when truncated to
+/// the header's 100 bytes — and it is a property of tar, not a leak: the
+/// budget charged both writes, so the report stays an upper bound.
+fn regular_members(archive: &[u8]) -> Option<Vec<PathBuf>> {
+    let raw = if archive.starts_with(&[0x1f, 0x8b]) {
+        let mut out = Vec::new();
+        std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(archive), &mut out).ok()?;
+        out
+    } else {
+        archive.to_vec()
+    };
+    let mut a = tar::Archive::new(&raw[..]);
+    let mut out = Vec::new();
+    for e in a.entries().ok()? {
+        let e = e.ok()?;
+        use tar::EntryType::{Continuous, GNUSparse, Regular};
+        if matches!(e.header().entry_type(), Regular | Continuous | GNUSparse) {
+            let p = String::from_utf8_lossy(&e.path_bytes()).replace('\\', "/");
+            out.push(
+                Path::new(&p)
+                    .components()
+                    .filter(|c| matches!(c, std::path::Component::Normal(_)))
+                    .collect(),
+            );
+        }
+    }
+    Some(out)
+}
+
 /// Every path under `root` resolves inside `root`; nothing under `canary`.
 fn check_tree(root: &Path, canary: &Path) -> (u64, u64) {
     let real_root = std::fs::canonicalize(root).expect("the root exists");
@@ -218,10 +296,13 @@ fuzz_target!(|data: &[u8]| {
         max_ratio,
     };
 
+    let Ok(raw) = u.arbitrary::<bool>() else {
+        return;
+    };
     let archive: Vec<u8> = match shape {
         0 => u.bytes(u.len()).map(<[u8]>::to_vec).unwrap_or_default(),
-        1 => tar_bytes(&entries(&mut u).unwrap_or_default(), false),
-        2 => tar_bytes(&entries(&mut u).unwrap_or_default(), true),
+        1 => tar_bytes(&entries(&mut u).unwrap_or_default(), false, raw),
+        2 => tar_bytes(&entries(&mut u).unwrap_or_default(), true, raw),
         _ => zip_bytes(&entries(&mut u).unwrap_or_default()),
     };
 
@@ -245,14 +326,27 @@ fuzz_target!(|data: &[u8]| {
                 report.files + report.directories,
                 policy.max_entries
             );
-            assert_eq!(
-                report.files, files,
-                "the report's file count is not what is on disk"
+            // The report is an upper bound on the disk always, and exact
+            // whenever no two tar members land on the same file (see
+            // `regular_members` for why an overwrite is not a finding).
+            assert!(
+                files <= report.files && bytes <= report.bytes,
+                "the disk holds more than the report says: {files} files / {bytes} bytes \
+                 against {report:?}"
             );
-            assert_eq!(
-                report.bytes, bytes,
-                "the report's byte count is not what is on disk"
-            );
+            if let Some(members) = regular_members(&archive) {
+                let distinct: std::collections::HashSet<_> = members.iter().collect();
+                if distinct.len() == members.len() {
+                    assert_eq!(
+                        report.files, files,
+                        "the report's file count is not what is on disk ({members:?})"
+                    );
+                    assert_eq!(
+                        report.bytes, bytes,
+                        "the report's byte count is not what is on disk ({members:?})"
+                    );
+                }
+            }
         }
         Err(_) => {
             // Refused: whatever was written before the refusal still obeys

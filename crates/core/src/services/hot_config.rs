@@ -52,7 +52,7 @@ pub struct IntegrityPolicy {
     /// A mismatch is never bypassable — it means the bytes are wrong.
     pub block_on_mismatch: bool,
     /// When the upstream provides no usable checksum, block the download unless
-    /// the caller holds one of `bypass_roles`. When `false` (default), a missing
+    /// the caller clears `bypass_roles`. When `false` (default), a missing
     /// checksum is only warned about.
     pub require_metadata: bool,
     /// Roles allowed to bypass the `require_metadata` gate.

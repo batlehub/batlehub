@@ -578,3 +578,50 @@ async fn a_proxied_only_package_stays_in_the_aggregate() {
         "an upstream package's downloads belong in everyone's total"
     );
 }
+
+// ── `GET /api/v1/packages` — the same door through `list_packages` ───────────
+
+impl Fixture {
+    async fn listed_to(&self, viewer: Option<ExploreViewer>) -> (Vec<String>, u64) {
+        let filter = batlehub_core::entities::PackageFilter {
+            registry: Some(self.registry.clone()),
+            limit: 50,
+            viewer,
+            ..Default::default()
+        };
+        let names = self
+            .repo
+            .list_packages(filter.clone())
+            .await
+            .expect("list_packages")
+            .into_iter()
+            .map(|p| p.package_id.name)
+            .collect();
+        let total = self.repo.count_packages(filter).await.expect("count");
+        (names, total)
+    }
+}
+
+/// Survey finding 12 again, on the front-office listing: a downloaded `team`
+/// package has a `package_statuses` row, and `list_packages` read that table
+/// with no visibility gate. `None` is the back office, which stays unfiltered.
+#[tokio::test]
+async fn the_package_listing_hides_a_downloaded_team_package_from_non_members() {
+    let url = require_db!();
+    let f = fixture(&url).await;
+    f.claim("secret-pkg", "team-a").await;
+    f.publish("secret-pkg", Visibility::Team).await;
+    f.record_download("secret-pkg").await;
+    f.record_download("upstream-pkg").await;
+
+    let upstream_only = (vec!["upstream-pkg".to_owned()], 1);
+    assert_eq!(f.listed_to(Some(anonymous())).await, upstream_only);
+    assert_eq!(
+        f.listed_to(Some(user(&["other-team"]))).await,
+        upstream_only
+    );
+
+    let both = (vec!["secret-pkg".to_owned(), "upstream-pkg".to_owned()], 2);
+    assert_eq!(f.listed_to(Some(user(&["team-a"]))).await, both);
+    assert_eq!(f.listed_to(None).await, both, "the unfiltered back office");
+}

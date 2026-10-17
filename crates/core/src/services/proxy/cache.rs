@@ -492,7 +492,7 @@ impl ProxyService {
         }
         let registry_name = req.package_id.registry.as_str();
         metrics::counter!("batlehub_integrity_checks_total", "registry" => timing.registry_label.clone(), "outcome" => "missing").increment(1);
-        if integrity.require_metadata && !integrity.bypass_roles.contains(&req.identity.role) {
+        if integrity.require_metadata && !req.identity.role.clears_bypass(&integrity.bypass_roles) {
             let reason = format!(
                 "integrity policy requires checksum metadata, but upstream provided none for {}",
                 req.package_id,

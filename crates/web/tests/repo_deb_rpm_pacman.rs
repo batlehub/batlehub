@@ -907,3 +907,193 @@ async fn proxy_response_contains_artifact_bytes() {
     // FixedRegistry embeds the package key in the artifact
     assert!(std::str::from_utf8(&body).unwrap().contains("lodash"));
 }
+
+// ── Repository layout injectivity (found by `fuzz_repo_publish` /
+//    `fuzz_repo_index_render`) ──────────────────────────────────────────────
+
+async fn put_status<S, B>(app: &S, uri: &str, token: &str, body: Vec<u8>) -> u16
+where
+    S: actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse<B>,
+        Error = actix_web::Error,
+    >,
+{
+    call_service(
+        app,
+        TestRequest::put()
+            .uri(uri)
+            .insert_header(("Authorization", bearer(token)))
+            .set_payload(body)
+            .to_request(),
+    )
+    .await
+    .status()
+    .as_u16()
+}
+
+/// A component of `main/x` with package `x` and a component of `main` with
+/// package `x/x` were the same pool file; a `/` in a component also re-cut the
+/// sidecar key `regenerate_deb` groups on.
+#[actix_web::test]
+async fn deb_publish_refuses_a_slash_in_component_distribution_or_name() {
+    let parts = local_registry_app_parts("apt", "deb", RegistryMode::Local, None);
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+
+    let x = make_test_deb("Package: x\nVersion: 1\nArchitecture: amd64\n");
+    for uri in [
+        "/proxy/apt/deb/pool/stable/main%2Fx/upload",
+        "/proxy/apt/deb/pool/stable%2Fupdates/main/upload",
+    ] {
+        assert_eq!(
+            put_status(&app, uri, USER_TOKEN, x.clone()).await,
+            400,
+            "{uri}"
+        );
+    }
+    let nested = make_test_deb("Package: x/x\nVersion: 1\nArchitecture: amd64\n");
+    let uri = "/proxy/apt/deb/pool/stable/main/upload";
+    assert_eq!(put_status(&app, uri, USER_TOKEN, nested).await, 400);
+    let underscore = make_test_deb("Package: a\nVersion: 1_2\nArchitecture: amd64\n");
+    assert_eq!(put_status(&app, uri, USER_TOKEN, underscore).await, 400);
+}
+
+/// A repeated field let `name()` authorize one `Package` while the index
+/// advertised the other; an empty field name rendered a line apt cannot read.
+#[actix_web::test]
+async fn deb_publish_refuses_a_control_file_apt_would_misread() {
+    let parts = local_registry_app_parts("apt", "deb", RegistryMode::Local, None);
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+    let uri = "/proxy/apt/deb/pool/stable/main/upload";
+    for control in [
+        "Package: mine\nVersion: 1\nPackage: theirs\n",
+        "Package: a\nVersion: 1\n: x\n",
+    ] {
+        let status = put_status(&app, uri, USER_TOKEN, make_test_deb(control)).await;
+        assert_eq!(status, 400, "{control:?}");
+    }
+}
+
+/// Debian drops the epoch from pool file names, so `1:1.0` would land on
+/// `1.0`'s file under a second index entry with a second checksum. The archive
+/// refuses the second upload; so does this.
+#[actix_web::test]
+async fn deb_publish_refuses_a_second_version_on_the_same_pool_file() {
+    let parts = local_registry_app_parts("apt", "deb", RegistryMode::Local, None);
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+    let uri = "/proxy/apt/deb/pool/stable/main/upload";
+    let plain = make_test_deb("Package: hello\nVersion: 1.0\nArchitecture: amd64\n");
+    assert_eq!(put_status(&app, uri, ADMIN_TOKEN, plain).await, 201);
+    let epoch = make_test_deb("Package: hello\nVersion: 1:1.0\nArchitecture: amd64\nX: y\n");
+    assert_eq!(put_status(&app, uri, ADMIN_TOKEN, epoch).await, 409);
+    // The control: another version is a different file and is accepted.
+    let next = make_test_deb("Package: hello\nVersion: 1:1.1\nArchitecture: amd64\n");
+    assert_eq!(put_status(&app, uri, ADMIN_TOKEN, next).await, 201);
+}
+
+/// The pool is shared by every suite, and each suite's stanza records the
+/// file's checksum: a rebuilt `1.0` sent to a second suite would have replaced
+/// the file under the first suite's index. Identical bytes (a promotion) pass.
+#[actix_web::test]
+async fn deb_publish_refuses_other_bytes_for_a_file_another_suite_lists() {
+    let parts = local_registry_app_parts("apt", "deb", RegistryMode::Local, None);
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+    let control = "Package: hello\nVersion: 1.0\nArchitecture: amd64\n";
+    let first = make_test_deb(control);
+    let stable = "/proxy/apt/deb/pool/stable/main/upload";
+    let testing = "/proxy/apt/deb/pool/testing/main/upload";
+    assert_eq!(
+        put_status(&app, stable, ADMIN_TOKEN, first.clone()).await,
+        201
+    );
+    assert_eq!(put_status(&app, testing, ADMIN_TOKEN, first).await, 201);
+    let rebuilt = make_test_deb(&format!("{control}X: rebuilt\n"));
+    assert_eq!(put_status(&app, testing, ADMIN_TOKEN, rebuilt).await, 409);
+}
+
+/// `(a-b, 1-1)` and `(a, b-1-1)` were the same `a-b-1-1-x86_64` file.
+#[actix_web::test]
+async fn pacman_publish_refuses_a_version_without_exactly_one_dash() {
+    let parts = local_registry_app_parts("arch", "pacman", RegistryMode::Local, None);
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+    let pkg = |name: &str, ver: &str| {
+        make_test_pkg(&format!(
+            "pkgname = {name}\npkgver = {ver}\narch = x86_64\n"
+        ))
+    };
+    let uri = "/proxy/arch/pacman/upload";
+    assert_eq!(
+        put_status(&app, uri, USER_TOKEN, pkg("a-b", "1-1")).await,
+        201
+    );
+    assert_eq!(
+        put_status(&app, uri, USER_TOKEN, pkg("a", "b-1-1")).await,
+        400
+    );
+    assert_eq!(
+        put_status(&app, uri, USER_TOKEN, pkg("a/b", "1-1")).await,
+        400
+    );
+}
+
+fn rpm_built(name: &str, epoch: u32, summary: &str) -> Vec<u8> {
+    let pkg = rpm::PackageBuilder::new(name, "1.0", "MIT", "x86_64", summary)
+        .epoch(epoch)
+        .build()
+        .unwrap();
+    let mut buf = Vec::new();
+    pkg.write(&mut buf).unwrap();
+    buf
+}
+
+/// `storage_id` prefixes a non-zero epoch, so `(389, ds-base)` and
+/// `(0, 389-ds-base)` — a real Fedora name — were one file.
+#[actix_web::test]
+async fn rpm_publish_refuses_an_epoch_that_collides_with_a_name() {
+    let parts = local_registry_app_parts("yum", "rpm", RegistryMode::Local, None);
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+    let uri = "/proxy/yum/rpm/upload";
+    assert_eq!(
+        put_status(&app, uri, ADMIN_TOKEN, rpm_built("ds-base", 389, "s")).await,
+        201
+    );
+    assert_eq!(
+        put_status(&app, uri, ADMIN_TOKEN, rpm_built("389-ds-base", 0, "s")).await,
+        409
+    );
+}
+
+/// One control character in one summary made `primary.xml` unparseable for
+/// the whole repository.
+#[actix_web::test]
+async fn rpm_repodata_stays_well_formed_with_a_control_character_in_a_summary() {
+    let parts = local_registry_app_parts("yum", "rpm", RegistryMode::Local, None);
+    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+    let uri = "/proxy/yum/rpm/upload";
+    // The builder refuses a control character, so patch one into the header
+    // the way a hand-crafted upload would (same length, same tag bookkeeping).
+    let mut bytes = rpm_built("hello", 0, "sumZsum");
+    let at = bytes
+        .windows(7)
+        .position(|w| w == b"sumZsum")
+        .expect("summary in header");
+    bytes[at + 3] = 0x01;
+    assert_eq!(put_status(&app, uri, USER_TOKEN, bytes).await, 201);
+
+    let primary = call_service(
+        &app,
+        TestRequest::get()
+            .uri("/proxy/yum/rpm/repodata/primary.xml.gz")
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .to_request(),
+    )
+    .await;
+    let gz = read_body(primary).await.to_vec();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut flate2::read::GzDecoder::new(&gz[..]), &mut xml).unwrap();
+    assert!(
+        !xml.contains('\u{1}'),
+        "a raw control character reached primary.xml"
+    );
+    assert!(xml.contains("<summary>sum\u{fffd}sum</summary>"), "{xml}");
+}

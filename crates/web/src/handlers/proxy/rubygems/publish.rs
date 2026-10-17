@@ -5,6 +5,7 @@ use super::{
     PublishRequest, RegistryMap, RegistryModeMap, Responder, Sha256,
 };
 use crate::handlers::schemas::MessageResponse;
+use batlehub_core::error::CoreError;
 
 #[derive(serde::Deserialize)]
 pub struct GemYankQuery {
@@ -23,7 +24,7 @@ pub struct GemYankQuery {
     params(("registry" = String, Path, description = "Registry name")),
     responses(
         (status = 200, description = "Gem published successfully", body = MessageResponse),
-        (status = 400, description = "Malformed signature headers"),
+        (status = 400, description = "Malformed signature headers, or a gemspec field outside its grammar"),
         (status = 403, description = "Access denied or quota exceeded"),
         (status = 409, description = "Version already exists"),
         (status = 422, description = "Invalid gem file or versioning policy violation"),
@@ -48,8 +49,13 @@ pub async fn gem_publish(
 
     let data = collect_payload(payload).await?;
 
-    let gem_meta = batlehub_adapters::registry::rubygems::parse_gem_bytes(&data)
-        .map_err(|e| AppError::unprocessable(e.to_string()))?;
+    let gem_meta =
+        batlehub_adapters::registry::rubygems::parse_gem_bytes(&data).map_err(|e| match e {
+            // A field outside the gemspec grammar (a traversal, a delimiter) is
+            // a bad coordinate: 400, like every other publisher's.
+            CoreError::InvalidInput(_) => AppError::from(e),
+            e => AppError::unprocessable(e.to_string()),
+        })?;
 
     let checksum = hex::encode(Sha256::digest(&data));
 

@@ -73,6 +73,7 @@ pub struct ReleaseAgeGateConfig {
     #[serde(default = "default_min_age")]
     pub min_age_secs: u64,
     /// Roles that may bypass the age gate (e.g. `["admin"]`).
+    /// The least-privileged listed role is the floor: a higher role bypasses too.
     #[serde(default)]
     pub bypass_roles: Vec<String>,
     /// When `true`, deny requests for packages whose upstream does not provide
@@ -115,6 +116,7 @@ pub struct RequireSignedReleaseConfig {
     #[serde(default)]
     pub enabled: bool,
     /// Roles that may bypass the signature requirement (e.g. `["admin"]`).
+    /// The least-privileged listed role is the floor: a higher role bypasses too.
     #[serde(default)]
     pub bypass_roles: Vec<String>,
     /// When `true`, deny releases from registries that report no signature
@@ -126,6 +128,7 @@ pub struct RequireSignedReleaseConfig {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DenyLatestConfig {
     /// Roles that may bypass the restriction (e.g. `["admin"]`).
+    /// The least-privileged listed role is the floor: a higher role bypasses too.
     #[serde(default)]
     pub bypass_roles: Vec<String>,
 }
@@ -151,6 +154,7 @@ pub struct CveGateConfig {
     #[serde(default)]
     pub block: bool,
     /// Roles that may bypass the gate even when `block` is `true` (e.g. `["admin"]`).
+    /// The least-privileged listed role is the floor: a higher role bypasses too.
     #[serde(default)]
     pub bypass_roles: Vec<String>,
 }
@@ -202,6 +206,7 @@ pub struct LicenseGateConfig {
     #[serde(default)]
     pub block: bool,
     /// Roles that may bypass the gate even when `block` is `true`.
+    /// The least-privileged listed role is the floor: a higher role bypasses too.
     #[serde(default)]
     pub bypass_roles: Vec<String>,
 }
@@ -227,6 +232,7 @@ pub struct VersionGateConfig {
     #[serde(default)]
     pub block: Vec<String>,
     /// Roles that may bypass the gate (e.g. `["admin"]`).
+    /// The least-privileged listed role is the floor: a higher role bypasses too.
     #[serde(default)]
     pub bypass_roles: Vec<String>,
 }
@@ -254,6 +260,7 @@ pub struct TrustedPublisherConfig {
     #[serde(default)]
     pub allow: Vec<String>,
     /// Roles that may bypass the gate (e.g. `["admin"]`).
+    /// The least-privileged listed role is the floor: a higher role bypasses too.
     #[serde(default)]
     pub bypass_roles: Vec<String>,
 }

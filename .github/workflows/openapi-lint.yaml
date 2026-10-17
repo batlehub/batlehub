@@ -1,0 +1,33 @@
+name: OpenAPI lint
+# Spectral over the committed spec: OAS correctness plus the OWASP API Top 10
+# authentication rules. Ruleset and every exception: .spectral.yaml.
+# Reproduce locally with `task openapi:lint`.
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "ui/openapi.json"
+      - ".spectral.yaml"
+      - ".github/workflows/openapi-lint.yaml"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "ui/openapi.json"
+      - ".spectral.yaml"
+      - ".github/workflows/openapi-lint.yaml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  spectral:
+    name: Spectral
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      # Same command as `task openapi:lint` (see the note there on why it is not
+      # a ui/ devDependency). Fails on any warning: the spec is kept at zero.
+      - name: Spectral lint
+        run: npx --yes @stoplight/spectral-cli@6.17.0 lint ui/openapi.json --fail-severity=warn

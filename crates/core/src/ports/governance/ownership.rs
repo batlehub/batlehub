@@ -27,6 +27,25 @@ pub trait OwnershipPort: Send + Sync {
         user_id: &str,
     ) -> Result<(), CoreError>;
 
+    /// Make `user_id` the package admin **only if the package has no owner**,
+    /// and report whether this call did. Two first publishers racing past
+    /// [`Self::can_publish`] (both saw no owner) would otherwise both become
+    /// admins; the loser gets `false` and re-checks `can_publish`, which now
+    /// sees the winner. Stores override this to make it atomic — the default is
+    /// check-then-insert and only fit for test doubles.
+    async fn claim_if_unowned(
+        &self,
+        registry: &str,
+        package: &str,
+        user_id: &str,
+    ) -> Result<bool, CoreError> {
+        if !self.list_owners(registry, package).await?.is_empty() {
+            return Ok(false);
+        }
+        self.initialize_owner(registry, package, user_id).await?;
+        Ok(true)
+    }
+
     /// Return `true` if `identity` is allowed to publish `package` in `registry`.
     ///
     /// Returns `true` when:

@@ -8,7 +8,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- **`bypass_roles` means "this role or higher", on every gate.**
+  `release_age_gate`, `cve_gate`, `license_gate`, `signed_release` and the
+  integrity block's `require_metadata` used exact membership, so
+  `bypass_roles = ["user"]` still gated an admin; they now read the list the
+  way `deny_latest`, `version_gate` and `trusted_publisher` always did — the
+  least-privileged listed role is the floor (`Role::clears_bypass`).
+- **deb/rpm/pacman/apk packages now have owners.** These publishers wrote no
+  version row, so the ownership gate never fired and any user could replace
+  another's package. The first publish of a package claims it, atomically.
+  **Upgrading:** packages already in such a registry have no owner yet, and
+  the next identified publisher of each claims it. Set the owners of the ones
+  that matter through the admin owners API before opening publishing.
+- Re-uploading an existing deb/rpm/pacman/apk file with **different** bytes is
+  a replace: it needs `releases:overwrite` and an `immutable` setting that
+  allows it. The same `.deb` sent to a second suite is not a replace.
+- Refused with **409**: a deb whose pool file another version (epoch) or
+  another suite (different bytes) already holds; an rpm whose file id another
+  NEVRA holds.
+- Refused with **400**: coordinates that would collide in storage or re-cut an
+  index — a version ending in `.sigzip`; `/` in a Terraform coordinate or a
+  deb/pacman/apk name; `-` in a Terraform `os`; `_` in a deb name, version or
+  arch; a pacman `pkgver` without exactly one `-`; a gem name, version or
+  dependency outside the gemspec grammar; a repeated or empty deb control field.
+- `GET`/`PUT`/`DELETE …/crates/{name}/owners` answer a crate the caller cannot
+  read with the missing crate's 404.
+- **OpenAPI spec linted in CI** (Spectral, `task openapi:lint`,
+  `.spectral.yaml`). Its first run fixed three defects in `ui/openapi.json`:
+  two duplicate `operationId`s, which the generated TypeScript client had
+  turned into `listPackages2` and `downloadTarball2` (now
+  `listVisiblePackages` for `GET /api/v1/packages` and
+  `githubDownloadTarball`), and npm publish documented as
+  `/proxy/{registry}/{name}` beside `GET /proxy/{registry}/{package}`. The
+  spec is now at zero findings and the gate fails on any warning: six tags
+  that were used but never declared, seven operations with no summary, an
+  `info` with no description or contact, and `PUT …/dist-tags/{tag}`
+  documenting a `200` it never returns are fixed too.
+
+### Fixed
+
+- The package listing (`/api/v1/packages`), the SBOM endpoint and the JetBrains
+  `pluginsXMLIds.json` no longer show team-visible packages to non-members.
+- SSRF guard: NAT64/6to4/Teredo, IPv4 multicast and several reserved ranges are
+  blocked; an IPv6 literal (`[::1]`) is checked; the address dialled is the one
+  checked (no DNS rebinding) for upstream-supplied URLs when no egress proxy is
+  configured.
+- rpm `primary.xml` stays well-formed with a control character in a summary;
+  Maven `<latest>`/`<release>` no longer name a blocked version; RubyGems
+  listings keep CRLF line endings; deleting a version no longer removes a
+  nested package's files (npm `@corp` vs `@corp/lib`).
 
 ---
 

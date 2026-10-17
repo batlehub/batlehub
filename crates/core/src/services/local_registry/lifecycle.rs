@@ -24,6 +24,8 @@
 //! rather than a verb in §4.2's vocabulary, and inventing a verb for it here
 //! would settle by implementation a question §3 hands to that document.
 
+use crate::entities::RegistryKind;
+
 use super::{
     artifact_storage_key, AccessAction, AccessEvent, AccessResult, Action, CoreError, Identity,
     LocalRegistryService, PackageId, PublishRequest, ReadmeFormat, SbomFormat, SbomPublishOptions,
@@ -554,12 +556,23 @@ impl LocalRegistryService {
     /// prefix of `local:r/p/1.0.1`, so it would delete a sibling version. The
     /// trailing slash on the prefix is what stops that.
     ///
+    /// The prefix delete runs **only for the kinds that write under a version**
+    /// ([`stores_files_under_version`]). Elsewhere it reached into another
+    /// package: names carry `/` (npm's `@scope/pkg`, Go modules, JetBrains ids),
+    /// so `local:r/@corp/lib/` is both `@corp@lib`'s version directory and
+    /// `@corp/lib`'s name directory, and deleting the first — by hand or by a
+    /// retention run — destroyed every version of the second. The three kinds
+    /// that do write under a version have names that cannot nest that way:
+    /// Maven's `group:artifact` and Nix's store name carry no `/`, and
+    /// Terraform's are fixed-arity `modules/…`/`providers/…` paths whose
+    /// segments are each refused a `/` at the edge.
+    ///
     /// Non-fatal by construction. The tombstone is already written by the time
     /// this runs, so the version is unreachable regardless; a storage error here
     /// leaves an orphaned blob for the coherence sweep, and turning that into a
     /// failed delete would tell the caller the version is still live when it is
     /// not.
-    async fn drop_version_bytes(&self, registry: &str, name: &str, version: &str) {
+    pub(super) async fn drop_version_bytes(&self, registry: &str, name: &str, version: &str) {
         let key = artifact_storage_key(registry, name, version);
         if let Err(e) = self.storage.delete(&key).await {
             tracing::warn!(
@@ -570,13 +583,25 @@ impl LocalRegistryService {
         }
         // RFC 0020: the signature archives beside the artifact — the
         // registry's and a provided one — go with it.
-        for sibling in [format!("{key}.sigzip"), format!("{key}.sigzip.upstream")] {
+        for sibling in super::VERSION_SIBLING_SUFFIXES.map(|suffix| format!("{key}{suffix}")) {
             if let Err(e) = self.storage.delete(&sibling).await {
                 tracing::warn!(
                     registry, name, version, error = %e,
                     "delete: dropping a signature sibling failed (non-fatal, see above)"
                 );
             }
+        }
+        let kind = {
+            let hot = self.hot.read().await;
+            hot.registries
+                .get(registry)
+                .and_then(|client| client.registry_type().parse::<RegistryKind>().ok())
+        };
+        // An unknown kind (a registry since removed from the config) keeps its
+        // multi-file blobs for the coherence sweep rather than risking another
+        // package's: an orphan is recoverable, a deleted neighbour is not.
+        if !kind.is_some_and(stores_files_under_version) {
+            return;
         }
         if let Err(e) = self.storage.delete_by_prefix(&format!("{key}/")).await {
             tracing::warn!(
@@ -795,5 +820,45 @@ impl LocalRegistryService {
             }
             Ok(()) => Ok(()),
         }
+    }
+}
+
+/// Whether `kind` stores a version's files *under* its artifact key
+/// (`local:{reg}/{name}/{version}/…`), which is what licenses the prefix delete
+/// in `drop_version_bytes`.
+///
+/// Exhaustive on purpose: a new kind that writes under a version must say so
+/// here, or deleting one of its versions leaves those files for the coherence
+/// sweep — and a kind that answers `true` must have names that cannot nest
+/// (see `drop_version_bytes`).
+pub fn stores_files_under_version(kind: RegistryKind) -> bool {
+    match kind {
+        // `{ver}/{filename}`, `{ver}/{os}-{arch}`, `{ver}/{hash}/{file}`.
+        RegistryKind::Maven | RegistryKind::Terraform | RegistryKind::Nix => true,
+        RegistryKind::Github
+        | RegistryKind::Forgejo
+        | RegistryKind::Gitlab
+        | RegistryKind::Cargo
+        | RegistryKind::Npm
+        | RegistryKind::Openvsx
+        | RegistryKind::Goproxy
+        | RegistryKind::Pypi
+        | RegistryKind::Conda
+        | RegistryKind::Composer
+        | RegistryKind::VscodeMarketplace
+        | RegistryKind::Rubygems
+        | RegistryKind::Nuget
+        | RegistryKind::Deb
+        | RegistryKind::Rpm
+        | RegistryKind::Pacman
+        | RegistryKind::Apk
+        | RegistryKind::Jetbrains
+        | RegistryKind::JetbrainsMarketplace
+        | RegistryKind::Generic
+        | RegistryKind::Nodedist
+        | RegistryKind::Sdkman
+        | RegistryKind::Rustup
+        | RegistryKind::Galaxy
+        | RegistryKind::Devfile => false,
     }
 }

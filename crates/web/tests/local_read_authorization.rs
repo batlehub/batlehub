@@ -45,6 +45,20 @@ async fn app_with_namespaces(
     Arc<InMemoryTeamNamespaceStore>,
     Arc<batlehub_core::services::LocalRegistryService>,
 ) {
+    app_with_namespaces_and_sbom(name, kind, None, None).await
+}
+
+/// [`app_with_namespaces`] with an SBOM service mounted.
+async fn app_with_namespaces_and_sbom(
+    name: &'static str,
+    kind: &'static str,
+    sbom_svc: Option<Arc<batlehub_core::services::SbomService>>,
+    ownership: Option<Arc<dyn batlehub_core::ports::OwnershipPort>>,
+) -> (
+    impl TestService,
+    Arc<InMemoryTeamNamespaceStore>,
+    Arc<batlehub_core::services::LocalRegistryService>,
+) {
     let ns_store = InMemoryTeamNamespaceStore::new();
     let mut parts = local_only_app_parts(name, kind, RegistryMode::Local, false);
 
@@ -54,7 +68,7 @@ async fn app_with_namespaces(
         storage: cur.storage.clone(),
         hot: cur.hot.clone(),
         quota: cur.quota.clone(),
-        ownership: cur.ownership.clone(),
+        ownership: ownership.or_else(|| cur.ownership.clone()),
         team_namespace: Some(ns_store.clone() as Arc<dyn TeamNamespacePort>),
         sbom: cur.sbom.clone(),
         explore_cache: cur.explore_cache.clone(),
@@ -63,7 +77,8 @@ async fn app_with_namespaces(
     });
 
     let local_svc = parts.local_svc.clone();
-    let app = build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await;
+    let app =
+        build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), sbom_svc).await;
     (app, ns_store, local_svc)
 }
 
@@ -818,4 +833,100 @@ async fn a_namespace_grant_below_a_seal_reaches_available_packages() {
             "{package}: the document and the per-package route must agree, got {status}"
         );
     }
+}
+
+// ── SBOM ─────────────────────────────────────────────────────────────────────
+
+/// The per-artifact SBOM checked only that the caller was not anonymous, so a
+/// team-visible package's inventory went to any authenticated user — and its
+/// `200` confirmed a name the download path answers `403` for.
+#[actix_web::test]
+async fn sbom_is_hidden_from_a_non_member_of_a_team_visible_package() {
+    use batlehub_core::{
+        entities::{ArtifactSbom, SbomFormat, SbomSource},
+        ports::SbomRepository,
+    };
+
+    let repo = batlehub_adapters::in_memory::InMemorySbomRepository::new();
+    repo.upsert_sbom(ArtifactSbom {
+        id: uuid::Uuid::new_v4(),
+        artifact_key: "local-maven/com.example:mylib/1.0.0".to_owned(),
+        registry: "local-maven".to_owned(),
+        package_name: "com.example:mylib".to_owned(),
+        version: "1.0.0".to_owned(),
+        format: SbomFormat::Spdx,
+        spec_version: "SPDX-2.3".to_owned(),
+        document: serde_json::json!({"spdxVersion": "SPDX-2.3"}),
+        source: SbomSource::Generated,
+        created_at: chrono::Utc::now(),
+        license: None,
+    })
+    .await
+    .unwrap();
+    let sbom_svc = Arc::new(batlehub_core::services::SbomService::new(repo, None, None));
+    let (app, ns_store, _local_svc) =
+        app_with_namespaces_and_sbom("local-maven", "maven", Some(sbom_svc), None).await;
+
+    let req = TestRequest::put()
+        .uri("/proxy/local-maven/maven2/com/example/mylib/1.0.0/mylib-1.0.0.pom")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_payload(SAMPLE_POM.as_bytes())
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 201);
+
+    let sbom = "/api/v1/sbom/local-maven/com.example:mylib/1.0.0";
+    // Control: public, so it is served.
+    assert_eq!(get_as(&app, sbom, USER_TOKEN).await, 200);
+
+    make_team_only(&ns_store, "local-maven", "com.example:mylib").await;
+
+    assert_eq!(
+        get_as(&app, sbom, USER_TOKEN).await,
+        404,
+        "refused as absent, so the status does not confirm the package"
+    );
+    assert_eq!(get_as(&app, sbom, ADMIN_TOKEN).await, 200);
+}
+
+// ── Cargo owners ─────────────────────────────────────────────────────────────
+
+/// `cargo owner --list` took no identity, so it named a team-visible crate's
+/// owners — and confirmed the crate exists — to a caller its index refuses.
+#[actix_web::test]
+async fn cargo_owners_are_hidden_from_a_non_member_of_a_team_visible_crate() {
+    let ownership = batlehub_adapters::in_memory::InMemoryOwnershipStore::new();
+    let (app, ns_store, _local_svc) = app_with_namespaces_and_sbom(
+        "local-cargo",
+        "cargo",
+        None,
+        Some(ownership as Arc<dyn batlehub_core::ports::OwnershipPort>),
+    )
+    .await;
+
+    let req = TestRequest::put()
+        .uri("/proxy/local-cargo/api/v1/crates/new")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_payload(make_publish_payload("secret-crate", "0.1.0"))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 200);
+
+    let owners = "/proxy/local-cargo/api/v1/crates/secret-crate/owners";
+    // Control: public, so it is served.
+    assert_eq!(get_as(&app, owners, USER_TOKEN).await, 200);
+
+    make_team_only(&ns_store, "local-cargo", "secret-crate").await;
+
+    assert_eq!(
+        get_as(&app, owners, USER_TOKEN).await,
+        404,
+        "answered as the missing crate's 404"
+    );
+    // The write route tells the hidden crate apart no better: an owned crate
+    // and an unknown one must not answer differently.
+    let req = TestRequest::put()
+        .uri(owners)
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_json(serde_json::json!({ "users": ["someone"] }))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 404);
 }

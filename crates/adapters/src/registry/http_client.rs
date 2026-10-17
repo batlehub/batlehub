@@ -152,7 +152,7 @@ pub fn no_redirect_client_pair(
             .redirect(reqwest::redirect::Policy::none())
     };
     let credentialed = apply_upstream_options(base(), opts).map_err(CoreError::Other)?;
-    let plain = apply_upstream_tls(base(), opts)
+    let plain = apply_upstream_tls(super::ssrf::public_only_dns(base(), opts), opts)
         .map_err(CoreError::Other)?
         .build()
         .map_err(|e| CoreError::Other(e.into()))?;

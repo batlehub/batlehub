@@ -5,7 +5,11 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use utoipa::{IntoParams, ToSchema};
 
-use batlehub_core::{entities::SbomFormat, services::SbomService};
+use batlehub_core::{
+    entities::{Action, PackageId, SbomFormat},
+    error::CoreError,
+    services::{authz, LocalRegistryService, SbomService},
+};
 
 use super::require_authenticated;
 use crate::{error::AppError, extractors::AuthIdentity};
@@ -46,7 +50,7 @@ pub struct SbomQuery {
         (status = 200, description = "SBOM document (JSON)", body = SbomDocument),
         (status = 400, description = "Unknown format"),
         (status = 403, description = "Authentication required"),
-        (status = 404, description = "No SBOM found for this artifact"),
+        (status = 404, description = "No SBOM found for this artifact, or the caller cannot read it"),
     ),
     security(("bearer_token" = [])),
 )]
@@ -56,11 +60,39 @@ pub async fn get_artifact_sbom(
     query: web::Query<SbomQuery>,
     identity: AuthIdentity,
     sbom_svc: web::Data<Arc<SbomService>>,
+    hot: web::Data<batlehub_core::services::hot_config::HotConfigLock>,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
 ) -> Result<impl Responder, AppError> {
     // Requires at least an authenticated user (not anonymous).
     require_authenticated(&identity)?;
 
     let (registry, name, version) = path.into_inner();
+
+    // An SBOM is the artifact's inventory, so it takes the artifact's read
+    // gates: the grant the download path checks, then package visibility.
+    // Both refuse as the `404` below would, so a hidden package is not
+    // confirmed by the status code.
+    let not_found = || {
+        AppError::not_found(format!(
+            "no SBOM found for {registry}/{name}/{version} (format: {})",
+            query.format
+        ))
+    };
+    // Only a refusal becomes the 404; a store failure stays a 5xx.
+    let refused = |e: CoreError| match e {
+        CoreError::NotFound(_) | CoreError::NotFoundWithheld(_) | CoreError::AccessDenied(_) => {
+            not_found()
+        }
+        e => e.into(),
+    };
+    let pkg = PackageId::new(&registry, &name, &version);
+    authz::authorize_grants_public(&hot, &pkg, &identity, Action::ReleasesRead)
+        .await
+        .map_err(refused)?;
+    local_svc
+        .check_visibility(&registry, &name, &identity)
+        .await
+        .map_err(refused)?;
 
     let format = SbomFormat::parse(&query.format)
         .ok_or_else(|| AppError::bad_request(format!("unknown SBOM format '{}'", query.format)))?;
@@ -76,10 +108,7 @@ pub async fn get_artifact_sbom(
         Some(s) => Ok(HttpResponse::Ok()
             .content_type("application/json")
             .json(s.document)),
-        None => Err(AppError::not_found(format!(
-            "no SBOM found for {registry}/{name}/{version} (format: {})",
-            query.format
-        ))),
+        None => Err(not_found()),
     }
 }
 

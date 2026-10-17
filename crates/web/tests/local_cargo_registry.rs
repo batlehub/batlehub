@@ -624,9 +624,11 @@ async fn cargo_add_owners_on_unowned_crate_is_refused_even_when_authenticated() 
         .to_request();
     let resp = call_service(&app, req).await;
 
+    // A crate that was never published is the missing crate's 404, as on
+    // `GET …/owners` — the write route must not tell it apart from a hidden one.
     assert_eq!(
         resp.status(),
-        403,
+        404,
         "ownership is established by publishing, not by claiming through this route"
     );
     assert!(ownership

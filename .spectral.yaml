@@ -1,0 +1,108 @@
+# Spectral ruleset for ui/openapi.json (`task openapi:lint`, `.github/workflows/openapi-lint.yaml`).
+#
+# The gate fails on any warning, so the spec stays at zero findings and every
+# exception is one written below. `spectral:oas` findings are real defects: a duplicate operationId made the generated TypeScript client emit
+# `listPackages2` / `downloadTarball2` before this gate existed.
+#
+# The OWASP API Top 10 ruleset is kept for its authentication rules: a new
+# write endpoint without `security` fails here. Its other rules do not fit a
+# server whose routes are fixed by package-manager protocols; each one turned
+# off below says why.
+extends:
+  - spectral:oas
+  - https://unpkg.com/@stoplight/spectral-owasp-ruleset@2.0.1/dist/ruleset.mjs
+
+rules:
+  # The first line of a handler's doc comment becomes its `summary`, which is
+  # what Scalar and the docs' endpoint tables render; a second paragraph
+  # (`description`) is written where there is more to say, not forced on 240
+  # one-line handlers. The summary itself is required, as an error.
+  operation-description: off
+  operation-summary:
+    description: Every operation has a summary.
+    message: "No summary: put a `///` line above its #[utoipa::path]."
+    severity: error
+    given: "$.paths[*][get,put,post,delete,patch,head,options,trace]"
+    then:
+      field: summary
+      function: truthy
+  # The trailing slash is the protocol's: PyPI `simple/`, Docker `v2/`, the
+  # Galaxy API, conda's `{platform}/`. Clients send it, so the route has it.
+  path-keys-no-trailing-slash: off
+  # The base URL is the deployment's, unknown when the spec is built; the
+  # instance serves its own spec and each client is configured with its URL.
+  oas3-api-servers: off
+  # Request and response bodies are protocol documents (packuments, repodata,
+  # gemspecs): a maxLength/maxItems/maximum would describe a limit no client
+  # observes. Body size is bounded by the server's payload limits instead.
+  owasp:api4:2023-string-limit: off
+  owasp:api4:2023-string-restricted: off
+  owasp:api4:2023-array-limit: off
+  owasp:api4:2023-integer-limit: off
+  # utoipa emits unsigned Rust integers without int32/int64; the client is
+  # unaffected.
+  owasp:api4:2023-integer-format: off
+  # Rate limits are per-registry operator config applied by middleware, so no
+  # operation has a fixed limit to declare.
+  owasp:api4:2023-rate-limit: off
+  owasp:api4:2023-rate-limit-responses-429: off
+  # Error responses are declared where a handler produces them, not blanket.
+  owasp:api8:2023-define-error-responses-401: off
+  owasp:api8:2023-define-error-responses-500: off
+  owasp:api8:2023-define-error-validation: off
+  # Admin and user routes share one bearer scheme; the role check is RFC 0015
+  # authz, which OpenAPI cannot express.
+  owasp:api5:2023-admin-security-unique: off
+
+# Percent-encode `{`/`}` in a `files` pointer (%7B/%7D): written literally, the
+# override silently matches nothing.
+overrides:
+  # The real route is `{filename:.+\.(?:tar\.bz2|conda)}`, which keeps it off
+  # npm's `/{package}/{version}`. An OpenAPI path template cannot carry that
+  # regex, so the two look equivalent here only.
+  - files:
+      - 'ui/openapi.json#/paths/~1proxy~1%7Bregistry%7D~1%7Bplatform%7D~1%7Bfilename%7D'
+    rules:
+      path-params: off
+  # Unauthenticated by design: the credential is in the request itself.
+  # flags and inbound webhooks are HMAC-signed bodies, refresh carries the
+  # refresh token in its body.
+  - files:
+      - 'ui/openapi.json#/paths/~1api~1v1~1auth~1oidc~1refresh'
+      - 'ui/openapi.json#/paths/~1api~1v1~1flags~1%7Bsource%7D'
+      - 'ui/openapi.json#/paths/~1api~1v1~1flags~1%7Bsource%7D~1%7Bexternal_id%7D'
+      - 'ui/openapi.json#/paths/~1api~1v1~1webhooks~1inbound~1%7Bname%7D'
+    rules:
+      owasp:api2:2023-write-restricted: off
+  # `ovsx publish` sends its token as `?token=`; the protocol fixes it, and
+  # raw_auth_from_request normalises it to a bearer before any provider reads it.
+  - files:
+      - 'ui/openapi.json#/paths/~1proxy~1%7Bregistry%7D~1api~1-~1publish'
+    rules:
+      owasp:api2:2023-no-credentials-in-url: off
+  # Never succeed, by design: the air-gap sink always answers 501 (RFC 0008
+  # §6.4), and npm dist-tags are derived, so writing one is declined with 501.
+  - files:
+      - 'ui/openapi.json#/paths/~1_air-gap~1unmirrored~1%7Btail%7D'
+      - 'ui/openapi.json#/paths/~1proxy~1%7Bregistry%7D~1-~1package~1%7Bpackage%7D~1dist-tags~1%7Btag%7D'
+    rules:
+      operation-success-response: off
+  # Public reads, by design: none of these handlers takes an identity. Login,
+  # its callback and the provider list come before a token exists; the banner
+  # shows on the login page; the CLI binary and the protocols' discovery and
+  # health documents (`npm ping`, OpenVSX version and signing key, Terraform's
+  # service discovery) are read by clients before they authenticate.
+  - files:
+      - 'ui/openapi.json#/paths/~1.well-known~1terraform.json'
+      - 'ui/openapi.json#/paths/~1_air-gap~1unmirrored~1%7Btail%7D'
+      - 'ui/openapi.json#/paths/~1api~1v1~1auth~1oidc~1callback'
+      - 'ui/openapi.json#/paths/~1api~1v1~1auth~1oidc~1login'
+      - 'ui/openapi.json#/paths/~1api~1v1~1auth~1oidc~1providers'
+      - 'ui/openapi.json#/paths/~1api~1v1~1banner'
+      - 'ui/openapi.json#/paths/~1api~1v1~1cli~1download'
+      - 'ui/openapi.json#/paths/~1proxy~1%7Bregistry%7D~1-~1ping'
+      - 'ui/openapi.json#/paths/~1proxy~1%7Bregistry%7D~1.well-known~1terraform.json'
+      - 'ui/openapi.json#/paths/~1proxy~1%7Bregistry%7D~1api~1-~1public-key~1%7Bkey_id%7D'
+      - 'ui/openapi.json#/paths/~1proxy~1%7Bregistry%7D~1api~1version'
+    rules:
+      owasp:api2:2023-read-restricted: off

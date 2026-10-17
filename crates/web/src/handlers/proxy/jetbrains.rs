@@ -23,8 +23,7 @@ use crate::handlers::schemas::ArtifactBytes;
 use crate::{error::AppError, extractors::AuthIdentity, RegistryMap};
 use batlehub_core::entities::Action;
 
-/// Serve a file from a JetBrains download repository
-/// (`GET /proxy/{registry}/jetbrains/{path}`).
+/// Serve a file from a JetBrains download repository.
 #[utoipa::path(
     get,
     path = "/proxy/{registry}/jetbrains/{path}",

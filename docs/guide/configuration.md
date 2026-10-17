@@ -922,7 +922,7 @@ Publishing requires at least the `user` role. The `published_by` field is set fr
 
 **Cargo** — `local`/`hybrid` modes expose the full publish API (`PUT /api/v1/crates/new`, yank, unyank, owners) and advertise the `api` URL in `config.json` so Cargo discovers it automatically.
 
-**npm** — `local`/`hybrid` modes accept `npm publish` payloads (`PUT /proxy/{registry}/{name}`) and serve packuments and tarballs from local storage.
+**npm** — `local`/`hybrid` modes accept `npm publish` payloads (`PUT /proxy/{registry}/{package}`) and serve packuments and tarballs from local storage.
 
 **openvsx / vscode-marketplace** — `local`/`hybrid` modes accept raw VSIX uploads (`PUT /proxy/{registry}/{extension_id}/{version}/vsix`) and serve them on download.
 
@@ -1624,7 +1624,7 @@ on_webhook    = true
 |---|---|---|---|
 | `kind` | string | — | Must be `"release_age_gate"` |
 | `min_age_secs` | u64 | `3600` | Releases younger than this are blocked. |
-| `bypass_roles` | string[] | `[]` | Roles that skip the gate entirely, including the missing-timestamp check (e.g. `["admin"]`). |
+| `bypass_roles` | string[] | `[]` | Roles that skip the gate entirely, including the missing-timestamp check (e.g. `["admin"]`). When multiple roles are listed the least-privileged one sets the access floor. |
 | `deny_missing_timestamp` | bool | `false` | When `true`, deny downloads for packages whose upstream provides no publish timestamp, instead of skipping the check and allowing the download. Useful for registries like conda where the timestamp field is optional — setting this to `true` ensures every package carries a verifiable age. |
 
 > **Timestamp support by registry type:** The gate is only enforced when the upstream provides a publish timestamp.
@@ -1645,7 +1645,7 @@ on_webhook    = true
 |---|---|---|---|
 | `kind` | string | — | Must be `"require_signed_release"` |
 | `enabled` | bool | `false` | When true, blocks releases with no signature signal (subject to `deny_missing_signature` below) |
-| `bypass_roles` | string[] | `[]` | Roles that skip the gate entirely (e.g. `["admin"]`). |
+| `bypass_roles` | string[] | `[]` | Roles that skip the gate entirely (e.g. `["admin"]`). When multiple roles are listed the least-privileged one sets the access floor. |
 | `deny_missing_signature` | bool | `false` | When `true`, deny releases from registries that report no signature signal at all, instead of skipping the check and allowing the download. |
 
 > This checks `PackageMetadata.is_signed`, a best-effort signal populated per registry adapter — not full cryptographic signature verification. GitHub, Forgejo, GitLab, OpenVSX, VS Code Marketplace and **nix** populate it (presence of a `.asc`/`.sig` release asset, an extension signature blob, or — for `nix` — at least one `Sig:` line on the narinfo); registries with no signing concept in their ecosystem (npm, PyPI, crates.io, Maven, RubyGems, Conda, Composer, Go, Terraform, NuGet, deb/rpm/pacman/apk, Ansible Galaxy, rustup) report `None` and are allowed through unless `deny_missing_signature = true`.
@@ -1705,7 +1705,7 @@ bypass_roles = ["admin"]
 |---|---|---|---|
 | `kind` | string | — | Must be `"cve_gate"` |
 | `min_severity` | string | `"high"` | Minimum severity that triggers a block: `"low"`, `"medium"`, `"high"`, or `"critical"`. |
-| `bypass_roles` | string[] | `[]` | Roles exempt from the gate. |
+| `bypass_roles` | string[] | `[]` | Roles exempt from the gate. When multiple roles are listed the least-privileged one sets the access floor. |
 
 **`[[registries.rules]]` — Licence gate:**
 
@@ -1728,7 +1728,7 @@ bypass_roles  = ["admin"]
 | `deny` | string[] | `[]` | Refused licences. Checked before `allow`, so a licence in both lists is refused. |
 | `allow_unknown` | bool | `true` | How to treat a version whose licence is not known. `true` lets it through; `false` refuses it. |
 | `block` | bool | `false` | `false` = warn-only: the licence is shown in the console and nothing is ever refused. |
-| `bypass_roles` | string[] | `[]` | Roles exempt from the gate. |
+| `bypass_roles` | string[] | `[]` | Roles exempt from the gate. When multiple roles are listed the least-privileged one sets the access floor. |
 
 > **This rule requires `[registries.sbom]` with `enabled = true` on the same registry.** The licence is read out of the archive as part of SBOM generation, so with SBOM off nothing is ever extracted and the gate sees an unknown licence for every version — however good the parser for that registry type is. Configuring it without SBOM raises `license-gate.sbom-disabled`.
 >
@@ -1757,7 +1757,7 @@ bypass_roles = ["admin"]
 |---|---|---|---|
 | `kind` | string | — | Must be `"trusted_publisher"` |
 | `allow` | string[] | `[]` | Allowed publisher identifiers. When non-empty, a package whose derived publisher matches none of these is rejected. When empty, the rule allows everything. |
-| `bypass_roles` | string[] | `[]` | Roles that may bypass the gate (e.g. `["admin"]`). |
+| `bypass_roles` | string[] | `[]` | Roles that may bypass the gate (e.g. `["admin"]`). When multiple roles are listed the least-privileged one sets the access floor. |
 
 > **Publisher support by registry type:** matching is case-insensitive.
 > - **GitHub**, **GitLab**, **Forgejo** — the top-level owner/group segment of the package path (`"owner/repo"` or `"group/subgroup/project"` → `"owner"` / `"group"`).
@@ -1826,8 +1826,8 @@ verify_on_serve = false   # re-hash stored bytes on every serve, not just on fir
 |---|---|---|---|
 | `enabled` | bool | `true` | Master switch. When `false`, no verification is performed. |
 | `block_on_mismatch` | bool | `true` | Fail the download (and skip caching) when the computed digest does not match the advertised one. A mismatch is never bypassable. |
-| `require_metadata` | bool | `false` | Block downloads for which the upstream advertises no usable checksum, unless the caller holds one of `bypass_roles`. Defaults to warn-only. |
-| `bypass_roles` | string[] | `[]` | Roles allowed to bypass the `require_metadata` gate. |
+| `require_metadata` | bool | `false` | Block downloads for which the upstream advertises no usable checksum, unless the caller clears `bypass_roles`. Defaults to warn-only. |
+| `bypass_roles` | string[] | `[]` | Roles allowed to bypass the `require_metadata` gate. When multiple roles are listed the least-privileged one sets the access floor. |
 | `verify_on_serve` | bool | `false` | Re-verify cached/stored bytes against a **self-computed** SHA-256 (recorded when the bytes are first cached) on every serve — cache hits on the proxy path and local-registry reads — not just on first fetch. Catches storage corruption or tampering of already-cached artifacts. A mismatch fails the download (`502`) and evicts the bad entry so a later request re-fetches clean bytes. Off by default because it reads and hashes the bytes on each serve (the proxy path streams them through the hash so memory stays bounded, then re-opens the entry to serve it). Pre-existing cache rows have no stored checksum and are treated as "skip re-verify" until next refreshed. |
 
 #### `[registries.signing]` {#signing}

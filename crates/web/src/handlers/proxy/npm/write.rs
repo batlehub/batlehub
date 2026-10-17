@@ -37,10 +37,10 @@ pub struct NpmPublishResponse {}
 /// `_attachments`.
 #[utoipa::path(
     put,
-    path = "/proxy/{registry}/{name}",
+    path = "/proxy/{registry}/{package}",
     tag = "proxy/npm",
     params(("registry" = String, Path, description = "Registry name"),
-           ("name" = String, Path, description = "Package name")),
+           ("package" = String, Path, description = "Package name")),
     request_body(content_type = "application/json", description = "npm publish payload"),
     responses(
         (status = 200, description = "Package published", body = NpmPublishResponse),
@@ -51,7 +51,7 @@ pub struct NpmPublishResponse {}
     security(("bearer_token" = [])),
 )]
 #[allow(clippy::too_many_arguments)]
-#[put("/proxy/{registry}/{name}")]
+#[put("/proxy/{registry}/{package}")]
 pub async fn npm_publish(
     req: actix_web::HttpRequest,
     path: web::Path<(String, String)>,

@@ -87,6 +87,48 @@ impl RpmPackage {
     }
 }
 
+/// The publish-time edge checks on the identifying header fields.
+///
+/// [`RpmPackage::storage_id`] is the stored file name and the sidecar key, and
+/// it is one NEVRA only if it splits back from the right: an architecture has
+/// no `.` or `-`, and rpmbuild already refuses a `-` in a version or release —
+/// a hand-built header did not, and `(a, 1-2, 3)` was `(a-1, 2, 3)`'s file.
+/// Each field is one path segment, and none carries a control character, which
+/// XML 1.0 cannot represent: one such name made `primary.xml` unparseable for
+/// every package in the repository.
+///
+/// What this cannot see is the epoch: `storage_id` prefixes a non-zero one, so
+/// `(epoch 389, ds-base)` and `(epoch 0, 389-ds-base)` — a real Fedora name —
+/// are one file. The handler refuses that against the stored sidecar.
+pub fn check_coordinate(pkg: &RpmPackage) -> Result<(), CoreError> {
+    use batlehub_core::services::validate_path_segment;
+    for (kind, value) in [
+        ("name", &pkg.name),
+        ("version", &pkg.version),
+        ("release", &pkg.release),
+        ("arch", &pkg.arch),
+    ] {
+        validate_path_segment(kind, value)?;
+        if value.chars().any(char::is_control) {
+            return Err(CoreError::InvalidInput(format!(
+                "rpm {kind} {value:?} contains a control character"
+            )));
+        }
+    }
+    for (kind, value, forbidden) in [
+        ("version", &pkg.version, &['-'][..]),
+        ("release", &pkg.release, &['-'][..]),
+        ("arch", &pkg.arch, &['-', '.'][..]),
+    ] {
+        if value.contains(forbidden) {
+            return Err(CoreError::InvalidInput(format!(
+                "rpm {kind} '{value}' must not contain any of {forbidden:?}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Parse a `.rpm` into [`RpmPackage`]; `location` is the repo-relative href under
 /// which the package will be served.
 pub fn parse_rpm(bytes: &[u8], location: &str) -> Result<RpmPackage, CoreError> {
@@ -174,11 +216,36 @@ pub fn parse_rpm(bytes: &[u8], location: &str) -> Result<RpmPackage, CoreError> 
 
 // ── XML generation ──────────────────────────────────────────────────────────
 
+/// Escape `s` for an XML 1.0 text node or double-quoted attribute.
+///
+/// Two things beyond the five entities, both found by `fuzz_repo_index_render`:
+///
+/// - **Characters XML 1.0 cannot carry at all** — C0 controls other than tab,
+///   newline and carriage return, and U+FFFE/U+FFFF — become U+FFFD. Not even a
+///   character reference may name them, so one `\x01` in one package's summary
+///   made `primary.xml` unparseable and DNF refused the whole repository. The
+///   identifying fields are refused at publish (`check_coordinate`); this is
+///   the free text, and every sidecar stored before that check existed.
+/// - **Tab, newline and carriage return** become character references, because
+///   a parser normalises them literally — `\r\n` to `\n` in text, all three to
+///   a space in an attribute — and the value read back would not be the value
+///   written.
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\t' => out.push_str("&#9;"),
+            '\n' => out.push_str("&#10;"),
+            '\r' => out.push_str("&#13;"),
+            '\u{0}'..='\u{1f}' | '\u{fffe}' | '\u{ffff}' => out.push('\u{fffd}'),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn version_attrs(p: &RpmPackage) -> String {
@@ -397,6 +464,45 @@ pub fn repomd_xml(entries: &[RepoMdData]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn esc_keeps_the_document_well_formed_and_the_value_readable() {
+        assert_eq!(super::esc("a\u{1}b"), "a\u{fffd}b");
+        assert_eq!(
+            super::esc("x\r\ny\t\"<&>"),
+            "x&#13;&#10;y&#9;&quot;&lt;&amp;&gt;"
+        );
+        assert_eq!(super::esc("\u{ffff}"), "\u{fffd}");
+    }
+
+    #[test]
+    fn check_coordinate_refuses_what_storage_id_cannot_split_back() {
+        let ok = super::RpmPackage {
+            name: "389-ds-base".into(),
+            version: "2.4".into(),
+            release: "1.fc40".into(),
+            arch: "x86_64".into(),
+            ..Default::default()
+        };
+        assert!(super::check_coordinate(&ok).is_ok());
+        for (field, value) in [
+            ("name", "a\u{1}"),
+            ("name", "a/b"),
+            ("version", "1-2"),
+            ("release", "1-2"),
+            ("arch", "noarch.x"),
+            ("arch", "x86-64"),
+        ] {
+            let mut p = ok.clone();
+            match field {
+                "name" => p.name = value.into(),
+                "version" => p.version = value.into(),
+                "release" => p.release = value.into(),
+                _ => p.arch = value.into(),
+            }
+            assert!(super::check_coordinate(&p).is_err(), "{field}={value:?}");
+        }
+    }
+
     use super::*;
 
     fn sample() -> RpmPackage {
