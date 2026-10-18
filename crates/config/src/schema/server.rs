@@ -59,6 +59,34 @@ pub struct ServerConfig {
     /// startup error rather than a registry that quietly serves nothing.
     #[serde(default)]
     pub signed_urls: Option<SignedUrlsConfig>,
+    /// The `/scalar` API reference. See [`ApiDocsConfig`].
+    #[serde(default)]
+    pub api_docs: ApiDocsConfig,
+}
+
+/// `[server.api_docs]` — what the `/scalar` API reference may do.
+///
+/// ```toml
+/// [server.api_docs]
+/// ai_agent     = true
+/// ai_agent_key = "${SCALAR_AGENT_KEY}"   # required off `localhost`
+/// ```
+///
+/// Off by default. "Ask AI" is Scalar's hosted agent: turning it on sends the
+/// whole OpenAPI document, and every question typed into it, to
+/// `api.scalar.com`, and opens `connect-src` on `/scalar` to that origin —
+/// which also lets the bundle's registry lookups through, announcing the page
+/// to Scalar on every load. A private registry should leave it off.
+#[derive(Debug, Default, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct ApiDocsConfig {
+    #[serde(default)]
+    pub ai_agent: bool,
+    /// Scalar agent key. The bundle enables the agent without one only when the
+    /// page is served from `localhost`; anywhere else it stays hidden. It is
+    /// written into the page, so it is not a secret from whoever can open it.
+    #[serde(default)]
+    pub ai_agent_key: Option<String>,
 }
 
 /// `[server.signed_urls]` — the instance secret that signs download URLs.

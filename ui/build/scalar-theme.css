@@ -1,0 +1,69 @@
+/* BatleHub's skin for `/scalar`, appended by build/copy-scalar.mjs after
+   src/design/tokens.css (whose light rendition it re-scopes to `.light-mode`,
+   the class Scalar toggles on <body>). Every colour below is a token — none is
+   decided here. Loaded with `theme: "none"`, so no preset fights it. */
+
+@font-face {
+  font-family: "Silkscreen";
+  src: url("/fonts/silkscreen-700.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/jetbrainsmono-latin.woff2") format("woff2");
+  font-weight: 100 800;
+  font-display: swap;
+}
+
+:root {
+  --scalar-font: var(--face-text);
+  --scalar-font-code: var(--face-text);
+  --scalar-radius: var(--radius);
+  --scalar-radius-lg: var(--radius);
+  --scalar-radius-xl: var(--radius);
+}
+
+.light-mode,
+.dark-mode {
+  --scalar-background-1: var(--ground);
+  --scalar-background-2: var(--ground-raised);
+  --scalar-background-3: var(--ground-raised);
+  --scalar-background-accent: color-mix(in oklch, var(--accent) 12%, transparent);
+  --scalar-color-1: var(--ink);
+  --scalar-color-2: var(--ink-dim);
+  --scalar-color-3: var(--ink-dim);
+  --scalar-color-accent: var(--accent);
+  --scalar-border-color: var(--rule-soft);
+
+  --scalar-color-red: var(--accent);
+  --scalar-color-orange: var(--copper);
+  --scalar-color-yellow: var(--focus);
+
+  --scalar-button-1: var(--accent);
+  --scalar-button-1-hover: color-mix(in oklch, var(--accent) 85%, var(--ink));
+  --scalar-button-1-color: var(--accent-ink);
+
+  --scalar-sidebar-background-1: var(--ground-sunk);
+  --scalar-sidebar-color-1: var(--ink);
+  --scalar-sidebar-color-2: var(--ink-dim);
+  --scalar-sidebar-border-color: var(--rule-soft);
+  --scalar-sidebar-item-hover-background: var(--ground-raised);
+  --scalar-sidebar-item-hover-color: var(--ink);
+  --scalar-sidebar-item-active-background: var(--ground-raised);
+  --scalar-sidebar-color-active: var(--accent);
+  --scalar-sidebar-search-background: var(--ground);
+  --scalar-sidebar-search-color: var(--ink-dim);
+  --scalar-sidebar-search-border-color: var(--rule-strong);
+}
+
+.scalar-app h1,
+.scalar-app .section-header {
+  font-family: var(--face-display);
+  font-weight: 700;
+}
+
+.scalar-app :focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}

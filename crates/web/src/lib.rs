@@ -482,7 +482,7 @@ pub use middleware::RateLimitMiddlewareFactory;
 pub use middleware::RateLimitService;
 pub use middleware::UserBlockMiddlewareFactory;
 pub use middleware::{
-    protocol_document_csp, security_headers, API_DOCS_CSP, PROTOCOL_DOCUMENT_CSP,
+    protocol_document_csp, security_headers, API_DOCS_AI_CSP, API_DOCS_CSP, PROTOCOL_DOCUMENT_CSP,
 };
 pub use middleware::{AuthMiddlewareFactory, CredentialRejectionAudit};
 pub use spa::{configure_spa, narrow_csp, SpaDir};
@@ -1406,6 +1406,11 @@ pub fn openapi_spec() -> utoipa::openapi::OpenApi {
 ///   declared anywhere a scanner could see.
 pub const SCALAR_BUNDLE_PATH: &str = "assets/scalar/standalone.js";
 
+/// The BatleHub skin for the reference, written beside the bundle by
+/// `ui/build/copy-scalar.mjs` from the console's design tokens. Same-origin, so
+/// `style-src 'self'` in [`API_DOCS_CSP`] admits it.
+pub const SCALAR_THEME_PATH: &str = "assets/scalar/batlehub.css";
+
 /// Whether the built bundle is present under `static_dir`.
 ///
 /// `static_dir` is optional, and a deployment that serves the API without the
@@ -1439,6 +1444,13 @@ pub fn scalar_bundle_present(static_dir: Option<&std::path::Path>) -> bool {
 ///   and any token pasted into the explorer — through a third party. Empty means
 ///   the browser calls the API directly, which is same-origin here: this page
 ///   documents the server serving it.
+/// - `agent` / `mcp` — "Ask AI" sends the spec and the question to Scalar's
+///   hosted agent, and the bundle turns it on by itself whenever the page is
+///   served from `localhost`. Both are therefore `disabled` unless the operator
+///   opts in with [`ScalarAgent`] (`[server.api_docs] ai_agent`); MCP stays off
+///   either way.
+/// - `theme: "none"` — no preset; [`SCALAR_THEME_PATH`] paints the page with
+///   the console's tokens instead.
 ///
 /// The third origin, `api.scalar.com/vector/registry/*`, is **not** fixable
 /// here or by self-hosting: those URLs are hardcoded in the bundle and ignore
@@ -1446,7 +1458,24 @@ pub fn scalar_bundle_present(static_dir: Option<&std::path::Path>) -> bool {
 /// effect). They are stopped one level out, by `connect-src 'self'` in
 /// [`API_DOCS_CSP`] — which is why that directive is not the `*` an API explorer
 /// superficially wants.
-fn scalar_html() -> String {
+fn scalar_html(agent: Option<&ScalarAgent>) -> String {
+    let agent = match agent {
+        None => serde_json::json!({ "disabled": true }),
+        Some(ScalarAgent { key: None }) => serde_json::json!({}),
+        Some(ScalarAgent { key: Some(key) }) => serde_json::json!({ "key": key }),
+    };
+    let configuration = serde_json::json!({
+        "withDefaultFonts": false,
+        "proxyUrl": "",
+        "theme": "none",
+        "agent": agent,
+        "mcp": { "disabled": true },
+    })
+    .to_string()
+    // The value sits in a single-quoted attribute; an operator-supplied key
+    // must not be able to close it.
+    .replace('&', "&amp;")
+    .replace('\'', "&#39;");
     format!(
         r#"<!doctype html>
 <html>
@@ -1454,11 +1483,12 @@ fn scalar_html() -> String {
     <title>BatleHub API</title>
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <link rel="stylesheet" href="/{SCALAR_THEME_PATH}"/>
 </head>
 <body>
 <script id="api-reference"
         type="application/json"
-        data-configuration='{{"withDefaultFonts":false,"proxyUrl":""}}'>
+        data-configuration='{configuration}'>
     $spec
 </script>
 <script src="/{SCALAR_BUNDLE_PATH}"></script>
@@ -1517,6 +1547,16 @@ fn scalar_unavailable_html() -> String {
     )
 }
 
+/// The operator's opt-in to Scalar's hosted "Ask AI" agent on `/scalar`
+/// (`[server.api_docs] ai_agent`). Its presence as app data is also what makes
+/// [`middleware::protocol_document_csp`] send [`API_DOCS_AI_CSP`] instead of
+/// [`API_DOCS_CSP`], since the agent cannot reach its backend otherwise.
+#[derive(Clone, Debug, Default)]
+pub struct ScalarAgent {
+    /// Required by the bundle anywhere but `localhost`.
+    pub key: Option<String>,
+}
+
 /// Return a Scalar API docs service using the provided OpenAPI spec.
 ///
 /// `static_dir` is the configured console directory, if any; it decides which of
@@ -1528,9 +1568,10 @@ fn scalar_unavailable_html() -> String {
 pub fn scalar(
     openapi: utoipa::openapi::OpenApi,
     static_dir: Option<&std::path::Path>,
+    agent: Option<&ScalarAgent>,
 ) -> Scalar<utoipa::openapi::OpenApi> {
     let html = if scalar_bundle_present(static_dir) {
-        scalar_html()
+        scalar_html(agent)
     } else {
         scalar_unavailable_html()
     };
@@ -1546,7 +1587,7 @@ mod scalar_tests {
     /// script at all.
     #[test]
     fn the_reference_loads_nothing_from_a_third_party() {
-        for html in [scalar_html(), scalar_unavailable_html()] {
+        for html in [scalar_html(None), scalar_unavailable_html()] {
             assert!(
                 !html.contains("//"),
                 "no protocol-relative or absolute external URL may appear: {html}"
@@ -1561,7 +1602,7 @@ mod scalar_tests {
     /// must not silently regain an absolute `src`.
     #[test]
     fn the_bundle_is_referenced_by_a_root_relative_path() {
-        let html = scalar_html();
+        let html = scalar_html(None);
         assert!(html.contains(&format!(r#"<script src="/{SCALAR_BUNDLE_PATH}">"#)));
         assert!(!html.contains("integrity="));
         assert!(!html.contains("crossorigin="));
@@ -1571,9 +1612,52 @@ mod scalar_tests {
     /// `proxy.scalar.com`; both were confirmed in a browser.
     #[test]
     fn the_reference_turns_off_the_two_configurable_third_party_calls() {
-        let html = scalar_html();
+        let html = scalar_html(None);
         assert!(html.contains(r#""withDefaultFonts":false"#));
         assert!(html.contains(r#""proxyUrl":"""#));
+    }
+
+    /// "Ask AI" and the MCP button talk to Scalar's hosted services; the
+    /// bundle enables the agent on its own for any `localhost` URL.
+    #[test]
+    fn the_reference_turns_off_the_hosted_ai_features() {
+        let html = scalar_html(None);
+        assert!(html.contains(r#""agent":{"disabled":true}"#));
+        assert!(html.contains(r#""mcp":{"disabled":true}"#));
+    }
+
+    /// Opting in enables the agent (and carries the key), never MCP.
+    #[test]
+    fn the_operator_can_turn_the_agent_on() {
+        let html = scalar_html(Some(&ScalarAgent { key: None }));
+        assert!(html.contains(r#""agent":{}"#));
+        assert!(html.contains(r#""mcp":{"disabled":true}"#));
+
+        let html = scalar_html(Some(&ScalarAgent {
+            key: Some("k-1".into()),
+        }));
+        assert!(html.contains(r#""agent":{"key":"k-1"}"#));
+    }
+
+    /// The key is operator input written into a single-quoted attribute.
+    #[test]
+    fn an_agent_key_cannot_break_out_of_the_attribute() {
+        let html = scalar_html(Some(&ScalarAgent {
+            key: Some("x'><script src=/evil.js></script>".into()),
+        }));
+        assert!(!html.contains("x'>"));
+        assert!(html.contains("x&#39;>"));
+    }
+
+    /// The skin is same-origin and replaces the presets rather than layering
+    /// over one.
+    #[test]
+    fn the_reference_is_skinned_with_the_console_tokens() {
+        let html = scalar_html(None);
+        assert!(html.contains(&format!(
+            r#"<link rel="stylesheet" href="/{SCALAR_THEME_PATH}"/>"#
+        )));
+        assert!(html.contains(r#""theme":"none""#));
     }
 
     /// `Scalar::to_html` substitutes `$spec`; losing the placeholder would serve
@@ -1581,7 +1665,7 @@ mod scalar_tests {
     /// degraded one deliberately, so `curl` still yields the document.
     #[test]
     fn both_templates_keep_the_spec_placeholder() {
-        assert!(scalar_html().contains("$spec"));
+        assert!(scalar_html(None).contains("$spec"));
         assert!(scalar_unavailable_html().contains("$spec"));
     }
 
@@ -1633,7 +1717,7 @@ mod scalar_tests {
     #[test]
     fn the_service_serves_the_degraded_page_without_a_bundle() {
         let spec = openapi_spec();
-        let rendered = scalar(spec, None).to_html();
+        let rendered = scalar(spec, None, None).to_html();
         assert!(rendered.contains("API reference unavailable"));
         assert!(!rendered.contains("<script src="));
     }

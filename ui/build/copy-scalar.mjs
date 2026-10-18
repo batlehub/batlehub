@@ -27,7 +27,7 @@
 // `standalone.esm.js`, which is smaller only because it code-splits into
 // `chunks/` and would need every chunk copied and a `type="module"` tag.
 
-import { copyFileSync, mkdirSync, statSync } from 'node:fs'
+import { copyFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -61,3 +61,19 @@ copyFileSync(SOURCE, TARGET)
 
 const kb = Math.round(source.size / 1024)
 console.log(`copy-scalar: assets/scalar/standalone.js (${kb} kB)`)
+
+// The BatleHub skin: the console's tokens, with the light rendition re-scoped
+// to the class Scalar puts on <body>, then build/scalar-theme.css mapping them
+// onto `--scalar-*`. Generated so the reference cannot drift from the console.
+const LIGHT = ':root[data-theme="light"]'
+const tokens = readFileSync(resolve(uiRoot, 'src/design/tokens.css'), 'utf8')
+if (!tokens.includes(LIGHT)) {
+  console.error(`copy-scalar: tokens.css no longer declares ${LIGHT}`)
+  process.exit(1)
+}
+writeFileSync(
+  resolve(dirname(TARGET), 'batlehub.css'),
+  tokens.replaceAll(LIGHT, '.light-mode') +
+    readFileSync(resolve(here, 'scalar-theme.css'), 'utf8'),
+)
+console.log('copy-scalar: assets/scalar/batlehub.css')

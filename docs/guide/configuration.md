@@ -197,6 +197,7 @@ port = 8080             # default
 | `cli_binary_path` | string | — | Path to `batlehub-cli`, served at `GET /api/v1/cli/download` |
 | `trusted_proxies` | string[] | *absent* | CIDR ranges (or bare IPs) of reverse proxies whose `X-Forwarded-*` headers are believed |
 | `signed_urls` | table | *absent* | Signing material for download URLs. See [`[server.signed_urls]`](#server-signed-urls) |
+| `api_docs` | table | *absent* → AI off | What the `/scalar` API reference may do. See [`[server.api_docs]`](#server-api-docs) |
 | `roles` | string[] | `["proxy", "worker"]` | What this process does: `proxy` serves requests and queues scan jobs, `worker` dequeues and scans them. The default is both (an embedded worker). `batlehub --roles worker` overrides it for a scan-only process. See [`[registries.security]`](#registries-security) and [`[worker]`](#scanners-and-worker). |
 
 #### CORS
@@ -331,6 +332,32 @@ signed-for user did not already have. If that is not enough for your estate:
 lower `ttl_seconds`, and drop or rewrite `http.target` in your log pipeline. The
 audit trail is unaffected — `access_events` records the package coordinate, never
 the URL.
+:::
+
+#### `[server.api_docs]` {#server-api-docs}
+
+The API reference at `/scalar` is served from this origin and calls no third
+party. Its "Ask AI" agent is Scalar's hosted service, so it is **off by
+default** and is turned on here.
+
+```toml
+[server.api_docs]
+ai_agent     = true
+ai_agent_key = "${SCALAR_AGENT_KEY}"   # needed anywhere but localhost
+```
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `ai_agent` | bool | `false` | Show "Ask AI" on `/scalar` |
+| `ai_agent_key` | string | — | Scalar agent key. Without one the agent only appears when the page is opened on `localhost`. It is written into the page, so anyone who can open `/scalar` can read it |
+
+::: warning What turning it on sends
+The agent uploads the whole OpenAPI document, and every question, to
+`api.scalar.com`, after the reader accepts Scalar's terms. To let it reach that
+host, `/scalar`'s `connect-src` is widened to `https://api.scalar.com`. This also
+unblocks the bundle's registry lookups, which would otherwise be blocked, so every load of
+the page then reaches Scalar. MCP stays off either way. The option is read at
+startup; changing it needs a restart.
 :::
 
 ---

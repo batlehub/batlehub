@@ -130,6 +130,22 @@ pub const API_DOCS_CSP: &str = "default-src 'none'; \
      form-action 'none'; \
      frame-ancestors 'none'";
 
+/// [`API_DOCS_CSP`] with `connect-src` opened to `api.scalar.com`, sent only
+/// when the operator turned the hosted agent on ([`crate::ScalarAgent`]). The
+/// agent's backend lives there and nothing else would reach it — and the
+/// bundle's registry lookups, which the strict policy stops, go through too.
+/// That is the price of the opt-in, and why it is off by default.
+pub const API_DOCS_AI_CSP: &str = "default-src 'none'; \
+     script-src 'self'; \
+     style-src 'self' 'unsafe-inline'; \
+     img-src 'self' data: blob:; \
+     font-src 'self' data:; \
+     connect-src 'self' https://api.scalar.com; \
+     worker-src 'self' blob:; \
+     base-uri 'none'; \
+     form-action 'none'; \
+     frame-ancestors 'none'";
+
 /// A restrictive `Content-Security-Policy` for protocol documents and artifacts.
 ///
 /// # Why a policy here when the module says it cannot be global
@@ -183,7 +199,11 @@ pub async fn protocol_document_csp<B: MessageBody>(
     let policy = if super::extract_registry_from_path(path).is_some() {
         Some(PROTOCOL_DOCUMENT_CSP)
     } else if is_api_docs_path(path) {
-        Some(API_DOCS_CSP)
+        Some(if req.app_data::<crate::ScalarAgent>().is_some() {
+            API_DOCS_AI_CSP
+        } else {
+            API_DOCS_CSP
+        })
     } else {
         None
     };
@@ -422,6 +442,31 @@ mod tests {
             test::call_service(&app, test::TestRequest::get().uri("/scalar").to_request()).await;
         assert_eq!(
             resp.headers().get("content-security-policy").unwrap(),
+            API_DOCS_CSP
+        );
+    }
+
+    /// The opt-in widens `connect-src` to the agent's backend and nothing else.
+    #[actix_web::test]
+    async fn the_ai_opt_in_opens_only_connect_src() {
+        let app = test::init_service(
+            App::new()
+                .wrap(actix_web::middleware::from_fn(protocol_document_csp))
+                .app_data(crate::ScalarAgent::default())
+                .route(
+                    "/scalar",
+                    web::get().to(|| async { HttpResponse::Ok().finish() }),
+                ),
+        )
+        .await;
+        let resp =
+            test::call_service(&app, test::TestRequest::get().uri("/scalar").to_request()).await;
+        assert_eq!(
+            resp.headers().get("content-security-policy").unwrap(),
+            API_DOCS_AI_CSP
+        );
+        assert_eq!(
+            API_DOCS_AI_CSP.replace(" https://api.scalar.com", ""),
             API_DOCS_CSP
         );
     }

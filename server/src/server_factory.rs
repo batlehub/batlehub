@@ -154,6 +154,7 @@ impl RootSpanBuilder for BatleHubSpanBuilder {
 pub(super) struct ServerParams {
     pub bind_addr: String,
     pub static_dir: Option<String>,
+    pub scalar_agent: Option<batlehub_web::ScalarAgent>,
     pub cli_binary_path: Option<PathBuf>,
     pub cors_allowed_origins: Vec<String>,
     pub db_pool: sqlx::PgPool,
@@ -241,6 +242,7 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
     let ServerParams {
         bind_addr,
         static_dir,
+        scalar_agent,
         cli_binary_path,
         cors_allowed_origins,
         db_pool,
@@ -391,6 +393,10 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
         }
         app = app.app_data(web::Data::new(Arc::clone(&artifact_inventory)));
         app = app.app_data(web::Data::new(Arc::clone(&audit_trail)));
+        // Read by `protocol_document_csp` to choose `/scalar`'s policy.
+        if let Some(agent) = scalar_agent.clone() {
+            app = app.app_data(agent);
+        }
 
         let cors = crate::watcher::build_cors(&cors_allowed_origins);
         let enabled = ip_blocking_cfg.as_ref().is_some_and(|c| c.enabled);
@@ -450,6 +456,7 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
         .service(batlehub_web::scalar(
             openapi,
             static_dir_inner.as_deref().map(std::path::Path::new),
+            scalar_agent.as_ref(),
         ))
         .configure(move |cfg| {
             if let Some(ref dir) = static_dir_inner {
