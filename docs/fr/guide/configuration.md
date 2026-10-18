@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: 29dbd192614c76cb
+sourceHash: 9e321bdcb26f7467
 ---
 
 # Référence de configuration
@@ -230,6 +230,7 @@ port = 8080             # défaut
 | `cli_binary_path` | chaîne | — | Chemin de `batlehub-cli`, servi sur `GET /api/v1/cli/download` |
 | `trusted_proxies` | chaîne[] | *absent* | Plages CIDR (ou IP nues) des reverse proxys dont les en-têtes `X-Forwarded-*` sont crus |
 | `signed_urls` | table | *absent* | Matériel de signature des URL de téléchargement. Voir [`[server.signed_urls]`](#server-signed-urls) |
+| `api_docs` | table | *absent* → IA désactivée | Ce que la référence d'API `/scalar` a le droit de faire. Voir [`[server.api_docs]`](#server-api-docs) |
 | `roles` | chaîne[] | `["proxy", "worker"]` | Ce que fait ce processus : `proxy` sert les requêtes et met les travaux d'analyse en file, `worker` les défile et les analyse. Le défaut est les deux (un worker embarqué). `batlehub --roles worker` le remplace pour un processus d'analyse seule. Voir [`[registries.security]`](#registries-security) et [`[worker]`](#scanners-and-worker). |
 
 #### CORS
@@ -379,6 +380,33 @@ permission que l'utilisateur signé n'avait déjà n'est accordée. Si cela ne s
 pas pour votre parc : abaissez `ttl_seconds`, et retirez ou réécrivez
 `http.target` dans votre pipeline de logs. La piste d'audit n'est pas
 concernée — `access_events` enregistre la coordonnée du paquet, jamais l'URL.
+:::
+
+#### `[server.api_docs]` {#server-api-docs}
+
+La référence d'API servie sur `/scalar` vient de cette origine et n'appelle aucun
+tiers. Son agent « Ask AI » est un service hébergé par Scalar : il est donc
+**désactivé par défaut**, et c'est ici qu'on l'active.
+
+```toml
+[server.api_docs]
+ai_agent     = true
+ai_agent_key = "${SCALAR_AGENT_KEY}"   # nécessaire ailleurs que sur localhost
+```
+
+| Clé | Type | Défaut | Description |
+| --- | --- | --- | --- |
+| `ai_agent` | booléen | `false` | Affiche « Ask AI » sur `/scalar` |
+| `ai_agent_key` | chaîne | — | Clé d'agent Scalar. Sans elle, l'agent n'apparaît que si la page est ouverte sur `localhost`. Elle est écrite dans la page : quiconque peut ouvrir `/scalar` peut la lire |
+
+::: warning Ce que l'activation envoie
+L'agent téléverse l'intégralité du document OpenAPI, et chaque question, vers
+`api.scalar.com`, une fois que le lecteur a accepté les conditions de Scalar.
+Pour qu'il puisse joindre cet hôte, le `connect-src` de `/scalar` est élargi à
+`https://api.scalar.com`. Cela laisse aussi passer les requêtes du bundle vers
+l'annuaire de Scalar, bloquées sinon : chaque chargement de la page contacte
+alors Scalar. Le MCP reste désactivé dans tous les cas. L'option est lue au
+démarrage ; la modifier demande un redémarrage.
 :::
 
 ---
