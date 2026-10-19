@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/helm.md
-sourceHash: 33907156f5632e42
+sourceHash: f33b54e665249cfe
 ---
 
 # Helm
