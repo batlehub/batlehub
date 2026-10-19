@@ -11,14 +11,12 @@ A self-hosted smart proxy and cache for package registries. It sits between your
 ### With Docker Compose
 
 ```sh
-# Clone and start PostgreSQL + the server
-git clone https://github.com/your-org/batlehub
-cd batlehub
-cp config.example.toml config.toml   # edit as needed
-podman compose up -d                 # or docker compose up -d
+git clone https://github.com/batlehub/batlehub
+cd batlehub/deploy/compose/min
+BATLEHUB_ADMIN_TOKEN=$(openssl rand -hex 32) docker compose up -d   # or podman compose
 ```
 
-The server listens on `http://localhost:8080`. The admin token from `config.example.toml` is `change-me-admin-token`.
+The server listens on `http://localhost:8080`, and npm is proxied at `/proxy/npm/`. `deploy/compose/base` adds an OIDC login (Dex) and `deploy/compose/max` adds Valkey and S3 storage — see [Docker Compose](https://batleforc.git.batleforc.fr/batlehub/guide/install/compose.html).
 
 ### Build from source
 

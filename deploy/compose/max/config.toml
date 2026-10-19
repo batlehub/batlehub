@@ -1,0 +1,69 @@
+# max — the config `docker-compose.yaml` beside this file mounts: `base` plus
+# Valkey for the shared cache and S3 (RustFS) for the artifacts — the two
+# pieces a second replica needs, since neither then lives in one process.
+#
+# `${VAR}` is read from the server's environment when the file is loaded.
+
+[server]
+host = "0.0.0.0"
+port = 8080
+# The console, served from the image by this same server.
+static_dir = "/app/ui/dist"
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+
+# For the API and the CLI; people sign in through Dex below.
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "${BATLEHUB_ADMIN_TOKEN}"
+role = "admin"
+user_id = "admin"
+
+[[auth]]
+type = "oidc"
+# Reached at localhost because BatleHub shares Dex's network namespace (see
+# docker-compose.yaml); it must equal `issuer` in dex.yaml exactly.
+issuer_url = "http://localhost:5556/dex"
+client_id = "batlehub"
+client_secret = "${OIDC_CLIENT_SECRET}"
+redirect_uri = "http://localhost:8080/api/v1/auth/oidc/callback"
+scopes = ["openid", "profile", "email"]
+user_id_claim = "email"
+# Dex's password DB emits no groups claim, so roles are mapped off the email.
+role_claim = "email"
+# Refuse to start while Dex is not answering yet; compose restarts the server
+# until it is. Without it the server would come up with no login at all.
+required = true
+
+[auth.role_mappings]
+"admin@example.com" = "admin"
+
+# Metadata cache and rate-limit counters, shared by every replica.
+# Valkey speaks the Redis protocol.
+[cache]
+type = "redis"
+url = "${REDIS_URL}"
+
+# Artifacts in S3. Credentials come from AWS_ACCESS_KEY_ID /
+# AWS_SECRET_ACCESS_KEY in the server's environment.
+[storage]
+type = "s3"
+bucket = "batlehub"
+region = "us-east-1"
+endpoint_url = "http://s3:9000"
+# Bucket in the path, not the hostname: what RustFS and most non-AWS stores need.
+force_path_style = true
+
+[[registries]]
+type = "npm"
+name = "npm"
+upstreams = ["https://registry.npmjs.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

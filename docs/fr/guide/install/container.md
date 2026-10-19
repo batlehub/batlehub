@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/install/container.md
-sourceHash: badd759c01fd4d7a
+sourceHash: 7771d7b1953a4931
 ---
 
 # Image de conteneur
@@ -13,10 +13,10 @@ Une image multi-architecture (`linux/amd64` + `linux/arm64`) est poussée sur le
 GitHub Container Registry :
 
 ```sh
-docker pull ghcr.io/batleforc/batlehub:<version>
+docker pull ghcr.io/batlehub/batlehub:<version>
 
 # Ou toujours la dernière version taguée (pas :latest — en production, figez une version)
-docker pull ghcr.io/batleforc/batlehub:0.2.0
+docker pull ghcr.io/batlehub/batlehub:1.7.0
 ```
 
 Pour la lancer :
@@ -25,8 +25,11 @@ Pour la lancer :
 docker run -p 8080:8080 \
   -v /path/to/config.toml:/etc/batlehub/config.toml:ro \
   -v /path/to/cache:/var/cache/batlehub \
-  ghcr.io/batleforc/batlehub:<version>
+  ghcr.io/batlehub/batlehub:<version>
 ```
+
+Les [piles Compose](/fr/guide/install/compose) de `deploy/compose/` lancent
+cette image avec une base, et en option Dex, Valkey et S3, déjà câblés.
 
 ---
 

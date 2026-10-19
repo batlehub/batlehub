@@ -1,0 +1,68 @@
+# base — PostgreSQL, Dex (OIDC) and BatleHub.
+#
+#   cd deploy/compose/base
+#   export BATLEHUB_ADMIN_TOKEN=$(openssl rand -hex 32)
+#   export OIDC_CLIENT_SECRET=$(openssl rand -hex 32)
+#   export DEX_ADMIN_PASSWORD_HASH=$(docker run --rm httpd:2.4-alpine htpasswd -nbBC 10 '' 'your-password' | tr -d ':\n')
+#   docker compose up -d
+#
+# Console on http://localhost:8080 — "Sign in" goes to Dex, as admin@example.com
+# with the password hashed above. `../min` is the same without Dex; `../max`
+# adds Valkey and S3 storage.
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: batlehub
+      POSTGRES_USER: batlehub
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U batlehub -d batlehub"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  dex:
+    image: ghcr.io/dexidp/dex:v2.45.0
+    restart: unless-stopped
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    environment:
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?set OIDC_CLIENT_SECRET, shared by Dex and BatleHub}
+      DEX_ADMIN_PASSWORD_HASH: ${DEX_ADMIN_PASSWORD_HASH:?set DEX_ADMIN_PASSWORD_HASH to a bcrypt hash}
+    volumes:
+      - ./dex.yaml:/etc/dex/config.yaml:ro
+      - dex_data:/var/dex
+    # BatleHub runs in this container's network namespace (below), so its port
+    # is published here: the issuer has to be one URL that the browser and the
+    # server both reach, and `localhost` is the only plain-HTTP one BatleHub
+    # accepts.
+    ports:
+      - "5556:5556"
+      - "8080:8080"
+
+  batlehub:
+    # Pinned to the latest release; bump it to upgrade.
+    image: ghcr.io/batlehub/batlehub:1.7.0
+    restart: unless-stopped
+    network_mode: service:dex
+    depends_on:
+      db:
+        condition: service_healthy
+      dex:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql://batlehub:${POSTGRES_PASSWORD:-changeme}@db:5432/batlehub
+      BATLEHUB_ADMIN_TOKEN: ${BATLEHUB_ADMIN_TOKEN:?set BATLEHUB_ADMIN_TOKEN to the admin API token}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+    volumes:
+      - ./config.toml:/etc/batlehub/config.toml:ro
+      - cache:/var/cache/batlehub
+
+volumes:
+  db_data:
+  dex_data:
+  cache:
