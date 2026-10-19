@@ -1208,7 +1208,7 @@ async fn replica_named(
 ) -> (Arc<ConfigReloadService>, tempfile::NamedTempFile) {
     let (svc, file) = make_svc_with_file_and_builder(true, content, noop_builder()).await;
     svc.share_with(Arc::clone(cluster), name.to_owned());
-    svc.report_to_cluster().await.unwrap();
+    svc.heartbeat("explore:").await.unwrap();
     (svc, file)
 }
 
@@ -1250,6 +1250,6 @@ async fn replicas_serving_the_same_config_raise_nothing_however_it_is_formatted(
 #[tokio::test]
 async fn a_single_server_has_no_replicas_to_disagree_with() {
     let (svc, _f) = make_svc_with_file_and_builder(true, MINIMAL_CONFIG, noop_builder()).await;
-    assert!(svc.report_to_cluster().await.is_ok());
+    assert!(svc.heartbeat("explore:").await.unwrap().is_empty());
     assert!(svc.replica_drift().await.is_none());
 }

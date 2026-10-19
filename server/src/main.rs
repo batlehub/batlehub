@@ -793,13 +793,18 @@ async fn main() -> Result<()> {
             .with_hot_config(hot.clone()),
     );
     // What the replicas share: the catalogue's invalidations here, the
-    // fingerprint of each one's config below. Postgres, whatever the `[cache]`
-    // type, because a `memory` cache is shared with nobody.
-    let cluster_state: Arc<dyn batlehub_core::ports::ClusterStatePort> =
-        Arc::new(batlehub_adapters::db::PgClusterState::new(repo.pool()));
-    admin_svc
-        .explore_cache
-        .share_with(Arc::clone(&cluster_state));
+    // fingerprint of each one's config below — kept in Postgres, through which
+    // every replica already talks. Only when `[cache]` is shared, which the HA
+    // guide requires of more than one replica: a single server would pay a
+    // statement every few seconds to agree with nobody.
+    let cluster_state: Option<Arc<dyn batlehub_core::ports::ClusterStatePort>> =
+        stores::cache_is_shared(&config).then(|| {
+            Arc::new(batlehub_adapters::db::PgClusterState::new(repo.pool()))
+                as Arc<dyn batlehub_core::ports::ClusterStatePort>
+        });
+    if let Some(ref cluster) = cluster_state {
+        admin_svc.explore_cache.share_with(Arc::clone(cluster));
+    }
 
     let sbom_svc = stores::build_sbom_service(repo.pool())?;
     // Per-registry README capture is configured in `HotConfig::readme` and
@@ -969,18 +974,20 @@ async fn main() -> Result<()> {
 
     // Report the config in force, so the console can say when the replicas
     // disagree (`config.replica-drift`). The pod name under Kubernetes.
-    let replica = std::env::var("HOSTNAME")
-        .ok()
-        .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| {
-            let started = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or_default();
-            format!("pid{}-{started}", std::process::id())
-        });
-    reload_svc.share_with(Arc::clone(&cluster_state), replica);
-    watcher::spawn_cluster_sync(Arc::clone(&admin_svc), Arc::clone(&reload_svc));
+    if let Some(cluster) = cluster_state {
+        let replica = std::env::var("HOSTNAME")
+            .ok()
+            .filter(|h| !h.is_empty())
+            .unwrap_or_else(|| {
+                let started = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or_default();
+                format!("pid{}-{started}", std::process::id())
+            });
+        reload_svc.share_with(cluster, replica);
+        watcher::spawn_cluster_sync(Arc::clone(&admin_svc), Arc::clone(&reload_svc));
+    }
 
     if hot_reload_enabled {
         watcher::spawn_config_watcher(config_paths.clone(), Arc::clone(&reload_svc));

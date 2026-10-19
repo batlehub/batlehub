@@ -5,14 +5,13 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 use crate::entities::{ExploreEntry, ExploreFilter, ExploreSortBy, RegistryStat};
-use crate::error::CoreError;
 use crate::ports::ClusterStatePort;
 
 const TTL: Duration = Duration::from_secs(600);
 
 /// The [`ClusterStatePort`] topics an invalidation advances: `explore:{registry}`,
 /// and `explore:*` for the whole cache.
-const TOPIC_PREFIX: &str = "explore:";
+pub const TOPIC_PREFIX: &str = "explore:";
 
 struct PackageEntry {
     items: Vec<ExploreEntry>,
@@ -41,7 +40,7 @@ pub struct ExploreCache {
     /// [`Self::share_with`] has been called. Unset — a single process, a test —
     /// the cache is this process's alone, as it always was.
     cluster: OnceLock<Arc<dyn ClusterStatePort>>,
-    /// The counters [`Self::sync_from_cluster`] last read. `None` until the
+    /// The counters [`Self::apply_generations`] last saw. `None` until the
     /// first read, which only records them: there is nothing to drop yet.
     seen: tokio::sync::Mutex<Option<HashMap<String, i64>>>,
 }
@@ -138,7 +137,7 @@ impl ExploreCache {
     // ── invalidation ──────────────────────────────────────────────────────────
 
     /// Announce this cache's invalidations to the other replicas, and follow
-    /// theirs through [`Self::sync_from_cluster`]. Called once at startup; a
+    /// theirs through [`Self::apply_generations`]. Called once at startup; a
     /// second call is ignored.
     pub fn share_with(&self, cluster: Arc<dyn ClusterStatePort>) {
         let _ = self.cluster.set(cluster);
@@ -152,7 +151,7 @@ impl ExploreCache {
     ///
     /// A replica that handled none of those requests holds the same stale
     /// listing; the counter advanced here is what its next
-    /// [`Self::sync_from_cluster`] reads. A failure to advance it leaves the
+    /// heartbeat reads. A failure to advance it leaves the
     /// others on their TTL, which is what they had before, so it is logged and
     /// not returned.
     pub async fn invalidate(&self, registry: Option<&str>) {
@@ -165,17 +164,11 @@ impl ExploreCache {
         }
     }
 
-    /// Drop what every other replica invalidated since the last call. Run on a
-    /// timer; a no-op until [`Self::share_with`].
-    pub async fn sync_from_cluster(&self) -> Result<(), CoreError> {
-        let Some(cluster) = self.cluster.get() else {
-            return Ok(());
-        };
-        let now: HashMap<String, i64> = cluster
-            .generations(TOPIC_PREFIX)
-            .await?
-            .into_iter()
-            .collect();
+    /// Drop what every other replica invalidated since `now` was last read:
+    /// the counters under [`TOPIC_PREFIX`], as the periodic heartbeat returns
+    /// them. The first call only records them — there is nothing to drop yet.
+    pub async fn apply_generations(&self, now: Vec<(String, i64)>) {
+        let now: HashMap<String, i64> = now.into_iter().collect();
         let mut seen = self.seen.lock().await;
         if let Some(previous) = seen.as_ref() {
             for (topic, generation) in &now {
@@ -192,7 +185,6 @@ impl ExploreCache {
             }
         }
         *seen = Some(now);
-        Ok(())
     }
 
     /// [`Self::invalidate`] without the announcement.

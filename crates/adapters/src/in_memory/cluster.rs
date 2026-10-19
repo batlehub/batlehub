@@ -37,18 +37,12 @@ impl ClusterStatePort for InMemoryClusterState {
         Ok(())
     }
 
-    async fn generations(&self, prefix: &str) -> Result<Vec<(String, i64)>, CoreError> {
-        Ok(self
-            .generations
-            .lock()
-            .await
-            .iter()
-            .filter(|(k, _)| k.starts_with(prefix))
-            .map(|(k, v)| (k.clone(), *v))
-            .collect())
-    }
-
-    async fn report_config(&self, replica: &str, fingerprint: &str) -> Result<(), CoreError> {
+    async fn heartbeat(
+        &self,
+        replica: &str,
+        fingerprint: &str,
+        prefix: &str,
+    ) -> Result<Vec<(String, i64)>, CoreError> {
         self.reports.lock().await.insert(
             replica.to_owned(),
             ReplicaConfig {
@@ -57,7 +51,14 @@ impl ClusterStatePort for InMemoryClusterState {
                 reported_at: Utc::now(),
             },
         );
-        Ok(())
+        Ok(self
+            .generations
+            .lock()
+            .await
+            .iter()
+            .filter(|(k, _)| k.starts_with(prefix))
+            .map(|(k, v)| (k.clone(), *v))
+            .collect())
     }
 
     async fn config_reports(&self, since: DateTime<Utc>) -> Result<Vec<ReplicaConfig>, CoreError> {
@@ -92,29 +93,35 @@ mod tests {
     }
 
     /// Two replicas, one shared state: an invalidation on one drops the other's
-    /// listing of that registry at its next sync, and leaves another registry's.
+    /// listing of that registry at its next heartbeat, and leaves another
+    /// registry's.
     #[tokio::test]
-    async fn an_invalidation_on_one_replica_reaches_the_other_at_its_next_sync() {
+    async fn an_invalidation_on_one_replica_reaches_the_other_at_its_next_heartbeat() {
+        use batlehub_core::services::explore_cache::TOPIC_PREFIX;
         let shared: Arc<dyn ClusterStatePort> = Arc::new(InMemoryClusterState::new());
         let (a, b) = (ExploreCache::new(), ExploreCache::new());
         a.share_with(Arc::clone(&shared));
         b.share_with(Arc::clone(&shared));
-        b.sync_from_cluster().await.unwrap(); // the first read only records
+        let beat = || async { shared.heartbeat("b", "fp", TOPIC_PREFIX).await.unwrap() };
+        b.apply_generations(beat().await).await; // the first read only records
 
         b.set_packages("npm", entry("npm"), 1, vec!["npm".into()])
             .await;
         b.set_packages("pypi", entry("pypi"), 1, vec!["pypi".into()])
             .await;
         a.invalidate(Some("npm")).await;
-        assert!(b.get_packages("npm").await.is_some(), "not before the sync");
+        assert!(
+            b.get_packages("npm").await.is_some(),
+            "not before the heartbeat"
+        );
 
-        b.sync_from_cluster().await.unwrap();
+        b.apply_generations(beat().await).await;
         assert!(b.get_packages("npm").await.is_none());
         assert!(b.get_packages("pypi").await.is_some());
 
         // A whole-cache invalidation is its own topic.
         a.invalidate(None).await;
-        b.sync_from_cluster().await.unwrap();
+        b.apply_generations(beat().await).await;
         assert!(b.get_packages("pypi").await.is_none());
     }
 
@@ -122,9 +129,9 @@ mod tests {
     async fn a_replica_s_latest_report_replaces_its_previous_one() {
         let state = InMemoryClusterState::new();
         let since = chrono::Utc::now() - chrono::Duration::seconds(1);
-        state.report_config("b", "x").await.unwrap();
-        state.report_config("a", "x").await.unwrap();
-        state.report_config("a", "y").await.unwrap();
+        state.heartbeat("b", "x", "explore:").await.unwrap();
+        state.heartbeat("a", "x", "explore:").await.unwrap();
+        state.heartbeat("a", "y", "explore:").await.unwrap();
         let reports = state.config_reports(since).await.unwrap();
         let got: Vec<_> = reports
             .iter()

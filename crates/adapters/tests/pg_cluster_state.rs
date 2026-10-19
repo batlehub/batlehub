@@ -33,14 +33,17 @@ async fn counters_and_config_reports_round_trip() {
         return;
     };
 
-    // Counters, under a prefix of this run only. `_` must not act as a pattern.
+    // Counters, under a prefix of this run only, read back by the heartbeat
+    // that also records the replica. `_` must not act as a pattern.
     let run = Uuid::new_v4().simple().to_string();
     let prefix = format!("t_{run}:");
     state.bump(&format!("{prefix}npm")).await.unwrap();
     state.bump(&format!("{prefix}npm")).await.unwrap();
     state.bump(&format!("{prefix}pypi")).await.unwrap();
     state.bump(&format!("tX{run}:other")).await.unwrap();
-    let mut got = state.generations(&prefix).await.unwrap();
+    let (a, b) = (format!("{run}-a"), format!("{run}-b"));
+    let since = chrono::Utc::now() - chrono::Duration::seconds(5);
+    let mut got = state.heartbeat(&a, "x", &prefix).await.unwrap();
     got.sort();
     assert_eq!(
         got,
@@ -48,11 +51,8 @@ async fn counters_and_config_reports_round_trip() {
     );
 
     // Config reports: the latest per replica, and only the recent ones.
-    let (a, b) = (format!("{run}-a"), format!("{run}-b"));
-    let since = chrono::Utc::now() - chrono::Duration::seconds(5);
-    state.report_config(&a, "x").await.unwrap();
-    state.report_config(&a, "y").await.unwrap();
-    state.report_config(&b, "x").await.unwrap();
+    state.heartbeat(&a, "y", &prefix).await.unwrap();
+    state.heartbeat(&b, "x", &prefix).await.unwrap();
     let mine: Vec<_> = state
         .config_reports(since)
         .await
@@ -74,8 +74,9 @@ async fn counters_and_config_reports_round_trip() {
         .all(|r| !r.replica.starts_with(&run)));
 
     // Not left behind.
-    sqlx::query("DELETE FROM system_kv WHERE starts_with(key, $1) OR starts_with(key, $2)")
+    sqlx::query("DELETE FROM system_kv WHERE starts_with(key, $1) OR starts_with(key, $2) OR starts_with(key, $3)")
         .bind(format!("t_{run}"))
+        .bind(format!("tX{run}"))
         .bind(format!("config:replica:{run}"))
         .execute(&state_pool().await)
         .await

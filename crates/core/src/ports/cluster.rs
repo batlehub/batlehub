@@ -29,11 +29,18 @@ pub trait ClusterStatePort: Send + Sync {
     /// Advance `topic`'s counter.
     async fn bump(&self, topic: &str) -> Result<(), CoreError>;
 
-    /// Every topic starting with `prefix`, with its counter.
-    async fn generations(&self, prefix: &str) -> Result<Vec<(String, i64)>, CoreError>;
-
-    /// Record the fingerprint of the configuration `replica` serves, now.
-    async fn report_config(&self, replica: &str, fingerprint: &str) -> Result<(), CoreError>;
+    /// One replica's periodic round trip, in a single statement: record the
+    /// fingerprint of the configuration `replica` serves, and return every
+    /// topic starting with `prefix` with its counter.
+    ///
+    /// One call rather than two because it runs on every replica every few
+    /// seconds, idle or not, and an idle server's statement count is budgeted.
+    async fn heartbeat(
+        &self,
+        replica: &str,
+        fingerprint: &str,
+        prefix: &str,
+    ) -> Result<Vec<(String, i64)>, CoreError>;
 
     /// Every replica that reported since `since`, with what it reported last.
     async fn config_reports(&self, since: DateTime<Utc>) -> Result<Vec<ReplicaConfig>, CoreError>;

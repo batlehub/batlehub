@@ -52,13 +52,40 @@ impl ClusterStatePort for PgClusterState {
         Ok(())
     }
 
-    async fn generations(&self, prefix: &str) -> Result<Vec<(String, i64)>, CoreError> {
-        // `starts_with`, not `LIKE`: a prefix holding `_` or `%` must not match
-        // as a pattern.
+    async fn heartbeat(
+        &self,
+        replica: &str,
+        fingerprint: &str,
+        prefix: &str,
+    ) -> Result<Vec<(String, i64)>, CoreError> {
+        // The report, the pruning of rows left by pods a rollout replaced (a
+        // day is far past any window a reader asks about) and the counters, in
+        // one statement. The final `SELECT` reads the snapshot from before the
+        // writes, which is all it needs: it does not read replica rows.
+        //
+        // `starts_with`, not `LIKE` (a `_` in a prefix is not a pattern) and not
+        // a key range (under a non-C collation `:` may not sort where a range
+        // assumes): `system_kv` holds a handful of rows, and a sequential scan
+        // of it is the plan either way.
         let rows = sqlx::query(
-            "SELECT key, COALESCE((value->>'gen')::bigint, 0) AS gen \
-             FROM system_kv WHERE starts_with(key, $1)",
+            r#"
+            WITH report AS (
+                INSERT INTO system_kv (key, value, updated_at)
+                VALUES ($1, jsonb_build_object('fingerprint', $2::text), NOW())
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+                RETURNING 1
+            ), pruned AS (
+                DELETE FROM system_kv
+                WHERE starts_with(key, $3) AND updated_at < NOW() - INTERVAL '1 day'
+                RETURNING 1
+            )
+            SELECT key, COALESCE((value->>'gen')::bigint, 0) AS gen
+            FROM system_kv WHERE starts_with(key, $4)
+            "#,
         )
+        .bind(format!("{REPLICA_PREFIX}{replica}"))
+        .bind(fingerprint)
+        .bind(REPLICA_PREFIX)
         .bind(prefix)
         .fetch_all(&self.pool)
         .await
@@ -67,30 +94,6 @@ impl ClusterStatePort for PgClusterState {
             .into_iter()
             .map(|r| (r.get("key"), r.get("gen")))
             .collect())
-    }
-
-    async fn report_config(&self, replica: &str, fingerprint: &str) -> Result<(), CoreError> {
-        sqlx::query(
-            "INSERT INTO system_kv (key, value, updated_at) \
-             VALUES ($1, jsonb_build_object('fingerprint', $2::text), NOW()) \
-             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
-        )
-        .bind(format!("{REPLICA_PREFIX}{replica}"))
-        .bind(fingerprint)
-        .execute(&self.pool)
-        .await
-        .db_err()?;
-        // Every rollout names new pods; the old ones' rows would otherwise stay
-        // forever. A day is far past any window a reader asks about.
-        sqlx::query(
-            "DELETE FROM system_kv WHERE starts_with(key, $1) \
-             AND updated_at < NOW() - INTERVAL '1 day'",
-        )
-        .bind(REPLICA_PREFIX)
-        .execute(&self.pool)
-        .await
-        .db_err()?;
-        Ok(())
     }
 
     async fn config_reports(&self, since: DateTime<Utc>) -> Result<Vec<ReplicaConfig>, CoreError> {

@@ -216,13 +216,15 @@ pub(super) fn spawn_periodic_vuln_scan(
 /// scheduler with services of its own would keep a second, private set — a
 /// manual sweep and a scheduled one would each be permanently on their own
 /// first pass, and neither would ever delete anything.
-/// How often a replica reads what the others changed and reports its config.
-/// One replica's catalogue lags the others' invalidations by at most this.
-const CLUSTER_SYNC_SECS: u64 = 5;
+/// How often a replica reports its config and reads the others' catalogue
+/// invalidations. One statement each time, on every replica, idle or not; a
+/// catalogue listing lags another replica's change by at most this, against
+/// the ten minutes it is otherwise cached for.
+const CLUSTER_SYNC_SECS: u64 = 15;
 
-/// Keep up with the other replicas: drop the catalogue listings they
-/// invalidated, and report the config in force here for the drift warning. A
-/// failure is logged and retried at the next tick.
+/// Keep up with the other replicas: report the config in force here for the
+/// drift warning, and drop the catalogue listings they invalidated. A failure
+/// is logged and retried at the next tick.
 pub(super) fn spawn_cluster_sync(
     admin_svc: Arc<batlehub_core::services::AdminService>,
     reload_svc: Arc<ConfigReloadService>,
@@ -232,11 +234,12 @@ pub(super) fn spawn_cluster_sync(
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             ticker.tick().await;
-            if let Err(e) = admin_svc.explore_cache.sync_from_cluster().await {
-                tracing::warn!(error = %e, "cluster sync: catalogue invalidations not read");
-            }
-            if let Err(e) = reload_svc.report_to_cluster().await {
-                tracing::warn!(error = %e, "cluster sync: this replica's config fingerprint not reported");
+            match reload_svc
+                .heartbeat(batlehub_core::services::explore_cache::TOPIC_PREFIX)
+                .await
+            {
+                Ok(generations) => admin_svc.explore_cache.apply_generations(generations).await,
+                Err(e) => tracing::warn!(error = %e, "cluster sync: heartbeat failed"),
             }
         }
     });

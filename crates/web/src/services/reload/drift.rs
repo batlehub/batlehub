@@ -17,10 +17,10 @@ use batlehub_core::{error::CoreError, ports::ClusterStatePort};
 
 use super::ConfigReloadService;
 
-/// How recently a replica must have reported to count. Several report periods,
-/// so a replica busy for one tick is not counted out; short enough that one
-/// scaled away stops counting within a minute.
-const REPORT_WINDOW: chrono::Duration = chrono::Duration::seconds(30);
+/// How recently a replica must have reported to count: four heartbeats, so a
+/// replica busy for one is not counted out, and one scaled away stops counting
+/// within about a minute.
+const REPORT_WINDOW: chrono::Duration = chrono::Duration::seconds(60);
 
 impl ConfigReloadService {
     /// Report this replica, as `replica`, to `cluster` and compare it with the
@@ -41,13 +41,15 @@ impl ConfigReloadService {
         hex::encode(Sha256::digest(document.as_bytes()))
     }
 
-    /// Record this replica's fingerprint. Run on a timer.
-    pub async fn report_to_cluster(&self) -> Result<(), CoreError> {
+    /// Record this replica's fingerprint, and read back the counters under
+    /// `prefix` — the catalogue's, for its caller to apply — in one round trip.
+    /// Run on a timer; empty until [`Self::share_with`].
+    pub async fn heartbeat(&self, prefix: &str) -> Result<Vec<(String, i64)>, CoreError> {
         let Some((cluster, replica)) = self.cluster.get() else {
-            return Ok(());
+            return Ok(Vec::new());
         };
         cluster
-            .report_config(replica, &self.config_fingerprint())
+            .heartbeat(replica, &self.config_fingerprint(), prefix)
             .await
     }
 

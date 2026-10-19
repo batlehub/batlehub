@@ -62,6 +62,13 @@ fn cache_backend(config: &AppConfig) -> CacheBackend {
     })
 }
 
+/// Whether `[cache]` is a store several replicas share. The high-availability
+/// guide requires one for more than one replica, so a `memory` cache is read
+/// as a single server: nothing to keep in step with.
+pub(super) fn cache_is_shared(config: &AppConfig) -> bool {
+    !matches!(cache_backend(config), CacheBackend::Memory)
+}
+
 /// How far back `prune_expired` reaches on each sweep. Generously larger than
 /// any realistic rate-limit window so a stale row is never pruned mid-window.
 const RATE_LIMIT_PRUNE_RETENTION_SECS: u64 = 24 * 60 * 60;
