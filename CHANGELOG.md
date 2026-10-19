@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-17
+
+### Added
+
+- **Helm: `writableConfig`.** The first `--config` file can live on a claim of
+  its own (`<fullname>-writable-config`, kept on uninstall), seeded from the
+  chart's `config` by a `seed-config` init container, so the config editor,
+  `config/from-content` and an operator pushing its rendered configuration
+  (weebo-batlehub's `manageConfig`) can rewrite it, and what they wrote
+  survives a restart. `seed: IfNotPresent` (the default) seeds it once;
+  `Always` puts the chart's copy back at every pod start. Off by default; the
+  credentials layer and the worker keep their read-only config.
+
 ### Changed
 
 - **`bypass_roles` means "this role or higher", on every gate.**
@@ -1646,7 +1659,8 @@ First stable release.
 
 ---
 
-[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.6.0...HEAD
+[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.7.0...HEAD
+[1.7.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.6.0...v1.7.0
 [1.6.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.5.0...v1.6.0
 [1.5.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.4.0...v1.5.0
 [1.4.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.3.0...v1.4.0

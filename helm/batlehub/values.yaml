@@ -370,6 +370,52 @@ credentials:
   # want to keep separate — it is merged over `config`, not a replacement for it.
   config: {}
 
+# ── Writable configuration ────────────────────────────────────────────────────
+# The first `--config` file is the one the config editor, `config/from-content`
+# and the pending-reload approval rewrite. Mounted from the chart's Secret it is
+# read-only, so all three fail; and on an emptyDir every rewrite would be lost
+# to the chart's copy at the next restart. With this on, the file lives on a
+# small volume of its own: an init container seeds it from the chart's config
+# (`config`, or the `externalManifest` entry with `mount.asConfig`) and the
+# server reads and rewrites it there.
+#
+# Who owns the configuration changes with it. Under `seed: IfNotPresent` the
+# chart's `config` is the FIRST configuration only: once the file exists, what
+# was written to it (the editor, an operator such as weebo-batlehub pushing
+# its rendered config) survives restarts and chart upgrades, and an edit of
+# `config` in your values does not reach the running server. `seed: Always`
+# puts the chart's copy back at every pod start, which is the read-only
+# behaviour with a writable file in between.
+#
+# The credentials layer is not affected: it stays a read-only second layer,
+# never rewritten. The worker Deployment keeps reading the chart's config —
+# it has no reload to approve and cannot share a ReadWriteOnce volume across
+# nodes.
+# -- Keep the first config file on a writable volume the server can rewrite,
+# seeded from the chart's config by an init container.
+writableConfig:
+  enabled: false
+  # -- `IfNotPresent` seeds the file only when the volume holds none: what the
+  # server or an operator wrote survives restarts. `Always` overwrites it with
+  # the chart's config at every pod start.
+  seed: IfNotPresent
+  persistence:
+    # -- An existing claim to hold the file. Empty renders `<fullname>-writable-config`.
+    existingClaim: ""
+    # -- Storage class of the rendered claim. Empty uses the cluster default.
+    storageClass: ""
+    # -- Access mode of the rendered claim. With `ReadWriteOnce` and more than
+    # one replica, every replica must land on the same node.
+    accessMode: ReadWriteOnce
+    # -- Size of the rendered claim: it holds one TOML file.
+    size: 16Mi
+  # -- The seed init container's image. It needs `sh` and `cp`, which the
+  # distroless server image does not ship.
+  initImage:
+    repository: docker.io/library/busybox
+    tag: "1.37.0"
+    pullPolicy: IfNotPresent
+
 # ── Disruption budget ─────────────────────────────────────────────────────────
 # Only rendered when replicaCount > 1 — a PDB over a single replica blocks node
 # drains without buying any availability.

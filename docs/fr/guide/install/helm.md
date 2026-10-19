@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/install/helm.md
-sourceHash: b85775b509d66b27
+sourceHash: d83bda93d063bf15
 ---
 
 # Chart Helm
@@ -476,6 +476,8 @@ tenue à jour par une porte de garde. Voici la liste courte.
 | `credentials.enabled` | `false` | Monter un second fichier de configuration, fusionné par-dessus `config`, depuis son propre Secret |
 | `credentials.existingSecret` | `""` | Utiliser un Secret géré ailleurs plutôt qu'un Secret rendu par ce chart |
 | `credentials.config` | `{}` | Le contenu de ce second fichier, de même forme que `config` |
+| `writableConfig.enabled` | `false` | Garder le premier fichier de configuration sur son propre volume, initialisé depuis `config` par un init container, pour que l'éditeur de configuration et la configuration poussée par un opérateur puissent le réécrire et survivent aux redémarrages |
+| `writableConfig.seed` | `IfNotPresent` | `IfNotPresent` : `config` initialise le fichier une seule fois, une modification ultérieure de `config` ne l'atteint pas. `Always` : réinitialisé à chaque démarrage du pod |
 | `ingress.enabled` | `false` | Créer une ressource Ingress |
 | `persistence.enabled` | `true` | Créer un PVC pour le cache |
 | `persistence.size` | `10Gi` | Capacité du PVC |

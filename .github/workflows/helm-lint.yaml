@@ -129,6 +129,47 @@ jobs:
             exit 1
           fi
 
+      # writableConfig: the server must mount the claim read-write at the
+      # config directory, the chart's config only as the init container's seed,
+      # and nothing of it may appear with the option off.
+      - name: Render with a writable config
+        run: |
+          helm template batlehub helm/batlehub \
+            --set writableConfig.enabled=true \
+            --set worker.enabled=true \
+            > /tmp/writable.yaml
+
+      - name: The proxy reads its config from the claim, seeded by the init container
+        run: |
+          grep -q 'claimName: batlehub-writable-config' /tmp/writable.yaml \
+            || { echo "::error::the proxy does not mount the config claim"; exit 1; }
+          grep -q 'name: seed-config' /tmp/writable.yaml \
+            || { echo "::error::no seed init container"; exit 1; }
+          grep -q 'mountPath: /etc/batlehub-seed' /tmp/writable.yaml \
+            || { echo "::error::the chart's config is not mounted as the seed"; exit 1; }
+          grep -q 'helm.sh/resource-policy: keep' /tmp/writable.yaml \
+            || { echo "::error::the config claim would be deleted on uninstall"; exit 1; }
+          # One claim reference: the worker keeps the chart's read-only config.
+          count=$(grep -c 'claimName: batlehub-writable-config' /tmp/writable.yaml || true)
+          [ "$count" = "1" ] || {
+            echo "::error::expected the config claim on the proxy only, found $count"
+            exit 1
+          }
+
+      - name: A bad seed policy fails the render
+        run: |
+          if helm template batlehub helm/batlehub --set writableConfig.seed=Sometimes >/dev/null 2>&1; then
+            echo "::error::writableConfig.seed=Sometimes rendered"
+            exit 1
+          fi
+
+      - name: The writable config is absent by default
+        run: |
+          if grep -qE 'seed-config|writable-config|/etc/batlehub-seed' /tmp/default.yaml; then
+            echo "::error::writableConfig renders with writableConfig.enabled=false"
+            exit 1
+          fi
+
       # Rendering with a non-default combination catches template errors that
       # the default path never reaches (ingress rules, PDB, extra manifests).
       - name: Render a non-default configuration

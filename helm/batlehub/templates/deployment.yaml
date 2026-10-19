@@ -15,6 +15,9 @@
 {{- if gt $asConfigCount 1 }}
 {{- fail "externalManifest: only one entry may set mount.asConfig: true" }}
 {{- end }}
+{{- if not (has .Values.writableConfig.seed (list "IfNotPresent" "Always")) }}
+{{- fail (printf "writableConfig.seed must be IfNotPresent or Always, got: %v" .Values.writableConfig.seed) }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -80,6 +83,13 @@ spec:
               - key: config.toml
                 path: config.toml
           {{- end }}
+        {{- if .Values.writableConfig.enabled }}
+        # The writable first config file (`writableConfig`): the `config` volume
+        # above is only its seed, read by the init container.
+        - name: config-writable
+          persistentVolumeClaim:
+            claimName: {{ .Values.writableConfig.persistence.existingClaim | default (printf "%s-writable-config" (include "batlehub.fullname" .)) }}
+        {{- end }}
         {{- with (include "batlehub.credentialsSecretName" .) }}
         # Mounted as its own volume rather than a second key in the config one:
         # the two have different lifecycles, which is the whole reason the layer
@@ -128,6 +138,46 @@ spec:
           {{- end }}
         {{- end }}
         {{- end }}
+      {{- with .Values.writableConfig }}
+      {{- if .enabled }}
+      initContainers:
+        # Seeds the writable config file from the chart's. Written beside the
+        # target then renamed, so a pod killed mid-copy never leaves the server
+        # a truncated file to start on.
+        - name: seed-config
+          image: "{{ .initImage.repository }}:{{ .initImage.tag }}"
+          imagePullPolicy: {{ .initImage.pullPolicy }}
+          securityContext:
+            {{- toYaml $.Values.securityContext | nindent 12 }}
+          env:
+            - name: SEED
+              value: {{ .seed | quote }}
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              if [ "$SEED" = Always ] || [ ! -f /etc/batlehub/config.toml ]; then
+                cp /etc/batlehub-seed/config.toml /etc/batlehub/.config.toml.seed
+                mv /etc/batlehub/.config.toml.seed /etc/batlehub/config.toml
+                echo "seeded /etc/batlehub/config.toml from the chart's configuration ($SEED)"
+              else
+                echo "kept the existing /etc/batlehub/config.toml ($SEED)"
+              fi
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/batlehub-seed
+              readOnly: true
+            - name: config-writable
+              mountPath: /etc/batlehub
+      {{- end }}
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           securityContext:
@@ -177,9 +227,14 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
+            {{- if .Values.writableConfig.enabled }}
+            - name: config-writable
+              mountPath: /etc/batlehub
+            {{- else }}
             - name: config
               mountPath: /etc/batlehub
               readOnly: true
+            {{- end }}
             {{- if (include "batlehub.credentialsSecretName" .) }}
             - name: credentials
               mountPath: /etc/batlehub/credentials
