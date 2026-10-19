@@ -425,6 +425,11 @@ async function fetchPackages() {
   const scope = searchIn.value;
   const seq = ++packagesSeq;
 
+  // Shown at once and then revalidated, not served for its TTL: the copy
+  // here paints the page without a skeleton, and the request below replaces
+  // it. Serving it as the answer kept a package the server had just cached
+  // out of the list for up to five minutes, invisible to every refresh short
+  // of a reload. The server's own catalogue cache absorbs the extra request.
   const cached = exploreCache.get(reg, p, s, q, scope);
   if (cached) {
     error.value = null;
@@ -433,17 +438,14 @@ async function fetchPackages() {
     perPage.value = cached.perPage;
     readmeSearchEnabled.value = cached.readmeSearchEnabled;
     searchTruncated.value = cached.truncated;
-    // `loading` has to be cleared here too, not only in the `finally` below.
-    // This call already bumped `packagesSeq`, so any request still in flight
-    // will fail its own `seq === packagesSeq` check and skip the `finally` —
-    // leaving the skeleton row on screen forever. Reproduced by selecting an
-    // uncached registry and then a cached one before the first lands.
+    // Cleared here rather than left to the `finally`: this call already bumped
+    // `packagesSeq`, so a request still in flight skips its own `finally` and
+    // would leave the skeleton row on screen.
     loading.value = false;
-    return;
+  } else {
+    loading.value = true;
+    error.value = null;
   }
-
-  loading.value = true;
-  error.value = null;
   try {
     const { data: res, error: apiErr } = await explorePackages({
       query: {
@@ -492,7 +494,8 @@ async function fetchPackages() {
     readmeSearchEnabled.value = prose;
     searchTruncated.value = cut;
   } catch (e) {
-    if (seq === packagesSeq) error.value = extractMessage(e);
+    // A failed revalidation leaves the copy already on screen alone.
+    if (seq === packagesSeq && !cached) error.value = extractMessage(e);
   } finally {
     if (seq === packagesSeq) loading.value = false;
   }

@@ -1,3 +1,5 @@
+// How long a listing paints the page instantly. It is never the answer:
+// `PackageCatalog` revalidates every hit against the server.
 const TTL_MS = 5 * 60 * 1_000; // 5 minutes
 
 /**

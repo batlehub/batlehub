@@ -792,6 +792,14 @@ async fn main() -> Result<()> {
             .with_vulnerability_repo(Arc::clone(&vuln_repo))
             .with_hot_config(hot.clone()),
     );
+    // What the replicas share: the catalogue's invalidations here, the
+    // fingerprint of each one's config below. Postgres, whatever the `[cache]`
+    // type, because a `memory` cache is shared with nobody.
+    let cluster_state: Arc<dyn batlehub_core::ports::ClusterStatePort> =
+        Arc::new(batlehub_adapters::db::PgClusterState::new(repo.pool()));
+    admin_svc
+        .explore_cache
+        .share_with(Arc::clone(&cluster_state));
 
     let sbom_svc = stores::build_sbom_service(repo.pool())?;
     // Per-registry README capture is configured in `HotConfig::readme` and
@@ -958,6 +966,21 @@ async fn main() -> Result<()> {
     // Seed the warning store from the config we booted with (this also logs each
     // one). Reloads refresh it themselves.
     reload_svc.set_warnings(config.warnings());
+
+    // Report the config in force, so the console can say when the replicas
+    // disagree (`config.replica-drift`). The pod name under Kubernetes.
+    let replica = std::env::var("HOSTNAME")
+        .ok()
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| {
+            let started = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or_default();
+            format!("pid{}-{started}", std::process::id())
+        });
+    reload_svc.share_with(Arc::clone(&cluster_state), replica);
+    watcher::spawn_cluster_sync(Arc::clone(&admin_svc), Arc::clone(&reload_svc));
 
     if hot_reload_enabled {
         watcher::spawn_config_watcher(config_paths.clone(), Arc::clone(&reload_svc));

@@ -3,6 +3,7 @@ pub mod air_gap;
 pub mod audit_trail;
 pub mod auth;
 pub mod banner;
+pub mod cluster;
 pub mod config_change;
 pub mod forge;
 pub mod governance;
@@ -29,6 +30,7 @@ pub use auth::{
     TokenOwner, UserToken, UserTokenRepository,
 };
 pub use banner::BannerPort;
+pub use cluster::{ClusterStatePort, ReplicaConfig};
 pub use config_change::{ConfigChangeRecord, ConfigChangeRepository};
 pub use forge::{
     budget_allows, token_fingerprint, BudgetRole, ForgeCommit, ForgeRegistry, ForgeTag,

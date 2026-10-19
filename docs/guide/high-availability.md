@@ -423,4 +423,8 @@ These are accepted trade-offs documented in `docs/contributing/contributing.md �
 
 - **Async quota rollback** — if a publish fails after storage but before the DB commit, the quota counter is decremented asynchronously. A short window exists where the counter is overcounted.
 
+- **A config reload reaches one replica** — the config editor and an approved file change are applied by the replica that handles the request, and by no other: the pending reload is in that process's memory and the file is on that pod's mount. Apply a change on every replica, or roll them out from the same files (`helm upgrade`). While the replicas that reported in the last 30 seconds do not all serve the same configuration, the **Config Reload** page shows a `config.replica-drift` warning naming each one and the configuration it serves; each replica reports a fingerprint of its merged config to PostgreSQL (`system_kv`) every five seconds, so a reformatted but identical file does not count as a difference.
+
+- **The catalogue follows within five seconds** — a package one replica publishes, deletes or caches for the first time clears that registry's cached listings on every replica at their next five-second poll of PostgreSQL, whatever the `[cache]` type.
+
 - **In-memory stores if misconfigured** — if `[cache]` is left at the default `type = "memory"`, each replica maintains its own independent rate-limit and IP-block state. Rate limits will be N times more permissive than configured (where N is the replica count), and IP blocks set on one replica will not propagate to others. **Always set a shared cache backend for multi-replica deployments.**

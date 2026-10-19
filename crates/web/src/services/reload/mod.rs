@@ -17,6 +17,7 @@ pub(super) const PENDING_TTL_SECS: i64 = 600; // 10 minutes
 
 pub mod applier;
 mod config_file;
+mod drift;
 pub mod validator;
 
 use config_file::ConfigFile;
@@ -404,6 +405,10 @@ pub struct ConfigReloadService {
     /// and what every `restart_required` is diffed against. The error as text
     /// when `merge_layers` refuses them.
     pub(super) startup_document: Result<String, String>,
+    /// Where this replica reports its configuration, and under which name —
+    /// unset on a single server. See `drift.rs`.
+    pub(super) cluster:
+        std::sync::OnceLock<(Arc<dyn batlehub_core::ports::ClusterStatePort>, String)>,
 }
 
 /// Everything [`ConfigReloadService::new`] needs, as named fields.
@@ -525,6 +530,7 @@ impl ConfigReloadService {
             applied_layers: Mutex::new(startup_layers.clone()),
             startup_document: batlehub_config::merge_layers(&startup_layers)
                 .map_err(|e| format!("{e:#}")),
+            cluster: std::sync::OnceLock::new(),
         }
     }
 

@@ -216,6 +216,32 @@ pub(super) fn spawn_periodic_vuln_scan(
 /// scheduler with services of its own would keep a second, private set — a
 /// manual sweep and a scheduled one would each be permanently on their own
 /// first pass, and neither would ever delete anything.
+/// How often a replica reads what the others changed and reports its config.
+/// One replica's catalogue lags the others' invalidations by at most this.
+const CLUSTER_SYNC_SECS: u64 = 5;
+
+/// Keep up with the other replicas: drop the catalogue listings they
+/// invalidated, and report the config in force here for the drift warning. A
+/// failure is logged and retried at the next tick.
+pub(super) fn spawn_cluster_sync(
+    admin_svc: Arc<batlehub_core::services::AdminService>,
+    reload_svc: Arc<ConfigReloadService>,
+) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(CLUSTER_SYNC_SECS));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+            if let Err(e) = admin_svc.explore_cache.sync_from_cluster().await {
+                tracing::warn!(error = %e, "cluster sync: catalogue invalidations not read");
+            }
+            if let Err(e) = reload_svc.report_to_cluster().await {
+                tracing::warn!(error = %e, "cluster sync: this replica's config fingerprint not reported");
+            }
+        }
+    });
+}
+
 pub(super) fn spawn_periodic_coherence_sweep(
     interval_secs: u64,
     eviction_map: batlehub_web::handlers::back_office::ops::eviction::EvictionServiceMap,

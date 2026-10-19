@@ -1,12 +1,18 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
 
 use crate::entities::{ExploreEntry, ExploreFilter, ExploreSortBy, RegistryStat};
+use crate::error::CoreError;
+use crate::ports::ClusterStatePort;
 
 const TTL: Duration = Duration::from_secs(600);
+
+/// The [`ClusterStatePort`] topics an invalidation advances: `explore:{registry}`,
+/// and `explore:*` for the whole cache.
+const TOPIC_PREFIX: &str = "explore:";
 
 struct PackageEntry {
     items: Vec<ExploreEntry>,
@@ -31,6 +37,13 @@ pub struct ExploreCache {
     packages: Arc<RwLock<HashMap<String, PackageEntry>>>,
     stats: Arc<RwLock<HashMap<String, StatsEntry>>>,
     ttl: Duration,
+    /// Where an invalidation is announced to the other replicas, once
+    /// [`Self::share_with`] has been called. Unset — a single process, a test —
+    /// the cache is this process's alone, as it always was.
+    cluster: OnceLock<Arc<dyn ClusterStatePort>>,
+    /// The counters [`Self::sync_from_cluster`] last read. `None` until the
+    /// first read, which only records them: there is nothing to drop yet.
+    seen: tokio::sync::Mutex<Option<HashMap<String, i64>>>,
 }
 
 impl Default for ExploreCache {
@@ -49,6 +62,8 @@ impl ExploreCache {
             packages: Arc::new(RwLock::new(HashMap::new())),
             stats: Arc::new(RwLock::new(HashMap::new())),
             ttl,
+            cluster: OnceLock::new(),
+            seen: tokio::sync::Mutex::new(None),
         }
     }
 
@@ -122,12 +137,66 @@ impl ExploreCache {
 
     // ── invalidation ──────────────────────────────────────────────────────────
 
-    /// Invalidate cache entries.
+    /// Announce this cache's invalidations to the other replicas, and follow
+    /// theirs through [`Self::sync_from_cluster`]. Called once at startup; a
+    /// second call is ignored.
+    pub fn share_with(&self, cluster: Arc<dyn ClusterStatePort>) {
+        let _ = self.cluster.set(cluster);
+    }
+
+    /// Invalidate cache entries, here and — once shared — on every replica.
     ///
     /// `registry = None` clears the entire cache. `registry = Some("npm")` removes
-    /// only entries whose query touched that registry. This is called automatically
-    /// on successful local-registry publish.
+    /// only entries whose query touched that registry. Called on a local publish,
+    /// a delete, the console's fetch and an artifact's first caching.
+    ///
+    /// A replica that handled none of those requests holds the same stale
+    /// listing; the counter advanced here is what its next
+    /// [`Self::sync_from_cluster`] reads. A failure to advance it leaves the
+    /// others on their TTL, which is what they had before, so it is logged and
+    /// not returned.
     pub async fn invalidate(&self, registry: Option<&str>) {
+        self.invalidate_local(registry).await;
+        if let Some(cluster) = self.cluster.get() {
+            let topic = format!("{TOPIC_PREFIX}{}", registry.unwrap_or("*"));
+            if let Err(e) = cluster.bump(&topic).await {
+                tracing::warn!(topic, error = %e, "explore cache: could not announce the invalidation to other replicas");
+            }
+        }
+    }
+
+    /// Drop what every other replica invalidated since the last call. Run on a
+    /// timer; a no-op until [`Self::share_with`].
+    pub async fn sync_from_cluster(&self) -> Result<(), CoreError> {
+        let Some(cluster) = self.cluster.get() else {
+            return Ok(());
+        };
+        let now: HashMap<String, i64> = cluster
+            .generations(TOPIC_PREFIX)
+            .await?
+            .into_iter()
+            .collect();
+        let mut seen = self.seen.lock().await;
+        if let Some(previous) = seen.as_ref() {
+            for (topic, generation) in &now {
+                if previous.get(topic) == Some(generation) {
+                    continue;
+                }
+                // This replica's own invalidations come back here too, and
+                // clearing twice is harmless.
+                match topic.strip_prefix(TOPIC_PREFIX) {
+                    Some("*") => self.invalidate_local(None).await,
+                    Some(registry) => self.invalidate_local(Some(registry)).await,
+                    None => {}
+                }
+            }
+        }
+        *seen = Some(now);
+        Ok(())
+    }
+
+    /// [`Self::invalidate`] without the announcement.
+    async fn invalidate_local(&self, registry: Option<&str>) {
         match registry {
             None => {
                 self.packages.write().await.clear();

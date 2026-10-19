@@ -143,7 +143,7 @@ describe("PackageCatalog", () => {
     expect(wrapper.text()).toContain("lodash");
   });
 
-  it("issues no second request for a repeated search", async () => {
+  it("paints a repeated search from its copy, then shows what the server says now", async () => {
     const wrapper = await mountPage();
     expect(explorePackagesMock).toHaveBeenCalledTimes(1);
 
@@ -152,13 +152,31 @@ describe("PackageCatalog", () => {
     await flushPromises();
     expect(explorePackagesMock).toHaveBeenCalledTimes(2);
 
-    // …and going back to the default order reads the entry the first call
-    // filled. `fetched`, not `downloads`: the catalog is ordered by last fetch,
-    // which is what its caption claims and what the proof settles on.
+    // …and going back to the default order paints the entry the first call
+    // filled, with no skeleton, while it asks again. `fetched`, not
+    // `downloads`: the catalog is ordered by last fetch.
+    let release!: (v: unknown) => void;
+    explorePackagesMock.mockReturnValueOnce(new Promise((r) => (release = r)));
     await wrapper.find("select").setValue("fetched");
     await flushPromises();
-    expect(explorePackagesMock).toHaveBeenCalledTimes(2);
+    expect(explorePackagesMock).toHaveBeenCalledTimes(3);
     expect(wrapper.text()).toContain("lodash");
+
+    // A package cached since: the copy is not the answer, the server is.
+    release(listing(["lodash", "left-pad"]));
+    await flushPromises();
+    expect(wrapper.text()).toContain("left-pad");
+  });
+
+  it("keeps the copy on screen when its revalidation fails", async () => {
+    const wrapper = await mountPage();
+    await wrapper.find("select").setValue("name");
+    await flushPromises();
+    explorePackagesMock.mockResolvedValueOnce({ error: { message: "upstream exploded" } });
+    await wrapper.find("select").setValue("fetched");
+    await flushPromises();
+    expect(wrapper.text()).toContain("lodash");
+    expect(wrapper.text()).not.toContain("upstream exploded");
   });
 
   /**
@@ -560,12 +578,14 @@ describe("PackageCatalog browsing", () => {
       },
     });
 
-    // Going back to "all" reads the entry the initial load filled — the facet is
-    // a cache key, so returning to a view already seen costs no request.
-    const calls = explorePackagesMock.mock.calls.length;
+    // Going back to "all" asks for the unscoped listing again — the facet is a
+    // cache key, and the copy the initial load filled paints the page while it
+    // is revalidated.
     await wrapper.findAll("aside button")[0].trigger("click"); // "All registries"
     await flushPromises();
-    expect(explorePackagesMock).toHaveBeenCalledTimes(calls);
+    expect(explorePackagesMock).toHaveBeenLastCalledWith({
+      query: { page: 0, sort: "fetched", registry: undefined, q: undefined, in: "name" },
+    });
     // Positive evidence that the facet actually reset. Asserting only that
     // nothing happened is equally true when the click does nothing: deleting
     // the all-option's `@click` left this green, because both fixtures return
