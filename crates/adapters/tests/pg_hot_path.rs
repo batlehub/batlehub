@@ -4,7 +4,9 @@
 //! - `covering_block` — the artifact's own block, else its bare version's;
 //! - `record_access` — the audit row and the first-seen status row together;
 //! - `can_publish` — no owners, a user owner, a group owner: three questions,
-//!   one statement (on the publish path).
+//!   one statement (on the publish path);
+//! - `blocked_in_registry` — every block of a registry for a whole-registry
+//!   document, without the listing query's `access_events` counts.
 //!
 //! Requires a running PostgreSQL instance. Set `DATABASE_URL` to opt in:
 //!
@@ -97,6 +99,37 @@ fn event(pkg: &PackageId, result: AccessResult) -> AccessEvent {
         throttled_count: None,
         detail: None,
     }
+}
+
+#[tokio::test]
+async fn blocked_in_registry_lists_every_blocked_version_of_the_registry_once() {
+    let Some((repo, reg)) = repo().await else {
+        return;
+    };
+    let other = format!("{reg}-other");
+    for pkg in [
+        PackageId::new(&reg, "a", "1.0.0"),
+        PackageId::new(&reg, "a", "2.0.0").with_artifact("tarball"),
+        // Its version and one of its files: one row in the answer.
+        PackageId::new(&reg, "b", "1.0.0"),
+        PackageId::new(&reg, "b", "1.0.0").with_artifact("sig"),
+        PackageId::new(&other, "a", "9.0.0"),
+    ] {
+        repo.set_status(&pkg, blocked("held")).await.unwrap();
+    }
+    let lifted = PackageId::new(&reg, "c", "1.0.0");
+    repo.set_status(&lifted, blocked("held")).await.unwrap();
+    repo.set_status(&lifted, PackageStatus::Available)
+        .await
+        .unwrap();
+
+    let mut got = repo.blocked_in_registry(&reg).await.unwrap();
+    got.sort();
+    let pair = |n: &str, v: &str| (n.to_owned(), v.to_owned());
+    assert_eq!(
+        got,
+        [pair("a", "1.0.0"), pair("a", "2.0.0"), pair("b", "1.0.0")]
+    );
 }
 
 #[tokio::test]

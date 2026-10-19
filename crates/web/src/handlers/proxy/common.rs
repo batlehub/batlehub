@@ -206,8 +206,9 @@ pub async fn collect_payload(mut payload: web::Payload) -> Result<Bytes, AppErro
 }
 
 /// Drain a `multipart/form-data` body into its named fields, bounded by
-/// [`MAX_UPLOAD_BYTES`] across all of them. A field with no name, and any
-/// field after the first of the same name, is dropped.
+/// [`MAX_UPLOAD_BYTES`] across all of them. A field with no name is dropped,
+/// and of two fields with the same name the last one wins — what helm's own
+/// loop did before it moved here.
 ///
 /// helm's publish is the one caller; nuget, pypi, jetbrains and galaxy still
 /// carry their own copy of this loop.
@@ -236,7 +237,7 @@ pub async fn collect_form_fields(
             buf.extend_from_slice(&chunk);
         }
         if !name.is_empty() {
-            fields.entry(name).or_insert_with(|| buf.freeze());
+            fields.insert(name, buf.freeze());
         }
     }
     Ok(fields)

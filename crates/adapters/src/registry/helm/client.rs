@@ -56,6 +56,7 @@ const MISS_REFRESH: Duration = Duration::from_secs(30);
 /// to RFC 0029, is 27 MB.
 const MAX_INDEX_BYTES: usize = 128 * 1024 * 1024;
 
+#[derive(Clone)]
 struct CachedIndex {
     fetched_at: Instant,
     value: Arc<Value>,
@@ -70,10 +71,12 @@ pub struct HelmRegistryClient {
     /// helm carries onto every relative chart URL.
     base: reqwest::Url,
     basic_auth: Option<(String, String)>,
-    /// Async, and held across the refresh: twenty requests that find the copy
-    /// expired wait for one download of a 27 MB index rather than starting
-    /// twenty.
-    index: tokio::sync::Mutex<Option<CachedIndex>>,
+    /// The current copy. Held only to read or replace it, never across a
+    /// download.
+    index: std::sync::Mutex<Option<CachedIndex>>,
+    /// Held across a refresh, so twenty requests that find the copy expired
+    /// start one download of a 27 MB index rather than twenty.
+    refresh: tokio::sync::Mutex<()>,
 }
 
 /// `ResolveReferenceURL` (`pkg/repo/chartrepo.go`), transcribed.
@@ -107,7 +110,8 @@ impl HelmRegistryClient {
             plain,
             base,
             basic_auth: opts.basic_auth.clone(),
-            index: tokio::sync::Mutex::new(None),
+            index: std::sync::Mutex::new(None),
+            refresh: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -178,22 +182,38 @@ impl HelmRegistryClient {
     }
 
     /// The in-process copy when it is younger than `max_age`, else a fresh
-    /// one — or, when the refresh fails and a copy exists, that copy (stale on
-    /// error), retried after [`MISS_REFRESH`].
+    /// one. The expired copy answers instead while another request is
+    /// refreshing it, and when the refresh fails (stale on error, retried after
+    /// [`MISS_REFRESH`]).
     ///
     /// ponytail: one copy per process; a shared copy (Redis) would make
     /// replicas agree exactly, and `MISS_REFRESH` is what stands in for it.
     async fn index_within(&self, max_age: Duration) -> Result<Arc<Value>, CoreError> {
-        let mut slot = self.index.lock().await;
-        if let Some(cached) = slot.as_ref() {
-            let backing_off = cached.failed_at.is_some_and(|t| t.elapsed() < MISS_REFRESH);
-            if cached.fetched_at.elapsed() < max_age || backing_off {
-                return Ok(Arc::clone(&cached.value));
+        let usable = |c: &CachedIndex| {
+            c.fetched_at.elapsed() < max_age
+                || c.failed_at.is_some_and(|t| t.elapsed() < MISS_REFRESH)
+        };
+        let current = self.index.lock().expect("index lock").clone();
+        if let Some(c) = current.as_ref().filter(|c| usable(c)) {
+            return Ok(Arc::clone(&c.value));
+        }
+        // One request refreshes. The others are answered from the expired copy
+        // rather than made to wait out the download, and wait only when there
+        // is no copy at all.
+        let _refreshing = match (self.refresh.try_lock(), &current) {
+            (Ok(guard), _) => guard,
+            (Err(_), Some(c)) => return Ok(Arc::clone(&c.value)),
+            (Err(_), None) => self.refresh.lock().await,
+        };
+        // The refresh this request waited on may have filled the copy.
+        if let Some(c) = self.index.lock().expect("index lock").as_ref() {
+            if usable(c) {
+                return Ok(Arc::clone(&c.value));
             }
         }
         match self.download_index().await {
             Ok(value) => {
-                *slot = Some(CachedIndex {
+                *self.index.lock().expect("index lock") = Some(CachedIndex {
                     fetched_at: Instant::now(),
                     value: Arc::clone(&value),
                     failed_at: None,
@@ -201,6 +221,7 @@ impl HelmRegistryClient {
                 Ok(value)
             }
             Err(e) => {
+                let mut slot = self.index.lock().expect("index lock");
                 let Some(cached) = slot.as_mut() else {
                     return Err(e);
                 };
@@ -235,8 +256,13 @@ impl HelmRegistryClient {
 #[cfg(test)]
 impl HelmRegistryClient {
     /// Age the in-process copy as `by` of wall time would.
+    /// Hold the refresh, as a request downloading the index does.
+    pub(super) async fn hold_refresh(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.refresh.lock().await
+    }
+
     pub(super) async fn age_index(&self, by: Duration) {
-        if let Some(cached) = self.index.lock().await.as_mut() {
+        if let Some(cached) = self.index.lock().expect("index lock").as_mut() {
             cached.fetched_at = cached.fetched_at.checked_sub(by).expect("uptime");
             cached.failed_at = cached.failed_at.map(|t| t.checked_sub(by).expect("uptime"));
         }

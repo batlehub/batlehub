@@ -150,6 +150,37 @@ pub(super) async fn blocked_versions_impl(
     Ok(rows.into_iter().map(|r| r.get("package_version")).collect())
 }
 
+/// Every blocked `(name, version)` in one registry — [`blocked_versions_impl`]
+/// for the whole registry, with the same artifact rule.
+///
+/// The trait's default answers through `list_packages`, whose correlated
+/// `access_events` counts run once per blocked row; a whole-registry document
+/// (a helm `index.yaml`) asks this on every request, and the audit table only
+/// grows. The cap is the default's.
+pub(super) async fn blocked_in_registry_impl(
+    pool: &PgPool,
+    registry: &str,
+) -> Result<Vec<(String, String)>, CoreError> {
+    let rows = sqlx::query(
+        r#"
+        SELECT DISTINCT package_name, package_version
+        FROM package_statuses
+        WHERE registry = $1 AND status = 'blocked'
+        LIMIT $2
+        "#,
+    )
+    .bind(registry)
+    .bind(batlehub_core::ports::MAX_BLOCKED_VERSIONS_PER_REGISTRY as i64)
+    .fetch_all(pool)
+    .await
+    .db_err()?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.get("package_name"), r.get("package_version")))
+        .collect())
+}
+
 /// The newest `blocked_at` among one package's block rows (RFC 0031 §4.4).
 ///
 /// A single indexed aggregate rather than the default's listing query, for the

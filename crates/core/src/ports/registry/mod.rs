@@ -13,4 +13,4 @@ pub use client::{
 };
 pub use forge_releases::{ForgeAsset, ForgeRelease, ForgeReleaseSource};
 pub use local_registry::{BulkResult, LocalRegistryBackend};
-pub use package_repo::{PackageRepository, RecentErrorRecord};
+pub use package_repo::{PackageRepository, RecentErrorRecord, MAX_BLOCKED_VERSIONS_PER_REGISTRY};

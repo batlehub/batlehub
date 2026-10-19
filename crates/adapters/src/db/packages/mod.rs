@@ -369,6 +369,13 @@ impl PackageRepository for PgPackageRepository {
         crud::blocked_versions_impl(&self.pool, registry, name).await
     }
 
+    async fn blocked_in_registry(
+        &self,
+        registry: &str,
+    ) -> Result<Vec<(String, String)>, CoreError> {
+        crud::blocked_in_registry_impl(&self.pool, registry).await
+    }
+
     async fn blocked_changed_at(
         &self,
         registry: &str,

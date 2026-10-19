@@ -235,6 +235,29 @@ async fn concurrent_reads_of_an_expired_index_download_it_once() {
 }
 
 #[tokio::test]
+async fn an_expired_index_answers_while_another_request_refreshes_it() {
+    let mut server = upstream().await;
+    let client = client(&server);
+    let pkg = PackageId::new("helm", "cert-manager", "v1.21.2");
+    client.resolve_metadata(&pkg).await.unwrap();
+
+    server.reset();
+    let refetch = server
+        .mock("GET", "/repo/index.yaml")
+        .with_body(index(&server.url()))
+        .expect(0)
+        .create_async()
+        .await;
+    client.age_index(std::time::Duration::from_secs(301)).await;
+    // Another request is mid-download: this one is served the expired copy at
+    // once rather than waiting behind it, and downloads nothing itself.
+    let refreshing = client.hold_refresh().await;
+    client.resolve_metadata(&pkg).await.unwrap();
+    drop(refreshing);
+    refetch.assert_async().await;
+}
+
+#[tokio::test]
 async fn a_failed_refresh_serves_the_previous_index_and_backs_off() {
     let mut server = upstream().await;
     let client = client(&server);
