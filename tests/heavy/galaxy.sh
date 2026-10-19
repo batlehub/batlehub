@@ -116,21 +116,6 @@ galaxy_run() {  # <cfg> <fresh-home-label> <args…>
   return $rc
 }
 
-# said <file> <ere> <explanation> — the client's own output must match.
-#
-# **Not `heavy_client_said`**, which only *reports*: it prints matching lines or
-# a tail and always returns 0, and its third argument is a line count. Using it
-# as an assertion is a phase that passes whatever the client printed — the
-# "green for the wrong reason" failure this suite exists to avoid.
-said() {
-  local file="$1" ere="$2" explanation="$3"
-  grep -qiE -- "$ere" "$file" 2>/dev/null && return 0
-  echo "--- the client's output ---" >&2
-  tail -n 40 "$file" >&2
-  heavy_fail "$explanation (nothing matching /$ere/ in $(basename "$file"))"
-  return $?
-}
-
 # The versions the proxy currently serves, newest first.
 #
 # Sorted here rather than trusting the document's order: nothing in the
@@ -168,7 +153,7 @@ phase_install() {
 
   galaxy_run "$CFG" install collection install "$COLLECTION" \
     || heavy_fail "ansible-galaxy collection install $COLLECTION failed"
-  said "$HEAVY_WORK/install.out" "was installed successfully" \
+  heavy_client_must_say "$HEAVY_WORK/install.out" "was installed successfully" \
     "the client did not report a successful install"
 
   # The four documents of one install, each on the wire and each here.
@@ -201,7 +186,7 @@ phase_install() {
   # `_download_file` hashes the body as it streams and compares it with
   # `artifact.sha256`, so a single rewritten byte is "Mismatch artifact hash
   # with downloaded file" and the install above would not have succeeded.
-  said "$HEAVY_WORK/install.out" "was installed successfully" \
+  heavy_client_must_say "$HEAVY_WORK/install.out" "was installed successfully" \
     "the install did not succeed, so the tarball's digest is unproven"
   return $?
 }
@@ -224,7 +209,7 @@ phase_blocked() {
   heavy_mark blocked
   galaxy_run "$CFG" blocked collection install "$COLLECTION" \
     || heavy_fail "the install should have resolved to $below, not failed"
-  said "$HEAVY_WORK/blocked.out" "$below" \
+  heavy_client_must_say "$HEAVY_WORK/blocked.out" "$below" \
     "the resolver did not step down to $below"
 
   # The whole point: nothing under the blocked version's paths was requested.
@@ -299,7 +284,7 @@ phase_pinned() {
     heavy_unblock "$REG" "$COLLECTION" "$newest"
     heavy_fail "installing a blocked version by exact pin should have failed"
   fi
-  said "$HEAVY_WORK/pinned.out" "Failed to resolve the requested dependencies map" \
+  heavy_client_must_say "$HEAVY_WORK/pinned.out" "Failed to resolve the requested dependencies map" \
     "the client did not stop on its own unsatisfiable-requirements error"
 
   local hits newest_re
@@ -402,7 +387,7 @@ so the client should stop on its first or second read"
   heavy_mark reinstall
   galaxy_run "$CFG_LOCAL" reinstall collection install "$ns.$name" \
     || heavy_fail "installing the collection we just published failed"
-  said "$HEAVY_WORK/reinstall.out" "was installed successfully" \
+  heavy_client_must_say "$HEAVY_WORK/reinstall.out" "was installed successfully" \
     "the published collection did not install back"
   heavy_wire_re_after reinstall \
     "GET /proxy/$REG_LOCAL/galaxy/api/v3/artifacts/collections/$ns-$name-$version[.]tar[.]gz" \
@@ -415,7 +400,7 @@ so the client should stop on its first or second read"
       > "$HEAVY_WORK/duplicate.out" 2>&1; then
     heavy_fail "publishing the same version twice should have been refused"
   fi
-  said "$HEAVY_WORK/duplicate.out" "409" \
+  heavy_client_must_say "$HEAVY_WORK/duplicate.out" "409" \
     "the duplicate publish did not surface as a 409"
 
   # ── a dependency edge between two locally published collections ────────────
@@ -438,7 +423,7 @@ so the client should stop on its first or second read"
   heavy_mark depinstall
   galaxy_run "$CFG_LOCAL" depinstall collection install "$ns.$app" \
     || heavy_fail "installing a collection whose dependency is published here failed"
-  said "$HEAVY_WORK/depinstall.out" "$ns[.]$dep" \
+  heavy_client_must_say "$HEAVY_WORK/depinstall.out" "$ns[.]$dep" \
     "the client did not report installing the dependency"
   heavy_wire_re_after depinstall \
     "GET /proxy/$REG_LOCAL/galaxy/api/v3/collections/$ns/$dep/versions/" \
@@ -480,7 +465,7 @@ phase_roles() {
   if galaxy_run "$CFG_LOCAL" roleoff role install "$ROLE"; then
     heavy_fail "roles = off should have refused a role install"
   fi
-  said "$HEAVY_WORK/roleoff.out" "requires API versions" \
+  heavy_client_must_say "$HEAVY_WORK/roleoff.out" "requires API versions" \
     "the client did not stop on its own API-version check — a bare 404 would read as a proxy fault"
   return 0
 }

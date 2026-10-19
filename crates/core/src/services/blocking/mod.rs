@@ -780,6 +780,11 @@ pub fn normalize(kind: RegistryKind, version: &str) -> Cow<'_, str> {
             let v = version.trim();
             Cow::Borrowed(v.strip_prefix('v').unwrap_or(v))
         }
+        // Helm compares Masterminds versions, so `v1.21.2`, `1.21.2` and
+        // `1.21.2+build` are one release and `helm install --version 1.21.2`
+        // selects any of them from the index.
+        RegistryKind::Helm => crate::services::helm::canonical_version(version)
+            .map_or(Cow::Borrowed(version), Cow::Owned),
         _ => Cow::Borrowed(version),
     }
 }

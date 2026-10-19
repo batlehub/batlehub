@@ -47,6 +47,7 @@ type      = "helm"
 mode      = "proxy"
 upstreams = ["https://charts.jetstack.io"]   # le répertoire du dépôt, pas …/index.yaml
 # oci_entries = "drop"                       # le défaut — voir plus bas
+# hybrid_merge = "chart"                     # hybride uniquement — voir plus bas
 
 [registries.rbac]
 anonymous = ["releases:read", "releases:list"]
@@ -65,6 +66,8 @@ Un registre helm a **exactement un** amont : un second dépôt de charts est un 
 ## Blocage
 
 Une version bloquée est absente d'`index.yaml`. L'index décrit le dépôt entier, donc un nouveau blocage l'atteint dans la durée de vie de 30 secondes de l'instantané des blocages. Mais `helm` lit **sa propre copie en cache** de l'index jusqu'au prochain `helm repo update` — d'ici là il propose encore la version, et c'est le téléchargement de l'archive qui la refuse.
+
+Un blocage couvre toutes les écritures que helm lit comme la même version : bloquer `1.21.2` bloque aussi `v1.21.2` et `1.21.2+build.1`.
 
 Après une mise à jour, un épinglage exact sur une version bloquée échoue avec l'erreur propre à helm, *« chart … version … not found »*, et une plage se résout vers la version autorisée la plus récente.
 
@@ -92,7 +95,9 @@ curl --data-binary @mychart-0.1.0.tgz \
 
 `helm cm-push ./mychart batlehub` fait le même appel. Les deux formes de corps de ChartMuseum sont acceptées : l'archive comme corps entier, ou un formulaire multipart avec un champ `chart` et un champ `prov` facultatif portant son fichier de provenance.
 
-Une version en double répond `409`. `?force` la remplace et demande `releases:overwrite`. `DELETE api/charts/{name}/{version}` supprime une version.
+Le `.prov` est enregistré comme une signature `pgp` : `signing.required` et `signing.allowed_types = ["pgp"]` s'y appliquent. `signing.verify_on_download` est refusé sur un registre helm : un `.prov` est de l'OpenPGP, que `helm --verify` vérifie et que ce serveur ne vérifie pas.
+
+Une version en double répond `409`, avec ou sans `?force` : une version publiée n'est jamais remplacée, il faut en publier une nouvelle. `DELETE api/charts/{name}/{version}` supprime une version.
 
 L'index que sert un registre local est composé à partir de ce qui a été publié — chaque entrée construite à partir du `Chart.yaml` de l'archive et de son condensé SHA-256 —, il ne peut donc pas nommer un chart qui n'est pas ici.
 
@@ -110,9 +115,16 @@ L'index que sert un registre local est composé à partir de ce qui a été publ
 | `GET` | `/proxy/{registry}/helm/index.yaml` | The repository index `helm repo add` and `helm repo update` fetch — blocked versions removed, every chart URL on this host. |
 <!-- END endpoints -->
 
-## Mode hybride : le local l'emporte version par version
+## Mode hybride : `hybrid_merge`
 
-Sur un registre `hybrid`, l'index servi est celui de l'amont, avec les entrées locales posées par-dessus. Une version de chart publiée ici remplace l'entrée amont pour le **même `{name, version}`** ; les autres versions amont de ce chart restent listées. C'est plus étroit que la règle du nom entier qu'appliquent d'autres types, parce qu'un index de charts est un seul document dont les entrées sont indépendantes.
+Sur un registre `hybrid`, l'index servi est celui de l'amont, avec les charts locaux posés par-dessus. `hybrid_merge` décide de ce qu'un chart publié ici fait du chart amont **du même nom** :
+
+| `hybrid_merge` | Effet |
+| --- | --- |
+| `chart` (en l'absence de la clé) | Le chart local prend le nom entier. Les entrées amont de ce nom sont retirées de l'index, et une archive ou un `.prov` de ce chart qui n'est pas publié ici répond `404` au lieu d'être récupéré en amont : un `acme-auth 9.9.9` public ne peut pas être installé à la place de l'`acme-auth` interne. Un chart masqué pour l'appelant se lit comme absent, jamais comme le chart public. Les charts sans homonyme local passent par le proxy comme d'habitude. |
+| `version` | Les versions amont restent listées sous les versions locales ; une version publiée ici remplace seulement l'entrée amont du même `{name, version}`. C'est ce que veut un miroir complété de quelques versions corrigées, et un vecteur de confusion de dépendances partout ailleurs, puisque `helm install` prend la version la plus récente quel que soit son côté. |
+
+Les deux réponses conviennent à des parcs différents : un registre helm hybride qui ne fixe pas `hybrid_merge` reçoit donc un avertissement à chaque rechargement (`helm.hybrid-merge-unset`) tant qu'aucun choix n'est fait. La clé est refusée sur tout autre type ou mode.
 
 ## Parcs hors ligne
 

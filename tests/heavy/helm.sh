@@ -86,12 +86,6 @@ run() {  # <label> <cmd…> → output in $HEAVY_WORK/<label>.out, status return
   "$@" > "$HEAVY_WORK/$label.out" 2>&1
 }
 
-said() {  # <label> <ere> <explanation>
-  grep -qiE -- "$2" "$HEAVY_WORK/$1.out" && return 0
-  tail -n 40 "$HEAVY_WORK/$1.out" >&2
-  heavy_fail "$3 (nothing matching /$2/ in $1.out)"
-}
-
 repo_add() {  # <client label> <name> <registry> <token>
   helm_env "$1"
   run "$1-add-$2" helm repo add "$2" "$HEAVY_TAP_BASE/proxy/$3/helm" \
@@ -155,7 +149,7 @@ phase_verify() {
   run verify "${DENY[@]}" helm pull jet/cert-manager --version "$CERT_MANAGER" \
     --verify --keyring "$HEAVY_WORK/cert-manager-keyring.gpg" -d "$HEAVY_WORK/verify" \
     || { cat "$HEAVY_WORK/verify.out" >&2; heavy_fail "helm pull --verify failed through the proxy"; }
-  said verify "Signed by|Using Key|Chart Hash Verified" \
+  heavy_client_must_say "$HEAVY_WORK/verify.out" "Signed by|Using Key|Chart Hash Verified" \
     "helm did not report a verified signature"
   local v; v="$(re "$CERT_MANAGER")"
   heavy_wire_re_after verify "GET /proxy/$JET/helm/charts/cert-manager-$v[.]tgz -> 200" \
@@ -199,7 +193,7 @@ phase_blocked() {
     heavy_unblock "$NGINX" ingress-nginx "$NGINX_BLOCK"
     heavy_fail "pulling a blocked version succeeded"
   fi
-  said blocked "not found|no chart version found" "helm did not fail on its own not-found path"
+  heavy_client_must_say "$HEAVY_WORK/blocked.out" "not found|no chart version found" "helm did not fail on its own not-found path"
   local hits
   hits="$(heavy_wire_count_after blocked "/proxy/$NGINX/helm/charts/")"
   [[ "$hits" == 0 ]] || heavy_fail "a blocked version still caused $hits archive requests"
@@ -266,7 +260,7 @@ phase_local() {
   [[ "$(sha256sum < "$tgz")" == "$(sha256sum < "$HEAVY_WORK/localpull/heavychart-0.1.0.tgz")" ]] \
     || heavy_fail "the chart pulled back is not the chart published"
   run localsearch helm search repo mine/heavychart
-  said localsearch "mine/heavychart" "helm search repo did not list the published chart"
+  heavy_client_must_say "$HEAVY_WORK/localsearch.out" "mine/heavychart" "helm search repo did not list the published chart"
 
   code="$(curl -sS -o /dev/null -w '%{http_code}' --data-binary "@$tgz" \
     -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_TAP_BASE/proxy/$LOCAL/helm/api/charts")"

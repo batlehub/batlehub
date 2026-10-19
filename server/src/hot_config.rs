@@ -673,6 +673,11 @@ pub(super) fn build_hot_bundle(
             .iter()
             .filter_map(|r| r.oci_entries.map(|o| (r.name.clone(), o)))
             .collect(),
+        helm_hybrid_merge: cfg
+            .registries
+            .iter()
+            .filter_map(|r| r.hybrid_merge.map(|m| (r.name.clone(), m)))
+            .collect(),
         // nix only, read on every narinfo relay for the same reason
         // (RFC 0028 §6.3).
         nix_require_upstream_sigs: cfg

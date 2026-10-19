@@ -776,8 +776,6 @@ mod bundle {
         );
     }
 
-    /// An entry naming a registry this instance does not have is rejected
-    /// per entry, and the rest of the bundle still lands.
     /// RFC 0029 §6.11 through the real door: a chart archive and its `.prov`
     /// carried with no facts, so the index entry can only come from the
     /// archive's own `Chart.yaml`, read at import. Without it the entry has
@@ -855,6 +853,8 @@ mod bundle {
         }
     }
 
+    /// An entry naming a registry this instance does not have is rejected
+    /// per entry, and the rest of the bundle still lands.
     #[actix_web::test]
     async fn an_entry_for_an_unknown_registry_is_rejected_without_failing_the_import() {
         let (signing, public) = key();

@@ -1548,9 +1548,12 @@ fn scalar_unavailable_html() -> String {
 }
 
 /// The operator's opt-in to Scalar's hosted "Ask AI" agent on `/scalar`
-/// (`[server.api_docs] ai_agent`). Its presence as app data is also what makes
+/// (`[server.api_docs] ai_agent`). Its presence as app data is also what lets
 /// [`middleware::protocol_document_csp`] send [`API_DOCS_AI_CSP`] instead of
-/// [`API_DOCS_CSP`], since the agent cannot reach its backend otherwise.
+/// [`API_DOCS_CSP`], since the agent cannot reach its backend otherwise — but
+/// only where the bundle will show the agent: with a [`key`](Self::key), or on
+/// a `localhost`-like host. A keyless agent on any other host is hidden, and
+/// the strict policy stays.
 #[derive(Clone, Debug, Default)]
 pub struct ScalarAgent {
     /// Required by the bundle anywhere but `localhost`.
@@ -1564,7 +1567,7 @@ pub struct ScalarAgent {
 /// local, and [`scalar_unavailable_html`] for why there is no CDN fallback. The
 /// route's `Content-Security-Policy` is applied by
 /// [`middleware::protocol_document_csp`], which sends [`API_DOCS_CSP`] on this
-/// prefix.
+/// prefix, or [`API_DOCS_AI_CSP`] where the [`ScalarAgent`] can show.
 pub fn scalar(
     openapi: utoipa::openapi::OpenApi,
     static_dir: Option<&std::path::Path>,

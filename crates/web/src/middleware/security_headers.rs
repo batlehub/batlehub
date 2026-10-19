@@ -131,10 +131,11 @@ pub const API_DOCS_CSP: &str = "default-src 'none'; \
      frame-ancestors 'none'";
 
 /// [`API_DOCS_CSP`] with `connect-src` opened to `api.scalar.com`, sent only
-/// when the operator turned the hosted agent on ([`crate::ScalarAgent`]). The
-/// agent's backend lives there and nothing else would reach it — and the
-/// bundle's registry lookups, which the strict policy stops, go through too.
-/// That is the price of the opt-in, and why it is off by default.
+/// when the operator turned the hosted agent on ([`crate::ScalarAgent`]) *and*
+/// the bundle will actually show it — see `agent_is_live`. The agent's
+/// backend lives there and nothing else would reach it — and the bundle's
+/// registry lookups, which the strict policy stops, go through too. That is the
+/// price of the opt-in, and why it is off by default.
 pub const API_DOCS_AI_CSP: &str = "default-src 'none'; \
      script-src 'self'; \
      style-src 'self' 'unsafe-inline'; \
@@ -199,10 +200,9 @@ pub async fn protocol_document_csp<B: MessageBody>(
     let policy = if super::extract_registry_from_path(path).is_some() {
         Some(PROTOCOL_DOCUMENT_CSP)
     } else if is_api_docs_path(path) {
-        Some(if req.app_data::<crate::ScalarAgent>().is_some() {
-            API_DOCS_AI_CSP
-        } else {
-            API_DOCS_CSP
+        Some(match req.app_data::<crate::ScalarAgent>() {
+            Some(agent) if agent_is_live(agent, &req) => API_DOCS_AI_CSP,
+            _ => API_DOCS_CSP,
         })
     } else {
         None
@@ -217,6 +217,32 @@ pub async fn protocol_document_csp<B: MessageBody>(
         }
     }
     Ok(res)
+}
+
+/// Whether the Scalar bundle will show the agent on this request, so the
+/// widened [`API_DOCS_AI_CSP`] buys something.
+///
+/// The bundle enables the agent when it has a key, or — keyless — only when the
+/// page's own URL is local. Anywhere else a keyless agent stays hidden, and
+/// opening `connect-src` would do nothing but let the bundle's registry lookups
+/// announce the page to Scalar. The host is the one the browser addressed,
+/// which is [`super::proxy_trust::routing_host`]: forwarded headers count only
+/// from a trusted proxy, exactly as for every URL this server renders.
+fn agent_is_live(agent: &crate::ScalarAgent, req: &ServiceRequest) -> bool {
+    agent.key.is_some() || is_local_host(&super::proxy_trust::routing_host(req.request()))
+}
+
+/// The bundle's own "is this URL local" rule (`_b` in `standalone.js`): one of
+/// four literal hosts, or a name under one of four reserved TLDs. Mirrored
+/// rather than narrowed — a host the bundle calls local but this did not would
+/// show an agent the policy then silences. `host` is already normalised:
+/// lowercase, no port, IPv6 still bracketed.
+fn is_local_host(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "0.0.0.0")
+        || host
+            .rsplit('.')
+            .next()
+            .is_some_and(|tld| matches!(tld, "test" | "example" | "invalid" | "localhost"))
 }
 
 /// `/scalar` and anything it serves beneath itself.
@@ -446,29 +472,79 @@ mod tests {
         );
     }
 
-    /// The opt-in widens `connect-src` to the agent's backend and nothing else.
-    #[actix_web::test]
-    async fn the_ai_opt_in_opens_only_connect_src() {
+    /// The policy `/scalar` gets with `agent` as app data, requested on `host`.
+    async fn docs_policy(agent: crate::ScalarAgent, host: &str) -> String {
         let app = test::init_service(
             App::new()
                 .wrap(actix_web::middleware::from_fn(protocol_document_csp))
-                .app_data(crate::ScalarAgent::default())
+                .app_data(agent)
                 .route(
                     "/scalar",
                     web::get().to(|| async { HttpResponse::Ok().finish() }),
                 ),
         )
         .await;
-        let resp =
-            test::call_service(&app, test::TestRequest::get().uri("/scalar").to_request()).await;
-        assert_eq!(
-            resp.headers().get("content-security-policy").unwrap(),
-            API_DOCS_AI_CSP
-        );
+        let req = test::TestRequest::get()
+            .uri("/scalar")
+            .insert_header((header::HOST, host))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        resp.headers()
+            .get("content-security-policy")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    /// The opt-in widens `connect-src` to the agent's backend and nothing else.
+    #[actix_web::test]
+    async fn the_ai_opt_in_opens_only_connect_src() {
+        let keyed = crate::ScalarAgent {
+            key: Some("k".into()),
+        };
+        assert_eq!(docs_policy(keyed, "docs.acme.io").await, API_DOCS_AI_CSP);
         assert_eq!(
             API_DOCS_AI_CSP.replace(" https://api.scalar.com", ""),
             API_DOCS_CSP
         );
+    }
+
+    /// Without a key the bundle hides the agent off `localhost`, so opening
+    /// `connect-src` there would only let the registry lookups phone home.
+    #[actix_web::test]
+    async fn a_keyless_agent_on_a_public_host_keeps_the_strict_policy() {
+        for host in [
+            "docs.acme.io",
+            "docs.acme.io:8080",
+            "10.0.0.5",
+            "localhost.acme.io",
+        ] {
+            assert_eq!(
+                docs_policy(crate::ScalarAgent::default(), host).await,
+                API_DOCS_CSP,
+                "{host}"
+            );
+        }
+    }
+
+    /// …and on a host the bundle calls local, it shows the agent keyless, which
+    /// then needs its backend.
+    #[actix_web::test]
+    async fn a_keyless_agent_on_localhost_gets_the_ai_policy() {
+        for host in [
+            "localhost",
+            "localhost:8080",
+            "127.0.0.1:5173",
+            "[::1]:8080",
+            "app.localhost",
+        ] {
+            assert_eq!(
+                docs_policy(crate::ScalarAgent::default(), host).await,
+                API_DOCS_AI_CSP,
+                "{host}"
+            );
+        }
     }
 
     /// It names the CDN the bundle is pinned to, and does **not** open

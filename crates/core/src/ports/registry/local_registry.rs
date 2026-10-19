@@ -279,6 +279,21 @@ pub trait LocalRegistryBackend: Send + Sync {
         Ok(vec![])
     }
 
+    /// Every *published* version in `registry`, every package — what a
+    /// whole-registry document (a helm `index.yaml`) reads. The default is a
+    /// [`Self::get_versions`] per name, the N+1 this exists to remove; a
+    /// backend with a query for it should override it.
+    async fn list_registry_versions(
+        &self,
+        registry: &str,
+    ) -> Result<Vec<PublishedPackage>, CoreError> {
+        let mut all = Vec::new();
+        for name in self.list_package_names(registry).await? {
+            all.extend(self.get_versions(registry, &name).await?);
+        }
+        Ok(all)
+    }
+
     /// Yank multiple versions in one call.
     /// The default implementation loops over `yank`. Override for efficiency.
     async fn bulk_yank(

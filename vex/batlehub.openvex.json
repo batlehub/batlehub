@@ -17,13 +17,13 @@
         {
           "@id": "pkg:oci/batlehub-worker",
           "subcomponents": [
-            { "@id": "pkg:golang/google.golang.org/grpc@v1.82.1" }
+            { "@id": "pkg:golang/google.golang.org/grpc@v1.84.0" }
           ]
         },
         {
           "@id": "pkg:oci/batlehub-worker-guarddog",
           "subcomponents": [
-            { "@id": "pkg:golang/google.golang.org/grpc@v1.82.1" }
+            { "@id": "pkg:golang/google.golang.org/grpc@v1.84.0" }
           ]
         }
       ],
@@ -40,13 +40,13 @@
         {
           "@id": "pkg:oci/batlehub-worker",
           "subcomponents": [
-            { "@id": "pkg:golang/google.golang.org/grpc@v1.82.1" }
+            { "@id": "pkg:golang/google.golang.org/grpc@v1.84.0" }
           ]
         },
         {
           "@id": "pkg:oci/batlehub-worker-guarddog",
           "subcomponents": [
-            { "@id": "pkg:golang/google.golang.org/grpc@v1.82.1" }
+            { "@id": "pkg:golang/google.golang.org/grpc@v1.84.0" }
           ]
         }
       ],
@@ -63,13 +63,13 @@
         {
           "@id": "pkg:oci/batlehub-worker",
           "subcomponents": [
-            { "@id": "pkg:golang/stdlib@v1.26.6" }
+            { "@id": "pkg:golang/stdlib@v1.27.2" }
           ]
         },
         {
           "@id": "pkg:oci/batlehub-worker-guarddog",
           "subcomponents": [
-            { "@id": "pkg:golang/stdlib@v1.26.6" }
+            { "@id": "pkg:golang/stdlib@v1.27.2" }
           ]
         }
       ],
@@ -86,13 +86,13 @@
         {
           "@id": "pkg:oci/batlehub-worker",
           "subcomponents": [
-            { "@id": "pkg:golang/stdlib@v1.26.6" }
+            { "@id": "pkg:golang/stdlib@v1.27.2" }
           ]
         },
         {
           "@id": "pkg:oci/batlehub-worker-guarddog",
           "subcomponents": [
-            { "@id": "pkg:golang/stdlib@v1.26.6" }
+            { "@id": "pkg:golang/stdlib@v1.27.2" }
           ]
         }
       ],

@@ -708,7 +708,14 @@ fn helm_registry_name(repo: &str) -> String {
 
 /// A version `helm` resolves to exactly one release: `1.2.3` or `v1.2.3`, with
 /// an optional pre-release or build suffix. `1.2.x`, `^1.2`, `>=1 <2` are ranges.
+///
+/// The three-number test alone reads only up to the first `-`, so
+/// `1.0.0-rc.1 || 2.0.0` passed as exact; helm's own grammar
+/// (`canonical_version`, a full match) is what rejects the tail.
 fn is_exact_chart_version(v: &str) -> bool {
+    if batlehub_core::services::helm::canonical_version(v).is_none() {
+        return false;
+    }
     let core = v.strip_prefix('v').unwrap_or(v);
     let core = core.split(['-', '+']).next().unwrap_or("");
     let parts: Vec<&str> = core.split('.').collect();
@@ -2005,7 +2012,17 @@ mod tests {
         for v in ["1.2.3", "v1.21.2", "1.0.0-rc.1", "2.0.0+build.5"] {
             assert!(is_exact_chart_version(v), "{v}");
         }
-        for v in ["1.2", "1.2.x", "~1.21", "^1.0.0", ">=1.0.0 <2.0.0", "*", ""] {
+        for v in [
+            "1.2",
+            "1.2.x",
+            "~1.21",
+            "^1.0.0",
+            ">=1.0.0",
+            ">=1.0.0 <2.0.0",
+            "1.0.0-rc.1 || 2.0.0",
+            "*",
+            "",
+        ] {
             assert!(!is_exact_chart_version(v), "{v}");
         }
     }

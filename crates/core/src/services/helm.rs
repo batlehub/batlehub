@@ -28,8 +28,10 @@ pub const CHART_ARTIFACT: &str = "chart";
 /// The `PackageId::artifact` of its provenance file.
 pub const PROV_ARTIFACT: &str = "prov";
 /// The `signature_type` a locally published `.prov` is stored under: the file
-/// rides the version row's signature slot, so `signing` policy sees it.
-pub const PROV_SIGNATURE_TYPE: &str = "helm-prov";
+/// rides the version row's signature slot, so `signing` policy sees it. A
+/// `.prov` is an OpenPGP clear-signed document, so it is `pgp` — the name
+/// `signing.allowed_types` already uses for OpenPGP.
+pub const PROV_SIGNATURE_TYPE: &str = "pgp";
 
 /// What an index entry whose `urls[0]` is `oci://` becomes in the served index
 /// (RFC 0029 §4.4, decision 2).
@@ -46,6 +48,23 @@ pub enum OciEntries {
     /// Served as upstream wrote it — `helm` pulls it from the OCI registry,
     /// past this instance.
     Relay,
+}
+
+/// How a `hybrid` helm registry composes a chart it hosts with the upstream
+/// chart of the same name. Read off `HotConfig` for `OciEntries`' reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HybridMerge {
+    /// A chart name published here takes the whole name: the upstream chart's
+    /// entries are dropped and its archives are never fetched. The rule every
+    /// other hybrid kind applies, and the one that keeps a public `acme-auth
+    /// 9.9.9` from outranking the internal `acme-auth 1.0.0`.
+    #[default]
+    Chart,
+    /// Upstream versions are listed under the local ones, local winning per
+    /// version (RFC 0029 §4.4) — what a mirror extended with a few patched
+    /// releases wants, and a dependency-confusion vector for anything else.
+    Version,
 }
 
 /// One file under `charts/`, parsed back into the coordinate it names.
@@ -89,28 +108,66 @@ pub fn validate_chart_name(name: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
-/// A chart version: SemVer 2, with the `v` prefix some publishers write
-/// (`cert-manager` is `v1.21.2`).
+/// A chart version, in helm's grammar: Masterminds semver's `NewVersion`,
+/// which helm calls with `CoerceNewVersion` on, so the loose expression
+/// applies — `v` prefix optional, minor and patch optional, leading zeros
+/// allowed. `1.0`, `v1.21.2` and `2024.01.15` are all chart versions helm
+/// packages, indexes and installs.
 pub fn validate_version(version: &str) -> Result<(), CoreError> {
-    if parse_semver(version).is_none() {
+    if version_parts(version).is_none() {
         return Err(CoreError::InvalidInput(format!(
-            "'{version}' is not a chart version (SemVer 2)"
+            "'{version}' is not a chart version"
         )));
     }
     Ok(())
 }
 
-fn parse_semver(version: &str) -> Option<semver::Version> {
-    semver::Version::parse(version.strip_prefix('v').unwrap_or(version)).ok()
+/// `looseSemVerRegex` (`Masterminds/semver/v3`, `version.go`):
+/// `v?([0-9]+)(\.[0-9]+)?(\.[0-9]+)?(-ident(\.ident)*)?(\+ident(\.ident)*)?`
+/// with `ident = [0-9A-Za-z-]+`, anchored. Returns the numbers, missing ones
+/// zero, and the prerelease.
+fn version_parts(version: &str) -> Option<([u64; 3], &str)> {
+    let ident = |s: &str| {
+        s.split('.')
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+    };
+    let v = version.strip_prefix('v').unwrap_or(version);
+    let (v, build) = v.split_once('+').map_or((v, None), |(a, b)| (a, Some(b)));
+    let (core, pre) = v.split_once('-').map_or((v, None), |(a, b)| (a, Some(b)));
+    if !build.is_none_or(ident) || !pre.is_none_or(ident) {
+        return None;
+    }
+    let mut nums = [0u64; 3];
+    let mut parts = core.split('.');
+    for (i, p) in parts.by_ref().take(3).enumerate() {
+        if p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        nums[i] = p.parse().ok()?;
+    }
+    parts.next().is_none().then_some((nums, pre.unwrap_or("")))
 }
 
-/// `{name}-{version}.tgz[.prov]` → its coordinate.
+/// The one spelling of a chart version that helm's comparison cannot tell
+/// apart from the others: `v1.0`, `1.0.0` and `1.0.0+build.5` are all
+/// `1.0.0`. `None` for what is not a chart version.
+pub fn canonical_version(version: &str) -> Option<String> {
+    let ([a, b, c], pre) = version_parts(version)?;
+    Some(if pre.is_empty() {
+        format!("{a}.{b}.{c}")
+    } else {
+        format!("{a}.{b}.{c}-{pre}")
+    })
+}
+
+/// `{name}-{version}.tgz[.prov]` → every coordinate it can name, leftmost
+/// split first.
 ///
-/// Chart names contain dashes (`kube-prometheus-stack-65.1.0.tgz`) and so do
-/// prerelease versions (`foo-1.0.0-rc.1.tgz`), so the split is at the
-/// **leftmost** dash whose remainder is a whole version: that keeps a
-/// prerelease in the version rather than cutting it off.
-pub fn coordinate_of(file: &str) -> Result<ChartFile, CoreError> {
+/// Both halves contain dashes (`kube-prometheus-stack-65.1.0.tgz`,
+/// `foo-1.0.0-rc.1.tgz`), so a file name can be read more than one way:
+/// `app-1.0.0-2.0.0.tgz` is `app` at `1.0.0-2.0.0` or `app-1.0.0` at `2.0.0`,
+/// and the name alone cannot say which. The caller picks the one that exists.
+pub fn coordinates_of(file: &str) -> Result<Vec<ChartFile>, CoreError> {
     let (stem, prov) = match file.strip_suffix(".tgz.prov") {
         Some(stem) => (stem, true),
         None => (
@@ -120,21 +177,24 @@ pub fn coordinate_of(file: &str) -> Result<ChartFile, CoreError> {
             false,
         ),
     };
-    let split = stem
+    let all: Vec<ChartFile> = stem
         .match_indices('-')
-        .map(|(i, _)| i)
-        .find(|&i| i > 0 && parse_semver(&stem[i + 1..]).is_some())
-        .ok_or_else(|| {
-            CoreError::InvalidInput(format!("'{file}' does not end in a chart version"))
-        })?;
-    let (name, version) = (&stem[..split], &stem[split + 1..]);
-    validate_chart_name(name)?;
-    validate_version(version)?;
-    Ok(ChartFile {
-        name: name.to_owned(),
-        version: version.to_owned(),
-        prov,
-    })
+        .map(|(i, _)| (&stem[..i], &stem[i + 1..]))
+        .filter(|(name, version)| {
+            validate_chart_name(name).is_ok() && validate_version(version).is_ok()
+        })
+        .map(|(name, version)| ChartFile {
+            name: name.to_owned(),
+            version: version.to_owned(),
+            prov,
+        })
+        .collect();
+    if all.is_empty() {
+        return Err(CoreError::InvalidInput(format!(
+            "'{file}' is not {{chart}}-{{version}}.tgz"
+        )));
+    }
+    Ok(all)
 }
 
 /// Any YAML document as a JSON value — `index.yaml`, or a `Chart.yaml` read out
@@ -325,34 +385,107 @@ pub fn rewrite(index: &mut Value, chart_base: &str, oci: OciEntries) -> Rewritte
     out
 }
 
-/// The `Chart.yaml` fields a composed index entry carries (§4.4).
-pub const CHART_YAML_FIELDS: &[&str] = &[
-    "apiVersion",
-    "name",
-    "version",
-    "appVersion",
-    "description",
-    "type",
-    "kubeVersion",
-    "keywords",
-    "maintainers",
-    "dependencies",
-    "annotations",
-    "home",
-    "sources",
-    "icon",
-    "deprecated",
+/// The shape a field must have to survive into the index.
+#[derive(Clone, Copy)]
+enum Shape {
+    Str,
+    Bool,
+    Strs,
+    StrMap,
+    Any,
+    /// A list of mappings, each keeping only these keys.
+    Records(&'static [(&'static str, Shape)]),
+}
+
+/// `Maintainer` in helm's `pkg/chart/metadata.go`.
+const MAINTAINER: &[(&str, Shape)] = &[
+    ("name", Shape::Str),
+    ("email", Shape::Str),
+    ("url", Shape::Str),
 ];
 
-/// The subset of a parsed `Chart.yaml` stored as a version's `index_metadata`.
-pub fn index_metadata_from_chart_yaml(chart: &Value) -> Value {
+/// `Dependency` in helm's `pkg/chart/dependency.go`.
+const DEPENDENCY: &[(&str, Shape)] = &[
+    ("name", Shape::Str),
+    ("version", Shape::Str),
+    ("repository", Shape::Str),
+    ("condition", Shape::Str),
+    ("tags", Shape::Strs),
+    ("enabled", Shape::Bool),
+    ("import-values", Shape::Any),
+    ("alias", Shape::Str),
+];
+
+/// The `Chart.yaml` fields a composed index entry carries (§4.4), with the
+/// type `Metadata` gives each.
+///
+/// The shapes are not decoration. `helm` reads `Chart.yaml` leniently but
+/// `index.yaml` with `yaml.UnmarshalStrict` (`pkg/repo/index.go`), so one
+/// unknown key or wrong type in one entry fails the whole document — every
+/// client's `helm repo update` on the repository, for one chart's
+/// `maintainers: [{name: a, github: b}]`.
+const CHART_YAML_FIELDS: &[(&str, Shape)] = &[
+    ("apiVersion", Shape::Str),
+    ("name", Shape::Str),
+    ("version", Shape::Str),
+    ("appVersion", Shape::Str),
+    ("description", Shape::Str),
+    ("type", Shape::Str),
+    ("kubeVersion", Shape::Str),
+    ("keywords", Shape::Strs),
+    ("maintainers", Shape::Records(MAINTAINER)),
+    ("dependencies", Shape::Records(DEPENDENCY)),
+    ("annotations", Shape::StrMap),
+    ("home", Shape::Str),
+    ("sources", Shape::Strs),
+    ("icon", Shape::Str),
+    ("deprecated", Shape::Bool),
+];
+
+/// `v` cut down to `shape`, or `None` when nothing of it fits.
+fn conform(v: &Value, shape: Shape) -> Option<Value> {
+    match shape {
+        Shape::Str => v.is_string().then(|| v.clone()),
+        Shape::Bool => v.is_boolean().then(|| v.clone()),
+        Shape::Any => (!v.is_null()).then(|| v.clone()),
+        Shape::Strs => Some(Value::Array(
+            v.as_array()?
+                .iter()
+                .filter(|s| s.is_string())
+                .cloned()
+                .collect(),
+        )),
+        Shape::StrMap => Some(Value::Object(
+            v.as_object()?
+                .iter()
+                .filter(|(_, s)| s.is_string())
+                .map(|(k, s)| (k.clone(), s.clone()))
+                .collect(),
+        )),
+        Shape::Records(fields) => Some(Value::Array(
+            v.as_array()?
+                .iter()
+                .filter(|r| r.is_object())
+                .map(|r| conform_fields(r, fields))
+                .collect(),
+        )),
+    }
+}
+
+fn conform_fields(v: &Value, fields: &[(&str, Shape)]) -> Value {
     let mut out = serde_json::Map::new();
-    for k in CHART_YAML_FIELDS {
-        if let Some(v) = chart.get(*k).filter(|v| !v.is_null()) {
-            out.insert((*k).to_owned(), v.clone());
+    for (k, shape) in fields {
+        if let Some(c) = v.get(*k).and_then(|f| conform(f, *shape)) {
+            out.insert((*k).to_owned(), c);
         }
     }
     Value::Object(out)
+}
+
+/// The subset of a parsed `Chart.yaml` stored as a version's `index_metadata`,
+/// each field cut to the shape helm's strict index reader accepts.
+pub fn index_metadata_from_chart_yaml(chart: &Value) -> Value {
+    conform_fields(chart, CHART_YAML_FIELDS)
 }
 
 /// An index entry composed from a stored version: its `Chart.yaml` fields plus
@@ -364,7 +497,12 @@ pub fn composed_entry(
     digest: &str,
     created: &str,
 ) -> Value {
-    let mut entry = meta.as_object().cloned().unwrap_or_default();
+    // Conformed again on the way out: rows stored before the shapes were
+    // enforced would otherwise still break the index.
+    let mut entry = match index_metadata_from_chart_yaml(meta) {
+        Value::Object(m) => m,
+        _ => Default::default(),
+    };
     entry.insert("name".to_owned(), Value::String(name.to_owned()));
     entry.insert("version".to_owned(), Value::String(version.to_owned()));
     entry.insert("digest".to_owned(), Value::String(digest.to_owned()));
@@ -383,13 +521,24 @@ pub fn compose_index(entries: serde_json::Map<String, Value>, generated: &str) -
     })
 }
 
-/// Hybrid: `local`'s entries over `upstream`'s, local winning on a `{name,
-/// version}` collision — the rule every hybrid kind applies.
-pub fn merge(upstream: &mut Value, local: &Value) {
-    let Some(local_charts) = local.get("entries").and_then(Value::as_object) else {
+/// Hybrid: `local`'s entries over `upstream`'s.
+///
+/// `hosted` is every chart name this registry holds rows for, **including the
+/// ones this caller may not see**. Under [`HybridMerge::Chart`] each of them
+/// drops the upstream chart of that name before the local entries go in, so a
+/// chart hidden from this caller reads as absent rather than as the public
+/// chart of the same name. Under [`HybridMerge::Version`] local wins on a
+/// `{name, version}` collision only.
+pub fn merge(upstream: &mut Value, local: &Value, hosted: &[String], how: HybridMerge) {
+    let Some(charts) = charts_mut(upstream) else {
         return;
     };
-    let Some(charts) = charts_mut(upstream) else {
+    if how == HybridMerge::Chart {
+        for name in hosted {
+            charts.remove(name);
+        }
+    }
+    let Some(local_charts) = local.get("entries").and_then(Value::as_object) else {
         return;
     };
     for (name, local_versions) in local_charts {
@@ -443,36 +592,70 @@ entries:
 generated: "2026-09-11T12:40:00Z"
 "#;
 
+    fn only(file: &str) -> (String, String, bool) {
+        let mut all = coordinates_of(file).unwrap();
+        assert_eq!(all.len(), 1, "{file}: {all:?}");
+        let c = all.remove(0);
+        (c.name, c.version, c.prov)
+    }
+
     #[test]
-    fn coordinate_of_splits_at_the_version() {
-        let c = coordinate_of("kube-prometheus-stack-65.1.0.tgz").unwrap();
+    fn coordinates_of_splits_at_the_version() {
+        let s = |a: &str, b: &str, p| (a.to_owned(), b.to_owned(), p);
         assert_eq!(
-            (c.name.as_str(), c.version.as_str(), c.prov),
-            ("kube-prometheus-stack", "65.1.0", false)
+            only("kube-prometheus-stack-65.1.0.tgz"),
+            s("kube-prometheus-stack", "65.1.0", false)
         );
-        let c = coordinate_of("cert-manager-v1.21.2.tgz.prov").unwrap();
         assert_eq!(
-            (c.name.as_str(), c.version.as_str(), c.prov),
-            ("cert-manager", "v1.21.2", true)
+            only("cert-manager-v1.21.2.tgz.prov"),
+            s("cert-manager", "v1.21.2", true)
         );
-        let c = coordinate_of("foo-1.0.0-rc.1.tgz").unwrap();
-        assert_eq!((c.name.as_str(), c.version.as_str()), ("foo", "1.0.0-rc.1"));
-        let c = coordinate_of("chart-2-1.0.0+build.5.tgz").unwrap();
-        assert_eq!(
-            (c.name.as_str(), c.version.as_str()),
-            ("chart-2", "1.0.0+build.5")
-        );
+        assert_eq!(only("foo-1.0.0-rc.1.tgz"), s("foo", "1.0.0-rc.1", false));
+        // Versions helm accepts and strict SemVer does not.
+        assert_eq!(only("foo-1.0.tgz"), s("foo", "1.0", false));
+        assert_eq!(only("cal-2024.01.15.tgz"), s("cal", "2024.01.15", false));
         for bad in [
             "foo.tgz",
-            "foo-1.0.tgz",
             "-1.0.0.tgz",
             "../x-1.0.0.tgz",
             "a%2F..-1.0.0.tgz",
             "x-1.0.0.zip",
             "x/y-1.0.0.tgz",
+            "x-1.0.0.0.tgz",
+            "x-V1.0.0.tgz",
         ] {
-            assert!(coordinate_of(bad).is_err(), "{bad} should be refused");
+            assert!(coordinates_of(bad).is_err(), "{bad} should be refused");
         }
+    }
+
+    #[test]
+    fn an_ambiguous_file_name_yields_every_reading() {
+        let all: Vec<_> = coordinates_of("app-1.0.0-2.0.0.tgz")
+            .unwrap()
+            .into_iter()
+            .map(|c| (c.name, c.version))
+            .collect();
+        assert_eq!(
+            all,
+            [
+                ("app".to_owned(), "1.0.0-2.0.0".to_owned()),
+                ("app-1.0.0".to_owned(), "2.0.0".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn canonical_version_is_what_helm_compares() {
+        for (a, b) in [
+            ("v1.21.2", "1.21.2"),
+            ("1.0", "1.0.0"),
+            ("1.0.0+b.5", "1"),
+            ("01.2.3", "1.2.3"),
+        ] {
+            assert_eq!(canonical_version(a), canonical_version(b), "{a} {b}");
+        }
+        assert_ne!(canonical_version("1.0.0-rc.1"), canonical_version("1.0.0"));
+        assert_eq!(canonical_version("../x"), None);
     }
 
     #[test]
@@ -571,7 +754,11 @@ generated: "2026-09-11T12:40:00Z"
             "mine".into(),
             serde_json::json!([composed_entry(&Value::Null, "mine", "0.1.0", "ef", "t")]),
         );
-        merge(&mut upstream, &compose_index(entries, "t"));
+        let local = compose_index(entries, "t");
+        let hosted = ["alertmanager".to_owned(), "mine".to_owned()];
+        let mut by_chart = upstream.clone();
+
+        merge(&mut upstream, &local, &hosted, HybridMerge::Version);
         assert_eq!(
             versions_of(&upstream, "alertmanager"),
             ["1.43.0", "9.0.0", "1.43.1"]
@@ -581,6 +768,25 @@ generated: "2026-09-11T12:40:00Z"
             "ours"
         );
         assert_eq!(versions_of(&upstream, "mine"), ["0.1.0"]);
+
+        // The upstream 1.43.1 is gone: the name is ours.
+        merge(&mut by_chart, &local, &hosted, HybridMerge::Chart);
+        assert_eq!(versions_of(&by_chart, "alertmanager"), ["1.43.0", "9.0.0"]);
+        assert_eq!(versions_of(&by_chart, "redis"), ["20.0.0"]);
+    }
+
+    #[test]
+    fn a_chart_hosted_here_but_hidden_from_the_caller_is_absent_not_public() {
+        let mut upstream = parse_index(INDEX).unwrap();
+        let local = compose_index(serde_json::Map::new(), "t");
+        merge(
+            &mut upstream,
+            &local,
+            &["redis".to_owned()],
+            HybridMerge::Chart,
+        );
+        assert!(upstream.pointer("/entries/redis").is_none());
+        assert!(!versions_of(&upstream, "alertmanager").is_empty());
     }
 
     #[test]
@@ -589,6 +795,31 @@ generated: "2026-09-11T12:40:00Z"
         assert_eq!(
             index_metadata_from_chart_yaml(&chart),
             serde_json::json!({"apiVersion": "v2", "name": "x", "version": "1.0.0", "appVersion": "2"})
+        );
+    }
+
+    #[test]
+    fn index_metadata_has_the_shape_helms_strict_index_reader_accepts() {
+        let chart = serde_json::json!({
+            "name": "x",
+            "version": "1.0.0",
+            "appVersion": 1.1,
+            "maintainers": [{"name": "a", "github": "b"}, null, "c"],
+            "dependencies": [{"name": "d", "repository": "r", "import-values": ["x"], "extra": 1}],
+            "annotations": {"k": "v", "n": 3},
+            "keywords": ["a", 1],
+            "deprecated": "yes",
+        });
+        assert_eq!(
+            index_metadata_from_chart_yaml(&chart),
+            serde_json::json!({
+                "name": "x",
+                "version": "1.0.0",
+                "maintainers": [{"name": "a"}],
+                "dependencies": [{"name": "d", "repository": "r", "import-values": ["x"]}],
+                "annotations": {"k": "v"},
+                "keywords": ["a"],
+            })
         );
     }
 

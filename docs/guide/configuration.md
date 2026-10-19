@@ -356,7 +356,11 @@ The agent uploads the whole OpenAPI document, and every question, to
 `api.scalar.com`, after the reader accepts Scalar's terms. To let it reach that
 host, `/scalar`'s `connect-src` is widened to `https://api.scalar.com`. This also
 unblocks the bundle's registry lookups, which would otherwise be blocked, so every load of
-the page then reaches Scalar. MCP stays off either way. The option is read at
+the page then reaches Scalar. The widening applies only where the agent can
+appear: always with `ai_agent_key`, and without it only when the page is opened
+on a local host (`localhost`, `127.0.0.1`, `[::1]`, a `*.localhost` name). A
+keyless agent anywhere else stays hidden, and `/scalar` keeps the strict
+policy. MCP stays off either way. The option is read at
 startup; changing it needs a restart.
 :::
 
@@ -1387,6 +1391,25 @@ curl -X PUT \
   --data-binary @hello-1.0-1.x86_64.rpm \
   http://batlehub.example.com/proxy/my-rpm/rpm/upload
 ```
+
+---
+
+**`helm`** — a classic Helm chart repository, the `index.yaml` kind that `helm repo add` takes ([RFC 0029](/rfc/0029-helm-charts)). `proxy`, `local` and `hybrid` all work; `local` and `hybrid` accept ChartMuseum's publish API (`POST /proxy/{registry}/helm/api/charts`, the call `helm cm-push` makes). Two keys are helm-only, and rejected on any other type:
+
+- `oci_entries` — what an upstream `index.yaml` entry whose URL is `oci://` becomes. `"drop"` (the default) omits it, so every chart version this registry lists is one it serves and gates. `"relay"` passes it through as written, and `helm` then installs that version straight from the OCI registry, **past this instance** — uncached and unblockable; it is warned at every reload.
+- `hybrid_merge` — `hybrid` only: how a chart published here composes with the upstream chart of the same name. `"chart"` (the default) gives the local chart the whole name and hides upstream's, so a public chart can never be installed in place of an internal one (no dependency confusion). `"version"` lists upstream's versions under the local ones, local winning per version — a mirror extended with a few patched releases. Leaving it unset on a hybrid helm registry raises a config warning asking you to choose.
+
+```toml
+[[registries]]
+type = "helm"
+name = "charts"
+mode = "hybrid"
+upstreams = ["https://charts.jetstack.io"]
+oci_entries = "drop"
+hybrid_merge = "chart"
+```
+
+Client snippets and the full endpoint list are on the [Helm](/registries/helm) page.
 
 ---
 

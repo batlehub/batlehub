@@ -22,13 +22,13 @@ version = "0.8.0"
 backend = "cargo:cargo-sweep"
 
 [[tools.claude]]
-version = "2.1.294"
+version = "2.1.302"
 backend = "aqua:anthropics/claude-code"
 
 [tools.claude."platforms.linux-x64"]
-checksum = "sha256:c152a9520cbe30adfaa7dbff26016d74c668c7dfb093fca2a06fa72cb6e98369"
-url = "https://github.com/anthropics/claude-code/releases/download/v2.1.294/claude-linux-x64.tar.gz"
-url_api = "https://api.github.com/repos/anthropics/claude-code/releases/assets/620618749"
+checksum = "sha256:0d865f10fe49f2e731ab9d4f7bdcce082cad4f7bbf71d2cbbf7be47b9d8ae5dc"
+url = "https://github.com/anthropics/claude-code/releases/download/v2.1.302/claude-linux-x64.tar.gz"
+url_api = "https://api.github.com/repos/anthropics/claude-code/releases/assets/647956172"
 
 [[tools.cocogitto]]
 version = "7.0.0"
@@ -88,12 +88,12 @@ version = "a5573af096a4b526dcbc3c896c220b1714a0765b"
 backend = "go:github.com/norwoodj/helm-docs/cmd/helm-docs"
 
 [[tools.helm]]
-version = "4.3.0"
+version = "4.3.1"
 backend = "aqua:helm/helm"
 
 [tools.helm."platforms.linux-x64"]
-checksum = "sha256:86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb"
-url = "https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz"
+checksum = "sha256:0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b"
+url = "https://get.helm.sh/helm-v4.3.1-linux-amd64.tar.gz"
 
 [[tools.helm-docs]]
 version = "1.14.2"
@@ -123,38 +123,38 @@ url = "https://github.com/jesseduffield/lazydocker/releases/download/v0.25.2/laz
 url_api = "https://api.github.com/repos/jesseduffield/lazydocker/releases/assets/399711577"
 
 [[tools.node]]
-version = "26.11.1"
+version = "26.12.0"
 backend = "core:node"
 
 [tools.node."platforms.linux-x64"]
-checksum = "sha256:15fc043a51a5783f2f4b634561091658f5a7f0e3db03f997dca3a8033a33e45b"
-url = "https://nodejs.org/dist/v26.11.1/node-v26.11.1-linux-x64.tar.gz"
+checksum = "sha256:d9f88af72ad34f7ddf8e67289829f1698f54b6254f7d4f54b7453117ff1a3d2c"
+url = "https://nodejs.org/dist/v26.12.0/node-v26.12.0-linux-x64.tar.gz"
 
 [[tools.pnpm]]
-version = "12.10.1"
+version = "12.14.0"
 backend = "aqua:pnpm/pnpm"
 
 [tools.pnpm."platforms.linux-x64"]
-checksum = "sha256:502a275984a4cd01e5579ac72049a241091cac5118e44becf84951130c3e079e"
-url = "https://github.com/pnpm/pnpm/releases/download/v12.10.1/pnpm-linux-x64.tar.gz"
-url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/616153639"
+checksum = "sha256:3910c3852136bed5bc1511b9137a45fd4357ed6b3970d9d08893641e9005867e"
+url = "https://github.com/pnpm/pnpm/releases/download/v12.14.0/pnpm-linux-x64.tar.gz"
+url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/643957410"
 provenance = "github-attestations"
 
 [[tools.python]]
-version = "3.14.8"
+version = "3.15.0"
 backend = "core:python"
 
 [tools.python."platforms.linux-x64"]
-checksum = "blake3:d12d9677c747e6fc0df2ab58073e142f84d516567e42a2832e003832763c827e"
-url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.14.8+20261003-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+checksum = "blake3:887ee1b5da8353b32ccd1bdc2bac6075628ab0862517b58917ef046a78eb2435"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261013/cpython-3.15.0+20261013-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
 provenance = "github-attestations"
 
 [[tools.rust]]
-version = "1.99.0"
+version = "1.99.1"
 backend = "core:rust"
 
 [[tools.semgrep]]
-version = "1.180.0"
+version = "1.181.0"
 backend = "pipx:semgrep"
 
 [[tools.sonar-scanner-cli]]
@@ -183,21 +183,21 @@ url = "https://github.com/go-task/task/releases/download/v3.54.0/task_linux_amd6
 url_api = "https://api.github.com/repos/go-task/task/releases/assets/604090073"
 
 [[tools.trivy]]
-version = "0.75.0"
+version = "0.76.0"
 backend = "aqua:aquasecurity/trivy"
 
 [tools.trivy."platforms.linux-x64"]
-checksum = "sha256:c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f"
-url = "https://github.com/aquasecurity/trivy/releases/download/v0.75.0/trivy_0.75.0_Linux-64bit.tar.gz"
-url_api = "https://api.github.com/repos/aquasecurity/trivy/releases/assets/603335432"
+checksum = "sha256:e24b1c51293c1b15e4ba8d45bbc7891ba053f90278ec2698f3562c993e145fe7"
+url = "https://github.com/aquasecurity/trivy/releases/download/v0.76.0/trivy_0.76.0_Linux-64bit.tar.gz"
+url_api = "https://api.github.com/repos/aquasecurity/trivy/releases/assets/640213415"
 provenance = "cosign"
 
 [[tools.uv]]
-version = "0.12.23"
+version = "0.13.1"
 backend = "aqua:astral-sh/uv"
 
 [tools.uv."platforms.linux-x64"]
-checksum = "sha256:9167d72b3319674b6303c4cbe071854bba13ebdf3d76b1a7cbdc175471fb66d6"
-url = "https://github.com/astral-sh/uv/releases/download/0.12.23/uv-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/608232628"
+checksum = "sha256:eadd9d27c134ab5ac1ffd4473b97a741407f3ea238288f03121fc4deddf90220"
+url = "https://github.com/astral-sh/uv/releases/download/0.13.1/uv-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/639313223"
 provenance = "github-attestations"

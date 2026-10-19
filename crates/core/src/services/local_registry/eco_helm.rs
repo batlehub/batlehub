@@ -1,6 +1,13 @@
 use super::{CoreError, Identity, LocalRegistryService};
 
 impl LocalRegistryService {
+    /// Whether `registry` holds a published version of chart `name`, whoever
+    /// may see it — what keeps a hybrid registry from fetching the public
+    /// chart of a name it hosts (`hybrid_merge = "chart"`).
+    pub async fn hosts(&self, registry: &str, name: &str) -> Result<bool, CoreError> {
+        self.backend.exists(registry, name).await
+    }
+
     /// `index.yaml` for a local or hybrid Helm registry, holding what
     /// `identity` may see (RFC 0029 §4.4).
     ///
@@ -15,28 +22,13 @@ impl LocalRegistryService {
         &self,
         registry: &str,
         identity: &Identity,
-    ) -> Result<serde_json::Value, CoreError> {
+    ) -> Result<HelmIndex, CoreError> {
         use crate::services::helm::{compose_index, composed_entry};
 
-        let names = self.backend.list_package_names(registry).await?;
-        let (readable, grant_rows) = self.readable_packages(registry, identity).await?;
+        let listing = self.visible_registry_versions(registry, identity).await?;
         let mut entries = serde_json::Map::new();
-        for name in &names {
-            if !readable.contains(name) {
-                continue;
-            }
-            let versions = match self
-                .load_visible_versions_in(registry, name, identity, Some(&grant_rows))
-                .await
-            {
-                Ok(v) => v,
-                Err(CoreError::AccessDenied(_)) => continue,
-                Err(e) => return Err(e),
-            };
-            let mut versions: Vec<_> = versions
-                .into_iter()
-                .filter(|p| !p.yanked && !p.unlisted)
-                .collect();
+        for (name, versions) in listing.visible {
+            let mut versions: Vec<_> = versions.into_iter().filter(|p| !p.yanked).collect();
             // Newest first, the order `helm repo index` writes and `helm search
             // repo` displays.
             versions.sort_by(|a, b| {
@@ -58,11 +50,24 @@ impl LocalRegistryService {
             if list.is_empty() {
                 continue;
             }
-            entries.insert(name.clone(), serde_json::Value::Array(list));
+            entries.insert(name, serde_json::Value::Array(list));
         }
-        Ok(compose_index(
-            entries,
-            &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        ))
+        Ok(HelmIndex {
+            index: compose_index(
+                entries,
+                &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            ),
+            hosted: listing.hosted,
+        })
     }
+}
+
+/// [`LocalRegistryService::get_helm_index`]' answer.
+pub struct HelmIndex {
+    /// The composed `index.yaml`, as this caller may see it.
+    pub index: serde_json::Value,
+    /// Every chart name this registry holds rows for, including the ones the
+    /// caller may not see — what a hybrid merge needs to hide the upstream
+    /// chart of a name hosted here (`services::helm::merge`).
+    pub hosted: Vec<String>,
 }

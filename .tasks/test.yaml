@@ -465,6 +465,8 @@ tasks:
       - bash tests/heavy/authz.sh terraform
       - bash tests/heavy/authz.sh maven
       - bash tests/heavy/authz.sh cargo
+      - bash tests/heavy/authz.sh galaxy
+      - bash tests/heavy/authz.sh helm
 
   test:authz-live-heavy:
     desc: "The authorization suite's live targets: the pull boundary as a real client meets it, for the eleven kinds with no local mode (goproxy, nodedist, sdkman, github, forgejo, gitlab, generic, deb, rpm, pacman, rustup). The one family in that suite that reaches the public internet — CI runs it nightly, not per-PR (needs DATABASE_URL, network, and podman/docker for the rpm target)"

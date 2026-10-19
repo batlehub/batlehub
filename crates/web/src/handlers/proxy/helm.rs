@@ -27,27 +27,27 @@ use actix_multipart::Multipart;
 use actix_web::{
     delete, guard::GuardContext, post, route, web, HttpRequest, HttpResponse, Responder,
 };
-use bytes::{Bytes, BytesMut};
-use futures::StreamExt;
+use bytes::Bytes;
 use serde::Serialize;
 use serde_json::Value;
 use utoipa::ToSchema;
 
 use batlehub_config::schema::RegistryMode;
 use batlehub_core::{
-    entities::{Action, PackageId},
+    entities::{Action, PackageId, RegistryKind},
     error::CoreError,
-    ports::DocumentKind,
+    ports::{DocumentBody, DocumentKind},
     services::helm::{
-        chart_file_name, coordinate_of, index_metadata_from_chart_yaml, render_index, rewrite,
-        validate_chart_name, validate_version, INDEX_ADDRESS, PROV_SIGNATURE_TYPE,
+        chart_file_name, coordinates_of, index_metadata_from_chart_yaml, render_index, rewrite,
+        validate_chart_name, validate_version, ChartFile, HybridMerge, INDEX_ADDRESS,
+        PROV_SIGNATURE_TYPE,
     },
     services::{local_registry::PublishRequest, LocalRegistryService, ProxyRequest, ProxyService},
 };
 
 use super::common::{
-    collect_payload, proxy_stream, publish_and_respond, registry_public_base, require_local_mode,
-    serve_local_or_proxy_artifact, synthesised_headers, LocalOrProxyArtifactOpts, MAX_UPLOAD_BYTES,
+    collect_form_fields, collect_payload, proxy_stream, publish_and_respond, registry_public_base,
+    require_local_mode, synthesised_headers,
 };
 use crate::handlers::schemas::{ArtifactBytes, ProtocolDocument, UpstreamDocument};
 use crate::middleware::extract_registry_from_path;
@@ -92,14 +92,14 @@ async fn index_value(
 ) -> Result<(Value, Option<u32>), AppError> {
     let pkg = PackageId::new(registry, INDEX_ADDRESS, "latest");
     if mode == RegistryMode::Local {
-        svc.authorize_read(&pkg, &identity.0, Action::ReleasesList)
+        svc.authorize_listing(&pkg, &identity.0, Action::ReleasesList)
             .await
             .map_err(AppError::from)?;
         let local = local_svc
             .get_helm_index(registry, &identity.0)
             .await
             .map_err(AppError::from)?;
-        return Ok((local, None));
+        return Ok((local.index, None));
     }
     let preq = ProxyRequest {
         package_id: pkg,
@@ -113,17 +113,22 @@ async fn index_value(
         .await
         .map_err(AppError::from)?;
     let synthesised = doc.synthesised;
-    let mut index = doc
-        .body
-        .as_json()
-        .cloned()
-        .ok_or_else(|| AppError::bad_gateway("the upstream index.yaml did not parse"))?;
+    let DocumentBody::Json(mut index) = doc.body else {
+        return Err(AppError::bad_gateway(
+            "the upstream index.yaml did not parse",
+        ));
+    };
     if mode == RegistryMode::Hybrid {
         let local = local_svc
             .get_helm_index(registry, &identity.0)
             .await
             .map_err(AppError::from)?;
-        batlehub_core::services::helm::merge(&mut index, &local);
+        batlehub_core::services::helm::merge(
+            &mut index,
+            &local.index,
+            &local.hosted,
+            svc.helm_hybrid_merge(registry).await,
+        );
     }
     Ok((index, synthesised))
 }
@@ -159,15 +164,35 @@ pub async fn helm_index(
     let registry = path.into_inner();
     let (mut index, synthesised) =
         index_value(&registry, &identity, &svc, &local_svc, modes.get(&registry)).await?;
-    let chart_base = format!("{}/helm/charts", registry_public_base(&req, &registry));
+    let repo_url = format!("{}/helm", registry_public_base(&req, &registry));
+    let chart_base = format!("{repo_url}/charts");
+    let context_path = repo_url
+        .split_once("://")
+        .and_then(|(_, rest)| rest.find('/').map(|i| rest[i..].to_owned()))
+        .unwrap_or_default();
+    let oci_entries = svc.helm_oci_entries(&registry).await;
+    // A large index (Bitnami's is 27 MB) takes seconds to rewrite and render,
+    // so both run off the runtime, as its parse does.
     // ponytail: rendered per request; cache the YAML under the blocked set's
     // fingerprint for `metadata_ttl` (RFC 0029 §4.4) when a fleet's `repo
     // update` shows up in the profile.
-    let r = rewrite(
-        &mut index,
-        &chart_base,
-        svc.helm_oci_entries(&registry).await,
-    );
+    let (r, body) = web::block(move || {
+        let r = rewrite(&mut index, &chart_base, oci_entries);
+        // `helm cm-push` posts to `{serverInfo.contextPath}/api/charts` and
+        // reads the context path from here; without it the plugin builds
+        // `/api/proxy/{registry}/helm/charts`. Set on every index, replacing an
+        // upstream ChartMuseum's own, which names a path on another host.
+        if let Some(obj) = index.as_object_mut() {
+            obj.insert(
+                "serverInfo".to_owned(),
+                serde_json::json!({ "contextPath": context_path }),
+            );
+        }
+        render_index(&index).map(|body| (r, body))
+    })
+    .await
+    .map_err(|e| AppError::internal(format!("helm: rendering index.yaml: {e}")))?
+    .map_err(AppError::from)?;
     if r.oci_dropped > 0 || r.multi_url > 0 {
         tracing::debug!(
             registry = %registry,
@@ -176,11 +201,84 @@ pub async fn helm_index(
             "helm: index entries dropped or narrowed to one URL"
         );
     }
-    let body = render_index(&index).map_err(AppError::from)?;
     let mut builder = HttpResponse::Ok();
     builder.content_type(YAML);
     synthesised_headers(&mut builder, synthesised);
     Ok(builder.body(body))
+}
+
+/// The coordinate `file` names. A file name that reads more than one way
+/// (`app-1.0.0-2.0.0.tgz`) is settled by which reading this registry holds —
+/// a local row, else an upstream index entry — and falls back to the leftmost
+/// split, which then answers `404` like any absent chart.
+async fn chart_of(
+    file: &str,
+    registry: &str,
+    mode: &RegistryMode,
+    svc: &ProxyService,
+    local_svc: &LocalRegistryService,
+) -> Result<ChartFile, AppError> {
+    let mut all = coordinates_of(file).map_err(AppError::from)?;
+    if all.len() > 1 {
+        let upstream = match mode {
+            RegistryMode::Local => None,
+            _ => svc.hot.read().await.registries.get(registry).cloned(),
+        };
+        for i in 0..all.len() {
+            let c = &all[i];
+            let local = *mode != RegistryMode::Proxy
+                && local_svc
+                    .get_version_meta(registry, &c.name, &c.version)
+                    .await
+                    .is_some();
+            let held = local
+                || match &upstream {
+                    Some(client) => client
+                        .resolve_metadata(&PackageId::new(registry, &c.name, &c.version))
+                        .await
+                        .is_ok(),
+                    None => false,
+                };
+            if held {
+                return Ok(all.swap_remove(i));
+            }
+        }
+    }
+    Ok(all.swap_remove(0))
+}
+
+/// Helm compares versions, not strings: `v1.2.3`, `1.2.3` and `1.2.3+b` are
+/// one release, and a block is recorded in whichever spelling the operator
+/// typed. The index filter compares them normalised (`blocking::normalize`);
+/// the download gate below matches the stored coordinate exactly, so the
+/// normalised comparison is repeated here — after the grants, so a caller who
+/// may not read the registry learns nothing of its blocks.
+async fn refuse_blocked_in_another_spelling(
+    svc: &ProxyService,
+    registry: &str,
+    chart: &ChartFile,
+    identity: &AuthIdentity,
+) -> Result<(), AppError> {
+    let pkg = PackageId::new(registry, &chart.name, &chart.version);
+    batlehub_core::services::authz::authorize_grants_public(
+        &svc.hot,
+        &pkg,
+        &identity.0,
+        Action::ReleasesRead,
+    )
+    .await
+    .map_err(AppError::from)?;
+    if svc
+        .blocked_in_registry_snapshot_public(registry, RegistryKind::Helm)
+        .await
+        .contains(&chart.name, &chart.version)
+    {
+        return Err(AppError::from(CoreError::AccessDenied(format!(
+            "{} {} is blocked",
+            chart.name, chart.version
+        ))));
+    }
+    Ok(())
 }
 
 /// A chart archive, or with `.prov` appended its provenance file — byte-exact, fetched from the URL the upstream index names.
@@ -216,69 +314,91 @@ pub async fn helm_chart(
     let (registry, file) = path.into_inner();
     // Parsed back into its coordinate before it becomes a key: this handler
     // names the artifact itself, so the edge validation is its own (§6.5).
-    let chart = coordinate_of(&file).map_err(AppError::from)?;
-    if !chart.prov {
-        return serve_local_or_proxy_artifact(
-            svc,
-            local_svc,
-            &modes,
-            &registry,
-            &chart.name,
-            &chart.version,
-            identity,
-            LocalOrProxyArtifactOpts {
-                artifact_suffix: chart.artifact(),
-                local_content_type: GZIP,
-                proxy_content_type: Some(GZIP),
-                action: Action::ReleasesRead,
-                check_prerelease: true,
-                append_signature: false,
-            },
-        )
-        .await;
+    let mut mode = modes.get(&registry);
+    let chart = chart_of(&file, &registry, &mode, &svc, &local_svc).await?;
+    refuse_blocked_in_another_spelling(&svc, &registry, &chart, &identity).await?;
+    // Under `hybrid_merge = "chart"` a chart name hosted here is answered from
+    // here alone: the index never listed an upstream version of it, and a miss
+    // must not fetch the public chart of the same name either.
+    if mode == RegistryMode::Hybrid
+        && svc.helm_hybrid_merge(&registry).await == HybridMerge::Chart
+        && local_svc
+            .hosts(&registry, &chart.name)
+            .await
+            .map_err(AppError::from)?
+    {
+        mode = RegistryMode::Local;
     }
-
-    // A local `.prov` rides the version row's signature slot. The archive read
-    // runs first because it is what authorizes the caller and applies
-    // visibility and the block — a `.prov` is readable exactly when its chart is.
-    let mode = modes.get(&registry);
     if matches!(mode, RegistryMode::Local | RegistryMode::Hybrid) {
         local_svc
             .check_prerelease_access(&registry, &chart.version, &identity)
             .await
             .map_err(AppError::from)?;
-        match local_svc
-            .get_artifact(
-                &registry,
-                &chart.name,
-                &chart.version,
-                Action::ReleasesRead,
-                &identity,
-                &identity.1,
-            )
-            .await
-        {
-            Ok(_) => {
-                let prov = local_svc
-                    .get_version_meta(&registry, &chart.name, &chart.version)
-                    .await
-                    .filter(|m| m.signature_type.as_deref() == Some(PROV_SIGNATURE_TYPE))
-                    .and_then(|m| m.signature_bytes)
-                    .ok_or_else(|| {
-                        AppError::not_found(format!(
-                            "{} {} was published without a provenance file",
-                            chart.name, chart.version
-                        ))
-                    })?;
-                return Ok(HttpResponse::Ok().content_type(PROV).body(prov));
-            }
+        match local_chart_file(&local_svc, &registry, &chart, &identity).await {
+            Ok(resp) => return Ok(resp),
             Err(CoreError::NotFound(_)) if mode == RegistryMode::Hybrid => {}
             Err(e) => return Err(AppError::from(e)),
         }
     }
+    let content_type = if chart.prov { PROV } else { GZIP };
     let pkg =
         PackageId::new(&registry, &chart.name, &chart.version).with_artifact(chart.artifact());
-    proxy_stream(svc, pkg, identity, Action::ReleasesRead, Some(PROV)).await
+    proxy_stream(svc, pkg, identity, Action::ReleasesRead, Some(content_type)).await
+}
+
+/// The archive, or its `.prov`, from this registry's rows.
+///
+/// A `.prov` rides the version row's signature slot, and is readable exactly
+/// when its chart is: `authorize_artifact_read` applies the rule chain,
+/// visibility and the block without reading the archive or counting a
+/// download, and hands back the row the signature is on.
+async fn local_chart_file(
+    local_svc: &LocalRegistryService,
+    registry: &str,
+    chart: &ChartFile,
+    identity: &AuthIdentity,
+) -> Result<HttpResponse, CoreError> {
+    if !chart.prov {
+        let bytes = local_svc
+            .get_artifact(
+                registry,
+                &chart.name,
+                &chart.version,
+                Action::ReleasesRead,
+                identity,
+                &identity.1,
+            )
+            .await?;
+        return Ok(HttpResponse::Ok().content_type(GZIP).body(bytes));
+    }
+    let row = local_svc
+        .authorize_artifact_read(
+            registry,
+            &chart.name,
+            &chart.version,
+            Action::ReleasesRead,
+            identity,
+            &identity.1,
+        )
+        .await?
+        .ok_or_else(|| {
+            CoreError::NotFound(format!(
+                "{}/{}@{} not found in local registry",
+                registry, chart.name, chart.version
+            ))
+        })?;
+    let prov = Some(row)
+        .filter(|m| m.signature_type.as_deref() == Some(PROV_SIGNATURE_TYPE))
+        .and_then(|m| m.signature_bytes)
+        .ok_or_else(|| {
+            // Not `NotFound`: the chart is here, so a hybrid registry must not
+            // go looking for an upstream `.prov` of it.
+            CoreError::NotFoundWithheld(format!(
+                "{} {} was published without a provenance file",
+                chart.name, chart.version
+            ))
+        })?;
+    Ok(HttpResponse::Ok().content_type(PROV).body(prov))
 }
 
 /// What a publish carried: the archive, and the `.prov` beside it if any.
@@ -302,46 +422,13 @@ async fn read_upload(req: &HttpRequest, payload: web::Payload) -> Result<Upload,
             prov: None,
         });
     }
-    let mut form = Multipart::new(req.headers(), payload);
-    let (mut chart, mut prov) = (None, None);
-    let mut total: u64 = 0;
-    while let Some(field) = form.next().await {
-        let mut field =
-            field.map_err(|e| AppError::bad_request(format!("multipart error: {e}")))?;
-        let name = field
-            .content_disposition()
-            .and_then(|cd| cd.get_name())
-            .unwrap_or("")
-            .to_owned();
-        let mut buf = BytesMut::new();
-        while let Some(chunk) = field.next().await {
-            let chunk = chunk.map_err(|e| AppError::bad_request(format!("chunk error: {e}")))?;
-            total += chunk.len() as u64;
-            if total > MAX_UPLOAD_BYTES {
-                return Err(AppError::from(CoreError::PayloadTooLarge(format!(
-                    "upload exceeds {MAX_UPLOAD_BYTES} bytes"
-                ))));
-            }
-            buf.extend_from_slice(&chunk);
-        }
-        match name.as_str() {
-            "chart" => chart = Some(buf.freeze()),
-            "prov" => prov = Some(buf.freeze()),
-            _ => {}
-        }
-    }
+    let mut fields = collect_form_fields(Multipart::new(req.headers(), payload)).await?;
+    let (chart, prov) = (fields.remove("chart"), fields.remove("prov"));
     Ok(Upload {
         chart: chart
             .ok_or_else(|| AppError::bad_request("no 'chart' field in the multipart body"))?,
         prov,
     })
-}
-
-/// Whether `?force` was asked for — ChartMuseum reads its presence.
-fn wants_force(req: &HttpRequest) -> bool {
-    req.query_string()
-        .split('&')
-        .any(|p| p == "force" || (p.starts_with("force=") && p != "force=false"))
 }
 
 /// Publish a packaged chart — ChartMuseum's upload, the call `helm cm-push` makes.
@@ -351,7 +438,7 @@ fn wants_force(req: &HttpRequest) -> bool {
     tag = "proxy/helm",
     params(
         ("registry" = String, Path, description = "Registry name"),
-        ("force" = Option<bool>, Query, description = "Replace an existing version (needs releases:overwrite)"),
+        ("force" = Option<bool>, Query, description = "Accepted for `helm cm-push --force` and ignored: a published version is never replaced"),
     ),
     request_body(content = String, description = "The .tgz as the body, or multipart/form-data with `chart` and optional `prov`", content_type = "application/octet-stream"),
     responses(
@@ -359,18 +446,16 @@ fn wants_force(req: &HttpRequest) -> bool {
         (status = 400, description = "Not a packaged chart, or its Chart.yaml names no valid name or version"),
         (status = 403, description = "Access denied"),
         (status = 404, description = "Unknown registry, or mode = proxy"),
-        (status = 409, description = "That version is already published"),
+        (status = 409, description = "That version is already published, with or without `?force`"),
     ),
     security(("bearer_token" = [])),
 )]
 #[post("/proxy/{registry}/helm/api/charts", guard = "is_helm")]
-#[allow(clippy::too_many_arguments)]
 pub async fn helm_publish(
     req: HttpRequest,
     path: web::Path<String>,
     payload: web::Payload,
     identity: AuthIdentity,
-    svc: web::Data<Arc<ProxyService>>,
     local_svc: web::Data<Arc<LocalRegistryService>>,
     notifications: web::Data<Option<Arc<NotificationService>>>,
     modes: web::Data<RegistryModeMap>,
@@ -401,20 +486,10 @@ pub async fn helm_publish(
     validate_chart_name(&name).map_err(AppError::from)?;
     validate_version(&version).map_err(AppError::from)?;
 
-    // `?force` is `releases:overwrite` (§4.4). The row store refuses every
-    // republish whatever the caller holds, so a forced publish of an existing
-    // version is still a `409`; the verb is checked first so a caller without it
-    // learns nothing about which versions exist.
-    if wants_force(&req) {
-        batlehub_core::services::authz::authorize_grants_public(
-            &svc.hot,
-            &PackageId::new(&registry, &name, &version),
-            &identity.0,
-            Action::ReleasesOverwrite,
-        )
-        .await
-        .map_err(AppError::from)?;
-    }
+    // `?force` is read nowhere. The row store refuses every republish whatever
+    // the caller holds (RFC 0016), so there is no replacement for
+    // `releases:overwrite` to authorize, and asking for it would only refuse a
+    // new version to a caller without it.
 
     let checksum = {
         use sha2::{Digest, Sha256};
@@ -498,17 +573,8 @@ async fn api_entries(
     modes: &RegistryModeMap,
 ) -> Result<serde_json::Map<String, Value>, AppError> {
     require_local_mode(registry, modes)?;
-    svc.authorize_read(
-        &PackageId::new(registry, INDEX_ADDRESS, "latest"),
-        &identity.0,
-        Action::ReleasesList,
-    )
-    .await
-    .map_err(AppError::from)?;
-    let mut index = local_svc
-        .get_helm_index(registry, &identity.0)
-        .await
-        .map_err(AppError::from)?;
+    let (mut index, _) =
+        index_value(registry, identity, svc, local_svc, RegistryMode::Local).await?;
     let mut entries = index
         .get_mut("entries")
         .and_then(Value::as_object_mut)

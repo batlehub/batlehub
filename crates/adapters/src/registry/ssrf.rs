@@ -110,6 +110,7 @@ pub fn is_blocked_ip(ip: IpAddr) -> bool {
 }
 
 fn blocked_error(url: &reqwest::Url) -> CoreError {
+    let url = super::http_client::redacted(url);
     CoreError::Registry(format!(
         "refusing to fetch upstream URL '{url}': host resolves to a private, reserved, or \
          link-local address (SSRF guard)"
@@ -120,8 +121,9 @@ fn blocked_error(url: &reqwest::Url) -> CoreError {
 /// link-local address. Hostnames are resolved (best-effort DNS-rebinding guard):
 /// every resolved address must be public.
 pub async fn ensure_public_url(url: &reqwest::Url) -> Result<(), CoreError> {
+    let shown = super::http_client::redacted(url);
     let host = url.host_str().ok_or_else(|| {
-        CoreError::Registry(format!("refusing to fetch upstream URL '{url}': no host"))
+        CoreError::Registry(format!("refusing to fetch upstream URL '{shown}': no host"))
     })?;
 
     // IP literal: check directly, no DNS. `host_str()` spells an IPv6 literal
@@ -143,7 +145,7 @@ pub async fn ensure_public_url(url: &reqwest::Url) -> Result<(), CoreError> {
     let port = url.port_or_known_default().unwrap_or(0);
     let addrs = tokio::net::lookup_host((host, port)).await.map_err(|e| {
         CoreError::Registry(format!(
-            "refusing to fetch upstream URL '{url}': DNS resolution failed: {e}"
+            "refusing to fetch upstream URL '{shown}': DNS resolution failed: {e}"
         ))
     })?;
     let mut saw_any = false;
@@ -155,7 +157,7 @@ pub async fn ensure_public_url(url: &reqwest::Url) -> Result<(), CoreError> {
     }
     if !saw_any {
         return Err(CoreError::Registry(format!(
-            "refusing to fetch upstream URL '{url}': host did not resolve to any address"
+            "refusing to fetch upstream URL '{shown}': host did not resolve to any address"
         )));
     }
     Ok(())
@@ -293,7 +295,7 @@ pub async fn fetch_following_redirects_trusting(
         let resp = req
             .send()
             .await
-            .map_err(|e| CoreError::Registry(e.to_string()))?;
+            .map_err(super::http_client::to_registry_error)?;
 
         if resp.status().is_redirection() {
             let location = resp
@@ -302,7 +304,8 @@ pub async fn fetch_following_redirects_trusting(
                 .and_then(|v| v.to_str().ok())
                 .ok_or_else(|| {
                     CoreError::Registry(format!(
-                        "upstream returned a redirect with no valid Location header (from '{url}')"
+                        "upstream returned a redirect with no valid Location header (from '{}')",
+                        super::http_client::redacted(&url)
                     ))
                 })?;
             // Resolve relative redirects against the current URL.

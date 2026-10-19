@@ -50,12 +50,9 @@ fn extract_pypi_wheel(data: &Bytes) -> Option<ExtractedManifest> {
 }
 
 fn extract_pypi_sdist(data: &Bytes) -> Option<ExtractedManifest> {
-    use flate2::read::GzDecoder;
     use std::io::Read;
-    use tar::Archive;
 
-    let gz = GzDecoder::new(data.as_ref());
-    let mut archive = Archive::new(gz);
+    let mut archive = readme::open_targz(data);
 
     let Ok(entries) = archive.entries() else {
         tracing::warn!("sbom: failed to parse pypi sdist manifest, treating as no dependencies");

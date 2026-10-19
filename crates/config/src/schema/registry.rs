@@ -284,6 +284,20 @@ pub struct RegistryConfig {
     /// Rejected on any other type, for the reason `roles` is.
     #[serde(default)]
     pub oci_entries: Option<HelmOciEntries>,
+    /// helm only, `hybrid` only: how a chart published here composes with the
+    /// upstream chart of the same name.
+    ///
+    /// - `chart` (the behaviour when absent) — the local chart takes the whole
+    ///   name; upstream's entries for it are dropped and its archives never
+    ///   fetched, so a public chart cannot outrank an internal one.
+    /// - `version` — upstream's versions are listed under the local ones, local
+    ///   winning per version: a mirror extended with a few patched releases.
+    ///
+    /// Leaving it unset on a hybrid helm registry is warned at every reload,
+    /// because the two answers suit different estates and the admin is the one
+    /// who knows which this is. Rejected on any other type or mode.
+    #[serde(default)]
+    pub hybrid_merge: Option<HelmHybridMerge>,
     #[serde(default)]
     pub cache: CachePolicy,
     #[serde(default)]
@@ -1318,4 +1332,5 @@ impl Default for CachePolicy {
 /// Re-exported from `batlehub_core`: the value lives on `HotConfig`, which is
 /// core's, so the type has to be too (RFC 0031 §6.3).
 pub use batlehub_core::services::galaxy::GalaxyRoleMode;
+pub use batlehub_core::services::helm::HybridMerge as HelmHybridMerge;
 pub use batlehub_core::services::helm::OciEntries as HelmOciEntries;

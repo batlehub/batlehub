@@ -33,6 +33,22 @@ pub(super) fn is_inside_root(path: &str) -> bool {
             .any(|segment| segment == ".." || segment == "~")
 }
 
+/// Decompressed bytes read out of one `.tar.gz` before an extractor gives up —
+/// helm's default chart limit, which `registry::helm::archive` applies at
+/// publish. Skipping an entry still inflates it, and `tar` buffers a GNU
+/// long-name or pax entry whole whatever its header claims, so without a bound
+/// on the stream a few MB of upload is gigabytes of work or of memory here, in
+/// a background task nobody watches.
+const MAX_DECOMPRESSED_BYTES: u64 = 100 * 1024 * 1024;
+
+/// A `.tar.gz` held in memory, with its decompressed stream bounded. Every
+/// extractor that walks one opens it here.
+pub(super) fn open_targz(
+    data: &[u8],
+) -> tar::Archive<std::io::Take<flate2::read::GzDecoder<&[u8]>>> {
+    tar::Archive::new(flate2::read::GzDecoder::new(data).take(MAX_DECOMPRESSED_BYTES))
+}
+
 /// Read at most [`README_EXTRACT_CEILING`] bytes and turn them into a README.
 ///
 /// `None` when the bytes are not UTF-8: a document full of replacement
@@ -99,10 +115,7 @@ pub(super) fn readme_from_targz(
     data: &Bytes,
     want: impl Fn(&str) -> bool,
 ) -> Option<ExtractedReadme> {
-    use flate2::read::GzDecoder;
-    use tar::Archive;
-
-    let mut archive = Archive::new(GzDecoder::new(data.as_ref()));
+    let mut archive = open_targz(data);
     let entries = archive.entries().ok()?;
     for entry in entries.flatten() {
         let Ok(path) = entry.path() else { continue };
@@ -224,10 +237,7 @@ fn zip_paths(data: &Bytes) -> Vec<String> {
 
 /// Every member path of a gzipped tar, without reading any bodies.
 fn targz_paths(data: &Bytes) -> Vec<String> {
-    use flate2::read::GzDecoder;
-    use tar::Archive;
-
-    let mut archive = Archive::new(GzDecoder::new(data.as_ref()));
+    let mut archive = open_targz(data);
     let Ok(entries) = archive.entries() else {
         return Vec::new();
     };
@@ -393,6 +403,34 @@ mod tests {
         assert_eq!(found.path, "package/README.md");
         assert_eq!(found.format, ReadmeFormat::Markdown);
         assert!(!found.truncated);
+    }
+
+    #[test]
+    fn decompression_stops_at_the_archive_ceiling() {
+        // 101 MiB of zeros ahead of the README: a few hundred KB on the wire,
+        // and past `MAX_DECOMPRESSED_BYTES`, so the walk ends before it.
+        let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::fast(),
+        ));
+        let mut header = tar::Header::new_gnu();
+        header.set_size(101 * 1024 * 1024);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append_data(
+            &mut header,
+            "mychart/big",
+            std::io::Read::take(std::io::repeat(0), 101 * 1024 * 1024),
+        )
+        .unwrap();
+        let mut header = tar::Header::new_gnu();
+        header.set_size(7);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append_data(&mut header, "mychart/README.md", b"# chart".as_slice())
+            .unwrap();
+        let data = Bytes::from(tar.into_inner().unwrap().finish().unwrap());
+        assert!(readme_from_targz(&data, root_readme_matcher(1)).is_none());
     }
 
     /// An entry whose path escapes the archive root is refused, so a crafted

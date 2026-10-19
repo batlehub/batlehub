@@ -1400,6 +1400,18 @@ impl ProxyService {
             .unwrap_or_default()
     }
 
+    /// How this hybrid `helm` registry composes a local chart with the
+    /// upstream one of its name — read per request, `chart` when unset.
+    pub async fn helm_hybrid_merge(&self, registry: &str) -> crate::services::helm::HybridMerge {
+        self.hot
+            .read()
+            .await
+            .helm_hybrid_merge
+            .get(registry)
+            .copied()
+            .unwrap_or_default()
+    }
+
     /// This `nix` registry's narinfo signing key, if it has one.
     ///
     /// Read from `HotConfig` on each use rather than held, so a rotated key

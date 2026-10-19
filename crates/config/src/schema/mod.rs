@@ -44,9 +44,10 @@ pub use notifications::{
 };
 pub use registry::{
     default_true, BetaChannelConfig, CachePolicy, FeatureFlagsConfig, GalaxyRoleMode,
-    GrantsShadowConfig, HelmOciEntries, Immutable, IntegrityConfig, NamespaceConfig, QuotaConfig,
-    QuotaEnforcement, ReadmeConfig, RegistryConfig, RegistryMode, RepoSigningConfig,
-    RetentionConfig, SbomConfig, SigningConfig, UpstreamDetailConfig, VersioningPolicy,
+    GrantsShadowConfig, HelmHybridMerge, HelmOciEntries, Immutable, IntegrityConfig,
+    NamespaceConfig, QuotaConfig, QuotaEnforcement, ReadmeConfig, RegistryConfig, RegistryMode,
+    RepoSigningConfig, RetentionConfig, SbomConfig, SigningConfig, UpstreamDetailConfig,
+    VersioningPolicy,
 };
 pub use release_imports::{ImportPrincipalConfig, ReleaseImportConfig, MIN_IMPORT_INTERVAL_SECS};
 pub use routing::{
@@ -711,6 +712,7 @@ impl AppConfig {
         self.require_signed_release_warnings(&mut out);
         self.vsx_signing_warnings(&mut out);
         self.helm_oci_relay_warnings(&mut out);
+        self.helm_hybrid_merge_warnings(&mut out);
         self.nix_signing_warnings(&mut out);
         self.release_import_warnings(&mut out);
         self.forge_warnings(&mut out);
@@ -1216,6 +1218,32 @@ impl AppConfig {
                          those chart versions straight from the OCI registry, past this \
                          instance — uncached, unblockable and outside its audit trail. Use \
                          oci_entries = \"drop\" to keep every listed chart behind the proxy.",
+                        registry.name
+                    ),
+                ));
+            }
+        }
+    }
+
+    /// A hybrid helm registry that has not said how a local chart composes with
+    /// the upstream chart of the same name. The default (`chart`) is the safe
+    /// one, but `version` is what a patched mirror needs, so the choice is
+    /// asked for rather than assumed in silence.
+    fn helm_hybrid_merge_warnings(&self, out: &mut Vec<ConfigWarning>) {
+        for (index, registry) in self.registries.iter().enumerate() {
+            if registry.registry_type == "helm"
+                && registry.mode == RegistryMode::Hybrid
+                && registry.hybrid_merge.is_none()
+            {
+                out.push(ConfigWarning::new(
+                    warnings::HELM_HYBRID_MERGE_UNSET,
+                    format!("registries[{index}].hybrid_merge"),
+                    format!(
+                        "registry '{}' is a hybrid helm registry with no hybrid_merge: a chart \
+                         published here hides the upstream chart of the same name. Set \
+                         hybrid_merge = \"chart\" to keep that, or hybrid_merge = \"version\" \
+                         to list upstream versions under the local ones — which lets a public \
+                         chart of an internal chart's name be installed in its place.",
                         registry.name
                     ),
                 ));
@@ -2463,6 +2491,7 @@ impl AppConfig {
             Self::validate_registry_deny_components(registry, kind)?;
             Self::validate_registry_roles(registry, kind)?;
             Self::validate_registry_oci_entries(registry, kind)?;
+            Self::validate_registry_hybrid_merge(registry, kind)?;
             Self::validate_registry_warm_platforms(registry, kind)?;
             Self::validate_registry_refs(registry, kind)?;
             // Beside `refs`, not inside it: `[registries.raw]` and
@@ -2580,13 +2609,23 @@ impl AppConfig {
         }
         // A helm upstream is the repository *directory* — what `helm repo add`
         // takes — and there is one: a registry is one repository, and a second
-        // one is a second registry block (RFC 0029 §3, §4.5). `hybrid` needs it
-        // too, since there is no default chart repository to fall back to.
+        // one is a second registry block (RFC 0029 §3, §4.5). `hybrid` with none
+        // is refused by `validate_registry_mode`, for every kind.
         if kind == batlehub_core::entities::RegistryKind::Helm {
-            if registry.mode == RegistryMode::Hybrid && registry.upstreams.is_empty() {
+            // A chart's signature is its `.prov`, OpenPGP, which only the
+            // client verifies (`helm --verify`). `verify_on_download` checks
+            // ed25519 and fails closed on anything else, so on helm it would
+            // refuse every signed chart and serve every unsigned one.
+            if registry
+                .signing
+                .as_ref()
+                .is_some_and(|s| s.verify_on_download)
+            {
                 bail!(
-                    "registry '{}': helm hybrid mode requires an upstream chart repository (no \
-                     default exists)",
+                    "registry '{}': signing.verify_on_download cannot apply to a helm registry — \
+                     a chart's signature is its OpenPGP .prov, verified by `helm --verify`, \
+                     and the server verifies ed25519 only; use signing.required or \
+                     signing.allowed_types = [\"pgp\"]",
                     registry.name
                 );
             }
@@ -2951,6 +2990,28 @@ impl AppConfig {
                  what an oci:// entry of index.yaml becomes), not {}",
                 registry.name,
                 kind
+            );
+        }
+        Ok(())
+    }
+
+    /// `hybrid_merge` is a hybrid helm registry's and nobody else's: on any
+    /// other type or mode there is no upstream chart to compose with.
+    fn validate_registry_hybrid_merge(
+        registry: &RegistryConfig,
+        kind: batlehub_core::entities::RegistryKind,
+    ) -> Result<()> {
+        if registry.hybrid_merge.is_some()
+            && (kind != batlehub_core::entities::RegistryKind::Helm
+                || registry.mode != RegistryMode::Hybrid)
+        {
+            bail!(
+                "registry '{}': 'hybrid_merge' is only meaningful on a helm registry in hybrid \
+                 mode (it decides how a local chart composes with the upstream one of the same \
+                 name), not a {} registry in {} mode",
+                registry.name,
+                kind,
+                format!("{:?}", registry.mode).to_lowercase()
             );
         }
         Ok(())

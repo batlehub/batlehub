@@ -134,6 +134,9 @@ struct Row {
     /// permitted caller in this minimal fixture (they need multi-file artifacts
     /// or an upstream). Stated per row rather than globally.
     control: bool,
+    /// Seed the version with a signature, `(signature_type, bytes)`, for a
+    /// route that serves it.
+    signature: Option<(&'static str, &'static [u8])>,
     /// The string that betrays this package in *this* document, when the
     /// coordinate itself does not appear in it.
     ///
@@ -273,9 +276,18 @@ impl Row {
             name: "pkg",
             version: "9.8.7",
             control: true,
+            signature: None,
             token: None,
             post: None,
         }
+    }
+
+    /// Seed the version signed, and look for the signature in the response:
+    /// the route serves it rather than the artifact.
+    fn signed(mut self, signature_type: &'static str, bytes: &'static str) -> Self {
+        self.signature = Some((signature_type, bytes.as_bytes()));
+        self.token = Some(bytes);
+        self
     }
 
     /// The string that gives this package away in this route's document, when
@@ -424,10 +436,11 @@ fn matrix() -> Vec<Row> {
         // coordinate before it becomes a key — the galaxy tarball's shape.
         Row::new("helm", "/proxy/reg/helm/index.yaml"),
         Row::new("helm", "/proxy/reg/helm/charts/pkg-9.8.7.tgz"),
-        // The fixture publishes no `.prov`, so a permitted caller is answered
-        // `404` too; the archive read that authorizes the `.prov` runs first,
-        // which is what the two denial axes still prove.
-        Row::new("helm", "/proxy/reg/helm/charts/pkg-9.8.7.tgz.prov").no_control(),
+        // Seeded with a `.prov`, so the control proves the permitted caller is
+        // served it and the two denials are refusals, not the `404` of a
+        // chart published without one.
+        Row::new("helm", "/proxy/reg/helm/charts/pkg-9.8.7.tgz.prov")
+            .signed("pgp", "zq-prov-fixture"),
         Row::new("helm", "/proxy/reg/helm/api/charts"),
         Row::new("helm", "/proxy/reg/helm/api/charts/pkg"),
         Row::new("helm", "/proxy/reg/helm/api/charts/pkg/9.8.7"),
@@ -949,7 +962,7 @@ async fn vis_app_for(row: &Row) -> impl TestService {
 
 /// Publish the row's package into `parts`.
 async fn seed(parts: &LocalRegistryAppParts, row: &Row) {
-    publish_fixture(parts, row.name, row.version, (row.meta)()).await;
+    publish_fixture(parts, row.name, row.version, (row.meta)(), row.signature).await;
 }
 
 /// Publish one coordinate into `parts`, as `user-1`.
@@ -962,6 +975,7 @@ async fn publish_fixture(
     name: &str,
     version: &str,
     index_metadata: serde_json::Value,
+    signature: Option<(&str, &[u8])>,
 ) {
     let artifact = Bytes::from_static(FIXTURE_BYTES);
     let checksum = hex::encode(Sha256::digest(&artifact));
@@ -981,8 +995,8 @@ async fn publish_fixture(
                 auth_provider: None,
                 groups: vec![],
             },
-            signature_bytes: None,
-            signature_type: None,
+            signature_bytes: signature.map(|(_, b)| b.to_vec()),
+            signature_type: signature.map(|(t, _)| t.to_owned()),
         })
         .await
         .expect("matrix fixture must publish");
@@ -2170,7 +2184,7 @@ async fn write_app_for(row: &WriteRow) -> (impl TestService, StateProbe) {
     }
 
     if row.seed {
-        publish_fixture(&parts, row.name, row.version, (row.meta)()).await;
+        publish_fixture(&parts, row.name, row.version, (row.meta)(), None).await;
     }
     if let Some(principal) = row.seed_owner {
         ownership

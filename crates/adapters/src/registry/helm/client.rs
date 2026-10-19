@@ -15,7 +15,7 @@
 //! guard on every hop that leaves it, the `302` GitHub's release assets answer
 //! with followed here rather than by the client (§4.4).
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -33,7 +33,7 @@ use batlehub_core::{
 };
 
 use super::super::http_client::{
-    cache_control, no_redirect_client_pair, to_registry_error, UpstreamHttpOptions,
+    cache_control, no_redirect_client_pair, redacted, to_registry_error, UpstreamHttpOptions,
 };
 use super::super::ssrf;
 
@@ -42,6 +42,16 @@ use super::super::ssrf;
 /// registry's `metadata_ttl`; this one maps coordinates back to upstream URLs.
 const INDEX_TTL: Duration = Duration::from_secs(300);
 
+/// How old a copy may be and still answer a coordinate it does not list, and
+/// how long a failed refresh serves the old copy before trying again.
+///
+/// The first is what keeps replicas agreeing: each holds its own copy, so the
+/// index one served can list a version another's copy predates — a miss
+/// re-reads rather than answering `404` for up to `INDEX_TTL`. The second is
+/// what an upstream outage costs: one attempt per interval, not one per
+/// request, each waiting out a timeout behind the lock.
+const MISS_REFRESH: Duration = Duration::from_secs(30);
+
 /// The largest `index.yaml` read. Bitnami's, the largest classic index known
 /// to RFC 0029, is 27 MB.
 const MAX_INDEX_BYTES: usize = 128 * 1024 * 1024;
@@ -49,6 +59,8 @@ const MAX_INDEX_BYTES: usize = 128 * 1024 * 1024;
 struct CachedIndex {
     fetched_at: Instant,
     value: Arc<Value>,
+    /// The last refresh that failed, while this copy is still being served.
+    failed_at: Option<Instant>,
 }
 
 pub struct HelmRegistryClient {
@@ -58,7 +70,10 @@ pub struct HelmRegistryClient {
     /// helm carries onto every relative chart URL.
     base: reqwest::Url,
     basic_auth: Option<(String, String)>,
-    index: Mutex<Option<CachedIndex>>,
+    /// Async, and held across the refresh: twenty requests that find the copy
+    /// expired wait for one download of a 27 MB index rather than starting
+    /// twenty.
+    index: tokio::sync::Mutex<Option<CachedIndex>>,
 }
 
 /// `ResolveReferenceURL` (`pkg/repo/chartrepo.go`), transcribed.
@@ -92,7 +107,7 @@ impl HelmRegistryClient {
             plain,
             base,
             basic_auth: opts.basic_auth.clone(),
-            index: Mutex::new(None),
+            index: tokio::sync::Mutex::new(None),
         })
     }
 
@@ -109,7 +124,8 @@ impl HelmRegistryClient {
     async fn get(&self, url: reqwest::Url) -> Result<reqwest::Response, CoreError> {
         if !matches!(url.scheme(), "http" | "https") {
             return Err(CoreError::NotFound(format!(
-                "helm: '{url}' is not an http(s) URL this registry can fetch"
+                "helm: '{}' is not an http(s) URL this registry can fetch",
+                redacted(&url)
             )));
         }
         let origin = self.base.origin().ascii_serialization();
@@ -122,13 +138,16 @@ impl HelmRegistryClient {
         )
         .await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Err(CoreError::NotFound(format!("{url} not found upstream")));
+            return Err(CoreError::NotFound(format!(
+                "{} not found upstream",
+                redacted(&url)
+            )));
         }
         resp.error_for_status().map_err(to_registry_error)
     }
 
     /// Upstream's index, parsed.
-    async fn fetch_index(&self) -> Result<Arc<Value>, CoreError> {
+    async fn download_index(&self) -> Result<Arc<Value>, CoreError> {
         let mut resp = self.get(self.index_url()).await?;
         if resp
             .content_length()
@@ -155,21 +174,72 @@ impl HelmRegistryClient {
             .await
             .map_err(|e| CoreError::Registry(format!("helm: parsing index.yaml: {e}")))?
             .map(Arc::new)?;
-        *self.index.lock().expect("index lock") = Some(CachedIndex {
-            fetched_at: Instant::now(),
-            value: Arc::clone(&value),
-        });
         Ok(value)
     }
 
-    /// The index from the in-process copy when it is fresh.
-    async fn index(&self) -> Result<Arc<Value>, CoreError> {
-        if let Some(cached) = self.index.lock().expect("index lock").as_ref() {
-            if cached.fetched_at.elapsed() < INDEX_TTL {
+    /// The in-process copy when it is younger than `max_age`, else a fresh
+    /// one — or, when the refresh fails and a copy exists, that copy (stale on
+    /// error), retried after [`MISS_REFRESH`].
+    ///
+    /// ponytail: one copy per process; a shared copy (Redis) would make
+    /// replicas agree exactly, and `MISS_REFRESH` is what stands in for it.
+    async fn index_within(&self, max_age: Duration) -> Result<Arc<Value>, CoreError> {
+        let mut slot = self.index.lock().await;
+        if let Some(cached) = slot.as_ref() {
+            let backing_off = cached.failed_at.is_some_and(|t| t.elapsed() < MISS_REFRESH);
+            if cached.fetched_at.elapsed() < max_age || backing_off {
                 return Ok(Arc::clone(&cached.value));
             }
         }
-        self.fetch_index().await
+        match self.download_index().await {
+            Ok(value) => {
+                *slot = Some(CachedIndex {
+                    fetched_at: Instant::now(),
+                    value: Arc::clone(&value),
+                    failed_at: None,
+                });
+                Ok(value)
+            }
+            Err(e) => {
+                let Some(cached) = slot.as_mut() else {
+                    return Err(e);
+                };
+                tracing::warn!(
+                    upstream = %redacted(&self.base),
+                    age_secs = cached.fetched_at.elapsed().as_secs(),
+                    error = %e,
+                    "helm: index.yaml refresh failed, serving the previous copy"
+                );
+                cached.failed_at = Some(Instant::now());
+                Ok(Arc::clone(&cached.value))
+            }
+        }
+    }
+
+    /// The index, re-read once when it does not list `pkg` and is older than
+    /// [`MISS_REFRESH`] — the version may be newer than this copy.
+    async fn index_listing(&self, pkg: &PackageId) -> Result<Arc<Value>, CoreError> {
+        let index = self.index_within(INDEX_TTL).await?;
+        let listed = if pkg.version == "latest" {
+            !versions_of(&index, &pkg.name).is_empty()
+        } else {
+            find_entry(&index, &pkg.name, &pkg.version).is_some()
+        };
+        if listed {
+            return Ok(index);
+        }
+        self.index_within(MISS_REFRESH).await
+    }
+}
+
+#[cfg(test)]
+impl HelmRegistryClient {
+    /// Age the in-process copy as `by` of wall time would.
+    pub(super) async fn age_index(&self, by: Duration) {
+        if let Some(cached) = self.index.lock().await.as_mut() {
+            cached.fetched_at = cached.fetched_at.checked_sub(by).expect("uptime");
+            cached.failed_at = cached.failed_at.map(|t| t.checked_sub(by).expect("uptime"));
+        }
     }
 }
 
@@ -185,7 +255,7 @@ impl RegistryClient for HelmRegistryClient {
     /// for the archive only — a `.prov` has none of its own.
     async fn resolve_metadata(&self, pkg: &PackageId) -> Result<PackageMetadata, CoreError> {
         validate_chart_name(&pkg.name)?;
-        let index = self.index().await?;
+        let index = self.index_listing(pkg).await?;
         let version = if pkg.version == "latest" {
             batlehub_core::services::blocking::best_latest(&versions_of(&index, &pkg.name))
                 .ok_or_else(|| {
@@ -272,7 +342,7 @@ impl RegistryClient for HelmRegistryClient {
             return Ok(None);
         };
         let url = reqwest::Url::parse(url)
-            .map_err(|e| CoreError::Registry(format!("helm: chart URL '{url}': {e}")))?;
+            .map_err(|e| CoreError::Registry(format!("helm: chart URL is not a URL: {e}")))?;
         let resp = self.get(url).await?;
         let cache_control = cache_control(&resp);
         Ok(Some(FetchedArtifact {
@@ -293,13 +363,17 @@ impl RegistryClient for HelmRegistryClient {
                 "a helm repository has no '{kind}' document"
             )));
         }
+        // The served index has its own cache, keyed by `metadata_ttl`; a copy
+        // `resolve_metadata` read in the last `MISS_REFRESH` is as good as a
+        // download. The clone is the document's: the copy stays here for
+        // `resolve_metadata`.
         if package == INDEX_ADDRESS {
             return Ok(VersionDocument::json(Arc::unwrap_or_clone(
-                self.fetch_index().await?,
+                self.index_within(MISS_REFRESH).await?,
             )));
         }
         validate_chart_name(package)?;
-        let index = self.index().await?;
+        let index = self.index_within(INDEX_TTL).await?;
         let entries = chart_entries(&index, package);
         if entries.is_empty() {
             return Err(CoreError::NotFound(format!(
@@ -314,7 +388,7 @@ impl RegistryClient for HelmRegistryClient {
     /// The chart's versions, oldest first as the trait asks.
     async fn list_versions(&self, package: &str) -> Result<Vec<String>, CoreError> {
         validate_chart_name(package)?;
-        let index = self.index().await?;
+        let index = self.index_within(INDEX_TTL).await?;
         let mut versions = versions_of(&index, package);
         versions.sort_by(|a, b| batlehub_core::services::newest_first(b, a));
         Ok(versions)

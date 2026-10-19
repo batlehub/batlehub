@@ -961,6 +961,16 @@ from here or from upstream, whole: Galaxy's page says so in as many words.
 is one document whose entries are independent, and `docs/registries/helm.md`
 states the difference rather than the claim.
 
+*Revised 2026-10-19.* The per-version rule is a dependency-confusion vector:
+with `acme-auth 1.0.0` published here, a public `acme-auth 9.9.9` was listed
+beside it and `helm install acme-auth` took the public one; a chart whose
+versions were all hidden from the caller was replaced by the public chart
+outright. The choice is now the admin's, `hybrid_merge`: `chart` (the
+default) gives the local chart the whole name — upstream's entries dropped
+from the index and its archives never fetched — and `version` keeps the
+rule above for the mirror-plus-patches estate it suits. A hybrid registry
+that leaves it unset is warned at every reload (`helm.hybrid-merge-unset`).
+
 **No `blocking/helm.rs`, no `handlers/proxy/helm/` directory.** `strip` and
 `rewrite` live in `services/helm.rs` beside the index model they edit, and
 the handlers are one file, `handlers/proxy/helm.rs`. A directory for one file

@@ -18,9 +18,16 @@ mod common;
 #[allow(unused_imports)]
 use common::*;
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use actix_web::test::{call_service, read_body, TestRequest};
 use batlehub_config::schema::RegistryMode;
-use batlehub_core::services::helm::{parse_index, versions_of};
+use batlehub_core::{
+    rules::{BlockListRule, DenyLatestRule, Rule},
+    services::helm::{parse_index, versions_of, HybridMerge},
+    services::RegistryPolicy,
+};
 
 const REG: &str = "charts";
 
@@ -34,13 +41,18 @@ async fn index_of<S: TestService>(app: &S) -> serde_json::Value {
 
 /// A packaged chart, laid out as `helm package` lays it out.
 fn chart_tgz(name: &str, version: &str) -> Vec<u8> {
+    chart_tgz_with(name, version, "")
+}
+
+/// [`chart_tgz`] with `extra` appended to its `Chart.yaml`.
+fn chart_tgz_with(name: &str, version: &str, extra: &str) -> Vec<u8> {
     // The directory is fixed so a hostile `name` can still be packaged — the
     // `tar` crate refuses to *write* a `..` path, and the server reads the name
     // out of `Chart.yaml`, not out of the directory.
     let files = [
         (
             "chart/Chart.yaml".to_owned(),
-            format!("apiVersion: v2\nname: {name}\nversion: {version}\nappVersion: \"1.10\"\ndescription: test chart\n"),
+            format!("apiVersion: v2\nname: {name}\nversion: {version}\nappVersion: \"1.10\"\ndescription: test chart\n{extra}"),
         ),
         ("chart/values.yaml".to_owned(), "a: 1\n".to_owned()),
         ("chart/README.md".to_owned(), format!("# {name}\n")),
@@ -176,12 +188,7 @@ async fn the_archive_and_its_provenance_are_separate_coordinates() {
 #[actix_web::test]
 async fn a_chart_file_name_is_validated_at_the_edge() {
     let app = proxy_registry_app(REG, "helm").await;
-    for bad in [
-        "demo.tgz",
-        "demo-1.0.tgz",
-        "..%2Fdemo-1.0.0.tgz",
-        "demo-1.0.0.zip",
-    ] {
+    for bad in ["demo.tgz", "..%2Fdemo-1.0.0.tgz", "demo-1.0.0.zip"] {
         let resp = call_service(&app, admin_get(&url(&format!("charts/{bad}")))).await;
         assert_eq!(resp.status(), 400, "{bad}");
     }
@@ -264,6 +271,7 @@ async fn a_cm_push_with_provenance_serves_the_prov_beside_the_archive() {
 
 #[actix_web::test]
 async fn publishing_twice_is_a_conflict_even_with_force() {
+    // `?force` on a new version is an ordinary publish.
     let app = registry_app(REG, "helm", RegistryMode::Local).await;
     let tgz = chart_tgz("mine", "0.1.0");
     assert_eq!(
@@ -278,13 +286,22 @@ async fn publishing_twice_is_a_conflict_even_with_force() {
             .status(),
         409
     );
-    // `?force` is checked for `releases:overwrite` and then meets the same
-    // refusal: the row store replaces no published version (RFC 0016).
+    // `?force` meets the same refusal: the row store replaces no published
+    // version (RFC 0016), so it asks for no verb either.
     assert_eq!(
         call_service(&app, publish_raw(tgz, "?force", Some(ADMIN_TOKEN)))
             .await
             .status(),
         409
+    );
+    assert_eq!(
+        call_service(
+            &app,
+            publish_raw(chart_tgz("mine", "0.2.0"), "?force", Some(ADMIN_TOKEN))
+        )
+        .await
+        .status(),
+        201
     );
 }
 
@@ -305,7 +322,7 @@ async fn helm_publish_traversal_version_returns_400() {
     for (name, version) in [
         ("mine", "../../etc/x"),
         ("../evil", "1.0.0"),
-        ("mine", "1.0"),
+        ("mine", "1.x"),
     ] {
         let resp = call_service(
             &app,
@@ -355,7 +372,7 @@ async fn delete_removes_the_version_from_the_next_index() {
     assert_eq!(call_service(&app, req).await.status(), 404);
 
     // The coordinate is validated at the edge, not left to the storage guard.
-    for bad in ["mine/..", "..%2Fetc/0.2.0", "mine/..%2F..%2Fx", "mine/1.0"] {
+    for bad in ["mine/..", "..%2Fetc/0.2.0", "mine/..%2F..%2Fx", "mine/1.x"] {
         let req = TestRequest::delete()
             .uri(&url(&format!("api/charts/{bad}")))
             .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
@@ -415,9 +432,24 @@ async fn the_chartmuseum_listings_describe_what_is_published() {
 
 // ── hybrid: local rows over the upstream index ───────────────────────────────
 
+/// A hybrid helm registry with `hybrid_merge` as given, `None` leaving it unset.
+async fn hybrid_app(merge: Option<HybridMerge>) -> impl TestService {
+    let parts = local_registry_app_parts(REG, "helm", RegistryMode::Hybrid, None);
+    if let Some(merge) = merge {
+        parts
+            .proxy_svc
+            .hot
+            .write()
+            .await
+            .helm_hybrid_merge
+            .insert(REG.to_owned(), merge);
+    }
+    build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await
+}
+
 #[actix_web::test]
-async fn hybrid_merges_local_over_upstream() {
-    let app = registry_app(REG, "helm", RegistryMode::Hybrid).await;
+async fn hybrid_merge_version_lists_upstream_versions_under_local_ones() {
+    let app = hybrid_app(Some(HybridMerge::Version)).await;
     for (n, v) in [("demo", "1.1.0"), ("mine", "0.1.0")] {
         assert_eq!(
             call_service(&app, publish_raw(chart_tgz(n, v), "", Some(ADMIN_TOKEN)))
@@ -444,6 +476,177 @@ async fn hybrid_merges_local_over_upstream() {
         get_text(&app, &url("charts/demo-1.0.0.tgz")).await,
         format!("artifact:helm:{REG}/demo/1.0.0/chart")
     );
+}
+
+#[actix_web::test]
+async fn a_chart_published_here_hides_the_upstream_chart_of_its_name() {
+    // The default: a public `demo 1.0.0` must not be installable in place of
+    // the internal `demo` — not listed, and not fetched on a direct request.
+    for merge in [None, Some(HybridMerge::Chart)] {
+        let app = hybrid_app(merge).await;
+        let resp = call_service(
+            &app,
+            publish_raw(chart_tgz("demo", "1.1.0"), "", Some(ADMIN_TOKEN)),
+        )
+        .await;
+        assert_eq!(resp.status(), 201);
+        let index = index_of(&app).await;
+        assert_eq!(versions_of(&index, "demo"), ["1.1.0"], "{merge:?}");
+        let resp = call_service(&app, admin_get(&url("charts/demo-1.0.0.tgz"))).await;
+        assert_eq!(resp.status(), 404, "{merge:?}");
+        let resp = call_service(&app, admin_get(&url("charts/demo-1.0.0.tgz.prov"))).await;
+        assert_eq!(resp.status(), 404, "{merge:?}");
+    }
+}
+
+#[actix_web::test]
+async fn an_upstream_chart_with_no_local_namesake_still_falls_through() {
+    let app = hybrid_app(None).await;
+    let resp = call_service(
+        &app,
+        publish_raw(chart_tgz("mine", "0.1.0"), "", Some(ADMIN_TOKEN)),
+    )
+    .await;
+    assert_eq!(resp.status(), 201);
+    let index = index_of(&app).await;
+    assert_eq!(versions_of(&index, "mine"), ["0.1.0"]);
+    assert!(versions_of(&index, "demo").contains(&"1.0.0".to_owned()));
+    assert_eq!(
+        get_text(&app, &url("charts/demo-1.0.0.tgz")).await,
+        format!("artifact:helm:{REG}/demo/1.0.0/chart")
+    );
+}
+
+// ── the review fixes ─────────────────────────────────────────────────────────
+
+/// A helm registry whose policy carries `deny_latest` beside the block list.
+async fn deny_latest_app(mode: RegistryMode) -> impl TestService {
+    let parts = local_registry_app_parts(REG, "helm", mode, None);
+    {
+        let mut hot = parts.proxy_svc.hot.write().await;
+        hot.policies.insert(
+            REG.to_owned(),
+            Arc::new(RegistryPolicy {
+                metadata_ttl: Some(Duration::from_secs(300)),
+                firewall_only: false,
+                serve_stale_metadata: false,
+                artifact_ttl: None,
+                rules: vec![
+                    Box::new(BlockListRule::new(Arc::clone(&parts.proxy_svc.repo))),
+                    Box::new(DenyLatestRule::new(vec![])) as Box<dyn Rule>,
+                ],
+            }),
+        );
+    }
+    build_local_registry_app(parts, batlehub_web::CargoIndexMap::default(), None).await
+}
+
+#[actix_web::test]
+async fn a_version_rule_does_not_refuse_the_whole_local_index() {
+    // The index is a listing: only the grants gate it. Run as a rule against
+    // a pseudo-coordinate `index.yaml@latest`, `deny_latest` refused it to
+    // everyone and broke `helm repo update` for the whole repository.
+    let app = deny_latest_app(RegistryMode::Local).await;
+    assert_eq!(
+        call_service(
+            &app,
+            publish_raw(chart_tgz("mine", "0.1.0"), "", Some(ADMIN_TOKEN))
+        )
+        .await
+        .status(),
+        201
+    );
+    assert_eq!(versions_of(&index_of(&app).await, "mine"), ["0.1.0"]);
+    assert_eq!(
+        get_json(&app, &url("api/charts/mine")).await[0]["version"],
+        "0.1.0"
+    );
+}
+
+#[actix_web::test]
+async fn a_chart_yaml_field_helm_would_refuse_in_an_index_is_left_out() {
+    // helm reads index.yaml strictly: `github` under a maintainer would fail
+    // the document for every client of the repository.
+    let app = registry_app(REG, "helm", RegistryMode::Local).await;
+    let tgz = chart_tgz_with(
+        "mine",
+        "0.1.0",
+        "maintainers:\n- name: a\n  github: b\nannotations:\n  n: 3\n  k: v\n",
+    );
+    assert_eq!(
+        call_service(&app, publish_raw(tgz, "", Some(ADMIN_TOKEN)))
+            .await
+            .status(),
+        201
+    );
+    let entry = &index_of(&app).await["entries"]["mine"][0];
+    assert_eq!(entry["maintainers"], serde_json::json!([{"name": "a"}]));
+    assert_eq!(entry["annotations"], serde_json::json!({"k": "v"}));
+}
+
+#[actix_web::test]
+async fn a_provenance_file_is_stored_as_a_pgp_signature() {
+    // `signing.allowed_types = ["pgp"]` is how an operator admits OpenPGP; a
+    // `.prov` must be that, not a type no configuration can name.
+    let app = registry_app(REG, "helm", RegistryMode::Local).await;
+    let prov = b"-----BEGIN PGP SIGNED MESSAGE-----\nfake\n";
+    call_service(
+        &app,
+        publish_multipart(&chart_tgz("signed", "1.0.0"), Some(prov)),
+    )
+    .await;
+    assert_eq!(batlehub_core::services::helm::PROV_SIGNATURE_TYPE, "pgp");
+    assert_eq!(
+        get_bytes(&app, &url("charts/signed-1.0.0.tgz.prov")).await,
+        prov
+    );
+}
+
+#[actix_web::test]
+async fn the_index_tells_cm_push_where_to_post() {
+    // `helm cm-push` posts to `{serverInfo.contextPath}/api/charts`.
+    for mode in [RegistryMode::Local, RegistryMode::Proxy] {
+        let index = index_of(&registry_app(REG, "helm", mode).await).await;
+        assert_eq!(
+            index["serverInfo"]["contextPath"],
+            format!("/proxy/{REG}/helm")
+        );
+    }
+}
+
+#[actix_web::test]
+async fn a_block_holds_whatever_spelling_of_the_version_it_names() {
+    // helm reads `v1.1.0` and `1.1.0` as one version.
+    let app = proxy_registry_app(REG, "helm").await;
+    block_version(&app, REG, "demo", "v1.1.0").await;
+    assert_eq!(
+        versions_of(&index_of(&app).await, "demo"),
+        ["2.0.0-beta.1", "1.0.0"]
+    );
+    let resp = call_service(&app, admin_get(&url("charts/demo-1.1.0.tgz"))).await;
+    assert_eq!(resp.status(), 403);
+}
+
+#[actix_web::test]
+async fn every_version_helm_accepts_is_served_and_an_ambiguous_file_finds_its_chart() {
+    let app = registry_app(REG, "helm", RegistryMode::Local).await;
+    // `2024.01.15` is a chart version to helm and not SemVer; `app-1.0.0` at
+    // `2.0.0` is a file name that also reads as `app` at `1.0.0-2.0.0`.
+    for (n, v) in [("cal", "2024.01.15"), ("app-1.0.0", "2.0.0")] {
+        let tgz = chart_tgz(n, v);
+        assert_eq!(
+            call_service(&app, publish_raw(tgz.clone(), "", Some(ADMIN_TOKEN)))
+                .await
+                .status(),
+            201,
+            "{n} {v}"
+        );
+        assert_eq!(
+            get_bytes(&app, &url(&format!("charts/{n}-{v}.tgz"))).await,
+            tgz,
+            "{n} {v}"
+        );
+    }
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

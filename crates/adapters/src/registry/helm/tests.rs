@@ -201,6 +201,93 @@ async fn an_absolute_url_naming_a_private_host_is_refused() {
     assert!(err.contains("SSRF guard"), "{err}");
 }
 
+#[tokio::test]
+async fn the_upstream_token_never_reaches_an_error_message() {
+    // A relative chart URL carries the base's `?token=`, and a missing `.prov`
+    // is the common case: its error is what a client and the audit log see.
+    let server = upstream().await;
+    let c = HelmRegistryClient::new(
+        &format!("{}/repo?token=s3cret", server.url()),
+        &Default::default(),
+    )
+    .unwrap();
+    let pkg = PackageId::new("r", "cert-manager", "v1.21.2").with_artifact("prov");
+    let err = body(&c, &pkg).await.unwrap_err().to_string();
+    assert!(!err.contains("s3cret"), "{err}");
+}
+
+#[tokio::test]
+async fn concurrent_reads_of_an_expired_index_download_it_once() {
+    let mut server = Server::new_async().await;
+    let index_mock = server
+        .mock("GET", "/repo/index.yaml")
+        .with_body(index(&server.url()))
+        .expect(1)
+        .create_async()
+        .await;
+    let client = client(&server);
+    let pkg = PackageId::new("helm", "cert-manager", "v1.21.2");
+    let reads = (0..10).map(|_| client.resolve_metadata(&pkg));
+    for r in futures::future::join_all(reads).await {
+        r.unwrap();
+    }
+    index_mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn a_failed_refresh_serves_the_previous_index_and_backs_off() {
+    let mut server = upstream().await;
+    let client = client(&server);
+    let pkg = PackageId::new("helm", "cert-manager", "v1.21.2");
+    client.resolve_metadata(&pkg).await.unwrap();
+
+    server.reset();
+    let down = server
+        .mock("GET", "/repo/index.yaml")
+        .with_status(503)
+        .expect(1)
+        .create_async()
+        .await;
+    client.age_index(std::time::Duration::from_secs(301)).await;
+    // Served from the expired copy; the second read does not retry yet.
+    client.resolve_metadata(&pkg).await.unwrap();
+    client.resolve_metadata(&pkg).await.unwrap();
+    down.assert_async().await;
+}
+
+#[tokio::test]
+async fn a_version_newer_than_the_copy_is_reread_but_not_on_every_miss() {
+    let mut server = upstream().await;
+    let client = client(&server);
+    client
+        .resolve_metadata(&PackageId::new("helm", "cert-manager", "v1.21.2"))
+        .await
+        .unwrap();
+
+    // Another replica's index already lists 9.9.9.
+    server.reset();
+    let newer = index(&server.url()).replace(
+        "  ingress-nginx:\n",
+        "  ingress-nginx:\n  - name: ingress-nginx\n    version: 9.9.9\n    urls:\n    - x-9.9.9.tgz\n",
+    );
+    let reread = server
+        .mock("GET", "/repo/index.yaml")
+        .with_body(newer)
+        .expect(1)
+        .create_async()
+        .await;
+    let fresh = PackageId::new("helm", "ingress-nginx", "9.9.9");
+
+    // A copy younger than the miss interval answers the miss itself.
+    assert!(matches!(
+        client.resolve_metadata(&fresh).await,
+        Err(CoreError::NotFound(_))
+    ));
+    client.age_index(std::time::Duration::from_secs(31)).await;
+    client.resolve_metadata(&fresh).await.unwrap();
+    reread.assert_async().await;
+}
+
 fn chart_archive(files: &[(&str, &str)]) -> Vec<u8> {
     let mut tar = tar::Builder::new(Vec::new());
     for (path, contents) in files {

@@ -42,6 +42,7 @@ type      = "helm"
 mode      = "proxy"
 upstreams = ["https://charts.jetstack.io"]   # the repository directory, not …/index.yaml
 # oci_entries = "drop"                       # the default — see below
+# hybrid_merge = "chart"                     # hybrid only — see below
 
 [registries.rbac]
 anonymous = ["releases:read", "releases:list"]
@@ -60,6 +61,8 @@ A helm registry has **exactly one** upstream: a second chart repository is a sec
 ## Blocking
 
 A blocked version is absent from `index.yaml`. The index describes the whole repository, so a new block reaches it within the blocked-set snapshot's 30-second lifetime. But `helm` reads **its own cached copy** of the index until the next `helm repo update` — until then it still offers the version, and the archive download is what refuses it.
+
+A block covers every spelling helm reads as the same version: blocking `1.21.2` also blocks `v1.21.2` and `1.21.2+build.1`.
 
 After an update, an exact pin on a blocked version fails with helm's own *"chart … version … not found"*, and a range resolves to the newest allowed version.
 
@@ -87,7 +90,9 @@ curl --data-binary @mychart-0.1.0.tgz \
 
 `helm cm-push ./mychart batlehub` makes the same call. Both of ChartMuseum's body shapes are accepted: the archive as the whole body, or a multipart form with a `chart` field and an optional `prov` field carrying its provenance file.
 
-A duplicate version answers `409`. `?force` replaces it and needs `releases:overwrite`. `DELETE api/charts/{name}/{version}` removes a version.
+The `.prov` is stored as a `pgp` signature, so `signing.required` and `signing.allowed_types = ["pgp"]` apply to it. `signing.verify_on_download` is refused on a helm registry: a `.prov` is OpenPGP, which `helm --verify` checks and this server does not.
+
+A duplicate version answers `409`, with or without `?force`: a published version is never replaced, so publish a new one. `DELETE api/charts/{name}/{version}` removes a version.
 
 The index a local registry serves is composed from what was published — each entry built from the archive's own `Chart.yaml` and its SHA-256 digest — so it cannot name a chart that is not here.
 
@@ -105,9 +110,16 @@ The index a local registry serves is composed from what was published — each e
 | `GET` | `/proxy/{registry}/helm/index.yaml` | The repository index `helm repo add` and `helm repo update` fetch — blocked versions removed, every chart URL on this host. |
 <!-- END endpoints -->
 
-## Hybrid mode: local wins per version
+## Hybrid mode: `hybrid_merge`
 
-On a `hybrid` registry the served index is upstream's with the local entries laid over it. A chart version published here replaces upstream's entry for the **same `{name, version}`**; upstream's other versions of that chart stay listed. That is narrower than the whole-name rule other kinds apply, because a chart index is one document and its entries are independent.
+On a `hybrid` registry the served index is upstream's with the local charts laid over it. `hybrid_merge` decides what a chart published here does to the upstream chart of the **same name**:
+
+| `hybrid_merge` | Effect |
+| --- | --- |
+| `chart` (when absent) | The local chart takes the whole name. Upstream's entries for it are left out of the index, and an archive or `.prov` of it that is not published here answers `404` instead of being fetched upstream — so a public `acme-auth 9.9.9` cannot be installed in place of the internal `acme-auth`. A chart hidden from the caller reads as absent, never as the public one. Charts with no local namesake are proxied as usual. |
+| `version` | Upstream's versions stay listed under the local ones; a version published here replaces upstream's entry for the same `{name, version}` only. What a mirror extended with a few patched releases wants — and a dependency-confusion vector for anything else, since `helm install` takes the newest version whichever side it comes from. |
+
+The two suit different estates, so a hybrid helm registry that does not set `hybrid_merge` is warned at every reload (`helm.hybrid-merge-unset`) until one is chosen. The key is refused on any other type or mode.
 
 ## Air-gapped estates
 

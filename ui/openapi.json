@@ -12187,7 +12187,7 @@
           {
             "name": "force",
             "in": "query",
-            "description": "Replace an existing version (needs releases:overwrite)",
+            "description": "Accepted for `helm cm-push --force` and ignored: a published version is never replaced",
             "required": false,
             "schema": {
               "type": "boolean"
@@ -12226,7 +12226,7 @@
             "description": "Unknown registry, or mode = proxy"
           },
           "409": {
-            "description": "That version is already published"
+            "description": "That version is already published, with or without `?force`"
           }
         },
         "security": [

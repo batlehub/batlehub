@@ -1502,6 +1502,81 @@ impl LocalRegistryService {
         })
     }
 
+    /// Every package in `registry` with the versions this caller may see in a
+    /// listing — [`Self::load_visible_versions_in`] for each, in a fixed number
+    /// of queries rather than four per package.
+    ///
+    /// The rows, the blocks and the beta membership are read once for the
+    /// registry; the filters and their order are the per-package path's. The
+    /// visibility check alone stays per package, and costs a query only when a
+    /// team-namespace port is wired. A package the caller may not read is left
+    /// out, as every whole-registry document skips the per-package path's
+    /// `AccessDenied`.
+    ///
+    /// `hosted` is every name the registry holds rows for, whatever the caller
+    /// sees: a hybrid document needs it to keep a hidden local package from
+    /// reading as the public one of its name.
+    ///
+    /// helm's index is the one caller; the other whole-registry documents still
+    /// loop, and move here when one shows up in a profile.
+    pub(super) async fn visible_registry_versions(
+        &self,
+        registry: &str,
+        identity: &Identity,
+    ) -> Result<RegistryVersions, CoreError> {
+        let mut by_name: std::collections::BTreeMap<String, Vec<PublishedPackage>> =
+            Default::default();
+        for p in self.backend.list_registry_versions(registry).await? {
+            by_name.entry(p.name.clone()).or_default().push(p);
+        }
+        let hosted: Vec<String> = by_name.keys().cloned().collect();
+
+        let (readable, grant_rows) = self.readable_packages(registry, identity).await?;
+        // `filter_blocked`'s fail-open, for its reason.
+        let blocked: std::collections::HashSet<(String, String)> = match &self.package_repo {
+            None => Default::default(),
+            Some(repo) => match repo.blocked_in_registry(registry).await {
+                Ok(b) => b.into_iter().collect(),
+                Err(e) => {
+                    tracing::warn!(
+                        registry = %registry,
+                        error = %e,
+                        "failed to load blocked versions for listing, failing open"
+                    );
+                    Default::default()
+                }
+            },
+        };
+        // `filter_for_identity`, asked once.
+        let beta_port = self.hot.read().await.beta_channel.get(registry).cloned();
+        let hide_prereleases = match beta_port {
+            Some(port) => !port.is_member(registry, identity).await?,
+            None => false,
+        };
+
+        let mut visible = Vec::new();
+        for (name, versions) in by_name {
+            if !readable.contains(&name) {
+                continue;
+            }
+            match self.check_read_access(registry, &name, identity).await {
+                Ok(()) => {}
+                Err(CoreError::AccessDenied(_)) => continue,
+                Err(e) => return Err(e),
+            }
+            let versions: Vec<_> = Self::filter_unlisted(versions)
+                .into_iter()
+                .filter(|p| !blocked.contains(&(name.clone(), p.version.clone())))
+                .filter(|p| !(hide_prereleases && Self::is_prerelease(&p.version)))
+                .collect();
+            let versions = self
+                .filter_by_grants(registry, &name, versions, identity, Some(&grant_rows))
+                .await?;
+            visible.push((name, versions));
+        }
+        Ok(RegistryVersions { hosted, visible })
+    }
+
     /// `load_visible_versions`, turning an empty result into an error.
     ///
     /// **Which** error matters, and the distinction is a security boundary, not
@@ -1638,4 +1713,12 @@ impl LocalRegistryService {
             .into_iter()
             .find(|p| p.version == version)
     }
+}
+
+/// [`LocalRegistryService::visible_registry_versions`]' answer.
+pub(super) struct RegistryVersions {
+    /// Every package name the registry holds rows for.
+    pub hosted: Vec<String>,
+    /// The packages this caller may read, by name, with their visible versions.
+    pub visible: Vec<(String, Vec<PublishedPackage>)>,
 }

@@ -2352,7 +2352,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
             `# Or with the cm-push plugin, which makes the same call:`,
             `# helm cm-push ./mychart batlehub`,
           ].join("\n"),
-        note: `A duplicate version answers <code>409</code>; <code>?force</code> replaces it and needs <code>releases:overwrite</code>. A <code>.prov</code> goes along as the <code>prov</code> field of a multipart upload beside <code>chart</code>.`,
+        note: `A duplicate version answers <code>409</code>, with or without <code>?force</code>: a published version is never replaced, so publish a new one. A <code>.prov</code> goes along as the <code>prov</code> field of a multipart upload beside <code>chart</code>.`,
       },
     ],
   },

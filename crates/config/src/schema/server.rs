@@ -77,6 +77,11 @@ pub struct ServerConfig {
 /// `api.scalar.com`, and opens `connect-src` on `/scalar` to that origin —
 /// which also lets the bundle's registry lookups through, announcing the page
 /// to Scalar on every load. A private registry should leave it off.
+///
+/// `connect-src` is opened only where the agent can actually appear: with a
+/// key, or keyless on a host the bundle calls local (`localhost`, `127.0.0.1`,
+/// `[::1]`, …). A keyless agent anywhere else stays hidden, so that page keeps
+/// the strict policy rather than paying the price for nothing.
 #[derive(Debug, Default, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ApiDocsConfig {
