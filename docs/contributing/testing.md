@@ -1012,6 +1012,16 @@ is one now. See `RegistryClient::fetch_artifact_resolved` and
 note that both are default-`None` hooks: a kind that does not implement them is
 unchanged.
 
+The memory verdict is the **idle live heap** — jemalloc's `stats.allocated`,
+read off `batlehub_memory_allocated_bytes` in each window — and not RSS, which
+is reported beside it. RSS is what the allocator holds, and jemalloc keeps
+freed pages in its arenas: across five CI runs the final RSS sat at
+235–241 MiB every time while the baseline wandered from 203 to 218 MiB, so the
+same server read as +9 % or +17 % and failed `main` at 15.1 %. The live heap of
+the same loop moves 1–2 %. `SOAK_MAX_HEAP_GROWTH_PCT` (default `10`) is the
+limit; `SOAK_MAX_RSS_GROWTH_PCT` (default `15`) is judged only on a build
+without the `jemalloc` feature, where RSS is all there is.
+
 One trap is worth naming, because it cost a green run that measured nothing.
 `heavy_start_server` launches `setsid cargo run`, so `$HEAVY_SERVER_PID` is not
 the server — and `/proc/<cargo>/status` answers every question with a plausible

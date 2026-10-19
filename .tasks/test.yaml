@@ -306,7 +306,7 @@ tasks:
       - bash tests/heavy/db_calls.sh {{.CLI_ARGS}}
 
   test:soak-heavy:
-    desc: "Heavy soak: npm in a loop against a served upstream, asserting the server gave back the memory, descriptors and threads it took (needs DATABASE_URL; no network). SOAK_ROUNDS/SOAK_PACKAGES/SOAK_SETTLE tune it"
+    desc: "Heavy soak: npm in a loop against a served upstream, asserting the server gave back the live heap, descriptors and threads it took (needs DATABASE_URL; no network). SOAK_ROUNDS/SOAK_PACKAGES/SOAK_SETTLE tune it"
     cmds:
       - bash tests/heavy/soak.sh
 
