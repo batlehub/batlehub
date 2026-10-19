@@ -64,7 +64,7 @@ concurrently.
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | replicaCount | int | `1` | Proxy replicas. Filesystem storage is effectively single-replica; see `persistence`. |
-| image | object | `{"pullPolicy":"IfNotPresent","repository":"ghcr.io/batleforc/batlehub","tag":""}` | Proxy image. The worker has its own under `worker.image`. |
+| image | object | `{"pullPolicy":"IfNotPresent","repository":"ghcr.io/batlehub/batlehub","tag":""}` | Proxy image. The worker has its own under `worker.image`. |
 | image.tag | string | `Chart.appVersion` | Overrides the image tag. |
 | imagePullSecrets | list | `[]` | Pull secrets, for images held in a private registry. |
 | nameOverride | string | `""` | Replaces the chart name in generated resource names. |
@@ -93,7 +93,7 @@ concurrently.
 | podDisruptionBudget | object | `{"enabled":true,"minAvailable":1}` | Disruption budget. Rendered only when `replicaCount` is above 1. |
 | worker | object | disabled | The scan worker: a second Deployment of the same binary run with `--roles worker` from the worker image (RFC 0018). Off by default, and turning it on means setting `config.server.roles = ["proxy"]` so the proxy stops scanning. |
 | worker.autoscaling | object | `{"enabled":false,"maxReplicas":4,"metricName":"batlehub_scan_jobs_queued","minReplicas":1,"targetQueued":20}` | HorizontalPodAutoscaler on the external metric `batlehub_scan_jobs_queued`. Needs a metrics adapter to expose that gauge; `worker.replicaCount` is ignored while this is on. |
-| worker.image.repository | string | `"ghcr.io/batleforc/batlehub-worker"` | Worker image. Point it at `batlehub-worker-guarddog` to enable the `[scanners.guarddog]` scanner, which is the only one not on the base image. |
+| worker.image.repository | string | `"ghcr.io/batlehub/batlehub-worker"` | Worker image. Point it at `batlehub-worker-guarddog` to enable the `[scanners.guarddog]` scanner, which is the only one not on the base image. |
 | worker.runtimeClassName | string | `""` | Optional sandboxed runtime (gVisor, Kata) around the whole worker pod, on top of the bubblewrap sandbox around each scanner. |
 | worker.scratch | object | `{"sizeLimit":"4Gi"}` | Per-job work directories, as a memory-backed emptyDir so a hostile archive never touches the node's disk. Size it for `max_concurrent` jobs of `[worker.sandbox] max_extracted_mb` each. |
 | worker.yaraRules | object | `{"configMap":""}` | ConfigMap of YARA rules (`*.yar`, `*.yara`) mounted read-only at `/etc/batlehub/yara`, for `[scanners.yara] rules_dir = "/etc/batlehub/yara"` (RFC 0036 §6.6). Empty mounts nothing; the worker refuses a YARA scanner whose directory holds no rule file. |

@@ -196,7 +196,7 @@ services:
     command: redis-server --save "" --appendonly no
 
   batlehub:
-    image: ghcr.io/batleforc/batlehub:1.1.0
+    image: ghcr.io/batlehub/batlehub:1.7.0
     deploy:
       replicas: 2
       restart_policy:
@@ -256,7 +256,7 @@ The bundled Helm chart supports multi-replica deployments out of the box once S3
 replicaCount: 3
 
 image:
-  repository: ghcr.io/batleforc/batlehub
+  repository: ghcr.io/batlehub/batlehub
   tag: "1.1.0"    # pin to a specific version
 
 database:

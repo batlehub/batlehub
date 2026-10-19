@@ -33,7 +33,7 @@ image carries the lot and this is mostly a question to ask of a build from
 source, or of an image whose provenance is unclear:
 
 ```sh
-docker run --rm ghcr.io/batleforc/batlehub:<version> --version
+docker run --rm ghcr.io/batlehub/batlehub:<version> --version
 ```
 
 ## `--config`

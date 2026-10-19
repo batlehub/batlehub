@@ -1,7 +1,7 @@
 ---
 title: Le worker d'analyse
 sourcePath: operations/scan-worker.md
-sourceHash: 3404edf7adaae344
+sourceHash: 5e5ddcd7c131c1aa
 ---
 
 # Le worker d'analyse
@@ -198,8 +198,8 @@ départ du chemin de [réponse à incident](/fr/operations/incident-response).
 
 ## Les deux images
 
-`ghcr.io/batleforc/batlehub-worker` embarque tous les analyseurs sauf GuardDog.
-`ghcr.io/batleforc/batlehub-worker-guarddog` est la même image avec GuardDog en
+`ghcr.io/batlehub/batlehub-worker` embarque tous les analyseurs sauf GuardDog.
+`ghcr.io/batlehub/batlehub-worker-guarddog` est la même image avec GuardDog en
 plus, construite sur elle, et c'est ce que `worker.image.repository` doit viser
 quand un registre nomme `guarddog` dans ses analyseurs.
 

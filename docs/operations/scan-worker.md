@@ -184,8 +184,8 @@ starting point of the [incident-response](/operations/incident-response) path.
 
 ## The two images
 
-`ghcr.io/batleforc/batlehub-worker` carries every scanner but GuardDog.
-`ghcr.io/batleforc/batlehub-worker-guarddog` is the same image with GuardDog
+`ghcr.io/batlehub/batlehub-worker` carries every scanner but GuardDog.
+`ghcr.io/batlehub/batlehub-worker-guarddog` is the same image with GuardDog
 added, built on it, and is what `worker.image.repository` points at when a
 registry names `guarddog` in its scanners.
 
