@@ -566,7 +566,7 @@ impl StorageBackend for StorageRouter {
         let like = like_prefix_pattern(prefix);
         let row = sqlx::query(
             r#"
-            SELECT COUNT(*) AS cnt, COALESCE(SUM(size_bytes), 0) AS total
+            SELECT COUNT(*) AS cnt, COALESCE(SUM(size_bytes), 0)::bigint AS total
             FROM artifact_storage
             WHERE storage_key LIKE $1 ESCAPE '\'
             "#,
@@ -576,8 +576,16 @@ impl StorageBackend for StorageRouter {
         .await
         .map_err(|e| CoreError::Storage(e.to_string()))?;
 
-        let count: i64 = row.try_get("cnt").unwrap_or(0);
-        let total: i64 = row.try_get("total").unwrap_or(0);
+        // `SUM` of a `bigint` is a `numeric` in Postgres, hence the cast above.
+        // Read with `?`, not `unwrap_or(0)`: decoding the uncast column failed on
+        // every call, and the fallback turned it into a cache of N artifacts
+        // weighing 0 B on the health page.
+        let count: i64 = row
+            .try_get("cnt")
+            .map_err(|e| CoreError::Storage(e.to_string()))?;
+        let total: i64 = row
+            .try_get("total")
+            .map_err(|e| CoreError::Storage(e.to_string()))?;
         Ok((count as u64, total as u64))
     }
 
