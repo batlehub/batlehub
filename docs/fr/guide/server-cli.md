@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/server-cli.md
-sourceHash: 9136dd8c04cace20
+sourceHash: 0805e1e2f18a0703
 ---
 
 # Sous-commandes du binaire serveur
@@ -41,7 +41,7 @@ la question se pose surtout pour une compilation depuis les sources, ou pour une
 image dont la provenance est incertaine :
 
 ```sh
-docker run --rm ghcr.io/batleforc/batlehub:<version> --version
+docker run --rm ghcr.io/batlehub/batlehub:<version> --version
 ```
 
 ## `--config`

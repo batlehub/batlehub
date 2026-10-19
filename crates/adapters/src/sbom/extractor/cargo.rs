@@ -4,12 +4,9 @@ use bytes::Bytes;
 use super::{anchor, readme};
 
 pub(super) fn extract_cargo_manifest(data: &Bytes) -> ExtractedManifest {
-    use flate2::read::GzDecoder;
     use std::io::Read;
-    use tar::Archive;
 
-    let gz = GzDecoder::new(data.as_ref());
-    let mut archive = Archive::new(gz);
+    let mut archive = readme::open_targz(data);
 
     let Ok(entries) = archive.entries() else {
         tracing::warn!("sbom: failed to parse cargo manifest, treating as no dependencies");

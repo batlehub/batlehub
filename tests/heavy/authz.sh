@@ -136,6 +136,7 @@ SDKMAN_R="authz-sdkman-$HEAVY_RUN"
 JETBRAINS_R="authz-jetbrains-$HEAVY_RUN"
 GENERIC_R="authz-generic-$HEAVY_RUN"
 GALAXY_R="authz-galaxy-$HEAVY_RUN"
+HELM_R="authz-helm-$HEAVY_RUN"
 RUSTUP_R="authz-rustup-$HEAVY_RUN"
 
 # The kinds a *client* target drives. Declared here rather than inferred,
@@ -144,7 +145,7 @@ RUSTUP_R="authz-rustup-$HEAVY_RUN"
 # so no single run can observe the whole matrix. Add a client phase, add its
 # kind here.
 AUTHZ_CLIENT_KINDS=(npm pypi nuget composer conda openvsx rubygems terraform maven cargo
-                    galaxy)
+                    galaxy helm)
 declare -A AUTHZ_KIND_SEEN=()
 
 T_ADMIN="$ADMIN_TOKEN"
@@ -1991,6 +1992,77 @@ YML
   verdict="$(authz_explain "$GALAXY_R" "$SUBJECT_DENIED" "releases:read" "$ns.$name" "$version")"
   [[ "$verdict" == "deny" ]] \
     || heavy_fail "galaxy: explain says '$verdict' for the caller the server just refused"
+  return 0
+}
+
+# ── helm (RFC 0029) ──────────────────────────────────────────────────────────
+#
+# `helm` sends basic auth from `--username/--password` on every request to the
+# repository's host — and the served index puts every chart URL on that host,
+# so each arm below is attributable to the identity the client presented, on
+# the index *and* on the archive. Hermetic: the admin publishes a chart the
+# phase packages itself, through ChartMuseum's `POST api/charts`.
+phase_helm() {
+  heavy_need helm "helm (https://helm.sh)"
+  local repo="$HEAVY_TAP_BASE/proxy/$HELM_R/helm" src="$HEAVY_WORK/helm-src"
+  mkdir -p "$src/authzchart"
+  printf 'apiVersion: v2\nname: authzchart\nversion: 9.8.7\n' > "$src/authzchart/Chart.yaml"
+  tar -czf "$src/authzchart-9.8.7.tgz" -C "$src" authzchart
+
+  heavy_mark "helm-publish"
+  local code
+  code="$(curl -sS -o "$HEAVY_WORK/helm-publish.json" -w '%{http_code}' \
+    --data-binary "@$src/authzchart-9.8.7.tgz" \
+    -H "Authorization: Bearer $T_ADMIN" "$repo/api/charts")"
+  [[ "$code" == 201 ]] \
+    || { cat "$HEAVY_WORK/helm-publish.json" >&2; heavy_fail "helm: the admin could not publish ($code)"; }
+  AUTHZ_KIND_SEEN["helm"]=1
+
+  helm_as() {  # <label> <token|-> → exit status of add + pull
+    local label="$1" token="$2" home="$HEAVY_WORK/helm-home-$1"
+    local -a creds=()
+    [[ "$token" == "$T_ANON" ]] || creds=(--username authz --password "$token")
+    # `helm pull -d` never creates its destination; without this every arm
+    # fails on the directory, and the denied ones pass for the wrong reason.
+    mkdir -p "$home/pulled"
+    HELM_CONFIG_HOME="$home/config" HELM_CACHE_HOME="$home/cache" HELM_DATA_HOME="$home/data" \
+      bash -c 'helm repo add authz "$0" "${@:2}" && helm pull authz/authzchart --version 9.8.7 -d "$1"' \
+      "$repo" "$home/pulled" "${creds[@]}" > "$HEAVY_WORK/helm-$label.out" 2>&1
+  }
+
+  heavy_mark "helm-reader"
+  helm_as reader "$T_READER" \
+    || { cat "$HEAVY_WORK/helm-reader.out" >&2; heavy_fail "releases:read — helm, the reader: the pull was refused"; }
+  heavy_wire_re_after "helm-reader" "GET /proxy/$HELM_R/helm/charts/authzchart-9[.]8[.]7[.]tgz -> 200" \
+    "helm: the reader's archive fetch did not reach this instance"
+  authz_note_verb "releases:read"
+  AUTHZ_CHECKS=$((AUTHZ_CHECKS + 1))
+
+  heavy_mark "helm-denied"
+  if helm_as denied "$T_DENIED"; then
+    cat "$HEAVY_WORK/helm-denied.out" >&2
+    heavy_fail "releases:list — helm, holding no read verb: the repository was readable"
+  fi
+  heavy_wire_re_after "helm-denied" "/proxy/$HELM_R/helm/index[.]yaml $WIRE_403" \
+    "helm: the denied caller was not refused at the index"
+  AUTHZ_CHECKS=$((AUTHZ_CHECKS + 1))
+
+  heavy_mark "helm-anon"
+  if helm_as anon "$T_ANON"; then
+    cat "$HEAVY_WORK/helm-anon.out" >&2
+    heavy_fail "releases:list — helm, anonymous: the repository was readable without a credential"
+  fi
+  heavy_wire_re_after "helm-anon" "/proxy/$HELM_R/helm/index[.]yaml -> 40[13]" \
+    "helm: the anonymous read was not refused"
+  AUTHZ_CHECKS=$((AUTHZ_CHECKS + 1))
+
+  local verdict
+  verdict="$(authz_explain "$HELM_R" "user:authz-reader" "releases:read" "authzchart" "9.8.7")"
+  [[ "$verdict" == "allow" ]] \
+    || heavy_fail "helm: explain says '$verdict' for the reader the server just served"
+  verdict="$(authz_explain "$HELM_R" "$SUBJECT_DENIED" "releases:read" "authzchart" "9.8.7")"
+  [[ "$verdict" == "deny" ]] \
+    || heavy_fail "helm: explain says '$verdict' for the caller the server just refused"
   return 0
 }
 
@@ -4026,8 +4098,9 @@ case "$TARGET" in
   terraform) phase_terraform; heavy_done "AUTHZ-HEAVY-TERRAFORM-OK" ;;
   composer)  phase_composer;  heavy_done "AUTHZ-HEAVY-COMPOSER-OK" ;;
   galaxy)    phase_galaxy;    heavy_done "AUTHZ-HEAVY-GALAXY-OK" ;;
+  helm)      phase_helm;      heavy_done "AUTHZ-HEAVY-HELM-OK" ;;
   *)
     heavy_fail "unknown target '$TARGET' — one of: matrix signing reads audit npm pypi nuget \
-composer conda openvsx rubygems terraform maven cargo galaxy, or live:<kind> for one of: ${AUTHZ_LIVE_KINDS[*]}"
+composer conda openvsx rubygems terraform maven cargo galaxy helm, or live:<kind> for one of: ${AUTHZ_LIVE_KINDS[*]}"
     ;;
 esac

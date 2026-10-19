@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/high-availability.md
-sourceHash: 876e0b9a9802ae9f
+sourceHash: d8d1422501e819f2
 ---
 
 # Haute disponibilité
@@ -224,7 +224,7 @@ services:
     command: redis-server --save "" --appendonly no
 
   batlehub:
-    image: ghcr.io/batleforc/batlehub:1.1.0
+    image: ghcr.io/batlehub/batlehub:1.7.0
     deploy:
       replicas: 2
       restart_policy:
@@ -287,7 +287,7 @@ un backend de cache partagé sont configurés.
 replicaCount: 3
 
 image:
-  repository: ghcr.io/batleforc/batlehub
+  repository: ghcr.io/batlehub/batlehub
   tag: "1.1.0"    # figez une version précise
 
 database:

@@ -262,6 +262,10 @@ fn default_upstreams(kind: RegistryKind, reg: &RegistryConfig) -> Vec<String> {
         // The registry root Che and `registry-library` are both given; one
         // entry, which config validation enforces (RFC 0035 §4.5).
         RegistryKind::Devfile => resolve_urls(&reg.upstreams, "https://registry.devfile.io"),
+        // No default chart repository exists; config validation requires one in
+        // proxy and hybrid mode, so the placeholder only backs a local registry,
+        // which never reads upstream (RFC 0029 §4.1).
+        RegistryKind::Helm => resolve_urls(&reg.upstreams, "https://example.invalid/helm"),
     }
 }
 
@@ -366,6 +370,11 @@ fn make_one(
             url, opts,
         )?),
         RegistryKind::Devfile => Arc::new(batlehub_adapters::registry::DevfileRegistryClient::new(
+            url, opts,
+        )?),
+        // `oci_entries` is read off `HotConfig` by the index handler, so the
+        // client needs nothing beyond the repository URL.
+        RegistryKind::Helm => Arc::new(batlehub_adapters::registry::HelmRegistryClient::new(
             url, opts,
         )?),
     };

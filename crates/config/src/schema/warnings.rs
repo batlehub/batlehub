@@ -80,6 +80,14 @@ pub const SUBDOMAIN_INVALID_DNS_LABEL: &str = "subdomain.invalid-dns-label";
 /// relayed regardless (RFC 0020 §4.3).
 pub const VSX_SIGNING_PROXY_MODE: &str = "vsx-signing.proxy-mode";
 
+/// `oci_entries = "relay"` on a helm registry: some listed charts install past
+/// this instance (RFC 0029 §4.5).
+pub const HELM_OCI_RELAY: &str = "helm.oci-relay";
+
+/// A `hybrid` helm registry with no `hybrid_merge`: the admin has not said
+/// whether a local chart hides the upstream one of its name.
+pub const HELM_HYBRID_MERGE_UNSET: &str = "helm.hybrid-merge-unset";
+
 /// `[registries.nix_signing]` on a `nix` registry in `proxy` mode: a relayed
 /// narinfo keeps the upstream's `Sig:` byte-exact and is never re-signed, so
 /// the key signs nothing (RFC 0028 §4.1).

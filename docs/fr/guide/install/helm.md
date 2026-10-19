@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/install/helm.md
-sourceHash: dd8071fbc45f78c0
+sourceHash: d83bda93d063bf15
 ---
 
 # Chart Helm
@@ -435,9 +435,9 @@ worker:
     enabled: false     # nécessite un adaptateur de métriques, voir ci-dessous
 ```
 
-L'image du worker (`ghcr.io/batleforc/batlehub-worker`) porte tous les scanners
+L'image du worker (`ghcr.io/batlehub/batlehub-worker`) porte tous les scanners
 sauf GuardDog. Activer `[scanners.guarddog]` suppose de pointer
-`worker.image.repository` vers `ghcr.io/batleforc/batlehub-worker-guarddog`,
+`worker.image.repository` vers `ghcr.io/batlehub/batlehub-worker-guarddog`,
 faute de quoi le scanner est refusé au chargement de la configuration.
 
 Chaque scanner tourne sous bubblewrap, qui exige des namespaces utilisateur non
@@ -464,7 +464,7 @@ tenue à jour par une porte de garde. Voici la liste courte.
 
 | Clé | Défaut | Description |
 |-----|---------|-------------|
-| `image.repository` | `ghcr.io/batleforc/batlehub` | Image de conteneur |
+| `image.repository` | `ghcr.io/batlehub/batlehub` | Image de conteneur |
 | `image.tag` | appVersion du chart | Tag de l'image |
 | `replicaCount` | `1` | Nombre de réplicas |
 | `config` | voir `values.yaml` | Toute la configuration applicative, sérialisée telle quelle dans `config.toml` |
@@ -483,7 +483,7 @@ tenue à jour par une porte de garde. Voici la liste courte.
 | `persistence.size` | `10Gi` | Capacité du PVC |
 | `externalManifest[].mount.asConfig` | — | Remplacer le Secret de configuration géré par le chart par le vôtre |
 | `worker.enabled` | `false` | Faire tourner le worker d'analyse dans son propre Deployment |
-| `worker.image.repository` | `ghcr.io/batleforc/batlehub-worker` | Image du worker ; la variante `-worker-guarddog` ajoute GuardDog |
+| `worker.image.repository` | `ghcr.io/batlehub/batlehub-worker` | Image du worker ; la variante `-worker-guarddog` ajoute GuardDog |
 | `worker.autoscaling.enabled` | `false` | HPA sur la métrique de jobs en file |
 | `worker.runtimeClassName` | `""` | Runtime class isolée autour du pod du worker |
 | `trivy.enabled` | `false` | Déployer le sous-chart du serveur Trivy |

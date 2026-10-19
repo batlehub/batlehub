@@ -128,6 +128,7 @@ default = [
   "registry-galaxy",
   "registry-nix",
   "registry-devfile",
+  "registry-helm",
   "sbom",
   "storage-fs",
   "vuln-scan"
@@ -187,6 +188,8 @@ registry-nix = ["dep:zstd", "dep:lzma-rs", "dep:ed25519-dalek"]
 # galaxy reads MANIFEST.json/FILES.json out of a collection tarball on publish.
 registry-galaxy = ["dep:flate2", "dep:tar"]
 registry-devfile = []
+# helm reads Chart.yaml and README.md out of a chart archive on publish.
+registry-helm = ["dep:flate2", "dep:tar"]
 registry-pypi = []
 # JetBrains IDE-archive proxy cache. Reuses the generic `PathProxyRegistryClient`
 # (shared with deb/rpm), so it needs no extra dependencies.

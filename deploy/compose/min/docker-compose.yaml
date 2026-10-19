@@ -1,0 +1,45 @@
+# min — PostgreSQL and BatleHub, nothing else. Sign-in is the admin token.
+#
+#   cd deploy/compose/min
+#   BATLEHUB_ADMIN_TOKEN=$(openssl rand -hex 32) docker compose up -d
+#
+# Console on http://localhost:8080, npm on http://localhost:8080/proxy/npm/.
+# `../base` adds an OIDC login (Dex); `../max` adds Valkey and S3 storage.
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: batlehub
+      POSTGRES_USER: batlehub
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U batlehub -d batlehub"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  batlehub:
+    # Pinned to the latest release; bump it to upgrade.
+    image: ghcr.io/batlehub/batlehub:1.7.0
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgresql://batlehub:${POSTGRES_PASSWORD:-changeme}@db:5432/batlehub
+      BATLEHUB_ADMIN_TOKEN: ${BATLEHUB_ADMIN_TOKEN:?set BATLEHUB_ADMIN_TOKEN to the admin API token}
+    volumes:
+      - ./config.toml:/etc/batlehub/config.toml:ro
+      - cache:/var/cache/batlehub
+    # No healthcheck: the image is distroless, with no shell or curl to run
+    # one. GET /healthz answers once the server is up.
+
+volumes:
+  db_data:
+  cache:

@@ -51,7 +51,7 @@ pub use registry::{
     ArtifactStream, BulkResult, DocumentBody, DocumentEncoding, DocumentKind, DocumentProbe,
     FetchedArtifact, ForgeAsset, ForgeRelease, ForgeReleaseSource, LocalRegistryBackend,
     PackageRepository, RecentErrorRecord, RegistryClient, StreamedDocument, UpstreamPackage,
-    VersionDocument,
+    VersionDocument, MAX_BLOCKED_VERSIONS_PER_REGISTRY,
 };
 pub use release_import::ImportHistory;
 pub use sbom::{

@@ -250,6 +250,12 @@ it never leaves this repository.
 vulnerability, a machine-readable `justification` and the prose (`impact_statement`) that says why
 the vulnerable code is unreachable in these images.
 
+Today the gate suppresses nothing: `.trivyignore.yaml` is empty, and the document's four statements
+are all `fixed` — the advisories against the worker's Trivy binary, closed by Trivy v0.76.0 (see
+[below](#third-party-binary)). They stay so that a consumer scanning an image
+published before that bump, which version 1 of the document stated `not_affected`, can see where
+the finding went.
+
 The release binds it to what it published (`.github/scripts/vex.py render`): each product is
 rewritten from a repository name to the **digest** this release actually pushed, the document is
 attached to the release page, and `cosign attest --type openvex` publishes it as a referrer of each
@@ -405,7 +411,7 @@ than rediscover — the reasoning lives next to the declaration in `Cargo.toml`,
 `deny.toml`'s `[bans].deny`, so re-enabling the feature fails CI instead of silently restoring the
 advisory. Check whether a feature can be dropped before concluding an advisory is unfixable.
 
-### An advisory inside a third party's binary
+### An advisory inside a third party's binary {#third-party-binary}
 
 > Every entry here has a matching statement in `vex/batlehub.openvex.json` — see
 > [VEX](#vex) above — and `task vex` fails when one of them does
@@ -414,16 +420,19 @@ advisory. Check whether a feature can be dropped before concluding an advisory i
 
 `.trivyignore.yaml` is the third case: a CVE in a dependency of a **prebuilt binary the image
 copies in**, where the fix is neither an upgrade of ours nor a feature we can drop. The worked
-example is the pair of grpc-go advisories against `/usr/local/bin/trivy`. Trivy vendors
-`google.golang.org/grpc` v1.82.1; both are fixed upstream, and no Trivy release carries the fix
-yet, so `TRIVY_VERSION` in `Containerfile.worker` has nowhere to move.
+example was the four advisories against `/usr/local/bin/trivy`: grpc-go CVE-2026-84304 and
+CVE-2026-84445 (Trivy vendored `google.golang.org/grpc` v1.82.1) and Go standard-library
+CVE-2026-78667 and CVE-2026-97031 (built with Go 1.26.6). Each was fixed upstream before any Trivy
+release carried the fix, so `TRIVY_VERSION` in `Containerfile.worker` had nowhere to move.
 
-The entries are pinned to that one path, each says why the vulnerable code is unreachable here —
-the advisories are against xDS *servers*, and the worker runs `trivy … --server <endpoint>`, the
-client half — and each carries an `expired_at`, so the gate reopens on its own instead of the
-entry outliving its reason. The file is the register: read it before renewing an entry, and check
-the `go.mod` of the Trivy tag first, because the version that closes it retires the entry rather
-than renewing it.
+The entries were pinned to that one path, each said why the vulnerable code was unreachable here —
+the worker runs `trivy … --server <endpoint>`, the client half, and nothing in the image listens —
+and each carried an `expired_at`, so the gate would reopen on its own instead of the entry
+outliving its reason. Trivy v0.76.0 (Go 1.27.2, grpc v1.84.0) closed all four: the bump retired
+the entries, leaving the file empty, and turned their VEX statements to `fixed`. Before adding an
+entry for that binary again, check the `go.mod` and toolchain of the next Trivy tag first — the
+commands are in the file's header — because a release that carries the fix retires an entry
+rather than renewing it.
 
 ### Scanner rule ignores are a different thing
 

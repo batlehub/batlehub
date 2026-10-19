@@ -21,7 +21,10 @@
 #      server stopped serving leaks nothing and proves nothing;
 #   2. the loop reached the upstream **zero** times after a warm-up that
 #      touched every package, so what it is soaking is the served path;
-#   3. RSS, open descriptors and threads came back to where they started;
+#   3. the live heap, open descriptors and threads came back to where they
+#      started — RSS is reported beside them and judged only on a build with
+#      no allocator statistics, because it measures the allocator as much as
+#      the server (see "What it gave back" below);
 #   4. the server logged no panic.
 #
 # Run: `task test:soak-heavy`, or `bash tests/heavy/soak.sh`.
@@ -31,7 +34,9 @@
 #   SOAK_ROUNDS                 rounds in the loop          (default 25)
 #   SOAK_PACKAGES               distinct upstream packages  (default 8)
 #   SOAK_SETTLE                 quiesce before each window  (default 20 s)
-#   SOAK_MAX_RSS_GROWTH_PCT     idle RSS growth             (default 15)
+#   SOAK_MAX_HEAP_GROWTH_PCT    idle live-heap growth       (default 10)
+#   SOAK_MAX_RSS_GROWTH_PCT     idle RSS growth, judged only without
+#                               allocator statistics        (default 15)
 #   SOAK_MAX_FD_GROWTH          open descriptors            (default 16)
 #   SOAK_MAX_THREAD_GROWTH      OS threads                  (default 4)
 #   SOAK_REPORT                 write a markdown summary here (default: none)
@@ -50,6 +55,7 @@ ROUNDS="${SOAK_ROUNDS:-25}"
 PACKAGES="${SOAK_PACKAGES:-8}"
 SETTLE="${SOAK_SETTLE:-20}"
 MAX_RSS_PCT="${SOAK_MAX_RSS_GROWTH_PCT:-15}"
+MAX_HEAP_PCT="${SOAK_MAX_HEAP_GROWTH_PCT:-10}"
 MAX_FD="${SOAK_MAX_FD_GROWTH:-16}"
 MAX_THREADS="${SOAK_MAX_THREAD_GROWTH:-4}"
 
@@ -109,13 +115,18 @@ SERVER_PROC="$(soak_server_proc)" \
   || heavy_fail "cannot read /proc/$SERVER_PROC — nothing can be measured"
 heavy_log "Measuring pid $SERVER_PROC: $(tr '\0' ' ' < "/proc/$SERVER_PROC/cmdline")"
 
-# soak_sample — "<rss_kb> <fds> <threads>" for the server process, right now.
+# soak_sample — "<rss_kb> <fds> <threads> <heap_kb>" for the server process,
+# right now. `heap_kb` is jemalloc's `stats.allocated` off /metrics — bytes in
+# live allocations, refreshed every 5 s — and `0` on a build without the
+# `jemalloc` feature, which the verdict reads as "not measured".
 soak_sample() {
-  local rss fds threads
+  local rss fds threads heap
   rss="$(awk '/^VmRSS:/{print $2; exit}' "/proc/$SERVER_PROC/status" 2>/dev/null || echo 0)"
   threads="$(awk '/^Threads:/{print $2; exit}' "/proc/$SERVER_PROC/status" 2>/dev/null || echo 0)"
   fds="$(ls "/proc/$SERVER_PROC/fd" 2>/dev/null | wc -l || echo 0)"
-  echo "$rss $fds $threads"
+  heap="$(curl -s --max-time 5 "$HEAVY_BASE/metrics" 2>/dev/null \
+    | awk '/^batlehub_memory_allocated_bytes /{h=int($2/1024)} END{print (h==""?0:h)}')"
+  echo "$rss $fds $threads ${heap:-0}"
   return $?
 }
 
@@ -130,24 +141,26 @@ soak_window() {
   local label="$1"
   heavy_log "Quiescing ${SETTLE}s before the $label window" >&2
   sleep "$SETTLE"
-  local rss=() fds=() threads=() s
+  local rss=() fds=() threads=() heap=() s
   for _ in 1 2 3 4 5; do
     s="$(soak_sample)"
     rss+=("$(echo "$s" | cut -d' ' -f1)")
     fds+=("$(echo "$s" | cut -d' ' -f2)")
     threads+=("$(echo "$s" | cut -d' ' -f3)")
+    heap+=("$(echo "$s" | cut -d' ' -f4)")
     sleep 1
   done
-  local m_rss m_fds m_threads
+  local m_rss m_fds m_threads m_heap
   m_rss="$(printf '%s\n' "${rss[@]}" | sort -n | sed -n '3p')"
   m_fds="$(printf '%s\n' "${fds[@]}" | sort -n | sed -n '3p')"
   m_threads="$(printf '%s\n' "${threads[@]}" | sort -n | sed -n '3p')"
-  # A window that is not three numbers is a broken measurement, and every
+  m_heap="$(printf '%s\n' "${heap[@]}" | sort -n | sed -n '3p')"
+  # A window that is not four numbers is a broken measurement, and every
   # comparison below it would be arithmetic on a string. Name it here.
-  [[ "$m_rss" =~ ^[0-9]+$ && "$m_fds" =~ ^[0-9]+$ && "$m_threads" =~ ^[0-9]+$ ]] \
-    || heavy_fail "the $label window did not measure three numbers (got '$m_rss' '$m_fds' '$m_threads') — is /proc/$SERVER_PROC still there?"
-  heavy_log "$label: RSS $((m_rss / 1024)) MiB, $m_fds fds, $m_threads threads" >&2
-  echo "$m_rss $m_fds $m_threads"
+  [[ "$m_rss" =~ ^[0-9]+$ && "$m_fds" =~ ^[0-9]+$ && "$m_threads" =~ ^[0-9]+$ && "$m_heap" =~ ^[0-9]+$ ]] \
+    || heavy_fail "the $label window did not measure four numbers (got '$m_rss' '$m_fds' '$m_threads' '$m_heap') — is /proc/$SERVER_PROC still there?"
+  heavy_log "$label: RSS $((m_rss / 1024)) MiB, live heap $((m_heap / 1024)) MiB, $m_fds fds, $m_threads threads" >&2
+  echo "$m_rss $m_fds $m_threads $m_heap"
   return $?
 }
 
@@ -213,6 +226,7 @@ BASELINE="$(soak_window baseline)"
 BASE_RSS="$(echo "$BASELINE" | cut -d' ' -f1)"
 BASE_FDS="$(echo "$BASELINE" | cut -d' ' -f2)"
 BASE_THREADS="$(echo "$BASELINE" | cut -d' ' -f3)"
+BASE_HEAP="$(echo "$BASELINE" | cut -d' ' -f4)"
 
 # ── The loop ─────────────────────────────────────────────────────────────────
 heavy_mark loop
@@ -225,6 +239,7 @@ FINAL="$(soak_window final)"
 FINAL_RSS="$(echo "$FINAL" | cut -d' ' -f1)"
 FINAL_FDS="$(echo "$FINAL" | cut -d' ' -f2)"
 FINAL_THREADS="$(echo "$FINAL" | cut -d' ' -f3)"
+FINAL_HEAP="$(echo "$FINAL" | cut -d' ' -f4)"
 
 # ── 1. The client kept working, and the cache did its job ────────────────────
 # Every round installed the same small set of names. The upstream is a served
@@ -262,22 +277,44 @@ if grep -q "panicked at" "$HEAVY_WORK/server.log" 2>/dev/null; then
 fi
 
 # ── 3. What it gave back ─────────────────────────────────────────────────────
+# The **live heap** is judged, not RSS. RSS is what the allocator holds, and
+# jemalloc keeps freed pages in its arenas: across five CI runs of this suite
+# the final RSS sat at 235–241 MiB every time while the baseline wandered
+# from 203 to 218 MiB, so the same server read as +9 % or +17 % depending on
+# how full the arenas happened to be after the warm-up — and failed `main` at
+# 15.1 %. The live heap separates "the server is holding objects" from "the
+# allocator is holding pages", as the k6 soak's verdict already does. RSS
+# stays in the report, and is judged only on a build with no allocator
+# statistics, where it is all there is.
 RSS_GROWTH_PCT="$(awk -v b="$BASE_RSS" -v f="$FINAL_RSS" 'BEGIN{ printf "%.1f", (b>0 ? (f-b)/b*100 : 0) }')"
+HEAP_MEASURED=$(( BASE_HEAP > 0 && FINAL_HEAP > 0 ))
+HEAP_GROWTH_PCT="$(awk -v b="$BASE_HEAP" -v f="$FINAL_HEAP" 'BEGIN{ printf "%.1f", (b>0 ? (f-b)/b*100 : 0) }')"
 FD_GROWTH=$((FINAL_FDS - BASE_FDS))
 THREAD_GROWTH=$((FINAL_THREADS - BASE_THREADS))
 
-heavy_log "$(printf 'RSS %d -> %d MiB (%s%%), fds %d -> %d (%+d), threads %d -> %d (%+d)' \
+heavy_log "$(printf 'live heap %d -> %d MiB (%s%%), RSS %d -> %d MiB (%s%%), fds %d -> %d (%+d), threads %d -> %d (%+d)' \
+  "$((BASE_HEAP / 1024))" "$((FINAL_HEAP / 1024))" "$HEAP_GROWTH_PCT" \
   "$((BASE_RSS / 1024))" "$((FINAL_RSS / 1024))" "$RSS_GROWTH_PCT" \
   "$BASE_FDS" "$FINAL_FDS" "$FD_GROWTH" \
   "$BASE_THREADS" "$FINAL_THREADS" "$THREAD_GROWTH")"
 
 FAILED=0
-RSS_VERDICT=ok FD_VERDICT=ok THREAD_VERDICT=ok
-awk -v g="$RSS_GROWTH_PCT" -v m="$MAX_RSS_PCT" 'BEGIN{ exit !(g > m) }' && {
-  echo "LEAK: idle RSS grew ${RSS_GROWTH_PCT}% over $ROUNDS rounds (limit ${MAX_RSS_PCT}%)" >&2
-  RSS_VERDICT="**over**"
-  FAILED=1
-}
+HEAP_VERDICT=ok RSS_VERDICT=ok FD_VERDICT=ok THREAD_VERDICT=ok
+if (( HEAP_MEASURED )); then
+  RSS_VERDICT="reported"
+  awk -v g="$HEAP_GROWTH_PCT" -v m="$MAX_HEAP_PCT" 'BEGIN{ exit !(g > m) }' && {
+    echo "LEAK: the idle live heap grew ${HEAP_GROWTH_PCT}% over $ROUNDS rounds (limit ${MAX_HEAP_PCT}%)" >&2
+    HEAP_VERDICT="**over**"
+    FAILED=1
+  }
+else
+  HEAP_VERDICT="not measured (no allocator statistics)"
+  awk -v g="$RSS_GROWTH_PCT" -v m="$MAX_RSS_PCT" 'BEGIN{ exit !(g > m) }' && {
+    echo "LEAK: idle RSS grew ${RSS_GROWTH_PCT}% over $ROUNDS rounds (limit ${MAX_RSS_PCT}%)" >&2
+    RSS_VERDICT="**over**"
+    FAILED=1
+  }
+fi
 if (( FD_GROWTH > MAX_FD )); then
   echo "LEAK: $FD_GROWTH more open descriptors than at baseline (limit $MAX_FD)" >&2
   FD_VERDICT="**over**"
@@ -307,6 +344,7 @@ if [[ -n "${SOAK_REPORT:-}" ]]; then
     echo
     echo "| | baseline | final | growth | limit | |"
     echo "| --- | ---: | ---: | ---: | ---: | :-- |"
+    echo "| Live heap (idle) | $((BASE_HEAP / 1024)) MiB | $((FINAL_HEAP / 1024)) MiB | ${HEAP_GROWTH_PCT}% | ${MAX_HEAP_PCT}% | $HEAP_VERDICT |"
     echo "| RSS (idle) | $((BASE_RSS / 1024)) MiB | $((FINAL_RSS / 1024)) MiB | ${RSS_GROWTH_PCT}% | ${MAX_RSS_PCT}% | $RSS_VERDICT |"
     echo "| File descriptors | $BASE_FDS | $FINAL_FDS | $(printf '%+d' "$FD_GROWTH") | $MAX_FD | $FD_VERDICT |"
     echo "| Threads | $BASE_THREADS | $FINAL_THREADS | $(printf '%+d' "$THREAD_GROWTH") | $MAX_THREADS | $THREAD_VERDICT |"
@@ -321,4 +359,4 @@ fi
 
 (( FAILED )) && heavy_fail "the server did not give back what it took — see the growth above"
 
-heavy_done "SOAK-HEAVY-OK ($ROUNDS rounds: RSS ${RSS_GROWTH_PCT}%, fds ${FD_GROWTH}, threads ${THREAD_GROWTH})"
+heavy_done "SOAK-HEAVY-OK ($ROUNDS rounds: live heap ${HEAP_GROWTH_PCT}%, RSS ${RSS_GROWTH_PCT}%, fds ${FD_GROWTH}, threads ${THREAD_GROWTH})"

@@ -1,0 +1,42 @@
+# Dex, the OIDC provider of this stack: one local user, one client (BatleHub).
+#
+# Nothing secret is written here. The client secret is $OIDC_CLIENT_SECRET and
+# the user's bcrypt hash is $DEX_ADMIN_PASSWORD_HASH, both read from Dex's
+# environment — a bcrypt literal in a tracked file is what every secret scanner
+# flags, and rightly.
+#
+# The issuer is http://localhost:5556/dex for the browser *and* for BatleHub:
+# the compose file runs BatleHub in this container's network namespace, so
+# `localhost` is the same place for both. BatleHub accepts plain-HTTP issuers on
+# loopback only; anything else needs https.
+issuer: http://localhost:5556/dex
+
+storage:
+  type: sqlite3
+  config:
+    file: /var/dex/dex.db
+
+web:
+  http: 0.0.0.0:5556
+
+oauth2:
+  skipApprovalScreen: true
+
+staticClients:
+  - id: batlehub
+    secretEnv: OIDC_CLIENT_SECRET
+    name: BatleHub
+    # BatleHub has one callback route for every OIDC provider.
+    redirectURIs:
+      - http://localhost:8080/api/v1/auth/oidc/callback
+
+# Local users. Replace with a real connector (LDAP, GitHub, an upstream OIDC)
+# for anything shared: https://dexidp.io/docs/connectors/
+enablePasswordDB: true
+staticPasswords:
+  # The email is what BatleHub maps to a role ([auth.role_mappings] in
+  # config.toml): Dex's password DB emits no groups claim.
+  - email: admin@example.com
+    username: admin
+    userID: 6d1b4bd6-4b54-4c9a-9a4e-1e5f1b0c7a01
+    hashFromEnv: DEX_ADMIN_PASSWORD_HASH

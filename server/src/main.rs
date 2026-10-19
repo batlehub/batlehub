@@ -1058,6 +1058,13 @@ async fn main() -> Result<()> {
     server_factory::run_actix_server(server_factory::ServerParams {
         bind_addr: format!("{}:{}", config.server.host, config.server.port),
         static_dir: config.server.static_dir.clone(),
+        scalar_agent: config
+            .server
+            .api_docs
+            .ai_agent
+            .then(|| batlehub_web::ScalarAgent {
+                key: config.server.api_docs.ai_agent_key.clone(),
+            }),
         cli_binary_path: config
             .server
             .cli_binary_path

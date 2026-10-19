@@ -238,6 +238,8 @@ pub(crate) fn proxy_path_for(
 pub(crate) fn proxy_base_path(registry_name: &str, registry_type: &str) -> String {
     let base = format!("/proxy/{registry_name}");
     match registry_type.parse::<RegistryKind>() {
+        // `helm` for the same reason: `…/helm` is the repository URL
+        // `helm repo add` takes (RFC 0029 §4.2).
         // `galaxy` joins them: its whole surface hangs off
         // `/proxy/{name}/galaxy/api/`, and the URL an operator writes into
         // `ansible.cfg` is that root (RFC 0031 §4.2).
@@ -245,7 +247,10 @@ pub(crate) fn proxy_base_path(registry_name: &str, registry_type: &str) -> Strin
             if kind.is_path_addressed()
                 || matches!(
                     kind,
-                    RegistryKind::Nodedist | RegistryKind::Sdkman | RegistryKind::Galaxy
+                    RegistryKind::Nodedist
+                        | RegistryKind::Sdkman
+                        | RegistryKind::Galaxy
+                        | RegistryKind::Helm
                 ) =>
         {
             format!("{base}/{kind}")
@@ -393,6 +398,7 @@ pub fn suggest_registries(root: &Path, depth: usize) -> Vec<SuggestedRegistry> {
     collect_from_manifests(root, depth, &mut acc);
     collect_from_toolchain_files(root, &mut acc);
     collect_from_ansible_files(root, &mut acc);
+    collect_from_helm_chart(root, &mut acc);
     collect_from_flake(root, &mut acc);
 
     acc.finish()
@@ -586,6 +592,137 @@ fn collect_from_ansible_files(root: &Path, acc: &mut Accumulator) {
         // commits (RFC 0031 decision 9).
         note,
     });
+}
+
+// ── Chart.yaml and Chart.lock ────────────────────────────────────────────────
+//
+// RFC 0029 §6.9. A chart's `dependencies[].repository` names the chart
+// repositories `helm dependency update` reads. A registry serves exactly one
+// repository, so each `https://` repository is its own `helm` registry with
+// that repository as its one upstream. `Chart.lock` is read in preference: it
+// names the same repositories with the versions actually resolved, which is
+// what `warm_packages` wants.
+
+/// `Chart.lock`, else `Chart.yaml` → one `helm` registry per chart repository.
+fn collect_from_helm_chart(root: &Path, acc: &mut Accumulator) {
+    let Some((source, content)) = ["Chart.lock", "Chart.yaml"]
+        .into_iter()
+        .find_map(|f| Some((f, std::fs::read_to_string(root.join(f)).ok()?)))
+    else {
+        return;
+    };
+    let Ok(doc) = batlehub_core::services::helm::parse_yaml(&content) else {
+        return;
+    };
+    let deps = doc
+        .get("dependencies")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+
+    // repository → the exact pins under it, in the order they were read.
+    let mut repos: Vec<(String, Vec<String>)> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    for dep in deps {
+        let text = |k: &str| match dep.get(k) {
+            Some(serde_json::Value::String(s)) => Some(s.trim().to_owned()),
+            Some(serde_json::Value::Number(n)) => Some(n.to_string()),
+            _ => None,
+        };
+        let (Some(name), Some(repo)) = (text("name"), text("repository")) else {
+            continue;
+        };
+        if !(repo.starts_with("https://") || repo.starts_with("http://")) {
+            // `oci://` is a container registry, `@alias`/`alias:` names a repo
+            // only the developer's own `helm repo add` knows, `file://` is local.
+            skipped.push(format!("{name} ({repo})"));
+            continue;
+        }
+        let repo = repo.trim_end_matches('/').to_owned();
+        let pin = text("version")
+            .filter(|v| is_exact_chart_version(v))
+            .map(|v| format!("{name}@{v}"));
+        match repos.iter_mut().find(|(r, _)| *r == repo) {
+            Some((_, pins)) => merge_new(pins, pin.into_iter()),
+            None => repos.push((repo, pin.into_iter().collect())),
+        }
+    }
+
+    // ponytail: the note rides each emitted registry; a chart whose every
+    // dependency is skipped gets no registry, so its note is not printed.
+    let note = (!skipped.is_empty()).then(|| {
+        format!(
+            "{source}: not proxied — {}. A helm registry fronts a classic https:// chart \
+             repository; oci:// is a container registry, and an alias or file:// names nothing \
+             this instance can reach",
+            skipped.join(", ")
+        )
+    });
+    for (repo, pins) in repos {
+        // `http://x` and `https://x`, or `…/a-b` and `…/a/b`, fold to one name;
+        // a helm registry takes one upstream, so the second gets a suffix.
+        let base = helm_registry_name(&repo);
+        let name = (1..)
+            .map(|n| {
+                if n == 1 {
+                    base.clone()
+                } else {
+                    format!("{base}-{n}")
+                }
+            })
+            .find(|n| {
+                acc.by_name
+                    .get(n)
+                    .is_none_or(|r| r.upstreams == [repo.clone()])
+            })
+            .expect("an unused name");
+        acc.add(SuggestedRegistry {
+            name,
+            registry_type: "helm".to_owned(),
+            upstreams: vec![repo],
+            path_allow: Vec::new(),
+            sources: vec![source.to_owned()],
+            // `helm repo add <name> {proxy}` is the switch; helm reads no
+            // environment variable for a repository URL.
+            client_env: Vec::new(),
+            warm_packages: pins,
+            note: note.clone(),
+        });
+    }
+}
+
+/// `https://charts.jetstack.io` → `helm-charts-jetstack-io`: one registry per
+/// repository, so the name has to tell two of them apart.
+fn helm_registry_name(repo: &str) -> String {
+    let tail = repo.split_once("://").map_or(repo, |(_, t)| t);
+    let mut name = String::from("helm-");
+    for c in tail.chars().map(|c| c.to_ascii_lowercase()) {
+        if c.is_ascii_alphanumeric() {
+            name.push(c);
+        } else if !name.ends_with('-') {
+            name.push('-');
+        }
+    }
+    name.trim_end_matches('-').to_owned()
+}
+
+/// A version `helm` resolves to exactly one release: `1.2.3` or `v1.2.3`, with
+/// an optional pre-release or build suffix. `1.2.x`, `^1.2`, `>=1 <2` are ranges.
+///
+/// The three-number test alone reads only up to the first `-`, so
+/// `1.0.0-rc.1 || 2.0.0` passed as exact; helm's own grammar
+/// (`canonical_version`, a full match) is what rejects the tail.
+fn is_exact_chart_version(v: &str) -> bool {
+    if batlehub_core::services::helm::canonical_version(v).is_none() {
+        return false;
+    }
+    let core = v.strip_prefix('v').unwrap_or(v);
+    let core = core.split(['-', '+']).next().unwrap_or("");
+    let parts: Vec<&str> = core.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
 }
 
 // ── flake.nix and flake.lock ─────────────────────────────────────────────────
@@ -1778,6 +1915,123 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("no collection is pinned"));
+    }
+
+    #[test]
+    fn a_chart_lock_maps_each_repository_to_a_helm_registry_and_warms_its_pins() {
+        let dir = TempDir::new().unwrap();
+        // Both present: the lock wins, because it names what was resolved.
+        std::fs::write(
+            dir.path().join("Chart.yaml"),
+            "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n\
+             \x20 - name: cert-manager\n    version: \"~1.21\"\n    repository: https://charts.jetstack.io\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("Chart.lock"),
+            "dependencies:\n\
+             - name: cert-manager\n  repository: https://charts.jetstack.io/\n  version: v1.21.2\n\
+             - name: ingress-nginx\n  repository: https://kubernetes.github.io/ingress-nginx\n  version: 4.15.1\n\
+             - name: trust-manager\n  repository: https://charts.jetstack.io\n  version: 0.12.0\n\
+             digest: sha256:00\ngenerated: \"2026-10-17T00:00:00Z\"\n",
+        )
+        .unwrap();
+        let regs = suggest_registries(dir.path(), 0);
+        let jet = find(&regs, "helm-charts-jetstack-io");
+        assert_eq!(jet.registry_type, "helm");
+        assert_eq!(jet.sources, ["Chart.lock"]);
+        assert_eq!(
+            jet.upstreams,
+            ["https://charts.jetstack.io"],
+            "one repository, slash trimmed"
+        );
+        assert_eq!(
+            jet.warm_packages,
+            ["cert-manager@v1.21.2", "trust-manager@0.12.0"]
+        );
+        assert_eq!(jet.note, None);
+        assert_eq!(
+            jet.proxy_url("https://hub.example.com/"),
+            "https://hub.example.com/proxy/helm-charts-jetstack-io/helm",
+            "the URL `helm repo add` takes"
+        );
+        let nginx = find(&regs, "helm-kubernetes-github-io-ingress-nginx");
+        assert_eq!(
+            nginx.upstreams,
+            ["https://kubernetes.github.io/ingress-nginx"]
+        );
+        assert_eq!(nginx.warm_packages, ["ingress-nginx@4.15.1"]);
+    }
+
+    #[test]
+    fn a_chart_yaml_warms_exact_pins_only_and_reports_what_it_cannot_proxy() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("Chart.yaml"),
+            "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n\
+             \x20 - name: postgresql\n    version: 12.1.6\n    repository: https://charts.example.com\n\
+             \x20 - name: redis\n    version: 17.x.x\n    repository: https://charts.example.com\n\
+             \x20 - name: valkey\n    version: 2.0.0\n    repository: oci://registry-1.docker.io/bitnamicharts\n\
+             \x20 - name: common\n    version: 1.0.0\n    repository: \"@bitnami\"\n\
+             \x20 - name: local\n    version: 0.1.0\n    repository: file://../local\n",
+        )
+        .unwrap();
+        let regs = suggest_registries(dir.path(), 0);
+        assert_eq!(regs.iter().filter(|r| r.registry_type == "helm").count(), 1);
+        let h = find(&regs, "helm-charts-example-com");
+        assert_eq!(h.sources, ["Chart.yaml"]);
+        assert_eq!(h.warm_packages, ["postgresql@12.1.6"], "17.x.x is a range");
+        let note = h
+            .note
+            .as_deref()
+            .expect("the skipped dependencies are named");
+        for skipped in ["valkey (oci://", "common (@bitnami)", "local (file://"] {
+            assert!(note.contains(skipped), "{skipped} missing from {note}");
+        }
+    }
+
+    #[test]
+    fn two_repositories_folding_to_one_name_get_two_registries() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("Chart.yaml"),
+            "apiVersion: v2\nname: app\nversion: 0.1.0\ndependencies:\n\
+             \x20 - name: a\n    version: 1.0.0\n    repository: https://charts.example.com\n\
+             \x20 - name: b\n    version: 1.0.0\n    repository: http://charts.example.com\n",
+        )
+        .unwrap();
+        let regs = suggest_registries(dir.path(), 0);
+        let helm: Vec<_> = regs.iter().filter(|r| r.registry_type == "helm").collect();
+        assert_eq!(helm.len(), 2, "{helm:?}");
+        assert!(helm.iter().all(|r| r.upstreams.len() == 1), "{helm:?}");
+        find(&regs, "helm-charts-example-com-2");
+    }
+
+    #[test]
+    fn exact_chart_versions_are_told_from_ranges() {
+        for v in ["1.2.3", "v1.21.2", "1.0.0-rc.1", "2.0.0+build.5"] {
+            assert!(is_exact_chart_version(v), "{v}");
+        }
+        for v in [
+            "1.2",
+            "1.2.x",
+            "~1.21",
+            "^1.0.0",
+            ">=1.0.0",
+            ">=1.0.0 <2.0.0",
+            "1.0.0-rc.1 || 2.0.0",
+            "*",
+            "",
+        ] {
+            assert!(!is_exact_chart_version(v), "{v}");
+        }
+    }
+
+    #[test]
+    fn a_project_with_no_chart_gets_no_helm_registry() {
+        let dir = TempDir::new().unwrap();
+        let regs = suggest_registries(dir.path(), 0);
+        assert!(regs.iter().all(|r| r.registry_type != "helm"));
     }
 
     #[test]

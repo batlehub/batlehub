@@ -6,7 +6,7 @@ replicaCount: 1
 
 # -- Proxy image. The worker has its own under `worker.image`.
 image:
-  repository: ghcr.io/batleforc/batlehub
+  repository: ghcr.io/batlehub/batlehub
   pullPolicy: IfNotPresent
   # Overrides the image tag. Defaults to Chart.appVersion.
   # -- Overrides the image tag.
@@ -474,12 +474,12 @@ worker:
     # `…-worker` carries every scanner but GuardDog, which is optional and is
     # the only one with a Python toolchain behind it. Enabling
     # `[scanners.guarddog]` in the config means pointing this at
-    # `ghcr.io/batleforc/batlehub-worker-guarddog`, the same image with
+    # `ghcr.io/batlehub/batlehub-worker-guarddog`, the same image with
     # GuardDog added; the scanner is refused at load if its `command` is not
     # on the image.
     # -- Worker image. Point it at `batlehub-worker-guarddog` to enable the
     # `[scanners.guarddog]` scanner, which is the only one not on the base image.
-    repository: ghcr.io/batleforc/batlehub-worker
+    repository: ghcr.io/batlehub/batlehub-worker
     pullPolicy: IfNotPresent
     # Defaults to Chart.appVersion — the worker and the proxy are one release.
     tag: ""

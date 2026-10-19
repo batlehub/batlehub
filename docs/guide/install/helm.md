@@ -418,9 +418,9 @@ worker:
     enabled: false     # needs a metrics adapter, see below
 ```
 
-The worker image (`ghcr.io/batleforc/batlehub-worker`) carries every scanner
+The worker image (`ghcr.io/batlehub/batlehub-worker`) carries every scanner
 but GuardDog. Enabling `[scanners.guarddog]` means pointing
-`worker.image.repository` at `ghcr.io/batleforc/batlehub-worker-guarddog`
+`worker.image.repository` at `ghcr.io/batlehub/batlehub-worker-guarddog`
 instead, otherwise the scanner is refused when the config loads.
 
 Each scanner runs under bubblewrap, which needs unprivileged user namespaces on
@@ -447,7 +447,7 @@ and kept in step with it by a drift gate. This is the shortlist.
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `image.repository` | `ghcr.io/batleforc/batlehub` | Container image |
+| `image.repository` | `ghcr.io/batlehub/batlehub` | Container image |
 | `image.tag` | Chart appVersion | Image tag |
 | `replicaCount` | `1` | Pod replicas |
 | `config` | see `values.yaml` | The whole application config, serialised verbatim to `config.toml` |
@@ -466,7 +466,7 @@ and kept in step with it by a drift gate. This is the shortlist.
 | `persistence.size` | `10Gi` | PVC capacity |
 | `externalManifest[].mount.asConfig` | — | Replace the chart-managed config Secret with one of your own |
 | `worker.enabled` | `false` | Run the scan worker in its own Deployment |
-| `worker.image.repository` | `ghcr.io/batleforc/batlehub-worker` | Worker image; the `-worker-guarddog` variant adds GuardDog |
+| `worker.image.repository` | `ghcr.io/batlehub/batlehub-worker` | Worker image; the `-worker-guarddog` variant adds GuardDog |
 | `worker.autoscaling.enabled` | `false` | HPA on the queued-jobs metric |
 | `worker.runtimeClassName` | `""` | Sandboxed runtime class around the worker pod |
 | `trivy.enabled` | `false` | Deploy the Trivy server sub-chart |

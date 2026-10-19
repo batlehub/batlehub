@@ -21,7 +21,7 @@
 # The worker image to add GuardDog to. CI passes the digest it has just built,
 # so the two images always carry the same `batlehub` binary; the default is
 # there for a local build against the published one.
-ARG WORKER_IMAGE=ghcr.io/batleforc/batlehub-worker:latest
+ARG WORKER_IMAGE=ghcr.io/batlehub/batlehub-worker:latest
 ARG GUARDDOG_VERSION=3.2.0
 
 # ── GuardDog's venv, built away from the image that carries it ───────────────

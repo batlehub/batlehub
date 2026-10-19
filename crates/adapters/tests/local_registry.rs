@@ -173,6 +173,43 @@ async fn get_versions_returns_in_published_at_order() {
 }
 
 #[tokio::test]
+async fn list_registry_versions_is_get_versions_for_every_name_in_one_read() {
+    let Some(url) = db_url() else { return };
+    let t = make_registry(&url).await;
+    let other = make_registry(&url).await;
+    for (name, version) in [("b", "1.0.0"), ("a", "2.0.0"), ("a", "1.0.0")] {
+        t.reg
+            .publish(pkg(&t.registry, name, version))
+            .await
+            .unwrap();
+        t.reg
+            .commit_publish(&t.registry, name, version)
+            .await
+            .unwrap();
+    }
+    // Pending, and another registry's: neither is listed.
+    t.reg.publish(pkg(&t.registry, "c", "1.0.0")).await.unwrap();
+    other
+        .reg
+        .publish(pkg(&other.registry, "a", "9.0.0"))
+        .await
+        .unwrap();
+    other
+        .reg
+        .commit_publish(&other.registry, "a", "9.0.0")
+        .await
+        .unwrap();
+
+    let all = t.reg.list_registry_versions(&t.registry).await.unwrap();
+    let coords: Vec<_> = all
+        .iter()
+        .map(|p| (p.name.as_str(), p.version.as_str()))
+        .collect();
+    assert_eq!(coords, [("a", "2.0.0"), ("a", "1.0.0"), ("b", "1.0.0")]);
+    assert_eq!(all[0].index_metadata["version"], "2.0.0");
+}
+
+#[tokio::test]
 async fn get_versions_preserves_index_metadata() {
     let Some(url) = db_url() else { return };
     let t = make_registry(&url).await;

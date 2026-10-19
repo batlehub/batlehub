@@ -65,7 +65,7 @@ on:
         description: "k6: fail above this % of idle RSS growth"
         default: "10"
       heavy_rss_growth_pct:
-        description: "heavy: fail above this % of idle RSS growth (looser — five samples a window, not sixty)"
+        description: "heavy: fail above this % of idle RSS growth — judged only on a build without jemalloc statistics; the live heap is the verdict otherwise"
         default: "15"
       rss_slope:
         description: "Fail above this live-heap trend under load, MiB/min"
@@ -195,11 +195,11 @@ jobs:
     env:
       NODE_VERSION: "24"
       SOAK_ROUNDS: ${{ inputs.rounds || '25' }}
-      # Its own input, with its own default. This suite's windows are five
-      # samples rather than sixty, so its RSS reading is noisier than the k6
-      # suite's and a limit tight enough for that one would make this one
-      # flaky — which is worse than not having it, because a gate that cries
-      # wolf gets re-run until it agrees.
+      # The verdict is the idle live heap (`SOAK_MAX_HEAP_GROWTH_PCT`, the
+      # script's default of 10 %). RSS is reported, and judged against this
+      # limit only on a build without jemalloc statistics: its baseline
+      # wandered 203–218 MiB between runs of the same code, so it failed
+      # `main` at 15.1 % on allocator pages rather than on anything held.
       SOAK_MAX_RSS_GROWTH_PCT: ${{ inputs.heavy_rss_growth_pct || '15' }}
       # No slope row here: this suite samples two five-sample windows, not a
       # continuous curve, so there is nothing to fit.

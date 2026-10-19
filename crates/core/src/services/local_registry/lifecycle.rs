@@ -859,6 +859,8 @@ pub fn stores_files_under_version(kind: RegistryKind) -> bool {
         | RegistryKind::Sdkman
         | RegistryKind::Rustup
         | RegistryKind::Galaxy
-        | RegistryKind::Devfile => false,
+        | RegistryKind::Devfile
+        // One archive at the version key; a `.prov` rides the row's signature.
+        | RegistryKind::Helm => false,
     }
 }

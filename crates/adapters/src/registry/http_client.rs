@@ -221,8 +221,24 @@ pub fn parse_http_date(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 /// adapter's `.map_err(...)` call site (both on `Result` and on
 /// `Stream::map_err`, e.g. `bytes_stream()`), which otherwise repeat this
 /// closure verbatim at each fallible HTTP step.
-pub fn to_registry_error(e: reqwest::Error) -> CoreError {
+pub fn to_registry_error(mut e: reqwest::Error) -> CoreError {
+    if let Some(url) = e.url_mut() {
+        *url = redacted(url);
+    }
     CoreError::Registry(e.to_string())
+}
+
+/// `url` as it may appear in an error: no query string and no userinfo. An
+/// upstream configured as `…/charts?token=…` carries that token onto every URL
+/// derived from it, and an error message reaches the client body and the audit
+/// log.
+pub fn redacted(url: &reqwest::Url) -> reqwest::Url {
+    let mut url = url.clone();
+    url.set_query(None);
+    url.set_fragment(None);
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url
 }
 
 /// GET an upstream *version-listing document* and return it as JSON.

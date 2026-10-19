@@ -205,6 +205,44 @@ pub async fn collect_payload(mut payload: web::Payload) -> Result<Bytes, AppErro
     Ok(raw.freeze())
 }
 
+/// Drain a `multipart/form-data` body into its named fields, bounded by
+/// [`MAX_UPLOAD_BYTES`] across all of them. A field with no name is dropped,
+/// and of two fields with the same name the last one wins — what helm's own
+/// loop did before it moved here.
+///
+/// helm's publish is the one caller; nuget, pypi, jetbrains and galaxy still
+/// carry their own copy of this loop.
+pub async fn collect_form_fields(
+    mut form: actix_multipart::Multipart,
+) -> Result<std::collections::HashMap<String, Bytes>, AppError> {
+    let mut fields = std::collections::HashMap::new();
+    let mut total: u64 = 0;
+    while let Some(field) = form.next().await {
+        let mut field =
+            field.map_err(|e| AppError::bad_request(format!("multipart error: {e}")))?;
+        let name = field
+            .content_disposition()
+            .and_then(|cd| cd.get_name())
+            .unwrap_or("")
+            .to_owned();
+        let mut buf = BytesMut::new();
+        while let Some(chunk) = field.next().await {
+            let chunk = chunk.map_err(|e| AppError::bad_request(format!("chunk error: {e}")))?;
+            total += chunk.len() as u64;
+            if total > MAX_UPLOAD_BYTES {
+                return Err(AppError::from(CoreError::PayloadTooLarge(format!(
+                    "upload exceeds {MAX_UPLOAD_BYTES} bytes"
+                ))));
+            }
+            buf.extend_from_slice(&chunk);
+        }
+        if !name.is_empty() {
+            fields.insert(name, buf.freeze());
+        }
+    }
+    Ok(fields)
+}
+
 /// Drain a storage `ByteStream` into contiguous `Bytes`.
 pub async fn collect_storage_stream(mut stream: ByteStream) -> Result<Bytes, AppError> {
     let mut buf = Vec::new();

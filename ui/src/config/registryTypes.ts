@@ -2293,6 +2293,70 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
     ],
   },
   {
+    id: "helm",
+    label: "Helm charts (classic repository)",
+    fileHint: "Chart.yaml",
+    description:
+      `Helm chart repositories (RFC 0029): <code>index.yaml</code> is the enforcement chokepoint ` +
+      `every <code>helm install</code>, <code>pull</code> and <code>dependency update</code> resolves ` +
+      `through, so a blocked version is absent from it. Every chart URL in the index is rewritten to ` +
+      `this instance, and the archive and its <code>.prov</code> are relayed byte-exact, so ` +
+      `<code>helm pull --verify</code> still checks the signature. <code>local</code> and ` +
+      `<code>hybrid</code> accept ChartMuseum's upload API — the call <code>helm cm-push</code> makes.`,
+    snippets: [
+      {
+        key: "helm-repo",
+        label: "Client setup",
+        lang: "bash",
+        template: (ctx) => {
+          const repo = `${ctx.registryUrl}/helm`;
+          return ctx.isAuthenticated
+            ? [
+                `helm repo add batlehub ${repo} \\`,
+                `  --username ${ctx.netrcLogin} --password ${ctx.token}`,
+                `helm repo update`,
+              ].join("\n")
+            : [`helm repo add batlehub ${repo}`, `helm repo update`].join("\n");
+        },
+        note: (ctx) =>
+          ctx.isAuthenticated
+            ? `helm sends the credential as HTTP Basic on the index <em>and</em> on every chart URL ` +
+              `of the same host, so this registry can be closed to anonymous reads.`
+            : `Reads with no <code>--username</code>/<code>--password</code> are anonymous. Add a token ` +
+              `from the Tokens page if this registry does not grant <code>releases:read</code> to anonymous callers.`,
+      },
+      {
+        key: "helm-install",
+        label: "Install",
+        lang: "bash",
+        template: () =>
+          [
+            `helm install my-release batlehub/cert-manager --version v1.21.2`,
+            ``,
+            `# A blocked version is absent from index.yaml: after \`helm repo update\` an exact`,
+            `# pin on it fails with helm's own "chart ... version ... not found".`,
+          ].join("\n"),
+      },
+      {
+        key: "helm-publish",
+        label: "Publish",
+        lang: "bash",
+        showWhen: isPublishMode,
+        template: (ctx) =>
+          [
+            `helm package ./mychart`,
+            `curl --data-binary @mychart-0.1.0.tgz \\`,
+            `  -H "Authorization: Bearer ${ctx.isAuthenticated ? ctx.token : "<token>"}" \\`,
+            `  ${ctx.registryUrl}/helm/api/charts`,
+            ``,
+            `# Or with the cm-push plugin, which makes the same call:`,
+            `# helm cm-push ./mychart batlehub`,
+          ].join("\n"),
+        note: `A duplicate version answers <code>409</code>, with or without <code>?force</code>: a published version is never replaced, so publish a new one. A <code>.prov</code> goes along as the <code>prov</code> field of a multipart upload beside <code>chart</code>.`,
+      },
+    ],
+  },
+  {
     id: "nix",
     label: "Nix binary cache",
     fileHint: "flake.nix",

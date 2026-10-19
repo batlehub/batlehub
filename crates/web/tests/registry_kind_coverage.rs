@@ -152,6 +152,12 @@ const COVERAGE: &[(&str, Live, AirGap)] = &[
     // digest, the prefix trap and Che's reads; the closed world is the one
     // that pulls with egress denied (RFC 0035 §6.9).
     ("devfile", Live::ClosedWorld("devfile"), AirGap::Case),
+    // The same closed-world phase as `generic`: it fetches the helm binary by
+    // path, then `helm repo add`s a `helm` registry and pulls a chart through
+    // it with egress denied. `tests/heavy/helm.sh` is the wider suite —
+    // blocking both ways, `.prov` verification, the redirect followed
+    // server-side and the ChartMuseum publish (RFC 0029 §6.10).
+    ("helm", Live::ClosedWorld("helm"), AirGap::Case),
 ];
 
 fn repo_root() -> PathBuf {

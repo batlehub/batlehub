@@ -35,11 +35,9 @@ pub(super) fn extract_galaxy_manifest(data: &Bytes) -> ExtractedManifest {
 /// `collection_info.readme` out of the tarball's `MANIFEST.json`.
 fn declared_readme(data: &Bytes) -> Option<String> {
     use batlehub_core::ports::README_EXTRACT_CEILING;
-    use flate2::read::GzDecoder;
     use std::io::Read;
-    use tar::Archive;
 
-    let mut archive = Archive::new(GzDecoder::new(data.as_ref()));
+    let mut archive = readme::open_targz(data);
     for entry in archive.entries().ok()?.flatten() {
         let Ok(path) = entry.path() else { continue };
         let path = path.to_string_lossy().into_owned();

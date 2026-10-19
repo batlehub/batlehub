@@ -28,6 +28,32 @@ macro_rules! tombstone_query {
     };
 }
 
+/// One `local_packages` row of the published-version select shared by
+/// `get_versions` and `list_registry_versions`.
+fn published_from_row(r: sqlx::postgres::PgRow) -> Result<PublishedPackage, CoreError> {
+    let vis = r
+        .get::<String, _>("visibility")
+        .parse()
+        .map_err(|e| CoreError::Database(format!("invalid visibility in db: {e}")))?;
+    Ok(PublishedPackage {
+        registry: r.get("registry"),
+        name: r.get("name"),
+        version: r.get("version"),
+        checksum: r.get("checksum"),
+        yanked: r.get("yanked"),
+        deprecated: r.get("deprecated"),
+        deprecation_message: r.get("deprecation_message"),
+        unlisted: r.get("unlisted"),
+        index_metadata: r.get("index_metadata"),
+        published_at: r.get("published_at"),
+        published_by: r.get("published_by"),
+        signature_bytes: r.get("signature_bytes"),
+        signature_type: r.get("signature_type"),
+        visibility: vis,
+        retention_keep: r.get("retention_keep"),
+    })
+}
+
 /// Read a tombstone from a row selected with [`TOMBSTONE_COLUMNS`].
 ///
 /// `checksum` reads as `Option` because compaction nulls it, and a compacted
@@ -359,31 +385,30 @@ impl LocalRegistryBackend for PostgresLocalRegistry {
         .await
         .map_err(|e| CoreError::Database(e.to_string()))?;
 
-        rows.into_iter()
-            .map(|r| {
-                let vis = r
-                    .get::<String, _>("visibility")
-                    .parse()
-                    .map_err(|e| CoreError::Database(format!("invalid visibility in db: {e}")))?;
-                Ok(PublishedPackage {
-                    registry: r.get("registry"),
-                    name: r.get("name"),
-                    version: r.get("version"),
-                    checksum: r.get("checksum"),
-                    yanked: r.get("yanked"),
-                    deprecated: r.get("deprecated"),
-                    deprecation_message: r.get("deprecation_message"),
-                    unlisted: r.get("unlisted"),
-                    index_metadata: r.get("index_metadata"),
-                    published_at: r.get("published_at"),
-                    published_by: r.get("published_by"),
-                    signature_bytes: r.get("signature_bytes"),
-                    signature_type: r.get("signature_type"),
-                    visibility: vis,
-                    retention_keep: r.get("retention_keep"),
-                })
-            })
-            .collect()
+        rows.into_iter().map(published_from_row).collect()
+    }
+
+    /// Every published version in `registry`, one query — the whole-registry
+    /// documents' read, which `get_versions` per name made an N+1.
+    async fn list_registry_versions(
+        &self,
+        registry: &str,
+    ) -> Result<Vec<PublishedPackage>, CoreError> {
+        let rows = sqlx::query(
+            "SELECT registry, name, version, checksum, yanked, deprecated, \
+                    deprecation_message, unlisted, index_metadata, \
+                    published_at, published_by, signature_bytes, signature_type, visibility, \
+                    retention_keep \
+             FROM local_packages \
+             WHERE registry = $1 AND status = 'published' \
+               AND deleted_at IS NULL \
+             ORDER BY name ASC, published_at ASC",
+        )
+        .bind(registry)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| CoreError::Database(e.to_string()))?;
+        rows.into_iter().map(published_from_row).collect()
     }
 
     async fn exists(&self, registry: &str, name: &str) -> Result<bool, CoreError> {

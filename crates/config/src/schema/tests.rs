@@ -3239,6 +3239,110 @@ fn an_sdkman_upstream_without_the_api_version_is_warned_not_refused() {
     );
 }
 
+// ── RFC 0029: helm registries ───────────────────────────────────────────────
+
+#[test]
+fn a_helm_upstream_that_is_not_http_is_refused() {
+    for upstream in [
+        "oci://registry-1.docker.io/bitnamicharts",
+        "file:///srv/charts",
+    ] {
+        let err = validation_error(
+            &format!(
+                r#"
+        [[registries]]
+        type = "helm"
+        name = "charts"
+        upstreams = ["{upstream}"]
+        "#
+            ),
+            "only an http(s) chart repository can be proxied",
+        );
+        assert!(err.contains("http(s) chart repository"), "{err}");
+        assert!(err.contains("and '"), "no stray line break: {err}");
+    }
+}
+
+#[test]
+fn verify_on_download_is_refused_on_a_helm_registry() {
+    // A chart's signature is an OpenPGP `.prov`; the server verifies ed25519
+    // only, so the setting would refuse every signed chart and pass the rest.
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "helm"
+        name = "charts"
+        mode = "local"
+        [registries.signing]
+        verify_on_download = true
+        "#,
+        "a .prov is not verifiable here",
+    );
+    assert!(err.contains("verify_on_download"), "{err}");
+    assert!(err.contains("and the server"), "no stray line break: {err}");
+}
+
+#[test]
+fn a_hybrid_helm_registry_is_asked_to_choose_its_merge() {
+    let hybrid = |extra: &str| {
+        parse_config(&format!(
+            r#"
+        [[registries]]
+        type = "helm"
+        name = "charts"
+        mode = "hybrid"
+        upstreams = ["https://charts.example/repo"]
+        {extra}
+        "#
+        ))
+    };
+    let unset = hybrid("");
+    unset.validate().expect("unset is valid, and warned");
+    let w = other_warnings(&unset)
+        .into_iter()
+        .find(|w| w.code == "helm.hybrid-merge-unset")
+        .expect("unset is warned");
+    assert_eq!(w.path, "registries[0].hybrid_merge");
+    assert!(
+        w.message.contains("hybrid_merge = \"version\""),
+        "{}",
+        w.message
+    );
+
+    for chosen in ["chart", "version"] {
+        let cfg = hybrid(&format!("hybrid_merge = \"{chosen}\""));
+        cfg.validate().expect(chosen);
+        assert!(!warning_codes(&cfg).contains(&"helm.hybrid-merge-unset".to_owned()));
+    }
+}
+
+#[test]
+fn hybrid_merge_is_refused_outside_a_hybrid_helm_registry() {
+    let err = validation_error(
+        r#"
+        [[registries]]
+        type = "helm"
+        name = "charts"
+        mode = "local"
+        hybrid_merge = "chart"
+        "#,
+        "a local registry has no upstream chart to merge",
+    );
+    assert!(err.contains("helm registry in hybrid mode"), "{err}");
+    assert!(err.contains("in local mode"), "{err}");
+    validation_error(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+        mode = "hybrid"
+        upstreams = ["https://registry.npmjs.org"]
+        hybrid_merge = "version"
+        "#,
+        "hybrid_merge is helm's",
+    );
+}
+
 // ── RFC 0035 §4.5: devfile registries ───────────────────────────────────────
 
 #[test]

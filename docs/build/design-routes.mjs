@@ -399,6 +399,20 @@ for (const plan of PLANS) {
     if (rendition !== plan.theme)
       failures.push({ plan: plan.name, route, rule: "rendition", detail: rendition });
 
+    // A cold browser's first page can be measured before it has requested a
+    // face at all: `networkidle0` saw nothing pending because nothing was asked
+    // for yet, and `fonts.check` then reads "not painted" (the first route,
+    // `/404.html`, failed this way twice in CI and never locally). Asking for
+    // both faces first keeps what the check is for — a face its CSP refuses or
+    // that 404s still fails to load, and still fails the check below.
+    await view.evaluate(async () => {
+      await document.fonts.ready;
+      await Promise.all(
+        ['700 16px "Silkscreen"', '400 16px "JetBrains Mono"'].map((s) =>
+          document.fonts.load(s).catch(() => {}),
+        ),
+      );
+    });
     const findings = await view.evaluate(assertions, [...TEXT_RAMP], [...DISPLAY_RAMP]);
     await view.evaluate(AXE_SOURCE);
     const axe = await view.evaluate(

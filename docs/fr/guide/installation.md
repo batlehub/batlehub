@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/installation.md
-sourceHash: ca5acd90b7473453
+sourceHash: a56638ca9a24903b
 ---
 
 # Installation
@@ -19,7 +19,7 @@ tranché pour vous.
 
 | Méthode | Quand la prendre |
 |---|---|
-| [Docker Compose](/fr/guide/install/compose) | évaluation, développement, une seule machine — le serveur et PostgreSQL ensemble |
+| [Docker Compose](/fr/guide/install/compose) | évaluation ou une seule machine — trois piles dans `deploy/compose/` : `min` (serveur + PostgreSQL), `base` (+ OIDC Dex), `max` (+ Valkey et S3) |
 | [Image de conteneur](/fr/guide/install/container) | vous avez déjà un orchestrateur et une base, et ne voulez que l'image |
 | [Binaire précompilé](/fr/guide/install/binary) | vous ne faites pas tourner de conteneurs |
 | [Depuis les sources](/fr/guide/install/source) | vous modifiez le code, ou visez une plateforme qu'aucune release ne couvre |

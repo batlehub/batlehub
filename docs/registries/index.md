@@ -81,6 +81,11 @@ Typed, so a release can be *blocked* rather than merely cached — the identity 
 | Registry | `type` | What it proxies | Modes | Publish | Default upstream |
 |----------|--------|-----------------|-------|:-------:|------------------|
 | [Devfile registry](./devfile) | `devfile` | The stack indexes (filtered), each stack version's devfile, OCI manifest and layers (verified, byte-exact) and starter projects — for Eclipse Che and `registry-library`/`odo`; needs a host of its own | proxy-only | ❌ | `registry.devfile.io` |
+### Kubernetes <Badge type="tip" text="RFC 0029" />
+
+| Registry | `type` | What it proxies | Modes | Publish | Default upstream |
+|----------|--------|-----------------|-------|:-------:|------------------|
+| [Helm](./helm) | `helm` | A classic chart repository: `index.yaml` (filtered, every chart URL rewritten here) + `.tgz`/`.prov` (byte-exact) | proxy · local · hybrid | ✅ | none — one named repository per registry |
 
 ## Feature matrix
 
@@ -120,6 +125,7 @@ Legend: **Ver.** version listing · **Src** source archive · **Bin** binary/ext
 | Node distributions | ✓ | ✓ | ✓ | — | ✓ | ✓ ⁴ | ✓ | ✓ ⁵ | — |
 | SDKMAN | ✓ | — | ✓ | — | ✓ | ⚠ ⁴ | ✓ | ✓ ⁵ | — |
 | Devfile registry | ✓ | — | ✓ | — | — | ⚠ ⁴ | ✓ | ✓ | — |
+| Helm | ✓ | ✓ | — | ✓ | — | ✓ | ✓ | ✓ | — |
 
 > ¹ Conda has no dedicated per-package version listing API. BatleHub synthesises one by scanning `repodata.json` across `noarch`, `linux-64`, `osx-64`, `osx-arm64`, and `win-64`; results are the union of versions found on all available platforms.
 >
@@ -192,6 +198,7 @@ any of them. The page says which rather than showing a disabled button — see
 | galaxy | a file inside the artifact | yes | versions only | yes |
 | nix | a store path is a NAR and its narinfo; the protocol carries no prose, and the NAR is a filesystem image rather than a package with a manifest | — | neither | no |
 | devfile | a devfile has no readme; its description is a field of the stack index | — | versions only | yes |
+| helm | a file inside the artifact | yes | versions only | yes |
 <!-- END readme-coverage -->
 
 Configured per registry with

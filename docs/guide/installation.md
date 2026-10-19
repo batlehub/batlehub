@@ -12,7 +12,7 @@ The others are for when your environment has already decided for you.
 
 | Method | Use it when |
 |---|---|
-| [Docker Compose](/guide/install/compose) | evaluating, developing, or running one host — the server and PostgreSQL together |
+| [Docker Compose](/guide/install/compose) | evaluating or running one host — three stacks in `deploy/compose/`: `min` (server + PostgreSQL), `base` (+ Dex OIDC), `max` (+ Valkey and S3) |
 | [Container image](/guide/install/container) | you have an orchestrator or a database already, and want only the image |
 | [Pre-built binary](/guide/install/binary) | you do not run containers |
 | [From source](/guide/install/source) | you are changing the code, or need a build for a platform no release covers |

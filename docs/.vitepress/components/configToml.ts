@@ -33,6 +33,7 @@ export type RegistryType =
   | "sdkman"
   | "rustup"
   | "devfile"
+  | "helm"
   | "generic";
 export type AuthRole = "admin" | "user" | "anonymous";
 export type StorageBackendType = "filesystem" | "s3";
@@ -491,6 +492,9 @@ export const defaultUpstream: Record<RegistryType, string> = {
   // One upstream only: one registry's index says nothing about another's
   // stacks, and config validation refuses a second (RFC 0035 §4.5).
   devfile: "https://registry.devfile.io",
+  // No public default chart repository: a registry is the one the operator
+  // names, and config validation refuses proxy/hybrid without it (RFC 0029 §4.1).
+  helm: "",
   generic: "",
 };
 

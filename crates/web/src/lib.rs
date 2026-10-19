@@ -482,7 +482,7 @@ pub use middleware::RateLimitMiddlewareFactory;
 pub use middleware::RateLimitService;
 pub use middleware::UserBlockMiddlewareFactory;
 pub use middleware::{
-    protocol_document_csp, security_headers, API_DOCS_CSP, PROTOCOL_DOCUMENT_CSP,
+    protocol_document_csp, security_headers, API_DOCS_AI_CSP, API_DOCS_CSP, PROTOCOL_DOCUMENT_CSP,
 };
 pub use middleware::{AuthMiddlewareFactory, CredentialRejectionAudit};
 pub use spa::{configure_spa, narrow_csp, SpaDir};
@@ -514,6 +514,7 @@ pub use spa::{configure_spa, narrow_csp, SpaDir};
         (name = "proxy/nodedist",   description = "Node distributions (nvm, fnm, n, mise) — the nodejs.org/dist tree as a typed registry: filtered index.tab/index.json listings, per-release tarballs and SHASUMS256.txt byte-exact"),
         (name = "proxy/nix",        description = "Nix binary cache (nix, cachix-style substituters) — the substituter protocol as a registry kind: narinfos relayed with only `URL:` rewritten so every `Sig:` still verifies, a blocked store path absent as the protocol's own 404, NARs cached under a coordinate, and stale upstream-shaped NAR URLs resolved through a reverse index"),
         (name = "proxy/devfile",    description = "Devfile registries (Eclipse Che, registry-library, odo) — the stack catalogue as a registry kind: the legacy and v2 indexes filtered registry-wide, each stack version's devfile, OCI manifest and layers relayed byte-exact and verified, a digest served only when an allowed version names it"),
+        (name = "proxy/helm",       description = "Helm chart repositories (classic index.yaml) — the index filtered registry-wide with every chart URL rewritten to this instance, archives and .prov files relayed byte-exact from the URL the upstream index names, and ChartMuseum's upload API and listings in local mode"),
         (name = "proxy/galaxy",     description = "Ansible Galaxy — the collections API v3 as a registry kind: the versions list filtered and served as one page, download_url rewritten to this instance, collection publish with its import-task poll, and the v1 role surface behind `roles`"),
         (name = "proxy/rustup",     description = "Rust toolchains (rustup, mise) — the static.rust-lang.org tree as a typed registry: channel manifests filtered and their .sha256 recomputed, blocked releases refused or repaired, component archives cached per release"),
         (name = "proxy/sdkman",     description = "SDKMAN — the candidates API and the download broker as one registry: filtered versions/all, candidates/default and the rendered sdk list table, a blocked version answered `invalid` at candidates/validate, hook scripts relayed byte-exact, the broker's 302 followed server-side and cached"),
@@ -688,6 +689,10 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 goproxy_file, goproxy_latest, goproxy_list, goproxy_publish, goproxy_sumdb,
                 goproxy_vuln_entry, goproxy_vuln_index, goproxy_vuln_query,
             },
+            helm::{
+                helm_api_chart, helm_api_list, helm_api_version, helm_chart, helm_delete,
+                helm_index, helm_publish,
+            },
             jetbrains::jetbrains_get,
             jetbrains_marketplace::{
                 jbm_aggregation, jbm_broken_plugins, jbm_comments, jbm_compatible_updates,
@@ -788,6 +793,17 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(devfile_oci_manifest); // GET|HEAD …/v2/{ns}/{stack}/manifests/{reference}
     cfg.service(devfile_oci_blob); // GET|HEAD …/v2/{ns}/{stack}/blobs/{digest}
     cfg.service(devfile_oci_tags); // GET …/v2/{ns}/{stack}/tags/list
+                                   // Helm chart repositories (RFC 0029), guarded by `is_helm` for devfile's
+                                   // reason: `…/helm/index.yaml` is otherwise an npm package `helm` at a
+                                   // version called `index.yaml`. `api/charts/{name}/{version}` before
+                                   // `api/charts/{name}` before `api/charts`.
+    cfg.service(helm_index); // GET|HEAD …/helm/index.yaml       (filtered, rewritten)
+    cfg.service(helm_chart); // GET|HEAD …/helm/charts/{file}    (.tgz / .tgz.prov)
+    cfg.service(helm_publish); // POST     …/helm/api/charts
+    cfg.service(helm_delete); // DELETE   …/helm/api/charts/{name}/{version}
+    cfg.service(helm_api_version); // GET|HEAD …/helm/api/charts/{name}/{version}
+    cfg.service(helm_api_chart); // GET|HEAD …/helm/api/charts/{name}
+    cfg.service(helm_api_list); // GET|HEAD …/helm/api/charts
 
     // Cargo publish API (literal "api/v1" sub-path — most specific, must precede download)
     //
@@ -1390,6 +1406,11 @@ pub fn openapi_spec() -> utoipa::openapi::OpenApi {
 ///   declared anywhere a scanner could see.
 pub const SCALAR_BUNDLE_PATH: &str = "assets/scalar/standalone.js";
 
+/// The BatleHub skin for the reference, written beside the bundle by
+/// `ui/build/copy-scalar.mjs` from the console's design tokens. Same-origin, so
+/// `style-src 'self'` in [`API_DOCS_CSP`] admits it.
+pub const SCALAR_THEME_PATH: &str = "assets/scalar/batlehub.css";
+
 /// Whether the built bundle is present under `static_dir`.
 ///
 /// `static_dir` is optional, and a deployment that serves the API without the
@@ -1423,6 +1444,13 @@ pub fn scalar_bundle_present(static_dir: Option<&std::path::Path>) -> bool {
 ///   and any token pasted into the explorer — through a third party. Empty means
 ///   the browser calls the API directly, which is same-origin here: this page
 ///   documents the server serving it.
+/// - `agent` / `mcp` — "Ask AI" sends the spec and the question to Scalar's
+///   hosted agent, and the bundle turns it on by itself whenever the page is
+///   served from `localhost`. Both are therefore `disabled` unless the operator
+///   opts in with [`ScalarAgent`] (`[server.api_docs] ai_agent`); MCP stays off
+///   either way.
+/// - `theme: "none"` — no preset; [`SCALAR_THEME_PATH`] paints the page with
+///   the console's tokens instead.
 ///
 /// The third origin, `api.scalar.com/vector/registry/*`, is **not** fixable
 /// here or by self-hosting: those URLs are hardcoded in the bundle and ignore
@@ -1430,7 +1458,24 @@ pub fn scalar_bundle_present(static_dir: Option<&std::path::Path>) -> bool {
 /// effect). They are stopped one level out, by `connect-src 'self'` in
 /// [`API_DOCS_CSP`] — which is why that directive is not the `*` an API explorer
 /// superficially wants.
-fn scalar_html() -> String {
+fn scalar_html(agent: Option<&ScalarAgent>) -> String {
+    let agent = match agent {
+        None => serde_json::json!({ "disabled": true }),
+        Some(ScalarAgent { key: None }) => serde_json::json!({}),
+        Some(ScalarAgent { key: Some(key) }) => serde_json::json!({ "key": key }),
+    };
+    let configuration = serde_json::json!({
+        "withDefaultFonts": false,
+        "proxyUrl": "",
+        "theme": "none",
+        "agent": agent,
+        "mcp": { "disabled": true },
+    })
+    .to_string()
+    // The value sits in a single-quoted attribute; an operator-supplied key
+    // must not be able to close it.
+    .replace('&', "&amp;")
+    .replace('\'', "&#39;");
     format!(
         r#"<!doctype html>
 <html>
@@ -1438,11 +1483,12 @@ fn scalar_html() -> String {
     <title>BatleHub API</title>
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <link rel="stylesheet" href="/{SCALAR_THEME_PATH}"/>
 </head>
 <body>
 <script id="api-reference"
         type="application/json"
-        data-configuration='{{"withDefaultFonts":false,"proxyUrl":""}}'>
+        data-configuration='{configuration}'>
     $spec
 </script>
 <script src="/{SCALAR_BUNDLE_PATH}"></script>
@@ -1501,6 +1547,19 @@ fn scalar_unavailable_html() -> String {
     )
 }
 
+/// The operator's opt-in to Scalar's hosted "Ask AI" agent on `/scalar`
+/// (`[server.api_docs] ai_agent`). Its presence as app data is also what lets
+/// [`middleware::protocol_document_csp`] send [`API_DOCS_AI_CSP`] instead of
+/// [`API_DOCS_CSP`], since the agent cannot reach its backend otherwise — but
+/// only where the bundle will show the agent: with a [`key`](Self::key), or on
+/// a `localhost`-like host. A keyless agent on any other host is hidden, and
+/// the strict policy stays.
+#[derive(Clone, Debug, Default)]
+pub struct ScalarAgent {
+    /// Required by the bundle anywhere but `localhost`.
+    pub key: Option<String>,
+}
+
 /// Return a Scalar API docs service using the provided OpenAPI spec.
 ///
 /// `static_dir` is the configured console directory, if any; it decides which of
@@ -1508,13 +1567,14 @@ fn scalar_unavailable_html() -> String {
 /// local, and [`scalar_unavailable_html`] for why there is no CDN fallback. The
 /// route's `Content-Security-Policy` is applied by
 /// [`middleware::protocol_document_csp`], which sends [`API_DOCS_CSP`] on this
-/// prefix.
+/// prefix, or [`API_DOCS_AI_CSP`] where the [`ScalarAgent`] can show.
 pub fn scalar(
     openapi: utoipa::openapi::OpenApi,
     static_dir: Option<&std::path::Path>,
+    agent: Option<&ScalarAgent>,
 ) -> Scalar<utoipa::openapi::OpenApi> {
     let html = if scalar_bundle_present(static_dir) {
-        scalar_html()
+        scalar_html(agent)
     } else {
         scalar_unavailable_html()
     };
@@ -1530,7 +1590,7 @@ mod scalar_tests {
     /// script at all.
     #[test]
     fn the_reference_loads_nothing_from_a_third_party() {
-        for html in [scalar_html(), scalar_unavailable_html()] {
+        for html in [scalar_html(None), scalar_unavailable_html()] {
             assert!(
                 !html.contains("//"),
                 "no protocol-relative or absolute external URL may appear: {html}"
@@ -1545,7 +1605,7 @@ mod scalar_tests {
     /// must not silently regain an absolute `src`.
     #[test]
     fn the_bundle_is_referenced_by_a_root_relative_path() {
-        let html = scalar_html();
+        let html = scalar_html(None);
         assert!(html.contains(&format!(r#"<script src="/{SCALAR_BUNDLE_PATH}">"#)));
         assert!(!html.contains("integrity="));
         assert!(!html.contains("crossorigin="));
@@ -1555,9 +1615,52 @@ mod scalar_tests {
     /// `proxy.scalar.com`; both were confirmed in a browser.
     #[test]
     fn the_reference_turns_off_the_two_configurable_third_party_calls() {
-        let html = scalar_html();
+        let html = scalar_html(None);
         assert!(html.contains(r#""withDefaultFonts":false"#));
         assert!(html.contains(r#""proxyUrl":"""#));
+    }
+
+    /// "Ask AI" and the MCP button talk to Scalar's hosted services; the
+    /// bundle enables the agent on its own for any `localhost` URL.
+    #[test]
+    fn the_reference_turns_off_the_hosted_ai_features() {
+        let html = scalar_html(None);
+        assert!(html.contains(r#""agent":{"disabled":true}"#));
+        assert!(html.contains(r#""mcp":{"disabled":true}"#));
+    }
+
+    /// Opting in enables the agent (and carries the key), never MCP.
+    #[test]
+    fn the_operator_can_turn_the_agent_on() {
+        let html = scalar_html(Some(&ScalarAgent { key: None }));
+        assert!(html.contains(r#""agent":{}"#));
+        assert!(html.contains(r#""mcp":{"disabled":true}"#));
+
+        let html = scalar_html(Some(&ScalarAgent {
+            key: Some("k-1".into()),
+        }));
+        assert!(html.contains(r#""agent":{"key":"k-1"}"#));
+    }
+
+    /// The key is operator input written into a single-quoted attribute.
+    #[test]
+    fn an_agent_key_cannot_break_out_of_the_attribute() {
+        let html = scalar_html(Some(&ScalarAgent {
+            key: Some("x'><script src=/evil.js></script>".into()),
+        }));
+        assert!(!html.contains("x'>"));
+        assert!(html.contains("x&#39;>"));
+    }
+
+    /// The skin is same-origin and replaces the presets rather than layering
+    /// over one.
+    #[test]
+    fn the_reference_is_skinned_with_the_console_tokens() {
+        let html = scalar_html(None);
+        assert!(html.contains(&format!(
+            r#"<link rel="stylesheet" href="/{SCALAR_THEME_PATH}"/>"#
+        )));
+        assert!(html.contains(r#""theme":"none""#));
     }
 
     /// `Scalar::to_html` substitutes `$spec`; losing the placeholder would serve
@@ -1565,7 +1668,7 @@ mod scalar_tests {
     /// degraded one deliberately, so `curl` still yields the document.
     #[test]
     fn both_templates_keep_the_spec_placeholder() {
-        assert!(scalar_html().contains("$spec"));
+        assert!(scalar_html(None).contains("$spec"));
         assert!(scalar_unavailable_html().contains("$spec"));
     }
 
@@ -1617,7 +1720,7 @@ mod scalar_tests {
     #[test]
     fn the_service_serves_the_degraded_page_without_a_bundle() {
         let spec = openapi_spec();
-        let rendered = scalar(spec, None).to_html();
+        let rendered = scalar(spec, None, None).to_html();
         assert!(rendered.contains("API reference unavailable"));
         assert!(!rendered.contains("<script src="));
     }

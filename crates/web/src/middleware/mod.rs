@@ -40,6 +40,6 @@ pub use proxy_trust::{PeerTrust, ProxyTrust};
 pub use rate_limit::RateLimitMiddlewareFactory;
 pub use rate_limit::RateLimitService;
 pub use security_headers::{
-    protocol_document_csp, security_headers, API_DOCS_CSP, PROTOCOL_DOCUMENT_CSP,
+    protocol_document_csp, security_headers, API_DOCS_AI_CSP, API_DOCS_CSP, PROTOCOL_DOCUMENT_CSP,
 };
 pub use user_block::UserBlockMiddlewareFactory;

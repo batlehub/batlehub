@@ -21,6 +21,7 @@ mod files;
 mod forge;
 mod galaxy;
 mod goproxy;
+mod helm;
 mod marketplaces;
 mod maven;
 mod nix;
@@ -45,6 +46,7 @@ pub fn configure(cfg: &mut actix_web::web::ServiceConfig) {
     forge::configure(cfg);
     galaxy::configure(cfg);
     goproxy::configure(cfg);
+    helm::configure(cfg);
     marketplaces::configure(cfg);
     maven::configure(cfg);
     nix::configure(cfg);

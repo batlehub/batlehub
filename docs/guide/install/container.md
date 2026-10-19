@@ -7,10 +7,10 @@ same image with its config, storage and ingress.
 A multi-arch image (`linux/amd64` + `linux/arm64`) is pushed to the GitHub Container Registry:
 
 ```sh
-docker pull ghcr.io/batleforc/batlehub:<version>
+docker pull ghcr.io/batlehub/batlehub:<version>
 
 # Or always pull the latest tagged version (not :latest — pin to a specific version in production)
-docker pull ghcr.io/batleforc/batlehub:0.2.0
+docker pull ghcr.io/batlehub/batlehub:1.7.0
 ```
 
 Run it:
@@ -19,8 +19,11 @@ Run it:
 docker run -p 8080:8080 \
   -v /path/to/config.toml:/etc/batlehub/config.toml:ro \
   -v /path/to/cache:/var/cache/batlehub \
-  ghcr.io/batleforc/batlehub:<version>
+  ghcr.io/batlehub/batlehub:<version>
 ```
+
+The [Compose stacks](/guide/install/compose) under `deploy/compose/` run this
+image with a database, and optionally Dex, Valkey and S3, already wired.
 
 ---
 

@@ -5,7 +5,7 @@
 # (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/configuration.md
-sourceHash: 29dbd192614c76cb
+sourceHash: a331962e52b3a226
 ---
 
 # Référence de configuration
@@ -230,6 +230,7 @@ port = 8080             # défaut
 | `cli_binary_path` | chaîne | — | Chemin de `batlehub-cli`, servi sur `GET /api/v1/cli/download` |
 | `trusted_proxies` | chaîne[] | *absent* | Plages CIDR (ou IP nues) des reverse proxys dont les en-têtes `X-Forwarded-*` sont crus |
 | `signed_urls` | table | *absent* | Matériel de signature des URL de téléchargement. Voir [`[server.signed_urls]`](#server-signed-urls) |
+| `api_docs` | table | *absent* → IA désactivée | Ce que la référence d'API `/scalar` a le droit de faire. Voir [`[server.api_docs]`](#server-api-docs) |
 | `roles` | chaîne[] | `["proxy", "worker"]` | Ce que fait ce processus : `proxy` sert les requêtes et met les travaux d'analyse en file, `worker` les défile et les analyse. Le défaut est les deux (un worker embarqué). `batlehub --roles worker` le remplace pour un processus d'analyse seule. Voir [`[registries.security]`](#registries-security) et [`[worker]`](#scanners-and-worker). |
 
 #### CORS
@@ -379,6 +380,37 @@ permission que l'utilisateur signé n'avait déjà n'est accordée. Si cela ne s
 pas pour votre parc : abaissez `ttl_seconds`, et retirez ou réécrivez
 `http.target` dans votre pipeline de logs. La piste d'audit n'est pas
 concernée — `access_events` enregistre la coordonnée du paquet, jamais l'URL.
+:::
+
+#### `[server.api_docs]` {#server-api-docs}
+
+La référence d'API servie sur `/scalar` vient de cette origine et n'appelle aucun
+tiers. Son agent « Ask AI » est un service hébergé par Scalar : il est donc
+**désactivé par défaut**, et c'est ici qu'on l'active.
+
+```toml
+[server.api_docs]
+ai_agent     = true
+ai_agent_key = "${SCALAR_AGENT_KEY}"   # nécessaire ailleurs que sur localhost
+```
+
+| Clé | Type | Défaut | Description |
+| --- | --- | --- | --- |
+| `ai_agent` | booléen | `false` | Affiche « Ask AI » sur `/scalar` |
+| `ai_agent_key` | chaîne | — | Clé d'agent Scalar. Sans elle, l'agent n'apparaît que si la page est ouverte sur `localhost`. Elle est écrite dans la page : quiconque peut ouvrir `/scalar` peut la lire |
+
+::: warning Ce que l'activation envoie
+L'agent téléverse l'intégralité du document OpenAPI, et chaque question, vers
+`api.scalar.com`, une fois que le lecteur a accepté les conditions de Scalar.
+Pour qu'il puisse joindre cet hôte, le `connect-src` de `/scalar` est élargi à
+`https://api.scalar.com`. Cela laisse aussi passer les requêtes du bundle vers
+l'annuaire de Scalar, bloquées sinon : chaque chargement de la page contacte
+alors Scalar. L'élargissement ne s'applique que là où l'agent peut apparaître :
+toujours avec `ai_agent_key`, et sans elle seulement quand la page est ouverte
+sur un hôte local (`localhost`, `127.0.0.1`, `[::1]`, un nom en `*.localhost`).
+Ailleurs, un agent sans clé reste masqué et `/scalar` garde la politique
+stricte. Le MCP reste désactivé dans tous les cas. L'option est lue au
+démarrage ; la modifier demande un redémarrage.
 :::
 
 ---
@@ -1743,6 +1775,25 @@ curl -X PUT \
   --data-binary @hello-1.0-1.x86_64.rpm \
   http://batlehub.example.com/proxy/my-rpm/rpm/upload
 ```
+
+---
+
+**`helm`** — un dépôt de charts Helm classique, du type `index.yaml` que prend `helm repo add` ([RFC 0029](/rfc/0029-helm-charts)). Les modes `proxy`, `local` et `hybrid` sont tous pris en charge ; `local` et `hybrid` acceptent l'API de publication de ChartMuseum (`POST /proxy/{registry}/helm/api/charts`, l'appel que fait `helm cm-push`). Deux clés sont propres à helm et rejetées sur tout autre type :
+
+- `oci_entries` — ce que devient une entrée de l'`index.yaml` amont dont l'URL est `oci://`. `"drop"` (le défaut) l'omet : toute version de chart que le registre liste est une version qu'il sert et contrôle. `"relay"` la transmet telle quelle, et `helm` installe alors cette version directement depuis le registre OCI, **en contournant cette instance** — sans cache ni blocage possible ; un avertissement est émis à chaque rechargement.
+- `hybrid_merge` — `hybrid` uniquement : la façon dont un chart publié ici se compose avec le chart amont du même nom. `"chart"` (le défaut) donne au chart local tout le nom et masque celui de l'amont, de sorte qu'un chart public ne peut jamais être installé à la place d'un chart interne (pas de confusion de dépendances). `"version"` liste les versions amont sous les versions locales, la version locale l'emportant à numéro égal — un miroir complété de quelques versions corrigées. Laissée vide sur un registre helm hybride, elle déclenche un avertissement de configuration qui vous demande de choisir.
+
+```toml
+[[registries]]
+type = "helm"
+name = "charts"
+mode = "hybrid"
+upstreams = ["https://charts.jetstack.io"]
+oci_entries = "drop"
+hybrid_merge = "chart"
+```
+
+Les extraits de configuration des clients et la liste complète des endpoints se trouvent sur la page [Helm](/fr/registries/helm).
 
 ---
 

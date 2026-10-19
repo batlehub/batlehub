@@ -335,6 +335,18 @@ anonymous = []
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
 
+# A helm chart repository (RFC 0029): the index filtered and rewritten on
+# every read, the archives resolved from it.
+[[registries]]
+type = "helm"
+name = "perf-helm"
+upstreams = ["${SOAK_UPSTREAM_URL}/helm"]
+
+[registries.rbac]
+anonymous = []
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
 [[registries]]
 type = "rustup"
 name = "perf-rustup"

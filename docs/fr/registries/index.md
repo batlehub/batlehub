@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/index.md
-sourceHash: 9f42985c65b34ef7
+sourceHash: 7d4e94de6cc0528a
 ---
 
 # Registres
@@ -98,6 +98,11 @@ cache — l'identité que le miroir générique ne sait pas donner aux mêmes oc
 | Registre | `type` | Ce qu'il mandate | Modes | Publication | Amont par défaut |
 |----------|--------|------------------|-------|:-----------:|------------------|
 | [Registre devfile](./devfile) | `devfile` | Les index de piles (filtrés), le devfile, le manifeste OCI et les couches de chaque version de pile (vérifiés, octet pour octet) et les projets de démarrage — pour Eclipse Che et `registry-library`/`odo` ; demande un hôte dédié | proxy seul | ❌ | `registry.devfile.io` |
+### Kubernetes <Badge type="tip" text="RFC 0029" />
+
+| Registre | `type` | Ce qu'il mandate | Modes | Publication | Amont par défaut |
+|----------|--------|------------------|-------|:-----------:|------------------|
+| [Helm](./helm) | `helm` | Un dépôt de charts classique : `index.yaml` (filtré, chaque URL de chart réécrite vers cette instance) + `.tgz`/`.prov` (octet pour octet) | proxy · local · hybrid | ✅ | aucun — un dépôt nommé par registre |
 
 ## Matrice des fonctionnalités
 
@@ -143,6 +148,7 @@ l'explorateur de paquets. ✓ pris en charge · `—` sans objet · ⚠ partiel.
 | Distributions Node | ✓ | ✓ | ✓ | — | ✓ | ✓ ⁴ | ✓ | ✓ ⁵ | — |
 | SDKMAN | ✓ | — | ✓ | — | ✓ | ⚠ ⁴ | ✓ | ✓ ⁵ | — |
 | Registre devfile | ✓ | — | ✓ | — | — | ⚠ ⁴ | ✓ | ✓ | — |
+| Helm | ✓ | ✓ | — | ✓ | — | ✓ | ✓ | ✓ | — |
 
 > ¹ Conda n'a pas d'API dédiée de liste de versions par paquet. BatleHub en
 > synthétise une en parcourant `repodata.json` sur `noarch`, `linux-64`,
@@ -255,6 +261,7 @@ bouton désactivé — voir
 | galaxy | a file inside the artifact | yes | versions only | yes |
 | nix | a store path is a NAR and its narinfo; the protocol carries no prose, and the NAR is a filesystem image rather than a package with a manifest | — | neither | no |
 | devfile | a devfile has no readme; its description is a field of the stack index | — | versions only | yes |
+| helm | a file inside the artifact | yes | versions only | yes |
 <!-- END readme-coverage -->
 
 La table ci-dessus est générée depuis le code Rust et reste en anglais : ses

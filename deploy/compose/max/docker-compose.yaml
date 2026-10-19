@@ -1,0 +1,121 @@
+# max — PostgreSQL, Dex (OIDC), Valkey (shared cache), S3 storage (RustFS) and
+# BatleHub: every piece a multi-replica deployment has, on one host.
+#
+#   cd deploy/compose/max
+#   export BATLEHUB_ADMIN_TOKEN=$(openssl rand -hex 32)
+#   export OIDC_CLIENT_SECRET=$(openssl rand -hex 32)
+#   export S3_SECRET_KEY=$(openssl rand -hex 32)
+#   export DEX_ADMIN_PASSWORD_HASH=$(docker run --rm httpd:2.4-alpine htpasswd -nbBC 10 '' 'your-password' | tr -d ':\n')
+#   docker compose up -d
+#
+# Console on http://localhost:8080 — "Sign in" goes to Dex, as admin@example.com.
+# RustFS's console is on http://localhost:9001 (batlehub / $S3_SECRET_KEY).
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: batlehub
+      POSTGRES_USER: batlehub
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U batlehub -d batlehub"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  valkey:
+    image: valkey/valkey:9.1.2-alpine
+    restart: unless-stopped
+    volumes:
+      - valkey_data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  s3:
+    image: rustfs/rustfs:1.0.0-rc.6
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: batlehub
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY, shared by RustFS and BatleHub}
+      RUSTFS_CONSOLE_ENABLE: "true"
+    volumes:
+      - s3_data:/data
+    ports:
+      - "9001:9001"   # RustFS console; the S3 API stays on the compose network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # Creates the bucket once and exits: BatleHub does not create it.
+  s3-init:
+    image: amazon/aws-cli:2.37.13
+    depends_on:
+      s3:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: batlehub
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - aws --endpoint-url http://s3:9000 s3api head-bucket --bucket batlehub 2>/dev/null
+        || aws --endpoint-url http://s3:9000 s3 mb s3://batlehub
+
+  dex:
+    image: ghcr.io/dexidp/dex:v2.45.0
+    restart: unless-stopped
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    environment:
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:?set OIDC_CLIENT_SECRET, shared by Dex and BatleHub}
+      DEX_ADMIN_PASSWORD_HASH: ${DEX_ADMIN_PASSWORD_HASH:?set DEX_ADMIN_PASSWORD_HASH to a bcrypt hash}
+    volumes:
+      - ./dex.yaml:/etc/dex/config.yaml:ro
+      - dex_data:/var/dex
+    # BatleHub runs in this container's network namespace (below), so its port
+    # is published here: the issuer has to be one URL that the browser and the
+    # server both reach, and `localhost` is the only plain-HTTP one BatleHub
+    # accepts.
+    ports:
+      - "5556:5556"
+      - "8080:8080"
+
+  batlehub:
+    # Pinned to the latest release; bump it to upgrade.
+    image: ghcr.io/batlehub/batlehub:1.7.0
+    restart: unless-stopped
+    network_mode: service:dex
+    depends_on:
+      db:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+      dex:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql://batlehub:${POSTGRES_PASSWORD:-changeme}@db:5432/batlehub
+      REDIS_URL: redis://valkey:6379
+      AWS_ACCESS_KEY_ID: batlehub
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+      AWS_REGION: us-east-1
+      BATLEHUB_ADMIN_TOKEN: ${BATLEHUB_ADMIN_TOKEN:?set BATLEHUB_ADMIN_TOKEN to the admin API token}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+    volumes:
+      - ./config.toml:/etc/batlehub/config.toml:ro
+
+volumes:
+  db_data:
+  valkey_data:
+  s3_data:
+  dex_data:

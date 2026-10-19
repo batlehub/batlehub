@@ -2,6 +2,7 @@ mod eco_composer;
 mod eco_conda;
 mod eco_galaxy;
 mod eco_go;
+mod eco_helm;
 mod eco_jetbrains;
 mod eco_maven;
 mod eco_nix;
@@ -16,6 +17,7 @@ mod publish;
 mod read;
 
 pub use eco_composer::COMPOSER_DIST_SHA1;
+pub use eco_helm::HelmIndex;
 pub use eco_jetbrains::{build_in_range, JetbrainsPluginVersion};
 pub use eco_openvsx::OpenVsxExtensionVersion;
 pub use lifecycle::stores_files_under_version;

@@ -224,6 +224,8 @@ pub const README_EXTRACTION_TYPES: &[&str] = &[
     // `MANIFEST.json`'s `collection_info.readme` says which file it is
     // (RFC 0031 §6.1).
     "galaxy",
+    // `{chart}/README.md`, what `helm show readme` prints (RFC 0029 §6.1).
+    "helm",
     "goproxy",
     "npm",
     "nuget",

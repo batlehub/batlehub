@@ -143,6 +143,10 @@ export const sidebar = {
         { text: "SDKMAN", link: "/registries/sdkman" },
       ],
     },
+    {
+      text: "Kubernetes",
+      items: [{ text: "Helm", link: "/registries/helm" }],
+    },
   ],
   // I am installing it, by one method. The hub page that chooses between them
   // stays in `/guide/` — listing it here too would file one page under two
@@ -361,10 +365,6 @@ export const sidebar = {
           link: "/rfc/0027-homebrew",
         },
         {
-          text: "0029 — Helm charts",
-          link: "/rfc/0029-helm-charts",
-        },
-        {
           text: "0030 — JSR",
           link: "/rfc/0030-jsr",
         },
@@ -500,6 +500,10 @@ export const sidebar = {
         {
           text: "0028 — Nix binary cache",
           link: "/rfc/0028-nix-binary-cache",
+        },
+        {
+          text: "0029 — Helm charts",
+          link: "/rfc/0029-helm-charts",
         },
         {
           text: "0031 — Ansible Galaxy",

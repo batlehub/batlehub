@@ -266,6 +266,8 @@ pub fn is_registry_wide(kind: RegistryKind, doc_kind: DocumentKind) -> bool {
         // Both devfile index shapes list every stack of the registry
         // (RFC 0035 §6.8).
         RegistryKind::Devfile => matches!(doc_kind.as_str(), "versions" | "legacy-index"),
+        // `index.yaml` lists every chart of the repository (RFC 0029 §6.11).
+        RegistryKind::Helm => doc_kind == DocumentKind::Versions,
         _ => false,
     }
 }
@@ -313,6 +315,7 @@ pub fn render_registry(
                 VersionDocument::json(find_stack(&index, name)?.clone())
             }
         }
+        (RegistryKind::Helm, "versions") => VersionDocument::json(helm_index(name, held)?),
         (RegistryKind::Nix, "cache-info") => VersionDocument::text(
             "text/x-nix-cache-info",
             // Composed, because there is no upstream to relay one from — the
@@ -326,6 +329,53 @@ pub fn render_registry(
         synthesised: Some(count),
         ..doc
     })
+}
+
+/// `index.yaml` from the held chart archives (RFC 0029 §6.11): each entry is
+/// the one its `meta:` entry carries (`extra.helm`, written by the resolve that
+/// cached the archive), `digest` the held checksum and `created` the upstream
+/// date or, for an import that left none, the receipt. `name` is the index
+/// address, or one chart for the console's discovery read.
+fn helm_index(name: &str, held: &[(String, HeldVersion)]) -> Option<Value> {
+    use crate::services::helm::{compose_index, composed_entry, INDEX_ADDRESS};
+    let mut entries: Map<String, Value> = Map::new();
+    for (chart, h) in held {
+        if h.artifact.as_deref() != Some(crate::services::helm::CHART_ARTIFACT)
+            || (name != INDEX_ADDRESS && chart != name)
+        {
+            continue;
+        }
+        let created = h
+            .published_at
+            .unwrap_or(h.received_at)
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let entry = composed_entry(
+            h.extra.get("helm").unwrap_or(&Value::Null),
+            chart,
+            &h.version,
+            h.checksum.as_deref().unwrap_or_default(),
+            &created,
+        );
+        if let Some(list) = entries
+            .entry(chart.clone())
+            .or_insert_with(|| Value::Array(Vec::new()))
+            .as_array_mut()
+        {
+            list.push(entry);
+        }
+    }
+    if entries.is_empty() {
+        return None;
+    }
+    for list in entries.values_mut().filter_map(Value::as_array_mut) {
+        list.sort_by(|a, b| {
+            newest_first(
+                a["version"].as_str().unwrap_or_default(),
+                b["version"].as_str().unwrap_or_default(),
+            )
+        });
+    }
+    Some(compose_index(entries, &Utc::now().to_rfc3339()))
 }
 
 /// The held devfile rows grouped into stack versions, each version's facts

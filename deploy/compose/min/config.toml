@@ -1,0 +1,39 @@
+# min — the config `docker-compose.yaml` beside this file mounts.
+#
+# One npm registry proxying registry.npmjs.org, cached on the local disk, and an
+# admin token. Everything else keeps its default; `config.example.toml` at the
+# repository root lists what can be turned on.
+#
+# `${VAR}` is read from the server's environment when the file is loaded.
+
+[server]
+host = "0.0.0.0"
+port = 8080
+# The console, served from the image by this same server.
+static_dir = "/app/ui/dist"
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "${BATLEHUB_ADMIN_TOKEN}"
+role = "admin"
+user_id = "admin"
+
+[storage]
+type = "filesystem"
+path = "/var/cache/batlehub"
+
+[[registries]]
+type = "npm"
+name = "npm"
+upstreams = ["https://registry.npmjs.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
