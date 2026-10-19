@@ -836,6 +836,7 @@ async fn main() -> Result<()> {
         sbom: Some(Arc::clone(&sbom_svc)),
         readme: Some(Arc::clone(&readme_svc)),
         discovery: Default::default(),
+        explore_cache: Some(Arc::clone(&admin_svc.explore_cache)),
     });
 
     // RFC 0008 §4.5, the third warning: an air-gapped registry with nothing

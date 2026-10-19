@@ -126,6 +126,7 @@ async fn make_me_app(
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     });
     let admin_svc =
         Arc::new(AdminService::new(repo_dyn).with_vulnerability_repo(Arc::clone(&vuln_dyn)));

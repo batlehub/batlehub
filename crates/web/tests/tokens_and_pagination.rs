@@ -275,6 +275,7 @@ async fn make_app_with_oidc_provider(
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     });
     let admin_svc = Arc::new(AdminService::new(repo_dyn));
     let tok_repo: Arc<dyn UserTokenRepository> = token_repo;

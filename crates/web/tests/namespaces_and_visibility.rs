@@ -73,6 +73,7 @@ async fn make_app_with_ns_store(
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     });
     let admin_svc = Arc::new(AdminService::new(repo_dyn));
     let token_repo: Arc<dyn UserTokenRepository> = Arc::new(NullTokenRepository);
@@ -211,6 +212,7 @@ async fn make_ns_cargo_app_with_backend(
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     });
     let admin_svc = Arc::new(AdminService::new(repo_dyn));
     let token_repo: Arc<dyn UserTokenRepository> = Arc::new(NullTokenRepository);

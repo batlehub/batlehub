@@ -245,6 +245,7 @@ impl TestServer {
             sbom: None,
             readme: Some(Arc::clone(&readme_svc)),
             discovery: Default::default(),
+            explore_cache: None,
         });
 
         let admin_svc = Arc::new(AdminService::new(repo.clone()));

@@ -175,6 +175,7 @@ async fn make_ns_upload_app(
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     });
     let admin_svc = Arc::new(AdminService::new(repo_dyn));
     let token_repo: Arc<dyn UserTokenRepository> = Arc::new(NullTokenRepository);

@@ -935,3 +935,46 @@ async fn a_registry_the_caller_may_not_browse_is_not_fetchable_either() {
         "a refused fetch must leave nothing behind"
     );
 }
+
+// ── The catalogue sees what a download cached ────────────────────────────────
+
+/// A package manager's download caches a version the catalogue's listing does
+/// not yet hold. The listing is cached for ten minutes per query, and only the
+/// console's own fetch and a local publish used to clear it, so a package
+/// proxied for the first time stayed out of the console until that TTL ran
+/// out — or a restart, which is how it read.
+#[actix_web::test]
+async fn a_version_cached_by_a_download_is_listed_without_waiting_out_the_catalogue() {
+    let (app, _) = app("npm").await;
+    let listing = || {
+        TestRequest::get()
+            .uri(&format!("/api/v1/explore/packages?registry={REG}"))
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .to_request()
+    };
+    let names = |body: serde_json::Value| -> Vec<String> {
+        body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    };
+
+    // Read once, so the listing is in the catalogue's cache.
+    let before = names(read_body_json(call_service(&app, listing()).await).await);
+    assert!(!before.contains(&"widget".to_owned()), "{before:?}");
+
+    let resp = call_service(
+        &app,
+        TestRequest::get()
+            .uri(&format!("/proxy/{REG}/widget/1.0.0/tarball"))
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+
+    let after = names(read_body_json(call_service(&app, listing()).await).await);
+    assert!(after.contains(&"widget".to_owned()), "{after:?}");
+}

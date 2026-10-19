@@ -940,6 +940,7 @@ pub fn one_registry_proxy(
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     });
     (proxy_svc, repo, local_svc)
 }
@@ -2005,6 +2006,7 @@ pub async fn make_app_with_defaults_and_access(
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     });
     let admin_svc = Arc::new(AdminService::new(repo_dyn).with_hot_config(hot.clone()));
 
@@ -2145,6 +2147,9 @@ pub fn local_registry_app_parts_with_artifact_meta(
         Some(repo_dyn.clone()),
         readme_svc.clone(),
     );
+    // Built first, so the proxy invalidates the catalogue the console reads,
+    // as `main.rs` wires it.
+    let admin_svc = Arc::new(AdminService::new(repo_dyn.clone()).with_hot_config(hot.clone()));
     let proxy_svc = Arc::new(ProxyService {
         hot: hot.clone(),
         storage,
@@ -2159,8 +2164,8 @@ pub fn local_registry_app_parts_with_artifact_meta(
         sbom: sbom_svc,
         readme: readme_svc,
         discovery: Default::default(),
+        explore_cache: Some(Arc::clone(&admin_svc.explore_cache)),
     });
-    let admin_svc = Arc::new(AdminService::new(repo_dyn).with_hot_config(hot.clone()));
 
     let mode_map = RegistryModeMap::default();
     mode_map.insert(name.to_owned(), mode);
@@ -2233,6 +2238,7 @@ pub fn local_only_app_parts(
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     });
     let mode_map = RegistryModeMap::default();
     mode_map.insert(name.to_owned(), mode);
@@ -2468,6 +2474,7 @@ pub fn empty_app_parts() -> EmptyAppParts {
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     });
     EmptyAppParts {
         proxy_svc,
@@ -2627,6 +2634,7 @@ pub async fn make_app_with_eviction_and_repo(
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     });
     let admin_svc = Arc::new(AdminService::new(repo_dyn).with_hot_config(hot.clone()));
     let token_repo: Arc<dyn UserTokenRepository> = Arc::new(NullTokenRepository);
@@ -2688,6 +2696,7 @@ pub async fn make_app_with_warming(
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     });
     let admin_svc = Arc::new(AdminService::new(repo_dyn).with_hot_config(hot.clone()));
     let token_repo: Arc<dyn UserTokenRepository> = Arc::new(NullTokenRepository);
@@ -3006,6 +3015,7 @@ pub async fn make_local_nuget_app(
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     });
     let admin_svc = Arc::new(AdminService::new(repo_dyn).with_hot_config(hot.clone()));
     let mode_map = RegistryModeMap::default();

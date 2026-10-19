@@ -53,6 +53,7 @@ async fn healthz_returns_ok_without_db() {
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     });
 
     let app = init_service(
@@ -97,6 +98,7 @@ async fn healthz_is_unauthenticated() {
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     });
 
     let app = init_service(
@@ -225,6 +227,7 @@ async fn cli_download_serves_binary_when_configured() {
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     });
     let admin_svc = Arc::new(AdminService::new(repo));
     let token_repo: Arc<dyn UserTokenRepository> = Arc::new(NullTokenRepository);
