@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-10-21
+
 ### Security
 
 - **CVE-2026-111943: distrusted emSign intermediates are refused.** The server
@@ -1704,7 +1706,8 @@ First stable release.
 
 ---
 
-[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.0...HEAD
+[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.1...HEAD
+[1.8.1]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.0...v1.8.1
 [1.8.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.7.0...v1.8.0
 [1.7.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.6.0...v1.7.0
 [1.6.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.5.0...v1.6.0
