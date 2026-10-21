@@ -463,9 +463,11 @@ pub async fn get_config_warnings(
         &hot,
     )
     .await?;
-    Ok(web::Json(ConfigWarningsResponse {
-        warnings: reload_svc.warnings(),
-    }))
+    let mut warnings = reload_svc.warnings();
+    // Not part of the config's own warnings: the replicas' disagreement is
+    // read from the shared state at each request.
+    warnings.extend(reload_svc.replica_drift().await);
+    Ok(web::Json(ConfigWarningsResponse { warnings }))
 }
 
 // ── Banner endpoints ──────────────────────────────────────────────────────────

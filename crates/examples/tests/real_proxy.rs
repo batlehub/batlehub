@@ -406,6 +406,7 @@ impl RealProxy {
             sbom: None,
             readme: None,
             discovery: Default::default(),
+            explore_cache: None,
         });
         let admin_svc = Arc::new(AdminService::new(repo));
         let token_repo = NullUserTokenRepository::arc();
@@ -556,6 +557,7 @@ impl RealProxy {
             sbom: None,
             readme: None,
             discovery: Default::default(),
+            explore_cache: None,
         });
         let admin_svc = Arc::new(AdminService::new(repo));
         let token_repo = NullUserTokenRepository::arc();

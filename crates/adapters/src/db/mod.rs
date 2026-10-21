@@ -46,6 +46,7 @@ pub mod sbom;
 
 #[cfg(feature = "db-postgres")]
 pub mod banner;
+pub mod cluster;
 
 #[cfg(feature = "db-postgres")]
 pub mod config_change;
@@ -92,6 +93,7 @@ pub use artifact_meta::PgArtifactMetaRepository;
 
 #[cfg(feature = "db-postgres")]
 pub use banner::PgBannerStore;
+pub use cluster::PgClusterState;
 
 #[cfg(feature = "db-postgres")]
 pub use config_change::PgConfigChangeRepository;

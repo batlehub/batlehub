@@ -84,6 +84,12 @@ pub const VSX_SIGNING_PROXY_MODE: &str = "vsx-signing.proxy-mode";
 /// this instance (RFC 0029 §4.5).
 pub const HELM_OCI_RELAY: &str = "helm.oci-relay";
 
+/// The replicas that reported recently do not all serve the same configuration
+/// — a reload reached only the replica that handled it. Raised at request
+/// time, not by `AppConfig::warnings`: it is a fact about the cluster, not
+/// about a config file.
+pub const CONFIG_REPLICA_DRIFT: &str = "config.replica-drift";
+
 /// A `hybrid` helm registry with no `hybrid_merge`: the admin has not said
 /// whether a local chart hides the upstream one of its name.
 pub const HELM_HYBRID_MERGE_UNSET: &str = "helm.hybrid-merge-unset";

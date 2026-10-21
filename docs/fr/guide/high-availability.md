@@ -1,6 +1,6 @@
 ---
 sourcePath: guide/high-availability.md
-sourceHash: d8d1422501e819f2
+sourceHash: f57aadaca0e63e48
 ---
 
 # Haute disponibilité
@@ -479,6 +479,29 @@ Ce sont des compromis assumés, consignés dans
   mais avant la validation en base, le compteur de quota est décrémenté de façon
   asynchrone. Il existe une courte fenêtre pendant laquelle le compteur est
   surévalué.
+
+- **Un rechargement de configuration n'atteint qu'un réplica** — l'éditeur de
+  configuration et un changement de fichier approuvé sont appliqués par le
+  réplica qui traite la requête, et par aucun autre : le rechargement en attente
+  vit dans la mémoire de ce processus et le fichier sur le montage de ce pod.
+  Appliquez un changement sur chaque réplica, ou déployez-les depuis les mêmes
+  fichiers (`helm upgrade`). Tant que les réplicas qui se sont signalés dans la
+  dernière minute ne servent pas tous la même configuration, la page
+  **Config Reload** affiche un avertissement `config.replica-drift` qui nomme
+  chacun d'eux et la configuration qu'il sert. Chaque réplica envoie toutes les
+  quinze secondes une empreinte de sa configuration fusionnée à PostgreSQL
+  (`system_kv`), si bien qu'un fichier reformaté mais identique ne compte pas
+  comme une différence.
+
+- **Le catalogue suit en quinze secondes** — un paquet qu'un réplica publie,
+  supprime ou met en cache pour la première fois vide les listes en cache de ce
+  registre sur tous les réplicas, à leur prochaine interrogation de PostgreSQL,
+  toutes les quinze secondes.
+
+  Les deux ne tournent que lorsque `[cache]` est partagé (`redis` ou
+  `postgres`), ce qu'exige de toute façon plus d'un réplica : un serveur seul en
+  `type = "memory"` n'a aucun réplica avec qui s'accorder, et ne paie pas la
+  requête toutes les quinze secondes.
 
 - **Des magasins en mémoire si la configuration est fautive** — si `[cache]`
   reste au défaut `type = "memory"`, chaque réplica tient son propre état de

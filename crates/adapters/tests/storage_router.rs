@@ -550,3 +550,37 @@ async fn staged_bytes_stay_out_of_dedup_and_promote_by_rename() {
     assert!(router.delete(&refused).await.unwrap());
     assert!(!fs.exists(&refused).await.unwrap());
 }
+
+/// The health page's cache size. `SUM` of the `bigint` column is a `numeric`,
+/// which failed to decode as `i64` and was read as 0 — every registry showed
+/// N artifacts weighing 0 B, whatever the backend.
+#[tokio::test]
+async fn stat_by_prefix_counts_and_sums_the_recorded_sizes() {
+    let Some(url) = db_url() else { return };
+    let router = single_backend_router(make_fs("stat").await, pool(&url).await);
+    let registry = format!(
+        "stat{}x{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
+    for (name, payload) in [("a", upayload("stat-a")), ("b", upayload("stat-bb"))] {
+        let stream: batlehub_core::ports::ByteStream =
+            Box::pin(futures::stream::once(async move { Ok(payload) }));
+        router
+            .store_streaming(
+                &format!("artifact:{registry}/{name}"),
+                stream,
+                StorageMeta::default(),
+            )
+            .await
+            .unwrap();
+    }
+    let expected = (upayload("stat-a").len() + upayload("stat-bb").len()) as u64;
+    assert_eq!(
+        router
+            .stat_by_prefix(&format!("artifact:{registry}/"))
+            .await
+            .unwrap(),
+        (2, expected)
+    );
+}

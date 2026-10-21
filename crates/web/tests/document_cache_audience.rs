@@ -174,6 +174,7 @@ async fn beta_channel_app() -> (
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     });
 
     let mode_map = RegistryModeMap::default();

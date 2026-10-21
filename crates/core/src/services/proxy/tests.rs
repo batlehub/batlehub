@@ -436,6 +436,7 @@ fn proxy(
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     }
 }
 
@@ -524,6 +525,7 @@ async fn metadata_cache_miss_then_hit() {
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     };
 
     let cache_key = format!("meta:{}", req("npm").package_id.cache_key());
@@ -602,6 +604,7 @@ async fn artifact_cache_hit_returns_stored_bytes() {
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     };
 
     let resp = svc.handle(req("npm")).await.unwrap();
@@ -656,6 +659,7 @@ async fn payload_too_large_returns_error() {
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     };
 
     let result = svc.handle(req("npm")).await;
@@ -676,6 +680,7 @@ async fn unused_registry_id_in_policies_does_not_panic() {
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     };
 
     let resp = svc.handle(req("npm")).await.unwrap();
@@ -707,6 +712,7 @@ async fn firewall_only_streams_without_storing() {
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     };
 
     let pkg = PackageId::new("npm", "test-pkg", "1.0.0");
@@ -767,6 +773,7 @@ fn proxy_with_stale(
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     }
 }
 
@@ -965,6 +972,7 @@ async fn metadata_no_store_skips_cache() {
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     };
 
     let cache_key = format!("meta:{}", req("npm").package_id.cache_key());
@@ -993,6 +1001,7 @@ async fn artifact_no_store_skips_storage() {
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     };
 
     let pkg = PackageId::new("npm", "test-pkg", "1.0.0");
@@ -1057,6 +1066,7 @@ async fn artifact_ttl_expired_refetches_from_upstream() {
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     };
 
     let resp = svc.handle(req("npm")).await.unwrap();
@@ -1120,6 +1130,7 @@ async fn artifact_cache_hit_records_touch() {
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     };
 
     let resp = svc.handle(req("npm")).await.unwrap();
@@ -1146,6 +1157,7 @@ async fn artifact_cache_miss_records_meta() {
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     };
 
     let pkg = PackageId::new("npm", "test-pkg", "1.0.0");
@@ -1184,6 +1196,7 @@ async fn metrics_artifact_miss_then_hit() {
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     };
 
     let npm = proxy_metrics.all().get("npm").unwrap();
@@ -1309,6 +1322,7 @@ fn proxy_with_integrity(
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     };
     (svc, storage)
 }
@@ -1628,6 +1642,7 @@ fn reverify_proxy(
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     }
 }
 
@@ -1939,6 +1954,7 @@ async fn resolve_metadata_for_miss_fetches_then_serves_from_cache() {
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     };
 
     let meta = svc.resolve_metadata_for(&req("jbm")).await.unwrap();
@@ -2048,6 +2064,7 @@ mod passthrough_rungs {
             sbom: None,
             readme: None,
             discovery: Default::default(),
+            explore_cache: None,
         };
         (svc, cache)
     }
@@ -2263,6 +2280,7 @@ mod search_rungs {
             sbom: None,
             readme: None,
             discovery: Default::default(),
+            explore_cache: None,
         }
     }
 
@@ -2523,6 +2541,7 @@ mod readme_capture {
                 repo as Arc<dyn ReadmeRepository>,
             ))),
             discovery: Default::default(),
+            explore_cache: None,
         }
     }
 
@@ -2868,6 +2887,7 @@ mod discovery {
             metrics: Arc::new(ProxyMetrics::new(&["r1".to_owned()])),
             sbom: None,
             discovery: Default::default(),
+            explore_cache: None,
             readme: None,
         }
     }
@@ -3231,6 +3251,7 @@ mod version_readme {
             metrics: Arc::new(ProxyMetrics::new(&["r1".to_owned()])),
             sbom: None,
             discovery: Default::default(),
+            explore_cache: None,
             readme: Some(Arc::new(ReadmeService::new(
                 Arc::clone(&repo) as Arc<dyn crate::ports::ReadmeRepository>
             ))),
@@ -3325,6 +3346,7 @@ mod version_readme {
             metrics: Arc::new(ProxyMetrics::new(&["r1".to_owned()])),
             sbom: None,
             discovery: Default::default(),
+            explore_cache: None,
             readme: Some(Arc::new(ReadmeService::new(
                 repo as Arc<dyn crate::ports::ReadmeRepository>,
             ))),

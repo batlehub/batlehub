@@ -148,6 +148,7 @@ async fn make_host_routed_app(
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     });
 
     let names: Vec<&str> = spec.registries.iter().map(|(n, _)| *n).collect();

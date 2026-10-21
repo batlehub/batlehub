@@ -205,6 +205,13 @@ pub struct ProxyService {
     /// *on* — this field is the process-level wiring, absent only where nothing
     /// has a store to write to (RFC 0007 §4.1).
     pub readme: Option<Arc<ReadmeService>>,
+    /// The console catalogue's cache, invalidated for the registry when an
+    /// artifact is cached for the first time — the moment the catalogue's row
+    /// for it changes. `None` where no catalogue reads (tests, tools).
+    ///
+    /// Not on every proxied download: a cache hit changes nothing the catalogue
+    /// shows, and flushing on it would leave a cache that never warms.
+    pub explore_cache: Option<Arc<crate::services::ExploreCache>>,
 }
 
 pub(super) fn warn_if_audit_failed(r: Result<(), CoreError>, ctx: &str) {

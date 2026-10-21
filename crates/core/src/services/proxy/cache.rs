@@ -458,6 +458,7 @@ impl ProxyService {
             ))
         })?;
 
+        let registry = req.package_id.registry.clone();
         super::warn_if_audit_failed(
             self.repo
                 .record_access(
@@ -471,6 +472,14 @@ impl ProxyService {
                 .await,
             "allowed download",
         );
+        // The catalogue lists this package from the status row `record_access`
+        // has just written and the artifact row above; until now its cached
+        // listing held neither, for up to `ExploreCache`'s TTL. Once per cached
+        // artifact, never on a hit — after both writes, so a listing read in
+        // between cannot put the old answer back.
+        if let Some(cache) = &self.explore_cache {
+            cache.invalidate(Some(&registry)).await;
+        }
         super::finish_request(&timing.registry_label, "allowed", timing.start);
         Ok(ProxyResponse::Stream(stored.stream))
     }

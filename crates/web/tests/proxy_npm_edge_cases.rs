@@ -165,6 +165,7 @@ async fn audit_quick_forwards_to_upstream_and_returns_response() {
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     });
     let admin_svc = Arc::new(AdminService::new(repo_dyn));
     let token_repo: Arc<dyn UserTokenRepository> = Arc::new(NullTokenRepository);

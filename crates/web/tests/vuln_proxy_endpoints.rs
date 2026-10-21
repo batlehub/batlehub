@@ -310,6 +310,7 @@ async fn composer_security_advisories_forwards_to_upstream_and_returns_response(
         sbom: None,
         readme: None,
         discovery: Default::default(),
+        explore_cache: None,
     });
     let mode_map = RegistryModeMap::default();
     mode_map.insert("packagist".to_owned(), RegistryMode::Proxy);

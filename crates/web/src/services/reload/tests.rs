@@ -1181,3 +1181,75 @@ async fn text_config_is_owed_against_the_column_not_the_startup_document() {
     let diff = stage(&svc, &back).await;
     assert!(diff.restart_required.is_empty(), "{diff:?}");
 }
+
+// ── Replica drift ─────────────────────────────────────────────────────────────
+//
+// Two services sharing one `InMemoryClusterState` are two replicas sharing one
+// database.
+
+const OTHER_PORT_CONFIG: &str = r#"
+[server]
+host = "127.0.0.1"
+port = 9090
+
+[database]
+type = "postgresql"
+url = "postgresql://user:pass@localhost/db"
+
+[storage]
+type = "filesystem"
+path = "./tmp"
+"#;
+
+async fn replica_named(
+    name: &str,
+    content: &str,
+    cluster: &Arc<dyn batlehub_core::ports::ClusterStatePort>,
+) -> (Arc<ConfigReloadService>, tempfile::NamedTempFile) {
+    let (svc, file) = make_svc_with_file_and_builder(true, content, noop_builder()).await;
+    svc.share_with(Arc::clone(cluster), name.to_owned());
+    svc.heartbeat("explore:").await.unwrap();
+    (svc, file)
+}
+
+#[tokio::test]
+async fn replicas_serving_different_configs_raise_a_drift_warning() {
+    let cluster: Arc<dyn batlehub_core::ports::ClusterStatePort> =
+        Arc::new(batlehub_adapters::in_memory::InMemoryClusterState::new());
+    let (a, _fa) = replica_named("pod-a", MINIMAL_CONFIG, &cluster).await;
+    let (_b, _fb) = replica_named("pod-b", OTHER_PORT_CONFIG, &cluster).await;
+
+    let warning = a.replica_drift().await.expect("drift");
+    assert_eq!(warning.code, "config.replica-drift");
+    assert!(
+        warning.message.contains("2 different configurations"),
+        "{}",
+        warning.message
+    );
+    assert!(
+        warning.message.contains("pod-a (this one)"),
+        "{}",
+        warning.message
+    );
+    assert!(warning.message.contains("pod-b"), "{}", warning.message);
+}
+
+#[tokio::test]
+async fn replicas_serving_the_same_config_raise_nothing_however_it_is_formatted() {
+    let cluster: Arc<dyn batlehub_core::ports::ClusterStatePort> =
+        Arc::new(batlehub_adapters::in_memory::InMemoryClusterState::new());
+    let reformatted = format!(
+        "# the same, commented and indented\n{}",
+        MINIMAL_CONFIG.replace("\nport", "\n  port")
+    );
+    let (a, _fa) = replica_named("pod-a", MINIMAL_CONFIG, &cluster).await;
+    let (_b, _fb) = replica_named("pod-b", &reformatted, &cluster).await;
+    assert!(a.replica_drift().await.is_none());
+}
+
+#[tokio::test]
+async fn a_single_server_has_no_replicas_to_disagree_with() {
+    let (svc, _f) = make_svc_with_file_and_builder(true, MINIMAL_CONFIG, noop_builder()).await;
+    assert!(svc.heartbeat("explore:").await.unwrap().is_empty());
+    assert!(svc.replica_drift().await.is_none());
+}
