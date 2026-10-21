@@ -8,6 +8,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-21
+
+### Added
+
+- **Helm chart repositories as a registry kind** (`type = "helm"`, RFC 0029).
+  The served `index.yaml` drops blocked versions and rewrites every chart URL
+  to this instance, so `helm` sends its basic auth to the archives too; `.tgz`
+  and `.prov` are relayed byte-exact, so `helm pull --verify` still works.
+  `oci_entries = "drop"` (the default) or `"relay"` decides what happens to
+  `oci://` entries. `local`/`hybrid` accept ChartMuseum's upload API and compose
+  the index from published charts, local winning per `{name, version}`; an
+  air-gapped instance composes it from the archives it holds.
+  `batlehub-cli registry suggest` reads `Chart.lock` / `Chart.yaml`. See
+  `docs/registries/helm.md`.
+- **Config drift between replicas is reported.** Each replica stores a
+  fingerprint of its merged configuration in PostgreSQL every fifteen seconds,
+  and the Config Reload page shows a `config.replica-drift` warning while the
+  replicas that reported in the last minute do not serve the same one. A
+  reload still reaches only the replica that handled it — see
+  `docs/guide/high-availability.md`, *Known limitations*.
+
+### Fixed
+
+- **The catalogue listed a newly proxied package only after ten minutes or a
+  restart.** A package manager's download never cleared the catalogue cache;
+  an artifact's first caching now does (a hit still does not). With a shared
+  `[cache]`, a publish, a delete or a first caching clears the listings on
+  every replica within fifteen seconds, and the catalogue page revalidates its
+  cached copy on every visit instead of serving it for five minutes.
+- **The health page read every registry's cache size as 0 B**, on every
+  storage backend: Postgres returns `SUM` of a `bigint` as a `numeric`, the
+  decode failed and the error was read as zero. It is now cast, and a decode
+  error is reported rather than shown as 0 B.
+
 ## [1.7.0] - 2026-10-17
 
 ### Added
@@ -1659,7 +1693,8 @@ First stable release.
 
 ---
 
-[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.7.0...HEAD
+[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.0...HEAD
+[1.8.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.7.0...v1.8.0
 [1.7.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.6.0...v1.7.0
 [1.6.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.5.0...v1.6.0
 [1.5.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.4.0...v1.5.0
