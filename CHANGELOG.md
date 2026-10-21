@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security
+
+- **CVE-2026-111943: distrusted emSign intermediates are refused.** The server
+  verified upstream TLS with `rustls-webpki` 0.103.15 and the `webpki-roots` /
+  `webpki-root-certs` 1.0.9 trust store, which accepted certificate paths
+  through emSign intermediates whose private keys are public
+  (RUSTSEC-2026-0381/0382/0383); they are now 0.103.16 and 1.0.10. The worker
+  images' Trivy moves to v0.76.1, built with Go 1.27.3, for the Go
+  `crypto/x509` side of the same CVE. Stated `fixed` in
+  `vex/batlehub.openvex.json`.
+
 ## [1.8.0] - 2026-10-21
 
 ### Added
