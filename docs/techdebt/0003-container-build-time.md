@@ -33,7 +33,8 @@ before and after.
 **Retired**: `image-proxy` builds each arch on its own native runner
 (`ubuntu-latest`, `ubuntu-24.04-arm`) and pushes by digest; `image` joins the
 two into the tagged index with `docker buildx imagetools create`. QEMU is gone
-from the workflow. The *after* time is the next release's to record here.
+from the workflow. Measured in [§ Measurements](#measurements): the release
+went from 4 h 16 to 28 min.
 
 ## 2. The dependency layer is invalidated by every release
 
@@ -55,6 +56,14 @@ shows it and the cache is silently empty. `Containerfile.worker` and
 `cargo-chef`, whose recipe pins every workspace-member version to `0.0.1`, and a
 failed `cargo chef cook` fails the build. `Containerfile.hardened`, which no
 workflow builds, still has the stub pattern.
+
+Checked by preparing the recipe before and after `task version:set`'s edit
+(`1.8.1` → `1.8.2` in `Cargo.toml`, the seven workspace entries in
+`Cargo.lock`): both recipes have the same sha256 (`27dbb786…`), so the cook
+layer's cache key does not move. Changing one third-party version in the lock
+does change the recipe, so the cache still invalidates when it should. Not yet
+seen end to end: the first release that reads a warm `buildcache:proxy-<arch>`
+is the one after `v1.8.2-rc.1`.
 
 ## 3. The same server is compiled three times per release
 
@@ -97,3 +106,33 @@ layers before the next run reads them.
 its own ref and of `main`, so a gha cache written by one release was never
 readable by the next one. Each build now caches to its own registry ref,
 `ghcr.io/<repo>/buildcache:<image>[-<arch>]`.
+
+## Measurements
+
+Release runs (`build.yaml`) before and after §1, §2 and §5:
+
+| | `v1.8.1` (run `39657343550`) | `v1.8.2-rc.1` (run `39839300187`) |
+| --- | ---: | ---: |
+| **Whole release run** | **4 h 16** | **28 min** |
+| Proxy image, both arches | 3 h 28 (one job, arm64 under QEMU) | — |
+| Proxy image, amd64 | — | 24 min (native) |
+| Proxy image, arm64 | — | 23 min (native) |
+| Worker images | 27 min, after the proxy image | 22 min, alongside it |
+| Publish, sign, scan (index + 3 images) | inside the 4 h job | 3 min 30 |
+| CLI Linux aarch64 | 5 min (`cross`) | 4 min 25 (native) |
+
+Both release runs were cold: `v1.8.1` because of §2 and §5, `v1.8.2-rc.1`
+because it created the registry cache. The `cli` jobs were done by 19:26 and
+the proxy legs by 19:45, so waiting for the CLI artefact cost nothing.
+
+The image of `v1.8.2-rc.1` carries the `cli` job's binary: extracted from both
+published images, `batlehub-cli` is a static ELF of the right arch and
+byte-identical to `batlehub-cli-linux-<arch>.tar.gz` on the release.
+
+Warm, measured with the `image` label on PR #226 (`pr-image.yaml`, same
+Containerfile, `buildcache:pr-<arch>`):
+
+| | amd64 | arm64 |
+| --- | ---: | ---: |
+| Cold (run `39773342781`) | 28 min 43 | 26 min 44 |
+| Every layer cached (run `39803105238`) | 6 s | 5 s |
