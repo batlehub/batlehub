@@ -1,0 +1,275 @@
+name: PR image
+# A proxy image of a pull request, on demand: add the `image` label and this
+# pushes `ghcr.io/<repo>:pr-<number>` (amd64 + arm64) built from the PR head.
+# Same mechanism as `soak.yaml` — a label, because a `workflow_dispatch`-only
+# workflow does not exist until it lands on the default branch — and the label
+# is removed at the end, so adding it again rebuilds.
+#
+# A fork's pull request gets a read-only token, so this cannot push for one.
+#
+# Each arch is scanned by Trivy (fixable HIGH/CRITICAL, `.trivyignore.yaml`, the
+# release gate's criteria) and one comment on the PR — edited in place on a
+# rebuild — gives the image references and the findings. The scan reports; it
+# does not fail the run, `image-scan.yaml` is the gate.
+#
+# Not a release: no signature, no attestation, no worker images. The CLI is the
+# one the Containerfile builds itself (no `cli` build context here).
+on:
+  pull_request:
+    branches: ["main"]
+    types: [labeled]
+permissions:
+  contents: read
+concurrency:
+  group: pr-image-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  CACHE: ghcr.io/${{ github.repository }}/buildcache
+jobs:
+  build:
+    name: PR image — ${{ matrix.platform }}
+    if: github.event.label.name == 'image'
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - platform: amd64
+            os: ubuntu-latest
+          - platform: arm64
+            os: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Reads the release cache but never writes it: a release must not build
+      # on layers a pull request produced. PRs share their own ref instead.
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ./Containerfile
+          platforms: linux/${{ matrix.platform }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+          cache-from: |
+            type=registry,ref=${{ env.CACHE }}:pr-${{ matrix.platform }}
+            type=registry,ref=${{ env.CACHE }}:proxy-${{ matrix.platform }}
+          cache-to: type=registry,ref=${{ env.CACHE }}:pr-${{ matrix.platform }},mode=max
+      - name: Record the digest
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: mkdir -p out && echo "$DIGEST" > out/digest
+      # Per-step times of the Containerfile (cook, build, UI…), out of the
+      # build record BuildKit keeps: the job only sees one "Build and push"
+      # step. `[stage n/m] cmd<TAB>seconds|cached`; steps under a second, and
+      # cached steps other than RUN, dropped. The logs come out on stderr.
+      # Best effort: a buildx without `history` loses the table only.
+      - name: Time the Containerfile steps
+        continue-on-error: true
+        shell: bash
+        env:
+          BUILDX_EXPERIMENTAL: "1"
+          METADATA: ${{ steps.build.outputs.metadata }}
+        run: |
+          set -euo pipefail
+          ref=$(jq -r '."buildx.build.ref" | split("/") | last' <<<"$METADATA")
+          docker buildx history logs "$ref" 2>&1 | awk '
+            /^#[0-9]+ \[/ {
+              id = $1; line = $0; sub(/^#[0-9]+ /, "", line)
+              if (line ~ /^\[internal\]/ || (id in name)) next
+              sub(/^\[linux\/[a-z0-9]+ /, "[", line)
+              gsub(/\|/, "\\|", line)
+              if (length(line) > 90) line = substr(line, 1, 87) "..."
+              name[id] = line; order[++n] = id; next
+            }
+            $2 == "DONE"   { t[$1] = $3 + 0 }
+            $2 == "CACHED" { t[$1] = "cached" }
+            END {
+              for (i = 1; i <= n; i++) {
+                id = order[i]
+                if (!(id in t)) continue
+                if (t[id] == "cached" ? name[id] ~ /^\[[^]]*\] RUN / : t[id] >= 1) print name[id] "\t" t[id]
+              }
+            }' > out/steps.tsv
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          format: json
+          output: out/trivy.json
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+          exit-code: "0"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-${{ matrix.platform }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 1
+  publish:
+    name: Tag pr-${{ github.event.pull_request.number }} and comment
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write # the comment
+      actions: read # the build jobs' step timings
+    steps:
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # One directory per arch: image-amd64/{digest,trivy.json,steps.tsv}, …
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: image-*
+      - name: Tag the multi-arch index
+        id: tag
+        shell: bash
+        env:
+          REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          TAG: pr-${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create -t "${REF}:${TAG}" \
+            "${REF}@$(cat image-amd64/digest)" "${REF}@$(cat image-arm64/digest)"
+          digest=$(docker buildx imagetools inspect "${REF}:${TAG}" --format '{{json .Manifest}}' | jq -r .digest)
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+      - name: Write the comment
+        shell: bash
+        env:
+          REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          TAG: pr-${{ github.event.pull_request.number }}
+          INDEX: ${{ steps.tag.outputs.digest }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The build jobs' own steps, from the API: started/completed per step.
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs" > jobs.json
+          job_steps=$(jq -r '
+            def d: (.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601);
+            def fmt: if . >= 60 then "\(. / 60 | floor)m \(. % 60)s" else "\(.)s" end;
+            def shown: select(.completed_at and (.name | startswith("Post ") | not) and .name != "Complete job");
+            (.jobs | map(select(.name | startswith("PR image — ")) | {key: (.name | ltrimstr("PR image — ")), value: .}) | from_entries) as $by
+            | "| Step | amd64 | arm64 |",
+              "| --- | ---: | ---: |",
+              ($by.amd64.steps[] | shown | .name as $n
+                | "| \($n) | \(d | fmt) | \(first($by.arm64.steps[] | select(.name == $n) | shown | d | fmt) // "–") |"),
+              "| **Total** | **\($by.amd64 | d | fmt)** | **\($by.arm64 | d | fmt)** |"' jobs.json)
+          # The Containerfile steps, joined on their name, in amd64's order.
+          containerfile_steps=""
+          if [ -s image-amd64/steps.tsv ] && [ -s image-arm64/steps.tsv ]; then
+            containerfile_steps=$(awk -F'\t' '
+              function fmt(v,  s) {
+                if (v == "cached") return "cached"
+                s = int(v + 0.5)
+                return s >= 60 ? int(s / 60) "m " s % 60 "s" : s "s"
+              }
+              FNR == NR { arm[$1] = $2; next }
+              { printf "| `%s` | %s | %s |\n", $1, fmt($2), ($1 in arm) ? fmt(arm[$1]) : "–" }
+            ' image-arm64/steps.tsv image-amd64/steps.tsv)
+          fi
+          {
+            echo "<!-- pr-image -->"
+            echo "### 🐳 PR image"
+            echo
+            echo "Built from ${SHA} — [run](${RUN_URL})"
+            echo
+            echo "| | Reference |"
+            echo "| --- | --- |"
+            echo "| tag | \`${REF}:${TAG}\` |"
+            echo "| index | \`${REF}@${INDEX}\` |"
+            for arch in amd64 arm64; do
+              echo "| ${arch} | \`${REF}@$(cat "image-${arch}/digest")\` |"
+            done
+            echo
+            echo '```sh'
+            echo "docker pull ${REF}@${INDEX}"
+            echo '```'
+            echo
+            echo "### Trivy — fixable HIGH/CRITICAL"
+            echo
+            for arch in amd64 arm64; do
+              rows=$(jq -r '.Results[]? | .Vulnerabilities[]? |
+                "| \(.PkgName) | \(.VulnerabilityID) | \(.Severity) | \(.InstalledVersion) | \(.FixedVersion) |"' \
+                "image-${arch}/trivy.json" | sort -u)
+              if [ -z "$rows" ]; then
+                echo "- **${arch}**: ✅ none"
+              else
+                echo "- **${arch}**: ❌ $(wc -l <<<"$rows") finding(s)"
+                echo
+                echo "  <details><summary>details</summary>"
+                echo
+                echo "  | Package | Advisory | Severity | Installed | Fixed in |"
+                echo "  | --- | --- | --- | --- | --- |"
+                echo "  ${rows//$'\n'/$'\n'  }"
+                echo
+                echo "  </details>"
+              fi
+            done
+            echo
+            echo "### Build timings"
+            echo
+            echo "$job_steps"
+            echo
+            echo "<details><summary>Containerfile steps (≥ 1 s, or a cached RUN)</summary>"
+            echo
+            if [ -n "$containerfile_steps" ]; then
+              echo "| Step | amd64 | arm64 |"
+              echo "| --- | ---: | ---: |"
+              echo "$containerfile_steps"
+            else
+              echo "_Not available: \`docker buildx history logs\` failed in a build job._"
+            fi
+            echo
+            echo "</details>"
+          } > comment.md
+          cat comment.md >> "$GITHUB_STEP_SUMMARY"
+      # One comment per PR, edited on each rebuild (the `pr-checklist.yaml` way).
+      - name: Post or update the comment
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- pr-image -->")) | .id' | head -n1)
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" -F body=@comment.md >/dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@comment.md >/dev/null
+          fi
+  unlabel:
+    name: Remove the label
+    needs: [build, publish]
+    if: always() && github.event.label.name == 'image'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Remove `image` so adding it again rebuilds
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/$PR/labels/image" >/dev/null
