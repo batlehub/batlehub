@@ -73,8 +73,9 @@ jobs:
         run: mkdir -p out && echo "$DIGEST" > out/digest
       # Per-step times of the Containerfile (cook, build, UI…), out of the
       # build record BuildKit keeps: the job only sees one "Build and push"
-      # step. `[stage n/m] cmd<TAB>seconds|cached`, steps under a second
-      # dropped. Best effort: a buildx without `history` loses the table only.
+      # step. `[stage n/m] cmd<TAB>seconds|cached`; steps under a second, and
+      # cached steps other than RUN, dropped. The logs come out on stderr.
+      # Best effort: a buildx without `history` loses the table only.
       - name: Time the Containerfile steps
         continue-on-error: true
         shell: bash
@@ -84,7 +85,7 @@ jobs:
         run: |
           set -euo pipefail
           ref=$(jq -r '."buildx.build.ref" | split("/") | last' <<<"$METADATA")
-          docker buildx history logs "$ref" | awk '
+          docker buildx history logs "$ref" 2>&1 | awk '
             /^#[0-9]+ \[/ {
               id = $1; line = $0; sub(/^#[0-9]+ /, "", line)
               if (line ~ /^\[internal\]/ || (id in name)) next
@@ -98,7 +99,8 @@ jobs:
             END {
               for (i = 1; i <= n; i++) {
                 id = order[i]
-                if ((id in t) && (t[id] == "cached" || t[id] >= 1)) print name[id] "\t" t[id]
+                if (!(id in t)) continue
+                if (t[id] == "cached" ? name[id] ~ /^\[[^]]*\] RUN / : t[id] >= 1) print name[id] "\t" t[id]
               }
             }' > out/steps.tsv
       - name: Trivy scan
@@ -229,7 +231,7 @@ jobs:
             echo
             echo "$job_steps"
             echo
-            echo "<details><summary>Containerfile steps (≥ 1 s, or cached)</summary>"
+            echo "<details><summary>Containerfile steps (≥ 1 s, or a cached RUN)</summary>"
             echo
             if [ -n "$containerfile_steps" ]; then
               echo "| Step | amd64 | arm64 |"
