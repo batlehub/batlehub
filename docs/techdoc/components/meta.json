@@ -1,0 +1,1 @@
+{ "pages": ["server", "web", "core", "adapters", "config", "cli", "ui", "helm", "examples"] }
