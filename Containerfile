@@ -1,47 +1,56 @@
 # ── Build stage ───────────────────────────────────────────────────────────────
-FROM rust:1.98-slim-bookworm@sha256:ebd900bae66fd508b466cef82d64a83a5fb34682e4c8b2797a42908bddc95a57 AS builder
+FROM rust:1.98-slim-bookworm@sha256:ebd900bae66fd508b466cef82d64a83a5fb34682e4c8b2797a42908bddc95a57 AS chef
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl libssl-dev make pkg-config \
     && rm -rf /var/lib/apt/lists/*
+RUN cargo install --locked cargo-chef --version 0.1.78
 
 WORKDIR /build
 
-# Cache dependency compilation separately from source changes.
+# cargo-chef rather than stub `lib.rs` files: every `chore(version)` rewrites
+# the workspace version in `Cargo.toml` and `Cargo.lock`, so a layer keyed on
+# those files was cold on every release and rebuilt the whole dependency graph.
+# The recipe masks workspace-member versions (all `0.0.1`), so it only changes
+# when a dependency does.
+FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
-COPY crates/core/Cargo.toml        crates/core/Cargo.toml
-COPY crates/config/Cargo.toml      crates/config/Cargo.toml
-COPY crates/adapters/Cargo.toml    crates/adapters/Cargo.toml
-COPY crates/web/Cargo.toml         crates/web/Cargo.toml
-COPY crates/examples/Cargo.toml    crates/examples/Cargo.toml
-COPY server/Cargo.toml             server/Cargo.toml
-COPY cli/Cargo.toml                cli/Cargo.toml
+COPY crates/  crates/
+COPY server/  server/
+COPY cli/     cli/
 COPY patches/ patches/
+RUN cargo chef prepare --recipe-path recipe.json
 
-# Stub out every lib/main so cargo can resolve and compile deps.
-RUN for crate in crates/core crates/config crates/adapters crates/web; do \
-    mkdir -p "$crate/src" && echo "pub fn _stub() {}" > "$crate/src/lib.rs"; \
-    done && \
-    mkdir -p crates/examples/src && echo "pub fn _stub() {}" > crates/examples/src/lib.rs && \
-    mkdir -p server/src && echo "fn main() {}" > server/src/main.rs && \
-    mkdir -p cli/src    && echo "fn main() {}" > cli/src/main.rs
-
+FROM chef AS builder
+# `patches/` is not a workspace member, so it is not in the recipe and has to be
+# real before the cook: `tikv-jemalloc-ctl` compiles against the `paste` shim.
+COPY patches/ patches/
+COPY --from=planner /build/recipe.json recipe.json
 # --locked: build exactly what Cargo.lock resolves and fail if it would need
 # updating — the image must not resolve a dependency the repository never saw.
-RUN cargo build --locked --release -p batlehub-server -p batlehub-cli 2>/dev/null; exit 0
+# Same package selection as the build below, or feature unification differs and
+# the shared dependencies are compiled twice.
+RUN cargo chef cook --locked --release --recipe-path recipe.json -p batlehub-server
 
-# Now copy real source and rebuild (only changed crates recompile).
+COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 COPY server/ server/
 COPY cli/    cli/
-
-# Touch lib/main files so cargo detects the change.
-RUN touch crates/*/src/lib.rs server/src/main.rs cli/src/main.rs
-
-RUN cargo build --locked --release -p batlehub-server -p batlehub-cli
+RUN cargo build --locked --release -p batlehub-server
 
 # Pre-create runtime directories so they can be copied into the shell-less distroless image.
 RUN mkdir -p /var/cache/batlehub
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+# The release overrides this stage with `--build-context cli=<dir>` holding the
+# static musl binary its `cli` job already built and attested, so the image ships
+# the same bytes as the release page and never compiles the CLI. A local build
+# or `image-scan.yaml` has no such directory and builds it here.
+FROM builder AS cli-build
+RUN cargo build --locked --release -p batlehub-cli
+
+FROM scratch AS cli
+COPY --from=cli-build /build/target/release/batlehub-cli /batlehub-cli
 
 # ── Frontend build stage ───────────────────────────────────────────────────────
 FROM node:26-slim@sha256:14bf3eac4bf209d906d3c41256597d3ab1f926b2e93a79e9bdfe1efd32454239 AS ui-builder
@@ -71,7 +80,7 @@ RUN batlehub --config /etc/batlehub/config.toml dump-spec > openapi.json && \
 FROM gcr.io/distroless/cc-debian12:latest@sha256:e5d81ddde149641e2a9ba55be4545bc125c67de07508b03ba4c22e6eb0ded5aa AS runtime
 
 COPY --from=builder  /build/target/release/batlehub     /usr/local/bin/batlehub
-COPY --from=builder  /build/target/release/batlehub-cli /usr/local/bin/batlehub-cli
+COPY --from=cli      /batlehub-cli                      /usr/local/bin/batlehub-cli
 # The cache directory is the one path the process writes to when
 # `[storage] type = "filesystem"`, so it must be owned by the runtime user.
 # Everything else (the binaries, the SPA bundle) stays root-owned and

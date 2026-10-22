@@ -28,34 +28,33 @@ ARG YARA_X_VERSION=1.20.0
 ARG YARA_X_SHA256=cabb8df46492fff59c51261302c71ed9cb2cef393d3f0ca560801a34a8e24cbe
 
 # ── Build stage: the server binary, as the proxy image builds it ─────────────
-FROM rust:1.98-slim-bookworm@sha256:ebd900bae66fd508b466cef82d64a83a5fb34682e4c8b2797a42908bddc95a57 AS builder
+# cargo-chef for the same reason as in `Containerfile`: the recipe survives the
+# version bump, so the dependency layer is not cold on every release.
+FROM rust:1.98-slim-bookworm@sha256:ebd900bae66fd508b466cef82d64a83a5fb34682e4c8b2797a42908bddc95a57 AS chef
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl libssl-dev make pkg-config \
     && rm -rf /var/lib/apt/lists/*
-
+RUN cargo install --locked cargo-chef --version 0.1.78
 WORKDIR /build
+
+FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
-COPY crates/core/Cargo.toml        crates/core/Cargo.toml
-COPY crates/config/Cargo.toml      crates/config/Cargo.toml
-COPY crates/adapters/Cargo.toml    crates/adapters/Cargo.toml
-COPY crates/web/Cargo.toml         crates/web/Cargo.toml
-COPY crates/examples/Cargo.toml    crates/examples/Cargo.toml
-COPY server/Cargo.toml             server/Cargo.toml
-COPY cli/Cargo.toml                cli/Cargo.toml
+COPY crates/  crates/
+COPY server/  server/
+COPY cli/     cli/
 COPY patches/ patches/
-RUN for crate in crates/core crates/config crates/adapters crates/web; do \
-    mkdir -p "$crate/src" && echo "pub fn _stub() {}" > "$crate/src/lib.rs"; \
-    done && \
-    mkdir -p crates/examples/src && echo "pub fn _stub() {}" > crates/examples/src/lib.rs && \
-    mkdir -p server/src && echo "fn main() {}" > server/src/main.rs && \
-    mkdir -p cli/src    && echo "fn main() {}" > cli/src/main.rs
-RUN cargo build --locked --release -p batlehub-server 2>/dev/null; exit 0
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+COPY patches/ patches/
+COPY --from=planner /build/recipe.json recipe.json
+RUN cargo chef cook --locked --release --recipe-path recipe.json -p batlehub-server
+COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 COPY server/ server/
 COPY cli/ cli/
-RUN touch crates/*/src/lib.rs server/src/main.rs cli/src/main.rs && \
-    cargo build --locked --release -p batlehub-server
+RUN cargo build --locked --release -p batlehub-server
 
 # ── Scanner toolchains ───────────────────────────────────────────────────────
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS tools
