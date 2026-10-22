@@ -56,7 +56,7 @@ tar = "0.4"
 # `cargo deny` refuses under this repository's no-suppressions stance.
 # `serde-saphyr` is safe Rust over `granit-parser` — its fork of
 # `saphyr-parser`, despite the name; that fork is what Cargo.lock carries.
-serde-saphyr = { version = "1.3", default-features = false, features = ["serialize", "deserialize"] }
+serde-saphyr = { version = "2.0", default-features = false, features = ["serialize", "deserialize"] }
 
 [dev-dependencies]
 # Only in tests, and only to assert that a *filtered* channel manifest still
