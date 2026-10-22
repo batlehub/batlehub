@@ -56,6 +56,13 @@ COPY server/ server/
 COPY cli/ cli/
 RUN cargo build --locked --release -p batlehub-server
 
+# The release overrides this stage with `--build-context server=<dir>` holding
+# the binary the proxy image's amd64 leg already built, so the release compiles
+# the server once (TD-0003 §3). A local build or `image-scan.yaml` has no such
+# directory and builds it above.
+FROM scratch AS server
+COPY --from=builder /build/target/release/batlehub /batlehub
+
 # ── Scanner toolchains ───────────────────────────────────────────────────────
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS tools
 ARG POSTMORTEM_VERSION
@@ -118,7 +125,7 @@ RUN apt-get update && apt-get upgrade -y --no-install-recommends \
     && groupadd -g 65532 nonroot && useradd -u 65532 -g 65532 -M -s /usr/sbin/nologin nonroot \
     && mkdir -p /var/cache/batlehub /tmp/batlehub && chown 65532:65532 /var/cache/batlehub /tmp/batlehub
 
-COPY --from=builder /build/target/release/batlehub /usr/local/bin/batlehub
+COPY --from=server /batlehub /usr/local/bin/batlehub
 COPY --from=tools /usr/local/bin/postmortem /usr/local/bin/postmortem
 COPY --from=tools /usr/local/bin/trivy      /usr/local/bin/trivy
 COPY --from=tools /usr/local/bin/yr         /usr/local/bin/yr
