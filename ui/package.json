@@ -42,7 +42,7 @@
     "@eslint/js": "^10.0.1",
     "@hey-api/openapi-ts": "^0.99.0",
     "@microsoft/eslint-formatter-sarif": "^3.1.0",
-    "@scalar/api-reference": "^1.74.0",
+    "@scalar/api-reference": "^1.75.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^26.6.5",
     "@typescript-eslint/eslint-plugin": "^8.71.2",
