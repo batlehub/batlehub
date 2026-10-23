@@ -61,9 +61,8 @@ Checked by preparing the recipe before and after `task version:set`'s edit
 (`1.8.1` → `1.8.2` in `Cargo.toml`, the seven workspace entries in
 `Cargo.lock`): both recipes have the same sha256 (`27dbb786…`), so the cook
 layer's cache key does not move. Changing one third-party version in the lock
-does change the recipe, so the cache still invalidates when it should. Not yet
-seen end to end: the first release that reads a warm `buildcache:proxy-<arch>`
-is the one after `v1.8.2-rc.1`.
+does change the recipe, so the cache still invalidates when it should. Seen end to end
+in `v1.8.2-rc.2` ([§ Measurements](#measurements)).
 
 ## 3. The same server is compiled three times per release
 
@@ -87,7 +86,8 @@ publishes and attests that file instead of compiling its own, and
 `image-scan.yaml`. One compile per arch. The release binary is therefore built
 on bookworm (glibc 2.36) rather than `ubuntu-latest`, so it runs on more hosts,
 not fewer. The cost is ordering: `server` and `image-worker` now wait for
-`image-proxy` instead of running beside it. Not yet seen in a release run.
+`image-proxy` instead of running beside it, which `v1.8.2-rc.2` shows costs nothing: the
+worker build now takes a minute.
 
 ## 4. The UI stage waits for the whole Rust build
 
@@ -126,21 +126,30 @@ readable by the next one. Each build now caches to its own registry ref,
 
 ## Measurements
 
-Release runs (`build.yaml`) before and after §1, §2 and §5:
+Release runs (`build.yaml`) before and after §1, §2 and §5, then §3 and §4:
 
-| | `v1.8.1` (run `39657343550`) | `v1.8.2-rc.1` (run `39839300187`) |
-| --- | ---: | ---: |
-| **Whole release run** | **4 h 16** | **28 min** |
-| Proxy image, both arches | 3 h 28 (one job, arm64 under QEMU) | — |
-| Proxy image, amd64 | — | 24 min (native) |
-| Proxy image, arm64 | — | 23 min (native) |
-| Worker images | 27 min, after the proxy image | 22 min, alongside it |
-| Publish, sign, scan (index + 3 images) | inside the 4 h job | 3 min 30 |
-| CLI Linux aarch64 | 5 min (`cross`) | 4 min 25 (native) |
+| | `v1.8.1` (run `39657343550`) | `v1.8.2-rc.1` (run `39839300187`) | `v1.8.2-rc.2` (run `39990328020`) |
+| --- | ---: | ---: | ---: |
+| **Whole release run** | **4 h 16** | **28 min** | **26 min** |
+| Proxy image, both arches | 3 h 28 (one job, arm64 under QEMU) | — | — |
+| Proxy image, amd64 | — | 24 min (native) | 17 min 29 |
+| Proxy image, arm64 | — | 23 min (native) | 17 min 06 |
+| Server binary | compiled on its own | compiled on its own | 1 min 26 (the image's, attested) |
+| Worker images | 27 min, after the proxy image | 22 min, alongside it | 1 min 03, after the proxy image |
+| Publish, sign, scan (index + 3 images) | inside the 4 h job | 3 min 30 | 3 min 37 |
+| CLI Linux aarch64 | 5 min (`cross`) | 4 min 25 (native) | 4 min 49 |
 
-Both release runs were cold: `v1.8.1` because of §2 and §5, `v1.8.2-rc.1`
+Both earlier release runs were cold: `v1.8.1` because of §2 and §5, `v1.8.2-rc.1`
 because it created the registry cache. The `cli` jobs were done by 19:26 and
 the proxy legs by 19:45, so waiting for the CLI artefact cost nothing.
+
+`v1.8.2-rc.2` is the first release to read a warm `buildcache:proxy-<arch>`:
+on both arches `cargo chef cook` came back `CACHED`, and what is left of a
+proxy leg is the workspace's own `cargo build` (902 s on amd64, 886 s on arm64).
+The worker build passed `--build-context server=dist/server` and compiled
+nothing. Its `Checksums and detached signature` job failed once, on an
+`HttpError` from `softprops/action-gh-release` while the perf workflow was writing
+to the same draft, and passed on a rerun; the 26 min exclude the rerun.
 
 The image of `v1.8.2-rc.1` carries the `cli` job's binary: extracted from both
 published images, `batlehub-cli` is a static ELF of the right arch and
