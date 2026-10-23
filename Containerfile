@@ -41,6 +41,13 @@ RUN cargo build --locked --release -p batlehub-server
 # Pre-create runtime directories so they can be copied into the shell-less distroless image.
 RUN mkdir -p /var/cache/batlehub
 
+# ── Server ────────────────────────────────────────────────────────────────────
+# The binary alone. The release exports this stage once on amd64 and hands it to
+# the release page and to `Containerfile.worker`'s `server` build context, so the
+# server is compiled once per arch, not once per artefact (TD-0003 §3).
+FROM scratch AS server
+COPY --from=builder /build/target/release/batlehub /batlehub
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 # The release overrides this stage with `--build-context cli=<dir>` holding the
 # static musl binary its `cli` job already built and attested, so the image ships
@@ -69,17 +76,16 @@ RUN pnpm install --frozen-lockfile
 
 COPY ui/ ./
 
-# Generate the OpenAPI spec from the just-built binary and then the TS client.
-COPY --from=builder /build/target/release/batlehub /usr/local/bin/batlehub
-COPY config.example.toml /etc/batlehub/config.toml
-RUN batlehub --config /etc/batlehub/config.toml dump-spec > openapi.json && \
-    pnpm run generate && \
-    pnpm run build
+# The client is generated from the committed spec, not from a `dump-spec` of the
+# builder's binary, so this stage runs alongside the Rust build instead of after
+# it (TD-0003 §4). `openapi_spec_is_committed` in `crates/web/tests` fails when
+# the committed spec and the server disagree.
+RUN pnpm run generate && pnpm run build
 
 # ── Runtime image ─────────────────────────────────────────────────────────────
 FROM gcr.io/distroless/cc-debian12:latest@sha256:e5d81ddde149641e2a9ba55be4545bc125c67de07508b03ba4c22e6eb0ded5aa AS runtime
 
-COPY --from=builder  /build/target/release/batlehub     /usr/local/bin/batlehub
+COPY --from=server   /batlehub                          /usr/local/bin/batlehub
 COPY --from=cli      /batlehub-cli                      /usr/local/bin/batlehub-cli
 # The cache directory is the one path the process writes to when
 # `[storage] type = "filesystem"`, so it must be owned by the runtime user.

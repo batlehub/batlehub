@@ -294,3 +294,18 @@ fn every_declared_success_status_is_one_the_handler_can_actually_send() {
         offenders.join("\n  ")
     );
 }
+
+/// `ui/openapi.json` is what the image's UI stage generates its client from
+/// (TD-0003 §4), so it must be what `dump-spec` prints, byte for byte.
+#[test]
+fn openapi_spec_is_committed() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../ui/openapi.json");
+    let committed = std::fs::read_to_string(path).expect("read ui/openapi.json");
+    let current = batlehub_web::openapi_spec()
+        .to_pretty_json()
+        .expect("serialize openapi spec");
+    assert!(
+        committed == current + "\n",
+        "ui/openapi.json differs from the server's spec: run `task dump-spec`"
+    );
+}

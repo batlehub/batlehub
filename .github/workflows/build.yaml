@@ -24,10 +24,13 @@ jobs:
           version="${tag_name#v}"
           echo "tag=${tag_name}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+  # Publishes the binary the proxy image's amd64 leg built (its `server` stage),
+  # not a build of its own: the release compiles the server once per arch
+  # (TD-0003 §3). Built on bookworm, so it also runs on a glibc as old as 2.36.
   server:
-    name: Build and publish server binary
+    name: Publish server binary
     runs-on: ubuntu-latest
-    needs: meta
+    needs: [meta, image-proxy]
     permissions:
       contents: write
       packages: write
@@ -44,9 +47,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
-      - name: Build release binary
-        shell: bash
-        run: cargo build --release --locked -p batlehub-server
+      - name: Fetch the server
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: server-linux-amd64
+          path: dist/server
+      # upload-artifact does not keep mode bits.
+      - name: Restore the executable bit
+        run: chmod 0755 dist/server/batlehub
       # CycloneDX SBOM of the Rust workspace — lets a future-disclosed crate CVE
       # be matched against this exact shipped build (`trivy sbom sbom-rust.cdx.json`).
       - name: Generate Rust SBOM (CycloneDX)
@@ -77,7 +85,7 @@ jobs:
       - name: Attest the binary's build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: target/release/batlehub
+          subject-path: dist/server/batlehub
       # The SBOM is *bound to the binary*, not merely uploaded beside it: the
       # attestation names the binary's digest as its subject, so a consumer who
       # has the file can ask which SBOM describes it and get an answer that
@@ -85,7 +93,7 @@ jobs:
       - name: Attest the binary's SBOM
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
-          subject-path: target/release/batlehub
+          subject-path: dist/server/batlehub
           sbom-path: sbom-rust.cdx.json
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -143,7 +151,7 @@ jobs:
             #### 📝 Changes
           generate_release_notes: true
           files: |
-            target/release/batlehub
+            dist/server/batlehub
             sbom-rust.cdx.json
           fail_on_unmatched_files: true
   cli:
@@ -253,8 +261,9 @@ jobs:
   #
   # Three jobs. `image-proxy` builds the proxy image once per arch on a native
   # runner — under QEMU the arm64 leg alone took 3 h 28 of v1.8.1's release —
-  # and pushes each by digest only. `image-worker` builds the two amd64 worker
-  # images alongside. `image` stitches the proxy digests into the tagged index,
+  # and pushes each by digest only. Its amd64 leg also hands its `server` stage
+  # to the `server` job and to `image-worker`, which builds the two amd64 worker
+  # images around that binary rather than compiling it again. `image` stitches the proxy digests into the tagged index,
   # then signs, scans, attests and gates all three images.
   #
   # Build caches live in the registry, not in `type=gha`: a tag run can only
@@ -285,19 +294,27 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # Everything but the CLI, while the `cli` job builds it: the server and
-      # the SPA are the twenty minutes, the CLI is a COPY. The final build
-      # below reuses these layers from this builder's local cache.
-      - name: Build the server and UI stages
+      # The server, while the `cli` job builds the CLI: the server is the
+      # twenty minutes, the CLI is a COPY. Exported as a file for the `server`
+      # and `image-worker` jobs; the final build below reuses these layers from
+      # this builder's local cache.
+      - name: Build the server stage
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Containerfile
-          target: ui-builder
+          target: server
           platforms: linux/${{ matrix.platform }}
-          outputs: type=cacheonly
+          outputs: type=local,dest=dist/server
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/buildcache:proxy-${{ matrix.platform }}
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/buildcache:proxy-${{ matrix.platform }},mode=max
+      - name: Hand the server to the release and the worker images
+        if: matrix.platform == 'amd64'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: server-linux-amd64
+          path: dist/server/batlehub
+          if-no-files-found: error
+          retention-days: 1
       # The image ships the binary the `cli` job built and attested, not a
       # second build of it. That job is normally done long before this point;
       # the wait only covers a slow runner queue.
@@ -338,6 +355,9 @@ jobs:
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           provenance: false
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/buildcache:proxy-${{ matrix.platform }}
+          # Here rather than on the server step, so the UI stage's layers are
+          # in it too.
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/buildcache:proxy-${{ matrix.platform }},mode=max
       - name: Record the digest
         shell: bash
         env:
@@ -354,7 +374,7 @@ jobs:
   image-worker:
     name: Worker images
     runs-on: ubuntu-latest
-    needs: meta
+    needs: [meta, image-proxy]
     permissions:
       contents: read
       packages: write
@@ -370,6 +390,14 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Fetch the server
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: server-linux-amd64
+          path: dist/server
+      # upload-artifact does not keep mode bits, and COPY carries them over.
+      - name: Restore the executable bit
+        run: chmod 0755 dist/server/batlehub
       # The worker image (RFC 0018 §5.4): the same binary with the scanner
       # toolchains — bubblewrap, postmortem, the Trivy client — that the proxy
       # image deliberately does not carry. amd64 only: the Containerfile
@@ -382,6 +410,8 @@ jobs:
           file: ./Containerfile.worker
           push: true
           platforms: linux/amd64
+          # Replaces the Containerfile's `server` stage, so it is never built.
+          build-contexts: server=dist/server
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-worker:${{ needs.meta.outputs.version }}
           provenance: false

@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | Open — §1, §2 (except `Containerfile.hardened`) and §5 retired |
+| **Status** | Retired |
 | **Found** | 2026-10-14, watching the `v1.6.0` Release run (`38622313628`) |
 | **Area** | `Containerfile`, `Containerfile.worker`, `Containerfile.hardened`, `.github/workflows/build.yaml` |
 
@@ -54,8 +54,8 @@ shows it and the cache is silently empty. `Containerfile.worker` and
 
 **Retired** for `Containerfile` and `Containerfile.worker`: both cook with
 `cargo-chef`, whose recipe pins every workspace-member version to `0.0.1`, and a
-failed `cargo chef cook` fails the build. `Containerfile.hardened`, which no
-workflow builds, still has the stub pattern.
+failed `cargo chef cook` fails the build. So does `Containerfile.hardened`,
+which no workflow builds.
 
 Checked by preparing the recipe before and after `task version:set`'s edit
 (`1.8.1` → `1.8.2` in `Cargo.toml`, the seven workspace entries in
@@ -77,8 +77,17 @@ builder stage or a build artefact passed in), not one they compile themselves.
 
 The CLI part of this is retired: the release passes the `cli` job's static
 musl binaries in as the `cli` build context, so the proxy image no longer
-compiles the CLI (and ships the same bytes as the release page). The server is
-still compiled three times.
+compiles the CLI (and ships the same bytes as the release page).
+
+**Retired** for the server too: the proxy image's amd64 leg builds its `server`
+stage first and uploads the binary as `server-linux-amd64`. The `server` job
+publishes and attests that file instead of compiling its own, and
+`image-worker` passes it as the `server` build context of
+`Containerfile.worker`, whose own builder now only runs for a local build or
+`image-scan.yaml`. One compile per arch. The release binary is therefore built
+on bookworm (glibc 2.36) rather than `ubuntu-latest`, so it runs on more hosts,
+not fewer. The cost is ordering: `server` and `image-worker` now wait for
+`image-proxy` instead of running beside it. Not yet seen in a release run.
 
 ## 4. The UI stage waits for the whole Rust build
 
@@ -91,6 +100,14 @@ from it.
 **Retired when** the UI stage builds from the committed spec, with no
 dependency on the builder, and the drift between the spec and the server is
 checked in CI instead (it may already be, check before adding a gate).
+
+**Retired**: `ui-builder` runs `pnpm run generate` on the committed spec and no
+longer copies anything from the builder. Nothing checked the drift before:
+`front-test.yaml` regenerates the spec without comparing it, and only runs on
+`ui/` paths. `openapi_spec_is_committed` in `crates/web/tests/openapi_contract.rs`
+now fails whenever `ui/openapi.json` is not byte-for-byte what `dump-spec`
+prints, so a Rust change that moves the API has to commit `task dump-spec`.
+`Containerfile.hardened` has the same stage.
 
 ## 5. Two images share one GitHub Actions cache scope
 
