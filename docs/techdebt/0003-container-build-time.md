@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Status** | Retired, except for `Containerfile.hardened` (§2, §4), which no workflow builds |
+| **Status** | Retired |
 | **Found** | 2026-10-14, watching the `v1.6.0` Release run (`38622313628`) |
 | **Area** | `Containerfile`, `Containerfile.worker`, `Containerfile.hardened`, `.github/workflows/build.yaml` |
 
@@ -54,8 +54,8 @@ shows it and the cache is silently empty. `Containerfile.worker` and
 
 **Retired** for `Containerfile` and `Containerfile.worker`: both cook with
 `cargo-chef`, whose recipe pins every workspace-member version to `0.0.1`, and a
-failed `cargo chef cook` fails the build. `Containerfile.hardened`, which no
-workflow builds, still has the stub pattern.
+failed `cargo chef cook` fails the build. So does `Containerfile.hardened`,
+which no workflow builds.
 
 Checked by preparing the recipe before and after `task version:set`'s edit
 (`1.8.1` → `1.8.2` in `Cargo.toml`, the seven workspace entries in
@@ -107,7 +107,7 @@ longer copies anything from the builder. Nothing checked the drift before:
 `ui/` paths. `openapi_spec_is_committed` in `crates/web/tests/openapi_contract.rs`
 now fails whenever `ui/openapi.json` is not byte-for-byte what `dump-spec`
 prints, so a Rust change that moves the API has to commit `task dump-spec`.
-`Containerfile.hardened` keeps the old stage.
+`Containerfile.hardened` has the same stage.
 
 ## 5. Two images share one GitHub Actions cache scope
 

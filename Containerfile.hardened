@@ -1,46 +1,55 @@
 # ── Build stage ───────────────────────────────────────────────────────────────
-FROM registry.access.redhat.com/hi/rust:latest-builder@sha256:8055c3dede8892b3685e99f690c7ec3772ce815add533a9c9e05f000f8b9e3ba AS builder
+FROM registry.access.redhat.com/hi/rust:latest-builder@sha256:8055c3dede8892b3685e99f690c7ec3772ce815add533a9c9e05f000f8b9e3ba AS chef
 
 RUN dnf install -y awk gcc make openssl-devel pkgconfig && dnf clean all
 
+RUN cargo install --locked cargo-chef --version 0.1.78
+
 WORKDIR /build
 
-# Cache dependency compilation separately from source changes.
+# cargo-chef rather than stub `lib.rs` files, as in `Containerfile`: the recipe
+# masks workspace-member versions, so a `chore(version)` bump no longer
+# invalidates the dependency layer (TD-0003 §2).
+FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
-COPY crates/core/Cargo.toml        crates/core/Cargo.toml
-COPY crates/config/Cargo.toml      crates/config/Cargo.toml
-COPY crates/adapters/Cargo.toml    crates/adapters/Cargo.toml
-COPY crates/web/Cargo.toml         crates/web/Cargo.toml
-COPY crates/examples/Cargo.toml    crates/examples/Cargo.toml
-COPY server/Cargo.toml             server/Cargo.toml
-COPY cli/Cargo.toml                cli/Cargo.toml
+COPY crates/  crates/
+COPY server/  server/
+COPY cli/     cli/
 COPY patches/ patches/
+RUN cargo chef prepare --recipe-path recipe.json
 
-# Stub out every lib/main so cargo can resolve and compile deps.
-RUN for crate in crates/core crates/config crates/adapters crates/web; do \
-    mkdir -p "$crate/src" && echo "pub fn _stub() {}" > "$crate/src/lib.rs"; \
-    done && \
-    mkdir -p crates/examples/src && echo "pub fn _stub() {}" > crates/examples/src/lib.rs && \
-    mkdir -p server/src && echo "fn main() {}" > server/src/main.rs && \
-    mkdir -p cli/src    && echo "fn main() {}" > cli/src/main.rs
-
+FROM chef AS builder
+# `patches/` is not a workspace member, so it is not in the recipe and has to be
+# real before the cook: `tikv-jemalloc-ctl` compiles against the `paste` shim.
+COPY patches/ patches/
+COPY --from=planner /build/recipe.json recipe.json
 # --locked: build exactly what Cargo.lock resolves and fail if it would need
 # updating — the image must not resolve a dependency the repository never saw.
-RUN cargo build --locked --release -p batlehub-server -p batlehub-cli 2>/dev/null; exit 0
+# Same package selection as the build below, or feature unification differs and
+# the shared dependencies are compiled twice.
+RUN cargo chef cook --locked --release --recipe-path recipe.json -p batlehub-server
 
-# Now copy real source and rebuild (only changed crates recompile).
+COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 COPY server/ server/
 COPY cli/    cli/
-
-# Touch lib/main files so cargo detects the change.
-RUN touch crates/*/src/lib.rs server/src/main.rs cli/src/main.rs
-
-RUN cargo build --locked --release -p batlehub-server -p batlehub-cli
+RUN cargo build --locked --release -p batlehub-server
 
 # Pre-create runtime directories here so they can be copied, already owned by the
 # runtime UID, into a runtime image that may have no usable shell.
 RUN mkdir -p /var/cache/batlehub
+
+# ── Server ────────────────────────────────────────────────────────────────────
+FROM scratch AS server
+COPY --from=builder /build/target/release/batlehub /batlehub
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+# Overridable with `--build-context cli=<dir>`, as in `Containerfile`.
+FROM builder AS cli-build
+RUN cargo build --locked --release -p batlehub-cli
+
+FROM scratch AS cli
+COPY --from=cli-build /build/target/release/batlehub-cli /batlehub-cli
 
 # ── Frontend build stage ───────────────────────────────────────────────────────
 FROM registry.access.redhat.com/hi/nodejs:latest-builder@sha256:614e489f0e686023b082bb11acbf53072a86fbab41475dfea0138951ec90bb1f AS ui-builder
@@ -60,18 +69,15 @@ RUN pnpm install --frozen-lockfile
 
 COPY ui/ ./
 
-# Generate the OpenAPI spec from the just-built binary and then the TS client.
-COPY --from=builder /build/target/release/batlehub /usr/local/bin/batlehub
-COPY config.example.toml /etc/batlehub/config.toml
-RUN batlehub --config /etc/batlehub/config.toml dump-spec > openapi.json && \
-    pnpm run generate && \
-    pnpm run build
+# The client is generated from the committed spec, not from a `dump-spec` of the
+# builder's binary, so this stage runs alongside the Rust build (TD-0003 §4).
+RUN pnpm run generate && pnpm run build
 
 # ── Runtime image ─────────────────────────────────────────────────────────────
 FROM registry.access.redhat.com/hi/core-runtime:latest@sha256:fa72c318cd10f62b5616f396df0493ad8531adf0841aaf7b5d89c323712cfa11 AS runtime
 
-COPY --from=builder   /build/target/release/batlehub     /usr/local/bin/batlehub
-COPY --from=builder   /build/target/release/batlehub-cli /usr/local/bin/batlehub-cli
+COPY --from=server    /batlehub                          /usr/local/bin/batlehub
+COPY --from=cli       /batlehub-cli                      /usr/local/bin/batlehub-cli
 # Only path the process writes to under `[storage] type = "filesystem"`.
 COPY --from=builder --chown=65532:65532 /var/cache/batlehub /var/cache/batlehub
 COPY --from=ui-builder /ui/dist                          /app/ui/dist
