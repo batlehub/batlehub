@@ -1123,7 +1123,11 @@ NarSize: 10
         let dropped = info.drop_signatures_by("batlehub-nix-1");
         assert_eq!(dropped, 2);
         let sigs = info.get_all("Sig");
-        assert_eq!(sigs.len(), 3, "the upstream's and the third parties' remain");
+        assert_eq!(
+            sigs.len(),
+            3,
+            "the upstream's and the third parties' remain"
+        );
         assert!(sigs.iter().any(|s| s.starts_with("cache.nixos.org-1:")));
         assert!(sigs.iter().any(|s| s.starts_with("someone-else-1:")));
         assert!(sigs.iter().any(|s| s.starts_with("batlehub-nix-10:")));
