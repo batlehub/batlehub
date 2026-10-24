@@ -14,9 +14,10 @@ import {
 import { useAuth } from "@/composables/useAuth";
 import { Badge } from "@/components/ui/badge";
 
+import { roleLabel } from "@/lib/roles";
 const { t } = useI18n();
 
-const { identity, isAdmin, isAuthenticated, logout } = useAuth();
+const { identity, isAuthenticated, logout } = useAuth();
 const router = useRouter();
 
 const isOidcUser = computed(() => isAuthenticated.value && !!identity.value?.auth_provider);
@@ -44,16 +45,17 @@ function handleLogout() {
         class="hidden sm:flex items-center gap-2 border border-border px-2 py-1 text-xs text-muted-foreground transition-colors outline-none hover:border-muted-foreground hover:text-foreground"
       >
         <div
-          class="h-6 w-6 bg-primary text-primary-foreground flex items-center justify-center text-xs font-bold shrink-0"
+          class="h-6 w-6 bg-foreground text-background flex items-center justify-center text-xs font-bold shrink-0"
         >
           {{ userInitials }}
         </div>
         <span class="hidden lg:inline max-w-[10rem] truncate tracking-[0.1em]">
           {{ identity?.user_id }}
         </span>
-        <Badge v-if="isAdmin" variant="copper" class="text-xs">admin</Badge>
-        <Badge v-else-if="identity?.role !== 'anonymous'" variant="outline" class="text-xs">
-          {{ identity?.role }}
+        <!-- One neutral badge, named by the catalogue. Admin was a hardcoded
+             English "admin" in copper — and copper means "held", not "you". -->
+        <Badge v-if="identity?.role !== 'anonymous'" variant="outline" class="text-xs">
+          {{ roleLabel(t, identity?.role) }}
         </Badge>
         <ChevronDown class="h-3.5 w-3.5 text-muted-foreground shrink-0" />
       </DropdownMenuTrigger>

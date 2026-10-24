@@ -6,6 +6,7 @@ import { useAuth } from "@/composables/useAuth";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 
+import { roleLabel } from "@/lib/roles";
 const { t } = useI18n();
 
 const { identity, oidcProvider } = useAuth();
@@ -54,7 +55,7 @@ function roleVariant(role: string) {
           <dt class="text-muted-foreground font-medium">{{ t("common.role") }}</dt>
           <dd>
             <Badge :variant="roleVariant(identity?.role ?? 'anonymous')">
-              {{ identity?.role ?? "anonymous" }}
+              {{ roleLabel(t, identity?.role) }}
             </Badge>
           </dd>
 

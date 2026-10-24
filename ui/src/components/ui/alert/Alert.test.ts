@@ -3,10 +3,17 @@ import { mount } from "@vue/test-utils";
 import Alert from "./Alert.vue";
 
 describe("Alert", () => {
-  it("renders slot content with role=alert", () => {
+  it("renders slot content as a polite status by default", () => {
     const wrapper = mount(Alert, { slots: { default: "Heads up" } });
     expect(wrapper.text()).toBe("Heads up");
+    expect(wrapper.attributes("role")).toBe("status");
+  });
+
+  it("interrupts only for a refusal", () => {
+    const wrapper = mount(Alert, { props: { variant: "destructive" }, slots: { default: "No" } });
     expect(wrapper.attributes("role")).toBe("alert");
+    const ok = mount(Alert, { props: { variant: "success" }, slots: { default: "Done" } });
+    expect(ok.attributes("role")).toBe("status");
   });
 
   it("applies the default variant classes", () => {

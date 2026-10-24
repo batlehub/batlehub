@@ -270,7 +270,7 @@ function reset() {
         <section
           tabindex="0"
           :aria-label="t('adminBulk.csvFormat')"
-          class="bg-muted rounded-sm p-3 overflow-x-auto focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          class="bg-muted rounded-sm p-3 overflow-x-auto"
         >
           <pre class="text-xs font-mono">
 registry,name,version,artifact,reason
@@ -348,7 +348,7 @@ github,org/repo,v2.0.0,binary.tar.gz,Supply chain risk</pre>
             v-model="csvText"
             rows="8"
             placeholder="registry,name,version,artifact,reason&#10;npm,lodash,4.17.21,,CVE-2021-23337"
-            class="flex w-full rounded-sm border border-input bg-transparent px-3 py-2 text-sm font-mono placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-y"
+            class="flex w-full rounded-sm border border-input bg-transparent px-3 py-2 text-sm font-mono placeholder:text-muted-foreground resize-y"
           />
         </div>
 

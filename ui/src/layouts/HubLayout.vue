@@ -35,10 +35,10 @@ const isActive = (to: string): boolean => route.path === to || route.path.starts
           <RouterLink
             :to="tab.to"
             :aria-current="isActive(tab.to) ? 'page' : undefined"
-            class="inline-block border-b-2 px-3 py-2 font-mono text-sm transition-colors"
+            class="inline-block border-b px-3 py-2 font-mono text-sm"
             :class="
               isActive(tab.to)
-                ? 'border-primary text-foreground font-semibold'
+                ? 'border-primary text-foreground'
                 : 'border-transparent text-muted-foreground hover:text-foreground'
             "
           >

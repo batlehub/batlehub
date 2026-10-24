@@ -84,6 +84,17 @@
   --resolve: 520ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/* The narrow step, 5×. At 56px Silkscreen's 0.848em advance puts a
+   ten-glyph word at ~475px, so on a 390px phone the catalog's "ALL
+   REGISTRIES" broke inside "REGISTR/IES" — the face does not hyphenate. 40px
+   fits the word and breaks at the space. DESIGN.md already listed 40 as a
+   legal size (the docs hero's narrow step); the console now uses it too. */
+@media (max-width: 479.98px) {
+  :root {
+    --t-display: 40px;
+  } /* 5× */
+}
+
 @media (min-width: 640px) {
   :root {
     --t-display: 72px;

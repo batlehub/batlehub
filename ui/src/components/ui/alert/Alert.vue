@@ -16,7 +16,7 @@ const alertVariants = cva(
         // "known" in the One Synthetic Rule's terms: a confirmation is full ink
         // against a rule that carries more weight, not a fifth hue. Green was
         // outside this palette entirely and its pairing was never measured.
-        success: "border-foreground/50 bg-background text-foreground [&>svg]:text-foreground",
+        success: "border-foreground bg-background text-foreground [&>svg]:text-foreground",
       },
     },
     defaultVariants: { variant: "default" },
@@ -24,6 +24,10 @@ const alertVariants = cva(
 );
 
 type AlertVariants = VariantProps<typeof alertVariants>;
+
+// Only a refusal interrupts. `role="alert"` on every variant made a success or
+// a plain notice cut into whatever the screen reader was saying; the others
+// are a polite `status`.
 
 const props = withDefaults(
   defineProps<{
@@ -35,7 +39,10 @@ const props = withDefaults(
 </script>
 
 <template>
-  <div :class="cn(alertVariants({ variant }), props.class)" role="alert">
+  <div
+    :class="cn(alertVariants({ variant }), props.class)"
+    :role="variant === 'destructive' ? 'alert' : 'status'"
+  >
     <slot />
   </div>
 </template>

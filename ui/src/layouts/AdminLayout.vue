@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { RouterView, RouterLink, useRoute } from "vue-router";
-import { ShieldCheck } from "@lucide/vue";
+import { ChevronDown, ShieldCheck } from "@lucide/vue";
 import { ADMIN_SIDEBAR } from "@/config/adminSections";
 
 const { t } = useI18n();
@@ -10,6 +11,18 @@ const route = useRoute();
 function isActive(to: string) {
   return route.path === to || route.path.startsWith(to + "/");
 }
+
+/** The section the route is in, named on the mobile trigger. */
+const currentSection = computed(() => ADMIN_SIDEBAR.find((link) => isActive(link.to)));
+
+/** Mobile: the sections sit behind one trigger that says where you are. */
+const sectionsOpen = ref(false);
+watch(
+  () => route.path,
+  () => {
+    sectionsOpen.value = false;
+  },
+);
 </script>
 
 <template>
@@ -25,53 +38,90 @@ function isActive(to: string) {
     1440x900 only. `design-authed.mjs` now measures both widths (RFC 0004 §10).
   -->
   <div class="flex flex-col md:flex-row md:gap-6 min-h-[calc(100vh-3.5rem-1px)]">
-    <!-- Sidebar (desktop) -->
-    <aside class="hidden md:flex flex-col w-52 shrink-0 border-r border-border/60 pr-4 pt-2">
+    <!--
+      The selected section is ink on a 1px crimson edge — DESIGN's selection
+      edge, one of crimson's four jobs — and not a filled row with a 2px
+      stripe, which is the thick side stripe the system refuses. `aria-current`
+      is set by hand because a section link is never *exactly* active: the
+      route is always one of its tabs, so RouterLink's own exact match never
+      fired and a screen reader heard seven links and no position.
+    -->
+    <aside class="hidden md:flex flex-col w-52 shrink-0 border-r border-rule-soft pr-4 pt-2">
       <div
-        class="flex items-center gap-2 px-3 py-2 mb-2 font-mono text-xs font-semibold uppercase tracking-wider text-copper"
+        class="flex items-center gap-2 px-3 py-2 mb-2 font-mono text-xs uppercase tracking-wider text-muted-foreground"
       >
-        <ShieldCheck class="h-3.5 w-3.5" />
+        <ShieldCheck class="h-3.5 w-3.5" aria-hidden="true" />
         {{ t("common.admin") }}
       </div>
-      <nav class="flex flex-col gap-0.5">
+      <nav class="flex flex-col" :aria-label="t('a11y.sectionsOf', { title: t('common.admin') })">
         <RouterLink
           v-for="link in ADMIN_SIDEBAR"
           :key="link.to"
           :to="link.to"
+          :aria-current="isActive(link.to) ? 'page' : undefined"
           :class="[
-            'flex items-center gap-2.5 px-3 py-2 rounded-sm font-mono text-sm transition-colors',
+            'flex items-center gap-2.5 border-l px-3 py-2 font-mono text-sm',
             isActive(link.to)
-              ? 'bg-accent text-accent-foreground font-semibold border-l-2 border-primary'
-              : 'text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground',
+              ? 'border-primary text-foreground'
+              : 'border-transparent text-muted-foreground hover:text-foreground',
           ]"
         >
-          <component :is="link.icon" class="h-4 w-4 shrink-0" />
+          <component :is="link.icon" class="h-4 w-4 shrink-0" aria-hidden="true" />
           {{ t(link.label) }}
         </RouterLink>
       </nav>
     </aside>
 
-    <!-- Mobile: horizontal tab strip -->
-    <div class="md:hidden -mx-4 px-4 border-b border-border/60 mb-4 w-full flex flex-col">
-      <div class="flex items-center gap-1 pb-1 overflow-x-auto">
-        <span class="flex items-center gap-1 font-mono text-xs text-copper mr-2 shrink-0">
-          <ShieldCheck class="h-3 w-3" /> {{ t("common.admin") }}
+    <!--
+      Mobile: one trigger that names where you are — "Admin · Operations" —
+      and opens the seven sections. Wrapped, they were four rows of links
+      above three rows of tabs, ~300px before the page began on a phone;
+      scrolled sideways before that, four of seven hid behind a gesture
+      nobody is told to make. Not a second ☰: the header's own burger opens
+      the site menu, and two identical icons opening different things is a
+      guess the reader should not have to make. It closes on navigation.
+    -->
+    <div class="md:hidden mb-3 w-full">
+      <button
+        type="button"
+        class="flex w-full items-center justify-between gap-2 border border-border px-3 py-2 font-mono text-sm"
+        :aria-expanded="sectionsOpen"
+        aria-controls="admin-sections-mobile"
+        @click="sectionsOpen = !sectionsOpen"
+      >
+        <span class="flex min-w-0 items-center gap-2">
+          <ShieldCheck class="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span class="text-muted-foreground">{{ t("common.admin") }} ·</span>
+          <span class="truncate">{{ currentSection ? t(currentSection.label) : "" }}</span>
         </span>
+        <ChevronDown
+          class="h-4 w-4 shrink-0 text-muted-foreground"
+          :class="sectionsOpen ? 'rotate-180' : ''"
+          aria-hidden="true"
+        />
+      </button>
+      <nav
+        v-show="sectionsOpen"
+        id="admin-sections-mobile"
+        class="flex flex-col border border-t-0 border-border"
+        :aria-label="t('a11y.sectionsOf', { title: t('common.admin') })"
+      >
         <RouterLink
           v-for="link in ADMIN_SIDEBAR"
           :key="link.to"
           :to="link.to"
+          :aria-current="isActive(link.to) ? 'page' : undefined"
           :class="[
-            'flex items-center gap-1.5 px-3 py-1.5 rounded-sm font-mono text-sm whitespace-nowrap transition-colors shrink-0',
+            'flex items-center gap-2.5 border-l px-3 py-2.5 font-mono text-sm',
             isActive(link.to)
-              ? 'bg-accent text-accent-foreground font-semibold'
-              : 'text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground',
+              ? 'border-primary text-foreground'
+              : 'border-transparent text-muted-foreground hover:text-foreground',
           ]"
         >
-          <component :is="link.icon" class="h-3.5 w-3.5 shrink-0" />
+          <component :is="link.icon" class="h-4 w-4 shrink-0" aria-hidden="true" />
           {{ t(link.label) }}
         </RouterLink>
-      </div>
+      </nav>
     </div>
 
     <!-- Content -->

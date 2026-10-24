@@ -19,12 +19,13 @@ import { RouterLink } from "vue-router";
 import { listRegistries } from "@/client/sdk.gen";
 import type { RegistryInfo } from "@/client/types.gen";
 import { useApi } from "@/composables/useApi";
+import { roleLabel } from "@/lib/roles";
 import { useAuth } from "@/composables/useAuth";
 import { DOCS_URL } from "@/config";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Alert } from "@/components/ui/alert";
+import { AsyncState } from "@/components/ui/async-state";
 import AdvisoriesWidget from "@/components/home/AdvisoriesWidget.vue";
 import QuotaWidget from "@/components/home/QuotaWidget.vue";
 import RecentPullsWidget from "@/components/home/RecentPullsWidget.vue";
@@ -33,7 +34,7 @@ const { t } = useI18n();
 
 const { identity, isAdmin, isAuthenticated, token } = useAuth();
 
-const { data, error, loading } = useApi<RegistryInfo[]>(
+const { data, error, loading, reload } = useApi<RegistryInfo[]>(
   () => listRegistries() as Promise<{ data?: unknown; error?: unknown }>,
   [token],
 );
@@ -41,6 +42,18 @@ const { data, error, loading } = useApi<RegistryInfo[]>(
 const registries = computed<RegistryInfo[]>(() => data.value ?? []);
 const isFresh = computed(() => !loading.value && !error.value && registries.value.length === 0);
 const publishable = computed(() => registries.value.filter((r) => r.mode !== "proxy").length);
+
+/**
+ * The instance in one ruled line, in the catalog caption's grammar. It was a
+ * three-cell stat row at 24px — the stat-tile row DESIGN refuses by name — and
+ * its third cell printed the wire role, `anonymous`, in English on a French
+ * session.
+ */
+const facts = computed(() => [
+  t("homePage.registryCount", registries.value.length),
+  t("homePage.publishableCount", publishable.value),
+  t("homePage.youAre", { role: roleLabel(t, identity.value?.role) }),
+]);
 const name = computed(() => identity.value?.user_id ?? "");
 const greeting = computed(() =>
   name.value ? t("home.greeting", { user: name.value }) : t("home.greetingNoName"),
@@ -87,7 +100,15 @@ const displayFits = computed(() => greeting.value.length <= 24);
 
     <Skeleton v-if="loading" :lines="4" />
 
-    <Alert v-else-if="error" variant="destructive">{{ error }}</Alert>
+    <!-- What failed and a retry — and the quick links below still render: a
+         failed list was a dead end that hid the two things people come for. -->
+    <AsyncState
+      v-else-if="error"
+      :loading="false"
+      :error="error"
+      :title="t('homePage.registriesCouldNotLoad')"
+      :on-retry="reload"
+    />
 
     <!-- Fresh instance. The operator is the only one who can act on this, so
          only they are told how; everyone else is told what it means for them. -->
@@ -111,27 +132,13 @@ const displayFits = computed(() => greeting.value.length <= 24);
     </EmptyState>
 
     <!-- Working instance: the shortest path to the two things people come for. -->
-    <template v-else>
-      <dl class="grid gap-px border border-border bg-border sm:grid-cols-3">
-        <div class="bg-background p-4">
-          <dt class="font-mono text-xs uppercase tracking-wider text-muted-foreground">
-            {{ t("common.registries") }}
-          </dt>
-          <dd class="mt-1 font-mono text-2xl tabular-nums">{{ registries.length }}</dd>
-        </div>
-        <div class="bg-background p-4">
-          <dt class="font-mono text-xs uppercase tracking-wider text-muted-foreground">
-            {{ t("homePage.acceptingPublishes") }}
-          </dt>
-          <dd class="mt-1 font-mono text-2xl tabular-nums">{{ publishable }}</dd>
-        </div>
-        <div class="bg-background p-4">
-          <dt class="font-mono text-xs uppercase tracking-wider text-muted-foreground">
-            {{ t("common.you") }}
-          </dt>
-          <dd class="mt-1 font-mono text-2xl">{{ identity?.role ?? "anonymous" }}</dd>
-        </div>
-      </dl>
+    <template v-if="!loading && !isFresh">
+      <p
+        v-if="!error"
+        class="border-y border-dashed border-rule-soft py-2 font-mono text-sm text-muted-foreground"
+      >
+        {{ facts.join(" · ") }}
+      </p>
 
       <div class="flex flex-wrap gap-2">
         <Button as-child size="sm">

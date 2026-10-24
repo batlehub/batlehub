@@ -522,7 +522,7 @@ async function testSubscription(id: string) {
               v-for="ch in channels"
               :key="ch.name"
               type="button"
-              class="rounded-sm border border-border px-2 py-0.5 font-mono text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              class="rounded-sm border border-border px-2 py-0.5 font-mono text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary"
               @click="form.channel_name = ch.name"
             >
               {{ ch.name }}

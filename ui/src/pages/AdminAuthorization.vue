@@ -35,6 +35,7 @@ import { Select } from "@/components/ui/select";
 import { Combobox } from "@/components/ui/combobox";
 import { useRegistryOptions } from "@/composables/useRegistryOptions";
 import { usePackageNameSuggestions, useVersionSuggestions } from "@/composables/useSuggestions";
+import { Button } from "@/components/ui/button";
 
 const { t } = useI18n();
 const route = useRoute();
@@ -397,13 +398,9 @@ onMounted(async () => {
           </div>
         </div>
 
-        <button
-          type="submit"
-          :disabled="explaining || !registry"
-          class="rounded-sm bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50"
-        >
+        <Button type="submit" :disabled="explaining || !registry">
           {{ explaining ? t("common.loading") : t("adminAuthorization.explainAction") }}
-        </button>
+        </Button>
       </form>
 
       <p v-if="explainError" class="text-sm text-destructive">{{ explainError }}</p>

@@ -19,7 +19,11 @@ import SetupGuide from "./SetupGuide.vue";
 type Registry = { name: string; type: string; mode?: string; public_url?: string | null };
 
 const stubs = {
-  CodeBlock: { name: "CodeBlock", props: ["code", "lang"], template: "<pre>{{ code }}</pre>" },
+  CodeBlock: {
+    name: "CodeBlock",
+    props: ["code", "lang"],
+    template: "<div><pre>{{ code }}</pre><slot/></div>",
+  },
   RouterLink: { props: ["to"], template: "<a :href='to'><slot/></a>" },
 };
 
@@ -98,7 +102,29 @@ describe("SetupGuide", () => {
     const w = await mountPage([]);
     const stanzas = snippets(w).find((s) => s.startsWith("machine"))!;
     expect(stanzas).toContain("login alice");
-    expect(stanzas).toContain("password tok-123");
+    expect(stanzas).toContain("password ••••••••");
+  });
+
+  /**
+   * The live bearer is masked on screen — a screen share read it in clear —
+   * while Copy still takes the real one, so the snippet stays ready to paste.
+   */
+  it("masks the token on screen, reveals it on request, and copies the real one", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const w = await mountPage([]);
+    expect(snippets(w).join("\n")).not.toContain("tok-123");
+
+    const copyButton = w.findAll("button").find((b) => b.text().trim() === "Copy")!;
+    await copyButton.trigger("click");
+    expect(writeText.mock.calls[0][0]).toContain("password tok-123");
+
+    await w
+      .findAll("button")
+      .find((b) => b.text().trim() === "Show token")!
+      .trigger("click");
+    expect(snippets(w).find((s) => s.startsWith("machine"))).toContain("password tok-123");
+    vi.unstubAllGlobals();
   });
 
   it("adds a stanza per host-routed registry", async () => {

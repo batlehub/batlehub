@@ -16,6 +16,11 @@ import { cn } from "@/lib/utils";
  * single centred card and nothing else, so its title had to be the document's
  * only heading — and was an `h2`, leaving the page with no `h1` at all. The
  * ramp gate found it the moment RFC 0004-bis §4.4 pointed it at public routes.
+ *
+ * The size is the Head step (`text-lg`, 20px, regular). It was `text-2xl`
+ * bold — 24px, the Pixel Medium step DESIGN reserves for the wordmark, set in
+ * the mono face where no 24px step exists — so every card title competed with
+ * the page `h1` above it.
  */
 const props = withDefaults(
   defineProps<{ class?: HTMLAttributes["class"]; as?: "h1" | "h2" | "h3" | "h4" }>(),
@@ -24,10 +29,7 @@ const props = withDefaults(
 </script>
 
 <template>
-  <component
-    :is="as"
-    :class="cn('font-mono text-2xl font-bold leading-none tracking-tight', props.class)"
-  >
+  <component :is="as" :class="cn('font-mono text-lg font-normal leading-snug', props.class)">
     <slot />
   </component>
 </template>

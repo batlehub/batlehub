@@ -4,6 +4,7 @@
     "breadcrumb": "Fil d'Ariane",
     "closeMenu": "Fermer le menu",
     "eventsTableLabel": "Événements récents",
+    "inThisSection": "Dans cette section",
     "openMenu": "Ouvrir le menu",
     "sectionsOf": "Sections : {title}",
     "skipToContent": "Aller au contenu",
@@ -17,7 +18,6 @@
     "checkAccess": "Vérifier l'accès",
     "checking": "Vérification…",
     "denied": "Refusé",
-    "nameOwnerRepo": "Nom (owner/repo)",
     "noReasonGiven": "aucun motif indiqué",
     "noResponse": "Aucune réponse",
     "versionNeedsPackage": "Choisissez d'abord un registre et un nom."
@@ -181,26 +181,29 @@
     "applying": "Application…",
     "bannerCleared": "Bandeau effacé",
     "bannerSet": "Bandeau défini",
+    "byColumn": "Par",
     "candidateWarnsAbout": "Ce changement lèverait {count} avertissement : | Ce changement lèverait {count} avertissements :",
     "changeHistory": "Historique des modifications",
     "changeNoun": "modification",
     "changeNounPlural": "modifications",
     "clearBanner": "Effacer la bannière",
     "clearing": "Effacement…",
+    "configCouldNotLoad": "La configuration n'a pas pu être chargée.",
     "configEditor": "Éditeur de configuration",
     "configNoun": "configuration",
     "configReload": "Rechargement de la configuration",
     "configTomlContent": "Contenu du config TOML",
     "configValidStageIt": "La configuration est valide. Cliquez sur « {action} » pour la préparer à l'application.",
     "configurationWarnings": "Avertissements de configuration ({count})",
+    "controlsWaitForConfig": "Les contrôles de rechargement l'attendent : tant qu'elle n'est pas chargée, cette page ne peut pas savoir si le rechargement à chaud est actif.",
     "createPendingReload": "Créer un rechargement en attente",
     "createdLabel": "Créé :",
     "discard": "Abandonner",
     "discarding": "Abandon…",
+    "editConfig": "Modifier la configuration",
     "expiresIn": "Expire dans :",
     "forceConsequence": "Le fichier de configuration est relu et appliqué immédiatement, sans diff à relire au préalable. Les requêtes en vol terminent sous l’ancienne configuration ; tout ce qui suit utilise la nouvelle, quoi qu’elle contienne.",
     "forceReloadNow": "Forcer le rechargement",
-    "globalBanner": "Bandeau global",
     "hideDiff": "Masquer le diff",
     "hotReloadDisabled": "Le rechargement à chaud est désactivé sur cette instance ({flag}). Toute modification de configuration nécessite un redémarrage du serveur.",
     "limitsChanged": "limites modifiées",
@@ -210,9 +213,10 @@
     "noChangesRecordedYet": "Aucune modification enregistrée.",
     "noPendingReloadThe": "Aucun rechargement en attente. Le watcher de fichiers remplira cette section dès qu'un changement de configuration sera détecté.",
     "nothingToStage": "Rien à préparer — ce contenu est identique à la configuration déjà chargée. Aucun rechargement en attente n'a été créé.",
+    "pendingCouldNotLoad": "Le rechargement en attente n'a pas pu être vérifié.",
     "pendingCreatedReviewIt": "Rechargement en attente créé. Vérifiez-le ci-dessous, puis appliquez.",
     "pendingReload": "Rechargement en attente",
-    "reReadsTheConfig": "Relit le fichier de configuration, le valide et l'applique immédiatement — sans étape de confirmation.",
+    "reReadsTheConfig": "Relit le fichier de configuration, le valide et applique ce qui est sur le disque. Une confirmation est demandée d'abord, car ce fichier ne vous a pas été montré ici.",
     "reloadApplied": "Appliqué partout",
     "reloadConfirmWord": "reload",
     "reloadFromDisk": "Recharger depuis le disque",
@@ -239,6 +243,9 @@
     "openConfig": "Ouvrir la configuration",
     "openHealth": "Ouvrir l'état de santé",
     "perRegistry": "Par registre",
+    "registryErrors": "Erreurs — voir la santé",
+    "registryServing": "En service",
+    "statsCouldNotLoad": "Les statistiques du cache n'ont pas pu être chargées.",
     "trendDown": "Sur les {days} derniers jours, le cache a servi {rate} des téléchargements — {points} points de moins que les {days} jours précédents.",
     "trendFlat": "Sur les {days} derniers jours, le cache a servi {rate} des téléchargements, comme les {days} jours précédents.",
     "trendNoBaseline": "Sur les {days} derniers jours, le cache a servi {rate} des téléchargements. L'historique est encore insuffisant pour comparer avec la période précédente.",
@@ -315,6 +322,7 @@
     "bulkBlock": "Blocage de masse",
     "configReload": "Rechargement de config",
     "dashboard": "Tableau de bord",
+    "globalBanner": "Bandeau global",
     "health": "Santé",
     "inboundEvents": "Événements entrants",
     "namespacesChannels": "Namespaces et canaux",
@@ -385,6 +393,7 @@
     "scopeSelection": "la sélection",
     "selectAllPackages": "Sélectionner tous les paquets",
     "selectPackage": "Sélectionner {name}",
+    "selectedCount": "{count} sélectionné | {count} sélectionnés",
     "tryClearingTheFilter": "Essayez d'effacer le filtre.",
     "unblockSelected": "Débloquer la sélection"
   },
@@ -540,6 +549,7 @@
     "signOut": "Se déconnecter"
   },
   "asyncState": {
+    "couldNotLoad": "Chargement impossible.",
     "loading": "Chargement…",
     "noResults": "Aucun résultat."
   },
@@ -547,6 +557,8 @@
     "accountWide": "Portée compte",
     "anonymousSubject": "anonyme",
     "deniedOnly": "Refusés uniquement",
+    "eventNoun": "événement d'audit",
+    "eventNounPlural": "événements d'audit",
     "export": "Exporter",
     "exportFormat": "Format d'export",
     "filterByRegistry": "Registre…",
@@ -561,8 +573,7 @@
     "purgeScope": "tous les événements d'audit enregistrés avant {before}",
     "purged": "{count} événement purgé. | {count} événements purgés.",
     "retention": "Rétention",
-    "retentionHelp": "Supprime les événements d'audit antérieurs à une date de coupure. Cette action supprime des preuves définitivement et est irréversible.",
-    "retentionWindow": "fenêtre de rétention"
+    "retentionHelp": "Supprime les événements d'audit antérieurs à une date de coupure. Cette action supprime des preuves définitivement et est irréversible."
   },
   "catalog": {
     "emptyBody": "Les paquets apparaissent ici dès qu'ils transitent par cette instance, ou dès qu'ils y sont publiés.",
@@ -631,7 +642,6 @@
     "edit": "Modifier",
     "enabled": "Activé",
     "error": "Erreur",
-    "errors": "Erreurs",
     "events": "Événements",
     "expires": "Expire",
     "expiresLabel": "Expire :",
@@ -670,7 +680,6 @@
     "reasonLabel": "Motif :",
     "refresh": "Actualiser",
     "refreshing": "Actualisation…",
-    "registries": "Registres",
     "registry": "Registre",
     "registryLabel": "Registre :",
     "release": "Release",
@@ -679,6 +688,7 @@
     "result": "Résultat",
     "retry": "Réessayer",
     "role": "Rôle",
+    "roleAnonymous": "Anonyme",
     "save": "Enregistrer",
     "saving": "Enregistrement…",
     "security": "Sécurité",
@@ -690,6 +700,7 @@
     "storage": "Stockage",
     "summary": "Résumé",
     "time": "Heure",
+    "to": "À",
     "type": "Type",
     "unblock": "Débloquer",
     "unknown": "inconnu",
@@ -703,8 +714,7 @@
     "visibility": "Visibilité",
     "warning": "Avertissement",
     "webhook": "Webhook",
-    "when": "Quand",
-    "you": "Vous"
+    "when": "Quand"
   },
   "config": {
     "copyToml": "Copier le TOML",
@@ -781,12 +791,15 @@
   },
   "homePage": {
     "aCacheAndRegistry": "Un cache et un registre pour les paquets que vos builds téléchargent.",
-    "acceptingPublishes": "Acceptent les publications",
     "browsePackages": "Parcourir les paquets",
     "configurationGuide": "Guide de configuration",
     "myNamespace": "Mon namespace",
     "openConfig": "Ouvrir la configuration",
-    "pointAToolAt": "Configurer un outil pour cette instance"
+    "pointAToolAt": "Configurer un outil pour cette instance",
+    "publishableCount": "{count} accepte les publications | {count} acceptent les publications",
+    "registriesCouldNotLoad": "La liste des registres n'a pas pu être chargée.",
+    "registryCount": "{count} registre | {count} registres",
+    "youAre": "vous : {role}"
   },
   "locale": {
     "en": "English",
@@ -1125,6 +1138,7 @@
     "configureYourToolsToRoute": "Configurez vos outils pour router les téléchargements de paquets via ce proxy. Les extraits sont pré-remplis avec l'adresse de ce serveur et vos registres configurés.",
     "filterTools": "Filtrer les outils",
     "filterTools2": "Filtrer les outils…",
+    "hideToken": "Masquer le jeton",
     "loadingRegistries": "Chargement des registres…",
     "netrcHelp": "Identifiants pour les outils utilisant l'authentification HTTP Basic (curl, wget, …). À placer dans {file} et à protéger avec {chmod}.",
     "noRegistriesAreConfiguredOn": "Aucun registre n'est configuré sur cette instance, ou aucun accessible à votre compte. Tant qu'il n'en existe pas, aucun outil n'a d'URL vers laquelle pointer.",
@@ -1132,7 +1146,10 @@
     "oidcTokenNote": "Votre token actuel est un token de session OIDC de courte durée. Pour de l'automatisation durable, créez un {link} et utilisez-le comme mot de passe.",
     "openConfig": "Ouvrir la configuration",
     "personalApiToken": "token d'API personnel",
-    "setupGuide": "Guide de configuration"
+    "registriesCouldNotLoad": "La liste des registres n'a pas pu être chargée : aucun extrait ne peut en nommer un.",
+    "setupGuide": "Guide de configuration",
+    "showToken": "Afficher le jeton",
+    "tokenHidden": "Votre jeton est masqué à l'écran. Copier place le vrai jeton dans le presse-papiers."
   },
   "severity": {
     "critical": "Critique",
@@ -1143,8 +1160,11 @@
   },
   "theme": {
     "dark": "Thème : sombre",
+    "darkShort": "Sombre",
     "light": "Thème : clair",
-    "system": "Thème : suivre le système"
+    "lightShort": "Clair",
+    "system": "Thème : suivre le système",
+    "systemShort": "Système"
   },
   "tokensPage": {
     "activeTokens": "Tokens actifs",
@@ -1232,5 +1252,12 @@
     "internal": "Interne",
     "public": "Public",
     "team": "Équipe"
+  },
+  "adminBanner": {
+    "description": "Un message affiché en haut de chaque page, pour tous les visiteurs — fenêtres de maintenance et incidents."
+  },
+  "displaySettings": {
+    "theme": "Thème",
+    "title": "Affichage"
   }
 }

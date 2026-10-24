@@ -517,15 +517,23 @@ async function runPending(): Promise<void> {
       </i18n-t>
     </p>
 
-    <!-- Bulk action bar -->
+    <!-- Bulk action bar.
+
+         Block and Delete were the same crimson fill side by side — one undoes
+         with a click, the other erases artifacts for good. Block is now the
+         outlined control (its confirmation carries the weight), and Delete is
+         the bar's one filled action, set apart at the far end so it is never
+         the button beside the one you meant. -->
     <div
       v-if="selected.size > 0"
-      class="sticky top-16 z-30 flex items-center gap-3 rounded-sm border bg-card px-4 py-2.5"
+      class="sticky top-16 z-30 flex flex-wrap items-center gap-3 border border-rule-strong bg-background px-4 py-2.5"
     >
-      <span class="text-sm font-medium">{{ selected.size }} selected</span>
+      <span class="text-sm font-medium">{{
+        t("adminPackages.selectedCount", { count: selected.size }, selected.size)
+      }}</span>
       <Button
         size="sm"
-        variant="destructive"
+        variant="outline"
         :disabled="bulkLoading"
         @click="
           blockReason = '';
@@ -540,16 +548,17 @@ async function runPending(): Promise<void> {
         @click="pending = { kind: 'bulk-unblock' }"
         >{{ t("adminPackages.unblockSelected") }}</Button
       >
+      <Button size="sm" variant="ghost" @click="selected = new Set()">
+        {{ t("common.clearAction") }}
+      </Button>
       <Button
         size="sm"
         variant="destructive"
+        class="ml-auto"
         :disabled="bulkLoading"
         @click="pending = { kind: 'bulk-delete' }"
         >{{ t("adminPackages.deleteSelected") }}</Button
       >
-      <Button size="sm" variant="ghost" @click="selected = new Set()">
-        {{ t("common.clearAction") }}
-      </Button>
     </div>
 
     <!-- Outside the selection-gated bar above: every bulk handler clears the

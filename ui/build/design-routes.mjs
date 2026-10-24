@@ -66,7 +66,7 @@ const TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
  * declared, and "the admin pages are not redrawn in the specimen grammar" stops
  * being an assertion the moment it is measured.
  */
-const RAMP = new Set([12, 13, 15, 16, 20, 24, 56, 72, 88, 104]);
+const RAMP = new Set([12, 13, 15, 16, 20, 24, 40, 56, 72, 88, 104]);
 
 /**
  * Routes that have a checked-in specification of their own appearance, and what
@@ -92,9 +92,12 @@ const RAMP = new Set([12, 13, 15, 16, 20, 24, 56, 72, 88, 104]);
 // assertion is "spends the Display step on its subject", not "spends 104px".
 // Transcribed from tokens.css now rather than from the proof's media queries —
 // the proof is the artefact of the decision, the token is the decision.
+// 40 below 480 is the narrow step DESIGN.md adopted for phones, where a
+// ten-glyph word at 56px breaks inside itself.
 const PROOF_DISPLAY_STEPS = [
   [640, 72],
-  [0, 56],
+  [480, 56],
+  [0, 40],
 ];
 const PROOF_ROUTES = {
   "/packages": "ui/design-proof/index.html",

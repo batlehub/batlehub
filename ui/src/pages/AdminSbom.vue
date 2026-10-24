@@ -150,7 +150,7 @@ async function exportSbom() {
             <select
               id="sbom-format"
               v-model="format"
-              class="w-full border border-input rounded-sm px-2 py-2 font-mono text-sm bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+              class="w-full border border-input rounded-sm px-2 py-2 font-mono text-sm bg-background"
             >
               <option value="spdx">{{ t("adminSbom.spdx23") }}</option>
               <option value="cyclonedx">{{ t("adminSbom.cyclonedx14") }}</option>

@@ -130,7 +130,7 @@ watch(pastedUrl, parseUrl);
       <select
         id="registry-select"
         v-model="registry"
-        class="w-full rounded-sm border border-border bg-background px-3 py-2 font-mono text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+        class="w-full rounded-sm border border-border bg-background px-3 py-2 font-mono text-sm"
       >
         <optgroup v-for="group in groupedTypes" :key="group.name" :label="group.name">
           <option v-for="type in group.types" :key="type.id" :value="type.id">

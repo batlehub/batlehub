@@ -28,6 +28,7 @@ import { DestructiveConfirm } from "@/components/ui/destructive-confirm";
 import { Announcer } from "@/components/ui/announcer";
 import { useAuth } from "@/composables/useAuth";
 
+import { roleLabel } from "@/lib/roles";
 const { t } = useI18n();
 
 const { identity } = useAuth();
@@ -315,7 +316,7 @@ const lifetimePresets = [7, 30, 90];
                 </TableCell>
                 <TableCell>
                   <Badge :variant="tok.role === 'admin' ? 'default' : 'secondary'" class="text-xs">
-                    {{ tok.role }}
+                    {{ roleLabel(t, tok.role) }}
                   </Badge>
                 </TableCell>
                 <!--

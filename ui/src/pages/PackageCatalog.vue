@@ -28,6 +28,7 @@ import type {
 import { Resolution, type ResolutionState } from "@/components/ui/resolution";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AsyncState } from "@/components/ui/async-state";
 import {
   Table,
   TableHeader,
@@ -458,7 +459,9 @@ async function fetchPackages() {
         in: scope,
       },
     });
-    if (apiErr) throw new Error(t("packageCatalog.loadFailed"));
+    // The transport's own words go under the title, which already says what
+    // failed — throwing the title here printed it twice.
+    if (apiErr) throw new Error(extractMessage(apiErr));
     const body = res as ExplorePackageListResponse;
     // Written under the coordinates captured at call time, not the current
     // refs, so a late response cannot land under the wrong key.
@@ -948,7 +951,7 @@ onMounted(() => {
           <select
             v-if="readmeSearchEnabled"
             :aria-label="t('packageCatalog.searchIn')"
-            class="h-9 rounded-sm border border-input bg-background px-3 font-mono text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            class="h-9 rounded-sm border border-input bg-background px-3 font-mono text-sm text-foreground"
             :value="searchIn"
             @change="onSearchInChange(($event.target as HTMLSelectElement).value)"
           >
@@ -975,7 +978,7 @@ onMounted(() => {
           </Button>
           <select
             :aria-label="t('packageCatalog.sortPackages')"
-            class="h-9 rounded-sm border border-input bg-background px-3 font-mono text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            class="h-9 rounded-sm border border-input bg-background px-3 font-mono text-sm text-foreground"
             :value="sort"
             @change="onSortChange(($event.target as HTMLSelectElement).value)"
           >
@@ -986,8 +989,17 @@ onMounted(() => {
           </select>
         </div>
 
-        <!-- Error -->
-        <p v-if="error" class="text-sm text-destructive">{{ error }}</p>
+        <!-- Error: what failed, the transport's reason, and a way forward. It
+             replaces the caption and the empty state below rather than joining
+             them — "Failed to load", "0 packages" and "No packages cached yet"
+             on one screen were three claims, two of them false. -->
+        <AsyncState
+          v-if="error"
+          :loading="false"
+          :error="error"
+          :title="t('packageCatalog.loadFailed')"
+          :on-retry="fetchPackages"
+        />
 
         <!-- The catalog.
 
@@ -1028,7 +1040,7 @@ onMounted(() => {
                the page that the all-caps rule catches, because caps strips the
                ascenders and descenders a reader recognises words by. The
                tracking goes with it: letterspacing is a small-caps device. -->
-          <caption class="caption-top pb-3 text-left text-xs text-muted-foreground">
+          <caption v-if="!error" class="caption-top pb-3 text-left text-xs text-muted-foreground">
             {{
               tableCaption
             }}
@@ -1311,7 +1323,7 @@ onMounted(() => {
            table's width, so at 390px the "nothing here" message sat off-screen
            behind a horizontal scroll — the one thing DESIGN.md's Own-Container
            Overflow Rule forbids the body to do. -->
-        <div v-if="tableRows.length === 0 && !loadingUpstream && !loading" class="mt-4">
+        <div v-if="tableRows.length === 0 && !loadingUpstream && !loading && !error" class="mt-4">
           <!-- A prose search that found nothing gets its own words. "Nothing
              matches that search" would imply the query was checked against every
              package here, and it was checked against the READMEs of the versions

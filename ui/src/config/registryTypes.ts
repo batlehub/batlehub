@@ -152,6 +152,37 @@ function netrcStanzas(hosts: string[], ctx: SnippetContext): string[] {
   ]);
 }
 
+/**
+ * A coordinate each registry type would actually ask for, as a form's example
+ * text. Access Check offered `owner/repo` and `v1.0.0` for every type — a forge
+ * coordinate shown to someone whose `npm install` failed on `@scope/pkg`.
+ * One table, with a neutral fallback, so a new type needs no entry to work.
+ */
+export const EXAMPLE_COORDINATES: Record<string, { name: string; version: string }> = {
+  npm: { name: "@scope/package", version: "1.2.3" },
+  cargo: { name: "serde", version: "1.0.200" },
+  pypi: { name: "requests", version: "2.32.3" },
+  maven: { name: "org.slf4j:slf4j-api", version: "2.0.13" },
+  nuget: { name: "Newtonsoft.Json", version: "13.0.3" },
+  goproxy: { name: "github.com/pkg/errors", version: "v0.9.1" },
+  rubygems: { name: "rails", version: "7.1.3" },
+  composer: { name: "monolog/monolog", version: "3.6.0" },
+  conda: { name: "numpy", version: "1.26.4" },
+  terraform: { name: "hashicorp/aws", version: "5.50.0" },
+  helm: { name: "ingress-nginx", version: "4.10.1" },
+  galaxy: { name: "community.general", version: "9.0.0" },
+  openvsx: { name: "redhat.java", version: "1.30.0" },
+  "vscode-marketplace": { name: "redhat.java", version: "1.30.0" },
+  github: { name: "owner/repo", version: "v1.0.0" },
+  gitlab: { name: "group/project", version: "v1.0.0" },
+  forgejo: { name: "owner/repo", version: "v1.0.0" },
+  deb: { name: "hello", version: "2.10-3" },
+  rpm: { name: "htop", version: "3.3.0" },
+  apk: { name: "curl", version: "8.7.1-r0" },
+  pacman: { name: "jq", version: "1.7.1" },
+};
+export const FALLBACK_COORDINATE = { name: "package", version: "1.0.0" };
+
 export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
   // ── mise (composite: github + npm + cargo) ─────────────────────────────────
   {

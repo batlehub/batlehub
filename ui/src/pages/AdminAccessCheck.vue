@@ -17,6 +17,7 @@ import {
   useVersionSuggestions,
 } from "@/composables/useSuggestions";
 
+import { Button } from "@/components/ui/button";
 const { t } = useI18n();
 
 /** RFC 0004-bis §6.2: the registry set is closed, small and already fetched. */
@@ -277,13 +278,9 @@ async function simulate() {
         </div>
       </div>
 
-      <button
-        type="submit"
-        :disabled="loading"
-        class="rounded-sm bg-primary text-primary-foreground px-4 py-1.5 text-sm font-medium disabled:opacity-50"
-      >
+      <Button type="submit" :disabled="loading">
         {{ loading ? t("accessCheck.checking") : t("adminAccessCheck.checkAccess") }}
-      </button>
+      </Button>
     </form>
 
     <div
