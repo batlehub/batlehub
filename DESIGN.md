@@ -391,17 +391,17 @@ between renditions.
 
 **There are two ramps because Silkscreen is drawn on an 8px em.** Its square pixel only stays square
 at integer multiples of 8, so every Silkscreen size is one: 16 / 24 / **40** / 56 / 72 / 88 / 104 px
-(2× / 3× / **5×** / 7× / 9× / 11× / 13×). 5× is the documentation site's hero step below 640px and
-the only size on this list that is not also a `--t-display` breakpoint: the face's advance measures
-0.848em and it does not hyphenate, so "BatleHub" needs 380px at 56px against a 336px column and
-breaks between glyphs. The rule the face is actually governed by is the integer em, not the
+(2× / 3× / **5×** / 7× / 9× / 11× / 13×). 5× is the narrow step, on both surfaces: the
+documentation site's hero below 640px, and `--t-display` below 480px in the console. The face's
+advance measures 0.848em and it does not hyphenate, so "BatleHub" needs 380px at 56px against a
+336px column, and the catalog's "ALL REGISTRIES" broke inside "REGISTR/IES" on a 390px phone. The rule the face is actually governed by is the integer em, not the
 console's four breakpoints, which are a property of a full-bleed specimen head. (RFC 0005 §13.)
 JetBrains Mono carries no such constraint and uses a conventional
 20 / 16 / 15 / 13 / 12 ramp.
 
 ### Hierarchy
 
-- **Display** (Silkscreen 700, 56px → 72 discrete per breakpoint, line-height 0.92, 0.02em): the
+- **Display** (Silkscreen 700, 40 → 56 → 72px discrete per breakpoint, line-height 0.92, 0.02em): the
   page-title step, and the one form set at poster scale — the subject at the top of the sheet, one
   per view. Every primary destination sets its title here: the home greeting, the catalog's
   registry, the package sheet's package, the setup guide. Uppercase where the subject has no case
@@ -431,7 +431,7 @@ JetBrains Mono carries no such constraint and uses a conventional
 ### Named Rules
 
 **The Integer Em Rule.** Silkscreen only ever appears at a multiple of 8px. `--t-display` is
-discrete per breakpoint (56 / 72 / 88 / 104 at 640 / 880 / 1140px) rather than a `clamp()` for
+discrete per breakpoint (40 below 480px, 56, then 72 from 640px) rather than a `clamp()` for
 exactly this reason: a fluid 10vw is an integer multiple at only a handful of viewport widths, which
 left the focal element off its own pixel grid across the whole 560–1040px band. Never fluid-size the
 bitmap face.
@@ -751,7 +751,7 @@ mode) degrades to session-only, never to a thrown error.
 - **Do** draw every mutually-exclusive choice set as one bounding box with 1px dividers and the
   chosen cell reversed to an ink block — the same grammar in the nav and in the settings popover.
 - **Do** size Silkscreen at integer multiples of 8px and step it discretely per breakpoint
-  (16 / 24 / 56 / 72 / 88 / 104).
+  (16 / 24 / 40 / 56 / 72 / 88 / 104).
 - **Do** keep all small text at `--ink-dim` (5.62:1 dark, 7.24:1 light) or better, and never below
   12px.
 - **Do** give every state three channels — pattern, word, hue — and label every matrix with its word.
