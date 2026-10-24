@@ -432,11 +432,14 @@ impl NarInfo {
     /// from bytes it verified. Every *other* signature the publisher sent is
     /// kept, because those are somebody else's provenance and not ours to
     /// discard (RFC 0028 §4.4, §5.4).
+    ///
+    /// The key name is everything before the first `:`, or the whole value
+    /// when there is none: a bare `Sig: batlehub-nix-1` verifies for nobody,
+    /// but it still puts a second line under our name in the document we sign.
     pub fn drop_signatures_by(&mut self, key_name: &str) -> usize {
-        let prefix = format!("{key_name}:");
         let before = self.lines.len();
         self.lines
-            .retain(|(k, v)| k != "Sig" || !v.starts_with(&prefix));
+            .retain(|(k, v)| k != "Sig" || v.split(':').next() != Some(key_name));
         before - self.lines.len()
     }
 
@@ -1112,14 +1115,18 @@ NarSize: 10
     fn a_publisher_cannot_keep_a_forged_registry_signature() {
         let mut info = NarInfo::parse(REAL_NARINFO).unwrap();
         info.push_signature("batlehub-nix-1:ZmFrZQ==");
+        // No `:` at all — found by fuzz_narinfo.
+        info.push_signature("batlehub-nix-1");
+        info.push_signature("batlehub-nix-10:ZmFrZQ==");
         info.push_signature("someone-else-1:ZmFrZQ==");
 
         let dropped = info.drop_signatures_by("batlehub-nix-1");
-        assert_eq!(dropped, 1);
+        assert_eq!(dropped, 2);
         let sigs = info.get_all("Sig");
-        assert_eq!(sigs.len(), 2, "the upstream's and the third party's remain");
+        assert_eq!(sigs.len(), 3, "the upstream's and the third parties' remain");
         assert!(sigs.iter().any(|s| s.starts_with("cache.nixos.org-1:")));
         assert!(sigs.iter().any(|s| s.starts_with("someone-else-1:")));
+        assert!(sigs.iter().any(|s| s.starts_with("batlehub-nix-10:")));
     }
 
     #[test]
