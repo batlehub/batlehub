@@ -556,6 +556,7 @@
   "auditLog": {
     "accountWide": "Portée compte",
     "anonymousSubject": "anonyme",
+    "couldNotLoad": "Le journal d'audit n'a pas pu être chargé.",
     "deniedOnly": "Refusés uniquement",
     "eventNoun": "événement d'audit",
     "eventNounPlural": "événements d'audit",
@@ -750,6 +751,7 @@
     "intro": "Qui a téléchargé une version signalée par une source, et combien de ces téléchargements précèdent le signalement — le cas rétroactif, où le développeur n'a rien fait de mal et détient pourtant l'artefact.",
     "lastPull": "Dernier téléchargement",
     "lastScan": "dernier passage sur {registry} le {when}",
+    "exportFailed": "L'export CSV a échoué.",
     "loadFailed": "Impossible de charger le rapport d'exposition.",
     "minEffect": "Effet minimal",
     "more": "Charger la suite",

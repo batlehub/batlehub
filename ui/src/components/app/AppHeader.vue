@@ -37,11 +37,15 @@ const isOidcUser = computed(() => isAuthenticated.value && !!identity.value?.aut
    behind a divider gave the same choice two different shapes and made the bar
    read as two bars; the proof's masthead runs Packages/Setup/Admin as three
    cells of one control, and Admin's copper ink is what marks it out (AppNav). */
+/* Access the server has not confirmed is no access: before `/me` answers, or
+   when it fails, an anonymous viewer on `/login` was offered Packages and Setup
+   on a locked instance — two links that each redirected straight back. A
+   signed-in viewer is unaffected, `primaryNav` only reads this for anonymous. */
 const navLinks = computed(() =>
   primaryNav({
     isAuthenticated: isAuthenticated.value,
     isAdmin: isAdmin.value,
-    hasRegistryAccess: identity.value?.has_registry_access !== false,
+    hasRegistryAccess: identity.value?.has_registry_access === true,
   }),
 );
 

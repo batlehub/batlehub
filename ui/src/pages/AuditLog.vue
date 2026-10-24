@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/table";
 
 import { Combobox } from "@/components/ui/combobox";
+import { AsyncState } from "@/components/ui/async-state";
 import { useRegistryOptions } from "@/composables/useRegistryOptions";
 const { t } = useI18n();
 
@@ -365,9 +366,14 @@ async function purge() {
       </CardHeader>
       <CardContent class="p-0">
         <p v-if="loading" class="p-6 text-sm text-muted-foreground">{{ t("auditLog.loading") }}</p>
-        <p v-else-if="error" class="p-6 text-sm text-destructive">
-          {{ error }}
-        </p>
+        <div v-else-if="error" class="p-6">
+          <AsyncState
+            :loading="false"
+            :error="error"
+            :title="t('auditLog.couldNotLoad')"
+            :on-retry="reload"
+          />
+        </div>
 
         <Table v-else-if="events.length">
           <TableHeader>

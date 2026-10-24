@@ -556,6 +556,7 @@
   "auditLog": {
     "accountWide": "Account-wide",
     "anonymousSubject": "anonymous",
+    "couldNotLoad": "The audit log could not be loaded.",
     "deniedOnly": "Denied only",
     "eventNoun": "audit event",
     "eventNounPlural": "audit events",
@@ -750,6 +751,7 @@
     "intro": "Who pulled a version a source has flagged, and how many of those pulls came before the flag was known — the retroactive case, where the developer did nothing wrong and still has the artifact.",
     "lastPull": "Last pull",
     "lastScan": "last pass over {registry} at {when}",
+    "exportFailed": "The CSV export failed.",
     "loadFailed": "The exposure report could not be loaded.",
     "minEffect": "Minimum effect",
     "more": "Load more",

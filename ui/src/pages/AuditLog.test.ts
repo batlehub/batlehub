@@ -200,6 +200,13 @@ describe("AuditLog", () => {
     auditLogMock.mockResolvedValue({ error: { message: "boom" } });
     const wrapper = await mountPage();
     expect(wrapper.text()).toContain("boom");
+    expect(wrapper.text()).toContain("The audit log could not be loaded.");
+
+    auditLogMock.mockClear().mockResolvedValue({ data: { items: [], total: 0 } });
+    const retry = wrapper.findAll("button").find((b) => b.text().trim() === "Try again");
+    await retry!.trigger("click");
+    await flushPromises();
+    expect(auditLogMock).toHaveBeenCalled();
   });
 });
 
