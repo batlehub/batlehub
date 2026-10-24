@@ -39,7 +39,9 @@ const titleText = computed(() => props.title ?? t("asyncState.couldNotLoad"));
 <template>
   <template v-if="loading">
     <slot name="loading">
-      <output class="block text-sm text-muted-foreground py-4">{{ t("asyncState.loading") }}</output>
+      <output class="block text-sm text-muted-foreground py-4">{{
+        t("asyncState.loading")
+      }}</output>
     </slot>
   </template>
   <template v-else-if="error">
