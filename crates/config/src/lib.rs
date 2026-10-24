@@ -423,36 +423,43 @@ fn unmark(text: &str) -> String {
 /// `name = "npm"` is two entries as markers and one on a server with
 /// `REG=npm` (RFC 0037 §4.1).
 fn check_marker_positions(value: &toml::Value) -> Result<()> {
-    let marked = |s: &str| s.contains(render::MARK_OPEN);
     match value {
         toml::Value::Table(table) => {
             for (k, v) in table {
-                if marked(k) {
+                if k.contains(render::MARK_OPEN) {
                     bail!(
                         "placeholder in the key '{}': merging compares keys as text",
                         unmark(k)
                     );
                 }
                 if let toml::Value::Array(items) = v {
-                    for entry in items.iter().filter_map(toml::Value::as_table) {
-                        for id in IDENTITY_KEYS {
-                            if let Some(s) = entry.get(id).and_then(toml::Value::as_str) {
-                                if marked(s) {
-                                    bail!(
-                                        "placeholder in `{k}` entry's `{id} = \"{}\"`: merging \
-                                         matches entries on it as text",
-                                        unmark(s)
-                                    );
-                                }
-                            }
-                        }
-                    }
+                    check_identity_markers(k, items)?;
                 }
                 check_marker_positions(v)?;
             }
         }
         toml::Value::Array(items) => items.iter().try_for_each(check_marker_positions)?,
         _ => {}
+    }
+    Ok(())
+}
+
+/// The `name`/`type` of each entry in the array of tables `key`, which the
+/// merge matches entries on as text.
+fn check_identity_markers(key: &str, items: &[toml::Value]) -> Result<()> {
+    for entry in items.iter().filter_map(toml::Value::as_table) {
+        for id in IDENTITY_KEYS {
+            let Some(s) = entry.get(id).and_then(toml::Value::as_str) else {
+                continue;
+            };
+            if s.contains(render::MARK_OPEN) {
+                bail!(
+                    "placeholder in `{key}` entry's `{id} = \"{}\"`: merging \
+                     matches entries on it as text",
+                    unmark(s)
+                );
+            }
+        }
     }
     Ok(())
 }

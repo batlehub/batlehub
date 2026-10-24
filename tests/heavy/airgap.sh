@@ -432,9 +432,20 @@ head -c 32 /dev/urandom | od -An -tx1 | tr -d " \n" > "$HEAVY_WORK/estate.key"
   || { cat "$HEAVY_WORK/export.json" "$HEAVY_WORK/export.err" >&2; heavy_fail "mise export failed"; }
 BLOBS="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["blobs"])' "$HEAVY_WORK/export.json")"
 [[ "$BLOBS" -eq 19 ]] || { cat "$HEAVY_WORK/export.json" "$HEAVY_WORK/export.err" >&2; heavy_fail "the bundle carried $BLOBS blob(s), expected 19 (asset, tarball, wheel, crate, zip, mod, jar, pom, nupkg, gem, conda package, provider archive, its checksum list and signature, the .apk, a devfile stack's manifest and devfile, and a chart archive and its .prov)"; }
+# `-L` follows a redirect, and the CDN redirects; `--proto-redir` pins the
+# redirect chain to HTTPS so a downgrade cannot slip a plain-HTTP hop into a
+# download that goes straight into `tar`. A wrapper rather than the flags
+# spliced in at each call site, for the reason `marketplace.sh` records: an
+# array splat is opaque to the rule that checks for this, and a call site that
+# names the wrapper cannot omit half of the pair.
+fetch_https() {
+  curl -fsSL --proto '=https' --proto-redir '=https' "$@"
+  return $?
+}
+
 # The keyring `helm pull --verify` checks the carried .prov against, fetched
 # while there is still a network to fetch it from.
-curl -fsSL --proto "=https" --proto-redir "=https" -o "$HEAVY_WORK/helm-keyring.gpg" "$HELM_KEYRING_URL" \
+fetch_https -o "$HEAVY_WORK/helm-keyring.gpg" "$HELM_KEYRING_URL" \
   || heavy_fail "could not fetch cert-manager's keyring"
 # The export read the provider's download document and carried its facts.
 python3 - "$HEAVY_WORK/estate.bhub" "$TF_REG" <<'PY' || heavy_fail "the manifest does not carry the provider's signing keys (0008-bis §13.7)"
@@ -753,17 +764,6 @@ heavy_log "MISE-NOLOCK-MEASURED"
 # below is measured against.
 
 CDN="https://dl-cdn.alpinelinux.org/alpine"
-
-# `-L` follows a redirect, and the CDN redirects; `--proto-redir` pins the
-# redirect chain to HTTPS so a downgrade cannot slip a plain-HTTP hop into a
-# download that goes straight into `tar`. A wrapper rather than the flags
-# spliced in at each call site, for the reason `marketplace.sh` records: an
-# array splat is opaque to the rule that checks for this, and a call site that
-# names the wrapper cannot omit half of the pair.
-fetch_https() {
-  curl -fsSL --proto '=https' --proto-redir '=https' "$@"
-  return $?
-}
 
 APK_ROOT="$HEAVY_WORK/apk-client"
 mkdir -p "$APK_ROOT"

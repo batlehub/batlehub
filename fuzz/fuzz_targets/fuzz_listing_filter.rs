@@ -277,86 +277,101 @@ fn well_formed(
 ) -> arbitrary::Result<Option<VersionDocument>> {
     let listed: Vec<&String> = pool.iter().filter(|v| plain(v)).collect();
     Ok(Some(match kind {
-        RegistryKind::Npm => {
-            let mut versions = Map::new();
-            let mut time = Map::new();
-            for v in &listed {
-                if u.arbitrary()? {
-                    versions.insert(
-                        (*v).clone(),
-                        serde_json::json!({ "version": v, "dist": { "tarball": format!("https://r.invalid/pkg/-/pkg-{v}.tgz") } }),
-                    );
-                    time.insert((*v).clone(), Value::from("2024-01-01T00:00:00.000Z"));
-                }
-            }
-            let keys: Vec<String> = versions.keys().cloned().collect();
-            let mut tags = Map::new();
-            if !keys.is_empty() {
-                for tag in ["latest", "next", "beta"] {
-                    if u.arbitrary()? {
-                        tags.insert(tag.to_owned(), Value::from(pick(u, &keys)?.clone()));
-                    }
-                }
-            }
-            VersionDocument::json(serde_json::json!({
-                "name": "pkg",
-                "dist-tags": tags,
-                "versions": versions,
-                "time": time,
-            }))
-        }
-        RegistryKind::Cargo => {
-            let mut body = String::new();
-            for _ in 0..u.int_in_range(0..=8u8)? {
-                if listed.is_empty() {
-                    break;
-                }
-                let line = serde_json::json!({
-                    "name": "pkg",
-                    "vers": pick(u, &listed)?,
-                    "deps": [],
-                    "cksum": "00",
-                    "yanked": u.arbitrary::<bool>()?,
-                });
-                body.push_str(&line.to_string());
-                body.push('\n');
-            }
-            VersionDocument::text("text/plain", body)
-        }
-        RegistryKind::Maven => {
-            let mut xml = String::from(
-                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<metadata>\n  \
-                 <groupId>g</groupId>\n  <artifactId>pkg</artifactId>\n  <versioning>\n",
-            );
-            // `<latest>`/`<release>` may name a version `<versions>` does not
-            // list: Maven follows the pointer alone, so the filter has to
-            // repair a blocked one either way (the first finding here).
-            let mut kept = Vec::new();
-            for v in &listed {
-                if u.arbitrary()? {
-                    kept.push(*v);
-                }
-            }
-            if !listed.is_empty() {
-                for el in ["latest", "release"] {
-                    if u.arbitrary()? {
-                        let v = pick(u, &listed)?;
-                        xml.push_str(&format!("    <{el}>{v}</{el}>\n"));
-                    }
-                }
-            }
-            xml.push_str("    <versions>\n");
-            for v in &kept {
-                xml.push_str(&format!("      <version>{v}</version>\n"));
-            }
-            xml.push_str(
-                "    </versions>\n    <lastUpdated>20240101000000</lastUpdated>\n  \
-                 </versioning>\n</metadata>\n",
-            );
-            VersionDocument::text("text/xml", xml)
-        }
+        RegistryKind::Npm => well_formed_packument(u, &listed)?,
+        RegistryKind::Cargo => well_formed_sparse_index(u, &listed)?,
+        RegistryKind::Maven => well_formed_maven_metadata(u, &listed)?,
         _ => return Ok(None),
     }))
+}
+
+fn well_formed_packument(
+    u: &mut arbitrary::Unstructured<'_>,
+    listed: &[&String],
+) -> arbitrary::Result<VersionDocument> {
+    let mut versions = Map::new();
+    let mut time = Map::new();
+    for v in listed {
+        if u.arbitrary()? {
+            versions.insert(
+                (*v).clone(),
+                serde_json::json!({ "version": v, "dist": { "tarball": format!("https://r.invalid/pkg/-/pkg-{v}.tgz") } }),
+            );
+            time.insert((*v).clone(), Value::from("2024-01-01T00:00:00.000Z"));
+        }
+    }
+    let keys: Vec<String> = versions.keys().cloned().collect();
+    let mut tags = Map::new();
+    if !keys.is_empty() {
+        for tag in ["latest", "next", "beta"] {
+            if u.arbitrary()? {
+                tags.insert(tag.to_owned(), Value::from(pick(u, &keys)?.clone()));
+            }
+        }
+    }
+    Ok(VersionDocument::json(serde_json::json!({
+        "name": "pkg",
+        "dist-tags": tags,
+        "versions": versions,
+        "time": time,
+    })))
+}
+
+fn well_formed_sparse_index(
+    u: &mut arbitrary::Unstructured<'_>,
+    listed: &[&String],
+) -> arbitrary::Result<VersionDocument> {
+    let mut body = String::new();
+    for _ in 0..u.int_in_range(0..=8u8)? {
+        if listed.is_empty() {
+            break;
+        }
+        let line = serde_json::json!({
+            "name": "pkg",
+            "vers": pick(u, listed)?,
+            "deps": [],
+            "cksum": "00",
+            "yanked": u.arbitrary::<bool>()?,
+        });
+        body.push_str(&line.to_string());
+        body.push('\n');
+    }
+    Ok(VersionDocument::text("text/plain", body))
+}
+
+fn well_formed_maven_metadata(
+    u: &mut arbitrary::Unstructured<'_>,
+    listed: &[&String],
+) -> arbitrary::Result<VersionDocument> {
+    let mut xml = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<metadata>\n  \
+         <groupId>g</groupId>\n  <artifactId>pkg</artifactId>\n  <versioning>\n",
+    );
+    // `<latest>`/`<release>` may name a version `<versions>` does not
+    // list: Maven follows the pointer alone, so the filter has to
+    // repair a blocked one either way (the first finding here).
+    let mut kept = Vec::new();
+    for v in listed {
+        if u.arbitrary()? {
+            kept.push(*v);
+        }
+    }
+    if !listed.is_empty() {
+        for el in ["latest", "release"] {
+            if u.arbitrary()? {
+                let v = pick(u, listed)?;
+                xml.push_str(&format!("    <{el}>{v}</{el}>\n"));
+            }
+        }
+    }
+    xml.push_str("    <versions>\n");
+    for v in &kept {
+        xml.push_str(&format!("      <version>{v}</version>\n"));
+    }
+    xml.push_str(
+        "    </versions>\n    <lastUpdated>20240101000000</lastUpdated>\n  \
+         </versioning>\n</metadata>\n",
+    );
+    Ok(VersionDocument::text("text/xml", xml))
 }
 
 /// Property 6: the end state of a filtered npm, cargo or Maven document names
