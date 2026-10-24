@@ -7,8 +7,7 @@ import { useAuth } from "@/composables/useAuth";
 import { primaryNav } from "@/config/navigation";
 import { DOCS_URL } from "@/config";
 import { Button } from "@/components/ui/button";
-import ThemeToggle from "@/components/ThemeToggle.vue";
-import LocaleToggle from "@/components/LocaleToggle.vue";
+import DisplaySettings from "@/components/DisplaySettings.vue";
 import AppNav from "./AppNav.vue";
 import UserMenu from "./UserMenu.vue";
 import GlobalBanner from "./GlobalBanner.vue";
@@ -166,8 +165,7 @@ function handleLogout() {
           <BookOpen class="h-3.5 w-3.5" />
           <span class="hidden lg:inline">{{ t("common.docs") }}</span>
         </a>
-        <LocaleToggle />
-        <ThemeToggle />
+        <DisplaySettings />
 
         <UserMenu />
 

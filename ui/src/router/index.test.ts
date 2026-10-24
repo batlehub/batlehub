@@ -176,7 +176,7 @@ describe("router navigation guards (integration)", () => {
     ["/admin", "/admin/dashboard"],
     ["/admin/security", "/admin/security/blocks"],
     ["/admin/namespaces", "/admin/namespaces/team-namespaces"],
-    ["/admin/operations", "/admin/operations/config-reload"],
+    ["/admin/operations", "/admin/operations/upstream"],
     ["/admin/observability", "/admin/observability/health"],
   ])("redirects the section base path %s to its first tab %s", async (basePath, firstTab) => {
     await setAuth(ADMIN, "tok");
@@ -310,6 +310,7 @@ describe("router navigation guards (integration)", () => {
       "/admin/namespaces/team-namespaces",
       "/admin/namespaces/beta-channel",
       "/admin/operations/config-reload",
+      "/admin/operations/banner",
       "/admin/operations/warming",
       "/admin/operations/imports",
       "/admin/observability/health",
@@ -411,7 +412,7 @@ describe("information architecture", () => {
       ["/admin/packages", "/admin/packages/all"],
       ["/admin/security", "/admin/security/blocks"],
       ["/admin/namespaces", "/admin/namespaces/team-namespaces"],
-      ["/admin/operations", "/admin/operations/config-reload"],
+      ["/admin/operations", "/admin/operations/upstream"],
       ["/admin/observability", "/admin/observability/health"],
       // RFC 0004 Phase 5 (*split*): the sidebar still points here, and it lands
       // on the first tab like every other section root.

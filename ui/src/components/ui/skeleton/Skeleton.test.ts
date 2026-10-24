@@ -15,15 +15,10 @@ describe("Skeleton", () => {
     expect(mount(Skeleton).attributes("aria-hidden")).toBe("true");
   });
 
-  /**
-   * `motion-safe:` rather than a bare animation — the craft floor and WCAG both
-   * require honouring prefers-reduced-motion, and a pulse on a region the user
-   * is already waiting for is exactly the kind that provokes it.
-   */
-  it("only animates when motion is safe", () => {
+  /** One Motion Rule: only an artifact resolving moves; a loading bar does not. */
+  it("does not animate", () => {
     const bar = mount(Skeleton).find('[data-testid="skeleton-line"]');
-    expect(bar.classes()).toContain("motion-safe:animate-pulse");
-    expect(bar.classes()).not.toContain("animate-pulse");
+    expect(bar.classes().some((c) => c.includes("animate"))).toBe(false);
   });
 
   /** Ragged widths read as text; identical bars read as a loading graphic. */

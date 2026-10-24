@@ -251,6 +251,14 @@ summary:focus-visible,
 [tabindex]:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
+  /* The ring arrives at once. Tailwind 4's `transition-colors` lists
+     `outline-color`, so on every control that carries it the ring faded in
+     over 150ms — a second, unauthored motion on the one indicator a keyboard
+     reader is tracking. Unlayered, so it outranks the utility; everything the
+     utilities animate except the outline keeps animating. */
+  transition-property:
+    color, background-color, border-color, text-decoration-color, fill, stroke, box-shadow,
+    transform, opacity;
 }
 
 /* ── Shiki highlighted code blocks ───────────────────────────────────────── */

@@ -26,8 +26,8 @@ function toggle() {
     :disabled="disabled"
     :class="
       cn(
-        'peer inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-sm border border-input transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50',
-        modelValue ? 'bg-primary' : 'bg-secondary',
+        'peer inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-sm border border-border disabled:cursor-not-allowed disabled:opacity-50',
+        modelValue ? 'bg-foreground' : 'bg-transparent',
         props.class,
       )
     "
@@ -36,8 +36,8 @@ function toggle() {
     <span
       :class="
         cn(
-          'pointer-events-none block h-3.5 w-3.5 rounded-sm bg-background transition-transform',
-          modelValue ? 'translate-x-4' : 'translate-x-0.5',
+          'pointer-events-none block h-3.5 w-3.5 rounded-sm',
+          modelValue ? 'translate-x-4 bg-background' : 'translate-x-0.5 bg-muted-foreground',
         )
       "
     />

@@ -46,7 +46,8 @@ describe("AdminLayout", () => {
   it("marks the section the route is in, including its sub-routes", () => {
     const active = mountAdmin("/admin/packages/bulk")
       .findAll("a")
-      .filter((a) => a.classes().includes("font-semibold"))
+      // The position is announced, not only painted.
+      .filter((a) => a.attributes("aria-current") === "page")
       .map((a) => a.attributes("href"));
     expect(new Set(active)).toEqual(new Set(["/admin/packages"]));
   });

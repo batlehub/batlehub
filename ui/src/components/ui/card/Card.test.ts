@@ -8,18 +8,21 @@ import CardContent from "./CardContent.vue";
 import CardFooter from "./CardFooter.vue";
 
 describe("Card", () => {
-  it("renders slot content in a div with base classes", () => {
+  /** A region is a hairline above it — never a frame on a raised fill. */
+  it("renders slot content under a top hairline, with no frame or fill", () => {
     const wrapper = mount(Card, { slots: { default: "Body" } });
     expect(wrapper.text()).toBe("Body");
     expect(wrapper.element.tagName).toBe("DIV");
-    expect(wrapper.classes()).toContain("rounded-sm");
-    expect(wrapper.classes()).toContain("border");
+    expect(wrapper.classes()).toContain("border-t");
+    expect(wrapper.classes()).toContain("border-rule-soft");
+    expect(wrapper.classes()).not.toContain("border");
+    expect(wrapper.classes()).not.toContain("bg-card");
   });
 
   it("merges a custom class", () => {
     const wrapper = mount(Card, { props: { class: "my-card" }, slots: { default: "Body" } });
     expect(wrapper.classes()).toContain("my-card");
-    expect(wrapper.classes()).toContain("bg-card");
+    expect(wrapper.classes()).toContain("border-t");
   });
 });
 
@@ -48,7 +51,9 @@ describe("CardTitle", () => {
     expect(wrapper.text()).toBe("Title");
     expect(wrapper.element.tagName).toBe("H2");
     expect(wrapper.classes()).toContain("font-mono");
-    expect(wrapper.classes()).toContain("font-bold");
+    // The Head step, regular — not 24px bold competing with the page h1.
+    expect(wrapper.classes()).toContain("text-lg");
+    expect(wrapper.classes()).not.toContain("font-bold");
   });
 
   it("takes a deeper level when the card is nested under a section heading", () => {
@@ -84,8 +89,9 @@ describe("CardContent", () => {
     const wrapper = mount(CardContent, { slots: { default: "Content" } });
     expect(wrapper.text()).toBe("Content");
     expect(wrapper.element.tagName).toBe("DIV");
-    expect(wrapper.classes()).toContain("p-6");
-    expect(wrapper.classes()).toContain("pt-0");
+    // Full measure: no side padding, only the gap before the next region.
+    expect(wrapper.classes()).toContain("pb-6");
+    expect(wrapper.classes()).not.toContain("p-6");
   });
 
   it("merges a custom class", () => {

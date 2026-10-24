@@ -30,6 +30,8 @@ import {
   TableCell,
 } from "@/components/ui/table";
 
+import { Combobox } from "@/components/ui/combobox";
+import { useRegistryOptions } from "@/composables/useRegistryOptions";
 const { t } = useI18n();
 
 const { token } = useAuth();
@@ -52,6 +54,7 @@ const { authFetch } = useAuthFetch();
  * defect as the access-check simulator's confident `allow`.
  */
 const registryFilter = ref("");
+const { options: registryOptions } = useRegistryOptions();
 const userFilter = ref("");
 const deniedOnly = ref(false);
 const from = ref("");
@@ -222,6 +225,29 @@ async function exportAuditLog() {
 
 const purgeBefore = ref("");
 const purgeOpen = ref(false);
+/**
+ * How many events the purge would delete, counted when the dialog opens. The
+ * dialog said "1 retention window" — a count of one for an action that can
+ * erase ten thousand records, which is the number principle 2 owes the reader.
+ */
+const purgeCount = ref(0);
+const countingPurge = ref(false);
+
+async function openPurge() {
+  const before = asRfc3339(purgeBefore.value);
+  if (!before) return;
+  countingPurge.value = true;
+  purgeError.value = null;
+  try {
+    const { data: res } = await auditLog({ query: { to: before, per_page: 1 } });
+    purgeCount.value = (res as AuditLogResponse | undefined)?.total ?? 0;
+  } catch (e) {
+    purgeError.value = extractMessage(e);
+  } finally {
+    countingPurge.value = false;
+    purgeOpen.value = true;
+  }
+}
 const purging = ref(false);
 const purgeError = ref<string | null>(null);
 const announcement = ref("");
@@ -308,11 +334,15 @@ async function purge() {
           </div>
           <div class="space-y-1">
             <Label for="al-registry" class="text-xs">{{ t("common.registry") }}</Label>
-            <Input
+            <!-- The known registries, offered — it was free text, so a filter
+                 was a spelling test. Still free text underneath: an audit row
+                 can name a registry the config no longer has. -->
+            <Combobox
               id="al-registry"
               v-model="registryFilter"
+              :options="registryOptions"
               :placeholder="t('auditLog.filterByRegistry')"
-              class="h-8 text-sm max-w-[160px]"
+              class="h-8 text-sm max-w-[200px]"
             />
           </div>
           <div class="space-y-1">
@@ -386,7 +416,10 @@ async function purge() {
               <TableCell class="text-xs font-mono">
                 {{ ev.action }}
               </TableCell>
-              <TableCell class="max-w-[220px]">
+              <!-- The reason in full, wrapping: it is the answer the row exists
+                   to give, and a 220px ellipsis with a hover-only title hid it
+                   from keyboard and touch readers alike. -->
+              <TableCell class="min-w-[16rem]">
                 <Badge :variant="ev.result.outcome === 'denied' ? 'destructive' : 'secondary'">
                   {{
                     ev.result.outcome === "denied"
@@ -396,8 +429,7 @@ async function purge() {
                 </Badge>
                 <p
                   v-if="ev.result.outcome === 'denied'"
-                  class="mt-0.5 text-xs text-muted-foreground truncate"
-                  :title="ev.result.reason"
+                  class="mt-0.5 text-xs text-muted-foreground [overflow-wrap:anywhere]"
                 >
                   {{ ev.result.reason }}
                 </p>
@@ -440,7 +472,12 @@ async function purge() {
             class="h-8 text-sm"
           />
         </div>
-        <Button variant="destructive" size="sm" :disabled="!purgeBefore" @click="purgeOpen = true">
+        <Button
+          variant="destructive"
+          size="sm"
+          :disabled="!purgeBefore || countingPurge"
+          @click="openPurge"
+        >
           {{ t("auditLog.purge") }}
         </Button>
       </CardContent>
@@ -449,8 +486,9 @@ async function purge() {
     <DestructiveConfirm
       :open="purgeOpen"
       :action="t('auditLog.purge')"
-      :count="1"
-      :item-noun="t('auditLog.retentionWindow')"
+      :count="purgeCount"
+      :item-noun="t('auditLog.eventNoun')"
+      :item-noun-plural="t('auditLog.eventNounPlural')"
       :scope="t('auditLog.purgeScope', { before: purgeBefore })"
       :consequence="t('auditLog.purgeConsequence')"
       :confirm-name="t('auditLog.purgeConfirmWord')"

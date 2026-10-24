@@ -18,11 +18,9 @@ import { useApi } from "@/composables/useApi";
 import { useAuth } from "@/composables/useAuth";
 import { formatBytes as fmtBytes, formatCount } from "@/lib/format";
 import { PageHeader } from "@/components/ui/page-header";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Alert } from "@/components/ui/alert";
 import {
   Table,
   TableHeader,
@@ -32,6 +30,8 @@ import {
   TableCell,
 } from "@/components/ui/table";
 
+import { Resolution } from "@/components/ui/resolution";
+import { AsyncState } from "@/components/ui/async-state";
 const { t } = useI18n();
 
 const { token } = useAuth();
@@ -40,6 +40,7 @@ const {
   data: stats,
   loading: statsLoading,
   error: statsError,
+  reload: reloadStats,
 } = useApi<StatsResponse>(
   () => adminStats() as Promise<{ data?: unknown; error?: unknown }>,
   [token],
@@ -205,7 +206,13 @@ const trendText = computed(() => {
     </EmptyState>
 
     <template v-else>
-      <Alert v-if="statsError" variant="destructive">{{ statsError }}</Alert>
+      <AsyncState
+        v-if="statsError"
+        :loading="false"
+        :error="statsError"
+        :title="t('adminDashboard.statsCouldNotLoad')"
+        :on-retry="reloadStats"
+      />
       <Skeleton v-else-if="statsLoading" :lines="2" />
 
       <!-- What the cache saved, stated as a sentence rather than as four tiles. -->
@@ -279,15 +286,20 @@ const trendText = computed(() => {
               <TableCell class="text-right font-mono text-sm text-muted-foreground">
                 {{ fmtBytes(r.cached_bytes) }}
               </TableCell>
+              <!-- State as the system draws it — pattern, word, hue — on the
+                   page that is *about* cache state, which never showed one. A
+                   degraded registry links to where its errors are, instead of
+                   naming a problem and leaving the reader to find it; the
+                   healthy word was a hardcoded English "OK". -->
               <TableCell>
-                <Badge
+                <RouterLink
                   v-if="degraded.some((d) => d.registry === r.registry)"
-                  variant="destructive"
-                  class="text-xs"
+                  to="/admin/observability/health"
+                  class="text-destructive hover:underline underline-offset-[3px]"
                 >
-                  {{ t("common.errors") }}
-                </Badge>
-                <span v-else class="text-xs text-muted-foreground">OK</span>
+                  <Resolution state="blocked" :label="t('adminDashboard.registryErrors')" />
+                </RouterLink>
+                <Resolution v-else state="cached" :label="t('adminDashboard.registryServing')" />
               </TableCell>
             </TableRow>
           </TableBody>

@@ -34,7 +34,7 @@ describe("MyProfile", () => {
       groups: [],
     });
     expect(w.text()).toContain("alice");
-    expect(w.text()).toContain("admin");
+    expect(w.text()).toContain("Admin"); // the role as the catalogue names it, not the wire value
     expect(w.text()).toContain("oidc");
   });
 

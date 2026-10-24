@@ -25,6 +25,7 @@ import {
   type SnippetContext,
 } from "@/config/registryTypes";
 
+import { AsyncState } from "@/components/ui/async-state";
 const { t } = useI18n();
 
 const base = computed(() => API_BASE_URL || globalThis.location.origin);
@@ -35,7 +36,12 @@ const { token, identity, isAuthenticated, isAdmin, expiresAt } = useAuth();
 const netrcLogin = computed(() => identity.value?.user_id ?? "token");
 const isOidc = computed(() => expiresAt.value > 0);
 
-const { data: registries, loading } = useApi<Array<RegistryInfo>>(
+const {
+  data: registries,
+  loading,
+  error,
+  reload,
+} = useApi<Array<RegistryInfo>>(
   () => listRegistries() as Promise<{ data?: unknown; error?: unknown }>,
   [],
 );
@@ -43,11 +49,30 @@ const { data: registries, loading } = useApi<Array<RegistryInfo>>(
 /** This origin plus every host-routed registry's own host — see `netrcHostsFor`. */
 const netrcHosts = computed(() => netrcHostsFor(base.value, registries.value ?? []));
 
-const netrcSnippet = computed(() =>
-  netrcHosts.value
-    .map((host) => `machine ${host}\nlogin ${netrcLogin.value}\npassword ${token.value}`)
-    .join("\n\n"),
-);
+/**
+ * The token a snippet carries — never the live bearer on screen by default.
+ *
+ * Every snippet printed the session token in clear, which is what a screen
+ * share or a colleague over a shoulder reads. On screen it is masked until the
+ * reader asks; Copy always takes the real one, so the snippet stays ready to
+ * paste. An OIDC session token expires within the hour, so writing it into a
+ * `~/.netrc` built a credential that stops working silently: those sessions
+ * get the placeholder, and the note beside it points at `/me/tokens`.
+ */
+const TOKEN_PLACEHOLDER = "<your-token>";
+const TOKEN_MASK = "••••••••";
+const tokenRevealed = ref(false);
+function tokenFor(forCopy: boolean): string {
+  if (isOidc.value) return TOKEN_PLACEHOLDER;
+  if (forCopy || tokenRevealed.value) return token.value ?? "";
+  return TOKEN_MASK;
+}
+
+function netrcSnippetFor(forCopy: boolean): string {
+  return netrcHosts.value
+    .map((host) => `machine ${host}\nlogin ${netrcLogin.value}\npassword ${tokenFor(forCopy)}`)
+    .join("\n\n");
+}
 
 // Group API registries by type
 const registriesByType = computed<Record<string, RegistryInfo[]>>(() => {
@@ -123,7 +148,7 @@ function primaryType(def: RegistryTypeDef): string | null {
   return def.apiTypes?.[0] ?? def.id;
 }
 
-function ctxFor(def: RegistryTypeDef): SnippetContext {
+function ctxFor(def: RegistryTypeDef, forCopy = false): SnippetContext {
   const pt =
     primaryType(def) ??
     (def.apiTypes ?? [def.id]).find((t) => t in registriesByType.value) ??
@@ -137,7 +162,7 @@ function ctxFor(def: RegistryTypeDef): SnippetContext {
     urlFor,
     mode: getMode(pt),
     isAuthenticated: isAuthenticated.value,
-    token: token.value ?? "",
+    token: tokenFor(forCopy),
     // Credentials are keyed by the host the client actually talks to, which is
     // the registry's own host once it has one.
     netrcHost: hostOf(registryUrl),
@@ -180,9 +205,19 @@ async function copy(key: string, text: string) {
     />
 
     <!-- Loading state -->
-    <div v-if="loading" class="text-sm text-muted-foreground">
+    <div v-if="loading" class="text-sm text-muted-foreground" role="status">
       {{ t("setupGuide.loadingRegistries") }}
     </div>
+
+    <!-- A failed list said nothing at all: the page fell through to its
+         tabs with no registry in them and left a lone `.netrc` tab. -->
+    <AsyncState
+      v-else-if="error"
+      :loading="false"
+      :error="error"
+      :title="t('setupGuide.registriesCouldNotLoad')"
+      :on-retry="reload"
+    />
 
     <!-- No registries configured -->
     <div v-else-if="activeDefs.length === 0 && !isAuthenticated">
@@ -207,6 +242,33 @@ async function copy(key: string, text: string) {
 
     <!-- Tabs -->
     <Tabs v-else :default-value="defaultTab">
+      <!-- The token on screen: masked unless asked for. Not offered to an
+           OIDC session, whose snippets carry the placeholder instead. -->
+      <div
+        v-if="isAuthenticated && !isOidc"
+        class="mb-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground"
+      >
+        <span>{{ t("setupGuide.tokenHidden") }}</span>
+        <Button
+          variant="outline"
+          size="sm"
+          :aria-pressed="tokenRevealed"
+          @click="tokenRevealed = !tokenRevealed"
+        >
+          {{ tokenRevealed ? t("setupGuide.hideToken") : t("setupGuide.showToken") }}
+        </Button>
+      </div>
+      <p v-else-if="isOidc" class="mb-3 text-xs text-muted-foreground">
+        <i18n-t keypath="setupGuide.oidcTokenNote" tag="span">
+          <template #link
+            ><RouterLink
+              to="/me/tokens"
+              class="underline underline-offset-2 hover:text-foreground"
+              >{{ t("setupGuide.personalApiToken") }}</RouterLink
+            ></template
+          >
+        </i18n-t>
+      </p>
       <div v-if="activeDefs.length > 6" class="mb-3 max-w-xs">
         <label class="sr-only" for="tool-filter">{{ t("setupGuide.filterTools") }}</label>
         <Input
@@ -278,7 +340,7 @@ async function copy(key: string, text: string) {
                     size="sm"
                     variant="ghost"
                     class="absolute top-2 right-2 h-7 px-2 text-xs"
-                    @click="copy(snippet.key, snippet.template(ctxFor(def)))"
+                    @click="copy(snippet.key, snippet.template(ctxFor(def, true)))"
                   >
                     {{ copied === snippet.key ? t("common.copied") : t("common.copy") }}
                   </Button>
@@ -319,12 +381,12 @@ async function copy(key: string, text: string) {
             </div>
           </CardHeader>
           <CardContent class="space-y-3">
-            <CodeBlock :code="netrcSnippet" lang="ini">
+            <CodeBlock :code="netrcSnippetFor(false)" lang="ini">
               <Button
                 size="sm"
                 variant="ghost"
                 class="absolute top-2 right-2 h-7 px-2 text-xs"
-                @click="copy('netrc', netrcSnippet)"
+                @click="copy('netrc', netrcSnippetFor(true))"
               >
                 {{ copied === "netrc" ? t("common.copied") : t("common.copy") }}
               </Button>

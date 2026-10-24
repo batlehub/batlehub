@@ -84,6 +84,16 @@
   --resolve: 520ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/* The narrow step. DESIGN's ramp starts at 5× for phones, and the console
+   never applied it: at 56px a ten-glyph word is ~450px of Silkscreen, so on a
+   390px screen "ALL REGISTRIES" broke inside "REGISTR/IES". 40px fits the
+   word and breaks at the space. */
+@media (max-width: 479.98px) {
+  :root {
+    --t-display: 40px;
+  } /* 5× */
+}
+
 @media (min-width: 640px) {
   :root {
     --t-display: 72px;

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
 import { useRoute } from "vue-router";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { checkAccess } from "@/client/sdk.gen";
 import type { AccessCheckResponse } from "@/client/types.gen";
 import { API_BASE_URL } from "@/config";
@@ -17,10 +17,16 @@ import { useRegistryOptions } from "@/composables/useRegistryOptions";
 import { Combobox } from "@/components/ui/combobox";
 import { usePackageNameSuggestions, useVersionSuggestions } from "@/composables/useSuggestions";
 
+import { EXAMPLE_COORDINATES, FALLBACK_COORDINATE } from "@/config/registryTypes";
 const { t } = useI18n();
 
 /** RFC 0004-bis §6.2: the registry set is closed, small and already fetched. */
-const { options: registryOptions } = useRegistryOptions();
+const { options: registryOptions, typeOf, error: registriesError } = useRegistryOptions();
+
+/** An example coordinate in the selected registry's own shape. */
+const example = computed(
+  () => EXAMPLE_COORDINATES[typeOf(registry.value) ?? ""] ?? FALLBACK_COORDINATE,
+);
 
 /**
  * Prefilled from the query when arriving from a denial (RFC 0003 §4.4).
@@ -94,15 +100,20 @@ async function check() {
             :options="registryOptions"
             :placeholder="t('adminHealth.chooseRegistry')"
           />
+          <!-- An empty list with no reason read as "this instance has no
+               registries"; it was a failed request. -->
+          <p v-if="registriesError" class="text-xs text-destructive">
+            {{ t("homePage.registriesCouldNotLoad") }} {{ registriesError }}
+          </p>
         </div>
         <div class="space-y-1">
-          <Label for="name">{{ t("accessCheck.nameOwnerRepo") }}</Label>
+          <Label for="name">{{ t("common.package") }}</Label>
           <Combobox
             id="name"
             v-model="name"
             :options="packageSuggestions.options.value"
             :loading="packageSuggestions.loading.value"
-            placeholder="owner/repo"
+            :placeholder="example.name"
           />
         </div>
         <div class="space-y-1">
@@ -114,7 +125,7 @@ async function check() {
             :loading="versionSuggestions.loading.value"
             :disabled="!versionSuggestions.ready()"
             :disabled-reason="t('accessCheck.versionNeedsPackage')"
-            placeholder="v1.0.0"
+            :placeholder="example.version"
           />
         </div>
         <div class="space-y-1">
@@ -127,13 +138,16 @@ async function check() {
         {{ loading ? t("accessCheck.checking") : t("accessCheck.checkAccess") }}
       </Button>
 
-      <p v-if="error" class="text-sm text-destructive">
-        {{ error }}
-      </p>
+      <!-- One live region, always in the DOM, so the verdict is announced
+           when it lands rather than only painted. -->
+      <div aria-live="polite" class="space-y-2">
+        <p v-if="error" class="text-sm text-destructive">
+          {{ error }}
+        </p>
 
-      <div v-if="result" class="rounded-sm border p-4 space-y-2">
-        <div class="flex items-center gap-2">
-          <!-- Three channels, never one (DESIGN.md). `default` and
+        <div v-if="result" class="border border-rule-strong p-4 space-y-2">
+          <div class="flex items-center gap-2">
+            <!-- Three channels, never one (DESIGN.md). `default` and
                `destructive` both resolve to `--accent` — `assets/index.css`
                sets `--destructive: var(--accent)` — so the page whose entire
                job is to answer "was I allowed?" painted both answers the same
@@ -145,27 +159,28 @@ async function check() {
                reader. Inside, the badge is the frame, the matrix is the
                pattern, the word is the word, and the hue Resolution sets on
                itself is the one its variant already carries. -->
-          <Badge :variant="result.can_access ? 'known' : 'destructive'">
-            <Resolution
-              :state="result.can_access ? 'cached' : 'blocked'"
-              :label="result.can_access ? t('accessCheck.allowed') : t('accessCheck.denied')"
-              class="gap-2"
-            />
-          </Badge>
-          <span v-if="!result.can_access" class="text-sm text-muted-foreground">
-            {{ result.reason ?? t("accessCheck.noReasonGiven") }}
-          </span>
+            <Badge :variant="result.can_access ? 'known' : 'destructive'">
+              <Resolution
+                :state="result.can_access ? 'cached' : 'blocked'"
+                :label="result.can_access ? t('accessCheck.allowed') : t('accessCheck.denied')"
+                class="gap-2"
+              />
+            </Badge>
+            <span v-if="!result.can_access" class="text-sm text-muted-foreground">
+              {{ result.reason ?? t("accessCheck.noReasonGiven") }}
+            </span>
+          </div>
+          <p v-if="result.proxy_url" class="text-xs text-muted-foreground break-all">
+            URL:
+            <a
+              :href="`${API_BASE_URL}${result.proxy_url}`"
+              target="_blank"
+              rel="noopener"
+              class="font-mono underline underline-offset-2 hover:text-foreground"
+              >{{ API_BASE_URL }}{{ result.proxy_url }}</a
+            >
+          </p>
         </div>
-        <p v-if="result.proxy_url" class="text-xs text-muted-foreground break-all">
-          URL:
-          <a
-            :href="`${API_BASE_URL}${result.proxy_url}`"
-            target="_blank"
-            rel="noopener"
-            class="font-mono underline underline-offset-2 hover:text-foreground"
-            >{{ API_BASE_URL }}{{ result.proxy_url }}</a
-          >
-        </p>
       </div>
     </CardContent>
   </Card>

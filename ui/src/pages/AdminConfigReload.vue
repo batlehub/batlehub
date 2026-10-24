@@ -6,13 +6,10 @@ import {
   applyPendingReload,
   reloadConfig,
   listConfigChanges,
-  setBanner,
-  clearBanner,
 } from "@/client/sdk.gen";
 import type { PendingReloadSnapshot, ConfigChangeRow, ConfigWarning } from "@/client/types.gen";
 import { useAuthFetch } from "@/composables/useAuthFetch";
 import { extractMessage } from "@/composables/useApi";
-import { useBanner } from "@/composables/useBanner";
 import { formatDate } from "@/lib/format";
 import { API_BASE_URL } from "@/config";
 import SectionTabs from "@/components/admin/SectionTabs.vue";
@@ -23,19 +20,37 @@ import { DestructiveConfirm } from "@/components/ui/destructive-confirm";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Alert } from "@/components/ui/alert";
+import { AsyncState } from "@/components/ui/async-state";
 import { Announcer } from "@/components/ui/announcer";
 import { ChevronRight } from "@lucide/vue";
 
 const { t } = useI18n();
 
 const { authFetch } = useAuthFetch();
-const { banner } = useBanner();
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Whether this instance reloads config at runtime: `true`, `false`, or `null`
+ * for "not known yet".
+ *
+ * Read from `is_readonly` on the config content, which the server sets to
+ * `!hot_reload_enabled` — never inferred from a status code. It was
+ * `pending.status !== 503`, so any 503 at all (an ingress or a database
+ * outage) made this page announce `BATLEHUB_DISABLE_HOT_RELOAD=1` and withdraw
+ * the reload controls: confident misinformation, at the moment an operator
+ * most needs the page to be right.
+ */
 const hotReloadEnabled = ref<boolean | null>(null);
+/** Why the pending reload could not be read, when it could not. */
+const pendingError = ref<string | null>(null);
+/**
+ * The editor is a tool and the pending diff is the decision; while a reload
+ * is staged the editor folds behind one control instead of putting an
+ * 18-row textarea between the operator and the Apply they came for.
+ */
+const editorOpen = ref(false);
 const pendingReload = ref<PendingReloadSnapshot | null>(null);
 const changeHistory = ref<ConfigChangeRow[]>([]);
 
@@ -102,12 +117,6 @@ const errorMsg = ref<string | null>(null);
 const successMsg = ref<string | null>(null);
 const expandedRow = ref<string | null>(null);
 
-// Banner form
-const bannerMessage = ref("");
-const bannerLevel = ref<"info" | "warning" | "error">("info");
-const loadingSetBanner = ref(false);
-const loadingClearBanner = ref(false);
-
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 // ── Config warnings ───────────────────────────────────────────────────────────
@@ -150,6 +159,7 @@ async function fetchWarnings() {
 const configContent = ref("");
 const configReadonly = ref(false);
 const configLoadError = ref<string | null>(null);
+const configLoading = ref(true);
 const editorValidating = ref(false);
 const editorCreating = ref(false);
 const editorSuccess = ref<string | null>(null);
@@ -163,18 +173,27 @@ const validatedContent = ref<string | null>(null);
 
 async function loadConfigContent() {
   configLoadError.value = null;
+  configLoading.value = true;
   try {
     const res = await authFetch(`${API_BASE_URL}/api/v1/admin/config/content`);
     if (!res.ok) {
-      configLoadError.value = `HTTP ${res.status}`;
+      const body = (await res.json().catch(() => ({}))) as { error?: string } | null;
+      configLoadError.value = body?.error ?? `HTTP ${res.status}`;
       return;
     }
     const body = (await res.json()) as { content: string; is_readonly: boolean };
     configContent.value = body.content;
     configReadonly.value = body.is_readonly;
+    hotReloadEnabled.value = !body.is_readonly;
   } catch (e) {
     configLoadError.value = extractMessage(e);
+  } finally {
+    configLoading.value = false;
   }
+}
+
+function retryLoad() {
+  void Promise.all([loadConfigContent(), fetchPending(), fetchWarnings()]);
 }
 
 async function validateConfigContent() {
@@ -248,16 +267,22 @@ async function createPendingFromContent() {
 async function fetchPending() {
   loadingPending.value = true;
   try {
-    // Use raw fetch to distinguish 404 (no pending) from 503 (hot reload disabled).
+    // Raw fetch, because 404 is an answer here: nothing is staged.
     const resp = await authFetch(`${API_BASE_URL}/api/v1/admin/config/pending`);
     if (resp.status === 404) {
       pendingReload.value = null;
+      pendingError.value = null;
     } else if (resp.ok) {
       pendingReload.value = await resp.json();
+      pendingError.value = null;
+    } else if (!(resp.status === 503 && hotReloadEnabled.value === false)) {
+      // A 503 is the expected answer only where hot reload is known to be
+      // off; anywhere else it is a failure, and said as one.
+      const body = (await resp.json().catch(() => ({}))) as { error?: string } | null;
+      pendingError.value = body?.error ?? `HTTP ${resp.status}`;
     }
-    hotReloadEnabled.value = resp.status !== 503;
-  } catch {
-    // ignore
+  } catch (e) {
+    pendingError.value = extractMessage(e);
   } finally {
     loadingPending.value = false;
   }
@@ -333,38 +358,6 @@ async function discardPending() {
   }
 }
 
-async function setBannerAction() {
-  if (!bannerMessage.value.trim()) return;
-  loadingSetBanner.value = true;
-  errorMsg.value = null;
-  try {
-    const { error: apiErr } = await setBanner({
-      body: { message: bannerMessage.value, level: bannerLevel.value },
-    });
-    if (apiErr) throw new Error(extractMessage(apiErr));
-    successMsg.value = t("adminConfigReload.bannerSet");
-    bannerMessage.value = "";
-  } catch (e: unknown) {
-    errorMsg.value = extractMessage(e);
-  } finally {
-    loadingSetBanner.value = false;
-  }
-}
-
-async function clearBannerAction() {
-  loadingClearBanner.value = true;
-  errorMsg.value = null;
-  try {
-    const { error: apiErr } = await clearBanner();
-    if (apiErr) throw new Error(extractMessage(apiErr));
-    successMsg.value = t("adminConfigReload.bannerCleared");
-  } catch (e: unknown) {
-    errorMsg.value = extractMessage(e);
-  } finally {
-    loadingClearBanner.value = false;
-  }
-}
-
 const expiresIn = computed(() => {
   if (!pendingReload.value) return "";
   const secs = Math.max(
@@ -402,6 +395,37 @@ onUnmounted(() => {
     <SectionTabs :tabs="OPERATIONS_TABS" />
     <PageHeader variant="display" :title="t('adminConfigReload.configReload')" />
 
+    <!--
+      The config could not be read: say so, say what it costs, offer a retry.
+      Until it loads the page does not know whether hot reload is on, so the
+      controls below stay visible and disabled rather than vanishing or
+      guessing — and nothing claims the instance is configured one way or the
+      other.
+    -->
+    <AsyncState
+      v-if="configLoadError"
+      :loading="false"
+      :error="configLoadError"
+      :title="t('adminConfigReload.configCouldNotLoad')"
+      :on-retry="retryLoad"
+    >
+      <template #error="{ error }">
+        <Alert variant="destructive" class="space-y-2">
+          <p class="font-medium">{{ t("adminConfigReload.configCouldNotLoad") }}</p>
+          <p class="text-xs break-words">{{ error }}</p>
+          <p class="text-xs">{{ t("adminConfigReload.controlsWaitForConfig") }}</p>
+          <Button variant="outline" size="sm" @click="retryLoad">{{ t("common.retry") }}</Button>
+        </Alert>
+      </template>
+    </AsyncState>
+
+    <!-- Status: hot reload disabled — only when the server said so. -->
+    <Alert v-if="hotReloadEnabled === false">
+      <i18n-t keypath="adminConfigReload.hotReloadDisabled" tag="span">
+        <template #flag><code>BATLEHUB_DISABLE_HOT_RELOAD=1</code></template>
+      </i18n-t>
+    </Alert>
+
     <!-- Config warnings: valid config, but something an operator should know -->
     <Card v-if="visibleWarnings.length">
       <CardHeader>
@@ -410,17 +434,19 @@ onUnmounted(() => {
         }}</CardTitle>
       </CardHeader>
       <CardContent class="space-y-2">
+        <!-- Opaque copper edge: alpha on the line that carries the contrast
+             was the one thing the other components had stopped doing. -->
         <div
           v-for="w in visibleWarnings"
           :key="`${w.code}@${w.path}`"
-          class="flex items-start gap-3 rounded-sm border border-copper/50 px-4 py-2 text-sm text-copper"
+          class="flex items-start gap-3 border border-copper px-4 py-2 text-sm text-copper"
         >
           <!-- `min-w-0` so a long config path can shrink, and the code/badge
                pair wraps: a warning names a TOML key, and TOML keys are long
                enough to push the page sideways on a phone. -->
           <div class="min-w-0 flex-1 space-y-1">
             <div class="flex flex-wrap items-center gap-2">
-              <code class="font-mono text-xs bg-muted px-1 rounded-sm break-all">{{ w.path }}</code>
+              <code class="font-mono text-xs break-all">{{ w.path }}</code>
               <Badge variant="outline">{{ w.code }}</Badge>
             </div>
             <p>{{ w.message }}</p>
@@ -442,20 +468,26 @@ onUnmounted(() => {
       one line, so it costs ~90px when nothing is staged and buys the whole
       decision when something is.
     -->
-    <!-- Pending Reload Card -->
     <Card v-if="hotReloadEnabled !== false">
       <CardHeader>
         <CardTitle>{{ t("adminConfigReload.pendingReload") }}</CardTitle>
       </CardHeader>
       <CardContent>
-        <div v-if="loadingPending && !pendingReload" class="text-sm text-muted-foreground">
+        <AsyncState
+          v-if="pendingError"
+          :loading="false"
+          :error="pendingError"
+          :title="t('adminConfigReload.pendingCouldNotLoad')"
+          :on-retry="fetchPending"
+        />
+        <div v-else-if="loadingPending && !pendingReload" class="text-sm text-muted-foreground">
           {{ t("adminConfigReload.loading") }}
         </div>
         <div v-else-if="!pendingReload" class="text-sm text-muted-foreground">
           {{ t("adminConfigReload.noPendingReloadThe") }}
         </div>
         <div v-else class="space-y-3">
-          <div class="flex gap-4 text-sm">
+          <div class="flex flex-wrap gap-x-4 gap-y-1 text-sm">
             <span
               ><strong>{{ t("adminConfigReload.sourceLabel") }}</strong>
               {{ pendingReload.source }}</span
@@ -492,9 +524,9 @@ onUnmounted(() => {
             <div
               v-for="w in pendingReload.warnings"
               :key="`pending-${w.code}@${w.path}`"
-              class="rounded-sm border border-copper/50 px-3 py-1.5 text-xs text-copper"
+              class="border border-copper px-3 py-1.5 text-xs text-copper"
             >
-              <code class="font-mono bg-muted px-1 rounded-sm break-all">{{ w.path }}</code>
+              <code class="font-mono break-all">{{ w.path }}</code>
               — {{ w.message }}
             </div>
           </div>
@@ -535,12 +567,7 @@ onUnmounted(() => {
                   {{ t(row.key) }}
                 </dt>
                 <dd class="flex flex-wrap gap-1">
-                  <code
-                    v-for="p in row.paths"
-                    :key="p"
-                    class="font-mono bg-muted px-1 rounded-sm break-all"
-                    >{{ p }}</code
-                  >
+                  <code v-for="p in row.paths" :key="p" class="font-mono break-all">{{ p }}</code>
                   <span v-if="row.restart && pendingReload.diff.restart_reason">
                     — {{ pendingReload.diff.restart_reason }}</span
                   >
@@ -548,6 +575,7 @@ onUnmounted(() => {
               </div>
             </template>
           </dl>
+          <!-- The view's one filled action: Apply. -->
           <div class="flex gap-2">
             <Button
               size="sm"
@@ -566,183 +594,117 @@ onUnmounted(() => {
       </CardContent>
     </Card>
 
-    <!-- Config Editor -->
-    <!-- Editing only exists when the config is writable; the read-only case is
-         its own screen rather than this one with the controls greyed out. -->
-    <Card v-if="!configReadonly">
-      <CardHeader>
-        <CardTitle>{{ t("adminConfigReload.configEditor") }}</CardTitle>
-      </CardHeader>
-      <CardContent class="space-y-3">
-        <p v-if="configLoadError" class="text-sm text-destructive">{{ configLoadError }}</p>
-        <textarea
-          v-model="configContent"
-          rows="18"
-          :readonly="configReadonly"
-          class="w-full rounded-sm border border-input bg-background font-mono text-xs p-3 focus:outline-none focus:ring-2 focus:ring-ring resize-y"
-          spellcheck="false"
-          :aria-label="t('adminConfigReload.configTomlContent')"
-          @input="validatedContent = null"
-        />
-        <div
-          v-if="editorSuccess"
-          class="rounded-sm border border-foreground/40 px-4 py-2 text-foreground text-sm"
-        >
-          {{ editorSuccess }}
-        </div>
-        <div
-          v-if="editorNotice"
-          class="rounded-sm border border-copper/50 px-4 py-2 text-sm text-copper"
-        >
-          {{ editorNotice }}
-        </div>
-        <div v-if="candidateWarnings.length" class="space-y-2">
-          <p class="text-sm text-muted-foreground">
-            <i18n-t keypath="adminConfigReload.validWithWarnings" tag="span">
-              <template #count>{{ candidateWarnings.length }}</template>
-            </i18n-t>
-          </p>
-          <div
-            v-for="w in candidateWarnings"
-            :key="`${w.code}@${w.path}`"
-            class="rounded-sm border border-copper/50 px-4 py-2 text-sm text-copper"
-          >
-            <code class="font-mono text-xs">{{ w.path }}</code> — {{ w.message }}
-          </div>
-        </div>
-        <div
-          v-if="editorError"
-          class="rounded-sm border border-destructive/40 px-4 py-2 text-destructive text-sm"
-        >
-          {{ editorError }}
-        </div>
-        <div class="flex gap-2 flex-wrap">
-          <Button
-            :disabled="
-              editorValidating || editorCreating || configReadonly || hotReloadEnabled === false
-            "
-            @click="validateConfigContent"
-          >
-            {{
-              editorValidating ? t("adminConfigReload.validating") : t("adminConfigReload.validate")
-            }}
-          </Button>
-          <Button
-            :disabled="
-              editorCreating ||
-              editorValidating ||
-              !validatedContent ||
-              configReadonly ||
-              hotReloadEnabled === false
-            "
-            @click="createPendingFromContent"
-          >
-            {{
-              editorCreating ? t("tokensPage.creating") : t("adminConfigReload.createPendingReload")
-            }}
-          </Button>
-          <Button variant="outline" @click="loadConfigContent">{{
-            t("adminConfigReload.reloadFromDisk")
-          }}</Button>
-        </div>
-      </CardContent>
-    </Card>
-
-    <ConfigReadOnlyView v-else :content="configContent" :error="configLoadError" />
-
-    <!-- Status: hot reload disabled -->
-    <Card v-if="hotReloadEnabled === false" class="border-copper/50">
-      <CardContent class="pt-4">
-        <p class="text-copper font-medium">
-          <i18n-t keypath="adminConfigReload.hotReloadDisabled" tag="span">
-            <template #flag><code>BATLEHUB_DISABLE_HOT_RELOAD=1</code></template>
-          </i18n-t>
-        </p>
-      </CardContent>
-    </Card>
-
     <!-- Feedback -->
-    <div
-      v-if="successMsg"
-      class="rounded-sm border border-foreground/40 px-4 py-2 text-foreground text-sm"
-    >
-      {{ successMsg }}
-    </div>
-    <div
-      v-if="errorMsg"
-      class="rounded-sm border border-destructive/40 px-4 py-2 text-destructive text-sm"
-    >
-      {{ errorMsg }}
-    </div>
+    <Alert v-if="successMsg" variant="success">{{ successMsg }}</Alert>
+    <Alert v-if="errorMsg" variant="destructive">{{ errorMsg }}</Alert>
 
-    <!-- Force Reload Card -->
+    <!--
+      Config Editor — only once the config has loaded and is writable. A
+      failed load used to leave an empty 18-row textarea under the error, as
+      if the config were blank; the read-only case is its own screen rather
+      than this one with the controls greyed out.
+    -->
+    <template v-if="!configLoading && !configLoadError">
+      <Card v-if="!configReadonly">
+        <CardHeader class="flex-row flex-wrap items-center justify-between gap-2">
+          <CardTitle>{{ t("adminConfigReload.configEditor") }}</CardTitle>
+          <Button
+            v-if="pendingReload && !editorOpen"
+            variant="outline"
+            size="sm"
+            @click="editorOpen = true"
+          >
+            {{ t("adminConfigReload.editConfig") }}
+          </Button>
+        </CardHeader>
+        <CardContent v-if="!pendingReload || editorOpen" class="space-y-3">
+          <textarea
+            v-model="configContent"
+            rows="18"
+            class="w-full border border-input bg-background font-mono text-xs p-3 resize-y"
+            spellcheck="false"
+            :aria-label="t('adminConfigReload.configTomlContent')"
+            @input="validatedContent = null"
+          />
+          <Alert v-if="editorSuccess" variant="success">{{ editorSuccess }}</Alert>
+          <div v-if="editorNotice" class="border border-copper px-4 py-2 text-sm text-copper">
+            {{ editorNotice }}
+          </div>
+          <div v-if="candidateWarnings.length" class="space-y-2">
+            <p class="text-sm text-muted-foreground">
+              <i18n-t keypath="adminConfigReload.validWithWarnings" tag="span">
+                <template #count>{{ candidateWarnings.length }}</template>
+              </i18n-t>
+            </p>
+            <div
+              v-for="w in candidateWarnings"
+              :key="`${w.code}@${w.path}`"
+              class="border border-copper px-4 py-2 text-sm text-copper"
+            >
+              <code class="font-mono text-xs">{{ w.path }}</code> — {{ w.message }}
+            </div>
+          </div>
+          <Alert v-if="editorError" variant="destructive">{{ editorError }}</Alert>
+          <!-- One filled action per view: staging is it here — unless a reload
+               is already staged, where Apply above is, and staging another
+               becomes the secondary control. -->
+          <div class="flex gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              :disabled="editorValidating || editorCreating || hotReloadEnabled !== true"
+              @click="validateConfigContent"
+            >
+              {{
+                editorValidating
+                  ? t("adminConfigReload.validating")
+                  : t("adminConfigReload.validate")
+              }}
+            </Button>
+            <Button
+              :variant="pendingReload ? 'outline' : 'default'"
+              :disabled="
+                editorCreating || editorValidating || !validatedContent || hotReloadEnabled !== true
+              "
+              @click="createPendingFromContent"
+            >
+              {{
+                editorCreating
+                  ? t("tokensPage.creating")
+                  : t("adminConfigReload.createPendingReload")
+              }}
+            </Button>
+            <Button variant="ghost" @click="loadConfigContent">{{
+              t("adminConfigReload.reloadFromDisk")
+            }}</Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <ConfigReadOnlyView v-else :content="configContent" :error="configLoadError" />
+    </template>
+
+    <!-- Force reload: an outlined control — the confirmation is where its
+         weight lives, not a second crimson fill on the page. Shown while
+         hot reload is unknown, but disabled until the server has said. -->
     <Card v-if="hotReloadEnabled !== false">
       <CardHeader>
         <CardTitle>{{ t("adminConfigReload.forceReloadNow") }}</CardTitle>
       </CardHeader>
       <CardContent class="space-y-2">
         <p class="text-sm text-muted-foreground">{{ t("adminConfigReload.reReadsTheConfig") }}</p>
-        <Button :disabled="loadingForce" @click="confirmForce = true">
+        <p
+          v-if="hotReloadEnabled === null && configLoadError"
+          class="text-xs text-muted-foreground"
+        >
+          {{ t("adminConfigReload.controlsWaitForConfig") }}
+        </p>
+        <Button
+          variant="outline"
+          :disabled="loadingForce || hotReloadEnabled !== true"
+          @click="confirmForce = true"
+        >
           {{ loadingForce ? t("adminConfigReload.reloading") : t("adminConfigReload.reloadNow") }}
         </Button>
-      </CardContent>
-    </Card>
-
-    <!-- Global Banner Card -->
-    <Card>
-      <CardHeader>
-        <CardTitle>{{ t("adminConfigReload.globalBanner") }}</CardTitle>
-      </CardHeader>
-      <CardContent class="space-y-4">
-        <div v-if="banner" class="rounded-sm border px-3 py-2 text-sm">
-          <strong>{{ t("common.currentLabel") }}</strong> [{{ banner.level }}] {{ banner.message }}
-          <span class="text-muted-foreground ml-2">
-            <i18n-t keypath="adminConfigReload.setBy" tag="span">
-              <template #user>{{ banner.set_by }}</template>
-            </i18n-t>
-          </span>
-        </div>
-        <div v-else class="text-sm text-muted-foreground">
-          {{ t("adminConfigReload.noBannerCurrentlySet") }}
-        </div>
-        <div class="flex gap-2 items-end flex-wrap">
-          <div class="flex-1 min-w-[16rem] space-y-1">
-            <Label for="banner-message">{{ t("common.message") }}</Label>
-            <Input
-              id="banner-message"
-              v-model="bannerMessage"
-              :placeholder="t('adminConfigReload.maintenanceInProgress')"
-            />
-          </div>
-          <div class="space-y-1">
-            <Label for="banner-level">{{ t("common.level") }}</Label>
-            <select
-              id="banner-level"
-              v-model="bannerLevel"
-              class="border border-input rounded-sm px-2 py-2 font-mono text-sm bg-background focus:outline-none focus:ring-2 focus:ring-ring"
-            >
-              <option value="info">{{ t("common.info") }}</option>
-              <option value="warning">{{ t("common.warning") }}</option>
-              <option value="error">{{ t("common.error") }}</option>
-            </select>
-          </div>
-          <Button :disabled="loadingSetBanner || !bannerMessage.trim()" @click="setBannerAction">
-            {{
-              loadingSetBanner ? t("adminConfigReload.setting") : t("adminConfigReload.setBanner")
-            }}
-          </Button>
-          <Button
-            variant="outline"
-            :disabled="loadingClearBanner || !banner"
-            @click="clearBannerAction"
-          >
-            {{
-              loadingClearBanner
-                ? t("adminConfigReload.clearing")
-                : t("adminConfigReload.clearBanner")
-            }}
-          </Button>
-        </div>
       </CardContent>
     </Card>
 
@@ -801,66 +763,72 @@ onUnmounted(() => {
         <div v-else-if="changeHistory.length === 0" class="text-sm text-muted-foreground">
           {{ t("adminConfigReload.noChangesRecordedYet") }}
         </div>
-        <table v-else class="w-full text-sm">
-          <thead>
-            <tr class="text-left border-b">
-              <th class="pb-2 pr-4">{{ t("common.date") }}</th>
-              <th class="pb-2 pr-4">By</th>
-              <th class="pb-2 pr-4">{{ t("common.status") }}</th>
-              <th class="pb-2">{{ t("common.summary") }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <template v-for="row in changeHistory" :key="row.id">
-              <!-- The disclosure is a button in the first cell, not a `@click`
-                   on the `<tr>`. A clickable row with `cursor-pointer`, no
-                   `tabindex`, no `role` and no key handler is unreachable by
-                   keyboard and announces nothing, which is the same finding
-                   `PackageDetailPage.vue` records against its version list.
-                   A button brings the focus ring, Enter and Space with it, and
-                   `aria-expanded` is what tells a reader whether the diff below
-                   is open — the chevron alone says it only to someone who can
-                   see it. -->
-              <tr class="border-b hover:bg-muted/30">
-                <td class="py-2 pr-4">
-                  <button
-                    type="button"
-                    class="inline-flex items-center gap-1.5 text-left hover:underline underline-offset-[3px]"
-                    :aria-expanded="expandedRow === row.id"
-                    :aria-controls="expandedRow === row.id ? `config-change-${row.id}` : undefined"
-                    @click="expandedRow = expandedRow === row.id ? null : row.id"
-                  >
-                    <ChevronRight
-                      class="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform"
-                      :class="expandedRow === row.id ? 'rotate-90' : ''"
-                      aria-hidden="true"
-                    />
-                    {{ formatDate(row.triggered_at) }}
-                    <span class="sr-only">{{
-                      expandedRow === row.id
-                        ? t("adminConfigReload.hideDiff")
-                        : t("adminConfigReload.showDiff")
-                    }}</span>
-                  </button>
-                </td>
-                <td class="py-2 pr-4">{{ row.triggered_by }}</td>
-                <td class="py-2 pr-4">
-                  <Badge :class="row.status === 'applied' ? 'text-foreground' : 'text-destructive'">
-                    {{ row.status }}
-                  </Badge>
-                </td>
-                <td class="py-2">{{ row.summary }}</td>
+        <div v-else class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-left border-b border-rule-strong">
+                <th class="pb-2 pr-4">{{ t("common.date") }}</th>
+                <th class="pb-2 pr-4">{{ t("adminConfigReload.byColumn") }}</th>
+                <th class="pb-2 pr-4">{{ t("common.status") }}</th>
+                <th class="pb-2">{{ t("common.summary") }}</th>
               </tr>
-              <tr v-if="expandedRow === row.id" :id="`config-change-${row.id}`">
-                <td colspan="4" class="pb-3">
-                  <pre class="bg-muted text-xs p-2 rounded-sm overflow-x-auto">{{
-                    JSON.stringify(row.diff, null, 2)
-                  }}</pre>
-                </td>
-              </tr>
-            </template>
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              <template v-for="row in changeHistory" :key="row.id">
+                <!-- The disclosure is a button in the first cell, not a `@click`
+                     on the `<tr>`. A clickable row with `cursor-pointer`, no
+                     `tabindex`, no `role` and no key handler is unreachable by
+                     keyboard and announces nothing, which is the same finding
+                     `PackageDetailPage.vue` records against its version list.
+                     A button brings the focus ring, Enter and Space with it, and
+                     `aria-expanded` is what tells a reader whether the diff below
+                     is open — the chevron alone says it only to someone who can
+                     see it. -->
+                <tr class="border-b border-dashed border-rule-soft">
+                  <td class="py-2 pr-4">
+                    <button
+                      type="button"
+                      class="inline-flex items-center gap-1.5 text-left hover:underline underline-offset-[3px]"
+                      :aria-expanded="expandedRow === row.id"
+                      :aria-controls="
+                        expandedRow === row.id ? `config-change-${row.id}` : undefined
+                      "
+                      @click="expandedRow = expandedRow === row.id ? null : row.id"
+                    >
+                      <ChevronRight
+                        class="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                        :class="expandedRow === row.id ? 'rotate-90' : ''"
+                        aria-hidden="true"
+                      />
+                      {{ formatDate(row.triggered_at) }}
+                      <span class="sr-only">{{
+                        expandedRow === row.id
+                          ? t("adminConfigReload.hideDiff")
+                          : t("adminConfigReload.showDiff")
+                      }}</span>
+                    </button>
+                  </td>
+                  <td class="py-2 pr-4">{{ row.triggered_by }}</td>
+                  <td class="py-2 pr-4">
+                    <Badge
+                      :class="row.status === 'applied' ? 'text-foreground' : 'text-destructive'"
+                    >
+                      {{ row.status }}
+                    </Badge>
+                  </td>
+                  <td class="py-2">{{ row.summary }}</td>
+                </tr>
+                <tr v-if="expandedRow === row.id" :id="`config-change-${row.id}`">
+                  <td colspan="4" class="pb-3">
+                    <pre class="bg-muted text-xs p-2 overflow-x-auto">{{
+                      JSON.stringify(row.diff, null, 2)
+                    }}</pre>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
       </CardContent>
     </Card>
   </div>

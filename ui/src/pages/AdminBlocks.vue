@@ -341,7 +341,10 @@ async function confirmUnblock() {
                 :class="row.expired ? 'text-muted-foreground' : ''"
               >
                 <TableCell>
-                  <Badge :variant="row.kind === 'account' ? 'default' : 'copper'" class="text-xs">
+                  <!-- A kind, not a state: both are blocks, so neither gets a
+                       hue. Account was crimson and IP copper — two colours for
+                       one condition, and copper means "held", not "blocked". -->
+                  <Badge variant="outline" class="text-xs">
                     {{ row.kind === "account" ? t("adminBlocks.account") : t("adminBlocks.ip") }}
                   </Badge>
                 </TableCell>

@@ -32,7 +32,7 @@ const stubs = {
   RouterLink: { props: ["to"], template: "<a :href='to'><slot/></a>" },
   UserMenu: true,
   GlobalBanner: true,
-  ThemeToggle: true,
+  DisplaySettings: true,
 };
 
 const mountHeader = () =>

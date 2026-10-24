@@ -11,16 +11,12 @@ const sdk = vi.hoisted(() => ({
   discardPendingReloadMock: vi.fn(),
   reloadConfigMock: vi.fn(),
   listConfigChangesMock: vi.fn(),
-  setBannerMock: vi.fn(),
-  clearBannerMock: vi.fn(),
 }));
 vi.mock("@/client/sdk.gen", () => ({
   applyPendingReload: sdk.applyPendingReloadMock,
   discardPendingReload: sdk.discardPendingReloadMock,
   reloadConfig: sdk.reloadConfigMock,
   listConfigChanges: sdk.listConfigChangesMock,
-  setBanner: sdk.setBannerMock,
-  clearBanner: sdk.clearBannerMock,
 }));
 
 import AdminConfigReload from "./AdminConfigReload.vue";
@@ -187,8 +183,6 @@ describe("AdminConfigReload", () => {
       .mockReset()
       .mockResolvedValue({ data: { diff: { added_registries: [], removed_registries: ["old"] } } });
     sdk.listConfigChangesMock.mockReset().mockResolvedValue({ data: { items: [] } });
-    sdk.setBannerMock.mockReset().mockResolvedValue({ data: {} });
-    sdk.clearBannerMock.mockReset().mockResolvedValue({ data: {} });
   });
 
   // Unmount *before* clearing the body: a teleported dialog whose nodes have
@@ -516,14 +510,66 @@ describe("AdminConfigReload", () => {
     expect(wrapper.text()).toContain("read-only");
   });
 
+  /** Hot reload off is what the *server* says — `is_readonly` on the content. */
   it("says hot reload is off, and withdraws every control that depends on it", async () => {
-    routes(null, { "/config/pending": { status: 503, json: {} } });
+    routes(null, {
+      "/config/content": { json: { content: "[server]\nport = 8080\n", is_readonly: true } },
+      "/config/pending": { status: 503, json: {} },
+    });
     const wrapper = await mountPage();
 
     expect(wrapper.text()).toContain("Hot reload is disabled on this instance");
     expect(wrapper.text()).toContain("BATLEHUB_DISABLE_HOT_RELOAD=1");
     expect(button(wrapper, "Reload Now")).toBeUndefined();
-    expect(button(wrapper, "Validate")?.attributes("disabled")).toBeDefined();
+    expect(button(wrapper, "Validate")).toBeUndefined();
+  });
+
+  /**
+   * The P0 of the 2026-10-24 critique: `hotReloadEnabled = status !== 503`, so
+   * any 503 — an ingress or database outage — announced the env flag and hid
+   * the reload controls. A 503 on a writable instance is a failure, said as one.
+   */
+  it("never reads an outage's 503 as hot reload being disabled", async () => {
+    routes(null, { "/config/pending": { status: 503, json: { error: "upstream unavailable" } } });
+    const wrapper = await mountPage();
+
+    expect(wrapper.text()).not.toContain("BATLEHUB_DISABLE_HOT_RELOAD=1");
+    expect(wrapper.text()).toContain("The pending reload could not be checked.");
+    expect(wrapper.text()).toContain("upstream unavailable");
+    expect(button(wrapper, "Try again")).toBeDefined();
+    expect(button(wrapper, "Reload Now")?.attributes("disabled")).toBeUndefined();
+  });
+
+  it("keeps the reload controls visible but disabled while the config cannot be read", async () => {
+    routes(null, { "/config/content": { status: 503, json: { error: "database unavailable" } } });
+    const wrapper = await mountPage();
+
+    expect(wrapper.text()).toContain("The configuration could not be loaded.");
+    expect(wrapper.text()).toContain("database unavailable");
+    expect(wrapper.text()).not.toContain("BATLEHUB_DISABLE_HOT_RELOAD=1");
+    expect(wrapper.find("textarea").exists()).toBe(false);
+    expect(button(wrapper, "Reload Now")?.attributes("disabled")).toBeDefined();
+  });
+
+  it("retries the reads it could not make", async () => {
+    routes(null, { "/config/content": { status: 500, json: {} } });
+    const wrapper = await mountPage();
+    routes(null);
+    await button(wrapper, "Try again")!.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain("The configuration could not be loaded.");
+    expect(wrapper.find("textarea").exists()).toBe(true);
+  });
+
+  /** The editor folds away while a reload is staged: the diff is the decision. */
+  it("folds the editor behind one control while a reload is staged", async () => {
+    routes(pending());
+    const wrapper = await mountPage();
+
+    expect(wrapper.find("textarea").exists()).toBe(false);
+    await button(wrapper, "Edit config")!.trigger("click");
+    expect(wrapper.find("textarea").exists()).toBe(true);
   });
 
   // ── Warnings about the config in force ──────────────────────────────────────
@@ -579,137 +625,5 @@ describe("AdminConfigReload", () => {
     await button(wrapper, "Reload Now")!.trigger("click");
     await confirmDialog(wrapper, "Force Reload Now");
     expect(wrapper.text()).toContain("Configuration warnings (1)");
-  });
-
-  // ── The global banner ───────────────────────────────────────────────────────
-
-  it("refuses to set an empty banner", async () => {
-    routes(null);
-    const wrapper = await mountPage();
-
-    expect(button(wrapper, "Set Banner")?.attributes("disabled")).toBeDefined();
-    await wrapper.get("#banner-message").setValue("   ");
-    expect(button(wrapper, "Set Banner")?.attributes("disabled")).toBeDefined();
-  });
-
-  it("sets the banner at the chosen level and clears the field", async () => {
-    routes(null);
-    const wrapper = await mountPage();
-
-    await wrapper.get("#banner-message").setValue("Upgrading at 22:00 UTC");
-    await wrapper.get("#banner-level").setValue("warning");
-    await button(wrapper, "Set Banner")!.trigger("click");
-    await flushPromises();
-
-    expect(sdk.setBannerMock).toHaveBeenCalledWith({
-      body: { message: "Upgrading at 22:00 UTC", level: "warning" },
-    });
-    expect(wrapper.text()).toContain("Banner set");
-    expect((wrapper.get("#banner-message").element as HTMLInputElement).value).toBe("");
-  });
-
-  it("reports a failure to set the banner", async () => {
-    routes(null);
-    sdk.setBannerMock.mockResolvedValue({ error: { message: "not permitted" } });
-    const wrapper = await mountPage();
-
-    await wrapper.get("#banner-message").setValue("hello");
-    await button(wrapper, "Set Banner")!.trigger("click");
-    await flushPromises();
-
-    expect(wrapper.text()).toContain("not permitted");
-  });
-
-  it("only offers to clear a banner that exists, and shows who set it", async () => {
-    routes(null);
-    const noBanner = await mountPage();
-    expect(noBanner.text()).toContain("No banner currently set.");
-    expect(button(noBanner, "Clear Banner")?.attributes("disabled")).toBeDefined();
-
-    stubBanner({ message: "Read-only mode", level: "error", set_at: "now", set_by: "alice" });
-    const wrapper = await mountPage();
-
-    expect(wrapper.text()).toContain("Read-only mode");
-    expect(wrapper.text()).toContain("alice");
-
-    await button(wrapper, "Clear Banner")!.trigger("click");
-    await flushPromises();
-
-    expect(sdk.clearBannerMock).toHaveBeenCalled();
-    expect(wrapper.text()).toContain("Banner cleared");
-  });
-
-  it("reports a failure to clear the banner", async () => {
-    routes(null);
-    stubBanner({ message: "Read-only mode", level: "error", set_at: "now", set_by: "alice" });
-    sdk.clearBannerMock.mockResolvedValue({ error: { message: "storage unreachable" } });
-    const wrapper = await mountPage();
-
-    await button(wrapper, "Clear Banner")!.trigger("click");
-    await flushPromises();
-
-    expect(wrapper.text()).toContain("storage unreachable");
-  });
-
-  // ── History ─────────────────────────────────────────────────────────────────
-
-  it("says the history is empty rather than rendering an empty table", async () => {
-    routes(null);
-    const wrapper = await mountPage();
-
-    expect(wrapper.text()).toContain("No changes recorded yet.");
-    expect(wrapper.find("table").exists()).toBe(false);
-  });
-
-  it("lists past changes and expands one to its diff on click", async () => {
-    routes(null);
-    sdk.listConfigChangesMock.mockResolvedValue({
-      data: {
-        items: [
-          {
-            id: "row-1",
-            triggered_at: "2026-08-12T10:00:00Z",
-            triggered_by: "alice",
-            status: "applied",
-            summary: "+1 registry",
-            diff: { added_registries: ["npm"] },
-          },
-          {
-            id: "row-2",
-            triggered_at: "2026-08-12T09:00:00Z",
-            triggered_by: "file_watcher",
-            status: "failed",
-            summary: "invalid TOML",
-            diff: {},
-          },
-        ],
-      },
-    });
-    const wrapper = await mountPage();
-
-    expect(wrapper.findAll("tbody tr")).toHaveLength(2);
-    expect(wrapper.text()).toContain("alice");
-    expect(wrapper.text()).toContain("invalid TOML");
-    // A failed reload must not read like an applied one.
-    const failed = wrapper.findAll("tbody tr").find((r) => r.text().includes("failed"))!;
-    expect(failed.html()).toContain("text-destructive");
-
-    // The disclosure is a button, not the row: a keyboard reaches it, and
-    // `aria-expanded` is what says whether the diff below is open.
-    const disclosure = wrapper.findAll("tbody tr")[0].find("button");
-    expect(disclosure.exists()).toBe(true);
-    expect(disclosure.attributes("aria-expanded")).toBe("false");
-
-    await disclosure.trigger("click");
-    expect(wrapper.find("pre").text()).toContain("added_registries");
-    expect(wrapper.findAll("tbody tr")[0].find("button").attributes("aria-expanded")).toBe("true");
-    // The button names the row it opens, and that row exists under that id.
-    const controls = wrapper.findAll("tbody tr")[0].find("button").attributes("aria-controls")!;
-    expect(wrapper.find(`#${controls}`).exists()).toBe(true);
-
-    // Pressing it again collapses it.
-    await wrapper.findAll("tbody tr")[0].find("button").trigger("click");
-    expect(wrapper.find("pre").exists()).toBe(false);
-    expect(wrapper.findAll("tbody tr")[0].find("button").attributes("aria-expanded")).toBe("false");
   });
 });

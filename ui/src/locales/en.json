@@ -4,6 +4,7 @@
     "breadcrumb": "Breadcrumb",
     "closeMenu": "Close menu",
     "eventsTableLabel": "Recent events",
+    "inThisSection": "In this section",
     "openMenu": "Open menu",
     "sectionsOf": "{title} sections",
     "skipToContent": "Skip to content",
@@ -17,7 +18,6 @@
     "checkAccess": "Check Access",
     "checking": "Checking…",
     "denied": "Denied",
-    "nameOwnerRepo": "Name (owner/repo)",
     "noReasonGiven": "no reason given",
     "noResponse": "No response",
     "versionNeedsPackage": "Choose a registry and name first."
@@ -181,26 +181,29 @@
     "applying": "Applying…",
     "bannerCleared": "Banner cleared",
     "bannerSet": "Banner set",
+    "byColumn": "By",
     "candidateWarnsAbout": "This change would raise {count} warning: | This change would raise {count} warnings:",
     "changeHistory": "Change History",
     "changeNoun": "change",
     "changeNounPlural": "changes",
     "clearBanner": "Clear Banner",
     "clearing": "Clearing…",
+    "configCouldNotLoad": "The configuration could not be loaded.",
     "configEditor": "Config Editor",
     "configNoun": "configuration",
     "configReload": "Config Reload",
     "configTomlContent": "Config TOML content",
     "configValidStageIt": "Config is valid. Click \"{action}\" to stage it for apply.",
     "configurationWarnings": "Configuration warnings ({count})",
+    "controlsWaitForConfig": "The reload controls wait for it: until it loads, this page cannot tell whether hot reload is on.",
     "createPendingReload": "Create Pending Reload",
     "createdLabel": "Created:",
     "discard": "Discard",
     "discarding": "Discarding…",
+    "editConfig": "Edit config",
     "expiresIn": "Expires in:",
     "forceConsequence": "The config file is re-read and applied immediately, with no staged diff to review first. In-flight requests finish under the old configuration; everything after them uses the new one, whatever it turns out to say.",
     "forceReloadNow": "Force Reload Now",
-    "globalBanner": "Global Banner",
     "hideDiff": "Hide the diff",
     "hotReloadDisabled": "Hot reload is disabled on this instance ({flag}). Config changes require a server restart.",
     "limitsChanged": "limits changed",
@@ -210,9 +213,10 @@
     "noChangesRecordedYet": "No changes recorded yet.",
     "noPendingReloadThe": "No pending reload. The file watcher will populate this when a config change is detected.",
     "nothingToStage": "Nothing to stage — this content is identical to the config already loaded. No pending reload was created.",
+    "pendingCouldNotLoad": "The pending reload could not be checked.",
     "pendingCreatedReviewIt": "Pending reload created. Review it below, then apply.",
     "pendingReload": "Pending Reload",
-    "reReadsTheConfig": "Re-reads the config file, validates it, and applies it immediately — no confirmation step.",
+    "reReadsTheConfig": "Re-reads the config file, validates it and applies what is on disk. You confirm first, because that file has not been shown to you here.",
     "reloadApplied": "Applied everywhere",
     "reloadConfirmWord": "reload",
     "reloadFromDisk": "Reload from Disk",
@@ -239,6 +243,9 @@
     "openConfig": "Open config",
     "openHealth": "Open health",
     "perRegistry": "Per registry",
+    "registryErrors": "Errors — see health",
+    "registryServing": "Serving",
+    "statsCouldNotLoad": "Cache statistics could not be loaded.",
     "trendDown": "Over the last {days} days the cache served {rate} of downloads — {points} points worse than the {days} days before.",
     "trendFlat": "Over the last {days} days the cache served {rate} of downloads, unchanged from the {days} days before.",
     "trendNoBaseline": "Over the last {days} days the cache served {rate} of downloads. There is not enough history yet to compare it with the period before.",
@@ -315,6 +322,7 @@
     "bulkBlock": "Bulk Block",
     "configReload": "Config Reload",
     "dashboard": "Dashboard",
+    "globalBanner": "Global banner",
     "health": "Health",
     "inboundEvents": "Inbound events",
     "namespacesChannels": "Namespaces & Channels",
@@ -385,6 +393,7 @@
     "scopeSelection": "the selection",
     "selectAllPackages": "Select all packages",
     "selectPackage": "Select {name}",
+    "selectedCount": "{count} selected | {count} selected",
     "tryClearingTheFilter": "Try clearing the filter.",
     "unblockSelected": "Unblock selected"
   },
@@ -540,6 +549,7 @@
     "signOut": "Sign out"
   },
   "asyncState": {
+    "couldNotLoad": "Could not load this.",
     "loading": "Loading…",
     "noResults": "No results."
   },
@@ -547,6 +557,8 @@
     "accountWide": "Account-wide",
     "anonymousSubject": "anonymous",
     "deniedOnly": "Denied only",
+    "eventNoun": "audit event",
+    "eventNounPlural": "audit events",
     "export": "Export",
     "exportFormat": "Export format",
     "filterByRegistry": "Registry…",
@@ -561,8 +573,7 @@
     "purgeScope": "every audit event recorded before {before}",
     "purged": "Purged {count} event. | Purged {count} events.",
     "retention": "Retention",
-    "retentionHelp": "Delete audit events older than a cut-off. This removes evidence permanently and cannot be undone.",
-    "retentionWindow": "retention window"
+    "retentionHelp": "Delete audit events older than a cut-off. This removes evidence permanently and cannot be undone."
   },
   "catalog": {
     "emptyBody": "Packages appear here once something pulls them through this instance, or once they are published to it.",
@@ -631,7 +642,6 @@
     "edit": "Edit",
     "enabled": "Enabled",
     "error": "Error",
-    "errors": "Errors",
     "events": "Events",
     "expires": "Expires",
     "expiresLabel": "Expires:",
@@ -670,7 +680,6 @@
     "reasonLabel": "Reason:",
     "refresh": "Refresh",
     "refreshing": "Refreshing…",
-    "registries": "Registries",
     "registry": "Registry",
     "registryLabel": "Registry:",
     "release": "Release",
@@ -679,6 +688,7 @@
     "result": "Result",
     "retry": "Try again",
     "role": "Role",
+    "roleAnonymous": "Anonymous",
     "save": "Save",
     "saving": "Saving…",
     "security": "Security",
@@ -690,6 +700,7 @@
     "storage": "Storage",
     "summary": "Summary",
     "time": "Time",
+    "to": "To",
     "type": "Type",
     "unblock": "Unblock",
     "unknown": "unknown",
@@ -703,8 +714,7 @@
     "visibility": "Visibility",
     "warning": "Warning",
     "webhook": "Webhook",
-    "when": "When",
-    "you": "You"
+    "when": "When"
   },
   "config": {
     "copyToml": "Copy TOML",
@@ -781,12 +791,15 @@
   },
   "homePage": {
     "aCacheAndRegistry": "A cache and registry for the packages your builds pull.",
-    "acceptingPublishes": "Accepting publishes",
     "browsePackages": "Browse packages",
     "configurationGuide": "Configuration guide",
     "myNamespace": "My namespace",
     "openConfig": "Open config",
-    "pointAToolAt": "Point a tool at this instance"
+    "pointAToolAt": "Point a tool at this instance",
+    "publishableCount": "{count} accepts publishes | {count} accept publishes",
+    "registriesCouldNotLoad": "The registry list could not be loaded.",
+    "registryCount": "{count} registry | {count} registries",
+    "youAre": "you: {role}"
   },
   "locale": {
     "en": "English",
@@ -1125,6 +1138,7 @@
     "configureYourToolsToRoute": "Configure your tools to route package downloads through this proxy. Snippets are pre-filled with this server's address and your configured registries.",
     "filterTools": "Filter tools",
     "filterTools2": "Filter tools…",
+    "hideToken": "Hide token",
     "loadingRegistries": "Loading registries…",
     "netrcHelp": "Credentials for tools that use HTTP Basic Auth (curl, wget, …). Place in {file} and restrict permissions with {chmod}.",
     "noRegistriesAreConfiguredOn": "No registries are configured on this instance, or none that your account can reach. Until one exists there is no URL for a tool to point at.",
@@ -1132,7 +1146,10 @@
     "oidcTokenNote": "Your current token is a short-lived OIDC session token. For long-lived automation, create a {link} and use that as the password.",
     "openConfig": "Open config",
     "personalApiToken": "personal API token",
-    "setupGuide": "Setup Guide"
+    "registriesCouldNotLoad": "The registry list could not be loaded, so no snippet can name one.",
+    "setupGuide": "Setup Guide",
+    "showToken": "Show token",
+    "tokenHidden": "Your token is hidden on screen. Copy puts the real one on the clipboard."
   },
   "severity": {
     "critical": "Critical",
@@ -1143,8 +1160,11 @@
   },
   "theme": {
     "dark": "Theme: dark",
+    "darkShort": "Dark",
     "light": "Theme: light",
-    "system": "Theme: follow system"
+    "lightShort": "Light",
+    "system": "Theme: follow system",
+    "systemShort": "System"
   },
   "tokensPage": {
     "activeTokens": "Active Tokens",
@@ -1232,5 +1252,12 @@
     "internal": "Internal",
     "public": "Public",
     "team": "Team"
+  },
+  "adminBanner": {
+    "description": "A message shown at the top of every page, to every visitor — for maintenance windows and incidents."
+  },
+  "displaySettings": {
+    "theme": "Theme",
+    "title": "Display"
   }
 }

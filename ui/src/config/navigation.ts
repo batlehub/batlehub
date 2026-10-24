@@ -114,7 +114,9 @@ export const SECTION_INDEXES: Record<string, string> = {
   "/admin/packages": "/admin/packages/all",
   "/admin/security": "/admin/security/blocks",
   "/admin/namespaces": "/admin/namespaces/team-namespaces",
-  "/admin/operations": "/admin/operations/config-reload",
+  // The read-only tab, not config reload: a section should open on what it
+  // knows, not on the control that changes a running instance.
+  "/admin/operations": "/admin/operations/upstream",
   "/admin/observability": "/admin/observability/health",
   // Not a LEGACY_REDIRECTS entry: `/admin/notifications` is not removed, it
   // becomes a section root like `/admin/packages`. The sidebar still points at

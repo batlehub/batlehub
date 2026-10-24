@@ -20,7 +20,11 @@
 
     <title>BatleHub</title>
     <meta name="description" content="Your package hub. Proxy, cache, and host npm, Cargo, Go, Maven, Terraform, and RubyGems registries." />
-    <meta name="theme-color" content="#dc2626" />
+    <!-- The browser chrome takes the ground of each rendition (oklch .07 and
+         .97), not a crimson: crimson has four jobs and the address bar is not
+         one. It was #dc2626, Tailwind's red, which is in neither palette. -->
+    <meta name="theme-color" content="#030001" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#faf3f3" media="(prefers-color-scheme: light)" />
 
     <link rel="icon" type="image/svg+xml" href="/logo.svg" />
 

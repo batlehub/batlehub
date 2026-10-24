@@ -2,7 +2,11 @@ import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 
 const { auditLogMock } = vi.hoisted(() => ({ auditLogMock: vi.fn() }));
-vi.mock("@/client/sdk.gen", () => ({ auditLog: auditLogMock }));
+vi.mock("@/client/sdk.gen", () => ({
+  auditLog: auditLogMock,
+  // The registry filter's suggestions; the tests here are about the log.
+  listRegistries: vi.fn().mockResolvedValue({ data: [{ name: "npm", type: "npm" }] }),
+}));
 
 import AuditLog from "./AuditLog.vue";
 
@@ -244,5 +248,29 @@ describe("AuditLog filter debounce", () => {
     expect(auditLogMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ query: expect.not.objectContaining({ user_id: "bob" }) }),
     );
+  });
+
+  /**
+   * The purge dialog states how many events it deletes. It said "1 retention
+   * window" — a count of one for an action that can erase thousands.
+   */
+  it("counts the events a purge would delete before asking to confirm it", async () => {
+    auditLogMock.mockResolvedValue({ data: envelope([event()], { total: 7_204 }) });
+    const wrapper = await mountPage();
+    await wrapper.get("#al-purge-before").setValue("2026-01-01T00:00");
+    auditLogMock.mockResolvedValueOnce({ data: envelope([event()], { total: 1_337 }) });
+
+    await wrapper
+      .findAll("button")
+      .find((b) => b.text().trim() === "Purge")!
+      .trigger("click");
+    await flushPromises();
+
+    expect(auditLogMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ per_page: 1 }) }),
+    );
+    const dialog = wrapper.findComponent({ name: "DestructiveConfirm" });
+    expect(dialog.props("count")).toBe(1_337);
+    expect(dialog.props("open")).toBe(true);
   });
 });

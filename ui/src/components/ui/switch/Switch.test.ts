@@ -12,11 +12,13 @@ describe("Switch", () => {
   it("reflects modelValue via aria-checked and background class", () => {
     const off = mount(Switch, { props: { modelValue: false } });
     expect(off.attributes("aria-checked")).toBe("false");
-    expect(off.classes()).toContain("bg-secondary");
+    expect(off.classes()).toContain("bg-transparent");
 
     const on = mount(Switch, { props: { modelValue: true } });
     expect(on.attributes("aria-checked")).toBe("true");
-    expect(on.classes()).toContain("bg-primary");
+    // On is ink, not crimson: crimson has four jobs and "enabled" is not one.
+    expect(on.classes()).toContain("bg-foreground");
+    expect(on.classes()).not.toContain("bg-primary");
   });
 
   it("emits update:modelValue with the toggled value when clicked", async () => {

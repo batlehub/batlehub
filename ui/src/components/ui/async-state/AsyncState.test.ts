@@ -45,4 +45,31 @@ describe("AsyncState", () => {
     });
     expect(wrapper.text()).toBe("Custom loading");
   });
+
+  it("says what failed, and an error wins over the empty state", () => {
+    const wrapper = mount(AsyncState, {
+      props: {
+        loading: false,
+        error: "HTTP 503",
+        empty: true,
+        emptyMessage: "Nothing here",
+        title: "Packages could not be loaded.",
+      },
+    });
+    expect(wrapper.text()).toContain("Packages could not be loaded.");
+    expect(wrapper.text()).toContain("HTTP 503");
+    expect(wrapper.text()).not.toContain("Nothing here");
+  });
+
+  it("offers a retry only when the page can retry", async () => {
+    const without = mount(AsyncState, { props: { loading: false, error: "Boom" } });
+    expect(without.find("button").exists()).toBe(false);
+
+    let retried = 0;
+    const withRetry = mount(AsyncState, {
+      props: { loading: false, error: "Boom", onRetry: () => retried++ },
+    });
+    await withRetry.find("button").trigger("click");
+    expect(retried).toBe(1);
+  });
 });

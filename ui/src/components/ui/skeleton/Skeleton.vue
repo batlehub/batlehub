@@ -2,10 +2,11 @@
 /**
  * A loading placeholder shaped like the content it stands in for.
  *
- * Deliberately not a shimmer sweep: a moving gradient is one of the category's
- * tells, and it animates a region the user is already waiting on. This is a
- * ruled block that dims and lifts, and `motion-safe:` means it does not move at
- * all under `prefers-reduced-motion`.
+ * Deliberately not a shimmer sweep, and no longer a pulse either: DESIGN's One
+ * Motion Rule spends motion on an artifact resolving and on nothing else, and
+ * a pulse was a second, unauthored one on every loading region. A dashed ruled
+ * block at rest already reads as "not yet here" — dashed is the system's
+ * at-rest line, solid its settled one.
  *
  * `aria-hidden`, because a skeleton has nothing to announce — the surface that
  * owns it announces the result through an Announcer when the data lands.
@@ -29,7 +30,7 @@ const widthFor = (index: number): string =>
       v-for="line in lines"
       :key="line"
       data-testid="skeleton-line"
-      class="h-4 border border-dashed border-border bg-muted motion-safe:animate-pulse"
+      class="h-4 border border-dashed border-border bg-muted"
       :style="{ width: widthFor(line) }"
     />
   </div>

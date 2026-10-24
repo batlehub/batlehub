@@ -17,16 +17,23 @@ function isActive(to: string) {
 </script>
 
 <template>
-  <nav class="flex items-center gap-1 flex-wrap border-b border-border/60 mb-4">
+  <!-- A 1px crimson edge under the current tab — the same selection edge as
+       the sidebar — not a 2px stripe; and `aria-current`, because the active
+       state was colour and weight only. -->
+  <nav
+    class="flex items-center gap-1 flex-wrap border-b border-rule-soft mb-4"
+    :aria-label="t('a11y.inThisSection')"
+  >
     <RouterLink
       v-for="tab in tabs"
       :key="tab.to"
       :to="tab.to"
+      :aria-current="isActive(tab.to) ? 'page' : undefined"
       :class="[
-        'px-3 py-1.5 font-mono text-sm whitespace-nowrap transition-colors border-b-2 -mb-px',
+        'px-3 py-1.5 font-mono text-sm whitespace-nowrap border-b -mb-px',
         isActive(tab.to)
-          ? 'border-primary text-foreground font-semibold'
-          : 'border-transparent text-muted-foreground hover:text-accent-foreground',
+          ? 'border-primary text-foreground'
+          : 'border-transparent text-muted-foreground hover:text-foreground',
       ]"
     >
       {{ t(tab.label) }}
