@@ -94,5 +94,18 @@ describe("ExposurePanel", () => {
     await w.find('[data-testid="exposure-apply"]').trigger("click");
     await flushPromises();
     expect(w.text()).toMatch(/could not|impossible/i);
+    // A failure is not an empty window: the two used to show side by side.
+    expect(w.find('[data-testid="exposure-empty"]').exists()).toBe(false);
+  });
+
+  it("drops the previous query's rows when a fresh load fails", async () => {
+    exposureReport.mockResolvedValueOnce(page([row()]));
+    const w = mount(ExposurePanel);
+    await flushPromises();
+    exposureReport.mockResolvedValueOnce({ data: undefined, error: { error: "x" } });
+    await w.find('[data-testid="exposure-apply"]').trigger("click");
+    await flushPromises();
+    expect(w.find('[data-testid="exposure-rows"]').exists()).toBe(false);
+    expect(w.find('[data-testid="exposure-coverage"]').exists()).toBe(false);
   });
 });

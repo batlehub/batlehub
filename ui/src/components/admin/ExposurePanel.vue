@@ -65,6 +65,15 @@ function query(after?: string) {
   };
 }
 
+/** A failed fresh load drops the previous query's rows: they answered another question. */
+function fail(append: boolean) {
+  error.value = t("exposurePanel.loadFailed");
+  if (append) return;
+  rows.value = [];
+  next.value = null;
+  coverage.value = null;
+}
+
 async function load(append = false) {
   loading.value = true;
   error.value = null;
@@ -73,14 +82,14 @@ async function load(append = false) {
       query: query(append ? (next.value ?? undefined) : undefined),
     });
     if (err || !data) {
-      error.value = t("exposurePanel.loadFailed");
+      fail(append);
       return;
     }
     rows.value = append ? [...rows.value, ...data.rows] : data.rows;
     next.value = data.next ?? null;
     coverage.value = data.coverage;
   } catch {
-    error.value = t("exposurePanel.loadFailed");
+    fail(append);
   } finally {
     loading.value = false;
   }
@@ -92,7 +101,7 @@ async function exportCsv() {
   if (minEffect.value) params.set("min_effect", minEffect.value);
   const resp = await authFetch(`${API_BASE_URL}/api/v1/admin/exposure/export?${params}`);
   if (!resp.ok) {
-    error.value = t("exposurePanel.loadFailed");
+    error.value = t("exposurePanel.exportFailed");
     return;
   }
   const blob = await resp.blob();
@@ -209,7 +218,11 @@ onMounted(() => load());
           </TableRow>
         </TableBody>
       </Table>
-      <p v-else-if="!loading" class="text-sm text-muted-foreground" data-testid="exposure-empty">
+      <p
+        v-else-if="!loading && !error"
+        class="text-sm text-muted-foreground"
+        data-testid="exposure-empty"
+      >
         {{ t("exposurePanel.empty") }}
       </p>
 

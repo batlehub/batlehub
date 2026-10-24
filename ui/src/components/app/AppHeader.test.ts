@@ -1,5 +1,5 @@
 import { mount } from "@vue/test-utils";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import AppHeader from "./AppHeader.vue";
 import AppFooter from "./AppFooter.vue";
@@ -19,13 +19,13 @@ vi.mock("vue-router", async (importOriginal) => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 
+const auth = vi.hoisted(() => ({
+  identity: { value: { role: "admin", groups: [], has_registry_access: true } as unknown },
+  isAdmin: { value: true },
+  isAuthenticated: { value: true },
+}));
 vi.mock("@/composables/useAuth", () => ({
-  useAuth: () => ({
-    identity: { value: { role: "admin", groups: [], has_registry_access: true } },
-    isAdmin: { value: true },
-    isAuthenticated: { value: true },
-    logout: vi.fn(),
-  }),
+  useAuth: () => ({ ...auth, logout: vi.fn() }),
 }));
 
 const stubs = {
@@ -76,6 +76,38 @@ describe("AppHeader", () => {
     const wrapper = mountHeader();
     expect(wrapper.element.tagName).toBe("HEADER");
     expect(wrapper.find("nav").exists()).toBe(true);
+  });
+});
+
+describe("AppHeader for an anonymous viewer", () => {
+  const signedOut = (identity: unknown) => {
+    auth.identity.value = identity;
+    auth.isAdmin.value = false;
+    auth.isAuthenticated.value = false;
+  };
+  const navTargets = () =>
+    mountHeader()
+      .findAll("nav a")
+      .map((a) => a.attributes("href"));
+
+  afterEach(() => {
+    auth.identity.value = { role: "admin", groups: [], has_registry_access: true };
+    auth.isAdmin.value = true;
+    auth.isAuthenticated.value = true;
+  });
+
+  it("offers the catalog when the server says anonymous reads are open", () => {
+    signedOut({ role: "anonymous", groups: [], has_registry_access: true });
+    expect(navTargets()).toEqual(["/packages", "/setup"]);
+  });
+
+  /** Unknown is not open: each link would only redirect back to /login. */
+  it.each([
+    ["locked", { role: "anonymous", groups: [], has_registry_access: false }],
+    ["unknown", null],
+  ])("offers nothing when access is %s", (_, identity) => {
+    signedOut(identity);
+    expect(navTargets()).toEqual([]);
   });
 });
 
