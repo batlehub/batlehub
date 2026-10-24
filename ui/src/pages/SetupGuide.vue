@@ -205,9 +205,9 @@ async function copy(key: string, text: string) {
     />
 
     <!-- Loading state -->
-    <div v-if="loading" class="text-sm text-muted-foreground" role="status">
+    <output v-if="loading" class="block text-sm text-muted-foreground">
       {{ t("setupGuide.loadingRegistries") }}
-    </div>
+    </output>
 
     <!-- A failed list said nothing at all: the page fell through to its
          tabs with no registry in them and left a lone `.netrc` tab. -->
