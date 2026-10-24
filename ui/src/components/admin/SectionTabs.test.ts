@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { createRouter, createMemoryHistory, type Router } from "vue-router";
 import SectionTabs from "./SectionTabs.vue";
@@ -45,5 +45,31 @@ describe("SectionTabs", () => {
     const links = wrapper.findAll("a");
     expect(links[1].classes()).toContain("border-primary");
     expect(links[0].classes()).not.toContain("border-primary");
+  });
+
+  /** On a phone the tabs are one native selector naming the current one. */
+  it("shows the current tab in the mobile selector", async () => {
+    const router = makeRouter("/admin/security/ip-blocks");
+    await router.isReady();
+    const wrapper = mount(SectionTabs, {
+      props: { tabs: TABS },
+      global: { plugins: [router] },
+    });
+    expect((wrapper.get("select").element as HTMLSelectElement).value).toBe(
+      "/admin/security/ip-blocks",
+    );
+    expect(wrapper.findAll("a")[1].attributes("aria-current")).toBe("page");
+  });
+
+  it("navigates when another tab is picked in the mobile selector", async () => {
+    const router = makeRouter("/admin/security/users");
+    await router.isReady();
+    const push = vi.spyOn(router, "push");
+    const wrapper = mount(SectionTabs, {
+      props: { tabs: TABS },
+      global: { plugins: [router] },
+    });
+    await wrapper.get("select").setValue("/admin/security/ip-blocks");
+    expect(push).toHaveBeenCalledWith("/admin/security/ip-blocks");
   });
 });

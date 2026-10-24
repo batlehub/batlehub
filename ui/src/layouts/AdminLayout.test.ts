@@ -52,6 +52,22 @@ describe("AdminLayout", () => {
     expect(new Set(active)).toEqual(new Set(["/admin/packages"]));
   });
 
+  /**
+   * On a phone the sections sit behind one trigger that names where you are,
+   * instead of four wrapped rows of links above the page.
+   */
+  it("names the current section on the mobile trigger and opens the list on demand", async () => {
+    const w = mountAdmin("/admin/operations/config-reload");
+    const trigger = w.get('button[aria-controls="admin-sections-mobile"]');
+    expect(trigger.text()).toContain("Operations");
+    expect(trigger.attributes("aria-expanded")).toBe("false");
+    expect((w.get("#admin-sections-mobile").element as HTMLElement).style.display).toBe("none");
+
+    await trigger.trigger("click");
+    expect(trigger.attributes("aria-expanded")).toBe("true");
+    expect((w.get("#admin-sections-mobile").element as HTMLElement).style.display).toBe("");
+  });
+
   it("renders the routed admin page", () => {
     expect(mountAdmin().find('[data-testid="outlet"]').exists()).toBe(true);
   });

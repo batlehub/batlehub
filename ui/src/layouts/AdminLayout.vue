@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { RouterView, RouterLink, useRoute } from "vue-router";
-import { ShieldCheck } from "@lucide/vue";
+import { ChevronDown, ShieldCheck } from "@lucide/vue";
 import { ADMIN_SIDEBAR } from "@/config/adminSections";
 
 const { t } = useI18n();
@@ -10,6 +11,18 @@ const route = useRoute();
 function isActive(to: string) {
   return route.path === to || route.path.startsWith(to + "/");
 }
+
+/** The section the route is in, named on the mobile trigger. */
+const currentSection = computed(() => ADMIN_SIDEBAR.find((link) => isActive(link.to)));
+
+/** Mobile: the sections sit behind one trigger that says where you are. */
+const sectionsOpen = ref(false);
+watch(
+  () => route.path,
+  () => {
+    sectionsOpen.value = false;
+  },
+);
 </script>
 
 <template>
@@ -60,30 +73,56 @@ function isActive(to: string) {
     </aside>
 
     <!--
-      Mobile: the sections wrap rather than scroll. A horizontal strip whose
-      only sign of more sections was the browser's own scrollbar hid four of
-      seven behind a gesture nobody is told to make.
+      Mobile: one trigger that names where you are — "Admin · Operations" —
+      and opens the seven sections. Wrapped, they were four rows of links
+      above three rows of tabs, ~300px before the page began on a phone;
+      scrolled sideways before that, four of seven hid behind a gesture
+      nobody is told to make. Not a second ☰: the header's own burger opens
+      the site menu, and two identical icons opening different things is a
+      guess the reader should not have to make. It closes on navigation.
     -->
-    <nav
-      class="md:hidden mb-4 flex w-full flex-wrap items-center gap-x-1 gap-y-1 border-b border-rule-soft pb-2"
-      :aria-label="t('a11y.sectionsOf', { title: t('common.admin') })"
-    >
-      <RouterLink
-        v-for="link in ADMIN_SIDEBAR"
-        :key="link.to"
-        :to="link.to"
-        :aria-current="isActive(link.to) ? 'page' : undefined"
-        :class="[
-          'flex items-center gap-1.5 border-b px-2 py-1.5 font-mono text-sm whitespace-nowrap',
-          isActive(link.to)
-            ? 'border-primary text-foreground'
-            : 'border-transparent text-muted-foreground hover:text-foreground',
-        ]"
+    <div class="md:hidden mb-3 w-full">
+      <button
+        type="button"
+        class="flex w-full items-center justify-between gap-2 border border-border px-3 py-2 font-mono text-sm"
+        :aria-expanded="sectionsOpen"
+        aria-controls="admin-sections-mobile"
+        @click="sectionsOpen = !sectionsOpen"
       >
-        <component :is="link.icon" class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-        {{ t(link.label) }}
-      </RouterLink>
-    </nav>
+        <span class="flex min-w-0 items-center gap-2">
+          <ShieldCheck class="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span class="text-muted-foreground">{{ t("common.admin") }} ·</span>
+          <span class="truncate">{{ currentSection ? t(currentSection.label) : "" }}</span>
+        </span>
+        <ChevronDown
+          class="h-4 w-4 shrink-0 text-muted-foreground"
+          :class="sectionsOpen ? 'rotate-180' : ''"
+          aria-hidden="true"
+        />
+      </button>
+      <nav
+        v-show="sectionsOpen"
+        id="admin-sections-mobile"
+        class="flex flex-col border border-t-0 border-border"
+        :aria-label="t('a11y.sectionsOf', { title: t('common.admin') })"
+      >
+        <RouterLink
+          v-for="link in ADMIN_SIDEBAR"
+          :key="link.to"
+          :to="link.to"
+          :aria-current="isActive(link.to) ? 'page' : undefined"
+          :class="[
+            'flex items-center gap-2.5 border-l px-3 py-2.5 font-mono text-sm',
+            isActive(link.to)
+              ? 'border-primary text-foreground'
+              : 'border-transparent text-muted-foreground hover:text-foreground',
+          ]"
+        >
+          <component :is="link.icon" class="h-4 w-4 shrink-0" aria-hidden="true" />
+          {{ t(link.label) }}
+        </RouterLink>
+      </nav>
+    </div>
 
     <!-- Content -->
     <div class="flex-1 min-w-0 pt-2">
