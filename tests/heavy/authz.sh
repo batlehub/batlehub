@@ -81,7 +81,12 @@ TARGET="${1:-matrix}"
 # Terraform refuses a plain-`http:` registry host outright (RFC 0009 §12.3), so
 # its tap terminates TLS on a port that looks like one. Set before `heavy_init`,
 # which is what reads the default.
-if [[ "$TARGET" == "terraform" ]]; then
+#
+# The Go tool is the same about credentials: it never sends userinfo to a
+# plain-http `GOPROXY` (`web.DefaultSecurity` in modfetch/proxy.go, "refusing
+# to pass credentials to insecure URL"), and `GOAUTH` is HTTPS-only too. So
+# `live:goproxy` gets the TLS tap as well, or its reader arm can never pass.
+if [[ "$TARGET" == "terraform" || "$TARGET" == "live:goproxy" ]]; then
   HEAVY_TAP_PORT="${HEAVY_TAP_PORT:-8444}"
   export HEAVY_TAP_HOST=localhost
 fi
@@ -3050,7 +3055,11 @@ LIVE_APT_SUITE="${HEAVY_AUTHZ_APT_SUITE:-noble}"
 LIVE_APT_PACKAGE="${HEAVY_AUTHZ_APT_PACKAGE:-hello}"
 LIVE_APT_KEYRING="${HEAVY_AUTHZ_APT_KEYRING:-/usr/share/keyrings/ubuntu-archive-keyring.gpg}"
 LIVE_RPM_IMAGE="${HEAVY_AUTHZ_RPM_IMAGE:-quay.io/almalinuxorg/almalinux:9}"
-LIVE_RPM_PACKAGE="${HEAVY_AUTHZ_RPM_PACKAGE:-htop}"
+# `pv`, not `htop`, for the reason `closed_world.sh` gives at its DNF_PACKAGE:
+# only this repository is enabled, and EPEL's htop needs libnl/libhwloc from
+# AlmaLinux's own BaseOS — "nothing provides libnl-3.so.200", a short repository
+# set and not a refusal. pv needs libc and nothing else.
+LIVE_RPM_PACKAGE="${HEAVY_AUTHZ_RPM_PACKAGE:-pv}"
 LIVE_MISE_TOOL="${HEAVY_AUTHZ_MISE_TOOL:-cli/cli}"
 LIVE_MISE_VERSION="${HEAVY_AUTHZ_MISE_VERSION:-2.60.0}"
 LIVE_FORGEJO_TOOL="${HEAVY_AUTHZ_FORGEJO_TOOL:-forgejo/forgejo}"
@@ -3121,9 +3130,10 @@ the refusal above proves nothing (§13.17)"; }
 
 # ── goproxy — credentials in the GOPROXY URL ────────────────────────────────
 #
-# Not `~/.netrc`: the Go tool reads that only for HTTPS, and this tap is plain
-# HTTP. Userinfo in `GOPROXY` works over either, and is what the console's own
-# snippet writes (`withCredentials(registryUrl)`).
+# Userinfo in `GOPROXY` is what the console's own snippet writes
+# (`withCredentials(registryUrl)`). The Go tool sends it over HTTPS only, so
+# this target runs behind the TLS tap (see the top of the file) and trusts its
+# certificate through `SSL_CERT_FILE`.
 live_run_goproxy() {
   local suffix="$1" login="$2" token="$3"
   local dir="$HEAVY_WORK/live-go-$suffix" cache="$HEAVY_WORK/live-go-cache-$suffix"
@@ -3136,7 +3146,8 @@ go 1.21
 require $LIVE_GO_MODULE $LIVE_GO_VERSION
 EOF
   (cd "$dir" && env \
-    GOPROXY="http://$(authz_live_cred "$login" "$token")@127.0.0.1:$HEAVY_TAP_PORT/proxy/$LIVE_GO" \
+    GOPROXY="https://$(authz_live_cred "$login" "$token")@$HEAVY_TAP_HOST:$HEAVY_TAP_PORT/proxy/$LIVE_GO" \
+    SSL_CERT_FILE="$HEAVY_AUTHZ_CERT" \
     GOFLAGS="-mod=mod -modcacherw" GOTOOLCHAIN=local GOSUMDB=off GONOSUMCHECK=1 \
     GOMODCACHE="$cache/mod" GOCACHE="$cache/build" GOPATH="$cache/gopath" \
     go mod download "$LIVE_GO_MODULE")
@@ -3151,6 +3162,11 @@ EOF
 # have is `NVM_AUTH_HEADER`, which it turns into `--header "Authorization: …"`,
 # and that is the mechanism this phase uses. The console's `nodedist` snippet
 # said `.netrc`; it is wrong, and `docs/registries/` now says so.
+#
+# `Bearer`, as the snippet writes it, and not `Basic`: nvm passes the value
+# through `nvm_sanitize_auth_header`, which deletes everything outside
+# `[a-zA-Z0-9:;_. -]` — base64's `+`, `/` and `=` padding included — so a
+# `Basic` credential reached the server undecodable and the reader was refused.
 live_run_nodedist() {
   local suffix="$1" login="$2" token="$3"
   local dir="$HEAVY_WORK/live-nvm-$suffix" src sh
@@ -3161,7 +3177,7 @@ live_run_nodedist() {
   mkdir -p "$dir"
   NVM_DIR="$dir" \
   NVM_NODEJS_ORG_MIRROR="$HEAVY_TAP_BASE/proxy/$LIVE_NODEDIST/nodedist" \
-  NVM_AUTH_HEADER="Basic $(printf '%s' "$(authz_live_cred "$login" "$token")" | base64 -w0)" \
+  NVM_AUTH_HEADER="Bearer $token" \
     bash -c '
       set -o pipefail
       export NVM_DIR NVM_NODEJS_ORG_MIRROR NVM_AUTH_HEADER
@@ -3300,6 +3316,12 @@ live_run_generic() {
 # `Dir::` this suite has to set that `pathproxy.sh` does not: everything else is
 # state, this is the credential. The `sources.list` line is unchanged, which is
 # the property the documentation claims and this asserts.
+#
+# The `machine` line carries the scheme: for a plain-http source apt matches a
+# bare host but then withholds the credential ("Credentials for 127.0.0.1
+# match, but the protocol is not encrypted. Annotate with http:// to use
+# them"), so the reader arm arrived anonymous and the deny arm was refused for
+# the wrong reason.
 live_run_deb() {
   local suffix="$1" login="$2" token="$3"
   local root="$HEAVY_WORK/live-deb-$suffix" arch
@@ -3307,7 +3329,7 @@ live_run_deb() {
   mkdir -p "$root/state/lists/partial" "$root/cache/archives/partial" "$root/out" "$root/auth.conf.d"
   echo "deb [arch=$arch signed-by=$LIVE_APT_KEYRING] $HEAVY_TAP_BASE/proxy/$LIVE_DEB/deb $LIVE_APT_SUITE main" \
     >"$root/sources.list"
-  printf 'machine 127.0.0.1\nlogin %s\npassword %s\n' "$login" "$token" \
+  printf 'machine http://127.0.0.1\nlogin %s\npassword %s\n' "$login" "$token" \
     >"$root/auth.conf.d/batlehub.conf"
   chmod 600 "$root/auth.conf.d/batlehub.conf"
   (cd "$root/out" && apt-get -q \
@@ -3517,7 +3539,7 @@ else
   heavy_start_server tests/heavy/config.authz.toml
 fi
 
-if [[ "$TARGET" == "terraform" ]]; then
+if [[ "$TARGET" == "terraform" || "$TARGET" == "live:goproxy" ]]; then
   HEAVY_AUTHZ_CERT="$(heavy_self_signed "$HEAVY_TAP_HOST")"
   heavy_start_tap "$HEAVY_AUTHZ_CERT" "$HEAVY_WORK/tls-key.pem"
 else
