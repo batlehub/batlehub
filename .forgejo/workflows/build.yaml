@@ -1,0 +1,156 @@
+# Fallback image build: the release images come from `.github/workflows/build.yaml`
+# (signed, multi-arch, on GHCR). This one builds amd64 images on the Forgejo
+# runner and pushes them to Harbor, so a deploy is still possible while the
+# GitHub pipeline is down. Its images are not signed — see
+# docs/contributing/security-scanning.md.
+name: Container Build
+# No build per merge: a fallback only has to be ready. The nightly run (on the
+# default branch, so `:main`) proves the path still works and keeps the layer
+# cache warm; a version tag pushes `:vX.Y.Z`, the tag the GitHub release
+# publishes on GHCR; a dispatch covers anything in between.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+  schedule:
+    - cron: "50 23 * * *"
+permissions:
+  contents: read
+env:
+  REGISTRY: registry.batleforc.fr
+concurrency:
+  # only run one build at a time
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+jobs:
+  build:
+    name: Build container images
+    enable-openid-connect: true # Required for vault authentication
+    runs-on: buildah
+    strategy:
+      matrix:
+        include:
+          - name: "Backend Container"
+            context: .
+            dockerfile: Containerfile
+            image_name: batleforc/batlehub
+          - name: "Backend Hardened Container"
+            context: .
+            dockerfile: Containerfile.hardened
+            image_name: batleforc/batlehub-hardened
+          # The scan worker (RFC 0018). Its `tools` stage still downloads
+          # postmortem, Trivy and yara-x from GitHub releases.
+          - name: "Worker Container"
+            context: .
+            dockerfile: Containerfile.worker
+            image_name: batleforc/batlehub-worker
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # The local mirror, not `actions/checkout`: that one resolves through the
+      # default actions URL, which is the outage this build is a fallback for.
+      - uses: https://git.batleforc.fr/action/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Create env var with vault CA certificate
+        id: cert
+        run: echo "VAULT_CA_CERTIFICATE=$(cat "$VAULT_CA_CERT" | base64 -w 0)">> "$GITHUB_OUTPUT"
+      - name: Get env variables from vault
+        uses: https://git.batleforc.fr/action/hashicorp_vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4.0.0
+        id: vault
+        with:
+          url: https://vault.vault:8200
+          caCertificate: ${{ steps.cert.outputs.VAULT_CA_CERTIFICATE }}
+          method: jwt
+          path: forgejo_jwt
+          role: forgejo_action
+          jwtGithubAudience: forgejo_action
+          secrets: |
+            git-vault/data/batleforc/batlehub/registry username | REGISTRY_USER ;
+            git-vault/data/batleforc/batlehub/registry password | REGISTRY_PAT ;
+            git-vault/data/batleforc/batlehub/registry url | REGISTRY ;
+      # The credentials go through the environment and stdin / a 0600 netrc,
+      # never through `${{ }}` into a script or onto a command line, where they
+      # would be readable in the process list.
+      - name: Log in to Harbor
+        env:
+          REGISTRY_USER: ${{ steps.vault.outputs.REGISTRY_USER }}
+          REGISTRY_PAT: ${{ steps.vault.outputs.REGISTRY_PAT }}
+          REGISTRY_URL: ${{ steps.vault.outputs.REGISTRY }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$REGISTRY_PAT" | buildah login --username "$REGISTRY_USER" --password-stdin "$REGISTRY_URL"
+          netrc="$RUNNER_TEMP/harbor.netrc"
+          (umask 077; printf 'machine %s login %s password %s\n' "${{ env.REGISTRY }}" "$REGISTRY_USER" "$REGISTRY_PAT" > "$netrc")
+          echo "HARBOR_NETRC=$netrc" >> "$GITHUB_ENV"
+      # Only downloaded when the runner lacks it, and then checksum-pinned.
+      - name: Install jq
+        run: |
+          set -euo pipefail
+          if ! command -v jq >/dev/null 2>&1; then
+            curl -sfL -o /usr/local/bin/jq https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64
+            echo "5942c9b0934e510ee61eb3e30273f1b3fe2590df93933a93d7c58b81d19c8ff5  /usr/local/bin/jq" | sha256sum -c -
+            chmod +x /usr/local/bin/jq
+          fi
+      - name: Build Image
+        run: |
+          IMAGE_TAG="${{ env.REGISTRY }}/${{ matrix.image_name }}:${GITHUB_SHA}"
+          IMAGE_TAG_BRANCH="${{ env.REGISTRY }}/${{ matrix.image_name }}:${GITHUB_REF_NAME}"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+          buildah bud  \
+            --platform linux/amd64 \
+            --layers \
+            --cache-to=${{ env.REGISTRY }}/${{ matrix.image_name }}/cache \
+            --cache-from=${{ env.REGISTRY }}/${{ matrix.image_name }}/cache \
+            --tag "$IMAGE_TAG" \
+            --tag "$IMAGE_TAG_BRANCH" \
+            --file ${{ matrix.dockerfile }} \
+            ${{ matrix.context }}
+          buildah push "$IMAGE_TAG"
+          buildah push "$IMAGE_TAG_BRANCH"
+      # Harbor scans every push automatically (project-level "scan on push") and
+      # generates its own SBOM accessory, so don't redo that work locally. Poll
+      # its API for up to ~5 minutes for the vulnerability report on the digest
+      # we just pushed. Shipping without a verdict is worse than a slower
+      # pipeline, so a still-pending/errored scan fails the build below rather
+      # than being treated as a pass (see "Gate on Harbor scan availability").
+      - name: Wait for Harbor scan result
+        id: harbor_scan
+        run: |
+          IMAGE_NAME="${{ matrix.image_name }}"
+          PROJECT="${IMAGE_NAME%%/*}"
+          REPO="${IMAGE_NAME#*/}"
+          API="https://${{ env.REGISTRY }}/api/v2.0/projects/${PROJECT}/repositories/${REPO}/artifacts/${GITHUB_SHA}?with_scan_overview=true"
+          STATUS="Pending"
+          for _ in $(seq 1 30); do
+            STATUS=$(curl -s --netrc-file "$HARBOR_NETRC" "$API" | jq -r '.scan_overview["application/vnd.security.vulnerability.report; version=1.1"].scan_status // "Pending"') || STATUS="Pending"
+            if [ "$STATUS" = "Success" ] || [ "$STATUS" = "Error" ]; then
+              break
+            fi
+            sleep 10
+          done
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+      # Gate: fail the build on any fixable HIGH/CRITICAL CVE in Harbor's report.
+      # Forgejo has no Security tab, so the exit code IS the gate; a short
+      # summary table is printed first for triage. Mirrors the previous
+      # `trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1`.
+      - name: Gate on Harbor vulnerability report
+        if: steps.harbor_scan.outputs.status == 'Success'
+        run: |
+          IMAGE_NAME="${{ matrix.image_name }}"
+          PROJECT="${IMAGE_NAME%%/*}"
+          REPO="${IMAGE_NAME#*/}"
+          API="https://${{ env.REGISTRY }}/api/v2.0/projects/${PROJECT}/repositories/${REPO}/artifacts/${GITHUB_SHA}/additions/vulnerabilities"
+          curl -s --netrc-file "$HARBOR_NETRC" -H "Accept: application/vnd.security.vulnerability.report; version=1.1" "$API" -o vulns.json
+          jq -r '.vulnerabilities[]? | select((.severity == "Critical" or .severity == "High") and (.fix_version // "") != "") | [.severity, .package, .version, .fix_version, .id] | @tsv' vulns.json | tee fixable.tsv
+          if [ -s fixable.tsv ]; then
+            echo "::error::Harbor reported fixable HIGH/CRITICAL vulnerabilities for $IMAGE_TAG"
+            exit 1
+          fi
+      # A scan that's still pending after 5 minutes, or that errored out in
+      # Harbor, means we have no vulnerability verdict for this digest — fail
+      # closed rather than shipping an unscanned image.
+      - name: Gate on Harbor scan availability
+        if: steps.harbor_scan.outputs.status != 'Success'
+        run: |
+          echo "::error::Harbor scan result not available for $IMAGE_TAG after 5 minutes (status: ${{ steps.harbor_scan.outputs.status }}); refusing to ship without a vulnerability verdict"
+          exit 1

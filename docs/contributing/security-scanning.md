@@ -23,7 +23,7 @@ you have already deployed.
 | JS dependencies | `pnpm audit --audit-level high` | `dep-audit-frontend.yaml` (PR + daily) | block on high/critical |
 | Dependency supply chain (reputation + vulns) | [postmortem](https://github.com/mlab-sh/postmortem) | `postmortem.yaml` (PR + daily) — one job per dependency root: Rust, UI, Website | block on high/critical vulns (Rust, UI); report-only (Website) |
 | Lockfile CVEs, second opinion | [vuln-scan-action](https://github.com/mlab-sh/vuln-scan-action) (vuln.mlab.sh) | `vuln-scan.yaml` (PR) — all four roots: `Cargo.lock`, `mise.lock`, and `ui/` + `docs/` via a syft CycloneDX SBOM | **report-only**, comments on the PR — see below |
-| Container / OS layers | Trivy | `image-scan.yaml` (PR + daily, GitHub) runs Trivy directly on the proxy image (`Containerfile`), the worker image (`Containerfile.worker`, RFC 0018 — the one that carries bubblewrap, postmortem and the Trivy client) and the GuardDog variant of the worker image (`Containerfile.worker-guarddog`, which adds the optional Python scanner and is gated separately, so its toolchain answers for its own CVEs); `.forgejo/workflows/build.yaml` (the proxy and hardened images, the two it builds) polls Harbor's own scan-on-push report instead | block on fixable HIGH/CRITICAL |
+| Container / OS layers | Trivy | `image-scan.yaml` (PR + daily, GitHub) runs Trivy directly on the proxy image (`Containerfile`), the worker image (`Containerfile.worker`, RFC 0018 — the one that carries bubblewrap, postmortem and the Trivy client) and the GuardDog variant of the worker image (`Containerfile.worker-guarddog`, which adds the optional Python scanner and is gated separately, so its toolchain answers for its own CVEs); `.forgejo/workflows/build.yaml` (the fallback build: proxy, hardened and worker images, amd64, to Harbor) polls Harbor's own scan-on-push report instead | block on fixable HIGH/CRITICAL |
 | Development toolchain | Trivy (`rootfs` over the installed tools) | `mise-scan.yaml` (PR touching `mise.toml`/`mise.lock`, weekly) | budget on fixable HIGH/CRITICAL — see below |
 | Static analysis | CodeQL + Semgrep | `codeql.yaml`, `semgrep.yaml` | CodeQL report / Semgrep block on ERROR |
 | API surface (OAS + OWASP API Top 10 auth rules) | Spectral (`.spectral.yaml`) | `openapi-lint.yaml` (PR touching `ui/openapi.json` or the ruleset) | block on error |
@@ -138,11 +138,12 @@ of the scan did not complete rather than showing an empty report as "clean".
 `registry.batleforc.fr` (Harbor) is configured to automatically scan every artifact pushed to the
 `batleforc/batlehub*` repositories and to generate its own SBOM accessory, so
 `.forgejo/workflows/build.yaml` doesn't run a second Trivy/Syft pass after pushing. Instead it polls
-Harbor's API for the vulnerability report of the digest it just pushed, for up to ~1 minute, and
+Harbor's API for the vulnerability report of the digest it just pushed, for up to ~5 minutes, and
 fails the job if Harbor reports a fixable HIGH/CRITICAL CVE — the same gate as before, just sourced
-from Harbor instead of a local `trivy image` run. If Harbor hasn't finished scanning within that
-minute, the job logs a warning and continues **without** a gate for that run (no local fallback
-scan); the daily `image-scan.yaml` run on GitHub remains the backstop for that layer.
+from Harbor instead of a local `trivy image` run. If Harbor hasn't finished scanning within those
+5 minutes, or the scan errored, the job **fails** rather than shipping an image without a verdict.
+This build is the fallback for when the GitHub pipeline is unavailable; the daily `image-scan.yaml`
+run on GitHub remains the primary gate for that layer.
 
 ## Run the gate locally
 
@@ -231,11 +232,12 @@ Signing is by digest and never by tag, everywhere. A tag is a mutable pointer, s
 `:1.2.3` would attest to whatever that name resolves to at verification time — which is the property
 an attacker with push access needs.
 
-**What is not signed, and why.** The Forgejo mirror build (`.forgejo/workflows/build.yaml`, which
-pushes the proxy and hardened images to Harbor on every push to a branch) is unsigned. Keyless
+**What is not signed, and why.** The Forgejo fallback build (`.forgejo/workflows/build.yaml`, which
+pushes the proxy, hardened and worker images to Harbor nightly, on a `v*` tag and on dispatch)
+is unsigned — including the `:vX.Y.Z` it pushes for a tag. Keyless
 signing needs an OIDC issuer Sigstore's public-good instance already trusts, and a self-hosted
 Forgejo is not one; signing there would mean a long-lived key in a secret, which is the thing
-keyless exists to avoid. Those images are continuous builds gated on Harbor's own scan-on-push,
+keyless exists to avoid. Those images are a fallback gated on Harbor's own scan-on-push,
 not releases — **the signed artefacts are the ones a release publishes**, and that is the set the
 table above covers.
 
