@@ -176,7 +176,7 @@ async function paintRendered() {
   if (!root) return;
   // Each block paints into its own element, so they go in parallel; a grammar
   // two blocks share may load twice, which Shiki's `loadLanguage` tolerates.
-  const blocks = [...root.querySelectorAll<HTMLElement>("pre > code")];
+  const blocks = [...root.querySelectorAll("pre > code")] as HTMLElement[];
   await Promise.all(
     blocks.map(async (el) => {
       if (el.dataset.highlighted === "true") return;

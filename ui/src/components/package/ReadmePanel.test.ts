@@ -1,12 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 
-const { explorePackageReadmeMock } = vi.hoisted(() => ({
+const { explorePackageReadmeMock, highlightIntoMock } = vi.hoisted(() => ({
   explorePackageReadmeMock: vi.fn(),
+  highlightIntoMock: vi.fn(),
 }));
 
 vi.mock("@/client/sdk.gen", () => ({
   explorePackageReadme: explorePackageReadmeMock,
+}));
+
+vi.mock("@/composables/useShiki", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/composables/useShiki")>()),
+  highlightInto: highlightIntoMock,
 }));
 
 import ReadmePanel from "./ReadmePanel.vue";
@@ -44,6 +50,32 @@ async function mountPanel(version: string | null = "4.18.2") {
 describe("ReadmePanel", () => {
   beforeEach(() => {
     explorePackageReadmeMock.mockReset().mockResolvedValue(ok());
+    highlightIntoMock.mockReset().mockResolvedValue(true);
+  });
+
+  /**
+   * Every fenced block with a language is painted — in parallel, each into its
+   * own element — and the ones with nothing to paint, or already painted, are
+   * left alone.
+   */
+  it("highlights each fenced block with a language, and only those", async () => {
+    explorePackageReadmeMock.mockResolvedValue(
+      ok({
+        rendered_html:
+          '<pre><code class="language-js">a()</code></pre>' +
+          '<pre><code class="language-sh">ls</code></pre>' +
+          "<pre><code>no language</code></pre>" +
+          '<pre><code class="language-js">   </code></pre>' +
+          '<pre><code class="language-js" data-highlighted="true">done()</code></pre>',
+      }),
+    );
+    const wrapper = await mountPanel();
+    await flushPromises();
+
+    expect(highlightIntoMock).toHaveBeenCalledTimes(2);
+    expect(highlightIntoMock.mock.calls.map((c) => c[2])).toEqual(["js", "sh"]);
+    const painted = wrapper.findAll('code[data-highlighted="true"]');
+    expect(painted).toHaveLength(3);
   });
 
   it("renders the HTML the server sanitised", async () => {
