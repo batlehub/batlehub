@@ -68,11 +68,13 @@ mkdir -p "$HEAVY_WORK"/{verify,absolute,blocked,stale,cachewarm,cache,localpull}
 # Every helm state directory inside the run, so the suite never touches the
 # runner's repositories and every phase can start from a clean cache.
 helm_env() {  # <label> → exports for a fresh client named <label>
-  local home="$HEAVY_WORK/helm-$1"
+  local label="$1"
+  local home="$HEAVY_WORK/helm-$label"
   mkdir -p "$home"
   export HELM_CONFIG_HOME="$home/config" HELM_CACHE_HOME="$home/cache" \
          HELM_DATA_HOME="$home/data" HELM_REPOSITORY_CONFIG="$home/config/repositories.yaml" \
          HELM_REPOSITORY_CACHE="$home/cache/repository"
+  return 0
 }
 
 # The client's egress, denied: a dead proxy for everything but loopback, so a
@@ -84,35 +86,41 @@ DENY=(env HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9
 run() {  # <label> <cmd…> → output in $HEAVY_WORK/<label>.out, status returned
   local label="$1"; shift
   "$@" > "$HEAVY_WORK/$label.out" 2>&1
+  return $?
 }
 
 repo_add() {  # <client label> <name> <registry> <token>
-  helm_env "$1"
-  run "$1-add-$2" helm repo add "$2" "$HEAVY_TAP_BASE/proxy/$3/helm" \
-    --username ci --password "$4" \
-    || { cat "$HEAVY_WORK/$1-add-$2.out" >&2; heavy_fail "helm repo add $2 failed"; }
+  local client="$1" name="$2" registry="$3" token="$4"
+  helm_env "$client"
+  run "$client-add-$name" helm repo add "$name" "$HEAVY_TAP_BASE/proxy/$registry/helm" \
+    --username ci --password "$token" \
+    || { cat "$HEAVY_WORK/$client-add-$name.out" >&2; heavy_fail "helm repo add $name failed"; }
+  return 0
 }
 
 # The served index as this server renders it, for a registry, as the reader.
 served_index() {  # <registry>
-  curl -fsS -u "ci:$READER" "$HEAVY_BASE/proxy/$1/helm/index.yaml"
+  local registry="$1"
+  curl -fsS -u "ci:$READER" "$HEAVY_BASE/proxy/$registry/helm/index.yaml"
+  return $?
 }
 
 # Wait until a block has reached the registry-wide index — it is filtered
 # against a 30-second snapshot of the blocked set (RFC 0029 §4.4).
 await_absent() {  # <registry> <chart> <version>
-  local i
+  local registry="$1" chart="$2" version="$3" i
   for i in $(seq 1 25); do
     # Not `served_index | grep -q`: grep stops at the first match, curl fails
     # writing the rest, and under pipefail that reads as "absent".
-    local index; index="$(served_index "$1")"
-    grep -qE "^    version: \"?$3\"?$" <<< "$index" || return 0
+    local index; index="$(served_index "$registry")"
+    grep -qE "^    version: \"?$version\"?$" <<< "$index" || return 0
     sleep 2
   done
-  heavy_fail "$2 $3 was still in the served index 50 s after the block"
+  heavy_fail "$chart $version was still in the served index 50 s after the block"
+  return 1
 }
 
-re() { printf '%s' "$1" | sed 's/[.]/[.]/g'; }
+re() { local s="$1"; printf '%s' "$s" | sed 's/[.]/[.]/g'; return $?; }
 
 phase_repo_add() {
   heavy_log "1. helm repo add reads the index with basic auth; every URL is on this host"
@@ -221,6 +229,7 @@ phase_stale() {
 hits_total() {
   curl -fsS "$HEAVY_BASE/metrics" \
     | awk '/^batlehub_artifact_cache_hits_total/ { n += $2 } END { print n + 0 }'
+  return $?
 }
 
 phase_cache() {

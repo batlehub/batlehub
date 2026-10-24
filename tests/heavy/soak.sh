@@ -299,30 +299,31 @@ heavy_log "$(printf 'live heap %d -> %d MiB (%s%%), RSS %d -> %d MiB (%s%%), fds
   "$BASE_THREADS" "$FINAL_THREADS" "$THREAD_GROWTH")"
 
 FAILED=0
+OVER="**over**"
 HEAP_VERDICT=ok RSS_VERDICT=ok FD_VERDICT=ok THREAD_VERDICT=ok
 if (( HEAP_MEASURED )); then
   RSS_VERDICT="reported"
   awk -v g="$HEAP_GROWTH_PCT" -v m="$MAX_HEAP_PCT" 'BEGIN{ exit !(g > m) }' && {
     echo "LEAK: the idle live heap grew ${HEAP_GROWTH_PCT}% over $ROUNDS rounds (limit ${MAX_HEAP_PCT}%)" >&2
-    HEAP_VERDICT="**over**"
+    HEAP_VERDICT="$OVER"
     FAILED=1
   }
 else
   HEAP_VERDICT="not measured (no allocator statistics)"
   awk -v g="$RSS_GROWTH_PCT" -v m="$MAX_RSS_PCT" 'BEGIN{ exit !(g > m) }' && {
     echo "LEAK: idle RSS grew ${RSS_GROWTH_PCT}% over $ROUNDS rounds (limit ${MAX_RSS_PCT}%)" >&2
-    RSS_VERDICT="**over**"
+    RSS_VERDICT="$OVER"
     FAILED=1
   }
 fi
 if (( FD_GROWTH > MAX_FD )); then
   echo "LEAK: $FD_GROWTH more open descriptors than at baseline (limit $MAX_FD)" >&2
-  FD_VERDICT="**over**"
+  FD_VERDICT="$OVER"
   FAILED=1
 fi
 if (( THREAD_GROWTH > MAX_THREADS )); then
   echo "LEAK: $THREAD_GROWTH more threads than at baseline (limit $MAX_THREADS)" >&2
-  THREAD_VERDICT="**over**"
+  THREAD_VERDICT="$OVER"
   FAILED=1
 fi
 

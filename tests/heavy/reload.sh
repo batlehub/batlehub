@@ -58,45 +58,56 @@ heavy_start_tap
 # `--fail-with-body`: a 4xx/5xx is a failed call, so every `|| heavy_fail`
 # below can fire, and the body still reaches the file for the post-mortem.
 api() {  # method, path, [body]
-  curl -sS --fail-with-body -X "$1" -H "Authorization: Bearer $ADMIN_TOKEN" \
-    ${3:+-H "Content-Type: application/json" -d "$3"} "$HEAVY_BASE$2"
+  local method="$1" path="$2" body="${3:-}"
+  curl -sS --fail-with-body -X "$method" -H "Authorization: Bearer $ADMIN_TOKEN" \
+    ${body:+-H "Content-Type: application/json" -d "$body"} "$HEAVY_BASE$path"
+  return $?
 }
 
 # Replace the watched file in one rename, as an editor's atomic save does.
 edit_config() {  # sed expression
-  sed "$1" "$CONFIG" > "$CONFIG.next"
-  cmp -s "$CONFIG" "$CONFIG.next" && heavy_fail "edit '$1' changed nothing in the config"
+  local expr="$1"
+  sed "$expr" "$CONFIG" > "$CONFIG.next"
+  cmp -s "$CONFIG" "$CONFIG.next" && heavy_fail "edit '$expr' changed nothing in the config"
   mv "$CONFIG.next" "$CONFIG"
+  return $?
 }
 
 # The watcher stages a pending reload; wait for one whose diff names `$1`.
 wait_pending() {  # expected path
+  local want="$1"
   for _ in $(seq 1 30); do
     api GET /api/v1/admin/config/pending > "$HEAVY_WORK/pending.json" 2>/dev/null || true
-    grep -qF "\"$1\"" "$HEAVY_WORK/pending.json" && return 0
+    grep -qF "\"$want\"" "$HEAVY_WORK/pending.json" && return 0
     sleep 1
   done
   cat "$HEAVY_WORK/pending.json" >&2
-  heavy_fail "no pending reload naming '$1' within 30 s"
+  heavy_fail "no pending reload naming '$want' within 30 s"
+  return 1
 }
 
 diff_list() {  # file, list → one path per line
-  python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["diff"][sys.argv[2]]))' "$1" "$2"
+  local file="$1" list="$2"
+  python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["diff"][sys.argv[2]]))' "$file" "$list"
+  return $?
 }
 
 apply_pending() {
   api POST /api/v1/admin/config/pending/apply > "$HEAVY_WORK/applied.json" \
     || heavy_fail "applying the pending reload failed"
+  return 0
 }
 
 export NPM_CONFIG_REGISTRY="$HEAVY_TAP_BASE/proxy/$REG/"
 export NPM_CONFIG_FUND=false NPM_CONFIG_AUDIT=false NPM_CONFIG_UPDATE_NOTIFIER=false
 
 npm_install() {  # package, dir
-  mkdir -p "$2"
-  (cd "$2" && echo '{}' > package.json \
-    && NPM_CONFIG_CACHE="$2/.npm" npm install "$1" --no-package-lock) \
-    || heavy_fail "npm install $1 failed"
+  local package="$1" dir="$2"
+  mkdir -p "$dir"
+  (cd "$dir" && echo '{}' > package.json \
+    && NPM_CONFIG_CACHE="$dir/.npm" npm install "$package" --no-package-lock) \
+    || heavy_fail "npm install $package failed"
+  return 0
 }
 
 # ── 1. A restart-only key: reported, at warn, and never "no change" ──────────

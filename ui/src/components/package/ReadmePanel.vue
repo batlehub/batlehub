@@ -174,14 +174,18 @@ const { ready: shikiReady } = useShiki();
 async function paintRendered() {
   const root = bodyEl.value;
   if (!root) return;
-  for (const code of root.querySelectorAll("pre > code")) {
-    const el = code as HTMLElement;
-    if (el.dataset.highlighted === "true") continue;
-    const lang = /language-([\w#+.-]+)/.exec(el.className)?.[1] ?? "";
-    const text = el.textContent ?? "";
-    if (!lang || !text.trim()) continue;
-    if (await highlightInto(el, text, lang)) el.dataset.highlighted = "true";
-  }
+  // Each block paints into its own element, so they go in parallel; a grammar
+  // two blocks share may load twice, which Shiki's `loadLanguage` tolerates.
+  const blocks = [...root.querySelectorAll<HTMLElement>("pre > code")];
+  await Promise.all(
+    blocks.map(async (el) => {
+      if (el.dataset.highlighted === "true") return;
+      const lang = /language-([\w#+.-]+)/.exec(el.className)?.[1] ?? "";
+      const text = el.textContent ?? "";
+      if (!lang || !text.trim()) return;
+      if (await highlightInto(el, text, lang)) el.dataset.highlighted = "true";
+    }),
+  );
 }
 
 /** The source view is itself a code block, so it is highlighted as one. */

@@ -374,7 +374,7 @@ impl DocumentKind {
     /// listing-filter fuzz target drives every `(RegistryKind, DocumentKind)`
     /// pair from it — so a new constant cannot be silently left out; the unit
     /// test `all_lists_every_document_kind` reads this file to hold that.
-    pub const ALL: &'static [Self] = &[
+    pub const ALL: &[Self] = &[
         Self::Versions,
         Self::REGISTRATION,
         Self::GEM,

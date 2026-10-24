@@ -142,7 +142,7 @@ fn nix_safe(s: &str) -> bool {
 impl Coord {
     fn arbitrary_valid(u: &mut Unstructured) -> Result<Option<Self>> {
         let kind = *u.choose(KINDS)?;
-        let c = match (kind, u.int_in_range(0..=2)?) {
+        match (kind, u.int_in_range(0..=2)?) {
             // npm/openvsx: a name from the request path (`%2F` decoded), a
             // version from the body; nothing beyond the publish coordinate.
             (RegistryKind::Npm | RegistryKind::Openvsx, _) => {
@@ -150,138 +150,126 @@ impl Coord {
                 if validate_publish_coordinate(&name, &version).is_err() {
                     return Ok(None);
                 }
-                Coord::Row {
+                Ok(Some(Coord::Row {
                     kind,
                     name,
                     version,
-                }
+                }))
             }
-            // Maven: `parse_maven_path` splits on `/` and joins the group with
-            // `.`, so no part carries a `/`; each is `validate_path_safe`d.
-            (RegistryKind::Maven, n) => {
-                let (name, version) = (piece(u)?, piece(u)?);
-                if name.contains('/')
-                    || validate_publish_coordinate(&name, &version).is_err()
-                    || validate_path_segment("version", &version).is_err()
-                {
+            (RegistryKind::Maven, n) => Self::maven(u, n),
+            (RegistryKind::Terraform, n) => Self::terraform(u, n),
+            (_, n) => Self::nix(u, n),
+        }
+    }
+
+    /// Maven: `parse_maven_path` splits on `/` and joins the group with `.`,
+    /// so no part carries a `/`; each is `validate_path_safe`d.
+    fn maven(u: &mut Unstructured, n: u8) -> Result<Option<Self>> {
+        let (name, version) = (piece(u)?, piece(u)?);
+        if name.contains('/')
+            || validate_publish_coordinate(&name, &version).is_err()
+            || validate_path_segment("version", &version).is_err()
+        {
+            return Ok(None);
+        }
+        if n == 0 {
+            return Ok(Some(Coord::Row {
+                kind: RegistryKind::Maven,
+                name,
+                version,
+            }));
+        }
+        let filename = piece(u)?;
+        if validate_path_segment("filename", &filename).is_err() {
+            return Ok(None);
+        }
+        Ok(Some(Coord::MavenFile {
+            name,
+            version,
+            filename,
+        }))
+    }
+
+    /// Terraform: every part is `require_segments`-checked; a module is
+    /// `modules/{ns}/{name}/{provider}`, a provider `providers/{ns}/{type}`.
+    fn terraform(u: &mut Unstructured, n: u8) -> Result<Option<Self>> {
+        let (ns, ptype, version) = (piece(u)?, piece(u)?, piece(u)?);
+        for part in [&ns, &ptype, &version] {
+            if validate_path_segment("part", part).is_err() {
+                return Ok(None);
+            }
+        }
+        let name = match n {
+            0 => {
+                let provider = piece(u)?;
+                if validate_path_segment("provider", &provider).is_err() {
                     return Ok(None);
                 }
-                if n == 0 {
-                    Coord::Row {
-                        kind,
-                        name,
-                        version,
-                    }
-                } else {
-                    let filename = piece(u)?;
-                    if validate_path_segment("filename", &filename).is_err() {
-                        return Ok(None);
-                    }
-                    Coord::MavenFile {
-                        name,
-                        version,
-                        filename,
-                    }
-                }
+                format!("modules/{ns}/{ptype}/{provider}")
             }
-            // Terraform: every part is `require_segments`-checked; a module is
-            // `modules/{ns}/{name}/{provider}`, a provider `providers/{ns}/{type}`.
-            (RegistryKind::Terraform, n) => {
-                let (ns, ptype, version) = (piece(u)?, piece(u)?, piece(u)?);
-                for part in [&ns, &ptype, &version] {
-                    if validate_path_segment("part", part).is_err() {
-                        return Ok(None);
-                    }
-                }
-                match n {
-                    0 => {
-                        let provider = piece(u)?;
-                        if validate_path_segment("provider", &provider).is_err() {
-                            return Ok(None);
-                        }
-                        let name = format!("modules/{ns}/{ptype}/{provider}");
-                        if validate_publish_coordinate(&name, &version).is_err() {
-                            return Ok(None);
-                        }
-                        Coord::Row {
-                            kind,
-                            name,
-                            version,
-                        }
-                    }
-                    1 => {
-                        let name = format!("providers/{ns}/{ptype}");
-                        if validate_publish_coordinate(&name, &version).is_err() {
-                            return Ok(None);
-                        }
-                        Coord::Row {
-                            kind,
-                            name,
-                            version,
-                        }
-                    }
-                    _ => {
-                        let (os, arch) = (piece(u)?, piece(u)?);
-                        if validate_terraform_platform(&os, &arch).is_err()
-                            || validate_publish_coordinate(
-                                &format!("providers/{ns}/{ptype}"),
-                                &version,
-                            )
-                            .is_err()
-                        {
-                            return Ok(None);
-                        }
-                        Coord::TfBinary {
-                            ns,
-                            ptype,
-                            version,
-                            os,
-                            arch,
-                        }
-                    }
-                }
-            }
-            // Nix: `publish_nix_narinfo` checks the name and version, the NAR
-            // file name is `validate_path_safe`d, and the row goes through the
-            // shared publish coordinate.
-            (_, n) => {
-                let (name, version, hash) = (piece(u)?, piece(u)?, piece(u)?);
-                if !nix_safe(&name)
-                    || !nix_safe(&version)
-                    || !nix_safe(&hash)
-                    || hash.contains('.')
-                    || validate_package_name(&name).is_err()
-                    || validate_publish_coordinate(&name, &version).is_err()
-                {
-                    return Ok(None);
-                }
-                match n {
-                    0 => Coord::Row {
-                        kind: RegistryKind::Nix,
-                        name,
-                        version,
-                    },
-                    1 => {
-                        let file = piece(u)?;
-                        if validate_path_safe("NAR file name", &file).is_err() {
-                            return Ok(None);
-                        }
-                        Coord::NixNar {
-                            name,
-                            version,
-                            hash,
-                            file,
-                        }
-                    }
-                    _ => Coord::NixNarinfo {
-                        name,
-                        version,
-                        hash,
-                    },
-                }
-            }
+            _ => format!("providers/{ns}/{ptype}"),
         };
-        Ok(Some(c))
+        if validate_publish_coordinate(&name, &version).is_err() {
+            return Ok(None);
+        }
+        if n < 2 {
+            return Ok(Some(Coord::Row {
+                kind: RegistryKind::Terraform,
+                name,
+                version,
+            }));
+        }
+        let (os, arch) = (piece(u)?, piece(u)?);
+        if validate_terraform_platform(&os, &arch).is_err() {
+            return Ok(None);
+        }
+        Ok(Some(Coord::TfBinary {
+            ns,
+            ptype,
+            version,
+            os,
+            arch,
+        }))
+    }
+
+    /// Nix: `publish_nix_narinfo` checks the name and version, the NAR file
+    /// name is `validate_path_safe`d, and the row goes through the shared
+    /// publish coordinate.
+    fn nix(u: &mut Unstructured, n: u8) -> Result<Option<Self>> {
+        let (name, version, hash) = (piece(u)?, piece(u)?, piece(u)?);
+        if !nix_safe(&name)
+            || !nix_safe(&version)
+            || !nix_safe(&hash)
+            || hash.contains('.')
+            || validate_package_name(&name).is_err()
+            || validate_publish_coordinate(&name, &version).is_err()
+        {
+            return Ok(None);
+        }
+        Ok(Some(match n {
+            0 => Coord::Row {
+                kind: RegistryKind::Nix,
+                name,
+                version,
+            },
+            1 => {
+                let file = piece(u)?;
+                if validate_path_safe("NAR file name", &file).is_err() {
+                    return Ok(None);
+                }
+                Coord::NixNar {
+                    name,
+                    version,
+                    hash,
+                    file,
+                }
+            }
+            _ => Coord::NixNarinfo {
+                name,
+                version,
+                hash,
+            },
+        }))
     }
 
     fn kind(&self) -> RegistryKind {

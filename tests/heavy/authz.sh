@@ -198,6 +198,8 @@ WHO_DENIED="the denied user"
 # (`T_DENIED` is the credential), and an oracle asked about the token instead
 # answers about a subject that holds nothing, which is an `allow`-shaped pass.
 SUBJECT_DENIED="user:authz-denied"
+# The verb the client phases assert a pull with, and ask `explain` about.
+VERB_RELEASES_READ="releases:read"
 
 # ── Assertion helpers ────────────────────────────────────────────────────────
 
@@ -1959,7 +1961,7 @@ YML
   grep -qiF "was installed successfully" "$HEAVY_WORK/galaxy-reader.out" \
     || { tail -n 40 "$HEAVY_WORK/galaxy-reader.out" >&2;
          heavy_fail "releases:read — galaxy, the reader: the install did not report success"; }
-  authz_note_verb "releases:read"
+  authz_note_verb "$VERB_RELEASES_READ"
   AUTHZ_CHECKS=$((AUTHZ_CHECKS + 1))
 
   # ── the caller holding no read verb ──
@@ -1986,10 +1988,10 @@ YML
 
   # The oracle agrees with the answers above (§11.6).
   local verdict
-  verdict="$(authz_explain "$GALAXY_R" "user:authz-reader" "releases:read" "$ns.$name" "$version")"
+  verdict="$(authz_explain "$GALAXY_R" "user:authz-reader" "$VERB_RELEASES_READ" "$ns.$name" "$version")"
   [[ "$verdict" == "allow" ]] \
     || heavy_fail "galaxy: explain says '$verdict' for the reader the server just served"
-  verdict="$(authz_explain "$GALAXY_R" "$SUBJECT_DENIED" "releases:read" "$ns.$name" "$version")"
+  verdict="$(authz_explain "$GALAXY_R" "$SUBJECT_DENIED" "$VERB_RELEASES_READ" "$ns.$name" "$version")"
   [[ "$verdict" == "deny" ]] \
     || heavy_fail "galaxy: explain says '$verdict' for the caller the server just refused"
   return 0
@@ -2028,6 +2030,7 @@ phase_helm() {
     HELM_CONFIG_HOME="$home/config" HELM_CACHE_HOME="$home/cache" HELM_DATA_HOME="$home/data" \
       bash -c 'helm repo add authz "$0" "${@:2}" && helm pull authz/authzchart --version 9.8.7 -d "$1"' \
       "$repo" "$home/pulled" "${creds[@]}" > "$HEAVY_WORK/helm-$label.out" 2>&1
+    return $?
   }
 
   heavy_mark "helm-reader"
@@ -2035,7 +2038,7 @@ phase_helm() {
     || { cat "$HEAVY_WORK/helm-reader.out" >&2; heavy_fail "releases:read — helm, the reader: the pull was refused"; }
   heavy_wire_re_after "helm-reader" "GET /proxy/$HELM_R/helm/charts/authzchart-9[.]8[.]7[.]tgz -> 200" \
     "helm: the reader's archive fetch did not reach this instance"
-  authz_note_verb "releases:read"
+  authz_note_verb "$VERB_RELEASES_READ"
   AUTHZ_CHECKS=$((AUTHZ_CHECKS + 1))
 
   heavy_mark "helm-denied"
@@ -2057,10 +2060,10 @@ phase_helm() {
   AUTHZ_CHECKS=$((AUTHZ_CHECKS + 1))
 
   local verdict
-  verdict="$(authz_explain "$HELM_R" "user:authz-reader" "releases:read" "authzchart" "9.8.7")"
+  verdict="$(authz_explain "$HELM_R" "user:authz-reader" "$VERB_RELEASES_READ" "authzchart" "9.8.7")"
   [[ "$verdict" == "allow" ]] \
     || heavy_fail "helm: explain says '$verdict' for the reader the server just served"
-  verdict="$(authz_explain "$HELM_R" "$SUBJECT_DENIED" "releases:read" "authzchart" "9.8.7")"
+  verdict="$(authz_explain "$HELM_R" "$SUBJECT_DENIED" "$VERB_RELEASES_READ" "authzchart" "9.8.7")"
   [[ "$verdict" == "deny" ]] \
     || heavy_fail "helm: explain says '$verdict' for the caller the server just refused"
   return 0

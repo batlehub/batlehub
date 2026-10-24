@@ -2588,104 +2588,119 @@ impl AppConfig {
                 kind
             );
         }
-        // A `rustup` upstream is the *root* of the tree, because the registry
-        // serves two subtrees of it (`dist/` and `rustup/`) plus
-        // `manifests.txt` at the root. `…/dist` is the most likely mistake for
-        // an operator migrating from the `generic` example, and it fails as a
-        // `404` per request rather than at boot (RFC 0024 §4.5).
-        if kind == batlehub_core::entities::RegistryKind::Rustup {
-            for upstream in &registry.upstreams {
-                let path = upstream.trim_end_matches('/');
-                if path.ends_with("/dist") {
-                    bail!(
-                        "registry '{}': a rustup upstream is the root of the tree, not its \
-                         'dist' directory — use '{}' instead of '{upstream}', because the \
-                         registry also serves 'rustup/' and 'manifests.txt' from the root",
-                        registry.name,
-                        path.trim_end_matches("/dist")
-                    );
-                }
+        match kind {
+            batlehub_core::entities::RegistryKind::Rustup => {
+                Self::validate_rustup_upstreams(registry)
+            }
+            batlehub_core::entities::RegistryKind::Helm => Self::validate_helm_upstreams(registry),
+            batlehub_core::entities::RegistryKind::Devfile => {
+                Self::validate_devfile_upstreams(registry)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// A `rustup` upstream is the *root* of the tree, because the registry
+    /// serves two subtrees of it (`dist/` and `rustup/`) plus
+    /// `manifests.txt` at the root. `…/dist` is the most likely mistake for
+    /// an operator migrating from the `generic` example, and it fails as a
+    /// `404` per request rather than at boot (RFC 0024 §4.5).
+    fn validate_rustup_upstreams(registry: &RegistryConfig) -> Result<()> {
+        for upstream in &registry.upstreams {
+            let path = upstream.trim_end_matches('/');
+            if path.ends_with("/dist") {
+                bail!(
+                    "registry '{}': a rustup upstream is the root of the tree, not its \
+                     'dist' directory — use '{}' instead of '{upstream}', because the \
+                     registry also serves 'rustup/' and 'manifests.txt' from the root",
+                    registry.name,
+                    path.trim_end_matches("/dist")
+                );
             }
         }
-        // A helm upstream is the repository *directory* — what `helm repo add`
-        // takes — and there is one: a registry is one repository, and a second
-        // one is a second registry block (RFC 0029 §3, §4.5). `hybrid` with none
-        // is refused by `validate_registry_mode`, for every kind.
-        if kind == batlehub_core::entities::RegistryKind::Helm {
-            // A chart's signature is its `.prov`, OpenPGP, which only the
-            // client verifies (`helm --verify`). `verify_on_download` checks
-            // ed25519 and fails closed on anything else, so on helm it would
-            // refuse every signed chart and serve every unsigned one.
-            if registry
-                .signing
-                .as_ref()
-                .is_some_and(|s| s.verify_on_download)
-            {
+        Ok(())
+    }
+
+    /// A helm upstream is the repository *directory* — what `helm repo add`
+    /// takes — and there is one: a registry is one repository, and a second
+    /// one is a second registry block (RFC 0029 §3, §4.5). `hybrid` with none
+    /// is refused by `validate_registry_mode`, for every kind.
+    fn validate_helm_upstreams(registry: &RegistryConfig) -> Result<()> {
+        // A chart's signature is its `.prov`, OpenPGP, which only the
+        // client verifies (`helm --verify`). `verify_on_download` checks
+        // ed25519 and fails closed on anything else, so on helm it would
+        // refuse every signed chart and serve every unsigned one.
+        if registry
+            .signing
+            .as_ref()
+            .is_some_and(|s| s.verify_on_download)
+        {
+            bail!(
+                "registry '{}': signing.verify_on_download cannot apply to a helm registry — \
+                 a chart's signature is its OpenPGP .prov, verified by `helm --verify`, \
+                 and the server verifies ed25519 only; use signing.required or \
+                 signing.allowed_types = [\"pgp\"]",
+                registry.name
+            );
+        }
+        if registry.upstreams.len() > 1 {
+            bail!(
+                "registry '{}': a helm registry serves one chart repository, and {} are \
+                 configured — add a second registry block for the second repository",
+                registry.name,
+                registry.upstreams.len()
+            );
+        }
+        for upstream in &registry.upstreams {
+            // `oci://` is the likeliest mistake: an OCI chart registry is
+            // not a chart repository, and the client could only 404 it.
+            let lower = upstream.to_ascii_lowercase();
+            if !lower.starts_with("http://") && !lower.starts_with("https://") {
                 bail!(
-                    "registry '{}': signing.verify_on_download cannot apply to a helm registry — \
-                     a chart's signature is its OpenPGP .prov, verified by `helm --verify`, \
-                     and the server verifies ed25519 only; use signing.required or \
-                     signing.allowed_types = [\"pgp\"]",
+                    "registry '{}': a helm upstream is an http(s) chart repository, and \
+                     '{upstream}' is not — an oci:// chart registry is pulled with `helm \
+                     pull oci://…` directly, not through a helm registry",
                     registry.name
                 );
             }
-            if registry.upstreams.len() > 1 {
+            let path = upstream.split(['?', '#']).next().unwrap_or(upstream);
+            let path = path.trim_end_matches('/');
+            if path.ends_with("/index.yaml") {
                 bail!(
-                    "registry '{}': a helm registry serves one chart repository, and {} are \
-                     configured — add a second registry block for the second repository",
+                    "registry '{}': a helm upstream is the repository directory, not its \
+                     index — use '{}' instead of '{upstream}' (what `helm repo add` takes)",
                     registry.name,
-                    registry.upstreams.len()
+                    path.trim_end_matches("/index.yaml")
                 );
-            }
-            for upstream in &registry.upstreams {
-                // `oci://` is the likeliest mistake: an OCI chart registry is
-                // not a chart repository, and the client could only 404 it.
-                let lower = upstream.to_ascii_lowercase();
-                if !lower.starts_with("http://") && !lower.starts_with("https://") {
-                    bail!(
-                        "registry '{}': a helm upstream is an http(s) chart repository, and \
-                         '{upstream}' is not — an oci:// chart registry is pulled with `helm \
-                         pull oci://…` directly, not through a helm registry",
-                        registry.name
-                    );
-                }
-                let path = upstream.split(['?', '#']).next().unwrap_or(upstream);
-                let path = path.trim_end_matches('/');
-                if path.ends_with("/index.yaml") {
-                    bail!(
-                        "registry '{}': a helm upstream is the repository directory, not its \
-                         index — use '{}' instead of '{upstream}' (what `helm repo add` takes)",
-                        registry.name,
-                        path.trim_end_matches("/index.yaml")
-                    );
-                }
             }
         }
-        // A devfile upstream is the registry *root* — what Che and
-        // `registry-library` are both given — and there is one: the tags and
-        // digests of two registries cannot be merged into one index, and a
-        // second entry would otherwise be a fan-out nobody asked for
-        // (RFC 0035 §4.5).
-        if kind == batlehub_core::entities::RegistryKind::Devfile {
-            if registry.upstreams.len() > 1 {
-                bail!(
-                    "registry '{}': a devfile registry has one upstream, and {} are configured \
-                     — one registry's index says nothing about another's stacks",
-                    registry.name,
-                    registry.upstreams.len()
-                );
-            }
-            for upstream in &registry.upstreams {
-                let path = upstream.trim_end_matches('/');
-                for doc in ["/v2index", "/index"] {
-                    if path.ends_with(doc) {
-                        bail!(
-                            "registry '{}': a devfile upstream is the registry root, not its \
-                             index — use '{}' instead of '{upstream}'",
-                            registry.name,
-                            path.trim_end_matches(doc)
-                        );
-                    }
+        Ok(())
+    }
+
+    /// A devfile upstream is the registry *root* — what Che and
+    /// `registry-library` are both given — and there is one: the tags and
+    /// digests of two registries cannot be merged into one index, and a
+    /// second entry would otherwise be a fan-out nobody asked for
+    /// (RFC 0035 §4.5).
+    fn validate_devfile_upstreams(registry: &RegistryConfig) -> Result<()> {
+        if registry.upstreams.len() > 1 {
+            bail!(
+                "registry '{}': a devfile registry has one upstream, and {} are configured \
+                 — one registry's index says nothing about another's stacks",
+                registry.name,
+                registry.upstreams.len()
+            );
+        }
+        for upstream in &registry.upstreams {
+            let path = upstream.trim_end_matches('/');
+            for doc in ["/v2index", "/index"] {
+                if path.ends_with(doc) {
+                    bail!(
+                        "registry '{}': a devfile upstream is the registry root, not its \
+                         index — use '{}' instead of '{upstream}'",
+                        registry.name,
+                        path.trim_end_matches(doc)
+                    );
                 }
             }
         }
