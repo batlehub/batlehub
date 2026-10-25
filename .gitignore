@@ -129,3 +129,19 @@ perf/results/perf-report.md
 perf/results/perf-report.json
 
 graphify-out/cache/
+
+# Symlinks `wska install` creates into its per-machine checkout
+# (~/.local/share/wska/…). They point outside the repo, so a committed one is a
+# dangling link on every other machine; `.claude/wska.toml` IS tracked and
+# re-creates them. No trailing slash: git sees a symlink as a file.
+/.claude/skills/grill-me
+/.claude/skills/grilling
+/.claude/skills/ponytail
+/.claude/skills/weebo-good-practice
+/.claude/skills/weebo-testing
+/.claude/skills/wska
+/.claude/agents/nr-check
+
+# graphify's knowledge graph (`graphify update .`): ~40 MB, regenerated from
+# the tree and stale by the next commit, so each machine builds its own.
+graphify-out/
