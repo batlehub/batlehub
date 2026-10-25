@@ -127,3 +127,5 @@ perf/results/runs.jsonl
 perf/results/*.k6.json
 perf/results/perf-report.md
 perf/results/perf-report.json
+
+graphify-out/cache/
