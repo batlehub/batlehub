@@ -381,6 +381,37 @@ fn run_status(plans: &[TargetPlan], json: bool) -> Result<i32> {
     })
 }
 
+/// What `apply` warns about: the clients it skipped, and an env file no rc
+/// file will source.
+fn apply_warnings(plans: &[TargetPlan], env: &client_setup::Env, shell_rc: ShellRc) -> Vec<String> {
+    let mut warnings: Vec<String> = plans
+        .iter()
+        .filter_map(|p| {
+            let detail = p.detail.as_deref().unwrap_or("");
+            match p.state {
+                State::Conflict => Some(format!(
+                    "{}: conflict, skipped — {detail}",
+                    clients_label(p)
+                )),
+                State::Ambiguous => Some(format!("{}: {detail}", clients_label(p))),
+                _ => None,
+            }
+        })
+        .collect();
+    let exports = plans
+        .iter()
+        .any(|p| p.target == TargetId::EnvSh && p.next.is_some());
+    let known_shell = matches!(env.shell.as_deref(), Some("bash" | "zsh" | "fish"));
+    if exports && shell_rc == ShellRc::Auto && !known_shell {
+        warnings.push(format!(
+            "login shell {} is not bash, zsh or fish: no rc file was changed; \
+             add `eval \"$(batlehub-cli setup env)\"` to it",
+            env.shell.as_deref().unwrap_or("unknown")
+        ));
+    }
+    warnings
+}
+
 fn run_apply(
     plans: &[TargetPlan],
     env: &client_setup::Env,
@@ -388,39 +419,12 @@ fn run_apply(
     yes: bool,
     json: bool,
 ) -> Result<i32> {
-    let mut warnings: Vec<String> = Vec::new();
-    for p in plans {
-        match p.state {
-            State::Conflict => warnings.push(format!(
-                "{}: conflict, skipped — {}",
-                clients_label(p),
-                p.detail.as_deref().unwrap_or("")
-            )),
-            State::Ambiguous => warnings.push(format!(
-                "{}: {}",
-                clients_label(p),
-                p.detail.as_deref().unwrap_or("")
-            )),
-            _ => {}
-        }
-    }
-    let exports = plans
-        .iter()
-        .any(|p| p.target == TargetId::EnvSh && p.next.is_some());
-    let known_shell = matches!(env.shell.as_deref(), Some("bash" | "zsh" | "fish"));
-    if exports && shell_rc == ShellRc::Auto && !known_shell {
-        warnings.push(format!(
-            "login shell {} is not bash, zsh or fish: no rc file was changed;              add `eval \"$(batlehub-cli setup env)\"` to it",
-            env.shell.as_deref().unwrap_or("unknown")
-        ));
-    }
-
+    let warnings = apply_warnings(plans, env, shell_rc);
     if yes {
         for p in plans.iter().filter(|p| p.writes()) {
             client_setup::apply_one(p)?;
         }
     }
-
     if json {
         println!(
             "{}",
@@ -431,41 +435,44 @@ fn run_apply(
             }))?
         );
     } else {
-        for p in plans.iter().filter(|p| p.writes()) {
-            if yes {
-                let verb = if p.next.is_some() { "wrote" } else { "deleted" };
-                println!("{verb} {} ({})", p.path.display(), clients_label(p));
-            } else {
-                print!(
-                    "{}",
-                    client_setup::diff(
-                        &p.path,
-                        p.current.as_deref().unwrap_or(""),
-                        p.next.as_deref()
-                    )
-                );
-            }
-        }
-        for p in plans.iter().filter(|p| p.state == State::Conflict) {
-            if let Some(snippet) = &p.snippet {
-                println!(
-                    "\n{} — merge by hand into {}:\n{snippet}",
-                    clients_label(p),
-                    p.path.display()
-                );
-            }
-        }
-        for w in &warnings {
-            eprintln!("warning: {w}");
-        }
-        let pending = plans.iter().filter(|p| p.writes()).count();
-        if pending == 0 {
-            println!("Nothing to write.");
-        } else if !yes {
-            println!("{pending} file(s) would change; run with --yes to write them.");
-        }
+        print_apply(plans, &warnings, yes);
     }
     Ok(if needs_a_look(plans) { 3 } else { 0 })
+}
+
+/// The human output of `apply`: what was written, or the diff of what would
+/// be, then the snippets to merge by hand and the warnings.
+fn print_apply(plans: &[TargetPlan], warnings: &[String], yes: bool) {
+    for p in plans.iter().filter(|p| p.writes()) {
+        if yes {
+            let verb = if p.next.is_some() { "wrote" } else { "deleted" };
+            println!("{verb} {} ({})", p.path.display(), clients_label(p));
+        } else {
+            let current = p.current.as_deref().unwrap_or("");
+            print!(
+                "{}",
+                client_setup::diff(&p.path, current, p.next.as_deref())
+            );
+        }
+    }
+    for p in plans.iter().filter(|p| p.state == State::Conflict) {
+        if let Some(snippet) = &p.snippet {
+            println!(
+                "\n{} — merge by hand into {}:\n{snippet}",
+                clients_label(p),
+                p.path.display()
+            );
+        }
+    }
+    for w in warnings {
+        eprintln!("warning: {w}");
+    }
+    let pending = plans.iter().filter(|p| p.writes()).count();
+    if pending == 0 {
+        println!("Nothing to write.");
+    } else if !yes {
+        println!("{pending} file(s) would change; run with --yes to write them.");
+    }
 }
 
 fn run_remove(env: &client_setup::Env, select: &Selection, yes: bool, json: bool) -> Result<i32> {
@@ -663,6 +670,199 @@ mod tests {
         assert!(load_registries("http://127.0.0.1:1", None, true)
             .await
             .is_empty());
+    }
+
+    // ── setup apply | status | remove | env (RFC 0038) ──
+
+    fn machine(installed: &[ClientId]) -> (tempfile::TempDir, client_setup::Env) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let home = dir.path().to_owned();
+        let env = client_setup::Env {
+            config_dir: home.join(".config"),
+            cargo_home: home.join(".cargo"),
+            goenv: Some(home.join(".config/go/env")),
+            pip_dir: home.join(".config/pip"),
+            shell: Some("bash".to_owned()),
+            installed: installed.iter().copied().collect(),
+            home,
+            ..client_setup::Env::default()
+        };
+        (dir, env)
+    }
+
+    fn info(name: &str, ty: &str) -> RegistryInfo {
+        RegistryInfo {
+            name: name.to_owned(),
+            registry_type: ty.to_owned(),
+            mode: "proxy".to_owned(),
+            public_url: None,
+        }
+    }
+
+    fn plans_for(regs: &[RegistryInfo], env: &client_setup::Env) -> Vec<TargetPlan> {
+        let opts = Options {
+            server: "https://hub.example.com",
+            picks: Default::default(),
+            maven_mirror_of: None,
+            shell_rc: ShellRc::Auto,
+            only: vec![],
+            skip: vec![],
+            allow_foreign_hosts: false,
+        };
+        client_setup::plan(regs, &opts, env).unwrap()
+    }
+
+    #[test]
+    fn apply_writes_then_status_settles_then_remove_restores() {
+        let (dir, env) = machine(&[ClientId::Npm, ClientId::Rustup]);
+        let regs = vec![info("n", "npm"), info("r", "rustup")];
+
+        // A dry run reports and writes nothing.
+        assert_eq!(
+            run_apply(&plans_for(&regs, &env), &env, ShellRc::Auto, false, false).unwrap(),
+            0
+        );
+        assert!(!dir.path().join(".npmrc").exists());
+        assert_eq!(run_status(&plans_for(&regs, &env), false).unwrap(), 3);
+
+        assert_eq!(
+            run_apply(&plans_for(&regs, &env), &env, ShellRc::Auto, true, true).unwrap(),
+            0
+        );
+        assert!(dir.path().join(".npmrc").exists());
+        assert_eq!(run_status(&plans_for(&regs, &env), true).unwrap(), 0);
+        assert_eq!(
+            run_apply(&plans_for(&regs, &env), &env, ShellRc::Auto, true, false).unwrap(),
+            0
+        );
+
+        let select = Selection {
+            only: vec![],
+            skip: vec![],
+        };
+        assert_eq!(run_remove(&env, &select, false, false).unwrap(), 0);
+        assert!(dir.path().join(".npmrc").exists(), "a dry remove removed");
+        assert_eq!(run_remove(&env, &select, true, false).unwrap(), 0);
+        assert!(!dir.path().join(".npmrc").exists());
+        assert_eq!(run_remove(&env, &select, true, true).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_conflict_is_exit_3_and_warned() {
+        let (dir, env) = machine(&[ClientId::Npm]);
+        std::fs::write(dir.path().join(".npmrc"), "registry=https://x/\n").unwrap();
+        let plans = plans_for(&[info("n", "npm")], &env);
+        assert_eq!(
+            run_apply(&plans, &env, ShellRc::Auto, true, false).unwrap(),
+            3
+        );
+        let warnings = apply_warnings(&plans, &env, ShellRc::Auto);
+        assert!(warnings[0].contains("conflict, skipped"), "{warnings:?}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".npmrc")).unwrap(),
+            "registry=https://x/\n"
+        );
+    }
+
+    #[test]
+    fn an_unknown_shell_is_told_to_eval_setup_env() {
+        let (_dir, mut env) = machine(&[ClientId::Rustup]);
+        env.shell = Some("nu".to_owned());
+        let plans = plans_for(&[info("r", "rustup")], &env);
+        let warnings = apply_warnings(&plans, &env, ShellRc::Auto);
+        assert_eq!(
+            warnings,
+            [
+                "login shell nu is not bash, zsh or fish: no rc file was changed; \
+              add `eval \"$(batlehub-cli setup env)\"` to it"
+            ]
+        );
+        assert!(apply_warnings(&plans, &env, ShellRc::None).is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_verbs_refuse_without_a_usable_server() {
+        let select = Selection {
+            only: vec![],
+            skip: vec![],
+        };
+        let args = ServerArgs {
+            registry: vec![],
+            insecure_http: false,
+            allow_foreign_hosts: false,
+        };
+        let (_dir, env) = machine(&[]);
+        let err = load_plan(None, &select, &args, None, ShellRc::Auto, &env)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no server"), "{err}");
+        let err = load_plan(
+            Some("http://hub.example.com"),
+            &select,
+            &args,
+            None,
+            ShellRc::Auto,
+            &env,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("plain HTTP"), "{err}");
+        assert!(fetch_registries("http://127.0.0.1:1").await.is_err());
+    }
+
+    /// The dispatch, against a stub server. Dry runs only: these read the
+    /// real machine's files and must never write to them.
+    #[tokio::test]
+    async fn run_dispatches_every_verb() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/api/v1/registries")
+            .with_header("content-type", "application/json")
+            .with_body(r#"[{"name":"r","type":"rustup","mode":"proxy"}]"#)
+            .expect_at_least(3)
+            .create_async()
+            .await;
+        let url = server.url();
+        let select = || Selection {
+            only: vec![ClientId::Rustup],
+            skip: vec![],
+        };
+        let args = || ServerArgs {
+            registry: vec![],
+            insecure_http: false,
+            allow_foreign_hosts: false,
+        };
+
+        let apply = SetupCommand::Apply {
+            yes: false,
+            select: select(),
+            server: args(),
+            maven_mirror_of: None,
+            shell_rc: ShellRc::None,
+            json: true,
+        };
+        assert_eq!(run(apply, Some(&url), None).await.unwrap(), 0);
+        let status = SetupCommand::Status {
+            select: select(),
+            server: args(),
+            json: true,
+        };
+        assert!(matches!(
+            run(status, Some(&url), None).await.unwrap(),
+            0 | 3
+        ));
+        let env = SetupCommand::Env {
+            shell: EnvShell::Fish,
+            select: select(),
+            server: args(),
+        };
+        assert_eq!(run(env, Some(&url), None).await.unwrap(), 0);
+        let remove = SetupCommand::Remove {
+            yes: false,
+            select: select(),
+            json: true,
+        };
+        assert_eq!(run(remove, Some(&url), None).await.unwrap(), 0);
     }
 
     #[tokio::test]

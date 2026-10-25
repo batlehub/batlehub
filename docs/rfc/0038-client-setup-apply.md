@@ -13,7 +13,7 @@ reference: true
 | Co-author   | Claude Opus 5.5 <noreply@anthropic.com>                       |
 | Created     | 2026-10-24                                                    |
 | Supersedes  | —                                                             |
-| Touches     | `cli`, `crates/web` (registry list, phase 2), `docs` |
+| Touches     | `cli`, `crates/web` (registry list, phase 2), `tests/heavy`, `.github/workflows`, `docs` |
 
 ---
 
@@ -644,8 +644,76 @@ None.
 
 | Phase | Content |
 | --- | --- |
-| 1 | `client_setup.rs`, the moved renderers, `setup apply|status|remove|env` for every client of §4.2 except `generic`-derived mise rules; unit, rendered-block and integration tests; heavy cases 1–10; docs: `docs/use/cli.md` (the verbs, the override limit of §4.3), `docs/operations/air-gap.md` (provisioning a fleet with `apply`), the Setup Guide page pointing at `setup apply`. **Ships on its own.** |
+| 1 | **Built, PR #243.** `client_setup.rs`, the moved renderers, `setup apply|status|remove|env` for every client of §4.2 except `generic`-derived mise rules; unit, rendered-block and integration tests; heavy cases 1–10; docs: `docs/use/cli.md` (the verbs, the override limit of §4.3), `docs/operations/air-gap.md` (provisioning a fleet with `apply`), the Setup Guide page pointing at `setup apply`. **Ships on its own.** |
 | 2 | `upstreams` on `GET /api/v1/registries` (§6.4), the `generic` mise rules it unlocks, the regenerated OpenAPI client, and the mise row of `docs/use/cli.md` updated |
+
+---
+
+## 13. Revision against the tree (2026-10-25)
+
+Phase 1 is built (PR #243): `cli/src/api/client_setup.rs`, the four verbs in
+`cli/src/cli/setup.rs`, and `tests/heavy/client_setup.sh` green locally on its
+nine cases. Phase 2 is not started. Where the built thing differs from the
+text above, each difference is deliberate:
+
+- **`--maven-mirror-of central|external|all`**, not `central|external:*|*`.
+  The `<mirrorOf>` values themselves are globs to the shell: unquoted, `*`
+  expanded to the directory listing, and bash and fish completion offered file
+  names for both. The marker still records the real value (`mirror-of=*`).
+- **node writes four variables**, not `NODEJS_ORG_MIRROR` alone: nvm, fnm and
+  n each read their own (`NVM_NODEJS_ORG_MIRROR`, `FNM_NODE_DIST_MIRROR`,
+  `N_NODE_MIRROR`), as the console's `nodedist` snippet already prints. §4.2's
+  table was wrong about nvm and fnm.
+- **fish has no `env.fish`.** `conf.d/batlehub.fish` carries the `set -gx`
+  lines itself, and is only planned when the login shell is fish (or one is
+  already there for `remove` to take out).
+- **pip on macOS** is written where pip reads it: `~/Library/Application
+  Support/pip/pip.conf` when that directory exists, `~/.config/pip` otherwise.
+  pip reads *only* the Library directory when it exists, so resolution 30's
+  "conflict on the Library file" would have reported a file that a correct
+  `~/.config` block could never beat. The legacy `~/.pip/pip.conf` is loaded
+  *before* the user file, so it cannot override the block and is not checked.
+- **yarn trusts a plain-HTTP registry.** Found by heavy case 2: yarn 4.18.1
+  refuses one with `YN0081: Unsafe http requests must be explicitly whitelisted
+  in your configuration (127.0.0.1)`. `apply` writes `http://` only for
+  loopback or `--insecure-http`, and in those cases the yarn block now adds
+  `unsafeHttpWhitelist` for the host; a user-owned `unsafeHttpWhitelist` is a
+  conflict, since YAML refuses a key twice.
+- **The registry list is fetched without a token**, whatever the profile
+  holds — that is what makes §4.4's "a closed registry is never written" true
+  for a logged-in user too.
+- **`status` prints one row per file**, with the clients that share it
+  (`npm,pnpm  up-to-date  …  ~/.npmrc`), not one row per client.
+- **`setup detect` changed its output**, against §9's "byte for byte": nine of
+  its ten snippets pointed at routes the server does not serve (`/npm/`,
+  `/cargo/`, `/pypi/`, `/maven/`, `/gems/`, `/composer/`, `/terraform/`,
+  `/conda/`, `GOPROXY=…/go,direct`). They now match the console; cargo, npm,
+  pip and go come from `client_setup::render_body`, as §6.2 intended.
+- **Shell completion was fixed on the way.** `batlehub-cli completion bash`
+  completed nothing below the first word — clap_complete 4.6.11 names its
+  dispatch arms `batlehub__subcmd__cli__…` and its state machine
+  `batlehub__cli__…` for a binary with a `-` in it — and fish never completed
+  a positional. `cli/src/cli/completion.rs` closes both.
+- **Detection runs the binary only for yarn and go.** Everything else is "an
+  executable file on `PATH`", so a dead mise shim (a tool uninstalled under
+  it) counts as installed. Writing that client's file is harmless; it is a
+  known ceiling, not fixed.
+
+**What the heavy suite observed**, against §6.5's list:
+
+- Cases 8 and 9 of §6.5 (a second npm registry; a local one beside it) are one
+  case, and case 10 (orphaned) is case 9; both are driven by a hot reload of
+  the server's config (`registries[*]` is `partial`), not by a restart.
+- go: with `GOSUMDB` unset, `GET /proxy/<go>/sumdb/sum.golang.org/supported`
+  answered 200 and every `lookup/` and `tile/` request followed it — §4.2's
+  "no GOSUMDB line" holds on go 1.27.2.
+- rustup is driven through `bash -i`, so the whole `--shell-rc` chain is what
+  is proved: `~/.bashrc` → `env.sh` → `RUSTUP_DIST_SERVER`.
+- Maven reads `${user.home}/.m2`, and Java takes `user.home` from the password
+  database, not `$HOME`: the suite passes `-Duser.home`. A real login has the
+  two agree.
+- Not driven: bun (the same `~/.npmrc` block npm and pnpm prove) and a node
+  runtime install (`closed_world.sh` §11 drives nvm).
 
 ---
 

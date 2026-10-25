@@ -843,56 +843,120 @@ const MISE_TYPES: [&str; 5] = ["github", "forgejo", "npm", "cargo", "openvsx"];
 
 /// The plan for every file, from the registry list and the machine.
 pub fn plan(registries: &[RegistryInfo], opts: &Options, env: &Env) -> Result<Vec<TargetPlan>> {
-    let marked = marked_registries(env);
+    let mut ctx = PlanCtx {
+        registries,
+        opts,
+        env,
+        marked: marked_registries(env),
+        env_vars: Vec::new(),
+        env_regs: Vec::new(),
+    };
     let mut out = Vec::new();
-    let mut env_vars: Vec<(String, String)> = Vec::new();
-    let mut env_regs: Vec<String> = Vec::new();
-
     for id in ALL_TARGETS {
-        let Some(t) = id.target(env) else { continue };
+        if let Some(t) = id.target(env) {
+            out.extend(ctx.plan_target(id, &t)?);
+        }
+    }
+    Ok(out)
+}
+
+/// What [`plan`] carries from one target to the next: the env-only variables
+/// `env.sh` resolves, which the fish drop-in and the rc block then reuse.
+struct PlanCtx<'a> {
+    registries: &'a [RegistryInfo],
+    opts: &'a Options<'a>,
+    env: &'a Env,
+    marked: BTreeSet<String>,
+    env_vars: Vec<(String, String)>,
+    env_regs: Vec<String>,
+}
+
+/// A target file as read: its content, the marker of its managed part, and
+/// the part the user owns.
+struct ReadTarget {
+    current: Option<String>,
+    managed: Option<Marker>,
+    user: String,
+}
+
+fn read_target(t: &Target) -> Result<ReadTarget> {
+    let current = match std::fs::read_to_string(&t.path) {
+        Ok(s) => Some(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e).with_context(|| format!("reading {}", t.path.display())),
+    };
+    let content = current.as_deref().unwrap_or("");
+    let (managed, user) = match t.shape {
+        Shape::Block => {
+            let span = find_block(content, t.comment).with_context(|| {
+                format!("{}: fix it by hand or run `setup remove`", t.path.display())
+            })?;
+            (span.map(|s| s.marker), user_part(content, t.comment)?)
+        }
+        Shape::DropIn => match drop_in_marker(content, t.comment) {
+            Some(m) => (Some(m), String::new()),
+            None => (None, content.to_owned()),
+        },
+    };
+    Ok(ReadTarget {
+        current,
+        managed,
+        user,
+    })
+}
+
+/// The registry types a target needs: one for most, every type mise rewrites
+/// for, and one per installed env-only client.
+fn target_types(id: TargetId, installed: &[ClientId]) -> Vec<&'static str> {
+    match id {
+        TargetId::Cargo => vec!["cargo"],
+        TargetId::Npmrc | TargetId::Yarnrc => vec!["npm"],
+        TargetId::Pip | TargetId::Uv => vec!["pypi"],
+        TargetId::Go => vec!["goproxy"],
+        TargetId::Maven => vec!["maven"],
+        TargetId::Mise => MISE_TYPES.to_vec(),
+        TargetId::EnvSh | TargetId::Fish | TargetId::ShellRc => installed
+            .iter()
+            .map(|c| match c {
+                ClientId::Rustup => "rustup",
+                _ => "nodedist",
+            })
+            .collect(),
+    }
+}
+
+type Chosen<'a> = Vec<(&'static str, &'a RegistryInfo)>;
+
+impl<'a> PlanCtx<'a> {
+    fn plan_target(&mut self, id: TargetId, t: &Target) -> Result<Option<TargetPlan>> {
         let clients: Vec<ClientId> = id
-            .clients(env)
+            .clients(self.env)
             .into_iter()
-            .filter(|c| opts.selects(*c))
+            .filter(|c| self.opts.selects(*c))
             .collect();
         if clients.is_empty() {
-            continue;
+            return Ok(None);
         }
         let installed: Vec<ClientId> = clients
             .iter()
             .copied()
-            .filter(|c| env.installed.contains(c))
+            .filter(|c| self.env.installed.contains(c))
             .collect();
-
-        let current = match std::fs::read_to_string(&t.path) {
-            Ok(s) => Some(s),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => return Err(e).with_context(|| format!("reading {}", t.path.display())),
-        };
+        let read = read_target(t)?;
         // The fish drop-in is only a candidate under fish; elsewhere it shows
         // up only when one is already there to take out.
-        if id == TargetId::Fish && env.shell.as_deref() != Some("fish") && current.is_none() {
-            continue;
+        if id == TargetId::Fish
+            && self.env.shell.as_deref() != Some("fish")
+            && read.current.is_none()
+        {
+            return Ok(None);
         }
-        let content = current.as_deref().unwrap_or("");
-        let (managed, user) = match t.shape {
-            Shape::Block => {
-                let span = find_block(content, t.comment).with_context(|| {
-                    format!("{}: fix it by hand or run `setup remove`", t.path.display())
-                })?;
-                (span.map(|s| s.marker), user_part(content, t.comment)?)
-            }
-            Shape::DropIn => match drop_in_marker(content, t.comment) {
-                Some(m) => (Some(m), String::new()),
-                None => (None, content.to_owned()),
-            },
-        };
 
         let mut p = TargetPlan {
             target: id,
             path: t.path.clone(),
             clients: if installed.is_empty() {
-                clients.clone()
+                clients
             } else {
                 installed.clone()
             },
@@ -900,99 +964,71 @@ pub fn plan(registries: &[RegistryInfo], opts: &Options, env: &Env) -> Result<Ve
             registries: Vec::new(),
             detail: None,
             snippet: None,
-            current: current.clone(),
+            current: read.current.clone(),
             next: None,
             env: Vec::new(),
         };
         if installed.is_empty() {
-            out.push(p);
-            continue;
+            return Ok(Some(p));
         }
 
-        // ── which registries ──
-        let types: Vec<&str> = match id {
-            TargetId::Cargo => vec!["cargo"],
-            TargetId::Npmrc | TargetId::Yarnrc => vec!["npm"],
-            TargetId::Pip | TargetId::Uv => vec!["pypi"],
-            TargetId::Go => vec!["goproxy"],
-            TargetId::Maven => vec!["maven"],
-            TargetId::Mise => MISE_TYPES.to_vec(),
-            TargetId::EnvSh | TargetId::Fish | TargetId::ShellRc => installed
-                .iter()
-                .map(|c| {
-                    if *c == ClientId::Rustup {
-                        "rustup"
-                    } else {
-                        "nodedist"
-                    }
-                })
-                .collect(),
-        };
-        let mut chosen: Vec<(&str, &RegistryInfo)> = Vec::new();
-        let mut ambiguous: Vec<String> = Vec::new();
-        for ty in &types {
-            match resolve(ty, registries, &opts.picks, &marked)? {
-                Resolution::One(r) => chosen.push((ty, r)),
-                Resolution::None => {}
-                Resolution::Ambiguous(names) => {
-                    ambiguous.push(format!("{ty}: {}", names.join(", ")));
-                }
-            }
-        }
+        let (chosen, ambiguous) = self.resolve_types(&target_types(id, &installed))?;
         p.registries = chosen.iter().map(|(_, r)| r.name.clone()).collect();
         p.registries.dedup();
-
         if !ambiguous.is_empty() {
             p.state = State::Ambiguous;
             p.detail = Some(format!(
                 "several candidates — pick with --registry <type>=<name> ({})",
                 ambiguous.join("; ")
             ));
-            out.push(p);
-            continue;
+            return Ok(Some(p));
         }
 
-        // ── the body ──
         let mut marker = Marker {
             registries: p.registries.clone(),
             ..Marker::default()
         };
-        let body = match id {
-            TargetId::EnvSh | TargetId::Fish | TargetId::ShellRc => {
-                if id == TargetId::EnvSh {
-                    for (ty, r) in &chosen {
-                        let base = base_url(r, opts.server, opts.allow_foreign_hosts)?;
-                        env_vars.extend(env_vars_for(ty, &base));
-                    }
-                    env_regs.clone_from(&p.registries);
-                }
-                p.env.clone_from(&env_vars);
-                p.registries.clone_from(&env_regs);
-                marker.registries.clone_from(&env_regs);
-                if env_vars.is_empty() {
-                    None
-                } else {
-                    match id {
-                        TargetId::EnvSh => Some(render_env(&env_vars, EnvShell::Sh)),
-                        TargetId::Fish
-                            if opts.shell_rc == ShellRc::Auto
-                                && env.shell.as_deref() == Some("fish") =>
-                        {
-                            Some(render_env(&env_vars, EnvShell::Fish))
-                        }
-                        TargetId::ShellRc if opts.shell_rc == ShellRc::Auto => {
-                            let path = shell_quote(&env_sh_path(env).to_string_lossy());
-                            Some(format!("[ -r {path} ] && . {path}"))
-                        }
-                        _ => None,
-                    }
+        let body = self.body(id, &chosen, &read, &mut marker, &mut p)?;
+        self.finish(p, t, &read, marker, body).map(Some)
+    }
+
+    fn resolve_types(&self, types: &[&'static str]) -> Result<(Chosen<'a>, Vec<String>)> {
+        let mut chosen = Vec::new();
+        let mut ambiguous = Vec::new();
+        for ty in types {
+            match resolve(ty, self.registries, &self.opts.picks, &self.marked)? {
+                Resolution::One(r) => chosen.push((*ty, r)),
+                Resolution::None => {}
+                Resolution::Ambiguous(names) => {
+                    ambiguous.push(format!("{ty}: {}", names.join(", ")));
                 }
             }
-            TargetId::Mise if chosen.is_empty() => None,
+        }
+        Ok((chosen, ambiguous))
+    }
+
+    fn base(&self, r: &RegistryInfo) -> Result<String> {
+        base_url(r, self.opts.server, self.opts.allow_foreign_hosts)
+    }
+
+    /// The managed block's body, or `None` when there is nothing to write.
+    fn body(
+        &mut self,
+        id: TargetId,
+        chosen: &Chosen<'_>,
+        read: &ReadTarget,
+        marker: &mut Marker,
+        p: &mut TargetPlan,
+    ) -> Result<Option<String>> {
+        match id {
+            TargetId::EnvSh | TargetId::Fish | TargetId::ShellRc => {
+                self.env_body(id, chosen, marker, p)
+            }
+            TargetId::Mise if chosen.is_empty() => Ok(None),
             TargetId::Mise => {
                 let mut body = String::from("[settings.url_replacements]\n");
-                for (ty, r) in &chosen {
-                    let base = base_url(r, opts.server, opts.allow_foreign_hosts)?;
+                for (ty, r) in chosen {
+                    let base = self.base(r)?;
                     for (pattern, replacement) in typed_url_replacements(ty) {
                         push_replacement(
                             &mut body,
@@ -1001,61 +1037,104 @@ pub fn plan(registries: &[RegistryInfo], opts: &Options, env: &Env) -> Result<Ve
                         );
                     }
                 }
-                Some(body)
+                Ok(Some(body))
             }
-            _ => match chosen.first() {
-                None => None,
-                Some(&(_, r)) => {
-                    let base = base_url(r, opts.server, opts.allow_foreign_hosts)?;
-                    if id == TargetId::Maven {
-                        let mirror_of = opts
-                            .maven_mirror_of
-                            .map(|m| m.mirror_of().to_owned())
-                            .or_else(|| managed.as_ref().and_then(|m| m.mirror_of.clone()))
-                            .unwrap_or_else(|| "central".to_owned());
-                        marker.mirror_of = Some(mirror_of.clone());
-                        Some(render_maven(&r.name, &base, &mirror_of))
-                    } else {
-                        Some(render_body(id, &base))
-                    }
+            _ => {
+                let Some(&(_, r)) = chosen.first() else {
+                    return Ok(None);
+                };
+                let base = self.base(r)?;
+                if id != TargetId::Maven {
+                    return Ok(Some(render_body(id, &base)));
                 }
-            },
-        };
+                let mirror_of = self
+                    .opts
+                    .maven_mirror_of
+                    .map(|m| m.mirror_of().to_owned())
+                    .or_else(|| read.managed.as_ref().and_then(|m| m.mirror_of.clone()))
+                    .unwrap_or_else(|| "central".to_owned());
+                let body = render_maven(&r.name, &base, &mirror_of);
+                marker.mirror_of = Some(mirror_of);
+                Ok(Some(body))
+            }
+        }
+    }
 
+    /// `env.sh` resolves the variables; the fish drop-in and the rc block,
+    /// planned after it, reuse them.
+    fn env_body(
+        &mut self,
+        id: TargetId,
+        chosen: &Chosen<'_>,
+        marker: &mut Marker,
+        p: &mut TargetPlan,
+    ) -> Result<Option<String>> {
+        if id == TargetId::EnvSh {
+            for (ty, r) in chosen {
+                let base = self.base(r)?;
+                self.env_vars.extend(env_vars_for(ty, &base));
+            }
+            self.env_regs.clone_from(&p.registries);
+        }
+        p.env.clone_from(&self.env_vars);
+        p.registries.clone_from(&self.env_regs);
+        marker.registries.clone_from(&self.env_regs);
+        if self.env_vars.is_empty() {
+            return Ok(None);
+        }
+        let auto = self.opts.shell_rc == ShellRc::Auto;
+        Ok(match id {
+            TargetId::EnvSh => Some(render_env(&self.env_vars, EnvShell::Sh)),
+            TargetId::Fish if auto && self.env.shell.as_deref() == Some("fish") => {
+                Some(render_env(&self.env_vars, EnvShell::Fish))
+            }
+            TargetId::ShellRc if auto => {
+                let path = shell_quote(&env_sh_path(self.env).to_string_lossy());
+                Some(format!("[ -r {path} ] && . {path}"))
+            }
+            _ => None,
+        })
+    }
+
+    /// The state, and the file's next content, once the body is known.
+    fn finish(
+        &self,
+        mut p: TargetPlan,
+        t: &Target,
+        read: &ReadTarget,
+        mut marker: Marker,
+        body: Option<String>,
+    ) -> Result<TargetPlan> {
+        let content = read.current.as_deref().unwrap_or("");
         let Some(body) = body else {
-            p.state = if managed.is_some() {
-                State::Orphaned
-            } else {
-                State::NoRegistry
-            };
-            if managed.is_some() {
+            p.state = State::NoRegistry;
+            if read.managed.is_some() {
+                p.state = State::Orphaned;
                 p.next = match t.shape {
                     Shape::DropIn => None,
                     Shape::Block => unsplice(content, t.comment)?,
                 };
             }
-            out.push(p);
-            continue;
+            return Ok(p);
         };
 
-        // ── a setting the user owns ──
-        let rc_user = rc_user_part(env)?;
+        let rc_user = rc_user_part(self.env)?;
+        let unmanaged_file = read.current.is_some() && read.managed.is_none();
         if let Some(why) = conflict(
-            id,
-            &t,
-            current.is_some() && managed.is_none(),
-            &user,
-            env,
+            p.target,
+            t,
+            unmanaged_file,
+            &read.user,
+            self.env,
             &rc_user,
             &p.env,
         )?
-        .or_else(|| yaml_key_clash(&t.path, &user, &body))
+        .or_else(|| yaml_key_clash(&t.path, &read.user, &body))
         {
             p.state = State::Conflict;
             p.detail = Some(why);
             p.snippet = Some(body);
-            out.push(p);
-            continue;
+            return Ok(p);
         }
 
         let next = match t.shape {
@@ -1063,17 +1142,16 @@ pub fn plan(registries: &[RegistryInfo], opts: &Options, env: &Env) -> Result<Ve
                 marker.created = true;
                 render_drop_in(&marker, t.comment, &body)
             }
-            Shape::Block => splice(current.as_deref(), t.comment, marker, &body)?,
+            Shape::Block => splice(read.current.as_deref(), t.comment, marker, &body)?,
         };
-        p.state = match (&current, managed.is_some()) {
+        p.state = match (&read.current, read.managed.is_some()) {
             (Some(c), true) if *c == next => State::UpToDate,
             (_, true) => State::Drifted,
             (_, false) => State::Absent,
         };
         p.next = Some(next);
-        out.push(p);
+        Ok(p)
     }
-    Ok(out)
 }
 
 /// A top-level YAML key the block would add and the user's part already has
@@ -2006,6 +2084,104 @@ mod tests {
         assert_eq!(
             std::fs::metadata(&real).unwrap().permissions().mode() & 0o777,
             0o600
+        );
+    }
+
+    #[test]
+    fn output_within_reads_stdout_and_kills_a_hang() {
+        let mut ok = Command::new("sh");
+        ok.args(["-c", "echo 4.18.1"]);
+        assert_eq!(
+            output_within(&mut ok, Duration::from_secs(5)).as_deref(),
+            Some("4.18.1\n")
+        );
+        let mut fails = Command::new("sh");
+        fails.args(["-c", "exit 1"]);
+        assert_eq!(output_within(&mut fails, Duration::from_secs(5)), None);
+        let mut hangs = Command::new("sleep");
+        hangs.arg("5");
+        let started = Instant::now();
+        assert_eq!(output_within(&mut hangs, Duration::from_millis(100)), None);
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "the hung child was waited out"
+        );
+        assert_eq!(
+            output_within(
+                &mut Command::new("/nonexistent/bin"),
+                Duration::from_secs(1)
+            ),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn on_path_needs_an_executable_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new().unwrap();
+        let bin = dir.path().join("npm");
+        std::fs::write(&bin, "#!/bin/sh\n").unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+        assert!(!on_path("npm", &path), "not executable yet");
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(on_path("npm", &path));
+        assert!(!on_path("cargo", &path));
+        std::fs::create_dir(dir.path().join("go")).unwrap();
+        assert!(!on_path("go", &path), "a directory is not a binary");
+    }
+
+    #[test]
+    fn env_from_process_always_has_node() {
+        let env = Env::from_process().unwrap();
+        assert!(env.installed.contains(&ClientId::Node));
+        assert!(env.config_dir.is_absolute());
+        // yarn is kept only when it could say its version.
+        assert_eq!(
+            env.installed.contains(&ClientId::Yarn),
+            env.yarn_major.is_some()
+        );
+    }
+
+    #[test]
+    fn pip_dir_is_the_xdg_one_off_macos() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("Library/Application Support/pip")).unwrap();
+        let got = pip_dir(dir.path(), &dir.path().join(".config"));
+        if cfg!(target_os = "macos") {
+            assert!(got.ends_with("Library/Application Support/pip"));
+        } else {
+            assert_eq!(got, dir.path().join(".config/pip"));
+        }
+    }
+
+    #[test]
+    fn parse_picks_takes_type_equals_name() {
+        let picks = parse_picks(&["npm=a".to_owned(), "cargo=b".to_owned()]).unwrap();
+        assert_eq!(picks.get("npm").map(String::as_str), Some("a"));
+        for bad in ["npm", "=a", "npm="] {
+            assert!(parse_picks(&[bad.to_owned()]).is_err(), "{bad}");
+        }
+        let regs = vec![reg("a", "npm", "proxy")];
+        let picks = parse_picks(&["npm=nope".to_owned()]).unwrap();
+        assert!(resolve("npm", &regs, &picks, &BTreeSet::new()).is_err());
+    }
+
+    #[test]
+    fn a_fish_shell_gets_the_conf_d_file_and_no_rc_block() {
+        let dir = TempDir::new().unwrap();
+        let mut env = env_in(dir.path(), &[ClientId::Rustup]);
+        env.shell = Some("fish".to_owned());
+        let plans = plan(&[reg("r", "rustup", "proxy")], &opts(), &env).unwrap();
+        let fish = find(&plans, TargetId::Fish);
+        assert!(fish
+            .next
+            .as_deref()
+            .unwrap()
+            .contains("set -gx RUSTUP_DIST_SERVER 'https://hub.example.com/proxy/r/rustup'"));
+        assert!(
+            plans.iter().all(|p| p.target != TargetId::ShellRc),
+            "fish has no rc block"
         );
     }
 
