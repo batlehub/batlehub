@@ -245,7 +245,9 @@ async function copy(key: string, text: string) {
       <!-- One command writes every snippet below for the clients on PATH
            (RFC 0038); the tabs stay for the client it does not cover. -->
       <p class="mb-4 rounded-lg border p-4 text-sm text-muted-foreground">
-        <i18n-t keypath="setupGuide.setupApplyNote" tag="span">
+        <!-- The box spans the page; its text keeps a reading measure
+             (the rendered gate's line-length rule, ~80 characters). -->
+        <i18n-t keypath="setupGuide.setupApplyNote" tag="span" class="block max-w-[60ch]">
           <template #apply
             ><code class="font-mono text-foreground">batlehub-cli setup apply</code></template
           >

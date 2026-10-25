@@ -19,9 +19,11 @@ aws-config = {
   features = ["default-https-client", "credentials-process", "rt-tokio"],
   optional = true
 }
+# No `sigv4a`: it pulls crypto-bigint 0.5 (RUSTSEC-2026-0387, no 0.5 fix) and
+# only signs for S3 Multi-Region Access Points. See deny.toml.
 aws-sdk-s3 = {
   workspace = true,
-  features = ["default-https-client", "http-1x", "rt-tokio", "sigv4a"],
+  features = ["default-https-client", "http-1x", "rt-tokio"],
   optional = true
 }
 base64.workspace = true
