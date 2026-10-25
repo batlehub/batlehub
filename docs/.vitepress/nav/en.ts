@@ -380,6 +380,14 @@ export const sidebar = {
           text: "0034 — full-ICU node",
           link: "/rfc/0034-full-icu-node",
         },
+        {
+          text: "0038 — client setup apply",
+          link: "/rfc/0038-client-setup-apply",
+        },
+        {
+          text: "0039 — Devfile publish",
+          link: "/rfc/0039-devfile-local-mode",
+        },
       ],
     },
     {
