@@ -534,6 +534,62 @@ pub async fn browsable_registries(
         .collect()
 }
 
+/// The registries this caller can **install** from: it holds, at registry
+/// level, every verb in [`RegistryKind::install_actions`] for that registry's
+/// kind (RFC 0038 §4.4 — `setup apply` never writes a URL that will 401).
+///
+/// # A ceiling, not a floor
+///
+/// Resolved over the instance and registry nodes only — the path
+/// [`authorize_grants`] walks before its short-circuit — so a `true` here is a
+/// `true` there for every package of the registry, with two exceptions that live
+/// below the registry: a namespace that seals (§4.3) and a package whose
+/// visibility is private. In the other direction, a package- or
+/// namespace-level grant can open a package on a registry answered `false`
+/// here; that caller can install that package but not "from the registry".
+///
+/// An active shadow on the path answers `true`, because enforcement serves
+/// through it (§4.7).
+///
+/// # Keyed by the registries that have a hierarchy
+///
+/// One entry per registry in `hot.grants`, `true` or `false`. A registry with
+/// no hierarchy is **absent** rather than `false`, because the two answers
+/// differ: [`authorize_grants`] lets every read through on one (an unknown
+/// registry is a routing question), so it *is* installable, but nothing here
+/// says the caller was granted it — a caller that widens a listing on this
+/// answer must not do so on absence (survey finding 2's shape, as in
+/// [`browsable_registries`]).
+///
+/// [`RegistryKind::install_actions`]: crate::entities::RegistryKind::install_actions
+pub async fn installable_registries(
+    hot: &HotConfigLock,
+    identity: &Identity,
+) -> std::collections::HashMap<String, bool> {
+    let (instance, grants) = {
+        let hot = hot.read().await;
+        (hot.instance.clone(), hot.grants.clone())
+    };
+    let subject = crate::entities::Subject::Identity(identity.clone());
+
+    grants
+        .iter()
+        .map(|(name, registry)| {
+            let mut path: Vec<crate::entities::Node> =
+                instance.iter().map(|n| (**n).clone()).collect();
+            path.push(registry.registry.clone());
+            let held = crate::entities::resolve(&path, &subject);
+            let installable = active_shadow(&path).is_some()
+                || registry
+                    .kind
+                    .install_actions()
+                    .iter()
+                    .all(|a| held.holds(*a));
+            (name.clone(), installable)
+        })
+        .collect()
+}
+
 /// The first node on the path whose shadow is still in force today.
 fn active_shadow(path: &[crate::entities::Node]) -> Option<&crate::entities::Node> {
     let today = chrono::Utc::now().date_naive();
@@ -1556,5 +1612,66 @@ mod instance_tier_tests {
         )
         .await
         .is_err());
+    }
+
+    // ── installable_registries (RFC 0038 §4.4) ───────────────────────────────
+
+    async fn installable(hot: &HotConfigLock, who: &Identity) -> bool {
+        installable_registries(hot, who).await.get("reg") == Some(&true)
+    }
+
+    /// `rbac.anonymous = ["releases:read"]` on npm: the packument loads, the
+    /// tarball (`source:read`) does not — so the registry is not installable,
+    /// even though the legacy listing filter shows it.
+    #[tokio::test]
+    async fn legacy_releases_read_alone_does_not_make_npm_installable() {
+        use crate::services::authz::translate::{translate_rbac, RbacSnapshot, WriteMode};
+        let rbac = |anonymous: Vec<Action>| {
+            let map = translate_rbac(
+                &RbacSnapshot {
+                    anonymous,
+                    ..Default::default()
+                },
+                WriteMode::Refuses,
+            )
+            .expect("translates");
+            hot(
+                None,
+                Some(Node::new(Tier::Registry, "registry:reg", Some(map))),
+            )
+        };
+        let anon = Identity::anonymous();
+        assert!(!installable(&rbac(vec![Action::ReleasesRead]), &anon).await);
+        assert!(installable(&rbac(vec![Action::ReleasesRead, Action::SourceRead]), &anon).await);
+    }
+
+    /// A grant at the instance tier reaches the registry, and only its subject.
+    #[tokio::test]
+    async fn an_instance_grant_makes_a_registry_installable_for_its_subject_only() {
+        let hot = hot(
+            Some(node(
+                Tier::Instance,
+                "instance",
+                Role::User,
+                RegistryKind::Npm.install_actions(),
+            )),
+            Some(irrelevant_registry()),
+        );
+        assert!(installable(&hot, &identity(Role::User)).await);
+        assert!(!installable(&hot, &Identity::anonymous()).await);
+    }
+
+    /// No hierarchy is no entry (enforcement allows, but nothing was granted);
+    /// an active shadow serves, so yes.
+    #[tokio::test]
+    async fn absence_is_no_entry_and_an_active_shadow_allows() {
+        let anon = Identity::anonymous();
+        assert!(installable_registries(&hot(None, None), &anon)
+            .await
+            .is_empty());
+        let shadowed = irrelevant_registry().shadowed(Some(crate::entities::DryRun {
+            until: chrono::Utc::now().date_naive() + chrono::Duration::days(7),
+        }));
+        assert!(installable(&hot(None, Some(shadowed)), &anon).await);
     }
 }

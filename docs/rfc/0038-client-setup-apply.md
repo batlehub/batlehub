@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Draft                                                         |
+| Status      | In review                                                     |
 | Short       | client setup apply                                            |
 | Settles     | How a machine is pointed at an instance in one command: the CLI writes, checks and removes every package-manager client's user configuration from the server's registry list |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -113,7 +113,7 @@ and with what, follows from the registry list at the moment it runs.
 - One command configures every installed client that has a matching registry
   on the instance, from the server's registry list, at user level.
 - Idempotent: a second `apply --yes` on an up-to-date machine writes nothing,
-  including when the first run was given `--registry` or `--maven-mirror-of`
+  including when the first run was given `--pick` or `--maven-mirror-of`
   and the second was not.
 - Never edits a setting the user owns: a conflict is reported, not merged.
 - Reversible: `remove` returns every touched file to its pre-`apply` content,
@@ -151,7 +151,7 @@ and with what, follows from the registry list at the moment it runs.
 
 ```text
 batlehub setup apply  [--yes] [--only <client>,…] [--skip <client>,…]
-                      [--registry <type>=<name>]… [--maven-mirror-of central|external:*|*]
+                      [--pick <type>=<name>]… [--maven-mirror-of central|external:*|*]
                       [--shell-rc auto|none] [--insecure-http] [--allow-foreign-hosts]
                       [--json]
 batlehub setup status [--only …] [--json]
@@ -162,7 +162,7 @@ batlehub setup env    [--shell sh|fish] [--only …]
 - `apply` without `--yes` prints a unified diff per file and exits without
   writing. `--yes` writes. There is no interactive prompt.
 - `--only` / `--skip` take client ids from the table in §4.2.
-- `--registry type=name` picks a registry when the instance serves several
+- `--pick type=name` picks a registry when the instance serves several
   candidates of one type (§4.4, *Candidates*). The pick is recorded in the
   block's marker and kept by later runs without the flag; passing the flag
   again overrides it.
@@ -181,7 +181,8 @@ batlehub setup env    [--shell sh|fish] [--only …]
 - `setup env` renders the variables from the same plan as `apply`, from the
   server — not by reading back `env.sh` — so `eval "$(batlehub setup env)"`
   works on a machine `apply` never ran on. With the server unreachable it
-  prints nothing and exits 1, so the `eval` sets nothing.
+  prints nothing and exits 1, so the `eval` sets nothing. *(Revised in §13:
+  it falls back to an unedited `env.sh` on disk.)*
 - The server is resolved like every other command: `--server`,
   `BATLEHUB_SERVER`, then the active profile's `server_url`. `setup detect`
   today reads only the flag and the variable; the new verbs read the profile
@@ -255,7 +256,7 @@ file cannot disagree (§6.2).
 | `absent` | nothing managed in the target file | writes |
 | `up-to-date` | the managed block/drop-in matches what would be written | nothing |
 | `drifted` | the managed block exists and differs (edited, or the instance changed) | rewrites the block |
-| `orphaned` | the managed block names a registry the instance no longer lists | removes the block (then `absent` or `no-registry`) |
+| `orphaned` | the managed block names a registry the instance no longer lists | keeps the block, exit 3 — fail closed; `remove` or `--pick` settles it (§13, pre-merge review) |
 | `conflict` | something the user owns sets what the block would set | nothing; prints the snippet and the source; exit 3 |
 
 A conflict has two sources. The first is the user's part of the target file —
@@ -303,7 +304,7 @@ it is not running in, and this limit is stated in `docs/use/cli.md`.
 - **Picks belong to the type.** `npm`, `pnpm`, `bun` and `yarn` share one
   pick across `~/.npmrc` and `~/.yarnrc.yml`. The pick is read back from the
   `registry=` field of any block of that type; blocks of one type that name
-  different registries make the type `ambiguous` until `--registry` rewrites
+  different registries make the type `ambiguous` until `--pick` rewrites
   them all.
 - **Markers.** A block starts with
 
@@ -379,7 +380,7 @@ flowchart TD
     E["environment + managed rc file"] --> P
     P --> T["ClientPlan per client:<br/>state, target, desired block, diff"]
     T --> ST["status: print states"]
-    T --> AP["apply: write absent + drifted,<br/>drop orphaned"]
+    T --> AP["apply: write absent + drifted,<br/>keep orphaned"]
     T --> RM["remove: delete managed parts"]
     T --> EN["env: print variables"]
 ```
@@ -400,8 +401,10 @@ state with it, and a hand-deleted block takes its pick with it.
 
 The block bodies are rendered by the functions that already render the printed
 snippets, moved where both callers reach them. No second copy of a snippet is
-introduced, so the RFC 0005-bis drift check (UI ↔ CLI) keeps covering the
-written form too.
+introduced inside the CLI. The RFC 0005-bis drift check compares the console
+with the docs only, not the CLI: what pins the written form to the console's
+URL shapes is the `rendered_blocks` unit test and the heavy suite, which
+drives each client through the written file.
 
 ---
 
@@ -456,7 +459,17 @@ written form too.
 `generic` registries cannot be turned into mise rules from `RegistryInfo`
 today: the rule is `^{upstream}/(.+)` → `{proxy}/$1`, and the list has no
 upstream. `GET /api/v1/registries` gains `upstreams: [string]` for path-addressed
-kinds (`generic`). The values are public facts of the configuration — the hosts
+kinds (`generic`).
+
+The typed rules need the same fact, and the list already has half of it: a
+single `upstream`, named for the kinds the console's catalog caption shows.
+Before merge it gained the four kinds mise rules are written for — `github`,
+`forgejo`, `cargo`, `openvsx` — and `apply` writes a kind's rules only when
+that upstream's host is the public one the rules rewrite (`api.github.com`,
+`codeberg.org`, `registry.npmjs.org`, `crates.io`, `open-vsx.org`). A
+registry in front of another forge, or a server that names no upstream, gets
+no rules and a note: the rules would otherwise send every codeberg.org or
+GitHub download of every mise tool to that forge. The values are public facts of the configuration — the hosts
 a mirror relays — and already visible to an admin; a caller sees them only for
 registries it could already list.
 
@@ -497,14 +510,15 @@ AppArmor profile refuses. What it proves, asserted on the wire transcript
    (`cmp`), including one seeded without a final newline; drop-ins and created
    files gone.
 8. A second `npm` proxy registry added to the instance — `status` says
-   `ambiguous` for `npm`, `pnpm`, `bun`, `yarn`; `apply --yes --registry
+   `ambiguous` for `npm`, `pnpm`, `bun`, `yarn`; `apply --yes --pick
    npm=<name>` writes that one's URL; a following plain `apply --yes` keeps it
    (no mtime moves) and exits 0. Same with `--maven-mirror-of '*'` followed by
    a plain `apply --yes`.
 9. A `local` npm registry added beside the single proxy one — `npm` stays
    `up-to-date` on the proxy, not `ambiguous`.
 10. The registry a block names removed from the instance — `status` says
-    `orphaned`, `apply --yes` removes the block.
+    `orphaned`, `apply --yes` keeps the block and exits 3, `remove --yes`
+    takes it out.
 
 **Deliberately untouched**, so reviewers do not go looking:
 
@@ -616,9 +630,9 @@ AppArmor profile refuses. What it proves, asserted on the wire transcript
 | 9 | TUI | **Out, to Future work** — against the draft, which had a Machine tab. The target is an unattended hook; the CLI's diff, `--only` and `status` cover a human |
 | 10 | `environment.d` for desktop sessions | **No, Future work** — against the draft's recommendation. A third env target that helps only desktop IDEs; the motivating fleet is containers without `systemd --user` |
 | 11 | Pick the `hybrid` registry when it and `proxy` ones compete | **No.** Explicit beats clever; the pick is one flag, once, and is kept (§4.4) |
-| 12 | A block whose registry the instance no longer lists | **A separate `orphaned` state**, removed by `apply --yes`, so a renamed registry does not leave a dead URL in `~/.npmrc` |
+| 12 | A block whose registry the instance no longer lists | **A separate `orphaned` state**, kept by `apply --yes` (exit 3) and removed by `remove` — *revised before merge (§13): removing it failed open* |
 | 13 | Windows | **Linux and macOS in phase 1.** `%APPDATA%` file targets later, no env target |
-| 14 | Where a pick lives | **In the block's marker**, kept by later runs; `--registry` overrides. One pick per type across files |
+| 14 | Where a pick lives | **In the block's marker**, kept by later runs; `--pick` overrides (not `--registry`, the global default-registry flag). One pick per type across files |
 | 15 | A state file | **None.** The marker carries `registry=`, `created`, `nl`, `mirror-of=` |
 | 16 | Which registries are candidates | **`proxy` and `hybrid` only**; a `local` registry cannot be a mirror |
 | 17 | `status` sees only the target file? | **No — overrides count as `conflict`**: known env vars and legacy/platform files per client (§4.3), from the process environment and the managed rc file |
@@ -630,7 +644,7 @@ AppArmor profile refuses. What it proves, asserted on the wire transcript
 | 23 | Maven `<mirrorOf>` | **`--maven-mirror-of central|external:*|*`, default `central`**, kept in the marker — against the draft's `*`, which breaks builds whose POMs declare other repositories |
 | 24 | `GOSUMDB` and `,direct` | **Neither.** `GOPROXY=<url>` alone; the go command already proxies the sumdb through `GOPROXY` |
 | 25 | `status` exit codes | **Same as `apply`**: 0 settled, 3 something to do or look at, 1 error |
-| 26 | `setup env` source | **The server, through `plan()`**; exits 1 and prints nothing when unreachable. `sh` and `fish` only |
+| 26 | `setup env` source | **The unedited `env.sh` on disk** when it is for this server and not overridden, **else the server, through `plan()`**, falling back to that `env.sh` when unreachable (§13 — originally: the server only, exits 1 and prints nothing). `--refresh` and `--pick` always ask. `sh` and `fish` only |
 | 27 | New crates for conflict parsing and snapshots | **None.** `toml` and line scanners; `assert_eq!` instead of snapshots |
 | 28 | Docs | **With the code of each phase**, not a phase of their own |
 
@@ -653,7 +667,9 @@ None.
 
 Phase 1 is built (PR #243): `cli/src/api/client_setup.rs`, the four verbs in
 `cli/src/cli/setup.rs`, and `tests/heavy/client_setup.sh` green locally on its
-nine cases. Phase 2 is not started. Where the built thing differs from the
+nine cases. Phase 2 has its first piece — `upstream` named for the kinds
+mise rules are written for (§6.4) — and the `generic` rules are still to do.
+Where the built thing differs from the
 text above, each difference is deliberate:
 
 - **`--maven-mirror-of central|external|all`**, not `central|external:*|*`.
@@ -714,6 +730,242 @@ text above, each difference is deliberate:
   two agree.
 - Not driven: bun (the same `~/.npmrc` block npm and pnpm prove) and a node
   runtime install (`closed_world.sh` §11 drives nvm).
+
+### Review of PR #243 (2026-10-25)
+
+A max-effort review (`tmp/code-review-pr-243.md`) reproduced fifteen defects
+plus seven below its cap; all are fixed, each with a regression test. What it
+changed in the design above:
+
+- **The pick is `--pick type=name`, not `--registry`.** The global
+  `-r/--registry` (env `BATLEHUB_REGISTRY`) is a bare default-registry name,
+  and clap derives an argument's id from its field name: the subcommand's
+  `--registry` was filled with the global value, so `BATLEHUB_REGISTRY=npm1`
+  broke every verb, `eval "$(batlehub-cli setup env)"` included. clap allows
+  one long name per command, so the flag had to change name.
+- **The marker records `type:name` and a `sum`** (FNV-1a of the body). The
+  type lets a vanished registry be told from a new type: one remaining
+  candidate is switched to with a note, several orphan the block (resolution
+  12 — it used to stay `ambiguous` on its dead URL). The sum tells a block
+  someone edited (`go env -w`, `<servers>` added to `settings.xml`) from one
+  that is only stale: an edited one is `conflict` and left alone, and `remove`
+  leaves an edited drop-in in place. §4.4's "a setting you own is never
+  edited" now holds for what the user changed inside our markers too.
+- **npm's stripped markers are taken back.** `npm config set` and
+  `npm login` rewrite `~/.npmrc` without comments; a bare `registry=` on the
+  server's host is now put back into a block by `apply`, and taken out by
+  `remove` when the server is known — the one line outside a marker pair the
+  module ever edits.
+- **Every URL written is checked as a string**, not as a parse: control,
+  space and quoting characters, credentials, query and fragment are refused,
+  `http` needs loopback or `--insecure-http` like the server itself, and
+  registry names are limited to `[A-Za-z0-9._-]` (no `--` for Maven's XML
+  comment). A `public_url` with a `\n` used to pass the host check and write
+  `script-shell=` into `~/.npmrc`.
+- **A per-file failure is that file's `conflict`.** Only an unknown `--pick`
+  still fails the whole plan; a broken marker, unparseable TOML or a refused
+  URL stops one client. `apply` and `remove` write every other file and
+  report each failure (exit 1). The spliced TOML (cargo, uv, mise) is parsed
+  before it is written.
+- **`--only`/`--skip` select files**: a shared file is touched when one of
+  its clients is selected and none is skipped, and always written for all of
+  them. `--shell-rc none` leaves rc files out of the plan entirely (it used
+  to remove an existing block). The rc block is kept up to date in every rc
+  file that has one, the fish drop-in wherever it exists — `$SHELL` is unset
+  in many hooks.
+- **Nothing is probed that `remove` needs.** go's env file is computed
+  (`$GOENV`, else `os.UserConfigDir()/go/env`) instead of asking `go env`,
+  which downloads a toolchain in a module that wants a newer one; `remove`
+  looks at both rc files whatever the shell.
+- **`env.sh` is never sourced unwritten.** Its override check ignores the
+  values our own `env.sh` exported, and a conflict on it blocks the rc block
+  and the fish drop-in.
+- **mise**: a `nodedist` registry writes `[settings.node] mirror_url` (mise
+  does not read `NODEJS_ORG_MIRROR`), and a global `url_replacements` or
+  `MISE_URL_REPLACEMENTS` — which replace the drop-in's table whole — is a
+  conflict. **Overrides** were narrowed for cargo (only the three keys the
+  block sets) and widened for npm (`npm_config_userconfig`, any case) and uv
+  (`UV_INDEX`, `UV_CONFIG_FILE`, `UV_NO_CONFIG`).
+- **`write_atomic`** creates its temp file with the original's mode under a
+  per-process name, and keeps the owner (RFC §4.4).
+- **`setup env`** plans only the env-only clients, waits 2 s, then prints the
+  `env.sh` on disk; **`setup detect`** prints the crates.io mirror only for a
+  `proxy`/`hybrid` cargo registry.
+
+### Second review loop (2026-10-25)
+
+Four independent reviewers (file-editing correctness, security, resilience
+against the real clients, code quality) found what the first round's fixes
+had introduced or left. What it changed:
+
+- **Adoption is by exact lines, never by host.** The first round took back
+  any `registry=` on the server's host; that rewrote or deleted a user's own
+  line to another registry of the same server, or a verdaccio on another
+  port. `apply` now takes back only the exact lines it would write now
+  (`find_run`), for npm, pip and yarn — the three that rewrite their file
+  without comments — and a section must still be whole. `remove`, which has
+  no registry list, only points such a file out.
+- **An edited block is left alone by `remove` too**, not only by `apply`:
+  `go env -w GOPROXY=…` rewrites the line inside the block, and `remove`
+  used to delete the user's value with it.
+- **`keep_owner` only runs as root.** A non-root run failed with `EPERM`
+  creating any new file in a directory owned by someone else — which is
+  exactly the Che home this was going to be tested in (`/home/user` is
+  `root:root 0777`). It uses `fchown` on the open file, not `chown` by path.
+- **Security**: `,` is refused in URLs (go reads `GOPROXY` as a
+  comma-separated list, a URL parser as one URL on the server's host); the
+  registry list follows a redirect only to `https` on the same host; a
+  symlinked dotfile whose target another user owns is not written through;
+  the `setup env` fallback ignores an edited `env.sh` and prints only the
+  variable names `apply` writes.
+- **`setup env`** prints nothing (exit 3) when `env.sh` is `conflict` or
+  `ambiguous`, falls back to the cached file only when the server cannot be
+  reached, applies `--only`/`--skip` to variables (also in the fallback), and
+  the process exits without waiting for a stuck DNS lookup.
+- **`status --shell-rc`**, so a machine set up with `none` settles; an empty
+  registry list is refused by `apply`/`status` rather than orphaning every
+  block; a `--pick` naming no registry fails even when unused; the marker
+  is ASCII and always `type:name`, and the pick another file recorded settles
+  an ambiguity for its own type only; a file that is not UTF-8 is spliced byte
+  for byte; a dangling dotfile symlink creates its target; an exported value
+  on the server's host (a shell that sourced a since-renamed `env.sh`) is not
+  an override.
+
+### Third review loop (2026-10-25)
+
+Three more reviewers — correctness, security, and an end-to-end run with the
+real clients as tomorrow's tester would do it — on the second loop's code:
+
+- **The rc block goes first in the file** (marker field `top`): the stock
+  Ubuntu `~/.bashrc` returns early for a non-interactive shell, so an
+  appended block reached `bash -i` only — not `bash -lc`, IDE tasks or
+  hooks. The line sources `"$HOME/…/env.sh"` so a moved home still finds it.
+  `$SHELL` unset falls back to the account's shell in `/etc/passwd`;
+  `ZDOTDIR` and `MISE_CONFIG_DIR` are followed. Env-only variables no rc file
+  sources make `apply` exit 3.
+- **Root with a user's `HOME` is refused** for `apply --yes`/`remove --yes`:
+  a symlinked `~/.config` or a dangling `~/.bashrc` link would have root write
+  `/etc/xdg` or `/etc/profile.d`. Checking every path component without libc
+  is not possible; refusing is. `keep_owner` went with it.
+- **The `setup env` fallback** prints only `RUSTUP_DIST_SERVER`,
+  `RUSTUP_UPDATE_ROOT` and the four node names, with plain http(s) values —
+  the marker's sum is no defence, and a forged file with a recomputed sum
+  injected commands into the `eval`. It now falls back whenever the server
+  cannot answer (an empty list included), as documented.
+- **URLs are written as checked**: the parsed form, ASCII only, on the
+  server's explicit port; registry names made of dots are refused (`..`
+  climbed out of `/proxy/`).
+- **Adoption** refuses a section configparser keeps reading past a blank
+  line, and a YAML list continued below the run; `[global] # comment` is the
+  pip section too; a `[global]` holding our `index-url` beside the user's keys
+  is reported as such.
+- **`remove`** deletes a symlink's target and keeps the user's link;
+  `apply` prints why a block was orphaned or switched, and exits 3 when a
+  pick is needed; a read-only file is left alone; a bind-mounted one is
+  written in place.
+
+### Eco-design pass (2026-10-25)
+
+`setup env` is in a shell rc file for every shell `--shell-rc auto` does not
+wire, so it runs at each terminal start — the only verb whose cost repeats.
+It paid two waits of up to 2 s there:
+
+- **`yarn --version`**, run by `Env::from_process` for every verb: it starts
+  node, and `env` plans no yarn target. `env` now skips the probe.
+- **The registry list**, fetched although the `env.sh` `apply` wrote already
+  holds the answer. `env` now prints that file first when `cached_env` trusts
+  it, every URL is on the server's host and port, and no variable already set
+  holds another value (an override the planned path refuses with exit 3).
+  The cost: a registry renamed or added since `apply` is picked up at the
+  next `apply`, or with `--refresh`/`--pick`, which always ask. A machine
+  `apply` never ran on has no `env.sh`, so it still asks.
+
+### Pre-merge review (2026-10-25)
+
+A review against the real clients (pip 26, pnpm 12, mise 2026.10.15) before
+merging. What it changed:
+
+- **Bare lines are never taken over.** The exact lines `apply` would write,
+  found without markers, used to be put back into a block — and a file
+  holding nothing else was marked `created`, so `remove` deleted it. A line
+  the user pasted from the Setup Guide is indistinguishable from one npm
+  stripped, so both now read `up-to-date` and stay the user's; `remove` only
+  points them out. This supersedes "npm's stripped markers are taken back"
+  and the second loop's adoption by exact lines.
+- **mise `node.mirror_url` ends in `/`.** mise `Url::join`s onto it, which
+  dropped `nodedist` and made every node install 404.
+- **`PIP_CONFIG_FILE` naming a file that exists is an override**, whatever
+  it holds: pip then never reads the user file.
+- **npm/pnpm overrides**: `npm_config_*` exported from the managed rc file
+  (any case), `pnpm_config_registry`, and pnpm's global `rc`/`auth.ini`,
+  which pnpm reads over `~/.npmrc`.
+- **An `orphaned` block is kept** (resolution 12 revised). `apply --yes`
+  used to take out a block whose registry the list no longer named — renamed,
+  anonymous read revoked, a reload dropping it — and exit 0, sending the
+  client straight back to the public upstream past the block lists, the
+  release-age gate and the scanner. It now keeps the file, says why and
+  exits 3; a multi-registry file (`env.sh`, the mise drop-in) losing one of
+  its registries is kept whole the same way. `--pick` or `remove` settles it.
+- **mise rules only for a registry of the public host** (§6.4): a forgejo
+  registry in front of `git.corp.example` used to get the codeberg.org rules,
+  and a github one in front of GitHub Enterprise the github.com ones. The
+  server's registry list now names the upstream of `github`, `forgejo`,
+  `cargo` and `openvsx` registries, and `apply` compares hosts. `setup detect`
+  still prints the rules unconditionally — it is advice read by a human, and
+  the same check is a follow-up.
+- **The root check reads the euid with `geteuid`** (rustix) instead of
+  creating a probe file in `$TMPDIR`, which failed on a read-only or missing
+  temp dir and on a stale probe.
+- **`installable` on the registry list** (§4.4). The list was filtered by the
+  legacy `rbac` tiers, not by the RFC 0015 grants that decide reads: a
+  registry open to anonymous `releases:read` alone was listed and written,
+  then failed every download; one opened only through grants was never
+  listed. Each entry now says whether the caller holds every verb a package
+  manager needs there, decided by the grants, and those the grants open are
+  listed too. `apply` treats `installable: false` as no candidate.
+- **A second index is a conflict**: `extra-index-url`, `find-links` or an
+  `index-url` in another section of `pip.conf`, another `[[index]]` in
+  `uv.toml`, and `PIP_EXTRA_INDEX_URL`/`UV_EXTRA_INDEX_URL`. pip takes the
+  highest version across indexes and uv asks the others first, so a version
+  the instance withholds would install from there — the dependency-confusion
+  shape. A plain-HTTP pip index gets `trusted-host`, or pip ignores it.
+- **mise's other config files**: `config.local.toml` and the other `conf.d`
+  files are read for `url_replacements` and `node.mirror_url`, which mise
+  keeps from one file only.
+- **What agrees is not a conflict**: a variable holding the URL the block
+  writes, an empty one, a config-file variable naming the target itself, and
+  cargo's legacy `config` symlinked to `config.toml` (cargo's own advice) used
+  to be permanent conflicts.
+- **`env.sh`'s override check** takes an empty variable as unset and treats as
+  the instance's own only its registry URLs (same scheme and port, under
+  `/proxy/` or on a registry subdomain): a verdaccio on another port of the
+  same host used to be replaced silently.
+- **`setup env`** prints the trusted `env.sh` when no server is set (a shell
+  that never exported one used to fail at every start), and its unreachable-
+  server fallback keeps the cached path's rules — that server's URLs, no
+  override — instead of printing whatever file is on disk.
+- **The rc file** is `~/.zshenv` when it sets `ZDOTDIR` itself (the XDG
+  layout; `$ZDOTDIR/.zshenv` is only read when `ZDOTDIR` comes from outside),
+  and on macOS the bash login file bash reads. A relative `XDG_CONFIG_HOME`,
+  `ZDOTDIR`, `MISE_CONFIG_DIR` or `GOENV` is ignored: the rc block would have
+  sourced a path relative to the shell's working directory.
+- **Smaller**: yarn 1 keeps `~/.yarnrc.yml` managed (the yarn 4 a project
+  pins reads it); `remove` says why it leaves a `settings.xml` whose marker an
+  XML declaration pushed down; `--json` no longer panics on a non-UTF-8 home;
+  `remove` recognises a host-routed URL in a markerless file; `setup detect`
+  keeps `,direct` like the console (a `local` goproxy needs it); the Windows
+  build refuses the four verbs (resolved 13).
+
+Known limits, kept on purpose:
+
+- **One `env.sh` for rustup and node.** A variable the user set for one blocks
+  the file for both, and `--skip node` skips rustup with it (`--only`/`--skip`
+  select files). Splitting the file is a phase-2-or-later change.
+- **A shell still holding the exports of an `env.sh` for another server**
+  sees them as overrides (exit 3) until a new shell.
+- **The root check is a heuristic** (euid 0 and a `HOME` root does not own):
+  a CI `container:` job running as root with the runner's home is refused;
+  `runuser` is the documented way round.
 
 ---
 

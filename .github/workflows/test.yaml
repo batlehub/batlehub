@@ -1156,7 +1156,7 @@ jobs:
         run: bash tests/heavy/${{ matrix.suite }}.sh
         env:
           COVERAGE: "1"
-          # The forge suites (mise, airgap) drive a `github` registry. Read by
+          # The forge suites (mise, airgap, client_setup) drive a `github` registry. Read by
           # `heavy_forge_auth_config` (tests/heavy/lib.sh), which authenticates
           # that registry's upstream with it: anonymous GitHub is 60 API
           # requests an hour *per source IP*, and a hosted runner's IP is shared

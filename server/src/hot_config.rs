@@ -404,6 +404,13 @@ pub(super) fn upstream_url_for(reg: &RegistryConfig) -> Option<String> {
         // The nodedist handlers read it to name the package: `iojs` on the
         // io.js tree, `node` everywhere else (RFC 0010 §4.3).
         RegistryKind::Nodedist => "https://nodejs.org/dist",
+        // `batlehub-cli setup apply` writes mise rules for these only when
+        // the registry proxies the public host (RFC 0038 §6.4); the values
+        // match `builders::default_upstreams`.
+        RegistryKind::Github => "https://api.github.com",
+        RegistryKind::Forgejo => "https://codeberg.org",
+        RegistryKind::Cargo => "https://crates.io",
+        RegistryKind::Openvsx => "https://open-vsx.org",
         _ => return None,
     };
     Some(
@@ -1347,6 +1354,28 @@ mod tests {
     }
 
     #[test]
+    fn upstream_url_for_names_the_hosts_setup_apply_rewrites() {
+        for (ty, want) in [
+            ("github", "https://api.github.com"),
+            ("forgejo", "https://codeberg.org"),
+            ("cargo", "https://crates.io"),
+            ("openvsx", "https://open-vsx.org"),
+        ] {
+            let r = make_registry(ty, "r", "");
+            assert_eq!(upstream_url_for(&r).as_deref(), Some(want), "{ty}");
+        }
+        let r = make_registry(
+            "forgejo",
+            "r",
+            r#"upstreams = ["https://git.corp.example"]"#,
+        );
+        assert_eq!(
+            upstream_url_for(&r).as_deref(),
+            Some("https://git.corp.example")
+        );
+    }
+
+    #[test]
     fn upstream_url_for_configured_override() {
         let r = make_registry(
             "npm",
@@ -1378,8 +1407,8 @@ mod tests {
     }
 
     #[test]
-    fn upstream_url_for_unknown_type_returns_none() {
-        let r = make_registry("github", "gh-reg", "");
+    fn upstream_url_for_a_kind_without_one_returns_none() {
+        let r = make_registry("generic", "g-reg", "");
         assert_eq!(upstream_url_for(&r), None);
     }
 

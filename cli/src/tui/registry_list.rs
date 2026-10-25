@@ -91,6 +91,8 @@ mod tests {
             registry_type: "npm".to_owned(),
             mode: "proxy".to_owned(),
             public_url: None,
+            upstream: None,
+            installable: None,
         }
     }
 

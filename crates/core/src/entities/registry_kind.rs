@@ -1,3 +1,4 @@
+use crate::entities::Action;
 use serde::{Deserialize, Serialize};
 
 /// Whether blocked versions are removed from one listing document.
@@ -1004,6 +1005,57 @@ impl RegistryKind {
         }
     }
 
+    /// Every verb a package manager needs to resolve **and** download from a
+    /// registry of this kind — what `GET /api/v1/registries` calls
+    /// `installable` (RFC 0038 §4.4).
+    ///
+    /// Read off the handlers, not the RFC, because the handlers are what
+    /// refuse:
+    ///
+    /// - `releases:list` for every kind: any document naming many versions goes
+    ///   through `ProxyService::authorize_listing_audited` /
+    ///   `LocalRegistryService`'s listing funnel, which ask for it whatever the
+    ///   handler's own action is.
+    /// - `source:read` where the artifact is the package's source archive:
+    ///   npm's `tarball`, cargo's `download`, goproxy's `.zip`, and the two VSX
+    ///   kinds' `.vsix` (whose metadata routes ask for `source:read` too, and
+    ///   never `releases:read`).
+    /// - `releases:read` everywhere else, for metadata and the artifact alike.
+    ///   The forges' `tarball`/`zipball`/`archive` routes want `source:read`,
+    ///   but a forge *install* (mise's `github:`/`gitlab:` backends) downloads
+    ///   release assets, which are `releases:read`.
+    pub fn install_actions(&self) -> &'static [Action] {
+        use Action::{ReleasesList, ReleasesRead, SourceRead};
+        match self {
+            Self::Npm | Self::Cargo | Self::Goproxy => &[ReleasesList, ReleasesRead, SourceRead],
+            Self::Openvsx | Self::VscodeMarketplace => &[ReleasesList, SourceRead],
+            Self::Github
+            | Self::Forgejo
+            | Self::Gitlab
+            | Self::Pypi
+            | Self::Conda
+            | Self::Composer
+            | Self::Maven
+            | Self::Terraform
+            | Self::Rubygems
+            | Self::Nuget
+            | Self::Deb
+            | Self::Rpm
+            | Self::Pacman
+            | Self::Apk
+            | Self::Jetbrains
+            | Self::JetbrainsMarketplace
+            | Self::Generic
+            | Self::Nodedist
+            | Self::Sdkman
+            | Self::Rustup
+            | Self::Galaxy
+            | Self::Nix
+            | Self::Devfile
+            | Self::Helm => &[ReleasesList, ReleasesRead],
+        }
+    }
+
     /// The artifact sub-coordinates one version of this kind has, one per
     /// platform — for the two kinds whose "one artifact per version" is
     /// really one per platform (RFC 0010 §6.9).
@@ -1284,6 +1336,20 @@ mod tests {
         for kind in RegistryKind::ALL {
             let s = kind.as_str();
             assert_eq!(s.parse::<RegistryKind>().unwrap(), *kind);
+        }
+    }
+
+    /// Every kind resolves through a listing and downloads bytes, so its
+    /// install set names `releases:list` and at least one byte verb.
+    #[test]
+    fn install_actions_cover_a_listing_and_a_download() {
+        for kind in RegistryKind::ALL {
+            let a = kind.install_actions();
+            assert!(a.contains(&Action::ReleasesList), "{kind:?}");
+            assert!(
+                a.contains(&Action::ReleasesRead) || a.contains(&Action::SourceRead),
+                "{kind:?}"
+            );
         }
     }
 

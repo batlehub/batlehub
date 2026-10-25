@@ -1,7 +1,7 @@
 ---
 title: Procédure de coupure réseau
 sourcePath: operations/air-gap.md
-sourceHash: a2cdaaba7ad0ce5a
+sourceHash: 7409665debf2000a
 ---
 
 # Procédure de coupure réseau
@@ -238,7 +238,58 @@ joignable :
   [RFC 0008 §14.8](/rfc/0008-mise-in-an-air-gapped-estate) pour savoir
   exactement quelle part de la vérification côté connecté est construite.
 
+## Provisionner les postes
+
+Chaque machine du côté coupé — un espace de travail Che, un devcontainer, un
+runner de CI — doit envoyer ses gestionnaires de paquets vers l'instance et
+nulle part ailleurs. `batlehub-cli setup apply` l'écrit dans la configuration
+utilisateur de chaque client installé, à partir de la liste des registres de
+l'instance elle-même ([RFC 0038](/rfc/0038-client-setup-apply)) : le parc
+provisionne une URL de serveur au lieu d'un extrait par client. Les options,
+les fichiers écrits et toutes les règles sont dans la
+[référence de la CLI](/fr/use/cli#setup-apply) ; ce qui suit décrit comment
+l'intégrer à un parc.
+
+- **Lancez-la au démarrage de la machine, en tant qu'utilisateur.** Une
+  commande `postStart` de Che, un `postCreateCommand` de devcontainer, le point
+  d'entrée d'une image :
+
+  ```sh
+  BATLEHUB_SERVER=https://pkg.example.com batlehub-cli setup apply --yes
+  ```
+
+  Elle écrit les fichiers de l'utilisateur, et refuse de tourner en root sur un
+  répertoire personnel qui n'appartient pas à root ; un hook exécuté en root
+  l'enveloppe dans `runuser -u <utilisateur> --`. Elle est idempotente et peut
+  donc s'exécuter à chaque démarrage.
+- **Vérifiez avec `setup status`.** La commande n'écrit rien et répond par son
+  code de sortie : `0` tout est réglé, `3` quelque chose ne l'est pas (un bloc
+  pas encore écrit ou qui a dérivé depuis, un fichier modifié par
+  l'utilisateur, deux registres d'un même type entre lesquels choisir, un bloc
+  dont le registre a disparu), `1` une erreur comme un serveur injoignable, `2`
+  une erreur d'utilisation. Une étape de CI ou une sonde de disponibilité peut
+  échouer sur tout autre code que `0`.
+- **Revenez en arrière avec `setup remove --yes`.** La commande ne retire que ce
+  que `apply` a écrit, octet pour octet, et laisse en place tout ce que
+  l'utilisateur a modifié.
+
+Trois comportements comptent de ce côté de la coupure, et tous trois échouent
+en position fermée :
+
+- **Go n'a pas de `,direct`.** `GOPROXY` ne nomme que l'instance : un module
+  qu'elle ne détient pas est une erreur, pas un téléchargement depuis son
+  origine.
+- **Un registre qui quitte la liste laisse son bloc en place.** Quand celui vers
+  lequel un client pointait est supprimé ou renommé sans remplaçant unique, le
+  bloc est `orphaned` : conservé sur son URL morte, pour que le client échoue au
+  lieu de revenir au registre public. `apply` et `status` sortent en `3` jusqu'à
+  ce qu'un `--pick` ou un `remove` règle la situation.
+- **Une liste de registres vide est refusée** (code `1`). Une instance à moitié
+  démarrée, ou dont tous les registres sont fermés aux lectures anonymes,
+  ferait sinon retirer chaque bloc du parc par le `apply --yes` de chaque hook.
+
 ## Voir aussi
 
 - [Faire pointer mise vers BatleHub](/fr/use/mise) · [Configuration](/fr/guide/configuration#air-gap)
+- [`setup apply` dans la référence de la CLI](/fr/use/cli#setup-apply)
 - [Reprise après sinistre](/fr/operations/disaster-recovery) · [Réponse à incident](/fr/operations/incident-response)

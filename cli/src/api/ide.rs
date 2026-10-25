@@ -353,12 +353,16 @@ mod tests {
             registry_type: ty.to_owned(),
             mode: "proxy".to_owned(),
             public_url: None,
+            upstream: None,
+            installable: None,
         }
     }
 
     fn hosted_reg(name: &str, ty: &str, public_url: &str) -> RegistryInfo {
         RegistryInfo {
             public_url: Some(public_url.to_owned()),
+            upstream: None,
+            installable: None,
             ..reg(name, ty)
         }
     }

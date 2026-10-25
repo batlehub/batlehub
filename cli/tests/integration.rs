@@ -4647,20 +4647,40 @@ impl Machine {
     /// can miss `apply`'s five seconds when every test binary runs at once,
     /// which is the trap [`setup_detect_resolved`] documents.
     fn setup(&self, server: &str, args: &[&str]) -> (i32, String, String) {
-        let mut out = self.setup_once(server, args);
+        self.setup_with(server, &[], args)
+    }
+
+    /// `setup …` with extra variables set on top of the bare machine.
+    fn setup_with(
+        &self,
+        server: &str,
+        vars: &[(&str, &str)],
+        args: &[&str],
+    ) -> (i32, String, String) {
+        let mut out = self.setup_once(server, vars, args);
         for _ in 0..3 {
             if !out.2.contains("did not answer within") {
                 break;
             }
-            out = self.setup_once(server, args);
+            out = self.setup_once(server, vars, args);
         }
         out
     }
 
-    fn setup_once(&self, server: &str, args: &[&str]) -> (i32, String, String) {
+    fn setup_once(
+        &self,
+        server: &str,
+        vars: &[(&str, &str)],
+        args: &[&str],
+    ) -> (i32, String, String) {
         let h = self.home.path();
         let out = std::process::Command::new(env!("CARGO_BIN_EXE_batlehub-cli"))
             .env_clear()
+            // Coverage: the instrumented binary writes its profile where the
+            // runner says; without the variable it is lost (and a stray
+            // `.profraw` lands in the cwd).
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|v| ("LLVM_PROFILE_FILE", v)))
+            .envs(vars.iter().copied())
             .env("HOME", h)
             .env("XDG_CONFIG_HOME", h.join(".config"))
             .env("CARGO_HOME", h.join(".cargo"))
@@ -4744,9 +4764,12 @@ fn setup_apply_writes_then_remove_restores_byte_for_byte() {
     assert!(stdout.contains("Nothing to write."), "{stdout}");
     assert_eq!(mtime(".npmrc"), before);
 
-    // `env` prints what env.sh holds, in the shell asked for.
-    let (code, stdout, _) = m.setup(&base, &["env", "--shell", "fish"]);
-    assert_eq!(code, 0);
+    // `env` prints what env.sh holds, in the shell asked for — without asking
+    // the server, which is gone.
+    drop(srv);
+    let (code, stdout, stderr) = m.setup(&base, &["env", "--shell", "fish"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stderr.is_empty(), "a request was made: {stderr}");
     assert!(
         stdout.contains(&format!(
             "set -gx RUSTUP_DIST_SERVER '{base}/proxy/rust/rustup'"
@@ -4799,6 +4822,76 @@ fn setup_apply_fails_without_a_server_and_writes_nothing() {
     assert!(stderr.contains("plain HTTP"), "{stderr}");
 }
 
+/// `setup env` is `eval`ed: it must not override a variable `apply` refused
+/// to, and an unreachable server prints the env.sh on disk written for it —
+/// not one for another server — while a mistake of the user's (a bad
+/// `--pick`) is still an error, not a silent fallback.
+#[test]
+fn setup_env_respects_a_conflict_and_falls_back_only_when_unreachable() {
+    let srv = proxy_server();
+    let base = srv.base_url();
+    let m = Machine::new(&["rustup"]);
+
+    let (code, stdout, stderr) = m.setup_with(
+        &base,
+        &[("RUSTUP_DIST_SERVER", "https://mirror.corp.example")],
+        &["env"],
+    );
+    assert_eq!(code, 3, "{stdout}\n{stderr}");
+    assert!(!stdout.contains("RUSTUP_DIST_SERVER"), "{stdout}");
+    assert!(stderr.contains("nothing printed"), "{stderr}");
+
+    let (code, _, stderr) = m.setup(&base, &["apply", "--yes"]);
+    assert_eq!(code, 0, "{stderr}");
+    let (code, stdout, _) = m.setup(&base, &["env", "--pick", "rustup=nope"]);
+    assert_eq!(code, 1, "{stdout}");
+    assert!(stdout.is_empty(), "{stdout}");
+
+    // Another server that cannot answer: its env.sh is not this one.
+    let (code, stdout, _) = m.setup("http://127.0.0.1:1", &["env", "--only", "rustup"]);
+    assert_eq!(code, 1, "{stdout}");
+    assert!(stdout.is_empty(), "{stdout}");
+
+    // The same server, down: the env.sh written last time.
+    drop(srv);
+    let (code, stdout, stderr) = m.setup(&base, &["env", "--refresh", "--only", "rustup"]);
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains(&format!(
+            "export RUSTUP_DIST_SERVER='{base}/proxy/rust/rustup'"
+        )),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("NODEJS_ORG_MIRROR"),
+        "--only rustup: {stdout}"
+    );
+    assert!(stderr.contains("written last time"), "{stderr}");
+}
+
+/// A `settings.xml` the user added `<servers>` to is theirs: `apply` leaves
+/// it (exit 3), and so does `remove` (exit 3, so a hook notices).
+#[test]
+fn setup_leaves_an_edited_settings_xml_alone() {
+    let srv = proxy_server();
+    let base = srv.base_url();
+    let m = Machine::new(&["mvn"]);
+    let (code, _, stderr) = m.setup(&base, &["apply", "--yes", "--only", "maven"]);
+    assert_eq!(code, 0, "{stderr}");
+    let edited = m.read(".m2/settings.xml").unwrap().replace(
+        "</settings>",
+        "  <servers><server><id>x</id></server></servers>\n</settings>",
+    );
+    std::fs::write(m.path(".m2/settings.xml"), &edited).unwrap();
+
+    let (code, _, stderr) = m.setup(&base, &["apply", "--yes", "--only", "maven"]);
+    assert_eq!(code, 3, "{stderr}");
+    let (code, _, stderr) = m.setup(&base, &["remove", "--yes"]);
+    assert_eq!(code, 3, "{stderr}");
+    assert!(stderr.contains("left alone"), "{stderr}");
+    assert_eq!(m.read(".m2/settings.xml").as_deref(), Some(edited.as_str()));
+}
+
 #[test]
 fn setup_apply_skips_local_registries_and_resolves_an_ambiguity_with_a_kept_pick() {
     let srv = TestServer::start_with_mode(&[("a", "npm"), ("b", "npm")], &[], RegistryMode::Proxy);
@@ -4806,10 +4899,17 @@ fn setup_apply_skips_local_registries_and_resolves_an_ambiguity_with_a_kept_pick
 
     let (code, stdout, stderr) = m.setup(&srv.base_url(), &["apply", "--yes"]);
     assert_eq!(code, 3, "{stdout}\n{stderr}");
-    assert!(stderr.contains("--registry"), "{stderr}");
+    assert!(stderr.contains("--pick"), "{stderr}");
     assert!(m.read(".npmrc").is_none());
 
-    let (code, _, _) = m.setup(&srv.base_url(), &["apply", "--yes", "--registry", "npm=b"]);
+    // The global `-r` / `BATLEHUB_REGISTRY` (a bare default registry name) is
+    // not the pick: it used to fill `--registry TYPE=NAME` and fail every verb.
+    let (code, stdout, stderr) =
+        m.setup_with(&srv.base_url(), &[("BATLEHUB_REGISTRY", "a")], &["status"]);
+    assert_eq!(code, 3, "{stdout}\n{stderr}");
+    assert!(stdout.contains("ambiguous"), "{stdout}");
+
+    let (code, _, _) = m.setup(&srv.base_url(), &["apply", "--yes", "--pick", "npm=b"]);
     assert_eq!(code, 0);
     // The pick lives in the marker: a plain run keeps it.
     let (code, stdout, _) = m.setup(&srv.base_url(), &["status"]);

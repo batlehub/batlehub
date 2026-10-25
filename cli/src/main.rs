@@ -48,11 +48,21 @@ async fn main() -> Result<()> {
             .token
             .clone()
             .or_else(|| profile.and_then(|p| p.token.clone()));
-        let code = setup::run(cmd, resolved_server.as_deref(), resolved_token.as_deref()).await?;
-        if code != 0 {
-            std::process::exit(code);
-        }
-        return Ok(());
+        let code =
+            match setup::run(cmd, resolved_server.as_deref(), resolved_token.as_deref()).await {
+                Ok(code) => code,
+                Err(e) => {
+                    eprintln!("Error: {e:?}");
+                    1
+                }
+            };
+        // Exit here rather than return: dropping the runtime waits for its
+        // blocking threads, and a `getaddrinfo` stuck on a dead resolver keeps
+        // `eval "$(batlehub-cli setup env)"` — every new terminal — waiting
+        // long after the timeout gave up on it.
+        use std::io::Write;
+        std::io::stdout().flush().ok();
+        std::process::exit(code);
     }
 
     // Determine base URL for potential OIDC auto-refresh (before building the client)

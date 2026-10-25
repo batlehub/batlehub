@@ -227,7 +227,51 @@ Two things are worth doing while the instance can still be reached:
   [RFC 0008 §14.8](/rfc/0008-mise-in-an-air-gapped-estate) for exactly how
   much of the connected-side verification is built.
 
+## Provisioning the workstations
+
+Every machine on the disconnected side — a Che workspace, a devcontainer, a CI
+runner — has to send its package managers to the instance and nowhere else.
+`batlehub-cli setup apply` writes that into each installed client's user-level
+configuration, from the instance's own registry list
+([RFC 0038](/rfc/0038-client-setup-apply)), so the estate provisions one
+server URL instead of one snippet per client. The flags, the files written and
+every rule are in the [CLI reference](/use/cli#setup-apply); what follows is
+how to wire it into a fleet.
+
+- **Run it where the machine starts, as the user.** A Che `postStart`
+  command, a devcontainer `postCreateCommand`, an image entrypoint:
+
+  ```sh
+  BATLEHUB_SERVER=https://pkg.example.com batlehub-cli setup apply --yes
+  ```
+
+  It writes the user's own files, and refuses to run as root against a home
+  root does not own; a hook that runs as root wraps it in
+  `runuser -u <user> --`. It is idempotent, so it can run at every start.
+- **Check with `setup status`.** It writes nothing and answers in its exit
+  code: `0` settled, `3` something is not (a block not written yet or
+  drifted since, a file the user edited, two registries of one type to choose
+  between, a block whose registry is gone),
+  `1` an error such as an unreachable server, `2` a usage error. A CI step or
+  a readiness probe can fail on anything but `0`.
+- **Roll back with `setup remove --yes`.** It takes out only what `apply`
+  wrote, byte for byte, and leaves anything the user changed alone.
+
+Three behaviours matter on this side of the gap, and all three fail closed:
+
+- **Go gets no `,direct`.** `GOPROXY` names the instance alone, so a module it
+  does not hold is an error rather than a fetch from its origin.
+- **A registry that leaves the list leaves its block in place.** When the one
+  a client was pointed at is removed or renamed and no single replacement
+  exists, the block is `orphaned`: kept on its dead URL, so the client fails
+  instead of going back to the public registry. `apply` and `status` exit `3`
+  until a `--pick` or a `remove` settles it.
+- **An empty registry list is refused** (exit `1`). A half-started instance,
+  or one whose registries are all closed to anonymous reads, would otherwise
+  have every hook's `apply --yes` take out every block on the fleet.
+
 ## See also
 
 - [Pointing mise at BatleHub](/use/mise) · [Configuration](/guide/configuration#air-gap)
+- [`setup apply` in the CLI reference](/use/cli#setup-apply)
 - [Disaster recovery](/operations/disaster-recovery) · [Incident response](/operations/incident-response)

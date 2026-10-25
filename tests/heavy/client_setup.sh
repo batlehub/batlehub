@@ -31,10 +31,10 @@
 #      one seeded without a final newline; the files `apply` created gone.
 #   8. A second npm *proxy* registry and a *local* one added by reload: npm is
 #      `ambiguous` between the two proxies only (§4.4 — a local registry is not
-#      a candidate); `--registry npm=<b>` writes b; a plain `apply --yes`
+#      a candidate); `--pick npm=<b>` writes b; a plain `apply --yes`
 #      keeps it, and keeps `--maven-mirror-of all`.
-#   9. The pypi registry removed by reload: pip is `orphaned`, and `apply
-#      --yes` takes the block out.
+#   9. The pypi registry removed by reload: pip is `orphaned`, `apply --yes`
+#      keeps the block (fail closed, exit 3), and `remove --yes` takes it out.
 #
 # bun is not driven: it would be one more client download for the same
 # `~/.npmrc` block npm and pnpm already prove. node's `NODEJS_ORG_MIRROR` is
@@ -140,8 +140,14 @@ done
 
 # ── The server, from a copy the reload cases can edit ────────────────────────
 
+# The forge registry (mise's github) is authenticated when the run has a token:
+# anonymous, the GitHub budget is per shared runner IP and regularly spent
+# before the mise phase (lib.sh, `heavy_forge_auth_config`). The reload cases
+# edit $CONFIG, so it is a copy of whatever that returns.
+sed "s/\${HEAVY_RUN}/$HEAVY_RUN/" tests/heavy/config.client-setup.toml > "$HEAVY_WORK/client-setup.src.toml"
+heavy_forge_auth_config "$HEAVY_WORK/client-setup.src.toml"
 CONFIG="$HEAVY_WORK/config.toml"
-sed "s/\${HEAVY_RUN}/$HEAVY_RUN/" tests/heavy/config.client-setup.toml > "$CONFIG"
+cp "$HEAVY_CONFIG" "$CONFIG"
 heavy_start_server "$CONFIG"
 heavy_start_tap
 
@@ -428,6 +434,11 @@ echo "$PKG" > "$dir/package.json"
 if client "$M4" "$OUT" "$dir" npm_config_cache="$HEAVY_WORK/npm-cache-4" npm install --no-audit --no-fund; then
   heavy_fail "npm installed with the user's registry= in a closed world — the conflict was masked"
 fi
+# Failing is not enough: it must fail *because* the user's registry= sent it to
+# registry.npmjs.org and the closed world refused it — not on a cache, a
+# parse or a network error that would pass this case for any reason.
+heavy_client_must_say "$OUT" "403|closed world" \
+  "npm failed, but not on the closed world's 403 for registry.npmjs.org"
 
 # ── 5. A user [global] in pip.conf ───────────────────────────────────────────
 
@@ -522,7 +533,7 @@ setup "$M8" status --only npm,maven,pip
 expect_code 3 "status with two npm proxies"
 heavy_client_must_say "$SETUP_OUT" "ambiguous.*$NPM_B|$NPM_B.*ambiguous|npm: .*$NPM_B" "npm is not ambiguous between the two proxies"
 grep -q "$NPM_LOCAL" "$SETUP_OUT" && { cat "$SETUP_OUT" >&2; heavy_fail "a local registry was offered as a mirror candidate"; }
-setup "$M8" apply --yes --only npm,maven,pip --registry "npm=$NPM_B" --maven-mirror-of all
+setup "$M8" apply --yes --only npm,maven,pip --pick "npm=$NPM_B" --maven-mirror-of all
 expect_code 0 "apply with a pick"
 grep -q "^registry=$HEAVY_TAP_BASE/proxy/$NPM_B/$" "$M8/.npmrc" || heavy_fail "the pick was not written"
 grep -q "<mirrorOf>\*</mirrorOf>" "$M8/.m2/settings.xml" || heavy_fail "--maven-mirror-of all was not written"
@@ -538,7 +549,12 @@ setup "$M8" status --only pip
 expect_code 3 "status with the pypi registry gone"
 heavy_client_must_say "$SETUP_OUT" "orphaned" "pip's block is not reported orphaned"
 setup "$M8" apply --yes --only pip
-expect_code 0 "apply over an orphaned block"
-[[ ! -e "$M8/.config/pip/pip.conf" ]] || heavy_fail "apply left the orphaned pip block (and the file it created)"
+expect_code 3 "apply over an orphaned block"
+heavy_client_must_say "$SETUP_OUT" "no longer listed" "apply did not say why pip's block is kept"
+grep -q "batlehub setup" "$M8/.config/pip/pip.conf" \
+  || heavy_fail "apply took the orphaned pip block out: pip would fall back to pypi.org"
+setup "$M8" remove --yes --only pip
+expect_code 0 "remove of an orphaned block"
+[[ ! -e "$M8/.config/pip/pip.conf" ]] || heavy_fail "remove left the orphaned pip block (and the file apply created)"
 
 heavy_done "CLIENT-SETUP-HEAVY-OK"

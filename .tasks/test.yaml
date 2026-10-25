@@ -403,7 +403,7 @@ tasks:
       - bash tests/heavy/rustup.sh
 
   test:client-setup-heavy:
-    desc: "Heavy `setup apply` suite (RFC 0038 §6.5): with egress denied to every client process and nothing configured but what `batlehub-cli setup apply` wrote, cargo, npm, pnpm, yarn 4, pip, uv, go (its sumdb included), mvn, mise and rustup install through the instance; a second apply moves no file; a user-owned setting or an exported override is a conflict left untouched; remove restores every file byte for byte; a pick and the Maven mirror form survive a plain apply; a removed registry's block is orphaned and taken out (needs DATABASE_URL + network)"
+    desc: "Heavy `setup apply` suite (RFC 0038 §6.5): with egress denied to every client process and nothing configured but what `batlehub-cli setup apply` wrote, cargo, npm, pnpm, yarn 4, pip, uv, go (its sumdb included), mvn, mise and rustup install through the instance; a second apply moves no file; a user-owned setting or an exported override is a conflict left untouched; remove restores every file byte for byte; a pick and the Maven mirror form survive a plain apply; a removed registry's block is orphaned, kept (fail closed) and taken out by remove (needs DATABASE_URL + network)"
     cmds:
       - bash tests/heavy/client_setup.sh
 

@@ -29,6 +29,7 @@ use std::path::Path;
 
 use batlehub_core::entities::RegistryKind;
 
+use crate::api::client_setup::NODEDIST_VARS;
 use crate::api::setup::scan_project_types;
 
 /// One registry BatleHub should be configured with.
@@ -457,7 +458,10 @@ fn registry_for_nvmrc(content: &str) -> SuggestedRegistry {
         upstreams: Vec::new(),
         path_allow: Vec::new(),
         sources: vec![".nvmrc".to_owned()],
-        client_env: vec![("NVM_NODEJS_ORG_MIRROR".to_owned(), "{proxy}".to_owned())],
+        client_env: NODEDIST_VARS
+            .iter()
+            .map(|k| ((*k).to_owned(), "{proxy}".to_owned()))
+            .collect(),
         warm_packages,
         note,
     }
@@ -2231,10 +2235,13 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
         );
         assert_eq!(
             node.resolved_env("https://hub.example.com"),
-            [(
-                "NVM_NODEJS_ORG_MIRROR".to_owned(),
-                "https://hub.example.com/proxy/node/nodedist".to_owned()
-            )]
+            NODEDIST_VARS
+                .map(|k| (
+                    k.to_owned(),
+                    "https://hub.example.com/proxy/node/nodedist".to_owned()
+                ))
+                .to_vec(),
+            "the same variables `setup env` exports"
         );
 
         let toml = render_toml(&regs);

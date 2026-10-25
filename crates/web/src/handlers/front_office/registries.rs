@@ -44,6 +44,19 @@ pub struct RegistryInfo {
     /// advice on a page the caller can already read, and a caller who can list
     /// a registry can discover the same fact by fetching from it.
     pub signed_downloads: bool,
+    /// Whether the caller holds, at registry level, every permission a package
+    /// manager needs to resolve and download from this registry (version
+    /// listing, metadata, and the artifact — `source:read` where the artifact
+    /// is a source archive), decided by the grants that enforce reads.
+    /// `batlehub-cli setup apply` writes a client config only where this is
+    /// `true` (RFC 0038 §4.4).
+    ///
+    /// A registry-level ceiling: a sealing namespace or a private package can
+    /// still refuse one package, and a package-level grant can open one package
+    /// on a registry answered `false`. Computed by
+    /// `batlehub_core::services::authz::installable_registries` from
+    /// `RegistryKind::install_actions`.
+    pub installable: bool,
 }
 
 /// List configured registries visible to the current user.
@@ -68,21 +81,39 @@ pub async fn list_registries(
 ) -> impl Responder {
     let accessible = access.read().await.accessible_registries_for(&identity);
     // Read from the hot config rather than a parallel map, so a reload that
-    // turns signing on cannot leave this endpoint answering with the old value.
-    // Snapshotted under one short read lock; the list is built after it drops.
-    let signed: std::collections::HashMap<String, bool> = match svc.as_ref() {
-        Some(svc) => svc.hot.read().await.signed_downloads.clone(),
-        None => std::collections::HashMap::new(),
+    // turns signing on — or changes a grant — cannot leave this endpoint
+    // answering with the old value.
+    let (signed, granted) = match svc.as_ref() {
+        Some(svc) => (
+            svc.hot.read().await.signed_downloads.clone(),
+            Some(batlehub_core::services::authz::installable_registries(&svc.hot, &identity).await),
+        ),
+        None => (Default::default(), None),
+    };
+    let installable = |name: &str| match &granted {
+        // No hierarchy for this registry: `authorize_grants` lets every read
+        // through, so it is installable for whoever may see it.
+        Some(granted) => granted.get(name).copied().unwrap_or(true),
+        // No proxy service wired, so no grants to ask: the legacy answer.
+        None => accessible.contains(name),
     };
     let mut registries: Vec<RegistryInfo> = map
         .entries()
         .into_iter()
-        .filter(|(name, _)| accessible.contains(name.as_str()))
+        // The legacy filter, unchanged for the console, plus every registry the
+        // grants let the caller install from: one opened only through
+        // `[registries.grants]` is invisible to `accessible_registries_for`.
+        // Only an actual grant widens the list — never the absence of one.
+        .filter(|(name, _)| {
+            accessible.contains(name.as_str())
+                || granted.as_ref().is_some_and(|g| g.get(name) == Some(&true))
+        })
         .map(|(name, registry_type)| RegistryInfo {
             mode: modes.get(&name).as_str().to_owned(),
             public_url: hosts.as_ref().and_then(|h| h.public_url_for(&name)),
             upstream: upstreams.as_ref().and_then(|u| u.upstream_for(&name)),
             signed_downloads: signed.get(&name).copied().unwrap_or(false),
+            installable: installable(&name),
             name,
             registry_type,
         })

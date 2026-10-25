@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::api::client_setup::{render_body, TargetId};
+use crate::api::client_setup::{is_candidate, render_body, TargetId};
 use crate::api::registry::RegistryTargets;
 
 pub struct ProjectDetection {
@@ -209,7 +209,19 @@ fn detect_cargo(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDetectio
     }
     let name = read_toml_field(&cargo_toml, &["package", "name"]);
     let pkg = name.as_deref().unwrap_or("<package>").to_string();
+    // The crates.io mirror only for a registry that can stand in for it: a
+    // `local` one serves only what was published to it, so replacing
+    // crates.io with it breaks every public dependency. Publishing needs only
+    // `[registries.batlehub]`, which is the last block of the full body.
+    let mirrors = targets.registry_for("cargo").is_some_and(is_candidate);
     Some(detection("cargo", targets, name, |base| {
+        let full = render_body(TargetId::Cargo, base);
+        let body = if mirrors {
+            full.as_str()
+        } else {
+            full.find("[registries.batlehub]")
+                .map_or(full.as_str(), |i| &full[i..])
+        };
         format!(
             "Registry type : cargo\n\
              Package       : {pkg}\n\
@@ -218,8 +230,7 @@ fn detect_cargo(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDetectio
              {body}\n\
              \n\
              Publish:\n\
-             cargo publish --registry batlehub",
-            body = render_body(TargetId::Cargo, base)
+             cargo publish --registry batlehub"
         )
     }))
 }
@@ -237,10 +248,13 @@ fn detect_gomodules(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDete
              Module        : {pkg}\n\
              \n\
              Environment:\n\
-             export {}\n\
+             export {},direct\n\
              \n\
              Use:\n\
              go get {pkg}",
+            // The console's snippet keeps the fallback, which a `local`
+            // registry needs for every public module; `setup apply` drops it
+            // on purpose (RFC 0038 §4.2).
             render_body(TargetId::Go, base)
         )
     }))
@@ -541,6 +555,28 @@ mod tests {
         assert!(results[0].instructions.contains("cargo publish"));
     }
 
+    /// A `local` cargo registry cannot stand in for crates.io: `detect` prints
+    /// only what publishing needs (review of PR #243, n° 11).
+    #[test]
+    fn cargo_mirror_only_for_a_proxy_registry() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"c\"\n").unwrap();
+        for (mode, mirrors) in [("local", false), ("proxy", true), ("hybrid", true)] {
+            let regs = vec![RegistryInfo {
+                name: "crates".to_owned(),
+                registry_type: "cargo".to_owned(),
+                mode: mode.to_owned(),
+                public_url: None,
+                upstream: None,
+                installable: None,
+            }];
+            let t = RegistryTargets::new("https://hub.example.com", &regs);
+            let out = &scan_project_types(dir.path(), &t, 0)[0].instructions;
+            assert_eq!(out.contains("replace-with"), mirrors, "{mode}: {out}");
+            assert!(out.contains("[registries.batlehub]"), "{mode}: {out}");
+        }
+    }
+
     #[test]
     fn detects_gomod() {
         let dir = TempDir::new().unwrap();
@@ -679,6 +715,8 @@ mod tests {
             registry_type: ty.to_owned(),
             mode: "proxy".to_owned(),
             public_url: public_url.map(str::to_owned),
+            upstream: None,
+            installable: None,
         }
     }
 
@@ -738,7 +776,7 @@ mod tests {
         assert_eq!(go.registry_name.as_deref(), Some("go1"));
         assert!(go
             .instructions
-            .contains("export GOPROXY=https://go1.batlehub.example.com"));
+            .contains("export GOPROXY=https://go1.batlehub.example.com,direct"));
         for det in &results {
             assert!(
                 !det.instructions.contains("/proxy/"),

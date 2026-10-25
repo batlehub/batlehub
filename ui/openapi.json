@@ -27146,9 +27146,14 @@
           "name",
           "type",
           "mode",
-          "signed_downloads"
+          "signed_downloads",
+          "installable"
         ],
         "properties": {
+          "installable": {
+            "type": "boolean",
+            "description": "Whether the caller holds, at registry level, every permission a package\nmanager needs to resolve and download from this registry (version\nlisting, metadata, and the artifact — `source:read` where the artifact\nis a source archive), decided by the grants that enforce reads.\n`batlehub-cli setup apply` writes a client config only where this is\n`true` (RFC 0038 §4.4).\n\nA registry-level ceiling: a sealing namespace or a private package can\nstill refuse one package, and a package-level grant can open one package\non a registry answered `false`. Computed by\n`batlehub_core::services::authz::installable_registries` from\n`RegistryKind::install_actions`."
+          },
           "mode": {
             "type": "string"
           },
