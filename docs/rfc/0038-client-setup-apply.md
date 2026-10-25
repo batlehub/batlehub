@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | In review                                                     |
+| Status      | Implemented — both phases; §13 records where the built thing differs |
 | Short       | client setup apply                                            |
 | Settles     | How a machine is pointed at an instance in one command: the CLI writes, checks and removes every package-manager client's user configuration from the server's registry list |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -469,7 +469,16 @@ that upstream's host is the public one the rules rewrite (`api.github.com`,
 `codeberg.org`, `registry.npmjs.org`, `crates.io`, `open-vsx.org`). A
 registry in front of another forge, or a server that names no upstream, gets
 no rules and a note: the rules would otherwise send every codeberg.org or
-GitHub download of every mise tool to that forge. The values are public facts of the configuration — the hosts
+GitHub download of every mise tool to that forge.
+
+As built, `upstreams` is the configured list of every path-addressed kind
+(`generic`, `deb`, `rpm`, `pacman`, `apk`, `jetbrains`), omitted when empty.
+Every `generic` registry is taken, not one per type — each mirrors its own
+hosts, so two are never candidates for one place — and its rules go after
+the typed ones: mise stops at the first match, and a mirror of `github.com`
+must not shadow the forge rules. A generic registry the list stops naming
+orphans the drop-in like any other (fail closed). An upstream that is not a
+plain http(s) URL is skipped with a note. The values are public facts of the configuration — the hosts
 a mirror relays — and already visible to an admin; a caller sees them only for
 registries it could already list.
 
@@ -659,7 +668,7 @@ None.
 | Phase | Content |
 | --- | --- |
 | 1 | **Built, PR #243.** `client_setup.rs`, the moved renderers, `setup apply|status|remove|env` for every client of §4.2 except `generic`-derived mise rules; unit, rendered-block and integration tests; heavy cases 1–10; docs: `docs/use/cli.md` (the verbs, the override limit of §4.3), `docs/operations/air-gap.md` (provisioning a fleet with `apply`), the Setup Guide page pointing at `setup apply`. **Ships on its own.** |
-| 2 | `upstreams` on `GET /api/v1/registries` (§6.4), the `generic` mise rules it unlocks, the regenerated OpenAPI client, and the mise row of `docs/use/cli.md` updated |
+| 2 | **Built.** `upstreams` on `GET /api/v1/registries` (§6.4), the `generic` mise rules it unlocks, the regenerated OpenAPI client, and the mise row of `docs/use/cli.md` updated; heavy case: `mise install aqua:helm/helm` through a generic mirror of `get.helm.sh` |
 
 ---
 
@@ -667,8 +676,8 @@ None.
 
 Phase 1 is built (PR #243): `cli/src/api/client_setup.rs`, the four verbs in
 `cli/src/cli/setup.rs`, and `tests/heavy/client_setup.sh` green locally on its
-nine cases. Phase 2 has its first piece — `upstream` named for the kinds
-mise rules are written for (§6.4) — and the `generic` rules are still to do.
+nine cases. Phase 2 is built too: `upstream` named for the kinds mise rules
+are written for, and `upstreams` for the path-addressed ones (§6.4).
 Where the built thing differs from the
 text above, each difference is deliberate:
 

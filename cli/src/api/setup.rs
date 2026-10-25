@@ -569,6 +569,7 @@ mod tests {
                 public_url: None,
                 upstream: None,
                 installable: None,
+                upstreams: Vec::new(),
             }];
             let t = RegistryTargets::new("https://hub.example.com", &regs);
             let out = &scan_project_types(dir.path(), &t, 0)[0].instructions;
@@ -717,6 +718,7 @@ mod tests {
             public_url: public_url.map(str::to_owned),
             upstream: None,
             installable: None,
+            upstreams: Vec::new(),
         }
     }
 

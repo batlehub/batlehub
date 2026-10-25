@@ -1350,7 +1350,7 @@ impl SuggestedRegistry {
 /// actually matters (`nodejs.org` would otherwise match `nodejsXorg`), but the
 /// rest are escaped too so a query string or a `+` in a path cannot change the
 /// pattern's meaning.
-fn regex_escape(s: &str) -> String {
+pub(crate) fn regex_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         if r".+*?()[]{}^$|\".contains(c) {

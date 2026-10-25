@@ -26,7 +26,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
 
 use crate::api::registry::RegistryInfo;
-use crate::api::suggest::{push_replacement, typed_url_replacements};
+use crate::api::suggest::{push_replacement, regex_escape, typed_url_replacements};
 
 // ── Clients ───────────────────────────────────────────────────────────────────
 
@@ -999,6 +999,27 @@ fn url_host(url: &str) -> Option<String> {
         .map(str::to_ascii_lowercase)
 }
 
+/// A generic registry's upstream, as it goes into a rule: a plain http(s) URL
+/// with nothing a TOML key or a regex could misread, without its final `/`.
+fn check_upstream(u: &str) -> std::result::Result<&str, String> {
+    let ok = u.is_ascii()
+        && !u
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace() || UNSAFE.contains(c))
+        && reqwest::Url::parse(u).is_ok_and(|p| {
+            matches!(p.scheme(), "http" | "https")
+                && p.username().is_empty()
+                && p.password().is_none()
+                && p.query().is_none()
+                && p.fragment().is_none()
+        });
+    if ok {
+        Ok(u.trim_end_matches('/'))
+    } else {
+        Err(format!("its upstream {u:?} is not a plain http(s) URL"))
+    }
+}
+
 /// Why `r`'s mise rules must not be written: they rewrite a fixed public host
 /// (`codeberg.org`, `api.github.com`, …) onto the registry, which is only
 /// right when the registry proxies that host. A forgejo registry in front of
@@ -1321,7 +1342,11 @@ const ALL_TARGETS: [TargetId; 11] = [
 /// Registry types the mise drop-in carries settings for: the ones whose URLs
 /// mise fetches itself. `generic` needs the upstreams the registry list does
 /// not carry yet (RFC 0038 phase 2).
-const MISE_TYPES: [&str; 6] = ["github", "forgejo", "npm", "cargo", "openvsx", "nodedist"];
+/// `generic` last: mise stops at the first rule that matches, and a mirror of
+/// `https://github.com` must not shadow the typed github rules.
+const MISE_TYPES: [&str; 7] = [
+    "github", "forgejo", "npm", "cargo", "openvsx", "nodedist", "generic",
+];
 
 /// The plan for every file, from the registry list and the machine. Fails only
 /// on a `--pick` the server does not list (used or not): everything else that goes
@@ -1652,6 +1677,25 @@ impl<'a> PlanCtx<'a> {
         let mut notes = Vec::new();
         let mut gone = false;
         for ty in types {
+            // Every generic mirror at once: each fronts its own upstreams, so
+            // two are not candidates for one place, and none is ambiguous.
+            if *ty == "generic" {
+                let all: Vec<&'a RegistryInfo> = self
+                    .registries
+                    .iter()
+                    .filter(|r| r.registry_type == "generic" && is_candidate(r))
+                    .collect();
+                for (t, n) in read.managed.iter().flat_map(|m| &m.registries) {
+                    if t == "generic" && !all.iter().any(|r| &r.name == n) {
+                        gone = true;
+                        notes.push(format!(
+                            "generic registry {n} is no longer listed; `setup remove` to stop using the instance"
+                        ));
+                    }
+                }
+                chosen.extend(all.into_iter().map(|r| ("generic", r)));
+                continue;
+            }
             let own = read.managed.as_ref().and_then(|m| m.name_for(ty));
             let (resolution, note) =
                 resolve(ty, self.registries, &self.opts.picks, own, &self.marked)?;
@@ -1701,6 +1745,28 @@ impl<'a> PlanCtx<'a> {
                         // mise `Url::join`s onto it: without the slash the last
                         // segment is dropped.
                         node = Some(format!("{base}/nodedist/"));
+                    }
+                    if *ty == "generic" {
+                        if r.upstreams.is_empty() {
+                            skipped.push(format!(
+                                "generic registry {} (the server does not say what it mirrors)",
+                                r.name
+                            ));
+                        }
+                        // A 1:1 path mirror: each upstream maps onto it.
+                        for upstream in &r.upstreams {
+                            match check_upstream(upstream) {
+                                Ok(u) => push_replacement(
+                                    &mut rules,
+                                    &format!("^{}/(.+)", regex_escape(u)),
+                                    &format!("{base}/generic/$1"),
+                                ),
+                                Err(why) => {
+                                    skipped.push(format!("generic registry {} ({why})", r.name))
+                                }
+                            }
+                        }
+                        continue;
                     }
                     if let Some(why) = foreign_upstream(ty, r) {
                         skipped.push(why);
@@ -2816,6 +2882,7 @@ mod tests {
                 _ => None,
             },
             installable: None,
+            upstreams: Vec::new(),
         }
     }
 
@@ -2844,6 +2911,43 @@ mod tests {
         only.upstream = Some("https://git.corp.example".to_owned());
         let p = find(&plan(&[only], &opts(), &env).unwrap(), TargetId::Mise).clone();
         assert!(!p.writes(), "{:?}", p.state);
+    }
+
+    /// Every generic mirror gets a rule per upstream, after the typed rules;
+    /// one the list no longer names keeps the drop-in (fail closed).
+    #[test]
+    fn mise_rules_for_every_generic_mirror() {
+        let dir = TempDir::new().unwrap();
+        let env = env_in(dir.path(), &[ClientId::Mise]);
+        let mut hc = reg("hc", "generic", "proxy");
+        hc.upstreams = vec!["https://releases.hashicorp.com/".to_owned()];
+        let mut k8s = reg("k8s", "generic", "proxy");
+        k8s.upstreams = vec!["https://dl.k8s.io".to_owned(), "bad url".to_owned()];
+        let regs = vec![hc, k8s.clone(), reg("gh", "github", "proxy")];
+        let plans = plan(&regs, &opts(), &env).unwrap();
+        let p = find(&plans, TargetId::Mise).clone();
+        let next = p.next.clone().unwrap();
+        let hc_rule = r#""regex:^https://releases\\.hashicorp\\.com/(.+)" = "https://hub.example.com/proxy/hc/generic/$1""#;
+        assert!(next.contains(hc_rule), "{next}");
+        assert!(next.contains("proxy/k8s/generic/$1"), "{next}");
+        assert!(
+            next.find("api\\\\.github").unwrap() < next.find("hashicorp").unwrap(),
+            "typed rules first: {next}"
+        );
+        assert!(p.detail.unwrap().contains("not a plain http(s) URL"));
+        toml::from_str::<toml::Table>(&next).unwrap();
+
+        apply_all(&plans);
+        let p = find(
+            &plan(&[k8s, reg("gh", "github", "proxy")], &opts(), &env).unwrap(),
+            TargetId::Mise,
+        )
+        .clone();
+        assert_eq!(p.state, State::Orphaned, "{:?}", p.detail);
+        assert!(p
+            .detail
+            .unwrap()
+            .contains("generic registry hc is no longer listed"));
     }
 
     const SERVER: &str = "https://hub.example.com";

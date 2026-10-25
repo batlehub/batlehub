@@ -17,7 +17,8 @@
 #
 #   1. `setup apply` without `--yes` exits 0 and writes no file.
 #   2. `setup apply --yes`, then one install per client — cargo, npm, pnpm,
-#      yarn 4, pip, uv, go, mvn, mise, rustup — each succeeds with egress
+#      yarn 4, pip, uv, go, mvn, mise (a GitHub release, and helm through a
+#      generic mirror), rustup — each succeeds with egress
 #      denied, and each artifact request is on the tap. go also proves RFC
 #      0038 §4.2's rule: with `GOSUMDB` unset, its checksum lookups come
 #      through `/proxy/<go>/sumdb/`.
@@ -64,6 +65,8 @@ PYPI="pypi-$HEAVY_RUN"
 GO="go-$HEAVY_RUN"
 MAVEN="maven-$HEAVY_RUN"
 GITHUB="github-$HEAVY_RUN"
+HELM="helm-$HEAVY_RUN"
+HELM_VERSION="${HEAVY_CS_HELM:-3.16.4}"
 RUST="rust-$HEAVY_RUN"
 NODEDIST="nodedist-$HEAVY_RUN"
 NPM_B="npmb-$HEAVY_RUN"
@@ -389,6 +392,19 @@ client "$MH" "$OUT" "$HEAVY_WORK" MISE_YES=1 MISE_GITHUB_ATTESTATIONS=false \
   || { cat "$OUT" >&2; heavy_fail "mise install failed with the drop-in apply wrote"; }
 heavy_wire_re_after mise "GET /proxy/$GITHUB/cli/cli/releases/download/[^ ]* -> 200" \
   "the release asset did not come through the instance"
+
+# RFC 0038 phase 2: the generic registry's rule is `^{upstream}/(.+)`, written
+# from the `upstreams` the registry list now carries. aqua's helm downloads
+# from get.helm.sh, a host no typed rule covers.
+heavy_mark mise-generic
+heavy_log "mise install aqua:helm/helm@$HELM_VERSION, through the generic mirror"
+client "$MH" "$OUT" "$HEAVY_WORK" MISE_YES=1 MISE_GITHUB_ATTESTATIONS=false \
+  MISE_AQUA_GITHUB_ATTESTATIONS=false MISE_AQUA_COSIGN=false MISE_AQUA_SLSA=false \
+  mise install "aqua:helm/helm@$HELM_VERSION" \
+  || { cat "$OUT" >&2; heavy_fail "mise install of helm failed with the generic rule apply wrote"; }
+heavy_wire_after mise-generic \
+  "GET /proxy/$HELM/generic/helm-v$HELM_VERSION-linux-amd64.tar.gz -> 200" \
+  "the helm archive did not come through the generic mirror"
 
 heavy_mark rustup
 heavy_log "rustup toolchain install $RUST_VERSION, from an interactive bash that sources ~/.bashrc"

@@ -27180,6 +27180,13 @@
               "null"
             ],
             "description": "The upstream this registry proxies (`https://registry.npmjs.org`), or\n`null` for a local-only registry that has none.\n\nThe design proof's catalog caption names it — *\"hybrid ·\nregistry.npmjs.org · 1,284 packages · 6.1 GB cached\"* — because \"which\nupstream is behind this\" is the first thing an operator asks of a\nregistry they did not configure themselves.\n\nVisible to anonymous callers on the same terms as `public_url` above,\nand for the same reason: this endpoint already filters by\n`accessible_registries_for`, so a caller only ever sees registries they\ncan already pull through — and pulling through one reveals the upstream\nanyway, in the artifacts it returns."
+          },
+          "upstreams": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every upstream a path-addressed registry (`generic`, `deb`, …) mirrors,\npath for path; omitted for the other kinds. `batlehub-cli setup apply`\nturns each into a mise rule `^{upstream}/(.+)` → `{proxy}/$1`\n(RFC 0038 §6.4). Visible on the same terms as `upstream`."
           }
         }
       },

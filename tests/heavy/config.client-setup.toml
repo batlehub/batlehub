@@ -96,6 +96,19 @@ anonymous = ["releases:read", "releases:list", "source:read"]
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
 
+# ── mise: a generic mirror, whose rules come from its `upstreams` ────────────
+[[registries]]
+type = "generic"
+name = "helm-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://get.helm.sh"]
+path_allow = ["helm-v*-linux-amd64.tar.gz", "helm-v*-linux-amd64.tar.gz.sha256sum"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
 # ── rustup: static.rust-lang.org, an env-only client ─────────────────────────
 [[registries]]
 type = "rustup"

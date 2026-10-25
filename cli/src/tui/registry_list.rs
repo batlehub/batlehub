@@ -93,6 +93,7 @@ mod tests {
             public_url: None,
             upstream: None,
             installable: None,
+            upstreams: Vec::new(),
         }
     }
 

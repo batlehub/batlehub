@@ -23,6 +23,10 @@ pub struct RegistryInfo {
     /// install from this registry; absent on servers older than the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installable: Option<bool>,
+    /// Every upstream a path-addressed registry (`generic`, …) mirrors, path
+    /// for path; empty for the other kinds and on older servers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub upstreams: Vec<String>,
 }
 
 impl RegistryInfo {
@@ -125,6 +129,7 @@ mod tests {
             public_url: public_url.map(str::to_owned),
             upstream: None,
             installable: None,
+            upstreams: Vec::new(),
         }
     }
 

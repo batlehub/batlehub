@@ -421,6 +421,22 @@ pub(super) fn upstream_url_for(reg: &RegistryConfig) -> Option<String> {
     )
 }
 
+/// Every configured upstream of a path-addressed registry (`generic`, `deb`,
+/// …): a 1:1 mirror whose client rule is `^{upstream}/(.+)` → `{proxy}/$1`,
+/// which `batlehub-cli setup apply` can only write knowing them all.
+fn path_addressed_upstreams(registries: &[RegistryConfig]) -> HashMap<String, Vec<String>> {
+    registries
+        .iter()
+        .filter(|r| {
+            r.registry_type
+                .parse::<RegistryKind>()
+                .is_ok_and(|k| k.is_path_addressed())
+                && !r.upstreams.is_empty()
+        })
+        .map(|r| (r.name.clone(), r.upstreams.clone()))
+        .collect()
+}
+
 fn build_vuln_db_map(registries: &[RegistryConfig]) -> VulnDbMap {
     const DEFAULT: &str = "https://vuln.go.dev";
     let urls = registries
@@ -788,7 +804,7 @@ pub(super) fn build_hot_bundle(
         build_access_config(cfg),
         RegistryMap::from(reg_type_map),
         RegistryModeMap::from(reg_mode_map),
-        UpstreamMap::from(upstream_map),
+        UpstreamMap::from(upstream_map).with_all(path_addressed_upstreams(&cfg.registries)),
         build_vuln_db_map(&cfg.registries),
         build_sumdb_map(&cfg.registries),
     ))
@@ -1373,6 +1389,28 @@ mod tests {
             upstream_url_for(&r).as_deref(),
             Some("https://git.corp.example")
         );
+    }
+
+    #[test]
+    fn path_addressed_upstreams_are_every_configured_one() {
+        let g = make_registry(
+            "generic",
+            "g",
+            r#"upstreams = ["https://releases.hashicorp.com", "https://dl.k8s.io"]"#,
+        );
+        let n = make_registry("npm", "n", r#"upstreams = ["https://npm.example.com"]"#);
+        let map = path_addressed_upstreams(&[g, n]);
+        assert_eq!(
+            map.get("g").map(Vec::as_slice),
+            Some(
+                [
+                    "https://releases.hashicorp.com".to_owned(),
+                    "https://dl.k8s.io".to_owned()
+                ]
+                .as_slice()
+            )
+        );
+        assert!(!map.contains_key("n"), "npm is not path-addressed");
     }
 
     #[test]

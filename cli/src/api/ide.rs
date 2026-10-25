@@ -355,6 +355,7 @@ mod tests {
             public_url: None,
             upstream: None,
             installable: None,
+            upstreams: Vec::new(),
         }
     }
 
@@ -363,6 +364,7 @@ mod tests {
             public_url: Some(public_url.to_owned()),
             upstream: None,
             installable: None,
+            upstreams: Vec::new(),
             ..reg(name, ty)
         }
     }
