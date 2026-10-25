@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod auth;
 pub mod authz;
+pub mod client_setup;
 pub mod ide;
 pub mod mise_plan;
 pub mod owner;

@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod auth;
 pub mod authz;
+pub mod completion;
 pub mod config_cmd;
 pub mod download;
 pub mod java;

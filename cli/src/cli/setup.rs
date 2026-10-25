@@ -3,6 +3,10 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Subcommand;
 
+use crate::api::client_setup::{
+    self, check_server_scheme, ClientId, EnvShell, MavenMirror, Options, ShellRc, State, TargetId,
+    TargetPlan,
+};
 use crate::api::ide::detect_ides;
 use crate::api::registry::{host_of, RegistryInfo, RegistryTargets};
 use crate::api::setup::{api_registry_type, scan_project_types};
@@ -55,6 +59,122 @@ pub enum SetupCommand {
         #[arg(long)]
         json: bool,
     },
+
+    /// Write every installed client's user configuration from the server's
+    /// registry list (RFC 0038). Without --yes, print the diff and write nothing
+    Apply {
+        /// Write the files; without it, only the diff is printed
+        #[arg(long)]
+        yes: bool,
+
+        #[command(flatten)]
+        select: Selection,
+
+        #[command(flatten)]
+        server: ServerArgs,
+
+        /// What Maven's mirror replaces (default `central`, which leaves the
+        /// repositories a POM declares alone). Kept by later runs once given
+        #[arg(long, value_enum)]
+        maven_mirror_of: Option<MavenMirror>,
+
+        /// `auto` adds a line sourcing the env file to ~/.bashrc or ~/.zshenv
+        /// (a conf.d file for fish); `none` leaves rc files alone
+        #[arg(long, value_enum, default_value = "auto")]
+        shell_rc: ShellRc,
+
+        /// Output raw JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Report, per client, whether this machine is configured. Exit 0 when
+    /// nothing is left to do, 3 otherwise
+    Status {
+        #[command(flatten)]
+        select: Selection,
+
+        #[command(flatten)]
+        server: ServerArgs,
+
+        /// Output raw JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Take every block and file `setup apply` wrote back out. Needs no server
+    Remove {
+        /// Remove; without it, only the diff is printed
+        #[arg(long)]
+        yes: bool,
+
+        #[command(flatten)]
+        select: Selection,
+
+        /// Output raw JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Print the variables of the clients configured only through their
+    /// environment, for `eval "$(batlehub-cli setup env)"`
+    Env {
+        /// Syntax of the output
+        #[arg(long, value_enum, default_value = "sh")]
+        shell: EnvShell,
+
+        #[command(flatten)]
+        select: Selection,
+
+        #[command(flatten)]
+        server: ServerArgs,
+    },
+}
+
+/// `--only` / `--skip`, shared by the RFC 0038 verbs.
+#[derive(clap::Args)]
+pub struct Selection {
+    /// Only these clients
+    #[arg(long, value_enum, value_delimiter = ',')]
+    only: Vec<ClientId>,
+
+    /// Every client but these
+    #[arg(long, value_enum, value_delimiter = ',')]
+    skip: Vec<ClientId>,
+}
+
+/// How the RFC 0038 verbs reach and trust the server.
+#[derive(clap::Args)]
+pub struct ServerArgs {
+    /// Pick a registry when the server has several of one type; kept by later
+    /// runs once given (repeatable)
+    #[arg(long = "registry", value_name = "TYPE=NAME")]
+    registry: Vec<String>,
+
+    /// Accept a plain-HTTP server URL outside loopback
+    #[arg(long)]
+    insecure_http: bool,
+
+    /// Accept a registry `public_url` that is not on the server's host or a
+    /// subdomain of it
+    #[arg(long)]
+    allow_foreign_hosts: bool,
+}
+
+/// The registry list, or an error — never placeholders.
+///
+/// Unlike [`load_registries`], an unreachable server is a failure: a
+/// placeholder written into `~/.npmrc` breaks npm. The list is asked for
+/// anonymously, whatever token the profile holds: `apply` configures anonymous
+/// reads, and the list only names the registries the caller may read, so a
+/// closed registry is never written into a client that sends no credential.
+async fn fetch_registries(server: &str) -> Result<Vec<RegistryInfo>> {
+    let client = BatleHubClient::new(server, None)?;
+    match tokio::time::timeout(REGISTRY_FETCH_TIMEOUT, client.list_registries()).await {
+        Ok(Ok(registries)) => Ok(registries),
+        Ok(Err(e)) => Err(e.context(format!("could not list registries on {server}"))),
+        Err(_) => anyhow::bail!("{server} did not answer within 5s"),
+    }
 }
 
 /// Best-effort registry list.
@@ -114,11 +234,12 @@ fn netrc_block(hosts: &[String]) -> Option<String> {
     Some(out)
 }
 
+/// Run a `setup` verb; the value is the process exit code (RFC 0038 §4.1).
 pub async fn run(
     cmd: SetupCommand,
     global_server: Option<&str>,
     token: Option<&str>,
-) -> Result<()> {
+) -> Result<i32> {
     match cmd {
         SetupCommand::Detect {
             dir,
@@ -128,7 +249,8 @@ pub async fn run(
             json,
         } => {
             let server = global_server.unwrap_or(&server);
-            run_detect(dir, depth, server, token, offline, json).await
+            run_detect(dir, depth, server, token, offline, json).await?;
+            Ok(0)
         }
         SetupCommand::Ide {
             server,
@@ -136,9 +258,252 @@ pub async fn run(
             json,
         } => {
             let server = global_server.unwrap_or(&server);
-            run_ide(server, token, offline, json).await
+            run_ide(server, token, offline, json).await?;
+            Ok(0)
+        }
+        SetupCommand::Apply {
+            yes,
+            select,
+            server,
+            maven_mirror_of,
+            shell_rc,
+            json,
+        } => {
+            let env = client_setup::Env::from_process()?;
+            let plans = load_plan(
+                global_server,
+                &select,
+                &server,
+                maven_mirror_of,
+                shell_rc,
+                &env,
+            )
+            .await?;
+            run_apply(&plans, &env, shell_rc, yes, json)
+        }
+        SetupCommand::Status {
+            select,
+            server,
+            json,
+        } => {
+            let env = client_setup::Env::from_process()?;
+            let plans =
+                load_plan(global_server, &select, &server, None, ShellRc::Auto, &env).await?;
+            run_status(&plans, json)
+        }
+        SetupCommand::Remove { yes, select, json } => {
+            let env = client_setup::Env::from_process()?;
+            run_remove(&env, &select, yes, json)
+        }
+        SetupCommand::Env {
+            shell,
+            select,
+            server,
+        } => {
+            let env = client_setup::Env::from_process()?;
+            let plans =
+                load_plan(global_server, &select, &server, None, ShellRc::None, &env).await?;
+            if let Some(p) = plans.iter().find(|p| p.target == TargetId::EnvSh) {
+                print!("{}", client_setup::render_env(&p.env, shell));
+            }
+            Ok(0)
         }
     }
+}
+
+async fn load_plan(
+    global_server: Option<&str>,
+    select: &Selection,
+    args: &ServerArgs,
+    maven_mirror_of: Option<MavenMirror>,
+    shell_rc: ShellRc,
+    env: &client_setup::Env,
+) -> Result<Vec<TargetPlan>> {
+    let server = global_server.ok_or_else(|| {
+        anyhow::anyhow!(
+            "no server: pass --server, set BATLEHUB_SERVER, or set the profile's server_url"
+        )
+    })?;
+    check_server_scheme(server, args.insecure_http)?;
+    let registries = fetch_registries(server).await?;
+    let opts = Options {
+        server,
+        picks: client_setup::parse_picks(&args.registry)?,
+        maven_mirror_of,
+        shell_rc,
+        only: select.only.clone(),
+        skip: select.skip.clone(),
+        allow_foreign_hosts: args.allow_foreign_hosts,
+    };
+    client_setup::plan(&registries, &opts, env)
+}
+
+/// 3 when a client needs a human: a conflict to merge or a registry to pick.
+fn needs_a_look(plans: &[TargetPlan]) -> bool {
+    plans
+        .iter()
+        .any(|p| matches!(p.state, State::Conflict | State::Ambiguous))
+}
+
+fn clients_label(p: &TargetPlan) -> String {
+    p.clients
+        .iter()
+        .map(|c| c.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn print_row(p: &TargetPlan) {
+    println!(
+        "{:<18} {:<14} {:<16} {}",
+        clients_label(p),
+        p.state.as_str(),
+        p.registries.join(","),
+        p.path.display()
+    );
+    if let Some(detail) = &p.detail {
+        println!("{:<18} └ {detail}", "");
+    }
+}
+
+fn run_status(plans: &[TargetPlan], json: bool) -> Result<i32> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(plans)?);
+    } else {
+        for p in plans {
+            print_row(p);
+        }
+    }
+    Ok(if plans.iter().all(|p| p.state.settled()) {
+        0
+    } else {
+        3
+    })
+}
+
+fn run_apply(
+    plans: &[TargetPlan],
+    env: &client_setup::Env,
+    shell_rc: ShellRc,
+    yes: bool,
+    json: bool,
+) -> Result<i32> {
+    let mut warnings: Vec<String> = Vec::new();
+    for p in plans {
+        match p.state {
+            State::Conflict => warnings.push(format!(
+                "{}: conflict, skipped — {}",
+                clients_label(p),
+                p.detail.as_deref().unwrap_or("")
+            )),
+            State::Ambiguous => warnings.push(format!(
+                "{}: {}",
+                clients_label(p),
+                p.detail.as_deref().unwrap_or("")
+            )),
+            _ => {}
+        }
+    }
+    let exports = plans
+        .iter()
+        .any(|p| p.target == TargetId::EnvSh && p.next.is_some());
+    let known_shell = matches!(env.shell.as_deref(), Some("bash" | "zsh" | "fish"));
+    if exports && shell_rc == ShellRc::Auto && !known_shell {
+        warnings.push(format!(
+            "login shell {} is not bash, zsh or fish: no rc file was changed;              add `eval \"$(batlehub-cli setup env)\"` to it",
+            env.shell.as_deref().unwrap_or("unknown")
+        ));
+    }
+
+    if yes {
+        for p in plans.iter().filter(|p| p.writes()) {
+            client_setup::apply_one(p)?;
+        }
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "written": yes,
+                "targets": plans,
+                "warnings": warnings,
+            }))?
+        );
+    } else {
+        for p in plans.iter().filter(|p| p.writes()) {
+            if yes {
+                let verb = if p.next.is_some() { "wrote" } else { "deleted" };
+                println!("{verb} {} ({})", p.path.display(), clients_label(p));
+            } else {
+                print!(
+                    "{}",
+                    client_setup::diff(
+                        &p.path,
+                        p.current.as_deref().unwrap_or(""),
+                        p.next.as_deref()
+                    )
+                );
+            }
+        }
+        for p in plans.iter().filter(|p| p.state == State::Conflict) {
+            if let Some(snippet) = &p.snippet {
+                println!(
+                    "\n{} — merge by hand into {}:\n{snippet}",
+                    clients_label(p),
+                    p.path.display()
+                );
+            }
+        }
+        for w in &warnings {
+            eprintln!("warning: {w}");
+        }
+        let pending = plans.iter().filter(|p| p.writes()).count();
+        if pending == 0 {
+            println!("Nothing to write.");
+        } else if !yes {
+            println!("{pending} file(s) would change; run with --yes to write them.");
+        }
+    }
+    Ok(if needs_a_look(plans) { 3 } else { 0 })
+}
+
+fn run_remove(env: &client_setup::Env, select: &Selection, yes: bool, json: bool) -> Result<i32> {
+    let removals = client_setup::removals(env, &select.only, &select.skip)?;
+    if yes {
+        for r in &removals {
+            client_setup::remove_one(r)?;
+        }
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &serde_json::json!({ "removed": yes, "files": removals })
+            )?
+        );
+        return Ok(0);
+    }
+    for r in &removals {
+        if yes {
+            let verb = if r.deletes { "deleted" } else { "restored" };
+            println!("{verb} {}", r.path.display());
+        } else {
+            print!(
+                "{}",
+                client_setup::diff(&r.path, &r.current, r.next.as_deref())
+            );
+        }
+    }
+    if removals.is_empty() {
+        println!("Nothing managed by batlehub setup on this machine.");
+    } else if !yes {
+        println!(
+            "{} file(s) would change; run with --yes to remove.",
+            removals.len()
+        );
+    }
+    Ok(0)
 }
 
 async fn run_detect(

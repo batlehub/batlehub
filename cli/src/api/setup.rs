@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::api::client_setup::{render_body, TargetId};
 use crate::api::registry::RegistryTargets;
 
 pub struct ProjectDetection {
@@ -214,11 +215,11 @@ fn detect_cargo(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDetectio
              Package       : {pkg}\n\
              \n\
              ~/.cargo/config.toml:\n\
-             [registries]\n\
-             batlehub = {{ index = \"sparse+{base}/cargo/\" }}\n\
+             {body}\n\
              \n\
              Publish:\n\
-             cargo publish --registry batlehub"
+             cargo publish --registry batlehub",
+            body = render_body(TargetId::Cargo, base)
         )
     }))
 }
@@ -236,10 +237,11 @@ fn detect_gomodules(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDete
              Module        : {pkg}\n\
              \n\
              Environment:\n\
-             export GOPROXY={base}/go,direct\n\
+             export {}\n\
              \n\
              Use:\n\
-             go get {pkg}"
+             go get {pkg}",
+            render_body(TargetId::Go, base)
         )
     }))
 }
@@ -257,10 +259,11 @@ fn detect_npm(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDetection>
              Package       : {pkg}\n\
              \n\
              .npmrc:\n\
-             registry={base}/npm/\n\
+             {}\n\
              \n\
              Publish:\n\
-             npm publish"
+             npm publish",
+            render_body(TargetId::Npmrc, base)
         )
     }))
 }
@@ -280,7 +283,7 @@ fn detect_maven(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDetectio
              settings.xml:\n\
              <repository>\n\
                <id>batlehub</id>\n\
-               <url>{base}/maven/</url>\n\
+               <url>{base}/maven2/</url>\n\
              </repository>\n\
              \n\
              Publish:\n\
@@ -304,7 +307,7 @@ fn detect_composer(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDetec
              composer.json:\n\
              \"repositories\": [{{\n\
                \"type\": \"composer\",\n\
-               \"url\": \"{base}/composer/\"\n\
+               \"url\": \"{base}/\"\n\
              }}]"
         )
     }))
@@ -329,10 +332,10 @@ fn detect_rubygems(dir_names: &[String], targets: &RegistryTargets) -> Option<Pr
              \n\
              ~/.gemrc:\n\
              :sources:\n\
-             - {base}/gems/\n\
+             - {base}/\n\
              \n\
              Publish:\n\
-             gem push *.gem --host {base}/gems/"
+             gem push *.gem --host {base}"
         )
     }))
 }
@@ -357,7 +360,7 @@ fn detect_terraform(
              ~/.terraformrc:\n\
              provider_installation {{\n\
                network_mirror {{\n\
-                 url = \"{base}/terraform/\"\n\
+                 url = \"{base}/\"\n\
                }}\n\
              }}"
         )
@@ -378,7 +381,7 @@ fn detect_conda(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDetectio
              \n\
              ~/.condarc:\n\
              channels:\n\
-               - {base}/conda/\n\
+               - {base}\n\
              \n\
              Publish:\n\
              batlehub-cli publish *.conda"
@@ -401,11 +404,11 @@ fn detect_pypi(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDetection
              Package       : {pkg}\n\
              \n\
              pip.conf / pip.ini:\n\
-             [global]\n\
-             index-url = {base}/pypi/\n\
+             {}\n\
              \n\
              Publish:\n\
-             twine upload dist/*"
+             twine upload dist/*",
+            render_body(TargetId::Pip, base)
         )
     }))
 }
@@ -688,7 +691,7 @@ mod tests {
         let results = scan_project_types(dir.path(), &targets(), 0);
         assert!(results[0]
             .instructions
-            .contains("registry=http://localhost:8080/proxy/<registry>/npm/"));
+            .contains("registry=http://localhost:8080/proxy/<registry>/"));
         assert_eq!(results[0].registry_name, None);
     }
 
@@ -704,7 +707,7 @@ mod tests {
         assert_eq!(results[0].registry_name.as_deref(), Some("npm1"));
         assert!(results[0]
             .instructions
-            .contains("registry=https://batlehub.example.com/proxy/npm1/npm/"));
+            .contains("registry=https://batlehub.example.com/proxy/npm1/"));
     }
 
     /// Host-routed: the instructions must point at the registry's own subdomain
@@ -731,11 +734,11 @@ mod tests {
         assert_eq!(npm.base_url, "https://npm1.batlehub.example.com");
         assert!(npm
             .instructions
-            .contains("registry=https://npm1.batlehub.example.com/npm/"));
+            .contains("registry=https://npm1.batlehub.example.com/"));
         assert_eq!(go.registry_name.as_deref(), Some("go1"));
         assert!(go
             .instructions
-            .contains("export GOPROXY=https://go1.batlehub.example.com/go,direct"));
+            .contains("export GOPROXY=https://go1.batlehub.example.com"));
         for det in &results {
             assert!(
                 !det.instructions.contains("/proxy/"),

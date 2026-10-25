@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use super::BatleHubClient;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RegistryInfo {
     pub name: String,
     #[serde(rename = "type")]

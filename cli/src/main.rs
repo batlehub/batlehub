@@ -9,8 +9,8 @@ use anyhow::Result;
 use clap::Parser;
 
 use cli::{
-    admin, auth, authz, config_cmd, download, java, mise, owner, package, proxy, publish, registry,
-    security, setup, version, vsx, Cli, Command,
+    admin, auth, authz, completion, config_cmd, download, java, mise, owner, package, proxy,
+    publish, registry, security, setup, version, vsx, Cli, Command,
 };
 use config::ConfigFile;
 
@@ -27,10 +27,7 @@ async fn main() -> Result<()> {
         return java::run(args);
     }
     if let Command::Completion { shell } = cli.command {
-        use clap::CommandFactory;
-        use clap_complete::generate;
-        let mut cmd = Cli::command();
-        generate(shell, &mut cmd, "batlehub-cli", &mut std::io::stdout());
+        print!("{}", completion::script(shell));
         return Ok(());
     }
     let mut cfg = ConfigFile::load()?;
@@ -51,7 +48,11 @@ async fn main() -> Result<()> {
             .token
             .clone()
             .or_else(|| profile.and_then(|p| p.token.clone()));
-        return setup::run(cmd, resolved_server.as_deref(), resolved_token.as_deref()).await;
+        let code = setup::run(cmd, resolved_server.as_deref(), resolved_token.as_deref()).await?;
+        if code != 0 {
+            std::process::exit(code);
+        }
+        return Ok(());
     }
 
     // Determine base URL for potential OIDC auto-refresh (before building the client)

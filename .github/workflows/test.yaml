@@ -975,6 +975,11 @@ jobs:
           # through a registry bound to `devfile.localhost` — the client drops
           # any path prefix for its OCI requests (RFC 0035 §5.3).
           - suite: devfile
+          # RFC 0038: `batlehub-cli setup apply` configures every client, and
+          # each one then installs through the instance with egress denied.
+          # Needs mise and uv beside the runner's own cargo, npm, pip, go and mvn;
+          # pnpm and yarn 4 are installed by the suite.
+          - suite: client_setup
     services:
       postgres:
         image: postgres:17-alpine
@@ -1018,7 +1023,7 @@ jobs:
 
       # ── Per-ecosystem client setup ──────────────────────────────────────────
       - name: Set up Node (npm / Open VSX / quarantine / upstream_audit / airgap / reload)
-        if: matrix.suite == 'npm' || matrix.suite == 'openvsx' || matrix.suite == 'quarantine' || matrix.suite == 'upstream_audit' || matrix.suite == 'airgap' || matrix.suite == 'hybrid' || matrix.suite == 'reload'
+        if: matrix.suite == 'npm' || matrix.suite == 'openvsx' || matrix.suite == 'quarantine' || matrix.suite == 'upstream_audit' || matrix.suite == 'airgap' || matrix.suite == 'hybrid' || matrix.suite == 'reload' || matrix.suite == 'client_setup'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -1042,7 +1047,7 @@ jobs:
           sudo unzip -o -q /tmp/terraform.zip -d /usr/local/bin
           terraform version
       - name: Install mise
-        if: matrix.suite == 'mise' || matrix.suite == 'airgap'
+        if: matrix.suite == 'mise' || matrix.suite == 'airgap' || matrix.suite == 'client_setup'
         run: |
           # From the release archive rather than the `curl | sh` installer:
           # one URL, one version, and nothing else enters the runner.
@@ -1053,7 +1058,7 @@ jobs:
           mise --version
       - name: Install uv
         # db_calls: psycopg, to mint the PAT its token-auth scenarios present.
-        if: matrix.suite == 'galaxy' || matrix.suite == 'db_calls'
+        if: matrix.suite == 'galaxy' || matrix.suite == 'db_calls' || matrix.suite == 'client_setup'
         run: |
           # From the release archive rather than the `curl | sh` installer:
           # one URL, one version, and nothing else enters the runner. The

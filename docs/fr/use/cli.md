@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: 0c16007cee85361e
+sourceHash: 218ddf3b5b45c4aa
 ---
 
 # batlehub-cli
@@ -1146,6 +1146,78 @@ d'hôte, donc un registre routé par hôte a besoin de sa propre entrée.
 Si le serveur est injoignable, les commandes fonctionnent quand même — elles
 impriment des marqueurs `<registry>` et le disent sur stderr. `--offline` saute
 entièrement la requête.
+
+### Configurer la machine : `setup apply`, `status`, `remove`, `env` {#setup-apply}
+
+```
+batlehub-cli setup apply  [--yes] [--only <client>,…] [--skip <client>,…]
+                          [--registry <type>=<name>]… [--maven-mirror-of central|external|all]
+                          [--shell-rc auto|none] [--insecure-http] [--allow-foreign-hosts] [--json]
+batlehub-cli setup status [--only …] [--registry …] [--json]
+batlehub-cli setup remove [--yes] [--only …] [--json]
+batlehub-cli setup env    [--shell sh|fish] [--only …]
+```
+
+`detect` imprime des extraits pour un projet ; `apply` les écrit pour une
+machine. La commande demande au serveur quels registres existent, repère les
+clients présents dans le `PATH` et écrit la configuration **utilisateur** de
+chacun ([RFC 0038](/rfc/0038-client-setup-apply)). Seule l'URL du serveur est à
+fournir — `--server`, `BATLEHUB_SERVER` ou le profil — si bien que le hook d'un
+environnement de développement tient en une ligne :
+
+```sh
+BATLEHUB_SERVER=https://pkg.example.com batlehub-cli setup apply --yes
+```
+
+| Client | Fichier | Ce qui est écrit |
+| --- | --- | --- |
+| cargo | `$CARGO_HOME/config.toml` | `[source.crates-io] replace-with`, plus `[registries.batlehub]` pour `cargo publish` |
+| npm, pnpm, bun, yarn 1 | `~/.npmrc` | `registry=` |
+| yarn 2+ | `~/.yarnrc.yml` | `npmRegistryServer:`, plus `unsafeHttpWhitelist` pour un serveur en HTTP simple, que yarn refuse sinon |
+| pip | `~/.config/pip/pip.conf` | `[global] index-url` |
+| uv | `~/.config/uv/uv.toml` | un `[[index]]` par défaut |
+| go | `$(go env GOENV)` | `GOPROXY`, sans repli `,direct` |
+| maven | `~/.m2/settings.xml` | le fichier entier, un `<mirror>` (seulement s'il est absent) |
+| mise | `~/.config/mise/conf.d/batlehub.toml` | `[settings.url_replacements]` pour les registres github, forgejo, npm, cargo et openvsx |
+| rustup, node | `~/.config/batlehub/env.sh` | `RUSTUP_DIST_SERVER`, `NODEJS_ORG_MIRROR` et les miroirs nvm/fnm/n, sourcé depuis `~/.bashrc` ou `~/.zshenv` (un fichier `conf.d` pour fish) |
+
+- **Sans `--yes`, rien n'est écrit** : le diff de chaque fichier est imprimé.
+- **Seul ce qui se trouve entre les marqueurs est modifié.** Un bloc commence
+  par `# >>> batlehub setup … >>>` et finit par `# <<< batlehub setup <<<` ;
+  les fichiers gérés en entier (`settings.xml`, les fichiers déposés) portent le
+  marqueur de début en première ligne. `remove` rend chaque fichier à
+  l'identique, octet pour octet.
+- **Un réglage qui vous appartient n'est jamais modifié.** Si votre partie du
+  fichier règle déjà ce que le bloc réglerait — une ligne `registry=`, une
+  section `[global]` dans `pip.conf`, votre propre `settings.xml` — ou si une
+  variable d'environnement prime sur le fichier (`GOPROXY`,
+  `NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL`, …), le client est en `conflict` :
+  ignoré, avec l'extrait à fusionner à la main. Les variables sont lues dans
+  l'environnement où `apply` s'exécute et dans le fichier rc qu'il gère ; une
+  variable exportée depuis un autre fichier n'est pas vue.
+- **Seuls les registres `proxy` et `hybrid` sont retenus** : un registre `local`
+  ne peut pas remplacer crates.io ou npmjs. Deux candidats d'un même type sont
+  `ambiguous` jusqu'à ce que `--registry npm=<nom>` en choisisse un ; le choix
+  est consigné dans le bloc et les exécutions suivantes le conservent.
+  `--maven-mirror-of` est conservé de la même façon.
+- **La liste est lue anonymement**, de sorte qu'un registre fermé aux lectures
+  anonymes n'est jamais écrit dans un client qui n'envoie aucun identifiant ; la
+  publication passe toujours par `auth login` et `.netrc`.
+- **Un serveur injoignable n'écrit rien** (code 1), contrairement à `detect`.
+  De même pour un serveur en `http://` hors boucle locale (`--insecure-http`
+  pour l'accepter), et pour un `public_url` de registre qui n'est ni sur l'hôte
+  du serveur ni sur l'un de ses sous-domaines (`--allow-foreign-hosts`).
+
+`status` imprime une ligne par fichier : `not-installed`, `no-registry`,
+`ambiguous`, `absent`, `up-to-date`, `drifted`, `orphaned` (son registre a
+disparu ; `apply` retire le bloc) ou `conflict`. `env` imprime les variables des
+clients configurés par l'environnement seul, pour
+`eval "$(batlehub-cli setup env)"`, dans un shell que `--shell-rc none` laisse
+intact.
+
+Codes de sortie, pour un hook ou une étape de CI : `0` plus rien à faire, `1`
+une erreur, `3` terminé mais un client demande votre attention (`conflict`,
+`ambiguous` ; pour `status`, tout ce qui n'est pas réglé).
 
 ---
 

@@ -1077,6 +1077,73 @@ registry needs its own entry.
 If the server cannot be reached the commands still work — they print `<registry>`
 placeholders and say so on stderr. `--offline` skips the request entirely.
 
+### Configure this machine: `setup apply`, `status`, `remove`, `env` {#setup-apply}
+
+```
+batlehub-cli setup apply  [--yes] [--only <client>,…] [--skip <client>,…]
+                          [--registry <type>=<name>]… [--maven-mirror-of central|external|all]
+                          [--shell-rc auto|none] [--insecure-http] [--allow-foreign-hosts] [--json]
+batlehub-cli setup status [--only …] [--registry …] [--json]
+batlehub-cli setup remove [--yes] [--only …] [--json]
+batlehub-cli setup env    [--shell sh|fish] [--only …]
+```
+
+`detect` prints snippets for a project; `apply` writes them for a machine. It
+asks the server which registries exist, finds which clients are on `PATH`, and
+writes each one's **user-level** configuration
+([RFC 0038](../rfc/0038-client-setup-apply.md)). The server URL is the only
+thing to provision — `--server`, `BATLEHUB_SERVER` or the profile — so a dev
+environment hook can be one line:
+
+```sh
+BATLEHUB_SERVER=https://pkg.example.com batlehub-cli setup apply --yes
+```
+
+| Client | File | What is written |
+| --- | --- | --- |
+| cargo | `$CARGO_HOME/config.toml` | `[source.crates-io] replace-with`, plus `[registries.batlehub]` for `cargo publish` |
+| npm, pnpm, bun, yarn 1 | `~/.npmrc` | `registry=` |
+| yarn 2+ | `~/.yarnrc.yml` | `npmRegistryServer:`, plus `unsafeHttpWhitelist` for a plain-HTTP server, which yarn otherwise refuses |
+| pip | `~/.config/pip/pip.conf` | `[global] index-url` |
+| uv | `~/.config/uv/uv.toml` | a default `[[index]]` |
+| go | `$(go env GOENV)` | `GOPROXY`, with no `,direct` fallback |
+| maven | `~/.m2/settings.xml` | the whole file, a `<mirror>` (only when absent) |
+| mise | `~/.config/mise/conf.d/batlehub.toml` | `[settings.url_replacements]` for github, forgejo, npm, cargo and openvsx registries |
+| rustup, node | `~/.config/batlehub/env.sh` | `RUSTUP_DIST_SERVER`, `NODEJS_ORG_MIRROR` and the nvm/fnm/n mirrors, sourced from `~/.bashrc` or `~/.zshenv` (a `conf.d` file for fish) |
+
+- **Without `--yes`, nothing is written**: the diff of every file is printed.
+- **Only what is between the markers is ever touched.** A block starts with
+  `# >>> batlehub setup … >>>` and ends with `# <<< batlehub setup <<<`; files
+  managed whole (`settings.xml`, the drop-ins) carry the start marker on their
+  first line. `remove` gives every file back byte for byte.
+- **A setting you own is never edited.** If your part of the file already sets
+  what the block would — a `registry=` line, a `[global]` section in
+  `pip.conf`, your own `settings.xml` — or an environment variable overrides
+  the file (`GOPROXY`, `NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL`, …), the client is
+  `conflict`: skipped, with the snippet to merge by hand. Variables are read
+  from the environment `apply` runs in and from the rc file it manages; one
+  exported from another dotfile is not seen.
+- **Only `proxy` and `hybrid` registries are used**: a `local` one cannot stand
+  in for crates.io or npmjs. Two candidates of one type are `ambiguous` until
+  `--registry npm=<name>` picks one; the pick is recorded in the block, and
+  later runs keep it. `--maven-mirror-of` is kept the same way.
+- **The list is read anonymously**, so a registry closed to anonymous reads is
+  never written into a client that sends no credential; publishing still goes
+  through `auth login` and `.netrc`.
+- **An unreachable server writes nothing** (exit 1), unlike `detect`. So does a
+  plain `http://` server outside loopback (`--insecure-http` to accept), and a
+  registry `public_url` that is not on the server's host or a subdomain of it
+  (`--allow-foreign-hosts`).
+
+`status` prints one row per file: `not-installed`, `no-registry`, `ambiguous`,
+`absent`, `up-to-date`, `drifted`, `orphaned` (its registry is gone; `apply`
+removes the block) or `conflict`. `env` prints the env-only variables for
+`eval "$(batlehub-cli setup env)"`, for a shell `--shell-rc none` leaves alone.
+
+Exit codes, for a hook or a CI step: `0` nothing left to do, `1` an error,
+`3` done but a client needs a look (`conflict`, `ambiguous`; for `status`,
+anything not settled).
+
 ---
 
 ## 16. TUI mode

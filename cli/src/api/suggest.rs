@@ -1245,7 +1245,9 @@ pub(crate) fn split_url(url: &str) -> Option<(&str, &str)> {
 /// URL shapes. The `api.github.com/repos/…` rule is the load-bearing one: aqua
 /// and ubi resolve *and* download assets through the API
 /// (`/releases/assets/{id}`), not through `github.com/…/releases/download/…`.
-fn typed_url_replacements(registry_type: &str) -> &'static [(&'static str, &'static str)] {
+pub(crate) fn typed_url_replacements(
+    registry_type: &str,
+) -> &'static [(&'static str, &'static str)] {
     match registry_type {
         "github" => &[
             // API: release listings, tag metadata, and asset downloads.
@@ -1490,7 +1492,7 @@ fn push_mise_registry_rules<'a>(
 }
 
 /// One `"regex:…" = "…"` line.
-fn push_replacement(body: &mut String, pattern: &str, replacement: &str) {
+pub(crate) fn push_replacement(body: &mut String, pattern: &str, replacement: &str) {
     body.push_str(&format!(
         "{} = {}\n",
         toml_quote(&format!("regex:{pattern}")),
