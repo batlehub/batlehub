@@ -89,11 +89,16 @@ pub async fn list_registries(
     // Read from the hot config rather than a parallel map, so a reload that
     // turns signing on — or changes a grant — cannot leave this endpoint
     // answering with the old value.
+    // The first read guard is dropped at the end of its own statement, before
+    // `installable_registries` takes another: holding one across that await
+    // lets a reload's queued `write()` deadlock both on tokio's fair RwLock.
     let (signed, granted) = match svc.as_ref() {
-        Some(svc) => (
-            svc.hot.read().await.signed_downloads.clone(),
-            Some(batlehub_core::services::authz::installable_registries(&svc.hot, &identity).await),
-        ),
+        Some(svc) => {
+            let signed = svc.hot.read().await.signed_downloads.clone();
+            let granted =
+                batlehub_core::services::authz::installable_registries(&svc.hot, &identity).await;
+            (signed, Some(granted))
+        }
         None => (Default::default(), None),
     };
     let installable = |name: &str| match &granted {

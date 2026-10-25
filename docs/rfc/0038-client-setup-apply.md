@@ -932,6 +932,13 @@ merging. What it changed:
   listed. Each entry now says whether the caller holds every verb a package
   manager needs there, decided by the grants, and those the grants open are
   listed too. `apply` treats `installable: false` as no candidate.
+  The final review found the first version holding a `HotConfig` read guard
+  — a temporary inside the tuple it built — across the `await` of
+  `installable_registries`, which takes a second read. On tokio's fair
+  `RwLock` a reload's `write()` queued between the two deadlocks the handler,
+  the reload and every later read of the hot config. Reproduced against the
+  workspace's tokio; the guard is now dropped in its own statement first, as
+  the hot-reload rule asks (snapshot, then `await`).
 - **A second index is a conflict**: `extra-index-url`, `find-links` or an
   `index-url` in another section of `pip.conf`, another `[[index]]` in
   `uv.toml`, and `PIP_EXTRA_INDEX_URL`/`UV_EXTRA_INDEX_URL`. pip takes the
