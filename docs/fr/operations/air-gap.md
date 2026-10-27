@@ -1,7 +1,7 @@
 ---
 title: Procédure de coupure réseau
 sourcePath: operations/air-gap.md
-sourceHash: a2cdaaba7ad0ce5a
+sourceHash: 4a377935ecae2774
 ---
 
 # Procédure de coupure réseau
@@ -238,7 +238,32 @@ joignable :
   [RFC 0008 §14.8](/rfc/0008-mise-in-an-air-gapped-estate) pour savoir
   exactement quelle part de la vérification côté connecté est construite.
 
+## Provisionner les postes
+
+Chaque machine du côté coupé — un espace de travail Che, un devcontainer, un
+runner de CI — doit envoyer ses gestionnaires de paquets vers l'instance et
+nulle part ailleurs. `batlehub-cli setup apply` l'écrit dans la configuration
+utilisateur de chaque client installé, à partir de la liste des registres de
+l'instance elle-même ([RFC 0038](/rfc/0038-client-setup-apply)) : le parc
+provisionne une URL de serveur au lieu d'un extrait par client.
+
+Lancez-la au démarrage de la machine — une commande `postStart` de Che, un
+`postCreateCommand` de devcontainer, le point d'entrée d'une image — en tant
+qu'utilisateur, à chaque démarrage (elle est idempotente), et conditionnez une
+étape de CI ou une sonde de disponibilité à `setup status` :
+
+```sh
+BATLEHUB_SERVER=https://pkg.example.com batlehub-cli setup apply --yes
+```
+
+Tout ce qu'elle fait de ce côté de la coupure échoue en position fermée : Go
+n'a pas de `,direct`, un bloc dont le registre a quitté la liste reste sur son
+URL morte, et une liste de registres vide est refusée. Les options, les
+fichiers écrits, les codes de sortie, la règle sur root et chacun de ces
+comportements sont dans la [référence de la CLI](/fr/use/cli#setup-apply).
+
 ## Voir aussi
 
 - [Faire pointer mise vers BatleHub](/fr/use/mise) · [Configuration](/fr/guide/configuration#air-gap)
+- [`setup apply` dans la référence de la CLI](/fr/use/cli#setup-apply)
 - [Reprise après sinistre](/fr/operations/disaster-recovery) · [Réponse à incident](/fr/operations/incident-response)

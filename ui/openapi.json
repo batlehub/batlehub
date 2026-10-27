@@ -27146,9 +27146,14 @@
           "name",
           "type",
           "mode",
-          "signed_downloads"
+          "signed_downloads",
+          "installable"
         ],
         "properties": {
+          "installable": {
+            "type": "boolean",
+            "description": "Whether the caller holds, at registry level, every permission a package\nmanager needs to resolve and download from this registry (version\nlisting, metadata, and the artifact — `source:read` where the artifact\nis a source archive), decided by the grants that enforce reads.\n`batlehub-cli setup apply` writes a client config only where this is\n`true` (RFC 0038 §4.4).\n\nA registry-level ceiling: a sealing namespace or a private package can\nstill refuse one package, and a package-level grant can open one package\non a registry answered `false`. Computed by\n`batlehub_core::services::authz::installable_registries` from\n`RegistryKind::install_actions`."
+          },
           "mode": {
             "type": "string"
           },
@@ -27174,7 +27179,14 @@
               "string",
               "null"
             ],
-            "description": "The upstream this registry proxies (`https://registry.npmjs.org`), or\n`null` for a local-only registry that has none.\n\nThe design proof's catalog caption names it — *\"hybrid ·\nregistry.npmjs.org · 1,284 packages · 6.1 GB cached\"* — because \"which\nupstream is behind this\" is the first thing an operator asks of a\nregistry they did not configure themselves.\n\nVisible to anonymous callers on the same terms as `public_url` above,\nand for the same reason: this endpoint already filters by\n`accessible_registries_for`, so a caller only ever sees registries they\ncan already pull through — and pulling through one reveals the upstream\nanyway, in the artifacts it returns."
+            "description": "The upstream this registry proxies (`https://registry.npmjs.org`), or\n`null` for a local-only registry that has none.\n\nThe design proof's catalog caption names it — *\"hybrid ·\nregistry.npmjs.org · 1,284 packages · 6.1 GB cached\"* — because \"which\nupstream is behind this\" is the first thing an operator asks of a\nregistry they did not configure themselves.\n\nShown only to a caller holding `upstreams:read` on the registry, which\ntranslation gives the administrator and anyone else gets by a grant: an\nupstream can name an internal host, and being able to install from a\nmirror is not being told what it fronts. Credentials, a query and a\nfragment are stripped whoever holds it."
+          },
+          "upstreams": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every upstream a path-addressed registry (`generic`, `deb`, …) mirrors,\npath for path; omitted for the other kinds. `batlehub-cli setup apply`\nturns each into a mise rule `^{upstream}/(.+)` → `{proxy}/$1`\n(RFC 0038 §6.4). Shown on the same terms as `upstream`."
           }
         }
       },

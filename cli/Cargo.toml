@@ -50,6 +50,11 @@ getrandom = "0.4"
 actix-web = { workspace = true }
 zip = { workspace = true }
 
+# `setup apply`'s root check: the effective uid, safely (already in the tree
+# through crossterm/tempfile)
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", default-features = false, features = ["std", "process"] }
+
 [dev-dependencies]
 batlehub-web      = { path = "../crates/web" }
 batlehub-adapters = { path = "../crates/adapters" }

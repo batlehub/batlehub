@@ -1149,6 +1149,8 @@
     "openConfig": "Open config",
     "personalApiToken": "personal API token",
     "registriesCouldNotLoad": "The registry list could not be loaded, so no snippet can name one.",
+    "setupApplyLink": "Command reference",
+    "setupApplyNote": "Rather than pasting each snippet, run {apply} on the machine: it finds the clients installed there and prints the change to each one's configuration; {yes} writes it. {status} checks it, {remove} undoes it. {link}.",
     "setupGuide": "Setup Guide",
     "showToken": "Show token",
     "tokenHidden": "Your token is hidden on screen. Copy puts the real one on the clipboard."

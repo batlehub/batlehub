@@ -69,6 +69,13 @@ jobs:
           tags: batlehub:scan
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # The runtime carries only what the binaries link (base-nossl + libgcc_s);
+      # a library left out is a loader error at start, which nothing else here
+      # would see, so start both.
+      - name: Smoke-run the binaries
+        run: |
+          docker run --rm batlehub:scan --version
+          docker run --rm --entrypoint batlehub-cli batlehub:scan --version
       # Produce SARIF for the Security tab (does not fail the build).
       - name: Trivy scan (SARIF)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

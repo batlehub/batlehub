@@ -84,6 +84,16 @@ impl TestServer {
     /// `[subdomain_routing]` produces, and what `GET /api/v1/registries`
     /// advertises as `public_url`.
     fn start_with_hosts(registries: &[(&str, &str)], public_urls: &[(&str, &str)]) -> Self {
+        Self::start_with_mode(registries, public_urls, RegistryMode::Local)
+    }
+
+    /// Like `start_with_hosts()`, with every registry in `mode` — `setup apply`
+    /// only points a client at a `proxy` or `hybrid` registry (RFC 0038 §4.4).
+    fn start_with_mode(
+        registries: &[(&str, &str)],
+        public_urls: &[(&str, &str)],
+        mode: RegistryMode,
+    ) -> Self {
         let host_map = batlehub_web::RegistryHostMap::new(
             public_urls
                 .iter()
@@ -277,7 +287,7 @@ impl TestServer {
         let mode_map = RegistryModeMap::from(
             registry_names
                 .iter()
-                .map(|n| (n.clone(), RegistryMode::Local))
+                .map(|n| (n.clone(), mode.clone()))
                 .collect::<HashMap<_, _>>(),
         );
 
@@ -2450,7 +2460,7 @@ fn setup_detect_names_the_configured_registry() {
     let stdout = setup_detect_resolved(&server.base_url(), dir.path(), &[]);
 
     assert!(
-        stdout.contains(&format!("registry={}/proxy/npm1/npm/", server.base_url())),
+        stdout.contains(&format!("registry={}/proxy/npm1/", server.base_url())),
         "expected the configured registry name in the snippet; got:\n{stdout}"
     );
     // Path-routed: everything answers on the one host.
@@ -2475,7 +2485,7 @@ fn setup_detect_uses_the_registry_subdomain_and_netrc_host() {
     let stdout = setup_detect_resolved(&server.base_url(), dir.path(), &[]);
 
     assert!(
-        stdout.contains("registry=https://npm1.batlehub.example.com/npm/"),
+        stdout.contains("registry=https://npm1.batlehub.example.com/"),
         "expected the registry's own host in the snippet; got:\n{stdout}"
     );
     assert!(
@@ -2525,7 +2535,7 @@ fn setup_detect_offline_keeps_the_placeholder() {
 
     assert!(ok, "setup detect failed: {stdout}");
     assert!(
-        stdout.contains("/proxy/<registry>/npm/"),
+        stdout.contains("/proxy/<registry>/"),
         "expected the placeholder; got:\n{stdout}"
     );
     // The placeholder came from `--offline`, not from a fetch that failed or
@@ -4596,4 +4606,319 @@ fn auth_logout_works_against_an_unreachable_server() {
         !config.contains("stale-refresh"),
         "the refresh token survived: {config}"
     );
+}
+
+// ── setup apply | status | remove | env (RFC 0038) ───────────────────────────
+
+/// A machine of its own: `HOME`, its config dirs, and a `PATH` holding stub
+/// executables for `clients` only — nothing of the real environment leaks in
+/// (`env_clear`), so an exported `GOPROXY` on the runner cannot turn a case into
+/// a conflict.
+struct Machine {
+    home: tempfile::TempDir,
+}
+
+impl Machine {
+    fn new(clients: &[&str]) -> Self {
+        let home = scratch_home();
+        let bin = home.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        for c in clients {
+            let path = bin.join(c);
+            std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        Self { home }
+    }
+
+    fn path(&self, rel: &str) -> std::path::PathBuf {
+        self.home.path().join(rel)
+    }
+
+    fn read(&self, rel: &str) -> Option<String> {
+        std::fs::read_to_string(self.path(rel)).ok()
+    }
+
+    /// Run `setup …`, retrying only the deadline miss: the in-process server
+    /// can miss `apply`'s five seconds when every test binary runs at once,
+    /// which is the trap [`setup_detect_resolved`] documents.
+    fn setup(&self, server: &str, args: &[&str]) -> (i32, String, String) {
+        self.setup_with(server, &[], args)
+    }
+
+    /// `setup …` with extra variables set on top of the bare machine.
+    fn setup_with(
+        &self,
+        server: &str,
+        vars: &[(&str, &str)],
+        args: &[&str],
+    ) -> (i32, String, String) {
+        let mut out = self.setup_once(server, vars, args);
+        for _ in 0..3 {
+            if !out.2.contains("did not answer within") {
+                break;
+            }
+            out = self.setup_once(server, vars, args);
+        }
+        out
+    }
+
+    fn setup_once(
+        &self,
+        server: &str,
+        vars: &[(&str, &str)],
+        args: &[&str],
+    ) -> (i32, String, String) {
+        let h = self.home.path();
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_batlehub-cli"))
+            .env_clear()
+            // Coverage: the instrumented binary writes its profile where the
+            // runner says; without the variable it is lost (and a stray
+            // `.profraw` lands in the cwd).
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|v| ("LLVM_PROFILE_FILE", v)))
+            .envs(vars.iter().copied())
+            .env("HOME", h)
+            .env("XDG_CONFIG_HOME", h.join(".config"))
+            .env("CARGO_HOME", h.join(".cargo"))
+            .env("PATH", h.join("bin"))
+            .env("SHELL", "/bin/bash")
+            .args(["--server", server, "setup"])
+            .args(args)
+            .output()
+            .expect("failed to run batlehub-cli");
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    }
+}
+
+fn proxy_server() -> TestServer {
+    TestServer::start_with_mode(
+        &[
+            ("npm1", "npm"),
+            ("crates", "cargo"),
+            ("central", "maven"),
+            ("rust", "rustup"),
+        ],
+        &[],
+        RegistryMode::Proxy,
+    )
+}
+
+#[test]
+fn setup_apply_writes_then_remove_restores_byte_for_byte() {
+    let srv = proxy_server();
+    let base = srv.base_url();
+    let m = Machine::new(&["npm", "cargo", "mvn", "rustup"]);
+    std::fs::write(m.path(".npmrc"), "save-exact=true").unwrap();
+    std::fs::write(m.path(".bashrc"), "alias ll='ls -l'\n").unwrap();
+
+    // A dry run writes nothing.
+    let (code, stdout, stderr) = m.setup(&base, &["apply"]);
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert!(stdout.contains("would change"), "{stdout}");
+    assert_eq!(m.read(".npmrc").as_deref(), Some("save-exact=true"));
+    assert!(m.read(".cargo/config.toml").is_none());
+
+    let (code, stdout, stderr) = m.setup(&base, &["apply", "--yes"]);
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    let npmrc = m.read(".npmrc").unwrap();
+    assert!(npmrc.starts_with("save-exact=true\n\n"), "{npmrc}");
+    assert!(
+        npmrc.contains(&format!("\nregistry={base}/proxy/npm1/\n")),
+        "{npmrc}"
+    );
+    let cargo = m.read(".cargo/config.toml").unwrap();
+    assert!(
+        cargo.contains(&format!(
+            "registry = \"sparse+{base}/proxy/crates/registry/\""
+        )),
+        "{cargo}"
+    );
+    assert!(m
+        .read(".m2/settings.xml")
+        .unwrap()
+        .contains("<mirrorOf>central</mirrorOf>"));
+    assert!(m
+        .read(".config/batlehub/env.sh")
+        .unwrap()
+        .contains(&format!(
+            "export RUSTUP_DIST_SERVER='{base}/proxy/rust/rustup'"
+        )));
+    assert!(m.read(".bashrc").unwrap().contains("batlehub/env.sh"));
+
+    // Idempotent: status is settled and a second apply moves no file.
+    let (code, stdout, _) = m.setup(&base, &["status"]);
+    assert_eq!(code, 0, "{stdout}");
+    assert!(stdout.contains("up-to-date"), "{stdout}");
+    let mtime = |rel: &str| std::fs::metadata(m.path(rel)).unwrap().modified().unwrap();
+    let before = mtime(".npmrc");
+    let (code, stdout, _) = m.setup(&base, &["apply", "--yes"]);
+    assert_eq!(code, 0, "{stdout}");
+    assert!(stdout.contains("Nothing to write."), "{stdout}");
+    assert_eq!(mtime(".npmrc"), before);
+
+    // `env` prints what env.sh holds, in the shell asked for — without asking
+    // the server, which is gone.
+    drop(srv);
+    let (code, stdout, stderr) = m.setup(&base, &["env", "--shell", "fish"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stderr.is_empty(), "a request was made: {stderr}");
+    assert!(
+        stdout.contains(&format!(
+            "set -gx RUSTUP_DIST_SERVER '{base}/proxy/rust/rustup'"
+        )),
+        "{stdout}"
+    );
+
+    // Remove needs no server.
+    let (code, stdout, stderr) = m.setup("http://127.0.0.1:1", &["remove", "--yes"]);
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert_eq!(m.read(".npmrc").as_deref(), Some("save-exact=true"));
+    assert_eq!(m.read(".bashrc").as_deref(), Some("alias ll='ls -l'\n"));
+    for gone in [
+        ".cargo/config.toml",
+        ".m2/settings.xml",
+        ".config/batlehub/env.sh",
+    ] {
+        assert!(m.read(gone).is_none(), "{gone} survived remove");
+    }
+}
+
+#[test]
+fn setup_apply_exits_3_on_a_conflict_and_leaves_the_file_alone() {
+    let srv = proxy_server();
+    let m = Machine::new(&["npm"]);
+    let seeded = "registry=https://registry.npmjs.org/\n";
+    std::fs::write(m.path(".npmrc"), seeded).unwrap();
+
+    let (code, stdout, stderr) = m.setup(&srv.base_url(), &["apply", "--yes"]);
+    assert_eq!(code, 3, "{stdout}\n{stderr}");
+    assert!(stderr.contains("conflict"), "{stderr}");
+    assert!(stdout.contains("merge by hand"), "{stdout}");
+    assert_eq!(m.read(".npmrc").as_deref(), Some(seeded));
+
+    let (code, stdout, _) = m.setup(&srv.base_url(), &["status"]);
+    assert_eq!(code, 3, "{stdout}");
+}
+
+/// A placeholder written into `~/.npmrc` breaks npm, so an unreachable server
+/// is a failure that writes nothing — unlike `setup detect`.
+#[test]
+fn setup_apply_fails_without_a_server_and_writes_nothing() {
+    let m = Machine::new(&["npm"]);
+    let (code, _, stderr) = m.setup("http://127.0.0.1:1", &["apply", "--yes"]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(m.read(".npmrc").is_none());
+
+    let (code, _, stderr) = m.setup("http://hub.example.com", &["apply", "--yes"]);
+    assert_eq!(code, 1);
+    assert!(stderr.contains("plain HTTP"), "{stderr}");
+}
+
+/// `setup env` is `eval`ed: it must not override a variable `apply` refused
+/// to, and an unreachable server prints the env.sh on disk written for it —
+/// not one for another server — while a mistake of the user's (a bad
+/// `--pick`) is still an error, not a silent fallback.
+#[test]
+fn setup_env_respects_a_conflict_and_falls_back_only_when_unreachable() {
+    let srv = proxy_server();
+    let base = srv.base_url();
+    let m = Machine::new(&["rustup"]);
+
+    let (code, stdout, stderr) = m.setup_with(
+        &base,
+        &[("RUSTUP_DIST_SERVER", "https://mirror.corp.example")],
+        &["env"],
+    );
+    assert_eq!(code, 3, "{stdout}\n{stderr}");
+    assert!(!stdout.contains("RUSTUP_DIST_SERVER"), "{stdout}");
+    assert!(stderr.contains("nothing printed"), "{stderr}");
+
+    let (code, _, stderr) = m.setup(&base, &["apply", "--yes"]);
+    assert_eq!(code, 0, "{stderr}");
+    let (code, stdout, _) = m.setup(&base, &["env", "--pick", "rustup=nope"]);
+    assert_eq!(code, 1, "{stdout}");
+    assert!(stdout.is_empty(), "{stdout}");
+
+    // Another server that cannot answer: its env.sh is not this one.
+    let (code, stdout, _) = m.setup("http://127.0.0.1:1", &["env", "--only", "rustup"]);
+    assert_eq!(code, 1, "{stdout}");
+    assert!(stdout.is_empty(), "{stdout}");
+
+    // The same server, down: the env.sh written last time.
+    drop(srv);
+    let (code, stdout, stderr) = m.setup(&base, &["env", "--refresh", "--only", "rustup"]);
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains(&format!(
+            "export RUSTUP_DIST_SERVER='{base}/proxy/rust/rustup'"
+        )),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("NODEJS_ORG_MIRROR"),
+        "--only rustup: {stdout}"
+    );
+    assert!(stderr.contains("written last time"), "{stderr}");
+}
+
+/// A `settings.xml` the user added `<servers>` to is theirs: `apply` leaves
+/// it (exit 3), and so does `remove` (exit 3, so a hook notices).
+#[test]
+fn setup_leaves_an_edited_settings_xml_alone() {
+    let srv = proxy_server();
+    let base = srv.base_url();
+    let m = Machine::new(&["mvn"]);
+    let (code, _, stderr) = m.setup(&base, &["apply", "--yes", "--only", "maven"]);
+    assert_eq!(code, 0, "{stderr}");
+    let edited = m.read(".m2/settings.xml").unwrap().replace(
+        "</settings>",
+        "  <servers><server><id>x</id></server></servers>\n</settings>",
+    );
+    std::fs::write(m.path(".m2/settings.xml"), &edited).unwrap();
+
+    let (code, _, stderr) = m.setup(&base, &["apply", "--yes", "--only", "maven"]);
+    assert_eq!(code, 3, "{stderr}");
+    let (code, _, stderr) = m.setup(&base, &["remove", "--yes"]);
+    assert_eq!(code, 3, "{stderr}");
+    assert!(stderr.contains("left alone"), "{stderr}");
+    assert_eq!(m.read(".m2/settings.xml").as_deref(), Some(edited.as_str()));
+}
+
+#[test]
+fn setup_apply_skips_local_registries_and_resolves_an_ambiguity_with_a_kept_pick() {
+    let srv = TestServer::start_with_mode(&[("a", "npm"), ("b", "npm")], &[], RegistryMode::Proxy);
+    let m = Machine::new(&["npm"]);
+
+    let (code, stdout, stderr) = m.setup(&srv.base_url(), &["apply", "--yes"]);
+    assert_eq!(code, 3, "{stdout}\n{stderr}");
+    assert!(stderr.contains("--pick"), "{stderr}");
+    assert!(m.read(".npmrc").is_none());
+
+    // The global `-r` / `BATLEHUB_REGISTRY` (a bare default registry name) is
+    // not the pick: it used to fill `--registry TYPE=NAME` and fail every verb.
+    let (code, stdout, stderr) =
+        m.setup_with(&srv.base_url(), &[("BATLEHUB_REGISTRY", "a")], &["status"]);
+    assert_eq!(code, 3, "{stdout}\n{stderr}");
+    assert!(stdout.contains("ambiguous"), "{stdout}");
+
+    let (code, _, _) = m.setup(&srv.base_url(), &["apply", "--yes", "--pick", "npm=b"]);
+    assert_eq!(code, 0);
+    // The pick lives in the marker: a plain run keeps it.
+    let (code, stdout, _) = m.setup(&srv.base_url(), &["status"]);
+    assert_eq!(code, 0, "{stdout}");
+    assert!(m.read(".npmrc").unwrap().contains("/proxy/b/"));
+
+    let local = TestServer::start_with(&[("priv", "npm")]);
+    let m = Machine::new(&["npm"]);
+    let (code, stdout, _) = m.setup(&local.base_url(), &["status"]);
+    assert_eq!(code, 0, "{stdout}");
+    assert!(stdout.contains("no-registry"), "{stdout}");
 }

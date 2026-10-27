@@ -29,6 +29,7 @@ use std::path::Path;
 
 use batlehub_core::entities::RegistryKind;
 
+use crate::api::client_setup::NODEDIST_VARS;
 use crate::api::setup::scan_project_types;
 
 /// One registry BatleHub should be configured with.
@@ -457,7 +458,10 @@ fn registry_for_nvmrc(content: &str) -> SuggestedRegistry {
         upstreams: Vec::new(),
         path_allow: Vec::new(),
         sources: vec![".nvmrc".to_owned()],
-        client_env: vec![("NVM_NODEJS_ORG_MIRROR".to_owned(), "{proxy}".to_owned())],
+        client_env: NODEDIST_VARS
+            .iter()
+            .map(|k| ((*k).to_owned(), "{proxy}".to_owned()))
+            .collect(),
         warm_packages,
         note,
     }
@@ -1245,7 +1249,9 @@ pub(crate) fn split_url(url: &str) -> Option<(&str, &str)> {
 /// URL shapes. The `api.github.com/repos/…` rule is the load-bearing one: aqua
 /// and ubi resolve *and* download assets through the API
 /// (`/releases/assets/{id}`), not through `github.com/…/releases/download/…`.
-fn typed_url_replacements(registry_type: &str) -> &'static [(&'static str, &'static str)] {
+pub(crate) fn typed_url_replacements(
+    registry_type: &str,
+) -> &'static [(&'static str, &'static str)] {
     match registry_type {
         "github" => &[
             // API: release listings, tag metadata, and asset downloads.
@@ -1344,7 +1350,7 @@ impl SuggestedRegistry {
 /// actually matters (`nodejs.org` would otherwise match `nodejsXorg`), but the
 /// rest are escaped too so a query string or a `+` in a path cannot change the
 /// pattern's meaning.
-fn regex_escape(s: &str) -> String {
+pub(crate) fn regex_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         if r".+*?()[]{}^$|\".contains(c) {
@@ -1490,7 +1496,7 @@ fn push_mise_registry_rules<'a>(
 }
 
 /// One `"regex:…" = "…"` line.
-fn push_replacement(body: &mut String, pattern: &str, replacement: &str) {
+pub(crate) fn push_replacement(body: &mut String, pattern: &str, replacement: &str) {
     body.push_str(&format!(
         "{} = {}\n",
         toml_quote(&format!("regex:{pattern}")),
@@ -2229,10 +2235,13 @@ url = "https://vendor.example.com/rel/1.0/thing-macos.tar.gz"
         );
         assert_eq!(
             node.resolved_env("https://hub.example.com"),
-            [(
-                "NVM_NODEJS_ORG_MIRROR".to_owned(),
-                "https://hub.example.com/proxy/node/nodedist".to_owned()
-            )]
+            NODEDIST_VARS
+                .map(|k| (
+                    k.to_owned(),
+                    "https://hub.example.com/proxy/node/nodedist".to_owned()
+                ))
+                .to_vec(),
+            "the same variables `setup env` exports"
         );
 
         let toml = render_toml(&regs);

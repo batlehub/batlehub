@@ -22,13 +22,13 @@ version = "0.8.0"
 backend = "cargo:cargo-sweep"
 
 [[tools.claude]]
-version = "2.1.302"
+version = "2.1.310"
 backend = "aqua:anthropics/claude-code"
 
 [tools.claude."platforms.linux-x64"]
-checksum = "sha256:0d865f10fe49f2e731ab9d4f7bdcce082cad4f7bbf71d2cbbf7be47b9d8ae5dc"
-url = "https://github.com/anthropics/claude-code/releases/download/v2.1.302/claude-linux-x64.tar.gz"
-url_api = "https://api.github.com/repos/anthropics/claude-code/releases/assets/647956172"
+checksum = "sha256:5bea9e13ac07ea6804c24e6263ec7e5b3d13f81d3f681c92f9784c534425fae1"
+url = "https://github.com/anthropics/claude-code/releases/download/v2.1.310/claude-linux-x64.tar.gz"
+url_api = "https://api.github.com/repos/anthropics/claude-code/releases/assets/670426847"
 
 [[tools.cocogitto]]
 version = "7.0.0"
@@ -38,6 +38,15 @@ backend = "aqua:cocogitto/cocogitto"
 checksum = "sha256:e03938ff2c4c86d71c00c0f3284dbbe95c5ca76fe34a51f33e945c23010d59bb"
 url = "https://github.com/cocogitto/cocogitto/releases/download/7.0.0/cocogitto-7.0.0-x86_64-unknown-linux-musl.tar.gz"
 url_api = "https://api.github.com/repos/cocogitto/cocogitto/releases/assets/366659350"
+
+[[tools."github:batleforc/weebo-skillsagent"]]
+version = "0.14.0"
+backend = "github:batleforc/weebo-skillsagent"
+
+[tools."github:batleforc/weebo-skillsagent"."platforms.linux-x64"]
+checksum = "sha256:75a0ae25f69a54ce72ad78adf72b46d971feb41f745e40237b7e34e3af6abd60"
+url = "https://github.com/batleforc/weebo-skillsagent/releases/download/v0.14.0/wska-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/batleforc/weebo-skillsagent/releases/assets/659187089"
 
 [[tools."github:mlab-sh/mlab-cli"]]
 version = "1.0.4"
@@ -123,30 +132,30 @@ url = "https://github.com/jesseduffield/lazydocker/releases/download/v0.25.2/laz
 url_api = "https://api.github.com/repos/jesseduffield/lazydocker/releases/assets/399711577"
 
 [[tools.node]]
-version = "26.12.0"
+version = "26.12.1"
 backend = "core:node"
 
 [tools.node."platforms.linux-x64"]
-checksum = "sha256:d9f88af72ad34f7ddf8e67289829f1698f54b6254f7d4f54b7453117ff1a3d2c"
-url = "https://nodejs.org/dist/v26.12.0/node-v26.12.0-linux-x64.tar.gz"
+checksum = "sha256:0fd1eb7770598f52a21995edf6ed35fc690400fa437c2386af329519e9143132"
+url = "https://nodejs.org/dist/v26.12.1/node-v26.12.1-linux-x64.tar.gz"
 
 [[tools.pnpm]]
-version = "12.14.0"
+version = "12.15.0"
 backend = "aqua:pnpm/pnpm"
 
 [tools.pnpm."platforms.linux-x64"]
-checksum = "sha256:3910c3852136bed5bc1511b9137a45fd4357ed6b3970d9d08893641e9005867e"
-url = "https://github.com/pnpm/pnpm/releases/download/v12.14.0/pnpm-linux-x64.tar.gz"
-url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/643957410"
+checksum = "sha256:55b5ed0092bd11176c1669598e231ae52e7cedac59de6efd0d415730f37d0598"
+url = "https://github.com/pnpm/pnpm/releases/download/v12.15.0/pnpm-linux-x64.tar.gz"
+url_api = "https://api.github.com/repos/pnpm/pnpm/releases/assets/662173360"
 provenance = "github-attestations"
 
 [[tools.python]]
-version = "3.15.0"
+version = "3.15.1"
 backend = "core:python"
 
 [tools.python."platforms.linux-x64"]
-checksum = "blake3:887ee1b5da8353b32ccd1bdc2bac6075628ab0862517b58917ef046a78eb2435"
-url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261013/cpython-3.15.0+20261013-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+checksum = "blake3:8f6db28a812d56713532738104bb4f8bb4057c574b7952a9f05557092864dae7"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261021/cpython-3.15.1+20261021-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
 provenance = "github-attestations"
 
 [[tools.rust]]
@@ -154,24 +163,26 @@ version = "1.99.1"
 backend = "core:rust"
 
 [[tools.semgrep]]
-version = "1.181.0"
+version = "1.182.1"
 backend = "pipx:semgrep"
 
 [[tools.sonar-scanner-cli]]
-version = "8.1.0.6389"
+version = "8.2.0.6438"
 backend = "aqua:SonarSource/sonar-scanner-cli"
 
 [tools.sonar-scanner-cli."platforms.linux-x64"]
-url = "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-8.1.0.6389-linux-x64.zip"
+checksum = "blake3:ad3ddc2322fcd821df362acb7a96b696634f3d2c12675c15cc0de45cac918586"
+url = "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-8.2.0.6438-linux-x64.zip"
 
 [[tools.syft]]
-version = "1.54.1"
+version = "1.55.0"
 backend = "aqua:anchore/syft"
 
 [tools.syft."platforms.linux-x64"]
-checksum = "sha256:c069905b391cc4c20a5ba65ad5c10be2a7ba074f8ea6ad203e24d14e303dad47"
-url = "https://github.com/anchore/syft/releases/download/v1.54.1/syft_1.54.1_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/anchore/syft/releases/assets/615916330"
+checksum = "sha256:bb65249542db5fedeeb4d3f9b018b75e7264dbfbbb10486f044581a92f90490d"
+url = "https://github.com/anchore/syft/releases/download/v1.55.0/syft_1.55.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/anchore/syft/releases/assets/657153873"
+provenance = "cosign"
 
 [[tools.task]]
 version = "3.54.0"
@@ -183,21 +194,21 @@ url = "https://github.com/go-task/task/releases/download/v3.54.0/task_linux_amd6
 url_api = "https://api.github.com/repos/go-task/task/releases/assets/604090073"
 
 [[tools.trivy]]
-version = "0.76.0"
+version = "0.76.1"
 backend = "aqua:aquasecurity/trivy"
 
 [tools.trivy."platforms.linux-x64"]
-checksum = "sha256:e24b1c51293c1b15e4ba8d45bbc7891ba053f90278ec2698f3562c993e145fe7"
-url = "https://github.com/aquasecurity/trivy/releases/download/v0.76.0/trivy_0.76.0_Linux-64bit.tar.gz"
-url_api = "https://api.github.com/repos/aquasecurity/trivy/releases/assets/640213415"
+checksum = "sha256:c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0"
+url = "https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz"
+url_api = "https://api.github.com/repos/aquasecurity/trivy/releases/assets/662254617"
 provenance = "cosign"
 
 [[tools.uv]]
-version = "0.13.1"
+version = "0.13.5"
 backend = "aqua:astral-sh/uv"
 
 [tools.uv."platforms.linux-x64"]
-checksum = "sha256:eadd9d27c134ab5ac1ffd4473b97a741407f3ea238288f03121fc4deddf90220"
-url = "https://github.com/astral-sh/uv/releases/download/0.13.1/uv-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/639313223"
+checksum = "sha256:f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
+url = "https://github.com/astral-sh/uv/releases/download/0.13.5/uv-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/664336023"
 provenance = "github-attestations"

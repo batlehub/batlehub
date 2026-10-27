@@ -19,9 +19,11 @@ aws-config = {
   features = ["default-https-client", "credentials-process", "rt-tokio"],
   optional = true
 }
+# No `sigv4a`: it pulls crypto-bigint 0.5 (RUSTSEC-2026-0387, no 0.5 fix) and
+# only signs for S3 Multi-Region Access Points. See deny.toml.
 aws-sdk-s3 = {
   workspace = true,
-  features = ["default-https-client", "http-1x", "rt-tokio", "sigv4a"],
+  features = ["default-https-client", "http-1x", "rt-tokio"],
   optional = true
 }
 base64.workspace = true
@@ -31,13 +33,13 @@ chrono.workspace = true
 bzip2 = { version = "0.6", optional = true }
 flate2 = { version = "1", optional = true }
 toml = { workspace = true, optional = true }
-zstd = { version = "0.13", optional = true }
+zstd = { version = "0.14.3", optional = true }
 # Deb/RPM repository hosting (all pure-Rust; none pull the banned `rsa` crate).
 ar = { version = "0.9", optional = true }
 lzma-rs = { version = "0.3", optional = true }
 sha1 = { version = "0.11", optional = true }
 ed25519-dalek = { version = "3", optional = true }
-rpm = { version = "0.28", default-features = false, features = [
+rpm = { version = "0.30", default-features = false, features = [
   "gzip-compression",
   "xz-compression",
   "zstd-compression",
@@ -84,13 +86,13 @@ rcgen = "0.14"
 # Test-only: the `payload` feature unlocks `rpm::PackageBuilder` / `FileOptions` for
 # building `.rpm` fixtures. Pulls no extra crates (`payload = []`) — notably not the
 # banned `rsa`, which only arrives via `signature-pgp`.
-rpm = { version = "0.28", default-features = false, features = ["payload", "gzip-compression"] }
+rpm = { version = "0.30", default-features = false, features = ["payload", "gzip-compression"] }
 rustls = { version = "0.23", features = ["aws-lc-rs"] }
 tar = "0.4"
 tokio-rustls = "0.26"
 toml = { workspace = true }
 # Building `.pkg.tar.zst` fixtures for the pacman interop generator.
-zstd = "0.13"
+zstd = "0.14.3"
 
 [features]
 default = [

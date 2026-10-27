@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: 0c16007cee85361e
+sourceHash: d53362b29e4d4566
 ---
 
 # batlehub-cli
@@ -1146,6 +1146,163 @@ d'hôte, donc un registre routé par hôte a besoin de sa propre entrée.
 Si le serveur est injoignable, les commandes fonctionnent quand même — elles
 impriment des marqueurs `<registry>` et le disent sur stderr. `--offline` saute
 entièrement la requête.
+
+### Configurer la machine : `setup apply`, `status`, `remove`, `env` {#setup-apply}
+
+```
+batlehub-cli setup apply  [--yes] [--only <client>,…] [--skip <client>,…]
+                          [--pick <type>=<name>]… [--maven-mirror-of central|external|all]
+                          [--shell-rc auto|none] [--insecure-http] [--allow-foreign-hosts] [--json]
+batlehub-cli setup status [--only …] [--skip …] [--pick …] [--shell-rc auto|none]
+                          [--insecure-http] [--allow-foreign-hosts] [--json]
+batlehub-cli setup remove [--yes] [--only …] [--skip …] [--json]
+batlehub-cli setup env    [--shell sh|fish] [--only …] [--skip …] [--pick …]
+                          [--insecure-http] [--allow-foreign-hosts] [--refresh]
+```
+
+`detect` imprime des extraits pour un projet ; `apply` les écrit pour une
+machine. La commande demande au serveur quels registres existent, repère les
+clients présents dans le `PATH` et écrit la configuration **utilisateur** de
+chacun ([RFC 0038](/rfc/0038-client-setup-apply)). Seule l'URL du serveur est à
+fournir — `--server`, `BATLEHUB_SERVER` ou le profil — si bien que le hook d'un
+environnement de développement tient en une ligne :
+
+```sh
+BATLEHUB_SERVER=https://pkg.example.com batlehub-cli setup apply --yes
+```
+
+`apply`, `status`, `remove` et `env` fonctionnent sous Linux et macOS ; sous
+Windows, ils refusent de s'exécuter, et `detect` imprime les extraits à la place.
+
+| Client | Fichier | Ce qui est écrit |
+| --- | --- | --- |
+| cargo | `$CARGO_HOME/config.toml` | `[source.crates-io] replace-with`, plus `[registries.batlehub]` pour `cargo publish` |
+| npm, pnpm, bun, yarn 1 | `~/.npmrc` | `registry=` |
+| yarn 2+ | `~/.yarnrc.yml` | `npmRegistryServer:`, plus `unsafeHttpWhitelist` pour un serveur en HTTP simple, que yarn refuse sinon |
+| pip | `~/.config/pip/pip.conf` | `[global] index-url` |
+| uv | `~/.config/uv/uv.toml` | un `[[index]]` par défaut |
+| go | `$GOENV`, sinon `~/.config/go/env` | `GOPROXY`, sans repli `,direct` |
+| maven | `~/.m2/settings.xml` | le fichier entier, un `<mirror>` (seulement s'il est absent ; dès que vous le modifiez, il vous appartient) |
+| mise | `$MISE_CONFIG_DIR/conf.d/batlehub.toml` (`~/.config/mise`) | `[settings.url_replacements]` pour les registres github, forgejo, npm, cargo et openvsx qui relaient l'hôte public (`api.github.com`, `codeberg.org`, … ; un registre devant une autre forge n'en reçoit aucune, et la commande le signale) ; pour chaque registre generic, une règle par amont qu'il reflète (`^<amont>/(.+)` vers le registre), après les autres ; `node.mirror_url` pour un registre nodedist. Les deux sortes de règle ont besoin des amonts, que la liste des registres ne montre qu'à un appelant qui détient [`upstreams:read`](/fr/guide/access-control#verbs) ; la liste est lue anonymement, donc cette autorisation va à `*` |
+| rustup, node | `~/.config/batlehub/env.sh` | `RUSTUP_DIST_SERVER`, `NODEJS_ORG_MIRROR` et les miroirs nvm/fnm/n, sourcé depuis le **début** de `~/.bashrc` (au-dessus de son `return` non interactif) ou depuis `~/.zshenv` (`$ZDOTDIR/.zshenv` quand `ZDOTDIR` vient d'ailleurs ; un fichier `conf.d` pour fish). Sur macOS, bash reçoit le fichier de connexion qu'il lit — le premier de `~/.bash_profile`, `~/.bash_login`, `~/.profile`. Le shell est `$SHELL`, sinon celui du compte dans `/etc/passwd`. `bash -c` ne lit aucun fichier rc : utilisez-y `BASH_ENV` ou `setup env` |
+
+- **Sans `--yes`, rien n'est écrit** : le diff de chaque fichier est imprimé.
+- **Seul ce qui se trouve entre les marqueurs est modifié.** Un bloc commence
+  par `# >>> batlehub setup … >>>` et finit par `# <<< batlehub setup <<<` ;
+  les fichiers gérés en entier (`settings.xml`, les fichiers déposés) portent le
+  marqueur de début en première ligne. `remove` rend chaque fichier à
+  l'identique, octet pour octet.
+- **Ce que vous modifiez cesse d'être géré.** Le marqueur consigne une
+  empreinte de ce qui a été écrit : un bloc ou un fichier déposé modifié
+  depuis (à la main, ou par `go env -w`) passe en `conflict` et n'est plus
+  touché ni par `apply` ni par `remove` — votre `GOPROXY`, les `<servers>`
+  ajoutés à `settings.xml`. Supprimez les lignes du marqueur pour vous
+  approprier le réglage, ou tout le bloc (tout le fichier déposé) pour qu'il
+  soit réécrit. Les lignes exactes qu'`apply`
+  écrirait, trouvées sans marqueurs — collées depuis le guide de
+  configuration, ou un bloc que `npm config set`, `npm login`,
+  `pip config set` ou `yarn config set` a réécrit sans commentaires — sont
+  `up-to-date` et restent les vôtres : `apply` ne se les approprie pas, et
+  `remove` se contente de signaler un tel fichier (`--server` connu) sans y
+  toucher.
+- **Un réglage qui vous appartient n'est jamais modifié.** Si votre partie du
+  fichier règle déjà ce que le bloc réglerait — une ligne `registry=`, une
+  section `[global]` dans `pip.conf`, votre propre `settings.xml` — ou si une
+  variable d'environnement prime sur le fichier (`GOPROXY`,
+  `NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL`, un `PIP_CONFIG_FILE` qui existe,
+  le `rc`/`auth.ini` global de pnpm, …), le client est en `conflict` :
+  ignoré, avec l'extrait à fusionner à la main. De même pour un second index
+  que le client interroge en plus de l'instance — `extra-index-url` ou un
+  `[install] index-url` dans `pip.conf`, un autre `[[index]]` dans `uv.toml`,
+  `PIP_EXTRA_INDEX_URL`, `UV_EXTRA_INDEX_URL` — puisqu'une version que
+  l'instance retient s'installerait depuis celui-ci ; et pour un autre fichier
+  de configuration mise (`config.local.toml`, un autre fichier `conf.d`) qui
+  règle la même table, que mise ne garde que d'un seul fichier. Un réglage qui
+  va dans le sens du bloc n'est pas un conflit : l'URL qu'il écrit, une
+  variable vide, une variable de fichier de configuration qui désigne ce même
+  fichier, le `config` de cargo lié symboliquement à `config.toml`. Les variables sont lues dans
+  l'environnement où `apply` s'exécute et dans le fichier rc qu'il gère ; une
+  variable exportée depuis un autre fichier n'est pas vue. Quand `env.sh` est
+  en conflit, aucune ligne rc ni aucun fichier fish n'est écrit pour le sourcer.
+- **Seuls les registres `proxy` et `hybrid` sont retenus**, et seulement ceux
+  depuis lesquels le serveur indique que vous pouvez installer (`installable`) :
+  un registre `local` ne peut pas remplacer crates.io ou npmjs, et un registre
+  listé pour ses seules métadonnées ferait échouer chaque téléchargement. Deux candidats d'un même type sont
+  `ambiguous` jusqu'à ce que `--pick npm=<nom>` en choisisse un (et non
+  `--registry`, l'option globale du registre par défaut) ; le choix est
+  consigné dans le bloc et les exécutions suivantes le conservent. Si le
+  registre choisi disparaît, la commande bascule sur l'unique candidat restant
+  en le signalant ; s'il n'en reste aucun ou plusieurs, le bloc est
+  `orphaned` : conservé sur son URL morte, pour que le client échoue au lieu de
+  revenir au registre public, jusqu'à un `--pick` ou un `remove`.
+  `--maven-mirror-of` est conservé de la même façon.
+- **`--only` / `--skip` choisissent des fichiers, pas des lignes** : un fichier
+  partagé par plusieurs clients (`~/.npmrc`, `env.sh`) n'est touché que si l'un
+  d'eux est choisi et qu'aucun n'est exclu, et il est toujours écrit pour tous.
+- **La liste est lue anonymement**, de sorte qu'un registre fermé aux lectures
+  anonymes n'est jamais écrit dans un client qui n'envoie aucun identifiant ; la
+  publication passe toujours par `auth login` et `.netrc`.
+- **Un serveur injoignable n'écrit rien** (code 1), contrairement à `detect`.
+  De même pour un serveur en `http://` hors boucle locale (`--insecure-http`
+  pour l'accepter). Un registre dont le `public_url` n'est ni sur l'hôte du
+  serveur ni sur l'un de ses sous-domaines (`--allow-foreign-hosts`), ou est en
+  HTTP simple sur un serveur HTTPS (`--insecure-http`), n'arrête que ses propres
+  clients : ils sont en `conflict`, tous les autres fichiers sont écrits, et la
+  commande se termine avec le code 3. Une URL ou un nom de registre contenant un
+  caractère qu'un fichier de configuration pourrait mal lire (saut de ligne,
+  guillemet, identifiants) est refusé de la même façon.
+- **Un fichier cassé est en `conflict` à lui seul** : une ligne de marqueur
+  manquante ou un TOML invalide n'arrête que ce client, et `remove` retire
+  quand même le reste. Un fichier qui n'est pas en UTF-8 (un `~/.bashrc` en
+  latin-1) garde chacun de ses octets.
+- **Une liste de registres vide est refusée** (code 1) : un serveur à moitié
+  démarré, ou dont tous les registres sont fermés aux lectures anonymes,
+  ferait sinon retirer tous les blocs par le `apply --yes` d'un hook — c'est
+  le rôle de `remove`, sur demande. La liste est lue sans suivre de
+  redirection hors de l'hôte du serveur ni vers du HTTP simple.
+- **Un fichier de configuration en lien symbolique** est écrit à travers le
+  lien (sa cible est créée si elle manque ; `remove` supprime la cible et
+  garde le lien), sauf si la cible appartient à un autre utilisateur que le
+  lien. Un fichier en lecture seule est laissé tel quel ; un lien physique est
+  rompu par le renommage atomique ; un fichier monté (montage `subPath` de
+  Che) est écrit sur place.
+- **Lancez-le en tant qu'utilisateur, pas en root** : `apply --yes` et
+  `remove --yes` refusent de tourner en root avec un `HOME` qui n'appartient
+  pas à root — chaque chemin y est un lien que l'utilisateur peut faire
+  pointer vers des fichiers système. Dans un hook root :
+  `runuser -u <utilisateur> -- batlehub-cli setup apply --yes`.
+- **Maven** lit `${user.home}/.m2`, et Java prend `user.home` dans la base des
+  mots de passe, pas dans `$HOME` : là où les deux diffèrent (certains
+  conteneurs), passez `-Duser.home` ou alignez `HOME`.
+
+`status` imprime une ligne par fichier : `not-installed`, `no-registry`,
+`ambiguous`, `absent`, `up-to-date`, `drifted`, `orphaned` (son registre a
+disparu ; le bloc est conservé — `--pick` un autre ou `remove`) ou `conflict`. `env` imprime les variables des
+clients configurés par l'environnement seul, pour
+`eval "$(batlehub-cli setup env)"`, dans un shell que `--shell-rc none` laisse
+intact (`none` écarte entièrement les fichiers rc : il n'y écrit ni n'en retire
+aucun bloc). `env` tourne à chaque ouverture de shell : il imprime donc
+l'`env.sh` écrit par `apply` sans interroger le serveur quand ce fichier n'a pas
+été modifié, vise le même serveur (ou n'importe lequel quand ce shell n'en
+définit aucun) et qu'aucune variable déjà définie ne le contredit — un registre renommé depuis apparaît au prochain `apply`, ou avec
+`--refresh` ou `--pick`, qui interrogent toujours le serveur. Sinon il attend le
+serveur 2 s, puis imprime l'`env.sh` écrit la dernière fois quand le serveur ne
+peut pas répondre (injoignable, statut
+d'erreur, liste illisible ou vide — un `--pick` erroné reste une erreur), selon
+les mêmes règles : les URL de ce serveur seulement, rien par-dessus une variable
+que vous avez définie, et seulement les variables qu'`apply` écrit, avec des
+URL simples. Il n'imprime rien, code 3, quand `env.sh` est en
+`conflict` ou `ambiguous` : `eval` écraserait la variable qu'`apply` a refusé
+de toucher. `status` prend le `--shell-rc` donné à `apply`.
+
+Codes de sortie, pour un hook ou une étape de CI : `0` plus rien à faire, `2`
+une erreur d'usage, `1` une erreur (un fichier impossible à écrire n'arrête pas les autres ; chacun est
+signalé), `3` terminé mais un client demande votre attention (`conflict`,
+`ambiguous` ; pour `status`, tout ce qui n'est pas réglé ; pour `remove`, un
+fichier laissé en place ; pour `apply`, aussi un bloc `orphaned`, et des variables qu'aucun fichier rc ne source
+— shell inconnu : passez `--shell-rc none` et évaluez
+`eval "$(batlehub-cli setup env)"` vous-même). `apply` sans `--yes` sort comme le ferait la vraie
+exécution : 0 même s'il reste des fichiers à écrire.
 
 ---
 

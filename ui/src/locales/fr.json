@@ -1149,6 +1149,8 @@
     "openConfig": "Ouvrir la configuration",
     "personalApiToken": "token d'API personnel",
     "registriesCouldNotLoad": "La liste des registres n'a pas pu être chargée : aucun extrait ne peut en nommer un.",
+    "setupApplyLink": "Référence de la commande",
+    "setupApplyNote": "Plutôt que de coller chaque extrait, lancez {apply} sur la machine : la commande trouve les clients installés et affiche la modification de la configuration de chacun ; {yes} l'écrit. {status} la vérifie, {remove} l'annule. {link}.",
     "setupGuide": "Guide de configuration",
     "showToken": "Afficher le jeton",
     "tokenHidden": "Votre jeton est masqué à l'écran. Copier place le vrai jeton dans le presse-papiers."

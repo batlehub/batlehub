@@ -45,7 +45,7 @@ form_urlencoded.workspace = true
 # conda and mamba request `repodata.json.zst` before any other encoding, and
 # fall back to `.bz2` (RFC 0009 §7.5). Without them every client pays the full
 # uncompressed transfer of a document fetched on every solve.
-zstd = "0.13"
+zstd = "0.14.3"
 bzip2 = "0.6"
 
 [dev-dependencies]
@@ -53,14 +53,14 @@ batlehub-adapters = { path = "../adapters" }
 # Test-only: sign a bundle manifest, to walk RFC 0008's import through its
 # own door rather than around it.
 ed25519-dalek = "3"
-actix-http = "3"
+actix-http = "3.20"
 ar = "0.9"
 # Test-only: build `.tar.bz2` conda package fixtures.
 bzip2 = "0.6"
 flate2 = "1"
 # Test-only: build `.rpm` fixtures via `rpm::PackageBuilder` (the `payload` feature).
 # No `rsa` — that only arrives via `signature-pgp`, which we never enable.
-rpm = { version = "0.28", default-features = false, features = ["payload", "gzip-compression"] }
+rpm = { version = "0.30", default-features = false, features = ["payload", "gzip-compression"] }
 tar = "0.4"
 tempfile.workspace = true
 toml.workspace = true

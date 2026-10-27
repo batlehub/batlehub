@@ -1,0 +1,133 @@
+# Server configuration for the heavy `setup apply` suite
+# (tests/heavy/client_setup.sh, RFC 0038 §6.5). See tests/heavy/config.npm.toml
+# for the env-var conventions.
+#
+# One proxy registry per type `setup apply` writes a client for. The suite runs
+# a *copy* of this file with `${HEAVY_RUN}` already substituted, because §8 and
+# §10 edit it while the server watches it — a second npm registry appears, the
+# pypi one goes — and a placeholder in a registry's `name` is one the reload
+# diff refuses (RFC 0037 §4.5).
+
+[server]
+host = "127.0.0.1"
+port = 8180
+roles = ["proxy"]
+
+[database]
+type = "postgresql"
+url = "${DATABASE_URL}"
+max_connections = 10
+
+[[auth]]
+type = "token"
+
+[[auth.tokens]]
+value = "heavy-admin-token"
+role = "admin"
+user_id = "ci-admin"
+
+[storage]
+type = "filesystem"
+path = "./tmp/heavy-client-setup-storage"
+
+# ── cargo: crates.io ─────────────────────────────────────────────────────────
+[[registries]]
+type = "cargo"
+name = "crates-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── npm, pnpm, yarn: registry.npmjs.org ──────────────────────────────────────
+[[registries]]
+type = "npm"
+name = "npm-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── pip, uv: pypi.org ────────────────────────────────────────────────────────
+[[registries]]
+type = "pypi"
+name = "pypi-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── go: proxy.golang.org, the checksum database included ─────────────────────
+[[registries]]
+type = "goproxy"
+name = "go-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── maven: repo1.maven.org, plugins as well as dependencies ──────────────────
+[[registries]]
+type = "maven"
+name = "maven-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── mise: a GitHub release, through the forge registry ───────────────────────
+[[registries]]
+type = "github"
+name = "github-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read", "upstreams:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── mise: a generic mirror, whose rules come from its `upstreams` ────────────
+[[registries]]
+type = "generic"
+name = "helm-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://get.helm.sh"]
+path_allow = ["helm-v*-linux-amd64.tar.gz", "helm-v*-linux-amd64.tar.gz.sha256sum"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read", "upstreams:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── rustup: static.rust-lang.org, an env-only client ─────────────────────────
+[[registries]]
+type = "rustup"
+name = "rust-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://static.rust-lang.org"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list"]
+admin = ["*"]
+
+# ── node: nodejs.org/dist, the other env-only client ─────────────────────────
+[[registries]]
+type = "nodedist"
+name = "nodedist-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

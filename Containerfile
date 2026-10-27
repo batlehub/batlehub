@@ -82,8 +82,20 @@ COPY ui/ ./
 # the committed spec and the server disagree.
 RUN pnpm run generate && pnpm run build
 
+# libgcc_s is the one library the binaries link beyond glibc (unwinding). Taken
+# from `chef`, not `builder`, so the release (which overrides `server` and `cli`)
+# compiles nothing to get it. The multiarch path is kept: it is one of the
+# loader's built-in search dirs, and the runtime has no ld.so.cache.
+FROM chef AS libgcc
+RUN mkdir /out && cp -L --parents /usr/lib/*-linux-gnu/libgcc_s.so.1 /out/
+
 # ── Runtime image ─────────────────────────────────────────────────────────────
-FROM gcr.io/distroless/cc-debian12:latest@sha256:e5d81ddde149641e2a9ba55be4545bc125c67de07508b03ba4c22e6eb0ded5aa AS runtime
+# `base-nossl`, not `cc`: nothing links OpenSSL (TLS is rustls), and `cc` ships
+# libssl3, so every OpenSSL advisory failed the image gate for a library no
+# process loads (CVE-2026-84782, a DTLS-only flaw, on 2026-10-27).
+FROM gcr.io/distroless/base-nossl-debian12:latest@sha256:e35893f8ca1cabfbd60394af94899c20930c4615355adf97c5da660a51b61bca AS runtime
+
+COPY --from=libgcc   /out/                              /
 
 COPY --from=server   /batlehub                          /usr/local/bin/batlehub
 COPY --from=cli      /batlehub-cli                      /usr/local/bin/batlehub-cli

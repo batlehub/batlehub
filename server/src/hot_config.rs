@@ -404,6 +404,13 @@ pub(super) fn upstream_url_for(reg: &RegistryConfig) -> Option<String> {
         // The nodedist handlers read it to name the package: `iojs` on the
         // io.js tree, `node` everywhere else (RFC 0010 §4.3).
         RegistryKind::Nodedist => "https://nodejs.org/dist",
+        // `batlehub-cli setup apply` writes mise rules for these only when
+        // the registry proxies the public host (RFC 0038 §6.4); the values
+        // match `builders::default_upstreams`.
+        RegistryKind::Github => "https://api.github.com",
+        RegistryKind::Forgejo => "https://codeberg.org",
+        RegistryKind::Cargo => "https://crates.io",
+        RegistryKind::Openvsx => "https://open-vsx.org",
         _ => return None,
     };
     Some(
@@ -412,6 +419,22 @@ pub(super) fn upstream_url_for(reg: &RegistryConfig) -> Option<String> {
             .cloned()
             .unwrap_or_else(|| default_url.to_owned()),
     )
+}
+
+/// Every configured upstream of a path-addressed registry (`generic`, `deb`,
+/// …): a 1:1 mirror whose client rule is `^{upstream}/(.+)` → `{proxy}/$1`,
+/// which `batlehub-cli setup apply` can only write knowing them all.
+fn path_addressed_upstreams(registries: &[RegistryConfig]) -> HashMap<String, Vec<String>> {
+    registries
+        .iter()
+        .filter(|r| {
+            r.registry_type
+                .parse::<RegistryKind>()
+                .is_ok_and(|k| k.is_path_addressed())
+                && !r.upstreams.is_empty()
+        })
+        .map(|r| (r.name.clone(), r.upstreams.clone()))
+        .collect()
 }
 
 fn build_vuln_db_map(registries: &[RegistryConfig]) -> VulnDbMap {
@@ -781,7 +804,7 @@ pub(super) fn build_hot_bundle(
         build_access_config(cfg),
         RegistryMap::from(reg_type_map),
         RegistryModeMap::from(reg_mode_map),
-        UpstreamMap::from(upstream_map),
+        UpstreamMap::from(upstream_map).with_all(path_addressed_upstreams(&cfg.registries)),
         build_vuln_db_map(&cfg.registries),
         build_sumdb_map(&cfg.registries),
     ))
@@ -1347,6 +1370,50 @@ mod tests {
     }
 
     #[test]
+    fn upstream_url_for_names_the_hosts_setup_apply_rewrites() {
+        for (ty, want) in [
+            ("github", "https://api.github.com"),
+            ("forgejo", "https://codeberg.org"),
+            ("cargo", "https://crates.io"),
+            ("openvsx", "https://open-vsx.org"),
+        ] {
+            let r = make_registry(ty, "r", "");
+            assert_eq!(upstream_url_for(&r).as_deref(), Some(want), "{ty}");
+        }
+        let r = make_registry(
+            "forgejo",
+            "r",
+            r#"upstreams = ["https://git.corp.example"]"#,
+        );
+        assert_eq!(
+            upstream_url_for(&r).as_deref(),
+            Some("https://git.corp.example")
+        );
+    }
+
+    #[test]
+    fn path_addressed_upstreams_are_every_configured_one() {
+        let g = make_registry(
+            "generic",
+            "g",
+            r#"upstreams = ["https://releases.hashicorp.com", "https://dl.k8s.io"]"#,
+        );
+        let n = make_registry("npm", "n", r#"upstreams = ["https://npm.example.com"]"#);
+        let map = path_addressed_upstreams(&[g, n]);
+        assert_eq!(
+            map.get("g").map(Vec::as_slice),
+            Some(
+                [
+                    "https://releases.hashicorp.com".to_owned(),
+                    "https://dl.k8s.io".to_owned()
+                ]
+                .as_slice()
+            )
+        );
+        assert!(!map.contains_key("n"), "npm is not path-addressed");
+    }
+
+    #[test]
     fn upstream_url_for_configured_override() {
         let r = make_registry(
             "npm",
@@ -1378,8 +1445,8 @@ mod tests {
     }
 
     #[test]
-    fn upstream_url_for_unknown_type_returns_none() {
-        let r = make_registry("github", "gh-reg", "");
+    fn upstream_url_for_a_kind_without_one_returns_none() {
+        let r = make_registry("generic", "g-reg", "");
         assert_eq!(upstream_url_for(&r), None);
     }
 

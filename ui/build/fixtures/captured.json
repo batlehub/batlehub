@@ -919,56 +919,64 @@
       "type": "cargo",
       "mode": "proxy",
       "upstream": "https://index.crates.io",
-      "signed_downloads": false
+      "signed_downloads": false,
+      "installable": true
     },
     {
       "name": "github",
       "type": "github",
       "mode": "proxy",
       "upstream": "https://api.github.com",
-      "signed_downloads": false
+      "signed_downloads": false,
+      "installable": true
     },
     {
       "name": "github2",
       "type": "github",
       "mode": "proxy",
       "upstream": "https://api.github.com",
-      "signed_downloads": false
+      "signed_downloads": false,
+      "installable": true
     },
     {
       "name": "go",
       "type": "goproxy",
       "mode": "proxy",
       "upstream": "https://proxy.golang.org",
-      "signed_downloads": false
+      "signed_downloads": false,
+      "installable": true
     },
     {
       "name": "jetbrains-ide",
       "type": "jetbrains",
       "mode": "proxy",
       "upstream": "https://plugins.jetbrains.com",
-      "signed_downloads": false
+      "signed_downloads": false,
+      "installable": true
     },
     {
       "name": "npm",
       "type": "npm",
       "mode": "proxy",
       "upstream": "https://registry.npmjs.org",
-      "signed_downloads": false
+      "signed_downloads": false,
+      "installable": true
     },
     {
       "name": "openvsx",
       "type": "openvsx",
       "mode": "proxy",
       "upstream": "https://open-vsx.org",
-      "signed_downloads": false
+      "signed_downloads": false,
+      "installable": true
     },
     {
       "name": "terraform",
       "type": "terraform",
       "mode": "proxy",
       "upstream": "https://registry.terraform.io",
-      "signed_downloads": true
+      "signed_downloads": true,
+      "installable": true
     }
   ],
   "/api/v1/explore/packages": {

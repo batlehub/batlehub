@@ -69,10 +69,10 @@ ui/eslint-results.sarif
 
 # Impeccable (design skill, RFC 0003). The skill itself is ~150 vendored files
 # that change on every upstream release — install it with `task impeccable:install`
-# rather than reviewing it as a diff. `.impeccable/` is per-developer state (live
+# rather than reviewing it as a diff (`.claude/skills/impeccable/` is under the
+# `/.claude/*` rule below). `.impeccable/` is per-developer state (live
 # mode's port, token and inject journal). PRODUCT.md and DESIGN.md, which are the
 # durable design decisions, ARE tracked.
-/.claude/skills/impeccable/
 /.impeccable/
 # ...except the shared detector config. A detector waiver is a design decision
 # with a reason attached, and it has to reach CI to mean anything: the rendered
@@ -127,3 +127,20 @@ perf/results/runs.jsonl
 perf/results/*.k6.json
 perf/results/perf-report.md
 perf/results/perf-report.json
+
+graphify-out/cache/
+
+# Claude Code's per-machine state: local settings, the symlinks `wska install`
+# creates into its checkout (~/.local/share/wska/…, dangling on every other
+# machine), installed skills and agents. Only what the project shares is
+# tracked: `wska.toml` re-creates the links, CLAUDE.md and settings.json are
+# the project's instructions and hooks. (Files already tracked under
+# `.claude/skills/` stay tracked; an ignore rule does not untrack.)
+/.claude/*
+!/.claude/wska.toml
+!/.claude/CLAUDE.md
+!/.claude/settings.json
+
+# graphify's knowledge graph (`graphify update .`): ~40 MB, regenerated from
+# the tree and stale by the next commit, so each machine builds its own.
+graphify-out/

@@ -42,7 +42,6 @@ ignore = []
 #   actix-http / -router  http 0.2, base64 0.22
 #   jsonwebtoken 11       base64 0.22, signature 2, simple_asn1 → num-bigint 0.4,
 #                         and pem 3 against rcgen 0.14's pem 4 (dev only)
-#   aws-sigv4 (sigv4a)    crypto-bigint 0.5 / elliptic-curve → rand_core 0.6
 #   ring / aws-lc-rs      untrusted 0.7, getrandom 0.2
 #   opentelemetry_sdk,    rand 0.9
 #     metrics-util
@@ -103,12 +102,6 @@ skip = [
     # attributed to argon2 0.5.3; argon2 0.6 is on cpufeatures 0.3, so rpm is the
     # only holder now.)
     { name = "cpufeatures", version = "0.2" },
-    # rand_core 0.6 is `aws-sigv4`'s: crypto-bigint 0.5 and the elliptic-curve /
-    # ecdsa / p256 stack behind aws-sdk-s3's sigv4a. `cargo tree` on this host
-    # does not reach it; cargo-deny's `all-features = true` graph does, which is
-    # why the skip stays even though the host tree looks clean. (It used to be
-    # argon2 0.5.3's password-hash 0.5 as well — argon2 0.6 retired that one.)
-    { name = "rand_core", version = "0.6" },
     # actix-http / actix-router, internal to actix.
     { name = "http", version = "0.2" },
     { name = "base64", version = "0.22" },
@@ -160,12 +153,11 @@ skip = [
 
     # ── The AWS SDK's own crypto and HTTP lineage ─────────────────────────────
     #
-    # aws-sigv4 → p256 → ecdsa 0.16, which is a generation behind on the RustCrypto
-    # traits; aws-runtime and aws-sdk-s3 hold the rest. All of it arrives through
-    # `aws-config` / `aws-sdk-s3`, which Cargo.toml already pins with
-    # `default-features = false` for the rustls advisories.
-    { name = "hmac", version = "0.12" },
-    { name = "const-oid", version = "0.9" },
+    # aws-sdk-s3's `sigv4a` feature used to bring aws-sigv4 → p256 → ecdsa
+    # 0.16 here, with hmac 0.12, const-oid 0.9 and crypto-bigint 0.5 →
+    # rand_core 0.6. It is off since crypto-bigint 0.5 got RUSTSEC-2026-0387
+    # with no 0.5 fix: SigV4a only signs for S3 Multi-Region Access Points,
+    # which nothing here uses. Turning it back on brings that advisory back.
     # pprof 0.15.0 (latest), behind batlehub-server's opt-in `profiling` feature
     # and never in a published image: its `nix ^0.26` holds bitflags 1, and its
     # `backtrace` (0.3.76, latest) holds `miniz_oxide ^0.8`. Its

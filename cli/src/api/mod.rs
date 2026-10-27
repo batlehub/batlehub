@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod auth;
 pub mod authz;
+pub mod client_setup;
 pub mod ide;
 pub mod mise_plan;
 pub mod owner;
@@ -80,6 +81,49 @@ impl BatleHubClient {
             inner,
             base_url: base_url.trim_end_matches('/').to_string(),
             token: token.map(str::to_string),
+        })
+    }
+
+    /// A client for a document that is trusted as a whole — the registry list
+    /// `setup apply` writes into dotfiles. Anonymous, and a redirect is
+    /// followed only to `https` on the same host and port: one hop to plain HTTP (an
+    /// ingress building `http://` Location headers) would hand the list to
+    /// anyone on the path, whatever scheme the user typed.
+    pub fn for_trusted_document(base_url: &str) -> Result<Self> {
+        let base = reqwest::Url::parse(base_url)?;
+        let host = base.host_str().map(str::to_owned);
+        // The server's own port, or 443 for the http → https upgrade an
+        // ingress answers a plain-http base with. Another port on the same
+        // host is another service.
+        let port = match base.scheme() {
+            "https" => base.port_or_known_default(),
+            _ => Some(443),
+        };
+        let policy = reqwest::redirect::Policy::custom(move |attempt| {
+            let url = attempt.url();
+            let allowed = attempt.previous().len() < 5
+                && url.scheme() == "https"
+                && url.host_str() == host.as_deref()
+                && url.port_or_known_default() == port;
+            let to = url.to_string();
+            if allowed {
+                attempt.follow()
+            } else {
+                attempt.error(format!(
+                    "refusing a redirect to {to}: only https on the same host and port is followed"
+                ))
+            }
+        });
+        let inner = reqwest::Client::builder()
+            .user_agent("batlehub-cli/0.1")
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .read_timeout(std::time::Duration::from_secs(60))
+            .redirect(policy)
+            .build()?;
+        Ok(Self {
+            inner,
+            base_url: base_url.trim_end_matches('/').to_string(),
+            token: None,
         })
     }
 

@@ -227,7 +227,31 @@ Two things are worth doing while the instance can still be reached:
   [RFC 0008 §14.8](/rfc/0008-mise-in-an-air-gapped-estate) for exactly how
   much of the connected-side verification is built.
 
+## Provisioning the workstations
+
+Every machine on the disconnected side — a Che workspace, a devcontainer, a CI
+runner — has to send its package managers to the instance and nowhere else.
+`batlehub-cli setup apply` writes that into each installed client's user-level
+configuration, from the instance's own registry list
+([RFC 0038](/rfc/0038-client-setup-apply)), so the estate provisions one
+server URL instead of one snippet per client.
+
+Run it where the machine starts — a Che `postStart` command, a devcontainer
+`postCreateCommand`, an image entrypoint — as the user, at every start (it is
+idempotent), and gate a CI step or a readiness probe on `setup status`:
+
+```sh
+BATLEHUB_SERVER=https://pkg.example.com batlehub-cli setup apply --yes
+```
+
+Everything it does on this side of the gap fails closed: Go gets no
+`,direct`, a block whose registry left the list stays on its dead URL, and an
+empty registry list is refused. The flags, the files written, the exit codes,
+the root rule and each of those behaviours are in the
+[CLI reference](/use/cli#setup-apply).
+
 ## See also
 
 - [Pointing mise at BatleHub](/use/mise) · [Configuration](/guide/configuration#air-gap)
+- [`setup apply` in the CLI reference](/use/cli#setup-apply)
 - [Disaster recovery](/operations/disaster-recovery) · [Incident response](/operations/incident-response)

@@ -402,6 +402,11 @@ tasks:
     cmds:
       - bash tests/heavy/rustup.sh
 
+  test:client-setup-heavy:
+    desc: "Heavy `setup apply` suite (RFC 0038 §6.5): with egress denied to every client process and nothing configured but what `batlehub-cli setup apply` wrote, cargo, npm, pnpm, yarn 4, pip, uv, go (its sumdb included), mvn, mise and rustup install through the instance; a second apply moves no file; a user-owned setting or an exported override is a conflict left untouched; remove restores every file byte for byte; a pick and the Maven mirror form survive a plain apply; a removed registry's block is orphaned, kept (fail closed) and taken out by remove (needs DATABASE_URL + network)"
+    cmds:
+      - bash tests/heavy/client_setup.sh
+
   test:closed-world-heavy:
     desc: "Heavy closed-world suite: BatleHub keeps its egress, every client process is denied all of it, and each registry kind then resolves from this instance, builds, and runs what it built — go, node, python, java, ruby, dotnet, php, conda, terraform, mise, nvm, sdkman, ovsx, helm, apt, forgejo, gitlab, jbr, vscode, jbplugin, dnf, pacman. One phase per kind: `task test:closed-world-heavy -- go`, or no argument for all of them (needs DATABASE_URL + network; Rust's closed world is `task test:rustup-heavy`, which proves the toolchain too). The dnf and pacman phases run their client inside an AlmaLinux 9 / Arch image (podman or docker), because a distribution package only runs in its own userland. HEAVY_CW_SKIP_RPM / HEAVY_CW_SKIP_PACMAN / HEAVY_CW_SKIP_JB=1 leave a row unmeasured on a runner without an engine or the disk, and say so in the banner"
     cmds:

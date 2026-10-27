@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::api::client_setup::{is_candidate, render_body, TargetId};
 use crate::api::registry::RegistryTargets;
 
 pub struct ProjectDetection {
@@ -208,14 +209,25 @@ fn detect_cargo(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDetectio
     }
     let name = read_toml_field(&cargo_toml, &["package", "name"]);
     let pkg = name.as_deref().unwrap_or("<package>").to_string();
+    // The crates.io mirror only for a registry that can stand in for it: a
+    // `local` one serves only what was published to it, so replacing
+    // crates.io with it breaks every public dependency. Publishing needs only
+    // `[registries.batlehub]`, which is the last block of the full body.
+    let mirrors = targets.registry_for("cargo").is_some_and(is_candidate);
     Some(detection("cargo", targets, name, |base| {
+        let full = render_body(TargetId::Cargo, base);
+        let body = if mirrors {
+            full.as_str()
+        } else {
+            full.find("[registries.batlehub]")
+                .map_or(full.as_str(), |i| &full[i..])
+        };
         format!(
             "Registry type : cargo\n\
              Package       : {pkg}\n\
              \n\
              ~/.cargo/config.toml:\n\
-             [registries]\n\
-             batlehub = {{ index = \"sparse+{base}/cargo/\" }}\n\
+             {body}\n\
              \n\
              Publish:\n\
              cargo publish --registry batlehub"
@@ -236,10 +248,14 @@ fn detect_gomodules(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDete
              Module        : {pkg}\n\
              \n\
              Environment:\n\
-             export GOPROXY={base}/go,direct\n\
+             export {},direct\n\
              \n\
              Use:\n\
-             go get {pkg}"
+             go get {pkg}",
+            // The console's snippet keeps the fallback, which a `local`
+            // registry needs for every public module; `setup apply` drops it
+            // on purpose (RFC 0038 §4.2).
+            render_body(TargetId::Go, base)
         )
     }))
 }
@@ -257,10 +273,11 @@ fn detect_npm(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDetection>
              Package       : {pkg}\n\
              \n\
              .npmrc:\n\
-             registry={base}/npm/\n\
+             {}\n\
              \n\
              Publish:\n\
-             npm publish"
+             npm publish",
+            render_body(TargetId::Npmrc, base)
         )
     }))
 }
@@ -280,7 +297,7 @@ fn detect_maven(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDetectio
              settings.xml:\n\
              <repository>\n\
                <id>batlehub</id>\n\
-               <url>{base}/maven/</url>\n\
+               <url>{base}/maven2/</url>\n\
              </repository>\n\
              \n\
              Publish:\n\
@@ -304,7 +321,7 @@ fn detect_composer(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDetec
              composer.json:\n\
              \"repositories\": [{{\n\
                \"type\": \"composer\",\n\
-               \"url\": \"{base}/composer/\"\n\
+               \"url\": \"{base}/\"\n\
              }}]"
         )
     }))
@@ -329,10 +346,10 @@ fn detect_rubygems(dir_names: &[String], targets: &RegistryTargets) -> Option<Pr
              \n\
              ~/.gemrc:\n\
              :sources:\n\
-             - {base}/gems/\n\
+             - {base}/\n\
              \n\
              Publish:\n\
-             gem push *.gem --host {base}/gems/"
+             gem push *.gem --host {base}"
         )
     }))
 }
@@ -357,7 +374,7 @@ fn detect_terraform(
              ~/.terraformrc:\n\
              provider_installation {{\n\
                network_mirror {{\n\
-                 url = \"{base}/terraform/\"\n\
+                 url = \"{base}/\"\n\
                }}\n\
              }}"
         )
@@ -378,7 +395,7 @@ fn detect_conda(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDetectio
              \n\
              ~/.condarc:\n\
              channels:\n\
-               - {base}/conda/\n\
+               - {base}\n\
              \n\
              Publish:\n\
              batlehub-cli publish *.conda"
@@ -401,11 +418,11 @@ fn detect_pypi(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDetection
              Package       : {pkg}\n\
              \n\
              pip.conf / pip.ini:\n\
-             [global]\n\
-             index-url = {base}/pypi/\n\
+             {}\n\
              \n\
              Publish:\n\
-             twine upload dist/*"
+             twine upload dist/*",
+            render_body(TargetId::Pip, base)
         )
     }))
 }
@@ -536,6 +553,29 @@ mod tests {
         assert_eq!(results[0].registry_type, "cargo");
         assert_eq!(results[0].package_name.as_deref(), Some("my-crate"));
         assert!(results[0].instructions.contains("cargo publish"));
+    }
+
+    /// A `local` cargo registry cannot stand in for crates.io: `detect` prints
+    /// only what publishing needs (review of PR #243, n° 11).
+    #[test]
+    fn cargo_mirror_only_for_a_proxy_registry() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"c\"\n").unwrap();
+        for (mode, mirrors) in [("local", false), ("proxy", true), ("hybrid", true)] {
+            let regs = vec![RegistryInfo {
+                name: "crates".to_owned(),
+                registry_type: "cargo".to_owned(),
+                mode: mode.to_owned(),
+                public_url: None,
+                upstream: None,
+                installable: None,
+                upstreams: Vec::new(),
+            }];
+            let t = RegistryTargets::new("https://hub.example.com", &regs);
+            let out = &scan_project_types(dir.path(), &t, 0)[0].instructions;
+            assert_eq!(out.contains("replace-with"), mirrors, "{mode}: {out}");
+            assert!(out.contains("[registries.batlehub]"), "{mode}: {out}");
+        }
     }
 
     #[test]
@@ -676,6 +716,9 @@ mod tests {
             registry_type: ty.to_owned(),
             mode: "proxy".to_owned(),
             public_url: public_url.map(str::to_owned),
+            upstream: None,
+            installable: None,
+            upstreams: Vec::new(),
         }
     }
 
@@ -688,7 +731,7 @@ mod tests {
         let results = scan_project_types(dir.path(), &targets(), 0);
         assert!(results[0]
             .instructions
-            .contains("registry=http://localhost:8080/proxy/<registry>/npm/"));
+            .contains("registry=http://localhost:8080/proxy/<registry>/"));
         assert_eq!(results[0].registry_name, None);
     }
 
@@ -704,7 +747,7 @@ mod tests {
         assert_eq!(results[0].registry_name.as_deref(), Some("npm1"));
         assert!(results[0]
             .instructions
-            .contains("registry=https://batlehub.example.com/proxy/npm1/npm/"));
+            .contains("registry=https://batlehub.example.com/proxy/npm1/"));
     }
 
     /// Host-routed: the instructions must point at the registry's own subdomain
@@ -731,11 +774,11 @@ mod tests {
         assert_eq!(npm.base_url, "https://npm1.batlehub.example.com");
         assert!(npm
             .instructions
-            .contains("registry=https://npm1.batlehub.example.com/npm/"));
+            .contains("registry=https://npm1.batlehub.example.com/"));
         assert_eq!(go.registry_name.as_deref(), Some("go1"));
         assert!(go
             .instructions
-            .contains("export GOPROXY=https://go1.batlehub.example.com/go,direct"));
+            .contains("export GOPROXY=https://go1.batlehub.example.com,direct"));
         for det in &results {
             assert!(
                 !det.instructions.contains("/proxy/"),

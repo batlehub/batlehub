@@ -230,22 +230,42 @@ impl From<HashMap<String, Arc<batlehub_adapters::repo::OpenPgpSigner>>> for Repo
     }
 }
 
-/// Maps npm/terraform/pypi/conda registry name → first upstream base URL (for audit pass-through).
+/// Maps npm/terraform/pypi/conda registry name → first upstream base URL (for audit pass-through),
+/// and a path-addressed registry (`generic`, `deb`, …) → every upstream it mirrors.
 #[derive(Clone, Default)]
-pub struct UpstreamMap(LockedMap<String>);
+pub struct UpstreamMap {
+    first: LockedMap<String>,
+    all: LockedMap<Vec<String>>,
+}
 
 impl UpstreamMap {
     pub fn new(map: HashMap<String, String>) -> Self {
-        Self(LockedMap::new(map))
+        Self {
+            first: LockedMap::new(map),
+            all: LockedMap::default(),
+        }
+    }
+
+    /// Every configured upstream of the path-addressed registries: the
+    /// registry list hands them to `batlehub-cli setup apply`, whose mise
+    /// rules rewrite each one onto the mirror (RFC 0038 §6.4).
+    pub fn with_all(mut self, all: HashMap<String, Vec<String>>) -> Self {
+        self.all = LockedMap::new(all);
+        self
     }
 
     pub fn upstream_for(&self, name: &str) -> Option<String> {
-        self.0.get(name)
+        self.first.get(name)
+    }
+
+    pub fn upstreams_for(&self, name: &str) -> Vec<String> {
+        self.all.get(name).unwrap_or_default()
     }
 
     /// Replace this map's contents with `other`'s (called by the hot-reload applier).
     pub fn replace_from(&self, other: &Self) {
-        self.0.replace_from(&other.0);
+        self.first.replace_from(&other.first);
+        self.all.replace_from(&other.all);
     }
 }
 

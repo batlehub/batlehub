@@ -562,10 +562,36 @@ heavy_wire_seen_after() {
 # after a `heavy_mark`. The transcript accumulates across the whole run, so an
 # unscoped assertion can be satisfied by an earlier phase's request; that is the
 # "green for the wrong reason" failure this suite exists to avoid.
+#
+# It waits: the tap writes a line once it has relayed the whole body
+# (`http_tap.py`, in a `finally`), and a client holding the full
+# `Content-Length` can return before that — a 17 MB helm archive lost the race
+# on CI with the line in the transcript a moment later. A positive assertion
+# polls for up to `HEAVY_WIRE_WAIT` seconds (default 5); the predicate itself
+# and `heavy_wire_not` stay immediate.
 heavy_wire_after() {
   local label="$1" needle="$2" explanation="${3:-}"
-  heavy_wire_seen_after "$label" "$needle" \
+  heavy_wire_wait heavy_wire_seen_after "$label" "$needle" \
     || heavy_fail "${explanation:-no request matching \"$needle\" after mark \"$label\"}"
+}
+
+# heavy_wire_wait <command...> — run the predicate until it holds or
+# `HEAVY_WIRE_WAIT` seconds pass; its status is the last run's.
+heavy_wire_wait() {
+  local tries=$(( ${HEAVY_WIRE_WAIT:-5} * 10 ))
+  while (( tries-- > 0 )); do
+    "$@" && return 0
+    sleep 0.1
+  done
+  "$@"
+}
+
+heavy_wire_re_seen_after() {
+  local label="$1" re="$2"
+  awk -v mark="### $label" -v re="$re" '
+    index($0, mark) == 1 { seen = 1; next }
+    seen && $0 ~ re { found = 1 }
+    END { exit found ? 0 : 1 }' "$HEAVY_LOG"
 }
 
 # heavy_wire_re_after <mark> <regex> [explanation] — like heavy_wire_after
@@ -584,10 +610,7 @@ heavy_wire_after() {
 # both layers unchanged. Measured on the airgap suite's `releases?per_page=100`.
 heavy_wire_re_after() {
   local label="$1" re="$2" explanation="${3:-}"
-  awk -v mark="### $label" -v re="$re" '
-    index($0, mark) == 1 { seen = 1; next }
-    seen && $0 ~ re { found = 1 }
-    END { exit found ? 0 : 1 }' "$HEAVY_LOG" \
+  heavy_wire_wait heavy_wire_re_seen_after "$label" "$re" \
     || heavy_fail "${explanation:-no request matching /$re/ after mark \"$label\"}"
 }
 heavy_wire_count_after() {  # mark, regex → count on stdout

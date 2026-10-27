@@ -53,6 +53,7 @@ const SKIP = new Set([
   "coverage",
   ".vitepress",
   ".desloppify",
+  "graphify-out",
   ".claude",
   ".impeccable",
   "fuzz",

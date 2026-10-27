@@ -242,6 +242,29 @@ async function copy(key: string, text: string) {
 
     <!-- Tabs -->
     <Tabs v-else :default-value="defaultTab">
+      <!-- One command writes every snippet below for the clients on PATH
+           (RFC 0038); the tabs stay for the client it does not cover. -->
+      <p class="mb-4 rounded-lg border p-4 text-sm text-muted-foreground">
+        <!-- The box spans the page; its text keeps a reading measure
+             (the rendered gate's line-length rule, ~80 characters). -->
+        <i18n-t keypath="setupGuide.setupApplyNote" tag="span" class="block max-w-[60ch]">
+          <template #apply
+            ><code class="font-mono text-foreground">batlehub-cli setup apply</code></template
+          >
+          <template #yes><code class="font-mono text-foreground">--yes</code></template>
+          <template #status><code class="font-mono text-foreground">setup status</code></template>
+          <template #remove><code class="font-mono text-foreground">setup remove</code></template>
+          <template #link
+            ><a
+              :href="`${DOCS_URL}use/cli#setup-apply`"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="underline underline-offset-2 hover:text-foreground"
+              >{{ t("setupGuide.setupApplyLink") }}</a
+            ></template
+          >
+        </i18n-t>
+      </p>
       <!-- The token on screen: masked unless asked for. Not offered to an
            OIDC session, whose snippets carry the placeholder instead. -->
       <div

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use super::BatleHubClient;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RegistryInfo {
     pub name: String,
     #[serde(rename = "type")]
@@ -14,6 +14,19 @@ pub struct RegistryInfo {
     /// the field on a path-routed deployment (RFC 0001).
     #[serde(default)]
     pub public_url: Option<String>,
+    /// The first upstream the registry proxies (`https://api.github.com`), or
+    /// absent for a kind the server names none for, and on servers older
+    /// than this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+    /// Whether the caller holds every action a package manager needs to
+    /// install from this registry; absent on servers older than the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installable: Option<bool>,
+    /// Every upstream a path-addressed registry (`generic`, …) mirrors, path
+    /// for path; empty for the other kinds and on older servers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub upstreams: Vec<String>,
 }
 
 impl RegistryInfo {
@@ -114,6 +127,9 @@ mod tests {
             registry_type: ty.to_owned(),
             mode: "proxy".to_owned(),
             public_url: public_url.map(str::to_owned),
+            upstream: None,
+            installable: None,
+            upstreams: Vec::new(),
         }
     }
 

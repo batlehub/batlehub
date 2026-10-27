@@ -2580,6 +2580,10 @@ drifted from the file and this check is no longer checking anything"
       # exist, which is why they are not here: this suite deliberately runs
       # without a security profile.
       quarantine:read | findings:read) continue ;;
+      # A visibility verb too (RFC 0038): it decides whether the registry list
+      # carries `upstream`/`upstreams`, never a `403`. Asserted against the
+      # list in `crates/web/tests/registry_installable.rs`.
+      upstreams:read) continue ;;
       # Every other verb falls through to the coverage check below, which is the
       # point: a verb added tomorrow is not in this list, so it is required to
       # have been exercised.
