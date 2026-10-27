@@ -458,18 +458,12 @@ makes it a server-side contract.
 | 8 | Does the coordinate rule move into `core` for every ecosystem at once? | **Only the rules that are unambiguous from the artifact.** `detect_meta` covers ten formats today, and two of the kinds this RFC could otherwise target are not derivable at all: a Maven coordinate needs a `groupId` no filename carries, and a Composer zip shares its extension with everything else, which is why the CLI makes `--type` mandatory for it. Those move nowhere; an import of a kind whose coordinate cannot be read refuses, which is the rule §4.2 already states for an unreadable manifest. |
 | 9 | Should the principal be a group rather than a user? | **No — `as.user_id` stays required.** Quota is keyed on `user_id` and so is the audit row, so a principal with only groups would be a publish nothing is charged for and nobody is named in. Group membership is still how it reaches a namespace; that is `as.groups`, and it is not an alternative to having a subject. |
 | 10 | Is this RFC 0015's first `token:` principal? | **Not now, and the config does not depend on the answer.** §4.3 of that RFC defines `token:<name>` as a machine credential with no user behind it, which is what this is — but `SubjectMatcher::Token` answers `false` for every identity, `Subject` has one variant, and `admin_authz_explain` refuses a `token:` subject outright rather than invent a caller. Promoting it here would land an authorization change inside a feature, and would break the one operator affordance §4.3 leans on: `authz explain` cannot answer about a subject form it refuses. Revisit when a **second** machine caller exists, since one is not a pattern; `as` names a subject either way. |
+| 11 | Where does a reader see *which* signature a version carries? | **Not here: it is RFC 0020's display, and is decided there.** The mechanism is settled (q7) and the two signatures are already distinguishable in storage and in the asset route, but whether the package page says "signed by this registry" or "signed by its builder" is a surface question about RFC 0020, which is Implemented, so it wants a 0020-bis. An import makes the question worth asking, since for an imported artifact the builder's signature is the more interesting fact; this RFC consumes whatever that page decides and adds nothing of its own. |
 
 ### Still open
 
-1. **Where does a reader see *which* signature a version carries?** The
-   mechanism is decided (q7) and the two are already distinguishable in
-   storage and in the asset route, but nothing on the package page says
-   whether a version is signed by this registry or by whoever built it —
-   and for an imported artifact that is the more interesting of the two
-   facts. It is a surface question about RFC 0020's own display rather than
-   about importing, so it wants deciding *there*: this RFC records that an
-   import makes it worth asking, and would consume whatever answer that page
-   gives.
+Nothing. The one question this RFC left open is decision 11, and it moved to
+RFC 0020, where the display it asks about lives.
 
 ---
 

@@ -1402,47 +1402,40 @@ of a denied coordinate is refused before any byte is downloaded.
 | 31 | Publish status per tool (was open question 2)      | **Keep each registry's shipped status.** Measured (§4.4): `cargo publish` accepts `200` and `202` alike and then polls the sparse index for the version by itself, so a held version is noticed by the tool's own wait — no status change buys anything; `mvn deploy:deploy-file` likewise (§13.1). The asynchronous part is discovered through `X-BatleHub-Verdict` and `batlehub wait`. |
 | 32 | A Go hold is never a `404`                           | **`goproxy` answers `403` for a withheld version whatever the caller's permission.** Measured: with `GOPROXY=<proxy>,direct` — the shape every `go env` defaults to — a `404` is "ask the next source" and the held module arrives from the origin; a `403` stops the list. The "no permission → 404" row of §4.2 has this one exception, and the doc page says why. |
 | 30 | `ForgeRefRule` (RFC 0019)                             | **Wrapped like the four gates** on a `[security]` registry, so `MUTABLE_REF`/`TAG_MOVED` are findings on the verdict; a plain rule elsewhere. |
+| 33 | postmortem input shape (was open question 1)       | **The synthetic lockfile works for all seven ecosystems; none falls to `SCANNER_UNSUPPORTED`.** Measured 2026-09-04 against postmortem 2.3.1 (§13.5, table below): npm, PyPI, Composer and Go work as designed, RubyGems once `data.tar.gz` is unpacked, Cargo and Maven are graph-only. |
+
+**Measured 2026-09-04, postmortem 2.3.1** (§13.5). One canary archive per
+ecosystem, packed as that ecosystem's tool packs one and carrying a
+`curl | sh`, a base64 `eval` and an `AWS_SECRET_ACCESS_KEY` read in its
+language; each materialised by `PostmortemScanner::layout` — the archive
+under the dependency path, the synthetic lockfile and manifest beside it
+— and scanned. **No ecosystem falls to `SCANNER_UNSUPPORTED`**: every
+layout is recognised (exit 0 or 1, never 2). What differs is whether
+postmortem has source rules for the language, and whether the artifact
+the proxy serves carries any source at all:
+
+| Ecosystem | Recognised as | Synthetic lockfile | Outcome | Caveat |
+| --- | --- | --- | --- | --- |
+| npm | `node` | `package-lock.json` + `package.json` | **works as designed** — `install_hook` (high) on the `preinstall`, `install_hook` (medium) on the `postinstall` | — |
+| PyPI | `python` | `requirements.txt` | **works as designed** — `install_hook` (critical) on `setup.py`, `obfuscation`, `sensitive_api` | an sdist; a wheel carries no `setup.py`, and the `.py` walk finds what it ships |
+| Composer | `php` | `composer.lock` + `composer.json` | **works as designed** — `obfuscation` (high), `sensitive_api` | a `scripts.post-install-cmd` in the package's own `composer.json` is not reported as an install hook |
+| Go | `go` | `go.sum` + `go.mod` | **works as designed** — `sensitive_api` | the graph is flat offline (postmortem's own `warn`, expected: §12 phase 0b); Go has no install hooks, and `exec.Command` alone is not one |
+| RubyGems | `ruby` | `Gemfile.lock` + `Gemfile` | **works with a fix** — `obfuscation` (high), `sensitive_api` ×2 **once `data.tar.gz` is unpacked** | a `.gem` is a tar of `metadata.gz` + `data.tar.gz`; the extraction policy does not descend nested archives, so the first run saw two blobs and found nothing. `materialise` now opens that one tarball, deliberately, under the same ceilings (`Layout::gem_data`) |
+| Cargo | `rust` | `Cargo.lock` + `Cargo.toml` | **graph only** — recognised, zero findings | postmortem 2.3.1 has no Rust source rules: `build.rs` with the full canary yields nothing. The lockfile graph (typosquat, advisories with `online`) is the whole answer for a crate |
+| Maven | `java` | `pom.xml` | **graph only** — recognised, zero findings | the Java rules exist (a `.java` with the canary yields `sensitive_api`), but a jar is bytecode and the proxy serves the jar; only a `-sources.jar` would carry a signal. Flat graph offline, as for Go |
+
+The row for a graph-only ecosystem is not a skip: the adapter test
+asserts the empty answer, so a postmortem release that starts reading
+`.rs` or `.class` turns it red and this table gets updated. The fixtures
+(`fixtures/canary-*.{tgz,tar.gz,crate,gem,zip,jar}`) and the recorded
+outputs are the canary tests', as the phase asked.
 
 ### Still open
 
-1. ~~**postmortem input shape** — a spike, not a decision (phase 0b below).~~
-   `scan` wants a project with a lockfile, not a bare archive. The
-   synthetic-lockfile approach in §6.3 must be validated against the pinned
-   postmortem release for each of the seven ecosystems, Go and Maven first
-   (flat graphs in postmortem). Outcome per ecosystem: works as designed /
-   works with a documented caveat / falls back to source-level rules only
-   with `SCANNER_UNSUPPORTED`. The result is appended to this RFC before it
-   moves to "In review".
-
-   **Measured 2026-09-04, postmortem 2.3.1** (§13.5). One canary archive per
-   ecosystem, packed as that ecosystem's tool packs one and carrying a
-   `curl | sh`, a base64 `eval` and an `AWS_SECRET_ACCESS_KEY` read in its
-   language; each materialised by `PostmortemScanner::layout` — the archive
-   under the dependency path, the synthetic lockfile and manifest beside it
-   — and scanned. **No ecosystem falls to `SCANNER_UNSUPPORTED`**: every
-   layout is recognised (exit 0 or 1, never 2). What differs is whether
-   postmortem has source rules for the language, and whether the artifact
-   the proxy serves carries any source at all:
-
-   | Ecosystem | Recognised as | Synthetic lockfile | Outcome | Caveat |
-   | --- | --- | --- | --- | --- |
-   | npm | `node` | `package-lock.json` + `package.json` | **works as designed** — `install_hook` (high) on the `preinstall`, `install_hook` (medium) on the `postinstall` | — |
-   | PyPI | `python` | `requirements.txt` | **works as designed** — `install_hook` (critical) on `setup.py`, `obfuscation`, `sensitive_api` | an sdist; a wheel carries no `setup.py`, and the `.py` walk finds what it ships |
-   | Composer | `php` | `composer.lock` + `composer.json` | **works as designed** — `obfuscation` (high), `sensitive_api` | a `scripts.post-install-cmd` in the package's own `composer.json` is not reported as an install hook |
-   | Go | `go` | `go.sum` + `go.mod` | **works as designed** — `sensitive_api` | the graph is flat offline (postmortem's own `warn`, expected: §12 phase 0b); Go has no install hooks, and `exec.Command` alone is not one |
-   | RubyGems | `ruby` | `Gemfile.lock` + `Gemfile` | **works with a fix** — `obfuscation` (high), `sensitive_api` ×2 **once `data.tar.gz` is unpacked** | a `.gem` is a tar of `metadata.gz` + `data.tar.gz`; the extraction policy does not descend nested archives, so the first run saw two blobs and found nothing. `materialise` now opens that one tarball, deliberately, under the same ceilings (`Layout::gem_data`) |
-   | Cargo | `rust` | `Cargo.lock` + `Cargo.toml` | **graph only** — recognised, zero findings | postmortem 2.3.1 has no Rust source rules: `build.rs` with the full canary yields nothing. The lockfile graph (typosquat, advisories with `online`) is the whole answer for a crate |
-   | Maven | `java` | `pom.xml` | **graph only** — recognised, zero findings | the Java rules exist (a `.java` with the canary yields `sensitive_api`), but a jar is bytecode and the proxy serves the jar; only a `-sources.jar` would carry a signal. Flat graph offline, as for Go |
-
-   The row for a graph-only ecosystem is not a skip: the adapter test
-   asserts the empty answer, so a postmortem release that starts reading
-   `.rs` or `.class` turns it red and this table gets updated. The fixtures
-   (`fixtures/canary-*.{tgz,tar.gz,crate,gem,zip,jar}`) and the recorded
-   outputs are the canary tests', as the phase asked.
-2. **Publish status per tool** — settled for cargo and mvn by decision 31;
-   `twine`, `gem push`, `composer` and `dotnet nuget push` are measured when
-   their registries opt in (their heavy suites exist; the Publish phase is
-   added to each then).
+Nothing. Question 1 is decision 33, with its measurement above; question 2 is
+decision 31, and `twine`, `gem push`, `composer` and `dotnet nuget push` are
+measured as their registries opt in and their heavy suites gain a Publish
+phase.
 
 ---
 
