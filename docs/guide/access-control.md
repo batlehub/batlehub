@@ -60,6 +60,7 @@ granted to nobody.
 | `releases:delete` | delete a version |
 | `source:read` | download a source archive |
 | `catalogue:browse` | use the console's package explorer |
+| `upstreams:read` | see the upstream URLs a registry proxies in the registry list, credentials stripped; the administrator holds it, anyone else by a grant — `setup apply` reads the list anonymously, so its mise rules for `generic` mirrors and the forges need it granted to `*` |
 | `owners:read` | see a package's owners |
 | `owners:write` | change them |
 | `packages:block` | block a package or version administratively |

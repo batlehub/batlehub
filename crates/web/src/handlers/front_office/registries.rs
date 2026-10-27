@@ -2,6 +2,8 @@ use actix_web::{get, web, Responder};
 use serde::Serialize;
 use utoipa::ToSchema;
 
+use batlehub_core::services::authz::RegistryAccess;
+
 use crate::{extractors::AuthIdentity, RegistryHostMap, RegistryMap, RegistryModeMap};
 
 #[derive(Serialize, ToSchema)]
@@ -28,17 +30,17 @@ pub struct RegistryInfo {
     /// upstream is behind this" is the first thing an operator asks of a
     /// registry they did not configure themselves.
     ///
-    /// Visible to anonymous callers on the same terms as `public_url` above,
-    /// and for the same reason: this endpoint already filters by
-    /// `accessible_registries_for`, so a caller only ever sees registries they
-    /// can already pull through — and pulling through one reveals the upstream
-    /// anyway, in the artifacts it returns.
+    /// Shown only to a caller holding `upstreams:read` on the registry, which
+    /// translation gives the administrator and anyone else gets by a grant: an
+    /// upstream can name an internal host, and being able to install from a
+    /// mirror is not being told what it fronts. Credentials, a query and a
+    /// fragment are stripped whoever holds it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream: Option<String>,
     /// Every upstream a path-addressed registry (`generic`, `deb`, …) mirrors,
     /// path for path; omitted for the other kinds. `batlehub-cli setup apply`
     /// turns each into a mise rule `^{upstream}/(.+)` → `{proxy}/$1`
-    /// (RFC 0038 §6.4). Visible on the same terms as `upstream`.
+    /// (RFC 0038 §6.4). Shown on the same terms as `upstream`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub upstreams: Vec<String>,
     /// Whether this registry mints signed download URLs (RFC 0012), and can
@@ -101,12 +103,18 @@ pub async fn list_registries(
         }
         None => (Default::default(), None),
     };
-    let installable = |name: &str| match &granted {
-        // No hierarchy for this registry: `authorize_grants` lets every read
-        // through, so it is installable for whoever may see it.
-        Some(granted) => granted.get(name).copied().unwrap_or(true),
-        // No proxy service wired, so no grants to ask: the legacy answer.
-        None => accessible.contains(name),
+    // No hierarchy for a registry: `authorize_grants` lets every read through,
+    // so it is installable, and its upstreams readable, for whoever may see it.
+    // No proxy service wired, so no grants to ask: the legacy answer.
+    let access = |name: &str| match &granted {
+        Some(granted) => granted.get(name).copied().unwrap_or(RegistryAccess {
+            installable: true,
+            upstreams: true,
+        }),
+        None => RegistryAccess {
+            installable: accessible.contains(name),
+            upstreams: true,
+        },
     };
     let mut registries: Vec<RegistryInfo> = map
         .entries()
@@ -117,24 +125,48 @@ pub async fn list_registries(
         // Only an actual grant widens the list — never the absence of one.
         .filter(|(name, _)| {
             accessible.contains(name.as_str())
-                || granted.as_ref().is_some_and(|g| g.get(name) == Some(&true))
+                || granted
+                    .as_ref()
+                    .is_some_and(|g| g.get(name).is_some_and(|a| a.installable))
         })
-        .map(|(name, registry_type)| RegistryInfo {
-            mode: modes.get(&name).as_str().to_owned(),
-            public_url: hosts.as_ref().and_then(|h| h.public_url_for(&name)),
-            upstream: upstreams.as_ref().and_then(|u| u.upstream_for(&name)),
-            upstreams: upstreams
-                .as_ref()
-                .map(|u| u.upstreams_for(&name))
-                .unwrap_or_default(),
-            signed_downloads: signed.get(&name).copied().unwrap_or(false),
-            installable: installable(&name),
-            name,
-            registry_type,
+        .map(|(name, registry_type)| {
+            let access = access(&name);
+            let shown = upstreams.as_ref().filter(|_| access.upstreams);
+            RegistryInfo {
+                mode: modes.get(&name).as_str().to_owned(),
+                public_url: hosts.as_ref().and_then(|h| h.public_url_for(&name)),
+                upstream: shown
+                    .and_then(|u| u.upstream_for(&name))
+                    .map(|u| public_upstream(&u)),
+                upstreams: shown
+                    .map(|u| u.upstreams_for(&name))
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|u| public_upstream(u))
+                    .collect(),
+                signed_downloads: signed.get(&name).copied().unwrap_or(false),
+                installable: access.installable,
+                name,
+                registry_type,
+            }
         })
         .collect();
     registries.sort_by(|a, b| a.name.cmp(&b.name));
     web::Json(registries)
+}
+
+/// An upstream URL as the registry list may show it: no userinfo, no query and
+/// no fragment, any of which can carry a credential the operator configured.
+fn public_upstream(url: &str) -> String {
+    let url = url.split(['?', '#']).next().unwrap_or_default();
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_owned();
+    };
+    let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    format!("{scheme}://{host}{path}")
 }
 
 #[cfg(test)]
@@ -196,5 +228,21 @@ mod tests {
             serde_json::json!(["https://releases.hashicorp.com", "https://dl.k8s.io"])
         );
         assert!(body[1].get("upstreams").is_none(), "{}", body[1]);
+    }
+
+    #[::core::prelude::v1::test]
+    fn an_upstream_is_shown_without_credentials() {
+        assert_eq!(
+            public_upstream("https://user:tok@artifactory.corp/generic?token=x#f"),
+            "https://artifactory.corp/generic"
+        );
+        assert_eq!(
+            public_upstream("https://a@b@host:8443"),
+            "https://host:8443"
+        );
+        assert_eq!(
+            public_upstream("https://dl.k8s.io/release/a@b"),
+            "https://dl.k8s.io/release/a@b"
+        );
     }
 }

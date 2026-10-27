@@ -270,6 +270,10 @@ pub fn translate_rbac(
             Action::OwnersWrite,
             Action::StatsRead,
             Action::AuditRead,
+            // New with RFC 0038: before it every caller who saw a registry saw
+            // its upstream. An upstream can name an internal host, so wider
+            // than the administrator is a grant the operator writes.
+            Action::UpstreamsRead,
         ],
     );
 

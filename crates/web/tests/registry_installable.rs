@@ -139,7 +139,16 @@ async fn app() -> (
         local_svc,
         RegistryModeMap::default(),
         batlehub_web::CargoIndexMap::default(),
-        ConfigureAppDefaults::default(),
+        ConfigureAppDefaults {
+            upstream_map: batlehub_web::UpstreamMap::new(HashMap::from([
+                (
+                    "npm".to_owned(),
+                    "https://u:secret@registry.npmjs.org/?token=t".to_owned(),
+                ),
+                ("open".to_owned(), "https://npm.corp.internal".to_owned()),
+            ])),
+            ..Default::default()
+        },
         test_auth_providers(),
     )
     .await;
@@ -216,4 +225,60 @@ async fn a_grant_reload_changes_the_answer() {
     // is not shrunk — but these grants give nobody `source:read` on it.
     let admin = listing(&app, Some(ADMIN_TOKEN)).await;
     assert_eq!(admin.get("open"), Some(&false), "{admin:?}");
+}
+
+/// name → `upstream`, absent when the field is withheld.
+async fn upstreams<S>(app: &S, token: Option<&str>) -> HashMap<String, Option<String>>
+where
+    S: actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse<actix_web::body::BoxBody>,
+        Error = actix_web::Error,
+    >,
+{
+    let mut req = TestRequest::get().uri("/api/v1/registries");
+    if let Some(t) = token {
+        req = req.insert_header(("Authorization", bearer(t)));
+    }
+    let body: Value = read_body_json(call_service(app, req.to_request()).await).await;
+    body.as_array()
+        .expect("an array")
+        .iter()
+        .map(|r| {
+            (
+                r["name"].as_str().expect("name").to_owned(),
+                r["upstream"].as_str().map(str::to_owned),
+            )
+        })
+        .collect()
+}
+
+/// Seeing a registry is not seeing what it fronts: `upstreams:read` is the
+/// administrator's by translation, anyone else's by a grant, and the URL never
+/// carries the credentials or the query it was configured with.
+#[actix_web::test]
+async fn upstreams_follow_upstreams_read_and_lose_their_credentials() {
+    let (app, hot) = app().await;
+    assert_eq!(
+        upstreams(&app, None).await,
+        HashMap::from([("npm".to_owned(), None), ("open".to_owned(), None)])
+    );
+    assert_eq!(
+        upstreams(&app, Some(ADMIN_TOKEN)).await.get("npm"),
+        Some(&Some("https://registry.npmjs.org/".to_owned()))
+    );
+
+    hot.write().await.grants.insert(
+        "open".to_owned(),
+        open_grants(&[
+            Action::ReleasesList,
+            Action::ReleasesRead,
+            Action::SourceRead,
+            Action::UpstreamsRead,
+        ]),
+    );
+    assert_eq!(
+        upstreams(&app, None).await.get("open"),
+        Some(&Some("https://npm.corp.internal".to_owned()))
+    );
 }

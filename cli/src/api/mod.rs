@@ -86,22 +86,31 @@ impl BatleHubClient {
 
     /// A client for a document that is trusted as a whole — the registry list
     /// `setup apply` writes into dotfiles. Anonymous, and a redirect is
-    /// followed only to `https` on the same host: one hop to plain HTTP (an
+    /// followed only to `https` on the same host and port: one hop to plain HTTP (an
     /// ingress building `http://` Location headers) would hand the list to
     /// anyone on the path, whatever scheme the user typed.
     pub fn for_trusted_document(base_url: &str) -> Result<Self> {
-        let host = reqwest::Url::parse(base_url)?.host_str().map(str::to_owned);
+        let base = reqwest::Url::parse(base_url)?;
+        let host = base.host_str().map(str::to_owned);
+        // The server's own port, or 443 for the http → https upgrade an
+        // ingress answers a plain-http base with. Another port on the same
+        // host is another service.
+        let port = match base.scheme() {
+            "https" => base.port_or_known_default(),
+            _ => Some(443),
+        };
         let policy = reqwest::redirect::Policy::custom(move |attempt| {
             let url = attempt.url();
             let allowed = attempt.previous().len() < 5
                 && url.scheme() == "https"
-                && url.host_str() == host.as_deref();
+                && url.host_str() == host.as_deref()
+                && url.port_or_known_default() == port;
             let to = url.to_string();
             if allowed {
                 attempt.follow()
             } else {
                 attempt.error(format!(
-                    "refusing a redirect to {to}: only https on the same host is followed"
+                    "refusing a redirect to {to}: only https on the same host and port is followed"
                 ))
             }
         });

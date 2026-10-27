@@ -1012,10 +1012,14 @@ impl RegistryKind {
     /// Read off the handlers, not the RFC, because the handlers are what
     /// refuse:
     ///
-    /// - `releases:list` for every kind: any document naming many versions goes
-    ///   through `ProxyService::authorize_listing_audited` /
-    ///   `LocalRegistryService`'s listing funnel, which ask for it whatever the
-    ///   handler's own action is.
+    /// - `releases:list` for every kind with a version listing: any document
+    ///   naming many versions goes through
+    ///   `ProxyService::authorize_listing_audited` / `LocalRegistryService`'s
+    ///   listing funnel, which ask for it whatever the handler's own action is.
+    ///   The path-addressed kinds ([`Self::is_path_addressed`]) have none: every
+    ///   file, an `APKINDEX` or a `Packages` included, is fetched by path under
+    ///   `releases:read` alone, so asking them for `releases:list` would answer
+    ///   `false` to a caller every download serves.
     /// - `source:read` where the artifact is the package's source archive:
     ///   npm's `tarball`, cargo's `download`, goproxy's `.zip`, and the two VSX
     ///   kinds' `.vsix` (whose metadata routes ask for `source:read` too, and
@@ -1039,13 +1043,7 @@ impl RegistryKind {
             | Self::Terraform
             | Self::Rubygems
             | Self::Nuget
-            | Self::Deb
-            | Self::Rpm
-            | Self::Pacman
-            | Self::Apk
-            | Self::Jetbrains
             | Self::JetbrainsMarketplace
-            | Self::Generic
             | Self::Nodedist
             | Self::Sdkman
             | Self::Rustup
@@ -1053,6 +1051,9 @@ impl RegistryKind {
             | Self::Nix
             | Self::Devfile
             | Self::Helm => &[ReleasesList, ReleasesRead],
+            Self::Deb | Self::Rpm | Self::Pacman | Self::Apk | Self::Jetbrains | Self::Generic => {
+                &[ReleasesRead]
+            }
         }
     }
 
@@ -1339,13 +1340,17 @@ mod tests {
         }
     }
 
-    /// Every kind resolves through a listing and downloads bytes, so its
-    /// install set names `releases:list` and at least one byte verb.
+    /// Every kind downloads bytes, and every kind but the path-addressed ones
+    /// resolves through a listing — those fetch even their indexes by path.
     #[test]
     fn install_actions_cover_a_listing_and_a_download() {
         for kind in RegistryKind::ALL {
             let a = kind.install_actions();
-            assert!(a.contains(&Action::ReleasesList), "{kind:?}");
+            assert_eq!(
+                a.contains(&Action::ReleasesList),
+                !kind.is_path_addressed(),
+                "{kind:?}"
+            );
             assert!(
                 a.contains(&Action::ReleasesRead) || a.contains(&Action::SourceRead),
                 "{kind:?}"

@@ -65,6 +65,15 @@ pub enum Action {
     /// agents resolve everything, people browse nothing" is a real and common
     /// configuration on a mirror, and one verb cannot express it.
     CatalogueBrowse,
+    /// The upstream URLs a registry proxies or mirrors, as the registry list
+    /// shows them (RFC 0038 §6.4).
+    ///
+    /// A visibility verb, like `quarantine:read`: no route answers `403` for
+    /// it, the list simply leaves `upstream`/`upstreams` out. Its own verb
+    /// because an upstream can name an internal host, and "may install from
+    /// this mirror" is not "may learn what it fronts". Credentials, a query and
+    /// a fragment are stripped whoever holds it.
+    UpstreamsRead,
 
     // ── the shared core: writes ──────────────────────────────────────────────
     /// Creating a new version.
@@ -272,6 +281,7 @@ impl Action {
         Action::ReleasesList,
         Action::SourceRead,
         Action::CatalogueBrowse,
+        Action::UpstreamsRead,
         Action::ReleasesPublish,
         Action::ReleasesOverwrite,
         Action::ReleasesYank,
@@ -316,6 +326,7 @@ impl Action {
             Action::ReleasesList => "releases:list",
             Action::SourceRead => "source:read",
             Action::CatalogueBrowse => "catalogue:browse",
+            Action::UpstreamsRead => "upstreams:read",
             Action::ReleasesPublish => "releases:publish",
             Action::ReleasesOverwrite => "releases:overwrite",
             Action::ReleasesYank => "releases:yank",

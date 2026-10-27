@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/access-control.md
-sourceHash: 43b799e8a37951e0
+sourceHash: 5063702ec3ad8ca0
 ---
 
 # Contrôle d'accès
@@ -66,6 +66,7 @@ pas une permission accordée à personne.
 | `releases:delete` | supprimer une version |
 | `source:read` | télécharger une archive de sources |
 | `catalogue:browse` | utiliser l'explorateur de paquets de la console |
+| `upstreams:read` | voir dans la liste des registres les URL amont qu'un registre relaie, sans leurs identifiants ; l'administrateur le détient, les autres par une autorisation — `setup apply` lit la liste anonymement, donc ses règles mise des miroirs `generic` et des forges demandent de l'accorder à `*` |
 | `owners:read` | voir les propriétaires d'un paquet |
 | `owners:write` | les modifier |
 | `packages:block` | bloquer administrativement un paquet ou une version |

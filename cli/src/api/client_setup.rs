@@ -999,10 +999,13 @@ fn url_host(url: &str) -> Option<String> {
         .map(str::to_ascii_lowercase)
 }
 
-/// A generic registry's upstream, as it goes into a rule: a plain http(s) URL
-/// with nothing a TOML key or a regex could misread, without its final `/`.
-fn check_upstream(u: &str) -> std::result::Result<&str, String> {
-    let ok = u.is_ascii()
+/// The one shape of URL setup writes into a file or prints for `eval`: ASCII,
+/// no control, space or quoting character, scheme `http` or `https`, no
+/// credentials, query or fragment. The string itself is checked, not only what
+/// a URL parser makes of it — a parser drops a `\n` that `~/.npmrc` would read
+/// as a second setting.
+fn is_plain_http_url(u: &str) -> bool {
+    u.is_ascii()
         && !u
             .chars()
             .any(|c| c.is_control() || c.is_whitespace() || UNSAFE.contains(c))
@@ -1012,8 +1015,13 @@ fn check_upstream(u: &str) -> std::result::Result<&str, String> {
                 && p.password().is_none()
                 && p.query().is_none()
                 && p.fragment().is_none()
-        });
-    if ok {
+        })
+}
+
+/// A generic registry's upstream, as it goes into a rule: a plain http(s) URL
+/// with nothing a TOML key or a regex could misread, without its final `/`.
+fn check_upstream(u: &str) -> std::result::Result<&str, String> {
+    if is_plain_http_url(u) {
         Ok(u.trim_end_matches('/'))
     } else {
         Err(format!("its upstream {u:?} is not a plain http(s) URL"))
@@ -1041,15 +1049,17 @@ fn foreign_upstream(ty: &str, r: &RegistryInfo) -> Option<String> {
             r.name
         )),
         None => Some(format!(
-            "{ty} registry {} (the server does not say what it proxies)",
+            "{ty} registry {} (the server does not say what it proxies: that needs \
+             `upstreams:read` granted to `*` on it)",
             r.name
         )),
     }
 }
 
 /// `url` is a registry URL of the instance at `server`: same scheme and port,
-/// on its host under `/proxy/`, or on one of its subdomains (a registry's own
-/// host). Another service on the same host — a verdaccio on :4873 — is not.
+/// on its host under `{server path}/proxy/` (a server reached under a path
+/// prefix), or on one of its subdomains (a registry's own host). Another
+/// service on the same host — a verdaccio on :4873 — is not.
 fn is_instance_url(url: &str, server: &str) -> bool {
     let (Ok(u), Ok(s)) = (reqwest::Url::parse(url), reqwest::Url::parse(server)) else {
         return false;
@@ -1058,9 +1068,10 @@ fn is_instance_url(url: &str, server: &str) -> bool {
         return false;
     };
     let (h, sh) = (h.to_ascii_lowercase(), sh.to_ascii_lowercase());
+    let proxy = format!("{}/proxy/", s.path().trim_end_matches('/'));
     u.scheme() == s.scheme()
         && u.port_or_known_default() == s.port_or_known_default()
-        && ((h == sh && u.path().starts_with("/proxy/")) || h.ends_with(&format!(".{sh}")))
+        && ((h == sh && u.path().starts_with(&proxy)) || h.ends_with(&format!(".{sh}")))
 }
 
 /// `host` is `server_host` or one of its subdomains.
@@ -1101,34 +1112,14 @@ fn check_name(name: &str) -> Result<()> {
 fn base_url(r: &RegistryInfo, opts: &Options) -> Result<String> {
     check_name(&r.name)?;
     let base = r.base_url(opts.server);
-    if !base.is_ascii() {
+    if !is_plain_http_url(&base) {
         bail!(
-            "registry {} advertises a URL that is not ASCII, which setup will not write",
+            "registry {} advertises {base:?}: only a plain http(s) URL — ASCII, without spaces, \
+             quoting characters, credentials, query or fragment — is written",
             r.name
         );
     }
-    if let Some(c) = base
-        .chars()
-        .find(|c| c.is_control() || c.is_whitespace() || UNSAFE.contains(*c))
-    {
-        bail!(
-            "registry {} advertises a URL containing {c:?}, which setup will not write",
-            r.name
-        );
-    }
-    let url = reqwest::Url::parse(&base)
-        .with_context(|| format!("registry {} advertises an invalid URL {base:?}", r.name))?;
-    if !matches!(url.scheme(), "http" | "https")
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        bail!(
-            "registry {} advertises {base}: only a plain http(s) URL, without credentials, query or fragment, is written",
-            r.name
-        );
-    }
+    let url = reqwest::Url::parse(&base)?;
     let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
     let server = reqwest::Url::parse(opts.server)?;
     let server_host = server.host_str().unwrap_or_default().to_ascii_lowercase();
@@ -1340,8 +1331,8 @@ const ALL_TARGETS: [TargetId; 11] = [
 ];
 
 /// Registry types the mise drop-in carries settings for: the ones whose URLs
-/// mise fetches itself. `generic` needs the upstreams the registry list does
-/// not carry yet (RFC 0038 phase 2).
+/// mise fetches itself, plus `generic`, one rule per upstream the registry
+/// list shows (RFC 0038 §6.4) — none when the caller lacks `upstreams:read`.
 /// `generic` last: mise stops at the first rule that matches, and a mirror of
 /// `https://github.com` must not shadow the typed github rules.
 const MISE_TYPES: [&str; 7] = [
@@ -1680,11 +1671,16 @@ impl<'a> PlanCtx<'a> {
             // Every generic mirror at once: each fronts its own upstreams, so
             // two are not candidates for one place, and none is ambiguous.
             if *ty == "generic" {
-                let all: Vec<&'a RegistryInfo> = self
+                let mut all: Vec<&'a RegistryInfo> = self
                     .registries
                     .iter()
                     .filter(|r| r.registry_type == "generic" && is_candidate(r))
                     .collect();
+                // `--pick generic=b` puts b's rules first: mise stops at the
+                // first match, so b wins every upstream two mirrors share.
+                if let Some(pick) = self.opts.picks.get("generic") {
+                    all.sort_by_key(|r| &r.name != pick);
+                }
                 for (t, n) in read.managed.iter().flat_map(|m| &m.registries) {
                     if t == "generic" && !all.iter().any(|r| &r.name == n) {
                         gone = true;
@@ -1739,6 +1735,9 @@ impl<'a> PlanCtx<'a> {
                 let mut rules = String::new();
                 let mut node = None;
                 let mut skipped = Vec::new();
+                // Generic pattern → the mirror it went to: a second mirror of
+                // the same upstream would repeat the TOML key.
+                let mut mirrored: BTreeMap<String, &str> = BTreeMap::new();
                 for (ty, r) in chosen {
                     let base = self.base(r)?;
                     if *ty == "nodedist" {
@@ -1749,18 +1748,31 @@ impl<'a> PlanCtx<'a> {
                     if *ty == "generic" {
                         if r.upstreams.is_empty() {
                             skipped.push(format!(
-                                "generic registry {} (the server does not say what it mirrors)",
+                                "generic registry {} (the server does not say what it mirrors: \
+                                 that needs `upstreams:read` granted to `*` on it)",
                                 r.name
                             ));
                         }
                         // A 1:1 path mirror: each upstream maps onto it.
                         for upstream in &r.upstreams {
                             match check_upstream(upstream) {
-                                Ok(u) => push_replacement(
-                                    &mut rules,
-                                    &format!("^{}/(.+)", regex_escape(u)),
-                                    &format!("{base}/generic/$1"),
-                                ),
+                                Ok(u) => {
+                                    let pattern = format!("^{}/(.+)", regex_escape(u));
+                                    if let Some(first) = mirrored.get(&pattern) {
+                                        skipped.push(format!(
+                                            "generic registry {} on {u} (registry {first} has it; \
+                                             --pick generic={} to swap)",
+                                            r.name, r.name
+                                        ));
+                                        continue;
+                                    }
+                                    push_replacement(
+                                        &mut rules,
+                                        &pattern,
+                                        &format!("{base}/generic/$1"),
+                                    );
+                                    mirrored.insert(pattern, &r.name);
+                                }
                                 Err(why) => {
                                     skipped.push(format!("generic registry {} ({why})", r.name))
                                 }
@@ -1822,7 +1834,22 @@ impl<'a> PlanCtx<'a> {
                     .opts
                     .maven_mirror_of
                     .map(|m| m.mirror_of().to_owned())
-                    .or_else(|| read.managed.as_ref().and_then(|m| m.mirror_of.clone()))
+                    // Read back from a marker anyone can edit, and written into
+                    // `<mirrorOf>`: kept only when it is a value `apply` writes.
+                    .or_else(|| {
+                        read.managed
+                            .as_ref()
+                            .and_then(|m| m.mirror_of.clone())
+                            .filter(|m| {
+                                [
+                                    MavenMirror::Central,
+                                    MavenMirror::External,
+                                    MavenMirror::All,
+                                ]
+                                .iter()
+                                .any(|v| v.mirror_of() == m)
+                            })
+                    })
                     .unwrap_or_else(|| "central".to_owned());
                 let body = render_maven(&r.name, &base, &mirror_of);
                 marker.mirror_of = Some(mirror_of);
@@ -2006,14 +2033,7 @@ pub fn cached_env(env: &Env) -> Option<Vec<(String, String)>> {
             // The sum is no defence (anyone who can edit the file can
             // recompute it): what is printed is checked as `apply` writes it,
             // a known name and a plain http(s) URL.
-            .filter(|(k, v)| {
-                env_var_client(k).is_some()
-                    && v.is_ascii()
-                    && !v
-                        .chars()
-                        .any(|c| c.is_control() || c.is_whitespace() || UNSAFE.contains(c))
-                    && reqwest::Url::parse(v).is_ok_and(|u| matches!(u.scheme(), "http" | "https"))
-            })
+            .filter(|(k, v)| env_var_client(k).is_some() && is_plain_http_url(v))
             .collect(),
     )
 }
@@ -2950,6 +2970,35 @@ mod tests {
             .contains("generic registry hc is no longer listed"));
     }
 
+    /// Two mirrors of one upstream: one rule (a repeated TOML key would not
+    /// parse), and `--pick generic=b` decides whose.
+    #[test]
+    fn a_generic_pick_wins_a_shared_upstream() {
+        let dir = TempDir::new().unwrap();
+        let env = env_in(dir.path(), &[ClientId::Mise]);
+        let regs: Vec<_> = ["a", "b"]
+            .into_iter()
+            .map(|n| {
+                let mut r = reg(n, "generic", "proxy");
+                r.upstreams = vec!["https://dl.k8s.io".to_owned()];
+                r
+            })
+            .collect();
+        let mut o = opts();
+        o.picks.insert("generic".to_owned(), "b".to_owned());
+        let p = find(&plan(&regs, &o, &env).unwrap(), TargetId::Mise).clone();
+        let next = p
+            .next
+            .clone()
+            .unwrap_or_else(|| panic!("{:?} {:?}", p.state, p.detail));
+        assert!(
+            next.contains("proxy/b/") && !next.contains("proxy/a/"),
+            "{next}"
+        );
+        assert!(p.detail.unwrap().contains("registry b has it"));
+        toml::from_str::<toml::Table>(&next).unwrap();
+    }
+
     const SERVER: &str = "https://hub.example.com";
 
     fn env_in(dir: &Path, installed: &[ClientId]) -> Env {
@@ -3208,6 +3257,30 @@ mod tests {
         assert!(std::fs::read_to_string(&settings)
             .unwrap()
             .contains("<mirrorOf>*</mirrorOf>"));
+    }
+
+    /// The marker is the user's file: a `mirror-of` edited into markup is not
+    /// written back into `<mirrorOf>`.
+    #[test]
+    fn an_edited_mirror_of_is_not_written_back() {
+        let dir = TempDir::new().unwrap();
+        let env = env_in(dir.path(), &[ClientId::Maven]);
+        let regs = vec![reg("m", "maven", "proxy")];
+        let settings = dir.path().join(".m2/settings.xml");
+        apply_all(&plan(&regs, &opts(), &env).unwrap());
+        let forged = std::fs::read_to_string(&settings).unwrap().replace(
+            "mirror-of=central",
+            "mirror-of=central</mirrorOf><url>http://evil/</url><mirrorOf>x",
+        );
+        std::fs::write(&settings, forged).unwrap();
+
+        apply_all(&plan(&regs, &opts(), &env).unwrap());
+        let written = std::fs::read_to_string(&settings).unwrap();
+        assert!(!written.contains("evil"), "{written}");
+        assert!(
+            written.contains("<mirrorOf>central</mirrorOf>"),
+            "{written}"
+        );
     }
 
     #[test]
@@ -4438,6 +4511,15 @@ mod tests {
         assert!(!is_instance_url("https://hub.example.com:4873/", s));
         assert!(!is_instance_url("https://hub.example.com/other", s));
         assert!(!is_instance_url("http://hub.example.com/proxy/r/", s));
+        let prefixed = "https://host.example.com/batlehub";
+        assert!(is_instance_url(
+            "https://host.example.com/batlehub/proxy/node",
+            prefixed
+        ));
+        assert!(!is_instance_url(
+            "https://host.example.com/proxy/node",
+            prefixed
+        ));
         assert!(!is_instance_url("https://evilhub.example.com/proxy/r/", s));
     }
 

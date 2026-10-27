@@ -983,6 +983,36 @@ Known limits, kept on purpose:
   a CI `container:` job running as root with the runner's home is refused;
   `runuser` is the documented way round.
 
+### Final review (2026-10-27)
+
+The review redone after the deadlock fix found ten defects; each was checked
+against the tree and fixed:
+
+- **Upstreams behind a verb.** The registry list handed every caller who could
+  see a registry its configured upstreams — `user:token@` and an internal host
+  included — and the grants-widened listing made that anonymous on an opened
+  registry. They now need **`upstreams:read`** on the registry, a new
+  visibility verb (like `quarantine:read`, never a `403`): the administrator
+  holds it by translation, anyone else by a grant (`*` for everyone, `role:user`
+  for the signed-in). `setup apply` reads the list anonymously, so only a `*`
+  grant reaches it. Userinfo, query and fragment are stripped whoever holds
+  it. Without it the list omits `upstream`/`upstreams`, so `setup apply`
+  writes no `generic` rule and refuses the forge/npm/cargo/openvsx mise rules
+  as "the server does not say what it proxies".
+- **A shadow is not a grant.** An active dry run made `installable` true for
+  every caller, and the list widens on it; it now answers what the new
+  hierarchy grants.
+- **`install_actions` of the path-addressed kinds** asked for `releases:list`,
+  which no generic/deb/rpm/pacman/apk/jetbrains route requests; a mirror opened
+  with `releases:read` alone answered `false`.
+- **CLI**: two generic mirrors of one upstream repeated a TOML key, which
+  made the drop-in a conflict; one rule is written now, the first mirror's or
+  the one `--pick generic=<name>` names, which the pick had silently ignored; a server under a path prefix recognises its own
+  registry URLs; a `mirror-of` edited in the marker is not written back into
+  `<mirrorOf>`; the trusted-document redirect also checks the port; the three
+  copies of the plain-URL check are one (`cached_env` accepted credentials and
+  a query).
+
 ---
 
 ## Future work

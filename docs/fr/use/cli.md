@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: 659c8928c88da528
+sourceHash: d53362b29e4d4566
 ---
 
 # batlehub-cli
@@ -1183,7 +1183,7 @@ Windows, ils refusent de s'exécuter, et `detect` imprime les extraits à la pla
 | uv | `~/.config/uv/uv.toml` | un `[[index]]` par défaut |
 | go | `$GOENV`, sinon `~/.config/go/env` | `GOPROXY`, sans repli `,direct` |
 | maven | `~/.m2/settings.xml` | le fichier entier, un `<mirror>` (seulement s'il est absent ; dès que vous le modifiez, il vous appartient) |
-| mise | `$MISE_CONFIG_DIR/conf.d/batlehub.toml` (`~/.config/mise`) | `[settings.url_replacements]` pour les registres github, forgejo, npm, cargo et openvsx qui relaient l'hôte public (`api.github.com`, `codeberg.org`, … ; un registre devant une autre forge n'en reçoit aucune, et la commande le signale) ; pour chaque registre generic, une règle par amont qu'il reflète (`^<amont>/(.+)` vers le registre), après les autres ; `node.mirror_url` pour un registre nodedist |
+| mise | `$MISE_CONFIG_DIR/conf.d/batlehub.toml` (`~/.config/mise`) | `[settings.url_replacements]` pour les registres github, forgejo, npm, cargo et openvsx qui relaient l'hôte public (`api.github.com`, `codeberg.org`, … ; un registre devant une autre forge n'en reçoit aucune, et la commande le signale) ; pour chaque registre generic, une règle par amont qu'il reflète (`^<amont>/(.+)` vers le registre), après les autres ; `node.mirror_url` pour un registre nodedist. Les deux sortes de règle ont besoin des amonts, que la liste des registres ne montre qu'à un appelant qui détient [`upstreams:read`](/fr/guide/access-control#verbs) ; la liste est lue anonymement, donc cette autorisation va à `*` |
 | rustup, node | `~/.config/batlehub/env.sh` | `RUSTUP_DIST_SERVER`, `NODEJS_ORG_MIRROR` et les miroirs nvm/fnm/n, sourcé depuis le **début** de `~/.bashrc` (au-dessus de son `return` non interactif) ou depuis `~/.zshenv` (`$ZDOTDIR/.zshenv` quand `ZDOTDIR` vient d'ailleurs ; un fichier `conf.d` pour fish). Sur macOS, bash reçoit le fichier de connexion qu'il lit — le premier de `~/.bash_profile`, `~/.bash_login`, `~/.profile`. Le shell est `$SHELL`, sinon celui du compte dans `/etc/passwd`. `bash -c` ne lit aucun fichier rc : utilisez-y `BASH_ENV` ou `setup env` |
 
 - **Sans `--yes`, rien n'est écrit** : le diff de chaque fichier est imprimé.

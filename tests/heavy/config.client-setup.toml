@@ -92,7 +92,7 @@ name = "github-${HEAVY_RUN}"
 mode = "proxy"
 
 [registries.rbac]
-anonymous = ["releases:read", "releases:list", "source:read"]
+anonymous = ["releases:read", "releases:list", "source:read", "upstreams:read"]
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
 
@@ -105,7 +105,7 @@ upstreams = ["https://get.helm.sh"]
 path_allow = ["helm-v*-linux-amd64.tar.gz", "helm-v*-linux-amd64.tar.gz.sha256sum"]
 
 [registries.rbac]
-anonymous = ["releases:read", "releases:list", "source:read"]
+anonymous = ["releases:read", "releases:list", "source:read", "upstreams:read"]
 user = ["releases:read", "releases:list", "source:read"]
 admin = ["*"]
 

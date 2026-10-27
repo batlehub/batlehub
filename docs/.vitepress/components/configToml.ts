@@ -859,6 +859,7 @@ export const RESOURCE_VERBS: string[] = [
   "releases:list",
   "source:read",
   "catalogue:browse",
+  "upstreams:read",
   "releases:publish",
   "releases:overwrite",
   "releases:yank",
