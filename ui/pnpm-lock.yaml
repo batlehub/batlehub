@@ -18,8 +18,8 @@ importers:
   .:
     dependencies:
       '@lucide/vue':
-        specifier: ^1.56.0
-        version: 1.56.0(vue@3.5.44(typescript@6.0.3))
+        specifier: ^1.58.0
+        version: 1.58.0(vue@3.5.44(typescript@6.0.3))
       '@shikijs/langs':
         specifier: ^4.5.0
         version: 4.5.0
@@ -485,8 +485,8 @@ packages:
   '@lezer/yaml@1.0.4':
     resolution: {integrity: sha512-2lrrHqxalACEbxIbsjhqGpSW8kWpUKuY6RHgnSAFZa6qK62wvnPxA8hGOwOoDbwHcOFs5M4o27mjGu+P7TvBmw==}
 
-  '@lucide/vue@1.56.0':
-    resolution: {integrity: sha512-IA7xSJwb5NQ6zamA1+zUmbVrWeX8TFPxCeqTRKJGLjb7jJmR2+USChuVRy+Opf9T545xkCSz/UJT2g44zyGgng==}
+  '@lucide/vue@1.58.0':
+    resolution: {integrity: sha512-HW7yrGw9OUC1TzldLep1d4p1Uc1OCRWLJwzKHm9C3V9Z4/9GADN84NDlyeTzgrcD8yxXs8/SVh8CpKFaA+OPRg==}
     peerDependencies:
       vue: '>=3.0.1'
 
@@ -3619,7 +3619,7 @@ snapshots:
       '@lezer/highlight': 1.2.5
       '@lezer/lr': 1.4.11
 
-  '@lucide/vue@1.56.0(vue@3.5.44(typescript@6.0.3))':
+  '@lucide/vue@1.58.0(vue@3.5.44(typescript@6.0.3))':
     dependencies:
       vue: 3.5.44(typescript@6.0.3)
 
