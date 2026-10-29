@@ -3648,6 +3648,12 @@ textarea {
   margin-bottom: 0;
 }
 
+/* Chrome 156's UA sheet gives a native radio border-radius: 50%, which the
+   zero-radius gate reads as a rounded corner. */
+input[type="radio"] {
+  border-radius: 0;
+}
+
 .cg-mb {
   margin-bottom: 0.6rem;
 }
