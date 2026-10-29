@@ -148,7 +148,7 @@ function assertions(textRampArr, displayRampArr) {
     add("body-overflow", `${de.scrollWidth} > ${de.clientWidth}`);
 
   const label = (el) =>
-    `${el.tagName.toLowerCase()}${el.className && typeof el.className === "string" ? "." + el.className.trim().split(/\s+/).slice(0, 2).join(".") : ""}`;
+    `${el.tagName.toLowerCase()}${el.type && el.tagName === "INPUT" ? `[${el.type}]` : ""}${el.className && typeof el.className === "string" ? "." + el.className.trim().split(/\s+/).slice(0, 2).join(".") : ""}`;
 
   // Every helper below is declared *inside* `assertions` for the same reason the
   // ramps arrive as arguments: the whole function is serialised into the page,
