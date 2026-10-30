@@ -201,7 +201,12 @@ function assertions(textRampArr, displayRampArr) {
   };
 
   // 4. Zero radius everywhere. The world has no rounded corner.
+  //    A native radio (`appearance: auto`) is the platform's widget, drawn
+  //    round whatever its border-radius says: Chrome 155 reported 0px for it,
+  //    Chrome 156 reports 50% even under an author `border-radius: 0`. Only
+  //    the author's own material is measured.
   const checkRadius = (el, cs) => {
+    if (el.matches('input[type="radio"]') && cs.appearance === "auto") return;
     for (const corner of [
       cs.borderTopLeftRadius,
       cs.borderTopRightRadius,
