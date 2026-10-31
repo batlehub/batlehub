@@ -2050,10 +2050,10 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
           [
             `# A stack directory: devfile.yaml, anything else (packed into archive.tar),`,
             `# and starter-projects/{name}.zip. Name and version come from the devfile.`,
-            `batlehub publish ./my-stack --server ${ctx.base} --registry ${ctx.registryName}`,
+            `batlehub publish ./my-stack -r ${ctx.registryName}`,
             ``,
             `# Or a bundle built elsewhere:`,
-            `curl --data-binary @my-stack-1.0.0.devfile.tar -H 'Content-Type: application/x-tar' \\`,
+            `curl --data-binary @acme-rust-1.2.0.devfile.tar -H 'Content-Type: application/x-tar' \\`,
             `  -H "Authorization: Bearer ${ctx.isAuthenticated ? ctx.token : "<token>"}" \\`,
             `  ${ctx.registryUrl}/api/stacks`,
           ].join("\n"),

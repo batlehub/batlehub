@@ -2584,6 +2584,13 @@ drifted from the file and this check is no longer checking anything"
       # carries `upstream`/`upstreams`, never a `403`. Asserted against the
       # list in `crates/web/tests/registry_installable.rs`.
       upstreams:read) continue ;;
+      # Refused only when upstream's index lists the name (RFC 0039 §4.5), and
+      # this suite's devfile upstream does not exist: the denied arm gets the
+      # `503` a cold index is by design (§11 decision 11), never a `403`.
+      # Covered on the wire in `tests/heavy/devfile.sh` L5–L6 against the real
+      # registry.devfile.io, through the real `batlehub publish`: the `403`
+      # naming the claim, the `503` with upstream down, the holder's publish.
+      devfile:stack:claim) continue ;;
       # Every other verb falls through to the coverage check below, which is the
       # point: a verb added tomorrow is not in this list, so it is required to
       # have been exercised.
@@ -2599,7 +2606,7 @@ drifted from the file and this check is no longer checking anything"
 in this run: ${missing[*]}. Either add the pair, or add it to the exception list above with \
 the reason."
   fi
-  heavy_log "vocabulary covered: ${#all[@]} verbs in the enum, three deliberate exceptions"
+  heavy_log "vocabulary covered: ${#all[@]} verbs in the enum, less the deliberate exceptions"
   return 0
 }
 
