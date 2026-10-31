@@ -3,8 +3,8 @@
   "@id": "https://batleforc.git.batleforc.fr/batlehub/vex/batlehub",
   "author": "BatleHub maintainers",
   "role": "Project maintainers",
-  "timestamp": "2026-10-21T00:00:00Z",
-  "version": 3,
+  "timestamp": "2026-10-30T00:00:00Z",
+  "version": 4,
   "tooling": "hand-maintained; validated and rendered by .github/scripts/vex.py",
   "statements": [
     {
@@ -130,6 +130,32 @@
       ],
       "status": "fixed",
       "status_notes": "Fixed in 1.8.1: rustls-webpki 0.103.16 and webpki-roots / webpki-root-certs 1.0.10 in the server, which verifies upstream TLS with them, and Trivy v0.76.1 (TRIVY_VERSION in Containerfile.worker), built with Go 1.27.3, in the worker images. 1.8.0 and earlier carry the affected versions."
+    },
+    {
+      "vulnerability": {
+        "name": "CVE-2026-116587",
+        "description": "go-jose: denial of service via crafted RSA parameters in JWKs"
+      },
+      "timestamp": "2026-10-30T00:00:00Z",
+      "products": [
+        {
+          "@id": "pkg:oci/batlehub-worker",
+          "subcomponents": [
+            { "@id": "pkg:golang/github.com/go-jose/go-jose/v4@v4.1.5" }
+          ]
+        },
+        {
+          "@id": "pkg:oci/batlehub-worker-guarddog",
+          "subcomponents": [
+            { "@id": "pkg:golang/github.com/go-jose/go-jose/v4@v4.1.5" }
+          ]
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "The vulnerable go-jose is an indirect dependency of the upstream Trivy release binary the worker image carries (/usr/local/bin/trivy, pinned by TRIVY_VERSION in Containerfile.worker), not of any BatleHub code. Trivy reaches JWK parsing only through its sigstore/Rekor attestation paths (`--sbom-sources rekor`, attestation verification), which are opt-in; the worker runs it as `trivy ... --server <endpoint>` (crates/adapters/src/scanners/trivy.rs) and never passes those flags, so no JWK from an untrusted source is parsed.",
+      "action_statement": "Bump TRIVY_VERSION to the first Trivy release whose go.mod carries go-jose/v4 >= 4.1.6 (Trivy main already does; v0.76.1 does not), and delete this statement together with its .trivyignore.yaml entry.",
+      "action_statement_timestamp": "2026-10-30T00:00:00Z"
     }
   ]
 }

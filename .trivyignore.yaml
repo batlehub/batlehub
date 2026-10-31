@@ -14,4 +14,12 @@
 #
 #   go version -m /usr/local/bin/trivy | head -1
 #   curl -s https://raw.githubusercontent.com/aquasecurity/trivy/v<version>/go.mod
-vulnerabilities: []
+vulnerabilities:
+  - id: CVE-2026-116587
+    # go-jose DoS via crafted RSA parameters in a JWK. Fixed in go-jose 4.1.6;
+    # Trivy main carries it, v0.76.1 (the latest release) still has 4.1.5. Trivy
+    # parses JWKs only on its opt-in sigstore/Rekor attestation paths, and the
+    # worker runs it as `trivy … --server <endpoint>` without those flags.
+    paths:
+      - "usr/local/bin/trivy"
+    expired_at: 2026-12-01

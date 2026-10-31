@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Draft                                                         |
+| Status      | In review                                                     |
 | Short       | NuGet v2                                                      |
 | Settles     | Adding the v2 OData surface to the nuget kind so choco and PowerShellGet can read and push through it, rendered from the same data as v3 |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |

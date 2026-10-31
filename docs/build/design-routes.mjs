@@ -148,7 +148,7 @@ function assertions(textRampArr, displayRampArr) {
     add("body-overflow", `${de.scrollWidth} > ${de.clientWidth}`);
 
   const label = (el) =>
-    `${el.tagName.toLowerCase()}${el.className && typeof el.className === "string" ? "." + el.className.trim().split(/\s+/).slice(0, 2).join(".") : ""}`;
+    `${el.tagName.toLowerCase()}${el.type && el.tagName === "INPUT" ? "[" + el.type + "]" : ""}${el.className && typeof el.className === "string" ? "." + el.className.trim().split(/\s+/).slice(0, 2).join(".") : ""}`;
 
   // Every helper below is declared *inside* `assertions` for the same reason the
   // ramps arrive as arguments: the whole function is serialised into the page,
@@ -201,7 +201,12 @@ function assertions(textRampArr, displayRampArr) {
   };
 
   // 4. Zero radius everywhere. The world has no rounded corner.
+  //    A native radio (`appearance: auto`) is the platform's widget, drawn
+  //    round whatever its border-radius says: Chrome 155 reported 0px for it,
+  //    Chrome 156 reports 50% even under an author `border-radius: 0`. Only
+  //    the author's own material is measured.
   const checkRadius = (el, cs) => {
+    if (el.matches('input[type="radio"]') && cs.appearance === "auto") return;
     for (const corner of [
       cs.borderTopLeftRadius,
       cs.borderTopRightRadius,
