@@ -421,6 +421,9 @@ pub fn instance_node(explicit: Option<&GrantMap>) -> Node {
             Action::TerraformSigningKeysWrite,
             Action::JetbrainsChannelAssign,
             Action::OpenvsxNamespaceClaim,
+            // RFC 0039 §4.5, for the same reason: new, and no translation rule
+            // produces it.
+            Action::DevfileStackClaim,
             // `gates:exempt` is **deliberately absent**. §4.5: it "goes to
             // nobody: it is new, and §4.2's shadow release is how an estate
             // discovers it needs one", and §13.6 records the exemption endpoint

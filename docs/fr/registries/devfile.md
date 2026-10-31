@@ -1,6 +1,6 @@
 ---
 sourcePath: registries/devfile.md
-sourceHash: fb1d5868a7e42d5f
+sourceHash: f314861bcad6598e
 ---
 
 # Registre devfile (Che, odo)
@@ -12,6 +12,7 @@ Ce qui est servi, et comment :
 - **Les documents d'index** — `index`, `v2index`, chacun avec `/sample`, `/stack` et `/all` — sans les versions bloquées. Ils décrivent le registre entier, donc un nouveau blocage les atteint dans la durée de vie de 30 secondes de l'instantané des blocages, comme le `repodata.json` de conda.
 - **Le devfile de chaque version de pile**, son **manifeste OCI** et les **couches** que ce manifeste nomme (`devfile.yaml`, `archive.tar`, …), octet pour octet, chacun vérifié contre son empreinte avant qu'un octet ne soit stocké ou servi.
 - **Les projets de démarrage**, les zips que récupère `registry-library download`.
+- **Vos propres piles**, en mode `local` ou `hybrid` : `batlehub publish` téléverse un répertoire de pile, et le serveur en dérive l'entrée d'index et les objets OCI qu'une récupération lit ([Publication](#publication)).
 
 Les images de conteneur qu'un devfile nomme **ne sont pas** mandatées : c'est le cluster qui les tire, et ceci n'est pas un registre de conteneurs.
 
@@ -21,9 +22,9 @@ Les images de conteneur qu'un devfile nomme **ne sont pas** mandatées : c'est l
 |---|---|
 | **Type de configuration** | `devfile` |
 | **Amont par défaut** | `registry.devfile.io` |
-| **Modes** | proxy seul |
+| **Modes** | proxy, local, hybride |
 | **Adressage** | un paquet par pile, une version par version de pile, un artefact par fichier de celle-ci |
-| **Publication privée** | ❌ proxy seul — un registre devfile est construit hors ligne dans une image |
+| **Publication privée** | ✅ `batlehub publish <répertoire de pile>` — un paquet défini par ce serveur, l'amont n'ayant pas de protocole de publication |
 | **Commutateur client** | Che : `externalDevfileRegistries` ; `registry-library`/`odo` : l'URL du registre |
 
 ## Donnez-lui un hôte dédié
@@ -40,7 +41,7 @@ Le bloc de registre de votre administrateur :
 [[registries]]
 name  = "<registry>"
 type  = "devfile"
-mode  = "proxy"                                  # the only mode: no publish protocol
+mode  = "proxy"                                  # or "local" / "hybrid" to publish — see Publishing
 hosts = ["devfile.batlehub.example.com"]         # registry-library needs the host root
 # upstreams = ["https://registry.devfile.io"]    # the default; one entry only
 
@@ -95,6 +96,49 @@ Chaque erreur rencontrée est affichée et le processus sort avec le code 0, et 
 
 Le `lastModified` de l'amont est l'heure de la dernière reconstruction du registre entier — le même instant pour chaque version — donc ce registre ne date aucune version de pile. Une règle `release_age_gate` sur ce registre doit définir `deny_missing_timestamp` : `true` refuse chaque téléchargement, `false` rend le garde-fou inopérant.
 
+## Publication
+
+Un registre `local` ou `hybrid` héberge ses propres piles. L'amont n'a pas d'API de téléversement — `registry-support` construit un registre hors ligne dans une image — : le téléversement est donc un paquet que ce serveur définit, et `batlehub publish` le compose à partir d'un répertoire de pile organisé comme `registry-support` en organise un :
+
+```sh
+# my-stack/devfile.yaml            metadata.name and metadata.version name the stack
+# my-stack/kubernetes/deploy.yaml  anything else goes into archive.tar
+# my-stack/starter-projects/hello.zip   optional, one per starterProjects[*].name
+batlehub publish ./my-stack -r <registry>
+batlehub publish ./my-stack/devfile.yaml -r <registry>     # the same thing
+```
+
+`--name` et `--version` sont refusés : le serveur lit les deux dans le `metadata` du devfile, et nulle part ailleurs. La composition est déterministe — chemins triés, horodatages et propriétaires à zéro — : le même répertoire donne toujours les mêmes empreintes, et une seconde publication de celui-ci est un `409` qui porte sur la version et non sur un horodatage.
+
+Sans la CLI, le paquet est une archive tar non compressée dont les membres sont exactement `devfile.yaml`, un `archive.tar` facultatif (compressé en gzip malgré son nom : `registry-library` le lit comme un `.tar.gz`) et des `starter-projects/{name}.zip` facultatifs :
+
+```sh
+curl --data-binary @acme-rust-1.2.0.devfile.tar -H 'Content-Type: application/x-tar' \
+  -H "Authorization: Bearer <token>" \
+  https://batlehub.example.com/proxy/<registry>/api/stacks
+curl -X DELETE -H "Authorization: Bearer <token>" \
+  https://batlehub.example.com/proxy/<registry>/api/stacks/acme-rust/1.2.0
+```
+
+Tout autre membre — un autre chemin, un répertoire, un lien, un doublon — est un `400` qui le nomme. Une version publiée n'est jamais remplacée.
+
+Ce qu'un client voit d'une version publiée :
+
+- son **entrée d'index** est composée à partir du `metadata` du devfile lors de la publication ; `icon` est `metadata.icon` tel qu'écrit : sur un parc déconnecté, faites-le pointer vers un fichier que cette instance sert (le chemin brut d'un registre `github`, par exemple) ;
+- sa **version par défaut** est la plus haute version stable, jamais une préversion tant qu'une version stable existe — publiez un `3.0.0` sous la forme `3.0.0-rc.1` jusqu'à ce que Che doive le proposer ;
+- son **manifeste OCI** est construit une fois à la publication puis stocké : son empreinte — celle que renvoie la publication — ne change jamais ;
+- un **projet de démarrage** n'est servi que si le paquet en contenait le zip. Che n'utilise pas cette route : un espace de travail clone lui-même le dépôt git du projet.
+
+Gardez les piles publiées `public`. Che lit l'index anonymement : une pile publiée en `internal` ou `team` est absente de *Get Started* ; le serveur avertit pour un registre dont la visibilité par défaut produirait cela.
+
+### En mode hybride, une pile publiée possède son nom
+
+Une pile publiée ici remplace **entièrement** la pile de même nom de l'amont : les entrées de l'amont pour ce nom quittent les deux index, et aucune de ses versions, étiquettes ou empreintes n'est récupérée. Une fusion version par version laisserait un `9.9.9` public devenir la version par défaut que Che propose à la place de la vôtre.
+
+Comme cela remplace la pile pour chaque utilisateur de l'instance, la **première** publication d'un nom que l'amont liste demande `devfile:stack:claim` en plus de `releases:publish` ; les administrateurs le détiennent, et `[registries.rbac]` ou un bloc `[[registries.namespaces]]` peut l'accorder à d'autres. Quand l'amont est injoignable et que son index n'est pas en cache, une telle publication est refusée par un `503` plutôt qu'acceptée. Les versions suivantes d'un nom déjà publié ici ne demandent rien de plus, et supprimer la dernière version libère le nom.
+
+Un nom que l'amont se met à lister *après* sa publication ici conserve la pile locale ; le serveur le journalise une fois et renseigne `batlehub_devfile_shadowed_upstream_stacks{registry}`.
+
 ## Hors ligne
 
 Une instance déconnectée ([air gap](../operations/air-gap)) sert les piles qu'un paquet a transportées. Transportez chaque version de pile sous la forme de son **manifeste** (`/v2/devfile-catalog/{stack}/manifests/{version}`) et de son **devfile** (`/devfiles/{stack}/{version}`). L'import lit les couches et leurs empreintes dans le manifeste, et les métadonnées affichées et les projets de démarrage dans le devfile. Avec `synthesise_listings` activé, les deux index sont composés à partir de ce qui est détenu :
@@ -103,6 +147,8 @@ Une instance déconnectée ([air gap](../operations/air-gap)) sert les piles qu'
 - les exemples ne sont pas listés — leur source est un dépôt git distant que l'instance déconnectée n'a pas ;
 - `icon` est présent et vide. Les icônes de l'amont sont des URL qu'un navigateur déconnecté ne peut pas atteindre, et Che écarte une entrée d'index qui n'a pas d'`icon` du tout ;
 - les filtres `arch` et `deprecated=false` s'appliquent ; les filtres de version de schéma, non.
+
+Un paquet transporte les piles mises en cache, pas les piles publiées. Publiez une pile locale de chaque côté à partir du même répertoire : la composition étant déterministe, les deux instances servent les mêmes empreintes.
 
 ## Voir aussi
 

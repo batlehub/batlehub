@@ -6,14 +6,14 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | In review                                                     |
+| Status      | **Implemented** — all four phases of §12 landed together on 2026-10-31, proven by `tests/heavy/devfile.sh` (L1–L9 against the real `registry-library`, publishing through the real `batlehub publish`) and the `devfile` phase of `tests/heavy/closed_world.sh`; §13 records the two protocol facts the text above had wrong (`archive.tar` is gzip, and its directories need entries) |
 | Short       | Devfile publish                                               |
 | Settles     | How an instance hosts its own devfile stacks — an upload format the CLI builds, the OCI objects the server derives from it, and a composed index where a local stack owns its whole name |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
 | Co-author   | Claude Opus 5.5 <noreply@anthropic.com>                       |
 | Created     | 2026-10-24                                                    |
 | Supersedes  | —                                                             |
-| Touches     | `crates/core` (`entities/registry_kind.rs`, `entities/permission.rs`, `services/authz/translate.rs`, `services/devfile.rs`, new `services/local_registry/eco_devfile.rs`), `crates/config` (`schema/mod.rs` validation, `schema/warnings.rs`), `crates/web/src/handlers/proxy/devfile.rs`, `cli/src/api/publish.rs` + `cli/src/cli/publish.rs`, `tests/heavy/devfile.sh` + `config.devfile.toml`, `crates/web/tests/devfile.rs`, `docs/registries/devfile.md` (+ `docs/fr/`), `docs/build/config-generator`, `CHANGELOG.md`, `ROADMAP.md` |
+| Touches     | `crates/core` (`entities/registry_kind.rs`, `entities/permission.rs`, `services/authz/translate.rs`, `services/devfile.rs`, new `services/local_registry/eco_devfile.rs`), `crates/config` (`schema/mod.rs` validation, `schema/warnings.rs`), `crates/web/src/handlers/proxy/devfile.rs`, `cli/src/api/publish.rs` + `cli/src/cli/publish.rs`, `tests/heavy/devfile.sh` + `config.devfile.toml`, `crates/web/tests/devfile.rs`, `docs/registries/devfile.md` (+ `docs/fr/`), `docs/build/config-generator`, `CHANGELOG.md`, `ROADMAP.md`; as built also `crates/web/tests/local_devfile_registry.rs` (not `devfile.rs`), `crates/web/tests/authz_matrix.rs`, `perf/profile_routes.txt`, `docs/guide/access-control.md` (+ `docs/fr/`), `ui/src/config/registryTypes.ts`, `ui/openapi.json`, `tests/heavy/closed_world.sh` + `config.closed-world.toml` |
 
 ---
 
@@ -695,3 +695,89 @@ None.
 | 2 | `merge_hybrid`, owned-name resolution on the OCI/REST routes, `devfile:stack:claim` and the claim check, the shadowed-name gauge | heavy steps 5–7, 9; zero upstream calls for an owned stack |
 | 3 | CLI: `detect_meta`, packer, `publish_devfile`; registry page snippets | CLI tests; heavy suite publishes through the CLI instead of `curl` |
 | 4 | Docs (`docs/registries/devfile.md` *Modes* row, *Publish* section, the squatting note; `docs/fr/`), config generator, closed-world phase, Che canary | the canary shows a published stack's tile and opens its devfile |
+
+---
+
+## 13. Revision against the tree (2026-10-31)
+
+Shipped as one change: every phase of §12, with the in-process suite
+(`crates/web/tests/local_devfile_registry.rs`, 13 cases), the unit tests of
+§10, and both heavy suites green. What differs from the text above, each
+point small and each deliberate:
+
+1. **`archive.tar` is gzip-compressed.** §4.3 calls the bundle uncompressed
+   and is right about the bundle, but says nothing of the layer, and §8 reads
+   as if no member were compressed. `registry-library`'s `decompress`
+   (`library/util.go`, commit `f299e1e1`) opens the layer through
+   `gzip.NewReader`, and upstream's are gzip: `go@2.6.0`'s `archive.tar`,
+   probed on 2026-10-31, is a 616-byte gzip stream that `tar tz` reads. A plain
+   tar would publish and then fail every pull with `gzip: invalid header`, so
+   `read_bundle` refuses an `archive.tar` member without the gzip magic, and
+   the CLI packs the layer as a gzip tar (`GzBuilder` with `mtime` 0).
+2. **Directories need entries.** The same function opens each regular file
+   with `O_CREATE` and creates no parent, so a layer of bare file entries
+   extracts nothing below its root. The packer writes a directory entry ahead
+   of every file in it (`kubernetes/`, then `kubernetes/deploy.yaml`), as
+   upstream's archive does (`./docker/`, `./kubernetes/`). Determinism holds
+   per CLI build: the gzip bytes are flate2's, so two CLI versions could give
+   one directory two digests, where §4.3 promised it of the tar alone.
+3. **No `local` + `upstreams` refusal.** §4.6's third row says a `local`
+   registry with `upstreams` is refused "as on every local registry". No local
+   registry refuses it in the tree, so none was added here; the entry is
+   ignored, as on every other kind.
+4. **The member read buffers.** §5.2 streams a starter zip from its offset.
+   `LocalRegistryService::get_artifact` returns the whole stored bundle, and
+   the member is a slice of it (`Bytes::slice_ref`), bounded by
+   `limits.max_artifact_size_bytes`. The walk itself is as written: no member
+   index is stored, the stored tar is walked again on each read.
+5. **No identity headers on a local object.** §6.4 applies
+   `X-BatleHub-Storage-Key` and its two siblings to local objects. They name a
+   *proxy* cache key, which is what a bundle export reads, and a published
+   version is not exported (§6.7) — a header naming a key the bytes are not
+   under would be wrong rather than redundant. Local objects carry the digest
+   headers only.
+6. **The config blob is served for a local version** under a local-only
+   artifact name, `config`. The proxy path is unchanged.
+7. **The claim reads upstream's *filtered* index.** A name whose every
+   upstream version is blocked is not listed, so taking it needs no claim. Left
+   so on purpose: the operator has already removed that stack.
+8. **The shadow report also fires for a claimed name.** A claim *is* a shadow,
+   so `merge_hybrid`'s dropped set — every upstream stack named here — feeds
+   the `WARN` and the gauge whether the name was taken with the claim or listed
+   upstream later. The gauge is set from unfiltered documents only, so an
+   `?arch=` read that leaves a stack out of upstream's half does not move it.
+9. **The default rule needed no code.** `best_latest` already prefers the
+   highest release and falls back to the highest prerelease, so `Source`
+   carries the icon, `lastModified` and the schema-version filter, and nothing
+   else.
+10. **The heavy list as built.** L5's cold cache with upstream closed is a
+    second hybrid registry whose upstream is a refused port
+    (`http://127.0.0.1:9`), not a tap closing upstream — the tap sits on the
+    client's side and sees no upstream request, which is also why L6's "no
+    upstream request under `/v2/devfile-catalog/go/`" is asserted in-process
+    (a mock upstream expecting zero manifest requests) and on the wire as a
+    `MANIFEST_UNKNOWN` replay. L1 gained the anonymous arm (`403`, nothing
+    written). `registry-library list` takes no registry argument: it reads
+    `$REGISTRY_LIST` (`cmd/root.go`) and the legacy `index/all`.
+11. **The closed-world phase** is the existing `devfile` phase extended, not a
+    new one: a `local` registry, a stack published through the CLI, pulled with
+    egress denied. The cross-instance digest equality §6.7 asks of it is
+    asserted in-process instead (two apps, one bundle, one digest).
+12. **Not done: the Che canary.** No Che was available here; the
+    *Get Started* tile of a published stack is unobserved. Che's reads of the
+    composed index are those of RFC 0035 §6.9 case 9 — `index/all` and the
+    tile link — and the legacy composition is unit- and route-tested, but a
+    real dashboard has not drawn the tile.
+
+What the real clients observed (`tests/heavy/devfile.sh`, run 014928): the
+publish answered `201` with `sha256:2cfa7e2b…`, the republish `409`, and the
+`HEAD` by tag answered the same digest as its `ETag`; `registry-library pull
+acme-go:1.0.0 --all` made the `HEAD`, the manifest by digest and two blob
+reads, all `200`, wrote the published `devfile.yaml` byte-for-byte and
+unpacked `kubernetes/deploy.yaml`; `download` unzipped the starter; role:user's
+publish of `go` was `403` naming `devfile:stack:claim`, the dark registry's
+`503`; after the claim, `pull go:2.6.0` printed *does not exist* with no
+request under `/v2/`; the block, the internal visibility and the release each
+did what L7–L9 say. The closed-world run printed
+`CLOSED-WORLD-DEVFILE-LOCAL-OK` with egress denied.
+

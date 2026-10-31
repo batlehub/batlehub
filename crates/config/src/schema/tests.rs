@@ -3405,15 +3405,52 @@ fn a_devfile_registry_takes_one_upstream() {
 }
 
 #[test]
-fn a_devfile_registry_cannot_be_local() {
+fn a_devfile_registry_can_be_local_or_hybrid() {
+    for mode in ["local", "hybrid"] {
+        parse_config(&format!(
+            r#"
+            [[registries]]
+            type = "devfile"
+            name = "devfile"
+            mode = "{mode}"
+            upstreams = ["https://registry.devfile.io"]
+            "#
+        ))
+        .validate()
+        .unwrap_or_else(|e| panic!("{mode}: {e}"));
+    }
     validation_error(
         r#"
         [[registries]]
         type = "devfile"
         name = "devfile"
-        mode = "local"
+        mode = "hybrid"
         "#,
-        "no publish protocol",
+        "hybrid mode requires at least one upstream",
+    );
+}
+
+#[test]
+fn a_published_devfile_registry_that_is_not_public_by_default_is_warned() {
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "devfile"
+        name = "devfile"
+        mode = "local"
+        visibility = "internal"
+
+        [registries.rbac]
+        anonymous = ["releases:read", "releases:list"]
+        "#,
+    );
+    cfg.validate().expect("served, with a warning");
+    let codes: Vec<String> = cfg.warnings().into_iter().map(|w| w.code).collect();
+    assert!(
+        codes
+            .iter()
+            .any(|c| c == warnings::DEVFILE_PUBLISHED_NOT_PUBLIC),
+        "{codes:?}"
     );
 }
 

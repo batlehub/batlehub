@@ -217,6 +217,8 @@ GET /proxy/{registry}/devfiles/{stack}	skip: no arm yet
 GET /proxy/{registry}/devfiles/{stack}/starter-projects/{name}	skip: no arm yet
 GET /proxy/{registry}/devfiles/{stack}/{version}	profiled
 GET /proxy/{registry}/devfiles/{stack}/{version}/starter-projects/{name}	skip: no arm yet
+POST /proxy/{registry}/api/stacks	skip: no arm yet
+DELETE /proxy/{registry}/api/stacks/{stack}/{version}	skip: no arm yet
 GET /proxy/{registry}/dist/{vendor}/{package}/{version}	skip: no arm yet
 GET /proxy/{registry}/feature/getImplementations	skip: no arm yet
 GET /proxy/{registry}/files/IDE/extensions.json	skip: no arm yet

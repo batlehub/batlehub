@@ -644,15 +644,19 @@ pub struct HeldStackVersion {
     pub facts: Map<String, Value>,
 }
 
-/// The two index documents a disconnected instance composes from what it
-/// holds (RFC 0035 §6.8). `address` is the listing's canonical address —
-/// `v2index/all?arch=amd64` — so the variant and the query come from it.
-///
-/// `held` is `(stack, version facts)` for every held version. Samples are
-/// never composed: their source is a git remote the air gap does not have.
-/// The default is the highest held version. `icon` is always present and
-/// empty: Che's `isDevfileMetaData` drops an entry whose icon is undefined,
-/// and the upstream icon is a URL a disconnected browser cannot reach.
+/// Where the versions [`compose_index`] composes came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// Cached from upstream and carried across an air gap (RFC 0035 §6.8).
+    Held,
+    /// Published here (RFC 0039 §4.4): the publisher wrote the devfile, so its
+    /// `icon` is kept, `lastModified` is the publish time, and the schema
+    /// version filters apply — upstream's half of a hybrid index gets them as
+    /// forwarded parameters, and a local half that ignored them would answer
+    /// one half of the query.
+    Published,
+}
+
 /// Whether a held version runs on every requested arch. A version that names
 /// no architectures runs on all of them, as upstream's index treats it.
 fn serves_archs(v: &HeldStackVersion, archs: &[&str]) -> bool {
@@ -669,7 +673,22 @@ fn serves_archs(v: &HeldStackVersion, archs: &[&str]) -> bool {
     have.is_empty() || archs.iter().all(|a| have.contains(a))
 }
 
-pub fn compose_index(address: &str, legacy: bool, held: &[(String, HeldStackVersion)]) -> Value {
+/// The two index documents composed from rows rather than relayed: what a
+/// disconnected instance holds (RFC 0035 §6.8), or what was published here
+/// (RFC 0039 §4.4). `address` is the listing's canonical address —
+/// `v2index/all?arch=amd64` — so the variant and the query come from it.
+///
+/// `held` is `(stack, version facts)` for every version. Samples are never
+/// composed: their source is a git remote. The default is the highest release,
+/// or the highest prerelease when a stack has none (`best_latest`), so a
+/// `3.0.0-rc.1` is never what Che offers over a `2.4.0`. `icon` is always
+/// present: Che's `isDevfileMetaData` drops an entry whose icon is undefined.
+pub fn compose_index(
+    address: &str,
+    legacy: bool,
+    held: &[(String, HeldStackVersion)],
+    source: Source,
+) -> Value {
     let (path, query) = address.split_once('?').unwrap_or((address, ""));
     if path.ends_with("/sample") {
         return Value::Array(Vec::new());
@@ -695,7 +714,8 @@ pub fn compose_index(address: &str, legacy: bool, held: &[(String, HeldStackVers
         let mut records: Vec<(String, Value)> = versions
             .iter()
             .filter(|v| serves_archs(v, &archs))
-            .map(|v| (v.version.clone(), version_record(stack, v)))
+            .filter(|v| source == Source::Held || in_schema_range(v, query))
+            .map(|v| (v.version.clone(), version_record(stack, v, source)))
             .collect();
         if records.is_empty() {
             continue;
@@ -734,7 +754,17 @@ pub fn compose_index(address: &str, legacy: bool, held: &[(String, HeldStackVers
             "tags".into(),
             field("tags").unwrap_or_else(|| Value::Array(Vec::new())),
         );
-        entry.insert("icon".into(), Value::String(String::new()));
+        // Empty, never absent: Che drops an entry with no `icon`. A held icon is
+        // upstream's URL, unreachable from a disconnected browser; a published
+        // one is what the publisher wrote (RFC 0039 §4.4).
+        let icon = match source {
+            Source::Published => field("icon").filter(Value::is_string),
+            Source::Held => None,
+        };
+        entry.insert(
+            "icon".into(),
+            icon.unwrap_or_else(|| Value::String(String::new())),
+        );
         for k in ["projectType", "language", "provider"] {
             if let Some(v) = field(k) {
                 entry.insert(k.into(), v);
@@ -770,7 +800,7 @@ pub fn compose_index(address: &str, legacy: bool, held: &[(String, HeldStackVers
 }
 
 /// One version's record in a composed v2 index.
-fn version_record(stack: &str, v: &HeldStackVersion) -> Value {
+fn version_record(stack: &str, v: &HeldStackVersion, source: Source) -> Value {
     let f = &v.facts;
     let meta = f.get("metadata").cloned().unwrap_or_default();
     let ns = f
@@ -799,7 +829,326 @@ fn version_record(stack: &str, v: &HeldStackVersion) -> Value {
             r[to] = v.clone();
         }
     }
+    if source == Source::Published {
+        if let Some(at) = f.get("lastModified").filter(|v| v.is_string()) {
+            r["lastModified"] = at.clone();
+        }
+    }
     r
+}
+
+/// Whether a published version's `schemaVersion` is inside the query's
+/// `minSchemaVersion`/`maxSchemaVersion`, both inclusive. A version whose
+/// devfile names none is outside any bound, as upstream's filter treats it.
+fn in_schema_range(v: &HeldStackVersion, query: &str) -> bool {
+    let bound = |key: &str| {
+        query
+            .split('&')
+            .find_map(|p| p.strip_prefix(key)?.strip_prefix('='))
+            .map(schema_key)
+    };
+    let (min, max) = (bound("minSchemaVersion"), bound("maxSchemaVersion"));
+    if min.is_none() && max.is_none() {
+        return true;
+    }
+    let Some(have) = v
+        .facts
+        .get("schemaVersion")
+        .and_then(Value::as_str)
+        .map(schema_key)
+    else {
+        return false;
+    };
+    min.is_none_or(|m| have >= m) && max.is_none_or(|m| have <= m)
+}
+
+/// `2.2.0-alpha` → `[2, 2, 0]`: the numbers a schema version is ordered by,
+/// a two-part bound reading as `.0`.
+fn schema_key(v: &str) -> [u64; 3] {
+    let numbers = v.split('-').next().unwrap_or_default();
+    let mut key = [0; 3];
+    for (slot, part) in key.iter_mut().zip(numbers.split('.')) {
+        *slot = part.parse().unwrap_or(0);
+    }
+    key
+}
+
+// ── RFC 0039: publishing a stack version ────────────────────────────────────
+
+/// The bundle member that becomes the `archive.tar` layer.
+pub const ARCHIVE_TITLE: &str = "archive.tar";
+/// The media type of the `devfile.yaml` layer, as `registry-support` pushes it.
+pub const DEVFILE_LAYER_MEDIA_TYPE: &str = "application/vnd.devfileio.devfile.layer.v1";
+/// The media type of the `archive.tar` layer.
+pub const ARCHIVE_LAYER_MEDIA_TYPE: &str = "application/x-tar";
+/// The media type of every stack's config blob.
+pub const CONFIG_MEDIA_TYPE: &str = "application/vnd.devfileio.devfile.config.v2+json";
+/// The config blob: the two bytes upstream serves for every stack version
+/// (`sha256:44136fa3…`, probed on `nodejs@2.2.1`). A constant, never stored.
+pub const CONFIG_BLOB: &[u8] = b"{}";
+
+/// A publish bundle, read and checked (RFC 0039 §4.3). Every member is a byte
+/// range into the uploaded tar, which is stored verbatim — so reading a member
+/// back later is this same walk over the same bytes, and a layer's digest is
+/// the digest of the member and never of something re-packed.
+#[derive(Debug, Clone)]
+pub struct Bundle {
+    pub name: String,
+    pub version: String,
+    pub devfile: std::ops::Range<usize>,
+    pub archive: Option<std::ops::Range<usize>>,
+    /// `(starter project name, range)`, in the bundle's order.
+    pub starters: Vec<(String, std::ops::Range<usize>)>,
+    /// What [`import_facts`] reads off the devfile: `metadata`,
+    /// `schemaVersion`, `starterProjects`.
+    pub facts: Map<String, Value>,
+}
+
+impl Bundle {
+    /// The member a layer title or a starter artifact names.
+    pub fn member<'a>(&self, bytes: &'a [u8], artifact: &str) -> Option<&'a [u8]> {
+        let range = if artifact == layer_artifact(DEVFILE_TITLE) {
+            Some(self.devfile.clone())
+        } else if artifact == layer_artifact(ARCHIVE_TITLE) {
+            self.archive.clone()
+        } else {
+            let name = starter_of(artifact)?;
+            self.starters
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, r)| r.clone())
+        };
+        bytes.get(range?)
+    }
+}
+
+/// Read a publish bundle: an uncompressed tar whose members are exactly
+/// `devfile.yaml`, an optional `archive.tar` and one optional
+/// `starter-projects/{name}.zip` per name the devfile declares.
+///
+/// Every refusal names the member. Nothing here ever becomes a storage key —
+/// the key is the coordinate's — but `name` and `version` do, so both pass the
+/// same validators the read routes apply, and `version` must parse as semver
+/// as `registry-library` parses it.
+pub fn read_bundle(bytes: &[u8]) -> Result<Bundle, CoreError> {
+    let bad = |m: String| CoreError::InvalidInput(format!("devfile bundle: {m}"));
+    let mut devfile = None;
+    let mut archive = None;
+    let mut starters: Vec<(String, std::ops::Range<usize>)> = Vec::new();
+    let mut archive_reader = tar::Archive::new(bytes);
+    let entries = archive_reader
+        .entries()
+        .map_err(|e| bad(format!("not a tar archive: {e}")))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| bad(format!("not a tar archive: {e}")))?;
+        let path = String::from_utf8_lossy(&entry.path_bytes()).into_owned();
+        if entry.header().entry_type() != tar::EntryType::Regular {
+            return Err(bad(format!(
+                "member '{path}' is not a regular file; links, directories and devices are refused"
+            )));
+        }
+        let start = usize::try_from(entry.raw_file_position())
+            .map_err(|_| bad(format!("member '{path}' lies outside the upload")))?;
+        let len = usize::try_from(entry.size())
+            .map_err(|_| bad(format!("member '{path}' lies outside the upload")))?;
+        let range = start..start.saturating_add(len);
+        if range.end > bytes.len() {
+            return Err(bad(format!("member '{path}' is truncated")));
+        }
+        let slot = match path.as_str() {
+            DEVFILE_TITLE => &mut devfile,
+            ARCHIVE_TITLE => &mut archive,
+            p => {
+                let name = p
+                    .strip_prefix(STARTER_PREFIX)
+                    .and_then(|n| n.strip_suffix(".zip"))
+                    .filter(|n| validate_starter(n).is_ok())
+                    .ok_or_else(|| {
+                        bad(format!(
+                            "member '{p}' is not devfile.yaml, archive.tar or \
+                             starter-projects/{{name}}.zip"
+                        ))
+                    })?;
+                if starters.iter().any(|(n, _)| n == name) {
+                    return Err(bad(format!("member '{p}' appears twice")));
+                }
+                starters.push((name.to_owned(), range));
+                continue;
+            }
+        };
+        if slot.is_some() {
+            return Err(bad(format!("member '{path}' appears twice")));
+        }
+        *slot = Some(range);
+    }
+    let devfile = devfile.ok_or_else(|| bad("no devfile.yaml member".to_owned()))?;
+    // `registry-library` reads the layer through `gzip.NewReader` whatever its
+    // name says (`library/util.go`'s `decompress`), and upstream's are gzip
+    // (`go@2.6.0`'s, probed). A plain tar would publish and then fail every
+    // pull with `gzip: invalid header`.
+    if archive
+        .as_ref()
+        .is_some_and(|r| !bytes[r.clone()].starts_with(&[0x1f, 0x8b]))
+    {
+        return Err(bad(
+            "archive.tar is not gzip-compressed; registry-library reads it as a .tar.gz".to_owned(),
+        ));
+    }
+    let text = std::str::from_utf8(&bytes[devfile.clone()])
+        .map_err(|_| bad("devfile.yaml is not UTF-8".to_owned()))?;
+    let Value::Object(facts) = devfile_facts(text) else {
+        return Err(bad("devfile.yaml does not read".to_owned()));
+    };
+    if facts.get("schemaVersion").is_none_or(Value::is_null) {
+        return Err(bad("devfile.yaml has no top-level schemaVersion".to_owned()));
+    }
+    let meta = |k: &str| {
+        facts
+            .get("metadata")
+            .and_then(|m| m.get(k))
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    let name = meta("name").ok_or_else(|| bad("devfile.yaml has no metadata.name".to_owned()))?;
+    let version =
+        meta("version").ok_or_else(|| bad("devfile.yaml has no metadata.version".to_owned()))?;
+    validate_stack(&name)?;
+    validate_version(&version)?;
+    semver::Version::parse(&version).map_err(|e| {
+        bad(format!(
+            "metadata.version '{version}' is not semver ({e}); registry-library refuses it"
+        ))
+    })?;
+    let declared: Vec<&str> = facts
+        .get("starterProjects")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    if let Some((n, _)) = starters
+        .iter()
+        .find(|(n, _)| !declared.contains(&n.as_str()))
+    {
+        return Err(bad(format!(
+            "member 'starter-projects/{n}.zip' names a starter project the devfile does not \
+             declare, so no client could ever ask for it"
+        )));
+    }
+    Ok(Bundle {
+        name,
+        version,
+        devfile,
+        archive,
+        starters,
+        facts,
+    })
+}
+
+fn sha256_digest(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    format!("sha256:{}", hex::encode(sha2::Sha256::digest(bytes)))
+}
+
+/// The OCI manifest of a published version, serialised once (RFC 0039 §4.4):
+/// the `{}` config and one layer per present member, `devfile.yaml` first.
+///
+/// The bytes are returned as a string to be **stored**, never rebuilt on a
+/// read: the manifest digest is the sha256 of exactly these bytes, and a
+/// re-serialisation that reordered a key would fail every pull with
+/// containerd's *unexpected commit digest*.
+pub fn build_manifest(bundle: &Bundle, bytes: &[u8]) -> (String, Vec<Descriptor>) {
+    let mut layers = vec![(
+        DEVFILE_LAYER_MEDIA_TYPE,
+        DEVFILE_TITLE,
+        bundle.devfile.clone(),
+    )];
+    if let Some(r) = &bundle.archive {
+        layers.push((ARCHIVE_LAYER_MEDIA_TYPE, ARCHIVE_TITLE, r.clone()));
+    }
+    let mut descriptors = vec![Descriptor {
+        media_type: CONFIG_MEDIA_TYPE.to_owned(),
+        digest: sha256_digest(CONFIG_BLOB),
+        size: CONFIG_BLOB.len() as u64,
+        title: None,
+    }];
+    for (media_type, title, range) in layers {
+        let member = bytes.get(range).unwrap_or_default();
+        descriptors.push(Descriptor {
+            media_type: media_type.to_owned(),
+            digest: sha256_digest(member),
+            size: member.len() as u64,
+            title: Some(title.to_owned()),
+        });
+    }
+    let json = |d: &Descriptor| {
+        let mut o = serde_json::json!({
+            "mediaType": d.media_type, "digest": d.digest, "size": d.size,
+        });
+        if let Some(t) = &d.title {
+            o["annotations"] = serde_json::json!({ TITLE_ANNOTATION: t });
+        }
+        o
+    };
+    let manifest = serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": MANIFEST_MEDIA_TYPE,
+        "config": json(&descriptors[0]),
+        "layers": descriptors[1..].iter().map(json).collect::<Vec<_>>(),
+    });
+    (manifest.to_string(), descriptors)
+}
+
+/// The `index_metadata` of a published version, `{"devfile": {…}}` — the
+/// facts [`compose_index`] reads, the layer list the digest lookup walks, and
+/// the stored manifest bytes with their digest.
+pub fn published_facts(bundle: &Bundle, bytes: &[u8]) -> Value {
+    let (manifest, descriptors) = build_manifest(bundle, bytes);
+    let mut facts = bundle.facts.clone();
+    facts.insert(
+        "manifestDigest".into(),
+        Value::String(sha256_digest(manifest.as_bytes())),
+    );
+    facts.insert("layers".into(), layers_json(&descriptors));
+    facts.insert("manifest".into(), Value::String(manifest));
+    serde_json::json!({ "devfile": facts })
+}
+
+/// A hybrid index (RFC 0039 §4.5): upstream's document minus every stack
+/// whose name is published here — `owned` counts every row, visible to the
+/// caller or not, so a stack hidden from a caller is not replaced for them by
+/// the public stack of its name — plus the local entries, sorted by name.
+///
+/// Returns the upstream stack names it dropped, for the shadowing report.
+pub fn merge_hybrid(
+    upstream: &mut Value,
+    local: Value,
+    owned: &std::collections::BTreeSet<String>,
+) -> std::collections::BTreeSet<String> {
+    let mut dropped = std::collections::BTreeSet::new();
+    let Some(entries) = upstream.as_array_mut() else {
+        return dropped;
+    };
+    entries.retain(|e| {
+        let name = e.get("name").and_then(Value::as_str).unwrap_or_default();
+        if is_sample(e) || !owned.contains(name) {
+            return true;
+        }
+        dropped.insert(name.to_owned());
+        false
+    });
+    if let Value::Array(local) = local {
+        entries.extend(local);
+    }
+    entries.sort_by(|a, b| {
+        let name = |e: &Value| {
+            e.get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        };
+        name(a).cmp(&name(b))
+    });
+    dropped
 }
 
 #[cfg(test)]
@@ -1038,6 +1387,7 @@ mod tests {
                 held("nodejs", "2.2.1", &[]),
                 held("go", "2.6.0", &[]),
             ],
+            Source::Held,
         );
         let node = find_stack(&doc, "nodejs").unwrap();
         assert_eq!(versions_of(node), vec!["2.2.1", "2.2.0"]);
@@ -1056,12 +1406,18 @@ mod tests {
             "index/all",
             true,
             &[held("nodejs", "2.2.0", &[]), held("nodejs", "2.2.1", &[])],
+            Source::Held,
         );
         let node = find_stack(&doc, "nodejs").unwrap();
         assert_eq!(node["version"], "2.2.1");
         assert_eq!(node["links"]["self"], "devfile-catalog/nodejs:2.2.1");
         assert_eq!(
-            compose_index("index/sample", true, &[held("nodejs", "2.2.1", &[])]),
+            compose_index(
+                "index/sample",
+                true,
+                &[held("nodejs", "2.2.1", &[])],
+                Source::Held
+            ),
             json!([])
         );
     }
@@ -1074,13 +1430,13 @@ mod tests {
             held("nodejs", "2.2.1", &[]),
             held("python", "1.0.0", &["Deprecated"]),
         ];
-        let live = compose_index("v2index?deprecated=false", false, &held);
+        let live = compose_index("v2index?deprecated=false", false, &held, Source::Held);
         assert_eq!(
             versions_of(find_stack(&live, "nodejs").unwrap()),
             vec!["2.2.1", "2.1.1"]
         );
         assert!(find_stack(&live, "python").is_none());
-        let only = compose_index("v2index?deprecated=true", false, &held);
+        let only = compose_index("v2index?deprecated=true", false, &held, Source::Held);
         assert!(find_stack(&only, "nodejs").is_none());
         assert!(find_stack(&only, "python").is_some());
     }
@@ -1097,7 +1453,7 @@ mod tests {
             with_archs("amd", &["amd64"]),
             held("any", "1.0.0", &[]),
         ];
-        let doc = compose_index("v2index?arch=amd64&arch=arm64", false, &held);
+        let doc = compose_index("v2index?arch=amd64&arch=arm64", false, &held, Source::Held);
         assert!(find_stack(&doc, "both").is_some());
         assert!(
             find_stack(&doc, "amd").is_none(),
@@ -1107,7 +1463,7 @@ mod tests {
             find_stack(&doc, "any").is_some(),
             "no architectures means all of them"
         );
-        let unfiltered = compose_index("v2index", false, &held);
+        let unfiltered = compose_index("v2index", false, &held, Source::Held);
         assert!(find_stack(&unfiltered, "amd").is_some());
     }
 
@@ -1123,5 +1479,226 @@ mod tests {
             Some("nodejs-starter")
         );
         assert_eq!(starter_of("layer/devfile.yaml"), None);
+    }
+
+    // ── RFC 0039: publishing ─────────────────────────────────────────────────
+
+    const PUBLISHED: &str = "schemaVersion: 2.2.0\nmetadata:\n  name: acme-go\n  version: 1.0.0\n  displayName: Acme Go\n  icon: https://icons.acme.example/go.svg\nstarterProjects:\n  - name: hello\n    zip:\n      location: x\n";
+
+    /// Stands in for a gzip stream: only the magic is read.
+    const GZ: &[u8] = b"\x1f\x8b gzip bytes";
+
+    /// A tar of `(path, bytes, entry type)` members.
+    fn tar_of(members: &[(&str, &[u8], tar::EntryType)]) -> Vec<u8> {
+        let mut b = tar::Builder::new(Vec::new());
+        for (path, bytes, kind) in members {
+            let mut h = tar::Header::new_ustar();
+            h.set_entry_type(*kind);
+            h.set_size(bytes.len() as u64);
+            h.set_mode(0o644);
+            // `set_path` refuses `..` and absolute paths, which is what the
+            // refusals below must be shown to catch; write the name raw.
+            let name = &mut h.as_old_mut().name;
+            name[..path.len()].copy_from_slice(path.as_bytes());
+            h.set_cksum();
+            b.append(&h, *bytes).unwrap();
+        }
+        b.into_inner().unwrap()
+    }
+
+    fn regular(
+        path: &'static str,
+        bytes: &'static [u8],
+    ) -> (&'static str, &'static [u8], tar::EntryType) {
+        (path, bytes, tar::EntryType::Regular)
+    }
+
+    #[test]
+    fn a_bundle_yields_its_members_name_and_version() {
+        let bytes = tar_of(&[
+            regular("devfile.yaml", PUBLISHED.as_bytes()),
+            regular("archive.tar", GZ),
+            regular("starter-projects/hello.zip", b"PK zip"),
+        ]);
+        let b = read_bundle(&bytes).unwrap();
+        assert_eq!((b.name.as_str(), b.version.as_str()), ("acme-go", "1.0.0"));
+        assert_eq!(&bytes[b.devfile.clone()], PUBLISHED.as_bytes());
+        assert_eq!(b.member(&bytes, "layer/archive.tar"), Some(GZ));
+        assert_eq!(
+            b.member(&bytes, "starter-projects/hello.zip"),
+            Some(&b"PK zip"[..])
+        );
+        assert_eq!(b.member(&bytes, "starter-projects/other.zip"), None);
+    }
+
+    #[test]
+    fn every_refused_member_shape_is_named() {
+        let dev = PUBLISHED.as_bytes();
+        let cases: Vec<(Vec<u8>, &str)> = vec![
+            (tar_of(&[regular("devfile.yaml", dev), ("archive.tar", b"", tar::EntryType::Symlink)]), "archive.tar"),
+            (tar_of(&[regular("devfile.yaml", dev), ("kubernetes", b"", tar::EntryType::Directory)]), "kubernetes"),
+            (tar_of(&[regular("devfile.yaml", dev), regular("../devfile.yaml", dev)]), "../devfile.yaml"),
+            (tar_of(&[regular("devfile.yaml", dev), regular("/etc/passwd", b"x")]), "/etc/passwd"),
+            (tar_of(&[regular("devfile.yaml", dev), regular("devfile.yaml", dev)]), "appears twice"),
+            (tar_of(&[regular("devfile.yaml", dev), regular("deploy.yaml", b"x")]), "deploy.yaml"),
+            (tar_of(&[regular("devfile.yaml", dev), regular("starter-projects/other.zip", b"x")]), "does not declare"),
+            (tar_of(&[regular("archive.tar", GZ)]), "no devfile.yaml"),
+            (tar_of(&[regular("devfile.yaml", dev), regular("archive.tar", b"plain tar")]), "gzip"),
+            (tar_of(&[regular("devfile.yaml", b"schemaVersion: 2.2.0\nmetadata:\n  name: acme-go\n")]), "metadata.version"),
+            (tar_of(&[regular("devfile.yaml", b"metadata:\n  name: acme-go\n  version: 1.0.0\n")]), "schemaVersion"),
+            (tar_of(&[regular("devfile.yaml", b"schemaVersion: 2.2.0\nmetadata:\n  name: acme-go\n  version: latest\n")]), "not semver"),
+            (tar_of(&[regular("devfile.yaml", b"schemaVersion: 2.2.0\nmetadata:\n  name: ../x\n  version: 1.0.0\n")]), "stack name"),
+            (b"not a tar at all, and long enough to be read as a header block that fails its checksum".repeat(8), "tar"),
+        ];
+        for (bytes, needle) in cases {
+            let err = read_bundle(&bytes).unwrap_err().to_string();
+            assert!(err.contains(needle), "expected '{needle}' in: {err}");
+        }
+    }
+
+    #[test]
+    fn the_manifest_is_pinned_and_round_trips_through_the_proxy_parser() {
+        let bytes = tar_of(&[
+            regular("devfile.yaml", PUBLISHED.as_bytes()),
+            regular("archive.tar", GZ),
+        ]);
+        let b = read_bundle(&bytes).unwrap();
+        let (manifest, built) = build_manifest(&b, &bytes);
+        assert_eq!(
+            manifest,
+            format!(
+                r#"{{"config":{{"digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a","mediaType":"application/vnd.devfileio.devfile.config.v2+json","size":2}},"layers":[{{"annotations":{{"org.opencontainers.image.title":"devfile.yaml"}},"digest":"{}","mediaType":"application/vnd.devfileio.devfile.layer.v1","size":{}}},{{"annotations":{{"org.opencontainers.image.title":"archive.tar"}},"digest":"{}","mediaType":"application/x-tar","size":{}}}],"mediaType":"application/vnd.oci.image.manifest.v1+json","schemaVersion":2}}"#,
+                sha256_digest(PUBLISHED.as_bytes()),
+                PUBLISHED.len(),
+                sha256_digest(GZ),
+                GZ.len(),
+            ),
+            "the config digest is upstream's, probed"
+        );
+        assert_eq!(manifest_descriptors(manifest.as_bytes()).unwrap(), built);
+
+        let one = tar_of(&[regular("devfile.yaml", PUBLISHED.as_bytes())]);
+        let (m, d) = build_manifest(&read_bundle(&one).unwrap(), &one);
+        assert_eq!(d.len(), 2, "config and devfile.yaml, nodejs@2.2.1's shape");
+        assert_eq!(manifest_descriptors(m.as_bytes()).unwrap(), d);
+    }
+
+    #[test]
+    fn published_facts_carry_the_manifest_bytes_and_their_digest() {
+        let bytes = tar_of(&[regular("devfile.yaml", PUBLISHED.as_bytes())]);
+        let b = read_bundle(&bytes).unwrap();
+        let facts = published_facts(&b, &bytes);
+        let f = &facts["devfile"];
+        let manifest = f["manifest"].as_str().unwrap();
+        assert_eq!(f["manifestDigest"], sha256_digest(manifest.as_bytes()));
+        assert_eq!(f["starterProjects"], json!(["hello"]));
+        assert_eq!(f["layers"].as_array().unwrap().len(), 1);
+    }
+
+    fn published(stack: &str, version: &str) -> (String, HeldStackVersion) {
+        let (s, mut v) = held(stack, version, &[]);
+        v.facts["metadata"]["icon"] = json!("https://icons.acme.example/x.svg");
+        v.facts.insert("schemaVersion".into(), json!("2.2.0"));
+        v.facts
+            .insert("lastModified".into(), json!("2026-10-31T00:00:00Z"));
+        (s, v)
+    }
+
+    #[test]
+    fn a_published_index_keeps_the_icon_and_defaults_to_the_highest_release() {
+        let rows = [
+            published("acme", "2.4.0"),
+            published("acme", "3.0.0-rc.1"),
+            published("pre", "1.0.0-rc.1"),
+        ];
+        let doc = compose_index("v2index", false, &rows, Source::Published);
+        let acme = find_stack(&doc, "acme").unwrap();
+        assert_eq!(acme["icon"], "https://icons.acme.example/x.svg");
+        assert_eq!(default_version(acme), Some("2.4.0"), "not the prerelease");
+        assert_eq!(
+            version_entry(acme, "2.4.0").unwrap()["lastModified"],
+            "2026-10-31T00:00:00Z"
+        );
+        let pre = find_stack(&doc, "pre").unwrap();
+        assert_eq!(
+            default_version(pre),
+            Some("1.0.0-rc.1"),
+            "no release to prefer"
+        );
+        let held_doc = compose_index("v2index", false, &rows, Source::Held);
+        assert_eq!(find_stack(&held_doc, "acme").unwrap()["icon"], "");
+    }
+
+    #[test]
+    fn the_schema_version_filter_applies_to_published_versions() {
+        let (s, mut old) = published("acme", "1.0.0");
+        old.facts.insert("schemaVersion".into(), json!("2.0.0"));
+        let rows = [(s, old), published("acme", "2.0.0")];
+        let doc = compose_index(
+            "v2index?minSchemaVersion=2.1",
+            false,
+            &rows,
+            Source::Published,
+        );
+        assert_eq!(
+            versions_of(find_stack(&doc, "acme").unwrap()),
+            vec!["2.0.0"]
+        );
+        let doc = compose_index(
+            "v2index?maxSchemaVersion=2.0.0",
+            false,
+            &rows,
+            Source::Published,
+        );
+        assert_eq!(
+            versions_of(find_stack(&doc, "acme").unwrap()),
+            vec!["1.0.0"]
+        );
+        let doc = compose_index(
+            "v2index?maxSchemaVersion=1.0",
+            false,
+            &rows,
+            Source::Published,
+        );
+        assert!(find_stack(&doc, "acme").is_none());
+    }
+
+    #[test]
+    fn a_hybrid_merge_drops_every_upstream_entry_of_an_owned_name() {
+        let owned: std::collections::BTreeSet<String> =
+            ["nodejs".to_owned(), "hidden".to_owned()].into();
+        let local =
+            json!([{"name": "nodejs", "type": "stack", "versions": [{"version": "9.0.0"}]}]);
+        let mut doc = v2();
+        doc.as_array_mut()
+            .unwrap()
+            .push(json!({"name": "hidden", "type": "stack", "versions": [{"version": "1.0.0"}]}));
+        let dropped = merge_hybrid(&mut doc, local, &owned);
+        assert_eq!(
+            dropped, owned,
+            "both upstream stacks named here are reported"
+        );
+        let node = find_stack(&doc, "nodejs").unwrap();
+        assert_eq!(versions_of(node), vec!["9.0.0"], "the local stack, whole");
+        assert!(
+            find_stack(&doc, "hidden").is_none(),
+            "a name owned but invisible to the caller leaves no upstream entry either"
+        );
+        let names: Vec<&str> = doc
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|e| e["name"].as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["go", "nodejs", "nodejs-basic"],
+            "sorted, sample kept"
+        );
+
+        let mut legacy = json!([{"name": "nodejs", "type": "stack", "version": "2.2.1"}]);
+        let dropped = merge_hybrid(&mut legacy, json!([]), &owned);
+        assert_eq!(dropped.len(), 1);
+        assert_eq!(legacy, json!([]));
     }
 }
