@@ -2002,7 +2002,9 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
       `(so <code>odo</code>) read. The indexes are filtered, and each stack version's ` +
       `devfile, OCI manifest and layers are served byte-exact and verified. ` +
       `<code>registry-library</code> asks for <code>/v2/…</code> at the <strong>host root</strong>, ` +
-      `so give the registry a host of its own. Proxy-only: there is no publish protocol.`,
+      `so give the registry a host of its own. In <code>local</code> or <code>hybrid</code> ` +
+      `mode, <code>batlehub publish</code> uploads a stack directory of your own; in ` +
+      `<code>hybrid</code> a published stack replaces upstream's of the same name whole.`,
     snippets: [
       {
         key: "devfile-che",
@@ -2038,6 +2040,24 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
           `Neither client sends a credential — <code>registry-library</code> builds its OCI ` +
           `requests from the host alone and carries no <code>Authorization</code> on them — so ` +
           `the registry must grant anonymous reads.`,
+      },
+      {
+        key: "devfile-publish",
+        label: "Publish",
+        lang: "bash",
+        showWhen: isPublishMode,
+        template: (ctx) =>
+          [
+            `# A stack directory: devfile.yaml, anything else (packed into archive.tar),`,
+            `# and starter-projects/{name}.zip. Name and version come from the devfile.`,
+            `batlehub publish ./my-stack --server ${ctx.base} --registry ${ctx.registryName}`,
+            ``,
+            `# Or a bundle built elsewhere:`,
+            `curl --data-binary @my-stack-1.0.0.devfile.tar -H 'Content-Type: application/x-tar' \\`,
+            `  -H "Authorization: Bearer ${ctx.isAuthenticated ? ctx.token : "<token>"}" \\`,
+            `  ${ctx.registryUrl}/api/stacks`,
+          ].join("\n"),
+        note: `A published version is never replaced: a second publish of it answers <code>409</code>. In <code>hybrid</code> mode the first publish of a name upstream also lists needs <code>devfile:stack:claim</code>, since it replaces upstream's stack for every user of this registry.`,
       },
     ],
   },

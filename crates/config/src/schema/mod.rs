@@ -833,6 +833,23 @@ impl AppConfig {
                     ),
                 ));
             }
+            if anonymous_reads
+                && reg.mode != RegistryMode::Proxy
+                && reg
+                    .visibility
+                    .is_some_and(|v| v != batlehub_core::entities::Visibility::Public)
+            {
+                out.push(ConfigWarning::new(
+                    warnings::DEVFILE_PUBLISHED_NOT_PUBLIC,
+                    format!("registries[{index}].visibility"),
+                    format!(
+                        "registry '{}': Che reads the index anonymously, and a version published \
+                         here is not public by default — every published stack will be missing \
+                         from Get Started until its visibility is set to public",
+                        reg.name
+                    ),
+                ));
+            }
         }
     }
 

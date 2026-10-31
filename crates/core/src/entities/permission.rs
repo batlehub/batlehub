@@ -227,6 +227,11 @@ pub enum Action {
     TerraformSigningKeysWrite,
     /// JetBrains Marketplace: assigning a plugin build to the stable or EAP channel.
     JetbrainsChannelAssign,
+    /// Devfile: taking a stack name upstream lists, on a hybrid registry
+    /// (RFC 0039 §4.5). A published name replaces upstream's whole stack for
+    /// every user of the instance, so the first publish of one is its own act
+    /// rather than a side effect of `releases:publish`.
+    DevfileStackClaim,
 }
 
 /// The verbs a legacy `[registries.rbac]` `"*"` expands to.
@@ -317,6 +322,7 @@ impl Action {
         Action::OpenvsxNamespaceClaim,
         Action::TerraformSigningKeysWrite,
         Action::JetbrainsChannelAssign,
+        Action::DevfileStackClaim,
     ];
 
     /// The wire form: what a config file, an API body and a log line spell.
@@ -362,6 +368,7 @@ impl Action {
             Action::OpenvsxNamespaceClaim => "openvsx:namespace:claim",
             Action::TerraformSigningKeysWrite => "terraform:signing-keys:write",
             Action::JetbrainsChannelAssign => "jetbrains:channel:assign",
+            Action::DevfileStackClaim => "devfile:stack:claim",
         }
     }
 
@@ -391,6 +398,7 @@ impl Action {
             Action::JetbrainsChannelAssign => {
                 Some(&[RegistryKind::Jetbrains, RegistryKind::JetbrainsMarketplace])
             }
+            Action::DevfileStackClaim => Some(&[RegistryKind::Devfile]),
             _ => None,
         }
     }

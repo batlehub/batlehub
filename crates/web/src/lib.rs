@@ -683,11 +683,11 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 conda_shard,
             },
             devfile::{
-                devfile_index, devfile_index_all, devfile_index_sample, devfile_index_stack,
-                devfile_oci_blob, devfile_oci_manifest, devfile_oci_ping, devfile_oci_tags,
-                devfile_stack, devfile_starter, devfile_v2index, devfile_v2index_all,
-                devfile_v2index_sample, devfile_v2index_stack, devfile_version,
-                devfile_version_starter,
+                devfile_delete, devfile_index, devfile_index_all, devfile_index_sample,
+                devfile_index_stack, devfile_oci_blob, devfile_oci_manifest, devfile_oci_ping,
+                devfile_oci_tags, devfile_publish, devfile_stack, devfile_starter, devfile_v2index,
+                devfile_v2index_all, devfile_v2index_sample, devfile_v2index_stack,
+                devfile_version, devfile_version_starter,
             },
             forgejo::fj_attachment,
             forgejo::fj_packages,
@@ -813,10 +813,12 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(devfile_oci_manifest); // GET|HEAD …/v2/{ns}/{stack}/manifests/{reference}
     cfg.service(devfile_oci_blob); // GET|HEAD …/v2/{ns}/{stack}/blobs/{digest}
     cfg.service(devfile_oci_tags); // GET …/v2/{ns}/{stack}/tags/list
-                                   // Helm chart repositories (RFC 0029), guarded by `is_helm` for devfile's
-                                   // reason: `…/helm/index.yaml` is otherwise an npm package `helm` at a
-                                   // version called `index.yaml`. `api/charts/{name}/{version}` before
-                                   // `api/charts/{name}` before `api/charts`.
+    cfg.service(devfile_publish); // POST …/api/stacks (RFC 0039)
+    cfg.service(devfile_delete); // DELETE …/api/stacks/{stack}/{version}
+                                 // Helm chart repositories (RFC 0029), guarded by `is_helm` for devfile's
+                                 // reason: `…/helm/index.yaml` is otherwise an npm package `helm` at a
+                                 // version called `index.yaml`. `api/charts/{name}/{version}` before
+                                 // `api/charts/{name}` before `api/charts`.
     cfg.service(helm_index); // GET|HEAD …/helm/index.yaml       (filtered, rewritten)
     cfg.service(helm_chart); // GET|HEAD …/helm/charts/{file}    (.tgz / .tgz.prov)
     cfg.service(helm_publish); // POST     …/helm/api/charts

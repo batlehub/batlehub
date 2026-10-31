@@ -526,8 +526,6 @@ export const PROXY_ONLY_TYPES = new Set<RegistryType>([
   "nodedist",
   "sdkman",
   "rustup",
-  // Built offline into an image; no publish protocol (RFC 0035 §3).
-  "devfile",
 ]);
 export const isProxyOnly = (reg: Registry) => PROXY_ONLY_TYPES.has(reg.type);
 
@@ -834,6 +832,7 @@ export const ECOSYSTEM_VERBS: Record<string, RegistryType[]> = {
   "openvsx:namespace:claim": ["openvsx", "vscode-marketplace"],
   "terraform:signing-keys:write": ["terraform"],
   "jetbrains:channel:assign": ["jetbrains", "jetbrains-marketplace"],
+  "devfile:stack:claim": ["devfile"],
 };
 
 /// Verbs in `csv` that this registry type does not define — the §4.2 rule 2

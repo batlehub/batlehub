@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: guide/access-control.md
-sourceHash: 5063702ec3ad8ca0
+sourceHash: 71680454839c8ac7
 ---
 
 # Contrôle d'accès
@@ -103,7 +103,7 @@ et chacun est désormais délégable seul.
 | `tombstones:read` | lire les pierres tombales, et compacter leur détail |
 | `packages:read` | la liste administrative des paquets |
 
-Quatre sont **rapportés à un écosystème** et ne s'accordent que sur les types de
+Cinq sont **rapportés à un écosystème** et ne s'accordent que sur les types de
 registre qui les définissent :
 
 | Verbe | Type de registre | Ce qu'il autorise |
@@ -111,10 +111,11 @@ registre qui les définissent :
 | `openvsx:namespace:claim` | `openvsx` | revendiquer un namespace d'éditeur |
 | `terraform:signing-keys:write` | `terraform` | enregistrer la clé GPG dont sont signés les providers d'un namespace |
 | `jetbrains:channel:assign` | `jetbrains-marketplace` | déplacer un build publié d'un canal de publication à l'autre |
+| `devfile:stack:claim` | `devfile` | en mode `hybrid`, publier la première version d'un nom de pile que l'amont liste aussi — ce qui remplace la pile de l'amont pour chaque utilisateur ([RFC 0039](/rfc/0039-devfile-local-mode) §4.5) |
 | `npm:dist-tags:write` | `npm` | *réservé* — les dist-tags sont dérivés ici, donc rien ne le demande (l'argument est en [RFC 0015](/rfc/0015-grants-on-the-resource-hierarchy) §4.2) |
 
 ::: tip La liste ci-dessus est tout le vocabulaire
-Les 35 verbes, confrontés à l'énumération par un test plutôt que maintenus à la
+Les 41 verbes, confrontés à l'énumération par un test plutôt que maintenus à la
 main — une version antérieure de cette table listait trois verbes qui
 n'existaient pas, et en copier un dans un fichier de configuration faisait
 échouer le serveur au démarrage.

@@ -5,11 +5,15 @@ use clap::Args;
 
 use batlehub_core::entities::RegistryKind;
 
-use crate::api::{publish::detect_meta, BatleHubClient};
+use crate::api::{
+    publish::{detect_meta, devfile_bundle, is_devfile_path},
+    BatleHubClient,
+};
 
 #[derive(Args)]
 pub struct PublishArgs {
-    /// Path to the artifact file
+    /// Path to the artifact file — or, for a devfile stack, its directory or
+    /// its devfile.yaml (packed into a bundle here)
     pub file: PathBuf,
 
     /// Target registry name (overrides default)
@@ -51,6 +55,12 @@ pub async fn run(
 ) -> Result<()> {
     if !args.file.exists() {
         bail!("file not found: {}", args.file.display());
+    }
+
+    if args.r#type.as_deref() == Some("devfile")
+        || (args.r#type.is_none() && is_devfile_path(&args.file))
+    {
+        return publish_devfile(args, client, default_registry).await;
     }
 
     // Auto-detect or use provided metadata
@@ -170,5 +180,42 @@ pub async fn run(
     }
 
     println!("Published successfully.");
+    Ok(())
+}
+
+/// RFC 0039 §4.2: pack (or read) the bundle, read its name and version the
+/// way the server will, and upload it. `--name`/`--version` are refused: the
+/// server reads both from the devfile and nowhere else, so an override could
+/// only ever produce a `400`.
+async fn publish_devfile(
+    args: PublishArgs,
+    client: &BatleHubClient,
+    default_registry: Option<&str>,
+) -> Result<()> {
+    if args.name.is_some() || args.version.is_some() {
+        bail!(
+            "--name and --version are not accepted for a devfile stack: the registry reads both \
+             from metadata.name and metadata.version in devfile.yaml"
+        );
+    }
+    let bundle = devfile_bundle(&args.file)?;
+    let read = batlehub_core::services::devfile::read_bundle(&bundle)
+        .map_err(|e| anyhow::anyhow!("{}: {e}", args.file.display()))?;
+    let registry = args
+        .registry
+        .clone()
+        .or_else(|| default_registry.map(str::to_string))
+        .ok_or_else(|| {
+            anyhow::anyhow!("no registry specified; use --registry or set a default in config")
+        })?;
+    println!(
+        "Publishing devfile {}@{} to registry '{}' ...",
+        read.name, read.version, registry
+    );
+    let published = client.publish_devfile(&registry, bundle).await?;
+    println!(
+        "Published {}@{} ({}).",
+        published.stack, published.version, published.digest
+    );
     Ok(())
 }

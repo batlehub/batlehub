@@ -382,10 +382,6 @@ impl RegistryKind {
                 | Self::Nodedist
                 | Self::Sdkman
                 | Self::Rustup
-                // A devfile registry is built offline into an image by
-                // `registry-support`'s tooling; there is no publish protocol to
-                // be a server for (RFC 0035 §3).
-                | Self::Devfile
         )
     }
 
@@ -1382,6 +1378,9 @@ mod tests {
         assert!(!RegistryKind::Generic.supports_local_mode());
         assert!(!RegistryKind::Nodedist.supports_local_mode());
         assert!(!RegistryKind::Sdkman.supports_local_mode());
+        // No publish protocol upstream, so this instance defines one: a
+        // bundle the CLI packs (RFC 0039 §4.3).
+        assert!(RegistryKind::Devfile.supports_local_mode());
         assert!(RegistryKind::Cargo.supports_local_mode());
         assert!(RegistryKind::Deb.supports_local_mode());
         assert!(RegistryKind::JetbrainsMarketplace.supports_local_mode());
