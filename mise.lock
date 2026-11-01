@@ -58,13 +58,13 @@ url = "https://github.com/mlab-sh/mlab-cli/releases/download/v1.0.4/mlab-1.0.4-x
 url_api = "https://api.github.com/repos/mlab-sh/mlab-cli/releases/assets/547198585"
 
 [[tools."github:mlab-sh/postmortem"]]
-version = "2.5.0"
+version = "2.9.2"
 backend = "github:mlab-sh/postmortem"
 
 [tools."github:mlab-sh/postmortem"."platforms.linux-x64"]
-checksum = "sha256:c60f578273cb747bcb54cb8f022fc221bf28689e4550178e290ce74d49ff47e5"
-url = "https://github.com/mlab-sh/postmortem/releases/download/v2.5.0/postmortem-2.5.0-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/mlab-sh/postmortem/releases/assets/578909690"
+checksum = "sha256:c2c53a1004999e78c89ff3ece5e7e4e5f77701a04f49a87aff7b6aeb1254e2be"
+url = "https://github.com/mlab-sh/postmortem/releases/download/v2.9.2/postmortem-2.9.2-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/mlab-sh/postmortem/releases/assets/653485545"
 
 [[tools."github:rustfs/cli"]]
 version = "0.1.36"

@@ -23,6 +23,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   upstream starts listing later is logged once and counted on
   `batlehub_devfile_shadowed_upstream_stacks`.
 
+### Changed
+
+- **The worker images run postmortem 2.9.2** (was 2.4.0), the version the
+  supply-chain CI gate and `mise.toml` now pin too, so the scanner the worker
+  runs and the one the gate runs are the same binary. Its `scan` and
+  `timeline` JSON are unchanged, and it still flags the canary packages of all
+  seven ecosystems as RFC 0018's spike recorded.
+
 ## [1.8.1] - 2026-10-21
 
 ### Security

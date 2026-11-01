@@ -20,7 +20,7 @@
 #   podman build -f Containerfile.worker -t batlehub-worker .
 #   podman run --rm -v ./config.toml:/etc/batlehub/config.toml:ro batlehub-worker
 
-ARG POSTMORTEM_VERSION=2.4.0
+ARG POSTMORTEM_VERSION=2.9.2
 ARG TRIVY_VERSION=0.76.1
 ARG YARA_X_VERSION=1.20.0
 # The release's own asset digest (GitHub's `digest` field); the binary runs
