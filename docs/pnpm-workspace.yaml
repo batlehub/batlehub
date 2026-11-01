@@ -39,7 +39,7 @@
 # flowchart with `$$x^2$$` labels renders KaTeX through the bundled 0.18.
 # Drop it once mermaid's own range reaches 0.18.
 overrides:
-  vite: ^6.4.3
+  vite: ^6.4.5
   postcss: ^8.5.25
   nanoid: ^3.3.17
   katex: ^0.18.2
