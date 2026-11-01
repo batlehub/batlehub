@@ -331,7 +331,19 @@ fn extract_zip(
             report.nested_archives += 1;
         }
         let declared = file.size();
-        let written = write_bounded(&mut file, &target, budget, declared)?;
+        // zip 9.2 reports an unsupported method on the first read, as an
+        // `io::Error` wrapping a `ZipError`: that is the archive's fault, not
+        // the disk's, so it is malformed like the errors `by_index` returns.
+        let written = write_bounded(&mut file, &target, budget, declared).map_err(|e| match e {
+            ExtractError::Io(io)
+                if io
+                    .get_ref()
+                    .is_some_and(|inner| inner.is::<zip::result::ZipError>()) =>
+            {
+                ExtractError::Malformed(io.to_string())
+            }
+            other => other,
+        })?;
         if written > declared {
             budget.bytes(written - declared)?;
         }
