@@ -4,7 +4,7 @@ status: experimental
 description: >-
   A client asked for a coordinate that a flag or a scan verdict marks malicious. The server refused it, but the request means a lockfile, a cache or a developer machine still names it.
 references:
-  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+  - https://batlehub.dev/operations/siem
 author: BatleHub
 date: 2026-10-05
 tags:

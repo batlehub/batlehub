@@ -4,7 +4,7 @@ status: experimental
 description: >-
   A whole-registry cache clear, a retention run or a tombstone compaction. All three are destructive to history; restrict the alert to outside your maintenance window with your SIEM's own time filter.
 references:
-  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+  - https://batlehub.dev/operations/siem
 author: BatleHub
 date: 2026-10-05
 tags:

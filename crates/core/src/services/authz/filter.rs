@@ -12,7 +12,7 @@
 //! the build would pick that version and fail at download. Grants filter the
 //! same document at the same point, for the same reason.
 //!
-//! [RFC 0006]: https://batleforc.git.batleforc.fr/batlehub/rfc/0006-blocked-versions-hidden-everywhere
+//! [RFC 0006]: https://batlehub.dev/rfc/0006-blocked-versions-hidden-everywhere
 //!
 //! # The three rules, and which of them live here
 //!

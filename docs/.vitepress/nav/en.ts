@@ -195,6 +195,7 @@ export const sidebar = {
       items: [
         { text: "Caching", link: "/guide/caching" },
         { text: "Access Control", link: "/guide/access-control" },
+        { text: "Security gates", link: "/guide/security-gates" },
         { text: "Host-based routing", link: "/guide/host-routing" },
         { text: "Private upstreams", link: "/guide/private-upstreams" },
         { text: "Hot reload", link: "/guide/hot-reload" },
@@ -203,10 +204,6 @@ export const sidebar = {
         { text: "Server binary subcommands", link: "/guide/server-cli" },
         { text: "Capacity planning", link: "/guide/capacity-planning" },
       ],
-    },
-    {
-      text: "Project",
-      items: [{ text: "Roadmap", link: "/guide/roadmap" }],
     },
   ],
 
@@ -232,6 +229,7 @@ export const sidebar = {
     {
       text: "When something is wrong",
       items: [
+        { text: "Refused downloads", link: "/use/refused-downloads" },
         { text: "Vulnerability proxy", link: "/use/vulnerability-proxy" },
         { text: "mise", link: "/use/mise" },
         { text: "Troubleshooting", link: "/use/troubleshooting" },

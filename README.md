@@ -16,7 +16,7 @@ cd batlehub/deploy/compose/min
 BATLEHUB_ADMIN_TOKEN=$(openssl rand -hex 32) docker compose up -d   # or podman compose
 ```
 
-The server listens on `http://localhost:8080`, and npm is proxied at `/proxy/npm/`. `deploy/compose/base` adds an OIDC login (Dex) and `deploy/compose/max` adds Valkey and S3 storage — see [Docker Compose](https://batleforc.git.batleforc.fr/batlehub/guide/install/compose.html).
+The server listens on `http://localhost:8080`, and npm is proxied at `/proxy/npm/`. `deploy/compose/base` adds an OIDC login (Dex) and `deploy/compose/max` adds Valkey and S3 storage — see [Docker Compose](https://batlehub.dev/guide/install/compose.html).
 
 ### Build from source
 
@@ -52,17 +52,17 @@ task test          # cargo test --workspace
 
 | Document | Contents |
 |----------|---------|
-| [Supported Registry](https://batleforc.git.batleforc.fr/batlehub/registries/) | List of supported Registries and how to use them |
-| [Installation](https://batleforc.git.batleforc.fr/batlehub/guide/installation.html) | Choosing a method: Docker Compose, container image, binary, source, Helm |
-| [Helm chart](https://batleforc.git.batleforc.fr/batlehub/guide/install/helm.html) | Kubernetes: three complete values files — basic, S3, production-ready |
-| [Administration](https://batleforc.git.batleforc.fr/batlehub/guide/administration.html) | Administration: config, auth, S3, health, package management |
-| [User guide](https://batleforc.git.batleforc.fr/batlehub/use/) | User guide: client setup and publishing for all registry types |
-| [Configuration](https://batleforc.git.batleforc.fr/batlehub/guide/configuration.html) | Full TOML reference, permissions, worked examples |
-| [Configuration § Registry modes](https://batleforc.git.batleforc.fr/batlehub/guide/configuration.html#registry-modes) | Private registry modes (local / hybrid) |
-| [Private upstreams](https://batleforc.git.batleforc.fr/batlehub/guide/private-upstreams.html) | Upstream auth (Bearer / Basic / header) and custom CA certificates |
-| [Publishing](https://batleforc.git.batleforc.fr/batlehub/use/publishing.html) | Step-by-step guide for publishing packages (npm, Cargo, VSIX, Go modules, gems, Maven artifacts, Terraform modules/providers, PyPI wheels, conda packages) |
-| [SBOM](https://batleforc.git.batleforc.fr/batlehub/guide/sbom.html) | SBOM configuration, format reference, API endpoints, and export guide |
-| [Adding a registry](https://batleforc.git.batleforc.fr/batlehub/contributing/adding-a-registry.html) | Step-by-step guide for implementing a new registry adapter |
+| [Supported Registry](https://batlehub.dev/registries/) | List of supported Registries and how to use them |
+| [Installation](https://batlehub.dev/guide/installation.html) | Choosing a method: Docker Compose, container image, binary, source, Helm |
+| [Helm chart](https://batlehub.dev/guide/install/helm.html) | Kubernetes: three complete values files — basic, S3, production-ready |
+| [Administration](https://batlehub.dev/guide/administration.html) | Administration: config, auth, S3, health, package management |
+| [User guide](https://batlehub.dev/use/) | User guide: client setup and publishing for all registry types |
+| [Configuration](https://batlehub.dev/guide/configuration.html) | Full TOML reference, permissions, worked examples |
+| [Configuration § Registry modes](https://batlehub.dev/guide/configuration.html#registry-modes) | Private registry modes (local / hybrid) |
+| [Private upstreams](https://batlehub.dev/guide/private-upstreams.html) | Upstream auth (Bearer / Basic / header) and custom CA certificates |
+| [Publishing](https://batlehub.dev/use/publishing.html) | Step-by-step guide for publishing packages (npm, Cargo, VSIX, Go modules, gems, Maven artifacts, Terraform modules/providers, PyPI wheels, conda packages) |
+| [SBOM](https://batlehub.dev/guide/sbom.html) | SBOM configuration, format reference, API endpoints, and export guide |
+| [Adding a registry](https://batlehub.dev/contributing/adding-a-registry.html) | Step-by-step guide for implementing a new registry adapter |
 | `/swagger-ui/` (runtime) | Interactive API docs |
 
 ---
@@ -80,11 +80,11 @@ task coverage       # generate HTML coverage report (requires PostgreSQL + RustF
 task coverage-check # enforce ≥80% line coverage (fails the build if below threshold)
 ```
 
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — contributor guide (points to [Contributing guide](https://batleforc.git.batleforc.fr/batlehub/contributing/contributing.html))
-- [Deployment](https://batleforc.git.batleforc.fr/batlehub/guide/installation.html)
-- [`ROADMAP.md`](ROADMAP.md) for the full list of planned features, or browse the [Roadmap page on the documentation site](https://batleforc.git.batleforc.fr/batlehub/guide/roadmap.html).
-- [Testing](https://batleforc.git.batleforc.fr/batlehub/contributing/testing.html)
-- [Access control](https://batleforc.git.batleforc.fr/batlehub/guide/access-control.html)
-- [RFCs](https://batleforc.git.batleforc.fr/batlehub/rfc/)
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — contributor guide (points to [Contributing guide](https://batlehub.dev/contributing/contributing.html))
+- [Deployment](https://batlehub.dev/guide/installation.html)
+- [`ROADMAP.md`](ROADMAP.md) for the full list of planned features, or browse the [Roadmap page on the documentation site](https://batlehub.dev/guide/roadmap.html).
+- [Testing](https://batlehub.dev/contributing/testing.html)
+- [Access control](https://batlehub.dev/guide/access-control.html)
+- [RFCs](https://batlehub.dev/rfc/)
 - [`SECURITY.md`](SECURITY.md) — supported versions and how to report a vulnerability
 - [`LICENSE`](LICENSE) — Apache License 2.0

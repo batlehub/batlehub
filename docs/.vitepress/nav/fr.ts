@@ -200,6 +200,7 @@ export const sidebar = {
       items: [
         { text: "Mise en cache", link: "/fr/guide/caching" },
         { text: "Contrôle d'accès", link: "/fr/guide/access-control" },
+        { text: "Contrôles de sécurité", link: "/fr/guide/security-gates" },
         { text: "Routage par hôte", link: "/fr/guide/host-routing" },
         { text: "Amonts privés", link: "/fr/guide/private-upstreams" },
         { text: "Rechargement à chaud", link: "/fr/guide/hot-reload" },
@@ -211,12 +212,6 @@ export const sidebar = {
         },
         { text: "Dimensionnement", link: "/fr/guide/capacity-planning" },
       ],
-    },
-    {
-      // Générée depuis `ROADMAP.md`, qui est canonique et en anglais : la page
-      // française serait une copie qu'aucune porte ne tient à jour.
-      text: "Projet",
-      items: [{ text: "Feuille de route (en)", link: "/guide/roadmap" }],
     },
   ],
 
@@ -248,6 +243,7 @@ export const sidebar = {
     {
       text: "Quand ça ne marche pas",
       items: [
+        { text: "Téléchargements refusés", link: "/fr/use/refused-downloads" },
         {
           text: "Proxy de vulnérabilités",
           link: "/fr/use/vulnerability-proxy",

@@ -9,7 +9,7 @@
 //! unexpressible, and the version tier was walked on the hot path for a
 //! capability nothing could populate.
 //!
-//! [RFC 0017]: https://batleforc.git.batleforc.fr/batlehub/rfc/0017-writing-grants-at-the-package-and-version-tiers
+//! [RFC 0017]: https://batlehub.dev/rfc/0017-writing-grants-at-the-package-and-version-tiers
 //!
 //! # Why this is a service and not handler code
 //!

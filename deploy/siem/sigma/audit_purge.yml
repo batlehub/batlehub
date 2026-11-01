@@ -4,7 +4,7 @@ status: experimental
 description: >-
   Someone deleted rows from the BatleHub audit trail. Always worth a human: a purge is how an intruder removes the record of what they did, and a legitimate one is rare and announced.
 references:
-  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+  - https://batlehub.dev/operations/siem
 author: BatleHub
 date: 2026-10-05
 tags:

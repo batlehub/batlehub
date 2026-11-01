@@ -1183,7 +1183,7 @@ impl LocalRegistryService {
     /// Drop versions this caller holds no `releases:read` on — RFC 0015 §4.4
     /// rule 2's second half, and [RFC 0017]'s phase 2.
     ///
-    /// [RFC 0017]: https://batleforc.git.batleforc.fr/batlehub/rfc/0017-writing-grants-at-the-package-and-version-tiers
+    /// [RFC 0017]: https://batlehub.dev/rfc/0017-writing-grants-at-the-package-and-version-tiers
     ///
     /// # Why this is inert on every estate that has not used the editor
     ///

@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: d53362b29e4d4566
+sourceHash: c3c81f4f91890b0b
 ---
 
 # batlehub-cli
@@ -1378,6 +1378,7 @@ batlehub why npm:left-pad@1.3.1 --rescan     # met aussi une réanalyse en file 
 npm:left-pad@1.3.1
   state        quarantined
   reasons      MIN_AGE_NOT_MET
+  docs         https://batlehub.dev/use/refused-downloads#min-age-not-met
   available    2026-09-05T14:12:00Z
   policy       npm/default
   evaluated    2026-09-04T14:12:03Z
@@ -1387,6 +1388,8 @@ npm:left-pad@1.3.1
 
 Held until 2026-09-05T14:12:00Z. `batlehub wait` waits for it.
 ```
+
+La ligne `docs` relie chaque code de raison à sa section de [Pourquoi un téléchargement est refusé](/fr/use/refused-downloads), qui explique ce que signifie le code et ce que vous pouvez faire.
 
 ### `wait <registry>:<name>@<version> [--timeout 1h] [--interval 30s]`
 

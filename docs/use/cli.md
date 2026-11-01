@@ -1290,6 +1290,7 @@ batlehub why npm:left-pad@1.3.1 --rescan     # queue a rescan too (needs gates:e
 npm:left-pad@1.3.1
   state        quarantined
   reasons      MIN_AGE_NOT_MET
+  docs         https://batlehub.dev/use/refused-downloads#min-age-not-met
   available    2026-09-05T14:12:00Z
   policy       npm/default
   evaluated    2026-09-04T14:12:03Z
@@ -1299,6 +1300,8 @@ npm:left-pad@1.3.1
 
 Held until 2026-09-05T14:12:00Z. `batlehub wait` waits for it.
 ```
+
+The `docs` row links each reason code to its section of [Why a download was refused](/use/refused-downloads), which says what the code means and what to do about it.
 
 ### `wait <registry>:<name>@<version> [--timeout 1h] [--interval 30s]`
 
