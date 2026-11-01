@@ -2,8 +2,8 @@ apiVersion: v2
 name: batlehub
 description: Smart proxy and cache for package registries
 type: application
-version: 1.8.1
-appVersion: "1.8.1"
+version: 1.8.2
+appVersion: "1.8.2"
 home: https://github.com/batlehub/batlehub
 sources:
   - https://github.com/batlehub/batlehub
