@@ -8,6 +8,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A namespace's gates now judge proxied packages too.** A
+  `[[registries.namespaces.rules]]` override reached only the packages published
+  locally: a proxied download was judged by the registry's own chain whatever
+  its name, so `min_age_secs = 0` on `@acme/ci` held the proxied `@acme/ci`
+  exactly as before. The access simulator answered from the same wrong chain.
+- **Gate exemptions now apply to proxied downloads.** An exemption on
+  `cve_gate`, `license_gate` or `flags` silenced its gate only on a locally
+  published version, so "this CVE does not apply to how we use it" changed
+  nothing for a package served from upstream. The store is read only when an
+  exemptible gate refuses, so a served download costs no extra query.
+
+### Added
+
+- **`security.rule-settings-ignored` warning.** On a registry with
+  `[registries.security]`, `cve_gate`, `license_gate`, `require_signed_release`
+  and `trusted_publisher` run as scanners judged by the profile's
+  `max_severity` and `mode`: their `bypass_roles`, `block = false`,
+  `cve_gate.min_severity` and namespace overrides are not read, and a reload
+  now says so instead of leaving them in place as though they did something.
+
 ## [1.8.2] - 2026-11-01
 
 ### Added

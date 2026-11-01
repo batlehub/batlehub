@@ -3353,3 +3353,204 @@ mod version_readme {
         }
     }
 }
+
+// ── RFC 0015 on the proxied read: namespace chains and gate exemptions ───────
+
+/// A gate that always refuses, under the name the test gives it — so the
+/// assertion is about which chain ran, not about a finding.
+struct NamedDeny(&'static str);
+
+#[async_trait]
+impl crate::rules::Rule for NamedDeny {
+    fn name(&self) -> &str {
+        self.0
+    }
+    async fn evaluate(&self, _ctx: &crate::rules::RuleContext<'_>) -> crate::rules::RuleDecision {
+        crate::rules::RuleDecision::Deny {
+            reason: format!("{} refused", self.0),
+        }
+    }
+}
+
+fn chain(rules: Vec<Box<dyn crate::rules::Rule>>) -> Arc<RegistryPolicy> {
+    Arc::new(RegistryPolicy {
+        metadata_ttl: None,
+        firewall_only: false,
+        serve_stale_metadata: false,
+        artifact_ttl: None,
+        rules,
+    })
+}
+
+/// An npm registry that grants reads to anyone, so the grant check passes and
+/// the rule chain is what decides.
+fn npm_grants() -> Arc<crate::entities::RegistryGrants> {
+    use crate::entities::{GrantMap, Node, RegistryGrants, RegistryKind, SubjectMatcher, Tier};
+    Arc::new(RegistryGrants {
+        kind: RegistryKind::Npm,
+        registry: Node::new(
+            Tier::Registry,
+            "registry:npm",
+            Some(GrantMap::new().grant(SubjectMatcher::Anyone, vec![Action::ReleasesRead])),
+        ),
+        namespaces: Vec::new(),
+    })
+}
+
+fn proxied_read(name: &str) -> ProxyRequest {
+    ProxyRequest {
+        package_id: PackageId::new("npm", name, "1.0.0"),
+        ..req("npm")
+    }
+}
+
+/// A namespace that overrides a gate judges a **proxied** package too. The
+/// proxy used to take the registry's chain whatever the package, so a
+/// namespace's gates reached only the packages published locally.
+#[tokio::test]
+async fn a_namespace_chain_judges_a_proxied_package() {
+    let svc = proxy(
+        "npm",
+        Arc::new(FixedRegistry),
+        SpyRepo::new(),
+        vec![Box::new(NamedDeny("release_age_gate"))],
+    );
+    {
+        let mut hot = svc.hot.write().await;
+        hot.grants.insert("npm".to_owned(), npm_grants());
+        hot.namespace_policies
+            .insert("npm".to_owned(), vec![("@acme".to_owned(), chain(vec![]))]);
+    }
+
+    let inside = svc.handle(proxied_read("@acme/ci")).await.unwrap();
+    assert!(
+        matches!(inside, ProxyResponse::Stream(_)),
+        "the namespace's empty chain must judge @acme/ci"
+    );
+    let outside = svc.handle(proxied_read("left-pad")).await.unwrap();
+    assert!(
+        matches!(&outside, ProxyResponse::Denied { reason, .. } if reason == "release_age_gate refused"),
+        "a package outside the namespace keeps the registry's chain"
+    );
+}
+
+/// A store holding one version-tier exemption, for the proxy's own funnel.
+struct OneExemption(crate::ports::StoredPolicy);
+
+#[async_trait]
+impl crate::ports::PolicyRepository for OneExemption {
+    async fn policy_for(
+        &self,
+        registry: &str,
+        package: &str,
+        version: Option<&str>,
+    ) -> Result<Vec<crate::ports::StoredPolicy>, CoreError> {
+        let key = version.map(|v| crate::ports::version_node_key(package, v));
+        Ok(
+            (self.0.registry == registry && key.as_deref() == Some(self.0.node_key.as_str()))
+                .then(|| self.0.clone())
+                .into_iter()
+                .collect(),
+        )
+    }
+    async fn put_policy(&self, _p: crate::ports::StoredPolicy) -> Result<(), CoreError> {
+        Ok(())
+    }
+    async fn delete_policy(
+        &self,
+        _r: &str,
+        _k: crate::ports::NodeKind,
+        _n: &str,
+    ) -> Result<(), CoreError> {
+        Ok(())
+    }
+    async fn policy_on_node(
+        &self,
+        _r: &str,
+        _k: crate::ports::NodeKind,
+        _n: &str,
+    ) -> Result<Option<crate::ports::StoredPolicy>, CoreError> {
+        Ok(None)
+    }
+    async fn exemptions_in_registry(
+        &self,
+        _r: &str,
+    ) -> Result<Vec<crate::ports::StoredPolicy>, CoreError> {
+        Ok(Vec::new())
+    }
+    async fn delete_package_policy(&self, _r: &str, _p: &str) -> Result<(), CoreError> {
+        Ok(())
+    }
+}
+
+fn cve_exemption(name: &str, version: &str) -> crate::ports::StoredPolicy {
+    use crate::entities::{GateExemption, RuleOverride};
+    use crate::ports::{version_node_key, NodeKind, StoredPolicy};
+    let mut policy = StoredPolicy::new("npm", NodeKind::Version, version_node_key(name, version));
+    let exemption = GateExemption {
+        exempt: true,
+        gate: "cve_gate".to_owned(),
+        exempt_until: Utc::now() + chrono::Duration::days(30),
+        reason: "assessed: not reachable from our usage".to_owned(),
+        granted_by: Some("sec".to_owned()),
+        self_approved: false,
+    };
+    policy.rules.push(RuleOverride {
+        gate: "cve_gate".to_owned(),
+        settings: serde_json::to_value(&exemption).unwrap(),
+    });
+    policy
+}
+
+/// An exemption written on a version silences its gate on the **proxied**
+/// download — and only its gate. The proxy used to run the chain unfiltered,
+/// so the documented "this CVE does not apply to us" changed nothing for a
+/// package nobody had published locally.
+#[tokio::test]
+async fn an_exemption_silences_its_gate_on_a_proxied_download() {
+    let rules = || -> Vec<Box<dyn crate::rules::Rule>> { vec![Box::new(NamedDeny("cve_gate"))] };
+
+    // Control: the gate refuses while no exemption exists.
+    let svc = proxy("npm", Arc::new(FixedRegistry), SpyRepo::new(), rules());
+    assert!(matches!(
+        svc.handle(proxied_read("left-pad")).await.unwrap(),
+        ProxyResponse::Denied { .. }
+    ));
+
+    let svc = proxy("npm", Arc::new(FixedRegistry), SpyRepo::new(), rules());
+    svc.hot.write().await.policy_repo =
+        Some(Arc::new(OneExemption(cve_exemption("left-pad", "1.0.0"))));
+    assert!(
+        matches!(
+            svc.handle(proxied_read("left-pad")).await.unwrap(),
+            ProxyResponse::Stream(_)
+        ),
+        "the exempted gate must not refuse the version it was written on"
+    );
+    assert!(
+        matches!(
+            svc.handle(proxied_read("other")).await.unwrap(),
+            ProxyResponse::Denied { .. }
+        ),
+        "an exemption reaches the coordinate it names and no other"
+    );
+
+    let svc = proxy(
+        "npm",
+        Arc::new(FixedRegistry),
+        SpyRepo::new(),
+        vec![
+            Box::new(NamedDeny("cve_gate")),
+            Box::new(NamedDeny("version_gate")),
+        ],
+    );
+    svc.hot.write().await.policy_repo =
+        Some(Arc::new(OneExemption(cve_exemption("left-pad", "1.0.0"))));
+    assert!(
+        matches!(
+            svc.handle(proxied_read("left-pad")).await.unwrap(),
+            ProxyResponse::Denied { reason, .. } if reason == "version_gate refused"
+        ),
+        "a gate the exemption does not name keeps refusing"
+    );
+}

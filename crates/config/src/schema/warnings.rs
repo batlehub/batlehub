@@ -409,6 +409,13 @@ pub const FLAG_SOURCE_CAN_HARD_BLOCK: &str = "flag-source.can-hard-block";
 /// creates one (RFC 0018 §6.3, `mlab`).
 pub const SECURITY_ENRICHMENT_REQUIRED: &str = "security.enrichment-required";
 
+/// A `[registries.security]` registry declares a `cve_gate`, `license_gate`,
+/// `require_signed_release` or `trusted_publisher` setting the verdict does not
+/// read: those four run as internal scanners there, judged by the profile's
+/// `max_severity` and `mode`, with no bypass role — and a namespace override of
+/// one of them is not built at all (RFC 0018 §4.1).
+pub const SECURITY_RULE_SETTINGS_IGNORED: &str = "security.rule-settings-ignored";
+
 /// `[registries.security]` with `hold_missing_timestamp = true` on a kind that
 /// structurally has no publish date — the path-proxy family — so every version
 /// is held open-ended (RFC 0018 §4.3, decision 27).

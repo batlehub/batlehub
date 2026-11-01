@@ -5,7 +5,8 @@ use crate::entities::AccessEvent;
 use crate::entities::MissKind;
 use crate::error::CoreError;
 use crate::ports::{DocumentKind, VersionDocument};
-use crate::rules::{evaluate_rules, RuleContext, RuleDecision};
+use crate::rules::{RuleContext, RuleDecision};
+use crate::services::authz::evaluate_chain;
 
 use super::{ProxyRequest, ProxyResponse, ProxyService, RequestTiming, StreamedIndex};
 use crate::entities::Action;
@@ -126,7 +127,13 @@ impl ProxyService {
                 .get(registry_name)
                 .ok_or_else(|| CoreError::UnknownRegistry(registry_name.to_owned()))?
                 .clone();
-            let policy = hot.policies.get(registry_name).cloned();
+            // RFC 0015 §4.1 — the deepest namespace that overrides a gate
+            // judges the package, on a proxied read as on a local one.
+            let policy = crate::services::authz::policy_in(
+                &hot,
+                registry_name,
+                req.package_id.name.as_str(),
+            );
             // Registries without an explicit `[registries.integrity]` block get the
             // default policy: verify against any advertised checksum, block on mismatch.
             let integrity = hot
@@ -327,7 +334,9 @@ impl ProxyService {
             cache_entry: None,
             requested_version: Some(&req.package_id.version),
         };
-        if let RuleDecision::Deny { reason } = evaluate_rules(rules, &ctx).await {
+        if let (RuleDecision::Deny { reason }, _) =
+            evaluate_chain(&self.hot, rules, &metadata.id, &ctx).await
+        {
             return Err(CoreError::AccessDenied(reason));
         }
 
@@ -750,12 +759,16 @@ impl ProxyService {
             requested_version: Some(&req.package_id.version),
         };
 
+        // RFC 0015 §4.5 — an exemption written on this version silences its
+        // gate on the proxied read too, not only on a locally published one.
         // The verdict gate leaves the verdict it judged under beside its
         // decision (RFC 0018 §4.2), so a refusal can carry the reason codes
         // and a `warned` stream its headers, without the chain's other rules
         // knowing anything about it.
-        let (decision, verdict) =
-            crate::services::verdict::with_request_verdict(evaluate_rules(rules, &ctx)).await;
+        let (decision, verdict) = crate::services::verdict::with_request_verdict(async {
+            evaluate_chain(&self.hot, rules, &metadata.id, &ctx).await.0
+        })
+        .await;
         if let RuleDecision::Deny { reason } = decision {
             super::warn_if_audit_failed(
                 self.repo
@@ -1260,7 +1273,10 @@ impl ProxyService {
             }
             let client = hot.registries.get(&coordinate.registry)?;
             let kind: crate::entities::RegistryKind = client.registry_type().parse().ok()?;
-            (kind, hot.policies.get(&coordinate.registry).cloned())
+            (
+                kind,
+                crate::services::authz::policy_in(&hot, &coordinate.registry, &coordinate.name),
+            )
         };
         if !crate::services::listing_synthesis::is_document_by_version(
             kind,
@@ -1314,8 +1330,10 @@ impl ProxyService {
             cache_entry: None,
             requested_version: Some(&coordinate.version),
         };
-        let (decision, verdict) =
-            crate::services::verdict::with_request_verdict(evaluate_rules(rules, &ctx)).await;
+        let (decision, verdict) = crate::services::verdict::with_request_verdict(async {
+            evaluate_chain(&self.hot, rules, coordinate, &ctx).await.0
+        })
+        .await;
         if let RuleDecision::Deny { reason } = decision {
             return Some(ProxyResponse::Denied {
                 reason,

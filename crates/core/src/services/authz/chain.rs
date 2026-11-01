@@ -31,7 +31,7 @@ use crate::entities::Action;
 use crate::entities::{Identity, PackageId, PackageMetadata};
 use crate::error::CoreError;
 use crate::rules::{RuleContext, RuleDecision};
-use crate::services::hot_config::{HotConfigLock, RegistryPolicy};
+use crate::services::hot_config::{HotConfig, HotConfigLock, RegistryPolicy};
 
 /// The coordinate the authorization entry points judge when no upstream
 /// metadata has been resolved for it — a path-addressed file, or a listing that
@@ -64,7 +64,14 @@ async fn policy_for(
     package: &str,
 ) -> Option<Arc<RegistryPolicy>> {
     let hot = hot.read().await;
+    policy_in(&hot, registry, package)
+}
 
+/// [`policy_for`] under a read lock the caller already holds — the proxy
+/// snapshots the client, the policy and the integrity settings under one lock,
+/// and judging a proxied package by the registry's chain alone is how a
+/// namespace's gates came to reach only its locally published packages.
+pub fn policy_in(hot: &HotConfig, registry: &str, package: &str) -> Option<Arc<RegistryPolicy>> {
     if !package.is_empty() {
         if let (Some(chains), Some(grants)) = (
             hot.namespace_policies.get(registry),
@@ -746,12 +753,6 @@ pub async fn authorize_read_against(
     // and `LicenseGateRule` for the reason this whole module exists: a rule that
     // consulted the policy table itself would be a second place the question is
     // answered, and the two would drift.
-    let exempt = exempt_gates(hot, &metadata.id).await;
-    let running: Vec<&Box<dyn crate::rules::Rule>> = rules
-        .iter()
-        .filter(|r| !exempt.iter().any(|e| e == r.name()))
-        .collect();
-
     let ctx = RuleContext {
         identity,
         package: metadata,
@@ -759,12 +760,49 @@ pub async fn authorize_read_against(
         cache_entry: None,
         requested_version: Some(&metadata.id.version),
     };
-    for rule in running {
-        if let RuleDecision::Deny { reason } = rule.evaluate(&ctx).await {
-            return Err(CoreError::AccessDenied(reason));
-        }
+    if let (RuleDecision::Deny { reason }, _) = evaluate_chain(hot, rules, &metadata.id, &ctx).await
+    {
+        return Err(CoreError::AccessDenied(reason));
     }
     Ok(())
+}
+
+/// Run `rules` in order and answer the first refusal an active exemption does
+/// not silence (RFC 0015 §4.5) — for every funnel that runs a chain: the local
+/// reads here, the proxy's downloads, the access simulator. Also answers which
+/// rule refused, for the simulator's trace.
+///
+/// The policy store is asked **only when an exemptible gate refuses**, and at
+/// most once: a served download costs no lookup, which matters because the
+/// `flags` gate sits in every chain an advisory store is wired for. An exempted
+/// gate has still been evaluated — the exemption silences its answer, not its
+/// work. The verdict gate (`verdict_gate`) is not on the list: it answers its
+/// own `security_verdict` exemption, serving the version `warned` with
+/// `ADMIN_OVERRIDE` rather than being dropped from the chain.
+pub async fn evaluate_chain<'r>(
+    hot: &HotConfigLock,
+    rules: impl IntoIterator<Item = &'r Box<dyn crate::rules::Rule>>,
+    id: &PackageId,
+    ctx: &RuleContext<'_>,
+) -> (RuleDecision, Option<String>) {
+    let mut exempt: Option<Vec<String>> = None;
+    for rule in rules {
+        let decision = rule.evaluate(ctx).await;
+        if !decision.is_deny() {
+            continue;
+        }
+        if crate::entities::EXEMPTIBLE_GATES.contains(&rule.name()) {
+            let silenced = match &exempt {
+                Some(gates) => gates,
+                None => exempt.insert(exempt_gates(hot, id).await),
+            };
+            if silenced.iter().any(|g| g == rule.name()) {
+                continue;
+            }
+        }
+        return (decision, Some(rule.name().to_owned()));
+    }
+    (RuleDecision::Allow, None)
 }
 
 /// The gates an active exemption silences for this coordinate (§4.5).
@@ -881,21 +919,20 @@ pub async fn authorize_unheld_read(
     // this" as "nobody is gated by this", and `version_gate`, `deny_latest` and
     // `trusted_publisher` all became no-ops on this path. Rules resolve against
     // `ctx.identity` themselves now, so there is no third verdict left to drop.
-    for rule in policy
+    let ctx = RuleContext {
+        identity,
+        package: &metadata,
+        action,
+        cache_entry: None,
+        requested_version: Some(&package_id.version),
+    };
+    let running = policy
         .rules
         .iter()
-        .filter(|r| !METADATA_DERIVED_RULES.contains(&r.name()))
+        .filter(|r| !METADATA_DERIVED_RULES.contains(&r.name()));
+    if let (RuleDecision::Deny { reason }, _) = evaluate_chain(hot, running, package_id, &ctx).await
     {
-        let ctx = RuleContext {
-            identity,
-            package: &metadata,
-            action,
-            cache_entry: None,
-            requested_version: Some(&package_id.version),
-        };
-        if let RuleDecision::Deny { reason } = rule.evaluate(&ctx).await {
-            return Err(CoreError::AccessDenied(reason));
-        }
+        return Err(CoreError::AccessDenied(reason));
     }
     Ok(())
 }

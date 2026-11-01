@@ -4977,3 +4977,49 @@ fn a_violation_window_past_the_counter_retention_refuses_to_start() {
     let err = cfg.validate().unwrap_err().to_string();
     assert!(err.contains("violation_window_secs"), "{err}");
 }
+
+#[test]
+fn rule_settings_a_security_registry_ignores_warn() {
+    let quiet = parse_config(&security_config(r#"        mode = "block""#, ""));
+    assert!(!warning_codes(&quiet).contains(&warnings::SECURITY_RULE_SETTINGS_IGNORED.to_owned()));
+
+    let cfg = parse_config(
+        r#"
+        [[registries]]
+        type = "npm"
+        name = "npm"
+
+        [registries.security]
+        mode = "block"
+
+        [[registries.rules]]
+        kind = "cve_gate"
+        min_severity = "critical"
+        bypass_roles = ["admin"]
+
+        [[registries.namespaces]]
+        match = "@acme"
+
+        [[registries.namespaces.rules]]
+        kind = "trusted_publisher"
+        allow = ["acme"]
+        "#,
+    );
+    let ignored: Vec<String> = cfg
+        .warnings()
+        .into_iter()
+        .filter(|w| w.code == warnings::SECURITY_RULE_SETTINGS_IGNORED)
+        .map(|w| w.message)
+        .collect();
+    for phrase in [
+        "cve_gate.block = false",
+        "cve_gate.min_severity = \"critical\"",
+        "cve_gate.bypass_roles",
+        "trusted_publisher override of namespace '@acme'",
+    ] {
+        assert!(
+            ignored.iter().any(|m| m.contains(phrase)),
+            "no warning names {phrase}: {ignored:?}"
+        );
+    }
+}
