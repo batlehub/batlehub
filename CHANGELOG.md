@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.8.2] - 2026-11-01
+
 ### Added
 
 - **Devfile registries in local and hybrid mode** (RFC 0039). A `devfile`
@@ -30,6 +32,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   runs and the one the gate runs are the same binary. Its `scan` and
   `timeline` JSON are unchanged, and it still flags the canary packages of all
   seven ecosystems as RFC 0018's spike recorded.
+- **November dependency round**: the Rust workspace, the console, the
+  documentation site, the fuzz targets and the CI actions move to their current
+  releases (#270).
 
 ## [1.8.1] - 2026-10-21
 
@@ -1729,7 +1734,8 @@ First stable release.
 
 ---
 
-[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.1...HEAD
+[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.2...HEAD
+[1.8.2]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.1...v1.8.2
 [1.8.1]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.0...v1.8.1
 [1.8.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.7.0...v1.8.0
 [1.7.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.6.0...v1.7.0
