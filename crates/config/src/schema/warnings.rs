@@ -149,6 +149,11 @@ pub const DEVFILE_WITHOUT_HOST: &str = "devfile.without-host";
 /// credential, so every read would be refused (RFC 0035 §4.5).
 pub const DEVFILE_NOT_ANONYMOUS: &str = "devfile.not-anonymous";
 
+/// A `local`/`hybrid` `devfile` registry reads anonymously but publishes
+/// non-public by default. Che sends no credential, so every published version
+/// would be missing from *Get Started* (RFC 0039 §4.6).
+pub const DEVFILE_PUBLISHED_NOT_PUBLIC: &str = "devfile.published-not-public";
+
 /// `[server.signed_urls]` is configured and no registry sets
 /// `signed_downloads = true`, so the secret signs nothing. Harmless, and worth
 /// saying: it is the shape of a feature enabled on the wrong side.

@@ -1838,6 +1838,20 @@ fn helm_publish_body() -> (Vec<u8>, &'static str) {
     (gz.finish().unwrap(), "application/octet-stream")
 }
 
+/// A devfile publish bundle (RFC 0039 §4.3): one `devfile.yaml` naming the
+/// coordinate, which the handler reads before the gate.
+fn devfile_publish_body() -> (Vec<u8>, &'static str) {
+    let devfile = b"schemaVersion: 2.2.0\nmetadata:\n  name: pkg\n  version: 9.8.7\n";
+    let mut tar = tar::Builder::new(Vec::new());
+    let mut header = tar::Header::new_ustar();
+    header.set_size(devfile.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    tar.append_data(&mut header, "devfile.yaml", devfile.as_slice())
+        .unwrap();
+    (tar.into_inner().unwrap(), "application/x-tar")
+}
+
 /// The `ansible-galaxy collection publish` envelope: `sha256` and `file`.
 ///
 /// A real collection tarball, because the publish handler reads `MANIFEST.json`
@@ -2027,6 +2041,23 @@ fn write_matrix() -> Vec<WriteRow> {
             "helm",
             Verb::Delete,
             "/proxy/reg/helm/api/charts/pkg/9.8.7",
+            empty_body,
+        )
+        .seeded(),
+        // ── devfile (RFC 0039) ───────────────────────────────────────────────
+        // The coordinate is inside `devfile.yaml`, read before the gate. The
+        // fixture is `local`, so the hybrid claim check never runs here; it has
+        // its own tests in `local_devfile_registry.rs`.
+        WriteRow::new(
+            "devfile",
+            Verb::Post,
+            "/proxy/reg/api/stacks",
+            devfile_publish_body,
+        ),
+        WriteRow::new(
+            "devfile",
+            Verb::Delete,
+            "/proxy/reg/api/stacks/pkg/9.8.7",
             empty_body,
         )
         .seeded(),
@@ -2436,6 +2467,9 @@ const WRITE_ROUTE_INVENTORY: &[(&str, &str, WriteCoverage)] = &[
     // ── helm ─────────────────────────────────────────────────────────────────
     ("POST", "/proxy/{registry}/helm/api/charts", WriteCoverage::Row),
     ("DELETE", "/proxy/{registry}/helm/api/charts/{name}/{version}", WriteCoverage::Row),
+    // ── devfile (RFC 0039) ───────────────────────────────────────────────────
+    ("POST", "/proxy/{registry}/api/stacks", WriteCoverage::Row),
+    ("DELETE", "/proxy/{registry}/api/stacks/{stack}/{version}", WriteCoverage::Row),
     // ── cargo ────────────────────────────────────────────────────────────────
     ("PUT", "/proxy/{registry}/api/v1/crates/new", WriteCoverage::Row),
     ("DELETE", "/proxy/{registry}/api/v1/crates/{name}/{version}/yank", WriteCoverage::Row),

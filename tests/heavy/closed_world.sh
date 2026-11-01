@@ -2213,6 +2213,31 @@ phase_devfile() {
   [[ "$got" == "$want" ]] \
     || heavy_fail "devfile: the devfile on disk ($got) is not the layer the manifest names ($want)"
   heavy_log "CLOSED-WORLD-DEVFILE-OK (the stack came from the instance: $got)"
+
+  # RFC 0039: a stack published to a `local` registry, then pulled with
+  # egress denied. Published through the real CLI, so the bundle is the one
+  # `batlehub publish` packs.
+  local stack="$dir/acme-go" lroot="http://devfile-local.localhost:$HEAVY_TAP_PORT/" bh
+  cargo build -p batlehub-cli >"$dir/cli-build.log" 2>&1 \
+    || { cat "$dir/cli-build.log" >&2; heavy_fail "devfile: batlehub-cli did not build"; }
+  bh="$HEAVY_ROOT/target/debug/batlehub-cli"
+  mkdir -p "$stack/kubernetes" "$dir/lctx"
+  printf 'schemaVersion: 2.2.0\nmetadata:\n  name: acme-go\n  version: 1.0.0\n' >"$stack/devfile.yaml"
+  printf 'kind: Deployment\n' >"$stack/kubernetes/deploy.yaml"
+  heavy_mark devfile-local
+  HOME="$dir/home" BATLEHUB_SERVER="$HEAVY_TAP_BASE" BATLEHUB_TOKEN="$ADMIN_TOKEN" \
+    "$bh" publish "$stack" --registry "devfile-local-$HEAVY_RUN" >"$out.publish" 2>&1 \
+    || { cat "$out.publish" >&2; heavy_fail "devfile: the publish to the local registry failed"; }
+  "${DENY[@]}" HOME="$dir/home" "$HEAVY_DEVFILE_CLIENT" pull "$lroot" acme-go:1.0.0 \
+    --all --new-index-schema --context "$dir/lctx" >"$out" 2>&1 || true
+  grep -q "Failed" "$out" && { cat "$out" >&2; heavy_fail "devfile: the local pull reported a failure"; }
+  cmp -s "$dir/lctx/devfile.yaml" "$stack/devfile.yaml" \
+    || { cat "$out" >&2; heavy_fail "devfile: the pulled devfile is not the published one"; }
+  [[ -s "$dir/lctx/kubernetes/deploy.yaml" ]] \
+    || heavy_fail "devfile: the published archive.tar was not unpacked"
+  heavy_wire_re_after devfile-local '^HEAD /v2/devfile-catalog/acme-go/manifests/1[.]0[.]0 -> 200' \
+    "devfile: the published manifest was not resolved through the instance"
+  heavy_log "CLOSED-WORLD-DEVFILE-LOCAL-OK (a published stack pulled with egress denied)"
 }
 
 for phase in "${WANTED[@]}"; do

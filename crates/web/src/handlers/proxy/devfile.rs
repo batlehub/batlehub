@@ -20,6 +20,14 @@
 //! the **host root**, dropping any path prefix, so those routes only work
 //! behind an RFC 0001 host binding; Che keeps the prefix (§5.3).
 //!
+//! **Local and hybrid mode** (RFC 0039) change the source behind a coordinate
+//! and nothing else. A stack with a local row — every stack, in `local` mode —
+//! is answered from the rows alone ([`Reader::local`]): its index entry is
+//! composed from what was published, its OCI objects are the stored manifest
+//! and the members of the stored bundle, and a version not held here is `404`
+//! with no upstream request. In `hybrid` the index is upstream's minus every
+//! stack named here, plus the local ones (`merge_hybrid`).
+//!
 //! Every route carries [`is_devfile`] as a guard, so it matches only on a
 //! devfile registry: without it the literal `index` route would take an npm
 //! package called `index` away from the npm packument route below it. The guard
@@ -28,31 +36,43 @@
 
 use std::sync::Arc;
 
-use actix_web::{get, guard::GuardContext, route, web, HttpRequest, HttpResponse, Responder};
+use std::collections::BTreeSet;
+
+use actix_web::{
+    delete, get, guard::GuardContext, post, route, web, HttpRequest, HttpResponse, Responder,
+};
+use bytes::Bytes;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
 
+use batlehub_config::schema::RegistryMode;
 use batlehub_core::{
     entities::{Action, PackageId},
     error::CoreError,
-    ports::DocumentKind,
+    ports::{DocumentBody, DocumentKind},
     services::devfile::{
-        default_version, find_stack, index_address, layer_artifact, self_link, starter_artifact,
-        validate_digest, validate_namespace, validate_stack, validate_starter, validate_version,
-        version_entry, versions_of, DEVFILE_TITLE, MANIFEST_ARTIFACT, MANIFEST_MEDIA_TYPE,
+        default_version, find_stack, index_address, layer_artifact, merge_hybrid, published_facts,
+        read_bundle, self_link, starter_artifact, starter_of, validate_digest, validate_namespace,
+        validate_stack, validate_starter, validate_version, version_entry, versions_of,
+        CONFIG_BLOB, DEVFILE_TITLE, MANIFEST_ARTIFACT, MANIFEST_MEDIA_TYPE,
     },
     services::{
-        authz::authorize_unpinned, blocking::best_latest, ProxyRequest, ProxyResponse, ProxyService,
+        authz::authorize_unpinned, blocking::best_latest, local_registry::PublishRequest,
+        LocalRegistryService, ProxyRequest, ProxyResponse, ProxyService,
     },
 };
 
 use super::common::{
-    attachment_disposition, collect_storage_stream, document_response, proxy_stream,
+    attachment_disposition, collect_payload, collect_storage_stream, document_response,
+    proxy_stream, publish_and_respond, require_local_mode,
 };
 use crate::handlers::schemas::{ArtifactBytes, ProtocolDocument, UpstreamDocument};
 use crate::middleware::extract_registry_from_path;
-use crate::{error::AppError, extractors::AuthIdentity, RegistryMap};
+use crate::{
+    error::AppError, extractors::AuthIdentity, services::NotificationService, RegistryMap,
+    RegistryModeMap,
+};
 
 const KIND: &str = "devfile";
 const API_VERSION: (&str, &str) = ("Docker-Distribution-Api-Version", "registry/2.0");
@@ -83,6 +103,148 @@ pub struct OciTagList {
     pub tags: Vec<String>,
 }
 
+/// `POST api/stacks` — what was stored.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DevfilePublished {
+    /// `metadata.name` of the devfile.
+    pub stack: String,
+    /// `metadata.version` of the devfile.
+    pub version: String,
+    /// The manifest digest a `HEAD` on the tag answers with, forever.
+    pub digest: String,
+}
+
+/// `DELETE api/stacks/{stack}/{version}`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DevfileDeleted {
+    pub deleted: bool,
+}
+
+/// The artifact sub-coordinate of a published version's config blob — the
+/// constant `{}`, never stored. Local only: the proxy path never names it.
+const CONFIG_ARTIFACT: &str = "config";
+
+/// Where one stack's versions are read from, decided once per request.
+struct Reader<'a> {
+    registry: &'a str,
+    identity: &'a AuthIdentity,
+    svc: &'a ProxyService,
+    local_svc: &'a LocalRegistryService,
+    /// The stack is answered from local rows only: always in `local` mode, and
+    /// in `hybrid` once any row of its name exists, visible to this caller or
+    /// not (RFC 0039 §4.5) — a stack hidden from a caller must not become the
+    /// public stack of its name for them.
+    local: bool,
+}
+
+impl<'a> Reader<'a> {
+    async fn new(
+        registry: &'a str,
+        stack: &str,
+        identity: &'a AuthIdentity,
+        svc: &'a ProxyService,
+        local_svc: &'a LocalRegistryService,
+        modes: &RegistryModeMap,
+    ) -> Result<Reader<'a>, AppError> {
+        let local = match modes.get(registry) {
+            RegistryMode::Proxy => false,
+            RegistryMode::Local => true,
+            // An invalid name is refused by the route's own validation next;
+            // it never becomes a row lookup.
+            RegistryMode::Hybrid => {
+                validate_stack(stack).is_ok()
+                    && local_svc
+                        .hosts(registry, stack)
+                        .await
+                        .map_err(AppError::from)?
+            }
+        };
+        Ok(Reader {
+            registry,
+            identity,
+            svc,
+            local_svc,
+            local,
+        })
+    }
+
+    /// The v2 index this stack is resolved through: the composed local one, or
+    /// upstream's with blocked versions removed.
+    async fn index(&self) -> Result<serde_json::Value, AppError> {
+        if !self.local {
+            return filtered_v2(self.registry, self.identity, self.svc).await;
+        }
+        self.svc
+            .authorize_listing(
+                &PackageId::new(self.registry, "v2index", "__index__"),
+                &self.identity.0,
+                Action::ReleasesList,
+            )
+            .await
+            .map_err(AppError::from)?;
+        Ok(self
+            .local_svc
+            .get_devfile_index(self.registry, "v2index", false, &self.identity.0)
+            .await
+            .map_err(AppError::from)?
+            .index)
+    }
+
+    /// The bytes of one object of a published version, through the local read
+    /// gates (rules, visibility, the block, prerelease access).
+    async fn local_object(&self, pkg: &PackageId) -> Result<Bytes, CoreError> {
+        let artifact = pkg.artifact.as_deref().unwrap_or_default();
+        let (registry, name, version) = (self.registry, &pkg.name, &pkg.version);
+        let (identity, net) = (&self.identity.0, &self.identity.1);
+        if artifact == MANIFEST_ARTIFACT || artifact == CONFIG_ARTIFACT {
+            let row = self
+                .local_svc
+                .authorize_artifact_read(
+                    registry,
+                    name,
+                    version,
+                    Action::ReleasesRead,
+                    identity,
+                    net,
+                )
+                .await?
+                .ok_or_else(|| {
+                    CoreError::NotFound(format!("{name} {version} is not published here"))
+                })?;
+            if artifact == CONFIG_ARTIFACT {
+                return Ok(Bytes::from_static(CONFIG_BLOB));
+            }
+            // The stored bytes, never re-serialised (RFC 0039 §7).
+            return row
+                .index_metadata
+                .pointer("/devfile/manifest")
+                .and_then(serde_json::Value::as_str)
+                .map(|m| Bytes::from(m.to_owned()))
+                .ok_or_else(|| {
+                    CoreError::Registry(format!("{name} {version} has no stored manifest"))
+                });
+        }
+        let stored = self
+            .local_svc
+            .get_artifact(registry, name, version, Action::ReleasesRead, identity, net)
+            .await?;
+        let bundle = read_bundle(&stored).map_err(|e| {
+            CoreError::Registry(format!(
+                "the stored bundle of {name} {version} does not read: {e}"
+            ))
+        })?;
+        match bundle.member(&stored, artifact) {
+            Some(member) => Ok(stored.slice_ref(member)),
+            None => Err(CoreError::NotFound(match starter_of(artifact) {
+                Some(starter) => format!(
+                    "{name} {version} was published without the zip of starter project                      '{starter}'"
+                ),
+                None => format!("{name} {version} has no {artifact}"),
+            })),
+        }
+    }
+}
+
 /// An OCI distribution error, the shape containerd reads (`errors[].code`).
 fn oci_error(status: actix_web::http::StatusCode, code: &str, message: &str) -> HttpResponse {
     HttpResponse::build(status)
@@ -108,25 +270,77 @@ fn proxy_request(pkg: PackageId, identity: &AuthIdentity, action: Action) -> Pro
     }
 }
 
-/// One index document, filtered.
+/// One index document: upstream's filtered, the composed local one, or in
+/// `hybrid` the two merged with a local stack owning its whole name.
 async fn serve_index(
     req: &HttpRequest,
     registry: &str,
     path: &str,
     identity: &AuthIdentity,
     svc: &ProxyService,
+    local_svc: &LocalRegistryService,
+    mode: RegistryMode,
 ) -> Result<HttpResponse, AppError> {
     let (address, kind) = index_address(path, req.query_string()).map_err(AppError::from)?;
-    let preq = proxy_request(
-        PackageId::new(registry, &address, "__index__"),
-        identity,
-        Action::ReleasesList,
-    );
-    let doc = svc
+    let legacy = kind == DocumentKind::LEGACY_INDEX;
+    let pkg = PackageId::new(registry, &address, "__index__");
+    if mode == RegistryMode::Local {
+        svc.authorize_listing(&pkg, &identity.0, Action::ReleasesList)
+            .await
+            .map_err(AppError::from)?;
+        let local = local_svc
+            .get_devfile_index(registry, &address, legacy, &identity.0)
+            .await
+            .map_err(AppError::from)?;
+        return Ok(HttpResponse::Ok().json(local.index));
+    }
+    let preq = proxy_request(pkg, identity, Action::ReleasesList);
+    let mut doc = svc
         .multi_package_document(&preq, kind, "")
         .await
         .map_err(AppError::from)?;
+    if mode == RegistryMode::Hybrid {
+        let local = local_svc
+            .get_devfile_index(registry, &address, legacy, &identity.0)
+            .await
+            .map_err(AppError::from)?;
+        if let DocumentBody::Json(upstream) = &mut doc.body {
+            let dropped = merge_hybrid(upstream, local.index, &local.hosted);
+            report_shadowed(registry, &address, &dropped);
+        }
+    }
     Ok(document_response(doc))
+}
+
+/// RFC 0039 §4.5's collision report: a stack published here that upstream
+/// also lists. Not refused — the local stack keeps its name — but said, once
+/// per name per process, and counted on a gauge an alert can read.
+///
+/// The gauge is set from the unfiltered documents only, so an `?arch=` query
+/// that happens to leave a stack out of upstream's half does not move it.
+fn report_shadowed(registry: &str, address: &str, dropped: &BTreeSet<String>) {
+    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    if !address.contains('?') {
+        metrics::gauge!(
+            "batlehub_devfile_shadowed_upstream_stacks",
+            "registry" => registry.to_owned()
+        )
+        .set(dropped.len() as f64);
+    }
+    let Ok(mut seen) = SEEN.get_or_init(Default::default).lock() else {
+        return;
+    };
+    for stack in dropped {
+        if seen.insert(format!("{registry}/{stack}")) {
+            tracing::warn!(
+                registry = %registry,
+                stack = %stack,
+                "devfile stack '{stack}' is published here and upstream lists one of the same \
+                 name; the local stack is served whole and upstream's is hidden"
+            );
+        }
+    }
 }
 
 /// The v2 index with blocked versions removed — the one place this handler
@@ -154,17 +368,16 @@ async fn filtered_v2(
 /// The version a REST request names, or the stack's default when it names none
 /// — checked against the filtered index, so a blocked version is not found.
 async fn resolve_version(
-    registry: &str,
+    r: &Reader<'_>,
     stack: &str,
     version: Option<&str>,
-    identity: &AuthIdentity,
-    svc: &ProxyService,
 ) -> Result<String, AppError> {
+    let (registry, identity, svc) = (r.registry, r.identity, r.svc);
     validate_stack(stack).map_err(AppError::from)?;
     if let Some(v) = version {
         validate_version(v).map_err(AppError::from)?;
     }
-    let index = filtered_v2(registry, identity, svc).await?;
+    let index = r.index().await?;
     let entry = find_stack(&index, stack)
         .ok_or_else(|| AppError::not_found(format!("stack '{stack}' is not in this registry")))?;
     let version = match version {
@@ -226,9 +439,12 @@ macro_rules! index_route {
             path: web::Path<String>,
             identity: AuthIdentity,
             svc: web::Data<Arc<ProxyService>>,
+            local_svc: web::Data<Arc<LocalRegistryService>>,
+            modes: web::Data<RegistryModeMap>,
         ) -> Result<impl Responder, AppError> {
             let registry = path.into_inner();
-            serve_index(&req, &registry, $doc, &identity, &svc).await
+            let mode = modes.get(&registry);
+            serve_index(&req, &registry, $doc, &identity, &svc, &local_svc, mode).await
         }
     };
 }
@@ -272,14 +488,26 @@ index_route!(
     "The v2 index of stacks and samples."
 );
 
-/// Serve one artifact of a resolved coordinate through the proxy funnel.
+/// Serve one artifact of a resolved coordinate: through the proxy funnel, or
+/// as a member of the stored bundle.
 async fn serve_artifact(
+    r: &Reader<'_>,
     svc: web::Data<Arc<ProxyService>>,
     pkg: PackageId,
-    identity: AuthIdentity,
     content_type: &'static str,
 ) -> Result<HttpResponse, AppError> {
-    proxy_stream(svc, pkg, identity, Action::ReleasesRead, Some(content_type)).await
+    if r.local {
+        let bytes = r.local_object(&pkg).await.map_err(AppError::from)?;
+        return Ok(HttpResponse::Ok().content_type(content_type).body(bytes));
+    }
+    proxy_stream(
+        svc,
+        pkg,
+        r.identity.clone(),
+        Action::ReleasesRead,
+        Some(content_type),
+    )
+    .await
 }
 
 /// A stack's devfile at its default version — the file Che's tile links to.
@@ -304,12 +532,15 @@ pub async fn devfile_stack(
     path: web::Path<(String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
+    modes: web::Data<RegistryModeMap>,
 ) -> Result<impl Responder, AppError> {
     let (registry, stack) = path.into_inner();
-    let version = resolve_version(&registry, &stack, None, &identity, &svc).await?;
+    let r = Reader::new(&registry, &stack, &identity, &svc, &local_svc, &modes).await?;
+    let version = resolve_version(&r, &stack, None).await?;
     let pkg =
         PackageId::new(&registry, &stack, &version).with_artifact(layer_artifact(DEVFILE_TITLE));
-    serve_artifact(svc, pkg, identity, TEXT).await
+    serve_artifact(&r, svc.clone(), pkg, TEXT).await
 }
 
 /// One version's devfile.
@@ -335,13 +566,23 @@ pub async fn devfile_version(
     path: web::Path<(String, String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
+    modes: web::Data<RegistryModeMap>,
 ) -> Result<impl Responder, AppError> {
     let (registry, stack, version) = path.into_inner();
-    let version = resolve_version(&registry, &stack, Some(&version), &identity, &svc).await?;
+    let r = Reader::new(&registry, &stack, &identity, &svc, &local_svc, &modes).await?;
+    let version = resolve_version(&r, &stack, Some(&version)).await?;
     let pkg =
         PackageId::new(&registry, &stack, &version).with_artifact(layer_artifact(DEVFILE_TITLE));
-    serve_artifact(svc, pkg, identity, TEXT).await
+    serve_artifact(&r, svc.clone(), pkg, TEXT).await
 }
+
+/// The extractors every stack route takes beyond its path.
+type Services = (
+    web::Data<Arc<ProxyService>>,
+    web::Data<Arc<LocalRegistryService>>,
+    web::Data<RegistryModeMap>,
+);
 
 async fn serve_starter(
     registry: String,
@@ -349,12 +590,13 @@ async fn serve_starter(
     version: Option<String>,
     name: String,
     identity: AuthIdentity,
-    svc: web::Data<Arc<ProxyService>>,
+    (svc, local_svc, modes): Services,
 ) -> Result<HttpResponse, AppError> {
     validate_starter(&name).map_err(AppError::from)?;
-    let version = resolve_version(&registry, &stack, version.as_deref(), &identity, &svc).await?;
+    let r = Reader::new(&registry, &stack, &identity, &svc, &local_svc, &modes).await?;
+    let version = resolve_version(&r, &stack, version.as_deref()).await?;
     let pkg = PackageId::new(&registry, &stack, &version).with_artifact(starter_artifact(&name));
-    let mut resp = serve_artifact(svc, pkg, identity, "application/zip").await?;
+    let mut resp = serve_artifact(&r, svc.clone(), pkg, "application/zip").await?;
     resp.headers_mut().insert(
         actix_web::http::header::CONTENT_DISPOSITION,
         attachment_disposition(&format!("{name}.zip"))?,
@@ -389,9 +631,19 @@ pub async fn devfile_starter(
     path: web::Path<(String, String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
+    modes: web::Data<RegistryModeMap>,
 ) -> Result<impl Responder, AppError> {
     let (registry, stack, name) = path.into_inner();
-    serve_starter(registry, stack, None, name, identity, svc).await
+    serve_starter(
+        registry,
+        stack,
+        None,
+        name,
+        identity,
+        (svc, local_svc, modes),
+    )
+    .await
 }
 
 /// A starter project of one version.
@@ -421,9 +673,19 @@ pub async fn devfile_version_starter(
     path: web::Path<(String, String, String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
+    modes: web::Data<RegistryModeMap>,
 ) -> Result<impl Responder, AppError> {
     let (registry, stack, version, name) = path.into_inner();
-    serve_starter(registry, stack, Some(version), name, identity, svc).await
+    serve_starter(
+        registry,
+        stack,
+        Some(version),
+        name,
+        identity,
+        (svc, local_svc, modes),
+    )
+    .await
 }
 
 /// The OCI API version check. `registry-library` does not send it; other OCI
@@ -449,11 +711,9 @@ pub async fn devfile_oci_ping() -> impl Responder {
 /// The stack's entry in the filtered index, checked against the namespace the
 /// request names — the index's `links.self` is the only source of it.
 async fn oci_stack(
-    registry: &str,
+    r: &Reader<'_>,
     ns: &str,
     stack: &str,
-    identity: &AuthIdentity,
-    svc: &ProxyService,
 ) -> Result<Result<Vec<(String, String)>, HttpResponse>, AppError> {
     if validate_namespace(ns).is_err() || validate_stack(stack).is_err() {
         return Ok(Err(oci_not_found(
@@ -461,7 +721,7 @@ async fn oci_stack(
             format!("'{ns}/{stack}' is not a repository name"),
         )));
     }
-    let index = filtered_v2(registry, identity, svc).await?;
+    let index = r.index().await?;
     let Some(entry) = find_stack(&index, stack) else {
         return Ok(Err(oci_not_found(
             "NAME_UNKNOWN",
@@ -490,26 +750,42 @@ async fn oci_stack(
 /// The manifest-by-digest or blob-by-digest lookup: which allowed version of
 /// the stack names this digest, and as which artifact.
 async fn artifact_for_digest(
-    registry: &str,
+    r: &Reader<'_>,
     stack: &str,
     tags: &[(String, String)],
     digest: &str,
     want_manifest: bool,
-    identity: &AuthIdentity,
-    svc: &ProxyService,
 ) -> Option<(String, String)> {
     for (version, _) in tags {
-        let preq = proxy_request(
-            PackageId::new(registry, stack, version).with_artifact(MANIFEST_ARTIFACT),
-            identity,
-            Action::ReleasesRead,
-        );
-        let Ok(meta) = svc.resolve_metadata_uncaptured_for(&preq).await else {
-            continue;
+        // The same facts either way: `extra.devfile` on a proxied version,
+        // `index_metadata.devfile` on a published one.
+        let facts = if r.local {
+            let Some(row) = r
+                .local_svc
+                .get_version_meta(r.registry, stack, version)
+                .await
+            else {
+                continue;
+            };
+            if !want_manifest
+                && digest == format!("sha256:{}", hex::encode(Sha256::digest(CONFIG_BLOB)))
+            {
+                return Some((version.clone(), CONFIG_ARTIFACT.to_owned()));
+            }
+            row.index_metadata
+        } else {
+            let preq = proxy_request(
+                PackageId::new(r.registry, stack, version).with_artifact(MANIFEST_ARTIFACT),
+                r.identity,
+                Action::ReleasesRead,
+            );
+            let Ok(meta) = r.svc.resolve_metadata_uncaptured_for(&preq).await else {
+                continue;
+            };
+            meta.extra
         };
         if want_manifest {
-            if meta
-                .extra
+            if facts
                 .pointer("/devfile/manifestDigest")
                 .and_then(|d| d.as_str())
                 == Some(digest)
@@ -518,10 +794,7 @@ async fn artifact_for_digest(
             }
             continue;
         }
-        let layers = meta
-            .extra
-            .pointer("/devfile/layers")
-            .and_then(|l| l.as_array());
+        let layers = facts.pointer("/devfile/layers").and_then(|l| l.as_array());
         for layer in layers.into_iter().flatten() {
             if layer.get("digest").and_then(|d| d.as_str()) == Some(digest) {
                 if let Some(title) = layer.get("title").and_then(|t| t.as_str()) {
@@ -537,12 +810,33 @@ async fn artifact_for_digest(
 /// digest and length a `HEAD` must carry. A refused coordinate is the OCI
 /// `code` the client understands, with the reason as its message.
 async fn serve_oci(
+    r: &Reader<'_>,
     svc: &web::Data<Arc<ProxyService>>,
     pkg: PackageId,
-    identity: &AuthIdentity,
     unknown_code: &str,
     content_type: &str,
 ) -> Result<HttpResponse, AppError> {
+    let identity = r.identity;
+    if r.local {
+        let body = match r.local_object(&pkg).await {
+            Ok(b) => b,
+            Err(CoreError::NotFound(m) | CoreError::NotFoundWithheld(m)) => {
+                return Ok(oci_not_found(unknown_code, m))
+            }
+            Err(CoreError::AccessDenied(m)) => {
+                return Ok(oci_error(
+                    actix_web::http::StatusCode::FORBIDDEN,
+                    "DENIED",
+                    &m,
+                ))
+            }
+            Err(e) => return Err(AppError::from(e)),
+        };
+        // No identity headers: they name a proxy cache key, which is what a
+        // bundle export reads, and a published version is not exported
+        // (RFC 0039 §6.7).
+        return Ok(oci_body(HttpResponse::Ok(), content_type, body));
+    }
     let coordinate = pkg.clone();
     let response = svc
         .handle(proxy_request(pkg, identity, Action::ReleasesRead))
@@ -580,19 +874,29 @@ async fn serve_oci(
         _ => return Err(AppError::internal("unexpected response for an OCI object")),
     };
     let body = collect_storage_stream(stream).await?;
-    let digest = format!("sha256:{}", hex::encode(Sha256::digest(&body)));
     let mut builder = HttpResponse::Ok();
     // The key, package and version these bytes are filed under — what a
     // bundle export reads back, rather than guessing a key from the route.
     for header in super::common::served_identity(&coordinate) {
         builder.insert_header(header);
     }
-    Ok(builder
+    Ok(oci_body(builder, content_type, body))
+}
+
+/// An OCI object, byte-exact, with the digest a `HEAD` must carry.
+fn oci_body(
+    mut builder: actix_web::HttpResponseBuilder,
+    content_type: &str,
+    body: impl Into<Bytes>,
+) -> HttpResponse {
+    let body = body.into();
+    let digest = format!("sha256:{}", hex::encode(Sha256::digest(&body)));
+    builder
         .content_type(content_type)
         .insert_header(API_VERSION)
         .insert_header(("Docker-Content-Digest", digest.clone()))
         .insert_header(("ETag", format!("\"{digest}\"")))
-        .body(body))
+        .body(body)
 }
 
 /// A stack version's OCI manifest, by tag or by digest — the chokepoint every
@@ -624,9 +928,12 @@ pub async fn devfile_oci_manifest(
     path: web::Path<(String, String, String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
+    modes: web::Data<RegistryModeMap>,
 ) -> Result<impl Responder, AppError> {
     let (registry, ns, stack, reference) = path.into_inner();
-    let tags = match oci_stack(&registry, &ns, &stack, &identity, &svc).await? {
+    let r = Reader::new(&registry, &stack, &identity, &svc, &local_svc, &modes).await?;
+    let tags = match oci_stack(&r, &ns, &stack).await? {
         Ok(t) => t,
         Err(resp) => return Ok(resp),
     };
@@ -637,8 +944,7 @@ pub async fn devfile_oci_manifest(
                 format!("'{reference}' is not a digest"),
             ));
         }
-        match artifact_for_digest(&registry, &stack, &tags, &reference, true, &identity, &svc).await
-        {
+        match artifact_for_digest(&r, &stack, &tags, &reference, true).await {
             Some((version, _)) => version,
             None => {
                 return Ok(oci_not_found(
@@ -659,14 +965,7 @@ pub async fn devfile_oci_manifest(
         }
     };
     let pkg = PackageId::new(&registry, &stack, &version).with_artifact(MANIFEST_ARTIFACT);
-    serve_oci(
-        &svc,
-        pkg,
-        &identity,
-        "MANIFEST_UNKNOWN",
-        MANIFEST_MEDIA_TYPE,
-    )
-    .await
+    serve_oci(&r, &svc, pkg, "MANIFEST_UNKNOWN", MANIFEST_MEDIA_TYPE).await
 }
 
 /// One layer of a stack version, by digest — served only when an allowed
@@ -698,6 +997,8 @@ pub async fn devfile_oci_blob(
     path: web::Path<(String, String, String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
+    modes: web::Data<RegistryModeMap>,
 ) -> Result<impl Responder, AppError> {
     let (registry, ns, stack, digest) = path.into_inner();
     if validate_digest(&digest).is_err() {
@@ -706,12 +1007,12 @@ pub async fn devfile_oci_blob(
             format!("'{digest}' is not a digest"),
         ));
     }
-    let tags = match oci_stack(&registry, &ns, &stack, &identity, &svc).await? {
+    let r = Reader::new(&registry, &stack, &identity, &svc, &local_svc, &modes).await?;
+    let tags = match oci_stack(&r, &ns, &stack).await? {
         Ok(t) => t,
         Err(resp) => return Ok(resp),
     };
-    let Some((version, artifact)) =
-        artifact_for_digest(&registry, &stack, &tags, &digest, false, &identity, &svc).await
+    let Some((version, artifact)) = artifact_for_digest(&r, &stack, &tags, &digest, false).await
     else {
         return Ok(oci_not_found(
             "BLOB_UNKNOWN",
@@ -719,14 +1020,7 @@ pub async fn devfile_oci_blob(
         ));
     };
     let pkg = PackageId::new(&registry, &stack, &version).with_artifact(artifact);
-    serve_oci(
-        &svc,
-        pkg,
-        &identity,
-        "BLOB_UNKNOWN",
-        "application/octet-stream",
-    )
-    .await
+    serve_oci(&r, &svc, pkg, "BLOB_UNKNOWN", "application/octet-stream").await
 }
 
 /// The tags of a stack — the versions the filtered index lists.
@@ -751,9 +1045,12 @@ pub async fn devfile_oci_tags(
     path: web::Path<(String, String, String)>,
     identity: AuthIdentity,
     svc: web::Data<Arc<ProxyService>>,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
+    modes: web::Data<RegistryModeMap>,
 ) -> Result<impl Responder, AppError> {
     let (registry, ns, stack) = path.into_inner();
-    let tags = match oci_stack(&registry, &ns, &stack, &identity, &svc).await? {
+    let r = Reader::new(&registry, &stack, &identity, &svc, &local_svc, &modes).await?;
+    let tags = match oci_stack(&r, &ns, &stack).await? {
         Ok(t) => t,
         Err(resp) => return Ok(resp),
     };
@@ -763,4 +1060,173 @@ pub async fn devfile_oci_tags(
             name: format!("{ns}/{stack}"),
             tags: tags.into_iter().map(|(_, tag)| tag).collect(),
         }))
+}
+
+/// RFC 0039 §4.5: the first publish of a name upstream lists needs
+/// `devfile:stack:claim`, and an undecidable answer refuses rather than lets
+/// through — a cold cache with upstream down is exactly a squat's window.
+async fn check_claim(
+    registry: &str,
+    stack: &str,
+    identity: &AuthIdentity,
+    svc: &ProxyService,
+    local_svc: &LocalRegistryService,
+) -> Result<(), AppError> {
+    if local_svc
+        .holds_devfile_claim(registry, stack, &identity.0)
+        .await
+        .map_err(AppError::from)?
+    {
+        return Ok(());
+    }
+    let preq = proxy_request(
+        PackageId::new(registry, "v2index", "__index__"),
+        identity,
+        Action::ReleasesList,
+    );
+    let index = match svc
+        .multi_package_document(&preq, DocumentKind::Versions, "")
+        .await
+    {
+        Ok(doc) => doc.body.as_json().cloned(),
+        Err(e @ CoreError::AccessDenied(_)) => return Err(AppError::from(e)),
+        Err(_) => None,
+    };
+    let Some(index) = index else {
+        return Err(AppError::service_unavailable(format!(
+            "cannot decide whether upstream lists a stack named '{stack}': its index is \
+             unreachable and none is cached. Publishing a name upstream lists needs \
+             'devfile:stack:claim', so this publish is refused until the index can be read"
+        )));
+    };
+    if find_stack(&index, stack).is_some() {
+        return Err(AppError::forbidden(format!(
+            "upstream lists a stack named '{stack}'; publishing it here replaces upstream's \
+             whole stack for every user of this registry, which needs 'devfile:stack:claim'"
+        )));
+    }
+    Ok(())
+}
+
+/// Publish one stack version — the bundle `batlehub publish` packs from a stack directory (RFC 0039 §4.3).
+#[utoipa::path(
+    post,
+    path = "/proxy/{registry}/api/stacks",
+    tag = "proxy/devfile",
+    params(("registry" = String, Path, description = "Registry name")),
+    request_body(content = String, description = "An uncompressed tar of devfile.yaml, an optional archive.tar and optional starter-projects/{name}.zip", content_type = "application/x-tar"),
+    responses(
+        (status = 201, description = "Stored; the digest is the manifest's", body = DevfilePublished),
+        (status = 400, description = "A member that is not one of the three, or a devfile with no valid metadata.name and metadata.version"),
+        (status = 403, description = "Access denied, or a first publish of a name upstream lists without devfile:stack:claim"),
+        (status = 404, description = "Unknown registry, or mode = proxy"),
+        (status = 409, description = "That version is already published"),
+        (status = 503, description = "Whether upstream lists the name could not be decided"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[post("/proxy/{registry}/api/stacks", guard = "is_devfile")]
+pub async fn devfile_publish(
+    path: web::Path<String>,
+    payload: web::Payload,
+    identity: AuthIdentity,
+    svc: web::Data<Arc<ProxyService>>,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
+    notifications: web::Data<Option<Arc<NotificationService>>>,
+    modes: web::Data<RegistryModeMap>,
+) -> Result<impl Responder, AppError> {
+    let registry = path.into_inner();
+    require_local_mode(&registry, &modes)?;
+    let body = collect_payload(payload).await?;
+    // The tar walk and the devfile read are CPU work over an upload, so off
+    // the worker thread. Name and version come from inside the devfile and
+    // are validated there before either reaches a storage key.
+    let bytes = body.clone();
+    let (bundle, index_metadata) = web::block(move || {
+        read_bundle(&bytes).map(|b| {
+            let facts = published_facts(&b, &bytes);
+            (b, facts)
+        })
+    })
+    .await
+    .map_err(|e| AppError::internal(format!("reading the devfile bundle: {e}")))?
+    .map_err(AppError::from)?;
+    if modes.get(&registry) == RegistryMode::Hybrid
+        && !local_svc
+            .hosts(&registry, &bundle.name)
+            .await
+            .map_err(AppError::from)?
+    {
+        check_claim(&registry, &bundle.name, &identity, &svc, &local_svc).await?;
+    }
+    let digest = index_metadata
+        .pointer("/devfile/manifestDigest")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let publish = PublishRequest {
+        registry,
+        name: bundle.name.clone(),
+        version: bundle.version.clone(),
+        checksum: hex::encode(Sha256::digest(&body)),
+        artifact: body,
+        index_metadata,
+        unlisted: false,
+        publisher: identity.0.clone(),
+        signature_type: None,
+        signature_bytes: None,
+    };
+    publish_and_respond(
+        &local_svc,
+        &notifications,
+        publish,
+        actix_web::http::StatusCode::CREATED,
+        DevfilePublished {
+            stack: bundle.name,
+            version: bundle.version,
+            digest,
+        },
+    )
+    .await
+}
+
+/// Delete a published stack version (`releases:delete`); deleting the last one releases the name.
+#[utoipa::path(
+    delete,
+    path = "/proxy/{registry}/api/stacks/{stack}/{version}",
+    tag = "proxy/devfile",
+    params(
+        ("registry" = String, Path, description = "Registry name"),
+        ("stack" = String, Path, description = "Stack name"),
+        ("version" = String, Path, description = "Stack version"),
+    ),
+    responses(
+        (status = 200, description = "Deleted", body = DevfileDeleted),
+        (status = 400, description = "Not a stack name or version"),
+        (status = 403, description = "Access denied"),
+        (status = 404, description = "Not published here, unknown registry, or mode = proxy"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[delete("/proxy/{registry}/api/stacks/{stack}/{version}", guard = "is_devfile")]
+pub async fn devfile_delete(
+    path: web::Path<(String, String, String)>,
+    identity: AuthIdentity,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
+    modes: web::Data<RegistryModeMap>,
+) -> Result<impl Responder, AppError> {
+    let (registry, stack, version) = path.into_inner();
+    require_local_mode(&registry, &modes)?;
+    validate_stack(&stack).map_err(AppError::from)?;
+    validate_version(&version).map_err(AppError::from)?;
+    if !local_svc
+        .delete_version(&registry, &stack, &version, &identity.0)
+        .await
+        .map_err(AppError::from)?
+    {
+        return Err(AppError::not_found(format!(
+            "{stack} {version} is not published here"
+        )));
+    }
+    Ok(HttpResponse::Ok().json(DevfileDeleted { deleted: true }))
 }

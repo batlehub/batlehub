@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Devfile registries in local and hybrid mode** (RFC 0039). A `devfile`
+  registry can now host stacks of its own: `batlehub publish <stack dir>` packs
+  a directory laid out as `registry-support` lays one out into a bundle and
+  uploads it to `POST /proxy/{registry}/api/stacks`; the server derives the
+  index entry and the OCI objects `registry-library` pulls from it once, at
+  publish, so the manifest digest the publish answers with never changes. In
+  `hybrid` a published stack owns its whole name — upstream's entries for it
+  leave both indexes and none of its objects is fetched — and the first
+  publish of a name upstream lists needs the new `devfile:stack:claim`
+  permission, refused with a `503` when upstream cannot be asked. A name
+  upstream starts listing later is logged once and counted on
+  `batlehub_devfile_shadowed_upstream_stacks`.
+
 ## [1.8.1] - 2026-10-21
 
 ### Security

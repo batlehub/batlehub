@@ -97,7 +97,7 @@ own:
 | `tombstones:read` | read tombstones, and compact their detail |
 | `packages:read` | the administrative package list |
 
-Four are **ecosystem-scoped** and only grantable on the registry types that
+Five are **ecosystem-scoped** and only grantable on the registry types that
 define them:
 
 | Verb | Registry type | What it authorises |
@@ -105,10 +105,11 @@ define them:
 | `openvsx:namespace:claim` | `openvsx` | claim a publisher namespace |
 | `terraform:signing-keys:write` | `terraform` | register the GPG key a namespace's providers are signed with |
 | `jetbrains:channel:assign` | `jetbrains-marketplace` | move a published build between release channels |
+| `devfile:stack:claim` | `devfile` | in `hybrid` mode, publish the first version of a stack name upstream also lists — which replaces upstream's stack for every user ([RFC 0039](/rfc/0039-devfile-local-mode) §4.5) |
 | `npm:dist-tags:write` | `npm` | *reserved* — dist-tags are derived here, so nothing requests it ([RFC 0015](/rfc/0015-grants-on-the-resource-hierarchy) §4.2 has the argument) |
 
 ::: tip The list above is the whole vocabulary
-All 35 verbs, checked against the enum by a test rather than maintained by hand
+All 41 verbs, checked against the enum by a test rather than maintained by hand
 — an earlier version of this table listed three verbs that did not exist, and
 copying one into a config file failed the server at startup.
 :::

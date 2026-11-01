@@ -300,18 +300,19 @@ pub fn render_registry(
             VersionDocument::text("text/x-nix-narinfo", nix_narinfo(name, held)?)
         }
         (RegistryKind::Devfile, "versions" | "legacy-index") => {
-            use crate::services::devfile::{compose_index, find_stack, is_index_address};
+            use crate::services::devfile::{compose_index, find_stack, is_index_address, Source};
             let held = devfile_held(held);
             if is_index_address(name) {
                 VersionDocument::json(compose_index(
                     name,
                     doc_kind.as_str() == "legacy-index",
                     &held,
+                    Source::Held,
                 ))
             } else {
                 // The console's discovery read names one stack, and the
                 // adapter answers it with that stack's v2 entry alone.
-                let index = compose_index("v2index", false, &held);
+                let index = compose_index("v2index", false, &held, Source::Held);
                 VersionDocument::json(find_stack(&index, name)?.clone())
             }
         }

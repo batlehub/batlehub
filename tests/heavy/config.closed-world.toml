@@ -435,3 +435,16 @@ hosts = ["devfile.localhost"]
 anonymous = ["releases:read", "releases:list"]
 user = ["releases:read", "releases:list"]
 admin = ["*"]
+
+# RFC 0039: a `local` devfile registry, the stack published in-phase and then
+# pulled with egress denied — a local stack needs nothing outside the instance.
+[[registries]]
+type = "devfile"
+name = "devfile-local-${HEAVY_RUN}"
+mode = "local"
+hosts = ["devfile-local.localhost"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list"]
+admin = ["*"]

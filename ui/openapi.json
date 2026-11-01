@@ -9147,6 +9147,133 @@
         ]
       }
     },
+    "/proxy/{registry}/api/stacks": {
+      "post": {
+        "tags": [
+          "proxy/devfile"
+        ],
+        "summary": "Publish one stack version — the bundle `batlehub publish` packs from a stack directory (RFC 0039 §4.3).",
+        "operationId": "devfile_publish",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "An uncompressed tar of devfile.yaml, an optional archive.tar and optional starter-projects/{name}.zip",
+          "content": {
+            "application/x-tar": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Stored; the digest is the manifest's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevfilePublished"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A member that is not one of the three, or a devfile with no valid metadata.name and metadata.version"
+          },
+          "403": {
+            "description": "Access denied, or a first publish of a name upstream lists without devfile:stack:claim"
+          },
+          "404": {
+            "description": "Unknown registry, or mode = proxy"
+          },
+          "409": {
+            "description": "That version is already published"
+          },
+          "503": {
+            "description": "Whether upstream lists the name could not be decided"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/proxy/{registry}/api/stacks/{stack}/{version}": {
+      "delete": {
+        "tags": [
+          "proxy/devfile"
+        ],
+        "summary": "Delete a published stack version (`releases:delete`); deleting the last one releases the name.",
+        "operationId": "devfile_delete",
+        "parameters": [
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Registry name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "stack",
+            "in": "path",
+            "description": "Stack name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "Stack version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevfileDeleted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a stack name or version"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "404": {
+            "description": "Not published here, unknown registry, or mode = proxy"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/proxy/{registry}/api/updates/upload": {
       "post": {
         "tags": [
@@ -23209,6 +23336,41 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "DevfileDeleted": {
+        "type": "object",
+        "description": "`DELETE api/stacks/{stack}/{version}`.",
+        "required": [
+          "deleted"
+        ],
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DevfilePublished": {
+        "type": "object",
+        "description": "`POST api/stacks` — what was stored.",
+        "required": [
+          "stack",
+          "version",
+          "digest"
+        ],
+        "properties": {
+          "digest": {
+            "type": "string",
+            "description": "The manifest digest a `HEAD` on the tag answers with, forever."
+          },
+          "stack": {
+            "type": "string",
+            "description": "`metadata.name` of the devfile."
+          },
+          "version": {
+            "type": "string",
+            "description": "`metadata.version` of the devfile."
           }
         }
       },

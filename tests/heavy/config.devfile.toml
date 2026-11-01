@@ -23,6 +23,13 @@ value = "heavy-admin-token"
 role = "admin"
 user_id = "ci-admin"
 
+# `role:user` holds `releases:publish` on a local or hybrid registry and not
+# `devfile:stack:claim` (RFC 0039 §4.5) — the publisher the claim refuses.
+[[auth.tokens]]
+value = "heavy-user-token"
+role = "user"
+user_id = "ci-user"
+
 [storage]
 type = "filesystem"
 path = "./tmp/heavy-devfile-storage"
@@ -40,6 +47,34 @@ hosts = ["devfile.localhost"]
 
 [registries.rbac]
 # Neither client sends a credential (RFC 0035 §5.1).
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list"]
+admin = ["*"]
+
+# ── Hybrid registry: published stacks beside registry.devfile.io (RFC 0039) ──
+[[registries]]
+type = "devfile"
+name = "devfile-local-${HEAVY_RUN}"
+mode = "hybrid"
+upstreams = ["https://registry.devfile.io"]
+hosts = ["devfile-local.localhost"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list"]
+user = ["releases:read", "releases:list"]
+admin = ["*"]
+
+# ── Hybrid registry whose upstream never answers: the claim is undecidable ──
+# Port 9 (discard) on loopback refuses the connection, so the upstream index is
+# never cached and a first publish by a caller without the claim must be 503.
+[[registries]]
+type = "devfile"
+name = "devfile-dark-${HEAVY_RUN}"
+mode = "hybrid"
+upstreams = ["http://127.0.0.1:9"]
+hosts = ["devfile-dark.localhost"]
+
+[registries.rbac]
 anonymous = ["releases:read", "releases:list"]
 user = ["releases:read", "releases:list"]
 admin = ["*"]
