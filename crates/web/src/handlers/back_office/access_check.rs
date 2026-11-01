@@ -9,7 +9,7 @@ use batlehub_core::{
         resolve, Action, ActionParseError, Identity, PackageId, PackageMetadata, Role, Subject,
     },
     ports::{IpBlockStore, UserBlockRepository},
-    rules::{Rule, RuleContext, RuleDecision},
+    rules::{RuleContext, RuleDecision},
     services::ProxyService,
 };
 
@@ -135,7 +135,9 @@ pub async fn admin_access_check(
 
     let policy = {
         let hot = proxy_svc.hot.read().await;
-        hot.policies.get(body.registry.as_str()).cloned()
+        // The chain the package is judged by, namespace overrides included —
+        // the same selection a real download makes.
+        batlehub_core::services::authz::policy_in(&hot, &body.registry, &body.package_name)
     };
 
     let policy = policy.ok_or_else(|| AppError::not_found("registry not configured"))?;
@@ -250,7 +252,15 @@ pub async fn admin_access_check(
         requested_version: Some(&body.version),
     };
 
-    let (decision, rule_matched) = evaluate_and_trace(&policy.rules, &ctx).await;
+    // The real chain's own evaluation — gate exemptions included — so the
+    // simulator cannot answer differently from the download it simulates.
+    let (decision, rule_matched) = batlehub_core::services::authz::evaluate_chain(
+        &proxy_svc.hot,
+        &policy.rules,
+        &metadata.id,
+        &ctx,
+    )
+    .await;
 
     let response = match decision {
         RuleDecision::Allow => AccessSimulationResponse {
@@ -270,18 +280,4 @@ pub async fn admin_access_check(
     };
 
     Ok(web::Json(response))
-}
-
-/// Run rules in order, returning the first deny and the name of the rule that caused it.
-async fn evaluate_and_trace(
-    rules: &[Box<dyn Rule>],
-    ctx: &RuleContext<'_>,
-) -> (RuleDecision, Option<String>) {
-    for rule in rules {
-        let decision = rule.evaluate(ctx).await;
-        if decision.is_deny() {
-            return (decision, Some(rule.name().to_owned()));
-        }
-    }
-    (RuleDecision::Allow, None)
 }

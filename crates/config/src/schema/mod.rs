@@ -3840,6 +3840,18 @@ impl AppConfig {
                     ));
                 }
             }
+            for ignored in Self::rule_settings_the_verdict_ignores(registry) {
+                out.push(ConfigWarning::new(
+                    warnings::SECURITY_RULE_SETTINGS_IGNORED,
+                    path.clone(),
+                    format!(
+                        "registry '{}' has [registries.security], so {ignored}: the gate runs \
+                         as a scanner whose finding is judged by security.max_severity and \
+                         security.mode, with no bypass role",
+                        registry.name
+                    ),
+                ));
+            }
             let Ok(kind) = registry
                 .registry_type
                 .parse::<batlehub_core::entities::RegistryKind>()
@@ -3862,6 +3874,61 @@ impl AppConfig {
                 ));
             }
         }
+    }
+
+    /// What a `[security]` registry's rule blocks say that the verdict never
+    /// reads, one phrase each (RFC 0018 §4.1): the four gates it runs as
+    /// internal scanners keep only their matching settings, and a namespace's
+    /// override of one is not built at all.
+    fn rule_settings_the_verdict_ignores(registry: &RegistryConfig) -> Vec<String> {
+        let mut out = Vec::new();
+        for rule in &registry.rules {
+            let (gate, bypass) = match rule {
+                RuleConfig::CveGate(c) => {
+                    if !c.block {
+                        out.push("cve_gate.block = false does not make it warn-only".to_owned());
+                    }
+                    if c.min_severity != "high" {
+                        out.push(format!(
+                            "cve_gate.min_severity = \"{}\" is not the threshold",
+                            c.min_severity
+                        ));
+                    }
+                    ("cve_gate", &c.bypass_roles)
+                }
+                RuleConfig::LicenseGate(c) => {
+                    if !c.block {
+                        out.push(
+                            "license_gate.block = false does not make it warn-only".to_owned(),
+                        );
+                    }
+                    ("license_gate", &c.bypass_roles)
+                }
+                RuleConfig::RequireSignedRelease(c) => ("require_signed_release", &c.bypass_roles),
+                RuleConfig::TrustedPublisher(c) => ("trusted_publisher", &c.bypass_roles),
+                _ => continue,
+            };
+            if !bypass.is_empty() {
+                out.push(format!("{gate}.bypass_roles bypasses nothing"));
+            }
+        }
+        for ns in &registry.namespaces {
+            for rule in ns.rules.iter().flatten() {
+                let gate = match rule {
+                    RuleConfig::CveGate(_) => "cve_gate",
+                    RuleConfig::LicenseGate(_) => "license_gate",
+                    RuleConfig::RequireSignedRelease(_) => "require_signed_release",
+                    RuleConfig::TrustedPublisher(_) => "trusted_publisher",
+                    _ => continue,
+                };
+                out.push(format!(
+                    "the {gate} override of namespace '{}' is not applied — the registry's own \
+                     {gate} judges every package",
+                    ns.match_prefix
+                ));
+            }
+        }
+        out
     }
 
     /// `[registries.refs]` (RFC 0019 §4.3): forge kinds only, and a branch TTL
