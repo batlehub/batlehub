@@ -50,8 +50,8 @@ pub struct PostmortemScanner {
     pub command: PathBuf,
     pub sandbox: Sandbox,
     pub extract: ExtractPolicy,
-    /// `tree --online --vulns`: reputation and advisories from code hosts
-    /// and OSV, coordinates only. Off by default.
+    /// `scan --enrich`: reputation and advisories from code hosts and OSV,
+    /// coordinates only, so the sandbox keeps its network. Off by default.
     pub online: bool,
     /// `timeline <name>` for npm coordinates: the transition signals.
     pub timeline: bool,

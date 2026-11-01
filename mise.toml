@@ -53,8 +53,9 @@ semgrep = "latest"                  # static analysis (Rust / TS / secrets rules
 "cargo:cargo-sweep" = "latest"
 # Dependency supply chain: source-repo reputation + vulns, from the lockfiles.
 # Pinned, not "latest": the same version is pinned in the CI action's `version`
-# input (.github/workflows/postmortem.yaml), so both run the identical gate.
-"github:mlab-sh/postmortem" = "2.5.0"
+# input (.github/workflows/postmortem.yaml) and in Containerfile.worker's
+# POSTMORTEM_VERSION, so the gate and the worker's scanner are one binary.
+"github:mlab-sh/postmortem" = "2.9.2"
 "github:mlab-sh/mlab-cli" = "1.0.4"
 uv = "latest"
 python = "latest"
