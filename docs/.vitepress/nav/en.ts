@@ -381,6 +381,15 @@ export const sidebar = {
       ],
     },
     {
+      text: "Ready to build",
+      items: [
+        {
+          text: "0040 — CLI grammar and coverage",
+          link: "/rfc/0040-cli-grammar-and-coverage",
+        },
+      ],
+    },
+    {
       text: "Settled",
       items: [
         {
