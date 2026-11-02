@@ -110,18 +110,23 @@ pub async fn run(cmd: MiseCommand, client: &BatleHubClient, json: bool) -> Resul
     }
 }
 
+/// Exit 7 (RFC 0040 §4.6): the command did something, but not all of it.
+fn partial(message: String) -> anyhow::Error {
+    crate::exit::CliError::new(crate::exit::ExitCode::Partial, message).into()
+}
+
 async fn run_import(args: ImportArgs, client: &BatleHubClient, json: bool) -> Result<()> {
     let bytes = tokio::fs::read(&args.bundle)
         .await
         .with_context(|| format!("reading {}", args.bundle.display()))?;
     let resp = client.import_bundle(bytes).await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&resp)?);
+        crate::render::data(&resp)?;
         // The same exit code as the human path: a runbook piping `--json` into
         // `jq` would otherwise go green on a partially failed import, and the
         // missing artifacts surface later as 503s from the disconnected proxy.
         if resp.rejected > 0 {
-            std::process::exit(1);
+            return Err(partial(format!("{} blob(s) rejected", resp.rejected)));
         }
         return Ok(());
     }
@@ -142,7 +147,7 @@ async fn run_import(args: ImportArgs, client: &BatleHubClient, json: bool) -> Re
         println!("  rejected: {line}");
     }
     if resp.rejected > 0 {
-        std::process::exit(1);
+        return Err(partial(format!("{} blob(s) rejected", resp.rejected)));
     }
     Ok(())
 }
@@ -588,7 +593,10 @@ async fn run_seed(args: SeedArgs, client: &BatleHubClient, json: bool) -> Result
     if failed > 0 {
         // A CI gate on the connected side: the run failed, and the lines
         // above say which entries and why.
-        std::process::exit(1);
+        return Err(partial(format!(
+            "{failed} of {} entries failed",
+            outcomes.len()
+        )));
     }
     Ok(())
 }

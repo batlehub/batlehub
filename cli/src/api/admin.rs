@@ -1012,7 +1012,6 @@ impl BatleHubClient {
         action: Option<&str>,
         format: &str,
     ) -> Result<String> {
-        use anyhow::bail;
         use reqwest::Method;
         #[derive(serde::Serialize)]
         struct Params<'a> {
@@ -1041,7 +1040,7 @@ impl BatleHubClient {
             Ok(resp.text().await?)
         } else {
             let body = resp.text().await.unwrap_or_default();
-            bail!("HTTP {status}: {body}")
+            Err(crate::exit::ApiError::from_body(status.as_u16(), &body).into())
         }
     }
 }

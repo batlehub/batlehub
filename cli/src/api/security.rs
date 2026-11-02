@@ -1,7 +1,7 @@
 //! The verdict endpoint (RFC 0018 §4.2), as `batlehub why` and `batlehub
 //! wait` read it.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 
@@ -101,22 +101,6 @@ pub struct RescanView {
     pub trigger: String,
 }
 
-/// `<registry>:<name>@<version>`, with the `@` that starts a scoped npm name
-/// left alone: the version is what follows the *last* `@`.
-pub fn parse_coordinate(spec: &str) -> Result<(String, String, String)> {
-    let Some((registry, rest)) = spec.split_once(':') else {
-        bail!("expected <registry>:<name>@<version>, got '{spec}'");
-    };
-    let Some(at) = rest.rfind('@').filter(|i| *i > 0) else {
-        bail!("expected <registry>:<name>@<version>, got '{spec}' (no version)");
-    };
-    let (name, version) = (&rest[..at], &rest[at + 1..]);
-    if registry.is_empty() || name.is_empty() || version.is_empty() {
-        bail!("expected <registry>:<name>@<version>, got '{spec}'");
-    }
-    Ok((registry.to_owned(), name.to_owned(), version.to_owned()))
-}
-
 impl BatleHubClient {
     /// The verdict, or `None` when there is none to read — a version never
     /// seen, a registry without a security profile, or a caller without
@@ -162,7 +146,7 @@ impl BatleHubClient {
         let status = resp.status();
         let body = resp.text().await?;
         if !status.is_success() {
-            anyhow::bail!("{status}: {body}");
+            return Err(crate::exit::ApiError::from_body(status.as_u16(), &body).into());
         }
         Ok(body)
     }
@@ -197,7 +181,7 @@ impl BatleHubClient {
         let status = resp.status();
         let body = resp.text().await?;
         if !status.is_success() {
-            anyhow::bail!("{status}: {body}");
+            return Err(crate::exit::ApiError::from_body(status.as_u16(), &body).into());
         }
         Ok(body)
     }
@@ -252,25 +236,6 @@ impl BatleHubClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_coordinate_splits_on_the_last_at() {
-        assert_eq!(
-            parse_coordinate("npm:left-pad@1.3.1").unwrap(),
-            ("npm".into(), "left-pad".into(), "1.3.1".into())
-        );
-        assert_eq!(
-            parse_coordinate("npm:@scope/name@1.0.0").unwrap(),
-            ("npm".into(), "@scope/name".into(), "1.0.0".into())
-        );
-        assert_eq!(
-            parse_coordinate("maven:com.acme:lib@1.0").unwrap(),
-            ("maven".into(), "com.acme:lib".into(), "1.0".into())
-        );
-        assert!(parse_coordinate("left-pad@1.3.1").is_err());
-        assert!(parse_coordinate("npm:left-pad").is_err());
-        assert!(parse_coordinate("npm:@scope/name").is_err());
-    }
 
     fn view(state: &str, codes: &[&str], available: Option<&str>) -> VerdictView {
         VerdictView {

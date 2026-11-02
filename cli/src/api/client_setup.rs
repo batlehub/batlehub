@@ -1204,7 +1204,7 @@ impl State {
     }
 
     /// Whether `status` reports this as settled (exit 0) or as something to do
-    /// or look at (exit 3).
+    /// or look at (exit 6).
     pub fn settled(self) -> bool {
         matches!(
             self,
@@ -2044,7 +2044,7 @@ pub enum Cached {
     /// Print these.
     Usable(Vec<(String, String)>),
     /// The process already holds another value for one of the names — an
-    /// override the planned path refuses (exit 3) too: print nothing.
+    /// override the planned path refuses (exit 6) too: print nothing.
     Overridden(String),
     /// No trusted file, or one for another server.
     Unusable,

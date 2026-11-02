@@ -38,13 +38,21 @@ pub struct Cli {
     #[arg(long, global = true, env = "BATLEHUB_TOKEN")]
     pub token: Option<String>,
 
-    /// Default registry name
+    /// Default registry: for a bare package name and for every registry filter
     #[arg(long, short = 'r', global = true, env = "BATLEHUB_REGISTRY")]
     pub registry: Option<String>,
 
-    /// Output raw JSON instead of pretty tables
+    /// Output shape: table (default), json, csv (listings) or raw (`auth token`)
+    #[arg(long, global = true, env = "BATLEHUB_FORMAT", value_enum)]
+    pub format: Option<crate::render::Format>,
+
+    /// Same as `--format json`
     #[arg(long, global = true)]
     pub json: bool,
+
+    /// Answer yes to the confirmation a destructive command asks for
+    #[arg(long, short = 'y', global = true)]
+    pub yes: bool,
 
     #[command(subcommand)]
     pub command: Command,
@@ -120,7 +128,7 @@ pub enum Command {
     },
     /// Explain why a version is held, denied or warned (RFC 0018)
     Why(security::WhyArgs),
-    /// Wait for a held version to become servable; exit 1 when waiting cannot help, 2 on timeout
+    /// Wait for a held version to become servable; exit 4 when waiting cannot help, 8 on timeout
     Wait(security::WaitArgs),
     /// The audit log's own reports: what an identity pulled (RFC 0018)
     Audit {

@@ -172,7 +172,7 @@ fn append_entry(
 }
 
 /// What `POST api/stacks` answers.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct DevfilePublished {
     pub stack: String,
     pub version: String,

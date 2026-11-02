@@ -2,10 +2,13 @@ use anyhow::Result;
 use clap::Subcommand;
 
 use crate::api::BatleHubClient;
+use crate::confirm::confirm;
+use crate::render::done;
 
 #[derive(Subcommand)]
 pub enum VersionCommand {
-    /// Yank a specific version (marks it unavailable but keeps it)
+    /// Yank a specific version (marks it unavailable but keeps it). Destructive:
+    /// asks on a terminal, refuses without one unless given `--yes`
     Yank {
         /// Registry name
         registry: String,
@@ -23,7 +26,8 @@ pub enum VersionCommand {
         /// Version string
         version: String,
     },
-    /// Delete a version's artifact; the version number is then spent forever
+    /// Delete a version's artifact; the version number is then spent forever.
+    /// Destructive: asks on a terminal, refuses without one unless given `--yes`
     Delete {
         /// Registry name
         registry: String,
@@ -31,9 +35,6 @@ pub enum VersionCommand {
         name: String,
         /// Version string
         version: String,
-        /// Skip confirmation prompt
-        #[arg(long, short = 'y')]
-        yes: bool,
     },
     /// Pin a version so a retention run never reclaims it
     Pin {
@@ -62,8 +63,9 @@ pub async fn run(cmd: VersionCommand, client: &BatleHubClient) -> Result<()> {
             name,
             version,
         } => {
+            confirm("yank", &[format!("{registry}/{name}@{version}")], None)?;
             client.yank_version(&registry, &name, &version).await?;
-            println!("Yanked {registry}/{name}@{version}");
+            done(&format!("Yanked {registry}/{name}@{version}"));
         }
         VersionCommand::Unyank {
             registry,
@@ -71,33 +73,26 @@ pub async fn run(cmd: VersionCommand, client: &BatleHubClient) -> Result<()> {
             version,
         } => {
             client.unyank_version(&registry, &name, &version).await?;
-            println!("Unyanked {registry}/{name}@{version}");
+            done(&format!("Unyanked {registry}/{name}@{version}"));
         }
         VersionCommand::Delete {
             registry,
             name,
             version,
-            yes,
         } => {
-            if !yes {
-                // Two separate facts, and the second is the one people are
-                // surprised by: the bytes go, *and* the number is spent. A
-                // deleted version can never be republished, so "delete and
-                // re-upload to fix it" is not a plan (RFC 0016 §4.4).
-                eprint!(
-                    "Delete {registry}/{name}@{version}? The artifact is dropped and the \
-                     version number is spent permanently — {version} can never be published \
-                     again. [y/N] "
-                );
-                let mut input = String::new();
-                std::io::stdin().read_line(&mut input)?;
-                if !input.trim().eq_ignore_ascii_case("y") {
-                    println!("Aborted.");
-                    return Ok(());
-                }
-            }
+            let coord = format!("{registry}/{name}@{version}");
+            // Two facts, and the second is the one people are surprised by:
+            // the bytes go, *and* the number is spent (RFC 0016 §4.4).
+            confirm(
+                "delete",
+                std::slice::from_ref(&coord),
+                Some(&format!(
+                    "the artifact is dropped and the version number is spent permanently — \
+                     {version} can never be published again"
+                )),
+            )?;
             client.delete_version(&registry, &name, &version).await?;
-            println!("Deleted {registry}/{name}@{version}");
+            done(&format!("Deleted {coord}"));
         }
         VersionCommand::Pin {
             registry,
@@ -107,7 +102,9 @@ pub async fn run(cmd: VersionCommand, client: &BatleHubClient) -> Result<()> {
             client
                 .set_retention_pin(&registry, &name, &version, true)
                 .await?;
-            println!("Pinned {registry}/{name}@{version} — retention will never reclaim it");
+            done(&format!(
+                "Pinned {registry}/{name}@{version} — retention will never reclaim it"
+            ));
         }
         VersionCommand::Unpin {
             registry,
@@ -117,10 +114,10 @@ pub async fn run(cmd: VersionCommand, client: &BatleHubClient) -> Result<()> {
             client
                 .set_retention_pin(&registry, &name, &version, false)
                 .await?;
-            println!(
+            done(&format!(
                 "Unpinned {registry}/{name}@{version} — the registry's retention policy applies \
                  to it again"
-            );
+            ));
         }
     }
     Ok(())

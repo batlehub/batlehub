@@ -168,7 +168,7 @@ pub async fn run(
         AuthCommand::Whoami => {
             let me = client.whoami().await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&me)?);
+                crate::render::data(&me)?;
             } else {
                 let mut table = Table::new();
                 table.add_row(["User ID", me.user_id.as_deref().unwrap_or("(anonymous)")]);
@@ -325,7 +325,12 @@ async fn handle_print_token(
             );
         }
     }
-    match args.output.as_str() {
+    // `--format json` is the global spelling of `--output json` (RFC 0040 §4.3).
+    let output = match crate::render::ctx().format {
+        crate::render::Format::Json => "json",
+        _ => args.output.as_str(),
+    };
+    match output {
         "raw" => println!("{token}"),
         "json" => println!(
             "{}",
@@ -364,7 +369,7 @@ async fn handle_write_token_file(
             match r.token {
                 Some(_) => {}
                 None => eprintln!(
-                    "Warning: that path yields no credential right now ({}).                      The entry is written anyway; `auth status` re-checks it.",
+                    "warning: that path yields no credential right now ({}).                      The entry is written anyway; `auth status` re-checks it.",
                     r.detail.as_deref().unwrap_or("no reason given")
                 ),
             }
@@ -412,7 +417,7 @@ fn handle_status(path: Option<PathBuf>, json: bool) -> Result<()> {
         .collect();
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&rows)?);
+        crate::render::data(&rows)?;
         return Ok(());
     }
     if rows.is_empty() {
@@ -463,7 +468,7 @@ async fn handle_token_command(
         TokenCommand::List => {
             let tokens = client.list_tokens().await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&tokens)?);
+                crate::render::data(&tokens)?;
             } else {
                 print_tokens_table(&tokens);
             }
@@ -489,12 +494,13 @@ async fn handle_token_command(
                 })
                 .await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
+                crate::render::data(&resp)?;
             } else {
                 print_created_token(&name, &role, &resp);
             }
         }
         TokenCommand::Revoke { id } => {
+            crate::confirm::confirm("revoke", &[format!("token {id}")], None)?;
             client.revoke_token(id).await?;
             println!("Revoked token {id}");
         }
@@ -613,7 +619,7 @@ async fn handle_auth_login(
              Run `auth login` again and paste the URL it sends you to."
         ),
         None => eprintln!(
-            "Warning: pasted a bare token, so this sign-in could not be matched \
+            "warning: pasted a bare token, so this sign-in could not be matched \
              to the one just started. Paste the full URL to have it checked."
         ),
     }
@@ -713,7 +719,7 @@ fn handle_auth_logout(
             // the profile.
             Err(e) => {
                 eprintln!(
-                    "Warning: left {} alone — it is not a usable contract file: {e}",
+                    "warning: left {} alone — it is not a usable contract file: {e}",
                     path.display()
                 );
                 false

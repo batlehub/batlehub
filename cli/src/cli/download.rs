@@ -1,7 +1,10 @@
 use anyhow::{Context, Result};
 use clap::Args;
 
+use std::io::IsTerminal;
+
 use crate::api::BatleHubClient;
+use crate::exit::{CliError, ExitCode};
 
 #[derive(Args)]
 pub struct DownloadArgs {
@@ -65,15 +68,39 @@ pub async fn run(
         .unwrap_or_else(|| default_output_name(&resolved));
 
     if out_name == "-" {
+        if std::io::stdout().is_terminal() {
+            return Err(CliError::new(
+                ExitCode::Usage,
+                "refusing to write an artifact to a terminal",
+            )
+            .hint("pass -o <file>, or redirect stdout")
+            .into());
+        }
         let mut stdout = tokio::io::stdout();
         let n = client.download_to(&resolved, &mut stdout).await?;
         eprintln!("Downloaded {n} bytes");
     } else {
+        if std::path::Path::new(&out_name).exists() {
+            crate::confirm::confirm("overwrite", std::slice::from_ref(&out_name), None)?;
+        }
         let mut file = tokio::fs::File::create(&out_name)
             .await
             .with_context(|| format!("creating output file '{out_name}'"))?;
-        let n = client.download_to(&resolved, &mut file).await?;
-        println!("Downloaded {n} bytes → {out_name}");
+        // A refused or broken download leaves no file behind to be mistaken
+        // for the artifact, or to trip the overwrite check on the retry.
+        let n = match client.download_to(&resolved, &mut file).await {
+            Ok(n) => n,
+            Err(e) => {
+                drop(file);
+                let _ = tokio::fs::remove_file(&out_name).await;
+                return Err(e);
+            }
+        };
+        if crate::render::ctx().structured() {
+            crate::render::data(&serde_json::json!({ "path": out_name, "bytes": n }))?;
+        } else {
+            println!("Downloaded {n} bytes → {out_name}");
+        }
     }
     Ok(())
 }

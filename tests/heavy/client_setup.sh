@@ -23,7 +23,7 @@
 #      0038 §4.2's rule: with `GOSUMDB` unset, its checksum lookups come
 #      through `/proxy/<go>/sumdb/`.
 #   3. A second `apply --yes` moves no file.
-#   4. A user `registry=` in `~/.npmrc`: `conflict`, exit 3, the file
+#   4. A user `registry=` in `~/.npmrc`: `conflict`, exit 6, the file
 #      byte-identical, and npm refused by the closed world.
 #   5. A user `[global]` in `pip.conf`: `conflict`, untouched, still parsed.
 #   6. `GOPROXY` in the environment: `conflict`, named, though the file is
@@ -35,7 +35,7 @@
 #      a candidate); `--pick npm=<b>` writes b; a plain `apply --yes`
 #      keeps it, and keeps `--maven-mirror-of all`.
 #   9. The pypi registry removed by reload: pip is `orphaned`, `apply --yes`
-#      keeps the block (fail closed, exit 3), and `remove --yes` takes it out.
+#      keeps the block (fail closed, exit 6), and `remove --yes` takes it out.
 #
 # bun is not driven: it would be one more client download for the same
 # `~/.npmrc` block npm and pnpm already prove. node's `NODEJS_ORG_MIRROR` is
@@ -184,7 +184,7 @@ machine() {
 
 # setup <home> <args...> — `batlehub-cli setup …` on that machine. The exit code
 # is in SETUP_CODE and the output in SETUP_OUT; a non-zero code is a result
-# here, not a failure, because 3 is half of what this suite asserts.
+# here, not a failure, because 6 is half of what this suite asserts.
 SETUP_OUT="$HEAVY_WORK/setup.txt"
 setup() {
   local home="$1"
@@ -439,10 +439,10 @@ mkdir -p "$M4"
 printf 'registry=https://registry.npmjs.org/\n' > "$M4/.npmrc"
 cp "$M4/.npmrc" "$HEAVY_WORK/npmrc.seeded"
 setup "$M4" status --only npm
-expect_code 3 "status with a user registry="
+expect_code 6 "status with a user registry="
 heavy_client_must_say "$SETUP_OUT" "conflict" "status did not report the conflict"
 setup "$M4" apply --yes --only npm
-expect_code 3 "apply with a user registry="
+expect_code 6 "apply with a user registry="
 cmp -s "$HEAVY_WORK/npmrc.seeded" "$M4/.npmrc" || heavy_fail "apply edited a .npmrc the user owns"
 dir="$HEAVY_WORK/npm-conflict"
 mkdir -p "$dir"
@@ -464,7 +464,7 @@ mkdir -p "$M5/.config/pip"
 printf '[global]\ntimeout = 30\n' > "$M5/.config/pip/pip.conf"
 cp "$M5/.config/pip/pip.conf" "$HEAVY_WORK/pip.seeded"
 setup "$M5" apply --yes --only pip
-expect_code 3 "apply with a user [global]"
+expect_code 6 "apply with a user [global]"
 cmp -s "$HEAVY_WORK/pip.seeded" "$M5/.config/pip/pip.conf" || heavy_fail "apply edited a pip.conf the user owns"
 client "$M5" "$OUT" "$HEAVY_WORK" pip config list \
   || { cat "$OUT" >&2; heavy_fail "pip can no longer parse its config"; }
@@ -478,7 +478,7 @@ machine "$M6"
 SETUP_CODE=0
 "${MENV[@]}" GOPROXY=https://proxy.golang.org "$CLI" --server "$HEAVY_TAP_BASE" setup status --only go \
   >"$SETUP_OUT" 2>&1 || SETUP_CODE=$?
-expect_code 3 "status with GOPROXY exported"
+expect_code 6 "status with GOPROXY exported"
 heavy_client_must_say "$SETUP_OUT" '^go +conflict' "status did not report go in conflict"
 heavy_client_must_say "$SETUP_OUT" '\$GOPROXY is set and overrides' "status did not name the GOPROXY override"
 
@@ -546,7 +546,7 @@ curl -fsS "$HEAVY_TAP_BASE/api/v1/registries" | grep -q "\"$NPM_B\"" \
 
 M8="$HEAVY_WORK/machine-pick"
 setup "$M8" status --only npm,maven,pip
-expect_code 3 "status with two npm proxies"
+expect_code 6 "status with two npm proxies"
 heavy_client_must_say "$SETUP_OUT" "ambiguous.*$NPM_B|$NPM_B.*ambiguous|npm: .*$NPM_B" "npm is not ambiguous between the two proxies"
 grep -q "$NPM_LOCAL" "$SETUP_OUT" && { cat "$SETUP_OUT" >&2; heavy_fail "a local registry was offered as a mirror candidate"; }
 setup "$M8" apply --yes --only npm,maven,pip --pick "npm=$NPM_B" --maven-mirror-of all
@@ -562,10 +562,10 @@ heavy_client_must_say "$SETUP_OUT" "Nothing to write" "a plain apply did not kee
 heavy_log "9. the pypi registry removed, by reload"
 reload_config "t[:t.index('# ── pip, uv')] + t[t.index('# ── go:'):]"
 setup "$M8" status --only pip
-expect_code 3 "status with the pypi registry gone"
+expect_code 6 "status with the pypi registry gone"
 heavy_client_must_say "$SETUP_OUT" "orphaned" "pip's block is not reported orphaned"
 setup "$M8" apply --yes --only pip
-expect_code 3 "apply over an orphaned block"
+expect_code 6 "apply over an orphaned block"
 heavy_client_must_say "$SETUP_OUT" "no longer listed" "apply did not say why pip's block is kept"
 grep -q "batlehub setup" "$M8/.config/pip/pip.conf" \
   || heavy_fail "apply took the orphaned pip block out: pip would fall back to pypi.org"

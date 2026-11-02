@@ -86,6 +86,7 @@ Every connection setting can be overridden by environment variables — useful i
 | `BATLEHUB_TOKEN`    | `--token`        |
 | `BATLEHUB_REGISTRY` | `--registry`     |
 | `BATLEHUB_PROFILE`  | `--profile`      |
+| `BATLEHUB_FORMAT`   | `--format`       |
 
 ---
 
@@ -98,8 +99,102 @@ These flags are available on every command:
 | `--profile <name>` | `-P` | Use a named config profile |
 | `--server <url>` | | Override the server URL |
 | `--token <tok>` | | Override the auth token |
-| `--registry <name>` | `-r` | Set a default registry |
-| `--json` | | Emit machine-readable JSON instead of tables |
+| `--registry <name>` | `-r` | The default registry: for a bare package name, and for every command's registry filter. Falls back to `BATLEHUB_REGISTRY`, then the profile's `registry` |
+| `--format <table\|json\|csv\|raw>` | | Output shape (below); `BATLEHUB_FORMAT` sets it once for a CI job |
+| `--json` | | Same as `--format json` |
+| `--yes` | `-y` | Answer yes to the confirmation a destructive command asks for |
+
+### Naming a package {#coordinate}
+
+A command that takes a package takes one coordinate, `registry/name[@version]`:
+the registry is everything before the first `/`, the version everything after
+the last `@` that is not the name's first character.
+
+```text
+npm-local/lodash@4.17.21
+npm-local/@scope/pkg@1.2.3        # name @scope/pkg
+go/github.com/x/y@v1.2.0          # the module path stays whole
+maven/org.slf4j:slf4j-api@2.0.9   # Maven's group:artifact stays whole
+```
+
+A coordinate with no `/` is a bare name, put in the default registry
+(`-r`, `BATLEHUB_REGISTRY`, the profile's `registry`); with none of them set the
+command fails with exit 2. A first segment that is not a registry you can see is
+read as part of the name when a default registry is set
+(`-r go github.com/x/y`), and fails with exit 5 otherwise, listing the registries
+you can see. The older `registry:name@version` spelling is still read, with a
+`warning:`.
+
+`why`, `wait`, `verdicts pullers` and `package readme` take a coordinate today;
+the other package commands still take `<registry> <name> <version>` as separate
+arguments.
+
+### Output and errors {#output}
+
+- **`table`** is the default, on a terminal and in a pipe alike.
+- **`json`** prints what the API sent, field names unchanged: a listing as an
+  array (or the API's page object), an action as its response, or `{"ok": true}`
+  when there is none.
+- **`csv`** works on every listing, with the JSON field names as headers. It is a
+  usage error (exit 2) on a command that prints one object.
+- **`raw`** is accepted only by `auth token`, which prints one value.
+
+Data goes to stdout. Progress, warnings, hints and confirmations go to stderr, so
+`batlehub-cli … --format json | jq` never reads a prompt.
+
+An error is one block on stderr:
+
+```text
+error: version 4.17.21 of npm-local/lodash is held until 2026-11-04 14:00 UTC
+  code: MIN_AGE_NOT_MET — https://batlehub.dev/use/refused-downloads#min-age-not-met
+hint: `batlehub-cli wait npm-local/lodash@4.17.21` returns when it becomes pullable
+```
+
+`error:` is the server's own message, `code:` the reason code when the server
+gave one, linked to [Why a download was refused](/use/refused-downloads). With
+`--format json` the same error is also written to stdout as
+`{"error": {"message", "code", "docs", "hint", "exit"}}`.
+
+### Exit codes {#exit-codes}
+
+| Code | Meaning | Typical source |
+| --- | --- | --- |
+| 0 | success | — |
+| 1 | generic failure | network error, unexpected 5xx, I/O |
+| 2 | usage | a flag clap refuses, a coordinate with no registry, an artifact written to a terminal, `--format csv` on one object |
+| 3 | not authenticated | HTTP 401 |
+| 4 | refused | HTTP 403; `wait` when waiting cannot help |
+| 5 | not found | HTTP 404, an unknown registry |
+| 6 | conflict | HTTP 409; `setup` `conflict`/`ambiguous`/`orphaned` |
+| 7 | partial failure | a bulk operation with failed items, `mise seed`/`import` with failures |
+| 8 | timed out | `wait --timeout` |
+| 9 | confirmation required | a destructive command without a terminal and without `--yes`, a "no" at the prompt |
+| *n* | child's code | `java` passes its child's exit code through |
+
+### Destructive commands {#confirmation}
+
+A command that deletes, purges, erases, yanks, unlists, blocks, revokes or
+reclaims prints what it will do on stderr and asks `Proceed? [y/N]`. Anything
+other than `y`/`yes` exits 9. **Without a terminal** it asks nothing, does
+nothing and exits 9, so a script that forgets `--yes` fails loudly instead of
+hanging on a prompt or destroying silently:
+
+```text
+$ batlehub-cli version delete internal serilog 2.0.0 </dev/null
+this will delete:
+  internal/serilog@2.0.0
+the artifact is dropped and the version number is spent permanently — 2.0.0 can never be published again
+error: refusing to delete without a terminal; pass --yes
+$ echo $?
+9
+```
+
+The commands that confirm: `version yank`/`delete`, `admin bulk yank`/`delete`,
+`admin unlist`, `admin cache clear`, `admin cache evict` and `coherence` (not
+with `--dry-run`), `admin audit-log --purge-before`, `admin users block`,
+`admin gdpr erase`, `admin retention --reclaim`, `admin notifications delete`,
+`auth token revoke`, and `download` over an existing file. `setup apply` and
+`setup remove` keep their own contract: a dry run by default, `--yes` writes.
 
 ---
 
@@ -330,7 +425,8 @@ batlehub-cli version pin    <registry> <name> <version>
 batlehub-cli version unpin  <registry> <name> <version>
 ```
 
-These commands require an admin token.
+These commands require an admin token. `yank` and `delete` are
+[destructive](#confirmation): they ask on a terminal and need `--yes` in a script.
 
 | Command | Effect |
 |---------|--------|
@@ -346,8 +442,10 @@ These commands require an admin token.
 
 ```
 $ batlehub-cli version delete internal serilog 2.0.0
-Delete internal/serilog@2.0.0? The artifact is dropped and the version number is
-spent permanently — 2.0.0 can never be published again. [y/N] y
+this will delete:
+  internal/serilog@2.0.0
+the artifact is dropped and the version number is spent permanently — 2.0.0 can never be published again
+Proceed? [y/N] y
 Deleted internal/serilog@2.0.0
 ```
 
@@ -945,9 +1043,9 @@ error` line each — failures are named, not just counted.
 ### SBOM
 
 ```
-batlehub-cli admin sbom get    <registry> <name> <version> [--format cyclonedx]
+batlehub-cli admin sbom get    <registry> <name> <version> [--sbom-format cyclonedx]
 batlehub-cli admin sbom export [--registry <r>] [--from <t>] [--to <t>]
-                               [--format cyclonedx] [-o <file>]
+                               [--sbom-format cyclonedx] [-o <file>]
 ```
 
 `get` always prints JSON. `export` writes to the named file, or stdout without
@@ -1171,7 +1269,7 @@ refuse, and `detect` prints the snippets instead.
   registry whose `public_url` is not on the server's host or a subdomain of it
   (`--allow-foreign-hosts`), or is plain HTTP on an HTTPS server
   (`--insecure-http`), stops only its own clients: they are `conflict`, every
-  other file is written, and the run exits 3. A URL or registry name holding a
+  other file is written, and the run exits 6. A URL or registry name holding a
   character a config file could misread (a newline, a quote, credentials) is
   refused the same way.
 - **One broken file is that file's `conflict`**, not every client's: a
@@ -1211,7 +1309,7 @@ server cannot answer (unreachable, an error status, an unreadable or empty
 list — a bad `--pick` is still an error) under the same rules: that server's
 URLs only, nothing over a variable you set, and only the variables `apply`
 writes, as plain URLs. It
-prints nothing, exit 3, when `env.sh` is `conflict` or `ambiguous`: `eval`
+prints nothing, exit 6, when `env.sh` is `conflict` or `ambiguous`: `eval`
 would override the variable `apply` refused to. `status` takes the
 `--shell-rc` given to `apply`.
 
@@ -1276,18 +1374,19 @@ The TUI is a full-screen terminal interface built with [ratatui](https://ratatui
 
 The two verbs of a supply-chain quarantine ([RFC 0018](/rfc/0018-supply-chain-quarantine-and-verdicts)). A registry behind `[registries.security]` refuses a version it has not judged yet, or has judged against; the refusal names the coordinate, the state, the reason codes and this command.
 
-### `why <registry>:<name>@<version>`
+### `why <registry>/<name>@<version>`
 
 The verdict behind a refusal: state, reason codes, when a hold lifts, which scanners answered, and — for a token with `findings:read` — the findings themselves. Needs `quarantine:read` on the registry (`user` and `admin` hold it by default; `anonymous` does not, so a public mirror answers a plain 404 unless the operator grants it).
 
 ```bash
-batlehub why npm:left-pad@1.3.1
-batlehub why npm:left-pad@1.3.1 --json
-batlehub why npm:left-pad@1.3.1 --rescan     # queue a rescan too (needs gates:exempt)
+batlehub-cli why npm/left-pad@1.3.1
+batlehub-cli why npm/left-pad@1.3.1 --json
+batlehub-cli why npm/left-pad@1.3.1 --rescan     # queue a rescan too (needs gates:exempt)
+batlehub-cli -r npm why left-pad@1.3.1           # a bare name, in the default registry
 ```
 
 ```text
-npm:left-pad@1.3.1
+npm/left-pad@1.3.1
   state        quarantined
   reasons      MIN_AGE_NOT_MET
   docs         https://batlehub.dev/use/refused-downloads#min-age-not-met
@@ -1298,17 +1397,17 @@ npm:left-pad@1.3.1
   scanners     osv
   findings     none
 
-Held until 2026-09-05T14:12:00Z. `batlehub wait` waits for it.
+Held until 2026-09-05T14:12:00Z. `batlehub-cli wait` waits for it.
 ```
 
 The `docs` row links each reason code to its section of [Why a download was refused](/use/refused-downloads), which says what the code means and what to do about it.
 
-### `wait <registry>:<name>@<version> [--timeout 1h] [--interval 30s]`
+### `wait <registry>/<name>@<version> [--timeout 1h] [--interval 30s]`
 
-The CI contract. Polls the verdict and exits **0** when the version becomes servable, **1 when waiting cannot help** — a `denied` verdict, or a hold with no clock such as `TIMESTAMP_MISSING` — and **2** on timeout. Exit 1 comes back on the first poll with the reason, never after burning the timeout, so a pipeline fails fast on a decision and waits only on a clock. When the hold names an `available_at` the wait sleeps to it rather than polling.
+The CI contract. Polls the verdict and exits **0** when the version becomes servable, **4 when waiting cannot help** — a `denied` verdict, or a hold with no clock such as `TIMESTAMP_MISSING` — and **8** on timeout ([exit codes](#exit-codes)). Exit 4 comes back on the first poll with the reason, never after burning the timeout, so a pipeline fails fast on a decision and waits only on a clock. When the hold names an `available_at` the wait sleeps to it rather than polling.
 
 ```bash
-batlehub wait npm:left-pad@1.3.1 --timeout 2h && npm ci
+batlehub-cli wait npm/left-pad@1.3.1 --timeout 2h && npm ci
 ```
 
 A version this instance has never been asked for has no verdict to wait on: request the artifact once (the first request is what creates the hold and queues the scan), then wait.
@@ -1395,7 +1494,7 @@ from the same access-log query the flip alert carries. `--since` takes `30d`,
 handing to someone who does not have the CLI.
 
 ```sh
-batlehub-cli verdicts pullers npm:left-pad@1.3.1 --since 30d --csv
+batlehub-cli verdicts pullers npm/left-pad@1.3.1 --since 30d --csv
 ```
 
 `list` shows a registry's verdicts by state — `allowed`, `warned`,

@@ -309,7 +309,7 @@ RC=$?
 set -e
 # Exit 1 is "waiting cannot help": the scan came back and the verdict is
 # terminal. Exit 2 (timed out) or 0 (served) would both be wrong here.
-[[ $RC -eq 1 ]] || { cat "$HEAVY_WORK/wait-2.out" >&2; heavy_fail "batlehub wait exited $RC on a version with a critical advisory; expected 1 (waiting cannot help)"; }
+[[ $RC -eq 4 ]] || { cat "$HEAVY_WORK/wait-2.out" >&2; heavy_fail "batlehub wait exited $RC on a version with a critical advisory; expected 4 (waiting cannot help, RFC 0040 §4.6)"; }
 
 # The pinned resolve: a lockfile that already names the version and the
 # tarball this server wrote into the packument. `npm ci` goes straight to it.
@@ -752,7 +752,7 @@ grep -q '"revoked":true' "$HEAVY_WORK/revoke.json" \
   || { cat "$HEAVY_WORK/revoke.json" >&2; heavy_fail "the revoke did not report the flag gone"; }
 # The revoke queues a rescan (§13.1 decision 3), so the lift is the
 # worker's, not the API call's. `batlehub wait` is the wrong instrument
-# here: it exits 1 on the first poll of a *denied* verdict by design, and
+# here: it exits 4 on the first poll of a *denied* verdict by design, and
 # the verdict is denied until the rescan lands. The tarball itself is the
 # signal, polled until it is served or the minute is out.
 LIFTED=0
@@ -796,11 +796,11 @@ else
   "$CLI" wait "$YARA_REG:$YARA_PKG@$YARA_VERSION" --timeout 5m --interval 3s >"$HEAVY_WORK/wait-yara.out" 2>&1
   RC=$?
   set -e
-  # Exit 1 is "waiting cannot help": the verdict came back denied.
-  if [[ $RC -ne 1 ]]; then
+  # Exit 4 is "waiting cannot help": the verdict came back denied.
+  if [[ $RC -ne 4 ]]; then
     cat "$HEAVY_WORK/wait-yara.out" >&2
     "$CLI" why "$YARA_REG:$YARA_PKG@$YARA_VERSION" >&2 || true
-    heavy_fail "batlehub wait exited $RC on a version the YARA rule matches; expected 1 (denied)"
+    heavy_fail "batlehub wait exited $RC on a version the YARA rule matches; expected 4 (denied)"
   fi
 
   # The pinned resolve, as step 3: the lockfile goes straight to the gate.

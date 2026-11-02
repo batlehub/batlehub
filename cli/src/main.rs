@@ -1,8 +1,12 @@
 mod api;
 mod cli;
 mod config;
+mod confirm;
 mod contract;
+mod coordinate;
+mod exit;
 mod gallery_proxy;
+mod render;
 mod tui;
 
 use anyhow::Result;
@@ -13,13 +17,56 @@ use cli::{
     publish, registry, security, setup, version, vsx, Cli, Command,
 };
 use config::ConfigFile;
+use exit::{CliError, ExitCode};
+use render::Format;
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
+    let format = if cli.json {
+        Format::Json
+    } else {
+        cli.format.unwrap_or_default()
+    };
+    match run(cli, format).await {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            let report = exit::Report::from_error(&e);
+            // A script parses a failure the way it parses a success.
+            if format == Format::Json {
+                println!("{}", report.to_json());
+            }
+            eprintln!("{}", report.to_stderr());
+            std::process::ExitCode::from(report.exit)
+        }
+    }
+}
+
+async fn run(cli: Cli, format: Format) -> Result<()> {
+    // `raw` has no record separator: only a command that prints one value
+    // takes it (§4.11).
+    let prints_one_value = matches!(
+        cli.command,
+        Command::Auth {
+            cmd: cli::auth::AuthCommand::Token { cmd: None, .. }
+        }
+    );
+    if format == Format::Raw && !prints_one_value {
+        return Err(CliError::new(
+            ExitCode::Usage,
+            "--format raw is only for a command that prints one value (`auth token`)",
+        )
+        .into());
+    }
+    let context = |registry: Option<String>| render::Context {
+        format,
+        registry,
+        yes: cli.yes,
+    };
 
     // Commands that need neither config nor a server connection
     if let Command::Config { cmd } = cli.command {
+        render::init(context(cli.registry.clone()));
         return config_cmd::run(cmd);
     }
     // The Java engine runs locally: no server, no token, no config.
@@ -31,6 +78,17 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     let mut cfg = ConfigFile::load()?;
+    {
+        let profile = match cli.profile.as_deref() {
+            Some(n) => cfg.profiles.get(n),
+            None => Some(&cfg.default),
+        };
+        render::init(context(
+            cli.registry
+                .clone()
+                .or_else(|| profile.and_then(|p| p.registry.clone())),
+        ));
+    }
 
     if let Command::Setup { cmd } = cli.command {
         let profile = match cli.profile.as_deref() {
@@ -52,8 +110,9 @@ async fn main() -> Result<()> {
             match setup::run(cmd, resolved_server.as_deref(), resolved_token.as_deref()).await {
                 Ok(code) => code,
                 Err(e) => {
-                    eprintln!("Error: {e:?}");
-                    1
+                    let report = exit::Report::from_error(&e);
+                    eprintln!("{}", report.to_stderr());
+                    i32::from(report.exit)
                 }
             };
         // Exit here rather than return: dropping the runtime waits for its
@@ -108,26 +167,22 @@ async fn main() -> Result<()> {
 
     let client = api::BatleHubClient::new(&resolved.server_url, resolved.token.as_deref())?;
 
+    let json = render::ctx().structured();
     match cli.command {
-        Command::Registry { cmd } => registry::run(cmd, &client, cli.json).await?,
+        Command::Registry { cmd } => registry::run(cmd, &client, json).await?,
         Command::Package { cmd } => {
-            package::run(cmd, &client, resolved.registry.as_deref(), cli.json).await?
+            package::run(cmd, &client, resolved.registry.as_deref(), json).await?
         }
         Command::Version { cmd } => version::run(cmd, &client).await?,
-        Command::Owners { cmd } => owner::run(cmd, &client, cli.json).await?,
-        Command::Authz { cmd } => authz::run(cmd, &client, cli.json).await?,
-        Command::Mise { cmd } => mise::run(cmd, &client, cli.json).await?,
+        Command::Owners { cmd } => owner::run(cmd, &client, json).await?,
+        Command::Authz { cmd } => authz::run(cmd, &client, json).await?,
+        Command::Mise { cmd } => mise::run(cmd, &client, json).await?,
         Command::Proxy { cmd } => proxy::run(cmd).await?,
         Command::Vsx { cmd } => vsx::run(cmd, cli.token.as_deref()).await?,
-        Command::Why(args) => security::run_why(args, &client, cli.json).await?,
-        Command::Audit { cmd } => security::run_audit(cmd, &client, cli.json).await?,
-        Command::Verdicts { cmd } => security::run_verdicts(cmd, &client, cli.json).await?,
-        Command::Wait(args) => {
-            let code = security::run_wait(args, &client, cli.json).await?;
-            if code != 0 {
-                std::process::exit(code);
-            }
-        }
+        Command::Why(args) => security::run_why(args, &client, json).await?,
+        Command::Audit { cmd } => security::run_audit(cmd, &client, json).await?,
+        Command::Verdicts { cmd } => security::run_verdicts(cmd, &client, json).await?,
+        Command::Wait(args) => security::run_wait(args, &client, json).await?,
         Command::Publish(args) => publish::run(args, &client, resolved.registry.as_deref()).await?,
         Command::Download(args) => {
             download::run(args, &client, resolved.registry.as_deref()).await?
@@ -136,13 +191,13 @@ async fn main() -> Result<()> {
             auth::run(
                 cmd,
                 &client,
-                cli.json,
+                json,
                 cli.profile.as_deref(),
                 cli.token.as_deref(),
             )
             .await?
         }
-        Command::Admin { cmd } => admin::run(cmd, &client, cli.json).await?,
+        Command::Admin { cmd } => admin::run(cmd, &client, json).await?,
         Command::Tui => tui::run(client).await?,
         Command::Config { .. }
         | Command::Completion { .. }

@@ -983,7 +983,7 @@ fn auth_token_revoke_requires_oidc_fails() {
     let srv = TestServer::start();
     let id = uuid::Uuid::new_v4().to_string();
     let (ok, _stdout, stderr) = cli_cmd(
-        &["auth", "token", "revoke", &id],
+        &["auth", "token", "revoke", "--yes", &id],
         &srv.base_url(),
         AUTH_TOKEN,
     );
@@ -1094,7 +1094,7 @@ fn version_yank_and_unyank() {
 
     // Yank
     let (ok, _stdout, stderr) = cli_cmd(
-        &["version", "yank", REGISTRY, "YankLib", "0.1.0"],
+        &["version", "yank", "--yes", REGISTRY, "YankLib", "0.1.0"],
         &srv.base_url(),
         AUTH_TOKEN,
     );
@@ -1147,6 +1147,125 @@ fn version_delete() {
 }
 
 // ── Tests: publish ────────────────────────────────────────────────────────────
+
+/// [`cli_cmd`], returning the exit code rather than success.
+fn cli_exit(args: &[&str], server: &str, token: &str) -> (i32, String, String) {
+    let config = tempfile::tempdir().unwrap();
+    let home = scratch_home();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_batlehub-cli"))
+        .args(args)
+        .env("BATLEHUB_SERVER", server)
+        .env("BATLEHUB_TOKEN", token)
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", config.path())
+        .output()
+        .expect("failed to run batlehub-cli binary");
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// RFC 0040 §4.5: no terminal and no `--yes` is exit 9, and nothing is sent —
+/// the version is still served afterwards.
+#[test]
+fn a_destructive_command_without_a_terminal_refuses_with_nine() {
+    let srv = TestServer::start();
+    http_publish_nuget(&srv.base_url(), REGISTRY, "KeepLib", "1.0.0");
+    for verb in ["delete", "yank"] {
+        let (code, stdout, stderr) = cli_exit(
+            &["version", verb, REGISTRY, "KeepLib", "1.0.0"],
+            &srv.base_url(),
+            AUTH_TOKEN,
+        );
+        assert_eq!(code, 9, "{verb}: {stdout}\n{stderr}");
+        assert!(stdout.is_empty(), "{verb}: {stdout}");
+        assert!(
+            stderr.contains(&format!(
+                "error: refusing to {verb} without a terminal; pass --yes"
+            )),
+            "{stderr}"
+        );
+    }
+    assert!(
+        nuget_flat_versions(&srv.base_url(), REGISTRY, "keeplib").contains(&"1.0.0".to_owned()),
+        "a refused confirmation must not reach the server"
+    );
+}
+
+/// RFC 0040 §4.6: a 404 is exit 5 and one `error:` line, never `HTTP 404: {json}`;
+/// with `--format json` the same error is also on stdout.
+#[test]
+fn a_not_found_exits_five_with_the_error_shape() {
+    let srv = TestServer::start();
+    let (code, stdout, stderr) = cli_exit(
+        &["admin", "cache", "warm", REGISTRY, "--packages", "pkg1"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 5, "{stderr}");
+    assert!(stderr.starts_with("error: "), "{stderr}");
+    assert!(
+        !stderr.contains("HTTP 404") && !stderr.contains('{'),
+        "{stderr}"
+    );
+    assert!(stdout.is_empty(), "{stdout}");
+
+    let (code, stdout, _) = cli_exit(
+        &[
+            "--format",
+            "json",
+            "admin",
+            "cache",
+            "warm",
+            REGISTRY,
+            "--packages",
+            "pkg1",
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 5);
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect(&stdout);
+    assert_eq!(v["error"]["exit"], 5, "{v}");
+    assert!(v["error"]["message"].is_string(), "{v}");
+}
+
+/// `--format csv` on a listing prints the JSON field names as headers; on a
+/// command that prints one object it is a usage error.
+#[test]
+fn format_csv_prints_a_listing_and_refuses_one_object() {
+    let srv = TestServer::start();
+    let (code, stdout, stderr) = cli_exit(
+        &["--format", "csv", "registry", "list"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let header = stdout.lines().next().unwrap_or_default();
+    assert!(header.split(',').any(|c| c == "name"), "{stdout}");
+    assert!(stdout.contains(REGISTRY), "{stdout}");
+
+    let (code, _, stderr) = cli_exit(
+        &["--format", "csv", "registry", "info", REGISTRY],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 2, "{stderr}");
+}
+
+/// `raw` has no record separator, so only `auth token` takes it.
+#[test]
+fn format_raw_is_refused_outside_auth_token() {
+    let srv = TestServer::start();
+    let (code, _, stderr) = cli_exit(
+        &["--format", "raw", "registry", "list"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 2, "{stderr}");
+}
 
 #[test]
 fn publish_nuget_via_cli() {
@@ -1527,7 +1646,7 @@ fn admin_banner_set_and_clear() {
 fn admin_cache_clear() {
     let srv = TestServer::start();
     let (ok, stdout, stderr) = cli_cmd(
-        &["admin", "cache", "clear", REGISTRY],
+        &["admin", "cache", "clear", "--yes", REGISTRY],
         &srv.base_url(),
         AUTH_TOKEN,
     );
@@ -1555,7 +1674,7 @@ fn admin_cache_warm_not_configured() {
         !ok,
         "cache warm should fail when warming is not configured for the registry"
     );
-    assert!(stderr.contains("HTTP 404"), "stderr: {stderr}");
+    assert!(stderr.contains("error: "), "stderr: {stderr}");
 }
 
 #[test]
@@ -1565,7 +1684,7 @@ fn admin_config_reload_disabled() {
         cli_cmd(&["admin", "config", "reload"], &srv.base_url(), AUTH_TOKEN);
     assert!(!ok, "config reload should fail when hot reload is disabled");
     assert!(
-        stderr.contains("HTTP 503") && stderr.contains("hot reload is disabled"),
+        stderr.contains("error: ") && stderr.contains("hot reload is disabled"),
         "stderr: {stderr}"
     );
 }
@@ -1579,7 +1698,7 @@ fn admin_config_changes_errors_without_pool() {
         !ok,
         "config changes should fail without a database pool configured"
     );
-    assert!(stderr.contains("HTTP 500"), "stderr: {stderr}");
+    assert!(stderr.contains("error: "), "stderr: {stderr}");
 }
 
 #[test]
@@ -1618,6 +1737,7 @@ fn admin_purge_audit_log() {
         &[
             "admin",
             "audit-log",
+            "--yes",
             "--purge-before",
             "2026-01-01T00:00:00Z",
             "--json",
@@ -1640,6 +1760,7 @@ fn admin_purge_audit_log_table_mode() {
         &[
             "admin",
             "audit-log",
+            "--yes",
             "--purge-before",
             "2026-01-01T00:00:00Z",
         ],
@@ -1660,7 +1781,11 @@ fn admin_purge_audit_log_table_mode() {
 fn admin_audit_log_table_shows_seeded_event() {
     let srv = TestServer::start();
     let base = srv.base_url();
-    cli_cmd(&["admin", "users", "block", "someone"], &base, AUTH_TOKEN);
+    cli_cmd(
+        &["admin", "users", "block", "--yes", "someone"],
+        &base,
+        AUTH_TOKEN,
+    );
 
     let (ok, stdout, stderr) = cli_cmd(&["admin", "audit-log"], &base, AUTH_TOKEN);
     assert!(ok, "audit-log should succeed; stderr: {stderr}");
@@ -1675,7 +1800,11 @@ fn admin_audit_log_filters_by_action() {
     let base = srv.base_url();
     // A download (via seed_package) and an account-wide block: two actions.
     srv.seed_package("left-alone", "1.0.0");
-    cli_cmd(&["admin", "users", "block", "someone"], &base, AUTH_TOKEN);
+    cli_cmd(
+        &["admin", "users", "block", "--yes", "someone"],
+        &base,
+        AUTH_TOKEN,
+    );
 
     let (ok, stdout, stderr) = cli_cmd(
         &["admin", "audit-log", "--action", "block_user"],
@@ -1716,7 +1845,7 @@ fn admin_audit_log_rejects_an_unknown_action() {
 fn admin_cache_evict_dry_run_reports() {
     let srv = TestServer::start();
     let (ok, stdout, stderr) = cli_cmd(
-        &["admin", "cache", "evict", REGISTRY, "--dry-run"],
+        &["admin", "cache", "evict", "--yes", REGISTRY, "--dry-run"],
         &srv.base_url(),
         AUTH_TOKEN,
     );
@@ -1731,7 +1860,7 @@ fn admin_cache_evict_dry_run_reports() {
 fn admin_cache_evict_runs_live_without_the_flag() {
     let srv = TestServer::start();
     let (ok, stdout, stderr) = cli_cmd(
-        &["admin", "cache", "evict", REGISTRY],
+        &["admin", "cache", "evict", "--yes", REGISTRY],
         &srv.base_url(),
         AUTH_TOKEN,
     );
@@ -1750,7 +1879,7 @@ fn admin_cache_evict_runs_live_without_the_flag() {
 fn admin_cache_coherence_reports() {
     let srv = TestServer::start();
     let (ok, stdout, stderr) = cli_cmd(
-        &["admin", "cache", "coherence", REGISTRY],
+        &["admin", "cache", "coherence", "--yes", REGISTRY],
         &srv.base_url(),
         AUTH_TOKEN,
     );
@@ -1763,7 +1892,14 @@ fn admin_cache_coherence_reports() {
 fn admin_cache_coherence_dry_run_says_it_armed_nothing() {
     let srv = TestServer::start();
     let (ok, stdout, stderr) = cli_cmd(
-        &["admin", "cache", "coherence", REGISTRY, "--dry-run"],
+        &[
+            "admin",
+            "cache",
+            "coherence",
+            "--yes",
+            REGISTRY,
+            "--dry-run",
+        ],
         &srv.base_url(),
         AUTH_TOKEN,
     );
@@ -1883,7 +2019,15 @@ fn admin_users_block_list_unblock() {
     assert!(arr.is_empty(), "stdout: {stdout}");
 
     let (ok, stdout, stderr) = cli_cmd(
-        &["admin", "users", "block", "bad-actor", "--reason", "abuse"],
+        &[
+            "admin",
+            "users",
+            "block",
+            "--yes",
+            "bad-actor",
+            "--reason",
+            "abuse",
+        ],
         &base,
         AUTH_TOKEN,
     );
@@ -1920,7 +2064,7 @@ fn admin_users_list_blocked_table_mode() {
     let srv = TestServer::start();
     let base = srv.base_url();
     cli_cmd(
-        &["admin", "users", "block", "table-user"],
+        &["admin", "users", "block", "--yes", "table-user"],
         &base,
         AUTH_TOKEN,
     );
@@ -2026,7 +2170,15 @@ fn admin_bulk_yank_unyank_delete() {
     http_publish_nuget(&base, REGISTRY, "BulkLib", "1.0.0");
 
     let (ok, stdout, stderr) = cli_cmd(
-        &["admin", "bulk", "yank", REGISTRY, "BulkLib@1.0.0", "--json"],
+        &[
+            "admin",
+            "bulk",
+            "yank",
+            "--yes",
+            REGISTRY,
+            "BulkLib@1.0.0",
+            "--json",
+        ],
         &base,
         AUTH_TOKEN,
     );
@@ -2043,7 +2195,14 @@ fn admin_bulk_yank_unyank_delete() {
     assert!(stdout.contains("processed=1"), "stdout: {stdout}");
 
     let (ok, stdout, stderr) = cli_cmd(
-        &["admin", "bulk", "delete", REGISTRY, "BulkLib@1.0.0"],
+        &[
+            "admin",
+            "bulk",
+            "delete",
+            "--yes",
+            REGISTRY,
+            "BulkLib@1.0.0",
+        ],
         &base,
         AUTH_TOKEN,
     );
@@ -2055,7 +2214,7 @@ fn admin_bulk_yank_unyank_delete() {
 fn admin_bulk_rejects_malformed_package_ref() {
     let srv = TestServer::start();
     let (ok, _stdout, stderr) = cli_cmd(
-        &["admin", "bulk", "yank", REGISTRY, "no-at-sign"],
+        &["admin", "bulk", "yank", "--yes", REGISTRY, "no-at-sign"],
         &srv.base_url(),
         AUTH_TOKEN,
     );
@@ -2093,7 +2252,7 @@ fn admin_deprecate_undeprecate_unlist_relist() {
         ("relist", "Relisted"),
     ] {
         let (ok, stdout, stderr) = cli_cmd(
-            &["admin", subcommand, REGISTRY, "DepLib", "1.0.0"],
+            &["admin", subcommand, "--yes", REGISTRY, "DepLib", "1.0.0"],
             &base,
             AUTH_TOKEN,
         );
@@ -2158,7 +2317,10 @@ fn admin_notifications_channels_and_list_error_without_service() {
         AUTH_TOKEN,
     );
     assert!(!ok, "notifications channels should fail without a service");
-    assert!(stderr.contains("503"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("error: notifications not configured"),
+        "stderr: {stderr}"
+    );
 
     let (ok, _stdout, stderr) = cli_cmd(
         &["admin", "notifications", "list", "--json"],
@@ -2166,7 +2328,7 @@ fn admin_notifications_channels_and_list_error_without_service() {
         AUTH_TOKEN,
     );
     assert!(!ok, "notifications list should fail without a service");
-    assert!(stderr.contains("503"), "stderr: {stderr}");
+    assert!(stderr.contains("error: "), "stderr: {stderr}");
 }
 
 #[test]
@@ -3049,7 +3211,7 @@ fn package_readme_rejects_a_coordinate_with_no_registry() {
         AUTH_TOKEN,
     );
     assert!(!ok);
-    assert!(stderr.contains("registry/name"), "{stderr}");
+    assert!(stderr.contains("names no registry"), "{stderr}");
 }
 
 /// `--json` prints the whole response, so a script can read `is_fallback` and
@@ -4167,7 +4329,7 @@ fn admin_air_gap_missing_says_why_it_records_nothing() {
     let (ok, _stdout, stderr) = cli_cmd(&["admin", "air-gap-missing"], &srv.base_url(), AUTH_TOKEN);
     assert!(!ok, "air-gap-missing cannot succeed without a database");
     assert!(
-        stderr.contains("HTTP 503") && stderr.contains("no database"),
+        stderr.contains("error: ") && stderr.contains("no database"),
         "stderr: {stderr}"
     );
 }
@@ -4182,7 +4344,7 @@ fn admin_retention_refuses_a_registry_that_keeps_everything() {
     );
     assert!(!ok, "retention needs a [registries.retention] block");
     assert!(
-        stderr.contains("HTTP 409") && stderr.contains("keeps every published version forever"),
+        stderr.contains("error: ") && stderr.contains("keeps every published version forever"),
         "stderr: {stderr}"
     );
 }
@@ -4200,12 +4362,12 @@ fn verdicts_commands_report_a_registry_with_no_security_profile() {
     for args in [
         vec!["verdicts", "backfill", "--registry", REGISTRY],
         vec!["verdicts", "rescan", "--registry", REGISTRY],
-        vec!["verdicts", "pullers", "test-nuget:DepLib@1.0.0"],
+        vec!["verdicts", "pullers", "test-nuget/DepLib@1.0.0"],
     ] {
         let (ok, _stdout, stderr) = cli_cmd(&args, &base, AUTH_TOKEN);
         assert!(!ok, "{args:?} should fail without a security profile");
         assert!(
-            stderr.contains("404") && stderr.contains("has no security profile"),
+            stderr.starts_with("error: ") && stderr.contains("has no security profile"),
             "{args:?} stderr: {stderr}"
         );
     }
@@ -4302,7 +4464,7 @@ fn admin_config_validate_sends_the_file_to_the_server() {
     );
     assert!(!ok, "validate cannot succeed with hot reload disabled");
     assert!(
-        stderr.contains("HTTP 503") && stderr.contains("hot reload is disabled"),
+        stderr.contains("error: ") && stderr.contains("hot reload is disabled"),
         "stderr: {stderr}"
     );
 }
@@ -4320,7 +4482,7 @@ fn admin_import_reports_when_no_import_is_configured() {
     let (ok, _stdout, stderr) =
         cli_cmd(&["admin", "import", REGISTRY], &srv.base_url(), AUTH_TOKEN);
     assert!(!ok, "import should fail when none is configured");
-    assert!(stderr.contains("HTTP 404"), "stderr: {stderr}");
+    assert!(stderr.contains("error: "), "stderr: {stderr}");
     assert!(
         stderr.contains("release_imports"),
         "the refusal should name what is missing: {stderr}"
@@ -4348,7 +4510,7 @@ fn admin_import_sends_the_repo_selector() {
         AUTH_TOKEN,
     );
     assert!(!ok, "import should fail when none is configured");
-    assert!(stderr.contains("HTTP 404"), "stderr: {stderr}");
+    assert!(stderr.contains("error: "), "stderr: {stderr}");
 }
 
 /// An unknown registry is refused before any import runs.
@@ -4362,7 +4524,7 @@ fn admin_import_rejects_an_unknown_registry() {
     );
     assert!(!ok, "import into an unknown registry should fail");
     assert!(
-        stderr.contains("HTTP 40"),
+        stderr.contains("error: "),
         "expected a 4xx refusal: {stderr}"
     );
 }
@@ -4792,20 +4954,20 @@ fn setup_apply_writes_then_remove_restores_byte_for_byte() {
 }
 
 #[test]
-fn setup_apply_exits_3_on_a_conflict_and_leaves_the_file_alone() {
+fn setup_apply_exits_6_on_a_conflict_and_leaves_the_file_alone() {
     let srv = proxy_server();
     let m = Machine::new(&["npm"]);
     let seeded = "registry=https://registry.npmjs.org/\n";
     std::fs::write(m.path(".npmrc"), seeded).unwrap();
 
     let (code, stdout, stderr) = m.setup(&srv.base_url(), &["apply", "--yes"]);
-    assert_eq!(code, 3, "{stdout}\n{stderr}");
+    assert_eq!(code, 6, "{stdout}\n{stderr}");
     assert!(stderr.contains("conflict"), "{stderr}");
     assert!(stdout.contains("merge by hand"), "{stdout}");
     assert_eq!(m.read(".npmrc").as_deref(), Some(seeded));
 
     let (code, stdout, _) = m.setup(&srv.base_url(), &["status"]);
-    assert_eq!(code, 3, "{stdout}");
+    assert_eq!(code, 6, "{stdout}");
 }
 
 /// A placeholder written into `~/.npmrc` breaks npm, so an unreachable server
@@ -4837,7 +4999,7 @@ fn setup_env_respects_a_conflict_and_falls_back_only_when_unreachable() {
         &[("RUSTUP_DIST_SERVER", "https://mirror.corp.example")],
         &["env"],
     );
-    assert_eq!(code, 3, "{stdout}\n{stderr}");
+    assert_eq!(code, 6, "{stdout}\n{stderr}");
     assert!(!stdout.contains("RUSTUP_DIST_SERVER"), "{stdout}");
     assert!(stderr.contains("nothing printed"), "{stderr}");
 
@@ -4885,9 +5047,9 @@ fn setup_leaves_an_edited_settings_xml_alone() {
     std::fs::write(m.path(".m2/settings.xml"), &edited).unwrap();
 
     let (code, _, stderr) = m.setup(&base, &["apply", "--yes", "--only", "maven"]);
-    assert_eq!(code, 3, "{stderr}");
+    assert_eq!(code, 6, "{stderr}");
     let (code, _, stderr) = m.setup(&base, &["remove", "--yes"]);
-    assert_eq!(code, 3, "{stderr}");
+    assert_eq!(code, 6, "{stderr}");
     assert!(stderr.contains("left alone"), "{stderr}");
     assert_eq!(m.read(".m2/settings.xml").as_deref(), Some(edited.as_str()));
 }
@@ -4898,7 +5060,7 @@ fn setup_apply_skips_local_registries_and_resolves_an_ambiguity_with_a_kept_pick
     let m = Machine::new(&["npm"]);
 
     let (code, stdout, stderr) = m.setup(&srv.base_url(), &["apply", "--yes"]);
-    assert_eq!(code, 3, "{stdout}\n{stderr}");
+    assert_eq!(code, 6, "{stdout}\n{stderr}");
     assert!(stderr.contains("--pick"), "{stderr}");
     assert!(m.read(".npmrc").is_none());
 
@@ -4906,7 +5068,7 @@ fn setup_apply_skips_local_registries_and_resolves_an_ambiguity_with_a_kept_pick
     // not the pick: it used to fill `--registry TYPE=NAME` and fail every verb.
     let (code, stdout, stderr) =
         m.setup_with(&srv.base_url(), &[("BATLEHUB_REGISTRY", "a")], &["status"]);
-    assert_eq!(code, 3, "{stdout}\n{stderr}");
+    assert_eq!(code, 6, "{stdout}\n{stderr}");
     assert!(stdout.contains("ambiguous"), "{stdout}");
 
     let (code, _, _) = m.setup(&srv.base_url(), &["apply", "--yes", "--pick", "npm=b"]);

@@ -18,9 +18,6 @@ fn render_status_cell(status: &PackageStatus) -> Cell {
 pub enum PackageCommand {
     /// List packages (across all or a specific registry)
     List {
-        /// Filter by registry name
-        #[arg(long, short = 'r')]
-        registry: Option<String>,
         /// Filter by name substring
         #[arg(long, short = 's')]
         search: Option<String>,
@@ -46,7 +43,7 @@ pub enum PackageCommand {
     /// The source, not a rendering: markdown in a terminal is readable, and
     /// turning it into ANSI is a separate concern (RFC 0007 §4.2).
     Readme {
-        /// `registry/name` or `registry/name@version`. Without a version, the
+        /// `registry/name[@version]`, or a bare `name[@version]` with `-r`. Without a version, the
         /// newest one that has a README answers.
         coordinate: String,
         /// Do not ask upstream about a version this instance holds nothing of.
@@ -59,38 +56,6 @@ pub enum PackageCommand {
     },
 }
 
-/// Split `registry/name` or `registry/name@version`.
-///
-/// The `@` is found from the *right* so a scoped npm package survives:
-/// `npm1/@scope/pkg@1.0.0` names the version, not the scope.
-fn parse_coordinate(raw: &str) -> Result<(String, String, Option<String>)> {
-    let (registry, rest) = raw
-        .split_once('/')
-        .ok_or_else(|| anyhow::anyhow!("expected registry/name[@version], got '{raw}'"))?;
-    if registry.is_empty() || rest.is_empty() {
-        anyhow::bail!("expected registry/name[@version], got '{raw}'");
-    }
-    match rest.rfind('@') {
-        // A leading `@` is a scope, not a version separator.
-        Some(at) if at > 0 => {
-            let version = &rest[at + 1..];
-            // A trailing `@` names no version. Passed through it became
-            // `?version=`, which the server reads as a request for the empty
-            // version rather than for the newest one — a `404` for a typo the
-            // client can see for itself.
-            if version.is_empty() {
-                anyhow::bail!("expected registry/name[@version], got '{raw}'");
-            }
-            Ok((
-                registry.to_owned(),
-                rest[..at].to_owned(),
-                Some(version.to_owned()),
-            ))
-        }
-        _ => Ok((registry.to_owned(), rest.to_owned(), None)),
-    }
-}
-
 pub async fn run(
     cmd: PackageCommand,
     client: &BatleHubClient,
@@ -99,13 +64,12 @@ pub async fn run(
 ) -> Result<()> {
     match cmd {
         PackageCommand::List {
-            registry,
             search,
             blocked_only,
             page,
             per_page,
         } => {
-            let reg = registry.or_else(|| default_registry.map(str::to_string));
+            let reg = default_registry.map(str::to_string);
             let resp = client
                 .list_packages(PackageQuery {
                     registry: reg,
@@ -125,7 +89,7 @@ pub async fn run(
             };
 
             if json {
-                println!("{}", serde_json::to_string_pretty(&items)?);
+                crate::render::data(&items)?;
             } else {
                 print_packages_table(&items, resp.total);
             }
@@ -134,7 +98,9 @@ pub async fn run(
             coordinate,
             no_upstream,
         } => {
-            let (registry, name, version) = parse_coordinate(&coordinate)?;
+            let c = crate::coordinate::Coordinate::resolve(client, &coordinate, default_registry)
+                .await?;
+            let (registry, name, version) = (c.registry, c.name, c.version);
             let resp = client
                 .package_readme(
                     &registry,
@@ -148,7 +114,7 @@ pub async fn run(
                 .await?;
 
             if json {
-                println!("{}", serde_json::to_string_pretty(&resp)?);
+                crate::render::data(&resp)?;
             } else {
                 print_readme(&resp);
             }
@@ -170,7 +136,7 @@ pub async fn run(
                 .collect();
 
             if json {
-                println!("{}", serde_json::to_string_pretty(&items)?);
+                crate::render::data(&items)?;
             } else {
                 print_versions_table(&items);
             }
@@ -241,71 +207,4 @@ fn print_readme(resp: &crate::api::package::ReadmeResponse) {
     }
     // `source_text` is absent only for `format=html`, which this never asks for.
     println!("{}", resp.source_text.as_deref().unwrap_or_default());
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_coordinate_splits_into_registry_name_and_optional_version() {
-        assert_eq!(
-            parse_coordinate("npm1/express").unwrap(),
-            ("npm1".into(), "express".into(), None)
-        );
-        assert_eq!(
-            parse_coordinate("npm1/express@4.18.2").unwrap(),
-            ("npm1".into(), "express".into(), Some("4.18.2".into()))
-        );
-    }
-
-    /// A scoped npm package has an `@` of its own, and it is not a version
-    /// separator. Splitting from the left would ask for the package `` at
-    /// version `scope/pkg@1.0.0`.
-    #[test]
-    fn a_scoped_name_survives() {
-        assert_eq!(
-            parse_coordinate("npm1/@scope/pkg").unwrap(),
-            ("npm1".into(), "@scope/pkg".into(), None)
-        );
-        assert_eq!(
-            parse_coordinate("npm1/@scope/pkg@1.0.0").unwrap(),
-            ("npm1".into(), "@scope/pkg".into(), Some("1.0.0".into()))
-        );
-    }
-
-    /// A maven coordinate carries a colon and no slash inside the name, and a
-    /// terraform one carries slashes — both go through unchanged.
-    #[test]
-    fn other_ecosystems_coordinates_pass_through() {
-        assert_eq!(
-            parse_coordinate("mvn1/com.example:lib@1.0.0").unwrap(),
-            (
-                "mvn1".into(),
-                "com.example:lib".into(),
-                Some("1.0.0".into())
-            )
-        );
-        assert_eq!(
-            parse_coordinate("tf1/modules/ns/name/aws").unwrap(),
-            ("tf1".into(), "modules/ns/name/aws".into(), None)
-        );
-    }
-
-    #[test]
-    fn a_coordinate_with_no_registry_is_rejected() {
-        for bad in ["express", "/express", "npm1/", ""] {
-            assert!(parse_coordinate(bad).is_err(), "{bad} should be rejected");
-        }
-    }
-
-    /// A trailing `@` names no version. Read as `Some("")` it travelled as
-    /// `?version=`, which asks the server for the empty version rather than for
-    /// the newest one — a `404` for something the client can see is a typo.
-    #[test]
-    fn a_trailing_at_is_rejected_rather_than_sent_as_an_empty_version() {
-        for bad in ["npm1/express@", "npm1/@scope/pkg@"] {
-            assert!(parse_coordinate(bad).is_err(), "{bad} should be rejected");
-        }
-    }
 }

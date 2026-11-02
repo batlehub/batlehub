@@ -1,4 +1,4 @@
-//! `batlehub why` and `batlehub wait` (RFC 0018 §4.2).
+//! `batlehub-cli why` and `batlehub-cli wait` (RFC 0018 §4.2).
 //!
 //! `why` is the channel the native error bodies point at: a `403` on the
 //! artifact path carries one line, and this prints the verdict behind it —
@@ -6,14 +6,14 @@
 //! findings for a caller with `findings:read`.
 //!
 //! `wait` is the CI contract. It polls the verdict endpoint and exits **0**
-//! when the coordinate becomes servable, **1 when waiting cannot help** — a
+//! when the coordinate becomes servable, **4 when waiting cannot help** — a
 //! `denied` verdict, or a hold with no clock such as `TIMESTAMP_MISSING` —
-//! and **2** on timeout. Exit 1 is returned on the first poll with the
-//! reason, never after burning the timeout, so a pipeline fails fast on a
-//! decision and waits only on a clock:
+//! and **8** on timeout (RFC 0040 §4.6). Exit 4 is returned on the first poll
+//! with the reason, never after burning the timeout, so a pipeline fails fast
+//! on a decision and waits only on a clock:
 //!
 //! ```text
-//! batlehub wait npm:left-pad@1.3.1 --timeout 2h && npm ci
+//! batlehub-cli wait npm/left-pad@1.3.1 --timeout 2h && npm ci
 //! ```
 
 use std::time::Duration;
@@ -22,12 +22,23 @@ use anyhow::Result;
 use batlehub_core::entities::reason_code_docs_url;
 use clap::Args;
 
-use crate::api::security::{parse_coordinate, VerdictView};
+use crate::api::security::VerdictView;
 use crate::api::BatleHubClient;
+use crate::coordinate::Coordinate;
+use crate::exit::{CliError, ExitCode};
+use crate::render::{ctx, Format};
+
+/// `registry/name@version` (or a bare `name@version` with `-r`), resolved
+/// against the registries the caller can see.
+async fn versioned(client: &BatleHubClient, raw: &str) -> Result<(String, String, String)> {
+    Ok(Coordinate::resolve(client, raw, ctx().registry.as_deref())
+        .await?
+        .require_version()?)
+}
 
 #[derive(Args)]
 pub struct WhyArgs {
-    /// `<registry>:<name>@<version>` — the coordinate the refusal named
+    /// `registry/name@version` — the coordinate the refusal named
     pub coordinate: String,
     /// Queue a rescan after printing (needs `gates:exempt` on the registry)
     #[arg(long)]
@@ -50,8 +61,6 @@ pub enum VerdictsCommand {
 
 #[derive(Args)]
 pub struct ListArgs {
-    #[arg(long)]
-    pub registry: String,
     /// `allowed`, `warned`, `quarantined` or `denied`; default every state
     #[arg(long)]
     pub state: Option<String>,
@@ -62,8 +71,6 @@ pub struct ListArgs {
 
 #[derive(Args)]
 pub struct BulkArgs {
-    #[arg(long)]
-    pub registry: String,
     /// `rescan` only: the state to rescan; default every verdict
     #[arg(long)]
     pub state: Option<String>,
@@ -71,7 +78,7 @@ pub struct BulkArgs {
 
 #[derive(Args)]
 pub struct PullersArgs {
-    /// `<registry>:<name>@<version>`
+    /// `registry/name@version`
     pub coordinate: String,
     /// The window back from now (`30d`, `12h`, `90m`) or an RFC 3339 instant;
     /// default: the registry's `pullers_window_days`
@@ -84,15 +91,16 @@ pub struct PullersArgs {
 
 /// `verdicts list`: the registry's stored verdicts, newest scan first.
 async fn list_verdicts(args: &ListArgs, client: &BatleHubClient, json: bool) -> Result<()> {
+    let registry = ctx().require_registry(None)?;
     let report = client
-        .list_verdicts(&args.registry, args.state.as_deref(), args.limit)
+        .list_verdicts(&registry, args.state.as_deref(), args.limit)
         .await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        crate::render::data(&report)?;
         return Ok(());
     }
     let items = report["items"].as_array().cloned().unwrap_or_default();
-    println!("{} verdict(s) in {}", items.len(), args.registry);
+    println!("{} verdict(s) in {registry}", items.len());
     if items.is_empty() {
         return Ok(());
     }
@@ -138,9 +146,15 @@ fn print_verdict_row(v: &serde_json::Value) {
 
 /// `verdicts pullers`: who pulled a held version before it was held.
 async fn list_pullers(args: &PullersArgs, client: &BatleHubClient, json: bool) -> Result<()> {
-    let (registry, name, version) = parse_coordinate(&args.coordinate)?;
+    let (registry, name, version) = versioned(client, &args.coordinate).await?;
     let body = client
-        .pullers(&registry, &name, &version, &args.since, args.csv)
+        .pullers(
+            &registry,
+            &name,
+            &version,
+            &args.since,
+            args.csv || ctx().format == Format::Csv,
+        )
         .await?;
     if args.csv || json {
         print!("{body}");
@@ -196,9 +210,6 @@ pub struct PullsArgs {
     /// Whose pulls: a user id, or `ip:<addr>` for an anonymous caller
     #[arg(long)]
     pub identity: String,
-    /// Narrow to one registry
-    #[arg(long)]
-    pub registry: Option<String>,
     /// Narrow to one package name
     #[arg(long)]
     pub package: Option<String>,
@@ -222,10 +233,10 @@ async fn list_pulls(args: &PullsArgs, client: &BatleHubClient, json: bool) -> Re
     let body = client
         .audit_pulls(
             &args.identity,
-            args.registry.as_deref(),
+            ctx().registry.as_deref(),
             args.package.as_deref(),
             &args.since,
-            args.csv,
+            args.csv || ctx().format == Format::Csv,
         )
         .await?;
     // The server rendered it; printing it verbatim is what keeps the CSV an
@@ -276,11 +287,12 @@ pub async fn run_verdicts(cmd: VerdictsCommand, client: &BatleHubClient, json: b
 }
 
 async fn bulk(client: &BatleHubClient, op: &str, args: &BulkArgs, json: bool) -> Result<()> {
+    let registry = ctx().require_registry(None)?;
     let out = client
-        .bulk_scan(op, &args.registry, args.state.as_deref())
+        .bulk_scan(op, &registry, args.state.as_deref())
         .await?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&out)?);
+        crate::render::data(&out)?;
     } else {
         println!(
             "{}: {} of {} coordinate(s) queued at {} priority in {}",
@@ -288,7 +300,7 @@ async fn bulk(client: &BatleHubClient, op: &str, args: &BulkArgs, json: bool) ->
             out["queued"].as_u64().unwrap_or(0),
             out["considered"].as_u64().unwrap_or(0),
             out["trigger"].as_str().unwrap_or("?"),
-            args.registry
+            registry
         );
     }
     Ok(())
@@ -296,7 +308,7 @@ async fn bulk(client: &BatleHubClient, op: &str, args: &BulkArgs, json: bool) ->
 
 #[derive(Args)]
 pub struct WaitArgs {
-    /// `<registry>:<name>@<version>`
+    /// `registry/name@version`
     pub coordinate: String,
     /// Give up after this long (e.g. `30m`, `2h`; default 1h)
     #[arg(long, default_value = "1h", value_parser = parse_duration)]
@@ -327,24 +339,27 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
 }
 
 pub async fn run_why(args: WhyArgs, client: &BatleHubClient, json: bool) -> Result<()> {
-    let (registry, name, version) = parse_coordinate(&args.coordinate)?;
+    let (registry, name, version) = versioned(client, &args.coordinate).await?;
     let Some(verdict) = client.get_verdict(&registry, &name, &version).await? else {
-        anyhow::bail!(
-            "no verdict for {}: either this instance has never been asked for it, the \
-             registry has no [registries.security] profile, or your token lacks \
-             quarantine:read",
-            args.coordinate
-        );
+        return Err(CliError::new(
+            ExitCode::NotFound,
+            format!(
+                "no verdict for {registry}/{name}@{version}: either this instance has never \
+                 been asked for it, the registry has no [registries.security] profile, or your \
+                 token lacks quarantine:read"
+            ),
+        )
+        .into());
     };
     if json {
-        println!("{}", serde_json::to_string_pretty(&verdict)?);
+        crate::render::data(&verdict)?;
     } else {
         print_verdict(&verdict);
     }
     if args.rescan {
         let r = client.rescan(&registry, &name, &version).await?;
         if json {
-            println!("{}", serde_json::to_string_pretty(&r)?);
+            crate::render::data(&r)?;
         } else if r.queued {
             println!("\nRescan queued (trigger: {}).", r.trigger);
         } else {
@@ -356,10 +371,10 @@ pub async fn run_why(args: WhyArgs, client: &BatleHubClient, json: bool) -> Resu
 
 pub fn print_verdict(v: &VerdictView) {
     println!(
-        "{}:{}@{}",
+        "{}/{}@{}",
         v.package.registry, v.package.name, v.package.version
     );
-    // RFC 0019: `batlehub why github:cli/cli@main` asked about a branch and
+    // RFC 0019: `batlehub-cli why github/cli/cli@main` asked about a branch and
     // is being answered about a commit. Say so before anything else, or the
     // rest of the block reads as though it were about `main`.
     if let (Some(git_ref), Some(kind), Some(sha)) =
@@ -420,33 +435,38 @@ pub fn print_verdict(v: &VerdictView) {
     match v.state.as_str() {
         "allowed" | "warned" => println!("\nServed."),
         "quarantined" if v.available_at.is_some() => {
-            println!("\nHeld until {}. `batlehub wait` waits for it.", v.available_at.as_deref().unwrap_or(""))
+            println!("\nHeld until {}. `batlehub-cli wait` waits for it.", v.available_at.as_deref().unwrap_or(""))
         }
         "quarantined" => println!("\nHeld until a scanner answers (or, for TIMESTAMP_MISSING, until the upstream is dated)."),
-        _ => println!("\nRefused until a rescan or an administrator acts. `batlehub why --rescan` queues one."),
+        _ => println!("\nRefused until a rescan or an administrator acts. `batlehub-cli why --rescan` queues one."),
     }
 }
 
-/// Exit code of `wait`: 0 servable, 1 waiting cannot help, 2 timed out.
-pub async fn run_wait(args: WaitArgs, client: &BatleHubClient, json: bool) -> Result<i32> {
-    let (registry, name, version) = parse_coordinate(&args.coordinate)?;
+/// `wait`: `Ok` when servable; exit 4 when waiting cannot help, 8 on timeout.
+pub async fn run_wait(args: WaitArgs, client: &BatleHubClient, json: bool) -> Result<()> {
+    let (registry, name, version) = versioned(client, &args.coordinate).await?;
     let started = std::time::Instant::now();
     let mut polls = 0u32;
     loop {
         polls += 1;
         let verdict = client.get_verdict(&registry, &name, &version).await?;
         let Some(verdict) = verdict else {
-            eprintln!(
-                "no verdict for {}: this instance has never been asked for it (request the \
-                 artifact once, or check the registry's security profile and your \
-                 quarantine:read)",
-                args.coordinate
-            );
-            return Ok(1);
+            return Err(CliError::new(
+                ExitCode::Refused,
+                format!(
+                    "no verdict for {registry}/{name}@{version}: this instance has never been \
+                     asked for it"
+                ),
+            )
+            .hint(
+                "request the artifact once, or check the registry's security profile and your \
+                 quarantine:read",
+            )
+            .into());
         };
         if verdict.is_served() {
             if json {
-                println!("{}", serde_json::to_string_pretty(&verdict)?);
+                crate::render::data(&verdict)?;
             } else {
                 println!(
                     "{} is {} ({})",
@@ -459,27 +479,31 @@ pub async fn run_wait(args: WaitArgs, client: &BatleHubClient, json: bool) -> Re
                     }
                 );
             }
-            return Ok(0);
+            return Ok(());
         }
         if !verdict.waiting_helps() {
-            eprintln!(
-                "{}: waiting cannot help — {}. Run `batlehub why {}`.",
-                args.coordinate,
-                verdict.why_waiting_cannot_help(),
-                args.coordinate
-            );
-            return Ok(1);
+            return Err(CliError::new(
+                ExitCode::Refused,
+                format!(
+                    "{registry}/{name}@{version}: waiting cannot help — {}",
+                    verdict.why_waiting_cannot_help()
+                ),
+            )
+            .hint(format!("batlehub-cli why {registry}/{name}@{version}"))
+            .into());
         }
         let elapsed = started.elapsed();
         if elapsed >= args.timeout {
-            eprintln!(
-                "{}: still {} ({}) after {}s; giving up",
-                args.coordinate,
-                verdict.state,
-                verdict.reason_codes.join(", "),
-                elapsed.as_secs()
-            );
-            return Ok(2);
+            return Err(CliError::new(
+                ExitCode::Timeout,
+                format!(
+                    "{registry}/{name}@{version}: still {} ({}) after {}s; giving up",
+                    verdict.state,
+                    verdict.reason_codes.join(", "),
+                    elapsed.as_secs()
+                ),
+            )
+            .into());
         }
         // Sleep to the clock when there is one, else the poll interval —
         // and never past the timeout.

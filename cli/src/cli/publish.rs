@@ -16,10 +16,6 @@ pub struct PublishArgs {
     /// its devfile.yaml (packed into a bundle here)
     pub file: PathBuf,
 
-    /// Target registry name (overrides default)
-    #[arg(long, short = 'r')]
-    pub registry: Option<String>,
-
     /// Package name (overrides auto-detection)
     #[arg(long, short = 'n')]
     pub name: Option<String>,
@@ -90,15 +86,9 @@ pub async fn run(
         (name, version)
     };
 
-    let registry = args
-        .registry
-        .clone()
-        .or_else(|| default_registry.map(str::to_string))
-        .ok_or_else(|| {
-            anyhow::anyhow!("no registry specified; use --registry or set a default in config")
-        })?;
+    let registry = crate::render::ctx().require_registry(default_registry.map(str::to_string))?;
 
-    println!(
+    eprintln!(
         "Publishing {} {}@{} to registry '{}' ...",
         registry_type, name, version, registry
     );
@@ -179,7 +169,13 @@ pub async fn run(
         }
     }
 
-    println!("Published successfully.");
+    if crate::render::ctx().structured() {
+        crate::render::data(&serde_json::json!({
+            "registry": registry, "name": name, "version": version
+        }))?;
+    } else {
+        println!("Published successfully.");
+    }
     Ok(())
 }
 
@@ -201,21 +197,19 @@ async fn publish_devfile(
     let bundle = devfile_bundle(&args.file)?;
     let read = batlehub_core::services::devfile::read_bundle(&bundle)
         .map_err(|e| anyhow::anyhow!("{}: {e}", args.file.display()))?;
-    let registry = args
-        .registry
-        .clone()
-        .or_else(|| default_registry.map(str::to_string))
-        .ok_or_else(|| {
-            anyhow::anyhow!("no registry specified; use --registry or set a default in config")
-        })?;
-    println!(
+    let registry = crate::render::ctx().require_registry(default_registry.map(str::to_string))?;
+    eprintln!(
         "Publishing devfile {}@{} to registry '{}' ...",
         read.name, read.version, registry
     );
     let published = client.publish_devfile(&registry, bundle).await?;
-    println!(
-        "Published {}@{} ({}).",
-        published.stack, published.version, published.digest
-    );
+    if crate::render::ctx().structured() {
+        crate::render::data(&published)?;
+    } else {
+        println!(
+            "Published {}@{} ({}).",
+            published.stack, published.version, published.digest
+        );
+    }
     Ok(())
 }

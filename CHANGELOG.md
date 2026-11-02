@@ -8,6 +8,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **`batlehub-cli` has one table of exit codes** (RFC 0040 §4.6). Every error
+  used to be 1. A script can now branch on the code:
+
+  | Case | Before | After |
+  | --- | --- | --- |
+  | HTTP 401 | 1 | 3 |
+  | HTTP 403 | 1 | 4 |
+  | HTTP 404, unknown registry | 1 | 5 |
+  | HTTP 409 | 1 | 6 |
+  | `wait`: waiting cannot help | 1 | 4 |
+  | `wait`: timed out | 2 | 8 |
+  | `setup`: `conflict` / `ambiguous` / `orphaned` | 3 | 6 |
+  | `mise seed` / `mise import` with failures, a bulk operation with failed items | 1 | 7 |
+  | a destructive command without a terminal and without `--yes` | ran | 9 |
+  | a usage error (no registry for a bare name, an artifact to a terminal) | 1 | 2 |
+
+  No switch restores the old codes.
+- **Destructive commands confirm, and refuse without a terminal.** These used
+  to run without asking: `version yank`, `admin bulk yank`/`delete`,
+  `admin unlist`, `admin cache clear`/`evict`/`coherence`,
+  `admin audit-log --purge-before`, `admin users block`, `admin gdpr erase`,
+  `admin retention --reclaim`, `admin notifications delete`,
+  `auth token revoke`, and `download` over an existing file. They now ask on a
+  terminal. In a script they exit 9 and send nothing unless given the new
+  global `-y/--yes`.
+- **Errors have one shape**: `error: <the server's message>`, a `code:` line
+  with its docs link when the server sent a reason code, and an optional
+  `hint:`. Before, an error was `HTTP 403: {json}`. With `--format json` the
+  error is also written to stdout as `{"error": {…, "exit": N}}`.
+- **`-r/--registry` is honoured by every registry filter.** That covers
+  `admin flags list`, `exposure`, `air-gap-missing`, `audit-log`,
+  `access-check`, `export-audit-log`, `quota list` and `sbom export`, plus
+  `verdicts list`/`backfill`/`rescan` and `audit pulls`. They used to declare
+  their own `--registry`, and so ignored `BATLEHUB_REGISTRY` and the profile.
+- **`admin sbom get/export --format` is now `--sbom-format`.** The global
+  `--format` took its name. `admin export-audit-log --format json|csv` is now
+  the global option, with the same spelling.
+- **`why`, `wait`, `verdicts pullers` and `package readme` take
+  `registry/name@version`.** A bare name goes to the default registry.
+  `registry:name@version` is still read, with a warning.
+
+### Added
+
+- **`--format table|json|csv|raw`** (and `BATLEHUB_FORMAT`) on every command.
+  `--json` is its short form, and is now honoured by `version`, `publish` and
+  `download` too. `csv` works on every listing, with the JSON field names as
+  headers.
+
 ## [1.8.3] - 2026-11-02
 
 ### Fixed

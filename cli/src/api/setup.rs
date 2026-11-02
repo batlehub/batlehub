@@ -90,7 +90,7 @@ fn read_dir_entries(dir: &Path, remaining_depth: usize) -> (Vec<String>, Vec<Pat
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) => {
-            eprintln!("Warning: failed to read directory {}: {e}", dir.display());
+            eprintln!("warning: failed to read directory {}: {e}", dir.display());
             return (file_names, subdirs);
         }
     };

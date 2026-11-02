@@ -47,7 +47,7 @@ pub async fn run(cmd: OwnerCommand, client: &BatleHubClient, json: bool) -> Resu
         OwnerCommand::List { registry, name } => {
             let owners = client.list_owners(&registry, &name).await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&owners)?);
+                crate::render::data(&owners)?;
             } else {
                 let mut table = Table::new();
                 table.set_header(["Type", "Principal", "Role", "Granted By"]);

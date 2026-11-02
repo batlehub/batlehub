@@ -73,7 +73,7 @@ pub async fn run(cmd: AuthzCommand, client: &BatleHubClient, json: bool) -> Resu
                 })
                 .await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&answer)?);
+                crate::render::data(&answer)?;
             } else {
                 print_explain(&answer, &subject, &action);
             }
@@ -81,7 +81,7 @@ pub async fn run(cmd: AuthzCommand, client: &BatleHubClient, json: bool) -> Resu
         AuthzCommand::Shadow { limit, detail } => {
             let report = client.authz_shadow(limit).await?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
+                crate::render::data(&report)?;
             } else {
                 print_shadow(&report, detail);
             }

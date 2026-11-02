@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: c3c81f4f91890b0b
+sourceHash: 989e4e0e97f935f6
 ---
 
 # batlehub-cli
@@ -93,6 +93,7 @@ d'environnement — pratique en CI, sans toucher au fichier de configuration :
 | `BATLEHUB_TOKEN`    | `--token`        |
 | `BATLEHUB_REGISTRY` | `--registry`     |
 | `BATLEHUB_PROFILE`  | `--profile`      |
+| `BATLEHUB_FORMAT`   | `--format`       |
 
 ---
 
@@ -105,8 +106,107 @@ Ces options sont disponibles sur toutes les commandes :
 | `--profile <name>` | `-P` | Utiliser un profil de configuration nommé |
 | `--server <url>` | | Remplacer l'URL du serveur |
 | `--token <tok>` | | Remplacer le token d'authentification |
-| `--registry <name>` | `-r` | Définir un registre par défaut |
-| `--json` | | Émettre du JSON exploitable par une machine plutôt que des tables |
+| `--registry <name>` | `-r` | Le registre par défaut : pour un nom de paquet nu, et pour le filtre de registre de chaque commande. À défaut, `BATLEHUB_REGISTRY`, puis le `registry` du profil |
+| `--format <table\|json\|csv\|raw>` | | Forme de la sortie (ci-dessous) ; `BATLEHUB_FORMAT` la fixe une fois pour un job de CI |
+| `--json` | | Équivaut à `--format json` |
+| `--yes` | `-y` | Répondre oui à la confirmation que demande une commande destructrice |
+
+### Nommer un paquet {#coordinate}
+
+Une commande qui agit sur un paquet prend une coordonnée,
+`registry/name[@version]` : le registre est tout ce qui précède le premier `/`, la
+version tout ce qui suit le dernier `@` qui n'est pas le premier caractère du nom.
+
+```text
+npm-local/lodash@4.17.21
+npm-local/@scope/pkg@1.2.3        # nom @scope/pkg
+go/github.com/x/y@v1.2.0          # le chemin de module reste entier
+maven/org.slf4j:slf4j-api@2.0.9   # le group:artifact de Maven reste entier
+```
+
+Une coordonnée sans `/` est un nom nu, placé dans le registre par défaut (`-r`,
+`BATLEHUB_REGISTRY`, le `registry` du profil) ; si aucun n'est défini, la
+commande échoue avec le code 2. Un premier segment qui n'est pas un registre que
+vous voyez est lu comme une partie du nom quand un registre par défaut est
+défini (`-r go github.com/x/y`), et échoue sinon avec le code 5, en listant les
+registres que vous voyez. L'ancienne forme `registry:name@version` est toujours
+lue, avec un `warning:`.
+
+`why`, `wait`, `verdicts pullers` et `package readme` prennent aujourd'hui une
+coordonnée ; les autres commandes de paquet prennent encore
+`<registry> <name> <version>` en arguments séparés.
+
+### Sortie et erreurs {#output}
+
+- **`table`** est le format par défaut, dans un terminal comme dans un pipe.
+- **`json`** imprime ce que l'API a envoyé, sans renommer les champs : une
+  liste comme un tableau (ou l'objet de page de l'API), une action comme sa
+  réponse, ou `{"ok": true}` quand elle n'en a pas.
+- **`csv`** fonctionne sur toute liste, avec les noms de champs JSON comme
+  en-têtes. C'est une erreur d'usage (code 2) sur une commande qui imprime un
+  seul objet.
+- **`raw`** n'est accepté que par `auth token`, qui imprime une seule valeur.
+
+Les données vont sur stdout. La progression, les avertissements, les indices et
+les confirmations vont sur stderr : `batlehub-cli … --format json | jq` ne lit
+jamais une invite.
+
+Une erreur est un bloc sur stderr :
+
+```text
+error: version 4.17.21 of npm-local/lodash is held until 2026-11-04 14:00 UTC
+  code: MIN_AGE_NOT_MET — https://batlehub.dev/use/refused-downloads#min-age-not-met
+hint: `batlehub-cli wait npm-local/lodash@4.17.21` returns when it becomes pullable
+```
+
+`error:` est le message du serveur lui-même, `code:` le code de motif quand le
+serveur en a donné un, relié à [Pourquoi un téléchargement est
+refusé](/fr/use/refused-downloads). Avec `--format json`, la même erreur est
+aussi écrite sur stdout sous la forme
+`{"error": {"message", "code", "docs", "hint", "exit"}}`.
+
+### Codes de sortie {#exit-codes}
+
+| Code | Signification | Source typique |
+| --- | --- | --- |
+| 0 | succès | — |
+| 1 | échec générique | erreur réseau, 5xx inattendu, E/S |
+| 2 | usage | une option que clap refuse, une coordonnée sans registre, un artefact écrit dans un terminal, `--format csv` sur un seul objet |
+| 3 | non authentifié | HTTP 401 |
+| 4 | refusé | HTTP 403 ; `wait` quand attendre n'y changera rien |
+| 5 | introuvable | HTTP 404, un registre inconnu |
+| 6 | conflit | HTTP 409 ; `setup` en `conflict`/`ambiguous`/`orphaned` |
+| 7 | échec partiel | une opération en masse avec des éléments en échec, `mise seed`/`import` avec des échecs |
+| 8 | délai dépassé | `wait --timeout` |
+| 9 | confirmation requise | une commande destructrice sans terminal et sans `--yes`, un « non » à l'invite |
+| *n* | code de l'enfant | `java` transmet le code de sortie de son processus enfant |
+
+### Commandes destructrices {#confirmation}
+
+Une commande qui supprime, purge, efface, retire (`yank`), masque (`unlist`),
+bloque, révoque ou récupère imprime sur stderr ce qu'elle va faire et demande
+`Proceed? [y/N]`. Toute autre réponse que `y`/`yes` sort avec le code 9. **Sans
+terminal**, elle ne demande rien, ne fait rien et sort avec le code 9 : un script
+qui oublie `--yes` échoue franchement au lieu d'attendre une réponse ou de
+détruire en silence.
+
+```text
+$ batlehub-cli version delete internal serilog 2.0.0 </dev/null
+this will delete:
+  internal/serilog@2.0.0
+the artifact is dropped and the version number is spent permanently — 2.0.0 can never be published again
+error: refusing to delete without a terminal; pass --yes
+$ echo $?
+9
+```
+
+Les commandes qui confirment : `version yank`/`delete`, `admin bulk
+yank`/`delete`, `admin unlist`, `admin cache clear`, `admin cache evict` et
+`coherence` (pas avec `--dry-run`), `admin audit-log --purge-before`,
+`admin users block`, `admin gdpr erase`, `admin retention --reclaim`,
+`admin notifications delete`, `auth token revoke`, et `download` sur un fichier
+existant. `setup apply` et `setup remove` gardent leur propre contrat : un essai
+à blanc par défaut, `--yes` écrit.
 
 ---
 
@@ -348,7 +448,9 @@ batlehub-cli version pin    <registry> <name> <version>
 batlehub-cli version unpin  <registry> <name> <version>
 ```
 
-Ces commandes exigent un token d'admin.
+Ces commandes exigent un token d'admin. `yank` et `delete` sont
+[destructrices](#confirmation) : elles demandent confirmation dans un terminal et
+exigent `--yes` dans un script.
 
 | Commande | Effet |
 |---------|--------|
@@ -367,8 +469,10 @@ Ces commandes exigent un token d'admin.
 
 ```
 $ batlehub-cli version delete internal serilog 2.0.0
-Delete internal/serilog@2.0.0? The artifact is dropped and the version number is
-spent permanently — 2.0.0 can never be published again. [y/N] y
+this will delete:
+  internal/serilog@2.0.0
+the artifact is dropped and the version number is spent permanently — 2.0.0 can never be published again
+Proceed? [y/N] y
 Deleted internal/serilog@2.0.0
 ```
 
@@ -1006,9 +1110,9 @@ comptés.
 ### SBOM
 
 ```
-batlehub-cli admin sbom get    <registry> <name> <version> [--format cyclonedx]
+batlehub-cli admin sbom get    <registry> <name> <version> [--sbom-format cyclonedx]
 batlehub-cli admin sbom export [--registry <r>] [--from <t>] [--to <t>]
-                               [--format cyclonedx] [-o <file>]
+                               [--sbom-format cyclonedx] [-o <file>]
 ```
 
 `get` imprime toujours du JSON. `export` écrit dans le fichier nommé, ou sur la
@@ -1248,7 +1352,7 @@ Windows, ils refusent de s'exécuter, et `detect` imprime les extraits à la pla
   serveur ni sur l'un de ses sous-domaines (`--allow-foreign-hosts`), ou est en
   HTTP simple sur un serveur HTTPS (`--insecure-http`), n'arrête que ses propres
   clients : ils sont en `conflict`, tous les autres fichiers sont écrits, et la
-  commande se termine avec le code 3. Une URL ou un nom de registre contenant un
+  commande se termine avec le code 6. Une URL ou un nom de registre contenant un
   caractère qu'un fichier de configuration pourrait mal lire (saut de ligne,
   guillemet, identifiants) est refusé de la même façon.
 - **Un fichier cassé est en `conflict` à lui seul** : une ligne de marqueur
@@ -1291,7 +1395,7 @@ peut pas répondre (injoignable, statut
 d'erreur, liste illisible ou vide — un `--pick` erroné reste une erreur), selon
 les mêmes règles : les URL de ce serveur seulement, rien par-dessus une variable
 que vous avez définie, et seulement les variables qu'`apply` écrit, avec des
-URL simples. Il n'imprime rien, code 3, quand `env.sh` est en
+URL simples. Il n'imprime rien, code 6, quand `env.sh` est en
 `conflict` ou `ambiguous` : `eval` écraserait la variable qu'`apply` a refusé
 de toucher. `status` prend le `--shell-rc` donné à `apply`.
 
@@ -1360,7 +1464,7 @@ derrière `[registries.security]` refuse une version qu'il n'a pas encore jugée
 ou qu'il a jugée défavorablement ; le refus nomme la coordonnée, l'état, les
 codes de motif et cette commande.
 
-### `why <registry>:<name>@<version>`
+### `why <registry>/<name>@<version>`
 
 Le verdict derrière un refus : l'état, les codes de motif, la date de levée d'une
 retenue, quels scanners ont répondu et — pour un token portant `findings:read` —
@@ -1369,13 +1473,14 @@ les constats eux-mêmes. Exige `quarantine:read` sur le registre (`user` et
 répond un simple 404 tant que l'opérateur ne l'accorde pas).
 
 ```bash
-batlehub why npm:left-pad@1.3.1
-batlehub why npm:left-pad@1.3.1 --json
-batlehub why npm:left-pad@1.3.1 --rescan     # met aussi une réanalyse en file (exige gates:exempt)
+batlehub-cli why npm/left-pad@1.3.1
+batlehub-cli why npm/left-pad@1.3.1 --json
+batlehub-cli why npm/left-pad@1.3.1 --rescan     # met aussi une réanalyse en file (exige gates:exempt)
+batlehub-cli -r npm why left-pad@1.3.1           # un nom nu, dans le registre par défaut
 ```
 
 ```text
-npm:left-pad@1.3.1
+npm/left-pad@1.3.1
   state        quarantined
   reasons      MIN_AGE_NOT_MET
   docs         https://batlehub.dev/use/refused-downloads#min-age-not-met
@@ -1386,23 +1491,23 @@ npm:left-pad@1.3.1
   scanners     osv
   findings     none
 
-Held until 2026-09-05T14:12:00Z. `batlehub wait` waits for it.
+Held until 2026-09-05T14:12:00Z. `batlehub-cli wait` waits for it.
 ```
 
 La ligne `docs` relie chaque code de raison à sa section de [Pourquoi un téléchargement est refusé](/fr/use/refused-downloads), qui explique ce que signifie le code et ce que vous pouvez faire.
 
-### `wait <registry>:<name>@<version> [--timeout 1h] [--interval 30s]`
+### `wait <registry>/<name>@<version> [--timeout 1h] [--interval 30s]`
 
 Le contrat pour la CI. La commande interroge le verdict et sort avec **0** quand
-la version devient servable, **1 quand attendre n'y changera rien** — un verdict
-`denied`, ou une retenue sans horloge comme `TIMESTAMP_MISSING` — et **2** en cas
-de dépassement de délai. Le code 1 revient dès la première interrogation, avec le
+la version devient servable, **4 quand attendre n'y changera rien** — un verdict
+`denied`, ou une retenue sans horloge comme `TIMESTAMP_MISSING` — et **8** en cas
+de dépassement de délai ([codes de sortie](#exit-codes)). Le code 4 revient dès la première interrogation, avec le
 motif, jamais après avoir consommé le délai : un pipeline échoue donc vite sur
 une décision et n'attend que sur une horloge. Quand la retenue nomme un
 `available_at`, l'attente dort jusque-là au lieu d'interroger en boucle.
 
 ```bash
-batlehub wait npm:left-pad@1.3.1 --timeout 2h && npm ci
+batlehub-cli wait npm/left-pad@1.3.1 --timeout 2h && npm ci
 ```
 
 Une version que cette instance ne s'est jamais vu demander n'a pas de verdict à
@@ -1494,7 +1599,7 @@ par défaut le `pullers_window_days` du registre. `--csv` imprime le CSV que ren
 l'endpoint d'export, pour le transmettre à quelqu'un qui n'a pas la CLI.
 
 ```sh
-batlehub-cli verdicts pullers npm:left-pad@1.3.1 --since 30d --csv
+batlehub-cli verdicts pullers npm/left-pad@1.3.1 --since 30d --csv
 ```
 
 `list` montre les verdicts d'un registre par état — `allowed`, `warned`,

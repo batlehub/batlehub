@@ -205,7 +205,7 @@ pub async fn resolve_token(
         return Ok(match tokio::fs::read_to_string(&path).await {
             Ok(s) => Some(s.trim().to_string()),
             Err(e) => {
-                eprintln!("Warning: failed to read kubernetes token file: {e}");
+                eprintln!("warning: failed to read kubernetes token file: {e}");
                 None
             }
         });
@@ -247,7 +247,7 @@ async fn try_refresh_token(
             Some(access_token)
         }
         Err(e) => {
-            eprintln!("Warning: OIDC token refresh failed: {e}");
+            eprintln!("warning: OIDC token refresh failed: {e}");
             None
         }
     }

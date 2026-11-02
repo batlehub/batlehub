@@ -94,7 +94,7 @@ pub enum SetupCommand {
     },
 
     /// Report, per client, whether this machine is configured. Exit 0 when
-    /// nothing is left to do, 3 otherwise
+    /// nothing is left to do, 6 otherwise
     Status {
         #[command(flatten)]
         select: Selection,
@@ -272,6 +272,8 @@ async fn run_in(
     // and `remove`, which needs no version.
     machine: impl Fn(bool) -> Result<client_setup::Env>,
 ) -> Result<i32> {
+    // The global `--format json` and `--yes` reach `setup` too (RFC 0040 §4.2).
+    let global = crate::render::ctx();
     match cmd {
         SetupCommand::Detect {
             dir,
@@ -280,6 +282,7 @@ async fn run_in(
             offline,
             json,
         } => {
+            let json = json || global.structured();
             let server = global_server.unwrap_or(&server);
             run_detect(dir, depth, server, token, offline, json).await?;
             Ok(0)
@@ -289,6 +292,7 @@ async fn run_in(
             offline,
             json,
         } => {
+            let json = json || global.structured();
             let server = global_server.unwrap_or(&server);
             run_ide(server, token, offline, json).await?;
             Ok(0)
@@ -301,6 +305,8 @@ async fn run_in(
             shell_rc,
             json,
         } => {
+            let json = json || global.structured();
+            let yes = yes || global.yes;
             let env = machine(true)?;
             if yes {
                 client_setup::check_not_root_for_another(&env)?;
@@ -322,11 +328,13 @@ async fn run_in(
             shell_rc,
             json,
         } => {
+            let json = json || global.structured();
             let env = machine(true)?;
             let plans = load_plan(global_server, &select, &server, None, shell_rc, &env).await?;
             run_status(&plans, json)
         }
         SetupCommand::Remove { yes, select, json } => {
+            let (yes, json) = (yes || global.yes, json || global.structured());
             // No yarn probe: remove takes out every block whatever yarn is.
             let env = machine(false)?;
             if yes {
@@ -357,7 +365,7 @@ async fn run_in(
 /// at the next `apply`, or with `--refresh` or `--pick`, which always ask.
 /// A server that cannot answer — unreachable, slow, an error status, an
 /// unreadable or empty list — falls back to that `env.sh` under the same
-/// rules, with a note on stderr; an override prints nothing (exit 3), and a
+/// rules, with a note on stderr; an override prints nothing (exit 6), and a
 /// mistake of the caller's (`--pick`) is an error.
 async fn run_env(
     global_server: Option<&str>,
@@ -382,7 +390,7 @@ async fn run_env(
     };
     let refused = |why: &str| {
         eprintln!("note: {why}; nothing printed");
-        Ok(3)
+        Ok(6)
     };
     if !refresh && args.pick.is_empty() {
         match client_setup::cached_env_for(env, global_server) {
@@ -438,7 +446,7 @@ async fn run_env(
             p.state.as_str(),
             p.detail.as_deref().unwrap_or("")
         );
-        return Ok(3);
+        return Ok(6);
     }
     print!("{}", client_setup::render_env(&selected(&p.env), shell));
     Ok(0)
@@ -496,7 +504,7 @@ async fn load_plan(
     client_setup::plan(&registries, &opts, env)
 }
 
-/// 3 when a client needs a human: a conflict to merge, a registry to pick
+/// 6 when a client needs a human: a conflict to merge, a registry to pick
 /// (ambiguous), a registry gone (orphaned, kept until `remove` or `--pick`),
 /// or env-only variables no rc file will source.
 fn needs_a_look(plans: &[TargetPlan], env: &client_setup::Env, shell_rc: ShellRc) -> bool {
@@ -546,7 +554,7 @@ fn print_row(p: &TargetPlan) {
 
 fn run_status(plans: &[TargetPlan], json: bool) -> Result<i32> {
     if json {
-        println!("{}", serde_json::to_string_pretty(plans)?);
+        crate::render::data(plans)?;
     } else {
         for p in plans {
             print_row(p);
@@ -555,7 +563,7 @@ fn run_status(plans: &[TargetPlan], json: bool) -> Result<i32> {
     Ok(if plans.iter().all(|p| p.state.settled()) {
         0
     } else {
-        3
+        6
     })
 }
 
@@ -590,7 +598,7 @@ fn apply_warnings(plans: &[TargetPlan], env: &client_setup::Env, shell_rc: Shell
 
 /// Write every file the plan changes. A file that cannot be written does not
 /// stop the others: each one is reported, and the exit code is 1 when any
-/// failed, else 3 when a client needs a look, else 0.
+/// failed, else 6 when a client needs a look, else 0.
 fn run_apply(
     plans: &[TargetPlan],
     env: &client_setup::Env,
@@ -639,7 +647,7 @@ fn run_apply(
     if !errors.is_empty() {
         1
     } else if needs_a_look(plans, env, shell_rc) {
-        3
+        6
     } else {
         0
     }
@@ -693,7 +701,7 @@ fn print_apply(
 
 /// Take every managed part out. Like `apply`, a file that cannot be written
 /// does not stop the others; one left alone (edited, broken markers) is a
-/// warning, and either makes the exit code non-zero (1 for a failure, 3 for a
+/// warning, and either makes the exit code non-zero (1 for a failure, 6 for a
 /// file left alone) so a hook notices.
 fn run_remove(
     env: &client_setup::Env,
@@ -716,7 +724,7 @@ fn run_remove(
     let code = if !errors.is_empty() {
         1
     } else if !warnings.is_empty() {
-        3
+        6
     } else {
         0
     };
@@ -798,7 +806,7 @@ async fn run_detect(
                 })
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&out)?);
+        crate::render::data(&out)?;
         return Ok(());
     }
 
@@ -854,7 +862,7 @@ async fn run_ide(server: &str, token: Option<&str>, offline: bool, json: bool) -
                 })
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&out)?);
+        crate::render::data(&out)?;
         return Ok(());
     }
 
@@ -983,7 +991,7 @@ mod tests {
             0
         );
         assert!(!dir.path().join(".npmrc").exists());
-        assert_eq!(run_status(&plans_for(&regs, &env), false).unwrap(), 3);
+        assert_eq!(run_status(&plans_for(&regs, &env), false).unwrap(), 6);
 
         assert_eq!(
             run_apply(&plans_for(&regs, &env), &env, ShellRc::Auto, true, true),
@@ -1012,7 +1020,7 @@ mod tests {
         let (dir, env) = machine(&[ClientId::Npm]);
         std::fs::write(dir.path().join(".npmrc"), "registry=https://x/\n").unwrap();
         let plans = plans_for(&[info("n", "npm")], &env);
-        assert_eq!(run_apply(&plans, &env, ShellRc::Auto, true, false), 3);
+        assert_eq!(run_apply(&plans, &env, ShellRc::Auto, true, false), 6);
         let warnings = apply_warnings(&plans, &env, ShellRc::Auto);
         assert!(warnings[0].contains("conflict, skipped"), "{warnings:?}");
         assert_eq!(
@@ -1022,7 +1030,7 @@ mod tests {
     }
 
     /// A registry gone with several left orphans the block: `apply` says
-    /// so, keeps the file (fail closed) and exits 3, a pick is needed.
+    /// so, keeps the file (fail closed) and exits 6, a pick is needed.
     #[test]
     fn an_orphan_that_needs_a_pick_is_exit_3_and_said() {
         let (dir, env) = machine(&[ClientId::Npm]);
@@ -1047,7 +1055,7 @@ mod tests {
         assert!(apply_warnings(&plans, &env, ShellRc::Auto)
             .iter()
             .any(|w| w.contains("b is gone")));
-        assert_eq!(run_apply(&plans, &env, ShellRc::Auto, true, true), 3);
+        assert_eq!(run_apply(&plans, &env, ShellRc::Auto, true, true), 6);
         assert!(std::fs::read_to_string(dir.path().join(".npmrc"))
             .unwrap()
             .contains("/proxy/b/"));
@@ -1156,7 +1164,7 @@ mod tests {
         };
         assert_eq!(
             run_in(status(), Some(&url), None, machine).await.unwrap(),
-            3
+            6
         );
         let apply = SetupCommand::Apply {
             yes: true,
@@ -1209,7 +1217,7 @@ mod tests {
         let auto = client_setup::plan(&regs, &opts(ShellRc::Auto), &env).unwrap();
         assert_eq!(
             run_status(&auto, true).unwrap(),
-            3,
+            6,
             "auto wants the rc block"
         );
     }
