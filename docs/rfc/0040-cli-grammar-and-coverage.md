@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Accepted                                                      |
+| Status      | Accepted — phases 2 and 3 landed, phase 4 in progress; §17 records how far each phase is and where the built thing differs |
 | Short       | CLI grammar and coverage                                      |
 | Settles     | How every batlehub-cli command names a package, prints, fails and confirms, what it must cover for each registry kind, and how a developer learns why a version is not pullable |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -1632,3 +1632,61 @@ Each phase leaves the tree green and updates `docs/use/cli.md` and
 | 7 | `check`, the batch endpoint, the lockfile readers and their fuzz target; the Check column joins `coverage.rs`; heavy case 14 | needs 5 |
 | 8 | TUI (§4.10) | needs 2, 3; gains the Why pane from 5 |
 | 9 | Docs pass across both languages, removal of the aliases in the following minor | — |
+
+---
+
+## 17. Implementation progress
+
+Updated as each piece lands. A phase is **done** only when everything its §16
+row names has landed; a partial phase lists what is still open.
+
+| Phase | State | Commits | What landed |
+| --- | --- | --- | --- |
+| 1 | done | `ac8e4fca` | This RFC, accepted |
+| 2 | done | `4f23b2ce` | `cli/src/{exit,coordinate,render,confirm}.rs`; the exit-code table, the error shape (`error:`/`code:`/`hint:`, JSON copy on stdout), global `--format`/`BATLEHUB_FORMAT`/`-y`; `-r` honoured by every registry filter; destructive commands confirm; `setup` 3 → 6, `wait` 1/2 → 4/8, `mise` partial → 7; `quarantine.sh` and `client_setup.sh` edited |
+| 3 | done | `6d7ac4aa` | The §4.4 tree (`admin` dissolved), `package <verb> <coord>…`, coordinates on `owner`/`visibility`/`grant`/`sbom show`/`authz check`, `profile` with `current`; every old spelling a hidden alias that warns; `--registry-url`; the server hint reads `batlehub-cli why reg/name@ver` |
+| 4 | in progress | `f08b58d5`, `36180a88`, + this commit | §6.4 owner arm (`OwnershipPort::not_owned_by`, `RegistryKind::owner_verbs`) on `bulk-yank`/`bulk-unyank`; §6.3 publish by the registry's kind with the nine uploaders; §6.5 `package versions` from the explore rows (upstream included, paged, state column) and `download <coord>` (`.part`, streaming verification, rename on match). **Open:** `setup` for the new kinds and detection (§6.5), the coverage gate (§6.6), heavy cases 1–7, 11, 13 |
+| 5 | not started | — | |
+| 6 | not started | — | |
+| 7 | not started | — | |
+| 8 | not started | — | |
+| 9 | not started | — | |
+
+### 17.1 Where the built thing differs
+
+- **Phase 2 pulled one phase 3 break forward.** `admin sbom get/export --format`
+  became `--sbom-format` in phase 2, not 3: the global `--format` made clap
+  panic on the old local flag the moment it existed (a downcast mismatch).
+- **No global `-o` yet** (§4.2). The commands whose output is bytes keep their
+  own `-o/--output` (`mise --out` became `--output`, aliased); a global `-o`
+  that captures any command's stdout is still to do.
+- **No `--no-color`, no `fuzz_cli_coordinate` target.** The CLI is a binary
+  crate with no library for a fuzz target to link; the coordinate parser is
+  covered by unit tests until that split is made.
+- **`--format csv` on a non-listing is caught after the call, not before**
+  (§4.11). The renderer decides on the JSON it was given; an action that
+  prints one object under `csv` has already acted when it exits 2.
+- **`package show` is not built.** It carries the §4.8 state column, so it
+  lands with phase 5's pullability answer rather than as an empty command.
+- **The owner arm lives in `bulk-yank`/`bulk-unyank` only.** `owner_verbs`
+  grants `yank`/`unyank` and nothing else to any kind today, so the
+  single-item deprecate/unlist routes have no owner arm to add; the enum holds
+  only the two verbs some kind grants. Its tests are in
+  `crates/web/tests/bulk_and_quota_and_cache.rs` beside the cargo ownership
+  fixture rather than in `authz_matrix.rs`, whose two inventories cover the
+  `/proxy` surface and gained no route.
+- **`download` verifies against the kind's own metadata, read by the CLI**
+  (npm's packument `dist.integrity`, cargo's sparse-index `cksum`), not
+  against a server header: no artifact response carries a checksum, and adding
+  one means threading it through every `ProxyResponse::Stream` site. Every
+  other kind is written with T7's `warning:`. The refusal path prints the
+  server's error and exits 4/5; printing `why`'s full answer waits for phase 5.
+- **The CLI's own npm publish now sends `dist.integrity`/`dist.shasum`.** It sent
+  neither, so the packument of a CLI-published version carried no checksum for
+  `download` — or npm — to verify.
+- **apk publish has no in-process test**: the route needs a signed package and
+  a configured signer; heavy case 7 is its proof.
+- **The CLI integration suite shows a rare `408` under load** (actix's client
+  request timeout when the in-process server is starved), one random test per
+  full run at most; every such test passes alone.
+

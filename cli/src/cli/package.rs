@@ -40,6 +40,18 @@ pub enum PackageCommand {
         /// `registry/name` (the older `<registry> <name>` still works, with a warning)
         #[arg(num_args = 1..=2, required = true)]
         coordinate: Vec<String>,
+        /// Rows per page (the server caps it at `[limits].versions_per_page`)
+        #[arg(long)]
+        limit: Option<u64>,
+        /// The page to show, 0-based
+        #[arg(long, default_value_t = 0)]
+        page: u64,
+        /// Follow the pages to the end, up to 10 000 rows
+        #[arg(long)]
+        all: bool,
+        /// Only what this instance holds; do not ask the upstream
+        #[arg(long)]
+        no_upstream: bool,
     },
     /// Print a version's README
     ///
@@ -194,7 +206,13 @@ async fn consult(
                 print_readme(&resp);
             }
         }
-        PackageCommand::Versions { coordinate } => {
+        PackageCommand::Versions {
+            coordinate,
+            limit,
+            page,
+            all,
+            no_upstream,
+        } => {
             let raw = match coordinate.as_slice() {
                 [registry, name] => {
                     deprecated(
@@ -208,25 +226,44 @@ async fn consult(
             };
             let c = Coordinate::resolve(client, &raw, default_registry).await?;
             let (registry, name) = (c.registry, c.name);
-            let resp = client
-                .list_packages(PackageQuery {
-                    registry: Some(registry.clone()),
-                    name: Some(name.clone()),
-                    page: 0,
-                    per_page: 200,
-                })
-                .await?;
-
-            let items: Vec<_> = resp
-                .items
-                .into_iter()
-                .filter(|p| p.name == name && p.registry == registry)
-                .collect();
-
+            let mut rows: Vec<serde_json::Value> = Vec::new();
+            let mut page = page;
+            let mut next = None;
+            loop {
+                let resp = client
+                    .package_versions_page(&registry, &name, page, limit, !no_upstream)
+                    .await?;
+                rows.extend(resp["versions"].as_array().cloned().unwrap_or_default());
+                let p = &resp["versions_page"];
+                let (per_page, total) = (
+                    p["per_page"].as_u64().unwrap_or(0),
+                    p["total"].as_u64().unwrap_or(0),
+                );
+                let more = per_page > 0 && (page + 1) * per_page < total;
+                if !more {
+                    break;
+                }
+                if !all {
+                    next = Some(page + 1);
+                    break;
+                }
+                if rows.len() >= MAX_ROWS {
+                    crate::render::warn(&format!(
+                        "--all stopped at {MAX_ROWS} rows; continue with --page {}",
+                        page + 1
+                    ));
+                    break;
+                }
+                page += 1;
+            }
             if json {
-                crate::render::data(&items)?;
+                crate::render::data(&rows)?;
             } else {
-                print_versions_table(&items);
+                print_version_rows(&rows);
+            }
+            // On stderr, so `jq '.[].version'` keeps working (§4.3).
+            if let Some(n) = next {
+                eprintln!("next: --page {n}");
             }
         }
         // The lifecycle verbs are dispatched by `run` before this.
@@ -251,18 +288,28 @@ fn print_packages_table(items: &[crate::api::package::PackageSummary], total: us
     println!("{} / {} package(s)", items.len(), total);
 }
 
-fn print_versions_table(items: &[crate::api::package::PackageSummary]) {
+/// `--all`'s cap (RFC 0040 §4.3).
+const MAX_ROWS: usize = 10_000;
+
+/// VERSION · STATE · SOURCE · PUBLISHED: the state is the server's own
+/// (`allowed`, `upstream-only`, `yanked`, …), never derived here.
+fn print_version_rows(rows: &[serde_json::Value]) {
+    if rows.is_empty() {
+        eprintln!("no versions");
+        return;
+    }
     let mut table = Table::new();
-    table.set_header(["Version", "Status", "Accesses"]);
-    for p in items {
+    table.set_header(["VERSION", "STATE", "SOURCE", "PUBLISHED"]);
+    let cell = |v: &serde_json::Value| v.as_str().unwrap_or("—").to_owned();
+    for r in rows {
         table.add_row(vec![
-            Cell::new(&p.version),
-            render_status_cell(&p.status),
-            Cell::new(p.access_count),
+            cell(&r["version"]),
+            cell(&r["state"]),
+            cell(&r["source"]),
+            cell(&r["published_at"]),
         ]);
     }
     println!("{table}");
-    println!("{} version(s)", items.len());
 }
 
 /// The README, with everything that qualifies it said *before* the text.

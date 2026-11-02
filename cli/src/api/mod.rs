@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod artifact;
 pub mod auth;
 pub mod authz;
 pub mod client_setup;

@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: e128ff4a2713635c
+sourceHash: e63272988f684192
 ---
 
 # batlehub-cli
@@ -389,8 +389,18 @@ batlehub-cli --json package list | jq '[.[] | select(.status.status == "blocked"
 
 ### `package versions <registry>/<name>`
 
-Liste toutes les versions en cache d'un paquet, avec leur état et leur nombre de
-téléchargements.
+Toutes les versions d'un paquet, y compris celles que seul l'amont connaît, une
+page à la fois, avec l'état que le serveur donne à chacune (détenue, amont
+seulement, retirée, bloquée…) et sa provenance (`local`, `proxied`, `upstream`).
+
+```
+batlehub-cli package versions <registry>/<name> [--limit N] [--page N] [--all] [--no-upstream]
+```
+
+`--page` part de 0. Quand d'autres pages existent, `next: --page N` va sur
+stderr, de sorte que `--format json | jq '.[].version'` continue de fonctionner.
+`--all` suit les pages, jusqu'à 10 000 lignes. `--no-upstream` ne répond que
+d'après ce que l'instance détient.
 
 ### `package readme <registry>/<name>[@<version>]`
 
@@ -1601,10 +1611,13 @@ que le proxy est censé servir se résout bien.
 batlehub-cli download <target> [-o <file>]
 ```
 
-`<target>` prend trois formes, et la troisième est la raison d'être de
-`--registry` :
+`<target>` est une coordonnée ou un chemin :
 
 ```sh
+# une coordonnée : l'artefact unique de la version, vérifié contre ses métadonnées
+batlehub-cli download npm-local/left-pad@1.3.0
+batlehub-cli -r crates download serde@1.0.200
+
 # une URL complète
 batlehub-cli download https://hub.example.dev/proxy/jb/jetbrains/idea/idea-2026.1.3.tar.gz
 
@@ -1615,8 +1628,24 @@ batlehub-cli download /proxy/jb/jetbrains/idea/idea-2026.1.3.tar.gz
 batlehub-cli download -r jb jetbrains/idea/idea-2026.1.3.tar.gz
 ```
 
-`-o` nomme le fichier de sortie ; par défaut c'est le nom de base du chemin, et
-`-o -` écrit sur la sortie standard pour que le fichier puisse être redirigé.
+**Par coordonnée**, le type doit avoir un artefact par version : npm, cargo,
+composer, rubygems, goproxy, nuget, openvsx, vscode-marketplace,
+jetbrains-marketplace et galaxy. Tout autre type sort avec le code 2 et dit
+pourquoi (une version PyPI est plusieurs fichiers, une version Maven un jar et un
+pom) ; donnez alors son chemin `/proxy/…`. Le fichier est nommé d'après la
+coordonnée (`left-pad-1.3.0.tgz`), jamais d'après ce que le serveur envoie.
+
+Les octets vont dans `<file>.part` et sont hachés au fil du flux, contre la
+somme de contrôle qu'annoncent les métadonnées du type (`dist.integrity` pour
+npm, le `cksum` de l'index pour cargo). Seule une correspondance est renommée à
+sa place ; une discordance, un refus ou un Ctrl-C supprime le `.part` et sort
+avec un code non nul. Un type dont les métadonnées ne portent aucune somme que
+la CLI sache lire est écrit avec un `warning:` qui le dit non vérifié.
+
+`-o` nomme le fichier de sortie, et un fichier existant n'est remplacé qu'après
+une [confirmation](#confirmation). `-o -` écrit sur la sortie standard pour que
+le fichier puisse être redirigé ; une discordance y est signalée après le
+dernier octet, et le code de sortie (1) en est le signal.
 
 ---
 

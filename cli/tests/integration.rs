@@ -5506,3 +5506,189 @@ fn vscode_marketplace_publish() {
     );
     assert_eq!(code, 0, "{stderr}");
 }
+
+// ── RFC 0040 §6.5: download by coordinate, versions with state ──────────────
+
+/// Publish `name-version.<ext>` with `content` through the CLI.
+fn cli_publish(srv: &TestServer, registry: &str, file: &str, content: &[u8]) {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join(file);
+    std::fs::write(&path, content).unwrap();
+    let (code, _, stderr) = cli_exit(
+        &["publish", path.to_str().unwrap(), "-r", registry],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 0, "publishing {file}: {stderr}");
+}
+
+/// The artifact lands under a name derived from the coordinate, verified
+/// against the packument's checksum, and no `.part` is left behind.
+#[test]
+fn npm_download() {
+    let srv = TestServer::start_with(&[("test-npm", "npm")]);
+    cli_publish(&srv, "test-npm", "left-pad-1.3.0.tgz", b"tarball-bytes");
+    let dir = tempfile::tempdir().unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_batlehub-cli"))
+        .args(["--json", "download", "test-npm/left-pad@1.3.0"])
+        .current_dir(dir.path())
+        .env("BATLEHUB_SERVER", srv.base_url())
+        .env("BATLEHUB_TOKEN", AUTH_TOKEN)
+        .env("XDG_CONFIG_HOME", dir.path())
+        .output()
+        .unwrap();
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(out.status.success(), "{stderr}");
+    let file = dir.path().join("left-pad-1.3.0.tgz");
+    assert_eq!(std::fs::read(&file).unwrap(), b"tarball-bytes");
+    assert!(!dir.path().join("left-pad-1.3.0.tgz.part").exists());
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect(&stdout);
+    assert_eq!(v["verified"], true, "{stdout}\n{stderr}");
+}
+
+#[test]
+fn cargo_download() {
+    let srv = TestServer::start_with(&[("test-cargo", "cargo")]);
+    cli_publish(&srv, "test-cargo", "my-crate-0.1.0.crate", b"crate-bytes");
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("x.crate");
+    let (code, _, stderr) = cli_exit(
+        &[
+            "download",
+            "test-cargo/my-crate@0.1.0",
+            "-o",
+            out.to_str().unwrap(),
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(std::fs::read(&out).unwrap(), b"crate-bytes");
+}
+
+/// NuGet's metadata carries no checksum the CLI reads: the file is written,
+/// and stderr says it is unverified.
+#[test]
+fn nuget_download() {
+    let srv = TestServer::start();
+    http_publish_nuget(&srv.base_url(), REGISTRY, "DlLib", "1.0.0");
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("dl.nupkg");
+    let coord = format!("{REGISTRY}/DlLib@1.0.0");
+    let (code, _, stderr) = cli_exit(
+        &["download", &coord, "-o", out.to_str().unwrap()],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stderr.contains("written unverified"), "{stderr}");
+    assert!(std::fs::metadata(&out).unwrap().len() > 0);
+}
+
+/// A refused download (here: a version that does not exist) leaves no file
+/// and no `.part`, and exits with the status's code.
+#[test]
+fn a_missing_version_downloads_nothing() {
+    let srv = TestServer::start_with(&[("test-cargo", "cargo")]);
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("x.crate");
+    let (code, _, stderr) = cli_exit(
+        &[
+            "download",
+            "test-cargo/nope@9.9.9",
+            "-o",
+            out.to_str().unwrap(),
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_ne!(code, 0, "{stderr}");
+    assert!(!out.exists() && !dir.path().join("x.crate.part").exists());
+}
+
+/// A kind with no single artifact per version says why, before any request
+/// for bytes.
+#[test]
+fn download_refuses_a_kind_with_no_artifact_per_version() {
+    let srv = TestServer::start_with(&[("test-pypi", "pypi")]);
+    let (code, _, stderr) = cli_exit(
+        &["download", "test-pypi/x@1.0"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 2, "{stderr}");
+    assert!(stderr.contains("distribution files"), "{stderr}");
+}
+
+/// `package versions` reads the explore rows: every version, with the
+/// server's state and source.
+#[test]
+fn nuget_consult() {
+    let srv = TestServer::start();
+    http_publish_nuget(&srv.base_url(), REGISTRY, "VerLib", "1.0.0");
+    http_publish_nuget(&srv.base_url(), REGISTRY, "VerLib", "2.0.0");
+    let coord = format!("{REGISTRY}/verlib");
+    let (code, stdout, stderr) = cli_exit(
+        &["--json", "package", "versions", &coord],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let rows: serde_json::Value = serde_json::from_str(&stdout).expect(&stdout);
+    let versions: Vec<&str> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["version"].as_str())
+        .collect();
+    assert!(
+        versions.contains(&"1.0.0") && versions.contains(&"2.0.0"),
+        "{stdout}"
+    );
+    assert!(rows[0]["state"].is_string(), "{stdout}");
+    let (code, table, _) = cli_exit(
+        &["package", "versions", &coord],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 0);
+    assert!(
+        table.contains("VERSION") && table.contains("STATE"),
+        "{table}"
+    );
+}
+
+/// T7: bytes that do not match the metadata's checksum are never left on
+/// disk — no file, no `.part` — and the command exits 1.
+#[test]
+fn download_checksum_mismatch() {
+    let mut upstream = mockito::Server::new();
+    let _regs = upstream
+        .mock("GET", "/api/v1/registries")
+        .with_body(r#"[{"name":"r","type":"npm","mode":"local"}]"#)
+        .create();
+    let _doc = upstream
+        .mock("GET", "/proxy/r/pkg")
+        .with_body(
+            // A sha512 that is not the digest of what the tarball route serves.
+            r#"{"versions":{"1.0.0":{"dist":{"integrity":"sha512-vqmJ6HBZDuUlmuHKRf/kcV8z/QjO8n/bv7TzGF1Fvr+JqWMyaHYb5zNqAKvbB9GRbEC0QD8LzDcOhw/gSQutGw=="}}}}"#,
+        )
+        .create();
+    let _tgz = upstream
+        .mock("GET", "/proxy/r/pkg/1.0.0/tarball")
+        .with_body("tampered")
+        .create();
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("pkg.tgz");
+    let (code, _, stderr) = cli_exit(
+        &["download", "r/pkg@1.0.0", "-o", out.to_str().unwrap()],
+        &upstream.url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("does not match its metadata"), "{stderr}");
+    assert!(!out.exists() && !dir.path().join("pkg.tgz.part").exists());
+}

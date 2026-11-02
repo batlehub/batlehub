@@ -3,19 +3,28 @@ use clap::Args;
 
 use std::io::IsTerminal;
 
+use batlehub_core::entities::RegistryKind;
+use batlehub_core::services::integrity::StreamingVerifier;
+use batlehub_core::services::IntegrityOutcome;
+
+use crate::api::artifact::{artifact_path, checksum_in, checksum_source};
 use crate::api::BatleHubClient;
+use crate::coordinate::Coordinate;
 use crate::exit::{CliError, ExitCode};
+use crate::render::warn;
 
 #[derive(Args)]
 pub struct DownloadArgs {
     /// What to download. One of:
+    ///   - a coordinate: npm-local/lodash@4.17.21 (or lodash@4.17.21 with -r)
     ///   - a full URL: https://host/proxy/jb/jetbrains/idea/x.tar.gz
     ///   - a server path: /proxy/jb/jetbrains/idea/x.tar.gz
     ///   - registry-relative (needs -r/--registry): jetbrains/idea/x.tar.gz
     #[arg(verbatim_doc_comment)]
     pub target: String,
 
-    /// Output file. Defaults to the path's basename; use "-" for stdout.
+    /// Output file; "-" for stdout. Default: named from the coordinate, or the
+    /// path's basename. An existing file is overwritten only after asking.
     #[arg(long, short = 'o')]
     pub output: Option<String>,
 }
@@ -55,17 +64,128 @@ fn default_output_name(resolved: &str) -> String {
 /// Download a file through the proxy cache. Because it goes through the normal
 /// proxy read path, a cache miss is fetched from upstream and **cached** — so
 /// this doubles as an on-demand warm for path-addressed registries.
+/// What the target names: a coordinate (RFC 0040 §4.8) or a raw path.
+struct Plan {
+    path: String,
+    /// The file name when `-o` is absent.
+    file: String,
+    /// The advertised checksum, when the kind's metadata carries one.
+    expected: Option<String>,
+}
+
+/// `registry/name@version` (or `name@version` with `-r`) on a kind fetchable
+/// by version; anything else is a path, as before.
+async fn plan(
+    target: &str,
+    client: &BatleHubClient,
+    default_registry: Option<&str>,
+) -> Result<Plan> {
+    let is_path = target.starts_with("http://")
+        || target.starts_with("https://")
+        || target.starts_with('/')
+        || !target.contains('@');
+    if is_path {
+        let path = resolve_target(target, default_registry)?;
+        return Ok(Plan {
+            file: default_output_name(&path),
+            path,
+            expected: None,
+        });
+    }
+    let (registry, name, version) = Coordinate::resolve(client, target, default_registry)
+        .await?
+        .require_version()?;
+    let kind: RegistryKind = client
+        .registry_kind(&registry)
+        .await?
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!(e))?;
+    let (path, file) = artifact_path(kind, &registry, &name, &version)
+        .map_err(|why| CliError::new(ExitCode::Usage, why))?;
+    let expected = match checksum_source(kind, &registry, &name) {
+        Some(src) => {
+            let mut doc = Vec::new();
+            client.download_to(&src, &mut doc).await?;
+            checksum_in(kind, &String::from_utf8_lossy(&doc), &version)
+        }
+        None => None,
+    };
+    if expected.is_none() {
+        warn(&format!(
+            "{kind} metadata carries no checksum this CLI reads: {registry}/{name}@{version} \
+             is written unverified"
+        ));
+    }
+    Ok(Plan {
+        path,
+        file,
+        expected,
+    })
+}
+
+/// Hashes what it forwards, so the check costs no second pass (§6.5).
+struct Verifying<W> {
+    inner: W,
+    verifier: Option<StreamingVerifier>,
+}
+
+impl<W: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for Verifying<W> {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let polled = std::pin::Pin::new(&mut self.inner).poll_write(cx, buf);
+        if let std::task::Poll::Ready(Ok(n)) = polled {
+            if let Some(v) = self.verifier.as_mut() {
+                v.update(buf.get(..n).unwrap_or_default());
+            }
+        }
+        polled
+    }
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+/// `Ok(())` when there was nothing to check or the bytes match.
+fn check(verifier: Option<StreamingVerifier>, what: &str) -> Result<()> {
+    match verifier.map(StreamingVerifier::finish) {
+        None | Some(IntegrityOutcome::Verified { .. }) => Ok(()),
+        Some(IntegrityOutcome::Mismatch {
+            expected, actual, ..
+        }) => Err(CliError::new(
+            ExitCode::Failure,
+            format!("{what} does not match its metadata: expected {expected}, got {actual}"),
+        )
+        .into()),
+        Some(other) => Err(CliError::new(
+            ExitCode::Failure,
+            format!("{what} could not be verified: {other:?}"),
+        )
+        .into()),
+    }
+}
+
+/// Download through the proxy cache. A cache miss is fetched from upstream
+/// and **cached**, so this doubles as an on-demand warm.
 pub async fn run(
     args: DownloadArgs,
     client: &BatleHubClient,
     default_registry: Option<&str>,
 ) -> Result<()> {
-    let resolved = resolve_target(&args.target, default_registry)?;
-
-    let out_name = args
-        .output
-        .clone()
-        .unwrap_or_else(|| default_output_name(&resolved));
+    let plan = plan(&args.target, client, default_registry).await?;
+    let verifier = plan.expected.as_deref().and_then(StreamingVerifier::new);
+    let out_name = args.output.clone().unwrap_or_else(|| plan.file.clone());
 
     if out_name == "-" {
         if std::io::stdout().is_terminal() {
@@ -76,31 +196,53 @@ pub async fn run(
             .hint("pass -o <file>, or redirect stdout")
             .into());
         }
-        let mut stdout = tokio::io::stdout();
-        let n = client.download_to(&resolved, &mut stdout).await?;
-        eprintln!("Downloaded {n} bytes");
-    } else {
-        if std::path::Path::new(&out_name).exists() {
-            crate::confirm::confirm("overwrite", std::slice::from_ref(&out_name), None)?;
-        }
-        let mut file = tokio::fs::File::create(&out_name)
-            .await
-            .with_context(|| format!("creating output file '{out_name}'"))?;
-        // A refused or broken download leaves no file behind to be mistaken
-        // for the artifact, or to trip the overwrite check on the retry.
-        let n = match client.download_to(&resolved, &mut file).await {
-            Ok(n) => n,
-            Err(e) => {
-                drop(file);
-                let _ = tokio::fs::remove_file(&out_name).await;
-                return Err(e);
-            }
+        // The bytes are already out by the time they are checked: a mismatch
+        // is reported after the last byte, and the exit code is the signal.
+        let mut out = Verifying {
+            inner: tokio::io::stdout(),
+            verifier,
         };
-        if crate::render::ctx().structured() {
-            crate::render::data(&serde_json::json!({ "path": out_name, "bytes": n }))?;
-        } else {
-            println!("Downloaded {n} bytes → {out_name}");
+        let n = client.download_to(&plan.path, &mut out).await?;
+        check(out.verifier.take(), "the download")?;
+        eprintln!("Downloaded {n} bytes");
+        return Ok(());
+    }
+
+    if std::path::Path::new(&out_name).exists() {
+        crate::confirm::confirm("overwrite", std::slice::from_ref(&out_name), None)?;
+    }
+    // Written beside, renamed only on a match: an interrupted or refused
+    // download never leaves a file that looks like the artifact.
+    let part = format!("{out_name}.part");
+    let file = tokio::fs::File::create(&part)
+        .await
+        .with_context(|| format!("creating '{part}'"))?;
+    let mut out = Verifying {
+        inner: file,
+        verifier,
+    };
+    let fetched = tokio::select! {
+        r = client.download_to(&plan.path, &mut out) => r,
+        _ = tokio::signal::ctrl_c() => Err(anyhow::anyhow!("interrupted")),
+    };
+    let outcome = fetched.and_then(|n| check(out.verifier.take(), &out_name).map(|()| n));
+    drop(out);
+    let n = match outcome {
+        Ok(n) => n,
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&part).await;
+            return Err(e);
         }
+    };
+    tokio::fs::rename(&part, &out_name)
+        .await
+        .with_context(|| format!("renaming '{part}' to '{out_name}'"))?;
+    if crate::render::ctx().structured() {
+        crate::render::data(&serde_json::json!({
+            "path": out_name, "bytes": n, "verified": plan.expected.is_some()
+        }))?;
+    } else {
+        println!("Downloaded {n} bytes → {out_name}");
     }
     Ok(())
 }

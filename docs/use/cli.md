@@ -370,7 +370,17 @@ batlehub-cli --json package list | jq '[.[] | select(.status.status == "blocked"
 
 ### `package versions <registry>/<name>`
 
-List all cached versions of a package with their status and download count.
+Every version of a package, including those only the upstream has, one page at a
+time, with the server's own state for each (held, upstream-only, yanked,
+blocked, …) and where it came from (`local`, `proxied`, `upstream`).
+
+```
+batlehub-cli package versions <registry>/<name> [--limit N] [--page N] [--all] [--no-upstream]
+```
+
+`--page` is 0-based. When more pages exist, `next: --page N` goes to stderr, so
+`--format json | jq '.[].version'` keeps working. `--all` follows the pages, up to
+10 000 rows. `--no-upstream` answers from what this instance holds only.
 
 ### `package readme <registry>/<name>[@<version>]`
 
@@ -1516,10 +1526,13 @@ serve actually resolves.
 batlehub-cli download <target> [-o <file>]
 ```
 
-`<target>` is one of three things, and the third is the reason `--registry`
-exists:
+`<target>` is a coordinate or a path:
 
 ```sh
+# a coordinate: the version's one artifact, checked against its metadata
+batlehub-cli download npm-local/left-pad@1.3.0
+batlehub-cli -r crates download serde@1.0.200
+
 # a full URL
 batlehub-cli download https://hub.example.dev/proxy/jb/jetbrains/idea/idea-2026.1.3.tar.gz
 
@@ -1530,8 +1543,23 @@ batlehub-cli download /proxy/jb/jetbrains/idea/idea-2026.1.3.tar.gz
 batlehub-cli download -r jb jetbrains/idea/idea-2026.1.3.tar.gz
 ```
 
-`-o` names the output file; it defaults to the path's basename, and `-o -` writes
-to stdout so the file can be piped.
+**By coordinate**, the kind must have one artifact per version: npm, cargo,
+composer, rubygems, goproxy, nuget, openvsx, vscode-marketplace,
+jetbrains-marketplace and galaxy. Any other kind exits 2 and says why (a PyPI
+version is several files, a Maven version a jar and a pom); give its `/proxy/…`
+path instead. The file is named from the coordinate (`left-pad-1.3.0.tgz`),
+never from anything the server sends.
+
+The bytes go to `<file>.part` and are hashed while they stream, against the
+checksum the kind's own metadata advertises (npm's `dist.integrity`, cargo's
+index `cksum`). Only a match is renamed into place; a mismatch, a refusal or a
+Ctrl-C removes the `.part` and exits non-zero. A kind whose metadata carries no
+checksum the CLI reads is written with a `warning:` that says it is unverified.
+
+`-o` names the output file, and an existing one is replaced only after a
+[confirmation](#confirmation). `-o -` writes to stdout so the file can be piped;
+there, a mismatch is reported after the last byte and the exit code (1) is the
+signal.
 
 ---
 

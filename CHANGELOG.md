@@ -99,6 +99,17 @@ spellings*.
   per-platform archives), galaxy, helm, apk, jetbrains-marketplace and
   vscode-marketplace. A nix registry is refused with the `nix copy --to`
   command to run instead.
+- **`download <registry>/<name>@<version>`** fetches a version's one artifact by
+  coordinate (npm, cargo, composer, rubygems, goproxy, nuget, the extension and
+  plugin galleries, galaxy). It writes `<file>.part`, verifies it against the
+  checksum the metadata advertises while it streams, and renames it only on a
+  match. A mismatch, a refusal or Ctrl-C leaves nothing behind.
+- **`package versions` lists every version, the upstream's included**, with the
+  server's state for each, one page at a time (`--limit`, `--page`, `--all`,
+  `--no-upstream`). It used to show only what was cached, and stopped at 200.
+- **`publish` to npm now sends `dist.integrity` and `dist.shasum`**, as
+  `npm publish` does, so the published packument carries a checksum clients can
+  verify.
 - **`profile list` and `profile use`.** `use` writes a top-level `current` key,
   so `-P` is needed only to leave the profile in use. An older CLI ignores the
   key.

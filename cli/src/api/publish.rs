@@ -285,10 +285,22 @@ impl BatleHubClient {
         let length = bytes.len();
         let data_b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
 
+        // What `npm publish` puts in `dist`: the SRI sha512 and the legacy
+        // sha1. The registry serves them back in the packument, so a client —
+        // npm, or `batlehub-cli download` — can verify the tarball.
+        let integrity = format!(
+            "sha512-{}",
+            base64::engine::general_purpose::STANDARD.encode(sha2::Sha512::digest(&bytes))
+        );
+        let shasum = hex::encode(<sha1::Sha1 as sha1::Digest>::digest(&bytes));
         let body = serde_json::json!({
             "name": name,
             "versions": {
-                version: { "name": name, "version": version },
+                version: {
+                    "name": name,
+                    "version": version,
+                    "dist": { "integrity": integrity, "shasum": shasum },
+                },
             },
             "_attachments": {
                 file_name: {

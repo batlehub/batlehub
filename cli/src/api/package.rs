@@ -79,6 +79,37 @@ impl BatleHubClient {
         self.get_with_params("/api/v1/packages", &query).await
     }
 
+    /// One page of a package's versions from the explore detail endpoint,
+    /// the upstream's included unless `upstream` is false (RFC 0040 §6.5).
+    /// Read as JSON: the spec owns the row shape, so it is not re-declared.
+    pub async fn package_versions_page(
+        &self,
+        registry: &str,
+        name: &str,
+        page: u64,
+        per_page: Option<u64>,
+        upstream: bool,
+    ) -> Result<serde_json::Value> {
+        #[derive(Serialize)]
+        struct Q {
+            page: u64,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            per_page: Option<u64>,
+            upstream: &'static str,
+        }
+        let path = format!(
+            "/api/v1/explore/packages/{}/{}",
+            percent_encode(registry),
+            percent_encode(name)
+        );
+        let q = Q {
+            page,
+            per_page,
+            upstream: if upstream { "auto" } else { "skip" },
+        };
+        self.get_with_params(&path, &q).await
+    }
+
     pub async fn package_readme(
         &self,
         registry: &str,
