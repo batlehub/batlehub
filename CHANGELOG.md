@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.8.3] - 2026-11-02
+
 ### Fixed
 
 - **A namespace's gates now judge proxied packages too.** A
@@ -1770,7 +1772,8 @@ First stable release.
 
 ---
 
-[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.2...HEAD
+[Unreleased]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.3...HEAD
+[1.8.3]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.2...v1.8.3
 [1.8.2]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.1...v1.8.2
 [1.8.1]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.8.0...v1.8.1
 [1.8.0]: https://git.batleforc.fr/batleforc/batlehub/compare/v1.7.0...v1.8.0
