@@ -229,7 +229,8 @@ The generated use fetch and include the full model spec, so any changes to the A
 ## Docs
 
 **There is one documentation tree, `docs/`, and it is the published site**
-(batleforc.git.batleforc.fr/batlehub). It used to be two — `website/` published
+(batlehub.dev; the Forgejo build is mirrored at batleforc.git.batleforc.fr/batlehub).
+It used to be two — `website/` published
 and `docs/` unpublished — with four documents maintained in both and drifted by
 up to 296 lines. RFC 0005 merged them. A document has exactly one home, and the
 home is chosen by **who reads it**:

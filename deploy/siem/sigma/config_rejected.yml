@@ -4,7 +4,7 @@ status: experimental
 description: >-
   A configuration candidate — from the file watcher or the console editor — did not parse, validate or build, and was refused. Repeated rejections are someone editing the live config by trial and error.
 references:
-  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+  - https://batlehub.dev/operations/siem
 author: BatleHub
 date: 2026-10-05
 logsource:

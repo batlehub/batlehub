@@ -2,7 +2,7 @@
 
 Sigma rules for the audit stream BatleHub writes under `[logging] format = "json"`
 (RFC 0036 §6.2). The operator page — the field reference, what each rule is for,
-how to add one — is [SIEM integration](https://batleforc.git.batleforc.fr/batlehub/operations/siem).
+how to add one — is [SIEM integration](https://batlehub.dev/operations/siem).
 
 ```
 sigma/       one rule per file; a burst rule carries its base rule and the correlation

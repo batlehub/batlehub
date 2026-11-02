@@ -5,7 +5,7 @@ status: experimental
 description: >-
   OIDC sign-in failures, one per callback.
 references:
-  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+  - https://batlehub.dev/operations/siem
 author: BatleHub
 date: 2026-10-05
 logsource:
@@ -27,7 +27,7 @@ description: >-
   Repeated OIDC sign-in failures from one source IP in ten minutes: a replayed
   or forged callback, or a misconfigured identity provider.
 references:
-  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+  - https://batlehub.dev/operations/siem
 author: BatleHub
 date: 2026-10-05
 tags:

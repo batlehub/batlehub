@@ -667,45 +667,9 @@ like: [RFC 0016](/rfc/0016-retention-and-the-permanence-of-a-published-name).
 
 ## Rules {#rules}
 
-Rules are optional per-registry policies evaluated after RBAC.
-
-### Release age gate
-
-Block packages published less than `min_age_secs` ago:
-
-```toml
-[[registries.rules]]
-kind         = "release_age_gate"
-min_age_secs = 3600       # 1 hour
-bypass_roles = ["admin"]  # admins can still install new packages
-```
-
-### Deny latest tag
-
-Force clients to pin exact versions:
-
-```toml
-[[registries.rules]]
-kind         = "deny_latest"
-bypass_roles = ["admin"]
-```
-
-### Trusted publisher
-
-Restrict downloads to packages published by an allowed org, user, or scope. The publisher is derived from metadata already resolved during the proxy fetch — no extra upstream calls.
-
-```toml
-[[registries.rules]]
-kind         = "trusted_publisher"
-allow        = ["my-org", "trusted-user"]
-bypass_roles = ["admin"]
-```
-
-Publisher support by registry type (matching is case-insensitive):
-
-- **GitHub**, **GitLab**, **Forgejo** — the top-level owner/group segment of the package path (`"owner/repo"` → `"owner"`)
-- **npm** — the scope for scoped packages (`"@scope/name"` → `"scope"`); otherwise the publishing user
-- **OpenVSX**, **VS Code Marketplace** — the publisher segment of the extension id (`"publisher.extension"` → `"publisher"`)
-- **Not yet supported: Cargo** and any other registry type — configuring this rule there denies every request (fail-closed)
-
-See [`docs/guide/configuration.md`](https://github.com/batlehub/batlehub/blob/main/docs/guide/configuration.md) for the full field table.
+Rules are the per-registry gates a download meets after the caller's grants
+have allowed it: `release_age_gate`, `deny_latest`, `version_gate`,
+`trusted_publisher`, `require_signed_release`, `cve_gate` and `license_gate`,
+next to the block list above and the flags a SOC pushes. What each one reads,
+what it does when that data is missing, and how the set changes on a registry
+with `[registries.security]` are on [Security gates](/guide/security-gates).

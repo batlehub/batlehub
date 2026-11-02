@@ -5,7 +5,7 @@
 # plafond, une déclaration que quelqu'un a dû écrire (RFC 0005-bis §4.5).
 reference: true
 sourcePath: guide/admin-policies.md
-sourceHash: 1f5e9ee0c2770140
+sourceHash: 631aa92fc9b97410
 ---
 
 # Politiques et paquets
@@ -738,53 +738,11 @@ rétention :
 
 ## Les règles {#rules}
 
-Les règles sont des politiques facultatives, propres à chaque registre, évaluées
-après le RBAC.
-
-### Le garde-fou d'âge de publication
-
-Refuse les paquets publiés il y a moins de `min_age_secs` :
-
-```toml
-[[registries.rules]]
-kind         = "release_age_gate"
-min_age_secs = 3600       # 1 heure
-bypass_roles = ["admin"]  # les admins peuvent toujours installer un paquet récent
-```
-
-### Refuser le tag `latest`
-
-Force les clients à épingler des versions exactes :
-
-```toml
-[[registries.rules]]
-kind         = "deny_latest"
-bypass_roles = ["admin"]
-```
-
-### Le publieur de confiance
-
-Restreint les téléchargements aux paquets publiés par une organisation, un
-utilisateur ou un scope autorisés. Le publieur est dérivé de métadonnées déjà
-résolues pendant la récupération par le proxy — aucun appel amont supplémentaire.
-
-```toml
-[[registries.rules]]
-kind         = "trusted_publisher"
-allow        = ["my-org", "trusted-user"]
-bypass_roles = ["admin"]
-```
-
-Prise en charge du publieur selon le type de registre (la comparaison est
-insensible à la casse) :
-
-- **GitHub**, **GitLab**, **Forgejo** — le segment propriétaire ou groupe de
-  premier niveau du chemin du paquet (`"owner/repo"` → `"owner"`)
-- **npm** — le scope pour les paquets à scope (`"@scope/name"` → `"scope"`) ;
-  sinon l'utilisateur qui publie
-- **OpenVSX**, **place de marché VS Code** — le segment d'éditeur de
-  l'identifiant d'extension (`"publisher.extension"` → `"publisher"`)
-- **Pas encore pris en charge : Cargo** et tout autre type de registre —
-  configurer cette règle là-bas refuse toutes les requêtes (échec fermé)
-
-Voir [Configuration](/fr/guide/configuration) pour la table complète des champs.
+Les règles sont les contrôles propres à chaque registre qu'un téléchargement
+rencontre une fois les droits de l'appelant vérifiés : `release_age_gate`,
+`deny_latest`, `version_gate`, `trusted_publisher`, `require_signed_release`,
+`cve_gate` et `license_gate`, à côté de la liste de blocage ci-dessus et des
+signalements poussés par un SOC. Ce que chacune lit, ce qu'elle fait quand
+cette donnée manque, et ce qui change sur un registre doté de
+`[registries.security]` sont décrits dans
+[Contrôles de sécurité](/fr/guide/security-gates).

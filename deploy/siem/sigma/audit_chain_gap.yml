@@ -5,7 +5,7 @@ status: experimental
 description: >-
   One record of the audit trail's seal chain, as it left the host.
 references:
-  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+  - https://batlehub.dev/operations/siem
 author: BatleHub
 date: 2026-10-05
 logsource:
@@ -31,7 +31,7 @@ description: >-
   §5.3). Run `batlehub-cli admin audit verify --head <the digest you received
   last>` to confirm.
 references:
-  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+  - https://batlehub.dev/operations/siem
 author: BatleHub
 date: 2026-10-05
 tags:

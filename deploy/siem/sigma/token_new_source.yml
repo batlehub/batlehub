@@ -4,7 +4,7 @@ status: experimental
 description: >-
   A personal access token was accepted from a source IP other than the one it was last used from. The server emits the fact because first-seen detection is stateful and a Sigma rule cannot express it.
 references:
-  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+  - https://batlehub.dev/operations/siem
 author: BatleHub
 date: 2026-10-05
 tags:

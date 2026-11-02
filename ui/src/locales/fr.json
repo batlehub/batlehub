@@ -1245,7 +1245,8 @@
     "rescan": "Relancer un scan",
     "rescanQueued": "Scan relancé.",
     "rescanAlreadyOpen": "Un scan est déjà en attente pour cette version.",
-    "rescanFailed": "Le scan n'a pas pu être relancé."
+    "rescanFailed": "Le scan n'a pas pu être relancé.",
+    "codeDocs": "Ce que signifie {code}, dans la documentation"
   },
   "visibility": {
     "internal": "Interne — utilisateurs authentifiés uniquement",

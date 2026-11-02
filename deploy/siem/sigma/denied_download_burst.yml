@@ -5,7 +5,7 @@ status: experimental
 description: >-
   A download the server refused.
 references:
-  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+  - https://batlehub.dev/operations/siem
 author: BatleHub
 date: 2026-10-05
 logsource:
@@ -28,7 +28,7 @@ description: >-
   Many refused downloads from one source IP in five minutes: enumeration of a
   closed registry, or a build hammering a blocked dependency.
 references:
-  - https://batleforc.git.batleforc.fr/batlehub/operations/siem
+  - https://batlehub.dev/operations/siem
 author: BatleHub
 date: 2026-10-05
 tags:

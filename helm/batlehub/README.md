@@ -10,7 +10,7 @@ Smart proxy and cache for package registries
 ## Install
 
 ```sh
-helm repo add batlehub https://batleforc.git.batleforc.fr/batlehub/charts
+helm repo add batlehub https://batlehub.dev/charts
 helm install batlehub batlehub/batlehub -f my-values.yaml
 ```
 

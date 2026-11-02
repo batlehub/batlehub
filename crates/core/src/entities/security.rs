@@ -213,6 +213,22 @@ impl ReasonCode {
     }
 }
 
+/// The page that explains every reason code to the person whose install was
+/// refused. The CLI prints a link per code; the console links each badge.
+pub const REASON_CODES_DOCS: &str = "https://batlehub.dev/use/refused-downloads";
+
+/// The link for one wire-form code: the page, anchored at the code's section.
+/// Takes the wire string rather than a [`ReasonCode`] so a client older than
+/// the server still links a code it cannot parse — to the right page, at
+/// worst to the top of it. The anchors are gated by
+/// `every_reason_code_has_a_section_on_the_refusals_page`.
+pub fn reason_code_docs_url(wire: &str) -> String {
+    format!(
+        "{REASON_CODES_DOCS}#{}",
+        wire.to_ascii_lowercase().replace('_', "-")
+    )
+}
+
 impl std::str::FromStr for ReasonCode {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -677,6 +693,37 @@ mod tests {
             );
         }
         assert_eq!(ReasonCode::ALL.len(), 29);
+    }
+
+    /// Every code the CLI and the console link to has its section, in both
+    /// languages: a code added without one is a link that lands at the top of
+    /// a page that does not mention it.
+    #[test]
+    fn every_reason_code_has_a_section_on_the_refusals_page() {
+        let pages = [
+            (
+                "en",
+                include_str!("../../../../docs/use/refused-downloads.md"),
+            ),
+            (
+                "fr",
+                include_str!("../../../../docs/fr/use/refused-downloads.md"),
+            ),
+        ];
+        for (lang, page) in pages {
+            for code in ReasonCode::ALL {
+                let url = reason_code_docs_url(code.as_str());
+                let anchor = url.rsplit('#').next().unwrap();
+                assert!(
+                    page.contains(&format!("{{#{anchor}}}")),
+                    "{lang}: docs/use/refused-downloads.md has no `{{#{anchor}}}` section for {code}"
+                );
+            }
+        }
+        assert_eq!(
+            reason_code_docs_url("MIN_AGE_NOT_MET"),
+            "https://batlehub.dev/use/refused-downloads#min-age-not-met"
+        );
     }
 
     #[test]

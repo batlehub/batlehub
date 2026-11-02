@@ -19,6 +19,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use batlehub_core::entities::reason_code_docs_url;
 use clap::Args;
 
 use crate::api::security::{parse_coordinate, VerdictView};
@@ -375,6 +376,12 @@ pub fn print_verdict(v: &VerdictView) {
             v.reason_codes.join(", ")
         }
     );
+    // One link per code, to the section that says what it means and what the
+    // person holding the refusal can do about it.
+    for (i, code) in v.reason_codes.iter().enumerate() {
+        let label = if i == 0 { "docs" } else { "" };
+        println!("  {label:<12} {}", reason_code_docs_url(code));
+    }
     if let Some(at) = &v.available_at {
         println!("  available    {at}");
     }

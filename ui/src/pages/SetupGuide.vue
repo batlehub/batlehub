@@ -2,7 +2,7 @@
 import { useI18n } from "vue-i18n";
 import { ref, computed } from "vue";
 import { RouterLink } from "vue-router";
-import { API_BASE_URL, DOCS_URL } from "@/config";
+import { API_BASE_URL, DOCS_URL, docsUrl } from "@/config";
 import { listRegistries } from "@/client/sdk.gen";
 import type { RegistryInfo } from "@/client/types.gen";
 import { useApi } from "@/composables/useApi";
@@ -26,7 +26,7 @@ import {
 } from "@/config/registryTypes";
 
 import { AsyncState } from "@/components/ui/async-state";
-const { t } = useI18n();
+const { t, locale } = useI18n();
 
 const base = computed(() => API_BASE_URL || globalThis.location.origin);
 const copied = ref<string | null>(null);
@@ -256,7 +256,7 @@ async function copy(key: string, text: string) {
           <template #remove><code class="font-mono text-foreground">setup remove</code></template>
           <template #link
             ><a
-              :href="`${DOCS_URL}use/cli#setup-apply`"
+              :href="docsUrl('use/cli#setup-apply', locale)"
               target="_blank"
               rel="noopener noreferrer"
               class="underline underline-offset-2 hover:text-foreground"

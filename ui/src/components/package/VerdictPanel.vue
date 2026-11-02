@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { severityVariant } from "@/lib/badge-variants";
 import { formatDay } from "@/lib/format";
+import { reasonCodeDocsUrl } from "@/config";
 
 /**
  * The supply-chain verdict of the selected version (RFC 0018 §4.2, phase 2):
@@ -32,7 +33,7 @@ const props = defineProps<{
   canRescan: boolean;
 }>();
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 
 const verdict = ref<VerdictResponse | null>(null);
 const loading = ref(false);
@@ -161,14 +162,21 @@ async function rescan() {
       <Badge :variant="stateVariant" class="text-xs" data-testid="verdict-state">
         {{ stateLabel }}
       </Badge>
-      <Badge
+      <a
         v-for="code in verdict.reason_codes ?? []"
         :key="code"
-        variant="outline"
-        class="font-mono text-xs"
+        :href="reasonCodeDocsUrl(code, locale)"
+        target="_blank"
+        rel="noopener noreferrer"
+        :aria-label="t('verdictPanel.codeDocs', { code })"
+        :title="t('verdictPanel.codeDocs', { code })"
+        class="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        data-testid="verdict-code"
       >
-        {{ code }}
-      </Badge>
+        <Badge variant="outline" class="font-mono text-xs hover:bg-accent">
+          {{ code }}
+        </Badge>
+      </a>
     </div>
 
     <p class="text-sm text-muted-foreground">{{ explanation }}</p>

@@ -29,6 +29,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `max_severity` and `mode`: their `bypass_roles`, `block = false`,
   `cve_gate.min_severity` and namespace overrides are not read, and a reload
   now says so instead of leaving them in place as though they did something.
+- **Every reason code links to its explanation.** `batlehub why` prints a
+  `docs` row per code, and each code badge on the console's verdict panel links
+  to the same section of the new *Why a download was refused* page
+  (`docs/use/refused-downloads.md`), in French when the console is. The
+  operator's side — every gate, what it reads, what it does when the data is
+  missing and how `[registries.security]` changes it — is the new *Security
+  gates* page (`docs/guide/security-gates.md`).
+
+### Changed
+
+- **The documentation lives at `https://batlehub.dev/`.** The console's default
+  `VITE_DOCS_URL`, the README, the chart README and the SIEM rules now point
+  there, and an override written without a trailing slash no longer glues the
+  host to the page path.
 
 ## [1.8.2] - 2026-11-01
 

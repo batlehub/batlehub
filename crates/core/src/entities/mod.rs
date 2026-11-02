@@ -80,9 +80,9 @@ pub use registry_kind::{
 pub use release_import::ImportRun;
 pub use sbom::{ArtifactSbom, SbomFormat, SbomSource};
 pub use security::{
-    coordinate_purl, worse_state, Escalation, Finding, FindingKind, InstallHookMode, ReasonCode,
-    ScanJob, ScanTrigger, ScannerErrorMode, SecurityMode, SecurityPolicy, Verdict, VerdictState,
-    BLOCK_LIST_SCANNER,
+    coordinate_purl, reason_code_docs_url, worse_state, Escalation, Finding, FindingKind,
+    InstallHookMode, ReasonCode, ScanJob, ScanTrigger, ScannerErrorMode, SecurityMode,
+    SecurityPolicy, Verdict, VerdictState, BLOCK_LIST_SCANNER,
 };
 pub use signing_key::SigningKey;
 pub use subject::{Decision, Resource, Subject, Tier};
