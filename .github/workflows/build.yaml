@@ -251,7 +251,7 @@ jobs:
       # The bare binary, for the image job: its `cli` build context.
       - name: Hand the binary to the image job
         if: matrix.image_platform
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cli-linux-${{ matrix.image_platform }}
           path: batlehub-cli
@@ -309,7 +309,7 @@ jobs:
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/buildcache:proxy-${{ matrix.platform }}
       - name: Hand the server to the release and the worker images
         if: matrix.platform == 'amd64'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: server-linux-amd64
           path: dist/server/batlehub
@@ -365,7 +365,7 @@ jobs:
         run: |
           mkdir -p digests
           touch "digests/${DIGEST#sha256:}"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: digest-proxy-${{ matrix.platform }}
           path: digests/*

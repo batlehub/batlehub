@@ -311,7 +311,7 @@ jobs:
       # written to a file the job would otherwise throw away.
       - name: Upload crash artefacts
         if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fuzz-artifacts
           path: fuzz/artifacts/
@@ -349,7 +349,7 @@ jobs:
       # insertion-ordered map (RFC 0037 §6.2). Nothing here enables it.
       - name: Config tests with toml/preserve_order
         run: cargo test -p batlehub-config --lib --features toml/preserve_order
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-unit
           path: coverage-unit.lcov
@@ -427,7 +427,7 @@ jobs:
         run: >-
           cargo llvm-cov report --lcov --output-path coverage-integration.lcov
           --ignore-filename-regex "${{ env.COVERAGE_EXCLUDE }}"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-integration
           path: coverage-integration.lcov
@@ -490,7 +490,7 @@ jobs:
         run: >-
           cargo llvm-cov report --lcov --output-path coverage-heavy.lcov
           --ignore-filename-regex "${{ env.COVERAGE_EXCLUDE }}"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-heavy
           path: coverage-heavy.lcov
@@ -555,7 +555,7 @@ jobs:
         env:
           BATLEHUB_VSX_SRC: ${{ github.workspace }}/batlehub-vsx
           CDP_URL: http://127.0.0.1:9222
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: vsx-extension-run
@@ -687,7 +687,7 @@ jobs:
         run: >-
           cargo llvm-cov report --lcov --output-path coverage-heavy-backends.lcov
           --ignore-filename-regex "${{ env.COVERAGE_EXCLUDE }}"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-heavy-backends
           path: coverage-heavy-backends.lcov
@@ -771,7 +771,7 @@ jobs:
         run: >-
           cargo llvm-cov report --lcov --output-path coverage-heavy-browser.lcov
           --ignore-filename-regex "${{ env.COVERAGE_EXCLUDE }}"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
         with:
           name: coverage-heavy-browser
@@ -780,7 +780,7 @@ jobs:
       # vsx_view.sh keeps its screenshots, transcripts and the editor's log
       # under ~/.cache/batlehub-heavy/vsx_view-last when a step past the
       # editor start fails.
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: heavy-browser-evidence
@@ -844,7 +844,7 @@ jobs:
         run: >-
           cargo llvm-cov report --lcov --output-path coverage-heavy-bundler.lcov
           --ignore-filename-regex "${{ env.COVERAGE_EXCLUDE }}"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-heavy-bundler
           path: coverage-heavy-bundler.lcov
@@ -1170,7 +1170,7 @@ jobs:
         run: >-
           cargo llvm-cov report --lcov --output-path coverage-heavy-${{ matrix.suite }}.lcov
           --ignore-filename-regex "${{ env.COVERAGE_EXCLUDE }}"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-heavy-${{ matrix.suite }}
           path: coverage-heavy-${{ matrix.suite }}.lcov
@@ -1331,7 +1331,7 @@ jobs:
         run: >-
           cargo llvm-cov report --lcov --output-path coverage-authz-${{ matrix.target }}.lcov
           --ignore-filename-regex "${{ env.COVERAGE_EXCLUDE }}"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-authz-${{ matrix.target }}
           path: coverage-authz-${{ matrix.target }}.lcov
@@ -1441,7 +1441,7 @@ jobs:
         run: >-
           cargo llvm-cov report --lcov --output-path coverage-authz-live-${{ matrix.kind }}.lcov
           --ignore-filename-regex "${{ env.COVERAGE_EXCLUDE }}"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-authz-live-${{ matrix.kind }}
           path: coverage-authz-live-${{ matrix.kind }}.lcov
@@ -1631,7 +1631,7 @@ jobs:
         run: >-
           cargo llvm-cov report --lcov --output-path coverage-closed-world-${{ matrix.phase }}.lcov
           --ignore-filename-regex "${{ env.COVERAGE_EXCLUDE }}"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-closed-world-${{ matrix.phase }}
           path: coverage-closed-world-${{ matrix.phase }}.lcov
@@ -1681,7 +1681,7 @@ jobs:
             authz-rubygems=coverage-authz-rubygems.lcov \
             authz-terraform=coverage-authz-terraform.lcov \
             | tee -a "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-merged
           path: coverage-merged.lcov
