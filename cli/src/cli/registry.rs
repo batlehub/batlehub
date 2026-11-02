@@ -12,10 +12,12 @@ pub enum RegistryCommand {
     /// List all accessible registries
     List,
     /// Show details for a single registry
-    Info {
+    Show {
         /// Registry name
         name: String,
     },
+    #[command(hide = true)]
+    Info { name: String },
     /// Suggest the registries a project needs, from its mise.lock and manifests
     Suggest {
         /// Directory to scan (defaults to the current working directory)
@@ -56,7 +58,11 @@ pub enum RegistryCommand {
 pub async fn run(cmd: RegistryCommand, client: &BatleHubClient, json: bool) -> Result<()> {
     match cmd {
         RegistryCommand::List => run_list(client, json).await,
-        RegistryCommand::Info { name } => run_info(client, json, &name).await,
+        RegistryCommand::Show { name } => run_info(client, json, &name).await,
+        RegistryCommand::Info { name } => {
+            crate::render::deprecated("registry info", "registry show");
+            run_info(client, json, &name).await
+        }
         RegistryCommand::Suggest {
             dir,
             depth,

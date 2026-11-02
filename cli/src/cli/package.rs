@@ -1,4 +1,8 @@
 use anyhow::Result;
+
+use super::lifecycle::Verb;
+use crate::coordinate::Coordinate;
+use crate::render::deprecated;
 use clap::Subcommand;
 use comfy_table::{Cell, Color, Table};
 
@@ -31,12 +35,11 @@ pub enum PackageCommand {
         #[arg(long, default_value = "50")]
         per_page: u64,
     },
-    /// Show all versions of a package
+    /// The versions of a package: `registry/name`, or a bare name with `-r`
     Versions {
-        /// Registry name
-        registry: String,
-        /// Package name
-        name: String,
+        /// `registry/name` (the older `<registry> <name>` still works, with a warning)
+        #[arg(num_args = 1..=2, required = true)]
+        coordinate: Vec<String>,
     },
     /// Print a version's README
     ///
@@ -54,9 +57,82 @@ pub enum PackageCommand {
         #[arg(long)]
         no_upstream: bool,
     },
+    /// Yank versions: kept, but no longer resolved (destructive: asks first)
+    Yank {
+        /// `registry/name@version`, one or more
+        #[arg(required = true)]
+        coordinates: Vec<String>,
+    },
+    /// Undo a yank
+    Unyank {
+        #[arg(required = true)]
+        coordinates: Vec<String>,
+    },
+    /// Delete versions; each version number is then spent forever (destructive: asks first)
+    Delete {
+        #[arg(required = true)]
+        coordinates: Vec<String>,
+    },
+    /// Pin versions so retention never reclaims them
+    Pin {
+        #[arg(required = true)]
+        coordinates: Vec<String>,
+    },
+    /// Release a retention pin
+    Unpin {
+        #[arg(required = true)]
+        coordinates: Vec<String>,
+    },
+    /// Mark versions deprecated
+    Deprecate {
+        #[arg(required = true)]
+        coordinates: Vec<String>,
+        /// Shown to the clients that read deprecation messages
+        #[arg(long)]
+        message: Option<String>,
+    },
+    /// Remove a deprecation
+    Undeprecate {
+        #[arg(required = true)]
+        coordinates: Vec<String>,
+    },
+    /// Hide versions from listings and search, without deleting (destructive: asks first)
+    Unlist {
+        #[arg(required = true)]
+        coordinates: Vec<String>,
+    },
+    /// Undo an unlist
+    Relist {
+        #[arg(required = true)]
+        coordinates: Vec<String>,
+    },
 }
 
 pub async fn run(
+    cmd: PackageCommand,
+    client: &BatleHubClient,
+    default_registry: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let (verb, coordinates, message) = match cmd {
+        PackageCommand::Yank { coordinates } => (Verb::Yank, coordinates, None),
+        PackageCommand::Unyank { coordinates } => (Verb::Unyank, coordinates, None),
+        PackageCommand::Delete { coordinates } => (Verb::Delete, coordinates, None),
+        PackageCommand::Pin { coordinates } => (Verb::Pin, coordinates, None),
+        PackageCommand::Unpin { coordinates } => (Verb::Unpin, coordinates, None),
+        PackageCommand::Deprecate {
+            coordinates,
+            message,
+        } => (Verb::Deprecate, coordinates, message),
+        PackageCommand::Undeprecate { coordinates } => (Verb::Undeprecate, coordinates, None),
+        PackageCommand::Unlist { coordinates } => (Verb::Unlist, coordinates, None),
+        PackageCommand::Relist { coordinates } => (Verb::Relist, coordinates, None),
+        other => return consult(other, client, default_registry, json).await,
+    };
+    super::lifecycle::run(verb, &coordinates, message.as_deref(), client).await
+}
+
+async fn consult(
     cmd: PackageCommand,
     client: &BatleHubClient,
     default_registry: Option<&str>,
@@ -98,8 +174,7 @@ pub async fn run(
             coordinate,
             no_upstream,
         } => {
-            let c = crate::coordinate::Coordinate::resolve(client, &coordinate, default_registry)
-                .await?;
+            let c = Coordinate::resolve(client, &coordinate, default_registry).await?;
             let (registry, name, version) = (c.registry, c.name, c.version);
             let resp = client
                 .package_readme(
@@ -119,7 +194,20 @@ pub async fn run(
                 print_readme(&resp);
             }
         }
-        PackageCommand::Versions { registry, name } => {
+        PackageCommand::Versions { coordinate } => {
+            let raw = match coordinate.as_slice() {
+                [registry, name] => {
+                    deprecated(
+                        "package versions <registry> <name>",
+                        "package versions <registry>/<name>",
+                    );
+                    format!("{registry}/{name}")
+                }
+                [one] => one.clone(),
+                _ => anyhow::bail!("expected registry/name"),
+            };
+            let c = Coordinate::resolve(client, &raw, default_registry).await?;
+            let (registry, name) = (c.registry, c.name);
             let resp = client
                 .list_packages(PackageQuery {
                     registry: Some(registry.clone()),
@@ -141,6 +229,8 @@ pub async fn run(
                 print_versions_table(&items);
             }
         }
+        // The lifecycle verbs are dispatched by `run` before this.
+        _ => anyhow::bail!("not a consult command"),
     }
     Ok(())
 }

@@ -1200,7 +1200,7 @@ fn a_destructive_command_without_a_terminal_refuses_with_nine() {
 fn a_not_found_exits_five_with_the_error_shape() {
     let srv = TestServer::start();
     let (code, stdout, stderr) = cli_exit(
-        &["admin", "cache", "warm", REGISTRY, "--packages", "pkg1"],
+        &["cache", "warm", "-r", REGISTRY, "--packages", "pkg1"],
         &srv.base_url(),
         AUTH_TOKEN,
     );
@@ -1216,9 +1216,9 @@ fn a_not_found_exits_five_with_the_error_shape() {
         &[
             "--format",
             "json",
-            "admin",
             "cache",
             "warm",
+            "-r",
             REGISTRY,
             "--packages",
             "pkg1",
@@ -1253,6 +1253,120 @@ fn format_csv_prints_a_listing_and_refuses_one_object() {
         AUTH_TOKEN,
     );
     assert_eq!(code, 2, "{stderr}");
+}
+
+/// RFC 0040 §4.4: one verb, several coordinates; the old `version yank`
+/// spelling still runs, with a warning naming its replacement.
+#[test]
+fn package_lifecycle_takes_several_coordinates_and_the_old_spelling_warns() {
+    let srv = TestServer::start();
+    let base = srv.base_url();
+    http_publish_nuget(&base, REGISTRY, "MultiA", "1.0.0");
+    http_publish_nuget(&base, REGISTRY, "MultiB", "2.0.0");
+
+    let a = format!("{REGISTRY}/multia@1.0.0");
+    let b = format!("{REGISTRY}/multib@2.0.0");
+    let (code, stdout, stderr) = cli_exit(&["package", "yank", "--yes", &a, &b], &base, AUTH_TOKEN);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains(&format!("Yanked {a}")), "{stdout}");
+    assert!(stdout.contains(&format!("Yanked {b}")), "{stdout}");
+    assert!(!nuget_flat_versions(&base, REGISTRY, "multia").contains(&"1.0.0".to_owned()));
+
+    // A bare name, in the `-r` registry.
+    let (code, _, stderr) = cli_exit(
+        &["-r", REGISTRY, "package", "unyank", "multia@1.0.0"],
+        &base,
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 0, "{stderr}");
+    assert!(nuget_flat_versions(&base, REGISTRY, "multia").contains(&"1.0.0".to_owned()));
+
+    let (code, stdout, stderr) = cli_exit(
+        &["version", "unyank", REGISTRY, "multib", "2.0.0"],
+        &base,
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stderr.contains("warning: `version unyank <registry> <name> <version>` is deprecated")
+            && stderr.contains("use `package unyank <registry>/<name>@<version>`"),
+        "{stderr}"
+    );
+    assert!(stdout.contains(&format!("Unyanked {b}")), "{stdout}");
+}
+
+/// A deprecated `admin …` spelling prints the same stdout as its new home and
+/// one warning on stderr.
+#[test]
+fn an_admin_alias_warns_and_prints_what_the_new_command_prints() {
+    let srv = TestServer::start();
+    let base = srv.base_url();
+    let (code, new_out, new_err) = cli_exit(&["server", "health"], &base, AUTH_TOKEN);
+    assert_eq!(code, 0, "{new_err}");
+    assert!(!new_err.contains("warning:"), "{new_err}");
+    let (code, old_out, old_err) = cli_exit(&["admin", "health"], &base, AUTH_TOKEN);
+    assert_eq!(code, 0, "{old_err}");
+    assert_eq!(old_out, new_out);
+    assert!(
+        old_err.contains("`admin health` is deprecated") && old_err.contains("`server health`"),
+        "{old_err}"
+    );
+}
+
+/// `owner` takes the coordinate; a version is refused, since ownership is per
+/// package.
+#[test]
+fn owner_takes_a_package_coordinate() {
+    let srv = TestServer::start();
+    let base = srv.base_url();
+    let with_version = format!("{REGISTRY}/somepkg@1.0.0");
+    let (code, _, stderr) = cli_exit(&["owner", "list", &with_version], &base, AUTH_TOKEN);
+    assert_eq!(code, 2, "{stderr}");
+    let package = format!("{REGISTRY}/somepkg");
+    let (code, stdout, stderr) = cli_exit(&["owner", "list", &package], &base, AUTH_TOKEN);
+    // The test server holds no ownership store: reaching it is the proof the
+    // coordinate was split into registry and name.
+    let _ = (code, stdout);
+    assert!(
+        stderr.contains("error: ownership not configured"),
+        "{stderr}"
+    );
+}
+
+/// `profile use` makes a profile current; `profile show` then reads it with no
+/// `-P`, and `config show` still works with a warning.
+#[test]
+fn profile_use_selects_the_profile_in_use() {
+    let config = tempfile::tempdir().unwrap();
+    let cfg = config.path().to_str().unwrap();
+    let run = |args: &[&str]| {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_batlehub-cli"))
+            .args(args)
+            .env("XDG_CONFIG_HOME", cfg)
+            .env_remove("BATLEHUB_SERVER")
+            .env_remove("BATLEHUB_PROFILE")
+            .output()
+            .unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let (code, _, err) = run(&["-P", "prod", "profile", "set", "server_url", "http://prod"]);
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = run(&["profile", "use", "nope"]);
+    assert_eq!(code, 5, "{err}");
+    let (code, _, err) = run(&["profile", "use", "prod"]);
+    assert_eq!(code, 0, "{err}");
+    let (_, out, _) = run(&["profile", "show", "--key", "server_url"]);
+    assert_eq!(out.trim(), "http://prod");
+    let (_, out, _) = run(&["profile", "list"]);
+    assert!(out.contains("* prod"), "{out}");
+    let (code, out, err) = run(&["config", "show"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("http://prod"), "{out}");
+    assert!(err.contains("`config show` is deprecated"), "{err}");
 }
 
 /// `raw` has no record separator, so only `auth token` takes it.
@@ -4360,9 +4474,9 @@ fn verdicts_commands_report_a_registry_with_no_security_profile() {
     let base = srv.base_url();
 
     for args in [
-        vec!["verdicts", "backfill", "--registry", REGISTRY],
-        vec!["verdicts", "rescan", "--registry", REGISTRY],
-        vec!["verdicts", "pullers", "test-nuget/DepLib@1.0.0"],
+        vec!["verdict", "backfill", "--registry", REGISTRY],
+        vec!["verdict", "rescan", "--registry", REGISTRY],
+        vec!["verdict", "pullers", "test-nuget/DepLib@1.0.0"],
     ] {
         let (ok, _stdout, stderr) = cli_cmd(&args, &base, AUTH_TOKEN);
         assert!(!ok, "{args:?} should fail without a security profile");

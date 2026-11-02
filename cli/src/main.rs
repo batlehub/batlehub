@@ -12,6 +12,7 @@ mod tui;
 use anyhow::Result;
 use clap::Parser;
 
+use cli::groups::{self, Group};
 use cli::{
     admin, auth, authz, completion, config_cmd, download, java, mise, owner, package, proxy,
     publish, registry, security, setup, version, vsx, Cli, Command,
@@ -49,6 +50,8 @@ async fn run(cli: Cli, format: Format) -> Result<()> {
         cli.command,
         Command::Auth {
             cmd: cli::auth::AuthCommand::Token { cmd: None, .. }
+        } | Command::Profile {
+            cmd: cli::config_cmd::ProfileCommand::Show { key: Some(_), .. }
         }
     );
     if format == Format::Raw && !prints_one_value {
@@ -65,9 +68,13 @@ async fn run(cli: Cli, format: Format) -> Result<()> {
     };
 
     // Commands that need neither config nor a server connection
+    if let Command::Profile { cmd } = cli.command {
+        render::init(context(cli.registry.clone()));
+        return config_cmd::run_profile(cmd, cli.profile.as_deref());
+    }
     if let Command::Config { cmd } = cli.command {
         render::init(context(cli.registry.clone()));
-        return config_cmd::run(cmd);
+        return config_cmd::run(cmd, cli.profile.as_deref());
     }
     // The Java engine runs locally: no server, no token, no config.
     if let Command::Java(args) = cli.command {
@@ -78,8 +85,10 @@ async fn run(cli: Cli, format: Format) -> Result<()> {
         return Ok(());
     }
     let mut cfg = ConfigFile::load()?;
+    // `-P`, else the file's `current` (`profile use`), else `default`.
+    let profile_name: Option<String> = cfg.selected(cli.profile.as_deref()).map(str::to_owned);
     {
-        let profile = match cli.profile.as_deref() {
+        let profile = match profile_name.as_deref() {
             Some(n) => cfg.profiles.get(n),
             None => Some(&cfg.default),
         };
@@ -91,7 +100,7 @@ async fn run(cli: Cli, format: Format) -> Result<()> {
     }
 
     if let Command::Setup { cmd } = cli.command {
-        let profile = match cli.profile.as_deref() {
+        let profile = match profile_name.as_deref() {
             Some(n) => cfg.profiles.get(n),
             None => Some(&cfg.default),
         };
@@ -129,7 +138,7 @@ async fn run(cli: Cli, format: Format) -> Result<()> {
         .server
         .clone()
         .or_else(|| {
-            cli.profile
+            profile_name
                 .as_deref()
                 .and_then(|n| cfg.profiles.get(n))
                 .or(Some(&cfg.default))
@@ -155,11 +164,11 @@ async fn run(cli: Cli, format: Format) -> Result<()> {
     } else if logging_out {
         None
     } else {
-        api::auth::resolve_token(&base_url_for_refresh, cli.profile.as_deref(), &mut cfg).await?
+        api::auth::resolve_token(&base_url_for_refresh, profile_name.as_deref(), &mut cfg).await?
     };
 
     let resolved = cfg.resolve(
-        cli.profile.as_deref(),
+        profile_name.as_deref(),
         cli.server.clone(),
         effective_token,
         cli.registry.clone(),
@@ -173,15 +182,61 @@ async fn run(cli: Cli, format: Format) -> Result<()> {
         Command::Package { cmd } => {
             package::run(cmd, &client, resolved.registry.as_deref(), json).await?
         }
+        Command::Owner { cmd } => owner::run(cmd, &client, json).await?,
+        Command::Visibility { cmd } => groups::run(Group::Visibility(cmd), &client, json).await?,
+        Command::Grant { cmd } => groups::run(Group::Grant(cmd), &client, json).await?,
+        Command::Namespace { cmd } => groups::run(Group::Namespace(cmd), &client, json).await?,
+        Command::User { cmd } => groups::run(Group::User(cmd), &client, json).await?,
+        Command::Quota { cmd } => groups::run(Group::Quota(cmd), &client, json).await?,
+        Command::IpBlock { cmd } => groups::run(Group::IpBlock(cmd), &client, json).await?,
+        Command::Server { cmd } => groups::run(Group::Server(cmd), &client, json).await?,
+        Command::Cache { cmd } => groups::run(Group::Cache(cmd), &client, json).await?,
+        Command::Import {
+            registry,
+            tag,
+            repo,
+        } => {
+            groups::run(
+                Group::Import {
+                    registry,
+                    tag,
+                    repo,
+                },
+                &client,
+                json,
+            )
+            .await?
+        }
+        Command::Retention { cmd } => groups::run(Group::Retention(cmd), &client, json).await?,
+        Command::Banner { cmd } => groups::run(Group::Banner(cmd), &client, json).await?,
+        Command::Exposure { cmd } => groups::run(Group::Exposure(cmd), &client, json).await?,
+        Command::Bundle { cmd } => groups::run(Group::Bundle(cmd), &client, json).await?,
+        Command::AirGap { cmd } => groups::run(Group::AirGap(cmd), &client, json).await?,
+        Command::Flag { cmd } => groups::run(Group::Flag(cmd), &client, json).await?,
+        Command::Gdpr { cmd } => groups::run(Group::Gdpr(cmd), &client, json).await?,
+        Command::Sbom { cmd } => groups::run(Group::Sbom(cmd), &client, json).await?,
+        Command::Notification { cmd } => {
+            groups::run(Group::Notification(cmd), &client, json).await?
+        }
+        Command::Audit { cmd } => groups::run(Group::Audit(cmd), &client, json).await?,
+        Command::Verdict { cmd } => security::run_verdicts(cmd, &client, json).await?,
+        // ── deprecated spellings ──
         Command::Version { cmd } => version::run(cmd, &client).await?,
-        Command::Owners { cmd } => owner::run(cmd, &client, json).await?,
+        Command::Owners { cmd } => owner::run_legacy(cmd, &client, json).await?,
+        Command::Verdicts { cmd } => {
+            render::deprecated("verdicts", "verdict");
+            security::run_verdicts(cmd, &client, json).await?
+        }
+        Command::Admin { cmd } => {
+            let (old, new) = groups::admin_replacement(&cmd);
+            render::deprecated(old, new);
+            admin::run(cmd, &client, json).await?
+        }
         Command::Authz { cmd } => authz::run(cmd, &client, json).await?,
         Command::Mise { cmd } => mise::run(cmd, &client, json).await?,
         Command::Proxy { cmd } => proxy::run(cmd).await?,
         Command::Vsx { cmd } => vsx::run(cmd, cli.token.as_deref()).await?,
         Command::Why(args) => security::run_why(args, &client, json).await?,
-        Command::Audit { cmd } => security::run_audit(cmd, &client, json).await?,
-        Command::Verdicts { cmd } => security::run_verdicts(cmd, &client, json).await?,
         Command::Wait(args) => security::run_wait(args, &client, json).await?,
         Command::Publish(args) => publish::run(args, &client, resolved.registry.as_deref()).await?,
         Command::Download(args) => {
@@ -192,14 +247,14 @@ async fn run(cli: Cli, format: Format) -> Result<()> {
                 cmd,
                 &client,
                 json,
-                cli.profile.as_deref(),
+                profile_name.as_deref(),
                 cli.token.as_deref(),
             )
             .await?
         }
-        Command::Admin { cmd } => admin::run(cmd, &client, json).await?,
         Command::Tui => tui::run(client).await?,
         Command::Config { .. }
+        | Command::Profile { .. }
         | Command::Completion { .. }
         | Command::Setup { .. }
         | Command::Java(_) => {

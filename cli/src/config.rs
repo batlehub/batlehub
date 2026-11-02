@@ -39,6 +39,10 @@ impl Profile {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ConfigFile {
+    /// The profile used when `-P` is not given (`profile use`); absent means
+    /// `default`. An older CLI ignores the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<String>,
     #[serde(default)]
     pub default: Profile,
     #[serde(default)]
@@ -91,6 +95,13 @@ impl ConfigFile {
         Ok(())
     }
 
+    /// The profile in use: `-P`, else `current`, else `None` for `default`.
+    pub fn selected<'a>(&'a self, explicit: Option<&'a str>) -> Option<&'a str> {
+        explicit
+            .or(self.current.as_deref())
+            .filter(|n| *n != "default")
+    }
+
     pub fn resolve(
         &self,
         profile: Option<&str>,
@@ -98,7 +109,7 @@ impl ConfigFile {
         token_override: Option<String>,
         registry_override: Option<String>,
     ) -> ResolvedConfig {
-        let base = match profile {
+        let base = match profile.filter(|n| *n != "default") {
             Some(name) => self.profiles.get(name).cloned().unwrap_or_default(),
             None => self.default.clone(),
         };
@@ -146,6 +157,7 @@ mod tests {
 
     fn cfg_with_default(url: &str, token: &str) -> ConfigFile {
         ConfigFile {
+            current: None,
             default: Profile {
                 server_url: Some(url.to_string()),
                 token: Some(token.to_string()),
@@ -199,6 +211,27 @@ mod tests {
         let r = cfg.resolve(None, None, None, None);
         assert_eq!(r.server_url, "http://localhost:8080");
         assert!(r.token.is_none());
+    }
+
+    /// `profile use` writes a top-level `current`; the loader ignores keys it
+    /// does not know, which is what lets an older CLI read the file.
+    #[test]
+    fn current_selects_a_profile_and_unknown_keys_are_ignored() {
+        let cfg: ConfigFile = toml::from_str(
+            "current = \"prod\"\nfrom_the_future = 1\n[default]\nserver_url = \"http://d\"\n\
+             [profiles.prod]\nserver_url = \"http://p\"\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.selected(None), Some("prod"));
+        assert_eq!(cfg.selected(Some("default")), None);
+        assert_eq!(
+            cfg.resolve(cfg.selected(None), None, None, None).server_url,
+            "http://p"
+        );
+        assert_eq!(
+            cfg.resolve(Some("default"), None, None, None).server_url,
+            "http://d"
+        );
     }
 
     #[test]

@@ -32,13 +32,6 @@ impl BatleHubClient {
         require_success(result)
     }
 
-    pub async fn delete_version(&self, registry: &str, name: &str, version: &str) -> Result<()> {
-        let result = self
-            .bulk_delete(registry, vec![(name.to_string(), version.to_string())])
-            .await?;
-        require_success(result)
-    }
-
     /// Pin or unpin a version against retention (RFC 0016 §4.1).
     ///
     /// Not a bulk endpoint, unlike its neighbours above: a pin is a considered

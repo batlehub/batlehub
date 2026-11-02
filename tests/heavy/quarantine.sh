@@ -250,8 +250,8 @@ if ! grep -q "SCAN_PENDING" "$HEAVY_WORK/install-1.err"; then
   cat "$HEAVY_WORK/install-1.err" >&2
   heavy_fail "npm exited $RC but printed no SCAN_PENDING — the reason code did not reach the developer (record this in RFC 0018 §4.4 before building anything else)"
 fi
-grep -q "batlehub why" "$HEAVY_WORK/install-1.err" \
-  || { cat "$HEAVY_WORK/install-1.err" >&2; heavy_fail "npm's output does not tell the developer to run 'batlehub why'"; }
+grep -q "batlehub-cli why $REG/" "$HEAVY_WORK/install-1.err" \
+  || { cat "$HEAVY_WORK/install-1.err" >&2; heavy_fail "npm's output does not tell the developer to run 'batlehub-cli why $REG/…'"; }
 [[ ! -d "$CONSUMER/node_modules/$PKG" ]] \
   || heavy_fail "npm left $PKG in node_modules after a refused tarball"
 TARBALL_REQUESTS="$(heavy_wire_count_after first-contact "GET /proxy/$REG/$PKG/$CLEAN/tarball -> 403")"

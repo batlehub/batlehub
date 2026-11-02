@@ -180,6 +180,27 @@ impl Coordinate {
         Self::parse_against(raw, default, visible.as_deref())
     }
 
+    /// [`Self::resolve`] for several strings, with one registry listing.
+    pub async fn resolve_all(
+        client: &BatleHubClient,
+        raws: &[String],
+        default: Option<&str>,
+    ) -> Result<Vec<Self>, CliError> {
+        let needs_list = raws.iter().any(|r| split_prefix(r.trim()) != Prefix::Bare);
+        let visible = if needs_list {
+            client
+                .list_registries()
+                .await
+                .ok()
+                .map(|rs| rs.into_iter().map(|r| r.name).collect::<Vec<_>>())
+        } else {
+            None
+        };
+        raws.iter()
+            .map(|r| Self::parse_against(r, default, visible.as_deref()))
+            .collect()
+    }
+
     /// The version, or a usage error naming the command's expectation.
     pub fn require_version(self) -> Result<(String, String, String), CliError> {
         match self.version {

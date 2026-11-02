@@ -28,8 +28,10 @@ pub enum ProxyCommand {
 #[derive(Args)]
 pub struct ServeArgs {
     /// The registry base on the BatleHub instance, e.g.
-    /// `https://hub.example/proxy/vsx`.
-    #[arg(long)]
+    /// `https://hub.example/proxy/vsx`. A URL, so not the global
+    /// `-r` (a registry name); `--registry` stays a hidden alias for the
+    /// editor extensions that pass it.
+    #[arg(long = "registry-url", alias = "registry")]
     pub registry: String,
     /// Where to listen. Loopback only: any other address is refused.
     #[arg(long, default_value = "127.0.0.1:0")]

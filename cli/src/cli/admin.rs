@@ -262,6 +262,9 @@ pub enum AdminCommand {
     },
     /// Simulate whether an identity would be allowed to access a registry resource
     AccessCheck {
+        /// Set by `authz check` from its coordinate; the alias reads `-r`.
+        #[arg(skip)]
+        registry: Option<String>,
         /// Package name
         #[arg(long, short = 'p')]
         package: String,
@@ -869,6 +872,7 @@ pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Resu
             println!("Relisted {registry}/{name}@{version}");
         }
         AdminCommand::AccessCheck {
+            registry,
             package,
             version,
             resource,
@@ -878,7 +882,7 @@ pub async fn run(cmd: AdminCommand, client: &BatleHubClient, json: bool) -> Resu
         } => {
             let resp = client
                 .simulate_access(&SimulateAccessRequest {
-                    registry: ctx().require_registry(None)?,
+                    registry: ctx().require_registry(registry)?,
                     package_name: package,
                     version,
                     resource_type: resource,

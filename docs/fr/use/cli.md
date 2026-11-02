@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: 989e4e0e97f935f6
+sourceHash: 2e62d9b6611ae0c2
 ---
 
 # batlehub-cli
@@ -66,7 +66,7 @@ task cli:help
 le crée :
 
 ```bash
-batlehub-cli config init
+batlehub-cli profile init
 ```
 
 Le fichier est en TOML et gère des profils nommés :
@@ -132,9 +132,9 @@ défini (`-r go github.com/x/y`), et échoue sinon avec le code 5, en listant le
 registres que vous voyez. L'ancienne forme `registry:name@version` est toujours
 lue, avec un `warning:`.
 
-`why`, `wait`, `verdicts pullers` et `package readme` prennent aujourd'hui une
-coordonnée ; les autres commandes de paquet prennent encore
-`<registry> <name> <version>` en arguments séparés.
+Toute commande qui agit sur un paquet prend une coordonnée : `package`, `owner`,
+`visibility`, `grant`, `sbom show`, `authz check`, `why`, `wait` et
+`verdict pullers`. Les verbes de cycle de vie en prennent plusieurs à la fois.
 
 ### Sortie et erreurs {#output}
 
@@ -191,7 +191,7 @@ qui oublie `--yes` échoue franchement au lieu d'attendre une réponse ou de
 détruire en silence.
 
 ```text
-$ batlehub-cli version delete internal serilog 2.0.0 </dev/null
+$ batlehub-cli package delete internal/serilog@2.0.0 </dev/null
 this will delete:
   internal/serilog@2.0.0
 the artifact is dropped and the version number is spent permanently — 2.0.0 can never be published again
@@ -200,11 +200,10 @@ $ echo $?
 9
 ```
 
-Les commandes qui confirment : `version yank`/`delete`, `admin bulk
-yank`/`delete`, `admin unlist`, `admin cache clear`, `admin cache evict` et
-`coherence` (pas avec `--dry-run`), `admin audit-log --purge-before`,
-`admin users block`, `admin gdpr erase`, `admin retention --reclaim`,
-`admin notifications delete`, `auth token revoke`, et `download` sur un fichier
+Les commandes qui confirment : `package yank`, `delete` et `unlist`,
+`cache delete`, `cache evict` et `coherence` (pas avec `--dry-run`),
+`audit purge`, `user block`, `gdpr erase`, `retention apply`,
+`notification delete`, `auth token delete`, et `download` sur un fichier
 existant. `setup apply` et `setup remove` gardent leur propre contrat : un essai
 à blanc par défaut, `--yes` écrit.
 
@@ -214,7 +213,7 @@ existant. `setup apply` et `setup remove` gardent leur propre contrat : un essai
 
 ```
 batlehub-cli registry list
-batlehub-cli registry info <name>
+batlehub-cli registry show <name>
 batlehub-cli registry suggest [--dir <path>] [--depth N] [--client-env] [--mise [--mise-commented]] [--include-existing]
 ```
 
@@ -234,7 +233,7 @@ $ batlehub-cli registry list
 3 registry/registries
 ```
 
-### `registry info <name>`
+### `registry show <name>`
 
 Affiche le type et le mode d'un seul registre.
 
@@ -345,7 +344,7 @@ suggestions structurées, plus le TOML rendu sous une clé `toml`.
 
 ```
 batlehub-cli package list   [--registry <r>] [--search <q>] [--blocked-only] [--page N] [--per-page N]
-batlehub-cli package versions <registry> <name>
+batlehub-cli package versions <registry>/<name>
 batlehub-cli package readme   <registry>/<name>[@<version>] [--no-upstream]
 ```
 
@@ -388,7 +387,7 @@ Filtrez dans un script avec `jq` :
 batlehub-cli --json package list | jq '[.[] | select(.status.status == "blocked")]'
 ```
 
-### `package versions <registry> <name>`
+### `package versions <registry>/<name>`
 
 Liste toutes les versions en cache d'un paquet, avec leur état et leur nombre de
 téléchargements.
@@ -438,19 +437,25 @@ Quels registres portent un README, et d'où vient celui de chacun, est dans la
 
 ---
 
-## 6. Commandes — version {#commands-version}
+## 6. Commandes — cycle de vie d'un paquet {#commands-version}
 
 ```
-batlehub-cli version yank   <registry> <name> <version>
-batlehub-cli version unyank <registry> <name> <version>
-batlehub-cli version delete <registry> <name> <version> [--yes]
-batlehub-cli version pin    <registry> <name> <version>
-batlehub-cli version unpin  <registry> <name> <version>
+batlehub-cli package yank        <registry>/<name>@<version>...
+batlehub-cli package unyank      <registry>/<name>@<version>...
+batlehub-cli package delete      <registry>/<name>@<version>...
+batlehub-cli package pin         <registry>/<name>@<version>...
+batlehub-cli package unpin       <registry>/<name>@<version>...
+batlehub-cli package deprecate   <registry>/<name>@<version>... [--message <text>]
+batlehub-cli package undeprecate <registry>/<name>@<version>...
+batlehub-cli package unlist      <registry>/<name>@<version>...
+batlehub-cli package relist      <registry>/<name>@<version>...
 ```
 
-Ces commandes exigent un token d'admin. `yank` et `delete` sont
-[destructrices](#confirmation) : elles demandent confirmation dans un terminal et
-exigent `--yes` dans un script.
+Chaque verbe prend une ou plusieurs coordonnées, de registres différents au
+besoin ; avec `-r`, un `name@version` nu désigne une version du registre par
+défaut. Ces commandes exigent un token d'admin. `yank`, `delete` et `unlist`
+sont [destructrices](#confirmation) : elles demandent confirmation dans un
+terminal et exigent `--yes` dans un script.
 
 | Commande | Effet |
 |---------|--------|
@@ -459,19 +464,28 @@ exigent `--yes` dans un script.
 | `delete` | Supprime l'artefact **et consomme définitivement le numéro de version** |
 | `pin` | Exempte une version de la rétention — elle n'est jamais reprise automatiquement |
 | `unpin` | Lève l'épinglage : la politique de rétention du registre s'applique de nouveau |
+| `deprecate` | Avertit le consommateur et continue de servir |
+| `undeprecate` | Retire la dépréciation |
+| `unlist` | Masque la version de la recherche et des listes, et la sert toujours à qui la demande par sa version exacte |
+| `relist` | Annule un `unlist` |
 
 > **Casse des noms de paquets** : les noms sont normalisés en minuscules à la
 > publication (NuGet met l'identifiant en minuscules, cargo et npm le font par
-> convention). Employez la forme en minuscules avec `version yank/unyank/delete`
-> pour correspondre au nom stocké — `serilog`, pas `Serilog`.
+> convention). Employez la forme en minuscules pour correspondre au nom stocké —
+> `serilog`, pas `Serilog`.
+
+Avec plusieurs coordonnées, chacune est tentée : la sortie nomme chaque réussite
+et chaque échec (`FAILED <coordinate>: <error>`), et la commande sort avec le
+code 7 quand certaines ont échoué. `--format json` imprime
+`{"processed", "succeeded": [...], "failed": [{"coordinate", "error"}]}`.
 
 `delete` demande confirmation, sauf si `--yes` est passé :
 
 ```
-$ batlehub-cli version delete internal serilog 2.0.0
+$ batlehub-cli package delete internal/serilog@2.0.0
 this will delete:
   internal/serilog@2.0.0
-the artifact is dropped and the version number is spent permanently — 2.0.0 can never be published again
+the artifact is dropped and the version number is spent permanently — it can never be published again
 Proceed? [y/N] y
 Deleted internal/serilog@2.0.0
 ```
@@ -485,19 +499,20 @@ dans [Supprimer une version publiée](/fr/guide/admin-policies#deleting-versions
 
 ---
 
-## 7. Commandes — owners
+## 7. Commandes — owner {#commands-owner}
 
 ```
-batlehub-cli owners list   <registry> <name>
-batlehub-cli owners add    <registry> <name> <principal> [--type user|group] [--role admin|maintainer]
-batlehub-cli owners remove <registry> <name> <principal> [--type user|group]
+batlehub-cli owner list   <registry>/<name>
+batlehub-cli owner add    <registry>/<name> <principal> [--type user|group] [--role admin|maintainer]
+batlehub-cli owner remove <registry>/<name> <principal> [--type user|group]
 ```
 
 La propriété décide qui peut publier de nouvelles versions sur un registre local
-ou hybrid. Exige un token d'admin.
+ou hybrid. Elle porte sur le paquet : une coordonnée avec une version est donc
+refusée. Exige un token d'admin.
 
 ```
-$ batlehub-cli owners list internal Serilog
+$ batlehub-cli owner list internal/Serilog
 +------+------------------+------------+------------+
 | Type | Principal        | Role       | Granted By |
 +------+------------------+------------+------------+
@@ -505,7 +520,7 @@ $ batlehub-cli owners list internal Serilog
 | group| nuget-maintainers| maintainer | alice      |
 +------+------------------+------------+------------+
 
-$ batlehub-cli owners add internal Serilog bob --type user --role maintainer
+$ batlehub-cli owner add internal/Serilog bob --type user --role maintainer
 Added user 'bob' as maintainer on internal/Serilog
 ```
 
@@ -582,10 +597,10 @@ batlehub-cli auth token [--output raw|json] [--min-ttl <seconds>]
 batlehub-cli auth token list
 batlehub-cli auth token create --name <n> [--days <d>] [--role user|admin]
                                [--groups <g1,g2> | --all-groups]
-batlehub-cli auth token revoke <uuid>
+batlehub-cli auth token delete <uuid>
 batlehub-cli auth write-token-file [--path <p>] [--from-file <p>]
 batlehub-cli auth status [--path <p>] [--json]
-batlehub-cli proxy serve --registry <url> [--bind 127.0.0.1:0] [--contract <p>]
+batlehub-cli proxy serve --registry-url <url> [--bind 127.0.0.1:0] [--contract <p>]
                          [--state-dir <d>] [--print-gallery-url]
 ```
 
@@ -782,7 +797,7 @@ l'identifiant tiré du fichier de contrat, de sorte que l'éditeur n'en détient
 jamais.
 
 ```
-$ batlehub-cli proxy serve --registry https://hub.example.dev/proxy/vsx
+$ batlehub-cli proxy serve --registry-url https://hub.example.dev/proxy/vsx
 gallery proxy for https://hub.example.dev/proxy/vsx on 127.0.0.1:41873
   extensionsGallery.serviceUrl = http://127.0.0.1:41873/9f2c…/vsx/vscode/gallery
   credential: /home/you/.batlehub/state/vsx-token.json
@@ -859,7 +874,7 @@ du fichier :
 
 ```
 $ batlehub-cli vsx verify weebo-bridge-notify-0.5.0.vsix \
-    --registry https://hub.example.dev/proxy/vsx --id batleforc.weebo-bridge-notify --version 0.5.0
+    --registry-url https://hub.example.dev/proxy/vsx --id batleforc.weebo-bridge-notify --version 0.5.0
 ok: weebo-bridge-notify-0.5.0.vsix is signed by key 3f1e0a9c7b2d4e61… (24503 bytes, manifest matches)
 ```
 
@@ -868,38 +883,56 @@ commande ne fait pas tourner le vérificateur propre à l'éditeur, qui n'accept
 que la signature de la place de marché.
 
 
-## 12. Commandes — admin
+## 12. Commandes d'administration
 
-Ces commandes exigent un token d'admin.
+Ces groupes agissent sur le serveur plutôt que sur un paquet. Une commande
+marquée `[admin]` dans son `--help` exige une autorisation de niveau instance ;
+c'est le serveur qui décide, de sorte qu'une commande déléguée par un opérateur
+fonctionne pour quiconque détient l'autorisation. Les groupes lisent le registre
+dans `-r` (ou `BATLEHUB_REGISTRY`, ou le profil) partout où le registre est un
+filtre plutôt que l'objet.
 
 ### Quota
 
 ```
-batlehub-cli admin quota list   [--registry <r>]
-batlehub-cli admin quota reset  <registry> <user>
+batlehub-cli quota list  [-r <registry>]
+batlehub-cli quota reset -r <registry> <user>
 ```
 
 ### Blocages d'IP
 
 ```
-batlehub-cli admin ip-block list
-batlehub-cli admin ip-block add    <ip> [--reason <text>]
-batlehub-cli admin ip-block remove <ip>
+batlehub-cli ip-block list
+batlehub-cli ip-block add    <ip> [--reason <text>]
+batlehub-cli ip-block remove <ip>
 ```
 
-### Configuration
+### Serveur
 
 ```
-batlehub-cli admin config reload    # déclencher un rechargement à chaud sur le serveur
-batlehub-cli admin config changes   # consulter l'historique des changements
+batlehub-cli server config reload     # déclencher le rechargement à chaud
+batlehub-cli server config changes    # l'historique des changements
+batlehub-cli server config show       # la configuration active, en TOML
+batlehub-cli server config validate <file>
+batlehub-cli server config from-file <file>
+batlehub-cli server stats             # taux de succès du cache, octets servis, compteurs
+batlehub-cli server health            # santé par registre et par backend
 ```
+
+`stats` et `health` sont en lecture seule. `health` est la commande à lancer
+quand un client signale des échecs sur un registre et pas sur les autres.
 
 ### Cache
 
 ```
-batlehub-cli admin cache warm  <registry> [--packages pkg1,pkg2]
-batlehub-cli admin cache clear <registry>
+batlehub-cli cache warm      -r <registry> [--packages pkg1,pkg2] [--paths p1,p2]
+batlehub-cli cache delete    -r <registry>
+batlehub-cli cache evict     -r <registry> [--dry-run]
+batlehub-cli cache coherence -r <registry> [--dry-run]
 ```
+
+`delete`, ainsi qu'`evict` et `coherence` sans `--dry-run`, sont
+[destructrices](#confirmation).
 
 ### Import
 
@@ -908,7 +941,7 @@ soit leur intervalle
 ([RFC 0021](/rfc/0021-forge-releases-into-registries)).
 
 ```
-batlehub-cli admin import <registry> [--tag <tag>] [--repo <owner/name>]
+batlehub-cli import <registry> [--tag <tag>] [--repo <owner/name>]
 ```
 
 `--tag` importe ce tag plutôt que ce que la configuration sélectionne, et c'est
@@ -916,7 +949,7 @@ le seul moyen d'atteindre délibérément une pre-release : `latest` n'en choisi
 pas. `--repo` exécute l'un des imports configurés dans un même registre.
 
 ```
-$ batlehub-cli admin import vsx-local
+$ batlehub-cli import vsx-local
 Release import on vsx-local: imported 3, skipped 11, errors 1
 
 +--------+-----------------------------+-------------------------------+
@@ -940,20 +973,9 @@ vôtre.
 ### Bandeau
 
 ```
-batlehub-cli admin banner set   "Maintenance at 22:00 UTC" [--level info|warning|error]
-batlehub-cli admin banner clear
+batlehub-cli banner set    "Maintenance at 22:00 UTC" [--level info|warning|error]
+batlehub-cli banner delete
 ```
-
-### Statistiques et santé
-
-```
-batlehub-cli admin stats     # taux de hit du cache, octets servis, compteurs agrégés
-batlehub-cli admin health    # santé par registre et par backend
-```
-
-Les deux sont en lecture seule et ne prennent aucun argument. `health` est la
-commande à lancer quand un client signale des échecs sur un registre et pas sur
-les autres.
 
 ### Notifications
 
@@ -961,9 +983,9 @@ Les canaux sont déclarés dans `config.toml` sous `[notifications]` et sont en
 lecture seule ici ; les abonnements sont des lignes que cette commande gère.
 
 ```
-batlehub-cli admin notifications channels        # les canaux sortants configurés
-batlehub-cli admin notifications list            # les abonnements
-batlehub-cli admin notifications delete <id>
+batlehub-cli notification channels        # les canaux sortants configurés
+batlehub-cli notification list            # les abonnements
+batlehub-cli notification delete <id>
 ```
 
 Aucune des deux listes n'imprime d'URL de webhook ni de secret de signature. Voir
@@ -977,17 +999,17 @@ fichier de configuration ne peut pas énumérer. Les autorisations de niveau
 registre et namespace restent dans `config.toml`.
 
 ```
-batlehub-cli admin grants list <registry> <name>[@<version>]
-batlehub-cli admin grants set  <registry> <name>[@<version>] --subject <s> --actions <a1,a2>
-batlehub-cli admin grants rm   <registry> <name>[@<version>] --subject <s>
+batlehub-cli grant list   <registry>/<name>[@<version>]
+batlehub-cli grant set    <registry>/<name>[@<version>] --subject <s> --actions <a1,a2>
+batlehub-cli grant remove <registry>/<name>[@<version>] --subject <s>
 ```
 
 ```
-$ batlehub-cli admin grants set npm1 @acme/billing \
+$ batlehub-cli grant set npm1/@acme/billing \
       --subject group:oidc1:eng --actions releases:read,releases:list
 Granted releases:read, releases:list on npm1/@acme/billing to group:oidc1:eng
 
-$ batlehub-cli admin grants list npm1 @acme/billing
+$ batlehub-cli grant list npm1/@acme/billing
 +----------------------------------+------------------------------+---------------------------+-----------+
 | Node                             | Subject                      | Actions                   | Source    |
 +----------------------------------+------------------------------+---------------------------+-----------+
@@ -999,16 +1021,16 @@ $ batlehub-cli admin grants list npm1 @acme/billing
 +----------------------------------+------------------------------+---------------------------+-----------+
 ```
 
-- **`name@version` adresse une version**, en coupant sur le *dernier* `@` — donc
-  `@acme/billing` est un paquet et `@acme/billing@2.4.0` une version.
+- **Une coordonnée avec une version adresse une version** : `npm1/@acme/billing`
+  est un paquet et `npm1/@acme/billing@2.4.0` une version.
 - **Ce que `set` imprime est ce qui a été stocké.** `--actions releases:*` nomme
   un verbe et en stocke plusieurs ; la sortie est l'ensemble développé. La
   commande imprime aussi des avertissements pour une autorisation légale mais
   inerte — une qu'un niveau plus large accorde déjà, ou une posée sur une version
   retirée.
 - **Les lignes `Source: ownership` ne s'éditent pas ici.** Elles suivent la liste
-  des propriétaires du paquet ; changez-les avec `admin owner`. En éditer une
-  vaut un `409`.
+  des propriétaires du paquet ; changez-les avec [`owner`](#commands-owner). En
+  éditer une vaut un `409`.
 - Exige `grants:write` (`grants:read` pour `list`), que `role:admin` détient.
 
 ### Exposition et signalements
@@ -1017,158 +1039,182 @@ Qui a récupéré une version signalée, et ce que les sources configurées ont
 signalé ([RFC 0002](/rfc/0002-vulnerability-flags-and-exposure)).
 
 ```
-batlehub-cli admin exposure [--registry <r>] [--package <p>] [--source <s>]
-                            [--min-effect inform|warn|gate|hard_block]
-                            [--when any|before-flag|after-flag]
-                            [--from <t>] [--to <t>] [--after <cursor>] [--limit 100]
+batlehub-cli exposure list [-r <registry>] [--package <p>] [--source <s>]
+                           [--min-effect inform|warn|gate|hard_block]
+                           [--when any|before-flag|after-flag]
+                           [--from <t>] [--to <t>] [--after <cursor>] [--limit 100]
 
-batlehub-cli admin flags list [--registry <r>] [--package <p>] [--source <s>]
-                              [--effect inform|warn|gate|hard_block] [--include-dead]
-                              [--page 0] [--per-page 50]
+batlehub-cli flag list [-r <registry>] [--package <p>] [--source <s>]
+                       [--effect inform|warn|gate|hard_block] [--include-dead]
+                       [--page 0] [--per-page 50]
 ```
 
-`exposure` donne une ligne par consommateur, le pull le plus récent en premier,
-avec le nombre de pulls qui ont précédé le signalement — le cas rétroactif, où
-l'alerte est arrivée après le téléchargement. La pagination se fait par curseur :
-`--after` prend celui qu'a imprimé la page précédente. `--min-effect` signifie
-« ou plus fort ».
+`exposure list` donne une ligne par consommateur, le pull le plus récent en
+premier, avec le nombre de pulls qui ont précédé le signalement — le cas
+rétroactif, où l'alerte est arrivée après le téléchargement. La pagination se
+fait par curseur : `--after` prend celui qu'a imprimé la page précédente.
+`--min-effect` signifie « ou plus fort ».
 
-`admin flags list` ne montre que les signalements vivants, sauf si
-`--include-dead` ajoute les révoqués et les expirés.
+`flag list` ne montre que les signalements vivants, sauf si `--include-dead`
+ajoute les révoqués et les expirés.
 
 ### Vérification d'accès
 
 ```
-batlehub-cli admin access-check --registry <r> --package <p> --version <v>
-                                [--resource releases:read] [--user <id>]
-                                [--role anonymous|user|admin] [--groups <g1,g2>]
+batlehub-cli authz check <registry>/<name>@<version>
+                         [--resource releases:read] [--user <id>]
+                         [--role anonymous|user|admin] [--groups <g1,g2>]
 ```
 
-Simule une décision sans émettre de requête sous cette identité. Les trois
-options de coordonnée sont obligatoires. Voir aussi
+Simule une décision sans émettre de requête sous cette identité. Voir aussi
 [`authz explain`](#commands-authz), qui répond à la question plus large de ce
 qu'un sujet a le droit de faire, en nommant le niveau qui a accordé chaque verbe.
 
 ### Visibilité, namespaces et utilisateurs
 
 ```
-batlehub-cli admin visibility get <registry> <name>
-batlehub-cli admin visibility set <registry> <name> public|internal|team
+batlehub-cli visibility show <registry>/<name>
+batlehub-cli visibility set  <registry>/<name> public|internal|team
 
-batlehub-cli admin namespace list    <registry>
-batlehub-cli admin namespace claim   <registry> <prefix> <group-id>
-batlehub-cli admin namespace release <registry> <prefix>
+batlehub-cli namespace list   -r <registry>
+batlehub-cli namespace claim  -r <registry> <prefix> <group-id>
+batlehub-cli namespace remove -r <registry> <prefix>
 
-batlehub-cli admin users list-blocked
-batlehub-cli admin users block   <user-id> [--reason <text>]
-batlehub-cli admin users unblock <user-id>
+batlehub-cli user list                      # les utilisateurs bloqués
+batlehub-cli user block   <user-id> [--reason <text>]
+batlehub-cli user unblock <user-id>
 ```
 
-Toutes les trois changent qui peut faire quoi, et prennent effet immédiatement.
-`namespace release` rouvre un préfixe à quiconque peut publier dans le registre,
-et c'est celle dont la portée est plus grande qu'elle n'en a l'air.
-
-### Cycle de vie d'un paquet
-
-Deux paires réversibles, chacune sur une version :
-
-```
-batlehub-cli admin deprecate   <registry> <name> <version> [--message <text>]
-batlehub-cli admin undeprecate <registry> <name> <version>
-
-batlehub-cli admin unlist <registry> <name> <version>
-batlehub-cli admin relist <registry> <name> <version>
-```
-
-Déprécier avertit le consommateur et continue de servir ; retirer des listes
-masque la version dans la recherche et les listings et continue de la servir à
-qui la demande par version exacte. Aucune des deux ne supprime quoi que ce soit —
-pour cela, voir [`version yank` et `version delete`](#commands-version).
-
-### Opérations en masse
-
-```
-batlehub-cli admin bulk yank   <registry> <name@version>...
-batlehub-cli admin bulk unyank <registry> <name@version>...
-batlehub-cli admin bulk delete <registry> <name@version>...
-```
-
-::: danger
-`admin bulk delete` est **irréversible et sans garde-fou**. Il n'y a ni
-`--dry-run`, ni demande de confirmation, ni verrou `--yes`, et la commande agit
-sur toutes les coordonnées de la ligne de commande dès que vous appuyez sur
-Entrée. À comparer avec [`admin retention`](#retention), qui exige à la fois
-`--reclaim` et un `dry_run = false` côté serveur avant de supprimer quoi que ce
-soit. Vérifiez d'abord la liste avec `admin bulk yank` si vous n'êtes pas
-certain.
-:::
-
-La sortie est `processed=N succeeded=N failed=N`, suivie d'une ligne
-`FAILED name@version: error` par échec — les échecs sont nommés, pas seulement
-comptés.
+Les trois changent qui peut faire quoi, et prennent effet immédiatement.
+`namespace remove` rouvre un préfixe à quiconque peut publier dans le registre :
+c'est ici la commande dont la portée est plus large qu'il n'y paraît.
 
 ### SBOM
 
 ```
-batlehub-cli admin sbom get    <registry> <name> <version> [--sbom-format cyclonedx]
-batlehub-cli admin sbom export [--registry <r>] [--from <t>] [--to <t>]
-                               [--sbom-format cyclonedx] [-o <file>]
+batlehub-cli sbom show   <registry>/<name>@<version> [--sbom-format cyclonedx]
+batlehub-cli sbom export [-r <registry>] [--from <t>] [--to <t>]
+                         [--sbom-format cyclonedx] [-o <file>]
 ```
 
-`get` imprime toujours du JSON. `export` écrit dans le fichier nommé, ou sur la
-sortie standard sans `-o`. Voir [SBOM](/fr/guide/sbom) pour les formats et leur
-contenu.
+`show` imprime toujours du JSON. `export` écrit dans le fichier nommé, ou sur
+stdout sans `-o`. Voir [`docs/guide/sbom.md`](/fr/guide/sbom) pour les formats et
+leur contenu.
 
 ### Journal d'audit
 
 ```
-batlehub-cli admin audit-log [--registry <r>] [--user <id>] [--from <date>] [--to <date>] [--denied-only]
+batlehub-cli audit log    [-r <registry>] [--user <id>] [--from <date>] [--to <date>] [--denied-only]
+batlehub-cli audit purge  --before <instant RFC 3339>
+batlehub-cli audit verify [--from <t>] [--to <t>] [--head <digest>]
 ```
+
+`purge` est [destructrice](#confirmation).
 
 #### Export pour la conformité
 
 ```
-batlehub-cli admin export-audit-log [--from <t>] [--to <t>] [--registry <r>]
-                                    [--action delete,retention_reclaim]
-                                    [--format json|csv] [-o <file>]
+batlehub-cli audit export [--from <t>] [--to <t>] [-r <registry>]
+                          [--action delete,retention_reclaim]
+                          [--format json|csv] [-o <file>]
 ```
 
-À distinguer d'`admin audit-log` ci-dessus, qui est la requête interactive
-paginée. Celle-ci est l'export qu'un auditeur conserve : une fenêtre entière dans
-un seul document, écrit dans `-o` ou sur la sortie standard. Pour la question
-rapportée à une identité — qu'est-ce que *ce compte* a récupéré — voir
-[`audit pulls`](#commands-audit), qui agrège plutôt que de lister chaque
-événement.
+À distinguer d'`audit log` ci-dessus, qui est la requête paginée interactive.
+Celle-ci est l'export qu'un auditeur conserve : une fenêtre entière en un seul
+document, écrit vers `-o` ou sur stdout. Pour la question centrée sur une
+identité — qu'a récupéré *ce compte* — voir [`audit pulls`](#commands-audit), qui
+agrège au lieu de lister chaque événement.
 
 ### Rétention
 
 ```
-batlehub-cli admin retention <registry> [--show-kept] [--reclaim]
+batlehub-cli retention show  <registry> [--show-kept]
+batlehub-cli retention apply <registry> [--show-kept] [--dry-run]
 ```
 
-Reprend les versions publiées localement que la politique
-`[registries.retention]` du registre ne conserve plus. **Se contente de faire un
-rapport par défaut** — `--reclaim` n'est que la moitié du verrou, et le registre
-doit en plus être en `dry_run = false`. Deux décisions à deux endroits, parce
-qu'un artefact repris peut n'exister nulle part ailleurs.
+Récupère les versions publiées localement que la politique
+`[registries.retention]` du registre ne conserve plus. `show` rend compte et ne
+change rien. `apply` n'est que la moitié du verrou : le registre exige aussi
+`dry_run = false`, et `apply` est [destructrice](#confirmation). Deux décisions
+à deux endroits, parce qu'un artefact récupéré peut n'exister nulle part
+ailleurs.
 
-`--show-kept` imprime chaque version survivante et la condition qui l'a sauvée,
-ce qui est la façon de confronter une politique à son effet réel avant de
-l'armer.
+`--show-kept` imprime chaque version conservée et la condition qui l'a sauvée :
+c'est ainsi que vous confrontez une politique à ce qu'elle fait réellement avant
+de l'armer.
 
-Épingler une version précise contre la rétention, c'est
-[`version pin`](#commands-version).
+Épingler une seule version contre la rétention se fait avec
+[`package pin`](#commands-version).
 
-### Coupure réseau
+### Air gap
 
 ```
-batlehub-cli admin air-gap-missing [--registry <r>] [--kind artifact|document|checksum|ref|unmirrored_host]
-batlehub-cli admin bundles
+batlehub-cli air-gap missing [-r <registry>] [--kind artifact|document|checksum|ref|unmirrored_host]
+batlehub-cli bundle list
 ```
 
-Ce qu'une instance coupée du réseau s'est vu demander et ne détenait pas, et ce
-qui a traversé la coupure. Voir
-[la procédure de coupure réseau](/fr/operations/air-gap).
+Ce qu'une instance déconnectée s'est vu demander sans le détenir, et ce qui a
+traversé l'air gap. Voir [le runbook air gap](/fr/operations/air-gap).
+
+### Demandes des personnes concernées
+
+```
+batlehub-cli gdpr erase  --user <subject> [--ignore-open-decisions]
+batlehub-cli gdpr export --user <subject>
+```
+
+`erase` est [destructrice](#confirmation). `--ignore-open-decisions` efface même
+quand une décision ouverte nomme la personne ; ce n'est pas un moyen d'éviter la
+confirmation, qui exige toujours `--yes` dans un script.
+
+### Anciennes formes {#deprecated-spellings}
+
+Chacune des formes ci-dessous fonctionne encore jusqu'à la 1.10, en imprimant un
+`warning:` qui nomme son remplacement.
+
+| Avant | Maintenant |
+| --- | --- |
+| `config init/show/set` | `profile init/show/set` |
+| `registry info <name>` | `registry show <name>` |
+| `version yank/unyank/delete/pin/unpin <reg> <name> <ver>` | `package yank/… <reg>/<name>@<ver>…` |
+| `admin bulk yank/unyank/delete <reg> <name@ver>…` | `package yank/unyank/delete <reg>/<name>@<ver>…` |
+| `admin deprecate/undeprecate/unlist/relist <reg> <name> <ver>` | `package deprecate/… <reg>/<name>@<ver>…` |
+| `package versions <reg> <name>` | `package versions <reg>/<name>` |
+| `owners list/add/remove <reg> <name>` | `owner list/add/remove <reg>/<name>` |
+| `admin visibility get/set <reg> <name>` | `visibility show/set <reg>/<name>` |
+| `admin grants list/set/rm <reg> <target>` | `grant list/set/remove <reg>/<target>` |
+| `admin namespace list/claim/release <reg> …` | `namespace list/claim/remove -r <reg> …` |
+| `admin users list-blocked/block/unblock` | `user list/block/unblock` |
+| `admin quota list/reset` | `quota list/reset` |
+| `admin ip-block …` | `ip-block …` |
+| `admin config reload/changes/view/validate/from-file` | `server config reload/changes/show/validate/from-file` |
+| `admin stats`, `admin health` | `server stats`, `server health` |
+| `admin cache warm/clear/evict/coherence <reg>` | `cache warm/delete/evict/coherence -r <reg>` |
+| `admin import <reg>` | `import <reg>` |
+| `admin banner set/clear` | `banner set/delete` |
+| `admin retention <reg> [--reclaim]` | `retention show <reg>` · `retention apply <reg>` |
+| `admin exposure` | `exposure list` |
+| `admin bundles` | `bundle list` |
+| `admin air-gap-missing` | `air-gap missing` |
+| `admin flags list` | `flag list` |
+| `admin audit-log [--purge-before]` | `audit log` · `audit purge --before` |
+| `admin export-audit-log` | `audit export` |
+| `admin audit verify` | `audit verify` |
+| `admin gdpr erase --force` | `gdpr erase --ignore-open-decisions` |
+| `admin sbom get/export` | `sbom show/export` |
+| `admin notifications …` | `notification …` |
+| `admin access-check --registry --package --version` | `authz check <reg>/<name>@<ver>` |
+| `verdicts …` | `verdict …` |
+| `auth token revoke` | `auth token delete` |
+| `--csv` | `--format csv` |
+| `mise plan/export --out` | `--output` (`-o`) |
+| `proxy serve --registry`, `vsx verify --registry` (une URL) | `--registry-url`, conservé en alias pour les extensions d'éditeur |
+
+Deux formes ont changé sans alias, parce que l'option globale `--format` a pris
+leur nom : `admin sbom get/export --format` devient `--sbom-format`, et
+`admin export-audit-log --format` devient l'option globale `--format`.
+`auth token --output raw|json` fonctionne toujours ; `--format raw|json` est la
+nouvelle forme.
 
 ---
 
@@ -1210,17 +1256,26 @@ ref qu'il portait. Importer deux fois le même lot n'écrit qu'une fois, et le d
 
 ---
 
-## 14. Commandes — config
+## 14. Commandes — profile {#commands-profile}
+
+Le fichier de configuration local : quel serveur, quel identifiant, quel
+registre par défaut. La configuration du serveur lui-même est
+[`server config`](#serveur).
 
 ```
-batlehub-cli config init           # assistant interactif de premier lancement
-batlehub-cli config show           # imprimer la configuration résolue (le token est masqué)
-batlehub-cli config set server_url https://batlehub.example.com
-batlehub-cli config set token      my-token [--profile prod]
-batlehub-cli config set registry   internal [--profile prod]
+batlehub-cli profile init                # assistant interactif de premier lancement
+batlehub-cli profile list                # les profils, `*` sur celui en usage
+batlehub-cli profile show [<name>] [--key <key>]   # token masqué
+batlehub-cli profile set server_url https://batlehub.example.com
+batlehub-cli -P prod profile set registry internal
+batlehub-cli profile use prod            # le profil utilisé quand -P est absent
 ```
 
-Clés valides pour `config set` : `server_url`, `token`, `registry`.
+Clés valides pour `profile set` : `server_url`, `token`, `registry`. `set` écrit
+dans le profil `-P` (ou celui en usage). `use` écrit une clé `current` en tête du
+fichier ; une CLI plus ancienne l'ignore et continue de lire `default`.
+`profile set token …` stocke un token statique, qu'`auth login` rafraîchirait et
+que celui-ci ne rafraîchit jamais.
 
 ---
 
@@ -1578,7 +1633,7 @@ défaut ; `--detail` imprime chaque entrée.
 
 ---
 
-## 20. Commandes — verdicts {#commands-verdicts}
+## 20. Commandes — verdict {#commands-verdicts}
 
 Le côté administrateur d'un verdict de chaîne d'approvisionnement
 ([RFC 0018](/rfc/0018-supply-chain-quarantine-and-verdicts)). Là où `why` répond
@@ -1586,20 +1641,20 @@ Le côté administrateur d'un verdict de chaîne d'approvisionnement
 qui est retenu, et qui l'a déjà récupéré*.
 
 ```
-batlehub-cli verdicts pullers  <registry>:<name>@<version> [--since <window>] [--csv]
-batlehub-cli verdicts list     --registry <r> [--state <s>] [--limit <n>]
-batlehub-cli verdicts backfill --registry <r>
-batlehub-cli verdicts rescan   --registry <r> [--state <s>]
+batlehub-cli verdict pullers  <registry>/<name>@<version> [--since <window>] [--format csv]
+batlehub-cli verdict list     -r <r> [--state <s>] [--limit <n>]
+batlehub-cli verdict backfill -r <r>
+batlehub-cli verdict rescan   -r <r> [--state <s>]
 ```
 
 `pullers` est la question d'incident : qui a récupéré cette version dans une
 fenêtre donnée, depuis la même requête de journal d'accès que porte l'alerte de
 bascule. `--since` accepte `30d`, `12h`, `90m` ou un instant RFC 3339, et vaut
-par défaut le `pullers_window_days` du registre. `--csv` imprime le CSV que rend
+par défaut le `pullers_window_days` du registre. `--format csv` imprime le CSV que rend
 l'endpoint d'export, pour le transmettre à quelqu'un qui n'a pas la CLI.
 
 ```sh
-batlehub-cli verdicts pullers npm/left-pad@1.3.1 --since 30d --csv
+batlehub-cli verdict pullers npm/left-pad@1.3.1 --since 30d --format csv
 ```
 
 `list` montre les verdicts d'un registre par état — `allowed`, `warned`,
@@ -1641,17 +1696,17 @@ batlehub-cli completion fish > ~/.config/fish/completions/batlehub-cli.fish
 
 Ce qu'une identité a récupéré
 ([RFC 0018](/rfc/0018-supply-chain-quarantine-and-verdicts) §4.2). La transposée
-de [`verdicts pullers`](#commands-verdicts) : celle-là fixe une version et
+de [`verdict pullers`](#commands-verdicts) : celle-là fixe une version et
 demande qui l'a prise, celle-ci fixe une identité et demande ce qu'elle a pris.
 
 ```
-batlehub-cli audit pulls --identity <id> [--registry <r>] [--package <p>] [--since <window>] [--csv]
+batlehub-cli audit pulls --identity <id> [-r <r>] [--package <p>] [--since <window>] [--format csv]
 ```
 
 `--identity` est un identifiant d'utilisateur, ou `ip:<addr>` pour un appelant
 anonyme — souvent la seule prise qu'un incident ait sur un runner qui ne présente
 aucun identifiant. `--since` accepte `30d`, `12h`, `90m` ou un instant RFC 3339,
-et vaut 30 jours par défaut. `--csv` imprime le CSV que rend l'endpoint, octet
+et vaut 30 jours par défaut. `--format csv` imprime le CSV que rend l'endpoint, octet
 pour octet, pour le transmettre à quelqu'un qui n'a pas la CLI.
 
 ```
@@ -1662,7 +1717,7 @@ npm-local      demo-pkg                     1.0.0               3  2026-09-08T23
 crates         serde                        1.0.219            11  2026-09-08T21:04:11Z
 ```
 
-Celle-ci et `verdicts pullers` exigent `audit:read`, et toutes deux ne
+Celle-ci et `verdict pullers` exigent `audit:read`, et toutes deux ne
 comptent **que les octets livrés** : un refus n'a rien transféré et relève d'une
 autre question. Les lignes sont groupées par coordonnée, le pull le plus récent
 en premier.

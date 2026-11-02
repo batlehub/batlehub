@@ -83,16 +83,6 @@ pub fn data<T: Serialize + ?Sized>(value: &T) -> Result<()> {
     }
 }
 
-/// The result of an action with no body of its own: `{"ok": true}` in
-/// JSON, the sentence otherwise.
-pub fn done(message: &str) {
-    if ctx().structured() {
-        println!("{}", serde_json::json!({ "ok": true }));
-    } else {
-        println!("{message}");
-    }
-}
-
 fn to_csv(value: &Value) -> Result<String, CliError> {
     let rows = match value {
         Value::Array(rows) => rows,
@@ -173,6 +163,16 @@ pub fn warn(message: &str) {
         }
     }
     eprintln!("warning: {message}");
+}
+
+/// The minor that removes the old spellings (RFC 0040 §13).
+pub const ALIASES_REMOVED_IN: &str = "1.10";
+
+/// The warning a deprecated command or flag prints, once.
+pub fn deprecated(old: &str, new: &str) {
+    warn(&format!(
+        "`{old}` is deprecated and goes away in {ALIASES_REMOVED_IN}; use `{new}`"
+    ));
 }
 
 /// Both ends a prompt needs: someone to type, and somewhere they can read it.

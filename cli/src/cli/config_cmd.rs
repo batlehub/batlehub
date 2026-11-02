@@ -25,53 +25,179 @@ pub enum ConfigCommand {
     },
 }
 
-pub fn run(cmd: ConfigCommand) -> Result<()> {
+/// `profile …` (RFC 0040 §4.2): the local file, by the name the server's
+/// configuration (`server config`) does not use.
+#[derive(Subcommand)]
+pub enum ProfileCommand {
+    /// The profiles in the file, and which one is in use
+    List,
+    /// One profile — by default the one in use — with the token masked
+    Show {
+        /// Profile name
+        name: Option<String>,
+        /// Print only this key's value
+        #[arg(long)]
+        key: Option<String>,
+    },
+    /// Write a key (server_url, token or registry) in the `-P` profile
+    Set {
+        /// server_url | token | registry
+        key: String,
+        value: String,
+    },
+    /// Make a profile the one used when `-P` is not given
+    Use { name: String },
+    /// Interactive setup of the default profile
+    Init,
+}
+
+const KEYS: &str = "server_url, token or registry";
+
+/// `global_profile` is `-P`/`BATLEHUB_PROFILE`; the file's `current` key
+/// answers when it is absent.
+pub fn run_profile(cmd: ProfileCommand, global_profile: Option<&str>) -> Result<()> {
+    let mut cfg = ConfigFile::load()?;
+    let in_use = cfg.selected(global_profile);
+    match cmd {
+        ProfileCommand::Init => interactive_init()?,
+        ProfileCommand::List => {
+            let mut names = vec!["default".to_owned()];
+            let mut others: Vec<String> = cfg.profiles.keys().cloned().collect();
+            others.sort();
+            names.extend(others);
+            let current = in_use.unwrap_or("default");
+            if crate::render::ctx().structured() {
+                crate::render::data(
+                    &names
+                        .iter()
+                        .map(|n| serde_json::json!({"name": n, "current": n == current}))
+                        .collect::<Vec<_>>(),
+                )?;
+            } else {
+                for n in &names {
+                    let mark = if n == current { "*" } else { " " };
+                    println!("{mark} {n}");
+                }
+            }
+        }
+        ProfileCommand::Show { name, key } => {
+            let name = name.as_deref().or(in_use);
+            let resolved = cfg.resolve(name, None, None, None);
+            let token = resolved
+                .token
+                .as_deref()
+                .map(mask_token)
+                .unwrap_or_default();
+            if let Some(key) = key {
+                let value = match key.as_str() {
+                    "server_url" => resolved.server_url,
+                    "token" => token,
+                    "registry" => resolved.registry.unwrap_or_default(),
+                    other => anyhow::bail!("unknown key '{other}'; expected {KEYS}"),
+                };
+                println!("{value}");
+            } else if crate::render::ctx().structured() {
+                crate::render::data(&serde_json::json!({
+                    "name": name.unwrap_or("default"),
+                    "server_url": resolved.server_url,
+                    "token": (!token.is_empty()).then_some(token),
+                    "registry": resolved.registry,
+                    "path": ConfigFile::config_path(),
+                }))?;
+            } else {
+                println!("profile:    {}", name.unwrap_or("default"));
+                println!("server_url: {}", resolved.server_url);
+                println!(
+                    "token:      {}",
+                    if token.is_empty() {
+                        "(not set)"
+                    } else {
+                        &token
+                    }
+                );
+                println!(
+                    "registry:   {}",
+                    resolved.registry.as_deref().unwrap_or("(not set)")
+                );
+                println!();
+                println!("Config file: {}", ConfigFile::config_path().display());
+            }
+        }
+        ProfileCommand::Set { key, value } => {
+            let target = in_use.map(str::to_owned);
+            let entry = match target.as_deref() {
+                Some(name) => cfg.profiles.entry(name.to_string()).or_default(),
+                None => &mut cfg.default,
+            };
+            match key.as_str() {
+                "server_url" => entry.server_url = Some(value.clone()),
+                "token" => {
+                    entry.token = Some(value.clone());
+                    crate::render::warn(
+                        "a static token is stored as-is: `auth login` refreshes its credential, \
+                         this one is never refreshed",
+                    );
+                }
+                "registry" => entry.registry = Some(value.clone()),
+                other => anyhow::bail!("unknown key '{other}'; expected {KEYS}"),
+            }
+            cfg.save()?;
+            let shown = if key == "token" {
+                mask_token(&value)
+            } else {
+                value
+            };
+            println!(
+                "Set {key} = {shown} in profile {}",
+                target.as_deref().unwrap_or("default")
+            );
+        }
+        ProfileCommand::Use { name } => {
+            if name != "default" && !cfg.profiles.contains_key(&name) {
+                return Err(crate::exit::CliError::new(
+                    crate::exit::ExitCode::NotFound,
+                    format!("no profile named `{name}`"),
+                )
+                .hint("`batlehub-cli profile list` names them")
+                .into());
+            }
+            cfg.current = (name != "default").then(|| name.clone());
+            cfg.save()?;
+            println!("Using profile {name}");
+        }
+    }
+    Ok(())
+}
+
+/// The deprecated `config …`: warns, then runs `profile …`.
+pub fn run(cmd: ConfigCommand, global_profile: Option<&str>) -> Result<()> {
     match cmd {
         ConfigCommand::Init => {
-            interactive_init()?;
+            crate::render::deprecated("config init", "profile init");
+            run_profile(ProfileCommand::Init, global_profile)
         }
         ConfigCommand::Show { profile } => {
-            let cfg = ConfigFile::load()?;
-            let resolved = cfg.resolve(profile.as_deref(), None, None, None);
-            println!("server_url: {}", resolved.server_url);
-            println!(
-                "token:      {}",
-                resolved
-                    .token
-                    .as_deref()
-                    .map(mask_token)
-                    .unwrap_or_else(|| "(not set)".to_string())
-            );
-            println!(
-                "registry:   {}",
-                resolved.registry.as_deref().unwrap_or("(not set)")
-            );
-            println!();
-            println!("Config file: {}", ConfigFile::config_path().display());
+            crate::render::deprecated("config show", "profile show");
+            run_profile(
+                ProfileCommand::Show {
+                    name: profile,
+                    key: None,
+                },
+                global_profile,
+            )
         }
         ConfigCommand::Set {
             key,
             value,
             profile,
         } => {
-            let mut cfg = ConfigFile::load()?;
-            let entry = match profile.as_deref() {
-                Some(name) => cfg.profiles.entry(name.to_string()).or_default(),
-                None => &mut cfg.default,
-            };
-            match key.as_str() {
-                "server_url" => entry.server_url = Some(value.clone()),
-                "token" => entry.token = Some(value.clone()),
-                "registry" => entry.registry = Some(value.clone()),
-                other => {
-                    anyhow::bail!("unknown key '{other}'; expected server_url, token, or registry")
-                }
-            }
-            cfg.save()?;
-            println!("Set {key} = {value}");
+            crate::render::deprecated("config set", "profile set");
+            run_profile(
+                ProfileCommand::Set { key, value },
+                profile.as_deref().or(global_profile),
+            )
         }
     }
-    Ok(())
 }
 
 fn interactive_init() -> Result<()> {

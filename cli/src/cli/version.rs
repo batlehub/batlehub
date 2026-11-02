@@ -1,9 +1,9 @@
 use anyhow::Result;
 use clap::Subcommand;
 
+use super::lifecycle::{run as run_lifecycle, Verb};
 use crate::api::BatleHubClient;
-use crate::confirm::confirm;
-use crate::render::done;
+use crate::render::deprecated;
 
 #[derive(Subcommand)]
 pub enum VersionCommand {
@@ -56,69 +56,45 @@ pub enum VersionCommand {
     },
 }
 
+/// The deprecated `version <verb> REG NAME VER`: warns, then runs
+/// `package <verb> REG/NAME@VER`.
 pub async fn run(cmd: VersionCommand, client: &BatleHubClient) -> Result<()> {
-    match cmd {
+    let (verb, word, registry, name, version) = match cmd {
         VersionCommand::Yank {
             registry,
             name,
             version,
-        } => {
-            confirm("yank", &[format!("{registry}/{name}@{version}")], None)?;
-            client.yank_version(&registry, &name, &version).await?;
-            done(&format!("Yanked {registry}/{name}@{version}"));
-        }
+        } => (Verb::Yank, "yank", registry, name, version),
         VersionCommand::Unyank {
             registry,
             name,
             version,
-        } => {
-            client.unyank_version(&registry, &name, &version).await?;
-            done(&format!("Unyanked {registry}/{name}@{version}"));
-        }
+        } => (Verb::Unyank, "unyank", registry, name, version),
         VersionCommand::Delete {
             registry,
             name,
             version,
-        } => {
-            let coord = format!("{registry}/{name}@{version}");
-            // Two facts, and the second is the one people are surprised by:
-            // the bytes go, *and* the number is spent (RFC 0016 §4.4).
-            confirm(
-                "delete",
-                std::slice::from_ref(&coord),
-                Some(&format!(
-                    "the artifact is dropped and the version number is spent permanently — \
-                     {version} can never be published again"
-                )),
-            )?;
-            client.delete_version(&registry, &name, &version).await?;
-            done(&format!("Deleted {coord}"));
-        }
+        } => (Verb::Delete, "delete", registry, name, version),
         VersionCommand::Pin {
             registry,
             name,
             version,
-        } => {
-            client
-                .set_retention_pin(&registry, &name, &version, true)
-                .await?;
-            done(&format!(
-                "Pinned {registry}/{name}@{version} — retention will never reclaim it"
-            ));
-        }
+        } => (Verb::Pin, "pin", registry, name, version),
         VersionCommand::Unpin {
             registry,
             name,
             version,
-        } => {
-            client
-                .set_retention_pin(&registry, &name, &version, false)
-                .await?;
-            done(&format!(
-                "Unpinned {registry}/{name}@{version} — the registry's retention policy applies \
-                 to it again"
-            ));
-        }
-    }
-    Ok(())
+        } => (Verb::Unpin, "unpin", registry, name, version),
+    };
+    deprecated(
+        &format!("version {word} <registry> <name> <version>"),
+        &format!("package {word} <registry>/<name>@<version>"),
+    );
+    run_lifecycle(
+        verb,
+        &[format!("{registry}/{name}@{version}")],
+        None,
+        client,
+    )
+    .await
 }

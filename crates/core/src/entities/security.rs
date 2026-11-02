@@ -408,8 +408,9 @@ impl Verdict {
     }
 
     /// The one-line message every native error body carries (RFC 0018 §4.2):
-    /// `<registry>:<name>@<version> is <state> (<CODES>[, available <RFC3339>]).
-    /// Run `batlehub why <coord>` for details.`
+    /// `<registry>/<name>@<version> is <state> (<CODES>[, available <RFC3339>]).
+    /// Run `batlehub-cli why <coord>` for details.` — the coordinate in the
+    /// form the CLI reads (RFC 0040 §4.1), and the binary's real name.
     pub fn short_message(&self) -> String {
         let codes = self
             .reason_codes
@@ -418,7 +419,7 @@ impl Verdict {
             .collect::<Vec<_>>()
             .join(", ");
         let coord = format!(
-            "{}:{}@{}",
+            "{}/{}@{}",
             self.package.registry, self.package.name, self.package.version
         );
         let available = self
@@ -431,7 +432,7 @@ impl Verdict {
             })
             .unwrap_or_default();
         format!(
-            "{coord} is {} ({codes}{available}). Run `batlehub why {coord}` for details.",
+            "{coord} is {} ({codes}{available}). Run `batlehub-cli why {coord}` for details.",
             self.state
         )
     }
@@ -741,8 +742,8 @@ mod tests {
         };
         assert_eq!(
             v.short_message(),
-            "npm-public:left-pad@1.3.1 is quarantined (MIN_AGE_NOT_MET, available \
-             2026-09-05T14:12:00Z). Run `batlehub why npm-public:left-pad@1.3.1` for details."
+            "npm-public/left-pad@1.3.1 is quarantined (MIN_AGE_NOT_MET, available \
+             2026-09-05T14:12:00Z). Run `batlehub-cli why npm-public/left-pad@1.3.1` for details."
         );
         let now: DateTime<Utc> = "2026-09-05T13:12:00Z".parse().unwrap();
         assert_eq!(v.retry_after_secs(now), Some(3600));

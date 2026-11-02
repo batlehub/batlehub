@@ -26,7 +26,7 @@ use crate::api::security::VerdictView;
 use crate::api::BatleHubClient;
 use crate::coordinate::Coordinate;
 use crate::exit::{CliError, ExitCode};
-use crate::render::{ctx, Format};
+use crate::render::{ctx, deprecated, Format};
 
 /// `registry/name@version` (or a bare `name@version` with `-r`), resolved
 /// against the registries the caller can see.
@@ -84,12 +84,20 @@ pub struct PullersArgs {
     /// default: the registry's `pullers_window_days`
     #[arg(long, default_value = "")]
     pub since: String,
-    /// Print the CSV the export endpoint renders
-    #[arg(long)]
+    /// Deprecated: `--format csv`
+    #[arg(long, hide = true)]
     pub csv: bool,
 }
 
-/// `verdicts list`: the registry's stored verdicts, newest scan first.
+/// `--csv` is the old spelling of `--format csv`.
+fn csv_wanted(flag: bool) -> bool {
+    if flag {
+        deprecated("--csv", "--format csv");
+    }
+    flag || ctx().format == Format::Csv
+}
+
+/// `verdict list`: the registry's stored verdicts, newest scan first.
 async fn list_verdicts(args: &ListArgs, client: &BatleHubClient, json: bool) -> Result<()> {
     let registry = ctx().require_registry(None)?;
     let report = client
@@ -144,7 +152,7 @@ fn print_verdict_row(v: &serde_json::Value) {
     );
 }
 
-/// `verdicts pullers`: who pulled a held version before it was held.
+/// `verdict pullers`: who pulled a held version before it was held.
 async fn list_pullers(args: &PullersArgs, client: &BatleHubClient, json: bool) -> Result<()> {
     let (registry, name, version) = versioned(client, &args.coordinate).await?;
     let body = client
@@ -153,7 +161,7 @@ async fn list_pullers(args: &PullersArgs, client: &BatleHubClient, json: bool) -
             &name,
             &version,
             &args.since,
-            args.csv || ctx().format == Format::Csv,
+            csv_wanted(args.csv),
         )
         .await?;
     if args.csv || json {
@@ -201,7 +209,7 @@ async fn list_pullers(args: &PullersArgs, client: &BatleHubClient, json: bool) -
 #[derive(clap::Subcommand)]
 pub enum AuditCommand {
     /// What one identity pulled inside a window — the transpose of
-    /// `verdicts pullers`
+    /// `verdict pullers`
     Pulls(PullsArgs),
 }
 
@@ -217,8 +225,8 @@ pub struct PullsArgs {
     /// default: 30 days
     #[arg(long, default_value = "")]
     pub since: String,
-    /// Print the CSV the export endpoint renders
-    #[arg(long)]
+    /// Deprecated: `--format csv`
+    #[arg(long, hide = true)]
     pub csv: bool,
 }
 
@@ -236,7 +244,7 @@ async fn list_pulls(args: &PullsArgs, client: &BatleHubClient, json: bool) -> Re
             ctx().registry.as_deref(),
             args.package.as_deref(),
             &args.since,
-            args.csv || ctx().format == Format::Csv,
+            csv_wanted(args.csv),
         )
         .await?;
     // The server rendered it; printing it verbatim is what keeps the CSV an

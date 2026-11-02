@@ -330,7 +330,7 @@ async fn first_request_is_held_pending_then_served_after_the_worker_scans() {
     let (code, body) = status(&app, &tarball("1.1.0")).await;
     assert_eq!(code, 403, "{body}");
     assert!(body.contains("SCAN_PENDING"), "{body}");
-    assert!(body.contains("batlehub why"), "{body}");
+    assert!(body.contains("batlehub-cli why"), "{body}");
     assert_eq!(lab.queue.open_jobs().await.len(), 1, "one FirstSeen job");
     assert_eq!(
         lab.queue.open_jobs().await[0].trigger,
@@ -682,7 +682,7 @@ async fn a_hold_is_npms_error_shape_with_headers_and_a_404_for_anonymous() {
     assert_eq!(header(&resp, HEADER_REASON), Some("SCAN_PENDING"));
     assert!(header(&resp, HEADER_DETAILS)
         .unwrap()
-        .contains("batlehub why"));
+        .contains("batlehub-cli why"));
     assert!(
         header(&resp, "retry-after").is_none(),
         "a pending scan names no clock"

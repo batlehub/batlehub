@@ -51,8 +51,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `registry/name@version`.** A bare name goes to the default registry.
   `registry:name@version` is still read, with a warning.
 
+- **The CLI's commands are grouped by object** (RFC 0040 §4.4). The `admin`
+  catch-all is gone: its subcommands now live under `server`, `cache`,
+  `quota`, `ip-block`, `user`, `grant`, `namespace`, `visibility`, `audit`,
+  `gdpr`, `sbom`, `notification`, `retention`, `import`, `banner`,
+  `exposure`, `flag`, `bundle` and `air-gap`. A version's lifecycle
+  (`yank`, `unyank`, `delete`, `pin`, `unpin`, `deprecate`, `undeprecate`,
+  `unlist`, `relist`) is under `package`, and every verb takes one
+  coordinate or several (`registry/name@version`). The local configuration
+  is `profile`.
+- **The server's refusal hint names the real binary and the `/` form:**
+  ``Run `batlehub-cli why npm/left-pad@1.3.1` for details.`` The CLI still
+  reads the `:` form an older server prints.
+
+### Deprecated
+
+These spellings still run until 1.10, and each prints a `warning:` that names
+its replacement. The full table is in the CLI reference, under *Deprecated
+spellings*.
+
+- `admin …`, `version …`, `owners …`, `verdicts …` and `config …`;
+- `registry info`, `auth token revoke` and `package versions <registry> <name>`;
+- `--csv` (now `--format csv`), `gdpr erase --force` (now
+  `--ignore-open-decisions`), `mise plan/export --out` (now `--output`);
+- `proxy serve --registry` and `vsx verify --registry`, which take a URL.
+  `--registry-url` is the new name, and `--registry` stays as an alias for the
+  editor extensions.
+
 ### Added
 
+- **`profile list` and `profile use`.** `use` writes a top-level `current` key,
+  so `-P` is needed only to leave the profile in use. An older CLI ignores the
+  key.
 - **`--format table|json|csv|raw`** (and `BATLEHUB_FORMAT`) on every command.
   `--json` is its short form, and is now honoured by `version`, `publish` and
   `download` too. `csv` works on every listing, with the JSON field names as
