@@ -74,8 +74,8 @@ pub use readme::{
     ReadmeSource, ReadmeState,
 };
 pub use registry_kind::{
-    FetchArtifact, FetchSupport, ListingDocument, ListingSupport, ReadmeSupport, RegistryKind,
-    UpstreamDetailSupport,
+    FetchArtifact, FetchSupport, LifecycleVerb, ListingDocument, ListingSupport, ReadmeSupport,
+    RegistryKind, UpstreamDetailSupport,
 };
 pub use release_import::ImportRun;
 pub use sbom::{ArtifactSbom, SbomFormat, SbomSource};

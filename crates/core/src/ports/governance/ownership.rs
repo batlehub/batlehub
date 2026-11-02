@@ -11,6 +11,16 @@ pub struct OwnerEntry {
     pub granted_by: Option<String>,
 }
 
+/// Whether an owner row names this identity: its user id, or one of its
+/// groups.
+pub fn explicit_owner(entry: &OwnerEntry, identity: &Identity) -> bool {
+    match entry.principal_type.as_str() {
+        "user" => identity.user_id.as_deref() == Some(entry.principal_id.as_str()),
+        "group" => identity.groups.contains(&entry.principal_id),
+        _ => false,
+    }
+}
+
 /// Port for per-package ownership management.
 ///
 /// On first publish, call `initialize_owner` to make the publisher the package admin.
@@ -108,6 +118,34 @@ pub trait OwnershipPort: Send + Sync {
             .await?;
         }
         Ok(())
+    }
+
+    /// The packages of `packages` that `identity` does **not** explicitly own:
+    /// no owner row names its user id or one of its groups. In request order.
+    ///
+    /// Not [`Self::can_publish`], which is true for a package with no owner
+    /// at all: the owner arm of the generic lifecycle endpoint (RFC 0040 §6.4)
+    /// must never treat "nobody owns it" as "you own it". An empty answer means
+    /// the caller owns every one. The default asks `list_owners` per package,
+    /// which is correct for any store; a database answers in one statement.
+    async fn not_owned_by(
+        &self,
+        registry: &str,
+        packages: &[String],
+        identity: &Identity,
+    ) -> Result<Vec<String>, CoreError> {
+        let mut missing = Vec::new();
+        for package in packages {
+            let owned = self
+                .list_owners(registry, package)
+                .await?
+                .iter()
+                .any(|o| explicit_owner(o, identity));
+            if !owned {
+                missing.push(package.clone());
+            }
+        }
+        Ok(missing)
     }
 
     /// The reverse of [`list_owners`](OwnershipPort::list_owners): every

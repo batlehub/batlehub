@@ -275,6 +275,15 @@ impl OwnershipPort for OwnershipGrants {
         self.inner.can_publish(registry, package, identity).await
     }
 
+    async fn not_owned_by(
+        &self,
+        registry: &str,
+        packages: &[String],
+        identity: &crate::entities::Identity,
+    ) -> Result<Vec<String>, CoreError> {
+        self.inner.not_owned_by(registry, packages, identity).await
+    }
+
     async fn add_owner(
         &self,
         registry: &str,

@@ -107,6 +107,35 @@ impl OwnershipPort for PgOwnershipStore {
         .db_err()
     }
 
+    async fn not_owned_by(
+        &self,
+        registry: &str,
+        packages: &[String],
+        identity: &Identity,
+    ) -> Result<Vec<String>, CoreError> {
+        // Explicit rows only: a package with no owner is *not* owned here,
+        // unlike `can_publish`.
+        let groups: Vec<&str> = identity.groups.iter().map(String::as_str).collect();
+        let owned: Vec<String> = sqlx::query_scalar(
+            "SELECT DISTINCT package_name FROM package_owners \
+              WHERE registry = $1 AND package_name = ANY($2) \
+                AND ((principal_type = 'user' AND principal_id = $3) \
+                  OR (principal_type = 'group' AND principal_id = ANY($4)))",
+        )
+        .bind(registry)
+        .bind(packages)
+        .bind(identity.user_id.as_deref())
+        .bind(&groups)
+        .fetch_all(&self.pool)
+        .await
+        .db_err()?;
+        Ok(packages
+            .iter()
+            .filter(|p| !owned.contains(p))
+            .cloned()
+            .collect())
+    }
+
     async fn add_owner(
         &self,
         registry: &str,

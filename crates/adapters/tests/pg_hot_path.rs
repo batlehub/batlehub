@@ -240,3 +240,42 @@ async fn can_publish_answers_the_three_ownership_questions_in_one() {
     // Ownership is per package.
     assert!(owners.can_publish(&reg, "other-pkg", &bob).await.unwrap());
 }
+
+/// RFC 0040 §6.4: `not_owned_by` reads explicit rows only — an unowned
+/// package is *not* the caller's, unlike `can_publish` — in one statement.
+#[tokio::test]
+async fn not_owned_by_counts_only_explicit_rows() {
+    let Some((repo, reg)) = repo().await else {
+        return;
+    };
+    let owners = PgOwnershipStore::new(repo.pool());
+    let (alice, bob, nobody) = (
+        who(Some("alice"), &[]),
+        who(Some("bob"), &["team"]),
+        who(None, &[]),
+    );
+    owners
+        .add_owner(&reg, "a", owner("user", "alice"))
+        .await
+        .unwrap();
+    owners
+        .add_owner(&reg, "b", owner("group", "team"))
+        .await
+        .unwrap();
+    let all = ["a".to_owned(), "b".to_owned(), "unowned".to_owned()];
+
+    assert_eq!(
+        owners.not_owned_by(&reg, &all, &alice).await.unwrap(),
+        ["b", "unowned"]
+    );
+    assert_eq!(
+        owners.not_owned_by(&reg, &all, &bob).await.unwrap(),
+        ["a", "unowned"]
+    );
+    assert_eq!(owners.not_owned_by(&reg, &all, &nobody).await.unwrap(), all);
+    assert!(owners
+        .not_owned_by(&reg, &["a".to_owned()], &alice)
+        .await
+        .unwrap()
+        .is_empty());
+}
