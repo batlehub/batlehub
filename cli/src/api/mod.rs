@@ -7,6 +7,7 @@ pub mod mise_plan;
 pub mod owner;
 pub mod package;
 pub mod publish;
+pub mod publish_input;
 pub mod registry;
 pub mod security;
 pub mod setup;

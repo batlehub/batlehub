@@ -430,8 +430,13 @@ batlehub-cli package relist      <registry>/<name>@<version>...
 ```
 
 Each verb takes one coordinate or several, across registries; with `-r`, a bare
-`name@version` names a version of the default registry. These commands require
-an admin token. `yank`, `delete` and `unlist` are
+`name@version` names a version of the default registry. These commands need the
+instance-tier `releases:yank` (`releases:delete` for `delete`), with one
+exception: on cargo, composer, rubygems, terraform and nuget registries, whose
+own clients let an owner yank, an **explicit owner of every package named** may
+`yank` and `unyank` them too. A request that names a package the caller does not
+own is refused whole, and a package with no owner is nobody's. `yank`, `delete`
+and `unlist` are
 [destructive](#confirmation): they ask on a terminal and need `--yes` in a
 script.
 
@@ -504,46 +509,72 @@ Added user 'bob' as maintainer on internal/Serilog
 ## 8. Commands — publish
 
 ```
-batlehub-cli publish <file> [-r <r>] [--name <n>] [--version <v>] [--type <t>]
-                             [--distribution <d>] [--component <c>] [--platform <p>]
+batlehub-cli publish <input> [-r <r>] [--name <n>] [--version <v>]
+                             [--pom <pom.xml>] [--distribution <d>] [--component <c>] [--platform <p>]
 ```
 
-Upload an artifact to a local or hybrid registry. The CLI auto-detects the registry type and package metadata from the file:
+Upload to a local or hybrid registry. **The registry decides the kind**: the
+CLI asks the server what `-r` is and uses that kind's upload route, so a Helm
+chart `.tgz` goes to Helm even though npm uses the same extension. The file name
+is read only for a name and a version, and only when it reads as that kind's own
+artifact.
 
-| Extension | Registry type | Metadata source |
-|-----------|---------------|-----------------|
-| `.nupkg` | nuget | embedded `.nuspec` |
-| `.whl` | pypi | filename (`name-version-*.whl`) |
-| `.gem` | rubygems | filename (`name-version.gem`) |
-| `.pkg.tar.{zst,xz,gz}` | pacman | filename (`name-pkgver-pkgrel-arch.pkg.tar.*`) |
-| `.tgz` | npm | filename (`name-version.tgz`, as produced by `npm pack`) |
-| `.crate` | cargo | filename (`name-version.crate`, as produced by `cargo package`) |
-| `.vsix` | openvsx | filename (`extension_id-version.vsix`) |
-| `.deb` | deb | server-side, from the package's control file — requires `--distribution` and `--component` |
-| `.rpm` | rpm | server-side, from the package's header |
-| `.tar.bz2` / `.conda` | conda | server-side, from the package's own `info/index.json` (`--platform` is only a fallback) |
+| Kind | Input | Name and version from |
+|------|-------|-----------------------|
+| nuget | `.nupkg` | the server, from the embedded `.nuspec` |
+| pypi | wheel or sdist | the file name |
+| rubygems | `.gem` | the server |
+| npm | `.tgz` | the file name (`name-version.tgz`, as `npm pack` writes it) |
+| cargo | `.crate` | the file name (`name-version.crate`) |
+| conda | `.conda`, `.tar.bz2` | the server, from `info/index.json` (`--platform` is only a fallback) |
+| composer | `.zip` | the server, from `composer.json` (`--version` overrides it) |
+| openvsx, vscode-marketplace | `.vsix` | the file name (`publisher.name-version.vsix`) |
+| jetbrains-marketplace | plugin `.zip`/`.jar` | the server, from `plugin.xml` |
+| galaxy | collection `.tar.gz` | the server, from `MANIFEST.json` |
+| helm | chart `.tgz` | the server, from `Chart.yaml` |
+| devfile | stack directory or `devfile.yaml` | the server, from `metadata` |
+| deb | `.deb` | the server — needs `--distribution` and `--component` |
+| rpm, pacman, apk | the package | the server |
+| goproxy | a module directory (zipped here), or a module `.zip` with `--name <module>` | `go.mod`'s `module` line; `--version v1.2.3` is required |
+| maven | a `.jar` with `--pom`, a `.pom` alone, or a `target/` directory | the pom's `groupId`/`artifactId`/`version` |
+| terraform | a module `.tar.gz`, with `--name <namespace>/<name>/<provider> --version` | the flags |
+| terraform | a provider directory of `terraform-provider-<type>_<version>_<os>_<arch>.zip`, with `--name <namespace>/<type>` | the archives' names |
 
-Composer ZIPs share the generic `.zip` extension with other formats and are not auto-detected — pass `--type composer` explicitly. Composer, like conda/deb/rpm, parses name/version server-side from `composer.json`, so no `--name`/`--version` is needed (an optional `--version` overrides the archive's own version).
+When a name or version cannot be read and no flag gives it, `publish` exits 2
+before sending anything.
 
-Use `--type` to override auto-detection entirely — useful for ambiguous extensions or when a file doesn't follow the expected naming convention.
+- **goproxy** sends one `PUT` of `{version}.zip`; the server derives `.mod` and
+  `.info` from it, so the publish is atomic. The zip carries no symlink, no
+  `vendor/` or version-control directory and no nested module.
+- **maven** sends the jar, the pom and their `.sha1`/`.md5` sidecars, the pom
+  last. A run that stops halfway exits 7 and names what was not sent; **run it
+  again**: a file the server already holds with the same bytes counts as sent.
+- **terraform** providers send the version manifest, then one archive per
+  platform. A re-run picks up from the manifest the same way, and a stopped run
+  exits 7.
+- **nix** is refused with the command to run instead: `nix copy --to` signs and
+  uploads a closure, which is not one file. Proxy-only kinds (jetbrains, github,
+  forgejo, gitlab, generic) and vendor mirrors (nodedist, sdkman, rustup) have
+  nothing to publish to.
 
-Maven (separate jar+pom+checksum files), Terraform (providers need shasums/signature files; modules need a packaging step), and Go modules (need an `.info`/`.mod`/`.zip` triad) don't fit this command's single-file model by design. Use your existing tooling (`mvn deploy`, Terraform registry publishing conventions, `go mod`) configured to point at the BatleHub endpoint — see [`docs/use/publishing.md`](publishing.md) for per-registry setup instructions.
+`-t/--type` is deprecated: it is checked against the registry's kind and never
+obeyed, so a `-t` that disagrees with the registry exits 2.
 
 ```bash
 # NuGet
-batlehub-cli publish Serilog.3.1.1.nupkg --registry internal
+batlehub-cli publish Serilog.3.1.1.nupkg -r internal
 
-# Override detected metadata
-batlehub-cli publish dist/mylib-1.2.3.tar.gz --type pypi --name mylib --version 1.2.3
+# A Go module, from its directory
+batlehub-cli publish ./mymod -r go-local --version v0.1.0
 
-# Composer (ambiguous .zip extension — type must be explicit)
-batlehub-cli publish acme-widget.zip --type composer --registry internal
+# Maven, after `mvn package`
+batlehub-cli publish target/ -r maven-local
 
-# Debian (distribution/component aren't in the filename)
-batlehub-cli publish hello_1.0-1_amd64.deb --registry internal --distribution stable --component main
+# A Terraform provider release directory
+batlehub-cli publish dist/ -r tf-local --name acme/null
 
-# Conda (platform is only a fallback for packages with no embedded subdir)
-batlehub-cli publish numpy-1.26.0-py311h0.conda --registry internal --platform linux-64
+# Debian (distribution/component aren't in the file)
+batlehub-cli publish hello_1.0-1_amd64.deb -r internal --distribution stable --component main
 ```
 
 ---

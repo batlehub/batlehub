@@ -64,6 +64,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   ``Run `batlehub-cli why npm/left-pad@1.3.1` for details.`` The CLI still
   reads the `:` form an older server prints.
 
+- **A package's owner can yank and unyank it through the generic lifecycle
+  endpoint** (`POST /api/v1/admin/registries/{r}/bulk-yank|bulk-unyank`, and so
+  `batlehub-cli package yank`), on the kinds whose native client already lets an
+  owner yank: cargo, composer, rubygems, terraform, nuget. The caller must be an
+  explicit owner of **every** package in the request; a package with no owner
+  counts as not owned, and a mixed request is refused whole. `delete` and `pin`
+  stay instance-tier. Rolling the server back removes this permission.
+
+- **`publish` uses the target registry's kind, not the file's extension.** A
+  Helm chart `.tgz` used to be detected as npm and sent to npm's route. It now
+  goes where the registry says. `-t` is deprecated: it is checked against the
+  registry and exits 2 on a mismatch.
+
 ### Deprecated
 
 These spellings still run until 1.10, and each prints a `warning:` that names
@@ -80,6 +93,12 @@ spellings*.
 
 ### Added
 
+- **`publish` covers nine more kinds:** goproxy (a module directory, zipped and
+  sent as one atomic `{version}.zip`), maven (jar, pom and checksum sidecars,
+  resumable), terraform (a module tarball, or a provider directory of
+  per-platform archives), galaxy, helm, apk, jetbrains-marketplace and
+  vscode-marketplace. A nix registry is refused with the `nix copy --to`
+  command to run instead.
 - **`profile list` and `profile use`.** `use` writes a top-level `current` key,
   so `-P` is needed only to leave the profile in use. An older CLI ignores the
   key.

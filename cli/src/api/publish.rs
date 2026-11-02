@@ -399,6 +399,200 @@ impl BatleHubClient {
     }
 }
 
+/// The registry's kind, as `GET /api/v1/registries` lists it (RFC 0040 §6.3):
+/// what `publish` dispatches on, never the file's extension.
+impl BatleHubClient {
+    pub async fn registry_kind(&self, registry: &str) -> Result<String> {
+        self.list_registries()
+            .await?
+            .into_iter()
+            .find(|r| r.name == registry)
+            .map(|r| r.registry_type)
+            .ok_or_else(|| {
+                crate::exit::CliError::new(
+                    crate::exit::ExitCode::NotFound,
+                    format!("no registry named `{registry}` that you can see"),
+                )
+                .into()
+            })
+    }
+
+    /// One `PUT` of `{version}.zip`; the server derives `.mod` and `.info`,
+    /// so the publish is atomic.
+    pub async fn publish_goproxy(
+        &self,
+        registry: &str,
+        module: &str,
+        version: &str,
+        zip: Vec<u8>,
+    ) -> Result<()> {
+        self.put_bytes(&format!("/proxy/{registry}/{module}/@v/{version}.zip"), zip)
+            .await
+    }
+
+    /// Upload Maven files in order, resuming: a `409` on a file whose stored
+    /// bytes equal the local ones is a file a previous run already sent. Each
+    /// file is `(repository path, bytes)`.
+    pub async fn publish_maven(
+        &self,
+        registry: &str,
+        files: &[(String, Vec<u8>)],
+    ) -> Result<Vec<String>> {
+        let mut sent = Vec::new();
+        for (i, (path, bytes)) in files.iter().enumerate() {
+            let url = format!("/proxy/{registry}/maven2/{path}");
+            match self.put_bytes(&url, bytes.clone()).await {
+                Ok(()) => {}
+                Err(e) if is_conflict(&e) && self.stored_equals(&url, bytes).await => {}
+                Err(e) => {
+                    let missing: Vec<&str> = files[i..].iter().map(|(p, _)| p.as_str()).collect();
+                    return Err(e.context(format!(
+                        "stopped at {path}; not sent: {}",
+                        missing.join(", ")
+                    )));
+                }
+            }
+            sent.push(path.clone());
+        }
+        Ok(sent)
+    }
+
+    async fn stored_equals(&self, path: &str, local: &[u8]) -> bool {
+        let mut stored = Vec::new();
+        self.download_to(path, &mut stored).await.is_ok() && stored == local
+    }
+
+    pub async fn publish_terraform_module(
+        &self,
+        registry: &str,
+        coordinate: &str,
+        version: &str,
+        file_path: &Path,
+    ) -> Result<()> {
+        let bytes = tokio::fs::read(file_path).await?;
+        self.post_bytes(
+            &format!("/proxy/{registry}/v1/modules/{coordinate}/{version}"),
+            bytes,
+        )
+        .await
+    }
+
+    /// The version manifest, then one `PUT` per platform. A `409` on the
+    /// manifest is a re-run: the version row exists, and the platforms follow.
+    pub async fn publish_terraform_provider(
+        &self,
+        registry: &str,
+        namespace_type: &str,
+        version: &str,
+        platforms: &[super::publish_input::ProviderPlatform],
+    ) -> Result<()> {
+        let mut entries = Vec::new();
+        let mut archives = Vec::new();
+        for p in platforms {
+            let bytes = tokio::fs::read(&p.path).await?;
+            let filename = p
+                .path
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            entries.push(serde_json::json!({
+                "os": p.os, "arch": p.arch, "filename": filename,
+                "shasum": hex::encode(Sha256::digest(&bytes)),
+            }));
+            archives.push((p, bytes));
+        }
+        let manifest = serde_json::json!({ "version": version, "platforms": entries });
+        let req = self
+            .request(
+                reqwest::Method::POST,
+                &format!("/proxy/{registry}/v1/providers/{namespace_type}/versions"),
+            )
+            .json(&manifest);
+        let resp = self.send(req).await?;
+        if !resp.status().is_success() && resp.status() != reqwest::StatusCode::CONFLICT {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(crate::exit::ApiError::from_body(status, &body).into());
+        }
+        for (i, (p, bytes)) in archives.into_iter().enumerate() {
+            let url = format!(
+                "/proxy/{registry}/v1/providers/{namespace_type}/{version}/artifact/{}/{}",
+                p.os, p.arch
+            );
+            if let Err(e) = self.put_bytes(&url, bytes).await {
+                let missing: Vec<String> = platforms[i..]
+                    .iter()
+                    .map(|p| format!("{}_{}", p.os, p.arch))
+                    .collect();
+                return Err(e.context(format!("not sent: {}", missing.join(", "))));
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn publish_galaxy(&self, registry: &str, file_path: &Path) -> Result<()> {
+        let bytes = tokio::fs::read(file_path).await?;
+        let sha256 = hex::encode(Sha256::digest(&bytes));
+        let form = reqwest::multipart::Form::new()
+            .text("sha256", sha256)
+            .part("file", file_part(file_path, bytes)?);
+        self.post_multipart_void(
+            &format!("/proxy/{registry}/galaxy/api/v3/artifacts/collections/"),
+            form,
+        )
+        .await
+    }
+
+    pub async fn publish_helm(&self, registry: &str, file_path: &Path) -> Result<()> {
+        let bytes = tokio::fs::read(file_path).await?;
+        self.post_bytes(&format!("/proxy/{registry}/helm/api/charts"), bytes)
+            .await
+    }
+
+    pub async fn publish_apk(&self, registry: &str, file_path: &Path) -> Result<()> {
+        let bytes = tokio::fs::read(file_path).await?;
+        self.put_bytes(&format!("/proxy/{registry}/apk/upload"), bytes)
+            .await
+    }
+
+    pub async fn publish_jetbrains_plugin(&self, registry: &str, file_path: &Path) -> Result<()> {
+        let bytes = tokio::fs::read(file_path).await?;
+        let form = reqwest::multipart::Form::new().part("file", file_part(file_path, bytes)?);
+        self.post_multipart_void(&format!("/proxy/{registry}/api/updates/upload"), form)
+            .await
+    }
+}
+
+fn file_part(path: &Path, bytes: Vec<u8>) -> Result<reqwest::multipart::Part> {
+    let name = path
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "upload".to_owned());
+    Ok(reqwest::multipart::Part::bytes(bytes)
+        .file_name(name)
+        .mime_str("application/octet-stream")?)
+}
+
+fn is_conflict(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        c.downcast_ref::<crate::exit::ApiError>()
+            .is_some_and(|a| a.status == 409)
+    })
+}
+
+/// `{path}`, `{path}.sha1`, `{path}.md5` — the sidecars Maven clients ask for.
+pub fn with_maven_checksums(path: &str, bytes: Vec<u8>) -> Vec<(String, Vec<u8>)> {
+    use md5::Md5;
+    use sha1::Sha1;
+    let sha1 = hex::encode(Sha1::digest(&bytes)).into_bytes();
+    let md5 = hex::encode(Md5::digest(&bytes)).into_bytes();
+    vec![
+        (path.to_owned(), bytes),
+        (format!("{path}.sha1"), sha1),
+        (format!("{path}.md5"), md5),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

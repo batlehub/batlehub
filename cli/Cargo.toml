@@ -47,6 +47,10 @@ base64 = { workspace = true }
 ed25519-dalek = "3"
 regex = { workspace = true }
 sha2 = { workspace = true }
+# Maven's `.sha1`/`.md5` sidecars (RFC 0040 §6.3): protocol requirements, not
+# integrity controls. The versions crates/web already locks.
+sha1 = "0.11"
+md-5 = "0.11"
 hex = { workspace = true }
 getrandom = "0.4"
 # The local gallery proxy (RFC 0011 §4.4): a loopback HTTP server, and the

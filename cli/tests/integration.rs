@@ -5198,3 +5198,311 @@ fn setup_apply_skips_local_registries_and_resolves_an_ambiguity_with_a_kept_pick
     assert_eq!(code, 0, "{stdout}");
     assert!(stdout.contains("no-registry"), "{stdout}");
 }
+
+// ── RFC 0040 §6.3: publish by the registry's kind ───────────────────────────
+
+fn tar_gz(files: &[(&str, &str)]) -> Vec<u8> {
+    let mut tar = tar::Builder::new(Vec::new());
+    for (path, body) in files {
+        let mut header = tar::Header::new_gnu();
+        header.set_path(path).unwrap();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append(&header, body.as_bytes()).unwrap();
+    }
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    std::io::Write::write_all(&mut gz, &tar.into_inner().unwrap()).unwrap();
+    gz.finish().unwrap()
+}
+
+fn http_get(url: &str) -> (u16, String) {
+    let resp = reqwest::blocking::Client::new()
+        .get(url)
+        .bearer_auth(AUTH_TOKEN)
+        .send()
+        .unwrap();
+    (resp.status().as_u16(), resp.text().unwrap_or_default())
+}
+
+/// T8: a chart `.tgz` — the extension npm uses — goes to the Helm route
+/// because the registry is a Helm registry, and lands in its index.
+#[test]
+fn helm_publish() {
+    let srv = TestServer::start_with(&[("helm-local", "helm")]);
+    let tmp = tempfile::tempdir().unwrap();
+    let chart = tmp.path().join("chart-0.1.0.tgz");
+    std::fs::write(
+        &chart,
+        tar_gz(&[(
+            "chart/Chart.yaml",
+            "apiVersion: v2\nname: chart\nversion: 0.1.0\ndescription: t\n",
+        )]),
+    )
+    .unwrap();
+    let (code, _, stderr) = cli_exit(
+        &["publish", chart.to_str().unwrap(), "-r", "helm-local"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let (status, index) = http_get(&format!(
+        "{}/proxy/helm-local/helm/index.yaml",
+        srv.base_url()
+    ));
+    assert_eq!(status, 200, "{index}");
+    assert!(
+        index.contains("chart") && index.contains("0.1.0"),
+        "{index}"
+    );
+}
+
+#[test]
+fn galaxy_publish() {
+    let srv = TestServer::start_with(&[("galaxy-local", "galaxy")]);
+    let tmp = tempfile::tempdir().unwrap();
+    let manifest = serde_json::json!({
+        "collection_info": {"namespace": "acme", "name": "tools", "version": "1.0.0",
+            "dependencies": {}, "tags": [], "license": ["MIT"], "readme": "README.md",
+            "authors": ["acme"]},
+        "format": 1,
+    })
+    .to_string();
+    let files = r#"{"files":[{"name":".","ftype":"dir"}],"format":1}"#;
+    let path = tmp.path().join("acme-tools-1.0.0.tar.gz");
+    std::fs::write(
+        &path,
+        tar_gz(&[("MANIFEST.json", &manifest), ("FILES.json", files)]),
+    )
+    .unwrap();
+    let (code, _, stderr) = cli_exit(
+        &["publish", path.to_str().unwrap(), "-r", "galaxy-local"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let (status, body) = http_get(&format!(
+        "{}/proxy/galaxy-local/galaxy/api/v3/collections/acme/tools/versions/",
+        srv.base_url()
+    ));
+    assert_eq!(status, 200, "{body}");
+    assert!(body.contains("1.0.0"), "{body}");
+}
+
+#[test]
+fn jetbrains_marketplace_publish() {
+    let srv = TestServer::start_with(&[("jbm-local", "jetbrains-marketplace")]);
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("demo-1.0.0.jar");
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut w = zip::ZipWriter::new(&mut buf);
+        w.start_file(
+            "META-INF/plugin.xml",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        std::io::Write::write_all(
+            &mut w,
+            br#"<idea-plugin><id>com.acme.demo</id><name>Demo</name><version>1.0.0</version>
+<vendor>Acme</vendor><description>d</description>
+<idea-version since-build="231" until-build="241.*"/></idea-plugin>"#,
+        )
+        .unwrap();
+        w.finish().unwrap();
+    }
+    std::fs::write(&path, buf.into_inner()).unwrap();
+    let (code, _, stderr) = cli_exit(
+        &["publish", path.to_str().unwrap(), "-r", "jbm-local"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 0, "{stderr}");
+}
+
+/// A module directory, zipped by the CLI; the proxy then lists the version.
+#[test]
+fn goproxy_publish() {
+    let srv = TestServer::start_with(&[("go-local", "goproxy")]);
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("mod");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("go.mod"), "module example.com/mod\n\ngo 1.22\n").unwrap();
+    std::fs::write(dir.join("mod.go"), "package mod\n").unwrap();
+    let (code, _, stderr) = cli_exit(
+        &[
+            "publish",
+            dir.to_str().unwrap(),
+            "-r",
+            "go-local",
+            "-v",
+            "v0.1.0",
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let (status, list) = http_get(&format!(
+        "{}/proxy/go-local/example.com/mod/@v/list",
+        srv.base_url()
+    ));
+    assert_eq!(status, 200, "{list}");
+    assert!(list.contains("v0.1.0"), "{list}");
+}
+
+/// The jar, the pom and their checksums; a second run resumes rather than
+/// failing on the files the first one sent.
+#[test]
+fn maven_publish() {
+    let srv = TestServer::start_with(&[("maven-local", "maven")]);
+    let tmp = tempfile::tempdir().unwrap();
+    let pom = tmp.path().join("pom.xml");
+    std::fs::write(
+        &pom,
+        "<project><groupId>com.acme</groupId><artifactId>app</artifactId>\
+         <version>1.0.0</version></project>",
+    )
+    .unwrap();
+    let jar = tmp.path().join("app-1.0.0.jar");
+    std::fs::write(&jar, b"PK-not-really-a-jar").unwrap();
+    let args = [
+        "publish",
+        jar.to_str().unwrap(),
+        "--pom",
+        pom.to_str().unwrap(),
+        "-r",
+        "maven-local",
+    ];
+    let (code, _, stderr) = cli_exit(&args, &srv.base_url(), AUTH_TOKEN);
+    assert_eq!(code, 0, "{stderr}");
+    let base = format!(
+        "{}/proxy/maven-local/maven2/com/acme/app/1.0.0",
+        srv.base_url()
+    );
+    let (status, body) = http_get(&format!("{base}/app-1.0.0.jar"));
+    assert_eq!((status, body.as_str()), (200, "PK-not-really-a-jar"));
+    let (status, sha1) = http_get(&format!("{base}/app-1.0.0.jar.sha1"));
+    assert_eq!(status, 200);
+    assert_eq!(sha1.len(), 40, "{sha1}");
+
+    let (code, _, stderr) = cli_exit(&args, &srv.base_url(), AUTH_TOKEN);
+    assert_eq!(code, 0, "a re-run resumes: {stderr}");
+}
+
+/// A module tarball, and a provider directory of per-platform archives.
+#[test]
+fn terraform_publish() {
+    let srv = TestServer::start_with(&[("tf-local", "terraform")]);
+    let tmp = tempfile::tempdir().unwrap();
+    let module = tmp.path().join("vpc.tar.gz");
+    std::fs::write(&module, tar_gz(&[("main.tf", "# vpc\n")])).unwrap();
+    let (code, _, stderr) = cli_exit(
+        &[
+            "publish",
+            module.to_str().unwrap(),
+            "-r",
+            "tf-local",
+            "-n",
+            "acme/vpc/aws",
+            "-v",
+            "1.0.0",
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 0, "{stderr}");
+
+    let dir = tmp.path().join("provider");
+    std::fs::create_dir_all(&dir).unwrap();
+    for platform in ["linux_amd64", "darwin_arm64"] {
+        std::fs::write(
+            dir.join(format!("terraform-provider-null_1.2.0_{platform}.zip")),
+            platform,
+        )
+        .unwrap();
+    }
+    let (code, _, stderr) = cli_exit(
+        &[
+            "publish",
+            dir.to_str().unwrap(),
+            "-r",
+            "tf-local",
+            "-n",
+            "acme/null",
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let (status, versions) = http_get(&format!(
+        "{}/proxy/tf-local/v1/providers/acme/null/versions",
+        srv.base_url()
+    ));
+    assert_eq!(status, 200, "{versions}");
+    assert!(versions.contains("1.2.0"), "{versions}");
+}
+
+/// A kind with no publish says why, and a `-t` that disagrees with the
+/// registry stops before anything is sent.
+#[test]
+fn publish_refuses_a_kind_it_cannot_publish_and_a_mismatched_type() {
+    let srv = TestServer::start_with(&[("nix-local", "nix"), ("test-npm", "npm")]);
+    let tmp = tempfile::tempdir().unwrap();
+    let f = tmp.path().join("x-1.0.0.tgz");
+    std::fs::write(&f, b"x").unwrap();
+    let (code, _, stderr) = cli_exit(
+        &["publish", f.to_str().unwrap(), "-r", "nix-local"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 2, "{stderr}");
+    assert!(stderr.contains("nix copy --to"), "{stderr}");
+    let (code, _, stderr) = cli_exit(
+        &[
+            "publish",
+            f.to_str().unwrap(),
+            "-r",
+            "test-npm",
+            "-t",
+            "helm",
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 2, "{stderr}");
+    assert!(stderr.contains("names a different kind"), "{stderr}");
+}
+
+/// The server's `PUT …/vsix` serves both gallery kinds, so a
+/// vscode-marketplace registry takes the openvsx uploader.
+#[test]
+fn vscode_marketplace_publish() {
+    let srv = TestServer::start_with(&[("vsm-local", "vscode-marketplace")]);
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("acme.demo-1.0.0.vsix");
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut w = zip::ZipWriter::new(&mut buf);
+        let o = zip::write::SimpleFileOptions::default();
+        w.start_file("extension/package.json", o).unwrap();
+        std::io::Write::write_all(
+            &mut w,
+            br#"{"name":"demo","publisher":"acme","version":"1.0.0","engines":{"vscode":"^1.80.0"}}"#,
+        )
+        .unwrap();
+        w.start_file("extension.vsixmanifest", o).unwrap();
+        std::io::Write::write_all(
+            &mut w,
+            br#"<?xml version="1.0"?><PackageManifest Version="2.0.0"><Metadata><Identity Id="demo" Version="1.0.0" Publisher="acme"/><DisplayName>Demo</DisplayName></Metadata></PackageManifest>"#,
+        )
+        .unwrap();
+        w.finish().unwrap();
+    }
+    std::fs::write(&path, buf.into_inner()).unwrap();
+    let (code, _, stderr) = cli_exit(
+        &["publish", path.to_str().unwrap(), "-r", "vsm-local"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 0, "{stderr}");
+}

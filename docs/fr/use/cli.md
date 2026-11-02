@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: 2e62d9b6611ae0c2
+sourceHash: e128ff4a2713635c
 ---
 
 # batlehub-cli
@@ -453,7 +453,13 @@ batlehub-cli package relist      <registry>/<name>@<version>...
 
 Chaque verbe prend une ou plusieurs coordonnées, de registres différents au
 besoin ; avec `-r`, un `name@version` nu désigne une version du registre par
-défaut. Ces commandes exigent un token d'admin. `yank`, `delete` et `unlist`
+défaut. Ces commandes exigent `releases:yank` au niveau de l'instance
+(`releases:delete` pour `delete`), à une exception près : sur les registres
+cargo, composer, rubygems, terraform et nuget, dont les clients natifs laissent
+un propriétaire retirer une version, un **propriétaire explicite de chaque
+paquet nommé** peut aussi lancer `yank` et `unyank`. Une requête qui nomme un
+paquet dont l'appelant n'est pas propriétaire est refusée en bloc, et un paquet
+sans propriétaire n'appartient à personne. `yank`, `delete` et `unlist`
 sont [destructrices](#confirmation) : elles demandent confirmation dans un
 terminal et exigent `--yes` dans un script.
 
@@ -529,61 +535,74 @@ Added user 'bob' as maintainer on internal/Serilog
 ## 8. Commandes — publish
 
 ```
-batlehub-cli publish <file> [--registry <r>] [--name <n>] [--version <v>] [--type <t>]
-                             [--distribution <d>] [--component <c>] [--platform <p>]
+batlehub-cli publish <input> [-r <r>] [--name <n>] [--version <v>]
+                             [--pom <pom.xml>] [--distribution <d>] [--component <c>] [--platform <p>]
 ```
 
-Envoie un artefact sur un registre local ou hybrid. La CLI détecte
-automatiquement le type de registre et les métadonnées du paquet à partir du
-fichier :
+Envoie un artefact vers un registre local ou hybrid. **C'est le registre qui
+décide du type** : la CLI demande au serveur ce qu'est `-r` et emprunte la route
+d'envoi de ce type ; un `.tgz` de chart Helm va donc vers Helm même si npm
+utilise la même extension. Le nom du fichier n'est lu que pour un nom et une
+version, et seulement s'il se lit comme un artefact de ce type.
 
-| Extension | Type de registre | Source des métadonnées |
-|-----------|---------------|-----------------|
-| `.nupkg` | nuget | le `.nuspec` embarqué |
-| `.whl` | pypi | le nom de fichier (`name-version-*.whl`) |
-| `.gem` | rubygems | le nom de fichier (`name-version.gem`) |
-| `.pkg.tar.{zst,xz,gz}` | pacman | le nom de fichier (`name-pkgver-pkgrel-arch.pkg.tar.*`) |
-| `.tgz` | npm | le nom de fichier (`name-version.tgz`, tel que produit par `npm pack`) |
-| `.crate` | cargo | le nom de fichier (`name-version.crate`, tel que produit par `cargo package`) |
-| `.vsix` | openvsx | le nom de fichier (`extension_id-version.vsix`) |
-| `.deb` | deb | côté serveur, depuis le fichier de contrôle du paquet — exige `--distribution` et `--component` |
-| `.rpm` | rpm | côté serveur, depuis l'en-tête du paquet |
-| `.tar.bz2` / `.conda` | conda | côté serveur, depuis l'`info/index.json` du paquet (`--platform` n'est qu'un repli) |
+| Type | Entrée | Nom et version tirés de |
+|------|--------|-------------------------|
+| nuget | `.nupkg` | le serveur, depuis le `.nuspec` embarqué |
+| pypi | wheel ou sdist | le nom du fichier |
+| rubygems | `.gem` | le serveur |
+| npm | `.tgz` | le nom du fichier (`name-version.tgz`, tel que `npm pack` l'écrit) |
+| cargo | `.crate` | le nom du fichier (`name-version.crate`) |
+| conda | `.conda`, `.tar.bz2` | le serveur, depuis `info/index.json` (`--platform` n'est qu'un repli) |
+| composer | `.zip` | le serveur, depuis `composer.json` (`--version` le remplace) |
+| openvsx, vscode-marketplace | `.vsix` | le nom du fichier (`publisher.name-version.vsix`) |
+| jetbrains-marketplace | `.zip`/`.jar` de plugin | le serveur, depuis `plugin.xml` |
+| galaxy | `.tar.gz` de collection | le serveur, depuis `MANIFEST.json` |
+| helm | `.tgz` de chart | le serveur, depuis `Chart.yaml` |
+| devfile | répertoire de stack ou `devfile.yaml` | le serveur, depuis `metadata` |
+| deb | `.deb` | le serveur — exige `--distribution` et `--component` |
+| rpm, pacman, apk | le paquet | le serveur |
+| goproxy | un répertoire de module (zippé ici), ou un `.zip` de module avec `--name <module>` | la ligne `module` de `go.mod` ; `--version v1.2.3` est obligatoire |
+| maven | un `.jar` avec `--pom`, un `.pom` seul, ou un répertoire `target/` | le `groupId`/`artifactId`/`version` du pom |
+| terraform | un `.tar.gz` de module, avec `--name <namespace>/<name>/<provider> --version` | les options |
+| terraform | un répertoire de provider contenant des `terraform-provider-<type>_<version>_<os>_<arch>.zip`, avec `--name <namespace>/<type>` | le nom des archives |
 
-Les ZIP Composer partagent l'extension générique `.zip` avec d'autres formats et
-ne sont donc pas détectés automatiquement — passez `--type composer`
-explicitement. Composer, comme conda, deb et rpm, lit le nom et la version côté
-serveur depuis `composer.json` : ni `--name` ni `--version` ne sont nécessaires
-(un `--version` facultatif remplace la version de l'archive).
+Quand un nom ou une version ne peut pas être lu et qu'aucune option ne le
+donne, `publish` sort avec le code 2 avant d'envoyer quoi que ce soit.
 
-`--type` remplace entièrement la détection automatique — utile pour les
-extensions ambiguës ou lorsqu'un fichier ne suit pas la convention de nommage
-attendue.
+- **goproxy** envoie un seul `PUT` de `{version}.zip` ; le serveur en déduit
+  `.mod` et `.info`, la publication est donc atomique. Le zip ne contient ni
+  lien symbolique, ni répertoire `vendor/` ou de gestion de versions, ni module
+  imbriqué.
+- **maven** envoie le jar, le pom et leurs fichiers `.sha1`/`.md5`, le pom en
+  dernier. Une exécution interrompue sort avec le code 7 et nomme ce qui n'a pas
+  été envoyé ; **relancez-la** : un fichier que le serveur détient déjà avec les
+  mêmes octets compte comme envoyé.
+- **terraform** envoie, pour un provider, le manifeste de version puis une
+  archive par plateforme. Une relance reprend après le manifeste de la même
+  façon, et une exécution interrompue sort avec le code 7.
+- **nix** est refusé avec la commande à lancer à la place : `nix copy --to`
+  signe et envoie une closure, qui n'est pas un fichier. Les types proxy
+  seulement (jetbrains, github, forgejo, gitlab, generic) et les miroirs
+  d'éditeur (nodedist, sdkman, rustup) n'ont rien à recevoir.
 
-Maven (fichiers jar + pom + sommes de contrôle séparés), Terraform (les providers
-exigent des fichiers de shasums et de signature ; les modules exigent une étape
-d'empaquetage) et les modules Go (qui exigent un triplet `.info` / `.mod` /
-`.zip`) ne rentrent pas, à dessein, dans le modèle à fichier unique de cette
-commande. Servez-vous de votre outillage habituel (`mvn deploy`, les conventions
-de publication du registre Terraform, `go mod`) configuré pour pointer vers
-l'endpoint BatleHub — les instructions de mise en place par registre sont dans
-[Publier des paquets](publishing.md).
+`-t/--type` est déprécié : il est comparé au type du registre et jamais suivi ;
+un `-t` en désaccord avec le registre sort donc avec le code 2.
 
 ```bash
 # NuGet
-batlehub-cli publish Serilog.3.1.1.nupkg --registry internal
+batlehub-cli publish Serilog.3.1.1.nupkg -r internal
 
-# Remplacer les métadonnées détectées
-batlehub-cli publish dist/mylib-1.2.3.tar.gz --type pypi --name mylib --version 1.2.3
+# Un module Go, depuis son répertoire
+batlehub-cli publish ./mymod -r go-local --version v0.1.0
 
-# Composer (extension .zip ambiguë — le type doit être explicite)
-batlehub-cli publish acme-widget.zip --type composer --registry internal
+# Maven, après `mvn package`
+batlehub-cli publish target/ -r maven-local
 
-# Debian (distribution et composant ne sont pas dans le nom de fichier)
-batlehub-cli publish hello_1.0-1_amd64.deb --registry internal --distribution stable --component main
+# Un répertoire de release de provider Terraform
+batlehub-cli publish dist/ -r tf-local --name acme/null
 
-# Conda (la plateforme n'est qu'un repli pour les paquets sans subdir embarqué)
-batlehub-cli publish numpy-1.26.0-py311h0.conda --registry internal --platform linux-64
+# Debian (distribution et composant ne sont pas dans le fichier)
+batlehub-cli publish hello_1.0-1_amd64.deb -r internal --distribution stable --component main
 ```
 
 ---
