@@ -656,8 +656,9 @@ link_tool gem "ruby@$RUBY_VERSION"
 link_tool ruby "ruby@$RUBY_VERSION"
 # Invariant globalization: this CDE has no libicu, and a restore needs none.
 # The real binary, not a mise shim: a shim stops resolving once HOME moves.
-DOTNET_BIN="$(mise where "dotnet@$DOTNET_VERSION" 2>/dev/null)/dotnet"
-[[ -x "$DOTNET_BIN" ]] || DOTNET_BIN="$(command -v dotnet)"
+# `|| true`: on a runner dotnet is not mise's, and `mise where` exits 1.
+DOTNET_BIN="$(mise where "dotnet@$DOTNET_VERSION" 2>/dev/null || true)/dotnet"
+[[ -x "$DOTNET_BIN" ]] || DOTNET_BIN="$(command -v dotnet || true)"
 DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 "$DOTNET_BIN" --version >/dev/null 2>&1 || heavy_fail "no working dotnet ($DOTNET_BIN)"
 printf '#!/bin/sh\nDOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 exec %q "$@"\n' "$DOTNET_BIN" > "$TOOLS_K/dotnet"
 chmod +x "$TOOLS_K/dotnet"
