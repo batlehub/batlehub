@@ -92,6 +92,8 @@ pub struct PomCoordinate {
     pub group_id: String,
     pub artifact_id: String,
     pub version: String,
+    /// `<packaging>`, `jar` when absent.
+    pub packaging: String,
 }
 
 impl PomCoordinate {
@@ -111,12 +113,19 @@ impl PomCoordinate {
     }
 }
 
-/// The project's own `groupId`/`artifactId`/`version`, with the `<parent>`'s
-/// groupId and version as Maven's inheritance fallback. Only top-level
-/// elements count: the sections that carry other coordinates are cut first.
+/// The project's own `groupId`/`artifactId`/`version`, as top-level
+/// elements only: the sections that carry other coordinates, and comments,
+/// are cut first. A coordinate inherited from `<parent>` is refused, because
+/// the registry reads the pom's own elements and nothing else — the jar would
+/// be stored and the pom then refused, leaving a version with no pom.
 pub fn pom_coordinate(pom: &str) -> Option<PomCoordinate> {
-    let parent = section(pom, "parent").unwrap_or_default();
     let mut own = pom.to_owned();
+    while let Some(start) = own.find("<!--") {
+        let end = own[start..]
+            .find("-->")
+            .map_or(own.len(), |e| start + e + 3);
+        own.replace_range(start..end, "");
+    }
     for nested in [
         "parent",
         "dependencies",
@@ -135,9 +144,9 @@ pub fn pom_coordinate(pom: &str) -> Option<PomCoordinate> {
             own.replace_range(start..end, "");
         }
     }
-    let group_id = element(&own, "groupId").or_else(|| element(&parent, "groupId"))?;
+    let group_id = element(&own, "groupId")?;
     let artifact_id = element(&own, "artifactId")?;
-    let version = element(&own, "version").or_else(|| element(&parent, "version"))?;
+    let version = element(&own, "version")?;
     // A `${…}` property is the build's to resolve; publishing it verbatim
     // would file the artifact under a literal placeholder.
     if [&group_id, &artifact_id, &version]
@@ -150,6 +159,7 @@ pub fn pom_coordinate(pom: &str) -> Option<PomCoordinate> {
         group_id,
         artifact_id,
         version,
+        packaging: element(&own, "packaging").unwrap_or_else(|| "jar".into()),
     })
 }
 
@@ -158,10 +168,6 @@ fn span(xml: &str, tag: &str) -> Option<(usize, usize)> {
     let close_tag = format!("</{tag}>");
     let close = xml[open..].find(&close_tag)? + open + close_tag.len();
     Some((open, close))
-}
-
-fn section(xml: &str, tag: &str) -> Option<String> {
-    span(xml, tag).map(|(s, e)| xml[s..e].to_owned())
 }
 
 fn element(xml: &str, tag: &str) -> Option<String> {
@@ -274,10 +280,14 @@ mod tests {
     }
 
     #[test]
-    fn a_pom_coordinate_ignores_dependencies_and_inherits_from_the_parent() {
+    fn a_pom_coordinate_ignores_dependencies_comments_and_the_parent() {
         let pom = r#"<project>
   <parent><groupId>org.parent</groupId><artifactId>p</artifactId><version>9</version></parent>
+  <groupId>org.app</groupId>
   <artifactId>app</artifactId>
+  <!-- <version>0.9</version> -->
+  <version>1.0</version>
+  <packaging>war</packaging>
   <dependencies><dependency><groupId>junit</groupId><artifactId>junit</artifactId>
     <version>4.13</version></dependency></dependencies>
 </project>"#;
@@ -285,13 +295,22 @@ mod tests {
         assert_eq!(
             c,
             PomCoordinate {
-                group_id: "org.parent".into(),
+                group_id: "org.app".into(),
                 artifact_id: "app".into(),
-                version: "9".into()
+                version: "1.0".into(),
+                packaging: "war".into(),
             }
         );
-        assert_eq!(c.dir(), "org/parent/app/9");
-        assert_eq!(c.name(), "org.parent:app");
+        assert_eq!(c.dir(), "org/app/app/1.0");
+        assert_eq!(c.name(), "org.app:app");
+
+        // Inherited from the parent: the registry would refuse the pom after
+        // the jar was stored, so the CLI refuses it before sending anything.
+        let inherited = r#"<project>
+  <parent><groupId>org.parent</groupId><artifactId>p</artifactId><version>9</version></parent>
+  <artifactId>app</artifactId>
+</project>"#;
+        assert_eq!(pom_coordinate(inherited), None);
 
         let own = "<project><groupId>g.h</groupId><artifactId>a</artifactId>\
                    <version>1.0</version></project>";

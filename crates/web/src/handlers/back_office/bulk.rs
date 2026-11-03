@@ -60,6 +60,9 @@ enum Arm {
     Owner,
 }
 
+/// The most items the owner arm takes in one request.
+const OWNER_BULK_MAX: usize = 1000;
+
 /// The instance-tier `action`, or — when the registry's kind grants `verb` to
 /// owners — explicit ownership of **every** package in `items`. Names are
 /// canonicalised in place, so the check and the action read the same string.
@@ -68,7 +71,7 @@ async fn authorize_lifecycle(
     action: batlehub_core::entities::Action,
     verb: LifecycleVerb,
     registry: &str,
-    items: &mut [(String, String)],
+    items: &mut Vec<(String, String)>,
     local_svc: &LocalRegistryService,
     hot: &batlehub_core::services::hot_config::HotConfigLock,
 ) -> Result<Arm, AppError> {
@@ -90,9 +93,19 @@ async fn authorize_lifecycle(
     if !kind.owner_verbs().contains(&verb) || items.is_empty() {
         return Err(denied);
     }
+    // Each owner item is one service call with its own checks and audit row,
+    // on a route the rate limiter does not cover: bounded, and once per item.
+    if items.len() > OWNER_BULK_MAX {
+        return Err(AppError::bad_request(format!(
+            "an owner's bulk request takes at most {OWNER_BULK_MAX} items, got {}",
+            items.len()
+        )));
+    }
     for (name, _) in items.iter_mut() {
         *name = kind.canonical_package_name(name).into_owned();
     }
+    items.sort_unstable();
+    items.dedup();
     let mut names: Vec<String> = items.iter().map(|(n, _)| n.clone()).collect();
     names.sort_unstable();
     names.dedup();

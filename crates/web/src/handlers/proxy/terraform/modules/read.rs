@@ -1,7 +1,8 @@
 use super::{
     append_signature_headers, get, proxy_stream, registry_public_base, require_registry_type,
-    terraform_versions_response, web, AppError, Arc, AuthIdentity, HttpRequest, HttpResponse,
-    LocalRegistryService, ProxyService, RegistryMap, RegistryMode, RegistryModeMap, Responder,
+    terraform_versions_response, upstream_may_answer, web, AppError, Arc, AuthIdentity,
+    HttpRequest, HttpResponse, LocalRegistryService, ProxyService, RegistryMap, RegistryMode,
+    RegistryModeMap, Responder,
 };
 use crate::handlers::schemas::{ArtifactBytes, UpstreamDocument};
 use batlehub_core::entities::Action;
@@ -291,8 +292,15 @@ pub async fn terraform_module_artifact(
         Ok(bytes) => bytes,
         // Hybrid serves the upstream's modules too, and their download answer
         // points `X-Terraform-Get` here: fall through, as the provider archive
-        // does (RFC 0040 §6.P case 7).
-        Err(batlehub_core::error::CoreError::NotFound(_)) if mode == RegistryMode::Hybrid => {
+        // does (RFC 0040 §6.P case 7). Only for a module with no local version.
+        Err(batlehub_core::error::CoreError::NotFound(_))
+            if mode == RegistryMode::Hybrid
+                && upstream_may_answer(
+                    local_svc
+                        .get_terraform_module_versions_response(&registry, &pkg_name, &identity)
+                        .await,
+                )? =>
+        {
             let pkg = batlehub_core::entities::PackageId::new(&registry, &pkg_name, &version)
                 .with_artifact("download");
             return proxy_stream(

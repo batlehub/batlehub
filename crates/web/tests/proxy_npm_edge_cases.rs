@@ -274,6 +274,8 @@ async fn access_check_returns_proxy_url_for_npm_metadata() {
     let app = make_app(InMemoryRepo::new()).await;
     let req = TestRequest::get()
         .uri("/api/v1/packages/access?registry=npm&name=lodash&version=4.17.21")
+        // Installing it asks `source:read`, granted here to users only.
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
         .to_request();
     let resp = call_service(&app, req).await;
     assert_eq!(resp.status(), 200);
@@ -288,6 +290,8 @@ async fn access_check_returns_proxy_url_for_cargo_metadata() {
     let app = make_app(InMemoryRepo::new()).await;
     let req = TestRequest::get()
         .uri("/api/v1/packages/access?registry=cargo&name=serde&version=1.0.0")
+        // Installing it asks `source:read`, granted here to users only.
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
         .to_request();
     let resp = call_service(&app, req).await;
     assert_eq!(resp.status(), 200);
@@ -303,6 +307,8 @@ async fn access_check_returns_null_proxy_url_for_unknown_registry_type() {
     // openvsx is a known registry but has no build_proxy_url branch -> returns None
     let req = TestRequest::get()
         .uri("/api/v1/packages/access?registry=openvsx&name=some.ext&version=1.0.0")
+        // Installing it asks `source:read`, granted here to users only.
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
         .to_request();
     let resp = call_service(&app, req).await;
     assert_eq!(resp.status(), 200);

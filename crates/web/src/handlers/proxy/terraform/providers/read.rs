@@ -1,9 +1,10 @@
 use super::{
     append_signature_headers, get, identity_for_artifact, mark_uncacheable_if_signed, proxy_stream,
     registry_public_base, require_registry_type, sign_download_document,
-    terraform_provider_binary_storage_key, terraform_versions_response, web, AppError, Arc,
-    AuthIdentity, DownloadCoords, HttpRequest, HttpResponse, LocalRegistryService, PackageId,
-    ProxyService, RegistryMap, RegistryMode, RegistryModeMap, Responder, TerraformPlatform,
+    terraform_provider_binary_storage_key, terraform_versions_response, upstream_may_answer, web,
+    AppError, Arc, AuthIdentity, DownloadCoords, HttpRequest, HttpResponse, LocalRegistryService,
+    PackageId, ProxyService, RegistryMap, RegistryMode, RegistryModeMap, Responder,
+    TerraformPlatform,
 };
 use crate::handlers::schemas::{ArtifactBytes, UpstreamDocument};
 use batlehub_core::entities::Action;
@@ -323,10 +324,16 @@ pub(super) async fn try_local_provider_download(
             append_signature_headers(&mut resp, local_svc, registry, name, version).await;
             Ok(Some(resp.json(json)))
         }
-        Err(batlehub_core::error::CoreError::NotFound(_)) if mode == RegistryMode::Hybrid => {
-            Ok(None)
+        Err(batlehub_core::error::CoreError::NotFound(msg)) => {
+            let listing = local_svc
+                .get_terraform_provider_versions_response(registry, name, identity)
+                .await;
+            if mode == RegistryMode::Hybrid && upstream_may_answer(listing)? {
+                Ok(None)
+            } else {
+                Err(AppError::not_found(msg))
+            }
         }
-        Err(batlehub_core::error::CoreError::NotFound(msg)) => Err(AppError::not_found(msg)),
         Err(e) => Err(AppError::from(e)),
     }
 }
@@ -530,8 +537,15 @@ pub async fn terraform_provider_artifact(
         // Hybrid serves the upstream's providers too, and their download
         // document points `download_url` here: without this fall-through no
         // upstream provider installed through a hybrid registry (found by
-        // `terraform init`, RFC 0040 §6.P case 7).
-        None if mode_map.get(&registry) == RegistryMode::Hybrid => {
+        // `terraform init`, RFC 0040 §6.P case 7). Only for a provider with no
+        // local version — a local one lacking this platform is a 404.
+        None if mode_map.get(&registry) == RegistryMode::Hybrid
+            && upstream_may_answer(
+                local_svc
+                    .get_terraform_provider_versions_response(&registry, &auth_name, &identity)
+                    .await,
+            )? =>
+        {
             proxy_stream(
                 svc,
                 pkg,

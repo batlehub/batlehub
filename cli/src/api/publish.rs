@@ -442,36 +442,85 @@ impl BatleHubClient {
             .await
     }
 
-    /// Upload Maven files in order, resuming: a `409` on a file whose stored
-    /// bytes equal the local ones is a file a previous run already sent. Each
+    /// Upload Maven files in order, resuming a previous run: a file already
+    /// stored with the same bytes is skipped, and one stored with different
+    /// bytes stops the run before it is overwritten — a rebuilt release must
+    /// not replace the jar consumers already resolved. Compared through the
+    /// `.sha1` sidecar, so a resume never downloads the artifact itself. Each
     /// file is `(repository path, bytes)`.
+    ///
+    /// Exits 7 only once something was written; a stop before that keeps the
+    /// cause's own exit (3, 4, 6…).
     pub async fn publish_maven(
         &self,
         registry: &str,
         files: &[(String, Vec<u8>)],
     ) -> Result<Vec<String>> {
         let mut sent = Vec::new();
+        let mut wrote = false;
         for (i, (path, bytes)) in files.iter().enumerate() {
             let url = format!("/proxy/{registry}/maven2/{path}");
-            match self.put_bytes(&url, bytes.clone()).await {
-                Ok(()) => {}
-                Err(e) if is_conflict(&e) && self.stored_equals(&url, bytes).await => {}
-                Err(e) => {
-                    let missing: Vec<&str> = files[i..].iter().map(|(p, _)| p.as_str()).collect();
-                    return Err(e.context(format!(
-                        "stopped at {path}; not sent: {}",
-                        missing.join(", ")
-                    )));
+            let step = match self.maven_stored(&url, bytes).await {
+                Ok(Some(true)) => Ok(()),
+                Ok(Some(false)) => Err(crate::exit::CliError::new(
+                    crate::exit::ExitCode::Conflict,
+                    format!("{path} is already published with different bytes; not overwritten"),
+                )
+                .into()),
+                Ok(None) => {
+                    wrote = true;
+                    self.put_bytes(&url, bytes.clone()).await
                 }
+                Err(e) => Err(e),
+            };
+            if let Err(e) = step {
+                let missing: Vec<&str> = files[i..].iter().map(|(p, _)| p.as_str()).collect();
+                let e = e.context(format!(
+                    "stopped at {path}; not sent: {}",
+                    missing.join(", ")
+                ));
+                if !wrote {
+                    return Err(e);
+                }
+                // Some files went, some did not: a re-run resumes (§6.3).
+                return Err(crate::exit::CliError::new(
+                    crate::exit::ExitCode::Partial,
+                    format!("{e:#}"),
+                )
+                .into());
             }
             sent.push(path.clone());
         }
         Ok(sent)
     }
 
-    async fn stored_equals(&self, path: &str, local: &[u8]) -> bool {
+    /// Whether `url` is already stored, and with these bytes: `None` when it
+    /// is not. A sidecar is compared whole; any other file by its `.sha1`.
+    async fn maven_stored(&self, url: &str, local: &[u8]) -> Result<Option<bool>> {
+        use sha1::{Digest, Sha1};
+        let (probe, expected) = if url.ends_with(".sha1") || url.ends_with(".md5") {
+            (
+                url.to_owned(),
+                String::from_utf8_lossy(local).trim().to_owned(),
+            )
+        } else {
+            (format!("{url}.sha1"), hex::encode(Sha1::digest(local)))
+        };
         let mut stored = Vec::new();
-        self.download_to(path, &mut stored).await.is_ok() && stored == local
+        match self.download_to(&probe, &mut stored).await {
+            // A sidecar may carry ` <file name>` after the digest.
+            Ok(_) => Ok(Some(
+                String::from_utf8_lossy(&stored).split_whitespace().next()
+                    == Some(expected.as_str()),
+            )),
+            Err(e)
+                if e.downcast_ref::<crate::exit::ApiError>()
+                    .is_some_and(|a| a.status == 404) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn publish_terraform_module(
@@ -536,7 +585,14 @@ impl BatleHubClient {
                     .iter()
                     .map(|p| format!("{}_{}", p.os, p.arch))
                     .collect();
-                return Err(e.context(format!("not sent: {}", missing.join(", "))));
+                // The manifest is there, the archives are not all: a re-run
+                // resumes (§6.3). A stop before this keeps its own exit.
+                let e = e.context(format!("not sent: {}", missing.join(", ")));
+                return Err(crate::exit::CliError::new(
+                    crate::exit::ExitCode::Partial,
+                    format!("{e:#}"),
+                )
+                .into());
             }
         }
         Ok(())
@@ -583,13 +639,6 @@ fn file_part(path: &Path, bytes: Vec<u8>) -> Result<reqwest::multipart::Part> {
     Ok(reqwest::multipart::Part::bytes(bytes)
         .file_name(name)
         .mime_str("application/octet-stream")?)
-}
-
-fn is_conflict(e: &anyhow::Error) -> bool {
-    e.chain().any(|c| {
-        c.downcast_ref::<crate::exit::ApiError>()
-            .is_some_and(|a| a.status == 409)
-    })
 }
 
 /// `{path}`, `{path}.sha1`, `{path}.md5` — the sidecars Maven clients ask for.

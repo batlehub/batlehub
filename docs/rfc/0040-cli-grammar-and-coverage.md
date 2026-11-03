@@ -1727,7 +1727,10 @@ row names has landed; a partial phase lists what is still open.
   `404` for an upstream provider's archive and module tarball: both artifact
   routes read local storage only, while the download documents point at them
   for every version — no upstream provider installed through a hybrid
-  registry. Fixed: they fall through to the proxy on a local miss.
+  registry. Fixed: they fall through to the proxy for a name with no local
+  version. The first fix fell through on *any* local miss, which served an
+  upstream binary under a locally published name lacking that platform —
+  dependency confusion, caught in review before merge.
   (2) `X-Terraform-Get` named `…/artifact` with no format, so go-getter parsed
   the gzip as an HTML page ("XML syntax error … U+001F") — no published module
   installed, in any mode. Fixed for a version published here

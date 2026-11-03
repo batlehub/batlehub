@@ -289,3 +289,92 @@ async fn a_registry_opened_by_grants_alone_is_visible() {
     // Still no oracle: an unknown name in the same registry is a 404.
     assert_eq!(ask(&app, "never-published", USER_TOKEN).await.0, 404);
 }
+
+/// A beta-channel version is as invisible to `why` as it is to the download:
+/// a refusal would confirm to a non-member that the pre-release exists.
+#[actix_web::test]
+async fn a_beta_version_is_not_found_for_a_non_member() {
+    use batlehub_core::ports::BetaChannelPort;
+    let (app, parts) = app().await;
+    let resp = call_service(
+        &app,
+        TestRequest::put()
+            .uri(&format!("/proxy/{REG}/api/v1/crates/new"))
+            .insert_header(("Authorization", bearer(ADMIN_TOKEN)))
+            .set_payload(make_publish_payload("beta", "0.2.0-beta.1"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let beta: std::sync::Arc<dyn BetaChannelPort> =
+        batlehub_adapters::in_memory::InMemoryBetaChannelStore::new();
+    parts
+        .proxy_svc
+        .hot
+        .write()
+        .await
+        .beta_channel
+        .insert(REG.to_owned(), beta);
+
+    let resp = call_service(
+        &app,
+        TestRequest::get()
+            .uri(&format!(
+                "/api/v1/packages/access?registry={REG}&name=beta&version=0.2.0-beta.1"
+            ))
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 404);
+}
+
+/// A crate download asks `source:read`: a caller granted only `releases:read`
+/// is refused it, so `why` must not call the crate pullable.
+#[actix_web::test]
+async fn why_judges_the_action_the_download_asks() {
+    use batlehub_core::entities::{
+        Action, GrantMap, Node, RegistryGrants, RegistryKind, SubjectMatcher, Tier,
+    };
+    let (app, parts) = app().await;
+    publish(&app, "src-only").await;
+    *parts.access_config.write().await = access_config(&[], &[]).read().await.clone();
+    parts.proxy_svc.hot.write().await.grants = [(
+        REG.to_owned(),
+        std::sync::Arc::new(RegistryGrants {
+            kind: RegistryKind::Cargo,
+            registry: Node::new(
+                Tier::Registry,
+                format!("registry:{REG}"),
+                Some(GrantMap::new().grant(
+                    SubjectMatcher::Anyone,
+                    vec![Action::ReleasesRead, Action::ReleasesList],
+                )),
+            ),
+            namespaces: Vec::new(),
+        }),
+    )]
+    .into();
+
+    assert_ne!(download(&app, "src-only", USER_TOKEN).await, 200);
+    let (status, body, _) = ask(&app, "src-only", USER_TOKEN).await;
+    assert_ne!(body["headline"], "pullable", "{status} {body}");
+}
+
+/// Resolution checks visibility before reading anything: an anonymous caller
+/// on a registry closed to it gets the not-found an unknown name gets.
+#[actix_web::test]
+async fn resolution_on_a_closed_registry_is_not_found_for_anonymous() {
+    let (app, _) = app().await;
+    publish(&app, "closed").await;
+    let resp = call_service(
+        &app,
+        TestRequest::get()
+            .uri(&format!(
+                "/api/v1/packages/access?registry={REG}&name=closed"
+            ))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 404);
+}

@@ -1010,6 +1010,15 @@ async fn handle_audit_trail(
 
 async fn handle_audit_log(client: &BatleHubClient, json: bool, args: AuditLogArgs) -> Result<()> {
     if let Some(before) = args.purge_before {
+        // The server's purge has no registry filter: a `-r` here would read
+        // as "this registry's rows" and delete every registry's.
+        if let Some(registry) = &args.registry {
+            return Err(CliError::new(
+                ExitCode::Usage,
+                format!("the purge covers every registry; -r {registry} cannot narrow it"),
+            )
+            .into());
+        }
         confirm(
             "purge",
             &[format!("every audit-log row older than {before}")],

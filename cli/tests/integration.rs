@@ -1867,6 +1867,27 @@ fn admin_purge_audit_log() {
     assert_eq!(body["deleted"], 0, "stdout: {stdout}");
 }
 
+/// The purge has no registry filter: `-r` is refused, never ignored.
+#[test]
+fn audit_purge_refuses_a_registry() {
+    let srv = TestServer::start();
+    let (code, _, stderr) = cli_exit(
+        &[
+            "audit",
+            "purge",
+            "--before",
+            "2026-01-01T00:00:00Z",
+            "-r",
+            "npm",
+            "--yes",
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 2, "{stderr}");
+    assert!(stderr.contains("every registry"), "{stderr}");
+}
+
 #[test]
 fn admin_purge_audit_log_table_mode() {
     let srv = TestServer::start();
@@ -5387,6 +5408,32 @@ fn maven_publish() {
 
     let (code, _, stderr) = cli_exit(&args, &srv.base_url(), AUTH_TOKEN);
     assert_eq!(code, 0, "a re-run resumes: {stderr}");
+
+    // A rebuilt jar is not a resume: it stops before overwriting the release.
+    std::fs::write(&jar, b"PK-rebuilt").unwrap();
+    let (code, _, stderr) = cli_exit(&args, &srv.base_url(), AUTH_TOKEN);
+    assert_eq!(code, 6, "{stderr}");
+    let (_, body) = http_get(&format!("{base}/app-1.0.0.jar"));
+    assert_eq!(body, "PK-not-really-a-jar");
+
+    // A classifier keeps its own name rather than taking the main jar's slot.
+    let sources = tmp.path().join("app-1.0.0-sources.jar");
+    std::fs::write(&sources, b"PK-sources").unwrap();
+    let mut with_sources = args;
+    with_sources[1] = sources.to_str().unwrap();
+    let (code, _, stderr) = cli_exit(&with_sources, &srv.base_url(), AUTH_TOKEN);
+    assert_eq!(code, 0, "{stderr}");
+    let (status, body) = http_get(&format!("{base}/app-1.0.0-sources.jar"));
+    assert_eq!((status, body.as_str()), (200, "PK-sources"));
+    let (_, body) = http_get(&format!("{base}/app-1.0.0.jar"));
+    assert_eq!(body, "PK-not-really-a-jar");
+
+    // A file not named for the pom is refused before anything is sent.
+    let other = tmp.path().join("other.jar");
+    std::fs::write(&other, b"PK").unwrap();
+    with_sources[1] = other.to_str().unwrap();
+    let (code, _, _) = cli_exit(&with_sources, &srv.base_url(), AUTH_TOKEN);
+    assert_eq!(code, 2);
 }
 
 /// A module tarball, and a provider directory of per-platform archives.

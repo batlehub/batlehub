@@ -67,6 +67,49 @@ async fn go_publish_user_can_publish() {
     assert_eq!(body["ok"], true);
 }
 
+/// An upper-case path is stored under the case encoding Go clients ask for,
+/// whether it was uploaded raw or already encoded.
+#[actix_web::test]
+async fn go_publish_upper_case_module_is_served_under_its_escaped_path() {
+    let app = make_local_go_app(RegistryMode::Local).await;
+    for (uri, version) in [
+        (
+            "/proxy/local-go/github.com/Acme/Lib/@v/v1.0.0.zip",
+            "v1.0.0",
+        ),
+        (
+            "/proxy/local-go/github.com/!acme/!lib/@v/v1.1.0.zip",
+            "v1.1.0",
+        ),
+    ] {
+        let req = TestRequest::put()
+            .uri(uri)
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .set_payload(make_go_module_zip("github.com/Acme/Lib", version))
+            .to_request();
+        assert!(call_service(&app, req).await.status().is_success(), "{uri}");
+    }
+    let req = TestRequest::get()
+        .uri("/proxy/local-go/github.com/!acme/!lib/@v/list")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+    let body = read_body(resp).await;
+    let list = std::str::from_utf8(&body).unwrap();
+    assert!(list.contains("v1.0.0") && list.contains("v1.1.0"), "{list}");
+
+    let req = TestRequest::get()
+        .uri("/proxy/local-go/github.com/!acme/!lib/@v/v1.0.0.mod")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    let body = read_body(call_service(&app, req).await).await;
+    assert_eq!(
+        std::str::from_utf8(&body).unwrap(),
+        "module github.com/Acme/Lib\n\ngo 1.21\n"
+    );
+}
+
 #[actix_web::test]
 async fn go_publish_duplicate_version_returns_409() {
     let app = make_local_go_app(RegistryMode::Local).await;

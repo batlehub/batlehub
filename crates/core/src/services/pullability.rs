@@ -18,8 +18,8 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::entities::{
-    Action, Identity, PackageId, PackageMetadata, PublishedPackage, ReasonCode, Role, Verdict,
-    VerdictState,
+    Action, Identity, PackageId, PackageMetadata, PublishedPackage, ReasonCode, RegistryKind, Role,
+    Verdict, VerdictState,
 };
 use crate::error::CoreError;
 use crate::rules::{RuleContext, RuleDecision};
@@ -127,7 +127,12 @@ impl PullabilityService {
         scope: Scope,
     ) -> Result<Answer, CoreError> {
         let started = std::time::Instant::now();
-        let answer = scoped(self.explain_inner(identity, package, scope)).await;
+        let kind = self.kind_of(&package.registry).await;
+        let mut package = package.clone();
+        if let Some(kind) = kind {
+            package.name = kind.canonical_package_name(&package.name).into_owned();
+        }
+        let answer = scoped(self.explain_inner(identity, &package, kind, scope)).await;
         let headline = match &answer {
             Ok(Answer::Found(p)) => match p.headline {
                 Headline::Pullable => "pullable",
@@ -144,27 +149,47 @@ impl PullabilityService {
         answer
     }
 
+    /// The registry's kind, from the live configuration.
+    async fn kind_of(&self, registry: &str) -> Option<RegistryKind> {
+        self.local
+            .hot
+            .read()
+            .await
+            .registries
+            .get(registry)
+            .and_then(|c| c.registry_type().parse().ok())
+    }
+
     async fn explain_inner(
         &self,
         identity: &Identity,
         package: &PackageId,
+        kind: Option<RegistryKind>,
         scope: Scope,
     ) -> Result<Answer, CoreError> {
         let registry_visible = scope.visible;
         let (registry, name, version) = (&package.registry, &package.name, &package.version);
+        let action = download_action(kind);
         // ── 1. Visibility: the registry, the grant chain, the package ────────
         if !registry_visible
             || crate::services::authz::authorize_grants_public(
                 &self.local.hot,
                 package,
                 identity,
-                Action::ReleasesRead,
+                action,
             )
             .await
             .is_err()
             || self
                 .local
                 .check_visibility(registry, name, identity)
+                .await
+                .is_err()
+            // A beta-channel version is invisible to a non-member, as the
+            // download makes it: refused, it would confirm the version exists.
+            || self
+                .local
+                .check_prerelease_access(registry, version, identity)
                 .await
                 .is_err()
         {
@@ -196,7 +221,7 @@ impl PullabilityService {
                 let req = ProxyRequest {
                     package_id: package.clone(),
                     identity: identity.clone(),
-                    action: Action::ReleasesRead,
+                    action,
                     ip_address: None,
                     user_agent: None,
                 };
@@ -264,7 +289,7 @@ impl PullabilityService {
         let ctx = RuleContext {
             identity,
             package: &metadata,
-            action: Action::ReleasesRead,
+            action,
             cache_entry: None,
             requested_version: Some(version),
         };
@@ -322,6 +347,22 @@ impl PullabilityService {
         name: &str,
         scope: Scope,
     ) -> Result<Option<Resolution>, CoreError> {
+        let kind = self.kind_of(registry).await;
+        let name = &kind.map_or_else(
+            || name.to_owned(),
+            |k| k.canonical_package_name(name).into_owned(),
+        );
+        // Nothing reaches the upstream for a caller who may not see the
+        // package: an anonymous `why` on a closed registry asked it anyway.
+        if !scope.visible
+            || self
+                .local
+                .check_visibility(registry, name, identity)
+                .await
+                .is_err()
+        {
+            return Ok(None);
+        }
         // (version, published_at, prerelease), from the local rows and the
         // upstream's own list — the console's discovery read, which asks
         // nothing when the registry turns it off.
@@ -332,11 +373,14 @@ impl PullabilityService {
             .await?
             .into_iter()
             .map(|p| {
-                let pre = p.version.contains('-');
+                let pre = crate::services::version_order::is_prerelease(&p.version);
                 (p.version, Some(p.published_at), pre)
             })
             .collect();
-        let upstream = if scope.falls_through {
+        // A name held here is never asked of the upstream: that would send an
+        // internal package's name to a public registry, which the console's
+        // own discovery read refuses to do.
+        let upstream = if scope.falls_through && candidates.is_empty() {
             scoped(self.proxy.upstream_detail(registry, name, identity)).await
         } else {
             Ok(None)
@@ -348,12 +392,17 @@ impl PullabilityService {
                 }
             }
         }
-        candidates.sort_by_key(|c| std::cmp::Reverse(c.1));
+        // Newest first by date, then by version: most upstreams date nothing
+        // (cargo, maven), and their lists run oldest first.
+        candidates.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| crate::services::version_order::newest_first(&a.0, &b.0))
+        });
         candidates.truncate(RESOLUTION_DEPTH);
         let mut versions = Vec::new();
         let mut resolved = None;
         for (version, _, prerelease) in candidates {
-            let id = PackageId::new(registry, name, &version);
+            let id = PackageId::new(registry, name.as_str(), &version);
             match self.explain(identity, &id, scope).await? {
                 Answer::NotFound => continue,
                 Answer::Found(p) => {
@@ -371,6 +420,23 @@ impl PullabilityService {
             resolved_version: resolved,
             versions,
         }))
+    }
+}
+
+/// The action the kind's download is authorised as: the tarball, crate,
+/// module zip or extension *is* the source on these, so their handlers ask
+/// `source:read`, and a `why` asking `releases:read` answered for a download
+/// that is refused.
+fn download_action(kind: Option<RegistryKind>) -> Action {
+    match kind {
+        Some(
+            RegistryKind::Npm
+            | RegistryKind::Cargo
+            | RegistryKind::Goproxy
+            | RegistryKind::Openvsx
+            | RegistryKind::VscodeMarketplace,
+        ) => Action::SourceRead,
+        _ => Action::ReleasesRead,
     }
 }
 
@@ -425,6 +491,18 @@ fn rule_cause(
     is_admin: bool,
 ) -> Option<Cause> {
     if rule == "verdict_gate" {
+        // A refusal that left no verdict is the gate failing closed (the
+        // verdict store is down): the download is refused, so `why` says so.
+        if let (None, RuleDecision::Deny { reason }) = (verdict, decision) {
+            return Some(Cause {
+                kind: "verdict".into(),
+                state: CauseState::Refuse,
+                reason_code: None,
+                until: None,
+                detail: reason.clone(),
+                next: Some("retry later; the security verdict could not be read".into()),
+            });
+        }
         return Some(verdict_cause(verdict));
     }
     let RuleDecision::Deny { reason } = decision else {

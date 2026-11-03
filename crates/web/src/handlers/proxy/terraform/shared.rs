@@ -438,6 +438,26 @@ pub async fn terraform_versions_response(
     .await
 }
 
+/// Whether a hybrid registry may answer `name` from its upstream, given the
+/// local versions listing of that name.
+///
+/// Only a name with no local version at all falls through. Once a provider or
+/// module is published here, the upstream's package of the same name is never
+/// served for it — not for a version, nor a platform, the local one lacks —
+/// or anyone able to publish upstream could plant a binary under an internal
+/// name (dependency confusion). The listing already answers local-only in that
+/// case; this keeps the download document and the artifact in step with it.
+/// A withheld or blocked name is an error, not a fall-through.
+pub fn upstream_may_answer(
+    local_listing: Result<serde_json::Value, batlehub_core::error::CoreError>,
+) -> Result<bool, AppError> {
+    match local_listing {
+        Ok(_) => Ok(false),
+        Err(batlehub_core::error::CoreError::NotFound(_)) => Ok(true),
+        Err(e) => Err(AppError::from(e)),
+    }
+}
+
 /// Each Terraform coordinate part is one path segment of the package name and
 /// storage key. `web::Path` decodes `%2F`, and `validate_path_safe` allows an
 /// interior `/`, so without this a `namespace` of `hashicorp%2Faws` re-cuts the

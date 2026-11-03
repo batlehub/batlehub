@@ -108,8 +108,15 @@ async fn packages_list_shows_packages_after_access() {
 #[actix_web::test]
 async fn access_check_returns_true_for_available_package() {
     let app = make_app(InMemoryRepo::new()).await;
+    // An npm download asks `source:read`, which this fixture grants users and
+    // not anonymous callers: `why` agrees with the download for both.
     let req = TestRequest::get()
         .uri("/api/v1/packages/access?registry=npm&name=lodash&version=4.17.21")
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 404);
+    let req = TestRequest::get()
+        .uri("/api/v1/packages/access?registry=npm&name=lodash&version=4.17.21")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
         .to_request();
     let resp = call_service(&app, req).await;
     assert_eq!(resp.status(), 200);
@@ -136,13 +143,14 @@ async fn access_check_returns_false_for_blocked_package() {
     let app = make_app(repo).await;
     let req = TestRequest::get()
         .uri("/api/v1/packages/access?registry=npm&name=evil-pkg&version=1.0.0")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
         .to_request();
     let resp = call_service(&app, req).await;
     assert_eq!(resp.status(), 200);
     let body: Value = read_body_json(resp).await;
     assert_eq!(body["can_access"], false);
     assert_eq!(body["headline"], "refused");
-    // RFC 0040 T2: the administrator's note is theirs; an anonymous caller
+    // RFC 0040 T2: the administrator's note is theirs; a non-admin caller
     // learns that it is a block, and its code, not why.
     assert_eq!(body["reason"], "blocked by an administrator");
     let block = body["causes"]

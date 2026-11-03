@@ -115,6 +115,10 @@ impl ProxyService {
                     }
                 }
                 metrics::counter!("batlehub_upstream_errors_total", "registry" => Arc::clone(registry_label)).increment(1);
+                // A pullability answer writes nothing the download would.
+                if crate::services::pullability::evaluate_only() {
+                    return Err(e);
+                }
                 super::warn_if_audit_failed(
                     self.repo
                         .record_access(

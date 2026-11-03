@@ -1799,6 +1799,35 @@ async fn an_owner_yanks_and_unyanks_their_own_crate_in_bulk() {
     assert!(!crate_yanked(&app, "mine-aa").await);
 }
 
+/// The owner arm is bounded and runs each item once: a duplicate is not a
+/// second service call, and an oversized request is refused before any.
+#[actix_web::test]
+async fn the_owner_arm_dedupes_and_caps_its_items() {
+    let (app, _ownership, _grants) = make_local_cargo_ownership_app(RegistryMode::Local).await;
+    publish_crate(&app, USER_TOKEN, "mine-cc").await;
+
+    let resp = call_service(
+        &app,
+        TestRequest::post()
+            .uri("/api/v1/admin/registries/local-cargo/bulk-yank")
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .set_json(serde_json::json!({ "packages": [
+                {"name": "mine-cc", "version": "0.1.0"},
+                {"name": "mine-cc", "version": "0.1.0"},
+            ]}))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body: Value = read_body_json(resp).await;
+    assert_eq!(body["processed"], 1, "{body}");
+    assert_eq!(body["failed"].as_array().map(Vec::len), Some(0), "{body}");
+
+    let many = vec!["mine-cc"; 1001];
+    assert_eq!(bulk(&app, USER_TOKEN, "unyank", &many).await, 400);
+    assert!(crate_yanked(&app, "mine-cc").await);
+}
+
 /// T4: a request naming one owned and one foreign crate is refused whole, and
 /// neither is touched; T4b: a crate nobody owns is not the caller's either —
 /// ownership is never vacuously true.

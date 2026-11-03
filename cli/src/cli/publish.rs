@@ -198,10 +198,7 @@ pub async fn run(
         }
         RegistryKind::Maven => {
             let (coord, files) = maven_files(&args)?;
-            client.publish_maven(&registry, &files).await.map_err(|e| {
-                // Some files went, some did not: a re-run resumes (§6.3).
-                anyhow::Error::new(CliError::new(ExitCode::Partial, format!("{e:#}")))
-            })?;
+            client.publish_maven(&registry, &files).await?;
             published = (Some(coord.name()), Some(coord.version));
         }
         RegistryKind::Terraform => {
@@ -215,10 +212,7 @@ pub async fn run(
                 let (v, platforms) = provider_platforms(&args.file)?;
                 client
                     .publish_terraform_provider(&registry, &ns_type, &v, &platforms)
-                    .await
-                    .map_err(|e| {
-                        anyhow::Error::new(CliError::new(ExitCode::Partial, format!("{e:#}")))
-                    })?;
+                    .await?;
                 published = (Some(format!("providers/{ns_type}")), Some(v));
             } else {
                 let coordinate = need("name", &args.name)?;
@@ -270,18 +264,29 @@ type MavenUpload = (
     Vec<(String, Vec<u8>)>,
 );
 
+/// The main artifact's extension for a `<packaging>`: Maven's own mapping
+/// for the packagings that do not name their extension.
+fn maven_extension(packaging: &str) -> &str {
+    match packaging {
+        "maven-plugin" | "ejb" | "bundle" | "pom" => "jar",
+        other => other,
+    }
+}
+
 fn maven_files(args: &PublishArgs) -> Result<MavenUpload> {
     let input = &args.file;
     let is_pom = input.extension().is_some_and(|e| e == "pom");
     let pom_path = match (&args.pom, input.is_dir(), is_pom) {
         (Some(p), _, _) => p.clone(),
         (None, _, true) => input.clone(),
+        // The directory's own pom first (a module), then the one above it
+        // (`target/`): the other way round, a module read its aggregator's.
         (None, true, _) => {
-            let beside = input.join("..").join("pom.xml");
-            if beside.exists() {
-                beside
+            let own = input.join("pom.xml");
+            if own.exists() {
+                own
             } else {
-                input.join("pom.xml")
+                input.join("..").join("pom.xml")
             }
         }
         (None, false, false) => return Err(usage("a jar publishes with --pom <pom.xml>")),
@@ -290,25 +295,50 @@ fn maven_files(args: &PublishArgs) -> Result<MavenUpload> {
         .with_context(|| format!("reading {}", pom_path.display()))?;
     let coord = pom_coordinate(&pom).ok_or_else(|| {
         usage(format!(
-            "{} names no literal groupId/artifactId/version (a `${{…}}` property is the \
-             build's to resolve)",
+            "{} names no literal groupId/artifactId/version of its own (a `${{…}}` property is \
+             the build's to resolve, and one inherited from <parent> is not read by the registry)",
             pom_path.display()
         ))
     })?;
-    let base = format!("{}/{}-{}", coord.dir(), coord.artifact_id, coord.version);
-    let jar = if input.is_dir() {
-        let j = input.join(format!("{}-{}.jar", coord.artifact_id, coord.version));
-        j.exists().then_some(j)
+    let stem = format!("{}-{}", coord.artifact_id, coord.version);
+    // An artifact keeps its own file name, so a `-sources.jar` or a `.war`
+    // lands beside the main jar rather than in its place.
+    let artifact = if input.is_dir() {
+        let main = format!("{stem}.{}", maven_extension(&coord.packaging));
+        let found = [input.join(&main), input.join("target").join(&main)]
+            .into_iter()
+            .find(|p| p.exists());
+        if found.is_none() && coord.packaging != "pom" {
+            return Err(usage(format!(
+                "no {main} in {} or its target/: build it first, or name the file",
+                input.display()
+            )));
+        }
+        found
     } else {
         (!is_pom).then(|| input.clone())
     };
     let mut files = Vec::new();
-    if let Some(jar) = jar {
+    if let Some(path) = artifact {
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let named_for_the_pom = file_name
+            .strip_prefix(&stem)
+            .is_some_and(|rest| rest.starts_with('.') || rest.starts_with('-'));
+        if !named_for_the_pom {
+            return Err(usage(format!(
+                "{file_name} is not named {stem}[-classifier].<ext>, as `mvn package` writes it \
+                 for this pom"
+            )));
+        }
         files.extend(with_maven_checksums(
-            &format!("{base}.jar"),
-            std::fs::read(&jar)?,
+            &format!("{}/{file_name}", coord.dir()),
+            std::fs::read(&path)?,
         ));
     }
+    let base = format!("{}/{stem}", coord.dir());
     let mut pom_files = with_maven_checksums(&format!("{base}.pom"), pom.into_bytes());
     // Sidecars first, the pom itself last.
     pom_files.rotate_left(1);

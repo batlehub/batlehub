@@ -160,11 +160,19 @@ spellings*.
 
 ### Fixed
 
-- **A hybrid terraform registry serves its upstream's providers and modules.**
-  The download documents point at this instance's artifact routes for
-  every version, but those routes read local storage only, so `terraform init`
-  got a `404` for any upstream provider archive or module tarball. They now
-  fall through to the upstream on a local miss.
+- **A hybrid terraform registry serves its upstream's providers.** The download
+  documents point at this instance's artifact routes for every version, but
+  those routes read local storage only, so `terraform init` got a `404` for any
+  upstream provider archive. They now fall through to the upstream, for a name
+  with no local version only: a provider or module published here is never
+  completed from the upstream, whatever platform or version it lacks. An
+  upstream *module* reaches its tarball the same way, but Terraform still
+  cannot install it, because its archive format is not named in the URL.
+- **A Go module whose path has an upper-case letter is served after a
+  publish.** The upload was stored under the path as typed (`Acme`), and every
+  Go client asks for the case-encoded one (`!acme`); in a hybrid registry the
+  public module of that name answered instead. Both spellings are now stored
+  under the encoded path.
 - **A terraform module published here installs.** `X-Terraform-Get` named the
   archive route without a format, and Terraform parsed the tarball as an HTML
   page ("XML syntax error"). It now carries `?archive=tar.gz` for a version

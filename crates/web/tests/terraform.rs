@@ -843,6 +843,53 @@ async fn terraform_module_artifact_hybrid_falls_through_to_proxy() {
     assert_eq!(resp.status(), 400);
 }
 
+/// A provider published here is never completed from the upstream: a platform
+/// or version the local one lacks is a 404, or anyone able to publish upstream
+/// could plant a binary under an internal name (dependency confusion). The
+/// proxy would answer 400 in this app, so 404 proves no fall-through.
+#[actix_web::test]
+async fn terraform_provider_hybrid_local_name_never_falls_through() {
+    let app = make_local_terraform_app(RegistryMode::Hybrid).await;
+    let req = TestRequest::post()
+        .uri("/proxy/local-tf/v1/providers/hashicorp/aws/versions")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .insert_header(("Content-Type", "application/json"))
+        .set_payload(PROVIDER_MANIFEST)
+        .to_request();
+    assert!(call_service(&app, req).await.status().is_success());
+
+    for uri in [
+        "/proxy/local-tf/v1/providers/hashicorp/aws/5.0.0/artifact/linux/arm64",
+        "/proxy/local-tf/v1/providers/hashicorp/aws/9.9.9/artifact/linux/amd64",
+        "/proxy/local-tf/v1/providers/hashicorp/aws/5.0.0/download/linux/arm64",
+        "/proxy/local-tf/v1/providers/hashicorp/aws/9.9.9/download/linux/amd64",
+    ] {
+        let req = TestRequest::get()
+            .uri(uri)
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .to_request();
+        assert_eq!(call_service(&app, req).await.status(), 404, "{uri}");
+    }
+}
+
+/// The module equivalent: a version the local module lacks is a 404.
+#[actix_web::test]
+async fn terraform_module_hybrid_local_name_never_falls_through() {
+    let app = make_local_terraform_app(RegistryMode::Hybrid).await;
+    let req = TestRequest::post()
+        .uri("/proxy/local-tf/v1/modules/hashicorp/consul/aws/0.1.0")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_payload(b"tarball".as_slice())
+        .to_request();
+    assert!(call_service(&app, req).await.status().is_success());
+
+    let req = TestRequest::get()
+        .uri("/proxy/local-tf/v1/modules/hashicorp/consul/aws/9.9.9/artifact")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 404);
+}
+
 /// And local mode keeps its 404 for the same module.
 #[actix_web::test]
 async fn terraform_module_artifact_local_unknown_returns_404() {
