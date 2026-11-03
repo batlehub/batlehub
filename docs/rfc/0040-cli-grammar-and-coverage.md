@@ -1645,8 +1645,8 @@ row names has landed; a partial phase lists what is still open.
 | 1 | done | `ac8e4fca` | This RFC, accepted |
 | 2 | done | `4f23b2ce` | `cli/src/{exit,coordinate,render,confirm}.rs`; the exit-code table, the error shape (`error:`/`code:`/`hint:`, JSON copy on stdout), global `--format`/`BATLEHUB_FORMAT`/`-y`; `-r` honoured by every registry filter; destructive commands confirm; `setup` 3 → 6, `wait` 1/2 → 4/8, `mise` partial → 7; `quarantine.sh` and `client_setup.sh` edited |
 | 3 | done | `6d7ac4aa` | The §4.4 tree (`admin` dissolved), `package <verb> <coord>…`, coordinates on `owner`/`visibility`/`grant`/`sbom show`/`authz check`, `profile` with `current`; every old spelling a hidden alias that warns; `--registry-url`; the server hint reads `batlehub-cli why reg/name@ver` |
-| 4 | in progress | `f08b58d5`, `36180a88`, `c59d4b7d`, + the coverage commit | §6.4 owner arm; §6.3 publish by kind with the nine uploaders; §6.5 `package versions` with upstream and `download <coord>`; §6.5 `setup` for conda, composer, gem, nuget, terraform, galaxy, nix, sdkman, gitlab (mise), helm (`manual`) and the print arms, plus detection of galaxy/helm/nix/devfile projects; §6.6 `cli/src/coverage.rs`, its gate and `task docs:cli-matrix`. **Open:** heavy cases 1–7, 11, 13 |
-| 5 | done | + the pullability commit | `services/pullability.rs` (`explain`, `explain_resolution`); `evaluate_chain_all`; the extended `packages/access` (404 for not visible, `version` optional); migration 063 and `reason_code` written by both funnels; `me/downloads?outcome=denied`; `why <coord>`, `why <name>`, `why --last`; `download`'s refusal prints `why`; the console's access page renders causes. heavy cases 8–10 (`quarantine.sh`) and 12 (`authz.sh npm`); `package show`; `/api/v1/registries` lists a registry read without being installable (`installable: false`) |
+| 4 | in progress | `f08b58d5`, `36180a88`, `c59d4b7d`, `b38c05e7`, + the heavy setup commit | §6.4 owner arm; §6.3 publish by kind with the nine uploaders; §6.5 `package versions` with upstream and `download <coord>`; §6.5 `setup` for conda, composer, gem, nuget, terraform, galaxy, nix, sdkman, gitlab (mise), helm (`manual`) and the print arms, plus detection of galaxy/helm/nix/devfile projects; §6.6 `cli/src/coverage.rs`, its gate and `task docs:cli-matrix`. heavy cases 1–3 (`client_setup.sh` 10–12). **Open:** heavy cases 4–7, 11, 13 |
+| 5 | done | `476e7c29` | `services/pullability.rs` (`explain`, `explain_resolution`); `evaluate_chain_all`; the extended `packages/access` (404 for not visible, `version` optional); migration 063 and `reason_code` written by both funnels; `me/downloads?outcome=denied`; `why <coord>`, `why <name>`, `why --last`; `download`'s refusal prints `why`; the console's access page renders causes. heavy cases 8–10 (`quarantine.sh`) and 12 (`authz.sh npm`); `package show`; `/api/v1/registries` lists a registry read without being installable (`installable: false`) |
 | 6 | not started | — | |
 | 7 | not started | — | |
 | 8 | not started | — | |
@@ -1705,10 +1705,26 @@ row names has landed; a partial phase lists what is still open.
   §6.6 says.
 - **`setup` deviations.** Composer's `auth.json` is not written (anonymous
   reads only), there is no terraform `host` block, and the nix public key is not
-  written (the registry list does not carry it). conda accepting `nodefaults`,
-  NuGet following `DOTNET_CLI_HOME`, ansible refusing a duplicate section and
-  the precedence of `NIX_CONFIG` were not checked against the clients' source.
-  Heavy case 1 is where they get proven.
+  written (the registry list does not carry it). Heavy case 1 proved micromamba
+  reading `nodefaults` from `~/.condarc`, `dotnet restore` reading
+  `~/.nuget/NuGet/NuGet.Config`, composer its XDG `config.json`, terraform the
+  network mirror in `~/.terraformrc`, ansible-galaxy `~/.ansible.cfg` and gem
+  `~/.gemrc`, each installing cold with egress denied. `DOTNET_CLI_HOME`,
+  ansible refusing a duplicate section and the precedence of `NIX_CONFIG` are
+  still unchecked against the clients' source.
+- **Heavy cases 1–3 are `client_setup.sh` 10–12, and differ in four places.**
+  *nix is not driven*: no runner has it, and a rootless `nix build` against a
+  substituter needs the daemon's `trusted-users` (the note `setup` prints).
+  *helm exits 6, then 0*: `manual` is a command still to run, so the first
+  `apply` exits 6 for helm alone; once the two printed commands have run,
+  `apply` finds the repository in place and exits 0. *Over a TLS tap*:
+  composer and terraform refuse a plain-HTTP instance, so the case reaches it
+  as `https://127.0.0.1` with a CA of the run's own (rustls refuses a
+  self-signed certificate as the server's: `CaUsedAsEndEntity`). *deb is a
+  Debian upstream*: the printed line names the suite `stable`, which an
+  Ubuntu archive does not have, so case 2 points at `deb.debian.org` and fetches
+  its keyring; the `stable` in the print arm is still a guess for any other
+  upstream.
 - **No `VerdictService::peek`, no `rules::evaluate_all`.** Evaluate-only is a
   task-local (`pullability::scoped`) that `VerdictService::current` and the
   shadow-evidence write both check, so `why` runs the verdict gate and the

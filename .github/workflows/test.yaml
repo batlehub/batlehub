@@ -977,8 +977,9 @@ jobs:
           - suite: devfile
           # RFC 0038: `batlehub-cli setup apply` configures every client, and
           # each one then installs through the instance with egress denied.
-          # Needs mise and uv beside the runner's own cargo, npm, pip, go and mvn;
-          # pnpm and yarn 4 are installed by the suite.
+          # Needs mise and uv beside the runner's own cargo, npm, pip, go and mvn,
+          # and .NET and Terraform for RFC 0040's kinds; pnpm, yarn 4,
+          # micromamba, php + composer and ansible-core are installed by the suite.
           - suite: client_setup
     services:
       postgres:
@@ -1028,7 +1029,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install the .NET SDK
-        if: matrix.suite == 'nuget'
+        if: matrix.suite == 'nuget' || matrix.suite == 'client_setup'
         run: |
           # Microsoft's own install script rather than a third-party action:
           # one URL, one channel, and no action SHA to keep pinned.
@@ -1038,7 +1039,7 @@ jobs:
           echo "$HOME/.dotnet" >> "$GITHUB_PATH"
           echo "DOTNET_ROOT=$HOME/.dotnet" >> "$GITHUB_ENV"
       - name: Install Terraform
-        if: matrix.suite == 'terraform'
+        if: matrix.suite == 'terraform' || matrix.suite == 'client_setup'
         run: |
           # From the release archive rather than a third-party action: one URL,
           # one version, and nothing else enters the runner.

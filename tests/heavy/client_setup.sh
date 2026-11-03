@@ -36,6 +36,18 @@
 #      keeps it, and keeps `--maven-mirror-of all`.
 #   9. The pypi registry removed by reload: pip is `orphaned`, `apply --yes`
 #      keeps the block (fail closed, exit 6), and `remove --yes` takes it out.
+#  10. RFC 0040 §6.P case 1 — the kinds phase 4 wired: `apply --yes` on a
+#      machine whose clients are micromamba, composer, gem, dotnet, terraform
+#      and ansible-galaxy, then one install each, cold, with egress denied;
+#      helm through the `helm repo add` setup prints (it is `manual`). Over
+#      https: composer and terraform refuse a plain-HTTP instance.
+#  11. RFC 0040 case 2 — deb: `apply --yes` writes nothing outside HOME, and
+#      the `sources.list` line it prints is what `apt-get update` reads.
+#  12. RFC 0040 case 3 — a user `channels:` in ~/.condarc: `conflict`, exit 6,
+#      the file byte-identical.
+#
+# nix is not driven: no runner has it, and a rootless `nix build` against a
+# substituter needs a daemon's trusted-users (the note setup prints).
 #
 # bun is not driven: it would be one more client download for the same
 # `~/.npmrc` block npm and pnpm already prove. node's `NODEJS_ORG_MIRROR` is
@@ -71,6 +83,22 @@ RUST="rust-$HEAVY_RUN"
 NODEDIST="nodedist-$HEAVY_RUN"
 NPM_B="npmb-$HEAVY_RUN"
 NPM_LOCAL="npmlocal-$HEAVY_RUN"
+CONDA="conda-$HEAVY_RUN"
+COMPOSER="composer-$HEAVY_RUN"
+GEMS="gems-$HEAVY_RUN"
+NUGET="nuget-$HEAVY_RUN"
+TF="tf-$HEAVY_RUN"
+GALAXY="galaxy-$HEAVY_RUN"
+CHARTS="charts-$HEAVY_RUN"
+DEB="deb-$HEAVY_RUN"
+MICROMAMBA_VERSION="${HEAVY_CS_MICROMAMBA:-2.9.0}"
+PHP_VERSION="${HEAVY_CS_PHP:-8.3.28}"
+COMPOSER_VERSION="${HEAVY_CS_COMPOSER:-2.10.2}"
+RUBY_VERSION="${HEAVY_CS_RUBY:-3.3.12}"
+DOTNET_VERSION="${HEAVY_CS_DOTNET:-10.0}"
+TERRAFORM_VERSION="${HEAVY_CS_TERRAFORM:-1.16.2}"
+ANSIBLE_CORE_VERSION="${HEAVY_CS_ANSIBLE:-2.19.3}"
+DEBIAN_KEYRING_DEB="${HEAVY_CS_DEBIAN_KEYRING:-debian-archive-keyring_2025.1_all.deb}"
 
 # ── The clients, resolved before HOME moves ──────────────────────────────────
 
@@ -176,7 +204,7 @@ machine() {
   local home="$1"
   mkdir -p "$home"
   MENV=(env -i HOME="$home" USER=heavy SHELL=/bin/bash LANG=C.UTF-8 TERM=dumb
-        PATH="$TOOLS:/usr/bin:/bin"
+        PATH="${MTOOLS:-$TOOLS}:/usr/bin:/bin" ${MCERT:+SSL_CERT_FILE="$MCERT"}
         XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share"
         XDG_CACHE_HOME="$home/.cache" XDG_STATE_HOME="$home/.local/state"
         CARGO_HOME="$home/.cargo" RUSTUP_HOME="$RUSTUP_REAL_HOME")
@@ -191,7 +219,7 @@ setup() {
   shift
   machine "$home"
   SETUP_CODE=0
-  "${MENV[@]}" "$CLI" --server "$HEAVY_TAP_BASE" setup "$@" >"$SETUP_OUT" 2>&1 || SETUP_CODE=$?
+  "${MENV[@]}" "$CLI" --server "${MSERVER:-$HEAVY_TAP_BASE}" setup "$@" >"$SETUP_OUT" 2>&1 || SETUP_CODE=$?
 }
 
 expect_code() {  # <code> <what>
@@ -572,5 +600,220 @@ grep -q "batlehub setup" "$M8/.config/pip/pip.conf" \
 setup "$M8" remove --yes --only pip
 expect_code 0 "remove of an orphaned block"
 [[ ! -e "$M8/.config/pip/pip.conf" ]] || heavy_fail "remove left the orphaned pip block (and the file apply created)"
+
+# ── 10. RFC 0040 case 1: the kinds phase 4 wired ─────────────────────────────
+#
+# A machine of its own, with its own clients: the cases above assert on every
+# file of $MH, and composer and terraform refuse the plain-HTTP tap, so this
+# one reaches the instance through a TLS tap on 127.0.0.1 (not `localhost`,
+# which a registry could be bound to) and trusts it through SSL_CERT_FILE —
+# the harness's certificate, not anything `apply` writes.
+
+heavy_log "10. setup apply --yes for conda, composer, gem, nuget, terraform, galaxy and helm"
+TLS_PORT="${HEAVY_CS_TLS_PORT:-8183}"
+# A CA and a leaf it signs, not `heavy_self_signed`: rustls (the CLI) refuses
+# a self-signed certificate as the server's own (CaUsedAsEndEntity).
+PKI="$HEAVY_WORK/pki"
+mkdir -p "$PKI"
+CERT="$PKI/ca.pem"
+{ openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 2 -subj "/CN=heavy client-setup CA" \
+    -keyout "$PKI/ca.key" -out "$CERT" \
+    -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign" \
+  && openssl req -newkey rsa:2048 -nodes -sha256 -subj "/CN=127.0.0.1" \
+    -keyout "$PKI/leaf.key" -out "$PKI/leaf.csr" \
+  && printf 'subjectAltName=IP:127.0.0.1\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n' > "$PKI/leaf.ext" \
+  && openssl x509 -req -sha256 -days 2 -in "$PKI/leaf.csr" -CA "$CERT" -CAkey "$PKI/ca.key" \
+    -CAcreateserial -extfile "$PKI/leaf.ext" -out "$PKI/leaf.pem"; } >"$PKI/openssl.log" 2>&1 \
+  || { cat "$PKI/openssl.log" >&2; heavy_fail "could not build the TLS tap's certificate"; }
+python3 tests/heavy/http_tap.py "$HEAVY_LOG" "$TLS_PORT" "$HEAVY_PORT" "$PKI/leaf.pem" "$PKI/leaf.key" \
+  >"$HEAVY_WORK/tls-tap.err" 2>&1 &
+HEAVY_EXTRA_PIDS+=("$!")
+TLS_BASE="https://127.0.0.1:$TLS_PORT"
+for _ in $(seq 1 30); do curl -s -o /dev/null --cacert "$CERT" "$TLS_BASE/healthz" && break; sleep 1; done
+curl -s -o /dev/null --cacert "$CERT" "$TLS_BASE/healthz" \
+  || { cat "$HEAVY_WORK/tls-tap.err" >&2; heavy_fail "the TLS tap never came up on $TLS_PORT"; }
+
+TOOLS_K="$HEAVY_WORK/tools-k"
+mkdir -p "$TOOLS_K"
+# Into TOOLS_K: `link_tool`/`wrap_tool` write to $TOOLS.
+TOOLS_SAVED="$TOOLS"
+TOOLS="$TOOLS_K"
+MM_DIR="$(heavy_cached_dir "micromamba-$MICROMAMBA_VERSION" \
+  "https://micro.mamba.pm/api/micromamba/linux-64/$MICROMAMBA_VERSION" tar.bz2)"
+wrap_tool micromamba "$MM_DIR/bin/micromamba"
+PHP_DIR="$(heavy_cached_dir "static-php-$PHP_VERSION" \
+  "https://dl.static-php.dev/static-php-cli/common/php-$PHP_VERSION-cli-linux-x86_64.tar.gz" tar.gz)"
+PHAR="$HEAVY_CACHE/composer-$COMPOSER_VERSION.phar"
+[[ -s "$PHAR" ]] || heavy_retry 3 "the composer download" curl -fsSL -o "$PHAR" \
+  "https://getcomposer.org/download/$COMPOSER_VERSION/composer.phar" || heavy_fail "could not download composer.phar"
+printf '#!/bin/sh\nexec %q %q "$@"\n' "$PHP_DIR/php" "$PHAR" > "$TOOLS_K/composer"
+chmod +x "$TOOLS_K/composer"
+link_tool gem "ruby@$RUBY_VERSION"
+link_tool ruby "ruby@$RUBY_VERSION"
+# Invariant globalization: this CDE has no libicu, and a restore needs none.
+# The real binary, not a mise shim: a shim stops resolving once HOME moves.
+DOTNET_BIN="$(mise where "dotnet@$DOTNET_VERSION" 2>/dev/null)/dotnet"
+[[ -x "$DOTNET_BIN" ]] || DOTNET_BIN="$(command -v dotnet)"
+DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 "$DOTNET_BIN" --version >/dev/null 2>&1 || heavy_fail "no working dotnet ($DOTNET_BIN)"
+printf '#!/bin/sh\nDOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 exec %q "$@"\n' "$DOTNET_BIN" > "$TOOLS_K/dotnet"
+chmod +x "$TOOLS_K/dotnet"
+link_tool terraform "terraform@$TERRAFORM_VERSION"
+GALAXY_VENV="$HEAVY_WORK/ansible-venv"
+uv venv --quiet "$GALAXY_VENV" >"$HEAVY_WORK/ansible-venv.log" 2>&1 \
+  && uv pip install --quiet --python "$GALAXY_VENV/bin/python" "ansible-core==$ANSIBLE_CORE_VERSION" \
+     >>"$HEAVY_WORK/ansible-venv.log" 2>&1 \
+  || { cat "$HEAVY_WORK/ansible-venv.log" >&2; heavy_fail "could not install ansible-core $ANSIBLE_CORE_VERSION"; }
+wrap_tool ansible-galaxy "$GALAXY_VENV/bin/ansible-galaxy"
+# The helm the mise-generic phase installed on $MH, through this instance.
+HELM_BIN="$(find "$MH/.local/share/mise/installs" -type f -name helm -perm -u+x 2>/dev/null | head -1 || true)"
+[[ -n "$HELM_BIN" ]] || HELM_BIN="$(mise which helm 2>/dev/null)" || heavy_fail "no helm"
+wrap_tool helm "$HELM_BIN"
+TOOLS="$TOOLS_SAVED"
+
+MK="$HEAVY_WORK/machine-kinds"
+MTOOLS="$TOOLS_K" MCERT="$CERT" MSERVER="$TLS_BASE" setup "$MK" apply --yes
+cat "$SETUP_OUT"
+# 6, and for helm alone: `manual` is a command still to run (setup.rs).
+expect_code 6 "apply --yes for the RFC 0040 kinds, helm still manual"
+heavy_client_must_say "$SETUP_OUT" "^helm .*helm rewrites its repositories file" "helm was not the one left to the user"
+for f in .condarc .gemrc .nuget/NuGet/NuGet.Config .terraformrc .ansible.cfg .config/composer/config.json; do
+  [[ -f "$MK/$f" ]] || heavy_fail "apply wrote no $f"
+done
+
+# kclient <mark> <dir> <cmd...> — one install on $MK, cold, egress denied.
+KOUT="$HEAVY_WORK/kinds.txt"
+kclient() {
+  local mark="$1" dir="$2"
+  shift 2
+  heavy_mark "$mark"
+  heavy_log "$mark: $*"
+  MTOOLS="$TOOLS_K" MCERT="$CERT" client "$MK" "$KOUT" "$dir" "$@" \
+    || { cat "$KOUT" >&2; heavy_fail "$mark failed with the configuration apply wrote"; }
+}
+
+# micromamba reads ~/.condarc; its own CA bundle is not SSL_CERT_FILE.
+kclient conda "$HEAVY_WORK/k-conda" MAMBA_ROOT_PREFIX="$HEAVY_WORK/k-mamba" \
+  CONDA_PKGS_DIRS="$HEAVY_WORK/k-mamba-pkgs" MAMBA_DOWNLOAD_THREADS=1 MAMBA_SSL_VERIFY="$CERT" \
+  micromamba create --yes --prefix "$HEAVY_WORK/k-conda-env" tzdata
+heavy_wire_re_after conda "GET /proxy/$CONDA/noarch/tzdata-[^ ]*[.](conda|tar[.]bz2) -> 200" \
+  "the conda package did not come through the instance"
+
+mkdir -p "$HEAVY_WORK/k-composer"
+echo '{"require":{"psr/log":"3.0.2"}}' > "$HEAVY_WORK/k-composer/composer.json"
+kclient composer "$HEAVY_WORK/k-composer" COMPOSER_CACHE_DIR="$HEAVY_WORK/k-composer-cache" \
+  composer install --no-progress --no-interaction
+heavy_wire_re_after composer "GET /proxy/$COMPOSER/dist/[^ ]* -> 200" \
+  "the composer archive did not come through the instance"
+
+kclient gem "$HEAVY_WORK" GEM_HOME="$HEAVY_WORK/k-gems" \
+  gem install --no-document tzinfo -v 2.0.6
+heavy_wire_re_after gem "GET /proxy/$GEMS/gems/tzinfo-2[.]0[.]6[.]gem -> 200" \
+  "the gem did not come through the instance"
+
+mkdir -p "$HEAVY_WORK/k-dotnet"
+SDK="$(MTOOLS="$TOOLS_K" machine "$MK"; "${MENV[@]}" dotnet --version 2>/dev/null | head -1)"
+cat > "$HEAVY_WORK/k-dotnet/app.csproj" <<EOF
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net${SDK%%.*}.0</TargetFramework></PropertyGroup>
+  <ItemGroup><PackageReference Include="Newtonsoft.Json" Version="13.0.3" /></ItemGroup>
+</Project>
+EOF
+kclient nuget "$HEAVY_WORK/k-dotnet" DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 NUGET_PACKAGES="$HEAVY_WORK/k-nuget-packages" \
+  NUGET_HTTP_CACHE_PATH="$HEAVY_WORK/k-nuget-http" dotnet restore
+heavy_wire_re_after nuget "GET /proxy/$NUGET/.*[Nn]ewtonsoft[^ ]*[.]nupkg -> 200" \
+  "the NuGet package did not come through the instance"
+
+mkdir -p "$HEAVY_WORK/k-terraform"
+cat > "$HEAVY_WORK/k-terraform/main.tf" <<'EOF'
+terraform {
+  required_providers {
+    null = { source = "hashicorp/null", version = "3.2.2" }
+  }
+}
+EOF
+kclient terraform "$HEAVY_WORK/k-terraform" TF_IN_AUTOMATION=1 CHECKPOINT_DISABLE=1 \
+  terraform init -no-color
+heavy_wire_re_after terraform "GET /proxy/$TF/registry[.]terraform[.]io/hashicorp/null/index[.]json -> 200" \
+  "terraform did not read the network mirror's index through the instance"
+heavy_wire_re_after terraform "GET /proxy/$TF/v1/providers/hashicorp/null/3[.]2[.]2/artifact/linux/amd64 -> 200" \
+  "the provider archive did not come through the instance"
+
+kclient galaxy "$HEAVY_WORK/k-galaxy" ANSIBLE_GALAXY_CACHE_DIR="$HEAVY_WORK/k-galaxy-cache" \
+  ansible-galaxy collection install community.general
+heavy_wire_re_after galaxy \
+  "GET /proxy/$GALAXY/galaxy/api/v3/artifacts/collections/community-general-[^ ]*[.]tar[.]gz -> 200" \
+  "the collection did not come through the instance"
+
+# helm is `manual`: status says so, apply prints the two commands, and they
+# are run as printed.
+MTOOLS="$TOOLS_K" MCERT="$CERT" MSERVER="$TLS_BASE" setup "$MK" status --only helm
+expect_code 6 "status with helm manual"
+heavy_client_must_say "$SETUP_OUT" "manual" "status did not report helm as manual"
+MTOOLS="$TOOLS_K" MCERT="$CERT" MSERVER="$TLS_BASE" setup "$MK" apply --yes --only helm
+expect_code 6 "apply with helm manual"
+grep -E '^ *helm repo (add|update) ' "$SETUP_OUT" | sed 's/^ *//' > "$HEAVY_WORK/helm-cmds.sh"
+[[ "$(wc -l < "$HEAVY_WORK/helm-cmds.sh")" -eq 2 ]] \
+  || { cat "$SETUP_OUT" >&2; heavy_fail "setup did not print helm's two commands"; }
+kclient helm "$HEAVY_WORK/k-helm" sh -c ". $HEAVY_WORK/helm-cmds.sh && helm pull batlehub/cert-manager --version v1.16.2"
+[[ -f "$HEAVY_WORK/k-helm/cert-manager-v1.16.2.tgz" ]] || heavy_fail "helm pull wrote no chart"
+heavy_wire_re_after helm "GET /proxy/$CHARTS/[^ ]*cert-manager-v1[.]16[.]2[.]tgz -> 200" \
+  "the chart did not come through the instance"
+
+# helm's repository now in place, nothing is left: up to date, and 0.
+MTOOLS="$TOOLS_K" MCERT="$CERT" MSERVER="$TLS_BASE" setup "$MK" apply --yes
+expect_code 0 "a second apply for the RFC 0040 kinds, after helm repo add"
+heavy_client_must_say "$SETUP_OUT" "Nothing to write" "the second apply wanted to write"
+
+# ── 11. RFC 0040 case 2: deb prints, writes nothing ──────────────────────────
+
+heavy_log "11. setup apply --yes with a deb registry"
+M11="$HEAVY_WORK/machine-deb"
+mkdir -p "$M11"
+touch "$HEAVY_WORK/deb.stamp"
+setup "$M11" apply --yes --only apt
+cat "$SETUP_OUT"
+expect_code 0 "apply --yes --only apt"
+written="$(find /etc /usr/share/keyrings -newer "$HEAVY_WORK/deb.stamp" 2>/dev/null || true)"
+[[ -z "$written" ]] || heavy_fail "apply wrote outside the run: $written"
+[[ -z "$(find "$M11" -type f)" ]] || heavy_fail "apply wrote a file for a print-only kind: $(find "$M11" -type f)"
+line="$(grep -o "deb \[signed-by=[^]]*\] [^\"]*" "$SETUP_OUT" | head -1)"
+[[ "$line" == *"$HEAVY_TAP_BASE/proxy/$DEB/deb stable main" ]] \
+  || { cat "$SETUP_OUT" >&2; heavy_fail "setup printed no sources.list line for $DEB"; }
+KR_DIR="$HEAVY_WORK/debian-keyring"
+mkdir -p "$KR_DIR"
+heavy_retry 3 "the debian keyring download" curl -fsSL -o "$KR_DIR/k.deb" \
+  "https://deb.debian.org/debian/pool/main/d/debian-archive-keyring/$DEBIAN_KEYRING_DEB" \
+  || heavy_fail "could not download $DEBIAN_KEYRING_DEB"
+dpkg-deb -x "$KR_DIR/k.deb" "$KR_DIR/x" || heavy_fail "could not unpack the debian keyring"
+APT_ROOT="$HEAVY_WORK/apt"
+mkdir -p "$APT_ROOT/state/lists/partial" "$APT_ROOT/cache/archives/partial"
+# The printed line, with only its $KEYRING placeholder filled.
+echo "${line/\$KEYRING/$KR_DIR/x/usr/share/keyrings/debian-archive-keyring.gpg}" > "$APT_ROOT/sources.list"
+heavy_mark apt
+client "$M11" "$OUT" "$APT_ROOT" apt-get -q \
+  -o "Dir::State=$APT_ROOT/state" -o "Dir::Cache=$APT_ROOT/cache" \
+  -o "Dir::Etc::SourceList=$APT_ROOT/sources.list" -o "Dir::Etc::SourceParts=/dev/null" \
+  -o "Dir::Etc::Preferences=/dev/null" -o "Dir::Etc::PreferencesParts=/dev/null" \
+  -o "Dir::Etc::Main=/dev/null" -o "Dir::Etc::Parts=/dev/null" \
+  -o "Acquire::Languages=none" -o "Debug::NoLocking=true" update \
+  || { cat "$OUT" >&2; heavy_fail "apt-get update failed on the line setup printed"; }
+grep -qE '^(W|E):' "$OUT" && { cat "$OUT" >&2; heavy_fail "apt-get update warned on the line setup printed"; }
+heavy_wire_after apt "GET /proxy/$DEB/deb/dists/stable/InRelease -> 200" \
+  "apt did not fetch InRelease from the instance"
+
+# ── 12. RFC 0040 case 3: a user channels: in ~/.condarc ──────────────────────
+
+heavy_log "12. a user channels: in ~/.condarc"
+M12="$HEAVY_WORK/machine-condarc"
+mkdir -p "$M12"
+printf 'channels:\n  - conda-forge\n' > "$M12/.condarc"
+cp "$M12/.condarc" "$HEAVY_WORK/condarc.seeded"
+MTOOLS="$TOOLS_K" setup "$M12" status --only conda
+expect_code 6 "status with a user channels:"
+heavy_client_must_say "$SETUP_OUT" "conflict" "status did not report the conda conflict"
+MTOOLS="$TOOLS_K" setup "$M12" apply --yes --only conda
+expect_code 6 "apply with a user channels:"
+cmp -s "$HEAVY_WORK/condarc.seeded" "$M12/.condarc" || heavy_fail "apply edited a .condarc the user owns"
 
 heavy_done "CLIENT-SETUP-HEAVY-OK"
