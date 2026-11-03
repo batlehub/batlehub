@@ -13,9 +13,11 @@
   },
   "accessCheck": {
     "accessCheck": "Access Check",
+    "allowed": "Allowed",
     "artifactOptional": "Artifact (optional)",
     "checkAccess": "Check Access",
     "checking": "Checking…",
+    "denied": "Denied",
     "next": "Next:",
     "noResponse": "No response",
     "notFound": "No such package, or not one you can see.",

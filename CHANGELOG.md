@@ -74,8 +74,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **`publish` uses the target registry's kind, not the file's extension.** A
   Helm chart `.tgz` used to be detected as npm and sent to npm's route. It now
-  goes where the registry says. `-t` is deprecated: it is checked against the
-  registry and exits 2 on a mismatch.
+  goes where the registry says. `-t` is checked against the registry and exits
+  2 on a mismatch; it names the kind only for a token that may publish to the
+  registry but not list it.
 
 - **`GET /api/v1/packages/access` returns `404` for a package the caller may
   not see**, with the body an unknown package gets. It used to answer

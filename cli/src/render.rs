@@ -140,7 +140,9 @@ fn to_csv(value: &Value) -> Result<String, CliError> {
 fn csv_cell(v: &Value) -> String {
     match v {
         Value::Null => String::new(),
-        Value::String(s) => csv_escape(s),
+        // A text cell is written by whoever published or asked for it: the
+        // server's own CSV rule, so a leading `=` never becomes a formula.
+        Value::String(s) => batlehub_core::services::csv::field(s),
         other => csv_escape(&other.to_string()),
     }
 }
@@ -199,6 +201,15 @@ mod tests {
         let v = json!({"items": [{"a": 1}], "total": 1});
         assert_eq!(to_csv(&v).unwrap(), "a\n1\n");
         assert_eq!(to_csv(&json!(["x", "y"])).unwrap(), "value\nx\ny\n");
+    }
+
+    #[test]
+    fn csv_neutralises_a_formula_in_text_but_not_a_number() {
+        let v = json!([{"d": "=HYPERLINK(\"x\")", "n": -1, "s": "@SUM(A1)"}]);
+        assert_eq!(
+            to_csv(&v).unwrap(),
+            "d,n,s\n\"'=HYPERLINK(\"\"x\"\")\",-1,\"'@SUM(A1)\"\n"
+        );
     }
 
     #[test]

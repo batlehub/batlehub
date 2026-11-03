@@ -554,8 +554,9 @@ Rules for reading the table:
   several artifacts it asks on a TTY, and refuses with exit 2 without one,
   until `--artifact` is given.
 - **Publish reads the kind from the target registry**, not from the file
-  (§6.3). `-t/--type` survives one minor as a deprecated flag that is
-  checked against the registry's kind (§4.11), never obeyed.
+  (§6.3). `-t/--type` is checked against the registry's kind (§4.11). It
+  is obeyed only when the registry is not in the caller's listing: a token
+  holding `releases:publish` alone may publish where it cannot list (§17.1).
 - **Consult on a proxy registry lists the upstream's versions too**, through
   the server's `upstream_detail()` path (`registry_kind.rs:772`). Each version
   has a state column, as described in §4.8.
@@ -1739,6 +1740,11 @@ row names has landed; a partial phase lists what is still open.
   nothing uploads them — so `terraform init` refuses it ("checksum list has no
   SHA-256 hash"). The CLI publish is asserted; the install is not, until local
   providers can carry a publisher-signed checksum list (issue #281).
+- **`publish -t` is kept, not deprecated.** Reading the kind from the
+  listing made a token holding `releases:publish` alone — the least-privilege
+  CI identity — exit 5 before any upload, though the server accepts its PUT.
+  When the registry is not in the caller's listing, `-t` names the kind; when
+  it is, `-t` is still only checked against it.
 - **Heavy case 11 uses a dedicated non-owner and a fresh resolve.** The
   non-owner is `authz-cargo-peer`, who reads the registry and owns nothing: a
   caller who cannot see the registry gets `5` from the CLI before any request

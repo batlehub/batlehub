@@ -11,7 +11,7 @@ use crate::api::{
     BatleHubClient,
 };
 use crate::exit::{CliError, ExitCode};
-use crate::render::{ctx, data, deprecated, warn};
+use crate::render::{ctx, data, warn};
 
 fn usage(message: impl Into<String>) -> anyhow::Error {
     CliError::new(ExitCode::Usage, message).into()
@@ -47,9 +47,10 @@ pub struct PublishArgs {
     #[arg(long, short = 'v')]
     pub version: Option<String>,
 
-    /// Deprecated: the registry's own kind decides. Checked against it, never
-    /// obeyed.
-    #[arg(long, short = 't', hide = true)]
+    /// The registry's kind, for a token that may publish to it but not list
+    /// it. Otherwise the registry's own kind decides, and this is checked
+    /// against it.
+    #[arg(long = "type", short = 't')]
     pub r#type: Option<String>,
 
     /// Maven: the pom to publish with the jar (default: `pom.xml` beside a
@@ -82,19 +83,31 @@ pub async fn run(
     let registry = ctx().require_registry(default_registry.map(str::to_string))?;
     // The registry decides the kind, never the file: a Helm chart `.tgz` is
     // not an npm tarball because they share an extension (§6.3, T8).
-    let kind: RegistryKind = client
-        .registry_kind(&registry)
-        .await?
-        .parse()
-        .map_err(|e: String| anyhow::anyhow!(e))?;
-    if let Some(t) = args.r#type.as_deref() {
-        if t != kind.as_str() {
+    let kind: RegistryKind = match (
+        client.registry_kind(&registry).await,
+        args.r#type.as_deref(),
+    ) {
+        (Ok(listed), Some(t)) if t != listed => {
             return Err(usage(format!(
-                "-t {t} names a different kind from registry `{registry}`, which is {kind}"
+                "-t {t} names a different kind from registry `{registry}`, which is {listed}"
             )));
         }
-        deprecated("publish -t", "publish (the registry's kind decides)");
+        (Ok(listed), _) => listed,
+        // A least-privilege CI token may publish to a registry it cannot
+        // list: the server checks only `releases:publish`, so neither does
+        // this, once the caller names the kind.
+        (Err(e), Some(t)) if is_not_found(&e) => t.to_owned(),
+        (Err(e), None) if is_not_found(&e) => {
+            return Err(CliError::new(ExitCode::NotFound, format!("{e:#}"))
+                .hint(
+                    "a token that may publish but not list the registry names its kind: -t <kind>",
+                )
+                .into());
+        }
+        (Err(e), _) => return Err(e),
     }
+    .parse()
+    .map_err(|e: String| usage(e))?;
     if let Some(reason) = refusal(kind, &client.base_url, &registry) {
         return Err(usage(reason));
     }
@@ -347,6 +360,12 @@ fn maven_files(args: &PublishArgs) -> Result<MavenUpload> {
         warn("--name/--version are ignored for maven: the pom is the coordinate");
     }
     Ok((coord, files))
+}
+
+fn is_not_found(e: &anyhow::Error) -> bool {
+    e.chain()
+        .filter_map(|c| c.downcast_ref::<CliError>())
+        .any(|c| c.exit == ExitCode::NotFound)
 }
 
 /// RFC 0039 §4.2: pack (or read) the bundle, read its name and version the

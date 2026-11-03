@@ -1541,6 +1541,40 @@ fn auth_login_kubernetes_saves_config() {
     );
 }
 
+/// `-P default` is the top-level `[default]` for a login as for every reader:
+/// written to `[profiles.default]`, the credential was never used again.
+#[test]
+fn auth_login_to_the_default_profile_writes_default() {
+    let config_dir = tempfile::tempdir().unwrap();
+    let token_dir = tempfile::tempdir().unwrap();
+    let token_file = token_dir.path().join("sa-token");
+    std::fs::write(&token_file, "sa").unwrap();
+    let srv = TestServer::start();
+    let home = scratch_home();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_batlehub-cli"))
+        .args(["-P", "default", "auth", "login", "--kubernetes-token-path"])
+        .arg(&token_file)
+        .env("BATLEHUB_SERVER", srv.base_url())
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", config_dir.path())
+        .output()
+        .expect("failed to run batlehub-cli");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let content = std::fs::read_to_string(config_dir.path().join("batlehub/config.toml")).unwrap();
+    assert!(!content.contains("[profiles.default]"), "{content}");
+    let parsed: toml::Value = toml::from_str(&content).unwrap();
+    assert!(
+        parsed["default"]["kubernetes_token_path"]
+            .as_str()
+            .is_some(),
+        "{content}"
+    );
+}
+
 /// `auth refresh` with no stored refresh token should exit non-zero and print
 /// a helpful error message.
 #[test]
@@ -5405,6 +5439,14 @@ fn maven_publish() {
     let (status, sha1) = http_get(&format!("{base}/app-1.0.0.jar.sha1"));
     assert_eq!(status, 200);
     assert_eq!(sha1.len(), 40, "{sha1}");
+    // The pom goes last, after its own sidecars: those must not make it look
+    // already sent.
+    let (status, pom_body) = http_get(&format!("{base}/app-1.0.0.pom"));
+    assert_eq!(status, 200, "{pom_body}");
+    assert!(
+        pom_body.contains("<artifactId>app</artifactId>"),
+        "{pom_body}"
+    );
 
     let (code, _, stderr) = cli_exit(&args, &srv.base_url(), AUTH_TOKEN);
     assert_eq!(code, 0, "a re-run resumes: {stderr}");
@@ -5518,6 +5560,36 @@ fn publish_refuses_a_kind_it_cannot_publish_and_a_mismatched_type() {
     );
     assert_eq!(code, 2, "{stderr}");
     assert!(stderr.contains("names a different kind"), "{stderr}");
+}
+
+/// A registry the token cannot list: the error names `-t`, and with `-t` the
+/// CLI goes straight to the upload the server judges on `releases:publish`.
+#[test]
+fn publish_to_an_unlisted_registry_takes_its_kind_from_t() {
+    let srv = TestServer::start_with(&[("test-npm", "npm")]);
+    let tmp = tempfile::tempdir().unwrap();
+    let f = tmp.path().join("x-1.0.0.tgz");
+    std::fs::write(&f, b"x").unwrap();
+    let (code, _, stderr) = cli_exit(
+        &["publish", f.to_str().unwrap(), "-r", "hidden-npm"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 5, "{stderr}");
+    assert!(stderr.contains("-t <kind>"), "{stderr}");
+    let (_, _, stderr) = cli_exit(
+        &[
+            "publish",
+            f.to_str().unwrap(),
+            "-r",
+            "hidden-npm",
+            "-t",
+            "npm",
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(!stderr.contains("that you can see"), "{stderr}");
 }
 
 /// The server's `PUT …/vsix` serves both gallery kinds, so a

@@ -635,8 +635,10 @@ before sending anything.
   forgejo, gitlab, generic) and vendor mirrors (nodedist, sdkman, rustup) have
   nothing to publish to.
 
-`-t/--type` is deprecated: it is checked against the registry's kind and never
-obeyed, so a `-t` that disagrees with the registry exits 2.
+`-t/--type` names the registry's kind for a token that may publish to it but
+not list it (a least-privilege CI token holding `releases:publish` alone).
+Otherwise the registry's own kind decides, and a `-t` that disagrees with it
+exits 2.
 
 ```bash
 # NuGet

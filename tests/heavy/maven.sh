@@ -20,7 +20,7 @@
 #            and does `-U` change the answer.
 #   Publish  `mvn deploy:deploy-file` to a local registry: the native status,
 #            then the same upload with the tap answering `202 Accepted`. And
-#            RFC 0040 §6.P case 6: `batlehub-cli publish app.jar --pom pom.xml`
+#            RFC 0040 §6.P case 6: `batlehub-cli publish app-2.0.0.jar --pom pom.xml`
 #            PUTs the jar, the pom and their checksums, and `mvn
 #            dependency:get` resolves what it sent.
 #
@@ -260,7 +260,7 @@ heavy_tap_rewrite_clear
 # ── Publish through the CLI (RFC 0040 §6.P case 6) ───────────────────────────
 
 mkdir -p "$HEAVY_WORK/cli-pub"
-cp "$HEAVY_WORK/lib.jar" "$HEAVY_WORK/cli-pub/app.jar"
+cp "$HEAVY_WORK/lib.jar" "$HEAVY_WORK/cli-pub/app-2.0.0.jar"
 cat >"$HEAVY_WORK/cli-pub/pom.xml" <<'EOF'
 <project>
   <modelVersion>4.0.0</modelVersion>
@@ -271,7 +271,7 @@ cat >"$HEAVY_WORK/cli-pub/pom.xml" <<'EOF'
 EOF
 APP_PREFIX="/proxy/$LOCAL/maven2/com/heavy/app/2.0.0/app-2.0.0"
 heavy_mark publish-cli
-heavy_cli "$ADMIN_TOKEN" publish "$HEAVY_WORK/cli-pub/app.jar" --pom "$HEAVY_WORK/cli-pub/pom.xml" -r "$LOCAL"
+heavy_cli "$ADMIN_TOKEN" publish "$HEAVY_WORK/cli-pub/app-2.0.0.jar" --pom "$HEAVY_WORK/cli-pub/pom.xml" -r "$LOCAL"
 [[ "$HEAVY_CLI_CODE" == 0 ]] || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "Publish/cli: batlehub-cli publish exited $HEAVY_CLI_CODE"; }
 for f in jar jar.sha1 jar.md5 pom pom.sha1 pom.md5; do
   heavy_wire_after publish-cli "PUT $APP_PREFIX.$f -> 201" "Publish/cli: the CLI did not PUT app-2.0.0.$f"

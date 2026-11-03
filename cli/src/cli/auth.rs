@@ -562,7 +562,11 @@ async fn handle_auth_login(
     profile: Option<String>,
     global_profile: Option<&str>,
 ) -> Result<()> {
-    let target_profile = profile.as_deref().or(global_profile);
+    // `default` is the top-level `[default]`, as every reader takes it.
+    let target_profile = profile
+        .as_deref()
+        .or(global_profile)
+        .filter(|n| *n != "default");
     let mut cfg = ConfigFile::load()?;
 
     if let Some(k8s_path) = kubernetes_token_path {
@@ -674,7 +678,11 @@ fn handle_auth_logout(
     keep_contract: bool,
     global_profile: Option<&str>,
 ) -> Result<()> {
-    let target_profile = profile.as_deref().or(global_profile);
+    // `default` is the top-level `[default]`, as every reader takes it.
+    let target_profile = profile
+        .as_deref()
+        .or(global_profile)
+        .filter(|n| *n != "default");
 
     // ── the profile store ───────────────────────────────────────────────────
     let mut cfg = ConfigFile::load()?;
@@ -754,7 +762,11 @@ async fn handle_auth_refresh(
     profile: Option<String>,
     global_profile: Option<&str>,
 ) -> Result<()> {
-    let target_profile = profile.as_deref().or(global_profile);
+    // `default` is the top-level `[default]`, as every reader takes it.
+    let target_profile = profile
+        .as_deref()
+        .or(global_profile)
+        .filter(|n| *n != "default");
     let mut cfg = ConfigFile::load()?;
 
     let refresh_token = {

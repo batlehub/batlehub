@@ -112,7 +112,14 @@ async fn run_bulk(
             Ok(res) => {
                 for (n, v) in &pkgs {
                     let coordinate = format!("{reg}/{n}@{v}");
-                    match res.failed.iter().find(|f| &f.name == n && &f.version == v) {
+                    // The server's owner arm reports a NuGet id lower-cased
+                    // (its canonical form): matched exactly, a failure read
+                    // as a success.
+                    match res
+                        .failed
+                        .iter()
+                        .find(|f| f.name.eq_ignore_ascii_case(n) && &f.version == v)
+                    {
                         Some(f) => tally.failed.push(Failure {
                             coordinate,
                             error: f.error.clone(),

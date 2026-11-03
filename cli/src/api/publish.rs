@@ -457,10 +457,17 @@ impl BatleHubClient {
         files: &[(String, Vec<u8>)],
     ) -> Result<Vec<String>> {
         let mut sent = Vec::new();
-        let mut wrote = false;
+        let mut written: Vec<String> = Vec::new();
         for (i, (path, bytes)) in files.iter().enumerate() {
             let url = format!("/proxy/{registry}/maven2/{path}");
-            let step = match self.maven_stored(&url, bytes).await {
+            // The pom's sidecars go before the pom: a `.sha1` this run just
+            // wrote says nothing about whether the file it describes is stored.
+            let stored = if written.contains(&format!("{url}.sha1")) {
+                Ok(None)
+            } else {
+                self.maven_stored(&url, bytes).await
+            };
+            let step = match stored {
                 Ok(Some(true)) => Ok(()),
                 Ok(Some(false)) => Err(crate::exit::CliError::new(
                     crate::exit::ExitCode::Conflict,
@@ -468,7 +475,7 @@ impl BatleHubClient {
                 )
                 .into()),
                 Ok(None) => {
-                    wrote = true;
+                    written.push(url.clone());
                     self.put_bytes(&url, bytes.clone()).await
                 }
                 Err(e) => Err(e),
@@ -479,7 +486,7 @@ impl BatleHubClient {
                     "stopped at {path}; not sent: {}",
                     missing.join(", ")
                 ));
-                if !wrote {
+                if written.is_empty() {
                     return Err(e);
                 }
                 // Some files went, some did not: a re-run resumes (§6.3).

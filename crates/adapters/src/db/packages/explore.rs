@@ -34,7 +34,7 @@ pub(super) async fn list_events_impl(
         r#"
         SELECT
             id, user_id, user_role, registry, package_name, package_version,
-            package_artifact, action, outcome, deny_reason, created_at,
+            package_artifact, action, outcome, deny_reason, reason_code, created_at,
             ip_address, user_agent, throttled_count, detail
         FROM access_events
         WHERE ($1::text IS NULL OR registry = $1)
@@ -144,8 +144,8 @@ pub(super) async fn list_own_downloads_impl(
         r#"
         SELECT
             id, user_id, user_role, registry, package_name, package_version,
-            package_artifact, action, outcome, deny_reason, created_at,
-            ip_address, user_agent, throttled_count, detail, reason_code
+            package_artifact, action, outcome, deny_reason, reason_code, created_at,
+            ip_address, user_agent, throttled_count, detail
         FROM access_events
         WHERE user_id = $1
           AND action = 'download'

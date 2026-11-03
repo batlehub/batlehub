@@ -13,9 +13,11 @@
   },
   "accessCheck": {
     "accessCheck": "Vérification d'accès",
+    "allowed": "Autorisé",
     "artifactOptional": "Artefact (facultatif)",
     "checkAccess": "Vérifier l'accès",
     "checking": "Vérification…",
+    "denied": "Refusé",
     "next": "Suite :",
     "noResponse": "Aucune réponse",
     "notFound": "Aucun paquet de ce nom, ou aucun que vous puissiez voir.",

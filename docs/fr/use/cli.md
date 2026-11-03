@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: 6e4033b4529a3626
+sourceHash: 33489a1045aca147
 ---
 
 # batlehub-cli
@@ -664,8 +664,10 @@ donne, `publish` sort avec le code 2 avant d'envoyer quoi que ce soit.
   seulement (jetbrains, github, forgejo, gitlab, generic) et les miroirs
   d'éditeur (nodedist, sdkman, rustup) n'ont rien à recevoir.
 
-`-t/--type` est déprécié : il est comparé au type du registre et jamais suivi ;
-un `-t` en désaccord avec le registre sort donc avec le code 2.
+`-t/--type` donne le type du registre à un jeton qui peut y publier sans pouvoir
+le lister (un jeton de CI au moindre privilège, qui ne détient que
+`releases:publish`). Sinon, c'est le type du registre qui décide, et un `-t` en
+désaccord avec lui sort avec le code 2.
 
 ```bash
 # NuGet
