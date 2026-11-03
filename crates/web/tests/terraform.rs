@@ -188,10 +188,45 @@ async fn terraform_module_download_local_returns_204_with_header() {
         .get("X-Terraform-Get")
         .expect("X-Terraform-Get header must be present");
     let url = header.to_str().unwrap();
+    // `?archive=tar.gz`: go-getter fetches an HTTP archive only when the URL
+    // names its format, and parses the body as HTML otherwise (RFC 0040 §6.P).
     assert!(
-        url.contains("/artifact"),
-        "X-Terraform-Get should point at /artifact"
+        url.ends_with("/v1/modules/hashicorp/consul/aws/0.1.0/artifact?archive=tar.gz"),
+        "X-Terraform-Get should point at /artifact and name the tarball: {url}"
     );
+}
+
+/// Hybrid names the tarball only for a version published here: an upstream
+/// module's archive format is the upstream's, unknown at this point.
+#[actix_web::test]
+async fn terraform_module_download_hybrid_names_the_archive_only_when_local() {
+    let app = make_local_terraform_app(RegistryMode::Hybrid).await;
+    let req = TestRequest::post()
+        .uri("/proxy/local-tf/v1/modules/hashicorp/consul/aws/0.1.0")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .set_payload(b"tarball".as_slice())
+        .to_request();
+    assert_eq!(call_service(&app, req).await.status(), 201);
+
+    for (version, expected_suffix) in [
+        ("0.1.0", "/0.1.0/artifact?archive=tar.gz"),
+        ("0.2.0", "/0.2.0/artifact"),
+    ] {
+        let req = TestRequest::get()
+            .uri(&format!(
+                "/proxy/local-tf/v1/modules/hashicorp/consul/aws/{version}/download"
+            ))
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .to_request();
+        let resp = call_service(&app, req).await;
+        let url = resp
+            .headers()
+            .get("X-Terraform-Get")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        assert!(url.ends_with(expected_suffix), "{version}: {url}");
+    }
 }
 
 #[actix_web::test]
@@ -777,6 +812,48 @@ async fn terraform_provider_download_hybrid_falls_through_to_proxy() {
         .to_request();
     let resp = call_service(&app, req).await;
     assert_eq!(resp.status(), 400);
+}
+
+/// The archive a hybrid registry's download document points at, for an
+/// upstream provider: it must fall through to the proxy, not answer the local
+/// 404. `terraform init` found it (RFC 0040 §6.P case 7). The 400 is
+/// proxy_stream's "unknown registry" in this factory, as above.
+#[actix_web::test]
+async fn terraform_provider_artifact_hybrid_falls_through_to_proxy() {
+    let app = make_local_terraform_app(RegistryMode::Hybrid).await;
+
+    let req = TestRequest::get()
+        .uri("/proxy/local-tf/v1/providers/hashicorp/unknown/9.9.9/artifact/linux/amd64")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+}
+
+/// The module equivalent: `X-Terraform-Get` points at this route.
+#[actix_web::test]
+async fn terraform_module_artifact_hybrid_falls_through_to_proxy() {
+    let app = make_local_terraform_app(RegistryMode::Hybrid).await;
+
+    let req = TestRequest::get()
+        .uri("/proxy/local-tf/v1/modules/hashicorp/unknown/aws/9.9.9/artifact")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+}
+
+/// And local mode keeps its 404 for the same module.
+#[actix_web::test]
+async fn terraform_module_artifact_local_unknown_returns_404() {
+    let app = make_local_terraform_app(RegistryMode::Local).await;
+
+    let req = TestRequest::get()
+        .uri("/proxy/local-tf/v1/modules/hashicorp/unknown/aws/9.9.9/artifact")
+        .insert_header(("Authorization", bearer(USER_TOKEN)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
 }
 
 #[actix_web::test]

@@ -158,6 +158,18 @@ spellings*.
   `download` too. `csv` works on every listing, with the JSON field names as
   headers.
 
+### Fixed
+
+- **A hybrid terraform registry serves its upstream's providers and modules.**
+  The download documents point at this instance's artifact routes for
+  every version, but those routes read local storage only, so `terraform init`
+  got a `404` for any upstream provider archive or module tarball. They now
+  fall through to the upstream on a local miss.
+- **A terraform module published here installs.** `X-Terraform-Get` named the
+  archive route without a format, and Terraform parsed the tarball as an HTML
+  page ("XML syntax error"). It now carries `?archive=tar.gz` for a version
+  published here.
+
 ## [1.8.3] - 2026-11-02
 
 ### Fixed
