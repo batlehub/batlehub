@@ -215,6 +215,8 @@ pub async fn resolve_ref(
         resolved_at: now,
         previous: previous.clone(),
     };
+    // A pullability answer writes nothing the download would (RFC 0040 T2b).
+    let store = store.filter(|_| !crate::services::pullability::evaluate_only());
     if let Some(s) = store {
         if let Err(e) = s.upsert(registry, owner_repo, git_ref, &resolution).await {
             tracing::warn!(

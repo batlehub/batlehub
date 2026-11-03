@@ -378,3 +378,57 @@ async fn resolution_on_a_closed_registry_is_not_found_for_anonymous() {
     .await;
     assert_eq!(resp.status(), 404);
 }
+
+/// A read granted on one package alone — a stored package-tier grant, on a
+/// registry whose own tier grants the caller nothing — opens the download, so
+/// `why` sees the package too. It used to answer 404 for something that
+/// installs; the next package, ungranted, still gets the same 404.
+#[actix_web::test]
+async fn a_package_tier_grant_alone_makes_the_package_visible() {
+    use batlehub_core::entities::{
+        Action, GrantMap, Node, RegistryGrants, RegistryKind, SubjectMatcher, Tier,
+    };
+    use batlehub_core::ports::{GrantRepository, NodeKind, StoredGrant};
+    let (app, parts) = app().await;
+    publish(&app, "pkgonly").await;
+    publish(&app, "other").await;
+    *parts.access_config.write().await = access_config(&[], &[]).read().await.clone();
+    let repo = batlehub_adapters::in_memory::InMemoryGrantRepository::new();
+    repo.put_grant(StoredGrant {
+        registry: REG.to_owned(),
+        node_kind: NodeKind::Package,
+        node_key: "pkgonly".to_owned(),
+        subject: SubjectMatcher::User("user-1".to_owned()),
+        actions: vec![
+            Action::ReleasesRead,
+            Action::ReleasesList,
+            Action::SourceRead,
+        ],
+        granted_by: None,
+    })
+    .await
+    .unwrap();
+    {
+        let mut hot = parts.proxy_svc.hot.write().await;
+        hot.grant_repo = Some(repo as std::sync::Arc<dyn GrantRepository>);
+        hot.grants = [(
+            REG.to_owned(),
+            std::sync::Arc::new(RegistryGrants {
+                kind: RegistryKind::Cargo,
+                registry: Node::new(
+                    Tier::Registry,
+                    format!("registry:{REG}"),
+                    Some(GrantMap::new()),
+                ),
+                namespaces: Vec::new(),
+            }),
+        )]
+        .into();
+    }
+
+    assert_eq!(download(&app, "pkgonly", USER_TOKEN).await, 200);
+    let (status, body, _) = ask(&app, "pkgonly", USER_TOKEN).await;
+    assert_eq!(status, 200, "the download serves it: {body}");
+    assert_eq!(body["headline"], "pullable", "{body}");
+    assert_eq!(ask(&app, "other", USER_TOKEN).await.0, 404);
+}

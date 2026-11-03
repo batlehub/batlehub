@@ -288,17 +288,31 @@ impl ProxyService {
         ),
         CoreError,
     > {
-        let prelude = self.request_prelude(req).await?;
+        // The ref facts the `forge_ref` rule judges, as `handle` gathers them:
+        // without them a moved tag the download refuses read as pullable.
+        let mut req = ProxyRequest {
+            package_id: req.package_id.clone(),
+            identity: req.identity.clone(),
+            action: req.action,
+            ip_address: req.ip_address.clone(),
+            user_agent: req.user_agent.clone(),
+        };
+        let resolved = self.resolve_forge_ref(&mut req).await?;
+        let prelude = self.request_prelude(&req).await?;
         let metadata = self
             .resolve_metadata_uncaptured(
                 &prelude.client,
                 &prelude.policy,
-                req,
+                &req,
                 &prelude.cache_key,
                 prelude.ttl,
                 &prelude.registry_label,
             )
             .await?;
+        let metadata = match &resolved {
+            Some(r) => overlay_forge_metadata(metadata, r),
+            None => metadata,
+        };
         Ok((metadata, prelude.policy))
     }
 

@@ -447,3 +447,28 @@ async fn an_archive_digest_is_never_asset_replaced() {
     *lab.forge.asset_digest.lock().unwrap() = Some(format!("sha256:{}", "f".repeat(64)));
     assert_eq!(get(&app, &tarball("v1.0.0")).await.status(), 200);
 }
+
+/// `why` judges the same ref facts the download does: once the tag has
+/// moved, the download is refused with `TAG_MOVED`, and so is the answer.
+/// It used to resolve no ref at all, so the rule saw nothing and said
+/// pullable.
+#[actix_web::test]
+async fn why_refuses_a_moved_tag_as_the_download_does() {
+    let (app, lab) = lab((RefAction::Warn, RefAction::Deny), false).await;
+    assert_eq!(get(&app, &tarball("v1.0.0")).await.status(), 200);
+    lab.forge.move_tag("v1.0.0", B);
+    assert_eq!(get(&app, &tarball("v1.0.0")).await.status(), 403);
+
+    let resp = get(
+        &app,
+        &format!(
+            "/api/v1/packages/access?registry={REG}&name={REPO}&version=v1.0.0\
+             &artifact=tarball/v1.0.0"
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body = String::from_utf8(actix_web::test::read_body(resp).await.to_vec()).unwrap();
+    assert!(body.contains("\"headline\":\"refused\""), "{body}");
+    assert!(body.contains("TAG_MOVED"), "{body}");
+}

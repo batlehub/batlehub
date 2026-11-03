@@ -218,8 +218,17 @@ impl PullabilityService {
             // the download, so it is not-found here.
             None if !scope.falls_through => return Ok(Answer::NotFound),
             None => {
+                // Keyed as the download keys it — `…/tarball`, `…/dl` — or
+                // `why` misses the metadata an air-gap bundle seeded and
+                // fills a cache slot no install reads.
+                let package_id = match (&package.artifact, kind.map(|k| k.fetchable_by_version())) {
+                    (None, Some(crate::entities::FetchSupport::ByVersion(a))) => {
+                        a.coordinate(registry, name, version)
+                    }
+                    _ => package.clone(),
+                };
                 let req = ProxyRequest {
-                    package_id: package.clone(),
+                    package_id,
                     identity: identity.clone(),
                     action,
                     ip_address: None,

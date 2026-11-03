@@ -261,7 +261,8 @@ pub async fn check_access(
                 &identity,
                 batlehub_core::entities::Action::ReleasesRead,
             )
-            .await);
+            .await
+            || coordinate_grant(&proxy_svc.hot, &query, &identity).await);
     let scope = Scope {
         visible,
         falls_through: modes.get(&query.registry) != batlehub_config::schema::RegistryMode::Local,
@@ -376,4 +377,42 @@ fn build_proxy_url(
         }),
         _ => None,
     }
+}
+
+/// A read granted on this package or version alone — the stored tiers
+/// `holds_anywhere_in_registry` deliberately does not enumerate. The download
+/// honours such a grant, so `why` must see the package too, or it answers 404
+/// for something that installs. Only reached when the registry has a grants
+/// hierarchy: without one, `holds_anywhere_in_registry` already said yes.
+async fn coordinate_grant(
+    hot: &batlehub_core::services::hot_config::HotConfigLock,
+    query: &AccessQuery,
+    identity: &AuthIdentity,
+) -> bool {
+    use batlehub_core::entities::{Action, RegistryKind};
+    let kind = hot
+        .read()
+        .await
+        .registries
+        .get(&query.registry)
+        .and_then(|c| c.registry_type().parse::<RegistryKind>().ok());
+    let name = kind.map_or_else(
+        || query.name.clone(),
+        |k| k.canonical_package_name(&query.name).into_owned(),
+    );
+    // No version asked: a package-tier grant still matches.
+    let pkg = PackageId::new(
+        &query.registry,
+        name,
+        query.version.as_deref().unwrap_or_default(),
+    );
+    for action in [Action::ReleasesRead, Action::SourceRead] {
+        if batlehub_core::services::authz::authorize_grants_public(hot, &pkg, identity, action)
+            .await
+            .is_ok()
+        {
+            return true;
+        }
+    }
+    false
 }
