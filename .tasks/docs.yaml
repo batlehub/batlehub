@@ -41,6 +41,18 @@ tasks:
           cat ROADMAP.md
         } > docs/guide/roadmap.md
 
+  docs:cli-matrix:
+    desc: Regenerate the per-kind coverage table in both CLI reference pages from cli/src/coverage.rs
+    # The table is the matrix of RFC 0040 §4.7, rendered by the same unit test
+    # that checks it: BLESS=1 makes it write rather than fail.
+    cmds:
+      - BLESS=1 cargo test -p batlehub-cli --bin batlehub-cli coverage::tests::the_reference_pages_carry_the_matrix
+
+  docs:cli-matrix:check:
+    desc: Fail if a CLI reference page's coverage table has drifted from cli/src/coverage.rs
+    cmds:
+      - cargo test -p batlehub-cli --bin batlehub-cli coverage::tests::the_reference_pages_carry_the_matrix
+
   docs:roadmap:check:
     desc: Fail if the published roadmap page has drifted from ROADMAP.md
     # Compares content rather than git state, for the reason above: the whole
@@ -235,6 +247,7 @@ tasks:
       # check guarded the freshness of a file no stylesheet read.
       - task: ui:tokens:check
       - task: docs:roadmap:check
+      - task: docs:cli-matrix:check
       - task: docs:listing-coverage:check
       - task: docs:readme-coverage:check
       - task: docs:endpoints:check

@@ -17,22 +17,18 @@ fn usage(message: impl Into<String>) -> anyhow::Error {
     CliError::new(ExitCode::Usage, message).into()
 }
 
-/// Why a kind takes no `publish` (RFC 0040 §4.7): the cell's reason is the
-/// message. `None` for a kind this command uploads.
+/// Why a kind takes no `publish`: its §4.7 cell's reason is the message
+/// (§4.11). `None` for a kind this command uploads.
 fn refusal(kind: RegistryKind, base: &str, registry: &str) -> Option<String> {
-    use RegistryKind as K;
-    match kind {
-        K::Nix => Some(format!(
-            "a nix registry is published by `nix copy`, which signs and uploads the \
-             closure: nix copy --to \"{base}/proxy/{registry}/nix\" ./result"
+    use crate::coverage::{cell, Capability, Cell};
+    match cell(kind, Capability::Publish) {
+        Cell::Done(_) => None,
+        Cell::Print(why) if kind == RegistryKind::Nix => Some(format!(
+            "{why}: nix copy --to \"{base}/proxy/{registry}/nix\" ./result"
         )),
-        K::Jetbrains | K::Github | K::Forgejo | K::Gitlab | K::Generic => Some(format!(
-            "a {kind} registry is proxy-only: there is nothing to publish to"
-        )),
-        K::Nodedist | K::Sdkman | K::Rustup => Some(format!(
-            "a {kind} registry mirrors a vendor's releases: there is nothing to publish to"
-        )),
-        _ => None,
+        Cell::Print(why) | Cell::NotApplicable(why) => {
+            Some(format!("nothing to publish to a {kind} registry: {why}"))
+        }
     }
 }
 

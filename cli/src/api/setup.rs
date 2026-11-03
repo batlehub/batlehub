@@ -198,6 +198,10 @@ fn detect_project_types_in(
     if let Some(det) = detect_conda(dir, targets) {
         out.push(det);
     }
+    out.extend(detect_galaxy(dir, targets));
+    out.extend(detect_helm(dir, targets));
+    out.extend(detect_nix(dir, targets));
+    out.extend(detect_devfile(dir, targets));
 
     out
 }
@@ -462,6 +466,96 @@ fn detect_nuget(dir_names: &[String], targets: &RegistryTargets) -> Option<Proje
     }))
 }
 
+/// A collection (`galaxy.yml`, named `namespace.name`) or a project that
+/// installs from Galaxy (`requirements.yml`).
+fn detect_galaxy(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDetection> {
+    let galaxy_yml = dir.join("galaxy.yml");
+    if !galaxy_yml.exists() && !dir.join("requirements.yml").exists() {
+        return None;
+    }
+    let name = grep_key(&galaxy_yml, "namespace:")
+        .zip(grep_key(&galaxy_yml, "name:"))
+        .map(|(ns, n)| format!("{ns}.{n}"));
+    let pkg = name.as_deref().unwrap_or("<collection>").to_string();
+    Some(detection("galaxy", targets, name, |base| {
+        format!(
+            "Registry type : galaxy\n\
+             Collection    : {pkg}\n\
+             \n\
+             ~/.ansible.cfg:\n\
+             {}\n\
+             \n\
+             Publish:\n\
+             ansible-galaxy collection publish *.tar.gz --server batlehub",
+            render_body(TargetId::Ansible, base)
+        )
+    }))
+}
+
+fn detect_helm(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDetection> {
+    let chart = dir.join("Chart.yaml");
+    if !chart.exists() {
+        return None;
+    }
+    let name = grep_key(&chart, "name:");
+    let pkg = name.as_deref().unwrap_or("<chart>").to_string();
+    Some(detection("helm", targets, name, |base| {
+        format!(
+            "Registry type : helm\n\
+             Chart         : {pkg}\n\
+             \n\
+             Repository:\n\
+             helm repo add batlehub {base}/helm\n\
+             helm repo update\n\
+             \n\
+             Publish:\n\
+             helm package . && batlehub-cli publish {pkg}-*.tgz"
+        )
+    }))
+}
+
+fn detect_nix(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDetection> {
+    if !dir.join("flake.nix").exists() {
+        return None;
+    }
+    Some(detection("nix", targets, None, |base| {
+        format!(
+            "Registry type : nix\n\
+             \n\
+             ~/.config/nix/nix.conf (your user must be in the daemon's trusted-users):\n\
+             {}\n\
+             \n\
+             Publish:\n\
+             nix copy --to \"{base}/nix\" ./result",
+            render_body(TargetId::Nix, base)
+        )
+    }))
+}
+
+fn detect_devfile(dir: &Path, targets: &RegistryTargets) -> Option<ProjectDetection> {
+    if !dir.join("devfile.yaml").exists() {
+        return None;
+    }
+    Some(detection("devfile", targets, None, |base| {
+        format!(
+            "Registry type : devfile\n\
+             \n\
+             CheCluster (cluster configuration):\n\
+             spec:\n\
+             \x20 components:\n\
+             \x20   devfileRegistry:\n\
+             \x20     externalDevfileRegistries:\n\
+             \x20       - url: {base}/\n\
+             \n\
+             odo:\n\
+             odo preference add registry batlehub {base}/\n\
+             \n\
+             Publish:\n\
+             batlehub-cli publish ."
+        )
+    }))
+}
+
 // ── Manifest parsing helpers ───────────────────────────────────────────────
 
 fn read_toml_field(path: &Path, keys: &[&str]) -> Option<String> {
@@ -637,6 +731,54 @@ mod tests {
         assert_eq!(results[0].registry_type, "nuget");
         assert_eq!(results[0].package_name.as_deref(), Some("MyPkg"));
         assert!(results[0].instructions.contains("dotnet nuget push"));
+    }
+
+    #[test]
+    fn detects_the_rfc_0040_manifests() {
+        let cases: &[(&str, &str, &str, Option<&str>, &str)] = &[
+            (
+                "galaxy.yml",
+                "namespace: acme\nname: util\nversion: 1.0.0\n",
+                "galaxy",
+                Some("acme.util"),
+                "[galaxy_server.batlehub]",
+            ),
+            (
+                "requirements.yml",
+                "collections:\n  - name: community.general\n",
+                "galaxy",
+                None,
+                "server_list = batlehub",
+            ),
+            (
+                "Chart.yaml",
+                "apiVersion: v2\nname: web\nversion: 0.1.0\n",
+                "helm",
+                Some("web"),
+                "helm repo add batlehub",
+            ),
+            ("flake.nix", "{ }\n", "nix", None, "extra-substituters = "),
+            (
+                "devfile.yaml",
+                "schemaVersion: 2.2.0\n",
+                "devfile",
+                None,
+                "externalDevfileRegistries",
+            ),
+        ];
+        for (file, content, ty, name, says) in cases {
+            let dir = TempDir::new().unwrap();
+            fs::write(dir.path().join(file), content).unwrap();
+            let results = scan_project_types(dir.path(), &targets(), 0);
+            assert_eq!(results.len(), 1, "{file}");
+            assert_eq!(results[0].registry_type, *ty, "{file}");
+            assert_eq!(results[0].package_name.as_deref(), *name, "{file}");
+            assert!(
+                results[0].instructions.contains(says),
+                "{file}: {}",
+                results[0].instructions
+            );
+        }
     }
 
     #[test]

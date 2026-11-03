@@ -4,6 +4,7 @@ mod config;
 mod confirm;
 mod contract;
 mod coordinate;
+mod coverage;
 mod exit;
 mod gallery_proxy;
 mod render;

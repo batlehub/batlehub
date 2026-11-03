@@ -1382,7 +1382,7 @@ fn format_raw_is_refused_outside_auth_token() {
 }
 
 #[test]
-fn publish_nuget_via_cli() {
+fn nuget_publish() {
     let srv = TestServer::start();
     let tmp = tempfile::tempdir().unwrap();
     let nupkg_path = tmp.path().join("TestPkg.1.2.3.nupkg");
@@ -1406,7 +1406,7 @@ fn publish_nuget_via_cli() {
 }
 
 #[test]
-fn publish_npm_via_cli() {
+fn npm_publish() {
     let srv = TestServer::start_with(&[("test-npm", "npm")]);
     let tmp = tempfile::tempdir().unwrap();
     let tgz_path = tmp.path().join("left-pad-1.3.0.tgz");
@@ -1430,7 +1430,7 @@ fn publish_npm_via_cli() {
 }
 
 #[test]
-fn publish_pypi_via_cli() {
+fn pypi_publish() {
     let srv = TestServer::start_with(&[("test-pypi", "pypi")]);
     let tmp = tempfile::tempdir().unwrap();
     let whl_path = tmp.path().join("my_pkg-1.0.0-py3-none-any.whl");
@@ -1454,7 +1454,7 @@ fn publish_pypi_via_cli() {
 }
 
 #[test]
-fn publish_cargo_via_cli() {
+fn cargo_publish() {
     let srv = TestServer::start_with(&[("test-cargo", "cargo")]);
     let tmp = tempfile::tempdir().unwrap();
     let crate_path = tmp.path().join("my-crate-0.1.0.crate");
@@ -5691,4 +5691,307 @@ fn download_checksum_mismatch() {
     assert_eq!(code, 1, "{stderr}");
     assert!(stderr.contains("does not match its metadata"), "{stderr}");
     assert!(!out.exists() && !dir.path().join("pkg.tgz.part").exists());
+}
+
+// ── RFC 0040 §6.6: one test per claimed cell of the coverage matrix ─────────
+//
+// The real-server tests above cover the cells that need the server's own
+// parsing (`<kind>_publish` for the nine new uploaders, `npm_download`, …).
+// These prove, per kind, that the CLI sends that kind's request to the route
+// it belongs on: a stand-in server lists one registry `r` of the kind and
+// expects exactly one call.
+
+/// A stand-in BatleHub listing one registry `r` of `kind`.
+fn stand_in(kind: &str) -> mockito::ServerGuard {
+    let mut s = mockito::Server::new();
+    s.mock("GET", "/api/v1/registries")
+        .with_body(format!(
+            r#"[{{"name":"r","type":"{kind}","mode":"local"}}]"#
+        ))
+        .create();
+    s
+}
+
+/// `package versions r/pkg` reads the explore rows for any kind.
+macro_rules! consult_case {
+    ($($name:ident, $kind:literal;)*) => {$(
+        #[test]
+        fn $name() {
+            let mut s = stand_in($kind);
+            let m = s
+                .mock("GET", "/api/v1/explore/packages/r/pkg")
+                .match_query(mockito::Matcher::Any)
+                .with_body(
+                    r#"{"versions":[{"version":"1.0.0","state":"held","source":"local"}],
+                        "versions_page":{"page":0,"per_page":50,"total":1}}"#,
+                )
+                .create();
+            let (code, stdout, stderr) =
+                cli_exit(&["--json", "package", "versions", "r/pkg"], &s.url(), AUTH_TOKEN);
+            assert_eq!(code, 0, "{stderr}");
+            assert!(stdout.contains("1.0.0"), "{stdout}");
+            m.assert();
+        }
+    )*};
+}
+
+consult_case! {
+    cargo_consult, "cargo"; npm_consult, "npm"; pypi_consult, "pypi";
+    goproxy_consult, "goproxy"; maven_consult, "maven"; conda_consult, "conda";
+    composer_consult, "composer"; rubygems_consult, "rubygems";
+    terraform_consult, "terraform"; helm_consult, "helm"; galaxy_consult, "galaxy";
+    nix_consult, "nix"; devfile_consult, "devfile"; openvsx_consult, "openvsx";
+    vscode_marketplace_consult, "vscode-marketplace";
+    jetbrains_marketplace_consult, "jetbrains-marketplace";
+    jetbrains_consult, "jetbrains"; deb_consult, "deb"; rpm_consult, "rpm";
+    pacman_consult, "pacman"; apk_consult, "apk"; github_consult, "github";
+    forgejo_consult, "forgejo"; gitlab_consult, "gitlab"; generic_consult, "generic";
+    nodedist_consult, "nodedist"; sdkman_consult, "sdkman"; rustup_consult, "rustup";
+}
+
+/// `package yank --yes r/pkg@1.0.0` goes to the generic lifecycle endpoint.
+macro_rules! lifecycle_case {
+    ($($name:ident, $kind:literal;)*) => {$(
+        #[test]
+        fn $name() {
+            let mut s = stand_in($kind);
+            let m = s
+                .mock("POST", "/api/v1/admin/registries/r/bulk-yank")
+                .with_body(r#"{"processed":1,"succeeded":1,"failed":[]}"#)
+                .create();
+            let (code, stdout, stderr) =
+                cli_exit(&["package", "yank", "--yes", "r/pkg@1.0.0"], &s.url(), AUTH_TOKEN);
+            assert_eq!(code, 0, "{stderr}");
+            assert!(stdout.contains("Yanked r/pkg@1.0.0"), "{stdout}");
+            m.assert();
+        }
+    )*};
+}
+
+lifecycle_case! {
+    cargo_lifecycle, "cargo"; npm_lifecycle, "npm"; pypi_lifecycle, "pypi";
+    goproxy_lifecycle, "goproxy"; maven_lifecycle, "maven"; conda_lifecycle, "conda";
+    composer_lifecycle, "composer"; rubygems_lifecycle, "rubygems";
+    nuget_lifecycle, "nuget"; terraform_lifecycle, "terraform"; helm_lifecycle, "helm";
+    galaxy_lifecycle, "galaxy"; nix_lifecycle, "nix"; devfile_lifecycle, "devfile";
+    openvsx_lifecycle, "openvsx"; vscode_marketplace_lifecycle, "vscode-marketplace";
+    jetbrains_marketplace_lifecycle, "jetbrains-marketplace"; deb_lifecycle, "deb";
+    rpm_lifecycle, "rpm"; pacman_lifecycle, "pacman"; apk_lifecycle, "apk";
+}
+
+/// `download r/<coord> -o file` fetches the kind's native artifact route.
+macro_rules! download_case {
+    ($($name:ident, $kind:literal, $coord:literal, $path:literal;)*) => {$(
+        #[test]
+        fn $name() {
+            let mut s = stand_in($kind);
+            let m = s
+                .mock("GET", $path)
+                .match_query(mockito::Matcher::Any)
+                .with_body("artifact-bytes")
+                .create();
+            let dir = tempfile::tempdir().unwrap();
+            let out = dir.path().join("artifact");
+            let (code, _, stderr) =
+                cli_exit(&["download", $coord, "-o", out.to_str().unwrap()], &s.url(), AUTH_TOKEN);
+            assert_eq!(code, 0, "{stderr}");
+            assert_eq!(std::fs::read(&out).unwrap(), b"artifact-bytes");
+            m.assert();
+        }
+    )*};
+}
+
+download_case! {
+    goproxy_download, "goproxy", "r/example.com/Mod@v1.0.0", "/proxy/r/example.com/!mod/@v/v1.0.0.zip";
+    composer_download, "composer", "r/acme/widget@1.0.0", "/proxy/r/dist/acme/widget/1.0.0";
+    rubygems_download, "rubygems", "r/rake@13.0.0", "/proxy/r/gems/rake-13.0.0.gem";
+    openvsx_download, "openvsx", "r/acme.demo@1.0.0", "/proxy/r/acme.demo/1.0.0/vsix";
+    vscode_marketplace_download, "vscode-marketplace", "r/acme.demo@1.0.0", "/proxy/r/acme.demo/1.0.0/vsix";
+    jetbrains_marketplace_download, "jetbrains-marketplace", "r/com.acme.demo@1.0.0", "/proxy/r/plugin/download";
+    galaxy_download, "galaxy", "r/acme.tools@1.0.0", "/proxy/r/galaxy/api/v3/artifacts/collections/acme-tools-1.0.0.tar.gz";
+    helm_download, "helm", "r/chart@0.1.0", "/proxy/r/helm/charts/chart-0.1.0.tgz";
+    devfile_download, "devfile", "r/go-stack@1.0.0", "/proxy/r/devfiles/go-stack/1.0.0";
+}
+
+/// `publish <file> -r r` sends the kind's upload request; the server's
+/// parsing of each format is the web suites' to prove.
+macro_rules! publish_case {
+    ($($name:ident, $kind:literal, $file:literal, $method:literal, $path:literal, [$($extra:literal),*];)*) => {$(
+        #[test]
+        fn $name() {
+            let mut s = stand_in($kind);
+            let m = s
+                .mock($method, $path)
+                .with_status(201)
+                .with_body("{}")
+                .create();
+            let dir = tempfile::tempdir().unwrap();
+            let file = dir.path().join($file);
+            std::fs::write(&file, b"payload").unwrap();
+            let extra: &[&str] = &[$($extra),*];
+            let mut args = vec!["publish", file.to_str().unwrap(), "-r", "r"];
+            args.extend_from_slice(extra);
+            let (code, _, stderr) = cli_exit(&args, &s.url(), AUTH_TOKEN);
+            assert_eq!(code, 0, "{stderr}");
+            m.assert();
+        }
+    )*};
+}
+
+publish_case! {
+    openvsx_publish, "openvsx", "acme.demo-1.0.0.vsix", "PUT", "/proxy/r/acme.demo/1.0.0/vsix", [];
+    conda_publish, "conda", "numpy-1.26.0-py311h0.conda", "POST", "/proxy/r/noarch/", [];
+    composer_publish, "composer", "widget.zip", "POST", "/proxy/r/api/upload", [];
+    rubygems_publish, "rubygems", "rake-13.0.0.gem", "POST", "/proxy/r/api/v1/gems", [];
+    deb_publish, "deb", "hello_1.0-1_amd64.deb", "PUT", "/proxy/r/deb/pool/stable/main/upload", ["--distribution", "stable", "--component", "main"];
+    rpm_publish, "rpm", "hello-1.0-1.x86_64.rpm", "PUT", "/proxy/r/rpm/upload", [];
+    pacman_publish, "pacman", "hello-1.0-1-x86_64.pkg.tar.zst", "PUT", "/proxy/r/pacman/upload", [];
+    apk_publish, "apk", "hello-1.0-r0.apk", "PUT", "/proxy/r/apk/upload", [];
+}
+
+/// A nix registry prints the command that publishes to it (a **print** cell).
+#[test]
+fn nix_publish() {
+    let s = stand_in("nix");
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("result");
+    std::fs::write(&file, b"x").unwrap();
+    let (code, _, stderr) = cli_exit(
+        &["publish", file.to_str().unwrap(), "-r", "r"],
+        &s.url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 2, "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "nix copy --to \"{}/proxy/r/nix\" ./result",
+            s.url()
+        )),
+        "{stderr}"
+    );
+}
+
+/// A devfile stack directory is packed and published as one bundle.
+#[test]
+fn devfile_publish() {
+    let mut s = stand_in("devfile");
+    let m = s
+        .mock("POST", "/proxy/r/api/stacks")
+        .with_status(201)
+        .with_body(r#"{"stack":"go-stack","version":"1.0.0","digest":"sha256:00"}"#)
+        .create();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("devfile.yaml"),
+        "schemaVersion: 2.2.0\nmetadata:\n  name: go-stack\n  version: 1.0.0\n",
+    )
+    .unwrap();
+    let (code, _, stderr) = cli_exit(
+        &["publish", dir.path().to_str().unwrap(), "-r", "r"],
+        &s.url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 0, "{stderr}");
+    m.assert();
+}
+
+/// A stand-in listing one *proxy* registry `r` of `kind` — what `setup`
+/// points a client at (RFC 0038 §4.4).
+fn stand_in_proxy(kind: &str, extra: &str) -> mockito::ServerGuard {
+    let mut s = mockito::Server::new();
+    s.mock("GET", "/api/v1/registries")
+        .with_body(format!(
+            r#"[{{"name":"r","type":"{kind}","mode":"proxy"{extra}}}]"#
+        ))
+        .create();
+    s
+}
+
+/// `setup apply --yes --only <client>` on a machine where the client is
+/// installed writes the instance into the file the client reads (or, for a
+/// **print** cell, prints it); the assertion is the instance URL being there.
+macro_rules! configure_case {
+    ($($name:ident, $kind:literal, $extra:literal, [$($bin:literal),*], $client:literal, $file:literal;)*) => {$(
+        #[test]
+        fn $name() {
+            let s = stand_in_proxy($kind, $extra);
+            let m = Machine::new(&[$($bin),*]);
+            if $client == "sdkman" {
+                let init = m.path(".sdkman/bin/sdkman-init.sh");
+                std::fs::create_dir_all(init.parent().unwrap()).unwrap();
+                std::fs::write(init, "").unwrap();
+            }
+            let mut args = vec!["apply", "--yes", "--only", $client];
+            // An https `public_url` cannot share the stand-in's port, so it
+            // is "another host" to setup's same-host rule.
+            if $extra.contains("public_url") {
+                args.push("--allow-foreign-hosts");
+            }
+            let (code, stdout, stderr) = m.setup(&s.url(), &args);
+            assert!(code == 0 || code == 6, "{code}: {stdout}\n{stderr}");
+            let written = if $file.is_empty() {
+                stdout.clone()
+            } else {
+                m.read($file).unwrap_or_default()
+            };
+            // The instance's own host, under the registry's path: the
+            // stand-in's URL, or the https `public_url` a kind that refuses
+            // plain HTTP is listed with.
+            assert!(
+                written.contains("127.0.0.1") && written.contains("/proxy/r"),
+                "{}: {written}\n--- stdout\n{stdout}\n--- stderr\n{stderr}",
+                $file
+            );
+        }
+    )*};
+}
+
+configure_case! {
+    cargo_configure, "cargo", "", ["cargo"], "cargo", ".cargo/config.toml";
+    npm_configure, "npm", "", ["npm"], "npm", ".npmrc";
+    pypi_configure, "pypi", "", ["pip"], "pip", ".config/pip/pip.conf";
+    goproxy_configure, "goproxy", "", ["go"], "go", ".config/go/env";
+    maven_configure, "maven", "", ["mvn"], "maven", ".m2/settings.xml";
+    conda_configure, "conda", "", ["conda"], "conda", ".condarc";
+    composer_configure, "composer", r#","public_url":"https://127.0.0.1/proxy/r""#, ["composer"], "composer", ".config/composer/config.json";
+    rubygems_configure, "rubygems", "", ["gem"], "gem", ".gemrc";
+    nuget_configure, "nuget", "", ["dotnet"], "nuget", ".nuget/NuGet/NuGet.Config";
+    terraform_configure, "terraform", r#","public_url":"https://127.0.0.1/proxy/r""#, ["terraform"], "terraform", ".terraformrc";
+    galaxy_configure, "galaxy", "", ["ansible-galaxy"], "galaxy", ".ansible.cfg";
+    nix_configure, "nix", "", ["nix"], "nix", ".config/nix/nix.conf";
+    github_configure, "github", r#","upstream":"https://api.github.com""#, ["mise"], "mise", ".config/mise/conf.d/batlehub.toml";
+    forgejo_configure, "forgejo", r#","upstream":"https://codeberg.org""#, ["mise"], "mise", ".config/mise/conf.d/batlehub.toml";
+    gitlab_configure, "gitlab", r#","upstream":"https://gitlab.com""#, ["mise"], "mise", ".config/mise/conf.d/batlehub.toml";
+    generic_configure, "generic", r#","upstreams":["https://example.com/dl"]"#, ["mise"], "mise", ".config/mise/conf.d/batlehub.toml";
+    nodedist_configure, "nodedist", "", ["mise"], "mise", ".config/mise/conf.d/batlehub.toml";
+    rustup_configure, "rustup", "", ["rustup"], "rustup", ".config/batlehub/env.sh";
+    sdkman_configure, "sdkman", "", [], "sdkman", ".config/batlehub/env.sh";
+    helm_configure, "helm", "", ["helm"], "helm", "";
+    deb_configure, "deb", "", ["apt-get"], "apt", "";
+    rpm_configure, "rpm", "", ["dnf"], "dnf", "";
+    pacman_configure, "pacman", "", ["pacman"], "pacman", "";
+    apk_configure, "apk", "", ["apk"], "apk", "";
+    devfile_configure, "devfile", "", [], "devfile", "";
+}
+
+/// The editor kinds: `setup ide` names the registry an editor in this
+/// terminal should use.
+macro_rules! ide_case {
+    ($($name:ident, $kind:literal, $var:literal, $value:literal;)*) => {$(
+        #[test]
+        fn $name() {
+            let s = stand_in_proxy($kind, "");
+            let m = Machine::new(&[]);
+            let (code, stdout, stderr) =
+                m.setup_with(&s.url(), &[($var, $value)], &["ide", "--json"]);
+            assert_eq!(code, 0, "{stderr}");
+            assert!(stdout.contains(&format!("{}/proxy/r", s.url())), "{stdout}\n{stderr}");
+        }
+    )*};
+}
+
+ide_case! {
+    openvsx_configure, "openvsx", "TERM_PROGRAM", "vscode";
+    vscode_marketplace_configure, "vscode-marketplace", "TERM_PROGRAM", "vscode";
+    jetbrains_marketplace_configure, "jetbrains-marketplace", "TERMINAL_EMULATOR", "JetBrains-JediTerm";
 }

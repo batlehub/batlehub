@@ -73,6 +73,15 @@ pub fn artifact_path(
                 file,
             )
         }
+        RegistryKind::Helm => (
+            format!("/proxy/{r}/helm/charts/{name}-{version}.tgz"),
+            format!("{name}-{version}.tgz"),
+        ),
+        // The stack's `devfile.yaml`, byte-exact.
+        RegistryKind::Devfile => (
+            format!("/proxy/{r}/devfiles/{name}/{version}"),
+            format!("{name}-{version}.devfile.yaml"),
+        ),
         other => {
             return Err(format!(
                 "{other}: no download by coordinate yet; pass the artifact's /proxy/… path"

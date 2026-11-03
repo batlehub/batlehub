@@ -506,13 +506,14 @@ async fn load_plan(
 
 /// 6 when a client needs a human: a conflict to merge, a registry to pick
 /// (ambiguous), a registry gone (orphaned, kept until `remove` or `--pick`),
-/// or env-only variables no rc file will source.
+/// a command still to run (manual), or env-only variables no rc file will
+/// source.
 fn needs_a_look(plans: &[TargetPlan], env: &client_setup::Env, shell_rc: ShellRc) -> bool {
     unwired(plans, env, shell_rc)
         || plans.iter().any(|p| {
             matches!(
                 p.state,
-                State::Conflict | State::Ambiguous | State::Orphaned
+                State::Conflict | State::Ambiguous | State::Orphaned | State::Manual
             )
         })
 }
@@ -580,6 +581,8 @@ fn apply_warnings(plans: &[TargetPlan], env: &client_setup::Env, shell_rc: Shell
                     clients_label(p)
                 )),
                 State::Ambiguous => Some(format!("{}: {detail}", clients_label(p))),
+                // Said with their snippet instead.
+                State::Manual | State::Print => None,
                 // A registry gone, switched to another: said, not only in status.
                 _ if p.detail.is_some() => Some(format!("{}: {detail}", clients_label(p))),
                 _ => None,
@@ -682,6 +685,19 @@ fn print_apply(
                 "\n{} — merge by hand into {}:\n{snippet}",
                 clients_label(p),
                 p.path.display()
+            );
+        }
+    }
+    for p in plans
+        .iter()
+        .filter(|p| matches!(p.state, State::Manual | State::Print))
+    {
+        if let Some(snippet) = &p.snippet {
+            println!(
+                "\n{} ({}) — {}:\n{snippet}",
+                clients_label(p),
+                p.registries.join(","),
+                p.detail.as_deref().unwrap_or("run")
             );
         }
     }

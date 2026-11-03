@@ -1645,7 +1645,7 @@ row names has landed; a partial phase lists what is still open.
 | 1 | done | `ac8e4fca` | This RFC, accepted |
 | 2 | done | `4f23b2ce` | `cli/src/{exit,coordinate,render,confirm}.rs`; the exit-code table, the error shape (`error:`/`code:`/`hint:`, JSON copy on stdout), global `--format`/`BATLEHUB_FORMAT`/`-y`; `-r` honoured by every registry filter; destructive commands confirm; `setup` 3 → 6, `wait` 1/2 → 4/8, `mise` partial → 7; `quarantine.sh` and `client_setup.sh` edited |
 | 3 | done | `6d7ac4aa` | The §4.4 tree (`admin` dissolved), `package <verb> <coord>…`, coordinates on `owner`/`visibility`/`grant`/`sbom show`/`authz check`, `profile` with `current`; every old spelling a hidden alias that warns; `--registry-url`; the server hint reads `batlehub-cli why reg/name@ver` |
-| 4 | in progress | `f08b58d5`, `36180a88`, + this commit | §6.4 owner arm (`OwnershipPort::not_owned_by`, `RegistryKind::owner_verbs`) on `bulk-yank`/`bulk-unyank`; §6.3 publish by the registry's kind with the nine uploaders; §6.5 `package versions` from the explore rows (upstream included, paged, state column) and `download <coord>` (`.part`, streaming verification, rename on match). **Open:** `setup` for the new kinds and detection (§6.5), the coverage gate (§6.6), heavy cases 1–7, 11, 13 |
+| 4 | in progress | `f08b58d5`, `36180a88`, `c59d4b7d`, + the coverage commit | §6.4 owner arm; §6.3 publish by kind with the nine uploaders; §6.5 `package versions` with upstream and `download <coord>`; §6.5 `setup` for conda, composer, gem, nuget, terraform, galaxy, nix, sdkman, gitlab (mise), helm (`manual`) and the print arms, plus detection of galaxy/helm/nix/devfile projects; §6.6 `cli/src/coverage.rs`, its gate and `task docs:cli-matrix`. **Open:** heavy cases 1–7, 11, 13 |
 | 5 | not started | — | |
 | 6 | not started | — | |
 | 7 | not started | — | |
@@ -1684,6 +1684,29 @@ row names has landed; a partial phase lists what is still open.
 - **The CLI's own npm publish now sends `dist.integrity`/`dist.shasum`.** It sent
   neither, so the packument of a CLI-published version carried no checksum for
   `download` — or npm — to verify.
+- **The coverage gate is a unit test in `cli/src/coverage.rs`, not
+  `cli/tests/kind_coverage.rs`**: the CLI is a binary crate, so an integration
+  test cannot import the matrix. It reads `cli/tests/*.rs` for `fn <kind>_<cap>(`
+  or a row of a `*_case!` table, and the docs check is the same file's
+  `the_reference_pages_carry_the_matrix` (`BLESS=1` writes). Most per-cell tests
+  run the CLI against a stand-in server that lists one registry of the kind and
+  expects the one request that kind's route takes. The server's handling of each
+  format is the web suites' to prove, and the nine new uploaders also have a
+  real-server test.
+- **The matrix differs from §4.7's table in four places.** `jetbrains` configure
+  is n.a., because `setup ide` configures the plugin marketplace and that kind
+  serves IDE downloads by path. helm configure is **print** (`manual`): helm
+  rewrites its own repository file and would drop a marked block. Download is
+  n.a. for the kinds `fetchable_by_version` says have no single artifact (pypi,
+  maven, conda, terraform, the OS kinds, the forges, the vendor mirrors) until
+  phase 5's `package show` can name one. The Check column joins in phase 7, as
+  §6.6 says.
+- **`setup` deviations.** Composer's `auth.json` is not written (anonymous
+  reads only), there is no terraform `host` block, and the nix public key is not
+  written (the registry list does not carry it). conda accepting `nodefaults`,
+  NuGet following `DOTNET_CLI_HOME`, ansible refusing a duplicate section and
+  the precedence of `NIX_CONFIG` were not checked against the clients' source.
+  Heavy case 1 is where they get proven.
 - **apk publish has no in-process test**: the route needs a signed package and
   a configured signer; heavy case 7 is its proof.
 - **The CLI integration suite shows a rare `408` under load** (actix's client

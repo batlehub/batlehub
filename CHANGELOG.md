@@ -110,6 +110,18 @@ spellings*.
 - **`publish` to npm now sends `dist.integrity` and `dist.shasum`**, as
   `npm publish` does, so the published packument carries a checksum clients can
   verify.
+- **`setup apply` configures ten more clients:** conda (`~/.condarc`), composer
+  (its `config.json`, managed only when setup created it), gem (`~/.gemrc`),
+  dotnet/nuget (`NuGet.Config`, likewise), terraform/tofu (`~/.terraformrc`
+  `network_mirror`), ansible-galaxy (`~/.ansible.cfg`), nix (`nix.conf`
+  `extra-substituters`), sdkman (`env.sh`), and mise rules for gitlab. helm is
+  reported as `manual`, with the `helm repo add` to run. apt, dnf, pacman, apk
+  and devfile get a `print` snippet, since their files are root's. `setup detect`
+  also recognises `galaxy.yml`/`requirements.yml`, `Chart.yaml`, `flake.nix` and
+  `devfile.yaml`.
+- **The CLI reference carries a per-kind coverage table** (RFC 0040 §4.7),
+  generated from `cli/src/coverage.rs`. The build fails when a kind claims a
+  capability that no test exercises.
 - **`profile list` and `profile use`.** `use` writes a top-level `current` key,
   so `-P` is needed only to leave the profile in use. An older CLI ignores the
   key.
