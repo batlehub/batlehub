@@ -10,7 +10,7 @@ Proxy and cache the Terraform provider and module registry protocol (v1 API), or
 | **Default upstream** | `registry.terraform.io` |
 | **Modes** | proxy · local · hybrid |
 | **Addressing** | per-package |
-| **Private publish** | ✅ module + provider upload |
+| **Private publish** | ✅ module · ⚠️ provider upload, but `terraform init` cannot install it yet ([below](#publishing-providers)) |
 | **Air gap** | offline, provider and module `versions` are composed from the held set, and a provider's `download` document for a platform whose archive, `shasums` and `shasums.sig` are all held — the plan must name all three paths — with the publisher's signing keys carried on the bundle's manifest by `mise export`; `terraform init` verifies the publisher's signature as it does connected, and this instance signs nothing. A platform missing any of the three is a `503` |
 
 ## Proxy setup
@@ -282,6 +282,15 @@ module "consul" {
 ```
 
 ### Publishing providers
+
+::: warning A provider published here is not installable yet
+Terraform verifies a provider against a signed `SHA256SUMS`, and this instance
+has no way to receive one: the upload below stores the archives, but the
+download document names no checksum list, so `terraform init` refuses the
+archive with *"checksum list has no SHA-256 hash for …"*. Modules are not
+affected. Publishing the publisher-signed `SHA256SUMS` and its `.sig` is the
+planned fix ([#281](https://github.com/batlehub/batlehub/issues/281)).
+:::
 
 **Step 1 — Upload version manifest** (JSON describing the version and its platforms):
 
