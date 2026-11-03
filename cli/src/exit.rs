@@ -89,6 +89,9 @@ pub struct CliError {
     pub exit: ExitCode,
     pub message: String,
     pub hint: Option<String>,
+    /// The command already wrote its `--format json` result on stdout, so
+    /// `main` adds no error document after it: one document per run.
+    pub reported: bool,
 }
 
 impl CliError {
@@ -97,6 +100,7 @@ impl CliError {
             exit,
             message: message.into(),
             hint: None,
+            reported: false,
         }
     }
 
@@ -104,6 +108,15 @@ impl CliError {
     /// the answer is on stdout, and an `error:` line would repeat it).
     pub fn quiet(exit: ExitCode) -> Self {
         Self::new(exit, "")
+    }
+
+    /// A [`quiet`](Self::quiet) exit whose result is already on stdout as the
+    /// run's one JSON document (`why`'s ⛔, `audit verify`'s failures).
+    pub fn reported(exit: ExitCode) -> Self {
+        Self {
+            reported: true,
+            ..Self::quiet(exit)
+        }
     }
 
     pub fn hint(mut self, hint: impl Into<String>) -> Self {
@@ -127,6 +140,8 @@ pub struct Report {
     pub code: Option<String>,
     pub docs: Option<String>,
     pub hint: Option<String>,
+    /// See [`CliError::reported`].
+    pub reported: bool,
 }
 
 impl Report {
@@ -139,6 +154,7 @@ impl Report {
                     docs: api.code.as_deref().map(reason_code_docs_url),
                     code: api.code.clone(),
                     hint: (api.status == 401).then(|| "run `batlehub-cli auth login`".to_owned()),
+                    reported: false,
                 };
             }
             if let Some(cli) = cause.downcast_ref::<CliError>() {
@@ -148,6 +164,7 @@ impl Report {
                     code: None,
                     docs: None,
                     hint: cli.hint.clone(),
+                    reported: cli.reported,
                 };
             }
         }
@@ -158,6 +175,7 @@ impl Report {
             code: None,
             docs: None,
             hint: None,
+            reported: false,
         }
     }
 

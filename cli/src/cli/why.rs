@@ -66,7 +66,7 @@ pub async fn run(args: WhyArgs, client: &BatleHubClient) -> Result<()> {
     }
     // A question, so ⏳ is a successful answer; ⛔ is exit 4 (§4.6).
     if headline(&answer) == "refused" {
-        return Err(CliError::quiet(ExitCode::Refused).into());
+        return Err(CliError::reported(ExitCode::Refused).into());
     }
     Ok(())
 }

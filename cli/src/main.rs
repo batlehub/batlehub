@@ -35,7 +35,7 @@ async fn main() -> std::process::ExitCode {
         Err(e) => {
             let report = exit::Report::from_error(&e);
             // A script parses a failure the way it parses a success.
-            if format == Format::Json {
+            if format == Format::Json && !report.reported {
                 println!("{}", report.to_json());
             }
             let text = report.to_stderr();

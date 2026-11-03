@@ -169,6 +169,9 @@ spellings*.
   archive route without a format, and Terraform parsed the tarball as an HTML
   page ("XML syntax error"). It now carries `?archive=tar.gz` for a version
   published here.
+- **`batlehub-cli --format json` prints one document when a command answers and
+  exits non-zero** (`why` on a refused version, `audit verify` with failures):
+  no error object is appended after the answer.
 
 ## [1.8.3] - 2026-11-02
 

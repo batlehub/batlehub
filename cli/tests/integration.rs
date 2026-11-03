@@ -6124,3 +6124,31 @@ fn why_on_a_refused_version_exits_four_with_the_answer() {
     );
     assert!(stderr.is_empty(), "the answer is the output: {stderr}");
 }
+
+/// Under `--format json` a refused `why` is still one JSON document on stdout:
+/// the answer, with no error object appended after it (a script reads one).
+#[test]
+fn why_json_on_a_refused_version_prints_one_document() {
+    let mut s = stand_in("npm");
+    s.mock("GET", "/api/v1/packages/access")
+        .match_query(mockito::Matcher::Any)
+        .with_body(
+            r#"{"package":{"registry":"r","name":"pkg","version":"1.0.0","artifact":null},
+                "can_access":false,"reason":"blocked by an administrator","proxy_url":null,
+                "headline":"refused","until":null,"resolved_version":null,"versions":[],
+                "causes":[
+                  {"kind":"access","state":"pass","detail":"you may read r","reason_code":null,"until":null,"next":null},
+                  {"kind":"block","state":"refuse","detail":"blocked by an administrator",
+                   "reason_code":"BLOCK_LIST","until":null,"next":"ask an administrator to unblock it"}]}"#,
+        )
+        .create();
+    let (code, stdout, stderr) = cli_exit(
+        &["--format", "json", "why", "r/pkg@1.0.0"],
+        &s.url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 4, "{stdout}\n{stderr}");
+    let doc: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout is not one JSON document ({e}): {stdout}"));
+    assert_eq!(doc["headline"], "refused", "{stdout}");
+}

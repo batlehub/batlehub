@@ -996,6 +996,10 @@ async fn handle_audit_trail(
         }
     }
     if r["ok"] != serde_json::Value::Bool(true) {
+        // Under --json the report above is the answer, failures included.
+        if json {
+            return Err(crate::exit::CliError::reported(crate::exit::ExitCode::Failure).into());
+        }
         anyhow::bail!("the audit trail does not verify");
     }
     if !json {
