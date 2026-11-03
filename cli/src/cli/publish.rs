@@ -191,7 +191,7 @@ pub async fn run(
             } else {
                 // A module zip built elsewhere: sent as it is.
                 let module = need("name", &args.name)?;
-                (module, std::fs::read(&args.file)?)
+                (module, tokio::fs::read(&args.file).await?)
             };
             client.publish_goproxy(&registry, &module, &v, zip).await?;
             published = (Some(module), Some(v));

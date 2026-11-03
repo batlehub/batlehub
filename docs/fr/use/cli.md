@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: 901485ab9a0886a7
+sourceHash: 6e4033b4529a3626
 ---
 
 # batlehub-cli
@@ -456,6 +456,20 @@ pour elle. Sans version, celle sur laquelle la console s'ouvre : la plus récent
 version stable que l'instance détient. Une version inconnue sort en 5. Avec
 `--format json`, la sortie est `{registry, name, version, links, pullability}`,
 où `version` est la ligne de `package versions`.
+
+```
+$ batlehub-cli package show npm-local/left-pad@1.3.9
+version     1.3.9
+state       cached
+source      local
+published   2026-10-02T09:14:00Z
+license     MIT
+repository  https://github.com/left-pad/left-pad
+homepage    —
+
+✅ npm-local/left-pad@1.3.9 — pullable now
+  ✅ pass  access      you may read npm-local
+```
 
 ### `package readme <registry>/<name>[@<version>]`
 
