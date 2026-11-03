@@ -3,6 +3,10 @@
 # registry, measuring the RFC 0018 §4.4 axes of a rejection (there is no
 # Publish axis: the Go module proxy protocol has no publish).
 #
+#   Publish  RFC 0040 §6.P case 5, against a local registry: `batlehub-cli
+#            publish ./mod` with no `-t` sends the module zip, and `go mod
+#            download` resolves `.info`, `.mod` and `.zip` from it.
+#
 #   Hide     A blocked version is omitted from `@v/list` and from `@latest`
 #            (RFC 0006): a fresh `go get module@latest` picks the previous
 #            version; a go.mod that pins the blocked one reaches the
@@ -174,5 +178,31 @@ run_go "$HEAVY_WORK/cache2" "$HEAVY_WORK/c2" "$PROXY" mod download \
   || { cat "$RUN_OUT" >&2; heavy_fail "Recover: go mod download after the unblock failed — the client remembered the refusal"; }
 heavy_wire_after recover "GET $ZIP -> 200" "Recover: the zip was not fetched after the unblock"
 heavy_log "Recover: the same module cache downloaded $MODULE@$BLOCKED after the unblock"
+
+# ── Publish (RFC 0040 §6.P case 5) ───────────────────────────────────────────
+
+LOCAL_REG="go-local-$HEAVY_RUN"
+SRC="$HEAVY_WORK/mod"
+mkdir -p "$SRC"
+printf 'module example.com/mod\n\ngo 1.21\n' > "$SRC/go.mod"
+printf 'package mod\n\n// Hello greets.\nfunc Hello() string { return "hello" }\n' > "$SRC/mod.go"
+heavy_mark publish
+heavy_cli "$ADMIN_TOKEN" publish "$SRC" -r "$LOCAL_REG" --version v0.1.0
+[[ "$HEAVY_CLI_CODE" == 0 ]] || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "Publish: batlehub-cli publish exited $HEAVY_CLI_CODE"; }
+# One PUT of the zip: the server derives `.mod` and `.info` from it, so the
+# publish is atomic (cli/src/api/publish.rs) — not the three PUTs §6.P names.
+heavy_wire_re_after publish "PUT /proxy/$LOCAL_REG/example[.]com/mod/@v/v0[.]1[.]0[.]zip -> 20[01]" \
+  "Publish: the CLI did not PUT the module zip"
+heavy_mark publish-read
+RUN_OUT="$HEAVY_WORK/publish-read.txt"
+mkdir -p "$HEAVY_WORK/pub"
+GONOSUMDB=example.com run_go "$HEAVY_WORK/cachepub" "$HEAVY_WORK/pub" "$HEAVY_TAP_BASE/proxy/$LOCAL_REG" \
+  mod download -json example.com/mod@v0.1.0 \
+  || { cat "$RUN_OUT" >&2; heavy_fail "Publish: go mod download of the published module failed"; }
+for f in info mod zip; do
+  heavy_wire_after publish-read "GET /proxy/$LOCAL_REG/example.com/mod/@v/v0.1.0.$f -> 200" \
+    "Publish: go did not read the published .$f"
+done
+heavy_log "Publish: example.com/mod@v0.1.0 published by the CLI and downloaded by go"
 
 heavy_done "go heavy test passed: hide=omitted/$PREVIOUS refuse=$NATIVE(x$NATIVE_TRIES) fallback-404=$FALLBACK_404 fallback-403=$FALLBACK_403 recover=ok"

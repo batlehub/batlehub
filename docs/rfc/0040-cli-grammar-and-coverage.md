@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Accepted — phases 2, 3 and 5 landed, phase 4 in progress; §17 records how far each phase is and where the built thing differs |
+| Status      | Accepted — phases 2 to 5 landed; §17 records how far each phase is and where the built thing differs |
 | Short       | CLI grammar and coverage                                      |
 | Settles     | How every batlehub-cli command names a package, prints, fails and confirms, what it must cover for each registry kind, and how a developer learns why a version is not pullable |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -1645,7 +1645,7 @@ row names has landed; a partial phase lists what is still open.
 | 1 | done | `ac8e4fca` | This RFC, accepted |
 | 2 | done | `4f23b2ce` | `cli/src/{exit,coordinate,render,confirm}.rs`; the exit-code table, the error shape (`error:`/`code:`/`hint:`, JSON copy on stdout), global `--format`/`BATLEHUB_FORMAT`/`-y`; `-r` honoured by every registry filter; destructive commands confirm; `setup` 3 → 6, `wait` 1/2 → 4/8, `mise` partial → 7; `quarantine.sh` and `client_setup.sh` edited |
 | 3 | done | `6d7ac4aa` | The §4.4 tree (`admin` dissolved), `package <verb> <coord>…`, coordinates on `owner`/`visibility`/`grant`/`sbom show`/`authz check`, `profile` with `current`; every old spelling a hidden alias that warns; `--registry-url`; the server hint reads `batlehub-cli why reg/name@ver` |
-| 4 | in progress | `f08b58d5`, `36180a88`, `c59d4b7d`, `b38c05e7`, + the heavy setup commit | §6.4 owner arm; §6.3 publish by kind with the nine uploaders; §6.5 `package versions` with upstream and `download <coord>`; §6.5 `setup` for conda, composer, gem, nuget, terraform, galaxy, nix, sdkman, gitlab (mise), helm (`manual`) and the print arms, plus detection of galaxy/helm/nix/devfile projects; §6.6 `cli/src/coverage.rs`, its gate and `task docs:cli-matrix`. heavy cases 1–3 (`client_setup.sh` 10–12). **Open:** heavy cases 4–7, 11, 13 |
+| 4 | done | `f08b58d5`, `36180a88`, `c59d4b7d`, `b38c05e7`, `62e591b1`, + the heavy publish commit | §6.4 owner arm; §6.3 publish by kind with the nine uploaders; §6.5 `package versions` with upstream and `download <coord>`; §6.5 `setup` for conda, composer, gem, nuget, terraform, galaxy, nix, sdkman, gitlab (mise), helm (`manual`) and the print arms, plus detection of galaxy/helm/nix/devfile projects; §6.6 `cli/src/coverage.rs`, its gate and `task docs:cli-matrix`. heavy cases 1–3 (`client_setup.sh` 10–12) 4–7 (in each kind's own suite), 11 (`authz.sh cargo`) and 13 (`authz.sh npm`). A locally published terraform provider is not installable: issue #281 (§17.1) |
 | 5 | done | `476e7c29` | `services/pullability.rs` (`explain`, `explain_resolution`); `evaluate_chain_all`; the extended `packages/access` (404 for not visible, `version` optional); migration 063 and `reason_code` written by both funnels; `me/downloads?outcome=denied`; `why <coord>`, `why <name>`, `why --last`; `download`'s refusal prints `why`; the console's access page renders causes. heavy cases 8–10 (`quarantine.sh`) and 12 (`authz.sh npm`); `package show`; `/api/v1/registries` lists a registry read without being installable (`installable: false`) |
 | 6 | not started | — | |
 | 7 | not started | — | |
@@ -1712,6 +1712,43 @@ row names has landed; a partial phase lists what is still open.
   `~/.gemrc`, each installing cold with egress denied. `DOTNET_CLI_HOME`,
   ansible refusing a duplicate section and the precedence of `NIX_CONFIG` are
   still unchecked against the clients' source.
+- **Heavy cases 4–7 live in each kind's own suite, not in `closed_world.sh`.**
+  `closed_world.sh` publishes nothing but a devfile stack; the suite that
+  already publishes a kind is the one that owns its publish surface (§6.P's own
+  rule), so the CLI replaced `curl` there: `helm.sh` `local`, `go.sh` Publish,
+  `maven.sh` Publish, `galaxy.sh` `cli_publish`, `apk.sh`'s local generations,
+  `terraform.sh` §4 and `marketplace.sh`'s JetBrains upload. `lib.sh` gained
+  `heavy_cli`. Three differences from §6.P's wording: go is **one** `PUT` of the
+  zip (the server derives `.mod` and `.info`, so the publish is atomic), maven's
+  checksums are `.sha1` and `.md5`, and `marketplace.sh` has no tap, so the
+  JetBrains publish is proven by `updatePlugins.xml` listing the id the CLI
+  never sent and by IntelliJ installing it.
+- **Case 7 found three terraform defects.** (1) A *hybrid* registry answered
+  `404` for an upstream provider's archive and module tarball: both artifact
+  routes read local storage only, while the download documents point at them
+  for every version — no upstream provider installed through a hybrid
+  registry. Fixed: they fall through to the proxy on a local miss.
+  (2) `X-Terraform-Get` named `…/artifact` with no format, so go-getter parsed
+  the gzip as an HTML page ("XML syntax error … U+001F") — no published module
+  installed, in any mode. Fixed for a version published here
+  (`?archive=tar.gz`); an upstream module's format is still the upstream's.
+  (3) **Open:** a provider published here has no `SHA256SUMS` or signature —
+  nothing uploads them — so `terraform init` refuses it ("checksum list has no
+  SHA-256 hash"). The CLI publish is asserted; the install is not, until local
+  providers can carry a publisher-signed checksum list (issue #281).
+- **Heavy case 11 uses a dedicated non-owner and a fresh resolve.** The
+  non-owner is `authz-cargo-peer`, who reads the registry and owns nothing: a
+  caller who cannot see the registry gets `5` from the CLI before any request
+  (it does not confirm the registry exists, §17.1 above), which is not the
+  owner arm's refusal. The same identity asks about the unowned crate
+  (`authz-orphan`, published by the administrator and stripped of its owner
+  through the admin API, which allows removing the last one). And the yanked
+  check is a fresh `cargo generate-lockfile`, not `cargo update --precise`:
+  current cargo lets `--precise` select a yanked version on purpose.
+- **`--format json` prints one document per run.** A command that has written
+  its JSON result and then exits non-zero (`why`'s ⛔, `audit verify`'s
+  failures) returns `CliError::reported`, and `main` appends no error object
+  after it. Two documents on stdout broke `authz.sh`'s audit case in CI.
 - **Heavy cases 1–3 are `client_setup.sh` 10–12, and differ in four places.**
   *nix is not driven*: no runner has it, and a rootless `nix build` against a
   substituter needs the daemon's `trusted-users` (the note `setup` prints).

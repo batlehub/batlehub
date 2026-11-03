@@ -112,6 +112,15 @@ value = "authz-lister-token"
 role = "user"
 user_id = "authz-lister"
 
+# Reads the cargo registry and owns nothing in it: RFC 0040 §6.P case 11's
+# non-owner. A caller who cannot see the registry gets `5` from the CLI before
+# any request (it does not confirm the registry exists), so the owner arm's
+# refusal needs a reader that is not an owner.
+[[auth.tokens]]
+value = "authz-cargo-peer-token"
+role = "user"
+user_id = "authz-cargo-peer"
+
 # Holds `catalogue:browse` and no read verb: the console's explore surface is a
 # different exposure from a package manager resolving a version (§4.2).
 [[auth.tokens]]
@@ -585,6 +594,7 @@ admin = ["*"]
 
 [registries.grants]
 "user:authz-reader" = ["releases:read", "releases:list", "source:read"]
+"user:authz-cargo-peer" = ["releases:read", "releases:list", "source:read"]
 
 [[registries]]
 type = "vscode-marketplace"

@@ -1,0 +1,97 @@
+# The registries of RFC 0040 §6.P cases 1–3, added by reload at case 10 of
+# client_setup.sh rather than at start-up: a runner that has composer (or gem)
+# on /usr/bin would otherwise see them in cases 1–9, whose machine is about the
+# RFC 0038 clients, and composer refuses the plain-HTTP tap there (exit 6).
+
+# ── conda, micromamba: conda-forge (RFC 0040 §6.P case 1) ────────────────────
+[[registries]]
+type = "conda"
+name = "conda-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://conda.anaconda.org/conda-forge"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── composer: repo.packagist.org ─────────────────────────────────────────────
+[[registries]]
+type = "composer"
+name = "composer-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── gem: rubygems.org ────────────────────────────────────────────────────────
+[[registries]]
+type = "rubygems"
+name = "gems-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── dotnet: api.nuget.org ────────────────────────────────────────────────────
+[[registries]]
+type = "nuget"
+name = "nuget-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── terraform: registry.terraform.io, as a network mirror (no `hosts`) ───────
+[[registries]]
+type = "terraform"
+name = "tf-${HEAVY_RUN}"
+mode = "proxy"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── ansible-galaxy: galaxy.ansible.com, collections only ─────────────────────
+[[registries]]
+type = "galaxy"
+name = "galaxy-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://galaxy.ansible.com/api/"]
+roles = "off"
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── helm: charts.jetstack.io, configured by the `helm repo add` setup prints ───
+[[registries]]
+type = "helm"
+name = "charts-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["https://charts.jetstack.io"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]
+
+# ── deb: deb.debian.org, whose `stable` suite is the one setup prints (case 2) ───
+[[registries]]
+type = "deb"
+name = "deb-${HEAVY_RUN}"
+mode = "proxy"
+upstreams = ["http://deb.debian.org/debian"]
+
+[registries.rbac]
+anonymous = ["releases:read", "releases:list", "source:read"]
+user = ["releases:read", "releases:list", "source:read"]
+admin = ["*"]

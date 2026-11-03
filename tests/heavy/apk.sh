@@ -403,16 +403,16 @@ local_generation() {
 
   heavy_log "[$label] Local — publish a v2 package this suite built"
   apk_v2_fixture "$name" "$version" "$file"
-  # Without `-f`, so a refusal arrives as its body and not as "curl: (22)".
-  # The first run of this suite spent a round trip on a `502` whose message —
-  # the one that named the format — `-f` had thrown away.
-  local status
-  status="$(curl -sS -o "$HEAVY_WORK/publish-$label.out" -w '%{http_code}' \
-    -X PUT "$HEAVY_BASE/proxy/$LOCAL_REG/apk/upload" \
-    -H "Authorization: Bearer $ADMIN_TOKEN" --data-binary @"$file")"
-  [[ "$status" == "201" ]] \
-    || { cat "$HEAVY_WORK/publish-$label.out" >&2; heavy_fail "[$label] the publish answered $status, expected 201"; }
-  heavy_log "[$label] server said: $(cat "$HEAVY_WORK/publish-$label.out")"
+  # Through `batlehub-cli publish` with no `-t` (RFC 0040 §6.P case 7: apk's
+  # only proof — the route needs a signer, which no in-process test has). The
+  # CLI prints the server's refusal as its `error:` line.
+  heavy_mark "$label-publish"
+  heavy_cli "$ADMIN_TOKEN" publish "$file" -r "$LOCAL_REG"
+  [[ "$HEAVY_CLI_CODE" == 0 ]] \
+    || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "[$label] batlehub-cli publish exited $HEAVY_CLI_CODE"; }
+  heavy_wire_after "$label-publish" "PUT /proxy/$LOCAL_REG/apk/upload -> 201" \
+    "[$label] the CLI did not publish through apk's upload route"
+  heavy_log "[$label] the CLI said: $(cat "$HEAVY_CLI_OUT")"
 
   # The key, from the route that serves it, into a directory holding nothing
   # else. A near miss on the name is an *untrusted index* rather than an error

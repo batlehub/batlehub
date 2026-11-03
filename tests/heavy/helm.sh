@@ -23,9 +23,11 @@
 #   5. stale     — a block after the client's last `repo update`: the archive
 #                  fetch is what refuses it, with a `403` (§4.4).
 #   6. cache     — a pull from a fresh client cache is a server cache hit.
-#   7. local     — package, `curl --data-binary` to `api/charts`, pull it back
-#                  with the same digest; a second POST is `409`; DELETE removes
-#                  it from the next index.
+#   7. local     — package, `batlehub-cli publish` with no `-t` (RFC 0040 §6.P
+#                  case 4: the registry's kind picks `api/charts`, no npm path
+#                  is touched), pull it back with the same digest; a second
+#                  publish exits 6 on the `409`; DELETE removes it from the
+#                  next index.
 #
 # Run via `task test:helm-heavy` or directly, optionally with phase names:
 #
@@ -259,9 +261,12 @@ phase_local() {
 
   heavy_mark publish
   local code
-  code="$(curl -sS -o "$HEAVY_WORK/publish.json" -w '%{http_code}' --data-binary "@$tgz" \
-    -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_TAP_BASE/proxy/$LOCAL/helm/api/charts")"
-  [[ "$code" == 201 ]] || { cat "$HEAVY_WORK/publish.json" >&2; heavy_fail "publish answered $code"; }
+  heavy_cli "$ADMIN_TOKEN" publish "$tgz" -r "$LOCAL"
+  [[ "$HEAVY_CLI_CODE" == 0 ]] || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "batlehub-cli publish exited $HEAVY_CLI_CODE"; }
+  heavy_wire_after publish "POST /proxy/$LOCAL/helm/api/charts -> 201" \
+    "the CLI did not publish through ChartMuseum's api/charts"
+  ! heavy_wire_re_seen_after publish "^PUT " \
+    || heavy_fail "the CLI sent a PUT: it took another kind's publish path"
 
   repo_add local mine "$LOCAL" "$READER"
   run localpull "${DENY[@]}" helm pull mine/heavychart --version 0.1.0 -d "$HEAVY_WORK/localpull" \
@@ -271,9 +276,9 @@ phase_local() {
   run localsearch helm search repo mine/heavychart
   heavy_client_must_say "$HEAVY_WORK/localsearch.out" "mine/heavychart" "helm search repo did not list the published chart"
 
-  code="$(curl -sS -o /dev/null -w '%{http_code}' --data-binary "@$tgz" \
-    -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_TAP_BASE/proxy/$LOCAL/helm/api/charts")"
-  [[ "$code" == 409 ]] || heavy_fail "a second publish of the same version answered $code, not 409"
+  heavy_cli "$ADMIN_TOKEN" publish "$tgz" -r "$LOCAL"
+  [[ "$HEAVY_CLI_CODE" == 6 ]] \
+    || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "a second publish of the same version exited $HEAVY_CLI_CODE, not 6 (conflict)"; }
 
   code="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
     -H "Authorization: Bearer $ADMIN_TOKEN" "$HEAVY_TAP_BASE/proxy/$LOCAL/helm/api/charts/heavychart/0.1.0")"

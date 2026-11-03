@@ -494,7 +494,34 @@ phase_cache() {
   return 0
 }
 
-PHASES=(install blocked stale pinned publish roles cache)
+# ── phase: cli_publish ───────────────────────────────────────────────────────
+#
+# RFC 0040 §6.P case 7: `batlehub-cli publish <tarball>` with no `-t` takes the
+# registry's kind, so the tarball goes to galaxy's multipart endpoint and to no
+# other kind's path; `ansible-galaxy` then installs what it sent.
+
+phase_cli_publish() {
+  heavy_log "8. batlehub-cli publish of a collection, installed back by ansible-galaxy"
+  local ns="cli$HEAVY_RUN" name="util" version="1.0.0"
+  build_collection "$ns" "$name" "$version"
+  heavy_mark cli-publish
+  heavy_cli "$ADMIN_TOKEN" publish "$BUILT_TARBALL" -r "$REG_LOCAL"
+  [[ "$HEAVY_CLI_CODE" == 0 ]] || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "batlehub-cli publish exited $HEAVY_CLI_CODE"; }
+  heavy_wire_re_after cli-publish \
+    "POST /proxy/$REG_LOCAL/galaxy/api/v3/artifacts/collections/ -> 20[0-9]" \
+    "the CLI did not publish through galaxy's multipart endpoint"
+  ! heavy_wire_re_seen_after cli-publish "^(PUT|POST) /proxy/$REG_LOCAL/[^g]" \
+    || heavy_fail "the CLI wrote to a path that is not galaxy's"
+  heavy_mark cli-reinstall
+  galaxy_run "$CFG_LOCAL" cli-reinstall collection install "$ns.$name" \
+    || heavy_fail "ansible-galaxy could not install what the CLI published"
+  heavy_wire_re_after cli-reinstall \
+    "GET /proxy/$REG_LOCAL/galaxy/api/v3/artifacts/collections/$ns-$name-$version[.]tar[.]gz -> 200" \
+    "the CLI-published tarball was not served from the local registry"
+  return 0
+}
+
+PHASES=(install blocked stale pinned publish roles cache cli_publish)
 
 if [[ $# -gt 0 ]]; then
   for name in "$@"; do

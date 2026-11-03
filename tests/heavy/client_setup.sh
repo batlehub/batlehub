@@ -610,6 +610,10 @@ expect_code 0 "remove of an orphaned block"
 # the harness's certificate, not anything `apply` writes.
 
 heavy_log "10. setup apply --yes for conda, composer, gem, nuget, terraform, galaxy and helm"
+KINDS_TOML="$(sed "s/\${HEAVY_RUN}/$HEAVY_RUN/" tests/heavy/config.client-setup.kinds.toml)"
+reload_config "t + '''$KINDS_TOML'''"
+REG_LIST="$(curl -fsS "$HEAVY_TAP_BASE/api/v1/registries")"
+grep -q "\"$CONDA\"" <<<"$REG_LIST" || heavy_fail "the reloaded registry list does not name $CONDA"
 TLS_PORT="${HEAVY_CS_TLS_PORT:-8183}"
 # A CA and a leaf it signs, not `heavy_self_signed`: rustls (the CLI) refuses
 # a self-signed certificate as the server's own (CaUsedAsEndEntity).

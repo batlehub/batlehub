@@ -62,7 +62,7 @@ export HEAVY_TAP_HOST=localhost
 TF_HOST="localhost:$HEAVY_TAP_PORT"
 
 heavy_start_server tests/heavy/config.terraform.toml
-CERT="$(heavy_self_signed "$HEAVY_TAP_HOST")"
+CERT="$(heavy_self_signed "$HEAVY_TAP_HOST" tf.localhost)"
 heavy_start_tap "$CERT" "$HEAVY_WORK/tls-key.pem"
 
 # Terraform is a Go program: it reads the system roots, and SSL_CERT_FILE
@@ -165,4 +165,65 @@ head -c 4 "$BINARY" | grep -q "ELF" \
   || heavy_fail "the installed provider is not an ELF binary: $(head -c 120 "$BINARY")"
 
 heavy_log "TERRAFORM-INIT-OK (discovery, versions, download document, shasums, signature, archive — all through BatleHub)"
+
+# ── 4. A module and a provider published by batlehub-cli (RFC 0040 §6.P case 7)
+#
+# The CLI reaches the instance at 127.0.0.1, not `localhost`: a host bound to a
+# registry rewrites *every* path to that registry's, `/api/v1/registries`
+# included. Terraform keeps using `localhost`, the host its addresses name —
+# `tf.localhost` for the module, since a module host must contain a dot.
+
+export HEAVY_CLI_SERVER="https://127.0.0.1:$HEAVY_TAP_PORT"
+
+MOD_SRC="$HEAVY_WORK/module-src"
+mkdir -p "$MOD_SRC"
+printf 'output "greeting" {\n  value = "from a published module"\n}\n' > "$MOD_SRC/main.tf"
+tar -czf "$HEAVY_WORK/module.tar.gz" -C "$MOD_SRC" main.tf
+heavy_mark "module-publish"
+heavy_cli "$ADMIN_TOKEN" publish "$HEAVY_WORK/module.tar.gz" -r "$REGISTRY" --name heavy/greet/aws --version 0.1.0
+[[ "$HEAVY_CLI_CODE" == 0 ]] || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "batlehub-cli could not publish the module (exit $HEAVY_CLI_CODE)"; }
+heavy_wire_re_after "module-publish" "POST /proxy/$REGISTRY/v1/modules/heavy/greet/aws/0[.]1[.]0 -> 20[01]" \
+  "the CLI did not publish through the module upload route"
+
+MOD_PROJECT="$HEAVY_WORK/module-project"
+mkdir -p "$MOD_PROJECT"
+cat > "$MOD_PROJECT/main.tf" <<EOF
+module "greet" {
+  source  = "tf.localhost:$HEAVY_TAP_PORT/heavy/greet/aws"
+  version = "0.1.0"
+}
+EOF
+heavy_mark "module-init"
+(cd "$MOD_PROJECT" && "${TF[@]}" init -no-color) >"$HEAVY_WORK/module-init.log" 2>&1 \
+  || { cat "$HEAVY_WORK/module-init.log" >&2; heavy_fail "terraform init could not install the module the CLI published"; }
+heavy_wire_after "module-init" "/v1/modules/heavy/greet/aws/0.1.0/download" \
+  "terraform did not ask this instance for the module's download location"
+[[ -f "$MOD_PROJECT/.terraform/modules/greet/main.tf" ]] \
+  || heavy_fail "the published module's main.tf is not where terraform installs modules"
+
+PROV_SRC="$HEAVY_WORK/provider-src"
+mkdir -p "$PROV_SRC/bin"
+printf '#!/bin/sh\necho heavy\n' > "$PROV_SRC/bin/terraform-provider-probe_v0.1.0"
+chmod +x "$PROV_SRC/bin/terraform-provider-probe_v0.1.0"
+mkdir -p "$HEAVY_WORK/provider"
+(cd "$PROV_SRC/bin" && python3 -c "
+import zipfile,sys
+z=zipfile.ZipFile(sys.argv[1],'w')
+i=zipfile.ZipInfo('terraform-provider-probe_v0.1.0'); i.external_attr=0o755<<16
+z.writestr(i, open('terraform-provider-probe_v0.1.0','rb').read())" \
+  "$HEAVY_WORK/provider/terraform-provider-probe_0.1.0_linux_amd64.zip")
+heavy_mark "provider-publish"
+heavy_cli "$ADMIN_TOKEN" publish "$HEAVY_WORK/provider" -r "$REGISTRY" --name heavy/probe
+[[ "$HEAVY_CLI_CODE" == 0 ]] || { cat "$HEAVY_CLI_OUT" >&2; heavy_fail "batlehub-cli could not publish the provider (exit $HEAVY_CLI_CODE)"; }
+heavy_wire_after "provider-publish" "POST /proxy/$REGISTRY/v1/providers/heavy/probe/versions" \
+  "the CLI did not send the provider's version manifest"
+heavy_wire_after "provider-publish" "PUT /proxy/$REGISTRY/v1/providers/heavy/probe/0.1.0/artifact/linux/amd64" \
+  "the CLI did not upload the provider's platform archive"
+
+# Not installed with `terraform init`: a provider published here has no
+# `SHA256SUMS` or signature to serve — nothing uploads them — so Terraform
+# refuses its archive ("checksum list has no SHA-256 hash for …"). Measured on
+# 2026-11-03 and recorded in RFC 0040 §17.1; the install joins this phase when
+# local providers can carry a publisher-signed checksum list (issue #281).
+heavy_log "TERRAFORM-PUBLISH-OK (a module published by batlehub-cli and installed by terraform init; a provider published)"
 heavy_done TERRAFORM-HEAVY-OK
