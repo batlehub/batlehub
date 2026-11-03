@@ -77,6 +77,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   goes where the registry says. `-t` is deprecated: it is checked against the
   registry and exits 2 on a mismatch.
 
+- **`GET /api/v1/packages/access` returns `404` for a package the caller may
+  not see**, with the body an unknown package gets. It used to answer
+  `200 {can_access: false, reason: "registry not accessible"}`, which confirmed
+  that the registry existed. A registry the caller reads only through
+  `[registries.grants]` (no `[registries.rbac]` role) is now visible to it, as it
+  already was to the download.
+
 ### Deprecated
 
 These spellings still run until 1.10, and each prints a `warning:` that names
@@ -122,6 +129,27 @@ spellings*.
 - **The CLI reference carries a per-kind coverage table** (RFC 0040 §4.7),
   generated from `cli/src/coverage.rs`. The build fails when a kind claims a
   capability that no test exercises.
+- **`batlehub-cli why` explains every cause, not only the verdict** (RFC 0040
+  §4.8). It prints a headline (✅ pullable now, ⏳ pullable from a given time, or
+  ⛔ not pullable), then access, block, lifecycle, policy rules, the verdict and
+  upstream, each with its reason code, docs link and next step. `why
+  <registry>/<name>` names the version a client asking for the newest receives.
+  `why --last` lists the caller's own recent refusals. A refused coordinate
+  `download` prints the same answer. Exit codes: 0 for ✅/⏳, 4 for ⛔.
+- **`GET /api/v1/packages/access` answers with `headline`, `until`, `causes`,
+  `resolved_version` and `versions`**, and `version` is optional. It writes
+  nothing: no scan is queued and no verdict or shadow evidence is recorded. The
+  console's access-check page renders the causes.
+- **`batlehub-cli package show <registry>/<name>[@<version>]`**: one version's
+  state, source, licence and links, followed by `why`'s answer for it.
+- **`GET /api/v1/registries` lists a registry the caller reads without being
+  able to install from it** — a namespace-only grant (`@team/x`), or
+  `releases:read` without `source:read` — with `installable: false`. `why`,
+  `download` and the other coordinate commands no longer call it an unknown
+  registry; `setup apply` still writes nothing for it.
+- **`GET /api/v1/me/downloads?outcome=denied`** returns the caller's own refused
+  downloads with their `reason_code`, a new nullable column on `access_events`
+  (migration 063) that both funnels write on every refusal.
 - **`profile list` and `profile use`.** `use` writes a top-level `current` key,
   so `-P` is needed only to leave the profile in use. An older CLI ignores the
   key.

@@ -413,8 +413,9 @@ impl PackageRepository for PgPackageRepository {
         user_id: &str,
         since: DateTime<Utc>,
         limit: u64,
+        denied: bool,
     ) -> Result<Vec<AccessEvent>, CoreError> {
-        explore::list_own_downloads_impl(&self.pool, user_id, since, limit).await
+        explore::list_own_downloads_impl(&self.pool, user_id, since, limit, denied).await
     }
 
     async fn purge_events_before(&self, before: DateTime<Utc>) -> Result<u64, CoreError> {

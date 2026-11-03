@@ -71,6 +71,8 @@ struct Plan {
     file: String,
     /// The advertised checksum, when the kind's metadata carries one.
     expected: Option<String>,
+    /// The coordinate, when the target was one: a refusal is explained.
+    coordinate: Option<(String, String, String)>,
 }
 
 /// `registry/name@version` (or `name@version` with `-r`) on a kind fetchable
@@ -90,6 +92,7 @@ async fn plan(
             file: default_output_name(&path),
             path,
             expected: None,
+            coordinate: None,
         });
     }
     let (registry, name, version) = Coordinate::resolve(client, target, default_registry)
@@ -120,6 +123,7 @@ async fn plan(
         path,
         file,
         expected,
+        coordinate: Some((registry, name, version)),
     })
 }
 
@@ -176,6 +180,35 @@ fn check(verifier: Option<StreamingVerifier>, what: &str) -> Result<()> {
     }
 }
 
+/// On a refused coordinate download, print what `why` prints — on stderr,
+/// since stdout may be carrying the artifact — and exit 4 or 5 (RFC 0040
+/// §4.8). Any other error, or no answer to ask for, is returned as it was.
+async fn explain_refusal(
+    client: &BatleHubClient,
+    plan: &Plan,
+    err: anyhow::Error,
+) -> anyhow::Error {
+    let status = err
+        .chain()
+        .find_map(|c| c.downcast_ref::<crate::exit::ApiError>().map(|a| a.status));
+    let (Some(status @ (403 | 404)), Some((registry, name, version))) = (status, &plan.coordinate)
+    else {
+        return err;
+    };
+    match client.pullability(registry, name, Some(version)).await {
+        Ok(answer) => {
+            eprint!("{}", super::why::render(registry, name, &answer));
+            CliError::quiet(if status == 404 {
+                ExitCode::NotFound
+            } else {
+                ExitCode::Refused
+            })
+            .into()
+        }
+        Err(_) => err,
+    }
+}
+
 /// Download through the proxy cache. A cache miss is fetched from upstream
 /// and **cached**, so this doubles as an on-demand warm.
 pub async fn run(
@@ -202,7 +235,10 @@ pub async fn run(
             inner: tokio::io::stdout(),
             verifier,
         };
-        let n = client.download_to(&plan.path, &mut out).await?;
+        let n = match client.download_to(&plan.path, &mut out).await {
+            Ok(n) => n,
+            Err(e) => return Err(explain_refusal(client, &plan, e).await),
+        };
         check(out.verifier.take(), "the download")?;
         eprintln!("Downloaded {n} bytes");
         return Ok(());
@@ -231,7 +267,7 @@ pub async fn run(
         Ok(n) => n,
         Err(e) => {
             let _ = tokio::fs::remove_file(&part).await;
-            return Err(e);
+            return Err(explain_refusal(client, &plan, e).await);
         }
     };
     tokio::fs::rename(&part, &out_name)

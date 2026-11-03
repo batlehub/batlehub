@@ -5995,3 +5995,132 @@ ide_case! {
     vscode_marketplace_configure, "vscode-marketplace", "TERM_PROGRAM", "vscode";
     jetbrains_marketplace_configure, "jetbrains-marketplace", "TERMINAL_EMULATOR", "JetBrains-JediTerm";
 }
+
+// ── RFC 0040 §4.8: why ──────────────────────────────────────────────────────
+
+#[test]
+fn why_says_pullable_and_not_found_with_their_exit_codes() {
+    let srv = TestServer::start();
+    let base = srv.base_url();
+    http_publish_nuget(&base, REGISTRY, "WhyLib", "1.0.0");
+    let coord = format!("{REGISTRY}/whylib@1.0.0");
+
+    let (code, stdout, stderr) = cli_exit(&["why", &coord], &base, AUTH_TOKEN);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.starts_with(&format!("✅ {coord} — pullable now")),
+        "{stdout}"
+    );
+    assert!(stdout.contains("pass  access"), "{stdout}");
+
+    let (code, _, stderr) = cli_exit(
+        &["why", &format!("{REGISTRY}/nothing-here@1.0.0")],
+        &base,
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 5, "{stderr}");
+}
+
+#[test]
+fn package_show_gives_the_state_and_the_why_answer() {
+    let srv = TestServer::start();
+    let base = srv.base_url();
+    http_publish_nuget(&base, REGISTRY, "ShowLib", "1.0.0");
+    http_publish_nuget(&base, REGISTRY, "ShowLib", "2.0.0");
+    let coord = format!("{REGISTRY}/showlib@1.0.0");
+
+    let (code, stdout, stderr) = cli_exit(&["package", "show", &coord], &base, AUTH_TOKEN);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("version     1.0.0"), "{stdout}");
+    assert!(stdout.contains("source      local"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("✅ {coord} — pullable now")),
+        "{stdout}"
+    );
+
+    // No version: the server's default, the newest held stable one.
+    let (code, stdout, stderr) = cli_exit(
+        &["--json", "package", "show", &format!("{REGISTRY}/showlib")],
+        &base,
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 0, "{stderr}");
+    let v: serde_json::Value = serde_json::from_str(&stdout).expect(&stdout);
+    assert_eq!(v["version"]["version"], "2.0.0", "{stdout}");
+    assert_eq!(v["pullability"]["headline"], "pullable", "{stdout}");
+
+    let (code, _, stderr) = cli_exit(
+        &["package", "show", &format!("{REGISTRY}/showlib@9.9.9")],
+        &base,
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 5, "{stderr}");
+}
+
+#[test]
+fn why_without_a_version_explains_resolution() {
+    let srv = TestServer::start();
+    let base = srv.base_url();
+    http_publish_nuget(&base, REGISTRY, "ResLib", "1.0.0");
+    http_publish_nuget(&base, REGISTRY, "ResLib", "2.0.0");
+    let (code, stdout, stderr) =
+        cli_exit(&["why", &format!("{REGISTRY}/reslib")], &base, AUTH_TOKEN);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains(&format!("{REGISTRY}/reslib resolves to")),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("VERSION") && stdout.contains("STATE"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("1.0.0") && stdout.contains("2.0.0"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn why_last_lists_the_callers_own_refusals() {
+    let srv = TestServer::start();
+    let (code, stdout, stderr) =
+        cli_exit(&["--json", "why", "--last"], &srv.base_url(), AUTH_TOKEN);
+    assert_eq!(code, 0, "{stderr}");
+    let rows: serde_json::Value = serde_json::from_str(&stdout).expect(&stdout);
+    assert!(rows.is_array(), "{stdout}");
+}
+
+/// ⛔ is exit 4, with the answer on stdout and nothing on stderr; the
+/// agreement with the download itself is `crates/web/tests/pullability.rs`'s.
+#[test]
+fn why_on_a_refused_version_exits_four_with_the_answer() {
+    let mut s = stand_in("npm");
+    s.mock("GET", "/api/v1/packages/access")
+        .match_query(mockito::Matcher::Any)
+        .with_body(
+            r#"{"package":{"registry":"r","name":"pkg","version":"1.0.0","artifact":null},
+                "can_access":false,"reason":"blocked by an administrator","proxy_url":null,
+                "headline":"refused","until":null,"resolved_version":null,"versions":[],
+                "causes":[
+                  {"kind":"access","state":"pass","detail":"you may read r","reason_code":null,"until":null,"next":null},
+                  {"kind":"block","state":"refuse","detail":"blocked by an administrator",
+                   "reason_code":"BLOCK_LIST","until":null,"next":"ask an administrator to unblock it"}]}"#,
+        )
+        .create();
+    let (code, stdout, stderr) = cli_exit(&["why", "r/pkg@1.0.0"], &s.url(), AUTH_TOKEN);
+    assert_eq!(code, 4, "{stdout}\n{stderr}");
+    assert!(
+        stdout.starts_with("⛔ r/pkg@1.0.0 — not pullable"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("⛔ refuse block       BLOCK_LIST: blocked by an administrator"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("refused-downloads#block-list"), "{stdout}");
+    assert!(
+        stdout.contains("next: ask an administrator to unblock it"),
+        "{stdout}"
+    );
+    assert!(stderr.is_empty(), "the answer is the output: {stderr}");
+}

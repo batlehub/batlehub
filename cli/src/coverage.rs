@@ -254,10 +254,8 @@ mod tests {
                 }
                 let name = test_name(*kind, cap);
                 // `fn <name>(`, or a row of a `*_case!` table: `<name>, "<kind>"`.
-                let row = regex::Regex::new(&format!(
-                    r#"(^|[\s{{(])(fn {name}\(|{name},\s*")"#
-                ))
-                .unwrap();
+                let row =
+                    regex::Regex::new(&format!(r#"(^|[\s{{(])(fn {name}\(|{name},\s*")"#)).unwrap();
                 let declared = row.is_match(&source);
                 if !declared {
                     missing.push(name);

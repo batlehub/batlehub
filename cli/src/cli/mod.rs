@@ -17,6 +17,7 @@ pub mod security;
 pub mod setup;
 pub mod version;
 pub mod vsx;
+pub mod why;
 
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
@@ -101,8 +102,8 @@ pub enum Command {
     Publish(publish::PublishArgs),
     /// Download a file through the proxy cache (warms path-addressed registries)
     Download(download::DownloadArgs),
-    /// Explain why a version is held, denied or warned (RFC 0018)
-    Why(security::WhyArgs),
+    /// Why a version is not pullable, or not yet: every cause, in the order the download checks them
+    Why(why::WhyArgs),
     /// Wait for a held version to become servable; exit 4 when waiting cannot help, 8 on timeout
     Wait(security::WaitArgs),
     /// Verdicts: who pulled a version, and the registry's stored verdicts (RFC 0018)

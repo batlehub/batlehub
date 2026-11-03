@@ -2,6 +2,7 @@ use anyhow::Result;
 
 use super::lifecycle::Verb;
 use crate::coordinate::Coordinate;
+use crate::exit::{CliError, ExitCode};
 use crate::render::deprecated;
 use clap::Subcommand;
 use comfy_table::{Cell, Color, Table};
@@ -52,6 +53,12 @@ pub enum PackageCommand {
         /// Only what this instance holds; do not ask the upstream
         #[arg(long)]
         no_upstream: bool,
+    },
+    /// One version: its state, where it comes from, and whether you can pull it
+    Show {
+        /// `registry/name[@version]`, or a bare name with `-r`. Without a version,
+        /// the one the console would show: the newest stable version held here.
+        coordinate: String,
     },
     /// Print a version's README
     ///
@@ -266,10 +273,87 @@ async fn consult(
                 eprintln!("next: --page {n}");
             }
         }
+        PackageCommand::Show { coordinate } => {
+            let c = Coordinate::resolve(client, &coordinate, default_registry).await?;
+            return show(client, &c.registry, &c.name, c.version.as_deref(), json).await;
+        }
         // The lifecycle verbs are dispatched by `run` before this.
         _ => anyhow::bail!("not a consult command"),
     }
     Ok(())
+}
+
+/// `package show`: the explore row of one version, then `why`'s answer for it,
+/// so the state column and the reason behind it come from the server (§4.8).
+async fn show(
+    client: &BatleHubClient,
+    registry: &str,
+    name: &str,
+    version: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let mut detail = client.package_detail(registry, name, version).await?;
+    // No version asked: the server names its default, then answers for it.
+    if version.is_none() {
+        if let Some(v) = detail["default_version"].as_str().map(str::to_owned) {
+            detail = client.package_detail(registry, name, Some(&v)).await?;
+        }
+    }
+    let row = detail["selected"].clone();
+    // `selected` falls back to the default for an unknown `version=`; that is
+    // not the version asked for.
+    let found = row["version"]
+        .as_str()
+        .filter(|v| version.is_none_or(|asked| asked == *v));
+    let Some(v) = found.map(str::to_owned) else {
+        let what = version.map_or_else(
+            || format!("{registry}/{name} has no versions"),
+            |v| format!("{registry}/{name}@{v} not found"),
+        );
+        return Err(CliError::new(ExitCode::NotFound, what).into());
+    };
+    let answer = client.pullability(registry, name, Some(&v)).await?;
+    if json {
+        return crate::render::data(&serde_json::json!({
+            "registry": registry,
+            "name": name,
+            "version": row,
+            "links": detail["links"],
+            "pullability": answer,
+        }));
+    }
+    print!("{}", show_text(&row, &detail["links"]));
+    println!();
+    print!("{}", super::why::render(registry, name, &answer));
+    Ok(())
+}
+
+/// The facts block of `package show`; `—` for what the server does not know.
+fn show_text(row: &serde_json::Value, links: &serde_json::Value) -> String {
+    let cell = |v: &serde_json::Value| v.as_str().unwrap_or("—").to_owned();
+    let mut out = String::new();
+    for (label, value) in [
+        ("version", cell(&row["version"])),
+        ("state", cell(&row["state"])),
+        ("source", cell(&row["source"])),
+        ("published", cell(&row["published_at"])),
+        ("license", cell(&row["license"])),
+        ("repository", cell(&links["repository"])),
+        ("homepage", cell(&links["homepage"])),
+    ] {
+        out.push_str(&format!("{label:<11} {value}\n"));
+    }
+    if row["deprecated"].as_bool() == Some(true) {
+        out.push_str(&format!(
+            "{:<11} {}\n",
+            "deprecated",
+            row["deprecation_message"].as_str().unwrap_or("yes")
+        ));
+    }
+    if row["unlisted"].as_bool() == Some(true) {
+        out.push_str("unlisted    yes — installable by exact version only\n");
+    }
+    out
 }
 
 fn print_packages_table(items: &[crate::api::package::PackageSummary], total: usize) {
@@ -344,4 +428,23 @@ fn print_readme(resp: &crate::api::package::ReadmeResponse) {
     }
     // `source_text` is absent only for `format=html`, which this never asks for.
     println!("{}", resp.source_text.as_deref().unwrap_or_default());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn show_prints_the_servers_state_and_dashes_for_the_unknown() {
+        let text = show_text(
+            &json!({"version": "1.4.0", "state": "pending", "source": "proxied",
+                    "unlisted": true}),
+            &json!(null),
+        );
+        assert!(text.contains("state       pending\n"), "{text}");
+        assert!(text.contains("license     —\n"), "{text}");
+        assert!(text.contains("unlisted    yes"), "{text}");
+        assert!(!text.contains("deprecated"), "{text}");
+    }
 }

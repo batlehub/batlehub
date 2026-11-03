@@ -2995,7 +2995,7 @@
             }
           },
           "403": {
-            "description": "`releases:yank` required"
+            "description": "`releases:yank` required, or explicit ownership of every package on a kind whose owners may yank"
           }
         },
         "security": [
@@ -3045,7 +3045,7 @@
             }
           },
           "403": {
-            "description": "`releases:yank` required"
+            "description": "`releases:yank` required, or explicit ownership of every package on a kind whose owners may yank"
           }
         },
         "security": [
@@ -6938,6 +6938,19 @@
               ],
               "format": "int64"
             }
+          },
+          {
+            "name": "outcome",
+            "in": "query",
+            "description": "`success` (the default): what was served. `denied`: what was refused\n— the coordinate, the time and the refusal's code, never the\noperator's free-text reason (RFC 0040 §6.1, T3).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "success",
+                "denied"
+              ]
+            }
           }
         ],
         "responses": {
@@ -7176,7 +7189,7 @@
         "tags": [
           "front-office"
         ],
-        "summary": "Check why a specific package is or isn't accessible for the current user.",
+        "summary": "Why a version is or is not pullable by the caller, now and when it will\nbe (RFC 0040 §6.1): every cause the download funnel checks, in its order.",
         "operationId": "check_access",
         "parameters": [
           {
@@ -7198,9 +7211,13 @@
           {
             "name": "version",
             "in": "query",
-            "required": true,
+            "description": "Absent: explain resolution — which version a client asking for the\nnewest receives, and the state of the newest ten (RFC 0040 §4.8).",
+            "required": false,
             "schema": {
-              "type": "string"
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           {
@@ -7217,7 +7234,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Access check result",
+            "description": "The pullability answer",
             "content": {
               "application/json": {
                 "schema": {
@@ -7225,6 +7242,9 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "No such package, or one the caller may not see — alike"
           }
         },
         "security": [
@@ -21672,11 +21692,26 @@
         "type": "object",
         "required": [
           "package",
-          "can_access"
+          "can_access",
+          "headline",
+          "causes",
+          "versions"
         ],
         "properties": {
           "can_access": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "`headline == pullable`, kept for the callers written before the causes."
+          },
+          "causes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Cause"
+            },
+            "description": "Every cause the download checks, in the order it checks them."
+          },
+          "headline": {
+            "$ref": "#/components/schemas/Headline",
+            "description": "`pullable`, `waiting` or `refused` (RFC 0040 §4.8)."
           },
           "package": {
             "$ref": "#/components/schemas/PackageIdentifierDto"
@@ -21692,7 +21727,30 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The first cause that refuses or waits, as one line."
+          },
+          "resolved_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "With no version asked: the newest stable version pullable now."
+          },
+          "until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "For `waiting`: when it lifts, if every waiting cause is a clock."
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Pullability"
+            },
+            "description": "With no version asked: the newest versions and their answers, newest\nfirst. Empty when a version was asked."
           }
         }
       },
@@ -21737,6 +21795,13 @@
                 "type": "null"
               }
             ]
+          },
+          "reason_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stable code of a refusal (`MIN_AGE_NOT_MET`, `BLOCK_LIST`, …),\nbeside the free-text `deny_reason`: what `GET /api/v1/me/downloads\n?outcome=denied` returns to the person refused, whose own row it is,\nwithout the operator's prose (RFC 0040 §6.1, decision 39). `None` on\nrows written before it existed and on every non-refusal."
           },
           "result": {
             "$ref": "#/components/schemas/AccessResult"
@@ -22721,6 +22786,59 @@
             }
           }
         }
+      },
+      "Cause": {
+        "type": "object",
+        "description": "One of the things the download checks, and what it said.",
+        "required": [
+          "kind",
+          "state",
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "One line, fit for the person asking: never another subject's grant, a\nrule's configuration or an administrator's note (T2)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`access`, `block`, `lifecycle`, `policy`, `verdict` or `upstream`."
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the caller can do about it, when it is not `pass`."
+          },
+          "reason_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stable code (`MIN_AGE_NOT_MET`, `BLOCK_LIST`, …) when the cause has\none; the docs anchor is derived from it."
+          },
+          "state": {
+            "$ref": "#/components/schemas/CauseState"
+          },
+          "until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When a `wait` lifts, if it is a clock."
+          }
+        }
+      },
+      "CauseState": {
+        "type": "string",
+        "enum": [
+          "pass",
+          "warn",
+          "wait",
+          "refuse"
+        ]
       },
       "ChangedRegistry": {
         "type": "object",
@@ -24998,6 +25116,14 @@
           }
         }
       },
+      "Headline": {
+        "type": "string",
+        "enum": [
+          "pullable",
+          "waiting",
+          "refused"
+        ]
+      },
       "HelmDeleted": {
         "type": "object",
         "description": "`DELETE api/charts/{name}/{version}`.",
@@ -25465,6 +25591,13 @@
           },
           "name": {
             "type": "string"
+          },
+          "reason_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On a refused row (`outcome=denied`): the refusal's stable code\n(`MIN_AGE_NOT_MET`, …), `null` for a row written before codes were\nrecorded. Absent on a served row."
           },
           "registry": {
             "type": "string"
@@ -26531,6 +26664,37 @@
               "null"
             ],
             "description": "Absent when the event recorded no version — a whole-package coordinate."
+          }
+        }
+      },
+      "Pullability": {
+        "type": "object",
+        "required": [
+          "headline",
+          "causes",
+          "version"
+        ],
+        "properties": {
+          "causes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Cause"
+            }
+          },
+          "headline": {
+            "$ref": "#/components/schemas/Headline"
+          },
+          "until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "For `waiting`: the latest clock among the causes, when every one that\nwaits has a clock. Absent when one waits on a scanner."
+          },
+          "version": {
+            "type": "string",
+            "description": "The version judged: the one asked for, or — with none asked — the\nnewest the caller would receive."
           }
         }
       },

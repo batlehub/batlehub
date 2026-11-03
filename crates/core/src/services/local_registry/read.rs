@@ -250,8 +250,9 @@ impl LocalRegistryService {
         net: &CallerNet,
     ) -> Result<Option<PublishedPackage>, CoreError> {
         super::validate_coordinate(name, version, None)?;
+        let mut code = None;
         match self
-            .read_gates(registry, name, version, action, identity)
+            .read_gates(registry, name, version, action, identity, &mut code)
             .await
         {
             Ok(row) => Ok(row),
@@ -260,7 +261,7 @@ impl LocalRegistryService {
                     PackageId::new(registry, name, version),
                     identity,
                     net,
-                    Some(e.to_string()),
+                    Some((e.to_string(), code)),
                 )
                 .await;
                 Err(e)
@@ -281,6 +282,7 @@ impl LocalRegistryService {
         version: &str,
         action: Action,
         identity: &Identity,
+        code: &mut Option<String>,
     ) -> Result<Option<PublishedPackage>, CoreError> {
         // The version's own row, because the chain is about to judge it. The
         // gate rules read `published_at` and `is_signed`, and this service holds
@@ -329,8 +331,8 @@ impl LocalRegistryService {
                     extra: serde_json::Value::Null,
                     cache_control: None,
                 };
-                crate::services::authz::authorize_read_against(
-                    &self.hot, &metadata, identity, action,
+                crate::services::authz::authorize_read_against_coded(
+                    &self.hot, &metadata, identity, action, code,
                 )
                 .await?;
             }
@@ -356,8 +358,10 @@ impl LocalRegistryService {
             // row is a store inconsistency, not a publish; `verify_on_serve` and
             // `verify_on_download` both fail closed on it a few lines below.
             None => {
-                crate::services::authz::authorize_unheld_read(&self.hot, &pkg_id, identity, action)
-                    .await?;
+                crate::services::authz::authorize_unheld_read_coded(
+                    &self.hot, &pkg_id, identity, action, code,
+                )
+                .await?;
             }
         }
         self.check_visibility(registry, name, identity).await?;
@@ -533,18 +537,19 @@ impl LocalRegistryService {
         pkg: PackageId,
         identity: &Identity,
         net: &CallerNet,
-        denial_reason: Option<String>,
+        denial: Option<(String, Option<String>)>,
     ) {
         let Some(repo) = self.package_repo.as_ref() else {
             return;
         };
-        let event = match denial_reason {
-            Some(reason) => AccessEvent::denied_download(
+        let event = match denial {
+            Some((reason, code)) => AccessEvent::denied_download(
                 pkg,
                 identity.user_id.clone(),
                 identity.role.clone(),
                 reason,
-            ),
+            )
+            .with_reason_code(code),
             None => AccessEvent::allowed_read(pkg, identity.user_id.clone(), identity.role.clone()),
         }
         .with_ip_ua(net.ip.clone(), net.user_agent.clone());

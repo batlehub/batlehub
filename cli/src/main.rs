@@ -38,7 +38,10 @@ async fn main() -> std::process::ExitCode {
             if format == Format::Json {
                 println!("{}", report.to_json());
             }
-            eprintln!("{}", report.to_stderr());
+            let text = report.to_stderr();
+            if !text.is_empty() {
+                eprintln!("{text}");
+            }
             std::process::ExitCode::from(report.exit)
         }
     }
@@ -237,7 +240,7 @@ async fn run(cli: Cli, format: Format) -> Result<()> {
         Command::Mise { cmd } => mise::run(cmd, &client, json).await?,
         Command::Proxy { cmd } => proxy::run(cmd).await?,
         Command::Vsx { cmd } => vsx::run(cmd, cli.token.as_deref()).await?,
-        Command::Why(args) => security::run_why(args, &client, json).await?,
+        Command::Why(args) => cli::why::run(args, &client).await?,
         Command::Wait(args) => security::run_wait(args, &client, json).await?,
         Command::Publish(args) => publish::run(args, &client, resolved.registry.as_deref()).await?,
         Command::Download(args) => {

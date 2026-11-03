@@ -19,10 +19,8 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use batlehub_core::entities::reason_code_docs_url;
 use clap::Args;
 
-use crate::api::security::VerdictView;
 use crate::api::BatleHubClient;
 use crate::coordinate::Coordinate;
 use crate::exit::{CliError, ExitCode};
@@ -34,15 +32,6 @@ async fn versioned(client: &BatleHubClient, raw: &str) -> Result<(String, String
     Ok(Coordinate::resolve(client, raw, ctx().registry.as_deref())
         .await?
         .require_version()?)
-}
-
-#[derive(Args)]
-pub struct WhyArgs {
-    /// `registry/name@version` — the coordinate the refusal named
-    pub coordinate: String,
-    /// Queue a rescan after printing (needs `gates:exempt` on the registry)
-    #[arg(long)]
-    pub rescan: bool,
 }
 
 /// `batlehub verdicts …` (RFC 0018 §4.2): the admin's side of the verdict.
@@ -344,110 +333,6 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
         other => return Err(format!("unknown duration unit '{other}' (s, m, h, d)")),
     };
     Ok(Duration::from_secs(n * mult))
-}
-
-pub async fn run_why(args: WhyArgs, client: &BatleHubClient, json: bool) -> Result<()> {
-    let (registry, name, version) = versioned(client, &args.coordinate).await?;
-    let Some(verdict) = client.get_verdict(&registry, &name, &version).await? else {
-        return Err(CliError::new(
-            ExitCode::NotFound,
-            format!(
-                "no verdict for {registry}/{name}@{version}: either this instance has never \
-                 been asked for it, the registry has no [registries.security] profile, or your \
-                 token lacks quarantine:read"
-            ),
-        )
-        .into());
-    };
-    if json {
-        crate::render::data(&verdict)?;
-    } else {
-        print_verdict(&verdict);
-    }
-    if args.rescan {
-        let r = client.rescan(&registry, &name, &version).await?;
-        if json {
-            crate::render::data(&r)?;
-        } else if r.queued {
-            println!("\nRescan queued (trigger: {}).", r.trigger);
-        } else {
-            println!("\nA scan job for this version is already open.");
-        }
-    }
-    Ok(())
-}
-
-pub fn print_verdict(v: &VerdictView) {
-    println!(
-        "{}/{}@{}",
-        v.package.registry, v.package.name, v.package.version
-    );
-    // RFC 0019: `batlehub-cli why github/cli/cli@main` asked about a branch and
-    // is being answered about a commit. Say so before anything else, or the
-    // rest of the block reads as though it were about `main`.
-    if let (Some(git_ref), Some(kind), Some(sha)) =
-        (&v.requested_ref, &v.ref_kind, &v.resolved_commit)
-    {
-        println!("  ref          {git_ref} ({kind}) → {sha}");
-    }
-    println!("  state        {}", v.state);
-    println!(
-        "  reasons      {}",
-        if v.reason_codes.is_empty() {
-            "—".to_owned()
-        } else {
-            v.reason_codes.join(", ")
-        }
-    );
-    // One link per code, to the section that says what it means and what the
-    // person holding the refusal can do about it.
-    for (i, code) in v.reason_codes.iter().enumerate() {
-        let label = if i == 0 { "docs" } else { "" };
-        println!("  {label:<12} {}", reason_code_docs_url(code));
-    }
-    if let Some(at) = &v.available_at {
-        println!("  available    {at}");
-    }
-    println!("  policy       {}", v.policy_ref);
-    println!("  evaluated    {}", v.evaluated_at);
-    println!(
-        "  scanned      {}",
-        v.last_scanned_at.as_deref().unwrap_or("never")
-    );
-    println!(
-        "  scanners     {}",
-        if v.scanners_done.is_empty() {
-            "none answered yet".to_owned()
-        } else {
-            v.scanners_done.join(", ")
-        }
-    );
-    if v.findings_withheld {
-        println!("  findings     withheld (needs findings:read)");
-    } else if v.findings.is_empty() {
-        println!("  findings     none");
-    } else {
-        println!("  findings");
-        for f in &v.findings {
-            let reference = f
-                .reference
-                .as_deref()
-                .map(|r| format!(" [{r}]"))
-                .unwrap_or_default();
-            println!(
-                "    {:<12} {:<10} {:<22} {}{}",
-                f.scanner, f.severity, f.code, f.summary, reference
-            );
-        }
-    }
-    match v.state.as_str() {
-        "allowed" | "warned" => println!("\nServed."),
-        "quarantined" if v.available_at.is_some() => {
-            println!("\nHeld until {}. `batlehub-cli wait` waits for it.", v.available_at.as_deref().unwrap_or(""))
-        }
-        "quarantined" => println!("\nHeld until a scanner answers (or, for TIMESTAMP_MISSING, until the upstream is dated)."),
-        _ => println!("\nRefused until a rescan or an administrator acts. `batlehub-cli why --rescan` queues one."),
-    }
 }
 
 /// `wait`: `Ok` when servable; exit 4 when waiting cannot help, 8 on timeout.

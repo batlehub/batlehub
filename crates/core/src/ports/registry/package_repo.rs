@@ -211,8 +211,9 @@ pub trait PackageRepository: Send + Sync {
         user_id: &str,
         since: DateTime<Utc>,
         limit: u64,
+        denied: bool,
     ) -> Result<Vec<AccessEvent>, CoreError> {
-        let (_, _, _) = (user_id, since, limit);
+        let (_, _, _, _) = (user_id, since, limit, denied);
         Ok(vec![])
     }
 

@@ -110,6 +110,35 @@ impl BatleHubClient {
         self.get_with_params(&path, &q).await
     }
 
+    /// One version's explore row (`selected`), the package's `default_version`
+    /// when `version` is `None` (RFC 0040 §4.8 `package show`).
+    pub async fn package_detail(
+        &self,
+        registry: &str,
+        name: &str,
+        version: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        #[derive(Serialize)]
+        struct Q<'a> {
+            per_page: u64,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            version: Option<&'a str>,
+        }
+        let path = format!(
+            "/api/v1/explore/packages/{}/{}",
+            percent_encode(registry),
+            percent_encode(name)
+        );
+        self.get_with_params(
+            &path,
+            &Q {
+                per_page: 1,
+                version,
+            },
+        )
+        .await
+    }
+
     pub async fn package_readme(
         &self,
         registry: &str,

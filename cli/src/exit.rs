@@ -100,6 +100,12 @@ impl CliError {
         }
     }
 
+    /// An exit code whose output the command already printed (`why`'s ⛔:
+    /// the answer is on stdout, and an `error:` line would repeat it).
+    pub fn quiet(exit: ExitCode) -> Self {
+        Self::new(exit, "")
+    }
+
     pub fn hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
         self
@@ -156,7 +162,11 @@ impl Report {
     }
 
     /// The stderr block: `error:`, then `code:` and `hint:` when there are any.
+    /// Empty for a [`CliError::quiet`] exit.
     pub fn to_stderr(&self) -> String {
+        if self.message.is_empty() {
+            return String::new();
+        }
         let mut out = format!("error: {}", lowercase_first(&self.message));
         if let Some(code) = &self.code {
             out.push_str(&format!("\n  code: {code}"));

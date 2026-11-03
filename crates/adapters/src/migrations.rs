@@ -252,6 +252,11 @@ pub fn embedded_migrator() -> Migrator {
             "../migrations/061_audit_auth_events.sql"
         ),
         mig!(62, "audit seals", "../migrations/062_audit_seals.sql"),
+        mig!(
+            63,
+            "access_events reason_code",
+            "../migrations/063_access_events_reason_code.sql"
+        ),
     ])
 }
 

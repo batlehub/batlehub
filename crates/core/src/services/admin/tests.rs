@@ -71,6 +71,7 @@ impl PackageRepository for MemRepo {
         user_id: &str,
         since: chrono::DateTime<Utc>,
         limit: u64,
+        _denied: bool,
     ) -> Result<Vec<AccessEvent>, CoreError> {
         let mut rows: Vec<AccessEvent> = self
             .events

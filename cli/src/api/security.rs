@@ -102,6 +102,42 @@ pub struct RescanView {
 }
 
 impl BatleHubClient {
+    /// `GET /api/v1/packages/access` (RFC 0040 §6.1): the pullability answer,
+    /// as JSON — the spec owns its shape.
+    pub async fn pullability(
+        &self,
+        registry: &str,
+        name: &str,
+        version: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        #[derive(Serialize)]
+        struct Q<'a> {
+            registry: &'a str,
+            name: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            version: Option<&'a str>,
+        }
+        self.get_with_params(
+            "/api/v1/packages/access",
+            &Q {
+                registry,
+                name,
+                version,
+            },
+        )
+        .await
+    }
+
+    /// `GET /api/v1/me/downloads?outcome=denied`: the caller's own refusals.
+    pub async fn my_refusals(&self, limit: u64) -> Result<serde_json::Value> {
+        self.get(&format!(
+            "/api/v1/me/downloads?outcome=denied&limit={limit}"
+        ))
+        .await
+    }
+}
+
+impl BatleHubClient {
     /// The verdict, or `None` when there is none to read — a version never
     /// seen, a registry without a security profile, or a caller without
     /// `quarantine:read`; the server does not say which.

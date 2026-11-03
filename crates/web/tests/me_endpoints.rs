@@ -191,6 +191,7 @@ async fn seed_download(
     ago_secs: i64,
 ) {
     repo.record_access(AccessEvent {
+        reason_code: None,
         id: Uuid::new_v4(),
         user_id: Some(user.to_owned()),
         user_role: Role::User,
@@ -299,6 +300,7 @@ async fn my_downloads_excludes_denied_and_non_download_events() {
     parts
         .repo
         .record_access(AccessEvent {
+            reason_code: None,
             id: Uuid::new_v4(),
             user_id: Some("alice".to_owned()),
             user_role: Role::User,
@@ -318,6 +320,7 @@ async fn my_downloads_excludes_denied_and_non_download_events() {
     parts
         .repo
         .record_access(AccessEvent {
+            reason_code: None,
             id: Uuid::new_v4(),
             user_id: Some("alice".to_owned()),
             user_role: Role::User,

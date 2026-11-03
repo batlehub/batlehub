@@ -6,7 +6,10 @@ use utoipa::{IntoParams, ToSchema};
 
 use batlehub_core::{
     entities::{PackageFilter, PackageId, PackageStatus},
-    services::AdminService,
+    services::pullability::{
+        Answer, Cause, CauseState, Headline, Pullability, PullabilityService, Scope,
+    },
+    services::{AdminService, LocalRegistryService, ProxyService},
 };
 
 use crate::{error::AppError, extractors::AuthIdentity, RegistryHostMap};
@@ -173,17 +176,32 @@ pub async fn list_packages(
 pub struct AccessQuery {
     registry: String,
     name: String,
-    version: String,
+    /// Absent: explain resolution — which version a client asking for the
+    /// newest receives, and the state of the newest ten (RFC 0040 §4.8).
+    version: Option<String>,
     artifact: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]
 pub struct AccessCheckResponse {
     pub package: PackageIdentifierDto,
+    /// `headline == pullable`, kept for the callers written before the causes.
     pub can_access: bool,
+    /// The first cause that refuses or waits, as one line.
     pub reason: Option<String>,
     /// The proxy path for this package (e.g. `/proxy/npm/lodash/4.17.21/tarball`).
     pub proxy_url: Option<String>,
+    /// `pullable`, `waiting` or `refused` (RFC 0040 §4.8).
+    pub headline: Headline,
+    /// For `waiting`: when it lifts, if every waiting cause is a clock.
+    pub until: Option<chrono::DateTime<chrono::Utc>>,
+    /// Every cause the download checks, in the order it checks them.
+    pub causes: Vec<Cause>,
+    /// With no version asked: the newest stable version pullable now.
+    pub resolved_version: Option<String>,
+    /// With no version asked: the newest versions and their answers, newest
+    /// first. Empty when a version was asked.
+    pub versions: Vec<Pullability>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -194,75 +212,123 @@ pub struct PackageIdentifierDto {
     pub artifact: Option<String>,
 }
 
-/// Check why a specific package is or isn't accessible for the current user.
+/// One body for an invisible package and an unknown one (RFC 0040 T1): a
+/// caller must not learn that something it may not see exists.
+fn not_found() -> AppError {
+    AppError::not_found("package not found")
+}
+
+/// Why a version is or is not pullable by the caller, now and when it will
+/// be (RFC 0040 §6.1): every cause the download funnel checks, in its order.
 #[utoipa::path(
     get,
     path = "/api/v1/packages/access",
     tag = "front-office",
     params(AccessQuery),
     responses(
-        (status = 200, description = "Access check result", body = AccessCheckResponse),
+        (status = 200, description = "The pullability answer", body = AccessCheckResponse),
+        (status = 404, description = "No such package, or one the caller may not see — alike"),
     ),
     security(("bearer_token" = [])),
 )]
 #[get("/api/v1/packages/access")]
+#[allow(clippy::too_many_arguments)]
 pub async fn check_access(
     query: web::Query<AccessQuery>,
     identity: AuthIdentity,
-    admin_svc: web::Data<Arc<AdminService>>,
     access: web::Data<crate::AccessConfigLock>,
     hosts: Option<web::Data<RegistryHostMap>>,
+    proxy_svc: web::Data<Arc<ProxyService>>,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
+    modes: web::Data<crate::RegistryModeMap>,
+    registries: web::Data<crate::RegistryMap>,
 ) -> Result<impl Responder, AppError> {
-    let pkg = PackageId {
-        registry: query.registry.clone(),
-        name: query.name.clone(),
-        version: query.version.clone(),
-        artifact: query.artifact.clone(),
-    };
-
-    let accessible = access.read().await.accessible_registries_for(&identity);
-    if !accessible.contains(&pkg.registry) {
-        return Ok(web::Json(AccessCheckResponse {
-            package: PackageIdentifierDto {
-                registry: pkg.registry,
-                name: pkg.name,
-                version: pkg.version,
-                artifact: pkg.artifact,
-            },
-            can_access: false,
-            reason: Some("registry not accessible".to_string()),
-            proxy_url: None,
-        }));
-    }
-
-    let status = admin_svc
-        .get_package_status(&pkg)
+    let query = query.into_inner();
+    // Visible as the download funnel sees it: the legacy role table, or a read
+    // grant anywhere in the registry — a namespace-only grant included, or a
+    // caller who can pull `@team/x` would be told it does not exist. The
+    // coordinate's own grant is judged in `explain`'s step 1.
+    let legacy = access
+        .read()
         .await
-        .map_err(AppError::from)?;
+        .accessible_registries_for(&identity)
+        .contains(&query.registry);
+    let visible = registries.contains(&query.registry)
+        && (legacy
+            || batlehub_core::services::authz::holds_anywhere_in_registry(
+                &proxy_svc.hot,
+                &query.registry,
+                &identity,
+                batlehub_core::entities::Action::ReleasesRead,
+            )
+            .await);
+    let scope = Scope {
+        visible,
+        falls_through: modes.get(&query.registry) != batlehub_config::schema::RegistryMode::Local,
+    };
+    let svc = PullabilityService::new(proxy_svc.get_ref().clone(), local_svc.get_ref().clone());
+    tracing::debug!(registry = %query.registry, name = %query.name, "pullability asked");
 
-    let (can_access, reason) = match &status {
-        PackageStatus::Available => (true, None),
-        PackageStatus::Blocked { reason, .. } => (false, Some(reason.clone())),
+    let (answer, resolved_version, versions) = match query.version.as_deref() {
+        Some(version) => {
+            let pkg = PackageId {
+                registry: query.registry.clone(),
+                name: query.name.clone(),
+                version: version.to_owned(),
+                artifact: query.artifact.clone(),
+            };
+            match svc.explain(&identity.0, &pkg, scope).await? {
+                Answer::NotFound => return Err(not_found()),
+                Answer::Found(p) => (p, None, Vec::new()),
+            }
+        }
+        None => {
+            let Some(res) = svc
+                .explain_resolution(&identity.0, &query.registry, &query.name, scope)
+                .await?
+            else {
+                return Err(not_found());
+            };
+            // The headline answers for the version a client would get, or
+            // the newest when none is pullable.
+            let head = res
+                .resolved_version
+                .as_ref()
+                .and_then(|v| res.versions.iter().find(|p| &p.version == v))
+                .or(res.versions.first())
+                .cloned()
+                .ok_or_else(not_found)?;
+            (head, res.resolved_version, res.versions)
+        }
     };
 
+    let reason = answer
+        .causes
+        .iter()
+        .find(|c| matches!(c.state, CauseState::Refuse | CauseState::Wait))
+        .map(|c| c.detail.clone());
     let proxy_url = build_proxy_url(
-        &registry_link_base(&pkg.registry, hosts.as_ref().map(|h| h.get_ref())),
-        &pkg.registry,
-        &pkg.name,
-        &pkg.version,
-        pkg.artifact.as_deref(),
+        &registry_link_base(&query.registry, hosts.as_ref().map(|h| h.get_ref())),
+        &query.registry,
+        &query.name,
+        &answer.version,
+        query.artifact.as_deref(),
     );
-
     Ok(web::Json(AccessCheckResponse {
         package: PackageIdentifierDto {
-            registry: pkg.registry,
-            name: pkg.name,
-            version: pkg.version,
-            artifact: pkg.artifact,
+            registry: query.registry,
+            name: query.name,
+            version: answer.version.clone(),
+            artifact: query.artifact,
         },
-        can_access,
+        can_access: answer.headline == Headline::Pullable,
         reason,
         proxy_url,
+        headline: answer.headline,
+        until: answer.until,
+        causes: answer.causes,
+        resolved_version,
+        versions,
     }))
 }
 

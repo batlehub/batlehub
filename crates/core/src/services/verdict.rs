@@ -367,6 +367,12 @@ impl VerdictService {
             None => (Vec::new(), Vec::new(), None),
         };
         let fresh = evaluate(package, scanner_findings, done, policy, now, last_scanned);
+        // RFC 0040 §6.1: a pullability answer reads the verdict the download
+        // would get and writes nothing — no scan queued, no hold persisted,
+        // no transition recorded (T2b). The same `evaluate` either way.
+        if crate::services::pullability::evaluate_only() {
+            return Ok(fresh);
+        }
 
         if stored.is_none() {
             // First sight: a user is waiting, so the job is `FirstSeen`, and

@@ -13,14 +13,25 @@
   },
   "accessCheck": {
     "accessCheck": "Vérification d'accès",
-    "allowed": "Autorisé",
     "artifactOptional": "Artefact (facultatif)",
     "checkAccess": "Vérifier l'accès",
     "checking": "Vérification…",
-    "denied": "Refusé",
-    "noReasonGiven": "aucun motif indiqué",
+    "next": "Suite :",
     "noResponse": "Aucune réponse",
-    "versionNeedsPackage": "Choisissez d'abord un registre et un nom."
+    "notFound": "Aucun paquet de ce nom, ou aucun que vous puissiez voir.",
+    "pullable": "Récupérable",
+    "pullableFrom": "récupérable à partir du {time}",
+    "refused": "Non récupérable",
+    "resolvesTo": "Un client qui demande la plus récente reçoit {version}.",
+    "state": {
+      "pass": "passe",
+      "warn": "alerte",
+      "wait": "attend",
+      "refuse": "refuse"
+    },
+    "versionNeedsPackage": "Choisissez d'abord un registre et un nom.",
+    "waiting": "En attente",
+    "whenScanned": "récupérable quand un analyseur aura répondu"
   },
   "account": {
     "cli": "CLI",

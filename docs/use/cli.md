@@ -372,6 +372,7 @@ the rendered TOML under a `toml` key.
 ```
 batlehub-cli package list   [-r <r>] [--search <q>] [--blocked-only] [--page N] [--per-page N]
 batlehub-cli package versions <registry>/<name>
+batlehub-cli package show     <registry>/<name>[@<version>]
 batlehub-cli package readme   <registry>/<name>[@<version>] [--no-upstream]
 ```
 
@@ -425,6 +426,29 @@ batlehub-cli package versions <registry>/<name> [--limit N] [--page N] [--all] [
 `--page` is 0-based. When more pages exist, `next: --page N` goes to stderr, so
 `--format json | jq '.[].version'` keeps working. `--all` follows the pages, up to
 10 000 rows. `--no-upstream` answers from what this instance holds only.
+
+### `package show <registry>/<name>[@<version>]`
+
+One version: its state (the same column as `package versions`), where it comes
+from, its published date, licence and links, then the answer `why` gives for it.
+Without a version, the one the console opens on: the newest stable version this
+instance holds. An unknown version exits 5. `--format json` returns
+`{registry, name, version, links, pullability}`, `version` being the
+`package versions` row.
+
+```
+$ batlehub-cli package show npm-local/left-pad@1.3.9
+version     1.3.9
+state       cached
+source      local
+published   2026-10-02T09:14:00Z
+license     MIT
+repository  https://github.com/left-pad/left-pad
+homepage    —
+
+✅ npm-local/left-pad@1.3.9 — pullable now
+  ✅ pass  access      you may read npm-local
+```
 
 ### `package readme <registry>/<name>[@<version>]`
 
@@ -1532,31 +1556,45 @@ The two verbs of a supply-chain quarantine ([RFC 0018](/rfc/0018-supply-chain-qu
 
 ### `why <registry>/<name>@<version>`
 
-The verdict behind a refusal: state, reason codes, when a hold lifts, which scanners answered, and — for a token with `findings:read` — the findings themselves. Needs `quarantine:read` on the registry (`user` and `admin` hold it by default; `anonymous` does not, so a public mirror answers a plain 404 unless the operator grants it).
+Why a version is pullable, not pullable yet, or not pullable ([RFC 0040 §4.8](/rfc/0040-cli-grammar-and-coverage#_4-8-why-a-version-is-not-pullable)). It prints one headline, then every cause the download checks, in the order the server checks them (access, block, lifecycle, policy rules, the verdict, upstream). Every cause is reported, not only the first one that fails. The command asks `GET /api/v1/packages/access` and writes nothing on the server: it queues no scan and records no verdict. Any identity may ask. A package you may not read gets the same `404` as an unknown one.
 
 ```bash
-batlehub-cli why npm/left-pad@1.3.1
-batlehub-cli why npm/left-pad@1.3.1 --json
-batlehub-cli why npm/left-pad@1.3.1 --rescan     # queue a rescan too (needs gates:exempt)
-batlehub-cli -r npm why left-pad@1.3.1           # a bare name, in the default registry
+batlehub-cli why npm/left-pad@1.4.0
+batlehub-cli why npm/left-pad@1.4.0 --format json
+batlehub-cli why npm/left-pad@1.4.0 --rescan     # queue a rescan too (needs gates:exempt)
+batlehub-cli -r npm why left-pad@1.4.0           # a bare name, in the default registry
 ```
 
 ```text
-npm/left-pad@1.3.1
-  state        quarantined
-  reasons      MIN_AGE_NOT_MET
-  docs         https://batlehub.dev/use/refused-downloads#min-age-not-met
-  available    2026-09-05T14:12:00Z
-  policy       npm/default
-  evaluated    2026-09-04T14:12:03Z
-  scanned      2026-09-04T14:12:01Z
-  scanners     osv
-  findings     none
+⏳ npm/left-pad@1.4.0 — pullable from 2026-11-04 14:00 UTC
 
-Held until 2026-09-05T14:12:00Z. `batlehub-cli wait` waits for it.
+  ✅ pass  access      you may read npm
+  ✅ pass  block       not blocked
+  ⏳ wait  verdict     MIN_AGE_NOT_MET: quarantined — MIN_AGE_NOT_MET (until 2026-11-04 14:00 UTC)
+                      https://batlehub.dev/use/refused-downloads#min-age-not-met
+  ✅ pass  upstream    metadata resolved
+
+next: `batlehub-cli wait npm/left-pad@1.4.0` returns when it becomes pullable
 ```
 
-The `docs` row links each reason code to its section of [Why a download was refused](/use/refused-downloads), which says what the code means and what to do about it.
+The headline is **✅ pullable now**, **⏳ pullable from \<time\>** (or **when a scanner answers**), or **⛔ not pullable**. Each failing cause carries its reason code, the code's section of [Why a download was refused](/use/refused-downloads), and a `next:` step. A token with `findings:read` also sees the scanners' findings under a held verdict. The exit code is **0** for ✅ and ⏳, since a hold that lifts on its own is still an answer, **4** for ⛔ and **5** for not found. Use `wait` when you want the exit code to wait.
+
+### `why <registry>/<name>`
+
+With no version, `why` explains **resolution**: which version a client asking for the newest one receives, and why that is not the newest version. Below that is a table of the ten newest versions and their state.
+
+```text
+npm/left-pad resolves to 1.3.9 — 1.4.0 is waiting (MIN_AGE_NOT_MET, until 2026-11-04 14:00 UTC)
+
+VERSION  STATE        UNTIL                  CODE
+1.4.0    quarantined  2026-11-04 14:00 UTC   MIN_AGE_NOT_MET
+1.3.9    allowed      —                      —
+1.3.8    yanked       —                      —
+```
+
+### `why --last [--limit 20]`
+
+Your own refusals from the last 30 days, newest first: the coordinate, the time and the reason code. Use it when npm printed a `403` and you do not know which exact version it asked for. Each row is a coordinate you can pass back to `why`. It reads `GET /api/v1/me/downloads?outcome=denied`, which returns only the caller's rows. A refusal recorded before the upgrade shows `—` as its code.
 
 ### `wait <registry>/<name>@<version> [--timeout 1h] [--interval 30s]`
 
@@ -1610,6 +1648,9 @@ checksum the kind's own metadata advertises (npm's `dist.integrity`, cargo's
 index `cksum`). Only a match is renamed into place; a mismatch, a refusal or a
 Ctrl-C removes the `.part` and exits non-zero. A kind whose metadata carries no
 checksum the CLI reads is written with a `warning:` that says it is unverified.
+
+When the server refuses a coordinate (`403`, or `404`), `download` prints what
+[`why`](#commands-security) prints for it on stderr, then exits 4 or 5.
 
 `-o` names the output file, and an existing one is replaced only after a
 [confirmation](#confirmation). `-o -` writes to stdout so the file can be piped;

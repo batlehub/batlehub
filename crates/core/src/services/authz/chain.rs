@@ -269,7 +269,11 @@ async fn authorize_grants(
     // should refuse because a date passed and nobody noticed, which is exactly
     // the failure the required `dry_run_until` exists to prevent.
     if let Some(node) = active_shadow(&path) {
-        record_shadowed(hot, package_id, &subject, action, node).await;
+        // A pullability answer is not traffic: it must not add to the
+        // evidence a shadow is watched for (RFC 0040 §6.1, T2b).
+        if !crate::services::pullability::evaluate_only() {
+            record_shadowed(hot, package_id, &subject, action, node).await;
+        }
         return Ok(());
     }
 
@@ -734,6 +738,18 @@ pub async fn authorize_read_against(
     identity: &Identity,
     action: Action,
 ) -> Result<(), CoreError> {
+    authorize_read_against_coded(hot, metadata, identity, action, &mut None).await
+}
+
+/// [`authorize_read_against`], leaving a rule refusal's reason code in `code`
+/// for the local funnel's access log (RFC 0040 decision 39).
+pub async fn authorize_read_against_coded(
+    hot: &HotConfigLock,
+    metadata: &PackageMetadata,
+    identity: &Identity,
+    action: Action,
+    code: &mut Option<String>,
+) -> Result<(), CoreError> {
     authorize_grants(hot, &metadata.id, identity, action).await?;
 
     let policy = policy_for(
@@ -760,8 +776,16 @@ pub async fn authorize_read_against(
         cache_entry: None,
         requested_version: Some(&metadata.id.version),
     };
-    if let (RuleDecision::Deny { reason }, _) = evaluate_chain(hot, rules, &metadata.id, &ctx).await
-    {
+    let ((decision, refused_by), verdict) = crate::services::verdict::with_request_verdict(
+        evaluate_chain(hot, rules, &metadata.id, &ctx),
+    )
+    .await;
+    if let RuleDecision::Deny { reason } = decision {
+        *code = crate::services::pullability::reason_code_for(
+            refused_by.as_deref().unwrap_or(""),
+            verdict.as_ref(),
+            metadata,
+        );
         return Err(CoreError::AccessDenied(reason));
     }
     Ok(())
@@ -787,22 +811,55 @@ pub async fn evaluate_chain<'r>(
 ) -> (RuleDecision, Option<String>) {
     let mut exempt: Option<Vec<String>> = None;
     for rule in rules {
-        let decision = rule.evaluate(ctx).await;
-        if !decision.is_deny() {
-            continue;
+        let decision = judge(hot, id, rule.name(), rule.evaluate(ctx).await, &mut exempt).await;
+        if decision.is_deny() {
+            return (decision, Some(rule.name().to_owned()));
         }
-        if crate::entities::EXEMPTIBLE_GATES.contains(&rule.name()) {
-            let silenced = match &exempt {
-                Some(gates) => gates,
-                None => exempt.insert(exempt_gates(hot, id).await),
-            };
-            if silenced.iter().any(|g| g == rule.name()) {
-                continue;
-            }
-        }
-        return (decision, Some(rule.name().to_owned()));
     }
     (RuleDecision::Allow, None)
+}
+
+/// [`evaluate_chain`] without the short circuit: every rule's decision, in
+/// chain order, under the same exemption rules (RFC 0040 §6.1 step 4). For
+/// the pullability answer, which reports every cause rather than the first —
+/// and evaluates, never acts: run it under `pullability::scoped`.
+pub async fn evaluate_chain_all<'r>(
+    hot: &HotConfigLock,
+    rules: impl IntoIterator<Item = &'r Box<dyn crate::rules::Rule>>,
+    id: &PackageId,
+    ctx: &RuleContext<'_>,
+) -> Vec<(String, RuleDecision)> {
+    let mut exempt: Option<Vec<String>> = None;
+    let mut out = Vec::new();
+    for rule in rules {
+        let decision = judge(hot, id, rule.name(), rule.evaluate(ctx).await, &mut exempt).await;
+        out.push((rule.name().to_owned(), decision));
+    }
+    out
+}
+
+/// One rule's answer after the exemptions: a refusal from an exemptible gate
+/// an active exemption names is an `Allow`. The policy store is read at most
+/// once per chain, and only when such a gate refuses.
+async fn judge(
+    hot: &HotConfigLock,
+    id: &PackageId,
+    name: &str,
+    decision: RuleDecision,
+    exempt: &mut Option<Vec<String>>,
+) -> RuleDecision {
+    if !decision.is_deny() || !crate::entities::EXEMPTIBLE_GATES.contains(&name) {
+        return decision;
+    }
+    let silenced = match exempt {
+        Some(gates) => gates,
+        None => exempt.insert(exempt_gates(hot, id).await),
+    };
+    if silenced.iter().any(|g| g == name) {
+        RuleDecision::Allow
+    } else {
+        decision
+    }
 }
 
 /// The gates an active exemption silences for this coordinate (§4.5).
@@ -904,6 +961,18 @@ pub async fn authorize_unheld_read(
     identity: &Identity,
     action: Action,
 ) -> Result<(), CoreError> {
+    authorize_unheld_read_coded(hot, package_id, identity, action, &mut None).await
+}
+
+/// [`authorize_unheld_read`], leaving a rule refusal's reason code in `code`
+/// (RFC 0040 decision 39).
+pub async fn authorize_unheld_read_coded(
+    hot: &HotConfigLock,
+    package_id: &PackageId,
+    identity: &Identity,
+    action: Action,
+    code: &mut Option<String>,
+) -> Result<(), CoreError> {
     authorize_grants(hot, package_id, identity, action).await?;
 
     let Some(policy) =
@@ -930,8 +999,10 @@ pub async fn authorize_unheld_read(
         .rules
         .iter()
         .filter(|r| !METADATA_DERIVED_RULES.contains(&r.name()));
-    if let (RuleDecision::Deny { reason }, _) = evaluate_chain(hot, running, package_id, &ctx).await
+    if let (RuleDecision::Deny { reason }, Some(rule)) =
+        evaluate_chain(hot, running, package_id, &ctx).await
     {
+        *code = crate::services::pullability::reason_code_for(&rule, None, &metadata);
         return Err(CoreError::AccessDenied(reason));
     }
     Ok(())

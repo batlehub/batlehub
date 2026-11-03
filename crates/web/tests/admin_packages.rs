@@ -5,7 +5,7 @@ mod common;
 #[allow(unused_imports)]
 use common::*;
 
-use actix_web::test::{call_service, read_body_json, TestRequest};
+use actix_web::test::{call_service, read_body, read_body_json, TestRequest};
 use chrono::Utc;
 use serde_json::Value;
 
@@ -141,21 +141,44 @@ async fn access_check_returns_false_for_blocked_package() {
     assert_eq!(resp.status(), 200);
     let body: Value = read_body_json(resp).await;
     assert_eq!(body["can_access"], false);
-    assert_eq!(body["reason"], "security vulnerability");
+    assert_eq!(body["headline"], "refused");
+    // RFC 0040 T2: the administrator's note is theirs; an anonymous caller
+    // learns that it is a block, and its code, not why.
+    assert_eq!(body["reason"], "blocked by an administrator");
+    let block = body["causes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["kind"] == "block")
+        .unwrap();
+    assert_eq!(block["state"], "refuse");
+    assert_eq!(block["reason_code"], "BLOCK_LIST");
+    assert!(
+        !body.to_string().contains("security vulnerability"),
+        "{body}"
+    );
 }
 
 #[actix_web::test]
-async fn access_check_returns_false_for_inaccessible_registry_without_leaking_block_status() {
+async fn access_check_answers_an_inaccessible_registry_as_not_found() {
     // make_app doesn't register or grant access to "pypi" for any role.
+    // RFC 0040 T1: the `200 {reason: "registry not accessible"}` this used to
+    // answer confirmed the registry exists; now it is the not-found an unknown
+    // registry gets, byte for byte.
     let app = make_app(InMemoryRepo::new()).await;
-    let req = TestRequest::get()
-        .uri("/api/v1/packages/access?registry=pypi&name=evil-pkg&version=1.0.0")
-        .to_request();
-    let resp = call_service(&app, req).await;
-    assert_eq!(resp.status(), 200);
-    let body: Value = read_body_json(resp).await;
-    assert_eq!(body["can_access"], false);
-    assert_eq!(body["reason"], "registry not accessible");
+    let ask = |reg: &str| {
+        TestRequest::get()
+            .uri(&format!(
+                "/api/v1/packages/access?registry={reg}&name=evil-pkg&version=1.0.0"
+            ))
+            .to_request()
+    };
+    let hidden = call_service(&app, ask("pypi")).await;
+    assert_eq!(hidden.status(), 404);
+    let hidden = read_body(hidden).await;
+    let unknown = call_service(&app, ask("no-such-registry")).await;
+    assert_eq!(unknown.status(), 404);
+    assert_eq!(hidden, read_body(unknown).await);
 }
 
 // ── /api/v1/admin/packages ────────────────────────────────────────────────────

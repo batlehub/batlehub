@@ -219,8 +219,13 @@ async fn a_grant_reload_changes_the_answer() {
         "open".to_owned(),
         open_grants(&[Action::ReleasesList, Action::ReleasesRead]),
     );
+    // Still listed — anyone reads its releases, so `why` must find it — but
+    // not installable.
     let got = listing(&app, None).await;
-    assert_eq!(got, HashMap::from([("npm".to_owned(), false)]));
+    assert_eq!(
+        got,
+        HashMap::from([("npm".to_owned(), false), ("open".to_owned(), false)])
+    );
     // An admin still sees it through the legacy filter — the console's view
     // is not shrunk — but these grants give nobody `source:read` on it.
     let admin = listing(&app, Some(ADMIN_TOKEN)).await;
@@ -280,5 +285,33 @@ async fn upstreams_follow_upstreams_read_and_lose_their_credentials() {
     assert_eq!(
         upstreams(&app, None).await.get("open"),
         Some(&Some("https://npm.corp.internal".to_owned()))
+    );
+}
+
+/// A registry closed at its own tier but read through one namespace grant
+/// (`@team/x`) is listed, `installable: false`: a coordinate command needs to
+/// find it, and `setup apply` must still write nothing for it (RFC 0040 §17.1).
+#[actix_web::test]
+async fn a_namespace_only_reader_sees_the_registry_as_not_installable() {
+    let (app, hot) = app().await;
+    hot.write().await.grants.insert(
+        "open".to_owned(),
+        Arc::new(RegistryGrants {
+            kind: RegistryKind::Npm,
+            registry: Node::new(Tier::Registry, "registry:open", None),
+            namespaces: vec![(
+                "@team".to_owned(),
+                Node::new(
+                    Tier::Namespace,
+                    "namespace:@team",
+                    Some(GrantMap::new().grant(SubjectMatcher::Anyone, vec![Action::ReleasesRead])),
+                ),
+            )],
+        }),
+    );
+    let got = listing(&app, None).await;
+    assert_eq!(
+        got,
+        HashMap::from([("npm".to_owned(), false), ("open".to_owned(), false)])
     );
 }

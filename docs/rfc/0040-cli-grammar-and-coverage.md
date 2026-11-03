@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Accepted — phases 2 and 3 landed, phase 4 in progress; §17 records how far each phase is and where the built thing differs |
+| Status      | Accepted — phases 2, 3 and 5 landed, phase 4 in progress; §17 records how far each phase is and where the built thing differs |
 | Short       | CLI grammar and coverage                                      |
 | Settles     | How every batlehub-cli command names a package, prints, fails and confirms, what it must cover for each registry kind, and how a developer learns why a version is not pullable |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -1646,7 +1646,7 @@ row names has landed; a partial phase lists what is still open.
 | 2 | done | `4f23b2ce` | `cli/src/{exit,coordinate,render,confirm}.rs`; the exit-code table, the error shape (`error:`/`code:`/`hint:`, JSON copy on stdout), global `--format`/`BATLEHUB_FORMAT`/`-y`; `-r` honoured by every registry filter; destructive commands confirm; `setup` 3 → 6, `wait` 1/2 → 4/8, `mise` partial → 7; `quarantine.sh` and `client_setup.sh` edited |
 | 3 | done | `6d7ac4aa` | The §4.4 tree (`admin` dissolved), `package <verb> <coord>…`, coordinates on `owner`/`visibility`/`grant`/`sbom show`/`authz check`, `profile` with `current`; every old spelling a hidden alias that warns; `--registry-url`; the server hint reads `batlehub-cli why reg/name@ver` |
 | 4 | in progress | `f08b58d5`, `36180a88`, `c59d4b7d`, + the coverage commit | §6.4 owner arm; §6.3 publish by kind with the nine uploaders; §6.5 `package versions` with upstream and `download <coord>`; §6.5 `setup` for conda, composer, gem, nuget, terraform, galaxy, nix, sdkman, gitlab (mise), helm (`manual`) and the print arms, plus detection of galaxy/helm/nix/devfile projects; §6.6 `cli/src/coverage.rs`, its gate and `task docs:cli-matrix`. **Open:** heavy cases 1–7, 11, 13 |
-| 5 | not started | — | |
+| 5 | done | + the pullability commit | `services/pullability.rs` (`explain`, `explain_resolution`); `evaluate_chain_all`; the extended `packages/access` (404 for not visible, `version` optional); migration 063 and `reason_code` written by both funnels; `me/downloads?outcome=denied`; `why <coord>`, `why <name>`, `why --last`; `download`'s refusal prints `why`; the console's access page renders causes. heavy cases 8–10 (`quarantine.sh`) and 12 (`authz.sh npm`); `package show`; `/api/v1/registries` lists a registry read without being installable (`installable: false`) |
 | 6 | not started | — | |
 | 7 | not started | — | |
 | 8 | not started | — | |
@@ -1666,8 +1666,10 @@ row names has landed; a partial phase lists what is still open.
 - **`--format csv` on a non-listing is caught after the call, not before**
   (§4.11). The renderer decides on the JSON it was given; an action that
   prints one object under `csv` has already acted when it exits 2.
-- **`package show` is not built.** It carries the §4.8 state column, so it
-  lands with phase 5's pullability answer rather than as an empty command.
+- **`package show` names no artifact.** It prints the explore row of one
+  version and `why`'s answer for it. The explore row carries no file names, so
+  `download` of a kind with several files per version (pypi, maven, conda, …)
+  stays n.a. until a listing of a version's files exists.
 - **The owner arm lives in `bulk-yank`/`bulk-unyank` only.** `owner_verbs`
   grants `yank`/`unyank` and nothing else to any kind today, so the
   single-item deprecate/unlist routes have no owner arm to add; the enum holds
@@ -1699,7 +1701,7 @@ row names has landed; a partial phase lists what is still open.
   rewrites its own repository file and would drop a marked block. Download is
   n.a. for the kinds `fetchable_by_version` says have no single artifact (pypi,
   maven, conda, terraform, the OS kinds, the forges, the vendor mirrors) until
-  phase 5's `package show` can name one. The Check column joins in phase 7, as
+  a version's files can be listed (`package show` names none, see below). The Check column joins in phase 7, as
   §6.6 says.
 - **`setup` deviations.** Composer's `auth.json` is not written (anonymous
   reads only), there is no terraform `host` block, and the nix public key is not
@@ -1707,6 +1709,44 @@ row names has landed; a partial phase lists what is still open.
   NuGet following `DOTNET_CLI_HOME`, ansible refusing a duplicate section and
   the precedence of `NIX_CONFIG` were not checked against the clients' source.
   Heavy case 1 is where they get proven.
+- **No `VerdictService::peek`, no `rules::evaluate_all`.** Evaluate-only is a
+  task-local (`pullability::scoped`) that `VerdictService::current` and the
+  shadow-evidence write both check, so `why` runs the verdict gate and the
+  grant chain the download runs, not a reading of their stored rows. Every
+  rule's decision comes from `authz::evaluate_chain_all`, beside
+  `evaluate_chain` in `authz/chain.rs`, so both share the exemption step.
+- **The admin block is the `block_list` rule's cause**, not a separate
+  `AdminService::get_package_status` call: the block list is what the funnels
+  consult, so asking it twice could only disagree.
+- **The local funnel's code travels through an out-parameter**
+  (`authorize_read_against_coded`, `authorize_unheld_read_coded`), since
+  `CoreError::AccessDenied` carries only text. A refusal by the grant chain or
+  visibility has no code, as T1 requires.
+- **Heavy case 9's timeout arm waits on a clock, not on a scan.** The embedded
+  worker answered OSV 0.3 s after first contact, so "a version still scanning"
+  could not hold for one second. The arm runs `wait --timeout 1s` on case 8's
+  `MIN_AGE_NOT_MET` hold instead, which is waiting that can help but not within a
+  second. Case 8 holds it with a registry whose `min_age_secs` is twenty years.
+- **Registry visibility is the grants', not only `accessible_registries_for`.**
+  §6.1 step 1 names `accessible_registries_for`, which reads the legacy
+  `[registries.rbac]` table alone. The download funnel does not consult it, so
+  a registry opened only by `[registries.grants]`, or a namespace grant, was
+  pullable and answered `404` by `why`. The handler now counts a registry as
+  visible when it exists and the caller holds `releases:read` anywhere in it
+  (`holds_anywhere_in_registry`). The coordinate's own grant is still step 1's
+  `authorize_grants_public`, so an invisible package stays a `404`.
+- **`/api/v1/registries` lists a registry the caller reads but cannot
+  install from**: a namespace-only grant (heavy case 12's denied user and
+  `@team`) or `releases:read` without `source:read`. It is listed with
+  `installable: false`, so `why` and `download` resolve the coordinate, and
+  `setup apply` writes nothing for it (it already skipped `installable: false`).
+  This widens what an RFC 0038 caller with metadata-only grants sees: the name
+  of a registry it can already read from.
+- **Heavy case 12 asks twice.** Once through the CLI (the hidden-registry
+  branch above) and once at `/api/v1/packages/access` directly, which is the
+  namespace-tier branch the case describes. Both pairs must be byte-identical
+  apart from the name. The configured denied user plays `@secret`'s outsider,
+  using the registry's own `@team` grant.
 - **apk publish has no in-process test**: the route needs a signed package and
   a configured signer; heavy case 7 is its proof.
 - **The CLI integration suite shows a rare `408` under load** (actix's client

@@ -236,6 +236,7 @@ impl EvictionService {
         let package_id = (!self.config.registry.is_empty())
             .then(|| PackageId::new(&self.config.registry, "", ""));
         let event = AccessEvent {
+            reason_code: None,
             id: uuid::Uuid::new_v4(),
             user_id: identity.user_id.clone(),
             user_role: identity.role.clone(),
@@ -647,6 +648,7 @@ impl EvictionService {
         let package_id = (!self.config.registry.is_empty())
             .then(|| PackageId::new(&self.config.registry, "", ""));
         let event = AccessEvent {
+            reason_code: None,
             id: uuid::Uuid::new_v4(),
             user_id: identity.user_id.clone(),
             user_role: identity.role.clone(),

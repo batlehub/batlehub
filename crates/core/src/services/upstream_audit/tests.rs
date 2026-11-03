@@ -475,6 +475,7 @@ impl PackageRepository for BlockTable {
         _: &str,
         _: DateTime<Utc>,
         _: u64,
+        _: bool,
     ) -> Result<Vec<AccessEvent>, CoreError> {
         Ok(vec![])
     }

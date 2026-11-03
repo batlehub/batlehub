@@ -87,6 +87,7 @@ async fn covering_block_prefers_the_artifact_then_widens_to_the_version() {
 
 fn event(pkg: &PackageId, result: AccessResult) -> AccessEvent {
     AccessEvent {
+        reason_code: None,
         id: Uuid::new_v4(),
         user_id: None,
         user_role: Role::Anonymous,

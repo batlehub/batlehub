@@ -390,6 +390,7 @@ suggestions structurées, plus le TOML rendu sous une clé `toml`.
 ```
 batlehub-cli package list   [--registry <r>] [--search <q>] [--blocked-only] [--page N] [--per-page N]
 batlehub-cli package versions <registry>/<name>
+batlehub-cli package show     <registry>/<name>[@<version>]
 batlehub-cli package readme   <registry>/<name>[@<version>] [--no-upstream]
 ```
 
@@ -446,6 +447,15 @@ batlehub-cli package versions <registry>/<name> [--limit N] [--page N] [--all] [
 stderr, de sorte que `--format json | jq '.[].version'` continue de fonctionner.
 `--all` suit les pages, jusqu'à 10 000 lignes. `--no-upstream` ne répond que
 d'après ce que l'instance détient.
+
+### `package show <registry>/<name>[@<version>]`
+
+Une version : son état (la même colonne que `package versions`), sa provenance,
+sa date de publication, sa licence et ses liens, puis la réponse que `why` donne
+pour elle. Sans version, celle sur laquelle la console s'ouvre : la plus récente
+version stable que l'instance détient. Une version inconnue sort en 5. Avec
+`--format json`, la sortie est `{registry, name, version, links, pullability}`,
+où `version` est la ligne de `package versions`.
 
 ### `package readme <registry>/<name>[@<version>]`
 
@@ -1606,35 +1616,45 @@ codes de motif et cette commande.
 
 ### `why <registry>/<name>@<version>`
 
-Le verdict derrière un refus : l'état, les codes de motif, la date de levée d'une
-retenue, quels scanners ont répondu et — pour un token portant `findings:read` —
-les constats eux-mêmes. Exige `quarantine:read` sur le registre (`user` et
-`admin` le détiennent par défaut ; `anonymous` non, de sorte qu'un miroir public
-répond un simple 404 tant que l'opérateur ne l'accorde pas).
+Pourquoi une version est téléchargeable, pas encore téléchargeable ou pas téléchargeable du tout ([RFC 0040 §4.8](/rfc/0040-cli-grammar-and-coverage#_4-8-why-a-version-is-not-pullable)). La commande affiche une ligne de synthèse, puis chacune des causes que le téléchargement vérifie, dans l'ordre où le serveur les vérifie (accès, blocage, cycle de vie, règles de politique, verdict, amont). Elle les rapporte toutes, pas seulement la première en échec. Elle interroge `GET /api/v1/packages/access` et n'écrit rien sur le serveur : aucune analyse n'est mise en file, aucun verdict n'est enregistré. Toute identité peut poser la question. Un paquet que vous ne pouvez pas lire reçoit le même `404` qu'un paquet inconnu.
 
 ```bash
-batlehub-cli why npm/left-pad@1.3.1
-batlehub-cli why npm/left-pad@1.3.1 --json
-batlehub-cli why npm/left-pad@1.3.1 --rescan     # met aussi une réanalyse en file (exige gates:exempt)
-batlehub-cli -r npm why left-pad@1.3.1           # un nom nu, dans le registre par défaut
+batlehub-cli why npm/left-pad@1.4.0
+batlehub-cli why npm/left-pad@1.4.0 --format json
+batlehub-cli why npm/left-pad@1.4.0 --rescan     # met aussi une réanalyse en file (exige gates:exempt)
+batlehub-cli -r npm why left-pad@1.4.0           # un nom nu, dans le registre par défaut
 ```
 
 ```text
-npm/left-pad@1.3.1
-  state        quarantined
-  reasons      MIN_AGE_NOT_MET
-  docs         https://batlehub.dev/use/refused-downloads#min-age-not-met
-  available    2026-09-05T14:12:00Z
-  policy       npm/default
-  evaluated    2026-09-04T14:12:03Z
-  scanned      2026-09-04T14:12:01Z
-  scanners     osv
-  findings     none
+⏳ npm/left-pad@1.4.0 — pullable from 2026-11-04 14:00 UTC
 
-Held until 2026-09-05T14:12:00Z. `batlehub-cli wait` waits for it.
+  ✅ pass  access      you may read npm
+  ✅ pass  block       not blocked
+  ⏳ wait  verdict     MIN_AGE_NOT_MET: quarantined — MIN_AGE_NOT_MET (until 2026-11-04 14:00 UTC)
+                      https://batlehub.dev/use/refused-downloads#min-age-not-met
+  ✅ pass  upstream    metadata resolved
+
+next: `batlehub-cli wait npm/left-pad@1.4.0` returns when it becomes pullable
 ```
 
-La ligne `docs` relie chaque code de raison à sa section de [Pourquoi un téléchargement est refusé](/fr/use/refused-downloads), qui explique ce que signifie le code et ce que vous pouvez faire.
+La synthèse vaut **✅ pullable now** (téléchargeable), **⏳ pullable from \<date\>** (ou **when a scanner answers**, à la réponse d'un scanner) ou **⛔ not pullable** (refusé). Chaque cause en échec porte son code de motif, un lien vers la section de [Pourquoi un téléchargement est refusé](/fr/use/refused-downloads) qui le décrit et une étape `next:`. Sous un verdict qui retient la version, un token portant `findings:read` voit aussi les constats des scanners. Le code de sortie vaut **0** pour ✅ et ⏳, car une retenue qui se lève d'elle-même reste une réponse, **4** pour ⛔ et **5** pour un paquet introuvable. Si vous voulez que le code de sortie attende la levée, utilisez `wait`.
+
+### `why <registry>/<name>`
+
+Sans version, `why` explique la **résolution** : quelle version reçoit un client qui demande la plus récente, et pourquoi ce n'est pas la dernière parue. Un tableau des dix versions les plus récentes et de leur état suit.
+
+```text
+npm/left-pad resolves to 1.3.9 — 1.4.0 is waiting (MIN_AGE_NOT_MET, until 2026-11-04 14:00 UTC)
+
+VERSION  STATE        UNTIL                  CODE
+1.4.0    quarantined  2026-11-04 14:00 UTC   MIN_AGE_NOT_MET
+1.3.9    allowed      —                      —
+1.3.8    yanked       —                      —
+```
+
+### `why --last [--limit 20]`
+
+Vos propres refus des 30 derniers jours, du plus récent au plus ancien : la coordonnée, l'heure et le code de motif. Utilisez cette commande quand npm a affiché un `403` sans que vous sachiez quelle version exacte il a demandée. Chaque ligne est une coordonnée que vous pouvez repasser à `why`. Elle lit `GET /api/v1/me/downloads?outcome=denied`, qui ne renvoie que les lignes de l'appelant. Un refus enregistré avant la mise à jour affiche `—` comme code.
 
 ### `wait <registry>/<name>@<version> [--timeout 1h] [--interval 30s]`
 
@@ -1697,6 +1717,10 @@ npm, le `cksum` de l'index pour cargo). Seule une correspondance est renommée �
 sa place ; une discordance, un refus ou un Ctrl-C supprime le `.part` et sort
 avec un code non nul. Un type dont les métadonnées ne portent aucune somme que
 la CLI sache lire est écrit avec un `warning:` qui le dit non vérifié.
+
+Quand le serveur refuse une coordonnée (`403` ou `404`), `download` affiche sur
+la sortie d'erreur ce qu'en dirait [`why`](#commands-security), puis sort avec le
+code 4 ou 5.
 
 `-o` nomme le fichier de sortie, et un fichier existant n'est remplacé qu'après
 une [confirmation](#confirmation). `-o -` écrit sur la sortie standard pour que

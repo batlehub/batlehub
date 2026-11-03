@@ -447,9 +447,22 @@ pub struct AccessEvent {
     /// hash, no authorization code (RFC 0036 §6.1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// The stable code of a refusal (`MIN_AGE_NOT_MET`, `BLOCK_LIST`, …),
+    /// beside the free-text `deny_reason`: what `GET /api/v1/me/downloads
+    /// ?outcome=denied` returns to the person refused, whose own row it is,
+    /// without the operator's prose (RFC 0040 §6.1, decision 39). `None` on
+    /// rows written before it existed and on every non-refusal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
 }
 
 impl AccessEvent {
+    /// The refusal's stable code (RFC 0040 decision 39).
+    pub fn with_reason_code(mut self, code: Option<String>) -> Self {
+        self.reason_code = code;
+        self
+    }
+
     /// An event about an identity or a credential rather than a package — the
     /// authentication actions of RFC 0036 §6.1. `detail` names what it is
     /// about and never carries a secret.
@@ -462,6 +475,7 @@ impl AccessEvent {
         detail: Option<String>,
     ) -> Self {
         Self {
+            reason_code: None,
             id: Uuid::new_v4(),
             user_id,
             user_role,
@@ -482,6 +496,7 @@ impl AccessEvent {
         user_role: Role,
     ) -> Self {
         Self {
+            reason_code: None,
             id: Uuid::new_v4(),
             user_id,
             user_role,
@@ -508,6 +523,7 @@ impl AccessEvent {
         user_role: Role,
     ) -> Self {
         Self {
+            reason_code: None,
             id: Uuid::new_v4(),
             user_id,
             user_role,
@@ -545,6 +561,7 @@ impl AccessEvent {
         reason: String,
     ) -> Self {
         Self {
+            reason_code: None,
             id: Uuid::new_v4(),
             user_id,
             user_role,
@@ -580,6 +597,7 @@ impl AccessEvent {
         reason: String,
     ) -> Self {
         Self {
+            reason_code: None,
             id: Uuid::new_v4(),
             user_id,
             user_role,
@@ -601,6 +619,7 @@ impl AccessEvent {
         reason: String,
     ) -> Self {
         Self {
+            reason_code: None,
             id: Uuid::new_v4(),
             user_id,
             user_role,

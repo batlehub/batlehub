@@ -272,6 +272,36 @@ impl ProxyService {
         self.resolve_metadata_for_inner(req, false).await
     }
 
+    /// The inputs a pullability answer judges (RFC 0040 §6.1): the metadata
+    /// the download would resolve — uncaptured, so no README row is written,
+    /// though a miss fills the metadata cache as the install would (decision
+    /// 35) — and the policy the download would judge it by. No grant check
+    /// and no chain: the caller has done the first and runs every rule of the
+    /// second itself.
+    pub async fn explain_inputs(
+        &self,
+        req: &ProxyRequest,
+    ) -> Result<
+        (
+            crate::entities::PackageMetadata,
+            Option<Arc<crate::services::hot_config::RegistryPolicy>>,
+        ),
+        CoreError,
+    > {
+        let prelude = self.request_prelude(req).await?;
+        let metadata = self
+            .resolve_metadata_uncaptured(
+                &prelude.client,
+                &prelude.policy,
+                req,
+                &prelude.cache_key,
+                prelude.ttl,
+                &prelude.registry_label,
+            )
+            .await?;
+        Ok((metadata, prelude.policy))
+    }
+
     async fn resolve_metadata_for_inner(
         &self,
         req: &ProxyRequest,
@@ -765,11 +795,19 @@ impl ProxyService {
         // decision (RFC 0018 §4.2), so a refusal can carry the reason codes
         // and a `warned` stream its headers, without the chain's other rules
         // knowing anything about it.
-        let (decision, verdict) = crate::services::verdict::with_request_verdict(async {
-            evaluate_chain(&self.hot, rules, &metadata.id, &ctx).await.0
-        })
-        .await;
+        let ((decision, refused_by), verdict) =
+            crate::services::verdict::with_request_verdict(async {
+                evaluate_chain(&self.hot, rules, &metadata.id, &ctx).await
+            })
+            .await;
         if let RuleDecision::Deny { reason } = decision {
+            // The stable code `why --last` shows the person refused (RFC 0040
+            // decision 39), from the same mapping `why` itself uses.
+            let code = crate::services::pullability::reason_code_for(
+                refused_by.as_deref().unwrap_or(""),
+                verdict.as_ref(),
+                &metadata,
+            );
             super::warn_if_audit_failed(
                 self.repo
                     .record_access(
@@ -779,7 +817,8 @@ impl ProxyService {
                             req.identity.role,
                             reason.clone(),
                         )
-                        .with_ip_ua(req.ip_address.clone(), req.user_agent.clone()),
+                        .with_ip_ua(req.ip_address.clone(), req.user_agent.clone())
+                        .with_reason_code(code),
                     )
                     .await,
                 "denied download",

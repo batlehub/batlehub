@@ -76,6 +76,7 @@ EGRESS_REG="npm-egress-$HEAVY_RUN"
 RESCAN_REG="npm-rescan-$HEAVY_RUN"
 FLAGS_REG="npm-flags-$HEAVY_RUN"
 YARA_REG="npm-yara-$HEAVY_RUN"
+YOUNG_REG="npm-young-$HEAVY_RUN"
 OSV_PORT="${HEAVY_OSV_PORT:-8127}"
 SINK_PORT="${HEAVY_SINK_PORT:-8137}"
 export HEAVY_OSV_URL="http://127.0.0.1:$OSV_PORT"
@@ -193,6 +194,7 @@ registry=$REG_URL
 //127.0.0.1:$HEAVY_TAP_PORT/proxy/$RESCAN_REG/:_authToken=$ADMIN_TOKEN
 //127.0.0.1:$HEAVY_TAP_PORT/proxy/$FLAGS_REG/:_authToken=$ADMIN_TOKEN
 //127.0.0.1:$HEAVY_TAP_PORT/proxy/$YARA_REG/:_authToken=$ADMIN_TOKEN
+//127.0.0.1:$HEAVY_TAP_PORT/proxy/$YOUNG_REG/:_authToken=$ADMIN_TOKEN
 EOF
 export NPM_CONFIG_USERCONFIG="$NPMRC"
 export NPM_CONFIG_FUND=false NPM_CONFIG_AUDIT=false NPM_CONFIG_UPDATE_NOTIFIER=false
@@ -307,8 +309,8 @@ set +e
 "$CLI" wait "$REG:$PKG@$VULN" --timeout 5m --interval 3s >"$HEAVY_WORK/wait-2.out" 2>&1
 RC=$?
 set -e
-# Exit 1 is "waiting cannot help": the scan came back and the verdict is
-# terminal. Exit 2 (timed out) or 0 (served) would both be wrong here.
+# Exit 4 is "waiting cannot help": the scan came back and the verdict is
+# terminal. Exit 8 (timed out) or 0 (served) would both be wrong here.
 [[ $RC -eq 4 ]] || { cat "$HEAVY_WORK/wait-2.out" >&2; heavy_fail "batlehub wait exited $RC on a version with a critical advisory; expected 4 (waiting cannot help, RFC 0040 §4.6)"; }
 
 # The pinned resolve: a lockfile that already names the version and the
@@ -358,6 +360,92 @@ grep -q "$ADVISORY" "$HEAVY_WORK/why.out" \
 grep -q "denied" "$HEAVY_WORK/why.out" \
   || { cat "$HEAVY_WORK/why.out" >&2; heavy_fail "batlehub why does not say the verdict is denied"; }
 heavy_log "FINDING-OK ($ADVISORY on the wire, printed by npm, and in 'why')"
+
+# ── 3b. `download` explains a refusal (RFC 0040 heavy case 10) ───────────────
+#
+# Through the tap, so the CLI's own request is on the wire.
+heavy_mark "cli-download-refused"
+heavy_log "batlehub-cli download $REG/$PKG@$VULN"
+set +e
+BATLEHUB_SERVER="$HEAVY_TAP_BASE" "$CLI" download "$REG/$PKG@$VULN" -o "$HEAVY_WORK/x.tgz" \
+  >"$HEAVY_WORK/download-refused.out" 2>"$HEAVY_WORK/download-refused.err"
+RC=$?
+set -e
+[[ $RC -eq 4 ]] || { cat "$HEAVY_WORK/download-refused.err" >&2; heavy_fail "batlehub-cli download of a denied version exited $RC; expected 4"; }
+grep -q "⛔ $REG/$PKG@$VULN — not pullable" "$HEAVY_WORK/download-refused.err" \
+  || { cat "$HEAVY_WORK/download-refused.err" >&2; heavy_fail "the refused download does not print why's ⛔ headline"; }
+[[ ! -e "$HEAVY_WORK/x.tgz" && ! -e "$HEAVY_WORK/x.tgz.part" ]] \
+  || heavy_fail "a refused download left x.tgz (or its .part) behind"
+heavy_wire_re_after "cli-download-refused" "GET /proxy/$REG/$PKG/$VULN/tarball -> 403 .*X-BatleHub-Verdict: denied" \
+  "the CLI's download was not refused as denied on the wire"
+heavy_log "DOWNLOAD-REFUSED-OK (exit 4, ⛔ printed, no file)"
+
+# ── 3c. A clock: ⏳, the refusal, and `why --last` (RFC 0040 heavy case 8) ──
+#
+# The young registry's age gate holds every real version. First contact
+# queues the scan; once OSV answers, the hold is MIN_AGE_NOT_MET with a date.
+YOUNG_URL="$HEAVY_TAP_BASE/proxy/$YOUNG_REG/"
+YOUNG="$HEAVY_WORK/consumer-young"
+mkdir -p "$YOUNG"
+cat > "$YOUNG/package.json" <<EOF
+{ "name": "consumer", "version": "1.0.0", "private": true, "dependencies": { "$PKG": "$CLEAN" } }
+EOF
+cat > "$YOUNG/package-lock.json" <<EOF
+{
+  "name": "consumer", "version": "1.0.0", "lockfileVersion": 3, "requires": true,
+  "packages": {
+    "": { "name": "consumer", "version": "1.0.0", "dependencies": { "$PKG": "$CLEAN" } },
+    "node_modules/$PKG": { "version": "$CLEAN", "resolved": "$YOUNG_URL$PKG/$CLEAN/tarball", "license": "MIT" }
+  }
+}
+EOF
+heavy_log "npm ci pinning $YOUNG_REG/$PKG@$CLEAN — first contact"
+(cd "$YOUNG" && npm ci --registry "$YOUNG_URL") >/dev/null 2>&1 \
+  && heavy_fail "npm ci installed $PKG@$CLEAN from a registry whose age gate holds everything"
+for _ in $(seq 1 100); do
+  "$CLI" why "$YOUNG_REG/$PKG@$CLEAN" >"$HEAVY_WORK/why-young.out" 2>&1 \
+    && grep -q MIN_AGE_NOT_MET "$HEAVY_WORK/why-young.out" && break
+  sleep 3
+done
+set +e
+"$CLI" why "$YOUNG_REG/$PKG@$CLEAN" >"$HEAVY_WORK/why-young.out" 2>&1
+RC=$?
+set -e
+[[ $RC -eq 0 ]] || { cat "$HEAVY_WORK/why-young.out" >&2; heavy_fail "why on a version held by a clock exited $RC; ⏳ is an answer, expected 0"; }
+grep -q "^⏳ $YOUNG_REG/$PKG@$CLEAN — pullable from " "$HEAVY_WORK/why-young.out" \
+  || { cat "$HEAVY_WORK/why-young.out" >&2; heavy_fail "why does not open with the ⏳ pullable-from headline"; }
+grep -q "verdict .*MIN_AGE_NOT_MET" "$HEAVY_WORK/why-young.out" \
+  || { cat "$HEAVY_WORK/why-young.out" >&2; heavy_fail "why does not put MIN_AGE_NOT_MET on the verdict line"; }
+
+# RFC 0040 heavy case 9, the timeout arm. On the clock, not on a pending
+# scan: the embedded worker answers OSV within a second of first contact, so
+# "still scanning" is a race. A hold that lifts in 2040 is one waiting can
+# help and one second cannot reach — exit 8, not 4.
+set +e
+"$CLI" wait "$YOUNG_REG/$PKG@$CLEAN" --timeout 1s --interval 1s >"$HEAVY_WORK/wait-young.out" 2>&1
+RC=$?
+set -e
+[[ $RC -eq 8 ]] || { cat "$HEAVY_WORK/wait-young.out" >&2; heavy_fail "batlehub wait --timeout 1s exited $RC on a version held by a clock; expected 8 (timed out, RFC 0040 §4.6)"; }
+
+heavy_mark "young-refused"
+set +e
+(cd "$YOUNG" && npm ci --registry "$YOUNG_URL") >"$HEAVY_WORK/install-young.out" 2>"$HEAVY_WORK/install-young.err"
+RC=$?
+set -e
+[[ $RC -ne 0 ]] || heavy_fail "npm ci installed $PKG@$CLEAN while why said it was held"
+heavy_wire_re_after "young-refused" "GET /proxy/$YOUNG_REG/$PKG/$CLEAN/tarball -> 403 .*X-BatleHub-Reason: MIN_AGE_NOT_MET" \
+  "npm's pinned tarball was not refused on MIN_AGE_NOT_MET"
+
+"$CLI" why --last --limit 5 --format json >"$HEAVY_WORK/why-last.json" 2>"$HEAVY_WORK/why-last.err" \
+  || { cat "$HEAVY_WORK/why-last.err" >&2; heavy_fail "why --last failed"; }
+python3 - "$HEAVY_WORK/why-last.json" "$YOUNG_REG" "$PKG" "$CLEAN" <<'PYEOF' \
+  || { cat "$HEAVY_WORK/why-last.json" >&2; heavy_fail "why --last does not list $YOUNG_REG/$PKG@$CLEAN with MIN_AGE_NOT_MET at the top"; }
+import json, sys
+top = json.load(open(sys.argv[1]))[0]
+want = (sys.argv[2], sys.argv[3], sys.argv[4], "MIN_AGE_NOT_MET")
+sys.exit(0 if (top["registry"], top["name"], top["version"], top["reason_code"]) == want else 1)
+PYEOF
+heavy_log "WHY-CLOCK-OK (⏳ exit 0, npm refused on MIN_AGE_NOT_MET, top of why --last)"
 
 # ── 4. The listing agrees ────────────────────────────────────────────────────
 #
@@ -569,8 +657,9 @@ heavy_log "batlehub verdicts pullers $RESCAN_REG:$FLIP_PKG@$FLIP_VERSION"
   || { cat "$HEAVY_WORK/pullers.out" >&2; heavy_fail "batlehub verdicts pullers failed"; }
 grep -q "ci-admin" "$HEAVY_WORK/pullers.out" \
   || { cat "$HEAVY_WORK/pullers.out" >&2; heavy_fail "batlehub verdicts pullers does not name ci-admin"; }
-"$CLI" verdicts pullers "$RESCAN_REG:$FLIP_PKG@$FLIP_VERSION" --csv >"$HEAVY_WORK/pullers.csv" 2>&1 \
-  || heavy_fail "batlehub verdicts pullers --csv failed"
+# stderr apart: a warning on it is not a CSV row.
+"$CLI" verdicts pullers "$RESCAN_REG/$FLIP_PKG@$FLIP_VERSION" --format csv >"$HEAVY_WORK/pullers.csv" 2>"$HEAVY_WORK/pullers-csv.err" \
+  || { cat "$HEAVY_WORK/pullers-csv.err" >&2; heavy_fail "batlehub verdicts pullers --format csv failed"; }
 head -1 "$HEAVY_WORK/pullers.csv" | grep -q '^identity,role,first_pull,last_pull,count' \
   || { cat "$HEAVY_WORK/pullers.csv" >&2; heavy_fail "the CSV has no header"; }
 grep -q '^ci-admin,admin,' "$HEAVY_WORK/pullers.csv" \

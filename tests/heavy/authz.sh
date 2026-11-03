@@ -1195,6 +1195,51 @@ for some other reason, which is a denial that proves nothing"
     "the denied user resolved $PKG, which no grant covers — the namespace grant is reaching \
 outside its own subtree"
 
+  # ── `why` is no oracle (RFC 0040 heavy case 12) ──
+  #
+  # The denied user may pull `@team/*` and not `$PKG`. They ask about `$PKG`
+  # and about a name that does not exist, twice: through the CLI, and straight
+  # at `GET /api/v1/packages/access`. Each pair must be the same not-found —
+  # the same exit code or status, the same bytes with the name swapped — and
+  # neither may name a grant, a rule or the namespace that lets them in (T1, T2).
+  #
+  # Both halves are the namespace-tier branch: their `@team` grant makes the
+  # registry visible (`/api/v1/registries` lists it, `installable: false`), so
+  # the refusal is the coordinate's grant, asked of the server (RFC 0040 §17.1).
+  heavy_mark "npm-why-oracle"
+  cargo build --quiet -p batlehub-cli >"$HEAVY_WORK/cli-build.txt" 2>&1 \
+    || { cat "$HEAVY_WORK/cli-build.txt" >&2; heavy_fail "the CLI did not build"; }
+  local cli
+  cli="$(cargo metadata --format-version 1 --no-deps \
+    | python3 -c 'import json,sys;print(json.load(sys.stdin)["target_directory"])')/debug/batlehub-cli"
+  local nope="authz-nope-$HEAVY_RUN" name rc stream code
+  for name in "$PKG" "$nope"; do
+    set +e
+    BATLEHUB_SERVER="$HEAVY_TAP_BASE" BATLEHUB_TOKEN="$T_DENIED" \
+      "$cli" why "$NPM/$name@1.0.0" >"$HEAVY_WORK/why-$name.out" 2>"$HEAVY_WORK/why-$name.err"
+    rc=$?
+    set -e
+    [[ $rc -eq 5 ]] || { cat "$HEAVY_WORK/why-$name.err" >&2; heavy_fail \
+      "why $NPM/$name@1.0.0 as the denied user exited $rc; expected 5 (not found), for a package that exists and one that does not alike"; }
+    code="$(curl -s -o "$HEAVY_WORK/why-$name.api" -w '%{http_code}' -H "Authorization: Bearer $T_DENIED" \
+      "$HEAVY_TAP_BASE/api/v1/packages/access?registry=$NPM&name=$name&version=1.0.0")"
+    [[ "$code" == 404 ]] || { cat "$HEAVY_WORK/why-$name.api" >&2; heavy_fail \
+      "/api/v1/packages/access answered the denied user $code for $name; expected 404 for a package that exists and one that does not alike"; }
+  done
+  for stream in out err api; do
+    sed "s/$nope/NAME/g" "$HEAVY_WORK/why-$nope.$stream" >"$HEAVY_WORK/why-nope-norm.$stream"
+    sed "s/$PKG/NAME/g" "$HEAVY_WORK/why-$PKG.$stream" >"$HEAVY_WORK/why-pkg-norm.$stream"
+    cmp -s "$HEAVY_WORK/why-pkg-norm.$stream" "$HEAVY_WORK/why-nope-norm.$stream" \
+      || { diff "$HEAVY_WORK/why-pkg-norm.$stream" "$HEAVY_WORK/why-nope-norm.$stream" >&2; heavy_fail \
+        "the $stream answer tells a package the denied user may not read from one that does not exist"; }
+  done
+  if grep -qiE "grant|rule|@team|releases:read" "$HEAVY_WORK/why-$PKG.out" "$HEAVY_WORK/why-$PKG.err" "$HEAVY_WORK/why-$PKG.api"; then
+    cat "$HEAVY_WORK/why-$PKG.out" "$HEAVY_WORK/why-$PKG.err" "$HEAVY_WORK/why-$PKG.api" >&2
+    heavy_fail "a refusal names a grant, a rule or a namespace to a caller who may not read the package"
+  fi
+  heavy_wire_re_after "npm-why-oracle" "GET /api/v1/packages/access.* -> 404" \
+    "the pullability endpoint was never asked — the not-found proves nothing"
+
   heavy_log "NPM-AUTHZ-OK (refused, served, and the namespace grant visible to the client)"
   return 0
 }
