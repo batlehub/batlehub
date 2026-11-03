@@ -80,11 +80,13 @@ async function check() {
       // object's `message`/`error` field, which is where the answer is.
       // A 404 is one answer for "no such package" and "one you may not see"
       // (RFC 0040 T1), so it is said as one sentence, not the raw body.
-      error.value = !apiErr
-        ? t("accessCheck.noResponse")
-        : response?.status === 404
-          ? t("accessCheck.notFound")
-          : extractMessage(apiErr);
+      if (!apiErr) {
+        error.value = t("accessCheck.noResponse");
+      } else if (response?.status === 404) {
+        error.value = t("accessCheck.notFound");
+      } else {
+        error.value = extractMessage(apiErr);
+      }
     } else {
       result.value = data;
     }

@@ -1365,6 +1365,15 @@ impl std::fmt::Display for RegistryKind {
     }
 }
 
+/// A verb an owner may be granted on the generic lifecycle endpoint
+/// (RFC 0040 §6.4). Only the ones some kind grants exist; `delete` and `pin`
+/// never will.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifecycleVerb {
+    Yank,
+    Unyank,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1870,13 +1879,4 @@ mod tests {
             }
         }
     }
-}
-
-/// A verb an owner may be granted on the generic lifecycle endpoint
-/// (RFC 0040 §6.4). Only the ones some kind grants exist; `delete` and `pin`
-/// never will.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LifecycleVerb {
-    Yank,
-    Unyank,
 }

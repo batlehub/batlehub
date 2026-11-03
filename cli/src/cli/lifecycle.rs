@@ -77,6 +77,94 @@ struct Outcome {
     failed: Vec<Failure>,
 }
 
+/// What a run did, item by item.
+#[derive(Default)]
+struct Tally {
+    succeeded: Vec<String>,
+    failed: Vec<Failure>,
+    /// The single-item error is returned as-is, so its exit code (403 → 4)
+    /// survives instead of becoming a partial failure.
+    only_error: Option<anyhow::Error>,
+}
+
+/// One request per registry, for the verbs that have a bulk endpoint.
+async fn run_bulk(
+    verb: Verb,
+    items: &[(String, String, String)],
+    client: &BatleHubClient,
+    tally: &mut Tally,
+) {
+    let mut registries: Vec<&str> = items.iter().map(|(r, _, _)| r.as_str()).collect();
+    registries.sort_unstable();
+    registries.dedup();
+    for reg in registries {
+        let pkgs: Vec<(String, String)> = items
+            .iter()
+            .filter(|(r, _, _)| r == reg)
+            .map(|(_, n, v)| (n.clone(), v.clone()))
+            .collect();
+        let result = match verb {
+            Verb::Yank => client.bulk_yank(reg, pkgs.clone()).await,
+            Verb::Unyank => client.bulk_unyank(reg, pkgs.clone()).await,
+            _ => client.bulk_delete(reg, pkgs.clone()).await,
+        };
+        match result {
+            Ok(res) => {
+                for (n, v) in &pkgs {
+                    let coordinate = format!("{reg}/{n}@{v}");
+                    match res.failed.iter().find(|f| &f.name == n && &f.version == v) {
+                        Some(f) => tally.failed.push(Failure {
+                            coordinate,
+                            error: f.error.clone(),
+                        }),
+                        None => tally.succeeded.push(coordinate),
+                    }
+                }
+            }
+            Err(e) => {
+                for (n, v) in &pkgs {
+                    tally.failed.push(Failure {
+                        coordinate: format!("{reg}/{n}@{v}"),
+                        error: format!("{e:#}"),
+                    });
+                }
+                tally.only_error = Some(e);
+            }
+        }
+    }
+}
+
+/// One request per item, for the verbs with no bulk endpoint.
+async fn run_each(
+    verb: Verb,
+    items: &[(String, String, String)],
+    message: Option<&str>,
+    client: &BatleHubClient,
+    tally: &mut Tally,
+) {
+    for (reg, n, v) in items {
+        let result = match verb {
+            Verb::Pin => client.set_retention_pin(reg, n, v, true).await,
+            Verb::Unpin => client.set_retention_pin(reg, n, v, false).await,
+            Verb::Deprecate => client.deprecate_package(reg, n, v, message).await,
+            Verb::Undeprecate => client.undeprecate_package(reg, n, v).await,
+            Verb::Unlist => client.unlist_package(reg, n, v).await,
+            _ => client.relist_package(reg, n, v).await,
+        };
+        let coordinate = format!("{reg}/{n}@{v}");
+        match result {
+            Ok(()) => tally.succeeded.push(coordinate),
+            Err(e) => {
+                tally.failed.push(Failure {
+                    coordinate,
+                    error: format!("{e:#}"),
+                });
+                tally.only_error = Some(e);
+            }
+        }
+    }
+}
+
 pub async fn run(
     verb: Verb,
     coordinates: &[String],
@@ -101,74 +189,17 @@ pub async fn run(
         confirm(verb.name(), &shown, note)?;
     }
 
-    let mut succeeded = Vec::new();
-    let mut failed = Vec::new();
-    // The single-item error is returned as-is, so its exit code (403 → 4)
-    // survives instead of becoming a partial failure.
-    let mut only_error: Option<anyhow::Error> = None;
-
+    let mut tally = Tally::default();
     if verb.bulk() {
-        let mut registries: Vec<&str> = items.iter().map(|(r, _, _)| r.as_str()).collect();
-        registries.sort_unstable();
-        registries.dedup();
-        for reg in registries {
-            let pkgs: Vec<(String, String)> = items
-                .iter()
-                .filter(|(r, _, _)| r == reg)
-                .map(|(_, n, v)| (n.clone(), v.clone()))
-                .collect();
-            let result = match verb {
-                Verb::Yank => client.bulk_yank(reg, pkgs.clone()).await,
-                Verb::Unyank => client.bulk_unyank(reg, pkgs.clone()).await,
-                _ => client.bulk_delete(reg, pkgs.clone()).await,
-            };
-            match result {
-                Ok(res) => {
-                    for (n, v) in &pkgs {
-                        let coordinate = format!("{reg}/{n}@{v}");
-                        match res.failed.iter().find(|f| &f.name == n && &f.version == v) {
-                            Some(f) => failed.push(Failure {
-                                coordinate,
-                                error: f.error.clone(),
-                            }),
-                            None => succeeded.push(coordinate),
-                        }
-                    }
-                }
-                Err(e) => {
-                    for (n, v) in &pkgs {
-                        failed.push(Failure {
-                            coordinate: format!("{reg}/{n}@{v}"),
-                            error: format!("{e:#}"),
-                        });
-                    }
-                    only_error = Some(e);
-                }
-            }
-        }
+        run_bulk(verb, &items, client, &mut tally).await;
     } else {
-        for (reg, n, v) in &items {
-            let result = match verb {
-                Verb::Pin => client.set_retention_pin(reg, n, v, true).await,
-                Verb::Unpin => client.set_retention_pin(reg, n, v, false).await,
-                Verb::Deprecate => client.deprecate_package(reg, n, v, message).await,
-                Verb::Undeprecate => client.undeprecate_package(reg, n, v).await,
-                Verb::Unlist => client.unlist_package(reg, n, v).await,
-                _ => client.relist_package(reg, n, v).await,
-            };
-            let coordinate = format!("{reg}/{n}@{v}");
-            match result {
-                Ok(()) => succeeded.push(coordinate),
-                Err(e) => {
-                    failed.push(Failure {
-                        coordinate,
-                        error: format!("{e:#}"),
-                    });
-                    only_error = Some(e);
-                }
-            }
-        }
+        run_each(verb, &items, message, client, &mut tally).await;
     }
+    let Tally {
+        succeeded,
+        failed,
+        only_error,
+    } = tally;
 
     if items.len() == 1 {
         if let Some(e) = only_error {
