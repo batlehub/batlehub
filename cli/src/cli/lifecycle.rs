@@ -1,5 +1,5 @@
-//! `package yank|unyank|delete|pin|unpin|deprecate|undeprecate|unlist|relist
-//! <coord>…` (RFC 0040 §4.4): one verb, any number of versions, across
+//! `package yank|unyank|delete|pin|unpin|deprecate|undeprecate|unlist|relist|block|unblock
+//! <coord>…` (RFC 0040 §4.4, §4.9): one verb, any number of versions, across
 //! registries. Replaces `version …`, `admin bulk …` and `admin deprecate …`.
 
 use anyhow::Result;
@@ -22,6 +22,8 @@ pub enum Verb {
     Undeprecate,
     Unlist,
     Relist,
+    Block,
+    Unblock,
 }
 
 impl Verb {
@@ -36,6 +38,8 @@ impl Verb {
             Self::Undeprecate => "undeprecate",
             Self::Unlist => "unlist",
             Self::Relist => "relist",
+            Self::Block => "block",
+            Self::Unblock => "unblock",
         }
     }
 
@@ -50,12 +54,14 @@ impl Verb {
             Self::Undeprecate => "Undeprecated",
             Self::Unlist => "Unlisted",
             Self::Relist => "Relisted",
+            Self::Block => "Blocked",
+            Self::Unblock => "Unblocked",
         }
     }
 
-    /// §4.5: deletes, yanks and unlists ask first.
+    /// §4.5: deletes, yanks, unlists and blocks ask first.
     fn destructive(self) -> bool {
-        matches!(self, Self::Yank | Self::Delete | Self::Unlist)
+        matches!(self, Self::Yank | Self::Delete | Self::Unlist | Self::Block)
     }
 
     /// The verbs that have a bulk endpoint: one request per registry.
@@ -141,6 +147,46 @@ async fn run_bulk(
     }
 }
 
+/// One request for every registry: the moderation endpoints take the
+/// registry per item.
+async fn run_moderation(
+    verb: Verb,
+    items: &[(String, String, String)],
+    reason: Option<&str>,
+    client: &BatleHubClient,
+    tally: &mut Tally,
+) {
+    let result = match verb {
+        Verb::Block => client.bulk_block(items, reason.unwrap_or_default()).await,
+        _ => client.bulk_unblock(items).await,
+    };
+    let failures = match result {
+        Ok(res) => res["failures"].as_array().cloned().unwrap_or_default(),
+        Err(e) => {
+            for (r, n, v) in items {
+                tally.failed.push(Failure {
+                    coordinate: format!("{r}/{n}@{v}"),
+                    error: format!("{e:#}"),
+                });
+            }
+            tally.only_error = Some(e);
+            return;
+        }
+    };
+    for (r, n, v) in items {
+        let coordinate = format!("{r}/{n}@{v}");
+        match failures.iter().find(|f| {
+            f["registry"] == r.as_str() && f["name"] == n.as_str() && f["version"] == v.as_str()
+        }) {
+            Some(f) => tally.failed.push(Failure {
+                coordinate,
+                error: f["error"].as_str().unwrap_or_default().to_owned(),
+            }),
+            None => tally.succeeded.push(coordinate),
+        }
+    }
+}
+
 /// One request per item, for the verbs with no bulk endpoint.
 async fn run_each(
     verb: Verb,
@@ -197,7 +243,9 @@ pub async fn run(
     }
 
     let mut tally = Tally::default();
-    if verb.bulk() {
+    if matches!(verb, Verb::Block | Verb::Unblock) {
+        run_moderation(verb, &items, message, client, &mut tally).await;
+    } else if verb.bulk() {
         run_bulk(verb, &items, client, &mut tally).await;
     } else {
         run_each(verb, &items, message, client, &mut tally).await;
@@ -230,6 +278,14 @@ pub async fn run(
     }
     if outcome.failed.is_empty() {
         Ok(())
+    } else if ctx().structured() {
+        // The outcome above is the run's one document, failures included.
+        let exit = if items.len() == 1 {
+            ExitCode::Failure
+        } else {
+            ExitCode::Partial
+        };
+        Err(CliError::reported(exit).into())
     } else if items.len() == 1 {
         // A bulk endpoint that answered 200 with the one item failed.
         Err(CliError::new(ExitCode::Failure, outcome.failed[0].error.clone()).into())

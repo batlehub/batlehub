@@ -6,6 +6,7 @@ pub mod config_cmd;
 pub mod download;
 pub mod groups;
 pub mod java;
+pub mod journeys;
 pub mod lifecycle;
 pub mod mise;
 pub mod owner;
@@ -104,6 +105,11 @@ pub enum Command {
     Download(download::DownloadArgs),
     /// Why a version is not pullable, or not yet: every cause, in the order the download checks them
     Why(why::WhyArgs),
+    /// Your own state: identity, quota, downloads, advisories, namespaces
+    Me {
+        #[command(subcommand)]
+        cmd: journeys::MeCmd,
+    },
     /// Wait for a held version to become servable; exit 4 when waiting cannot help, 8 on timeout
     Wait(security::WaitArgs),
     /// Verdicts: who pulled a version, and the registry's stored verdicts (RFC 0018)
@@ -147,6 +153,21 @@ pub enum Command {
     Vsx {
         #[command(subcommand)]
         cmd: vsx::VsxCommand,
+    },
+    /// Package and version policy [admin]
+    Policy {
+        #[command(subcommand)]
+        cmd: journeys::PolicyCmd,
+    },
+    /// Gate exemptions [admin]
+    Exemption {
+        #[command(subcommand)]
+        cmd: journeys::ExemptionCmd,
+    },
+    /// The upstream audit: what upstream no longer lists (RFC 0014) [admin]
+    Upstream {
+        #[command(subcommand)]
+        cmd: journeys::UpstreamCmd,
     },
     /// Blocked users [admin]
     User {
@@ -209,10 +230,10 @@ pub enum Command {
         #[command(subcommand)]
         cmd: groups::AirGapCmd,
     },
-    /// Pushed vulnerability flags (RFC 0002) [admin]
+    /// Vulnerability flags (RFC 0002): list [admin]; create and delete as a flag source
     Flag {
         #[command(subcommand)]
-        cmd: admin::FlagsCommand,
+        cmd: journeys::FlagCmd,
     },
     /// Data-subject requests (RFC 0036) [admin]
     Gdpr {

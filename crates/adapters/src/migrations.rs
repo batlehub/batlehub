@@ -257,6 +257,11 @@ pub fn embedded_migrator() -> Migrator {
             "access_events reason_code",
             "../migrations/063_access_events_reason_code.sql"
         ),
+        mig!(
+            64,
+            "oidc_login_states return_to",
+            "../migrations/064_oidc_login_states_return_to.sql"
+        ),
     ])
 }
 

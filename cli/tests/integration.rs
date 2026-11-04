@@ -1030,6 +1030,61 @@ fn package_list_after_seed() {
     assert_eq!(arr[0]["registry"], REGISTRY);
 }
 
+/// RFC 0040 §4.9: `package block` reaches the moderation endpoint, and
+/// `--blocked` is the server's filter — a one-row page holds the blocked
+/// version, which a client-side filter of the first page would have missed.
+#[test]
+fn package_block_then_list_blocked_is_filtered_by_the_server() {
+    let srv = TestServer::start();
+    for name in ["a", "b", "c"] {
+        srv.seed_package(name, "1.0.0");
+    }
+    let target = format!("{REGISTRY}/c@1.0.0");
+    let (code, _, stderr) = cli_exit(
+        &["package", "block", &target, "--reason", "malware", "-y"],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert_eq!(code, 0, "{stderr}");
+
+    let (ok, stdout, stderr) = cli_cmd(
+        &[
+            "package",
+            "list",
+            "-r",
+            REGISTRY,
+            "--blocked",
+            "--per-page",
+            "1",
+            "--json",
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(ok, "{stderr}");
+    let arr: Vec<serde_json::Value> = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(arr.len(), 1, "{stdout}");
+    assert_eq!(arr[0]["name"], "c");
+    assert_eq!(arr[0]["status"]["status"], "blocked");
+
+    let (ok, _, stderr) = cli_cmd(
+        &[
+            "package",
+            "list",
+            "-r",
+            REGISTRY,
+            "--blocked-only",
+            "--json",
+        ],
+        &srv.base_url(),
+        AUTH_TOKEN,
+    );
+    assert!(
+        ok && stderr.contains("--blocked-only` is deprecated"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn package_versions_after_seed() {
     let srv = TestServer::start();
@@ -1652,6 +1707,123 @@ oidc_expires_at = 0
         stderr.contains("OIDC SSO is not configured"),
         "error should surface the server's response; stderr: {stderr}"
     );
+}
+
+// ── Tests: the loopback login (RFC 0040 §4.9) ────────────────────────────────
+
+/// What the stand-in server's login endpoint was asked: the CLI's `state` and
+/// the listener it named as `return_to`.
+type Started = Arc<std::sync::Mutex<Option<(String, String)>>>;
+
+/// Run `auth login` against a stand-in server, play the browser by calling the
+/// listener with `callback(state)` as its query, and return the exit code,
+/// stderr and the config file the run left (empty when none).
+fn loopback_login(callback: impl Fn(&str) -> String) -> (i32, String, String) {
+    let mut server = mockito::Server::new();
+    server
+        .mock("GET", "/api/v1/auth/oidc/providers")
+        .with_body(r#"[{"name":"oidc"}]"#)
+        .create();
+    let started: Started = Arc::default();
+    let seen = Arc::clone(&started);
+    server
+        .mock("GET", "/api/v1/auth/oidc/login")
+        .match_query(mockito::Matcher::Any)
+        .match_request(move |req| {
+            let url = reqwest::Url::parse(&format!("http://x{}", req.path_and_query())).unwrap();
+            let q: HashMap<_, _> = url.query_pairs().into_owned().collect();
+            if let (Some(s), Some(to)) = (q.get("state"), q.get("return_to")) {
+                *seen.lock().unwrap() = Some((s.clone(), to.clone()));
+            }
+            true
+        })
+        .with_status(302)
+        .with_header("Location", "https://idp.example.test/authorize?state=srv")
+        .create();
+
+    let config = tempfile::tempdir().unwrap();
+    let home = scratch_home();
+    let child = std::process::Command::new(env!("CARGO_BIN_EXE_batlehub-cli"))
+        .args(["auth", "login"])
+        .env("BATLEHUB_SERVER", server.url())
+        .env_remove("BATLEHUB_TOKEN")
+        // `true` opens nothing and succeeds: this test is the browser.
+        .env("BROWSER", "true")
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", config.path())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let (state, to) = loop {
+        if let Some(found) = started.lock().unwrap().clone() {
+            break found;
+        }
+        if Instant::now() >= deadline {
+            let mut child = child;
+            let _ = child.kill();
+            let out = child.wait_with_output().unwrap();
+            panic!(
+                "the CLI never started a login: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+    assert!(
+        to.starts_with("http://127.0.0.1:") && to.ends_with("/callback"),
+        "{to}"
+    );
+    // A stray request first: the listener answers it and keeps waiting.
+    let stray = to.replace("/callback", "/favicon.ico");
+    assert_eq!(reqwest::blocking::get(&stray).unwrap().status(), 404);
+    let page = reqwest::blocking::get(format!("{to}?{}", callback(&state))).unwrap();
+    assert_eq!(page.status(), 200);
+
+    let out = child.wait_with_output().unwrap();
+    let saved =
+        std::fs::read_to_string(config.path().join("batlehub/config.toml")).unwrap_or_default();
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        saved,
+    )
+}
+
+#[test]
+fn login_through_the_loopback_saves_the_token() {
+    let (code, stderr, saved) = loopback_login(|state| {
+        format!(
+            "oidc_access_token=a.b.c&oidc_state={state}&oidc_provider=oidc&oidc_refresh_token=rt&oidc_expires_in=60"
+        )
+    });
+    assert_eq!(code, 0, "{stderr}");
+    assert!(saved.contains("a.b.c") && saved.contains("rt"), "{saved}");
+    assert!(saved.contains(r#"oidc_provider = "oidc""#), "{saved}");
+}
+
+/// T6: a callback whose `state` is not the one this CLI generated — a local
+/// process racing the browser — writes no profile.
+#[test]
+fn login_rejects_wrong_state() {
+    let (code, stderr, saved) =
+        loopback_login(|_| "oidc_access_token=forged&oidc_state=not-mine".to_owned());
+    assert_eq!(code, 1, "{stderr}");
+    assert!(
+        stderr.contains("does not belong to the sign-in"),
+        "{stderr}"
+    );
+    assert!(!saved.contains("forged"), "{saved}");
+}
+
+#[test]
+fn login_reports_the_providers_refusal() {
+    let (code, stderr, saved) = loopback_login(|_| "oidc_error=access%20denied".to_owned());
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("sign-in failed: access denied"), "{stderr}");
+    assert!(saved.is_empty() || !saved.contains("token ="), "{saved}");
 }
 
 // ── Tests: admin ──────────────────────────────────────────────────────────────

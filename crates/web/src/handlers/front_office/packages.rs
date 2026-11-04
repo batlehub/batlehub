@@ -18,6 +18,9 @@ use crate::{error::AppError, extractors::AuthIdentity, RegistryHostMap};
 pub struct PackageQuery {
     pub registry: Option<String>,
     pub name: Option<String>,
+    /// Only blocked versions, filtered before the page is cut
+    #[serde(default)]
+    pub blocked: bool,
     #[serde(default)]
     pub page: u64,
     #[serde(default = "default_per_page")]
@@ -126,7 +129,7 @@ pub async fn list_packages(
         registries: registries.clone(),
         name_contains: query.name.clone(),
         name_exact: None,
-        blocked_only: false,
+        blocked_only: query.blocked,
         limit: per_page,
         offset: page * per_page,
         viewer: viewer.clone(),
@@ -137,7 +140,7 @@ pub async fn list_packages(
         registries,
         name_contains: query.name.clone(),
         name_exact: None,
-        blocked_only: false,
+        blocked_only: query.blocked,
         limit: 0,
         offset: 0,
         viewer,

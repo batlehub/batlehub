@@ -83,6 +83,43 @@ pub fn data<T: Serialize + ?Sized>(value: &T) -> Result<()> {
     }
 }
 
+/// A journey's answer (§4.9): the API's JSON under `--format json|csv`, else
+/// `rows` as a table of `columns` — or, when `rows` is not a list, `value`'s
+/// fields one per line.
+pub fn show(value: &Value, rows: &Value, columns: &[&str]) -> Result<()> {
+    if ctx().structured() {
+        return data(value);
+    }
+    match rows {
+        Value::Array(rows) if rows.is_empty() => println!("(none)"),
+        Value::Array(rows) => {
+            let mut t = comfy_table::Table::new();
+            t.set_header(columns.iter().map(|c| c.to_uppercase()));
+            for row in rows {
+                t.add_row(columns.iter().map(|c| cell(&row[*c])));
+            }
+            println!("{t}");
+        }
+        _ => {
+            if let Value::Object(o) = value {
+                for (k, v) in o {
+                    println!("{k}: {}", cell(v));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One value as a table cell: text as written, absent as `—`.
+fn cell(v: &Value) -> String {
+    match v {
+        Value::Null => "—".to_owned(),
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
 fn to_csv(value: &Value) -> Result<String, CliError> {
     let rows = match value {
         Value::Array(rows) => rows,

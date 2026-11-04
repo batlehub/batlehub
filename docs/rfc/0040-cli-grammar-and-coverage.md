@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Accepted — phases 2 to 5 landed; §17 records how far each phase is and where the built thing differs |
+| Status      | Accepted — phases 2 to 6 landed; §17 records how far each phase is and where the built thing differs |
 | Short       | CLI grammar and coverage                                      |
 | Settles     | How every batlehub-cli command names a package, prints, fails and confirms, what it must cover for each registry kind, and how a developer learns why a version is not pullable |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -1648,12 +1648,33 @@ row names has landed; a partial phase lists what is still open.
 | 3 | done | `6d7ac4aa` | The §4.4 tree (`admin` dissolved), `package <verb> <coord>…`, coordinates on `owner`/`visibility`/`grant`/`sbom show`/`authz check`, `profile` with `current`; every old spelling a hidden alias that warns; `--registry-url`; the server hint reads `batlehub-cli why reg/name@ver` |
 | 4 | done | `f08b58d5`, `36180a88`, `c59d4b7d`, `b38c05e7`, `62e591b1`, + the heavy publish commit | §6.4 owner arm; §6.3 publish by kind with the nine uploaders; §6.5 `package versions` with upstream and `download <coord>`; §6.5 `setup` for conda, composer, gem, nuget, terraform, galaxy, nix, sdkman, gitlab (mise), helm (`manual`) and the print arms, plus detection of galaxy/helm/nix/devfile projects; §6.6 `cli/src/coverage.rs`, its gate and `task docs:cli-matrix`. heavy cases 1–3 (`client_setup.sh` 10–12) 4–7 (in each kind's own suite), 11 (`authz.sh cargo`) and 13 (`authz.sh npm`). A locally published terraform provider is not installable: issue #281 (§17.1) |
 | 5 | done | `476e7c29` | `services/pullability.rs` (`explain`, `explain_resolution`); `evaluate_chain_all`; the extended `packages/access` (404 for not visible, `version` optional); migration 063 and `reason_code` written by both funnels; `me/downloads?outcome=denied`; `why <coord>`, `why <name>`, `why --last`; `download`'s refusal prints `why`; the console's access page renders causes. heavy cases 8–10 (`quarantine.sh`) and 12 (`authz.sh npm`); `package show`; `/api/v1/registries` lists a registry read without being installable (`installable: false`) |
-| 6 | not started | — | |
+| 6 | done | PR #280 | `cli/src/{api,cli}/journeys.rs`: `policy`, `exemption`, `me`, `upstream`, `namespace signing-key`, `flag create/delete`, `server config pending/apply/discard/warnings`; `package block/unblock` in `lifecycle.rs`; `package list --blocked` filtered by the server (`?blocked=true`); the loopback `auth login` with `--no-browser`, `sso.rs`'s `return_to` and migration 064. T6's tests: `login_rejects_wrong_state` and `return_to_must_be_exact_loopback` |
 | 7 | not started | — | |
 | 8 | not started | — | |
 | 9 | not started | — | |
 
 ### 17.1 Where the built thing differs
+
+- **Phase 6: the loopback callback carries the tokens in the query string.**
+  The console gets them in the fragment, but a fragment never reaches an HTTP
+  server, so the listener could not read it. On `127.0.0.1` there is no access
+  log or proxy that the fragment protects against. A failed callback also goes
+  back to the listener (`?oidc_error=`), so the CLI does not wait out its five
+  minutes. A provider error now consumes the login's state to find out whether
+  a CLI is waiting.
+- **The listener answers anything but `/callback` with a 404 and keeps
+  waiting**, so a browser's favicon request does not end the login. The first
+  request to `/callback` decides it, and a wrong `state` writes nothing (T6).
+  The browser is `$BROWSER` when it is set, before the platform's opener.
+- **The journeys are tested against a stand-in server** (`cli/tests/journeys.rs`),
+  which expects the one request each command maps to. The in-memory test server
+  does not wire up policy, flags, the upstream audit or signing keys, and the
+  web suites already cover the endpoints. `package block` and
+  `--blocked` run against the real in-memory server.
+- **`policy set` takes the whole policy as a JSON file** (`-f`, or `-` for
+  stdin). Fields left out inherit, as `PolicyDto` defines. `policy set --gate`
+  and `exemption add` are one call. `user list [--blocked]` was not added:
+  `user list` already lists only blocked users.
 
 - **Phase 2 pulled one phase 3 break forward.** `admin sbom get/export --format`
   became `--sbom-format` in phase 2, not 3: the global `--format` made clap

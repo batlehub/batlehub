@@ -432,6 +432,7 @@ async fn an_expired_state_redeems_nothing() {
                 code_verifier: "v".to_owned(),
                 nonce: "n".to_owned(),
                 spa_state: "spa".to_owned(),
+                return_to: None,
             },
             0,
         )
@@ -774,4 +775,108 @@ async fn a_failed_sign_in_is_recorded_by_class_without_the_code() {
         !serialised.contains("secret-code"),
         "the code never reaches the trail"
     );
+}
+
+// ── The CLI's loopback login (RFC 0040 §6.5, decision 40) ────────────────────
+
+/// T6: a `return_to` that is not the loopback callback exactly is a 400, before
+/// a state is written or the provider is reached — so a crafted link cannot
+/// send a code off the machine.
+#[actix_web::test]
+async fn return_to_must_be_exact_loopback() {
+    let server = mockito::Server::new_async().await;
+    let (app, states) = make_sso_app(&server.url()).await;
+    for bad in [
+        "http://evil.example/",
+        "http://127.0.0.1.evil.example/",
+        "http://localhost:1/callback",
+        "http://127.0.0.1:1/other",
+        "https://127.0.0.1:1/callback",
+        "http://127.0.0.1:/callback",
+        "http://127.0.0.1:99999/callback",
+        "http://127.0.0.1:1/callback?x=1",
+    ] {
+        let uri = format!(
+            "/api/v1/auth/oidc/login?state=s&return_to={}",
+            urlencoding(bad)
+        );
+        let resp = call_service(&app, TestRequest::get().uri(&uri).to_request()).await;
+        assert_eq!(resp.status(), 400, "{bad}");
+        assert!(
+            location(&resp).is_empty(),
+            "{bad}: no redirect to the provider"
+        );
+    }
+    assert!(states.written.lock().unwrap().is_empty(), "nothing stored");
+}
+
+/// `%`-encode what a query value cannot carry raw.
+fn urlencoding(s: &str) -> String {
+    s.replace(':', "%3A")
+        .replace('/', "%2F")
+        .replace('?', "%3F")
+        .replace('=', "%3D")
+}
+
+#[actix_web::test]
+async fn a_loopback_login_returns_the_tokens_to_the_listener_in_the_query() {
+    let mut server = mockito::Server::new_async().await;
+    let (app, states) = make_sso_app(&server.url()).await;
+    let to = "http://127.0.0.1:48123/callback";
+    let uri = format!(
+        "/api/v1/auth/oidc/login?state=cli-nonce&return_to={}",
+        urlencoding(to)
+    );
+    let resp = call_service(&app, TestRequest::get().uri(&uri).to_request()).await;
+    assert_eq!(resp.status(), 302);
+    let state = param(&location(&resp), "state").unwrap();
+    assert_eq!(states.recorded(&state).return_to.as_deref(), Some(to));
+
+    let _token = mock_token_endpoint(&mut server, &states.recorded(&state).nonce).await;
+    let resp = call_service(
+        &app,
+        TestRequest::get()
+            .uri(&format!(
+                "/api/v1/auth/oidc/callback?code=abc&state={state}"
+            ))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 302);
+    let loc = location(&resp);
+    assert!(loc.starts_with(&format!("{to}?")), "{loc}");
+    assert!(
+        !loc.contains('#'),
+        "a fragment never reaches the listener: {loc}"
+    );
+    assert_eq!(param(&loc, "oidc_state").as_deref(), Some("cli-nonce"));
+    assert!(param(&loc, "oidc_access_token").is_some());
+    assert_eq!(param(&loc, "oidc_refresh_token").as_deref(), Some("rt-1"));
+}
+
+/// A refusal at the provider reaches the CLI that started the login, so it
+/// does not wait out its five minutes.
+#[actix_web::test]
+async fn a_provider_error_on_a_loopback_login_goes_back_to_the_listener() {
+    let server = mockito::Server::new_async().await;
+    let (app, _states) = make_sso_app(&server.url()).await;
+    let to = "http://127.0.0.1:48124/callback";
+    let uri = format!(
+        "/api/v1/auth/oidc/login?state=s&return_to={}",
+        urlencoding(to)
+    );
+    let resp = call_service(&app, TestRequest::get().uri(&uri).to_request()).await;
+    let state = param(&location(&resp), "state").unwrap();
+
+    let resp = call_service(
+        &app,
+        TestRequest::get()
+            .uri(&format!(
+                "/api/v1/auth/oidc/callback?error=access_denied&state={state}"
+            ))
+            .to_request(),
+    )
+    .await;
+    let loc = location(&resp);
+    assert!(loc.starts_with(&format!("{to}?oidc_error=")), "{loc}");
 }

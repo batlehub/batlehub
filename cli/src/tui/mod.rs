@@ -168,6 +168,7 @@ async fn open_registry(app: &mut App, registry: String) {
         .list_packages(PackageQuery {
             registry: Some(registry.clone()),
             name: None,
+            blocked: false,
             page: 0,
             per_page: 100,
         })
@@ -261,6 +262,7 @@ async fn open_package_detail(app: &mut App, registry: String, name: String) {
         .list_packages(PackageQuery {
             registry: Some(registry.clone()),
             name: Some(name.clone()),
+            blocked: false,
             page: 0,
             per_page: 200,
         })
@@ -362,6 +364,7 @@ async fn refresh_detail(app: &mut App, registry: &str, name: &str) {
         .list_packages(PackageQuery {
             registry: Some(registry.to_string()),
             name: Some(name.to_string()),
+            blocked: false,
             page: 0,
             per_page: 200,
         })
@@ -411,7 +414,7 @@ async fn handle_login(app: &mut App, key: event::KeyEvent) {
         app.login.path_input = Input::default();
         if app.login.oidc_url.is_none() {
             let csrf = Uuid::new_v4().to_string();
-            match app.client.oidc_login_url(&csrf, None).await {
+            match app.client.oidc_login_url(&csrf, None, None).await {
                 Ok(url) => app.login.oidc_url = Some(url),
                 Err(e) => app.login.status = Some(format!("OIDC unavailable: {e}")),
             }

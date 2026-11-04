@@ -80,8 +80,13 @@ impl BatleHubClient {
     /// Fetch the IdP authorization URL for browser-based OIDC login. Unlike
     /// every other method on this client, this deliberately does not attach the
     /// profile's bearer token — there is no session yet, this call *starts* one.
-    pub async fn oidc_login_url(&self, csrf: &str, provider: Option<&str>) -> Result<String> {
-        get_oidc_login_url(&self.base_url, csrf, provider).await
+    pub async fn oidc_login_url(
+        &self,
+        csrf: &str,
+        provider: Option<&str>,
+        return_to: Option<&str>,
+    ) -> Result<String> {
+        get_oidc_login_url(&self.base_url, csrf, provider, return_to).await
     }
 
     /// Exchange a refresh token for a new access token via the server's OIDC
@@ -104,6 +109,7 @@ pub async fn get_oidc_login_url(
     base_url: &str,
     csrf: &str,
     provider: Option<&str>,
+    return_to: Option<&str>,
 ) -> Result<String> {
     let client = reqwest::ClientBuilder::new()
         .redirect(reqwest::redirect::Policy::none())
@@ -117,6 +123,9 @@ pub async fn get_oidc_login_url(
     );
     if let Some(p) = provider {
         url.push_str(&format!("&provider={}", percent_encode(p)));
+    }
+    if let Some(to) = return_to {
+        url.push_str(&format!("&return_to={}", percent_encode(to)));
     }
 
     let resp = client.get(&url).send().await?;
@@ -302,7 +311,7 @@ pub fn parse_oidc_paste(input: &str) -> OidcPaste {
     }
 }
 
-fn extract_param(url: &str, key: &str) -> Option<String> {
+pub(crate) fn extract_param(url: &str, key: &str) -> Option<String> {
     let needle = format!("{key}=");
     let start = url.find(&needle)? + needle.len();
     let rest = &url[start..];
@@ -438,7 +447,7 @@ mod tests {
             .create_async()
             .await;
 
-        let url = get_oidc_login_url(&server.url(), "abc", Some("github"))
+        let url = get_oidc_login_url(&server.url(), "abc", Some("github"), None)
             .await
             .unwrap();
         assert_eq!(url, "https://idp.example.com/authorize?state=abc");
@@ -454,7 +463,7 @@ mod tests {
             .create_async()
             .await;
 
-        let err = get_oidc_login_url(&server.url(), "abc", None)
+        let err = get_oidc_login_url(&server.url(), "abc", None, None)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("not configured"));
@@ -470,7 +479,7 @@ mod tests {
             .create_async()
             .await;
 
-        let err = get_oidc_login_url(&server.url(), "abc", None)
+        let err = get_oidc_login_url(&server.url(), "abc", None, None)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("unexpected status"));
@@ -486,7 +495,7 @@ mod tests {
             .create_async()
             .await;
 
-        let err = get_oidc_login_url(&server.url(), "abc", None)
+        let err = get_oidc_login_url(&server.url(), "abc", None, None)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("did not return a redirect"));

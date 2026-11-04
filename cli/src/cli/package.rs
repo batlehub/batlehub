@@ -26,8 +26,10 @@ pub enum PackageCommand {
         /// Filter by name substring
         #[arg(long, short = 's')]
         search: Option<String>,
-        /// Show only blocked packages
+        /// Only blocked versions (the server filters, so paging stays exact)
         #[arg(long)]
+        blocked: bool,
+        #[arg(long, hide = true)]
         blocked_only: bool,
         /// Page number (0-based)
         #[arg(long, default_value = "0")]
@@ -125,6 +127,19 @@ pub enum PackageCommand {
         #[arg(required = true)]
         coordinates: Vec<String>,
     },
+    /// Refuse versions to every client (destructive: asks first) [admin]
+    Block {
+        #[arg(required = true)]
+        coordinates: Vec<String>,
+        /// Recorded with the block; an admin reads it, a client sees the code
+        #[arg(long)]
+        reason: String,
+    },
+    /// Lift a block [admin]
+    Unblock {
+        #[arg(required = true)]
+        coordinates: Vec<String>,
+    },
 }
 
 pub async fn run(
@@ -146,6 +161,11 @@ pub async fn run(
         PackageCommand::Undeprecate { coordinates } => (Verb::Undeprecate, coordinates, None),
         PackageCommand::Unlist { coordinates } => (Verb::Unlist, coordinates, None),
         PackageCommand::Relist { coordinates } => (Verb::Relist, coordinates, None),
+        PackageCommand::Block {
+            coordinates,
+            reason,
+        } => (Verb::Block, coordinates, Some(reason)),
+        PackageCommand::Unblock { coordinates } => (Verb::Unblock, coordinates, None),
         other => return consult(other, client, default_registry, json).await,
     };
     super::lifecycle::run(verb, &coordinates, message.as_deref(), client).await
@@ -160,28 +180,25 @@ async fn consult(
     match cmd {
         PackageCommand::List {
             search,
+            blocked,
             blocked_only,
             page,
             per_page,
         } => {
+            if blocked_only {
+                crate::render::deprecated("package list --blocked-only", "package list --blocked");
+            }
             let reg = default_registry.map(str::to_string);
             let resp = client
                 .list_packages(PackageQuery {
                     registry: reg,
                     name: search,
+                    blocked: blocked || blocked_only,
                     page,
                     per_page,
                 })
                 .await?;
-
-            let items: Vec<_> = if blocked_only {
-                resp.items
-                    .into_iter()
-                    .filter(|p| matches!(p.status, PackageStatus::Blocked { .. }))
-                    .collect()
-            } else {
-                resp.items
-            };
+            let items = resp.items;
 
             if json {
                 crate::render::data(&items)?;

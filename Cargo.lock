@@ -1100,6 +1100,7 @@ dependencies = [
  "futures",
  "getrandom 0.4.3",
  "hex",
+ "hmac",
  "md-5",
  "mockito",
  "ratatui",

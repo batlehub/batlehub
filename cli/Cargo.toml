@@ -47,6 +47,8 @@ base64 = { workspace = true }
 ed25519-dalek = "3"
 regex = { workspace = true }
 sha2 = { workspace = true }
+# `flag create/delete` sign as a `[[flag_sources]]` entry does (RFC 0002)
+hmac = { workspace = true }
 # Maven's `.sha1`/`.md5` sidecars (RFC 0040 §6.3): protocol requirements, not
 # integrity controls. The versions crates/web already locks.
 sha1 = "0.11"

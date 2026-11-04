@@ -427,10 +427,12 @@ de l'objet :
 ]
 ```
 
-Filtrez dans un script avec `jq` :
+`--blocked` ne garde que les versions bloquées. Le serveur filtre avant de
+découper la page : `--per-page` et le total ne comptent donc que les lignes
+bloquées.
+
 ```bash
-# Lister uniquement les paquets bloqués
-batlehub-cli --json package list | jq '[.[] | select(.status.status == "blocked")]'
+batlehub-cli package list --blocked -r internal
 ```
 
 ### `package versions <registry>/<name>`
@@ -528,6 +530,8 @@ batlehub-cli package deprecate   <registry>/<name>@<version>... [--message <text
 batlehub-cli package undeprecate <registry>/<name>@<version>...
 batlehub-cli package unlist      <registry>/<name>@<version>...
 batlehub-cli package relist      <registry>/<name>@<version>...
+batlehub-cli package block       <registry>/<name>@<version>... --reason <text>
+batlehub-cli package unblock     <registry>/<name>@<version>...
 ```
 
 Chaque verbe prend une ou plusieurs coordonnées, de registres différents au
@@ -538,7 +542,9 @@ cargo, composer, rubygems, terraform et nuget, dont les clients natifs laissent
 un propriétaire retirer une version, un **propriétaire explicite de chaque
 paquet nommé** peut aussi lancer `yank` et `unyank`. Une requête qui nomme un
 paquet dont l'appelant n'est pas propriétaire est refusée en bloc, et un paquet
-sans propriétaire n'appartient à personne. `yank`, `delete` et `unlist`
+sans propriétaire n'appartient à personne. `block` et `unblock` relèvent de la
+modération et exigent `packages:block` ; ils envoient une seule requête pour
+tous les registres nommés. `yank`, `delete`, `unlist` et `block`
 sont [destructrices](#confirmation) : elles demandent confirmation dans un
 terminal et exigent `--yes` dans un script.
 
@@ -553,6 +559,8 @@ terminal et exigent `--yes` dans un script.
 | `undeprecate` | Retire la dépréciation |
 | `unlist` | Masque la version de la recherche et des listes, et la sert toujours à qui la demande par sa version exacte |
 | `relist` | Annule un `unlist` |
+| `block` | Refuse la version à tous les clients, avec le code [`BLOCK_LIST`](/fr/use/refused-downloads#block-list) ; `why` montre le motif à qui peut voir les constats |
+| `unblock` | Lève un blocage |
 
 > **Casse des noms de paquets** : les noms sont normalisés en minuscules à la
 > publication (NuGet met l'identifiant en minuscules, cargo et npm le font par
@@ -691,6 +699,8 @@ batlehub-cli publish hello_1.0-1_amd64.deb -r internal --distribution stable --c
 ## 9. Commandes — auth
 
 ```
+batlehub-cli auth login [--provider <p>] [--profile <p>] [--no-browser]
+batlehub-cli auth login --kubernetes-token-path <path>
 batlehub-cli auth whoami
 batlehub-cli auth token                      # imprime un identifiant (après l'avoir rafraîchi)
 batlehub-cli auth token [--output raw|json] [--min-ttl <seconds>]
@@ -703,6 +713,28 @@ batlehub-cli auth status [--path <p>] [--json]
 batlehub-cli proxy serve --registry-url <url> [--bind 127.0.0.1:0] [--contract <p>]
                          [--state-dir <d>] [--print-gallery-url]
 ```
+
+### `auth login` {#auth-login}
+
+Connecte par le fournisseur OIDC du serveur et enregistre le token, avec son
+token de rafraîchissement, dans le profil `-P`. La CLI écoute sur `127.0.0.1`,
+sur un port libre, et ouvre votre navigateur sur la connexion du serveur. Une
+fois que le fournisseur vous a connecté, le serveur renvoie le navigateur vers
+ce port. La CLI vérifie que le retour appartient bien à la connexion qu'elle a
+lancée, puis ferme le port. Elle attend jusqu'à cinq minutes.
+
+Le navigateur est `$BROWSER` quand la variable est définie, sinon `xdg-open`,
+`open` ou le gestionnaire d'URL de Windows. Si aucun ne démarre, la CLI imprime
+l'URL pour que vous l'ouvriez vous-même. Si le navigateur ne peut pas joindre
+`127.0.0.1` sur la machine qui exécute la CLI (session SSH, espace de travail
+distant), utilisez `--no-browser`. La CLI imprime alors l'URL, et vous collez en
+retour celle où vous arrivez.
+
+La configuration du fournisseur ne change pas : le serveur termine l'échange
+comme il le fait pour la console, et n'accepte aucun `return_to` autre que
+`http://127.0.0.1:<port>/callback`. Un serveur sans cette prise en charge ignore
+`return_to` : la connexion expire alors avec un conseil d'utiliser
+`--no-browser`. La CI garde `BATLEHUB_TOKEN` ou `--kubernetes-token-path`.
 
 ### `auth whoami`
 
@@ -717,6 +749,20 @@ $ batlehub-cli auth whoami
 | Groups   | nuget-maintainers, …  |
 +----------+-----------------------+
 ```
+
+### `me` : votre propre état {#me}
+
+```
+batlehub-cli me show                      # utilisateur, rôle, groupes, tels que le serveur vous voit
+batlehub-cli me quota                     # votre consommation du quota de chaque registre
+batlehub-cli me downloads [--denied] [--limit 50] [--days <n>]
+batlehub-cli me advisories                # les alertes sur les versions que vous avez publiées ou récupérées
+batlehub-cli me namespaces                # les namespaces d'équipe dont vous êtes membre
+```
+
+`me downloads --denied` ne liste que vos téléchargements refusés, chacun avec
+son code de motif. Passez-en un à [`why`](#commands-security) pour le motif
+complet. Chaque commande `me` ne lit que vos propres lignes.
 
 ### `auth token`
 
@@ -1015,6 +1061,10 @@ batlehub-cli server config changes    # l'historique des changements
 batlehub-cli server config show       # la configuration active, en TOML
 batlehub-cli server config validate <file>
 batlehub-cli server config from-file <file>
+batlehub-cli server config pending    # la configuration en attente, et ce que l'appliquer change
+batlehub-cli server config apply      # l'appliquer (destructrice : demande confirmation)
+batlehub-cli server config discard    # l'abandonner (destructrice : demande confirmation)
+batlehub-cli server config warnings   # les avertissements de validation de la configuration active
 batlehub-cli server stats             # taux de succès du cache, octets servis, compteurs
 batlehub-cli server health            # santé par registre et par backend
 ```
@@ -1158,6 +1208,54 @@ fait par curseur : `--after` prend celui qu'a imprimé la page précédente.
 `flag list` ne montre que les signalements vivants, sauf si `--include-dead`
 ajoute les révoqués et les expirés.
 
+```
+batlehub-cli flag create <registry>/<name>[@<version>] --source <s> --external-id <id>
+                         --effect inform|warn|gate|hard_block --summary <text>
+                         [--severity <s>] [--kind <k>] [--url <u>] [--expires-at <t>]
+batlehub-cli flag delete <external-id> --source <s>
+```
+
+`flag create` et `flag delete` agissent au nom d'une entrée `[[flag_sources]]`,
+pas au vôtre : chaque requête est signée avec le secret partagé de la source,
+lu dans `BATLEHUB_FLAG_SECRET` pour rester hors de l'historique du shell. Sans
+version, le signalement couvre toutes les versions. Renvoyer le même
+`--external-id` met à jour le signalement. `flag delete` le révoque et est
+[destructrice](#confirmation) : les versions qu'il retenait sont de nouveau
+servies.
+
+### Politiques et exemptions {#policy}
+
+```
+batlehub-cli policy show   <registry>/<name>[@<version>]
+batlehub-cli policy set    <registry>/<name>[@<version>] -f <policy.json | ->
+batlehub-cli policy set    <registry>/<name>@<version> --gate <g> --until <t> --reason <text>
+batlehub-cli policy delete <registry>/<name>[@<version>] [--gate <g>]
+
+batlehub-cli exemption list   -r <registry>
+batlehub-cli exemption add    <registry>/<name>@<version> --gate <g> --until <t> --reason <text>
+batlehub-cli exemption remove <registry>/<name>@<version> --gate <g>
+```
+
+Une coordonnée sans version désigne la politique du paquet, une coordonnée avec
+version celle de cette version. Dans le fichier JSON, un champ absent hérite du
+niveau supérieur. `policy set --gate` et `exemption add` sont le même appel :
+ils exemptent une version d'une barrière jusqu'à `--until` (RFC 3339). Le
+serveur note si vous avez exempté une version que vous avez vous-même publiée,
+et `add` le signale. `policy delete` est [destructrice](#confirmation).
+
+### Audit de l'amont {#upstream}
+
+```
+batlehub-cli upstream status      <registry>/<name>
+batlehub-cli upstream recheck     <registry>/<name>[@<version>]
+batlehub-cli upstream disappeared [-r <registry>] [--state missing|disappeared|restored]
+                                  [--page 0] [--per-page 50]
+```
+
+Ces commandes montrent ce que l'amont ne liste plus
+([RFC 0014](/rfc/0014-upstream-disappearance)). `recheck` interroge l'amont
+tout de suite, sans attendre le prochain passage.
+
 ### Vérification d'accès
 
 ```
@@ -1179,6 +1277,9 @@ batlehub-cli visibility set  <registry>/<name> public|internal|team
 batlehub-cli namespace list   -r <registry>
 batlehub-cli namespace claim  -r <registry> <prefix> <group-id>
 batlehub-cli namespace remove -r <registry> <prefix>
+batlehub-cli namespace signing-key list   -r <registry> <namespace>
+batlehub-cli namespace signing-key set    -r <registry> <namespace> --key-id <id> --armor <key.asc | ->
+batlehub-cli namespace signing-key delete -r <registry> <namespace> <key-id>
 
 batlehub-cli user list                      # les utilisateurs bloqués
 batlehub-cli user block   <user-id> [--reason <text>]

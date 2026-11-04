@@ -34,6 +34,10 @@ pub struct LoginState {
     /// The caller's own CSRF value, echoed back to it after redemption so it can
     /// confirm this callback belongs to the login *it* started.
     pub spa_state: String,
+    /// Where the callback sends the tokens instead of the console: the CLI's
+    /// loopback listener, `http://127.0.0.1:<port>/callback` exactly, checked
+    /// before this entry is written (RFC 0040 decision 40).
+    pub return_to: Option<String>,
 }
 
 /// One-time store for in-flight OIDC authorization requests.

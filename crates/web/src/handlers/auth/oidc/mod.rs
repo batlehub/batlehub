@@ -16,6 +16,9 @@ pub struct LoginQuery {
     pub state: Option<String>,
     /// Provider name to log in with. Defaults to the first configured provider.
     pub provider: Option<String>,
+    /// The CLI's loopback listener, `http://127.0.0.1:<port>/callback`
+    /// exactly; the callback sends the tokens there instead of to the console.
+    pub return_to: Option<String>,
 }
 
 #[derive(Deserialize)]

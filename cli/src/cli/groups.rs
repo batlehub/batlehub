@@ -11,6 +11,7 @@ use super::admin::{
     FlagsCommand, GdprCommand, GrantsCommand, IpBlockCommand, NamespaceCommand,
     NotificationsCommand, QuotaCommand, SbomCommand, UsersCommand, VisibilityCommand,
 };
+use super::journeys::{self, PendingCmd};
 use super::security::{self, PullsArgs};
 use crate::api::BatleHubClient;
 use crate::coordinate::Coordinate;
@@ -84,6 +85,14 @@ pub enum ServerConfigCmd {
     Validate { file: String },
     /// Stage a local TOML file as the pending configuration [admin]
     FromFile { file: String },
+    /// The staged configuration a reload is waiting on, and what it changes [admin]
+    Pending,
+    /// Apply the staged configuration (destructive: asks first) [admin]
+    Apply,
+    /// Drop the staged configuration (destructive: asks first) [admin]
+    Discard,
+    /// What the running configuration's validation warned about [admin]
+    Warnings,
 }
 
 // ── cache · import · retention · banner ──────────────────────────────────────
@@ -339,6 +348,11 @@ pub enum NamespaceCmd {
     Claim { prefix: String, group_id: String },
     /// Remove a claim from the `-r` registry [admin]
     Remove { prefix: String },
+    /// The keys a namespace's releases are signed with [admin]
+    SigningKey {
+        #[command(subcommand)]
+        cmd: journeys::SigningKeyCmd,
+    },
 }
 
 /// Every group above, as `main` dispatches it.
@@ -358,7 +372,9 @@ pub enum Group {
     Exposure(ExposureCmd),
     Bundle(BundleCmd),
     AirGap(AirGapCmd),
-    Flag(FlagsCommand),
+    Flag(journeys::FlagCmd),
+    /// `flag list`, once `run` has taken the verbs `admin flags` lacks.
+    FlagList(FlagsCommand),
     Audit(AuditCmd),
     Gdpr(GdprCmd),
     Sbom(SbomCmd),
@@ -388,6 +404,26 @@ pub struct AccessCheckArgs {
 }
 
 pub async fn run(group: Group, client: &BatleHubClient, json: bool) -> Result<()> {
+    let group = match group {
+        Group::Server(ServerCmd::Config { cmd }) => {
+            let pending = match cmd {
+                ServerConfigCmd::Pending => PendingCmd::Pending,
+                ServerConfigCmd::Apply => PendingCmd::Apply,
+                ServerConfigCmd::Discard => PendingCmd::Discard,
+                ServerConfigCmd::Warnings => PendingCmd::Warnings,
+                cmd => return run_config(cmd, client, json).await,
+            };
+            return journeys::run_pending(pending, client).await;
+        }
+        Group::Namespace(NamespaceCmd::SigningKey { cmd }) => {
+            return journeys::run_signing_key(cmd, client).await
+        }
+        Group::Flag(cmd) => match cmd {
+            journeys::FlagCmd::Listing(list) => Group::FlagList(list),
+            cmd => return journeys::run_flag(cmd, client, json).await,
+        },
+        other => other,
+    };
     let cmd = match group {
         Group::Quota(QuotaCmd::List) => AdminCommand::Quota {
             cmd: QuotaCommand::List,
@@ -408,15 +444,7 @@ pub async fn run(group: Group, client: &BatleHubClient, json: bool) -> Result<()
         },
         Group::Server(ServerCmd::Stats) => AdminCommand::Stats,
         Group::Server(ServerCmd::Health) => AdminCommand::Health,
-        Group::Server(ServerCmd::Config { cmd }) => AdminCommand::Config {
-            cmd: match cmd {
-                ServerConfigCmd::Reload => ConfigAdminCommand::Reload,
-                ServerConfigCmd::Changes => ConfigAdminCommand::Changes,
-                ServerConfigCmd::Show => ConfigAdminCommand::View,
-                ServerConfigCmd::Validate { file } => ConfigAdminCommand::Validate { file },
-                ServerConfigCmd::FromFile { file } => ConfigAdminCommand::FromFile { file },
-            },
-        },
+        Group::Server(ServerCmd::Config { cmd }) => return run_config(cmd, client, json).await,
         Group::Cache(c) => AdminCommand::Cache {
             cmd: match c {
                 CacheCmd::Warm { packages, paths } => CacheCommand::Warm {
@@ -498,7 +526,10 @@ pub async fn run(group: Group, client: &BatleHubClient, json: bool) -> Result<()
             page,
             per_page,
         },
-        Group::Flag(cmd) => AdminCommand::Flags { cmd },
+        Group::FlagList(cmd) => AdminCommand::Flags { cmd },
+        Group::Flag(_) | Group::Namespace(NamespaceCmd::SigningKey { .. }) => {
+            unreachable!("dispatched above")
+        }
         Group::Audit(AuditCmd::Pulls(args)) => {
             return security::run_audit(security::AuditCommand::Pulls(args), client, json).await
         }
@@ -656,6 +687,7 @@ pub async fn run(group: Group, client: &BatleHubClient, json: bool) -> Result<()
                     registry: registry()?,
                     prefix,
                 },
+                NamespaceCmd::SigningKey { .. } => unreachable!("dispatched above"),
             },
         },
         Group::AccessCheck(a) => {
@@ -673,6 +705,22 @@ pub async fn run(group: Group, client: &BatleHubClient, json: bool) -> Result<()
         }
     };
     admin::run(cmd, client, json).await
+}
+
+/// `server config <verb>` for the verbs `admin config` already had.
+async fn run_config(cmd: ServerConfigCmd, client: &BatleHubClient, json: bool) -> Result<()> {
+    let cmd = match cmd {
+        ServerConfigCmd::Reload => ConfigAdminCommand::Reload,
+        ServerConfigCmd::Changes => ConfigAdminCommand::Changes,
+        ServerConfigCmd::Show => ConfigAdminCommand::View,
+        ServerConfigCmd::Validate { file } => ConfigAdminCommand::Validate { file },
+        ServerConfigCmd::FromFile { file } => ConfigAdminCommand::FromFile { file },
+        ServerConfigCmd::Pending
+        | ServerConfigCmd::Apply
+        | ServerConfigCmd::Discard
+        | ServerConfigCmd::Warnings => unreachable!("dispatched by `run`"),
+    };
+    admin::run(AdminCommand::Config { cmd }, client, json).await
 }
 
 /// The new spelling of an `admin …` command, for its deprecation warning.

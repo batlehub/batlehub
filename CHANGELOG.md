@@ -98,8 +98,27 @@ spellings*.
 - `proxy serve --registry` and `vsx verify --registry`, which take a URL.
   `--registry-url` is the new name, and `--registry` stays as an alias for the
   editor extensions.
+- `package list --blocked-only` (now `--blocked`).
 
 ### Added
+
+- **`auth login` signs in through the browser and back** (RFC 0040 §4.9). The
+  CLI listens on `127.0.0.1`, opens the browser at the server's sign-in with
+  `return_to=http://127.0.0.1:<port>/callback`, and saves the token the server
+  redirects back. Pasting a URL is now `--no-browser`. The server accepts that
+  `return_to` and no other (migration 064), and the provider configuration does
+  not change.
+- **The CLI covers the journeys only the console had** (RFC 0040 §4.9):
+  `package block/unblock`, `policy show/set/delete`,
+  `exemption list/add/remove`, `server config pending/apply/discard/warnings`,
+  `flag create/delete` (signed with the source's secret from
+  `BATLEHUB_FLAG_SECRET`), `me show/quota/downloads/advisories/namespaces`,
+  `upstream status/recheck/disappeared` and
+  `namespace signing-key list/set/delete`.
+- **`GET /api/v1/packages?blocked=true`** filters blocked versions on the
+  server, so the page and the total count only include them.
+  `package list --blocked` uses it. Before, the CLI filtered the page it had
+  already fetched.
 
 - **`publish` covers nine more kinds:** goproxy (a module directory, zipped and
   sent as one atomic `{version}.zip`), maven (jar, pom and checksum sidecars,
@@ -160,6 +179,9 @@ spellings*.
   headers.
 
 ### Fixed
+
+- **`--format json` prints one document when some items of a bulk `package`
+  verb fail.** The outcome was followed by a second error document on stdout.
 
 - **A hybrid terraform registry serves its upstream's providers.** The download
   documents point at this instance's artifact routes for every version, but

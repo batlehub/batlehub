@@ -5896,6 +5896,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "return_to",
+            "in": "query",
+            "description": "The CLI's loopback listener, `http://127.0.0.1:<port>/callback` exactly; the callback redirects there with the tokens in the query string",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -5911,6 +5920,9 @@
           },
           "302": {
             "description": "Redirect to OIDC authorization endpoint"
+          },
+          "400": {
+            "description": "`state` too long, or a `return_to` other than the loopback callback"
           },
           "404": {
             "description": "Named provider not found"
@@ -7142,6 +7154,15 @@
                 "string",
                 "null"
               ]
+            }
+          },
+          {
+            "name": "blocked",
+            "in": "query",
+            "description": "Only blocked versions, filtered before the page is cut",
+            "required": false,
+            "schema": {
+              "type": "boolean"
             }
           },
           {

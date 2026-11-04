@@ -35,6 +35,8 @@ pub struct PackageQuery {
     pub registry: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub blocked: bool,
     pub page: u64,
     pub per_page: u64,
 }
