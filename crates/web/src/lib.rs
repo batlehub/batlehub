@@ -650,7 +650,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
                 explore_upstream_search,
             },
             me::{me, my_advisories, my_downloads, my_quota},
-            packages::{check_access, list_packages},
+            packages::{check_access, check_access_batch, list_packages},
             registries::list_registries,
         },
         inbound_webhook::{list_inbound_events, receive_inbound_webhook},
@@ -1227,6 +1227,7 @@ fn collect_routes(cfg: &mut UtoipaServiceConfig) {
     cfg.service(explore_registry_stats);
     cfg.service(list_packages);
     cfg.service(check_access);
+    cfg.service(check_access_batch); // RFC 0040 §6.1, `check`
     cfg.service(invalidate_explore_cache);
     cfg.service(admin_list_packages);
     cfg.service(package_detail);

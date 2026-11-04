@@ -1444,6 +1444,10 @@ pub struct ConfigureAppDefaults {
     /// The `[[flag_sources]]` the push endpoint accepts. Empty by default:
     /// no source means every push is a `404`.
     pub flag_sources: batlehub_web::FlagSources,
+    /// The per-registry rate limiter, registered as `server_factory` does so
+    /// the access batch can charge it (RFC 0040 §6.1). `None` by default: the
+    /// middleware is not on test apps either.
+    pub rate_limit: Option<Arc<batlehub_web::RateLimitService>>,
 }
 
 impl Default for ConfigureAppDefaults {
@@ -1468,6 +1472,7 @@ impl Default for ConfigureAppDefaults {
             sso_flows: Vec::new(),
             advisory_repo: None,
             flag_sources: batlehub_web::FlagSources::default(),
+            rate_limit: None,
         }
     }
 }
@@ -1527,6 +1532,7 @@ pub async fn finish_test_app(
     let user_block_repo = Arc::clone(&defaults.user_block_repo);
     let ip_block_store = Arc::clone(&defaults.ip_block_store);
     let upstream_audit = defaults.upstream_audit.clone();
+    let rate_limit = defaults.rate_limit.clone();
     // RFC 0002 (recast): the flag store joins the exposure report against
     // this app's own access log, and the push funnel judges over its hot
     // config. Present on every app so the routes answer `403`/`404` rather
@@ -1565,6 +1571,9 @@ pub async fn finish_test_app(
         .configure(move |cfg| {
             if let Some(audit) = upstream_audit.clone() {
                 cfg.app_data(actix_web::web::Data::new(audit));
+            }
+            if let Some(rl) = rate_limit.clone() {
+                cfg.app_data(actix_web::web::Data::new(rl));
             }
         })
         // RFC 0018 phase 5: what `backfill` walks. Empty here — the proxy

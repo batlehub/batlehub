@@ -27,6 +27,17 @@ use crate::services::{LocalRegistryService, ProxyRequest, ProxyService};
 
 tokio::task_local! {
     static EVALUATE_ONLY: ();
+    static CACHE_ONLY: ();
+}
+
+/// What metadata resolution fails with under [`cache_only`] when it would
+/// have gone upstream.
+pub const NOT_YET_RESOLVED: &str = "not yet resolved";
+
+/// Whether the current task answers from cached metadata only: the batch
+/// behind `check` (§6.1, T11), which must never fetch upstream.
+pub fn cache_only() -> bool {
+    CACHE_ONLY.try_with(|_| ()).is_ok()
 }
 
 /// Whether the current task is computing a pullability answer, which must
@@ -149,6 +160,20 @@ impl PullabilityService {
         answer
     }
 
+    /// [`Self::explain`] from cached metadata only (`POST
+    /// …/packages/access/batch`): a version this instance has not resolved
+    /// yet waits as "not yet resolved" instead of being fetched.
+    pub async fn explain_cached(
+        &self,
+        identity: &Identity,
+        package: &PackageId,
+        scope: Scope,
+    ) -> Result<Answer, CoreError> {
+        CACHE_ONLY
+            .scope((), self.explain(identity, package, scope))
+            .await
+    }
+
     /// The registry's kind, from the live configuration.
     async fn kind_of(&self, registry: &str) -> Option<RegistryKind> {
         self.local
@@ -249,6 +274,10 @@ impl PullabilityService {
                     // Unknown upstream and unknown here: the same not-found an
                     // invisible package gets.
                     Err(CoreError::NotFound(_)) => return Ok(Answer::NotFound),
+                    Err(CoreError::Cache(m)) if cache_only() && m == NOT_YET_RESOLVED => {
+                        causes.push(not_yet_resolved(registry, name, version));
+                        return Ok(Answer::Found(finish(causes, version)));
+                    }
                     Err(e) => {
                         causes.push(Cause {
                             kind: "upstream".into(),
@@ -451,6 +480,25 @@ fn download_action(kind: Option<RegistryKind>) -> Action {
 
 /// The headline from the causes: any refusal refuses; else any wait waits;
 /// else pullable.
+/// A batch item not answered within the request's deadline: the same `wait`
+/// an uncached one gets, whatever the coordinate — unknown and invisible
+/// alike, so the deadline is no oracle (T1).
+pub fn unanswered(registry: &str, name: &str, version: &str) -> Pullability {
+    finish(vec![not_yet_resolved(registry, name, version)], version)
+}
+
+/// A batch item whose metadata is not cached: `why` resolves it.
+fn not_yet_resolved(registry: &str, name: &str, version: &str) -> Cause {
+    Cause {
+        kind: "upstream".into(),
+        state: CauseState::Wait,
+        reason_code: None,
+        until: None,
+        detail: "not yet resolved: this instance holds no metadata for it yet".into(),
+        next: Some(format!("batlehub-cli why {registry}/{name}@{version}")),
+    }
+}
+
 fn finish(mut causes: Vec<Cause>, version: &str) -> Pullability {
     // The server's order (§4.8): access, block, lifecycle, policy, verdict,
     // upstream. Stable, so causes of one kind keep chain order.

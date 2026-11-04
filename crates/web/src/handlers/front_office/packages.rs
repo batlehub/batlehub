@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use actix_web::{get, web, Responder};
+use actix_web::{get, post, web, Responder};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
@@ -247,29 +247,17 @@ pub async fn check_access(
     registries: web::Data<crate::RegistryMap>,
 ) -> Result<impl Responder, AppError> {
     let query = query.into_inner();
-    // Visible as the download funnel sees it: the legacy role table, or a read
-    // grant anywhere in the registry — a namespace-only grant included, or a
-    // caller who can pull `@team/x` would be told it does not exist. The
-    // coordinate's own grant is judged in `explain`'s step 1.
-    let legacy = access
-        .read()
-        .await
-        .accessible_registries_for(&identity)
-        .contains(&query.registry);
-    let visible = registries.contains(&query.registry)
-        && (legacy
-            || batlehub_core::services::authz::holds_anywhere_in_registry(
-                &proxy_svc.hot,
-                &query.registry,
-                &identity,
-                batlehub_core::entities::Action::ReleasesRead,
-            )
-            .await
-            || coordinate_grant(&proxy_svc.hot, &query, &identity).await);
-    let scope = Scope {
-        visible,
-        falls_through: modes.get(&query.registry) != batlehub_config::schema::RegistryMode::Local,
-    };
+    let scope = scope_for(
+        &query.registry,
+        &query.name,
+        query.version.as_deref(),
+        &identity,
+        &access,
+        &proxy_svc.hot,
+        &modes,
+        &registries,
+    )
+    .await;
     let svc = PullabilityService::new(proxy_svc.get_ref().clone(), local_svc.get_ref().clone());
     tracing::debug!(registry = %query.registry, name = %query.name, "pullability asked");
 
@@ -306,24 +294,82 @@ pub async fn check_access(
         }
     };
 
+    Ok(web::Json(response(
+        query.registry,
+        query.name,
+        query.artifact,
+        answer,
+        resolved_version,
+        versions,
+        hosts.as_ref().map(|h| h.get_ref()),
+    )))
+}
+
+/// Who may see `registry` at all, as the download funnel sees it: the legacy
+/// role table, or a read grant anywhere in the registry — a namespace-only
+/// grant included, or a caller who can pull `@team/x` would be told it does
+/// not exist — or one on this very coordinate. The coordinate's own grant is
+/// judged in `explain`'s step 1.
+#[allow(clippy::too_many_arguments)]
+async fn scope_for(
+    registry: &str,
+    name: &str,
+    version: Option<&str>,
+    identity: &AuthIdentity,
+    access: &crate::AccessConfigLock,
+    hot: &batlehub_core::services::hot_config::HotConfigLock,
+    modes: &crate::RegistryModeMap,
+    registries: &crate::RegistryMap,
+) -> Scope {
+    let legacy = access
+        .read()
+        .await
+        .accessible_registries_for(identity)
+        .contains(registry);
+    let visible = registries.contains(registry)
+        && (legacy
+            || batlehub_core::services::authz::holds_anywhere_in_registry(
+                hot,
+                registry,
+                identity,
+                batlehub_core::entities::Action::ReleasesRead,
+            )
+            .await
+            || coordinate_grant(hot, registry, name, version, identity).await);
+    Scope {
+        visible,
+        falls_through: modes.get(registry) != batlehub_config::schema::RegistryMode::Local,
+    }
+}
+
+/// The single answer's body, which the batch repeats per item.
+fn response(
+    registry: String,
+    name: String,
+    artifact: Option<String>,
+    answer: Pullability,
+    resolved_version: Option<String>,
+    versions: Vec<Pullability>,
+    hosts: Option<&RegistryHostMap>,
+) -> AccessCheckResponse {
     let reason = answer
         .causes
         .iter()
         .find(|c| matches!(c.state, CauseState::Refuse | CauseState::Wait))
         .map(|c| c.detail.clone());
     let proxy_url = build_proxy_url(
-        &registry_link_base(&query.registry, hosts.as_ref().map(|h| h.get_ref())),
-        &query.registry,
-        &query.name,
+        &registry_link_base(&registry, hosts),
+        &registry,
+        &name,
         &answer.version,
-        query.artifact.as_deref(),
+        artifact.as_deref(),
     );
-    Ok(web::Json(AccessCheckResponse {
+    AccessCheckResponse {
         package: PackageIdentifierDto {
-            registry: query.registry,
-            name: query.name,
+            registry,
+            name,
             version: answer.version.clone(),
-            artifact: query.artifact,
+            artifact,
         },
         can_access: answer.headline == Headline::Pullable,
         reason,
@@ -333,7 +379,167 @@ pub async fn check_access(
         causes: answer.causes,
         resolved_version,
         versions,
-    }))
+    }
+}
+
+/// The most coordinates one batch may ask about (decision 37).
+pub const MAX_ACCESS_BATCH: usize = 50;
+
+/// How long one batch may take; what is not answered by then waits.
+const ACCESS_BATCH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[derive(Deserialize, ToSchema)]
+pub struct AccessBatchRequest {
+    /// At most 50.
+    pub items: Vec<AccessBatchItem>,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct AccessBatchItem {
+    pub registry: String,
+    pub name: String,
+    pub version: String,
+}
+
+/// One item's answer: the single endpoint's body, or `not_found` — the same
+/// for an unknown coordinate and one the caller may not see (T1).
+#[derive(Serialize, ToSchema)]
+#[serde(untagged)]
+pub enum AccessBatchAnswer {
+    Found(Box<AccessCheckResponse>),
+    NotFound { state: BatchNotFound },
+}
+
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BatchNotFound {
+    NotFound,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct AccessBatchResponse {
+    /// In request order.
+    pub items: Vec<AccessBatchAnswer>,
+}
+
+/// The pullability of up to 50 versions, for `batlehub-cli check`
+/// (RFC 0040 §6.1, decision 37). Answered from cached metadata only: a version
+/// this instance has not resolved yet waits as "not yet resolved", and so does
+/// one not answered within 10 seconds — a batch never fetches upstream. Each
+/// item is charged to the caller's rate-limit bucket of its registry, as the
+/// download would be.
+#[utoipa::path(
+    post,
+    path = "/api/v1/packages/access/batch",
+    tag = "front-office",
+    request_body = AccessBatchRequest,
+    responses(
+        (status = 200, description = "One answer per item, in request order", body = AccessBatchResponse),
+        (status = 400, description = "More than 50 items"),
+        (status = 429, description = "An item exceeded its registry's rate limit"),
+    ),
+    security(("bearer_token" = [])),
+)]
+#[post("/api/v1/packages/access/batch")]
+#[allow(clippy::too_many_arguments)]
+pub async fn check_access_batch(
+    req: actix_web::HttpRequest,
+    body: web::Json<AccessBatchRequest>,
+    identity: AuthIdentity,
+    access: web::Data<crate::AccessConfigLock>,
+    hosts: Option<web::Data<RegistryHostMap>>,
+    proxy_svc: web::Data<Arc<ProxyService>>,
+    local_svc: web::Data<Arc<LocalRegistryService>>,
+    modes: web::Data<crate::RegistryModeMap>,
+    registries: web::Data<crate::RegistryMap>,
+    rate_limit: Option<web::Data<Arc<crate::RateLimitService>>>,
+) -> Result<impl Responder, AppError> {
+    let items = body.into_inner().items;
+    if items.len() > MAX_ACCESS_BATCH {
+        return Err(AppError::bad_request(format!(
+            "at most {MAX_ACCESS_BATCH} items per batch, got {}",
+            items.len()
+        )));
+    }
+    if let Some(rl) = &rate_limit {
+        charge(rl, &req, &identity, &items).await?;
+    }
+    let svc = PullabilityService::new(proxy_svc.get_ref().clone(), local_svc.get_ref().clone());
+    let hosts = hosts.as_ref().map(|h| h.get_ref());
+    let deadline = tokio::time::Instant::now() + ACCESS_BATCH_DEADLINE;
+    let mut answers = Vec::with_capacity(items.len());
+    for item in items {
+        let pkg = PackageId::new(&item.registry, &item.name, &item.version);
+        let answer = tokio::time::timeout_at(deadline, async {
+            let scope = scope_for(
+                &item.registry,
+                &item.name,
+                Some(&item.version),
+                &identity,
+                &access,
+                &proxy_svc.hot,
+                &modes,
+                &registries,
+            )
+            .await;
+            svc.explain_cached(&identity.0, &pkg, scope).await
+        })
+        .await;
+        let found = match answer {
+            Ok(Ok(Answer::Found(p))) => p,
+            Ok(Ok(Answer::NotFound)) => {
+                answers.push(AccessBatchAnswer::NotFound {
+                    state: BatchNotFound::NotFound,
+                });
+                continue;
+            }
+            Ok(Err(e)) => return Err(e.into()),
+            Err(_) => batlehub_core::services::pullability::unanswered(
+                &item.registry,
+                &item.name,
+                &item.version,
+            ),
+        };
+        answers.push(AccessBatchAnswer::Found(Box::new(response(
+            item.registry,
+            item.name,
+            None,
+            found,
+            None,
+            Vec::new(),
+            hosts,
+        ))));
+    }
+    Ok(web::Json(AccessBatchResponse { items: answers }))
+}
+
+/// One token per item from the caller's bucket of the item's registry — what
+/// the downloads `check` predicts would cost. The first item over a blocking
+/// limit refuses the batch with the middleware's `429`.
+async fn charge(
+    rl: &crate::RateLimitService,
+    req: &actix_web::HttpRequest,
+    identity: &AuthIdentity,
+    items: &[AccessBatchItem],
+) -> Result<(), AppError> {
+    use crate::middleware::proxy_trust::{client_ip, peer_trust};
+    let key = identity
+        .0
+        .user_id
+        .clone()
+        .unwrap_or_else(|| format!("ip:{}", client_ip(req, peer_trust(req))));
+    for item in items {
+        if let Some(Err((wait, _, batlehub_config::schema::RateLimitEnforcement::Block, _))) =
+            rl.check(&item.registry, &key, &identity.0.groups).await
+        {
+            return Err(AppError::too_many_requests(format!(
+                "rate limit exceeded on {}; retry after {}s",
+                item.registry,
+                wait.as_secs().max(1)
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// The prefix package links for `registry` hang off.
@@ -389,7 +595,9 @@ fn build_proxy_url(
 /// hierarchy: without one, `holds_anywhere_in_registry` already said yes.
 async fn coordinate_grant(
     hot: &batlehub_core::services::hot_config::HotConfigLock,
-    query: &AccessQuery,
+    registry: &str,
+    name: &str,
+    version: Option<&str>,
     identity: &AuthIdentity,
 ) -> bool {
     use batlehub_core::entities::{Action, RegistryKind};
@@ -397,18 +605,14 @@ async fn coordinate_grant(
         .read()
         .await
         .registries
-        .get(&query.registry)
+        .get(registry)
         .and_then(|c| c.registry_type().parse::<RegistryKind>().ok());
     let name = kind.map_or_else(
-        || query.name.clone(),
-        |k| k.canonical_package_name(&query.name).into_owned(),
+        || name.to_owned(),
+        |k| k.canonical_package_name(name).into_owned(),
     );
     // No version asked: a package-tier grant still matches.
-    let pkg = PackageId::new(
-        &query.registry,
-        name,
-        query.version.as_deref().unwrap_or_default(),
-    );
+    let pkg = PackageId::new(registry, name, version.unwrap_or_default());
     for action in [Action::ReleasesRead, Action::SourceRead] {
         if batlehub_core::services::authz::authorize_grants_public(hot, &pkg, identity, action)
             .await

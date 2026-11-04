@@ -13,7 +13,7 @@ use batlehub_core::entities::{FetchSupport, RegistryKind};
     not(test),
     expect(
         dead_code,
-        reason = "only `publish` reads a cell at run time; the gate and the docs table read all five"
+        reason = "only `publish` reads a cell at run time; the gate and the docs table read all six"
     )
 )]
 pub enum Capability {
@@ -22,6 +22,7 @@ pub enum Capability {
     Download,
     Consult,
     Lifecycle,
+    Check,
 }
 
 /// One cell. There is no fourth value (§4.7).
@@ -51,6 +52,7 @@ pub fn cell(kind: RegistryKind, cap: Capability) -> Cell {
         },
         Capability::Consult => consult(kind),
         Capability::Lifecycle => lifecycle(kind),
+        Capability::Check => check(kind),
     }
 }
 
@@ -176,17 +178,49 @@ fn lifecycle(kind: RegistryKind) -> Cell {
     }
 }
 
+/// `check`: the lockfiles `batlehub_core::lockfile` reads, plus `mise.lock`.
+fn check(kind: RegistryKind) -> Cell {
+    match kind {
+        K::Cargo => Done("`Cargo.lock`"),
+        K::Npm => Done("`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`"),
+        K::Pypi => Done("`uv.lock`, `poetry.lock`, pinned `requirements*.txt`"),
+        K::Goproxy => Done("`go.sum`"),
+        K::Conda => Done("`conda-lock.yml`"),
+        K::Composer => Done("`composer.lock`"),
+        K::Rubygems => Done("`Gemfile.lock`"),
+        K::Nuget => Done("`packages.lock.json`"),
+        K::Terraform => Done("`.terraform.lock.hcl`"),
+        K::Helm => Done("`Chart.lock`"),
+        K::Github | K::Forgejo => Done("`mise.lock`"),
+        K::Gitlab => NotApplicable("`mise plan` maps no GitLab download to a registry yet"),
+        K::Nodedist => Done("`.nvmrc`"),
+        K::Sdkman => Done("`.sdkmanrc`"),
+        K::Rustup => Done("`rust-toolchain.toml`"),
+        K::Maven => NotApplicable("Maven has no lockfile"),
+        K::Galaxy => NotApplicable("`requirements.yml` pins no exact version"),
+        K::Nix => NotApplicable("`flake.lock` pins sources; the cache serves store paths by hash"),
+        K::Generic => NotApplicable("a mirrored file has no version to ask about"),
+        K::Devfile | K::Openvsx | K::VscodeMarketplace | K::JetbrainsMarketplace | K::Jetbrains => {
+            NotApplicable("editors keep no lockfile")
+        }
+        K::Deb | K::Rpm | K::Pacman | K::Apk => {
+            NotApplicable("the system's package manager keeps no lockfile")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     impl Capability {
-        const ALL: [Capability; 5] = [
+        const ALL: [Capability; 6] = [
             Capability::Configure,
             Capability::Publish,
             Capability::Download,
             Capability::Consult,
             Capability::Lifecycle,
+            Capability::Check,
         ];
 
         fn as_str(self) -> &'static str {
@@ -196,6 +230,7 @@ mod tests {
                 Capability::Download => "download",
                 Capability::Consult => "consult",
                 Capability::Lifecycle => "lifecycle",
+                Capability::Check => "check",
             }
         }
     }
@@ -208,8 +243,8 @@ mod tests {
     /// The markdown table, as both CLI reference pages carry it.
     fn matrix_markdown() -> String {
         let mut out = String::from(
-            "| Kind | Configure | Publish | Download | Consult | Lifecycle |\n\
-         | --- | --- | --- | --- | --- | --- |\n",
+            "| Kind | Configure | Publish | Download | Consult | Lifecycle | Check |\n\
+         | --- | --- | --- | --- | --- | --- | --- |\n",
         );
         for kind in RegistryKind::ALL {
             out.push_str(&format!("| {} |", kind.as_str()));

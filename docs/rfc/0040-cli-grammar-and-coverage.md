@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Accepted — phases 2 to 6 landed; §17 records how far each phase is and where the built thing differs |
+| Status      | Accepted — phases 2 to 7 landed; §17 records how far each phase is and where the built thing differs |
 | Short       | CLI grammar and coverage                                      |
 | Settles     | How every batlehub-cli command names a package, prints, fails and confirms, what it must cover for each registry kind, and how a developer learns why a version is not pullable |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -1649,11 +1649,29 @@ row names has landed; a partial phase lists what is still open.
 | 4 | done | `f08b58d5`, `36180a88`, `c59d4b7d`, `b38c05e7`, `62e591b1`, + the heavy publish commit | §6.4 owner arm; §6.3 publish by kind with the nine uploaders; §6.5 `package versions` with upstream and `download <coord>`; §6.5 `setup` for conda, composer, gem, nuget, terraform, galaxy, nix, sdkman, gitlab (mise), helm (`manual`) and the print arms, plus detection of galaxy/helm/nix/devfile projects; §6.6 `cli/src/coverage.rs`, its gate and `task docs:cli-matrix`. heavy cases 1–3 (`client_setup.sh` 10–12) 4–7 (in each kind's own suite), 11 (`authz.sh cargo`) and 13 (`authz.sh npm`). A locally published terraform provider is not installable: issue #281 (§17.1) |
 | 5 | done | `476e7c29` | `services/pullability.rs` (`explain`, `explain_resolution`); `evaluate_chain_all`; the extended `packages/access` (404 for not visible, `version` optional); migration 063 and `reason_code` written by both funnels; `me/downloads?outcome=denied`; `why <coord>`, `why <name>`, `why --last`; `download`'s refusal prints `why`; the console's access page renders causes. heavy cases 8–10 (`quarantine.sh`) and 12 (`authz.sh npm`); `package show`; `/api/v1/registries` lists a registry read without being installable (`installable: false`) |
 | 6 | done | PR #280 | `cli/src/{api,cli}/journeys.rs`: `policy`, `exemption`, `me`, `upstream`, `namespace signing-key`, `flag create/delete`, `server config pending/apply/discard/warnings`; `package block/unblock` in `lifecycle.rs`; `package list --blocked` filtered by the server (`?blocked=true`); the loopback `auth login` with `--no-browser`, `sso.rs`'s `return_to` and migration 064. T6's tests: `login_rejects_wrong_state` and `return_to_must_be_exact_loopback` |
-| 7 | not started | — | |
+| 7 | done | PR #280 | `crates/core/src/lockfile.rs` (17 readers, 16 MiB cap) and `fuzz_cli_lockfile`; `cli/src/cli/check.rs` (`mise.lock` through `mise plan`); `POST /api/v1/packages/access/batch` (≤ 50, cache-only through `pullability::cache_only`, 10 s deadline, charged per item); the Check column in `coverage.rs` with a `<kind>_check` test per ✅ cell (`cli/tests/check.rs`); the `pullability` and `pullability_batch` soak arms and `db_calls.py` scenarios; heavy case 14 (`quarantine.sh`) |
 | 8 | not started | — | |
 | 9 | not started | — | |
 
 ### 17.1 Where the built thing differs
+
+- **Phase 7: the lockfile readers live in `batlehub-core`** (`lockfile.rs`), not
+  in the CLI, so `fuzz_cli_lockfile` can link them: the CLI is a binary crate.
+  `mise.lock` is read through `mise plan` in the CLI and is not fuzzed, and
+  the goproxy zipper's path rules are not fuzzed yet either.
+- **Four Check cells changed from the table in §4.7.** `gitlab` is n.a.: `mise plan`
+  maps no gitlab.com download to a registry, so `check` would ask about names
+  the registry does not use. `generic` is n.a.: a mirrored file has no version
+  to ask about. `nix` is n.a.: `flake.lock` pins sources, and the cache serves
+  store paths by hash. `nodedist` reads `.nvmrc` only, because `mise plan`
+  routes nodejs.org to a `generic` mirror.
+- **`check` reads the current directory**, not the tree `setup detect` walks.
+- **The batch judges a forge ref as written.** Resolving a tag goes to the
+  forge, which the batch never does, so `TAG_MOVED` is reported by `why`, not
+  by `check`. The first item over a blocking rate limit refuses the whole batch
+  with a `429`.
+- **Heavy case 14 asserts on `check`'s output and exit codes, not on the
+  wire**: the CLI talks to the server directly, not through the tap.
 
 - **Phase 6: the loopback callback carries the tokens in the query string.**
   The console gets them in the fragment, but a fragment never reaches an HTTP

@@ -89,6 +89,12 @@ impl ProxyService {
                 .await?;
             return Ok(meta);
         }
+        // The batch behind `check` never goes upstream (RFC 0040 T11).
+        if crate::services::pullability::cache_only() {
+            return Err(CoreError::Cache(
+                crate::services::pullability::NOT_YET_RESOLVED.into(),
+            ));
+        }
 
         let meta = match super::time_upstream_call(
             registry_label,

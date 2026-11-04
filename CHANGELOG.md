@@ -102,6 +102,18 @@ spellings*.
 
 ### Added
 
+- **`batlehub-cli check`** (RFC 0040 §4.8): reads the project's lockfiles
+  (`Cargo.lock`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `uv.lock`,
+  `poetry.lock`, pinned `requirements*.txt`, `go.sum`, `conda-lock.yml`,
+  `composer.lock`, `Gemfile.lock`, `packages.lock.json`, `.terraform.lock.hcl`,
+  `Chart.lock`, `mise.lock`, `.nvmrc`, `.sdkmanrc`, `rust-toolchain.toml`) and
+  lists every pinned dependency that is not pullable, with its reason. It exits
+  4 on a ⛔, or on a ⏳ with `--strict`, so a CI step before the install fails
+  naming the dependency.
+- **`POST /api/v1/packages/access/batch`**: the pullability of up to 50
+  versions, answered from cached metadata only. A version not yet resolved
+  here, or not answered within 10 seconds, is ⏳ "not yet resolved", and each
+  item counts against the caller's rate limit as a download would.
 - **`auth login` signs in through the browser and back** (RFC 0040 §4.9). The
   CLI listens on `127.0.0.1`, opens the browser at the server's sign-in with
   `return_to=http://127.0.0.1:<port>/callback`, and saves the token the server

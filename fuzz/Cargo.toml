@@ -98,6 +98,12 @@ test = false
 doc = false
 
 [[bin]]
+name = "fuzz_cli_lockfile"
+path = "fuzz_targets/fuzz_cli_lockfile.rs"
+test = false
+doc = false
+
+[[bin]]
 name = "fuzz_integrity_parse"
 path = "fuzz_targets/fuzz_integrity_parse.rs"
 test = false

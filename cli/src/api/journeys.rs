@@ -77,6 +77,19 @@ pub fn hub_signature(secret: &str, data: &[u8]) -> String {
 }
 
 impl BatleHubClient {
+    // ── check (RFC 0040 §6.1): cached metadata only, at most 50 ─────────────
+
+    pub async fn access_batch(&self, items: &[(String, String, String)]) -> Result<Value> {
+        let items: Vec<Value> = items
+            .iter()
+            .map(|(registry, name, version)| {
+                json!({ "registry": registry, "name": name, "version": version })
+            })
+            .collect();
+        self.post("/api/v1/packages/access/batch", &json!({ "items": items }))
+            .await
+    }
+
     // ── moderation ───────────────────────────────────────────────────────────
 
     pub async fn bulk_block(&self, versions: &[Item], reason: &str) -> Result<Value> {

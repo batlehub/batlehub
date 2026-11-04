@@ -427,6 +427,23 @@ RC=$?
 set -e
 [[ $RC -eq 8 ]] || { cat "$HEAVY_WORK/wait-young.out" >&2; heavy_fail "batlehub wait --timeout 1s exited $RC on a version held by a clock; expected 8 (timed out, RFC 0040 §4.6)"; }
 
+# RFC 0040 heavy case 14: `check` reads the project's lockfile, answers from
+# what `why` just cached, and predicts the `npm ci` below — ⏳, so 0, and 4
+# with --strict. `-r` picks the young registry among the npm ones.
+set +e
+(cd "$YOUNG" && "$CLI" check -r "$YOUNG_REG") >"$HEAVY_WORK/check-young.out" 2>&1
+RC=$?
+set -e
+[[ $RC -eq 0 ]] || { cat "$HEAVY_WORK/check-young.out" >&2; heavy_fail "check exited $RC on a lockfile whose one pin is ⏳; expected 0"; }
+grep -q "⏳.*$YOUNG_REG/$PKG@$CLEAN.*MIN_AGE_NOT_MET" "$HEAVY_WORK/check-young.out" \
+  || { cat "$HEAVY_WORK/check-young.out" >&2; heavy_fail "check does not list $YOUNG_REG/$PKG@$CLEAN as ⏳ MIN_AGE_NOT_MET"; }
+set +e
+(cd "$YOUNG" && "$CLI" check -r "$YOUNG_REG" --strict) >"$HEAVY_WORK/check-strict.out" 2>&1
+RC=$?
+set -e
+[[ $RC -eq 4 ]] || { cat "$HEAVY_WORK/check-strict.out" >&2; heavy_fail "check --strict exited $RC on a ⏳ pin; expected 4"; }
+heavy_log "CHECK-OK (⏳ exit 0, --strict exit 4; npm ci below must agree)"
+
 heavy_mark "young-refused"
 set +e
 (cd "$YOUNG" && npm ci --registry "$YOUNG_URL") >"$HEAVY_WORK/install-young.out" 2>"$HEAVY_WORK/install-young.err"

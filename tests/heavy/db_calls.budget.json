@@ -23,6 +23,14 @@
     "cold": 7,
     "warm": 7
   },
+  "api-pullability": {
+    "cold": 4,
+    "warm": 4
+  },
+  "api-pullability-batch": {
+    "cold": 200,
+    "warm": 200
+  },
   "local-publish": {
     "cold": 18,
     "warm": 15

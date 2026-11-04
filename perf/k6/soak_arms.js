@@ -200,6 +200,37 @@ export const ARMS = [
     request: () => ({ url: p(`/api/v1/packages?registry=${NPM_REGISTRY}&limit=50`) }),
   },
   {
+    op: "pullability",
+    kind: "npm",
+    registry: NPM_REGISTRY,
+    weight: 2,
+    expect: [200],
+    doc: "`why`: every gate the download checks, evaluated and written nowhere (RFC 0040 §10.3)",
+    request: () => ({
+      url: p(`/api/v1/packages/access?registry=${NPM_REGISTRY}&name=${SEED_PKG}&version=${SEED_VER}`),
+    }),
+  },
+  {
+    op: "pullability_batch",
+    kind: "npm",
+    registry: NPM_REGISTRY,
+    weight: 1,
+    expect: [200],
+    doc: "`check`: 50 coordinates from cached metadata only, never upstream (RFC 0040 T11)",
+    request: () => ({
+      method: "POST",
+      url: p(`/api/v1/packages/access/batch`),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        items: Array.from({ length: 50 }, () => ({
+          registry: NPM_REGISTRY,
+          name: SEED_PKG,
+          version: SEED_VER,
+        })),
+      }),
+    }),
+  },
+  {
     op: "npm_publish",
     kind: "npm",
     registry: LOCAL_NPM_REGISTRY,

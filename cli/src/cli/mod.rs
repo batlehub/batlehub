@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod auth;
 pub mod authz;
+pub mod check;
 pub mod completion;
 pub mod config_cmd;
 pub mod download;
@@ -105,6 +106,8 @@ pub enum Command {
     Download(download::DownloadArgs),
     /// Why a version is not pullable, or not yet: every cause, in the order the download checks them
     Why(why::WhyArgs),
+    /// Would this project's pinned dependencies install? Reads the lockfiles here; exit 4 on any ⛔
+    Check(check::CheckArgs),
     /// Your own state: identity, quota, downloads, advisories, namespaces
     Me {
         #[command(subcommand)]

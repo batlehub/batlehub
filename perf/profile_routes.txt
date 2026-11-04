@@ -151,7 +151,8 @@ GET /api/v1/me/namespaces	skip: no arm yet
 GET /api/v1/me/namespaces/{registry}/{prefix}/packages	skip: no arm yet
 GET /api/v1/me/quota	skip: no arm yet
 GET /api/v1/packages	profiled
-GET /api/v1/packages/access	skip: no arm yet
+GET /api/v1/packages/access	profiled
+POST /api/v1/packages/access/batch	profiled
 GET /api/v1/registries	skip: no arm yet
 GET /api/v1/sbom/export	skip: no arm yet
 GET /api/v1/sbom/{registry}/{name}/{version}	profiled

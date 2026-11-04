@@ -7275,6 +7275,48 @@
         ]
       }
     },
+    "/api/v1/packages/access/batch": {
+      "post": {
+        "tags": [
+          "front-office"
+        ],
+        "summary": "The pullability of up to 50 versions, for `batlehub-cli check`\n(RFC 0040 §6.1, decision 37). Answered from cached metadata only: a version\nthis instance has not resolved yet waits as \"not yet resolved\", and so does\none not answered within 10 seconds — a batch never fetches upstream. Each\nitem is charged to the caller's rate-limit bucket of its registry, as the\ndownload would be.",
+        "operationId": "check_access_batch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "One answer per item, in request order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessBatchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "More than 50 items"
+          },
+          "429": {
+            "description": "An item exceeded its registry's rate limit"
+          }
+        },
+        "security": [
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/api/v1/registries": {
       "get": {
         "tags": [
@@ -21657,6 +21699,74 @@
           "auditlifecyclerun"
         ]
       },
+      "AccessBatchAnswer": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AccessCheckResponse"
+          },
+          {
+            "type": "object",
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "$ref": "#/components/schemas/BatchNotFound"
+              }
+            }
+          }
+        ],
+        "description": "One item's answer: the single endpoint's body, or `not_found` — the same\nfor an unknown coordinate and one the caller may not see (T1)."
+      },
+      "AccessBatchItem": {
+        "type": "object",
+        "required": [
+          "registry",
+          "name",
+          "version"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "registry": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "AccessBatchRequest": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccessBatchItem"
+            },
+            "description": "At most 50."
+          }
+        }
+      },
+      "AccessBatchResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccessBatchAnswer"
+            },
+            "description": "In request order."
+          }
+        }
+      },
       "AccessCheckRequest": {
         "type": "object",
         "required": [
@@ -22202,6 +22312,12 @@
           "info",
           "warning",
           "error"
+        ]
+      },
+      "BatchNotFound": {
+        "type": "string",
+        "enum": [
+          "not_found"
         ]
       },
       "BetaChannelMemberDto": {

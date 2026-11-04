@@ -297,7 +297,13 @@ impl ProxyService {
             ip_address: req.ip_address.clone(),
             user_agent: req.user_agent.clone(),
         };
-        let resolved = self.resolve_forge_ref(&mut req).await?;
+        // A ref is resolved against the forge: never under the batch's
+        // cache-only answer, which judges the coordinate as written.
+        let resolved = if crate::services::pullability::cache_only() {
+            None
+        } else {
+            self.resolve_forge_ref(&mut req).await?
+        };
         let prelude = self.request_prelude(&req).await?;
         let metadata = self
             .resolve_metadata_uncaptured(

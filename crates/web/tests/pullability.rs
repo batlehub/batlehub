@@ -432,3 +432,123 @@ async fn a_package_tier_grant_alone_makes_the_package_visible() {
     assert_eq!(body["headline"], "pullable", "{body}");
     assert_eq!(ask(&app, "other", USER_TOKEN).await.0, 404);
 }
+
+// ── The batch behind `check` (RFC 0040 §6.1, decision 37) ───────────────────
+
+const PROXY: &str = "proxy-cargo";
+
+/// A proxy registry whose upstream (`FixedRegistry`) knows every version, so
+/// a `wait` "not yet resolved" can only mean the batch did not ask it.
+async fn proxy_app(
+    rate_limit: Option<std::sync::Arc<batlehub_web::RateLimitService>>,
+) -> impl TestService {
+    let parts = local_registry_app_parts(PROXY, "cargo", RegistryMode::Proxy, None);
+    build_local_registry_app_with_defaults(
+        parts,
+        batlehub_web::CargoIndexMap::default(),
+        ConfigureAppDefaults {
+            rate_limit,
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+async fn batch<S: TestService>(app: &S, items: Value) -> (u16, Value) {
+    let resp = call_service(
+        app,
+        TestRequest::post()
+            .uri("/api/v1/packages/access/batch")
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .set_json(serde_json::json!({ "items": items }))
+            .to_request(),
+    )
+    .await;
+    let status = resp.status().as_u16();
+    (status, read_body_json(resp).await)
+}
+
+fn item(registry: &str, name: &str) -> Value {
+    serde_json::json!({"registry": registry, "name": name, "version": "1.0.0"})
+}
+
+/// T11: the batch never goes upstream — an uncached version waits as "not
+/// yet resolved", names `why` as the next step, and answers once the single
+/// call has resolved it — and it takes at most 50 items. T1: an unknown and an
+/// invisible coordinate are the same `not_found`.
+#[actix_web::test]
+async fn batch_is_cache_only_and_capped() {
+    let app = proxy_app(None).await;
+
+    let (status, _) = batch(&app, Value::Array(vec![item(PROXY, "serde"); 51])).await;
+    assert_eq!(status, 400, "a batch of 51 is refused");
+
+    let (status, body) = batch(
+        &app,
+        serde_json::json!([
+            item(PROXY, "serde"),
+            item("not-mine", "x"),
+            item(PROXY, "serde")
+        ]),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let first = &body["items"][0];
+    assert_eq!(first["headline"], "waiting", "{body}");
+    let upstream = first["causes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["kind"] == "upstream")
+        .expect("an upstream cause");
+    assert_eq!(upstream["state"], "wait");
+    assert_eq!(
+        upstream["next"],
+        format!("batlehub-cli why {PROXY}/serde@1.0.0")
+    );
+    assert_eq!(body["items"][1], serde_json::json!({"state": "not_found"}));
+    assert_eq!(
+        body["items"][2]["headline"], "waiting",
+        "request order kept"
+    );
+
+    // The single call resolves it — and fills the cache the batch reads.
+    let resp = call_service(
+        &app,
+        TestRequest::get()
+            .uri(&format!(
+                "/api/v1/packages/access?registry={PROXY}&name=serde&version=1.0.0"
+            ))
+            .insert_header(("Authorization", bearer(USER_TOKEN)))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let (_, body) = batch(&app, serde_json::json!([item(PROXY, "serde")])).await;
+    assert_eq!(body["items"][0]["headline"], "pullable", "{body}");
+}
+
+/// T11: a batch of 50 costs what 50 downloads cost — the next item over the
+/// registry's limit is a `429`.
+#[actix_web::test]
+async fn batch_charges_the_bucket_once_per_item() {
+    use batlehub_config::schema::{RateLimitConfig, RateLimitEnforcement};
+    let configs = std::collections::HashMap::from([(
+        PROXY.to_owned(),
+        RateLimitConfig {
+            requests_per_window: 50,
+            window_secs: 3600,
+            enforcement: RateLimitEnforcement::Block,
+            groups: vec![],
+        },
+    )]);
+    let rl = std::sync::Arc::new(batlehub_web::RateLimitService::new(
+        &configs,
+        std::sync::Arc::new(batlehub_adapters::rate_limit::InMemoryRateLimitStore::new()),
+    ));
+    let app = proxy_app(Some(rl)).await;
+    let (status, _) = batch(&app, Value::Array(vec![item(PROXY, "serde"); 50])).await;
+    assert_eq!(status, 200);
+    let (status, _) = batch(&app, serde_json::json!([item(PROXY, "serde")])).await;
+    assert_eq!(status, 429, "the 51st item is over the limit");
+}

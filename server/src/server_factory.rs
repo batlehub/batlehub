@@ -393,6 +393,8 @@ pub(super) async fn run_actix_server(p: ServerParams) -> anyhow::Result<()> {
         }
         app = app.app_data(web::Data::new(Arc::clone(&artifact_inventory)));
         app = app.app_data(web::Data::new(Arc::clone(&audit_trail)));
+        // The access batch charges each item to its registry's bucket (RFC 0040 §6.1).
+        app = app.app_data(web::Data::new(rate_limit_svc.clone()));
         // Read by `protocol_document_csp` to choose `/scalar`'s policy.
         if let Some(agent) = scalar_agent.clone() {
             app = app.app_data(agent);
