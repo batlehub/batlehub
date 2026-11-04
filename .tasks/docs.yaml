@@ -59,7 +59,7 @@ tasks:
     # docs-only review cannot see these: 212 examples named the server binary
     # and 172 an alias before RFC 0040 phase 9 swept them.
     cmds:
-      - cargo build --quiet -p batlehub-cli
+      - cargo build --locked --quiet -p batlehub-cli
       - cd .tasks/scripts && python3 -m unittest -q test_check_doc_commands
       - |
         bin=$(cargo metadata --format-version 1 --no-deps \

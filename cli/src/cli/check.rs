@@ -54,7 +54,7 @@ fn lockfiles(given: &[PathBuf], dir: &Path) -> Result<Vec<PathBuf>> {
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| {
             p.file_name()
-                .and_then(|n| n.to_str())
+                .and_then(std::ffi::OsStr::to_str)
                 .is_some_and(|n| n == "mise.lock" || Format::from_file_name(n).is_some())
         })
         .collect();
@@ -166,7 +166,7 @@ pub async fn run(args: CheckArgs, client: &BatleHubClient) -> Result<()> {
     for (path, bytes) in files.iter().zip(&contents) {
         let file = path
             .file_name()
-            .and_then(|n| n.to_str())
+            .and_then(std::ffi::OsStr::to_str)
             .unwrap_or_default()
             .to_owned();
         if file == "mise.lock" {
