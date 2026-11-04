@@ -102,6 +102,12 @@ spellings*.
 
 ### Added
 
+- **The TUI speaks the CLI's grammar** (RFC 0040 §4.10). On a version: `w`
+  opens a Why pane (`why`'s answer and your refusals of the package), `o` lists
+  the owners, `d` deletes, `p`/`P` pin and unpin. `y` and `d` ask first in a
+  modal. The login screen writes the `-P` profile and reconnects at once,
+  where it used to write `default` and ask for a restart, and the publish
+  form runs `publish` itself, after showing the name and version it read.
 - **`batlehub-cli check`** (RFC 0040 §4.8): reads the project's lockfiles
   (`Cargo.lock`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `uv.lock`,
   `poetry.lock`, pinned `requirements*.txt`, `go.sum`, `conda-lock.yml`,

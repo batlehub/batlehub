@@ -261,7 +261,7 @@ async fn run(cli: Cli, format: Format) -> Result<()> {
             )
             .await?
         }
-        Command::Tui => tui::run(client).await?,
+        Command::Tui => tui::run(client, profile_name).await?,
         Command::Config { .. }
         | Command::Profile { .. }
         | Command::Completion { .. }

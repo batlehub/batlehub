@@ -27,7 +27,7 @@ pub enum Verb {
 }
 
 impl Verb {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Yank => "yank",
             Self::Unyank => "unyank",
@@ -43,7 +43,7 @@ impl Verb {
         }
     }
 
-    fn past(self) -> &'static str {
+    pub(crate) fn past(self) -> &'static str {
         match self {
             Self::Yank => "Yanked",
             Self::Unyank => "Unyanked",
@@ -60,8 +60,16 @@ impl Verb {
     }
 
     /// §4.5: deletes, yanks, unlists and blocks ask first.
-    fn destructive(self) -> bool {
+    pub(crate) fn destructive(self) -> bool {
         matches!(self, Self::Yank | Self::Delete | Self::Unlist | Self::Block)
+    }
+
+    /// The one fact a confirmation must not leave out.
+    pub(crate) fn note(self) -> Option<&'static str> {
+        (self == Self::Delete).then_some(
+            "the artifact is dropped and the version number is spent permanently — it can \
+             never be published again",
+        )
     }
 
     /// The verbs that have a bulk endpoint: one request per registry.
@@ -218,6 +226,38 @@ async fn run_each(
     }
 }
 
+async fn dispatch(
+    verb: Verb,
+    items: &[(String, String, String)],
+    message: Option<&str>,
+    client: &BatleHubClient,
+    tally: &mut Tally,
+) {
+    if matches!(verb, Verb::Block | Verb::Unblock) {
+        run_moderation(verb, items, message, client, tally).await;
+    } else if verb.bulk() {
+        run_bulk(verb, items, client, tally).await;
+    } else {
+        run_each(verb, items, message, client, tally).await;
+    }
+}
+
+/// One version, through the same requests as [`run`], with no confirmation
+/// and no output: the TUI's path (§4.10), which confirms in its own modal.
+pub async fn apply_one(
+    verb: Verb,
+    item: (String, String, String),
+    client: &BatleHubClient,
+) -> Result<()> {
+    let mut tally = Tally::default();
+    dispatch(verb, &[item], None, client, &mut tally).await;
+    match (tally.only_error, tally.failed.pop()) {
+        (Some(e), _) => Err(e),
+        (None, Some(f)) => Err(anyhow::anyhow!(f.error)),
+        (None, None) => Ok(()),
+    }
+}
+
 pub async fn run(
     verb: Verb,
     coordinates: &[String],
@@ -235,21 +275,11 @@ pub async fn run(
         .map(|(r, n, v)| format!("{r}/{n}@{v}"))
         .collect();
     if verb.destructive() {
-        let note = (verb == Verb::Delete).then_some(
-            "the artifact is dropped and the version number is spent permanently — it can \
-             never be published again",
-        );
-        confirm(verb.name(), &shown, note)?;
+        confirm(verb.name(), &shown, verb.note())?;
     }
 
     let mut tally = Tally::default();
-    if matches!(verb, Verb::Block | Verb::Unblock) {
-        run_moderation(verb, &items, message, client, &mut tally).await;
-    } else if verb.bulk() {
-        run_bulk(verb, &items, client, &mut tally).await;
-    } else {
-        run_each(verb, &items, message, client, &mut tally).await;
-    }
+    dispatch(verb, &items, message, client, &mut tally).await;
     let Tally {
         succeeded,
         failed,

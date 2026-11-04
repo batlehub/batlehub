@@ -69,8 +69,12 @@ pub fn render(f: &mut Frame, _app: &App) {
             "Package detail (versions)",
             Style::default().add_modifier(Modifier::BOLD),
         )),
-        Line::from("  y            Yank selected version"),
+        Line::from("  w            Why: is the selected version pullable, and your refusals"),
+        Line::from("  o            Owners of the package"),
+        Line::from("  y / d        Yank / delete selected version (asks first)"),
         Line::from("  u            Unyank selected version"),
+        Line::from("  p / P        Pin / unpin selected version against retention"),
+        Line::from("  Esc          Close the side pane, then go back"),
         Line::from(""),
         Line::from(Span::styled(
             "Publish wizard",
@@ -78,7 +82,7 @@ pub fn render(f: &mut Frame, _app: &App) {
         )),
         Line::from("  Tab          Next field"),
         Line::from("  Shift-Tab    Previous field"),
-        Line::from("  Enter        Submit"),
+        Line::from("  Enter        Path: read name and version; Version: publish"),
         Line::from("  Esc          Cancel"),
         Line::from(""),
         Line::from(Span::styled(
@@ -96,7 +100,7 @@ pub fn render(f: &mut Frame, _app: &App) {
         Line::from("  1            Static token"),
         Line::from("  2            OIDC (browser login)"),
         Line::from("  3            Kubernetes service account"),
-        Line::from("  Enter        Save credentials"),
+        Line::from("  Enter        Save to the -P profile and reconnect"),
         Line::from(""),
         Line::from(Span::styled(
             "Press Esc or ? to close",

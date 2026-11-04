@@ -1,7 +1,7 @@
 ---
 reference: true
 sourcePath: use/cli.md
-sourceHash: 6e5e9b2693c76ee4
+sourceHash: f0fe40f25c1064cd
 ---
 
 # batlehub-cli
@@ -1717,11 +1717,28 @@ La TUI est une interface plein écran en terminal, construite avec
 | `↓` / `j` | Descendre dans la sélection |
 | `Entrée` | Ouvrir l'élément sélectionné |
 | `/` | Activer le filtre de recherche de paquets |
-| `y` | Retirer la version sélectionnée (écran de détail d'une version) |
-| `u` | Annuler le retrait de la version sélectionnée |
-| `p` | Ouvrir l'assistant de publication |
+| `p` | Ouvrir l'assistant de publication (liste des registres) |
+| `L` | Ouvrir l'écran de connexion (liste des registres) |
 | `?` | Afficher ou masquer l'aide |
 | `Tab` / `Maj-Tab` | Passer d'un champ à l'autre dans l'assistant de publication |
+
+Sur l'écran de détail, les touches agissent sur la version sélectionnée, par
+les mêmes requêtes que [`package <verbe>`](#commands-version) et `why` :
+
+| Touche | Action |
+|-----|--------|
+| `w` | Panneau **Why** : la réponse de [`why`](#commands-security) pour la version, puis vos propres refus récents sur ce paquet |
+| `o` | Les propriétaires du paquet |
+| `y` / `d` | Retirer / supprimer : une fenêtre nomme la version et demande d'abord ; toute autre touche que `y` annule |
+| `u` | Annuler le retrait |
+| `p` / `P` | Épingler / désépingler face à la rétention |
+| `Échap` | Fermer le panneau latéral, puis revenir |
+
+L'écran de connexion écrit dans le profil `-P`, comme `auth login`, et le TUI
+utilise aussitôt le nouvel identifiant. L'assistant de publication affiche le
+nom et la version lus dans le fichier dès que vous validez le chemin avec
+`Entrée`, puis lance lui-même `publish` : le TUI s'efface le temps de
+l'affichage et revient sur `Entrée`.
 
 ## 17. Commandes — why, wait et check {#commands-security}
 

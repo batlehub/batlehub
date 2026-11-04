@@ -6,7 +6,7 @@ reference: true
 
 | Field       | Value                                                        |
 | ----------- | ------------------------------------------------------------ |
-| Status      | Accepted — phases 2 to 7 landed; §17 records how far each phase is and where the built thing differs |
+| Status      | Accepted — phases 2 to 8 landed; §17 records how far each phase is and where the built thing differs |
 | Short       | CLI grammar and coverage                                      |
 | Settles     | How every batlehub-cli command names a package, prints, fails and confirms, what it must cover for each registry kind, and how a developer learns why a version is not pullable |
 | Author      | Max Batleforc <maxleriche.60@gmail.com>                       |
@@ -1650,10 +1650,20 @@ row names has landed; a partial phase lists what is still open.
 | 5 | done | `476e7c29` | `services/pullability.rs` (`explain`, `explain_resolution`); `evaluate_chain_all`; the extended `packages/access` (404 for not visible, `version` optional); migration 063 and `reason_code` written by both funnels; `me/downloads?outcome=denied`; `why <coord>`, `why <name>`, `why --last`; `download`'s refusal prints `why`; the console's access page renders causes. heavy cases 8–10 (`quarantine.sh`) and 12 (`authz.sh npm`); `package show`; `/api/v1/registries` lists a registry read without being installable (`installable: false`) |
 | 6 | done | PR #280 | `cli/src/{api,cli}/journeys.rs`: `policy`, `exemption`, `me`, `upstream`, `namespace signing-key`, `flag create/delete`, `server config pending/apply/discard/warnings`; `package block/unblock` in `lifecycle.rs`; `package list --blocked` filtered by the server (`?blocked=true`); the loopback `auth login` with `--no-browser`, `sso.rs`'s `return_to` and migration 064. T6's tests: `login_rejects_wrong_state` and `return_to_must_be_exact_loopback` |
 | 7 | done | PR #280 | `crates/core/src/lockfile.rs` (17 readers, 16 MiB cap) and `fuzz_cli_lockfile`; `cli/src/cli/check.rs` (`mise.lock` through `mise plan`); `POST /api/v1/packages/access/batch` (≤ 50, cache-only through `pullability::cache_only`, 10 s deadline, charged per item); the Check column in `coverage.rs` with a `<kind>_check` test per ✅ cell (`cli/tests/check.rs`); the `pullability` and `pullability_batch` soak arms and `db_calls.py` scenarios; heavy case 14 (`quarantine.sh`) |
-| 8 | not started | — | |
+| 8 | done | PR #280 | `tui/`: the login writes the `-P` profile and reconnects without a restart; `y`/`d` confirm in a modal (`render_confirm`), and every lifecycle key goes through `lifecycle::apply_one`, the dispatch `package <verb>` uses; `p`/`P` pin and unpin, `o` owners, `w` the Why pane (`why::render` and the caller's refusals of the package); the publish form shows the name and version it read and runs `publish::run`. `TestBackend` tests in `tui/mod.rs` |
 | 9 | not started | — | |
 
 ### 17.1 Where the built thing differs
+
+- **Phase 8: the TUI shows owners, it does not edit them.** Adding an owner
+  needs a principal and a role typed in, which `owner add` already takes; the
+  pane lists them, and `owner add/remove` stays the way to change them.
+- **The TUI publishes on the plain terminal.** `publish::run` prints its
+  progress as the CLI does, so the TUI leaves the alternate screen while it
+  runs and comes back on `Enter`, rather than a second, silent publish path.
+- **The Why pane shows no scanner findings.** It renders `why`'s causes and
+  the caller's refusals of the package; the findings `why` adds under a held
+  verdict stay in the CLI.
 
 - **Phase 7: the lockfile readers live in `batlehub-core`** (`lockfile.rs`), not
   in the CLI, so `fuzz_cli_lockfile` can link them: the CLI is a binary crate.

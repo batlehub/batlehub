@@ -1642,11 +1642,27 @@ The TUI is a full-screen terminal interface built with [ratatui](https://ratatui
 | `↓` / `j` | Move selection down |
 | `Enter` | Open selected item |
 | `/` | Toggle package search filter |
-| `y` | Yank selected version (version detail screen) |
-| `u` | Unyank selected version |
-| `p` | Open publish wizard |
+| `p` | Open publish wizard (registry list) |
+| `L` | Open the login screen (registry list) |
 | `?` | Toggle help overlay |
 | `Tab` / `Shift-Tab` | Cycle fields in publish wizard |
+
+On the version detail screen, the keys act on the selected version, through
+the same requests as [`package <verb>`](#commands-version) and `why`:
+
+| Key | Action |
+|-----|--------|
+| `w` | **Why** pane: [`why`](#commands-security)'s answer for the version, then your own recent refusals of this package |
+| `o` | The package's owners |
+| `y` / `d` | Yank / delete: a modal names the version and asks first; any key but `y` cancels |
+| `u` | Unyank |
+| `p` / `P` | Pin / unpin against retention |
+| `Esc` | Close the side pane, then go back |
+
+The login screen writes the `-P` profile, as `auth login` does, and the TUI
+uses the new credential at once. The publish wizard shows the name and version
+it read from the file once you press `Enter` on the path, and runs `publish`
+itself: the TUI steps aside while it prints, and comes back on `Enter`.
 
 ## 17. Commands — why, wait and check {#commands-security}
 
