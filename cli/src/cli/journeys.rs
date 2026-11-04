@@ -645,7 +645,9 @@ pub async fn run_signing_key(cmd: SigningKeyCmd, client: &BatleHubClient) -> Res
             let ascii_armor = if armor == "-" {
                 std::io::read_to_string(std::io::stdin())?
             } else {
-                std::fs::read_to_string(&armor).with_context(|| format!("reading {armor}"))?
+                tokio::fs::read_to_string(&armor)
+                    .await
+                    .with_context(|| format!("reading {armor}"))?
             };
             let key = json!({
                 "key_id": key_id,
