@@ -9235,7 +9235,7 @@
         "tags": [
           "proxy/devfile"
         ],
-        "summary": "Publish one stack version — the bundle `batlehub publish` packs from a stack directory (RFC 0039 §4.3).",
+        "summary": "Publish one stack version — the bundle `batlehub-cli publish` packs from a stack directory (RFC 0039 §4.3).",
         "operationId": "devfile_publish",
         "parameters": [
           {

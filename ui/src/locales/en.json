@@ -1047,7 +1047,7 @@
     "subjectHint": "user:alice, group:oidc1:eng, role:user, or * for everyone.",
     "version": "Version",
     "versionGrants": "Granted on single versions",
-    "versionGrantsCli": "Read-only here. Use the CLI: batlehub admin grants set <registry> <name>{'@'}<version> --subject … --actions …",
+    "versionGrantsCli": "Read-only here. Use the CLI: batlehub-cli grant set <registry>/<name>{'@'}<version> --subject … --actions …",
     "whoCanReachThis": "Who can reach this package"
   },
   "packageVersionsTable": {
@@ -1246,7 +1246,7 @@
     "allowed": "Every required scanner answered and nothing reached the threshold.",
     "warned": "Served, with the reasons on the response: findings under warn mode, or a scan still pending on a version past its maturity age.",
     "denied": "Refused until a rescan or an administrator acts.",
-    "heldUntil": "Held until {when}. `batlehub wait` waits for it.",
+    "heldUntil": "Held until {when}. `batlehub-cli wait` waits for it.",
     "heldOpen": "Held until a scanner answers — or, for TIMESTAMP_MISSING, until the upstream is dated.",
     "policy": "Policy",
     "scanners": "Scanners",

@@ -2003,7 +2003,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
       `devfile, OCI manifest and layers are served byte-exact and verified. ` +
       `<code>registry-library</code> asks for <code>/v2/…</code> at the <strong>host root</strong>, ` +
       `so give the registry a host of its own. In <code>local</code> or <code>hybrid</code> ` +
-      `mode, <code>batlehub publish</code> uploads a stack directory of your own; in ` +
+      `mode, <code>batlehub-cli publish</code> uploads a stack directory of your own; in ` +
       `<code>hybrid</code> a published stack replaces upstream's of the same name whole.`,
     snippets: [
       {
@@ -2050,7 +2050,7 @@ export const REGISTRY_TYPE_DEFS: RegistryTypeDef[] = [
           [
             `# A stack directory: devfile.yaml, anything else (packed into archive.tar),`,
             `# and starter-projects/{name}.zip. Name and version come from the devfile.`,
-            `batlehub publish ./my-stack -r ${ctx.registryName}`,
+            `batlehub-cli publish ./my-stack -r ${ctx.registryName}`,
             ``,
             `# Or a bundle built elsewhere:`,
             `curl --data-binary @acme-rust-1.2.0.devfile.tar -H 'Content-Type: application/x-tar' \\`,

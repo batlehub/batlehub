@@ -203,7 +203,9 @@ spellings*.
   used a spelling RFC 0040 deprecated, and `incident-response` showed four
   commands that never existed (`admin ip-blocks add`, `admin token revoke`,
   `admin block`, `admin packages unlist`). Every command the published docs
-  show now parses with the current CLI, in both languages.
+  show now parses with the current CLI, in both languages. The console had the
+  same slip: the devfile publish snippet, the version-grant hint and the
+  "held until" note now name `batlehub-cli`, in its current grammar.
 
 - **`--format json` prints one document when some items of a bulk `package`
   verb fail.** The outcome was followed by a second error document on stdout.

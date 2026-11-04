@@ -1108,7 +1108,7 @@ async fn check_claim(
     Ok(())
 }
 
-/// Publish one stack version — the bundle `batlehub publish` packs from a stack directory (RFC 0039 §4.3).
+/// Publish one stack version — the bundle `batlehub-cli publish` packs from a stack directory (RFC 0039 §4.3).
 #[utoipa::path(
     post,
     path = "/proxy/{registry}/api/stacks",

@@ -1047,7 +1047,7 @@
     "subjectHint": "user:alice, group:oidc1:eng, role:user, ou * pour tout le monde.",
     "version": "Version",
     "versionGrants": "Accordé sur des versions précises",
-    "versionGrantsCli": "En lecture seule ici. Utilisez la CLI : batlehub admin grants set <dépôt> <nom>{'@'}<version> --subject … --actions …",
+    "versionGrantsCli": "En lecture seule ici. Utilisez la CLI : batlehub-cli grant set <dépôt>/<nom>{'@'}<version> --subject … --actions …",
     "whoCanReachThis": "Qui peut accéder à ce paquet"
   },
   "packageVersionsTable": {
@@ -1246,7 +1246,7 @@
     "allowed": "Chaque scanner requis a répondu et rien n'atteint le seuil.",
     "warned": "Servie, avec les raisons sur la réponse : des constats en mode « warn », ou un scan encore en attente sur une version au-delà de son âge de maturité.",
     "denied": "Refusée jusqu'à un nouveau scan ou une action d'un administrateur.",
-    "heldUntil": "Retenue jusqu'au {when}. `batlehub wait` attend ce moment.",
+    "heldUntil": "Retenue jusqu'au {when}. `batlehub-cli wait` attend ce moment.",
     "heldOpen": "Retenue jusqu'à la réponse d'un scanner — ou, pour TIMESTAMP_MISSING, jusqu'à ce que l'amont la date.",
     "policy": "Politique",
     "scanners": "Scanners",

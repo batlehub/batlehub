@@ -113,7 +113,7 @@ describe("PackageGrants", () => {
     const wrapper = await mountPanel([EDITOR_ROW, VERSION_ROW]);
     expect(wrapper.text()).toContain("2.4.0-rc.1");
     expect(wrapper.text()).toContain("group:oidc1:release-managers");
-    expect(wrapper.text()).toContain("batlehub admin grants set");
+    expect(wrapper.text()).toContain("batlehub-cli grant set");
   });
 
   it("writes a grant through the editor", async () => {
