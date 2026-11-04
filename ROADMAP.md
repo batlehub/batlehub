@@ -207,7 +207,7 @@ Applies to registries running in `local` or `hybrid` mode.
   - [x] Version management commands for yanking, unyanking, or deleting specific versions — `batlehub-cli package yank|unyank|delete`
   - [x] Package management commands for listing versions, viewing metadata, or managing owners — `batlehub-cli package list|versions` and `batlehub-cli owner list|add|remove`
   - [x] Authentication support for static tokens and token management — `batlehub-cli auth whoami` and `token list|create|revoke`; token passed via `--token` / `BATLEHUB_TOKEN`
-  - [x] List of available registries and their types, with per-registry configuration details — `batlehub-cli registry list|info`
+  - [x] List of available registries and their types, with per-registry configuration details — `batlehub-cli registry list|show`
   - [x] Suggest the set of registries a project needs — `batlehub-cli registry suggest` scans the working directory (`mise.toml`/`mise.lock` tool backends plus the usual manifests: Cargo.toml, package.json, go.mod, …), maps each detected source to a registry type, and emits the `[[registries]]` TOML block (or JSON) to paste into `config.toml`. `--client-env` additionally prints the environment variables that point each toolchain at BatleHub
   - [x] List packages and versions in a registry, with filtering options — `batlehub-cli package list|versions`
   - [x] Autocompletion support for shell integration — `batlehub-cli completion bash|zsh|fish|...` generates and prints the completion script; pipe to shell RC file

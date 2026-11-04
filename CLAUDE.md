@@ -58,6 +58,9 @@ task ui:dev:local             # 5174 → API on localhost:8080, for in-pod tools
 cd ui && pnpm run generate    # regenerate TypeScript client from ui/openapi.json
 task dump-spec                # refresh ui/openapi.json from running server
 
+# Docs: every `batlehub-cli …` example parses with the CLI as built, none deprecated
+task docs:cli-commands
+
 # Fuzz
 task fuzz:check                                 # every target compiles — the per-PR CI gate
 task fuzz TARGET=fuzz_rbac_evaluate MAX_TIME=30 # actually fuzz one (nightly)

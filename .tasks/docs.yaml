@@ -53,6 +53,19 @@ tasks:
     cmds:
       - cargo test -p batlehub-cli --bin batlehub-cli coverage::tests::the_reference_pages_carry_the_matrix
 
+  docs:cli-commands:
+    desc: Fail if a batlehub-cli command the docs show does not parse with the CLI as built, or uses a deprecated spelling
+    # Every example is run as `<cmd> --help`, so nothing reaches a server. A
+    # docs-only review cannot see these: 212 examples named the server binary
+    # and 172 an alias before RFC 0040 phase 9 swept them.
+    cmds:
+      - cargo build --quiet -p batlehub-cli
+      - cd .tasks/scripts && python3 -m unittest -q test_check_doc_commands
+      - |
+        bin=$(cargo metadata --format-version 1 --no-deps \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')/debug/batlehub-cli
+        python3 .tasks/scripts/check_doc_commands.py "$bin" docs
+
   docs:roadmap:check:
     desc: Fail if the published roadmap page has drifted from ROADMAP.md
     # Compares content rather than git state, for the reason above: the whole
